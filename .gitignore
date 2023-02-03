@@ -1,0 +1,5 @@
+/.vscode
+/target
+/dist
+/*.sh
+/Cargo.lock
