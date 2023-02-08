@@ -298,7 +298,7 @@ pub fn draw_progress_bar(
     }
 
     cr.set_source_rgb(fg.red(), fg.green(), fg.blue());
-    cr.move_to((width - te.width) / 2.0, (height - te.height) / 2.0 - te.y_bearing);
+    cr.move_to((width - te.width()) / 2.0, (height - te.height()) / 2.0 - te.y_bearing());
     cr.show_text(text)?;
 
     Ok(())

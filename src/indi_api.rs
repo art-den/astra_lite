@@ -46,6 +46,9 @@ pub enum Error {
 
     #[error("Can't convert property value {0} of type {1} into type {2}")]
     CantConvertPropValue(String, String, String),
+
+    #[error("Wrong value format: {0}")]
+    WrongValueFormat(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -166,6 +169,197 @@ impl Subscriptions {
 }
 
 #[derive(Debug, Clone)]
+pub enum NumFormat {
+    Float{ width: Option<u8>, prec: u8 },
+    G,
+    Sexagesimal { zero: bool, width: Option<u8>, frac: u8 },
+    Unrecorgnized,
+}
+
+impl NumFormat {
+    pub fn new_from_str(format_str: &str) -> Self {
+        use once_cell::sync::OnceCell;
+        static FLOAT_RE: OnceCell<regex::Regex> = OnceCell::new();
+        let float_re = FLOAT_RE.get_or_init(|| {
+            regex::Regex::new(r"%(\d*)\.(\d*)[Ff]").unwrap()
+        });
+        if let Some(float_re_res) = float_re.captures(format_str) {
+            let width: Option<u8> = float_re_res[1].parse().ok();
+            let prec: u8 = float_re_res[2].parse().unwrap_or(0);
+            return NumFormat::Float { width, prec };
+        }
+        static G_RE: OnceCell<regex::Regex> = OnceCell::new();
+        let g_re = G_RE.get_or_init(|| {
+            regex::Regex::new(r"%.*[Gg]").unwrap()
+        });
+        if g_re.is_match(format_str) {
+            return NumFormat::G;
+        }
+        static SEX_RE: OnceCell<regex::Regex> = OnceCell::new();
+        let sex_re = SEX_RE.get_or_init(|| {
+            regex::Regex::new(r"%(\d*)\.(\d*)[Mm]").unwrap()
+        });
+        if let Some(sex_re_res) = sex_re.captures(format_str) {
+            let width_str = &sex_re_res[1];
+            let zero = width_str.starts_with("0");
+            let width: Option<u8> = width_str.parse().ok();
+            let frac: u8 = sex_re_res[2].parse().unwrap_or(0);
+            return NumFormat::Sexagesimal { zero, width, frac };
+        }
+        NumFormat::Unrecorgnized
+    }
+
+    pub fn value_to_string(&self, value: f64) -> String {
+        match self {
+            NumFormat::Float { width, prec } =>
+                match width {
+                    Some(width) => format!(
+                        "{:width$.prec$}",
+                        value,
+                        width = *width as usize,
+                        prec = *prec as usize
+                    ),
+                    None => format!(
+                        "{:.prec$}",
+                        value,
+                        prec = *prec as usize
+                    ),
+                }
+            NumFormat::G =>
+                value.to_string(),
+            NumFormat::Sexagesimal { zero, frac, .. } =>
+                value_to_sexagesimal(value, *zero, *frac),
+            NumFormat::Unrecorgnized =>
+                format!("{:.7}", value),
+        }
+    }
+}
+
+pub fn value_to_sexagesimal(value: f64, zero: bool, frac: u8) -> String {
+    let mut hours = value.trunc() as i32;
+    let round = match frac {
+        9 => 0.5,
+        8 => 5.0,
+        6 => 50.0,
+        5 => 50.0 * 60.0 / 10.0,
+        3 => 50.0 * 60.0,
+        _ => 0.0,
+    };
+    let mut seconds100 = (value.abs().fract() * 3600.0 * 100.0 + round) as u32;
+    if seconds100 >= 3600 * 100 {
+        hours += if hours < 0 { -1 } else { 1 };
+        seconds100 -= 3600 * 100;
+    }
+    let minutes100 = seconds100 / 60;
+    seconds100 %= 60 * 100;
+    match (frac, zero) {
+        (3, false) => format!("{}:{:02}", hours, minutes100 / 100),
+        (3, true)  => format!("{:02}:{:02}", hours, minutes100 / 100),
+        (5, false) => format!("{}:{:02}.{}", hours, minutes100 / 100, (minutes100 % 100)/10),
+        (5, true)  => format!("{:02}:{:02}.{}", hours, minutes100 / 100, (minutes100 % 100)/10),
+        (6, false) => format!("{}:{:02}:{:02}", hours, minutes100 / 100, seconds100 / 100),
+        (6, true)  => format!("{:02}:{:02}:{:02}", hours, minutes100 / 100, seconds100 / 100),
+        (8, false) => format!("{}:{:02}:{:02}.{}", hours, minutes100 / 100, seconds100 / 100, (seconds100 % 100) / 10),
+        (8, true)  => format!("{:02}:{:02}:{:02}.{}", hours, minutes100 / 100, seconds100 / 100, (seconds100 % 100) / 10),
+        (9, false) => format!("{}:{:02}:{:02}.{:02}", hours, minutes100 / 100, seconds100 / 100, seconds100 % 100),
+        (9, true)  => format!("{:02}:{:02}:{:02}.{:02}", hours, minutes100 / 100, seconds100 / 100, seconds100 % 100),
+        _          => value.to_string(),
+    }
+}
+
+pub fn sexagesimal_to_value(mut text: &str) -> Result<f64> {
+    use once_cell::sync::OnceCell;
+    text = text.trim();
+
+    // -00:00:00.00
+    static F9_RE: OnceCell<regex::Regex> = OnceCell::new();
+    let f9_re = F9_RE.get_or_init(|| {
+        regex::Regex::new(r"([+-]?)(\d+):(\d+):(\d+)\.(\d\d)").unwrap()
+    });
+    if let Some(res) = f9_re.captures(text) {
+        let is_neg = &res[1] == "-";
+        let hours = res[2].parse::<f64>().unwrap_or(0.0);
+        let minutes = res[3].parse::<f64>().unwrap_or(0.0);
+        let seconds = res[4].parse::<f64>().unwrap_or(0.0) +
+                      res[5].parse::<f64>().unwrap_or(0.0) / 100.0;
+        let value = hours + minutes / 60.0 + seconds / 3600.0;
+        return Ok(if !is_neg {value} else {-value});
+    }
+
+    // -00:00:00.0
+    static F8_RE: OnceCell<regex::Regex> = OnceCell::new();
+    let f8_re = F8_RE.get_or_init(|| {
+        regex::Regex::new(r"([+-]?)(\d+):(\d+):(\d+)\.(\d)").unwrap()
+    });
+    if let Some(res) = f8_re.captures(text) {
+        let is_neg = &res[1] == "-";
+        let hours = res[2].parse::<f64>().unwrap_or(0.0);
+        let minutes = res[3].parse::<f64>().unwrap_or(0.0);
+        let seconds = res[4].parse::<f64>().unwrap_or(0.0) +
+                      res[5].parse::<f64>().unwrap_or(0.0) / 10.0;
+        let value = hours + minutes / 60.0 + seconds / 3600.0;
+        return Ok(if !is_neg {value} else {-value});
+    }
+
+    // -00:00:00
+    static F6_RE: OnceCell<regex::Regex> = OnceCell::new();
+    let f6_re = F6_RE.get_or_init(|| {
+        regex::Regex::new(r"([+-]?)(\d+):(\d+):(\d+)").unwrap()
+    });
+    if let Some(res) = f6_re.captures(text) {
+        let is_neg = &res[1] == "-";
+        let hours = res[2].parse::<f64>().unwrap_or(0.0);
+        let minutes = res[3].parse::<f64>().unwrap_or(0.0);
+        let seconds = res[4].parse::<f64>().unwrap_or(0.0);
+        let value = hours + minutes / 60.0 + seconds / 3600.0;
+        return Ok(if !is_neg {value} else {-value});
+    }
+
+    // -00:00.0
+    static F5_RE: OnceCell<regex::Regex> = OnceCell::new();
+    let f5_re = F5_RE.get_or_init(|| {
+        regex::Regex::new(r"([+-]?)(\d+):(\d+)\.(\d)").unwrap()
+    });
+    if let Some(res) = f5_re.captures(text) {
+        let is_neg = &res[1] == "-";
+        let hours = res[2].parse::<f64>().unwrap_or(0.0);
+        let minutes = res[3].parse::<f64>().unwrap_or(0.0) +
+                      res[4].parse::<f64>().unwrap_or(0.0) / 10.0;
+        let value = hours + minutes / 60.0;
+        return Ok(if !is_neg {value} else {-value});
+    }
+
+    // -00:00
+    static F3_RE: OnceCell<regex::Regex> = OnceCell::new();
+    let f3_re = F3_RE.get_or_init(|| {
+        regex::Regex::new(r"([+-]?)(\d+):(\d+)").unwrap()
+    });
+    if let Some(res) = f3_re.captures(text) {
+        let is_neg = &res[1] == "-";
+        let int = res[2].parse::<f64>().unwrap_or(0.0);
+        let frac1 = res[3].parse::<f64>().unwrap_or(0.0);
+        let value = int + frac1 / 60.0;
+        return Ok(if !is_neg {value} else {-value});
+    }
+
+    Err(Error::WrongValueFormat(text.to_string()))
+}
+
+#[test]
+fn test_sexagesimal_to_value() {
+    assert!(sexagesimal_to_value("").is_err());
+    assert!(sexagesimal_to_value("1:00").unwrap() == 1.0);
+    assert!(sexagesimal_to_value("-1:00").unwrap() == -1.0);
+    assert!(sexagesimal_to_value("10:30").unwrap() == 10.5);
+    assert!(sexagesimal_to_value("-10:30").unwrap() == -10.5);
+    assert!(sexagesimal_to_value("10:30.3").unwrap() == 10.505);
+    assert!(sexagesimal_to_value("-10:30.3").unwrap() == -10.505);
+    assert!(sexagesimal_to_value("10:30:00").unwrap() == 10.5);
+    assert!(sexagesimal_to_value("10:30:30").unwrap() == 10.508333333333333);
+    // TODO: more tests
+}
+
+#[derive(Debug, Clone)]
 pub enum PropState { Idle, Ok, Busy, Alert }
 
 impl PropState {
@@ -245,6 +439,7 @@ pub struct PropStaticData {
     pub label: Option<String>,
     pub group: Option<String>,
     pub perm:  PropPerm,
+    sort_pos:  u64,
 }
 
 impl PropStaticData {
@@ -281,16 +476,17 @@ impl PropStaticData {
         let label = xml.attributes.remove("label");
         let group = xml.attributes.remove("group");
         let perm = PropPerm::from_str(xml.attributes.get("perm").map(String::as_str))?;
-        Ok((PropStaticData{ tp, label, group, perm }, xml))
+        Ok((PropStaticData{ tp, label, group, perm, sort_pos: 0 }, xml))
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct PropDynamicData {
-    pub state:     PropState,
-    pub timeout:   Option<u32>,
-    pub timestamp: Option<String>, // TODO: normal timestamp instead of string
-    pub message:   Option<String>,
+    pub state:      PropState,
+    pub timeout:    Option<u32>,
+    pub timestamp:  Option<String>, // TODO: normal timestamp instead of string
+    pub message:    Option<String>,
+    pub change_cnt: u64,
 }
 
 impl PropDynamicData {
@@ -300,7 +496,7 @@ impl PropDynamicData {
             .map(|to_str| to_str.parse::<u32>().unwrap_or(0));
         let message = xml.attributes.remove("message");
         let timestamp = xml.attributes.remove("timestamp");
-        Ok((PropDynamicData { state, timeout, timestamp, message }, xml))
+        Ok((PropDynamicData { state, timeout, timestamp, message, change_cnt: 1 }, xml))
     }
 }
 
@@ -312,9 +508,10 @@ struct Property {
 }
 
 impl Property {
-    fn new_from_xml(xml: xmltree::Element) -> anyhow::Result<Self> {
-        let (static_data, xml) = PropStaticData::from_xml(xml)?;
+    fn new_from_xml(xml: xmltree::Element, sort_pos: u64) -> anyhow::Result<Self> {
+        let (mut static_data, xml) = PropStaticData::from_xml(xml)?;
         let (dynamic_data, xml) = PropDynamicData::from_xml(xml)?;
+        static_data.sort_pos = sort_pos;
         let mut elements = Vec::new();
         for mut child in xml.into_elements(None) {
             let name = child.attr_string_or_err("name")?;
@@ -343,7 +540,6 @@ impl Property {
                 name,
                 label,
                 value,
-                change_cnt: 0,
                 changed: false
             });
         }
@@ -416,7 +612,6 @@ impl Property {
                     }
                 }
                 elem.changed = true;
-                elem.change_cnt += 1;
             } else {
                 anyhow::bail!(
                     "Element `{}` of property {} of device `{}` not found",
@@ -474,11 +669,10 @@ impl Property {
 
 #[derive(Debug, Clone)]
 pub struct PropElement {
-    pub name:       String,
-    pub label:      Option<String>,
-    pub value:      PropValue,
-    pub change_cnt: u64,
-    changed:        bool,
+    pub name:  String,
+    pub label: Option<String>,
+    pub value: PropValue,
+    changed:   bool,
 }
 
 #[derive(Debug, Clone)]
@@ -520,9 +714,22 @@ pub struct BlobPropValue {
 }
 
 type Device = HashMap<String, Property>;
-struct Devices(HashMap<String, Device>);
+struct Devices {
+    list:       HashMap<String, Device>,
+    change_cnt: u64,
+    sort_cnt:   u64,
+}
 
 impl Devices {
+
+    fn new() -> Self {
+        Self {
+            list:       HashMap::new(),
+            change_cnt: 0,
+            sort_cnt:   0,
+        }
+    }
+
     fn basic_check_device_and_prop_name(
         device_name: &str,
         prop_name:   &str
@@ -537,7 +744,7 @@ impl Devices {
     }
 
     fn get_names(&self) -> Vec<String> {
-        self.0
+        self.list
             .keys()
             .map(String::clone)
             .collect()
@@ -561,7 +768,7 @@ impl Devices {
     }
 
     fn get_device_by_driver(&self, driver_name: &str) -> Option<String> {
-        self.0.keys()
+        self.list.keys()
             .unique()
             .find(|&device| {
                 let exec_driver_prop = self.get_text_property(
@@ -575,26 +782,35 @@ impl Devices {
     }
 
     fn get_device_by_name(&self, device_name: &str) -> Result<&Device> {
-        self.0
+        self.list
             .get(device_name)
             .ok_or_else(|| Error::DeviceNotExists(device_name.to_string()))
     }
 
-    fn get_properties_list(&self, device: Option<&str>) -> Vec<ExportProperty> {
-        self.0
+    fn get_properties_list(
+        &self,
+        device:        Option<&str>,
+        changed_after: Option<u64>,
+    ) -> Vec<ExportProperty> {
+        self.list
             .iter()
-            .filter(|(k, _)|
+            .filter(|(k, _)| {
                 device.is_none() || Some(k.as_str()) == device
-            )
+            })
             .flat_map(|(device, props)| {
-                props.iter().map(|(prop_name, prop)| {
-                    ExportProperty {
+                props.iter().filter_map(|(prop_name, prop)| {
+                    if let Some(changed_after) = changed_after {
+                        if prop.dynamic_data.change_cnt <= changed_after {
+                            return None;
+                        }
+                    }
+                    Some(ExportProperty {
                         device: device.to_string(),
                         name: prop_name.to_string(),
                         static_data: Arc::clone(&prop.static_data),
                         dynamic_data: prop.dynamic_data.clone(),
                         elements: prop.elements.clone()
-                    }
+                    })
                 })
             })
             .collect()
@@ -625,7 +841,7 @@ impl Devices {
         elem_get_name:   impl Fn(usize) -> &'a str,
         req_type_str:    &str,
     ) -> Result<()> {
-        let Some(device) = self.0.get(device_name)
+        let Some(device) = self.list.get(device_name)
         else {
             return Err(Error::DeviceNotExists(device_name.to_string()));
         };
@@ -818,7 +1034,7 @@ impl Devices {
         &'a self,
         device_name: &str
     ) -> Result<&'a Device> {
-        let Some(device) = self.0.get(device_name) else {
+        let Some(device) = self.list.get(device_name) else {
             return Err(Error::DeviceNotExists(
                 device_name.to_string()
             ));
@@ -958,7 +1174,7 @@ impl Connection {
                 ConnState::Disconnected
             )),
             devices: Arc::new(Mutex::new(
-                Devices(HashMap::new())
+                Devices::new()
             )),
             subscriptions: Arc::new(
                 Mutex::new(Subscriptions::new())
@@ -1091,7 +1307,8 @@ impl Connection {
                         conn_state,
                         devices,
                         stream,
-                        XmlSender { xml_sender }
+                        XmlSender { xml_sender },
+                        settings.activate_all_devices,
                     );
                     receiver.main(events_sender);
                 })
@@ -1157,7 +1374,7 @@ impl Connection {
             }
 
             // Clear devices properties
-            self.devices.lock().unwrap().0.clear();
+            self.devices.lock().unwrap().list.clear();
 
             // Setting new "disconnected" state
             Self::set_new_conn_state(
@@ -1185,13 +1402,17 @@ impl Connection {
         devices.get_device_by_driver(driver_name)
     }
 
-    pub fn get_properties_list(&self, device: Option<&str>) -> Vec<ExportProperty> {
+    pub fn get_properties_list(
+        &self,
+        device:        Option<&str>,
+        changed_after: Option<u64>,
+    ) -> Vec<ExportProperty> {
         let devices = self.devices.lock().unwrap();
-        let mut result = devices.get_properties_list(device);
-        result.sort_by(|d1, d2| {
+        let mut result = devices.get_properties_list(device, changed_after);
+        result.sort_by(|d1, d2| { // TODO: optional
             let res = d1.device.cmp(&d2.device);
             if res != Ordering::Equal { return res; }
-            d1.name.cmp(&d2.name)
+            d1.static_data.sort_pos.cmp(&d2.static_data.sort_pos)
         });
         result
     }
@@ -1317,6 +1538,34 @@ impl Connection {
                 timeout_ms
             )?;
         }
+        Ok(())
+    }
+
+    pub fn command_set_text_property(
+        &self,
+        device_name: &str,
+        prop_name:   &str,
+        elements:    &[(&str, &str)]
+    ) -> Result<()> {
+        Devices::basic_check_device_and_prop_name(
+            device_name,
+            prop_name
+        )?;
+        self.devices.lock().unwrap().check_property_exists(
+            device_name,
+            prop_name,
+            elements.len(),
+            |tp| matches!(*tp, PropType::Text),
+            |index| elements[index].0,
+            "Text",
+        )?;
+        self.with_conn_data_or_err(|data| {
+            data.xml_sender.command_set_text_property(
+                device_name,
+                prop_name,
+                elements
+            )
+        })?;
         Ok(())
     }
 
@@ -2431,6 +2680,23 @@ impl XmlSender {
         Ok(())
     }
 
+    fn command_set_text_property(
+        &self,
+        device_name: &str,
+        prop_name:   &str,
+        elements:    &[(&str, &str)]
+    ) -> Result<()> {
+        self.command_set_property_impl(
+            device_name,
+            prop_name,
+            "newTextVector",
+            "oneText",
+            elements.len(),
+            |index| elements[index].0,
+            |index| elements[index].1.to_string(),
+        )
+    }
+
     fn command_set_switch_property(
         &self,
         device_name: &str,
@@ -2507,14 +2773,16 @@ struct XmlReceiver {
     read_buffer:   Vec<u8>,
     start_tag_re:  regex::bytes::Regex,
     begin_blob_re: regex::bytes::Regex,
+    activate_devs: bool,
 }
 
 impl XmlReceiver {
     fn new(
-        conn_state: Arc<Mutex<ConnState>>,
-        devices:    Arc<Mutex<Devices>>,
-        stream:     TcpStream,
-        xml_sender: XmlSender,
+        conn_state:    Arc<Mutex<ConnState>>,
+        devices:       Arc<Mutex<Devices>>,
+        stream:        TcpStream,
+        xml_sender:    XmlSender,
+        activate_devs: bool,
     ) -> Self {
         Self {
             conn_state,
@@ -2525,6 +2793,7 @@ impl XmlReceiver {
             read_buffer: Vec::new(),
             start_tag_re: regex::bytes::Regex::new(r"<(\w+)[> /]").unwrap(),
             begin_blob_re: regex::bytes::Regex::new(r#"(?m)<setBLOBVector\s+device="(.*?)"\s+name="(.*?)"(?:.|\s)*?<oneBLOB[^>]+?name="(.*?)"[^>]+?len="(.*?)"(?:.|\s)*?>"#).unwrap(),
+            activate_devs,
         }
     }
 
@@ -2542,7 +2811,6 @@ impl XmlReceiver {
                     if log::log_enabled!(log::Level::Trace) {
                         log::trace!("indi_api: incoming xml =\n{}", xml);
                     }
-
                     timeout_processed = false;
                     let process_xml_res = self.process_xml(&xml, blob, time, &events_sender);
                     if let Err(err) = process_xml_res {
@@ -2780,13 +3048,16 @@ impl XmlReceiver {
             let device_name = xml_elem.attr_string_or_err("device")?;
             let prop_name = xml_elem.attr_string_or_err("name")?;
             let timestamp = xml_elem.attr_time_or_err("timestamp")?;
-            let property = Property::new_from_xml(xml_elem)?;
-            let values = property.get_values(false);
             let mut devices = self.devices.lock().unwrap();
-            if let Some(device) = devices.0.get_mut(&device_name) {
+            let mut property = Property::new_from_xml(xml_elem, devices.sort_cnt)?;
+            let values = property.get_values(false);
+            devices.change_cnt += 1;
+            devices.sort_cnt += 1;
+            property.dynamic_data.change_cnt = devices.change_cnt;
+            if let Some(device) = devices.list.get_mut(&device_name) {
                 device.insert(prop_name.clone(), property);
             } else {
-                devices.0.insert(
+                devices.list.insert(
                     device_name.clone(),
                     HashMap::from([
                         (prop_name.clone(), property)
@@ -2807,7 +3078,9 @@ impl XmlReceiver {
             let prop_name = xml_elem.attr_string_or_err("name")?;
             let timestamp = xml_elem.attr_time_or_err("timestamp")?;
             let mut devices = self.devices.lock().unwrap();
-            let Some(device) = devices.0.get_mut(&device_name) else {
+            devices.change_cnt += 1;
+            let change_cnt = devices.change_cnt;
+            let Some(device) = devices.list.get_mut(&device_name) else {
                 anyhow::bail!(Error::DeviceNotExists(device_name));
             };
             let Some(property) = device.get_mut(&prop_name) else {
@@ -2816,6 +3089,7 @@ impl XmlReceiver {
                     prop_name
                 ));
             };
+            property.dynamic_data.change_cnt = change_cnt;
             property.update_dyn_data_from_xml(
                 &mut xml_elem,
                 blob,
@@ -2838,7 +3112,7 @@ impl XmlReceiver {
             let timestamp = xml_elem.attr_time_or_err("timestamp")?;
             let mut devices = self.devices.lock().unwrap();
             if let Some(prop_name) = xml_elem.attributes.remove("name") {
-                let Some(device) = devices.0.get_mut(&device_name) else {
+                let Some(device) = devices.list.get_mut(&device_name) else {
                     anyhow::bail!(Error::DeviceNotExists(device_name));
                 };
                 device
@@ -2854,7 +3128,7 @@ impl XmlReceiver {
                     events_sender
                 );
             } else {
-                let removed = devices.0.remove(&device_name).is_some();
+                let removed = devices.list.remove(&device_name).is_some();
                 if !removed {
                     anyhow::bail!(Error::DeviceNotExists(device_name));
                 }
@@ -2879,15 +3153,19 @@ impl XmlReceiver {
     fn process_time_out(&mut self) -> anyhow::Result<()> {
         match self.state {
             XmlReceiverState::WaitForDevicesList => {
-                let devices = self.devices.lock().unwrap();
-                let names = devices.get_names();
-                for device_name in names {
-                    self.xml_sender.command_enable_device(
-                        &device_name,
-                        true
-                    )?;
+                if self.activate_devs {
+                    let devices = self.devices.lock().unwrap();
+                    let names = devices.get_names();
+                    for device_name in names {
+                        self.xml_sender.command_enable_device(
+                            &device_name,
+                            true
+                        )?;
+                    }
+                    self.state = XmlReceiverState::WaitForDevicesOn;
+                } else {
+                    self.state = XmlReceiverState::Working;
                 }
-                self.state = XmlReceiverState::WaitForDevicesOn;
             },
             XmlReceiverState::WaitForDevicesOn => {
                 self.state = XmlReceiverState::Working;

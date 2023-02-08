@@ -2,8 +2,6 @@ use std::{
     rc::Rc,
     sync::{*, atomic::AtomicI64},
     cell::RefCell,
-    io::{prelude::*, BufWriter},
-    fs::File,
     path::PathBuf,
     f32::consts::PI,
     thread::JoinHandle,
@@ -588,7 +586,6 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let bldr = &data.main.builder;
     gtk_utils::connect_action(&data.main.window, data, "take_shot",             handler_action_take_shot);
     gtk_utils::connect_action(&data.main.window, data, "stop_shot",             handler_action_stop_shot);
-    gtk_utils::connect_action(&data.main.window, data, "help_save_indi",        handler_action_help_save_indi);
     gtk_utils::connect_action(&data.main.window, data, "start_live_stacking",   handler_action_start_live_stacking);
     gtk_utils::connect_action(&data.main.window, data, "stop_live_stacking",    handler_action_stop_live_stacking);
     gtk_utils::connect_action(&data.main.window, data, "clear_light_history",   handler_action_clear_light_history);
@@ -749,7 +746,9 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let scl_gamma = bldr.object::<gtk::Scale>("scl_gamma").unwrap();
     scl_gamma.connect_value_changed(clone!(@strong data => move |scl| {
         let Ok(mut options) = data.options.try_borrow_mut() else { return; };
-        options.preview.gamma = scl.value();
+        let new_value = (scl.value() * 10.0).round() / 10.0;
+        if options.preview.gamma == new_value { return; }
+        options.preview.gamma = new_value;
         drop(options);
         show_preview_image(&data, None, None);
     }));
@@ -1027,7 +1026,7 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.live.min_stars       = gtk_utils::get_f64      (bld, "spb_min_stars") as usize;
     options.live.out_dir         = gtk_utils::get_pathbuf  (bld, "fch_live_folder").unwrap_or_default();
     options.preview.auto_black   = gtk_utils::get_bool     (bld, "chb_auto_black");
-    options.preview.gamma        = gtk_utils::get_f64      (bld, "scl_gamma");
+    options.preview.gamma        = (gtk_utils::get_f64     (bld, "scl_gamma") * 10.0).round() / 10.0;
     options.hist_log_x           = gtk_utils::get_bool     (bld, "ch_hist_logx");
     options.hist_log_y           = gtk_utils::get_bool     (bld, "ch_hist_logy");
     options.cam_ctrl_exp         = gtk_utils::get_bool     (bld, "exp_cam_ctrl");
@@ -1883,46 +1882,6 @@ fn stop_live_view(data: &Rc<CameraData>) {
     });
 }
 
-fn handler_action_help_save_indi(data: &Rc<CameraData>) {
-    let ff = gtk::FileFilter::new();
-        ff.set_name(Some("Text files"));
-        ff.add_pattern("*.txt");
-    let fc = gtk::FileChooserDialog::builder()
-        .action(gtk::FileChooserAction::Save)
-        .title("Enter file name to save properties")
-        .filter(&ff)
-        .modal(true)
-        .transient_for(&data.main.window)
-        .build();
-    fc.add_buttons(&[
-        ("_Cancel", gtk::ResponseType::Cancel),
-        ("_Save", gtk::ResponseType::Accept),
-    ]);
-    let resp = fc.run();
-    fc.close();
-    if resp == gtk::ResponseType::Accept {
-        gtk_utils::exec_and_show_error(&data.main.window, || {
-            let all_props = data.main.indi.get_properties_list(None);
-            let file_name = fc.file().expect("File name").path().unwrap().with_extension("txt");
-            let mut file = BufWriter::new(File::create(file_name)?);
-            for prop in all_props {
-                for elem in prop.elements {
-                    write!(
-                        &mut file, "{:20}.{:27}.{:27} = ",
-                        prop.device, prop.name, elem.name,
-                    )?;
-                    if let indi_api::PropValue::Blob(blob) = elem.value {
-                        writeln!(&mut file, "[BLOB len={}]", blob.data.len())?;
-                    } else {
-                        writeln!(&mut file, "{:?}", elem.value)?;
-                    }
-                }
-            }
-            Ok(())
-        });
-    }
-}
-
 fn process_conn_state_event(
     data:       &Rc<CameraData>,
     conn_state: indi_api::ConnState
@@ -2213,10 +2172,10 @@ fn paint_histogram(
     cr.set_font_size(12.0);
 
     let max_y_text_te = cr.text_extents(max_y_text)?;
-    let left_margin = max_y_text_te.width + 5.0;
+    let left_margin = max_y_text_te.width() + 5.0;
     let right_margin = 3.0;
     let top_margin = 3.0;
-    let bottom_margin = cr.text_extents(min_y_text)?.width + 3.0;
+    let bottom_margin = cr.text_extents(min_y_text)?.width() + 3.0;
     let area_width = width as f64 - left_margin - right_margin;
     let area_height = height as f64 - top_margin - bottom_margin;
 
@@ -2226,7 +2185,7 @@ fn paint_histogram(
     cr.stroke()?;
 
     cr.set_source_rgb(fg.red(), fg.green(), fg.blue());
-    cr.move_to(0.0, top_margin+max_y_text_te.height);
+    cr.move_to(0.0, top_margin+max_y_text_te.height());
     cr.show_text(max_y_text)?;
     cr.move_to(0.0, height as f64 - bottom_margin);
     cr.show_text(min_y_text)?;
@@ -2372,8 +2331,8 @@ fn update_light_history_table(data: &Rc<CameraData>) {
                     .clickable(true)
                     .visible(true)
                     .build();
-                col.pack_start(&cell_text, true);
-                col.add_attribute(&cell_text, "markup", idx as i32);
+                TreeViewColumnExt::pack_start(&col, &cell_text, true);
+                TreeViewColumnExt::add_attribute(&col, &cell_text, "markup", idx as i32);
                 tree.append_column(&col);
             }
             tree.set_model(Some(&model));

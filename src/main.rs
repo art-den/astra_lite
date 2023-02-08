@@ -15,6 +15,7 @@ mod indi_api;
 mod gtk_utils;
 mod gui_main;
 mod gui_hardware;
+mod gui_indi;
 mod gui_camera;
 mod io_utils;
 mod image_processing;

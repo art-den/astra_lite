@@ -1,7 +1,15 @@
-use std::{rc::Rc, cell::RefCell, collections::HashMap, borrow::Cow};
+use std::{
+    rc::Rc,
+    cell::{RefCell, Cell},
+    collections::HashMap,
+    borrow::Cow,
+    io::{prelude::*, BufWriter},
+    fs::File,
+};
+
 use gtk::{prelude::*, glib, glib::clone};
 use serde::{Serialize, Deserialize};
-use crate::{gui_main::*, gtk_utils, indi_api, io_utils::*};
+use crate::{gui_main::*, gtk_utils, indi_api, io_utils::*, gui_indi::*};
 use chrono::prelude::*;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -25,12 +33,13 @@ impl Default for HardwareOptions {
         }
     }
 }
-
 struct HardwareData {
     main:         Rc<MainData>,
     options:      RefCell<HardwareOptions>,
     indi_drivers: indi_api::Drivers,
     indi_conn:    RefCell<Option<indi_api::Subscription>>,
+    indi_gui:     IndiGui,
+    remote:       Cell<bool>,
 }
 
 impl Drop for HardwareData {
@@ -49,20 +58,25 @@ pub fn build_ui(
         let mut options = HardwareOptions::default();
         load_json_from_config_file(&mut options, "conf_hardware")?;
 
+        let sidebar = data.builder.object("sdb_indi").unwrap();
+        let stack = data.builder.object("stk_indi").unwrap();
+
         let hw_data = Rc::new(HardwareData {
             main:         Rc::clone(data),
             options:      RefCell::new(options),
             indi_drivers: drivers,
             indi_conn:    RefCell::new(None),
+            indi_gui:     IndiGui::new(&data.indi, sidebar, stack),
+            remote:       Cell::new(false),
         });
 
         fill_devices_name(&hw_data);
         show_options(&hw_data);
 
-        gtk_utils::connect_action(&data.window, &hw_data, "conn_indi",           handler_action_conn_indi);
-        gtk_utils::connect_action(&data.window, &hw_data, "disconn_indi",        handler_action_disconn_indi);
-        gtk_utils::connect_action(&data.window, &hw_data, "crash_camera_driver", handler_action_crash_camera_driver);
-        gtk_utils::connect_action(&data.window, &hw_data, "clear_hw_log",        handler_action_clear_hw_log);
+        gtk_utils::connect_action(&data.window, &hw_data, "help_save_indi", handler_action_help_save_indi);
+        gtk_utils::connect_action(&data.window, &hw_data, "conn_indi",      handler_action_conn_indi);
+        gtk_utils::connect_action(&data.window, &hw_data, "disconn_indi",   handler_action_disconn_indi);
+        gtk_utils::connect_action(&data.window, &hw_data, "clear_hw_log",   handler_action_clear_hw_log);
 
         connect_indi_events(&hw_data);
         correct_ctrls_by_conn_status(&hw_data);
@@ -83,9 +97,9 @@ fn handler_close_window(data: &Rc<HardwareData>) -> gtk::Inhibit {
         data.main.indi.unsubscribe(indi_conn);
     }
 
-    log::info!("Disabling all INDI devices...");
-    _ = data.main.indi.command_enable_all_devices(false, true, Some(2000));
-    log::info!("Done!");
+    if !data.remote.get() {
+        _ = data.main.indi.command_enable_all_devices(false, true, Some(2000));
+    }
 
     log::info!("Disconnecting from INDI...");
     _ = data.main.indi.disconnect_and_wait();
@@ -161,15 +175,11 @@ fn connect_indi_events(data: &Rc<HardwareData>) {
             indi_api::Event::ConnChange(conn_state) => {
                 *data.main.indi_status.borrow_mut() = conn_state;
                 correct_ctrls_by_conn_status(&data);
-                update_chash_buttons_visiblity(&data);
             },
             indi_api::Event::PropChange(event) => {
                 match &event.change {
                     indi_api::PropChange::New(value) => {
                         log_prop_change(&event.device_name, &event.prop_name, true, value);
-                        if event.prop_name == "CCD_SIMULATE_CRASH" {
-                            update_chash_buttons_visiblity(&data);
-                        }
                     },
                     indi_api::PropChange::Change(value) => {
                         log_prop_change(&event.device_name, &event.prop_name, false, value);
@@ -179,11 +189,9 @@ fn connect_indi_events(data: &Rc<HardwareData>) {
                     },
                 };
             },
-
             indi_api::Event::DeviceDelete(event) => {
                 log::debug!("(-) {:20}", &event.device_name);
             },
-
             indi_api::Event::Message(message) => {
                 log::info!("indi: device={}, text={}", message.device_name, message.text);
                 add_log_record(&data, &message);
@@ -223,10 +231,12 @@ fn handler_action_conn_indi(data: &Rc<HardwareData>) {
         }
         let conn_settings = indi_api::ConnSettings {
             drivers,
-            remote: options.remote,
-            host:   options.address.clone(),
+            remote:               options.remote,
+            host:                 options.address.clone(),
+            activate_all_devices: !options.remote,
             .. Default::default()
         };
+        data.remote.set(options.remote);
         drop(options);
         data.main.indi.connect(&conn_settings)?;
         Ok(())
@@ -235,7 +245,9 @@ fn handler_action_conn_indi(data: &Rc<HardwareData>) {
 
 fn handler_action_disconn_indi(data: &Rc<HardwareData>) {
     gtk_utils::exec_and_show_error(&data.main.window, || {
-        data.main.indi.command_enable_all_devices(false, true, Some(2000))?;
+        if !data.remote.get() {
+            data.main.indi.command_enable_all_devices(false, true, Some(2000))?;
+        }
         data.main.indi.disconnect_and_wait()?;
         Ok(())
     });
@@ -306,27 +318,6 @@ fn read_options_from_widgets(data: &Rc<HardwareData>) {
     options.address = gtk_utils::get_string   (bldr, "e_remote_addr");
 }
 
-fn update_chash_buttons_visiblity(data: &Rc<HardwareData>) {
-    let options = data.options.borrow();
-    let connected = data.main.indi.state() == indi_api::ConnState::Connected;
-    let camera_crash_enabled = connected && if let Some(camera) = options.camera.as_ref() {
-        data.main.indi.device_is_simu_chash_supported(camera).unwrap_or(false)
-    } else {
-        false
-    };
-    gtk_utils::show_widgets(
-        &data.main.builder,
-        &[("btn_crash_camera", camera_crash_enabled)]
-    )
-}
-
-fn handler_action_crash_camera_driver(data: &Rc<HardwareData>) {
-    let options = data.options.borrow();
-    let Some(camera) = options.camera.as_ref() else { return; };
-    log::info!("Crashing driver for camera {}", camera);
-    _ = data.main.indi.device_chash(camera, true, None);
-}
-
 fn add_log_record(
     data:    &Rc<HardwareData>,
     message: &indi_api::MessageEvent
@@ -355,8 +346,8 @@ fn add_log_record(
                     .clickable(true)
                     .visible(true)
                     .build();
-                col.pack_start(&cell_text, true);
-                col.add_attribute(&cell_text, "text", idx as i32);
+                TreeViewColumnExt::pack_start(&col, &cell_text, true);
+                TreeViewColumnExt::add_attribute(&col, &cell_text, "text", idx as i32);
                 tv_hw_log.append_column(&col);
             }
             tv_hw_log.set_model(Some(&model));
@@ -392,4 +383,44 @@ fn handler_action_clear_hw_log(data: &Rc<HardwareData>) {
     let Some(model) = tv_hw_log.model() else { return; };
     let model = model.downcast::<gtk::ListStore>().unwrap();
     model.clear();
+}
+
+fn handler_action_help_save_indi(data: &Rc<HardwareData>) {
+    let ff = gtk::FileFilter::new();
+        ff.set_name(Some("Text files"));
+        ff.add_pattern("*.txt");
+    let fc = gtk::FileChooserDialog::builder()
+        .action(gtk::FileChooserAction::Save)
+        .title("Enter file name to save properties")
+        .filter(&ff)
+        .modal(true)
+        .transient_for(&data.main.window)
+        .build();
+    fc.add_buttons(&[
+        ("_Cancel", gtk::ResponseType::Cancel),
+        ("_Save", gtk::ResponseType::Accept),
+    ]);
+    let resp = fc.run();
+    fc.close();
+    if resp == gtk::ResponseType::Accept {
+        gtk_utils::exec_and_show_error(&data.main.window, || {
+            let all_props = data.main.indi.get_properties_list(None, None);
+            let file_name = fc.file().expect("File name").path().unwrap().with_extension("txt");
+            let mut file = BufWriter::new(File::create(file_name)?);
+            for prop in all_props {
+                for elem in prop.elements {
+                    write!(
+                        &mut file, "{:20}.{:27}.{:27} = ",
+                        prop.device, prop.name, elem.name,
+                    )?;
+                    if let indi_api::PropValue::Blob(blob) = elem.value {
+                        writeln!(&mut file, "[BLOB len={}]", blob.data.len())?;
+                    } else {
+                        writeln!(&mut file, "{:?}", elem.value)?;
+                    }
+                }
+            }
+            Ok(())
+        });
+    }
 }
