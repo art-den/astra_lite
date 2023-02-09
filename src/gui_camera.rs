@@ -404,7 +404,7 @@ impl Default for PreviewOptions {
 #[serde(default)]
 struct CameraOptions {
     camera_name:    Option<String>,
-    live_view:   bool,
+    live_view:      bool,
     ctrl:           CamCtrlOptions,
     frame:          FrameOptions,
     calibr:         CalibrOptions,
@@ -429,7 +429,7 @@ impl Default for CameraOptions {
     fn default() -> Self {
         Self {
             camera_name:    None,
-            live_view:   false,
+            live_view:      false,
             preview:        PreviewOptions::default(),
             ctrl:           CamCtrlOptions::default(),
             frame:          FrameOptions::default(),
@@ -446,7 +446,7 @@ impl Default for CameraOptions {
             cam_ctrl_exp:   true,
             shot_exp:       true,
             calibr_exp:     false,
-            raw_frames_exp: true,
+            raw_frames_exp: false,
             live_exp:       false,
         }
     }
@@ -560,7 +560,6 @@ pub fn build_ui(
             MainThreadCommands::Exit =>
                 return Continue(false),
         }
-
         Continue(true)
     }));
     show_options(&camera_data);
@@ -570,9 +569,13 @@ pub fn build_ui(
     correct_ctrl_widgets_properties(&camera_data);
     connect_widgets_events(&camera_data);
     connect_img_mouse_scroll_events(&camera_data);
-    timer_handlers.push(Box::new(clone!(@weak camera_data => @default-panic, move ||
-        handler_timer(&camera_data);
-    )));
+
+    let weak_camera_data = Rc::downgrade(&camera_data);
+    timer_handlers.push(Box::new(move || {
+        let Some(data) = weak_camera_data.upgrade() else { return; };
+        handler_timer(&data);
+    }));
+
     data.window.connect_delete_event(clone!(@weak camera_data => @default-panic, move |_, _| {
         let res = handler_close_window(&camera_data);
         if res == Inhibit(false) {

@@ -1,16 +1,17 @@
 [package]
 name = "astra_lite"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 description = "Software for deepsky astrophotography"
 repository = "https://github.com/art-den/astra_lite"
 license = "MIT"
+build = "build.rs"
 
 [dependencies]
 gtk = "0.16"
 anyhow = "1.0"
-fitsio = "*"
-libc = "*"
+fitsio = "0.21.1"
+libc = "0.2"
 bitstream-io = "1.3"
 itertools = "0.10"
 tiff = "0.8"
@@ -26,6 +27,9 @@ log = "0.4"
 flexi_logger = "0.24"
 chrono = "0.4"
 once_cell = "1"
+
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "1.7"
 
 [profile.dev]
 opt-level = 1

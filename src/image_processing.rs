@@ -254,13 +254,17 @@ fn create_raw_image_from_blob(
             );
         }
         if status != 0 {
-            unsafe { sys::ffrprt(sys::stderr, status) };
-            panic!("bad status: {}", status); // TODO: return error
+            anyhow::bail!("sys::ffomem status = {}", status);
         }
         let mut f = unsafe { FitsFile::from_raw(
             fptr,
             FileOpenMode::READONLY
-        )}.unwrap();
+        )}.map_err(|e|
+            anyhow::anyhow!(
+                "FitsFile::from_raw failed with {}",
+                e.to_string()
+            )
+        )?;
         let raw_image = RawImage::new_from_fits(&mut f);
         return raw_image
     }

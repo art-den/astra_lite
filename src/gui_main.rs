@@ -27,9 +27,19 @@ const CSS: &[u8] = b"
     background: rgba(255, 255, 0, .05);
 }
 .expander > title {
-    background: rgba(64, 64, 255, .3);
+    color: mix(@theme_fg_color, rgb(0, 64, 255), 0.3);
+    background: rgba(0, 64, 255, .1);
 }
 ";
+
+// color: mix(@fg_color, rgb(0, 0, 255), 1);
+
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
+enum Theme {
+    #[default]
+    Dark,
+    Light,
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
@@ -37,14 +47,16 @@ pub struct MainOptions {
     win_width:     i32,
     win_height:    i32,
     win_maximized: bool,
+    theme:         Theme,
 }
 
 impl Default for MainOptions {
     fn default() -> Self {
         Self {
-            win_width: -1,
-            win_height: -1,
+            win_width:     -1,
+            win_height:    -1,
             win_maximized: false,
+            theme:         Theme::default(),
         }
     }
 }
@@ -110,6 +122,7 @@ pub fn build_ui(application: &gtk::Application) {
     window.set_application(Some(application));
     window.show();
     apply_options(&data);
+    apply_theme(&data);
     gtk::main_iteration_do(true);
     gtk::main_iteration_do(true);
     let data_weak = Rc::downgrade(&data);
@@ -134,6 +147,26 @@ pub fn build_ui(application: &gtk::Application) {
         &data,
         &mut data.timer_handlers.borrow_mut()
     );
+
+    gtk_utils::enable_widgets(&builder, &[
+        ("mi_color_theme", cfg!(target_os = "windows"))
+    ]);
+
+    let mi_dark_theme = builder.object::<gtk::RadioMenuItem>("mi_dark_theme").unwrap();
+    mi_dark_theme.connect_activate(clone!(@strong data => move |mi| {
+        if mi.is_active() {
+            data.options.borrow_mut().theme = Theme::Dark;
+            apply_theme(&data);
+        }
+    }));
+
+    let mi_light_theme = builder.object::<gtk::RadioMenuItem>("mi_light_theme").unwrap();
+    mi_light_theme.connect_activate(clone!(@strong data => move |mi| {
+        if mi.is_active() {
+            data.options.borrow_mut().theme = Theme::Light;
+            apply_theme(&data);
+        }
+    }));
 
     let data_weak = Rc::downgrade(&data);
     window.connect_delete_event(move |_, _| {
@@ -200,6 +233,24 @@ fn apply_options(data: &Rc<MainData>) {
 
     if options.win_maximized {
         data.window.maximize();
+    }
+
+    let mi_dark_theme = data.builder.object::<gtk::RadioMenuItem>("mi_dark_theme").unwrap();
+    let mi_light_theme = data.builder.object::<gtk::RadioMenuItem>("mi_light_theme").unwrap();
+    match options.theme {
+        Theme::Dark => mi_dark_theme.set_active(true),
+        Theme::Light => mi_light_theme.set_active(true),
+    }
+}
+
+fn apply_theme(data: &Rc<MainData>) {
+    if cfg!(target_os = "windows") {
+        let gtk_settings = gtk::Settings::default().unwrap();
+        let options = data.options.borrow();
+        gtk_settings.set_property(
+            "gtk-application-prefer-dark-theme",
+            options.theme == Theme::Dark
+        );
     }
 }
 

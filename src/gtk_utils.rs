@@ -135,10 +135,13 @@ pub fn get_list_view_selected_row(tree: &gtk::TreeView) -> Option<i32> {
 }
 
 pub fn is_combobox_empty<T: IsA<gtk::ComboBox>>(cb: &T) -> bool {
-    cb.model()
-        .unwrap()
-        .iter_first()
-        .is_none()
+    let Some(model) = cb.model() else { return true; };
+    model.iter_first().is_none()
+}
+
+pub fn is_named_combobox_empty(builder: &gtk::Builder, widget_name: &str) -> bool {
+    let cb = builder.object::<gtk::ComboBox>(widget_name).unwrap();
+    is_combobox_empty(&cb)
 }
 
 pub fn combobox_items_count<T: IsA<gtk::ComboBox>>(cb: &T) -> usize {

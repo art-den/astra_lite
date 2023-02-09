@@ -53,7 +53,9 @@ impl IndiGui {
 
         let data_weak = Rc::downgrade(&data);
         receiver.attach(None, move |event| {
-            let Some(data) = data_weak.upgrade() else { return Continue(false); };
+            let Some(data) = data_weak.upgrade() else {
+                return Continue(false);
+            };
             let mut data = data.borrow_mut();
             match event {
                 indi_api::Event::ConnChange(_) |

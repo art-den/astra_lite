@@ -151,6 +151,39 @@
         </child>
       </object>
     </child>
+    <child>
+      <object class="GtkMenuItem" id="mi_color_theme">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="label" translatable="yes">Color theme</property>
+        <property name="use-underline">True</property>
+        <child type="submenu">
+          <object class="GtkMenu">
+            <property name="visible">True</property>
+            <property name="can-focus">False</property>
+            <child>
+              <object class="GtkRadioMenuItem" id="mi_dark_theme">
+                <property name="visible">True</property>
+                <property name="can-focus">False</property>
+                <property name="label" translatable="yes">Dark</property>
+                <property name="use-underline">True</property>
+                <property name="draw-as-radio">True</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkRadioMenuItem" id="mi_light_theme">
+                <property name="visible">True</property>
+                <property name="can-focus">False</property>
+                <property name="label" translatable="yes">Light</property>
+                <property name="use-underline">True</property>
+                <property name="draw-as-radio">True</property>
+                <property name="group">mi_dark_theme</property>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
   </object>
   <object class="GtkApplicationWindow" id="window">
     <property name="can-focus">False</property>
@@ -1435,6 +1468,7 @@
                                     <property name="label" translatable="yes">[ Saving raw frames ]</property>
                                     <attributes>
                                       <attribute name="weight" value="bold"/>
+                                      <attribute name="underline" value="True"/>
                                     </attributes>
                                   </object>
                                 </child>

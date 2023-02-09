@@ -3310,6 +3310,12 @@ pub struct Drivers {
 }
 
 impl Drivers {
+    pub fn new_empty() -> Self {
+        Self {
+            groups: Vec::new(),
+        }
+    }
+
     pub fn new() -> Result<Self> {
         Self::new_from_directory(Path::new("/usr/share/indi"))
     }

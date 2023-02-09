@@ -53,13 +53,22 @@ pub fn build_ui(
     data:         &Rc<MainData>
 ) {
     gtk_utils::exec_and_show_error(&data.window, || {
-        let drivers = indi_api::Drivers::new()?;
-
         let mut options = HardwareOptions::default();
         load_json_from_config_file(&mut options, "conf_hardware")?;
 
         let sidebar = data.builder.object("sdb_indi").unwrap();
         let stack = data.builder.object("stk_indi").unwrap();
+
+        let (drivers, load_drivers_err) = match indi_api::Drivers::new() {
+            Ok(drivers) =>
+                (drivers, None),
+            Err(err) =>
+                (indi_api::Drivers::new_empty(), Some(err.to_string())),
+        };
+
+        if drivers.groups.is_empty() {
+            options.remote = true; // force remote mode if no devices info
+        }
 
         let hw_data = Rc::new(HardwareData {
             main:         Rc::clone(data),
@@ -79,11 +88,21 @@ pub fn build_ui(
         gtk_utils::connect_action(&data.window, &hw_data, "clear_hw_log",   handler_action_clear_hw_log);
 
         connect_indi_events(&hw_data);
-        correct_ctrls_by_conn_status(&hw_data);
+        correct_ctrls_by_cur_state(&hw_data);
 
         data.window.connect_delete_event(clone!(@weak hw_data => @default-panic, move |_, _| {
             handler_close_window(&hw_data)
         }));
+
+        if let Some(load_drivers_err) = load_drivers_err {
+            add_log_record(
+                &hw_data,
+                &Utc::now(),
+                "Common",
+                &format!("Load devices info error: {}", load_drivers_err)
+            );
+        }
+
         Ok(())
     });
 
@@ -108,7 +127,7 @@ fn handler_close_window(data: &Rc<HardwareData>) -> gtk::Inhibit {
     gtk::Inhibit(false)
 }
 
-fn correct_ctrls_by_conn_status(data: &Rc<HardwareData>) {
+fn correct_ctrls_by_cur_state(data: &Rc<HardwareData>) {
     let status = data.main.indi_status.borrow();
     let (conn_en, disconn_en, info_text) = match *status {
         indi_api::ConnState::Disconnected =>
@@ -128,12 +147,16 @@ fn correct_ctrls_by_conn_status(data: &Rc<HardwareData>) {
     ]);
     gtk_utils::set_str(&data.main.builder, "lbl_indi_conn_status", &info_text);
 
-    let disconnected = matches!(*status, indi_api::ConnState::Disconnected);
-    gtk_utils::enable_widgets(
-        &data.main.builder, &[
-        ("cb_mount", disconnected),
-        ("cb_camera", disconnected),
-        ("cb_focuser", disconnected)
+    let disconnected = matches!(
+        *status,
+        indi_api::ConnState::Disconnected|
+        indi_api::ConnState::Error(_)
+    );
+    gtk_utils::enable_widgets(&data.main.builder, &[
+        ("cb_mount",   disconnected && !gtk_utils::is_named_combobox_empty(&data.main.builder, "cb_mount")),
+        ("cb_camera",  disconnected && !gtk_utils::is_named_combobox_empty(&data.main.builder, "cb_camera")),
+        ("cb_focuser", disconnected && !gtk_utils::is_named_combobox_empty(&data.main.builder, "cb_focuser")),
+        ("chb_remote", !data.indi_drivers.groups.is_empty()),
     ]);
 }
 
@@ -174,7 +197,7 @@ fn connect_indi_events(data: &Rc<HardwareData>) {
         match event {
             indi_api::Event::ConnChange(conn_state) => {
                 *data.main.indi_status.borrow_mut() = conn_state;
-                correct_ctrls_by_conn_status(&data);
+                correct_ctrls_by_cur_state(&data);
             },
             indi_api::Event::PropChange(event) => {
                 match &event.change {
@@ -194,7 +217,12 @@ fn connect_indi_events(data: &Rc<HardwareData>) {
             },
             indi_api::Event::Message(message) => {
                 log::info!("indi: device={}, text={}", message.device_name, message.text);
-                add_log_record(&data, &message);
+                add_log_record(
+                    &data,
+                    &message.timestamp,
+                    &message.device_name,
+                    &message.text
+                );
             },
             _ => {},
         }
@@ -206,26 +234,30 @@ fn handler_action_conn_indi(data: &Rc<HardwareData>) {
     read_options_from_widgets(data);
     gtk_utils::exec_and_show_error(&data.main.window, || {
         let options = data.options.borrow();
-        let telescopes = data.indi_drivers.get_group_by_name("Telescopes")?;
-        let cameras = data.indi_drivers.get_group_by_name("CCDs")?;
-        let focusers = data.indi_drivers.get_group_by_name("Focusers")?;
-        let telescope_driver_name = options.mount.as_ref()
-            .and_then(|name| telescopes.get_item_by_device_name(name))
-            .map(|d| &d.driver);
-        let camera_driver_name = options.camera.as_ref()
-            .and_then(|name| cameras.get_item_by_device_name(name))
-            .map(|d| &d.driver);
-        let focuser_driver_name = options.focuser.as_ref()
-            .and_then(|name| focusers.get_item_by_device_name(name))
-            .map(|d| &d.driver);
-        let drivers: Vec<_> = [
-            telescope_driver_name,
-            camera_driver_name,
-            focuser_driver_name
-        ].iter()
-            .filter_map(|v| *v)
-            .cloned()
-            .collect();
+        let drivers = if !options.remote {
+            let telescopes = data.indi_drivers.get_group_by_name("Telescopes")?;
+            let cameras = data.indi_drivers.get_group_by_name("CCDs")?;
+            let focusers = data.indi_drivers.get_group_by_name("Focusers")?;
+            let telescope_driver_name = options.mount.as_ref()
+                .and_then(|name| telescopes.get_item_by_device_name(name))
+                .map(|d| &d.driver);
+            let camera_driver_name = options.camera.as_ref()
+                .and_then(|name| cameras.get_item_by_device_name(name))
+                .map(|d| &d.driver);
+            let focuser_driver_name = options.focuser.as_ref()
+                .and_then(|name| focusers.get_item_by_device_name(name))
+                .map(|d| &d.driver);
+            [ telescope_driver_name,
+              camera_driver_name,
+              focuser_driver_name
+            ].iter()
+                .filter_map(|v| *v)
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
         if !options.remote && drivers.is_empty() {
             anyhow::bail!("No devices selected");
         }
@@ -259,8 +291,8 @@ fn fill_devices_name(data: &Rc<HardwareData>) {
         cb_name:    &str,
         group_name: &str,
         active:     &Option<String>
-    ) -> anyhow::Result<()> {
-        let group = data.indi_drivers.get_group_by_name(group_name)?;
+    ) {
+        let Ok(group) = data.indi_drivers.get_group_by_name(group_name) else { return; };
         let model = gtk::TreeStore::new(&[String::static_type(), String::static_type()]);
         let cb = data.main.builder.object::<gtk::ComboBox>(cb_name).unwrap();
         let mut manufacturer_nodes = HashMap::<&str, gtk::TreeIter>::new();
@@ -290,13 +322,12 @@ fn fill_devices_name(data: &Rc<HardwareData>) {
         cb.set_id_column(0);
         cb.set_entry_text_column(1);
         cb.set_active_iter(active_iter.as_ref());
-        Ok(())
     }
     gtk_utils::exec_and_show_error(&data.main.window, || {
         let options = data.options.borrow();
-        fill_cb_list(data, "cb_mount",   "Telescopes", &options.mount)?;
-        fill_cb_list(data, "cb_camera",  "CCDs",       &options.camera)?;
-        fill_cb_list(data, "cb_focuser", "Focusers",   &options.focuser)?;
+        fill_cb_list(data, "cb_mount",   "Telescopes", &options.mount);
+        fill_cb_list(data, "cb_camera",  "CCDs",       &options.camera);
+        fill_cb_list(data, "cb_focuser", "Focusers",   &options.focuser);
         Ok(())
     });
 }
@@ -319,8 +350,10 @@ fn read_options_from_widgets(data: &Rc<HardwareData>) {
 }
 
 fn add_log_record(
-    data:    &Rc<HardwareData>,
-    message: &indi_api::MessageEvent
+    data:        &Rc<HardwareData>,
+    timestamp:   &DateTime<Utc>,
+    device_name: &str,
+    text:        &str,
 ) {
     let tv_hw_log = data.main.builder.object::<gtk::TreeView>("tv_hw_log").unwrap();
     let model = match tv_hw_log.model() {
@@ -358,13 +391,13 @@ fn add_log_record(
     let last_is_selected =
         gtk_utils::get_list_view_selected_row(&tv_hw_log).map(|v| v+1) ==
         Some(models_row_cnt as i32);
-    let local_time: DateTime<Local> = DateTime::from(message.timestamp);
+    let local_time: DateTime<Local> = DateTime::from(*timestamp);
     let local_time_str = local_time.format("%H:%M:%S").to_string();
     let last = model.insert_with_values(
         None, &[
         (0, &local_time_str),
-        (1, &message.device_name),
-        (2, &message.text),
+        (1, &device_name),
+        (2, &text),
     ]);
     if last_is_selected || models_row_cnt == 0 {
         tv_hw_log.selection().select_iter(&last);
