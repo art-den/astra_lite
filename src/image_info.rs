@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::f64::consts::PI;
 use std::sync::*;
@@ -109,38 +110,44 @@ impl LightImageInfo {
         let border = (noise * 100.0) as u32;
         let possible_stars = Mutex::new(Vec::new());
 
-        let find_possible_stars_in_rows = |y1: usize, y2: usize| {
-            let mut filtered = Vec::new();
-            filtered.resize(image.width(), 0);
+        thread_local! {
+            static FILTERED: RefCell<Vec<u16>> = RefCell::new(Vec::new());
+        }
 
-            for y in y1..y2 {
-                if y < MAX_STAR_DIAM/2 || y > image.height()-MAX_STAR_DIAM/2 {
-                    continue;
-                }
-                let row = image.row(y);
-                let mut filter = IirFilter::new();
-                filter.filter_direct_and_revert_u16(&iir_filter_coeffs, row, &mut filtered);
-                for (i, ((v1, v2, v3, v4, v5), f))
-                in row.iter().tuple_windows().zip(&filtered[2..]).enumerate() {
-                    let f1 = *v1 as u32 + *v2 as u32 + *v3 as u32;
-                    let f2 = *v2 as u32 + *v3 as u32 + *v4 as u32;
-                    let f3 = *v3 as u32 + *v4 as u32 + *v5 as u32;
-                    if f1 > f2 || f3 > f2 { continue; }
-                    let v = *v1 as u32 + *v2 as u32 + *v3 as u32;
-                    let f = *f as u32 * 3;
-                    if v > f && (v-f) > border {
-                        let star_x = i as isize+2;
-                        let star_y = y as isize;
-                        if star_x < MAX_STAR_DIAM as isize
-                        || star_y < MAX_STAR_DIAM as isize
-                        || star_x > (image.width() - MAX_STAR_DIAM) as isize
-                        || star_y > (image.height() - MAX_STAR_DIAM) as isize {
-                            continue; // skip points near image border
+        let find_possible_stars_in_rows = |y1: usize, y2: usize| {
+            FILTERED.with(|filtered| {
+                let filtered = &mut *filtered.borrow_mut();
+
+                filtered.resize(image.width(), 0);
+                for y in y1..y2 {
+                    if y < MAX_STAR_DIAM/2 || y > image.height()-MAX_STAR_DIAM/2 {
+                        continue;
+                    }
+                    let row = image.row(y);
+                    let mut filter = IirFilter::new();
+                    filter.filter_direct_and_revert_u16(&iir_filter_coeffs, row, filtered);
+                    for (i, ((v1, v2, v3, v4, v5), f))
+                    in row.iter().tuple_windows().zip(&filtered[2..]).enumerate() {
+                        let f1 = *v1 as u32 + *v2 as u32 + *v3 as u32;
+                        let f2 = *v2 as u32 + *v3 as u32 + *v4 as u32;
+                        let f3 = *v3 as u32 + *v4 as u32 + *v5 as u32;
+                        if f1 > f2 || f3 > f2 { continue; }
+                        let v = *v1 as u32 + *v2 as u32 + *v3 as u32;
+                        let f = *f as u32 * 3;
+                        if v > f && (v-f) > border {
+                            let star_x = i as isize+2;
+                            let star_y = y as isize;
+                            if star_x < MAX_STAR_DIAM as isize
+                            || star_y < MAX_STAR_DIAM as isize
+                            || star_x > (image.width() - MAX_STAR_DIAM) as isize
+                            || star_y > (image.height() - MAX_STAR_DIAM) as isize {
+                                continue; // skip points near image border
+                            }
+                            possible_stars.lock().unwrap().push((star_x, star_y, f2 / 3));
                         }
-                        possible_stars.lock().unwrap().push((star_x, star_y, f2 / 3));
                     }
                 }
-            }
+            });
         };
 
         if !mt {
@@ -161,6 +168,8 @@ impl LightImageInfo {
         }
 
         let mut possible_stars = possible_stars.into_inner().unwrap();
+
+        println!("possible_stars.len() = {}", possible_stars.len());
 
         possible_stars.sort_by_key(|(_, _, v)| -(*v as i32));
 
@@ -219,6 +228,8 @@ impl LightImageInfo {
                     hit
                 }
             );
+
+            dbg!(star_points.len());
 
             if !star_points.is_empty()
             && star_points.len() < MAX_STARS_POINTS_CNT

@@ -8,9 +8,29 @@ use std::{
 };
 
 use gtk::{prelude::*, glib, glib::clone};
+use itertools::Itertools;
 use serde::{Serialize, Deserialize};
 use crate::{gui_main::*, gtk_utils, indi_api, io_utils::*, gui_indi::*};
 use chrono::prelude::*;
+
+impl indi_api::ConnState {
+    fn to_str(&self, short: bool) -> Cow<str> {
+        match self {
+            indi_api::ConnState::Disconnected =>
+                Cow::from("Disconnected"),
+            indi_api::ConnState::Connecting =>
+                Cow::from("Connecting..."),
+            indi_api::ConnState::Connected =>
+                Cow::from("Connected"),
+            indi_api::ConnState::Disconnecting =>
+                Cow::from("Disconnecting..."),
+            indi_api::ConnState::Error(text) =>
+                if short { Cow::from("Connection error") }
+                else { Cow::from(format!("Error: {}", text)) },
+        }
+    }
+}
+
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
@@ -97,8 +117,8 @@ pub fn build_ui(
         if let Some(load_drivers_err) = load_drivers_err {
             add_log_record(
                 &hw_data,
-                &Utc::now(),
-                "Common",
+                &Some(Utc::now()),
+                "",
                 &format!("Load devices info error: {}", load_drivers_err)
             );
         }
@@ -129,23 +149,22 @@ fn handler_close_window(data: &Rc<HardwareData>) -> gtk::Inhibit {
 
 fn correct_ctrls_by_cur_state(data: &Rc<HardwareData>) {
     let status = data.main.indi_status.borrow();
-    let (conn_en, disconn_en, info_text) = match *status {
-        indi_api::ConnState::Disconnected =>
-            (true, false, Cow::from("Disconnected")),
-        indi_api::ConnState::Connecting =>
-            (false, false, Cow::from("Connecting...")),
-        indi_api::ConnState::Disconnecting =>
-            (false, false, Cow::from("Disconnecting...")),
-        indi_api::ConnState::Connected =>
-            (false, true, Cow::from("Connected")),
-        indi_api::ConnState::Error(ref text) =>
-            (true, false, Cow::from(format!("Error: {}", text))),
+    let (conn_en, disconn_en) = match *status {
+        indi_api::ConnState::Disconnected  => (true,  false),
+        indi_api::ConnState::Connecting    => (false, false),
+        indi_api::ConnState::Disconnecting => (false, false),
+        indi_api::ConnState::Connected     => (false, true),
+        indi_api::ConnState::Error(_)      => (true,  false),
     };
     gtk_utils::enable_actions(&data.main.window, &[
         ("conn_indi",    conn_en),
         ("disconn_indi", disconn_en),
     ]);
-    gtk_utils::set_str(&data.main.builder, "lbl_indi_conn_status", &info_text);
+    gtk_utils::set_str(
+        &data.main.builder,
+        "lbl_indi_conn_status",
+        &status.to_str(false)
+    );
 
     let disconnected = matches!(
         *status,
@@ -196,8 +215,12 @@ fn connect_indi_events(data: &Rc<HardwareData>) {
         let Some(data) = data.upgrade() else { return Continue(false); };
         match event {
             indi_api::Event::ConnChange(conn_state) => {
+                if let indi_api::ConnState::Error(_) = &conn_state {
+                    add_log_record(&data, &Some(Utc::now()), "", &conn_state.to_str(false))
+                }
                 *data.main.indi_status.borrow_mut() = conn_state;
                 correct_ctrls_by_cur_state(&data);
+                update_window_title(&data);
             },
             indi_api::Event::PropChange(event) => {
                 match &event.change {
@@ -351,7 +374,7 @@ fn read_options_from_widgets(data: &Rc<HardwareData>) {
 
 fn add_log_record(
     data:        &Rc<HardwareData>,
-    timestamp:   &DateTime<Utc>,
+    timestamp:   &Option<DateTime<Utc>>,
     device_name: &str,
     text:        &str,
 ) {
@@ -391,8 +414,13 @@ fn add_log_record(
     let last_is_selected =
         gtk_utils::get_list_view_selected_row(&tv_hw_log).map(|v| v+1) ==
         Some(models_row_cnt as i32);
-    let local_time: DateTime<Local> = DateTime::from(*timestamp);
-    let local_time_str = local_time.format("%H:%M:%S").to_string();
+
+    let local_time_str = if let Some(timestamp) = timestamp {
+        let local_time: DateTime<Local> = DateTime::from(*timestamp);
+        local_time.format("%H:%M:%S").to_string()
+    } else {
+        String::new()
+    };
     let last = model.insert_with_values(
         None, &[
         (0, &local_time_str),
@@ -456,4 +484,22 @@ fn handler_action_help_save_indi(data: &Rc<HardwareData>) {
             Ok(())
         });
     }
+}
+
+fn update_window_title(data: &Rc<HardwareData>) {
+    let options = data.options.borrow();
+    let status = data.main.indi_status.borrow();
+    let dev_list = [
+        ("mount",   &options.mount),
+        ("camera",  &options.camera),
+        ("focuser", &options.focuser),
+    ].iter()
+        .filter_map(|(str, v)| v.as_deref().map(
+            |v| format!("{}: {}", str, v)
+        ))
+        .join(", ");
+    data.main.set_dev_list_and_conn_status(
+        dev_list,
+        status.to_str(true).to_string()
+    );
 }

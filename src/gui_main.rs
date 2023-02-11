@@ -77,6 +77,8 @@ pub struct MainData {
     pub indi_status:  RefCell<indi_api::ConnState>,
     pub cur_frame:    Arc<ResultImage>,
     pub thread_timer: ThreadTimer,
+    pub conn_string:  RefCell<String>,
+    pub dev_string:   RefCell<String>,
 }
 
 impl Drop for MainData {
@@ -118,6 +120,8 @@ pub fn build_ui(application: &gtk::Application) {
         indi_status:    RefCell::new(indi_api::ConnState::Disconnected),
         cur_frame:      Arc::new(ResultImage::new()),
         thread_timer:   ThreadTimer::new(),
+        conn_string:    RefCell::new(String::new()),
+        dev_string:     RefCell::new(String::new()),
     });
     window.set_application(Some(application));
     window.show();
@@ -208,10 +212,7 @@ pub fn build_ui(application: &gtk::Application) {
         }
     }));
 
-    let title = window.title().map(|s| s.to_string()).unwrap_or_default();
-    let title = title.replace("${arch}", std::env::consts::ARCH);
-    let title = title.replace("${ver}", env!("CARGO_PKG_VERSION"));
-    window.set_title(&title)
+    update_window_title(&data);
 }
 
 
@@ -222,6 +223,16 @@ fn handler_close_window(data: &Rc<MainData>) -> gtk::Inhibit {
     drop(options);
 
     gtk::Inhibit(false)
+}
+
+fn update_window_title(data: &MainData) {
+    let title = "AstraLite (${arch} ver. ${ver})   --   Deepsky astrophotography and livestacking   --   [${devices_list}]   --   [${conn_status}]";
+    let title = title.replace("${arch}",         std::env::consts::ARCH);
+    let title = title.replace("${ver}",          env!("CARGO_PKG_VERSION"));
+    let title = title.replace("${devices_list}", &data.dev_string.borrow());
+    let title = title.replace("${conn_status}",  &data.conn_string.borrow());
+
+    data.window.set_title(&title)
 }
 
 fn apply_options(data: &Rc<MainData>) {
@@ -262,20 +273,6 @@ fn read_options_from_widgets(data: &Rc<MainData>) {
     options.win_maximized = data.window.is_maximized();
 }
 
-pub fn show_progress(data: &Rc<MainData>, progress: f64, text: String) {
-    let mut progress_data = data.progress.borrow_mut();
-    progress_data.progress = progress;
-    progress_data.text = text;
-    drop(progress_data);
-    let da_progress = data.builder.object::<gtk::DrawingArea>("da_progress").unwrap();
-    da_progress.queue_draw();
-}
-
-pub fn set_cur_action_text(data: &Rc<MainData>, text: &str) {
-    let lbl_cur_action = data.builder.object::<gtk::Label>("lbl_cur_action").unwrap();
-    lbl_cur_action.set_text(text);
-}
-
 fn handler_draw_progress(
     data: &Rc<MainData>,
     area: &gtk::DrawingArea,
@@ -291,6 +288,30 @@ fn handler_draw_progress(
         )
     });
 }
+
+impl MainData {
+    pub fn show_progress(&self, progress: f64, text: String) {
+        let mut progress_data = self.progress.borrow_mut();
+        progress_data.progress = progress;
+        progress_data.text = text;
+        drop(progress_data);
+        let da_progress = self.builder.object::<gtk::DrawingArea>("da_progress").unwrap();
+        da_progress.queue_draw();
+    }
+
+    pub fn set_cur_action_text(&self, text: &str) {
+        let lbl_cur_action = self.builder.object::<gtk::Label>("lbl_cur_action").unwrap();
+        lbl_cur_action.set_text(text);
+    }
+
+    pub fn set_dev_list_and_conn_status(&self, dev_list: String, conn_status: String) {
+        *self.dev_string.borrow_mut() = dev_list;
+        *self.conn_string.borrow_mut() = conn_status;
+        update_window_title(self);
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
 
 pub struct ThreadTimer {
     thread: Option<std::thread::JoinHandle<()>>,

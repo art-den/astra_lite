@@ -82,7 +82,12 @@ pub fn exec_and_show_error(
 ) {
     let exec_res = fun();
     if let Err(err) = exec_res {
-        show_error_message(window, "Error", err.to_string().as_str());
+        let message = if cfg!(debug_assertions) {
+            format!("{}\n\nat\n\n{}", err.to_string(), err.backtrace().to_string())
+        } else {
+            err.to_string()
+        };
+        show_error_message(window, "Error", &message);
     }
 }
 

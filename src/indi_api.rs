@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::io::{prelude::*, BufWriter, Cursor, ErrorKind};
 use std::net::{TcpStream, SocketAddr};
 use std::path::Path;
-use std::process::{Command, Child};
+use std::process::{Command, Child, Stdio};
 use std::sync::{Mutex, Arc, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -28,6 +28,9 @@ pub enum Error {
 
     #[error("Property `{1}` of device `{0}` not found")]
     PropertyNotExists(String, String),
+
+    #[error("No one of properties found of device `{0}`")]
+    NoOnePropertyFound(String),
 
     #[error("Property `{1}` of device `{0}` is read only")]
     PropertyIsReadOnly(String, String),
@@ -58,6 +61,7 @@ pub struct ConnSettings {
     pub remote: bool,
     pub host: String,
     pub port: u16,
+    pub server_exe: String,
     pub drivers: Vec<String>,
     pub activate_all_devices: bool,
 }
@@ -68,6 +72,7 @@ impl Default for ConnSettings {
             remote: false,
             host: "127.0.0.1".to_string(),
             port: 7624,
+            server_exe: "indiserver".to_string(),
             drivers: Vec::new(),
             activate_all_devices: true,
         }
@@ -110,19 +115,19 @@ pub enum PropChange {
 }
 
 pub struct PropChangeEvent {
-    pub timestamp:   DateTime<Utc>,
+    pub timestamp:   Option<DateTime<Utc>>,
     pub device_name: String,
     pub prop_name:   String,
     pub change:      PropChange,
 }
 
 pub struct DeviceDeleteEvent {
-    pub timestamp:   DateTime<Utc>,
+    pub timestamp:   Option<DateTime<Utc>>,
     pub device_name: String,
 }
 
 pub struct MessageEvent {
-    pub timestamp:   DateTime<Utc>,
+    pub timestamp:   Option<DateTime<Utc>>,
     pub device_name: String,
     pub text:        String,
 }
@@ -959,24 +964,6 @@ impl Devices {
         &self,
         device_name:   &str,
         prop_and_elem: &[(&'a str, &'a str)]
-    ) -> Result<Option<(&'a str, &'a str)>> {
-        let device = self.get_device(device_name)?;
-        for &(prop_name, elem_name) in prop_and_elem {
-            let Some(prop) = device.get(prop_name) else {
-                continue;
-            };
-            let elem_exists = prop.elements.iter().any(|e| e.name == elem_name);
-            if elem_exists {
-                return Ok(Some((prop_name, elem_name)));
-            }
-        }
-        Ok(None)
-    }
-
-    fn existing_prop_name_or_err<'a>(
-        &self,
-        device_name:   &str,
-        prop_and_elem: &[(&'a str, &'a str)]
     ) -> Result<(&'a str, &'a str)> {
         let device = self.get_device(device_name)?;
         for &(prop_name, elem_name) in prop_and_elem {
@@ -988,10 +975,7 @@ impl Devices {
                 return Ok((prop_name, elem_name));
             }
         }
-        Err(Error::PropertyNotExists(
-            device_name.to_string(),
-            prop_and_elem.iter().map(|(p, e)| format!("{}.{}", p, e)).join(", "),
-        ))
+        Err(Error::NoOnePropertyFound(device_name.to_string()))
     }
 
     fn get_property_static_data(
@@ -1200,6 +1184,53 @@ impl Connection {
         subscriptions.items.remove(&subscription);
     }
 
+    fn start_indi_server(
+        exe:     &str,
+        drivers: &Vec<String>,
+    ) -> anyhow::Result<Child> {
+        // Start indiserver process
+        let mut child = Command::new(exe)
+            .args(drivers.clone())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        // Wait 1 seconds and check is it alive
+        std::thread::sleep(Duration::from_millis(1000));
+        if let Ok(Some(status)) = child.try_wait() {
+            // kill zombie
+            _ = child.kill();
+            _ = child.wait();
+            // read stderr of process and return error information
+            let mut stderr_str = String::new();
+            let stderr_ok = child.stderr
+                .as_mut()
+                .unwrap()
+                .read_to_string(&mut stderr_str).is_ok();
+            if stderr_ok {
+                let stderr_lines: Vec<_> = stderr_str
+                    .split("\n")
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty() && !s.ends_with("good bye"))
+                    .collect();
+                if !stderr_lines.is_empty() {
+                    let mut err_text = *stderr_lines.last().unwrap();
+                    if let Some(space_pos) = err_text.find(" ") {
+                        err_text = &err_text[space_pos..];
+                    }
+                    anyhow::bail!(
+                        "Process `{}` terminated with code `{}` and text `{}`",
+                        exe, status.code().unwrap_or(0), err_text
+                    );
+                }
+            }
+            anyhow::bail!(
+                "Process `{}` terminated with code `{}`",
+                exe, status.code().unwrap_or(0)
+            );
+        }
+        Ok(child)
+    }
+
     pub fn connect(&self, settings: &ConnSettings) -> Result<()> {
         let mut state = self.state.lock().unwrap();
         match *state {
@@ -1223,12 +1254,12 @@ impl Connection {
             let subscriptions = Arc::clone(&subscriptions);
             // Start indi drivers
             let mut indiserver = if !settings.remote {
-                let start_indiserver_result = Command::new("indiserver")
-                    .args(settings.drivers.clone())
-                    .spawn();
-                match start_indiserver_result {
-                    Ok(child) =>
-                        Some(child),
+                let start_result = Self::start_indi_server(
+                    &settings.server_exe,
+                    &settings.drivers,
+                );
+                match start_result {
+                    Ok(child) => Some(child),
                     Err(err) => {
                         Self::set_new_conn_state(
                             ConnState::Error(err.to_string()),
@@ -1236,7 +1267,7 @@ impl Connection {
                             &subscriptions.lock().unwrap()
                         );
                         return;
-                    },
+                    }
                 }
             } else {
                 None
@@ -1263,7 +1294,10 @@ impl Connection {
             // Try to connect indi driver during 3 seconds
             let mut try_cnt = 30;
             let stream = loop {
-                match TcpStream::connect_timeout(&sock_addr, Duration::from_millis(10)) {
+                match TcpStream::connect_timeout(
+                    &sock_addr,
+                    Duration::from_millis(10)
+                ) {
                     Ok(stream) =>
                         break stream,
                     Err(err) => {
@@ -1322,8 +1356,13 @@ impl Connection {
                 })
             };
 
-            let mut data = data.lock().unwrap();
-            *data = Some(ActiveConnData{
+            // take indiserver stderr
+            let indiserver_stderr = indiserver
+                .as_mut()
+                .and_then(|v| v.stderr.take());
+
+            // Assign active connection data
+            *data.lock().unwrap() = Some(ActiveConnData{
                 indiserver,
                 tcp_stream: stream,
                 xml_sender: XmlSender { xml_sender },
@@ -1332,6 +1371,17 @@ impl Connection {
                 write_thread,
                 settings,
             });
+
+            // Read from indiserver's stderr and inform subscribers
+            if let Some(mut indiserver_stderr) = indiserver_stderr {
+                let mut stderr_data = Vec::new();
+                let mut buffer = [0_u8; 256];
+                while let Ok(read) = indiserver_stderr.read(&mut buffer) {
+                    stderr_data.extend_from_slice(&buffer[..read]);
+                    if read == 0 { break; }
+                    // TODO: parce error text and inform subscribers
+                }
+            }
         });
         Ok(())
     }
@@ -1740,28 +1790,33 @@ impl Connection {
         props:       PropsStr
     ) -> Result<bool> {
         let devices = self.devices.lock().unwrap();
-        Ok(devices.existing_prop_name(
+        let result = devices.existing_prop_name(
             device_name,
             props
-        )?.is_some())
+        );
+        if let Err(Error::NoOnePropertyFound(_)) = result {
+            Ok(false)
+        } else if let Err(err) = result {
+            Err(err)
+        } else {
+            Ok(true)
+        }
     }
 
     pub fn device_get_any_of_prop_info(
         &self,
         device_name: &str,
         props:       PropsStr
-    ) -> Result<Option<Arc<NumPropElemInfo>>> {
+    ) -> Result<Arc<NumPropElemInfo>> {
         let devices = self.devices.lock().unwrap();
-        let Some((prop_name, elem_name)) = devices.existing_prop_name(
+        let (prop_name, elem_name) = devices.existing_prop_name(
             device_name,
             props
-        )? else {
-            return Ok(None);
-        };
-        Ok(Some(devices.get_num_prop_elem_info(
+        )?;
+        devices.get_num_prop_elem_info(
             device_name,
             prop_name, elem_name
-        )?))
+        )
     }
 
     pub fn device_set_any_of_num_props(
@@ -1773,12 +1828,11 @@ impl Connection {
         timeout_ms:  Option<u64>,
     ) -> Result<()> {
         let devices = self.devices.lock().unwrap();
-        let (prop_name, elem_name) = devices.existing_prop_name_or_err(
+        let (prop_name, elem_name) = devices.existing_prop_name(
             device_name,
             props
         )?;
         drop(devices);
-
         self.command_set_num_property_and_wait(
             force_set,
             timeout_ms,
@@ -1797,7 +1851,7 @@ impl Connection {
         timeout_ms:  Option<u64>,
     ) -> Result<()> {
         let devices = self.devices.lock().unwrap();
-        let (prop_name, elem_name) = devices.existing_prop_name_or_err(
+        let (prop_name, elem_name) = devices.existing_prop_name(
             device_name,
             props
         )?;
@@ -1817,7 +1871,7 @@ impl Connection {
         props:       PropsStr,
     ) -> Result<f64> {
         let devices = self.devices.lock().unwrap();
-        let (prop_name, elem_name) = devices.existing_prop_name_or_err(
+        let (prop_name, elem_name) = devices.existing_prop_name(
             device_name,
             props
         )?;
@@ -1834,7 +1888,7 @@ impl Connection {
         props:       PropsStr,
     ) -> Result<bool> {
         let devices = self.devices.lock().unwrap();
-        let (prop_name, elem_name) = devices.existing_prop_name_or_err(
+        let (prop_name, elem_name) = devices.existing_prop_name(
             device_name,
             props
         )?;
@@ -1964,27 +2018,23 @@ impl Connection {
     pub fn camera_get_exposure_prop_info(
         &self,
         device_name: &str
-    ) -> Result<Option<Arc<NumPropElemInfo>>> {
+    ) -> Result<Arc<NumPropElemInfo>> {
         let devices = self.devices.lock().unwrap();
-        let Some((prop_name, elem_name)) = devices.existing_prop_name(
+        devices.get_num_prop_elem_info(
             device_name,
-            PROP_CAM_EXPOSURE
-        )? else {
-            return Ok(None);
-        };
-        Ok(Some(devices.get_num_prop_elem_info(
-            device_name,
-            prop_name, elem_name
-        )?))
+            "CCD_EXPOSURE",
+            "CCD_EXPOSURE_VALUE"
+        )
     }
 
     pub fn camera_get_exposure(
         &self,
         device_name: &str
     ) -> Result<f64> {
-        self.device_get_any_of_num_props(
+        self.get_num_property(
             device_name,
-            PROP_CAM_EXPOSURE
+            "CCD_EXPOSURE",
+            "CCD_EXPOSURE_VALUE"
         )
     }
 
@@ -1993,16 +2043,10 @@ impl Connection {
         device_name: &str,
         exposure:    f64
     ) -> Result<()> {
-        let devices = self.devices.lock().unwrap();
-        let (prop_name, elem_name) = devices.existing_prop_name_or_err(
-            device_name,
-            PROP_CAM_EXPOSURE
-        )?;
-        drop(devices);
         self.command_set_num_property(
             device_name,
-            prop_name,
-            &[(elem_name, exposure)]
+            "CCD_EXPOSURE",
+            &[("CCD_EXPOSURE_VALUE", exposure)]
         )
     }
 
@@ -2058,7 +2102,7 @@ impl Connection {
     pub fn camera_get_temperature_prop_info(
         &self,
         device_name: &str
-    ) -> Result<Option<Arc<NumPropElemInfo>>> {
+    ) -> Result<Arc<NumPropElemInfo>> {
         self.device_get_any_of_prop_info(
             device_name,
             PROP_CAM_TEMPERATURE
@@ -2094,7 +2138,7 @@ impl Connection {
     pub fn camera_get_gain_prop_info(
         &self,
         device_name: &str
-    ) -> Result<Option<Arc<NumPropElemInfo>>> {
+    ) -> Result<Arc<NumPropElemInfo>> {
         self.device_get_any_of_prop_info(
             device_name,
             PROP_CAM_GAIN
@@ -2132,7 +2176,7 @@ impl Connection {
     pub fn camera_get_offset_prop_info(
         &self,
         device_name: &str
-    ) -> Result<Option<Arc<NumPropElemInfo>>> {
+    ) -> Result<Arc<NumPropElemInfo>> {
         self.device_get_any_of_prop_info(
             device_name,
             PROP_CAM_OFFSET
@@ -2176,12 +2220,12 @@ impl Connection {
         timeout_ms:  Option<u64>,
     ) -> Result<bool> {
         let devices = self.devices.lock().unwrap();
-        let Some((prop, elem)) = (match format {
+        let (prop, elem) = match format {
             CaptureFormat::Rgb =>
                 devices.existing_prop_name(device_name, PROP_CAM_VIDEO_FORMAT_RGB)?,
             CaptureFormat::Raw =>
                 devices.existing_prop_name(device_name, PROP_CAM_VIDEO_FORMAT_RAW)?,
-        }) else { return Ok(false); };
+        };
 
         drop(devices);
         self.command_set_switch_property_and_wait(
@@ -2300,6 +2344,13 @@ impl Connection {
 
     // Camera frame size
 
+    pub fn camera_is_frame_supported(
+        &self,
+        device_name: &str,
+    ) -> Result<bool> {
+        self.property_exists(device_name, "CCD_FRAME", None)
+    }
+
     pub fn camera_set_frame_size(
         &self,
         device_name: &str,
@@ -2393,12 +2444,12 @@ impl Connection {
         timeout_ms:   Option<u64>,
     ) -> Result<bool> {
         let devices = self.devices.lock().unwrap();
-        let Some((prop, elem)) = (match binning_mode {
+        let (prop, elem) = match binning_mode {
             BinningMode::Add =>
                 devices.existing_prop_name(device_name, PROP_CAM_BIN_ADD)?,
             BinningMode::Avg =>
                 devices.existing_prop_name(device_name, PROP_CAM_BIN_AVG)?,
-        }) else { return Ok(false) };
+        };
         drop(devices);
         self.command_set_switch_property_and_wait(
             force_set,
@@ -2473,11 +2524,11 @@ impl Connection {
         timeout_ms:  Option<u64>,
     ) -> Result<bool> {
         let devices = self.devices.lock().unwrap();
-        let Some((prop, elem)) = (if enable {
+        let (prop, elem) = if enable {
             devices.existing_prop_name(device_name, PROP_CAM_FAN_ON)?
         } else {
             devices.existing_prop_name(device_name, PROP_CAM_FAN_OFF)?
-        }) else { return Ok(false) };
+        };
         drop(devices);
         self.command_set_switch_property_and_wait(
             force_set,
@@ -2509,20 +2560,18 @@ impl Connection {
         timeout_ms:  Option<u64>,
     ) -> Result<()> {
         let devices = self.devices.lock().unwrap();
-        if let (Some((prop_name, on_elem_name)), Some((_, off_elem_name)))
-        = (devices.existing_prop_name(device_name, PROP_CAM_HEAT_ON)?,
-           devices.existing_prop_name(device_name, PROP_CAM_HEAT_OFF)?)
-        {
-            drop(devices);
-            self.command_set_switch_property_and_wait(
-                force_set,
-                timeout_ms,
-                device_name,
-                prop_name, &[
-                (on_elem_name,  enable),
-                (off_elem_name, !enable),
-            ])?;
-        }
+        let ((prop_name, on_elem_name), (_, off_elem_name)) =
+          (devices.existing_prop_name(device_name, PROP_CAM_HEAT_ON)?,
+           devices.existing_prop_name(device_name, PROP_CAM_HEAT_OFF)?);
+        drop(devices);
+        self.command_set_switch_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            prop_name, &[
+            (on_elem_name,  enable),
+            (off_elem_name, !enable),
+        ])?;
         Ok(())
     }
 
@@ -2547,11 +2596,11 @@ impl Connection {
         timeout_ms:  Option<u64>,
     ) -> Result<bool> {
         let devices = self.devices.lock().unwrap();
-        let Some((prop, elem)) = (if enable {
+        let (prop, elem) = if enable {
             devices.existing_prop_name(device_name, PROP_CAM_LOW_NOISE_ON)?
         } else {
             devices.existing_prop_name(device_name, PROP_CAM_LOW_NOISE_OFF)?
-        }) else { return Ok(false); };
+        };
         drop(devices);
 
         self.command_set_switch_property_and_wait(
@@ -2953,7 +3002,7 @@ impl XmlReceiver {
     fn notify_subcribers_about_prop_change(
         &self,
         new_prop:       bool,
-        timestamp:      DateTime<Utc>,
+        timestamp:      Option<DateTime<Utc>>,
         device_name:    &str,
         prop_name:      &str,
         changed_values: Vec<(String, PropValue)>,
@@ -2981,7 +3030,7 @@ impl XmlReceiver {
 
     fn notify_subcribers_about_prop_delete(
         &self,
-        time:          DateTime<Utc>,
+        time:          Option<DateTime<Utc>>,
         device_name:   &str,
         prop_name:     &str,
         events_sender: &mpsc::Sender<Event>
@@ -2997,7 +3046,7 @@ impl XmlReceiver {
 
     fn notify_subcribers_about_device_delete(
         &self,
-        time:          DateTime<Utc>,
+        time:          Option<DateTime<Utc>>,
         device_name:   &str,
         events_sender: &mpsc::Sender<Event>
     ) {
@@ -3010,7 +3059,7 @@ impl XmlReceiver {
 
     fn notify_subcribers_about_message(
         &self,
-        timestamp:     DateTime<Utc>,
+        timestamp:     Option<DateTime<Utc>>,
         device_name:   &str,
         message:       String,
         events_sender: &mpsc::Sender<Event>
@@ -3047,7 +3096,7 @@ impl XmlReceiver {
         if xml_elem.name.starts_with("def") { // defXXXXVector
             let device_name = xml_elem.attr_string_or_err("device")?;
             let prop_name = xml_elem.attr_string_or_err("name")?;
-            let timestamp = xml_elem.attr_time_or_err("timestamp")?;
+            let timestamp = xml_elem.attr_time("timestamp");
             let mut devices = self.devices.lock().unwrap();
             let mut property = Property::new_from_xml(xml_elem, devices.sort_cnt)?;
             let values = property.get_values(false);
@@ -3076,7 +3125,7 @@ impl XmlReceiver {
         } else if xml_elem.name.starts_with("set") { // setXXXXVector
             let device_name = xml_elem.attr_string_or_err("device")?;
             let prop_name = xml_elem.attr_string_or_err("name")?;
-            let timestamp = xml_elem.attr_time_or_err("timestamp")?;
+            let timestamp = xml_elem.attr_time("timestamp");
             let mut devices = self.devices.lock().unwrap();
             devices.change_cnt += 1;
             let change_cnt = devices.change_cnt;
@@ -3109,7 +3158,7 @@ impl XmlReceiver {
             );
         } else if xml_elem.name == "delProperty" { // delProperty
             let device_name = xml_elem.attr_string_or_err("device")?;
-            let timestamp = xml_elem.attr_time_or_err("timestamp")?;
+            let timestamp = xml_elem.attr_time("timestamp");
             let mut devices = self.devices.lock().unwrap();
             if let Some(prop_name) = xml_elem.attributes.remove("name") {
                 let Some(device) = devices.list.get_mut(&device_name) else {
@@ -3142,7 +3191,7 @@ impl XmlReceiver {
         } else if xml_elem.name == "message" {
             let message = xml_elem.attr_string_or_err("message")?;
             let device = xml_elem.attr_str_or_err("device")?;
-            let timestamp = xml_elem.attr_time_or_err("timestamp")?;
+            let timestamp = xml_elem.attr_time("timestamp");
             self.notify_subcribers_about_message(timestamp, device, message, events_sender);
         } else {
             println!("Unknown tag: {}, xml=\n{}", xml_elem.name, xml_text);
@@ -3415,7 +3464,7 @@ trait XmlElementHelper {
     fn elements<'a>(&'a self, tag: Option<&'static str>) -> Box<dyn Iterator<Item = &'a xmltree::Element> + 'a>;
     fn attr_string_or_err(&mut self, attr_name: &str) -> Result<String>;
     fn attr_str_or_err<'a>(&'a self, attr_name: &str) -> Result<&'a str>;
-    fn attr_time_or_err(&self, attr_name: &str) -> Result<DateTime<Utc>>;
+    fn attr_time(&self, attr_name: &str) -> Option<DateTime<Utc>>;
     fn text_or_err(&self) -> Result<Cow<str>>;
     fn child_mut_or_err(&mut self, child_name: &str) -> Result<&mut xmltree::Element>;
 }
@@ -3491,14 +3540,9 @@ impl XmlElementHelper for xmltree::Element {
             )))
     }
 
-    fn attr_time_or_err(&self, attr_name: &str) -> Result<DateTime<Utc>> {
+    fn attr_time(&self, attr_name: &str) -> Option<DateTime<Utc>> {
         self.attributes.get(attr_name)
-            .map(|s| Utc.datetime_from_str(s, "%Y-%m-%dT%H:%M:%S").unwrap_or_default())
-            .ok_or_else(|| Error::Xml(format!(
-                "`{}` without `{}` attribute",
-                self.name,
-                attr_name
-            )))
+            .and_then(|s| Utc.datetime_from_str(s, "%Y-%m-%dT%H:%M:%S").ok())
     }
 
     fn text_or_err(&self) -> Result<Cow<str>> {
@@ -3535,9 +3579,6 @@ type PropsStr = &'static [(&'static str, &'static str)];
 
 const PROP_CAM_TEMPERATURE: PropsStr = &[
     ("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE"),
-];
-const PROP_CAM_EXPOSURE: PropsStr = &[
-    ("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE"),
 ];
 const PROP_CAM_GAIN: PropsStr = &[
     ("CCD_GAIN",     "GAIN"),

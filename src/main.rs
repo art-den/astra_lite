@@ -30,6 +30,10 @@ fn main() -> anyhow::Result<()> {
     log_utils::start_logger(&logs_dir)?;
     log::set_max_level(log::LevelFilter::Info);
 
+    #[cfg(debug_assertions)] {
+        std::env::set_var("RUST_BACKTRACE", "1");
+    }
+
     log::info!(
         "{} {} ver. {} is started",
         env!("CARGO_PKG_NAME"),

@@ -889,7 +889,12 @@ fn connect_indi_events(data: &Rc<CameraData>) {
                             false,
                             &value.prop_value
                         ),
-                    _ => {},
+                    indi_api::PropChange::Delete =>
+                        process_prop_delete_event(
+                            &data,
+                            &event_data.device_name,
+                            &event_data.prop_name,
+                        ),
                 };
             },
             _ =>
@@ -1100,10 +1105,10 @@ fn correct_ctrl_widgets_properties(data: &Rc<CameraData>) {
         cb_camera_list.set_sensitive(cam_count >= 2);
 
         let correct_num_adjustment_by_prop = |
-            prop_info: Option<Arc<indi_api::NumPropElemInfo>>,
+            prop_info: indi_api::Result<Arc<indi_api::NumPropElemInfo>>,
             adj_name:  &str,
         | -> bool {
-            if let Some(info) = prop_info {
+            if let Ok(info) = prop_info {
                 let adj = bldr.object::<gtk::Adjustment>(adj_name).unwrap();
                 adj.set_lower(info.min);
                 adj.set_upper(info.max);
@@ -1129,21 +1134,22 @@ fn correct_ctrl_widgets_properties(data: &Rc<CameraData>) {
         };
 
         let temp_supported = correct_num_adjustment_by_prop(
-            data.main.indi.camera_get_temperature_prop_info(&camera)?,
+            data.main.indi.camera_get_temperature_prop_info(&camera),
             "adj_temp"
         );
-        correct_num_adjustment_by_prop(
-            data.main.indi.camera_get_exposure_prop_info(&camera)?,
+        let exposure_supported = correct_num_adjustment_by_prop(
+            data.main.indi.camera_get_exposure_prop_info(&camera),
             "adj_exp"
         );
         let gain_supported = correct_num_adjustment_by_prop(
-            data.main.indi.camera_get_gain_prop_info(&camera)?,
+            data.main.indi.camera_get_gain_prop_info(&camera),
             "adj_gain"
         );
         let offset_supported = correct_num_adjustment_by_prop(
-            data.main.indi.camera_get_offset_prop_info(&camera)?,
+            data.main.indi.camera_get_offset_prop_info(&camera),
             "adj_offset"
         );
+        let bin_supported = data.main.indi.camera_is_binning_supported(&camera)?;
         let fan_supported = data.main.indi.camera_is_fan_supported(&camera)?;
         let heater_supported = data.main.indi.camera_is_heater_supported(&camera)?;
         let low_noise_supported = data.main.indi.camera_is_low_noise_ctrl_supported(&camera)?;
@@ -1160,7 +1166,7 @@ fn correct_ctrl_widgets_properties(data: &Rc<CameraData>) {
         let state = data.state.read().unwrap();
         let waiting = matches!(*state, State::Waiting);
         let shot_active = matches!(*state, State::Active{mode: Mode::SingleShot, ..});
-        let cont_active = matches!(*state, State::Active{mode: Mode::LiveView, ..});
+        let liveview_active = matches!(*state, State::Active{mode: Mode::LiveView, ..});
         let saving_frames = matches!(*state, State::Active{mode: Mode::SavingRawFrames, ..});
         let saving_frames_paused = data.save_raw_pause.borrow().is_some();
         let live_active = matches!(*state, State::Active{mode: Mode::LiveStacking, ..});
@@ -1178,15 +1184,15 @@ fn correct_ctrl_widgets_properties(data: &Rc<CameraData>) {
 
         let can_change_cam_opts = !saving_frames && !live_active;
         let can_change_mode = waiting || shot_active;
-        let can_change_frame_opts = waiting || cont_active;
+        let can_change_frame_opts = waiting || liveview_active;
         let can_change_cal_ops = !live_active;
 
         gtk_utils::enable_actions(&data.main.window, &[
-            ("take_shot",             !shot_active && can_change_mode),
+            ("take_shot",             exposure_supported && !shot_active && can_change_mode),
             ("stop_shot",             shot_active),
-            ("start_live_stacking",   !live_active && can_change_mode),
+            ("start_live_stacking",   exposure_supported && !live_active && can_change_mode),
             ("stop_live_stacking",    live_active),
-            ("start_save_raw_frames", !saving_frames && can_change_mode),
+            ("start_save_raw_frames", exposure_supported && !saving_frames && can_change_mode),
             ("pause_save_raw_frames", saving_frames),
             ("stop_save_raw_frames",  saving_frames || saving_frames_paused),
         ]);
@@ -1201,14 +1207,14 @@ fn correct_ctrl_widgets_properties(data: &Rc<CameraData>) {
             ("chb_fan",            !cooler_active),
             ("chb_cooler",         temp_supported && can_change_cam_opts),
             ("spb_temp",           cooler_active && temp_supported && can_change_cam_opts),
-            ("chb_shots_cont",     cont_active || can_change_mode),
+            ("chb_shots_cont",     (exposure_supported && liveview_active) || can_change_mode),
             ("spb_delay",          delay_active),
             ("cb_frame_mode",      can_change_frame_opts),
-            ("spb_exp",            can_change_frame_opts),
+            ("spb_exp",            exposure_supported && can_change_frame_opts),
             ("cb_crop",            can_change_frame_opts),
             ("spb_gain",           gain_supported && can_change_frame_opts),
             ("spb_offset",         offset_supported && can_change_frame_opts && !frame_mode_is_flat),
-            ("cb_bin",             can_change_frame_opts),
+            ("cb_bin",             bin_supported && can_change_frame_opts),
             ("chb_master_frame",   can_change_cal_ops && (frame_mode_is_flat || frame_mode_is_dark) && !saving_frames),
             ("chb_master_dark",    can_change_cal_ops),
             ("fch_master_dark",    can_change_cal_ops),
@@ -1317,7 +1323,7 @@ fn start_taking_shots(
     counter: Option<FramesCounter>,
 ) {
     gtk_utils::exec_and_show_error(&data.main.window, move || {
-        show_progress(&data.main, 0.0, String::new());
+        data.main.show_progress(0.0, String::new());
         let live_stacking_mode = mode == Mode::LiveStacking;
         let saving_frames_mode = mode == Mode::SavingRawFrames;
         let options = data.options.borrow();
@@ -1369,13 +1375,13 @@ fn start_taking_shots(
 
         match mode {
             Mode::SingleShot => {
-                set_cur_action_text(&data.main, "");
+                data.main.set_cur_action_text("");
             },
             Mode::LiveView => {
-                set_cur_action_text(&data.main, "Live view mode");
+                data.main.set_cur_action_text("Live view mode");
             },
             Mode::LiveStacking => {
-                set_cur_action_text(&data.main, "Live stacking");
+                data.main.set_cur_action_text("Live stacking");
             },
             Mode::SavingRawFrames => {
                 let text = match options.frame.frame_type {
@@ -1383,7 +1389,7 @@ fn start_taking_shots(
                     FrameType::Flats => "Saving FLAT frames",
                     FrameType::Darks => "Saving DARK frames",
                 };
-                set_cur_action_text(&data.main, text);
+                data.main.set_cur_action_text(text);
             },
         };
 
@@ -1681,7 +1687,7 @@ fn show_shots_progress(data: &Rc<CameraData>) {
     if let Some(counter) = counter {
         let progress = (counter.total - counter.to_go) as f64 / counter.total as f64;
         let text = format!("{} / {}", counter.total - counter.to_go, counter.total);
-        show_progress(&data.main, progress, text);
+        data.main.show_progress(progress, text);
     }
     if matches!(counter, &Some(FramesCounter { to_go: 0, .. })) {
         drop(state);
@@ -1906,6 +1912,16 @@ fn process_prop_change_event(
     } else {
         process_simple_prop_change_event(data, device_name, prop_name, elem_name, new_prop, value);
     }
+}
+
+fn process_prop_delete_event(
+    data:         &Rc<CameraData>,
+    _device_name: &str,
+    _prop_name:   &str,
+){
+    data.delayed_action.borrow_mut().set(
+        DelayedFlags::UPDATE_CTRL_WIDGETS
+    );
 }
 
 fn process_simple_prop_change_event(

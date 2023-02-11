@@ -430,6 +430,7 @@
                             <property name="can-focus">False</property>
                             <property name="label" translatable="yes">Connection status</property>
                             <property name="wrap">True</property>
+                            <property name="max-width-chars">30</property>
                           </object>
                           <packing>
                             <property name="expand">False</property>

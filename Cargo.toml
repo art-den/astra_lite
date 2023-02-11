@@ -1,6 +1,6 @@
 [package]
 name = "astra_lite"
-version = "0.0.3"
+version = "0.0.5"
 edition = "2021"
 description = "Software for deepsky astrophotography"
 repository = "https://github.com/art-den/astra_lite"
@@ -9,7 +9,7 @@ build = "build.rs"
 
 [dependencies]
 gtk = "0.16"
-anyhow = "1.0"
+anyhow = { version = "1.0", features = ["backtrace"] }
 fitsio = "0.21.1"
 libc = "0.2"
 bitstream-io = "1.3"
