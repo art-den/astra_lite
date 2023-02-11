@@ -212,6 +212,7 @@ struct FrameOptions {
     binning:    Binning,
     crop:       Crop,
     low_noise:  bool,
+    delay:      f64,
 }
 
 impl Default for FrameOptions {
@@ -224,6 +225,7 @@ impl Default for FrameOptions {
             binning:    Binning::default(),
             crop:       Crop::default(),
             low_noise:  false,
+            delay:      2.0,
         }
     }
 }
@@ -235,6 +237,11 @@ impl FrameOptions {
 
     fn create_master_flat_file_name(&self) -> String {
         String::new()
+    }
+
+    fn have_to_use_delay(&self) -> bool {
+        self.exposure < 2.0 &&
+        self.delay > 0.0
     }
 }
 
@@ -411,8 +418,6 @@ struct CameraOptions {
     raw_frames:     RawFrameOptions,
     live:           LiveStackingOptions,
     preview:        PreviewOptions,
-    set_delay:      bool,
-    delay:          f64,
     paned_pos1:     i32,
     paned_pos2:     i32,
     paned_pos3:     i32,
@@ -436,8 +441,6 @@ impl Default for CameraOptions {
             calibr:         CalibrOptions::default(),
             raw_frames:     RawFrameOptions::default(),
             live:           LiveStackingOptions::default(),
-            set_delay:      false,
-            delay:          0.0,
             paned_pos1:     -1,
             paned_pos2:     -1,
             paned_pos3:     -1,
@@ -475,10 +478,11 @@ struct FramesCounter {
 enum State {
     Waiting,
     Active{
-        mode:    Mode,
-        camera:  String,
-        frame:   FrameOptions,
-        counter: Option<FramesCounter>,
+        mode:         Mode,
+        camera:       String,
+        frame:        FrameOptions,
+        counter:      Option<FramesCounter>,
+        thread_timer: Arc<ThreadTimer>,
     },
 }
 
@@ -692,6 +696,14 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
         }
     }));
 
+    let spb_delay = bldr.object::<gtk::SpinButton>("spb_delay").unwrap();
+    spb_delay.connect_value_changed(clone!(@strong data => move |sb| {
+        let mut state = data.state.write().unwrap();
+        if let State::Active{ frame, .. } = &mut *state {
+            frame.delay = sb.value();
+        }
+    }));
+
     let chb_low_noise = bldr.object::<gtk::CheckButton>("chb_low_noise").unwrap();
     chb_low_noise.connect_active_notify(clone!(@strong data => move |chb| {
         let mut state = data.state.write().unwrap();
@@ -707,7 +719,6 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
         drop(options);
         show_total_raw_time(&data);
     }));
-
 
     let da_shot_state = bldr.object::<gtk::DrawingArea>("da_shot_state").unwrap();
     da_shot_state.connect_draw(clone!(@strong data => move |area, cr| {
@@ -918,8 +929,7 @@ fn show_options(data: &Rc<CameraData>) {
     pan_cam3.set_position(options.paned_pos3);
 
     gtk_utils::set_bool     (bld, "chb_shots_cont",      options.live_view);
-    gtk_utils::set_bool     (bld, "chb_delay",           options.set_delay);
-    gtk_utils::set_f64      (bld, "spb_delay",           options.delay);
+
     gtk_utils::set_bool     (bld, "chb_cooler",          options.ctrl.enable_cooler);
     gtk_utils::set_f64      (bld, "spb_temp",            options.ctrl.temperature);
     gtk_utils::set_bool     (bld, "chb_heater",          options.ctrl.enable_heater);
@@ -927,6 +937,7 @@ fn show_options(data: &Rc<CameraData>) {
 
     gtk_utils::set_active_id(bld, "cb_frame_mode",       options.frame.frame_type.to_active_id());
     gtk_utils::set_f64      (bld, "spb_exp",             options.frame.exposure);
+    gtk_utils::set_f64      (bld, "spb_delay",           options.frame.delay);
     gtk_utils::set_f64      (bld, "spb_gain",            options.frame.gain);
     gtk_utils::set_f64      (bld, "spb_offset",          options.frame.offset as f64);
     gtk_utils::set_active_id(bld, "cb_bin",              options.frame.binning.to_active_id());
@@ -1002,13 +1013,14 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
 
     options.camera_name          = gtk_utils::get_active_id(bld, "cb_camera_list");
     options.live_view            = gtk_utils::get_bool     (bld, "chb_shots_cont");
-    options.set_delay            = gtk_utils::get_bool     (bld, "chb_delay");
-    options.delay                = gtk_utils::get_f64      (bld, "spb_delay");
+
     options.ctrl.enable_cooler   = gtk_utils::get_bool     (bld, "chb_cooler");
     options.ctrl.temperature     = gtk_utils::get_f64      (bld, "spb_temp");
     options.ctrl.enable_heater   = gtk_utils::get_bool     (bld, "chb_heater");
     options.ctrl.enable_fan      = gtk_utils::get_bool     (bld, "chb_fan");
+
     options.frame.exposure       = gtk_utils::get_f64      (bld, "spb_exp");
+    options.frame.delay          = gtk_utils::get_f64      (bld, "spb_delay");
     options.frame.gain           = gtk_utils::get_f64      (bld, "spb_gain");
     options.frame.offset         = gtk_utils::get_f64      (bld, "spb_offset") as u32;
     options.frame.low_noise      = gtk_utils::get_bool     (bld, "chb_low_noise");
@@ -1155,7 +1167,6 @@ fn correct_ctrl_widgets_properties(data: &Rc<CameraData>) {
         let low_noise_supported = data.main.indi.camera_is_low_noise_ctrl_supported(&camera)?;
 
         let cooler_active = gtk_utils::get_bool(bldr, "chb_cooler");
-        let delay_active = gtk_utils::get_bool(bldr, "chb_delay");
 
         let frame_mode_str = gtk_utils::get_active_id(bldr, "cb_frame_mode");
         let frame_mode = FrameType::from_active_id(frame_mode_str.as_deref());
@@ -1208,7 +1219,6 @@ fn correct_ctrl_widgets_properties(data: &Rc<CameraData>) {
             ("chb_cooler",         temp_supported && can_change_cam_opts),
             ("spb_temp",           cooler_active && temp_supported && can_change_cam_opts),
             ("chb_shots_cont",     (exposure_supported && liveview_active) || can_change_mode),
-            ("spb_delay",          delay_active),
             ("cb_frame_mode",      can_change_frame_opts),
             ("spb_exp",            exposure_supported && can_change_frame_opts),
             ("cb_crop",            can_change_frame_opts),
@@ -1337,7 +1347,9 @@ fn start_taking_shots(
             indi_api::BlobEnable::Also
         )?;
         if data.main.indi.camera_is_fast_toggle_supported(camera_name)? {
-            let use_fast_toggle = saving_frames_mode;
+            let use_fast_toggle =
+                saving_frames_mode &&
+                !options.frame.have_to_use_delay();
             data.main.indi.camera_enable_fast_toggle(
                 camera_name,
                 use_fast_toggle,
@@ -1371,6 +1383,7 @@ fn start_taking_shots(
             camera: camera_name.clone(),
             frame:  options.frame.clone(),
             counter,
+            thread_timer: Arc::clone(&data.main.thread_timer),
         };
 
         match mode {
@@ -1799,17 +1812,6 @@ fn apply_camera_options_and_take_shot(
         SET_PROP_TIMEOUT
     )?;
 
-    // Binning
-    if indi.camera_is_binning_supported(camera_name)? {
-        indi.camera_set_binning(
-            camera_name,
-            frame.binning.get_ratio(),
-            frame.binning.get_ratio(),
-            true,
-            SET_PROP_TIMEOUT
-        )?;
-    }
-
     // Binning mode = AVG
     if indi.camera_is_binning_mode_supported(camera_name)?
     && frame.binning != Binning::Orig {
@@ -1818,6 +1820,17 @@ fn apply_camera_options_and_take_shot(
             indi_api::BinningMode::Avg,
             true,
             None, //SET_PROP_TIMEOUT
+        )?;
+    }
+
+    // Binning
+    if indi.camera_is_binning_supported(camera_name)? {
+        indi.camera_set_binning(
+            camera_name,
+            frame.binning.get_ratio(),
+            frame.binning.get_ratio(),
+            true,
+            SET_PROP_TIMEOUT
         )?;
     }
 
@@ -2075,7 +2088,7 @@ fn process_blob_start_event(
     last_exposure: &Arc<AtomicI64>
 ) {
     let mut state = state.write().unwrap();
-    let State::Active { mode, camera, frame, counter, .. } = &mut *state else {
+    let State::Active { mode, camera, frame, counter, thread_timer, .. } = &mut *state else {
         return
     };
     if *mode == Mode::SingleShot { return; }
@@ -2089,15 +2102,34 @@ fn process_blob_start_event(
         indi.camera_is_fast_toggle_supported(camera).unwrap_or(false) &&
         indi.camera_is_fast_toggle_enabled(camera).unwrap_or(false);
     if !fast_mode_enabled {
-        let res = apply_camera_options_and_take_shot(
-            indi,
-            camera,
-            frame,
-            last_exposure
-        );
-        if let Err(err) = res {
-            log::error!("{} during trying start next shot", err.to_string());
-            // TODO: show error!!!
+        if !frame.have_to_use_delay() {
+            let res = apply_camera_options_and_take_shot(
+                indi,
+                camera,
+                frame,
+                last_exposure
+            );
+            if let Err(err) = res {
+                log::error!("{} during trying start next shot", err.to_string());
+                // TODO: show error!!!
+            }
+        } else {
+            let indi = Arc::clone(indi);
+            let camera = camera.clone();
+            let frame = frame.clone();
+            let last_exposure = Arc::clone(last_exposure);
+            thread_timer.exec((frame.delay * 1000.0) as u32, move || {
+                let res = apply_camera_options_and_take_shot(
+                    &indi,
+                    &camera,
+                    &frame,
+                    &last_exposure
+                );
+                if let Err(err) = res {
+                    log::error!("{} during trying start next shot", err.to_string());
+                    // TODO: show error!!!
+                }
+            });
         }
     }
 }
@@ -2447,7 +2479,8 @@ fn handler_action_pause_save_raw_frames(data: &Rc<CameraData>) {
         mode: Mode::SavingRawFrames,
         camera,
         frame,
-        counter
+        counter,
+        ..
     } = &*state else {
         return;
     };

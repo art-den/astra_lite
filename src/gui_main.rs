@@ -27,12 +27,10 @@ const CSS: &[u8] = b"
     background: rgba(255, 255, 0, .05);
 }
 .expander > title {
-    color: mix(@theme_fg_color, rgb(0, 64, 255), 0.3);
+    color: mix(@theme_fg_color, rgb(0, 64, 255), 0.4);
     background: rgba(0, 64, 255, .1);
 }
 ";
-
-// color: mix(@fg_color, rgb(0, 0, 255), 1);
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
 enum Theme {
@@ -76,7 +74,7 @@ pub struct MainData {
     pub window:       gtk::ApplicationWindow,
     pub indi_status:  RefCell<indi_api::ConnState>,
     pub cur_frame:    Arc<ResultImage>,
-    pub thread_timer: ThreadTimer,
+    pub thread_timer: Arc<ThreadTimer>,
     pub conn_string:  RefCell<String>,
     pub dev_string:   RefCell<String>,
 }
@@ -119,7 +117,7 @@ pub fn build_ui(application: &gtk::Application) {
         builder:        builder.clone(),
         indi_status:    RefCell::new(indi_api::ConnState::Disconnected),
         cur_frame:      Arc::new(ResultImage::new()),
-        thread_timer:   ThreadTimer::new(),
+        thread_timer:   Arc::new(ThreadTimer::new()),
         conn_string:    RefCell::new(String::new()),
         dev_string:     RefCell::new(String::new()),
     });
