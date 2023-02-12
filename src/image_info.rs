@@ -169,8 +169,6 @@ impl LightImageInfo {
 
         let mut possible_stars = possible_stars.into_inner().unwrap();
 
-        println!("possible_stars.len() = {}", possible_stars.len());
-
         possible_stars.sort_by_key(|(_, _, v)| -(*v as i32));
 
         let mut all_star_coords = HashSet::<(isize, isize)>::new();
@@ -228,8 +226,6 @@ impl LightImageInfo {
                     hit
                 }
             );
-
-            dbg!(star_points.len());
 
             if !star_points.is_empty()
             && star_points.len() < MAX_STARS_POINTS_CNT
