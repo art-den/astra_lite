@@ -133,6 +133,13 @@ impl RawImage {
         Self { info, data, cfa_arr: &[] }
     }
 
+    pub fn new_from_info(info: RawImageInfo)  -> RawImage {
+        let mut data = Vec::new();
+        data.resize(info.width * info.height, 0);
+        let cfa_arr = info.cfa.get_array();
+        Self { info, data, cfa_arr }
+    }
+
     pub fn new_from_fits(fptr: &mut fitsio::FitsFile) -> anyhow::Result<RawImage> {
         let (image_hdu, width, height, _img_type) = find_image_hdu(fptr)?;
         let data: Vec<_> = image_hdu.read_image(fptr)?;
@@ -232,9 +239,16 @@ impl RawImage {
         self.cfa_arr[y % self.cfa_arr.len()]
     }
 
-    fn cfa_get(&self, x: isize, y: isize) -> CfaColor {
-        let row = self.cfa_arr[y as usize % self.cfa_arr.len()];
-        row[x as usize % row.len()]
+    fn cfa_get(&self, x: isize, y: isize) -> Option<CfaColor> {
+        if x < 0
+        || y < 0
+        || x >= self.info.width as isize
+        || y >= self.info.height as isize {
+            None
+        } else {
+            let row = self.cfa_arr[y as usize % self.cfa_arr.len()];
+            Some(row[x as usize % row.len()])
+        }
     }
 
     fn rect_iter(&self, mut x1: isize, mut y1: isize, mut x2: isize, mut y2: isize) -> RawRectIterator {
@@ -315,6 +329,226 @@ impl RawImage {
             .collect()
     }
 
+    pub fn create_filtered_image_for_stars(
+        &mut self,
+        result: &mut Image,
+        mt:     bool,
+    ) {
+        result.make_monochrome(
+            self.info.width,
+            self.info.height,
+            self.info.zero,
+            self.info.max_value,
+        );
+        if self.info.cfa == CfaType::None {
+            self.create_filtered_image_for_stars_mono(&mut result.l, mt);
+        } else {
+            self.create_filtered_image_for_stars_bayer(&mut result.l, mt);
+        }
+    }
+
+    fn create_filtered_image_for_stars_mono(
+        &mut self,
+        result: &mut ImageLayer<u16>,
+        mt:     bool
+    ) {
+        fn filter_row(res_row: &mut [u16], src_image: &RawImage, y: usize) {
+            if y == 0 || y == src_image.info.height-1 {
+                res_row.copy_from_slice(src_image.row(y));
+                return;
+            }
+            let row1 = src_image.row(y-1);
+            let row2 = src_image.row(y);
+            let row3 = src_image.row(y+1);
+
+            res_row[0] = row2[0];
+            res_row[src_image.info.width-1] = row2[src_image.info.width-1];
+
+            let mut r1_ptr = &row1[1] as *const u16;
+            let mut r2_ptr = &row2[0] as *const u16;
+            let mut r3_ptr = &row3[1] as *const u16;
+            for res in &mut res_row[1..src_image.info.width-1] { unsafe {
+                //  _  v12  _
+                // v21 v22 v23
+                //  _  v32  _
+                let v12 = *r1_ptr;
+                let v21 = *r2_ptr;
+                let v22 = *r2_ptr.offset(1);
+                let v23 = *r2_ptr.offset(2);
+                let v32 = *r3_ptr;
+                *res = median5(v12, v21, v22, v23, v32);
+                r1_ptr = r1_ptr.offset(1);
+                r2_ptr = r2_ptr.offset(1);
+                r3_ptr = r3_ptr.offset(1);
+            }}
+        }
+        if !mt {
+            result
+                .as_slice_mut()
+                .chunks_exact_mut(self.info.width)
+                .enumerate()
+                .for_each(|(y, row)| {
+                    filter_row(row, self, y);
+                });
+        } else {
+            result
+                .as_slice_mut()
+                .par_chunks_exact_mut(self.info.width)
+                .enumerate()
+                .for_each(|(y, row)| {
+                    filter_row(row, self, y);
+                });
+        }
+    }
+
+    fn create_filtered_image_for_stars_bayer(
+        &mut self,
+        result: &mut ImageLayer<u16>,
+        mt:     bool
+    ) {
+        fn filter_row(res_row: &mut [u16], src_image: &RawImage, y: usize) {
+            if y == 0 || y == src_image.info.height-1 {
+                return;
+            }
+            let row1 = src_image.row(y-1);
+            let row2 = src_image.row(y);
+            let row3 = src_image.row(y+1);
+            let row_cfa = src_image.cfa_row(y);
+            let mut r1_ptr = &row1[0] as *const u16;
+            let mut r2_ptr = &row2[0] as *const u16;
+            let mut r3_ptr = &row3[0] as *const u16;
+            let mut cfa_iter = row_cfa.iter().cycle().skip(1);
+            for res in &mut res_row[1..src_image.info.width-1] { unsafe {
+                let c22 = cfa_iter.next().unwrap_unchecked();
+                if *c22 == CfaColor::G {
+                    // v11  _  v13
+                    //  _  v22  _
+                    // v31  _  v33
+                    let v11 = *r1_ptr;
+                    let v13 = *r1_ptr.offset(2);
+                    let v22 = *r2_ptr.offset(1);
+                    let v31 = *r3_ptr;
+                    let v33 = *r3_ptr.offset(2);
+                    *res = median5(v11, v13, v22, v31, v33);
+                }
+                r1_ptr = r1_ptr.offset(1);
+                r2_ptr = r2_ptr.offset(1);
+                r3_ptr = r3_ptr.offset(1);
+            }}
+        }
+        if !mt {
+            result
+                .as_slice_mut()
+                .chunks_exact_mut(self.info.width)
+                .enumerate()
+                .for_each(|(y, row)| {
+                    filter_row(row, self, y);
+                });
+        } else {
+            result
+                .as_slice_mut()
+                .par_chunks_exact_mut(self.info.width)
+                .enumerate()
+                .for_each(|(y, row)| {
+                    filter_row(row, self, y);
+                });
+        }
+        let mut filter_pixel_at_border = |x, y| {
+            let x = x as isize;
+            let y = y as isize;
+            if self.cfa_get(x, y) == Some(CfaColor::G) {
+                result.set(x, y, self.get(x, y).unwrap_or(0));
+            }
+        };
+        for x in 0..self.info.width {
+            filter_pixel_at_border(x, 0);
+            filter_pixel_at_border(x, self.info.height-1);
+        }
+        for y in 0..self.info.height {
+            filter_pixel_at_border(0, y);
+            filter_pixel_at_border(self.info.width-1, y);
+        }
+        result.swap_data(&mut self.data);
+
+        fn demosaic_row(res_row: &mut [u16], src_image: &RawImage, y: usize) {
+            if y == 0 || y == src_image.info.height-1 {
+                return;
+            }
+            let row1 = src_image.row(y-1);
+            let row2 = src_image.row(y);
+            let row3 = src_image.row(y+1);
+            let row_cfa = src_image.cfa_row(y);
+            let mut r1_ptr = &row1[0] as *const u16;
+            let mut r2_ptr = &row2[0] as *const u16;
+            let mut r3_ptr = &row3[0] as *const u16;
+            let mut cfa_iter = row_cfa.iter().cycle().skip(1);
+            for res in &mut res_row[1..src_image.info.width-1] { unsafe {
+                let c22 = cfa_iter.next().unwrap_unchecked();
+                if *c22 == CfaColor::G {
+                    *res = *r2_ptr.offset(1);
+                } else {
+                    //  _  v12  _
+                    // v21  _  v23
+                    //  _  v32  _
+                    let v12 = *r1_ptr.offset(1) as u32;
+                    let v21 = *r2_ptr.offset(0) as u32;
+                    let v23 = *r2_ptr.offset(2) as u32;
+                    let v32 = *r3_ptr.offset(1) as u32;
+                    *res = ((v12 + v21 + v23 + v32) / 4) as u16;
+                }
+                r1_ptr = r1_ptr.offset(1);
+                r2_ptr = r2_ptr.offset(1);
+                r3_ptr = r3_ptr.offset(1);
+            }}
+
+        }
+        if !mt {
+            result
+                .as_slice_mut()
+                .chunks_exact_mut(self.info.width)
+                .enumerate()
+                .for_each(|(y, row)| {
+                    demosaic_row(row, self, y);
+                });
+        } else {
+            result
+                .as_slice_mut()
+                .par_chunks_exact_mut(self.info.width)
+                .enumerate()
+                .for_each(|(y, row)| {
+                    demosaic_row(row, self, y);
+                });
+        }
+        let mut demosaic_pixel_at_border = |x, y| {
+            let x = x as isize;
+            let y = y as isize;
+            let color = self.cfa_get(x, y);
+            if color == Some(CfaColor::G) {
+                result.set(x, y, self.get(x, y).unwrap_or(0));
+            } else {
+                let mut sum = 0_u32;
+                let mut cnt = 0_u32;
+                for dy in -1..=1 { for dx in -1..=1 {
+                    if self.cfa_get(x+dx, y+dy) == Some(CfaColor::G) {
+                        sum += self.get(x+dx, y+dy).unwrap_or(0) as u32;
+                        cnt += 1;
+                    }
+                }}
+                if cnt != 0 {
+                    result.set(x, y, (sum / cnt) as u16);
+                }
+            }
+        };
+        for x in 0..self.info.width {
+            demosaic_pixel_at_border(x, 0);
+            demosaic_pixel_at_border(x, self.info.height-1);
+        }
+        for y in 0..self.info.height {
+            demosaic_pixel_at_border(0, y);
+            demosaic_pixel_at_border(self.info.width-1, y);
+        }
+    }
+
     pub fn remove_bad_pixels(&mut self, bad_pixels: &[BadPixel]) {
         let mut pixels_to_fix = HashSet::new();
         for pixel in bad_pixels {
@@ -328,7 +562,11 @@ impl RawImage {
                 let bad_pixel_color = self.cfa_get(*px, *py);
                 let mut cnt = 0_u32;
                 let mut sum = 0_u32;
-                let range = match bad_pixel_color { CfaColor::G|CfaColor::None => 1, _ => 2 };
+                let range = match bad_pixel_color {
+                    Some(CfaColor::G)|
+                    Some(CfaColor::None) => 1,
+                    _                    => 2
+                };
                 for dy in -range..=range {
                     let y = *py + dy;
                     for dx in -range..=range {
@@ -625,7 +863,7 @@ impl RawImage {
                 let sy = y + dy;
                 for dx in -1..=1 {
                     let sx = x + dx;
-                    if self.cfa_get(sx, sy) == color {
+                    if self.cfa_get(sx, sy) == Some(color) {
                         if let Some(v) = self.get(sx, sy) {
                             sum += v as usize;
                             cnt += 1;
@@ -908,4 +1146,24 @@ impl ValuesDecompressor {
         self.values_ptr += 1;
         Ok(result)
     }
+}
+
+
+#[inline(always)]
+pub fn median3<T>(v1: T, v2: T, v3: T) -> T
+where T: std::cmp::Ord {
+    if (v1 > v2) ^ (v1 > v3) {
+        return v1;
+    } else if (v2 < v1) ^ (v2 < v3) {
+        return v2;
+    }
+    return v3;
+}
+
+#[inline(always)]
+pub fn median5<T>(v1: T, v2: T, v3: T, v4: T, v5: T) -> T
+where T: std::cmp::Ord + Copy {
+    let v6 = T::max(T::min(v1, v2), T::min(v3, v4));
+    let v7 = T::min(T::max(v1, v2), T::max(v3, v4));
+    return median3(v5, v6, v7);
 }

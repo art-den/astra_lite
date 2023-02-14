@@ -3,3 +3,5 @@
 /dist
 /*.sh
 /Cargo.lock
+/.svn
+**.*~

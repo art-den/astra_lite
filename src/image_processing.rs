@@ -24,7 +24,7 @@ struct CalibrImages {
     master_dark_fn: Option<PathBuf>,
     master_flat:    Option<RawImage>,
     master_flat_fn: Option<PathBuf>,
-    bad_pixels:     Vec<BadPixel>,
+    hot_pixels:     Vec<BadPixel>,
 }
 
 pub struct ResultImage {
@@ -32,15 +32,17 @@ pub struct ResultImage {
     pub hist:  RwLock<Histogram>,
     pub info:  RwLock<ResultImageInfo>,
     calibr:    Mutex<CalibrImages>,
+    filtered:  Mutex<Image>, // for stars
 }
 
 impl ResultImage {
     pub fn new() -> Self {
         Self {
-            image:  RwLock::new(Image::new_empty()),
-            hist:   RwLock::new(Histogram::new()),
-            info:   RwLock::new(ResultImageInfo::None),
-            calibr: Mutex::new(CalibrImages::default()),
+            image:    RwLock::new(Image::new_empty()),
+            hist:     RwLock::new(Histogram::new()),
+            info:     RwLock::new(ResultImageInfo::None),
+            calibr:   Mutex::new(CalibrImages::default()),
+            filtered: Mutex::new(Image::new_empty()),
         }
     }
 }
@@ -315,7 +317,7 @@ pub fn get_rgb_bytes_from_preview_image(
     )
 }
 
-fn apply_calibr_data(
+fn apply_calibr_data_and_remove_hot_pixels(
     params:    &CalibrParams,
     raw_image: &mut RawImage,
     calibr:    &mut CalibrImages,
@@ -333,9 +335,9 @@ fn apply_calibr_data(
                 ))?;
             tmr.log("loading master dark from file");
             let tmr = TimeLogger::start();
-            calibr.bad_pixels = master_dark.find_hot_pixels_in_master_dark();
+            calibr.hot_pixels = master_dark.find_hot_pixels_in_master_dark();
             tmr.log("searching hot pixels");
-            log::debug!("hot pixels count = {}", calibr.bad_pixels.len());
+            log::debug!("hot pixels count = {}", calibr.hot_pixels.len());
             calibr.master_dark = Some(master_dark);
             calibr.master_dark_fn = Some(file_name.clone());
         }
@@ -351,8 +353,8 @@ fn apply_calibr_data(
             ))?;
         tmr.log("subtracting master dark");
         let tmr = TimeLogger::start();
-        raw_image.remove_bad_pixels(&calibr.bad_pixels);
-        tmr.log("removing bad pixels from light frame");
+        raw_image.remove_bad_pixels(&calibr.hot_pixels);
+        tmr.log("removing hot pixels from light frame");
     }
 
     if let Some(file_name) = &params.flat {
@@ -367,7 +369,7 @@ fn apply_calibr_data(
                 ))?;
             tmr.log("loading master flat from file");
             let tmr = TimeLogger::start();
-            raw_image.remove_bad_pixels(&calibr.bad_pixels);
+            raw_image.remove_bad_pixels(&calibr.hot_pixels);
             tmr.log("removing bad pixels from master flat");
             let tmr = TimeLogger::start();
             master_flat.filter_flat();
@@ -444,12 +446,6 @@ fn make_preview_image_impl(
         matches!(frame_type, FrameType::Bias) ||
         matches!(frame_type, FrameType::Dark);
 
-    // Applying calibration data
-    if frame_type == FrameType::Light {
-        let mut calibr = command.frame.calibr.lock().unwrap();
-        apply_calibr_data(&command.calibr, &mut raw_image, &mut calibr, true)?;
-    }
-
     // Histogram
 
     let mut hist = command.frame.hist.write().unwrap();
@@ -461,6 +457,12 @@ fn make_preview_image_impl(
     );
     tmr.log("histogram from raw image");
     drop(hist);
+
+    // Applying calibration data
+    if frame_type == FrameType::Light {
+        let mut calibr = command.frame.calibr.lock().unwrap();
+        apply_calibr_data_and_remove_hot_pixels(&command.calibr, &mut raw_image, &mut calibr, true)?;
+    }
 
     let mode = if command.save_path.is_some() {
         ResultMode::RawFrame
@@ -504,6 +506,7 @@ fn make_preview_image_impl(
     let tmr = TimeLogger::start();
     if !is_monochrome_img {
         raw_image.demosaic_into(&mut image, true);
+
     } else {
         raw_image.copy_into_monochrome(&mut image);
     }
@@ -513,7 +516,6 @@ fn make_preview_image_impl(
         add_calibr_image(&mut raw_image, &command.raw_adder, frame_type)?;
     }
 
-    drop(raw_image);
     drop(image);
 
     // Preview image RGB bytes
@@ -538,8 +540,25 @@ fn make_preview_image_impl(
 
     let mut light_info_result: Option<LightFileShortInfo> = None;
     if frame_type == FrameType::Light {
+        // Filtered image for stars
+
+        let mut filtered = command.frame.filtered.lock().unwrap();
+        if frame_type == FrameType::Light {
+            let tmr = TimeLogger::start();
+            raw_image.create_filtered_image_for_stars(&mut filtered, true);
+            tmr.log("creating filtered image for stars");
+        }
+
         let tmr = TimeLogger::start();
-        let info = LightImageInfo::from_image(&image, exposure, true);
+        let mono_layer = if image.is_color() { &image.g } else { &image.l };
+        let info = LightImageInfo::from_image(
+            image.max_value(),
+            mono_layer,
+            &filtered.l,
+            exposure,
+            true
+        );
+
         let mut light_info = LightFileShortInfo::default();
         light_info.noise = 100.0 * info.noise / image.max_value() as f32;
         light_info.background = 100.0 * info.background as f32 / image.max_value() as f32;
@@ -553,6 +572,7 @@ fn make_preview_image_impl(
             mode
         ));
     }
+    drop(raw_image);
 
     if let Some(save_path) = command.save_path.as_ref() {
         let sub_path = match frame_type {
@@ -640,7 +660,7 @@ fn append_image_for_live_stacking_impl(
     // Applying calibration data
 
     let mut calibr = command.frame.calibr.lock().unwrap();
-    apply_calibr_data(&command.calibr, &mut raw_image, &mut calibr, true)?;
+    apply_calibr_data_and_remove_hot_pixels(&command.calibr, &mut raw_image, &mut calibr, true)?;
     drop(calibr);
 
     // Demosaic
@@ -649,7 +669,6 @@ fn append_image_for_live_stacking_impl(
     let tmr = TimeLogger::start();
     raw_image.demosaic_into(&mut image, true);
     tmr.log("demosaic");
-    drop(raw_image);
     drop(image);
 
     let image = command.frame.image.read().unwrap();
@@ -678,12 +697,28 @@ fn append_image_for_live_stacking_impl(
         ));
     }
 
+    // Filtered image for stars
+
+    let mut filtered = command.frame.filtered.lock().unwrap();
+    let tmr = TimeLogger::start();
+    raw_image.create_filtered_image_for_stars(&mut filtered, true);
+    tmr.log("creating filtered image for stars");
+
+    drop(raw_image);
+
     // Image info and stars
 
     let mut light_info = LightFileShortInfo::default();
 
     let tmr = TimeLogger::start();
-    let light_frame_info = LightImageInfo::from_image(&image, exposure, true);
+    let mono_layer = if image.is_color() { &image.g } else { &image.l };
+    let light_frame_info = LightImageInfo::from_image(
+        image.max_value(),
+        mono_layer,
+        &filtered.l,
+        exposure,
+        true
+    );
     tmr.log("LightImageInfo::from_image");
 
     light_info.noise = 100.0 * light_frame_info.noise / image.max_value() as f32;
@@ -789,8 +824,11 @@ fn append_image_for_live_stacking_impl(
     // Live stacking image info
 
     let tmr = TimeLogger::start();
+    let mono_layer = if image.is_color() { &image.g } else { &image.l };
     let live_stacking_info = LightImageInfo::from_image(
-        &res_image,
+        res_image.max_value(),
+        mono_layer,
+        mono_layer,
         image_adder.total_exposure(),
         true
     );

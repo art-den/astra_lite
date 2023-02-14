@@ -33,12 +33,17 @@ impl<T: Copy + Default> ImageLayer<T> {
         self.height_1 = 0;
     }
 
-    fn resize(&mut self, width: usize, height: usize) {
+    pub fn resize(&mut self, width: usize, height: usize) {
         self.data.resize(width * height, T::default());
         self.width = width;
         self.height = height;
         self.width_1 = width as i64 - 1;
         self.height_1 = height as i64 - 1;
+    }
+
+    pub fn swap_data(&mut self, data: &mut Vec<T>) {
+        assert!(self.data.len() == data.len());
+        std::mem::swap(&mut self.data, data);
     }
 
     pub fn is_empty(&self) -> bool {
