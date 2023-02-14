@@ -446,51 +446,51 @@ impl Image {
         let mut bytes = Vec::with_capacity(3 * width * height);
         if args.is_color_image {
             for y in 0..height {
-                let mut r0 = self.r.row(2*y).iter();
-                let mut r1 = self.r.row(2*y+1).iter();
-                let mut g0 = self.g.row(2*y).iter();
-                let mut g1 = self.g.row(2*y+1).iter();
-                let mut b0 = self.b.row(2*y).iter();
-                let mut b1 = self.b.row(2*y+1).iter();
+                let mut r0 = self.r.row(2*y).as_ptr();
+                let mut r1 = self.r.row(2*y+1).as_ptr();
+                let mut g0 = self.g.row(2*y).as_ptr();
+                let mut g1 = self.g.row(2*y+1).as_ptr();
+                let mut b0 = self.b.row(2*y).as_ptr();
+                let mut b1 = self.b.row(2*y+1).as_ptr();
                 for _ in 0..width {
                     let r = unsafe {(
-                        *r0.next().unwrap_unchecked() as u32 +
-                        *r0.next().unwrap_unchecked() as u32 +
-                        *r1.next().unwrap_unchecked() as u32 +
-                        *r1.next().unwrap_unchecked() as u32 + 2
+                        *r0 as u32 + *r0.offset(1) as u32 +
+                        *r1 as u32 + *r1.offset(1) as u32 + 2
                     ) / 4};
                     let g = unsafe {(
-                        *g0.next().unwrap_unchecked() as u32 +
-                        *g0.next().unwrap_unchecked() as u32 +
-                        *g1.next().unwrap_unchecked() as u32 +
-                        *g1.next().unwrap_unchecked() as u32 + 2
+                        *g0 as u32 + *g0.offset(1) as u32 +
+                        *g1 as u32 + *g1.offset(1) as u32 + 2
                     ) / 4};
                     let b = unsafe {(
-                        *b0.next().unwrap_unchecked() as u32 +
-                        *b0.next().unwrap_unchecked() as u32 +
-                        *b1.next().unwrap_unchecked() as u32 +
-                        *b1.next().unwrap_unchecked() as u32 + 2
+                        *b0 as u32 + *b0.offset(1) as u32 +
+                        *b1 as u32 + *b1.offset(1) as u32 + 2
                     ) / 4};
                     bytes.push(table[(r as i32 - args.r_black_level).min(65535).max(0) as usize]);
                     bytes.push(table[(g as i32 - args.g_black_level).min(65535).max(0) as usize]);
                     bytes.push(table[(b as i32 - args.b_black_level).min(65535).max(0) as usize]);
+                    r0 = r0.wrapping_offset(2);
+                    r1 = r1.wrapping_offset(2);
+                    g0 = g0.wrapping_offset(2);
+                    g1 = g1.wrapping_offset(2);
+                    b0 = b0.wrapping_offset(2);
+                    b1 = b1.wrapping_offset(2);
                 }
             }
         } else {
             for y in 0..height {
-                let mut l0 = self.l.row(2*y).iter();
-                let mut l1 = self.l.row(2*y+1).iter();
+                let mut l0 = self.l.row(2*y).as_ptr();
+                let mut l1 = self.l.row(2*y+1).as_ptr();
                 for _ in 0..width {
                     let l = unsafe {(
-                        *l0.next().unwrap_unchecked() as u32 +
-                        *l0.next().unwrap_unchecked() as u32 +
-                        *l1.next().unwrap_unchecked() as u32 +
-                        *l1.next().unwrap_unchecked() as u32 + 2
+                        *l0 as u32 + *l0.offset(1) as u32 +
+                        *l1 as u32 + *l1.offset(1) as u32 + 2
                     ) / 4};
                     let l = table[(l as i32 - args.l_black_level).min(65535).max(0) as usize];
                     bytes.push(l);
                     bytes.push(l);
                     bytes.push(l);
+                    l0 = l0.wrapping_offset(2);
+                    l1 = l1.wrapping_offset(2);
                 }
             }
         }
@@ -507,77 +507,63 @@ impl Image {
         let mut bytes = Vec::with_capacity(3 * width * height);
         if args.is_color_image {
             for y in 0..height {
-                let mut r0 = self.r.row(3*y).iter();
-                let mut r1 = self.r.row(3*y+1).iter();
-                let mut r2 = self.r.row(3*y+2).iter();
-                let mut g0 = self.g.row(3*y).iter();
-                let mut g1 = self.g.row(3*y+1).iter();
-                let mut g2 = self.g.row(3*y+2).iter();
-                let mut b0 = self.b.row(3*y).iter();
-                let mut b1 = self.b.row(3*y+1).iter();
-                let mut b2 = self.b.row(3*y+2).iter();
+                let mut r0 = self.r.row(3*y).as_ptr();
+                let mut r1 = self.r.row(3*y+1).as_ptr();
+                let mut r2 = self.r.row(3*y+2).as_ptr();
+                let mut g0 = self.g.row(3*y).as_ptr();
+                let mut g1 = self.g.row(3*y+1).as_ptr();
+                let mut g2 = self.g.row(3*y+2).as_ptr();
+                let mut b0 = self.b.row(3*y).as_ptr();
+                let mut b1 = self.b.row(3*y+1).as_ptr();
+                let mut b2 = self.b.row(3*y+2).as_ptr();
                 for _ in 0..width {
-
                     let r = unsafe {(
-                        *r0.next().unwrap_unchecked() as u32 +
-                        *r0.next().unwrap_unchecked() as u32 +
-                        *r0.next().unwrap_unchecked() as u32 +
-                        *r1.next().unwrap_unchecked() as u32 +
-                        *r1.next().unwrap_unchecked() as u32 +
-                        *r1.next().unwrap_unchecked() as u32 +
-                        *r2.next().unwrap_unchecked() as u32 +
-                        *r2.next().unwrap_unchecked() as u32 +
-                        *r2.next().unwrap_unchecked() as u32 + 4
+                        *r0 as u32 + *r0.offset(1) as u32 + *r0.offset(2) as u32 +
+                        *r1 as u32 + *r1.offset(1) as u32 + *r1.offset(2) as u32 +
+                        *r2 as u32 + *r2.offset(1) as u32 + *r2.offset(2) as u32 + 4
                     ) / 9};
                     let g = unsafe {(
-                        *g0.next().unwrap_unchecked() as u32 +
-                        *g0.next().unwrap_unchecked() as u32 +
-                        *g0.next().unwrap_unchecked() as u32 +
-                        *g1.next().unwrap_unchecked() as u32 +
-                        *g1.next().unwrap_unchecked() as u32 +
-                        *g1.next().unwrap_unchecked() as u32 +
-                        *g2.next().unwrap_unchecked() as u32 +
-                        *g2.next().unwrap_unchecked() as u32 +
-                        *g2.next().unwrap_unchecked() as u32 + 4
+                        *g0 as u32 + *g0.offset(1) as u32 + *g0.offset(2) as u32 +
+                        *g1 as u32 + *g1.offset(1) as u32 + *g1.offset(2) as u32 +
+                        *g2 as u32 + *g2.offset(1) as u32 + *g2.offset(2) as u32 + 4
                     ) / 9};
                     let b = unsafe {(
-                        *b0.next().unwrap_unchecked() as u32 +
-                        *b0.next().unwrap_unchecked() as u32 +
-                        *b0.next().unwrap_unchecked() as u32 +
-                        *b1.next().unwrap_unchecked() as u32 +
-                        *b1.next().unwrap_unchecked() as u32 +
-                        *b1.next().unwrap_unchecked() as u32 +
-                        *b2.next().unwrap_unchecked() as u32 +
-                        *b2.next().unwrap_unchecked() as u32 +
-                        *b2.next().unwrap_unchecked() as u32 + 4
+                        *b0 as u32 + *b0.offset(1) as u32 + *b0.offset(2) as u32 +
+                        *b1 as u32 + *b1.offset(1) as u32 + *b1.offset(2) as u32 +
+                        *b2 as u32 + *b2.offset(1) as u32 + *b2.offset(2) as u32 + 4
                     ) / 9};
-
                     bytes.push(table[(r as i32 - args.r_black_level).min(65535).max(0) as usize]);
                     bytes.push(table[(g as i32 - args.g_black_level).min(65535).max(0) as usize]);
                     bytes.push(table[(b as i32 - args.b_black_level).min(65535).max(0) as usize]);
+                    r0 = r0.wrapping_offset(3);
+                    r1 = r1.wrapping_offset(3);
+                    r2 = r2.wrapping_offset(3);
+                    g0 = g0.wrapping_offset(3);
+                    g1 = g1.wrapping_offset(3);
+                    g2 = g2.wrapping_offset(3);
+                    b0 = b0.wrapping_offset(3);
+                    b1 = b1.wrapping_offset(3);
+                    b2 = b2.wrapping_offset(3);
                 }
             }
         } else {
             for y in 0..height {
-                let mut l0 = self.l.row(3*y).iter();
-                let mut l1 = self.l.row(3*y+1).iter();
-                let mut l2 = self.l.row(3*y+2).iter();
+                let mut l0 = self.r.row(3*y).as_ptr();
+                let mut l1 = self.r.row(3*y+1).as_ptr();
+                let mut l2 = self.r.row(3*y+2).as_ptr();
                 for _ in 0..width {
                     let l = unsafe {(
-                        *l0.next().unwrap_unchecked() as u32 +
-                        *l0.next().unwrap_unchecked() as u32 +
-                        *l0.next().unwrap_unchecked() as u32 +
-                        *l1.next().unwrap_unchecked() as u32 +
-                        *l1.next().unwrap_unchecked() as u32 +
-                        *l1.next().unwrap_unchecked() as u32 +
-                        *l2.next().unwrap_unchecked() as u32 +
-                        *l2.next().unwrap_unchecked() as u32 +
-                        *l2.next().unwrap_unchecked() as u32 + 4
+                        *l0 as u32 + *l0.offset(1) as u32 + *l0.offset(2) as u32 +
+                        *l1 as u32 + *l1.offset(1) as u32 + *l1.offset(2) as u32 +
+                        *l2 as u32 + *l2.offset(1) as u32 + *l2.offset(2) as u32 + 4
                     ) / 9};
                     let l = table[(l as i32 - args.l_black_level).min(65535).max(0) as usize];
                     bytes.push(l);
                     bytes.push(l);
                     bytes.push(l);
+                    l0 = l0.wrapping_offset(3);
+                    l1 = l1.wrapping_offset(3);
+                    l2 = l2.wrapping_offset(3);
                 }
             }
         }
@@ -594,107 +580,75 @@ impl Image {
         let mut bytes = Vec::with_capacity(3 * width * height);
         if args.is_color_image {
             for y in 0..height {
-                let mut r0 = self.r.row(4*y).iter();
-                let mut r1 = self.r.row(4*y+1).iter();
-                let mut r2 = self.r.row(4*y+2).iter();
-                let mut r3 = self.r.row(4*y+3).iter();
-                let mut g0 = self.g.row(4*y).iter();
-                let mut g1 = self.g.row(4*y+1).iter();
-                let mut g2 = self.g.row(4*y+2).iter();
-                let mut g3 = self.g.row(4*y+3).iter();
-                let mut b0 = self.b.row(4*y).iter();
-                let mut b1 = self.b.row(4*y+1).iter();
-                let mut b2 = self.b.row(4*y+2).iter();
-                let mut b3 = self.b.row(4*y+3).iter();
+                let mut r0 = self.r.row(4*y).as_ptr();
+                let mut r1 = self.r.row(4*y+1).as_ptr();
+                let mut r2 = self.r.row(4*y+2).as_ptr();
+                let mut r3 = self.r.row(4*y+3).as_ptr();
+                let mut g0 = self.g.row(4*y).as_ptr();
+                let mut g1 = self.g.row(4*y+1).as_ptr();
+                let mut g2 = self.g.row(4*y+2).as_ptr();
+                let mut g3 = self.g.row(4*y+3).as_ptr();
+                let mut b0 = self.b.row(4*y).as_ptr();
+                let mut b1 = self.b.row(4*y+1).as_ptr();
+                let mut b2 = self.b.row(4*y+2).as_ptr();
+                let mut b3 = self.b.row(4*y+3).as_ptr();
                 for _ in 0..width {
                     let r = unsafe {(
-                        *r0.next().unwrap_unchecked() as u32 +
-                        *r0.next().unwrap_unchecked() as u32 +
-                        *r0.next().unwrap_unchecked() as u32 +
-                        *r0.next().unwrap_unchecked() as u32 +
-                        *r1.next().unwrap_unchecked() as u32 +
-                        *r1.next().unwrap_unchecked() as u32 +
-                        *r1.next().unwrap_unchecked() as u32 +
-                        *r1.next().unwrap_unchecked() as u32 +
-                        *r2.next().unwrap_unchecked() as u32 +
-                        *r2.next().unwrap_unchecked() as u32 +
-                        *r2.next().unwrap_unchecked() as u32 +
-                        *r2.next().unwrap_unchecked() as u32 +
-                        *r3.next().unwrap_unchecked() as u32 +
-                        *r3.next().unwrap_unchecked() as u32 +
-                        *r3.next().unwrap_unchecked() as u32 +
-                        *r3.next().unwrap_unchecked() as u32 + 8
+                        *r0 as u32 + *r0.offset(1) as u32 + *r0.offset(2) as u32 + *r0.offset(3) as u32 +
+                        *r1 as u32 + *r1.offset(1) as u32 + *r1.offset(2) as u32 + *r1.offset(3) as u32 +
+                        *r2 as u32 + *r2.offset(1) as u32 + *r2.offset(2) as u32 + *r2.offset(3) as u32 +
+                        *r3 as u32 + *r3.offset(1) as u32 + *r3.offset(2) as u32 + *r3.offset(3) as u32 + 8
                     ) / 16};
                     let g = unsafe {(
-                        *g0.next().unwrap_unchecked() as u32 +
-                        *g0.next().unwrap_unchecked() as u32 +
-                        *g0.next().unwrap_unchecked() as u32 +
-                        *g0.next().unwrap_unchecked() as u32 +
-                        *g1.next().unwrap_unchecked() as u32 +
-                        *g1.next().unwrap_unchecked() as u32 +
-                        *g1.next().unwrap_unchecked() as u32 +
-                        *g1.next().unwrap_unchecked() as u32 +
-                        *g2.next().unwrap_unchecked() as u32 +
-                        *g2.next().unwrap_unchecked() as u32 +
-                        *g2.next().unwrap_unchecked() as u32 +
-                        *g2.next().unwrap_unchecked() as u32 +
-                        *g3.next().unwrap_unchecked() as u32 +
-                        *g3.next().unwrap_unchecked() as u32 +
-                        *g3.next().unwrap_unchecked() as u32 +
-                        *g3.next().unwrap_unchecked() as u32 + 8
+                        *g0 as u32 + *g0.offset(1) as u32 + *g0.offset(2) as u32 + *g0.offset(3) as u32 +
+                        *g1 as u32 + *g1.offset(1) as u32 + *g1.offset(2) as u32 + *g1.offset(3) as u32 +
+                        *g2 as u32 + *g2.offset(1) as u32 + *g2.offset(2) as u32 + *g2.offset(3) as u32 +
+                        *g3 as u32 + *g3.offset(1) as u32 + *g3.offset(2) as u32 + *g3.offset(3) as u32 + 8
                     ) / 16};
                     let b = unsafe {(
-                        *b0.next().unwrap_unchecked() as u32 +
-                        *b0.next().unwrap_unchecked() as u32 +
-                        *b0.next().unwrap_unchecked() as u32 +
-                        *b0.next().unwrap_unchecked() as u32 +
-                        *b1.next().unwrap_unchecked() as u32 +
-                        *b1.next().unwrap_unchecked() as u32 +
-                        *b1.next().unwrap_unchecked() as u32 +
-                        *b1.next().unwrap_unchecked() as u32 +
-                        *b2.next().unwrap_unchecked() as u32 +
-                        *b2.next().unwrap_unchecked() as u32 +
-                        *b2.next().unwrap_unchecked() as u32 +
-                        *b2.next().unwrap_unchecked() as u32 +
-                        *b3.next().unwrap_unchecked() as u32 +
-                        *b3.next().unwrap_unchecked() as u32 +
-                        *b3.next().unwrap_unchecked() as u32 +
-                        *b3.next().unwrap_unchecked() as u32 + 8
+                        *b0 as u32 + *b0.offset(1) as u32 + *b0.offset(2) as u32 + *b0.offset(3) as u32 +
+                        *b1 as u32 + *b1.offset(1) as u32 + *b1.offset(2) as u32 + *b1.offset(3) as u32 +
+                        *b2 as u32 + *b2.offset(1) as u32 + *b2.offset(2) as u32 + *b2.offset(3) as u32 +
+                        *b3 as u32 + *b3.offset(1) as u32 + *b3.offset(2) as u32 + *b3.offset(3) as u32 + 8
                     ) / 16};
                     bytes.push(table[(r as i32 - args.r_black_level).min(65535).max(0) as usize]);
                     bytes.push(table[(g as i32 - args.g_black_level).min(65535).max(0) as usize]);
                     bytes.push(table[(b as i32 - args.b_black_level).min(65535).max(0) as usize]);
+                    r0 = r0.wrapping_offset(4);
+                    r1 = r1.wrapping_offset(4);
+                    r2 = r2.wrapping_offset(4);
+                    r3 = r3.wrapping_offset(4);
+                    g0 = g0.wrapping_offset(4);
+                    g1 = g1.wrapping_offset(4);
+                    g2 = g2.wrapping_offset(4);
+                    g3 = g3.wrapping_offset(4);
+                    b0 = b0.wrapping_offset(4);
+                    b1 = b1.wrapping_offset(4);
+                    b2 = b2.wrapping_offset(4);
+                    b3 = b3.wrapping_offset(4);
                 }
             }
         } else {
             for y in 0..height {
-                let mut l0 = self.l.row(4*y).iter();
-                let mut l1 = self.l.row(4*y+1).iter();
-                let mut l2 = self.l.row(4*y+2).iter();
-                let mut l3 = self.l.row(4*y+3).iter();
+                let mut l0 = self.l.row(4*y).as_ptr();
+                let mut l1 = self.l.row(4*y+1).as_ptr();
+                let mut l2 = self.l.row(4*y+2).as_ptr();
+                let mut l3 = self.l.row(4*y+3).as_ptr();
                 for _ in 0..width {
                     let l = unsafe {(
-                        *l0.next().unwrap_unchecked() as u32 +
-                        *l0.next().unwrap_unchecked() as u32 +
-                        *l0.next().unwrap_unchecked() as u32 +
-                        *l0.next().unwrap_unchecked() as u32 +
-                        *l1.next().unwrap_unchecked() as u32 +
-                        *l1.next().unwrap_unchecked() as u32 +
-                        *l1.next().unwrap_unchecked() as u32 +
-                        *l1.next().unwrap_unchecked() as u32 +
-                        *l2.next().unwrap_unchecked() as u32 +
-                        *l2.next().unwrap_unchecked() as u32 +
-                        *l2.next().unwrap_unchecked() as u32 +
-                        *l2.next().unwrap_unchecked() as u32 +
-                        *l3.next().unwrap_unchecked() as u32 +
-                        *l3.next().unwrap_unchecked() as u32 +
-                        *l3.next().unwrap_unchecked() as u32 +
-                        *l3.next().unwrap_unchecked() as u32 + 8
+                        *l0 as u32 + *l0.offset(1) as u32 + *l0.offset(2) as u32 + *l0.offset(3) as u32 +
+                        *l1 as u32 + *l1.offset(1) as u32 + *l1.offset(2) as u32 + *l1.offset(3) as u32 +
+                        *l2 as u32 + *l2.offset(1) as u32 + *l2.offset(2) as u32 + *l2.offset(3) as u32 +
+                        *l3 as u32 + *l3.offset(1) as u32 + *l3.offset(2) as u32 + *l3.offset(3) as u32 + 8
                     ) / 16};
                     let l = table[(l as i32 - args.l_black_level).min(65535).max(0) as usize];
                     bytes.push(l);
                     bytes.push(l);
                     bytes.push(l);
+                    l0 = l0.wrapping_offset(4);
+                    l1 = l1.wrapping_offset(4);
+                    l2 = l2.wrapping_offset(4);
+                    l3 = l3.wrapping_offset(4);
                 }
             }
         }
