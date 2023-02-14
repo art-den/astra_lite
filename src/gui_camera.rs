@@ -652,6 +652,16 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
         handler_live_view_changed(&data);
     }));
 
+    let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
+    cb_frame_mode.connect_active_id_notify(clone!(@strong data => move |cb| {
+        let mut state = data.state.write().unwrap();
+        if let State::Active{ frame, .. } = &mut *state {
+            frame.frame_type = FrameType::from_active_id(
+                cb.active_id().map(|id| id.to_string()).as_deref()
+            )
+        }
+    }));
+
     let spb_exp = bldr.object::<gtk::SpinButton>("spb_exp").unwrap();
     spb_exp.connect_value_changed(clone!(@strong data => move |sb| {
         let mut state = data.state.write().unwrap();
@@ -684,7 +694,9 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     cb_bin.connect_active_id_notify(clone!(@strong data => move |cb| {
         let mut state = data.state.write().unwrap();
         if let State::Active{ frame, .. } = &mut *state {
-            frame.binning = Binning::from_active_id(cb.active_id().map(|id| id.to_string()).as_deref());
+            frame.binning = Binning::from_active_id(
+                cb.active_id().map(|id| id.to_string()).as_deref()
+            );
         }
     }));
 
@@ -692,7 +704,9 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     cb_crop.connect_active_id_notify(clone!(@strong data => move |cb| {
         let mut state = data.state.write().unwrap();
         if let State::Active{ frame, .. } = &mut *state {
-            frame.crop = Crop::from_active_id(cb.active_id().map(|id| id.to_string()).as_deref());
+            frame.crop = Crop::from_active_id(
+                cb.active_id().map(|id| id.to_string()).as_deref()
+            );
         }
     }));
 
@@ -729,8 +743,9 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let cb_preview_src = bldr.object::<gtk::ComboBoxText>("cb_preview_src").unwrap();
     cb_preview_src.connect_active_id_notify(clone!(@strong data => move |cb| {
         let Ok(mut options) = data.options.try_borrow_mut() else { return; };
-        options.preview.source =
-            PreviewSource::from_active_id(cb.active_id().map(|id| id.to_string()).as_deref());
+        options.preview.source = PreviewSource::from_active_id(
+            cb.active_id().map(|id| id.to_string()).as_deref()
+        );
         drop(options);
         show_preview_image(&data, None, None);
         repaint_histogram(&data);
