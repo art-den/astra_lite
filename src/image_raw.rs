@@ -784,33 +784,47 @@ impl RawImage {
             self.info.max_value
         );
 
-        fn demosaic_row(r_row: &mut [u16], g_row: &mut [u16], b_row: &mut [u16], img: &RawImage, y: usize) {
-            let row1 = img.row(y-1);
-            let row2 = img.row(y);
-            let row3 = img.row(y+1);
+        fn demosaic_row(
+            r_row: &mut [u16],
+            g_row: &mut [u16],
+            b_row: &mut [u16],
+            img:   &RawImage,
+            y:     usize
+        ) {
+            let mut row1 = img.row(y-1).as_ptr();
+            let mut row2 = img.row(y).as_ptr();
+            let mut row3 = img.row(y+1).as_ptr();
             let row_cfa = img.cfa_row(y);
-            for (
-                r, g, b,
-                (v11, v12, v13),
-                (v21, v22, v23),
-                (v31, v32, v33),
-                (c21, c22),
-            ) in izip!(
-                &mut r_row[1..img.info.width-1],
-                &mut g_row[1..img.info.width-1],
-                &mut b_row[1..img.info.width-1],
-                row1.iter().tuple_windows(),
-                row2.iter().tuple_windows(),
-                row3.iter().tuple_windows(),
-                row_cfa.iter().cycle().tuple_windows(),
-            ) {
+
+            let mut r = r_row[1..].as_mut_ptr();
+            let mut g = g_row[1..].as_mut_ptr();
+            let mut b = b_row[1..].as_mut_ptr();
+
+            for (_, (c21, c22)) in izip!(
+                0..img.info.width-2,
+                row_cfa.iter().cycle().tuple_windows()
+            ) { unsafe {
                 match *c22 {
                     CfaColor::R => {
+                        let v11 = row1;
+                        let v12 = row1.offset(1);
+                        let v13 = row1.offset(2);
+                        let v21 = row2;
+                        let v22 = row2.offset(1);
+                        let v23 = row2.offset(2);
+                        let v31 = row3;
+                        let v32 = row3.offset(1);
+                        let v33 = row3.offset(2);
                         *r = *v22;
                         *g = ((*v12 as usize + *v21 as usize + *v23 as usize + *v32 as usize + 2) / 4) as u16;
                         *b = ((*v11 as usize + *v13 as usize + *v31 as usize + *v33 as usize + 2) / 4) as u16;
                     },
                     CfaColor::G => {
+                        let v12 = row1.offset(1);
+                        let v21 = row2;
+                        let v22 = row2.offset(1);
+                        let v23 = row2.offset(2);
+                        let v32 = row3.offset(1);
                         *g = *v22;
                         if *c21 == CfaColor::R {
                             *r = ((*v21 as usize + *v23 as usize + 1) / 2) as u16;
@@ -821,13 +835,28 @@ impl RawImage {
                         }
                     },
                     CfaColor::B => {
+                        let v11 = row1;
+                        let v12 = row1.offset(1);
+                        let v13 = row1.offset(2);
+                        let v21 = row2;
+                        let v22 = row2.offset(1);
+                        let v23 = row2.offset(2);
+                        let v31 = row3;
+                        let v32 = row3.offset(1);
+                        let v33 = row3.offset(2);
                         *b = *v22;
                         *g = ((*v12 as usize + *v21 as usize + *v23 as usize + *v32 as usize + 2) / 4) as u16;
                         *r = ((*v11 as usize + *v13 as usize + *v31 as usize + *v33 as usize + 2) / 4) as u16;
                     },
                     _ => {},
                 }
-            }
+                row1 = row1.offset(1);
+                row2 = row2.offset(1);
+                row3 = row3.offset(1);
+                r = r.offset(1);
+                g = g.offset(1);
+                b = b.offset(1);
+            }}
         }
 
         if !mt {
