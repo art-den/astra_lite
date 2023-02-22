@@ -179,7 +179,6 @@ fn correct_ctrls_by_cur_state(data: &Rc<HardwareData>) {
     ]);
 }
 
-
 fn connect_indi_events(data: &Rc<HardwareData>) {
     let (sender, receiver) = glib::MainContext::channel(glib::PRIORITY_DEFAULT);
     *data.indi_conn.borrow_mut() = Some(data.main.indi.subscribe_events(move |event| {

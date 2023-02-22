@@ -1,4 +1,4 @@
-use std::{sync::Arc, sync::{mpsc, RwLock, Mutex}, thread::JoinHandle, path::*};
+use std::{sync::Arc, sync::{mpsc, RwLock, Mutex}, thread::JoinHandle, path::*, io::Cursor};
 
 use chrono::{DateTime, Local};
 
@@ -20,11 +20,11 @@ pub enum ResultImageInfo {
 
 #[derive(Default)]
 struct CalibrImages {
-    master_dark:    Option<RawImage>,
-    master_dark_fn: Option<PathBuf>,
-    master_flat:    Option<RawImage>,
-    master_flat_fn: Option<PathBuf>,
-    hot_pixels:     Vec<BadPixel>,
+    master_dark:     Option<RawImage>,
+    master_dark_fn:  Option<PathBuf>,
+    master_flat:     Option<RawImage>,
+    master_flat_fn:  Option<PathBuf>,
+    dark_hot_pixels: Vec<BadPixel>,
 }
 
 pub struct ResultImage {
@@ -32,17 +32,15 @@ pub struct ResultImage {
     pub hist:  RwLock<Histogram>,
     pub info:  RwLock<ResultImageInfo>,
     calibr:    Mutex<CalibrImages>,
-    filtered:  Mutex<Image>, // for stars
 }
 
 impl ResultImage {
     pub fn new() -> Self {
         Self {
-            image:    RwLock::new(Image::new_empty()),
-            hist:     RwLock::new(Histogram::new()),
-            info:     RwLock::new(ResultImageInfo::None),
-            calibr:   Mutex::new(CalibrImages::default()),
-            filtered: Mutex::new(Image::new_empty()),
+            image:  RwLock::new(Image::new_empty()),
+            hist:   RwLock::new(Histogram::new()),
+            info:   RwLock::new(ResultImageInfo::None),
+            calibr: Mutex::new(CalibrImages::default()),
         }
     }
 }
@@ -58,8 +56,9 @@ pub struct PreviewParams {
 
 #[derive(Default)]
 pub struct CalibrParams {
-    pub dark: Option<PathBuf>,
-    pub flat: Option<PathBuf>,
+    pub dark:       Option<PathBuf>,
+    pub flat:       Option<PathBuf>,
+    pub hot_pixels: bool,
 }
 
 pub struct PreviewImageCommand {
@@ -237,38 +236,9 @@ fn create_raw_image_from_blob(
     blob_prop_value: &Arc<indi_api::BlobPropValue>
 ) -> anyhow::Result<RawImage> {
     if blob_prop_value.format == ".fits" {
-        use fitsio::{sys, FileOpenMode, FitsFile};
-        let mut ptr = blob_prop_value.data.as_ptr();
-        let mut ptr_size = blob_prop_value.data.len() as sys::size_t;
-        let mut fptr = std::ptr::null_mut();
-        let mut status = 0;
-        let c_filename = std::ffi::CString::new("filename.fits").unwrap();
-        unsafe {
-            sys::ffomem(
-                &mut fptr as *mut *mut _,
-                c_filename.as_ptr(),
-                sys::READONLY as _,
-                &mut ptr as *const _ as *mut *mut libc::c_void,
-                &mut ptr_size as *mut sys::size_t,
-                0,
-                None,
-                &mut status,
-            );
-        }
-        if status != 0 {
-            anyhow::bail!("sys::ffomem status = {}", status);
-        }
-        let mut f = unsafe { FitsFile::from_raw(
-            fptr,
-            FileOpenMode::READONLY
-        )}.map_err(|e|
-            anyhow::anyhow!(
-                "FitsFile::from_raw failed with {}",
-                e.to_string()
-            )
-        )?;
-        let raw_image = RawImage::new_from_fits(&mut f);
-        return raw_image
+        let mem_stream = Cursor::new(blob_prop_value.data.as_slice());
+        let raw_image = RawImage::new_from_fits_stream(mem_stream)?;
+        return Ok(raw_image);
     }
 
     anyhow::bail!("Unsupported blob format: {}", blob_prop_value.format);
@@ -335,9 +305,9 @@ fn apply_calibr_data_and_remove_hot_pixels(
                 ))?;
             tmr.log("loading master dark from file");
             let tmr = TimeLogger::start();
-            calibr.hot_pixels = master_dark.find_hot_pixels_in_master_dark();
-            tmr.log("searching hot pixels");
-            log::debug!("hot pixels count = {}", calibr.hot_pixels.len());
+            calibr.dark_hot_pixels = master_dark.find_hot_pixels_in_master_dark();
+            tmr.log("searching hot pixels in dark image");
+            log::debug!("hot pixels count = {}", calibr.dark_hot_pixels.len());
             calibr.master_dark = Some(master_dark);
             calibr.master_dark_fn = Some(file_name.clone());
         }
@@ -353,8 +323,16 @@ fn apply_calibr_data_and_remove_hot_pixels(
             ))?;
         tmr.log("subtracting master dark");
         let tmr = TimeLogger::start();
-        raw_image.remove_bad_pixels(&calibr.hot_pixels);
+        raw_image.remove_bad_pixels(&calibr.dark_hot_pixels);
         tmr.log("removing hot pixels from light frame");
+    }
+
+    if params.hot_pixels && calibr.master_dark.is_none() {
+        let tmr = TimeLogger::start();
+        let hot_pixels = raw_image.find_hot_pixels_in_light();
+        tmr.log("searching hot pixels in light image");
+        log::debug!("hot pixels count = {}", hot_pixels.len());
+        raw_image.remove_bad_pixels(&hot_pixels);
     }
 
     if let Some(file_name) = &params.flat {
@@ -369,7 +347,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
                 ))?;
             tmr.log("loading master flat from file");
             let tmr = TimeLogger::start();
-            raw_image.remove_bad_pixels(&calibr.hot_pixels);
+            raw_image.remove_bad_pixels(&calibr.dark_hot_pixels);
             tmr.log("removing bad pixels from master flat");
             let tmr = TimeLogger::start();
             master_flat.filter_flat();
@@ -517,6 +495,7 @@ fn make_preview_image_impl(
     }
 
     drop(image);
+    drop(raw_image);
 
     // Preview image RGB bytes
 
@@ -542,22 +521,9 @@ fn make_preview_image_impl(
     if frame_type == FrameType::Light {
         // Filtered image for stars
 
-        let mut filtered = command.frame.filtered.lock().unwrap();
-        if frame_type == FrameType::Light {
-            let tmr = TimeLogger::start();
-            raw_image.create_filtered_image_for_stars(&mut filtered, true);
-            tmr.log("creating filtered image for stars");
-        }
-
         let tmr = TimeLogger::start();
-        let mono_layer = if image.is_color() { &image.g } else { &image.l };
-        let info = LightImageInfo::from_image(
-            image.max_value(),
-            mono_layer,
-            &filtered.l,
-            exposure,
-            true
-        );
+
+        let info = LightImageInfo::from_image(&image, exposure, true);
 
         let mut light_info = LightFileShortInfo::default();
         light_info.noise = 100.0 * info.noise / image.max_value() as f32;
@@ -572,7 +538,6 @@ fn make_preview_image_impl(
             mode
         ));
     }
-    drop(raw_image);
 
     if let Some(save_path) = command.save_path.as_ref() {
         let sub_path = match frame_type {
@@ -669,6 +634,8 @@ fn append_image_for_live_stacking_impl(
     let tmr = TimeLogger::start();
     raw_image.demosaic_into(&mut image, true);
     tmr.log("demosaic");
+
+    drop(raw_image);
     drop(image);
 
     let image = command.frame.image.read().unwrap();
@@ -697,28 +664,12 @@ fn append_image_for_live_stacking_impl(
         ));
     }
 
-    // Filtered image for stars
-
-    let mut filtered = command.frame.filtered.lock().unwrap();
-    let tmr = TimeLogger::start();
-    raw_image.create_filtered_image_for_stars(&mut filtered, true);
-    tmr.log("creating filtered image for stars");
-
-    drop(raw_image);
-
     // Image info and stars
 
     let mut light_info = LightFileShortInfo::default();
 
     let tmr = TimeLogger::start();
-    let mono_layer = if image.is_color() { &image.g } else { &image.l };
-    let light_frame_info = LightImageInfo::from_image(
-        image.max_value(),
-        mono_layer,
-        &filtered.l,
-        exposure,
-        true
-    );
+    let light_frame_info = LightImageInfo::from_image(&image, exposure, true);
     tmr.log("LightImageInfo::from_image");
 
     light_info.noise = 100.0 * light_frame_info.noise / image.max_value() as f32;
@@ -824,11 +775,8 @@ fn append_image_for_live_stacking_impl(
     // Live stacking image info
 
     let tmr = TimeLogger::start();
-    let mono_layer = if image.is_color() { &image.g } else { &image.l };
     let live_stacking_info = LightImageInfo::from_image(
-        res_image.max_value(),
-        mono_layer,
-        mono_layer,
+        &res_image,
         image_adder.total_exposure(),
         true
     );

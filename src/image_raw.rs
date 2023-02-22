@@ -4,10 +4,11 @@ use rayon::prelude::*;
 use itertools::{izip, Itertools};
 use serde::{Serialize, Deserialize};
 use bitstream_io::*;
-use crate::{image::*};
+use crate::{image::*, fits_reader::*};
 
 const RAW_IMAGE_FILE_VERSION: u8 = 1;
 
+#[derive(Clone)]
 pub struct BadPixel {
     pub x: isize,
     pub y: isize,
@@ -102,20 +103,6 @@ pub struct RawImage {
     cfa_arr: &'static CfaArray,
 }
 
-fn find_image_hdu(
-    file: &mut fitsio::FitsFile
-) -> anyhow::Result<(fitsio::hdu::FitsHdu, usize, usize, fitsio::images::ImageType)> {
-    for hdu in file.iter() {
-        if let fitsio::hdu::HduInfo::ImageInfo { shape, image_type } = &hdu.info {
-            let image_type = *image_type;
-            if let &[height, width] = shape.as_slice() {
-                return Ok((hdu, width, height, image_type));
-            }
-        }
-    }
-    anyhow::bail!("Supported image HDU with raw image not found in FITS file")
-}
-
 impl RawImage {
     pub fn new(width: usize, height: usize, max_value: u16) -> RawImage {
         let mut data = Vec::new();
@@ -140,19 +127,39 @@ impl RawImage {
         Self { info, data, cfa_arr }
     }
 
-    pub fn new_from_fits(fptr: &mut fitsio::FitsFile) -> anyhow::Result<RawImage> {
-        let (image_hdu, width, height, _img_type) = find_image_hdu(fptr)?;
-        let data: Vec<_> = image_hdu.read_image(fptr)?;
-        let exposure  = image_hdu.read_key::<f64>   (fptr, "EXPTIME" ).unwrap_or(0.0);
-        let bayer     = image_hdu.read_key::<String>(fptr, "BAYERPAT").unwrap_or_default();
-        let bitdepth  = image_hdu.read_key::<i64>   (fptr, "BITDEPTH").unwrap_or(16) as i32;
-        let bin       = image_hdu.read_key::<i64>   (fptr, "XBINNING").unwrap_or(1) as u8;
-        let offset    = image_hdu.read_key::<i64>   (fptr, "OFFSET"  ).unwrap_or(0) as i32;
-        let frame_str = image_hdu.read_key::<String>(fptr, "FRAME"   );
+    pub fn new_from_fits_stream(
+        mut stream: impl SeekNRead,
+    ) -> anyhow::Result<RawImage> {
+        let reader = FitsReader::new(&mut stream)?;
+        let Some(image_hdu) = reader.hdus.iter().find(|hdu| {
+            hdu.dims.len() == 2
+        }) else {
+            anyhow::bail!("No RAW image found in fits data");
+        };
+
+        let width     = image_hdu.dims[0];
+        let height    = image_hdu.dims[1];
+        let exposure  = image_hdu.get_f64("EXPTIME" ).unwrap_or(0.0);
+        let bayer     = image_hdu.get_str("BAYERPAT").unwrap_or_default();
+        let bitdepth  = image_hdu.get_i64("BITDEPTH").unwrap_or(16) as i32;
+        let bin       = image_hdu.get_i64("XBINNING").unwrap_or(1) as u8;
+        let offset    = image_hdu.get_i64("OFFSET"  ).unwrap_or(0) as i32;
+        let frame_str = image_hdu.get_str("FRAME"   );
+
+        let data      = image_hdu.data_u16(&mut stream).unwrap();
+
+        if bitdepth > 16 {
+            anyhow::bail!("BITDEPTH = {} is not supported", bitdepth);
+        }
+
         let max_value = ((1 << bitdepth) - 1) as u16;
         let cfa = CfaType::from_str(&bayer);
         let cfa_arr = cfa.get_array();
-        let frame_type = FrameType::from_str(frame_str.as_deref().unwrap_or_default(), FrameType::Light);
+        let frame_type = FrameType::from_str(
+            frame_str.as_deref().unwrap_or_default(),
+            FrameType::Light
+        );
+
         let info = RawImageInfo {
             width,
             height,
@@ -167,8 +174,8 @@ impl RawImage {
     }
 
     pub fn new_from_fits_file(file_name: &Path) -> anyhow::Result<RawImage> {
-        let mut fptr = fitsio::FitsFile::open(file_name)?;
-        Self::new_from_fits(&mut fptr)
+        let mut file = File::open(file_name)?;
+        Self::new_from_fits_stream(&mut file)
     }
 
     pub fn save_to_fits_file(&self, file_name: &Path) -> anyhow::Result<()> {
@@ -230,7 +237,10 @@ impl RawImage {
 
     fn set(&mut self, x: isize, y: isize, value: u16) {
         if x < 0 || y < 0 || x >= self.info.width as isize || y >= self.info.height as isize{
-            panic!("Wrong coords ({}, {})", x, y);
+            panic!(
+                "Wrong coords =({}, {}), image width = {}, image height = {}",
+                x, y, self.info.width, self.info.height,
+            );
         }
         self.data[y as usize * self.info.width + x as usize] = value;
     }
@@ -329,224 +339,111 @@ impl RawImage {
             .collect()
     }
 
-    pub fn create_filtered_image_for_stars(
-        &mut self,
-        result: &mut Image,
-        mt:     bool,
-    ) {
-        result.make_monochrome(
-            self.info.width,
-            self.info.height,
-            self.info.zero,
-            self.info.max_value,
-        );
-        if self.info.cfa == CfaType::None {
-            self.create_filtered_image_for_stars_mono(&mut result.l, mt);
-        } else {
-            self.create_filtered_image_for_stars_bayer(&mut result.l, mt);
-        }
-    }
-
-    fn create_filtered_image_for_stars_mono(
-        &mut self,
-        result: &mut ImageLayer<u16>,
-        mt:     bool
-    ) {
-        fn filter_row(res_row: &mut [u16], src_image: &RawImage, y: usize) {
-            if y == 0 || y == src_image.info.height-1 {
-                res_row.copy_from_slice(src_image.row(y));
-                return;
-            }
-            let row1 = src_image.row(y-1);
-            let row2 = src_image.row(y);
-            let row3 = src_image.row(y+1);
-
-            res_row[0] = row2[0];
-            res_row[src_image.info.width-1] = row2[src_image.info.width-1];
-
-            let mut r1_ptr = &row1[1] as *const u16;
-            let mut r2_ptr = &row2[0] as *const u16;
-            let mut r3_ptr = &row3[1] as *const u16;
-            for res in &mut res_row[1..src_image.info.width-1] { unsafe {
-                //  _  v12  _
-                // v21 v22 v23
-                //  _  v32  _
-                let v12 = *r1_ptr;
-                let v21 = *r2_ptr;
-                let v22 = *r2_ptr.offset(1);
-                let v23 = *r2_ptr.offset(2);
-                let v32 = *r3_ptr;
-                *res = median5(v12, v21, v22, v23, v32);
-                r1_ptr = r1_ptr.offset(1);
-                r2_ptr = r2_ptr.offset(1);
-                r3_ptr = r3_ptr.offset(1);
-            }}
-        }
-        if !mt {
-            result
-                .as_slice_mut()
-                .chunks_exact_mut(self.info.width)
+    pub fn find_hot_pixels_in_light(&self) -> Vec<BadPixel> {
+        let process_color = |color: CfaColor, x_step: usize, y_step: usize, result: &mut Vec<BadPixel>| {
+            let cfa_arr = self.info.cfa.get_array();
+            let y_start =
+                if color == CfaColor::None { 0 }
+                else if cfa_arr[0][0] == color || cfa_arr[0][1] == color { 0 }
+                else if cfa_arr[1][0] == color || cfa_arr[1][1] == color { 1 }
+                else { panic!("Internal error"); };
+            let mut diffs: Vec<_> = self.data
+                .par_chunks_exact(self.info.width)
                 .enumerate()
-                .for_each(|(y, row)| {
-                    filter_row(row, self, y);
-                });
-        } else {
-            result
-                .as_slice_mut()
-                .par_chunks_exact_mut(self.info.width)
+                .skip(y_start)
+                .step_by(4*y_step)
+                .flat_map_iter(|(y, row)| {
+                    let cfa_row = self.cfa_row(y);
+                    let x_start = if cfa_row[0] == color { 0 } else { 1 };
+                    row.iter()
+                        .skip(x_start)
+                        .step_by(x_step)
+                        .tuple_windows()
+                        .filter_map(move |(v1, v2, v3)| {
+                            if v2 > v1 && v2 > v3 {
+                                let aver = ((*v1 as u32 + *v3 as u32) / 2) as u16;
+                                Some(*v2 - aver)
+                            } else {
+                                None
+                            }
+                        })
+                })
+                .collect();
+            let pos = 99 * diffs.len() / 100;
+            let percentile_val = *diffs.select_nth_unstable(pos).1;
+            let border = 150 * percentile_val as u32 / 100;
+            let border = border
+                .max(self.info.max_value as u32 / 1000)
+                .min(u16::MAX as u32 / 2) as u16;
+            let tmp_result: Vec<_> = self.data
+                .par_chunks_exact(self.info.width)
                 .enumerate()
-                .for_each(|(y, row)| {
-                    filter_row(row, self, y);
-                });
-        }
-    }
-
-    fn create_filtered_image_for_stars_bayer(
-        &mut self,
-        result: &mut ImageLayer<u16>,
-        mt:     bool
-    ) {
-        fn filter_row(res_row: &mut [u16], src_image: &RawImage, y: usize) {
-            if y == 0 || y == src_image.info.height-1 {
-                return;
-            }
-            let row1 = src_image.row(y-1);
-            let row2 = src_image.row(y);
-            let row3 = src_image.row(y+1);
-            let row_cfa = src_image.cfa_row(y);
-            let mut r1_ptr = &row1[0] as *const u16;
-            let mut r2_ptr = &row2[0] as *const u16;
-            let mut r3_ptr = &row3[0] as *const u16;
-            let mut cfa_iter = row_cfa.iter().cycle().skip(1);
-            for res in &mut res_row[1..src_image.info.width-1] { unsafe {
-                let c22 = cfa_iter.next().unwrap_unchecked();
-                if *c22 == CfaColor::G {
-                    // v11  _  v13
-                    //  _  v22  _
-                    // v31  _  v33
-                    let v11 = *r1_ptr;
-                    let v13 = *r1_ptr.offset(2);
-                    let v22 = *r2_ptr.offset(1);
-                    let v31 = *r3_ptr;
-                    let v33 = *r3_ptr.offset(2);
-                    *res = median5(v11, v13, v22, v31, v33);
-                }
-                r1_ptr = r1_ptr.offset(1);
-                r2_ptr = r2_ptr.offset(1);
-                r3_ptr = r3_ptr.offset(1);
-            }}
-        }
-        if !mt {
-            result
-                .as_slice_mut()
-                .chunks_exact_mut(self.info.width)
-                .enumerate()
-                .for_each(|(y, row)| {
-                    filter_row(row, self, y);
-                });
-        } else {
-            result
-                .as_slice_mut()
-                .par_chunks_exact_mut(self.info.width)
-                .enumerate()
-                .for_each(|(y, row)| {
-                    filter_row(row, self, y);
-                });
-        }
-        let mut filter_pixel_at_border = |x, y| {
-            let x = x as isize;
-            let y = y as isize;
-            if self.cfa_get(x, y) == Some(CfaColor::G) {
-                result.set(x, y, self.get(x, y).unwrap_or(0));
-            }
+                .skip(y_start)
+                .step_by(y_step)
+                .flat_map_iter(|(y, row)| {
+                    let cfa_row = self.cfa_row(y);
+                    let x_start = if cfa_row[0] == color { 0 } else { 1 };
+                    row.iter()
+                        .enumerate()
+                        .skip(x_start)
+                        .step_by(x_step)
+                        .tuple_windows()
+                        .filter_map(move |((_, v1), (x, p), (_, v2))| {
+                            if p > v1 && p > v2 && p-v1 > border && p-v2 > border {
+                                let mut min = u16::MAX;
+                                for offset in 2 ..= 3 {
+                                    let offset = offset as isize * 2;
+                                    let mut sum = 0_u32;
+                                    let mut cnt = 0_u32;
+                                    for my in -1 ..= 1 { for mx in -1 ..= 1 {
+                                        if my == 0 && mx == 0 { continue; }
+                                        let test_x = x as isize + mx * offset;
+                                        let test_y = x as isize + my * offset;
+                                        if let Some(v) = self.get(test_x, test_y) {
+                                            sum += v as u32;
+                                            cnt += 1;
+                                        }
+                                    }}
+                                    if cnt != 0 {
+                                        let aver = sum / cnt;
+                                        min = min.min(aver as u16);
+                                    }
+                                }
+                                let diff1 = *p as i32 - *v1 as i32;
+                                let diff2 = *v1 as i32 - min as i32;
+                                let diff3 = *p as i32 - *v2 as i32;
+                                let diff4 = *v2 as i32 - min as i32;
+                                if diff1 > 2*diff2 && diff3 > 2*diff4 {
+                                    Some(BadPixel {
+                                        x: x as isize,
+                                        y: y as isize,
+                                    })
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        })
+                })
+                .collect();
+            result.extend_from_slice(&tmp_result);
         };
-        for x in 0..self.info.width {
-            filter_pixel_at_border(x, 0);
-            filter_pixel_at_border(x, self.info.height-1);
-        }
-        for y in 0..self.info.height {
-            filter_pixel_at_border(0, y);
-            filter_pixel_at_border(self.info.width-1, y);
-        }
-        result.swap_data(&mut self.data);
-
-        fn demosaic_row(res_row: &mut [u16], src_image: &RawImage, y: usize) {
-            if y == 0 || y == src_image.info.height-1 {
-                return;
-            }
-            let row1 = src_image.row(y-1);
-            let row2 = src_image.row(y);
-            let row3 = src_image.row(y+1);
-            let row_cfa = src_image.cfa_row(y);
-            let mut r1_ptr = &row1[0] as *const u16;
-            let mut r2_ptr = &row2[0] as *const u16;
-            let mut r3_ptr = &row3[0] as *const u16;
-            let mut cfa_iter = row_cfa.iter().cycle().skip(1);
-            for res in &mut res_row[1..src_image.info.width-1] { unsafe {
-                let c22 = cfa_iter.next().unwrap_unchecked();
-                if *c22 == CfaColor::G {
-                    *res = *r2_ptr.offset(1);
-                } else {
-                    //  _  v12  _
-                    // v21  _  v23
-                    //  _  v32  _
-                    let v12 = *r1_ptr.offset(1) as u32;
-                    let v21 = *r2_ptr.offset(0) as u32;
-                    let v23 = *r2_ptr.offset(2) as u32;
-                    let v32 = *r3_ptr.offset(1) as u32;
-                    *res = ((v12 + v21 + v23 + v32) / 4) as u16;
-                }
-                r1_ptr = r1_ptr.offset(1);
-                r2_ptr = r2_ptr.offset(1);
-                r3_ptr = r3_ptr.offset(1);
-            }}
-
-        }
-        if !mt {
-            result
-                .as_slice_mut()
-                .chunks_exact_mut(self.info.width)
-                .enumerate()
-                .for_each(|(y, row)| {
-                    demosaic_row(row, self, y);
-                });
+        let mut result = Vec::new();
+        if self.info.cfa != CfaType::None {
+            process_color(CfaColor::R, 2, 2, &mut result);
+            process_color(CfaColor::G, 2, 1, &mut result);
+            process_color(CfaColor::B, 2, 2, &mut result);
         } else {
-            result
-                .as_slice_mut()
-                .par_chunks_exact_mut(self.info.width)
-                .enumerate()
-                .for_each(|(y, row)| {
-                    demosaic_row(row, self, y);
-                });
+            process_color(CfaColor::None, 1, 1, &mut result);
         }
-        let mut demosaic_pixel_at_border = |x, y| {
-            let x = x as isize;
-            let y = y as isize;
-            let color = self.cfa_get(x, y);
-            if color == Some(CfaColor::G) {
-                result.set(x, y, self.get(x, y).unwrap_or(0));
-            } else {
-                let mut sum = 0_u32;
-                let mut cnt = 0_u32;
-                for dy in -1..=1 { for dx in -1..=1 {
-                    if self.cfa_get(x+dx, y+dy) == Some(CfaColor::G) {
-                        sum += self.get(x+dx, y+dy).unwrap_or(0) as u32;
-                        cnt += 1;
-                    }
-                }}
-                if cnt != 0 {
-                    result.set(x, y, (sum / cnt) as u16);
-                }
-            }
-        };
-        for x in 0..self.info.width {
-            demosaic_pixel_at_border(x, 0);
-            demosaic_pixel_at_border(x, self.info.height-1);
+
+        for px in &result {
+            debug_assert!(px.y < self.info.height as _);
+            debug_assert!(px.x < self.info.width as _);
         }
-        for y in 0..self.info.height {
-            demosaic_pixel_at_border(0, y);
-            demosaic_pixel_at_border(self.info.width-1, y);
-        }
+
+        result
     }
 
     pub fn remove_bad_pixels(&mut self, bad_pixels: &[BadPixel]) {
@@ -749,7 +646,7 @@ impl RawImage {
         self.data = new_data;
     }
 
-    pub fn demosaic(&mut self, mt: bool) -> Image {
+    pub fn demosaic(&self, mt: bool) -> Image {
         let mut result = Image::new_empty();
         self.demosaic_into(&mut result, mt);
         result

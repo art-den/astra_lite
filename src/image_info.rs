@@ -6,6 +6,8 @@ use crate::log_utils::TimeLogger;
 use crate::{image::*, image_raw::*};
 
 const MAX_STAR_DIAM: usize = 32;
+const MAX_STARS_CNT: usize = 500;
+const MAX_STARS_FOR_STAR_IMAGE: usize = 200;
 
 pub fn seconds_to_total_time_str(seconds: f64, short: bool) -> String {
     let secs_total = seconds as u64;
@@ -41,7 +43,7 @@ pub struct Star {
     pub max_value: u16,
     pub brightness: u32,
     pub overexposured: bool,
-    pub points: Vec<(usize, usize)>,
+    pub points: HashSet<(isize, isize)>,
     pub width: usize,
     pub height: usize,
 }
@@ -60,29 +62,23 @@ pub struct LightImageInfo {
 }
 
 impl LightImageInfo {
-    pub fn from_image(
-        max_value: u16,
-        image:     &ImageLayer<u16>,
-        filtered:  &ImageLayer<u16>,
-        exposure:  f64,
-        mt:        bool
-    ) -> Self {
+    pub fn from_image(image: &Image, exposure: f64, mt: bool) -> Self {
+        let max_value = image.max_value();
         let overexposured_bord = (97 * max_value as u32 / 100) as u16;
+        let mono_layer = if image.is_color() { &image.g } else { &image.l };
 
         let tmr = TimeLogger::start();
-        let noise = image.calc_noise(mt);
+        let noise = mono_layer.calc_noise(mt);
         tmr.log("calc image noise");
 
         let tmr = TimeLogger::start();
-        let background = image.calc_background(mt) as i32;
+        let background = mono_layer.calc_background(mt) as i32;
         tmr.log("calc image background");
 
         let tmr = TimeLogger::start();
-        let filtered_img_noise = filtered.calc_noise(mt);
-
         let stars = Self::find_stars_in_image(
-            filtered,
-            filtered_img_noise,
+            &mono_layer,
+            noise,
             overexposured_bord,
             mt
         );
@@ -90,7 +86,7 @@ impl LightImageInfo {
 
         let tmr = TimeLogger::start();
         const COMMON_STAR_MAG: usize = 4;
-        let star_img = Self::calc_common_star_image(image, &stars, COMMON_STAR_MAG);
+        let star_img = Self::calc_common_star_image(&mono_layer, &stars, COMMON_STAR_MAG);
         let stars_fwhm = Self::calc_fwhm(&star_img, COMMON_STAR_MAG);
         let stars_ovality = Self::calc_ovality(&star_img);
         tmr.log("calc fwhm+ovality");
@@ -115,13 +111,9 @@ impl LightImageInfo {
     ) -> Stars {
         if noise < 1.0 { noise = 1.0; }
         const MAX_STARS_POINTS_CNT: usize = MAX_STAR_DIAM * MAX_STAR_DIAM;
-
-        let iir_filter_coeffs = IirFilterCoeffs::new_gauss(42.0);
-
-        let border = (noise * 70.0) as u32;
+        let iir_filter_coeffs = IirFilterCoeffs::new(0.95);
+        let border = (noise * 50.0) as u32;
         let possible_stars = Mutex::new(Vec::new());
-
-
         let find_possible_stars_in_rows = |y1: usize, y2: usize| {
             let mut filtered = Vec::new();
             filtered.resize(image.width(), 0);
@@ -132,21 +124,20 @@ impl LightImageInfo {
                 let row = image.row(y);
                 let mut filter = IirFilter::new();
                 filter.filter_direct_and_revert_u16(&iir_filter_coeffs, row, &mut filtered);
-                for (i, ((v1, v2, v3, v4, v5), f))
+                for (i, ((v1, v2, v3, v4, v5, v6, v7), f))
                 in row.iter().tuple_windows().zip(&filtered[2..]).enumerate() {
                     let f1 = *v1 as u32 + *v2 as u32 + *v3 as u32;
-                    let f2 = *v2 as u32 + *v3 as u32 + *v4 as u32;
-                    let f3 = *v3 as u32 + *v4 as u32 + *v5 as u32;
+                    let f2 = *v3 as u32 + *v4 as u32 + *v5 as u32;
+                    let f3 = *v5 as u32 + *v6 as u32 + *v7 as u32;
                     if f1 > f2 || f3 > f2 { continue; }
-                    let v = *v1 as u32 + *v2 as u32 + *v3 as u32;
                     let f = *f as u32 * 3;
-                    if v > f && (v-f) > border {
-                        let star_x = i as isize+2;
+                    if f2 > f && (f2-f) > border {
+                        let star_x = i as isize+3;
                         let star_y = y as isize;
-                        if star_x < MAX_STAR_DIAM as isize
-                        || star_y < MAX_STAR_DIAM as isize
-                        || star_x > (image.width() - MAX_STAR_DIAM) as isize
-                        || star_y > (image.height() - MAX_STAR_DIAM) as isize {
+                        if star_x < (MAX_STAR_DIAM/2) as isize
+                        || star_y < (MAX_STAR_DIAM/2) as isize
+                        || star_x > (image.width() - MAX_STAR_DIAM/2) as isize
+                        || star_y > (image.height() - MAX_STAR_DIAM/2) as isize {
                             continue; // skip points near image border
                         }
                         possible_stars.lock().unwrap().push((star_x, star_y, f2 / 3));
@@ -154,14 +145,13 @@ impl LightImageInfo {
                 }
             }
         };
-
         if !mt {
             find_possible_stars_in_rows(0, image.height());
         } else {
             rayon::scope(|s| {
                 let mut y1 = 0_usize;
                 loop {
-                    let mut y2 = y1 + 200;
+                    let mut y2 = y1 + 100;
                     if y2 > image.height() { y2 = image.height(); }
                     s.spawn(move |_| {
                         find_possible_stars_in_rows(y1, y2);
@@ -173,18 +163,19 @@ impl LightImageInfo {
         }
 
         let mut possible_stars = possible_stars.into_inner().unwrap();
-
         possible_stars.sort_by_key(|(_, _, v)| -(*v as i32));
-
         let mut all_star_coords = HashSet::<(isize, isize)>::new();
         let mut flood_filler = FloodFiller::new();
-
         let mut stars = Vec::new();
-
         let mut star_bg_values = Vec::new();
+        let max_stars_points = image.width() * image.height() / 100; // 1% of area maximum
+        let mut big_cnt = 0_usize;
         for (x, y, max_v) in possible_stars {
             if all_star_coords.contains(&(x, y)) { continue; }
-
+            if all_star_coords.len() > max_stars_points
+            || big_cnt > 1000 {
+                return Stars::new();
+            }
             let x1 = x - MAX_STAR_DIAM as isize / 2;
             let y1 = y - MAX_STAR_DIAM as isize / 2;
             let x2 = x + MAX_STAR_DIAM as isize / 2;
@@ -193,11 +184,9 @@ impl LightImageInfo {
             for v in image.rect_iter(x1, y1, x2, y2) {
                 star_bg_values.push(v);
             }
-
             let bg_pos = star_bg_values.len() / 4;
             let bg = *star_bg_values.select_nth_unstable(bg_pos).1;
-            let mut star_points = Vec::new();
-
+            let mut star_points = HashSet::new();
             let border = bg as i32 + (max_v as i32 - bg as i32) / 3;
             if border <= 0 { continue; }
             let border = border as u16;
@@ -210,18 +199,19 @@ impl LightImageInfo {
                 x,
                 y,
                 |x, y| -> bool {
-                    if all_star_coords.contains(&(x, y))
-                    || star_points.len() > MAX_STARS_POINTS_CNT {
-                        return false;
-                    }
                     let v = image.get(x, y).unwrap_or(0);
                     let hit = v > border;
                     if hit {
+                        if all_star_coords.contains(&(x, y))
+                        || star_points.contains(&(x, y))
+                        || star_points.len() > MAX_STARS_POINTS_CNT {
+                            return false;
+                        }
                         if v > overexposured_bord {
                             overexposured = true;
                         }
+                        star_points.insert((x, y));
                         all_star_coords.insert((x, y));
-                        star_points.push((x as usize, y as usize));
                         let v_part = linear_interpolate(v as f64, bg as f64, max_v as f64, 0.0, 1.0);
                         x_summ += v_part * x as f64;
                         y_summ += v_part * y as f64;
@@ -232,19 +222,20 @@ impl LightImageInfo {
                 }
             );
 
-            if !star_points.is_empty()
-            && star_points.len() < MAX_STARS_POINTS_CNT
+            if star_points.len() > MAX_STARS_POINTS_CNT {
+                big_cnt += 1;
+            }
+
+            if star_points.len() < MAX_STARS_POINTS_CNT
             && max_v > bg as u32
             && brightness > 0
-            {
-                let min_x = star_points.iter().map(|(x, _)| *x as isize).min().unwrap_or(x);
-                let max_x = star_points.iter().map(|(x, _)| *x as isize).max().unwrap_or(x);
-                let min_y = star_points.iter().map(|(_, y)| *y as isize).min().unwrap_or(y);
-                let max_y = star_points.iter().map(|(_, y)| *y as isize).max().unwrap_or(y);
-
+            && Self::check_is_star_points_ok(&star_points) {
+                let min_x = star_points.iter().map(|(x, _)| *x).min().unwrap_or(x);
+                let max_x = star_points.iter().map(|(x, _)| *x).max().unwrap_or(x);
+                let min_y = star_points.iter().map(|(_, y)| *y).min().unwrap_or(y);
+                let max_y = star_points.iter().map(|(_, y)| *y).max().unwrap_or(y);
                 let width = 3 * isize::max(x-min_x+1, max_x-x+1);
                 let height = 3 * isize::max(y-min_y+1, max_y-y+1);
-
                 stars.push(Star {
                     x: x_summ / crd_cnt,
                     y: y_summ / crd_cnt,
@@ -259,17 +250,39 @@ impl LightImageInfo {
             }
         }
 
-        // TODO: delete wrong stars!
-
         stars.sort_by_key(|star| -(star.brightness as i32));
 
+        if stars.len() > MAX_STARS_CNT {
+            stars.drain(MAX_STARS_CNT..);
+        }
+
         stars
+    }
+
+    fn check_is_star_points_ok(star_points: &HashSet<(isize, isize)>) -> bool {
+        let real_perimeter = star_points
+            .iter()
+            .map(|&(x, y)| {
+                if star_points.contains(&(x-1, y))
+                ||star_points.contains(&(x+1, y))
+                ||star_points.contains(&(x, y+1))
+                ||star_points.contains(&(x, y-1)) {
+                    1
+                } else {
+                    0
+                }
+            })
+            .sum::<usize>() as f64;
+        let possible_s = star_points.len() as f64;
+        let possible_r = f64::sqrt(possible_s / PI);
+        let possible_perimeter = 2.0 * PI * possible_r;
+        real_perimeter < 3.0 * possible_perimeter
     }
 
     fn calc_common_star_image(image: &ImageLayer<u16>, stars: &[Star], k: usize) -> ImageLayer<u16> {
         let stars_for_image: Vec<_> = stars.iter()
             .filter(|s| !s.overexposured)
-            .take(300) // 300 stars is maximum
+            .take(MAX_STARS_FOR_STAR_IMAGE)
             .map(|s| (s, (s.max_value - s.background) as i32))
             .collect();
         if stars_for_image.is_empty() {
@@ -355,74 +368,36 @@ impl LightImageInfo {
 struct IirFilterCoeffs {
     a0: f32,
     b0: f32,
-    b1: f32,
-    b2: f32,
 }
 
 impl IirFilterCoeffs {
-    fn new_gauss(sigma: f32) -> IirFilterCoeffs {
-        let q = if sigma >= 2.5 {
-            0.98711 * sigma - 0.96330
-        } else if (0.5..2.5).contains(&sigma) {
-            3.97156 - 4.14554 * (1.0 - 0.26891 * sigma).sqrt()
-        } else {
-            0.1147705
-        };
-
-        let q2 = q * q;
-        let q3 = q * q2;
-
-        let  b0 = 1.0 / (1.57825 + (2.44413 * q) + (1.4281 * q2) + (0.422205 * q3));
-        let  b1 = ((2.44413 * q) + (2.85619 * q2) + (1.26661 * q3)) * b0;
-        let  b2 = (-((1.4281 * q2) + (1.26661 * q3))) * b0;
-        let  b3 = (0.422205 * q3) * b0;
-        let  a = 1.0 - (b1 + b2 + b3);
-
+    fn new(b0: f32) -> IirFilterCoeffs {
         IirFilterCoeffs {
-            a0: a,
-            b0: b1,
-            b1: b2,
-            b2: b3,
+            a0: 1.0 - b0,
+            b0: b0,
         }
     }
 }
 
 struct IirFilter {
-    y0: f32,
-    y1: f32,
-    y2: f32,
-    first_time: bool,
+    y0: Option<f32>,
+
 }
 
 impl IirFilter {
     fn new() -> Self {
         Self {
-            y0: 0.0,
-            y1: 0.0,
-            y2: 0.0,
-            first_time: true,
+            y0: None,
         }
     }
 
     fn set_first_time(&mut self) {
-        self.first_time = true;
+        self.y0 = None;
     }
 
     fn filter(&mut self, coeffs: &IirFilterCoeffs, x: f32) -> f32 {
-        if self.first_time {
-            self.first_time = false;
-            self.y0 = x;
-            self.y1 = x;
-            self.y2 = x;
-        }
-        let result =
-            coeffs.a0 * x +
-            coeffs.b0 * self.y0 +
-            coeffs.b1 * self.y1 +
-            coeffs.b2 * self.y2;
-        self.y2 = self.y1;
-        self.y1 = self.y0;
-        self.y0 = result;
+        let result = coeffs.a0 * x + coeffs.b0 * self.y0.unwrap_or(x);
+        self.y0 = Some(result);
         result
     }
 
@@ -453,8 +428,8 @@ impl IirFilter {
             *d = res as u16;
         }
     }
-
 }
+
 
 struct FloodFiller {
     visited: VecDeque<(isize, isize)>,

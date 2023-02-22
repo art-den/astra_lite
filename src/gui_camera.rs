@@ -252,15 +252,17 @@ struct CalibrOptions {
     dark_frame:    Option<PathBuf>,
     flat_frame_en: bool,
     flat_frame:    Option<PathBuf>,
+    hot_pixels:    bool,
 }
 
 impl Default for CalibrOptions {
     fn default() -> Self {
         Self {
             dark_frame_en: true,
-            dark_frame: None,
+            dark_frame:    None,
             flat_frame_en: true,
-            flat_frame: None,
+            flat_frame:    None,
+            hot_pixels:    true,
         }
     }
 }
@@ -277,7 +279,11 @@ impl CalibrOptions {
         } else {
             None
         };
-        CalibrParams { dark, flat }
+        CalibrParams {
+            dark,
+            flat,
+            hot_pixels: self.hot_pixels
+        }
     }
 }
 
@@ -566,6 +572,7 @@ pub fn build_ui(
         }
         Continue(true)
     }));
+    connect_widgets_events_before_show_options(&camera_data);
     show_options(&camera_data);
     show_total_raw_time(&camera_data);
     update_light_history_table(&camera_data);
@@ -587,6 +594,18 @@ pub fn build_ui(
         }
         res
     }));
+}
+
+fn connect_widgets_events_before_show_options(data: &Rc<CameraData>) {
+    let chb_hot_pixels = data.main.builder.object::<gtk::CheckButton>("chb_hot_pixels").unwrap();
+    chb_hot_pixels.connect_active_notify(clone!(@strong data => move |chb| {
+        gtk_utils::enable_widgets(
+            &data.main.builder,
+            &[("l_hot_pixels_warn", chb.is_active())]
+        )
+    }));
+    chb_hot_pixels.set_active(true);
+    chb_hot_pixels.set_active(false);
 }
 
 fn connect_widgets_events(data: &Rc<CameraData>) {
@@ -963,6 +982,7 @@ fn show_options(data: &Rc<CameraData>) {
     gtk_utils::set_path     (bld, "fch_master_dark",     options.calibr.dark_frame.as_deref());
     gtk_utils::set_bool     (bld, "chb_master_flat",     options.calibr.flat_frame_en);
     gtk_utils::set_path     (bld, "fch_master_flat",     options.calibr.flat_frame.as_deref());
+    gtk_utils::set_bool     (bld, "chb_hot_pixels",      options.calibr.hot_pixels);
 
     gtk_utils::set_bool     (bld, "chb_raw_frames_cnt",  options.raw_frames.use_cnt);
     gtk_utils::set_f64      (bld, "spb_raw_frames_cnt",  options.raw_frames.frame_cnt as f64);
@@ -1044,6 +1064,7 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.calibr.dark_frame    = gtk_utils::get_pathbuf  (bld, "fch_master_dark");
     options.calibr.flat_frame_en = gtk_utils::get_bool     (bld, "chb_master_flat");
     options.calibr.flat_frame    = gtk_utils::get_pathbuf  (bld, "fch_master_flat");
+    options.calibr.hot_pixels    = gtk_utils::get_bool     (bld, "chb_hot_pixels");
 
     options.raw_frames.use_cnt       = gtk_utils::get_bool     (bld, "chb_raw_frames_cnt");
     options.raw_frames.frame_cnt     = gtk_utils::get_f64      (bld, "spb_raw_frames_cnt") as usize;

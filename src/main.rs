@@ -20,6 +20,7 @@ mod gui_camera;
 mod io_utils;
 mod image_processing;
 mod log_utils;
+mod fits_reader;
 
 use gtk::prelude::*;
 use crate::io_utils::*;
