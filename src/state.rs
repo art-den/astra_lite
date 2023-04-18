@@ -481,7 +481,9 @@ fn apply_camera_options_and_take_shot(
     frame:         &FrameOptions
 ) -> anyhow::Result<()> {
     // Polling period
-    indi.set_polling_period(camera_name, 500, false, None)?;
+    if indi.device_is_polling_period_supported(camera_name)? {
+        indi.device_set_polling_period(camera_name, 500, false, None)?;
+    }
 
     // Frame type
     indi.camera_set_frame_type(
@@ -916,14 +918,16 @@ impl Mode for CameraActiveMode {
     fn notify_about_light_frame_info(
         &mut self,
         info:         &LightImageInfo,
-        _indi:        &indi_api::Connection,
+        indi:         &indi_api::Connection,
         _subscribers: &Subscribers
     ) -> anyhow::Result<NotifyResult> {
         if !info.is_ok() { return Ok(NotifyResult::Empty); }
+        let mount_device_active = indi.is_device_enabled(&self.mount_device).unwrap_or(false);
+
         if let Some(guid_options) = &self.guid_options { // Guiding and dithering
             let guid_data = self.guid_data.get_or_insert_with(|| GuidingData::new());
             if (guid_options.enabled || guid_options.dith_period != 0)
-            && !self.mount_device.is_empty() {
+            && mount_device_active {
                 if guid_data.mnt_calibr.is_none() { // mount moving calibration
                     return Ok(NotifyResult::StartMountCalibr {
                         options: guid_options.clone(),
@@ -941,12 +945,14 @@ impl Mode for CameraActiveMode {
             self.cam_mode == CamMode::SavingRawFrames;
         if let (Some(focuser_options), true) = (&self.focus_options, use_focus) {
             let mut have_to_refocus = false;
-            if focuser_options.periodically && focuser_options.period_minutes != 0 {
-                self.exp_sum += self.frame_options.exposure;
-                let max_exp_sum = (focuser_options.period_minutes * 60) as f64;
-                if self.exp_sum >= max_exp_sum {
-                    have_to_refocus = true;
-                    self.exp_sum = 0.0;
+            if indi.is_device_enabled(&focuser_options.device).unwrap_or(false) {
+                if focuser_options.periodically && focuser_options.period_minutes != 0 {
+                    self.exp_sum += self.frame_options.exposure;
+                    let max_exp_sum = (focuser_options.period_minutes * 60) as f64;
+                    if self.exp_sum >= max_exp_sum {
+                        have_to_refocus = true;
+                        self.exp_sum = 0.0;
+                    }
                 }
             }
             if have_to_refocus {
@@ -970,9 +976,12 @@ impl Mode for CameraActiveMode {
         || info.flags.contains(LightFrameShortInfoFlags::BAD_STARS_OVAL) {
             return Ok(result);
         }
+
+        let mount_device_active = indi.is_device_enabled(&self.mount_device).unwrap_or(false);
+
         if self.state == CamState::Usual {
-            if let (Some(guid_options), false, Some(mut offset_x), Some(mut offset_y))
-            = (&self.guid_options, self.mount_device.is_empty(), info.offset_x, info.offset_y) {
+            if let (true, Some(guid_options), Some(mut offset_x), Some(mut offset_y))
+            = (mount_device_active, &self.guid_options, info.offset_x, info.offset_y) {
                 let guid_data = self.guid_data.get_or_insert_with(|| GuidingData::new());
 
                 if guid_options.dith_period != 0 { // dithering
@@ -1138,7 +1147,7 @@ impl FocusingMode {
         frame.exposure = options.exposure;
         FocusingMode {
             state:      FocusingState::Undefined,
-            device:     options.device.as_deref().unwrap_or("").to_string(),
+            device:     options.device.clone(),
             options:    options.clone(),
             frame,
             before_pos: 0.0,

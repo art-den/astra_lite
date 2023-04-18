@@ -487,7 +487,7 @@ impl Default for GuiOptions {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct FocuserOptions {
-    pub device:          Option<String>,
+    pub device:          String,
     pub on_temp_change:  bool,
     pub max_temp_change: f64,
     pub on_fwhm_change:  bool,
@@ -502,7 +502,7 @@ pub struct FocuserOptions {
 impl Default for FocuserOptions {
     fn default() -> Self {
         Self {
-            device:          None,
+            device:          String::new(),
             on_temp_change:  false,
             max_temp_change: 5.0,
             on_fwhm_change:  false,
@@ -2833,8 +2833,8 @@ fn update_focuser_devices_list(data: &Rc<CameraData>) {
         let options = data.options.borrow();
         if last_active_id.is_some() {
             cb_foc_list.set_active_id(last_active_id.as_deref());
-        } else if options.focuser.device.is_some() {
-            cb_foc_list.set_active_id(options.device.as_deref());
+        } else if !options.focuser.device.is_empty() {
+            cb_foc_list.set_active_id(Some(options.focuser.device.as_str()));
         }
         if cb_foc_list.active_id().is_none() {
             cb_foc_list.set_active(Some(0));
@@ -2846,7 +2846,7 @@ fn update_focuser_devices_list(data: &Rc<CameraData>) {
         ("grd_foc",     connected && focusers_count > 0)
     ]);
     data.options.borrow_mut().focuser.device =
-        cb_foc_list.active_id().map(|s| s.to_string());
+        cb_foc_list.active_id().map(|s| s.to_string()).unwrap_or_else(String::new);
 }
 
 fn update_focuser_position_widget(data: &Rc<CameraData>, new_prop: bool) {

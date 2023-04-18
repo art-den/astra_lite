@@ -76,7 +76,6 @@ pub fn draw_plots(
 ) -> anyhow::Result<()> {
     let range = calc_data_range(plots);
     let margin = 8.0;
-    da.style_context().color(gtk::StateFlags::NORMAL);
     let area_rect =
         calc_plot_area(plots, margin, &range, da, ctx)?;
     let area_bg = plots.area.bg_color.unwrap_or_else(|| {

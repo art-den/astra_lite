@@ -12,7 +12,7 @@ Compiled binaries and discussion here: https://www.indilib.org/forum/clients/130
 # Features
 * UI for INDI devices control
 * Live images preview
-* Saving RAW files
+* Saving RAW frames
 * Live stacking
 * Dark and flat files creation
 * Light frame quality filter

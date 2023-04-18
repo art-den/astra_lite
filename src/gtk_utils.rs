@@ -335,12 +335,19 @@ pub fn draw_progress_bar(
     cr.set_source_rgba(bg_color.0, bg_color.1, bg_color.2, bg_color.3);
     cr.rectangle(0.0, 0.0, width * progress, height);
     cr.fill()?;
+    let area_bg = area
+        .style_context()
+        .lookup_color("theme_base_color")
+        .unwrap_or(gtk::gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
+    cr.set_source_rgb(area_bg.red(), area_bg.green(), area_bg.blue());
+    cr.rectangle(width * progress, 0.0, width * (1.0 - progress), height);
+    cr.fill()?;
 
     cr.set_font_size(height);
     let te = cr.text_extents(text)?;
 
     if !text.is_empty() {
-        cr.set_source_rgba(fg.red(), fg.green(), fg.blue(), 0.33);
+        cr.set_source_rgba(fg.red(), fg.green(), fg.blue(), 0.45);
         cr.rectangle(0.0, 0.0, width, height);
         cr.stroke()?;
     }

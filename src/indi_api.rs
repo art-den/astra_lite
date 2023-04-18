@@ -2066,11 +2066,11 @@ impl Connection {
     ) -> Result<bool> {
         self.is_device_support_any_of_props(
             device_name,
-            PROP_DEVICE_CHASH
+            PROP_DEVICE_CRASH
         )
     }
 
-    pub fn device_chash(
+    pub fn device_crash(
         &self,
         device_name: &str,
         force_set:   bool,
@@ -2078,7 +2078,7 @@ impl Connection {
     ) -> Result<()> {
         self.set_any_of_switch_props(
             device_name,
-            PROP_DEVICE_CHASH,
+            PROP_DEVICE_CRASH,
             true,
             force_set,
             timeout_ms
@@ -2087,7 +2087,14 @@ impl Connection {
 
     // Device polling period
 
-    pub fn get_polling_period(
+    pub fn device_is_polling_period_supported(
+        &self,
+        device_name: &str
+    ) -> Result<bool> {
+        self.property_exists(device_name, "POLLING_PERIOD", None)
+    }
+
+    pub fn device_get_polling_period(
         &self,
         device_name: &str,
     ) -> Result<usize> {
@@ -2099,7 +2106,7 @@ impl Connection {
         Ok(result as usize)
     }
 
-    pub fn set_polling_period(
+    pub fn device_set_polling_period(
         &self,
         device_name:    &str,
         polling_period: usize,
@@ -4079,6 +4086,6 @@ const PROP_CAM_BIN_AVG: PropsStr = &[
 const PROP_CAM_BIN_ADD: PropsStr = &[
     ("CCD_BINNING_MODE", "TC_BINNING_ADD"),
 ];
-const PROP_DEVICE_CHASH: PropsStr = &[
+const PROP_DEVICE_CRASH: PropsStr = &[
     ("CCD_SIMULATE_CRASH", "CRASH"),
 ];
