@@ -3587,7 +3587,7 @@ Better use "Subtrack master DARK frame"</property>
                                         <property name="visible">True</property>
                                         <property name="can-focus">False</property>
                                         <property name="halign">start</property>
-                                        <property name="label" translatable="yes">Dizering period:</property>
+                                        <property name="label" translatable="yes">Dithering period:</property>
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
@@ -3622,7 +3622,7 @@ Better use "Subtrack master DARK frame"</property>
                                         <property name="visible">True</property>
                                         <property name="can-focus">False</property>
                                         <property name="halign">start</property>
-                                        <property name="label" translatable="yes">Dizering distance:</property>
+                                        <property name="label" translatable="yes">Dithering distance:</property>
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
@@ -3727,24 +3727,13 @@ Better use "Subtrack master DARK frame"</property>
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
-                                        <property name="top-attach">3</property>
-                                        <property name="width">2</property>
-                                      </packing>
-                                    </child>
-                                    <child>
-                                      <object class="GtkSeparator">
-                                        <property name="visible">True</property>
-                                        <property name="can-focus">False</property>
-                                      </object>
-                                      <packing>
-                                        <property name="left-attach">0</property>
                                         <property name="top-attach">5</property>
                                         <property name="width">2</property>
                                       </packing>
                                     </child>
                                     <child>
                                       <object class="GtkCheckButton" id="chb_guid_enabled">
-                                        <property name="label" translatable="yes">Stop and correct mount
+                                        <property name="label" translatable="yes">Correct mount position
 if error larger than (pixels)</property>
                                         <property name="visible">True</property>
                                         <property name="can-focus">True</property>
@@ -3791,13 +3780,52 @@ if error larger than (pixels)</property>
                                         <property name="top-attach">6</property>
                                       </packing>
                                     </child>
+                                    <child>
+                                      <object class="GtkBox">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="spacing">5</property>
+                                        <child>
+                                          <object class="GtkLabel">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">False</property>
+                                            <property name="label" translatable="yes">Simple guiding</property>
+                                            <attributes>
+                                              <attribute name="weight" value="bold"/>
+                                            </attributes>
+                                          </object>
+                                          <packing>
+                                            <property name="expand">False</property>
+                                            <property name="fill">True</property>
+                                            <property name="position">0</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkSeparator">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">False</property>
+                                            <property name="valign">center</property>
+                                          </object>
+                                          <packing>
+                                            <property name="expand">False</property>
+                                            <property name="fill">True</property>
+                                            <property name="position">1</property>
+                                          </packing>
+                                        </child>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">0</property>
+                                        <property name="top-attach">3</property>
+                                        <property name="width">2</property>
+                                      </packing>
+                                    </child>
                                   </object>
                                 </child>
                                 <child type="label">
                                   <object class="GtkLabel">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
-                                    <property name="label" translatable="yes">[ Dizering and simple guiding ]</property>
+                                    <property name="label" translatable="yes">[ Dithering and simple guiding ]</property>
                                     <attributes>
                                       <attribute name="weight" value="bold"/>
                                       <attribute name="underline" value="True"/>
