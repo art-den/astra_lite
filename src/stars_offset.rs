@@ -29,11 +29,9 @@ impl Offset {
         image_height: f64
     ) -> Option<Self> {
         for (max_points_cnt, max_err, triangulate) in [
-            (50,  5.0, false),
-            (100, 3.0, false),
-            (200, 3.0, false),
-            (50,  3.0, true),
-            (100, 3.0, true),
+            (50,  3.0, false),
+            (70,  2.0, false),
+            (100, 2.0, false),
         ] {
             let result = try_calculate(
                 ref_points,
@@ -94,6 +92,7 @@ fn try_calculate(
     }
 
     let mut angle_values = Vec::new();
+    let mut angle_diffs = Vec::new();
     let mut x_values = Vec::new();
     let mut y_values = Vec::new();
     for _iteration in 0..10 {
@@ -103,16 +102,21 @@ fn try_calculate(
         angle_values.clear();
         for (angle, ..) in &similar_triangles { angle_values.push(*angle); }
         angle_values.sort_by(cmp_f64);
+        angle_diffs.clear();
+        for (a1, a2) in angle_values.iter().tuple_windows() {
+            angle_diffs.push(a2-a1);
+        }
+        let angle_diffs_pos = angle_diffs.len() / 4;
+        let min_angle_diff = *angle_diffs.select_nth_unstable_by(angle_diffs_pos, cmp_f64).1;
         struct Cluster {
             start_index: usize,
             end_index: usize,
         }
         let mut clusters = Vec::new();
-        const MIN_ANGLE_DIFF: f64 = 2.0 * PI / 360.0;
         let mut start_index = 0_usize;
         for (i, (a1, a2)) in angle_values.iter().tuple_windows().enumerate() {
             let angle_diff = a2 - a1;
-            if angle_diff > MIN_ANGLE_DIFF {
+            if angle_diff > min_angle_diff {
                 if i != start_index {
                     clusters.push( Cluster { start_index, end_index: i } );
                 }
@@ -135,8 +139,9 @@ fn try_calculate(
         let angle = for_angle_values.iter().sum::<f64>() / for_angle_values.len() as f64;
 
         // filter similar_triangles by angle
-        let min_angle = angle - MIN_ANGLE_DIFF;
-        let max_angle = angle + MIN_ANGLE_DIFF;
+        const ANGLE_ERR: f64 = 1.0 * PI / 180.0;
+        let min_angle = angle - ANGLE_ERR;
+        let max_angle = angle + ANGLE_ERR;
         similar_triangles.retain(|(angle, ..)| *angle > min_angle && *angle < max_angle);
         if similar_triangles.len() < MAX_SIMILAR_TRIANGLES_CNT {
             return None;

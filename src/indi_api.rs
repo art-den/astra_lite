@@ -103,17 +103,24 @@ pub enum ConnState {
     Error(String)
 }
 
+#[derive(Debug)]
 pub struct PropChangeValue {
     pub elem_name:  String,
     pub prop_value: PropValue,
 }
 
+#[derive(Debug)]
 pub enum PropChange {
     New(PropChangeValue),
-    Change(PropChangeValue),
+    Change{
+        value:      PropChangeValue,
+        prev_state: PropState,
+        new_state:  PropState,
+    },
     Delete,
 }
 
+#[derive(Debug)]
 pub struct PropChangeEvent {
     pub timestamp:   Option<DateTime<Utc>>,
     pub device_name: String,
@@ -364,7 +371,7 @@ fn test_sexagesimal_to_value() {
     // TODO: more tests
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PropState { Idle, Ok, Busy, Alert }
 
 impl PropState {
@@ -389,7 +396,7 @@ impl PropPerm {
             Some("wo") => Ok(PropPerm::WO),
             Some("rw") => Ok(PropPerm::RW),
             Some(s)    => Err(anyhow::anyhow!("Unknown property permission: {}", s)),
-            _          => Err(anyhow::anyhow!("Property permission not defined")),
+            _          => Ok(PropPerm::RO),
         }
     }
 }
@@ -424,6 +431,7 @@ pub enum PropType {
     Text,
     Num(Vec<Arc<NumPropElemInfo>>),
     Switch(Option<SwitchRule>),
+    Light,
     Blob
 }
 
@@ -433,6 +441,7 @@ impl PropType {
             PropType::Text      => "Text",
             PropType::Num(_)    => "Num",
             PropType::Switch(_) => "Switch",
+            PropType::Light     => "Light",
             PropType::Blob      => "Blob",
         }
     }
@@ -445,6 +454,15 @@ pub struct PropStaticData {
     pub group: Option<String>,
     pub perm:  PropPerm,
     sort_pos:  u64,
+}
+
+impl PartialEq for PropStaticData {
+    fn eq(&self, other: &Self) -> bool {
+        self.tp    == other.tp    &&
+        self.label == other.label &&
+        self.group == other.group &&
+        self.perm  == other.perm
+    }
 }
 
 impl PropStaticData {
@@ -474,6 +492,9 @@ impl PropStaticData {
             "defBLOBVector" => {
                 PropType::Blob
             },
+            "defLightVector" => {
+                PropType::Light
+            },
             s => {
                 anyhow::bail!("Unknown vector: {}", s);
             },
@@ -483,6 +504,7 @@ impl PropStaticData {
         let perm = PropPerm::from_str(xml.attributes.get("perm").map(String::as_str))?;
         Ok((PropStaticData{ tp, label, group, perm, sort_pos: 0 }, xml))
     }
+
 }
 
 #[derive(Debug, Clone)]
@@ -492,6 +514,14 @@ pub struct PropDynamicData {
     pub timestamp:  Option<String>, // TODO: normal timestamp instead of string
     pub message:    Option<String>,
     pub change_cnt: u64,
+}
+
+impl PartialEq for PropDynamicData {
+    fn eq(&self, other: &Self) -> bool {
+        self.state   == other.state   &&
+        self.timeout == other.timeout &&
+        self.message == other.message
+    }
 }
 
 impl PropDynamicData {
@@ -505,7 +535,7 @@ impl PropDynamicData {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct Property {
     static_data: Arc<PropStaticData>,
     dynamic_data: PropDynamicData,
@@ -530,6 +560,9 @@ impl Property {
                 },
                 "defSwitch" => {
                     Self::get_switch_value_from_xml_elem(&child)?
+                },
+                "defLight" => {
+                    Self::get_light_value_from_xml_elem(&child)?
                 },
                 "defBLOB" => {
                     PropValue::Blob(Arc::new(BlobPropValue {
@@ -562,15 +595,27 @@ impl Property {
         device_name: &str, // for error message
         prop_name:   &str, // same
         dl_time:     f64,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
+        let mut changed = false;
         if let Some(state_str) = xml.attributes.get("state") {
-            self.dynamic_data.state = PropState::from_str(state_str)?;
+            let new_state = PropState::from_str(state_str)?;
+            if new_state != self.dynamic_data.state {
+                self.dynamic_data.state = new_state;
+                changed = true;
+            }
         }
         if let Some(timeout_str) = xml.attributes.get("timeout") {
-            self.dynamic_data.timeout = Some(timeout_str.parse()?);
+            let new_timeout = Some(timeout_str.parse()?);
+            if new_timeout != self.dynamic_data.timeout {
+                self.dynamic_data.timeout = new_timeout;
+                changed = true;
+            }
         }
         if let Some(message) = xml.attributes.remove("message") {
-            self.dynamic_data.message = Some(message);
+            if self.dynamic_data.message.as_ref() != Some(&message) {
+                self.dynamic_data.message = Some(message);
+                changed = true;
+            }
         }
         if let Some(timestamp) = xml.attributes.remove("timestamp") {
             self.dynamic_data.timestamp = Some(timestamp);
@@ -581,15 +626,18 @@ impl Property {
         for child in xml.elements(None) {
             let elem_name = child.attr_str_or_err("name")?;
             if let Some(elem) = self.get_elem_mut(elem_name) {
-                match elem.value {
+                let new_value = match elem.value {
                     PropValue::Text(_) => {
-                        elem.value = Self::get_str_value_from_xml_elem(child)?;
+                        Some(Self::get_str_value_from_xml_elem(child)?)
                     },
                     PropValue::Num(_) => {
-                        elem.value = Self::get_num_value_from_xml_elem(child)?;
+                        Some(Self::get_num_value_from_xml_elem(child)?)
                     },
                     PropValue::Switch(_) => {
-                        elem.value = Self::get_switch_value_from_xml_elem(child)?;
+                        Some(Self::get_switch_value_from_xml_elem(child)?)
+                    },
+                    PropValue::Light(_) => {
+                        Some(Self::get_light_value_from_xml_elem(child)?)
                     },
                     PropValue::Blob(_) => {
                         if let Some(data) = blob.take() {
@@ -608,15 +656,22 @@ impl Property {
                                 );
                             }
                             let format = child.attr_str_or_err("format")?;
-                            elem.value = PropValue::Blob(Arc::new(BlobPropValue {
+                            Some(PropValue::Blob(Arc::new(BlobPropValue {
                                 format: format.to_string(),
                                 data,
                                 dl_time,
-                            }));
+                            })))
+                        } else {
+                            None
                         }
                     }
-                }
-                elem.changed = true;
+                };
+
+                if let Some(new_value) = new_value { if elem.value != new_value {
+                    elem.value = new_value;
+                    elem.changed = true;
+                    changed = true;
+                }}
             } else {
                 anyhow::bail!(
                     "Element `{}` of property {} of device `{}` not found",
@@ -624,7 +679,7 @@ impl Property {
                 );
             }
         }
-        Ok(())
+        Ok(changed)
     }
 
     fn get_elem(&self, name: &str) -> Option<&PropElement> {
@@ -662,6 +717,15 @@ impl Property {
         ))
     }
 
+    fn get_light_value_from_xml_elem(xml: &xmltree::Element) -> anyhow::Result<PropValue> {
+        Ok(PropValue::Light(xml
+            .get_text()
+            .ok_or_else(||anyhow::anyhow!("{} without value", xml.name))?
+            .trim()
+            .to_string()
+        ))
+    }
+
     fn get_values(&self, only_changed: bool) -> Vec<(String, PropValue)> {
         self
             .elements
@@ -680,12 +744,48 @@ pub struct PropElement {
     changed:   bool,
 }
 
+impl PartialEq for PropElement {
+    fn eq(&self, other: &Self) -> bool {
+        self.name  == other.name  &&
+        self.label == other.label &&
+        self.value == other.value
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum PropValue {
     Text(String),
     Num(f64),
     Switch(bool),
+    Light(String),
     Blob(Arc<BlobPropValue>),
+}
+
+impl PartialEq for PropValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Text(l0), Self::Text(r0)) =>
+                l0 == r0,
+            (Self::Num(l0), Self::Num(r0)) => {
+                if l0.is_nan() && r0.is_nan() {
+                    true
+                } else if !l0.is_nan() && r0.is_nan() {
+                    false
+                } else if l0.is_nan() && !r0.is_nan() {
+                    false
+                } else {
+                    l0 == r0
+                }
+            },
+            (Self::Switch(l0), Self::Switch(r0)) =>
+                l0 == r0,
+            (Self::Light(l0), Self::Light(r0)) =>
+                l0 == r0,
+            (Self::Blob(l0), Self::Blob(r0)) =>
+                l0 == r0,
+            _ => false,
+        }
+    }
 }
 
 impl PropValue {
@@ -702,11 +802,55 @@ impl PropValue {
                     )),
             PropValue::Switch(value) =>
                 Ok(if *value {1} else {0}),
+            PropValue::Light(text) => Err(Error::CantConvertPropValue(
+                text.into(),
+                "light".into(),
+                "i32".into()
+            )),
             PropValue::Blob(_) => Err(Error::CantConvertPropValue(
                 "[blob]".into(),
                 "Blob".into(),
                 "i32".into()
-            ))
+            )),
+        }
+    }
+
+    pub fn as_f64(&self) -> Result<f64> {
+        match self {
+            PropValue::Num(num) =>
+                Ok(*num as f64),
+            PropValue::Text(text) =>
+                text.parse()
+                    .map_err(|_| Error::CantConvertPropValue(
+                        text.into(),
+                        "Text".into(),
+                        "f64".into()
+                    )),
+            PropValue::Switch(value) => Err(Error::CantConvertPropValue(
+                value.to_string(),
+                "switch".into(),
+                "f64".into()
+            )),
+            PropValue::Light(text) => Err(Error::CantConvertPropValue(
+                text.into(),
+                "light".into(),
+                "f64".into()
+            )),
+            PropValue::Blob(_) => Err(Error::CantConvertPropValue(
+                "[blob]".into(),
+                "Blob".into(),
+                "f64".into()
+            )),
+        }
+
+    }
+
+    pub fn as_log_str(&self) -> String {
+        match self {
+            PropValue::Blob(blob) =>
+                format!("[BLOB len={}]", blob.data.len()),
+            _ =>
+                format!("{:?}", &self)
         }
     }
 }
@@ -718,6 +862,13 @@ pub struct BlobPropValue {
     pub dl_time: f64,
 }
 
+impl PartialEq for BlobPropValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.format == other.format &&
+        self.data == other.data
+    }
+}
+
 type Device = HashMap<String, Property>;
 struct Devices {
     list:       HashMap<String, Device>,
@@ -726,7 +877,6 @@ struct Devices {
 }
 
 impl Devices {
-
     fn new() -> Self {
         Self {
             list:       HashMap::new(),
@@ -1092,23 +1242,23 @@ pub struct ExportProperty {
 }
 
 bitflags! { pub struct DriverInterface: u32 {
-    const GENERAL_INTERFACE       = 0;
-    const TELESCOPE_INTERFACE     = (1 << 0);
-    const CCD_INTERFACE           = (1 << 1);
-    const GUIDER_INTERFACE        = (1 << 2);
-    const FOCUSER_INTERFACE       = (1 << 3);
-    const FILTER_INTERFACE        = (1 << 4);
-    const DOME_INTERFACE          = (1 << 5);
-    const GPS_INTERFACE           = (1 << 6);
-    const WEATHER_INTERFACE       = (1 << 7);
-    const AO_INTERFACE            = (1 << 8);
-    const DUSTCAP_INTERFACE       = (1 << 9);
-    const LIGHTBOX_INTERFACE      = (1 << 10);
-    const DETECTOR_INTERFACE      = (1 << 11);
-    const ROTATOR_INTERFACE       = (1 << 12);
-    const SPECTROGRAPH_INTERFACE  = (1 << 13);
-    const CORRELATOR_INTERFACE    = (1 << 14);
-    const AUX_INTERFACE           = (1 << 15);
+    const GENERAL       = 0;
+    const TELESCOPE     = (1 << 0);
+    const CCD           = (1 << 1);
+    const GUIDER        = (1 << 2);
+    const FOCUSER       = (1 << 3);
+    const FILTER        = (1 << 4);
+    const DOME          = (1 << 5);
+    const GPS           = (1 << 6);
+    const WEATHER       = (1 << 7);
+    const AO            = (1 << 8);
+    const DUSTCAP       = (1 << 9);
+    const LIGHTBOX      = (1 << 10);
+    const DETECTOR      = (1 << 11);
+    const ROTATOR       = (1 << 12);
+    const SPECTROGRAPH  = (1 << 13);
+    const CORRELATOR    = (1 << 14);
+    const AUX           = (1 << 15);
 }}
 
 pub enum DeviceCap {
@@ -1571,6 +1721,14 @@ impl Connection {
         Ok(())
     }
 
+    pub fn is_device_enabled(&self, device_name: &str) -> Result<bool> {
+        self.get_switch_property(
+            device_name,
+            "CONNECTION",
+            "CONNECT"
+        )
+    }
+
     pub fn command_enable_all_devices(
         &self,
         enable:      bool,
@@ -1743,6 +1901,7 @@ impl Connection {
                 prop_name,
                 elem_name
             )?;
+            // TODO: better f64 comparsion
             let diff = f64::abs(prop_value - *expected_value);
             if diff > 0.001 { return Ok(false); }
         }
@@ -2613,6 +2772,271 @@ impl Connection {
         Ok(true)
     }
 
+    // Focuser absolute position
+
+    pub fn focuser_get_abs_value_prop_info(
+        &self,
+        device_name: &str
+    ) -> Result<Arc<NumPropElemInfo>> {
+        self.device_get_any_of_prop_info(
+            device_name,
+            &[("ABS_FOCUS_POSITION", "FOCUS_ABSOLUTE_POSITION")]
+        )
+    }
+
+
+    pub fn focuser_get_abs_value(&self, device_name: &str) -> Result<f64> {
+        self.get_num_property(
+            device_name,
+            "ABS_FOCUS_POSITION",
+            "FOCUS_ABSOLUTE_POSITION"
+        )
+    }
+
+    pub fn focuser_set_abs_value(
+        &self,
+        device_name: &str,
+        value:       f64,
+        force_set:   bool,
+        timeout_ms:  Option<u64>,
+    ) -> Result<()> {
+        self.command_set_num_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            "ABS_FOCUS_POSITION",
+            &[("FOCUS_ABSOLUTE_POSITION", value)]
+        )
+    }
+
+    pub fn mount_abort_motion(&self, device_name: &str) -> Result<()> {
+        self.command_set_switch_property(
+            device_name,
+            "TELESCOPE_ABORT_MOTION",
+            &[("ABORT", true)]
+        )
+    }
+
+    pub fn mount_get_eq_dec(&self, device_name: &str) -> Result<f64> {
+        self.get_num_property(
+            device_name,
+            "EQUATORIAL_EOD_COORD",
+            "DEC"
+        )
+    }
+
+    pub fn mount_get_eq_ra(&self, device_name: &str) -> Result<f64> {
+        self.get_num_property(
+            device_name,
+            "EQUATORIAL_EOD_COORD",
+            "RA"
+        )
+    }
+
+    pub fn mount_set_eq_coord(
+        &self,
+        device_name: &str,
+        ra: f64,
+        dec: f64,
+        force_set:   bool,
+        timeout_ms:  Option<u64>,
+    ) -> Result<()> {
+        self.command_set_num_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            "EQUATORIAL_EOD_COORD", &[
+            ("RA",  ra),
+            ("DEC", dec),
+        ])
+    }
+
+    pub fn mount_start_move_north(&self, device_name: &str) -> Result<()> {
+        self.command_set_switch_property(
+            device_name,
+            "TELESCOPE_MOTION_NS",
+            &[("MOTION_NORTH", true)]
+        )
+    }
+
+    pub fn mount_start_move_south(&self, device_name: &str) -> Result<()> {
+        self.command_set_switch_property(
+            device_name,
+            "TELESCOPE_MOTION_NS",
+            &[("MOTION_SOUTH", true)]
+        )
+    }
+
+    pub fn mount_start_move_west(&self, device_name: &str) -> Result<()> {
+        self.command_set_switch_property(
+            device_name,
+            "TELESCOPE_MOTION_WE",
+            &[("MOTION_WEST", true)]
+        )
+    }
+
+    pub fn mount_start_move_east(&self, device_name: &str) -> Result<()> {
+        self.command_set_switch_property(
+            device_name,
+            "TELESCOPE_MOTION_WE",
+            &[("MOTION_EAST", true)]
+        )
+    }
+
+    pub fn mount_stop_move(&self, device_name: &str) -> Result<()> {
+        self.command_set_switch_property(
+            device_name,
+            "TELESCOPE_MOTION_NS", &[
+            ("MOTION_NORTH", false),
+            ("MOTION_SOUTH", false),
+        ])?;
+
+        self.command_set_switch_property(
+            device_name,
+            "TELESCOPE_MOTION_WE", &[
+            ("MOTION_WEST", false),
+            ("MOTION_EAST", false)
+        ])?;
+
+        Ok(())
+    }
+
+    pub fn mount_reverse_motion(
+        &self,
+        device_name: &str,
+        reverse_ns:  bool,
+        reverse_we:  bool,
+        force_set:   bool,
+        timeout_ms:  Option<u64>,
+    ) -> Result<()> {
+        self.command_set_switch_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            "TELESCOPE_REVERSE_MOTION", &[
+            ("REVERSE_NS", reverse_ns),
+            ("REVERSE_WE", reverse_we),
+        ])
+    }
+
+    pub fn mount_get_slew_speed_list(&self, device_name: &str) -> Result<Vec<(String, String)>> {
+        let devices = self.devices.lock().unwrap();
+        let device = devices.get_device(device_name)?;
+        let Some(prop) = device.get("TELESCOPE_SLEW_RATE") else {
+            return Ok(Vec::new());
+        };
+        let result = prop.elements
+            .iter()
+            .map(|e| (e.name.clone(), e.label.as_deref().unwrap_or("").to_string()))
+            .collect();
+        Ok(result)
+    }
+
+    pub fn mount_set_slew_speed(
+        &self,
+        device_name: &str,
+        speed_name:  &str,
+        force_set:   bool,
+        timeout_ms:  Option<u64>,
+    ) -> Result<()> {
+        self.command_set_switch_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            "TELESCOPE_SLEW_RATE",
+            &[(speed_name, true)]
+        )
+    }
+
+    pub fn mount_get_tracking(&self, device_name: &str) -> Result<bool> {
+        self.get_switch_property(
+            device_name,
+            "TELESCOPE_TRACK_STATE",
+            "TRACK_ON"
+        )
+    }
+
+    pub fn mount_set_tracking(
+        &self,
+        device_name: &str,
+        tracking:    bool,
+        force_set:   bool,
+        timeout_ms:  Option<u64>,
+    ) -> Result<()> {
+        let elem_name = if tracking {
+            "TRACK_ON"
+        } else {
+            "TRACK_OFF"
+        };
+        self.command_set_switch_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            "TELESCOPE_TRACK_STATE",
+            &[(elem_name, true)]
+        )
+    }
+
+    pub fn mount_get_parked(&self, device_name: &str) -> Result<bool> {
+        self.get_switch_property(
+            device_name,
+            "TELESCOPE_PARK",
+            "PARK"
+        )
+    }
+
+    pub fn mount_set_parked(
+        &self,
+        device_name: &str,
+        parked:      bool,
+        force_set:   bool,
+        timeout_ms:  Option<u64>,
+    ) -> Result<()> {
+        let elem_name = if parked {
+            "PARK"
+        } else {
+            "UNPARK"
+        };
+        self.command_set_switch_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            "TELESCOPE_PARK",
+            &[(elem_name, true)]
+        )
+    }
+
+    pub fn mount_timed_guide(
+        &self,
+        device_name: &str,
+        north_south: f64,
+        west_east:   f64,
+    ) -> Result<()> {
+        let (north, south) = if north_south > 0.0 {
+            (north_south, 0.0)
+        } else {
+            (0.0, -north_south)
+        };
+        let (west, east) = if west_east > 0.0 {
+            (west_east, 0.0)
+        } else {
+            (0.0, -west_east)
+        };
+        self.command_set_num_property(
+            device_name,
+            "TELESCOPE_TIMED_GUIDE_NS", &[
+            ("TIMED_GUIDE_N", north),
+            ("TIMED_GUIDE_S", south),
+        ])?;
+        self.command_set_num_property(
+            device_name,
+            "TELESCOPE_TIMED_GUIDE_WE",&[
+            ("TIMED_GUIDE_W", west),
+            ("TIMED_GUIDE_E", east),
+        ])?;
+        Ok(())
+    }
+
 }
 
 struct XmlSender {
@@ -2999,9 +3423,8 @@ impl XmlReceiver {
         }
     }
 
-    fn notify_subcribers_about_prop_change(
+    fn notify_subcribers_about_new_prop(
         &self,
-        new_prop:       bool,
         timestamp:      Option<DateTime<Utc>>,
         device_name:    &str,
         prop_name:      &str,
@@ -3013,16 +3436,42 @@ impl XmlReceiver {
                 elem_name:  name.to_string(),
                 prop_value: value,
             };
-            let change = if new_prop {
-                PropChange::New(value)
-            } else {
-                PropChange::Change(value)
+            let event = PropChangeEvent {
+                timestamp,
+                device_name: device_name.to_string(),
+                prop_name:   prop_name.to_string(),
+                change:       PropChange::New(value),
+            };
+            events_sender.send(Event::PropChange(Arc::new(
+                event
+            ))).unwrap();
+        }
+    }
+
+    fn notify_subcribers_about_prop_change(
+        &self,
+        timestamp:      Option<DateTime<Utc>>,
+        device_name:    &str,
+        prop_name:      &str,
+        prev_state:     PropState,
+        new_state:      PropState,
+        changed_values: Vec<(String, PropValue)>,
+        events_sender:  &mpsc::Sender<Event>
+    ) {
+        for (name, value) in changed_values {
+            let value = PropChangeValue {
+                elem_name:  name.to_string(),
+                prop_value: value,
             };
             let event = PropChangeEvent {
                 timestamp,
                 device_name: device_name.to_string(),
-                prop_name: prop_name.to_string(),
-                change,
+                prop_name:   prop_name.to_string(),
+                change:      PropChange::Change{
+                    value,
+                    prev_state: prev_state.clone(),
+                    new_state: new_state.clone(),
+                },
             };
             events_sender.send(Event::PropChange(Arc::new(event))).unwrap();
         }
@@ -3094,35 +3543,42 @@ impl XmlReceiver {
     ) -> anyhow::Result<()> {
         let mut xml_elem = xmltree::Element::parse(xml_text.as_bytes())?;
         if xml_elem.name.starts_with("def") { // defXXXXVector
+            // New property from INDI server
             let device_name = xml_elem.attr_string_or_err("device")?;
+            if device_name.is_empty() {
+                anyhow::bail!("Empty device name");
+            }
+            let mut devices_lock = self.devices.lock().unwrap();
+            let devices = &mut *devices_lock;
+            let device = if let Some(device) = devices.list.get_mut(&device_name) {
+                device
+            } else {
+                devices.list.insert(device_name.clone(), HashMap::new());
+                devices.list.get_mut(&device_name).unwrap()
+            };
             let prop_name = xml_elem.attr_string_or_err("name")?;
+            if device.contains_key(&prop_name) {
+                // simple ignore if INDI server sends defXXXXVector command
+                // for already existing property
+                return Ok(());
+            }
             let timestamp = xml_elem.attr_time("timestamp");
-            let mut devices = self.devices.lock().unwrap();
             let mut property = Property::new_from_xml(xml_elem, devices.sort_cnt)?;
             let values = property.get_values(false);
             devices.change_cnt += 1;
             devices.sort_cnt += 1;
             property.dynamic_data.change_cnt = devices.change_cnt;
-            if let Some(device) = devices.list.get_mut(&device_name) {
-                device.insert(prop_name.clone(), property);
-            } else {
-                devices.list.insert(
-                    device_name.clone(),
-                    HashMap::from([
-                        (prop_name.clone(), property)
-                    ])
-                );
-            }
-            drop(devices);
-            self.notify_subcribers_about_prop_change(
-                true,
+            device.insert(prop_name.clone(), property);
+            drop(devices_lock);
+            self.notify_subcribers_about_new_prop(
                 timestamp,
                 &device_name,
                 &prop_name,
                 values,
-                events_sender
+                events_sender,
             );
         } else if xml_elem.name.starts_with("set") { // setXXXXVector
+            // Changed property data from INDI server
             let device_name = xml_elem.attr_string_or_err("device")?;
             let prop_name = xml_elem.attr_string_or_err("name")?;
             let timestamp = xml_elem.attr_time("timestamp");
@@ -3139,23 +3595,28 @@ impl XmlReceiver {
                 ));
             };
             property.dynamic_data.change_cnt = change_cnt;
-            property.update_dyn_data_from_xml(
+            let prev_state = property.dynamic_data.state.clone();
+            let prop_changed = property.update_dyn_data_from_xml(
                 &mut xml_elem,
                 blob,
                 &device_name,
                 &prop_name,
                 dl_time,
             )?;
-            let values = property.get_values(true);
-            drop(devices);
-            self.notify_subcribers_about_prop_change(
-                false,
-                timestamp,
-                &device_name,
-                &prop_name,
-                values,
-                events_sender
-            );
+            if prop_changed {
+                let values = property.get_values(true);
+                let cur_state = property.dynamic_data.state.clone();
+                drop(devices);
+                self.notify_subcribers_about_prop_change(
+                    timestamp,
+                    &device_name,
+                    &prop_name,
+                    prev_state,
+                    cur_state,
+                    values,
+                    events_sender,
+                );
+            }
         } else if xml_elem.name == "delProperty" { // delProperty
             let device_name = xml_elem.attr_string_or_err("device")?;
             let timestamp = xml_elem.attr_time("timestamp");

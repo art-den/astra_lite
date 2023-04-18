@@ -1,6 +1,27 @@
-use std::{rc::Rc, path::{Path, PathBuf}};
+use std::{rc::Rc, path::{Path, PathBuf}, cell::Cell};
 use gtk::{prelude::*, gio, cairo, glib};
 
+
+pub struct ExclusiveCaller {
+    busy: Cell<bool>,
+}
+
+impl ExclusiveCaller {
+    pub fn new() -> Self {
+        Self {
+            busy: Cell::new(false),
+        }
+    }
+
+    pub fn exec(&self, mut fun: impl FnMut()) {
+        if self.busy.get() {
+            return;
+        }
+        self.busy.set(true);
+        fun();
+        self.busy.set(false);
+    }
+}
 
 pub fn disable_scroll_for_most_of_widgets(builder: &gtk::Builder) {
     for object in builder.objects() {
@@ -92,12 +113,13 @@ pub fn exec_and_show_error(
 }
 
 pub fn enable_widgets(
-    builder: &gtk::Builder,
-    names:   &[(&str, bool)]
+    builder:   &gtk::Builder,
+    force_set: bool,
+    names:     &[(&str, bool)]
 ) {
     for (widget_name, enable) in names {
         let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-        if widget.is_sensitive() != *enable {
+        if force_set || widget.is_sensitive() != *enable {
             widget.set_sensitive(*enable);
         }
     }
@@ -177,12 +199,30 @@ pub fn set_bool(
     let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
     if let Some(checkbutton) = widget.downcast_ref::<gtk::CheckButton>() {
         checkbutton.set_active(value);
-    } else if let Some(exp) = widget.downcast_ref::<gtk::Expander>() {
-        exp.set_expanded(value);
     } else {
         panic!("Widget named {} is not supported", widget_name);
     }
 }
+
+pub fn set_bool_prop(
+    builder:     &gtk::Builder,
+    widget_name: &str,
+    prop_name:   &str,
+    value:       bool
+) {
+    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
+    widget.set_properties(&[(prop_name, &value)]);
+}
+
+pub fn get_bool_prop(
+    builder:     &gtk::Builder,
+    widget_name: &str,
+    prop_name:   &str
+) -> bool {
+    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
+    widget.property::<bool>(prop_name)
+}
+
 
 pub fn set_str(
     builder:     &gtk::Builder,

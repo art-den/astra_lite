@@ -66,7 +66,7 @@ impl IndiGui {
                         indi_api::PropChange::New(_) |
                         indi_api::PropChange::Delete =>
                             data.list_changed = true,
-                        indi_api::PropChange::Change(_) =>
+                        indi_api::PropChange::Change{..} =>
                             data.prop_changed = true,
                     },
                 _ =>
@@ -360,6 +360,16 @@ impl IndiGui {
                     grid,
                     next_row
                 ),
+            indi_api::PropType::Light =>
+                Self::create_light_property_ui(
+                    indi,
+                    &prop.device,
+                    &prop.name,
+                    &prop.static_data,
+                    &prop.elements,
+                    grid,
+                    next_row
+                ),
         }
     }
 
@@ -604,9 +614,8 @@ impl IndiGui {
                     btn.set_sensitive(false);
                 }
             });
-
-            *next_row += 1;
         }
+        *next_row += 1;
         result
     }
 
@@ -647,6 +656,44 @@ impl IndiGui {
         result
     }
 
+    fn create_light_property_ui(
+        _indi:        &Arc<indi_api::Connection>,
+        _device:      &str,
+        prop_name:    &str,
+        _static_data: &indi_api::PropStaticData,
+        elements:     &Vec<indi_api::PropElement>,
+        grid:         &gtk::Grid,
+        next_row:     &mut i32,
+    ) -> Vec<UiIndiPropElem> {
+        let mut result = Vec::new();
+
+        let bx = gtk::Box::builder()
+            .visible(true)
+            .spacing(5)
+            .orientation(gtk::Orientation::Horizontal)
+            .build();
+        grid.attach(&bx, 2, *next_row, 1, 1);
+        for elem in elements {
+            let elem_label = gtk::Label::builder()
+                .visible(true)
+                .halign(gtk::Align::End)
+                .tooltip_text(&format!("{}.{}", prop_name, elem.name))
+                .build();
+            bx.add(&elem_label);
+            let data = UiIndiPropElemData::Light(UiIndiPropLightElem {
+                text: elem.label.as_deref().unwrap_or(&elem.name).to_string(),
+                label: elem_label
+            });
+            result.push(UiIndiPropElem{
+                name: elem.name.clone(),
+                data,
+                row: *next_row,
+            });
+        }
+        *next_row += 1;
+        result
+    }
+
     fn show_property_values(
         ui_prop:   &UiIndiProp,
         indi_prop: &indi_api::ExportProperty,
@@ -663,6 +710,8 @@ impl IndiGui {
                 Self::show_switch_property_values(ui_prop, indi_prop, rule),
             indi_api::PropType::Blob =>
                 Self::show_blob_property_values(ui_prop, indi_prop),
+            indi_api::PropType::Light =>
+                Self::show_light_property_values(ui_prop, indi_prop),
         }
     }
 
@@ -739,6 +788,18 @@ impl IndiGui {
         }
     }
 
+    fn show_light_property_values(
+        ui_prop:   &UiIndiProp,
+        indi_prop: &indi_api::ExportProperty,
+    ) {
+        for ui_elem in &ui_prop.elements {
+            let indi_elem = indi_prop.elements.iter().find(|p| p.name == ui_elem.name);
+            let Some(indi_elem) = indi_elem else { continue; };
+            let UiIndiPropElemData::Light(light_data) = &ui_elem.data else { continue; };
+            let indi_api::PropValue::Light(value) = &indi_elem.value else { continue; };
+            light_data.label.set_text(&format!("{}={}", light_data.text, value));
+        }
+    }
 }
 
 struct UiIndiDevice {
@@ -780,11 +841,17 @@ struct UiIndiPropBlobElem {
     entry: gtk::Entry,
 }
 
+struct UiIndiPropLightElem {
+    text: String,
+    label: gtk::Label,
+}
+
 enum UiIndiPropElemData {
     Text(UiIndiPropTextElem),
     Num(UiIndiPropNumElem),
     Switch(UiIndiPropSwithElem),
     Blob(UiIndiPropBlobElem),
+    Light(UiIndiPropLightElem),
 }
 
 struct UiIndiPropElem {

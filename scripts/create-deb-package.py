@@ -114,6 +114,7 @@ subprocess.check_output([
     'dpkg-deb',
     '--root-owner-group',
     '--build',
+    '-Zgzip',
     package_dir
 ])
 

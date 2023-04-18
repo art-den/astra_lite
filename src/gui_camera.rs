@@ -1,13 +1,14 @@
 use std::{
     rc::Rc,
-    sync::{*, atomic::AtomicI64},
-    cell::RefCell,
+    sync::*,
+    cell::{RefCell, Cell},
     path::PathBuf,
-    f32::consts::PI,
+    f64::consts::PI,
     thread::JoinHandle,
 };
 use bitflags::bitflags;
-use gtk::{prelude::*, glib, glib::clone, cairo};
+use chrono::{DateTime, Local};
+use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use serde::{Serialize, Deserialize};
 use crate::{
     gui_main::*,
@@ -18,23 +19,31 @@ use crate::{
     log_utils::*,
     image_info::*,
     image::RgbU8Data,
-    image_raw::RawAdder,
+    image_raw::{RawAdder, FrameType},
+    state::*,
+    plots::*,
+    math::*, stars_offset::Point,
 };
 
-const SET_PROP_TIMEOUT: Option<u64> = Some(2000);
+pub const SET_PROP_TIMEOUT: Option<u64> = Some(2000);
 
 bitflags! { struct DelayedFlags: u32 {
-    const UPDATE_CAM_LIST        = 1;
-    const START_LIVE_VIEW        = 2;
-    const START_COOLING          = 4;
-    const UPDATE_CTRL_WIDGETS    = 8;
-    const UPDATE_RESOLUTION_LIST = 16;
-    const SELECT_MAX_RESOLUTION  = 32;
+    const UPDATE_CAM_LIST        = 1 << 0;
+    const START_LIVE_VIEW        = 1 << 1;
+    const START_COOLING          = 1 << 2;
+    const UPDATE_CTRL_WIDGETS    = 1 << 3;
+    const UPDATE_RESOLUTION_LIST = 1 << 4;
+    const SELECT_MAX_RESOLUTION  = 1 << 5;
+    const UPDATE_FOC_LIST        = 1 << 6;
+    const UPDATE_FOC_POS_NEW     = 1 << 7;
+    const UPDATE_FOC_POS         = 1 << 8;
+    const UPDATE_MOUNT_WIDGETS   = 1 << 9;
+    const UPDATE_MOUNT_SPD_LIST  = 1 << 10;
 }}
 
 struct DelayedAction {
-    countdown:  u8,
-    flags:      DelayedFlags,
+    countdown: u8,
+    flags:     DelayedFlags,
 }
 
 impl DelayedAction {
@@ -68,42 +77,40 @@ impl ImgPreviewScale {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, Copy, PartialEq)]
-enum FrameType {
-    #[default]
-    Lights,
-    Flats,
-    Darks,
-}
-
 impl FrameType {
-    fn from_active_id(active_id: Option<&str>) -> Self {
+    pub fn from_active_id(active_id: Option<&str>) -> Self {
         match active_id {
             Some("flat") => Self::Flats,
             Some("dark") => Self::Darks,
+            Some("bias") => Self::Biases,
             _            => Self::Lights,
         }
     }
 
-    fn to_active_id(&self) -> Option<&'static str> {
+    pub fn to_active_id(&self) -> Option<&'static str> {
         match self {
             FrameType::Lights => Some("light"),
-            FrameType::Flats => Some("flat"),
-            FrameType::Darks => Some("dark"),
+            FrameType::Flats  => Some("flat"),
+            FrameType::Darks  => Some("dark"),
+            FrameType::Biases => Some("bias"),
+            FrameType::Undef  => Some("light"),
+
         }
     }
 
-    fn to_indi_frame_type(&self) -> indi_api::FrameType {
+    pub fn to_indi_frame_type(&self) -> indi_api::FrameType {
         match self {
             FrameType::Lights => indi_api::FrameType::Light,
-            FrameType::Flats => indi_api::FrameType::Flat,
-            FrameType::Darks => indi_api::FrameType::Dark,
+            FrameType::Flats  => indi_api::FrameType::Flat,
+            FrameType::Darks  => indi_api::FrameType::Dark,
+            FrameType::Biases => indi_api::FrameType::Bias,
+            FrameType::Undef  => panic!("Undefined frame type"),
         }
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
-enum Binning {
+pub enum Binning {
     #[default]
     Orig,
     Bin2,
@@ -130,7 +137,7 @@ impl Binning {
         }
     }
 
-    fn get_ratio(&self) -> usize {
+    pub fn get_ratio(&self) -> usize {
         match self {
             Self::Orig => 1,
             Self::Bin2 => 2,
@@ -141,7 +148,7 @@ impl Binning {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone)]
-enum Crop {
+pub enum Crop {
     #[default]
     None,
     P75,
@@ -171,13 +178,13 @@ impl Crop {
         }
     }
 
-    fn translate(&self, value: usize) -> usize {
+    pub fn translate(&self, value: usize) -> usize {
         match self {
             Crop::None => value,
-            Crop::P75 => 3 * value / 4,
-            Crop::P50 => value / 2,
-            Crop::P33 => value / 3,
-            Crop::P25 => value / 4,
+            Crop::P75  => 3 * value / 4,
+            Crop::P50  => value / 2,
+            Crop::P33  => value / 3,
+            Crop::P25  => value / 4,
         }
     }
 }
@@ -204,15 +211,15 @@ impl Default for CamCtrlOptions {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
-struct FrameOptions {
-    exposure:   f64,
-    gain:       f64,
-    offset:     u32,
-    frame_type: FrameType,
-    binning:    Binning,
-    crop:       Crop,
-    low_noise:  bool,
-    delay:      f64,
+pub struct FrameOptions {
+    pub exposure:   f64,
+    pub gain:       f64,
+    pub offset:     u32,
+    pub frame_type: FrameType,
+    pub binning:    Binning,
+    pub crop:       Crop,
+    pub low_noise:  bool,
+    pub delay:      f64,
 }
 
 impl Default for FrameOptions {
@@ -231,15 +238,15 @@ impl Default for FrameOptions {
 }
 
 impl FrameOptions {
-    fn create_master_dark_file_name(&self) -> String {
+    pub fn create_master_dark_file_name_suff(&self) -> String {
         format!("{:.1}s_g{:.0}_ofs{}", self.exposure, self.gain, self.offset)
     }
 
-    fn create_master_flat_file_name(&self) -> String {
-        String::new()
+    pub fn create_master_flat_file_name_suff(&self) -> String {
+        format!("g{:.0}_ofs{}", self.gain, self.offset)
     }
 
-    fn have_to_use_delay(&self) -> bool {
+    pub fn have_to_use_delay(&self) -> bool {
         self.exposure < 2.0 &&
         self.delay > 0.0
     }
@@ -289,11 +296,11 @@ impl CalibrOptions {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
-struct RawFrameOptions {
-    out_path:      PathBuf,
-    frame_cnt:     usize,
-    use_cnt:       bool,
-    create_master: bool,
+pub struct RawFrameOptions {
+    pub out_path:      PathBuf,
+    pub frame_cnt:     usize,
+    pub use_cnt:       bool,
+    pub create_master: bool,
 }
 
 impl Default for RawFrameOptions {
@@ -322,19 +329,13 @@ impl RawFrameOptions {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
-struct LiveStackingOptions {
-    save_orig:       bool,
-    save_minutes:    usize,
-    save_enabled:    bool,
-    use_max_fwhm:    bool,
-    max_fwhm:        f32,
-    use_max_ovality: bool,
-    max_ovality:     f32,
-    use_min_stars:   bool,
-    min_stars:       usize,
-    out_dir:         PathBuf,
+pub struct LiveStackingOptions {
+    pub save_orig:       bool,
+    pub save_minutes:    usize,
+    pub save_enabled:    bool,
+    pub out_dir:         PathBuf,
 }
 
 impl Default for LiveStackingOptions {
@@ -343,12 +344,6 @@ impl Default for LiveStackingOptions {
             save_orig:       false,
             save_minutes:    5,
             save_enabled:    true,
-            use_max_fwhm:    true,
-            max_fwhm:        20.0,
-            use_max_ovality: true,
-            max_ovality:     0.2,
-            use_min_stars:   false,
-            min_stars:       1000,
             out_dir:         PathBuf::new(),
         }
     }
@@ -366,6 +361,26 @@ impl LiveStackingOptions {
             self.out_dir = save_path;
         }
         Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
+pub struct QualityOptions {
+    pub use_max_fwhm:    bool,
+    pub max_fwhm:        f32,
+    pub use_max_ovality: bool,
+    pub max_ovality:     f32,
+}
+
+impl Default for QualityOptions {
+    fn default() -> Self {
+        Self {
+            use_max_fwhm:    false,
+            max_fwhm:        20.0,
+            use_max_ovality: true,
+            max_ovality:     0.5,
+        }
     }
 }
 
@@ -415,107 +430,199 @@ impl Default for PreviewOptions {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
-struct CameraOptions {
-    camera_name:    Option<String>,
-    live_view:      bool,
-    ctrl:           CamCtrlOptions,
-    frame:          FrameOptions,
-    calibr:         CalibrOptions,
-    raw_frames:     RawFrameOptions,
-    live:           LiveStackingOptions,
-    preview:        PreviewOptions,
+struct HistOptions {
+    log_x:    bool,
+    log_y:    bool,
+    percents: bool,
+}
+
+impl Default for HistOptions {
+    fn default() -> Self {
+        Self {
+            log_x:    false,
+            log_y:    false,
+            percents: true,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(default)]
+struct GuiOptions {
     paned_pos1:     i32,
     paned_pos2:     i32,
     paned_pos3:     i32,
-    hist_log_x:     bool,
-    hist_log_y:     bool,
+    paned_pos4:     i32,
     cam_ctrl_exp:   bool,
     shot_exp:       bool,
     calibr_exp:     bool,
     raw_frames_exp: bool,
     live_exp:       bool,
+    foc_exp:        bool,
+    diz_exp:        bool,
+    quality_exp:    bool,
+    mount_exp:      bool,
+}
+
+impl Default for GuiOptions {
+    fn default() -> Self {
+        Self {
+            paned_pos1:     -1,
+            paned_pos2:     -1,
+            paned_pos3:     -1,
+            paned_pos4:     -1,
+            cam_ctrl_exp:   true,
+            shot_exp:       true,
+            calibr_exp:     true,
+            raw_frames_exp: true,
+            live_exp:       false,
+            foc_exp:        false,
+            diz_exp:        false,
+            quality_exp:    true,
+            mount_exp:      false,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
+pub struct FocuserOptions {
+    pub device:          Option<String>,
+    pub on_temp_change:  bool,
+    pub max_temp_change: f64,
+    pub on_fwhm_change:  bool,
+    pub max_fwhm_change: u32,
+    pub periodically:    bool,
+    pub period_minutes:  u32,
+    pub measures:        u32,
+    pub step:            f64,
+    pub exposure:        f64,
+}
+
+impl Default for FocuserOptions {
+    fn default() -> Self {
+        Self {
+            device:          None,
+            on_temp_change:  false,
+            max_temp_change: 5.0,
+            on_fwhm_change:  false,
+            max_fwhm_change: 20,
+            periodically:    false,
+            period_minutes:  120,
+            measures:        11,
+            step:            500.0,
+            exposure:        10.0,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
+pub struct GuidingOptions {
+    pub enabled: bool,
+    pub max_error: f64,
+    pub dith_period: u32, // in minutes, 0 - do not dizer
+    pub dith_percent: f64, // percent of image
+    pub calibr_exposure: f64,
+}
+
+impl Default for GuidingOptions {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_error: 5.0,
+            dith_period: 0,
+            dith_percent: 5.0,
+            calibr_exposure: 1.0,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
+pub struct MountOptions {
+    inv_ns: bool,
+    inv_we: bool,
+    speed:  Option<String>,
+}
+
+impl Default for MountOptions {
+    fn default() -> Self {
+        Self {
+            inv_ns: false,
+            inv_we: false,
+            speed:  None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(default)]
+struct CameraOptions {
+    device:     Option<String>,
+    live_view:  bool,
+    ctrl:       CamCtrlOptions,
+    frame:      FrameOptions,
+    calibr:     CalibrOptions,
+    raw_frames: RawFrameOptions,
+    live:       LiveStackingOptions,
+    quality:    QualityOptions,
+    preview:    PreviewOptions,
+    hist:       HistOptions,
+    focuser:    FocuserOptions,
+    guiding:    GuidingOptions,
+    mount:      MountOptions,
+    gui:        GuiOptions,
 }
 
 impl Default for CameraOptions {
     fn default() -> Self {
         Self {
-            camera_name:    None,
-            live_view:      false,
-            preview:        PreviewOptions::default(),
-            ctrl:           CamCtrlOptions::default(),
-            frame:          FrameOptions::default(),
-            calibr:         CalibrOptions::default(),
-            raw_frames:     RawFrameOptions::default(),
-            live:           LiveStackingOptions::default(),
-            paned_pos1:     -1,
-            paned_pos2:     -1,
-            paned_pos3:     -1,
-            hist_log_x:     false,
-            hist_log_y:     true,
-            cam_ctrl_exp:   true,
-            shot_exp:       true,
-            calibr_exp:     false,
-            raw_frames_exp: false,
-            live_exp:       false,
+            device:     None,
+            live_view:  false,
+            preview:    PreviewOptions::default(),
+            ctrl:       CamCtrlOptions::default(),
+            frame:      FrameOptions::default(),
+            calibr:     CalibrOptions::default(),
+            raw_frames: RawFrameOptions::default(),
+            live:       LiveStackingOptions::default(),
+            quality:    QualityOptions::default(),
+            hist:       HistOptions::default(),
+            focuser:    FocuserOptions::default(),
+            guiding:    GuidingOptions::default(),
+            mount:      MountOptions::default(),
+            gui:        GuiOptions::default(),
         }
     }
 }
 
-enum MainThreadCommands {
+enum MainThreadEvents {
     ShowFrameProcessingResult(FrameProcessingResult),
-    Exit,
+    StateEvent(Event),
+    IndiEvent(indi_api::Event),
 }
 
-#[derive(PartialEq, Clone, Copy)]
-enum Mode {
-    SingleShot,
-    LiveView,
-    LiveStacking,
-    SavingRawFrames,
-}
-
-
-#[derive(Clone, Debug)]
-struct FramesCounter {
-    to_go: usize,
-    total: usize,
-}
-
-enum State {
-    Waiting,
-    Active{
-        mode:         Mode,
-        camera:       String,
-        frame:        FrameOptions,
-        counter:      Option<FramesCounter>,
-        thread_timer: Arc<ThreadTimer>,
-    },
-}
-
-#[derive(Debug)]
-struct SavingRawPause {
-    camera:  String,
-    frame:   FrameOptions,
-    counter: FramesCounter,
-}
 
 struct CameraData {
     main:               Rc<MainData>,
+    cur_frame:          Arc<ResultImage>,
+    ref_stars:          Arc<RwLock<Option<Vec<Point>>>>,
+    calibr_images:      Arc<Mutex<CalibrImages>>,
     delayed_action:     RefCell<DelayedAction>,
     options:            RefCell<CameraOptions>,
     process_thread:     JoinHandle<()>,
     img_cmds_sender:    mpsc::Sender<Command>,
-    main_thread_sender: glib::Sender<MainThreadCommands>,
     conn_state:         RefCell<indi_api::ConnState>,
     indi_conn:          RefCell<Option<indi_api::Subscription>>,
-    state:              Arc<RwLock<State>>,
     fn_gen:             Arc<Mutex<SeqFileNameGen>>,
     live_staking:       Arc<LiveStackingData>,
     preview_scroll_pos: RefCell<Option<((f64, f64), (f64, f64))>>,
-    last_exposure:      Arc<AtomicI64>, // to show exposure progress
-    light_history:      RefCell<Vec<LightFileShortInfo>>,
-    raw_adder:          Arc<Mutex<Option<RawAdder>>>,
-    save_raw_pause:     RefCell<Option<SavingRawPause>>,
+    light_history:      RefCell<Vec<LightFrameShortInfo>>,
+    raw_adder:          Arc<Mutex<RawAdder>>,
+    focusing_data:      RefCell<Option<FocusingEvt>>,
+    closed:             Cell<bool>,
+    excl:               gtk_utils::ExclusiveCaller,
+    mount_device_name:  RefCell<Option<String>>,
 }
 
 impl Drop for CameraData {
@@ -536,8 +643,7 @@ pub fn build_ui(
         options.live.check_and_correct()?;
         Ok(())
     });
-    let (main_thread_sender, main_thread_receiver) =
-        glib::MainContext::channel(glib::PRIORITY_DEFAULT);
+
     let delayed_action = DelayedAction{
         countdown: 0,
         flags:     DelayedFlags::empty(),
@@ -546,40 +652,44 @@ pub fn build_ui(
     let (img_cmds_sender, process_thread) = start_process_blob_thread();
     let camera_data = Rc::new(CameraData {
         main:               Rc::clone(data),
+        cur_frame:          Arc::new(ResultImage::new()),
+        ref_stars:          Arc::new(RwLock::new(None)),
+        calibr_images:      Arc::new(Mutex::new(CalibrImages::default())),
         delayed_action:     RefCell::new(delayed_action),
         options:            RefCell::new(options),
         process_thread,
         img_cmds_sender,
-        main_thread_sender,
         conn_state:         RefCell::new(indi_api::ConnState::Disconnected),
         indi_conn:          RefCell::new(None),
-        state:              Arc::new(RwLock::new(State::Waiting)),
         fn_gen:             Arc::new(Mutex::new(SeqFileNameGen::new())),
         live_staking:       Arc::new(LiveStackingData::new()),
         preview_scroll_pos: RefCell::new(None),
-        last_exposure:      Arc::new(AtomicI64::new(0)),
         light_history:      RefCell::new(Vec::new()),
-        raw_adder:          Arc::new(Mutex::new(None)),
-        save_raw_pause:     RefCell::new(None),
+        raw_adder:          Arc::new(Mutex::new(RawAdder::new())),
+        focusing_data:      RefCell::new(None),
+        closed:             Cell::new(false),
+        excl:               gtk_utils::ExclusiveCaller::new(),
+        mount_device_name:  RefCell::new(None),
     });
-    main_thread_receiver.attach(None, clone! (@strong camera_data => move |cmd| {
-        if matches!(cmd, MainThreadCommands::Exit) {  }
-        match cmd {
-            MainThreadCommands::ShowFrameProcessingResult(result) =>
-                show_frame_processing_result(&camera_data, result),
-            MainThreadCommands::Exit =>
-                return Continue(false),
-        }
-        Continue(true)
-    }));
+
+    connect_misc_events(&camera_data);
+
     connect_widgets_events_before_show_options(&camera_data);
-    show_options(&camera_data);
+
+    init_focuser_widgets(&camera_data);
+    init_dizering_widgets(&camera_data);
+
+    show_camera_options(&camera_data);
+    show_frame_options(&camera_data);
+
     show_total_raw_time(&camera_data);
     update_light_history_table(&camera_data);
-    connect_indi_events(&camera_data);
-    correct_ctrl_widgets_properties(&camera_data);
+
     connect_widgets_events(&camera_data);
     connect_img_mouse_scroll_events(&camera_data);
+    connect_focuser_widgets_events(&camera_data);
+    connect_dizering_widgets_events(&camera_data);
+    connect_mount_widgets_events(&camera_data);
 
     let weak_camera_data = Rc::downgrade(&camera_data);
     timer_handlers.push(Box::new(move || {
@@ -589,11 +699,122 @@ pub fn build_ui(
 
     data.window.connect_delete_event(clone!(@weak camera_data => @default-panic, move |_, _| {
         let res = handler_close_window(&camera_data);
-        if res == Inhibit(false) {
-            camera_data.main_thread_sender.send(MainThreadCommands::Exit).unwrap();
-        }
         res
     }));
+
+    update_camera_devices_list(&camera_data);
+    update_focuser_devices_list(&camera_data);
+    update_mount_widgets(&camera_data);
+    correct_widget_properties(&camera_data);
+}
+
+fn connect_misc_events(data: &Rc<CameraData>) {
+    let (main_thread_sender, main_thread_receiver) =
+        glib::MainContext::channel(glib::PRIORITY_DEFAULT);
+
+    let sender = main_thread_sender.clone();
+    *data.indi_conn.borrow_mut() = Some(data.main.indi.subscribe_events(move |event| {
+        sender.send(MainThreadEvents::IndiEvent(event)).unwrap();
+    }));
+
+    let mut state = data.main.state.write().unwrap();
+    let sender = main_thread_sender.clone();
+    state.subscribe_events(move |event| {
+        sender.send(MainThreadEvents::StateEvent(event)).unwrap();
+    });
+
+    let sender = main_thread_sender.clone();
+    let data = Rc::downgrade(data);
+    main_thread_receiver.attach(None, move |item| {
+        let Some(data) = data.upgrade() else { return Continue(false); };
+        if data.closed.get() { return Continue(false); };
+        match item {
+            MainThreadEvents::IndiEvent(indi_api::Event::ConnChange(conn_state)) =>
+                process_conn_state_event(&data, conn_state),
+            MainThreadEvents::IndiEvent(indi_api::Event::PropChange(event_data)) => {
+                match &event_data.change {
+                    indi_api::PropChange::New(value) =>
+                        process_prop_change_event(
+                            &data,
+                            &sender,
+                            &event_data.device_name,
+                            &event_data.prop_name,
+                            &value.elem_name,
+                            true,
+                            None,
+                            None,
+                            &value.prop_value
+                        ),
+                    indi_api::PropChange::Change{value, prev_state, new_state} =>
+                        process_prop_change_event(
+                            &data,
+                            &sender,
+                            &event_data.device_name,
+                            &event_data.prop_name,
+                            &value.elem_name,
+                            false,
+                            Some(prev_state),
+                            Some(new_state),
+                            &value.prop_value
+                        ),
+                    indi_api::PropChange::Delete =>
+                        process_prop_delete_event(
+                            &data,
+                            &event_data.device_name,
+                            &event_data.prop_name,
+                        ),
+                };
+            },
+
+            MainThreadEvents::IndiEvent(_) => {},
+
+            MainThreadEvents::ShowFrameProcessingResult(result) => {
+                gtk_utils::exec_and_show_error(&data.main.window, || {
+                    match result.data {
+                        ProcessingResultData::ShotProcessingStarted(mode_type) => {
+                            let mut state = data.main.state.write().unwrap();
+                            if state.mode().get_type() == mode_type {
+                                state.notify_about_frame_processing_started(&data.main.indi)?;
+                            }
+                        },
+                        ProcessingResultData::ShotProcessingFinished {frame_is_ok, mode_type} => {
+                            let mut state = data.main.state.write().unwrap();
+                            if state.mode().get_type() == mode_type {
+                                state.notify_about_frame_processing_finished(
+                                    &data.main.indi,
+                                    frame_is_ok
+                                )?;
+                            }
+                        },
+                        _ => {},
+                    }
+                    Ok(())
+                });
+                show_frame_processing_result(&data, result);
+            },
+
+            MainThreadEvents::StateEvent(Event::ModeChanged) => {
+                correct_widget_properties(&data);
+            },
+
+            MainThreadEvents::StateEvent(Event::ModeContinued) => {
+                correct_after_continue_last_mode(&data);
+            },
+
+            MainThreadEvents::StateEvent(Event::Focusing(fdata)) => {
+                *data.focusing_data.borrow_mut() = Some(fdata);
+                let da_focusing = data.main.builder.object::<gtk::DrawingArea>("da_focusing").unwrap();
+                da_focusing.queue_draw();
+            },
+
+            MainThreadEvents::StateEvent(Event::FocusResultValue { value }) => {
+                update_focuser_position_after_focusing(&data, value);
+            },
+
+            _ => {},
+        }
+        Continue(true)
+    });
 }
 
 fn connect_widgets_events_before_show_options(data: &Rc<CameraData>) {
@@ -601,6 +822,7 @@ fn connect_widgets_events_before_show_options(data: &Rc<CameraData>) {
     chb_hot_pixels.connect_active_notify(clone!(@strong data => move |chb| {
         gtk_utils::enable_widgets(
             &data.main.builder,
+            false,
             &[("l_hot_pixels_warn", chb.is_active())]
         )
     }));
@@ -612,12 +834,16 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let bldr = &data.main.builder;
     gtk_utils::connect_action(&data.main.window, data, "take_shot",             handler_action_take_shot);
     gtk_utils::connect_action(&data.main.window, data, "stop_shot",             handler_action_stop_shot);
-    gtk_utils::connect_action(&data.main.window, data, "start_live_stacking",   handler_action_start_live_stacking);
-    gtk_utils::connect_action(&data.main.window, data, "stop_live_stacking",    handler_action_stop_live_stacking);
     gtk_utils::connect_action(&data.main.window, data, "clear_light_history",   handler_action_clear_light_history);
     gtk_utils::connect_action(&data.main.window, data, "start_save_raw_frames", handler_action_start_save_raw_frames);
     gtk_utils::connect_action(&data.main.window, data, "stop_save_raw_frames",  handler_action_stop_save_raw_frames);
-    gtk_utils::connect_action(&data.main.window, data, "pause_save_raw_frames", handler_action_pause_save_raw_frames);
+    gtk_utils::connect_action(&data.main.window, data, "continue_save_raw",     handler_action_continue_save_raw_frames);
+    gtk_utils::connect_action(&data.main.window, data, "start_live_stacking",   handler_action_start_live_stacking);
+    gtk_utils::connect_action(&data.main.window, data, "stop_live_stacking",    handler_action_stop_live_stacking);
+    gtk_utils::connect_action(&data.main.window, data, "manual_focus",          handler_action_manual_focus);
+    gtk_utils::connect_action(&data.main.window, data, "stop_manual_focus",     handler_action_stop_manual_focus);
+    gtk_utils::connect_action(&data.main.window, data, "start_dither_calibr",   handler_action_start_dither_calibr);
+    gtk_utils::connect_action(&data.main.window, data, "stop_dither_calibr",    handler_action_stop_dither_calibr);
 
     let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
     cb_frame_mode.connect_active_id_notify(clone!(@strong data => move |cb| {
@@ -626,7 +852,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
             cb.active_id().map(|v| v.to_string()).as_deref()
         );
         drop(options);
-        correct_ctrl_widgets_properties(&data);
+        correct_widget_properties(&data);
     }));
 
     let chb_cooler = bldr.object::<gtk::CheckButton>("chb_cooler").unwrap();
@@ -635,7 +861,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
         options.ctrl.enable_cooler = chb.is_active();
         drop(options);
         set_temperature_by_options(&data, false);
-        correct_ctrl_widgets_properties(&data);
+        correct_widget_properties(&data);
     }));
 
     let chb_heater = bldr.object::<gtk::CheckButton>("chb_heater").unwrap();
@@ -644,7 +870,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
         options.ctrl.enable_heater = chb.is_active();
         drop(options);
         set_temperature_by_options(&data, false);
-        correct_ctrl_widgets_properties(&data);
+        correct_widget_properties(&data);
     }));
 
     let chb_fan = bldr.object::<gtk::CheckButton>("chb_fan").unwrap();
@@ -653,7 +879,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
         options.ctrl.enable_fan = chb.is_active();
         drop(options);
         set_temperature_by_options(&data, false);
-        correct_ctrl_widgets_properties(&data);
+        correct_widget_properties(&data);
     }));
 
     let spb_temp = bldr.object::<gtk::SpinButton>("spb_temp").unwrap();
@@ -666,25 +892,26 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
 
     let chb_shots_cont = bldr.object::<gtk::CheckButton>("chb_shots_cont").unwrap();
     chb_shots_cont.connect_active_notify(clone!(@strong data => move |_| {
-        read_options_from_widgets(&data);
-        correct_ctrl_widgets_properties(&data);
+        read_camera_options_from_widgets(&data);
+        correct_widget_properties(&data);
         handler_live_view_changed(&data);
     }));
 
     let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
     cb_frame_mode.connect_active_id_notify(clone!(@strong data => move |cb| {
-        let mut state = data.state.write().unwrap();
-        if let State::Active{ frame, .. } = &mut *state {
-            frame.frame_type = FrameType::from_active_id(
-                cb.active_id().map(|id| id.to_string()).as_deref()
-            )
+        let frame_type = FrameType::from_active_id(
+            cb.active_id().map(|id| id.to_string()).as_deref()
+        );
+        let mut state = data.main.state.write().unwrap();
+        if let Some(frame) = state.mode_mut().get_frame_options_mut() {
+            frame.frame_type = frame_type;
         }
     }));
 
     let spb_exp = bldr.object::<gtk::SpinButton>("spb_exp").unwrap();
     spb_exp.connect_value_changed(clone!(@strong data => move |sb| {
-        let mut state = data.state.write().unwrap();
-        if let State::Active{ frame, .. } = &mut *state {
+        let mut state = data.main.state.write().unwrap();
+        if let Some(frame) = state.mode_mut().get_frame_options_mut() {
             frame.exposure = sb.value();
         }
         if let Ok(mut options) = data.options.try_borrow_mut() {
@@ -695,52 +922,54 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
 
     let spb_gain = bldr.object::<gtk::SpinButton>("spb_gain").unwrap();
     spb_gain.connect_value_changed(clone!(@strong data => move |sb| {
-        let mut state = data.state.write().unwrap();
-        if let State::Active{ frame, .. } = &mut *state {
+        let mut state = data.main.state.write().unwrap();
+        if let Some(frame) = state.mode_mut().get_frame_options_mut() {
             frame.gain = sb.value();
         }
     }));
 
     let spb_offset = bldr.object::<gtk::SpinButton>("spb_offset").unwrap();
     spb_offset.connect_value_changed(clone!(@strong data => move |sb| {
-        let mut state = data.state.write().unwrap();
-        if let State::Active{ frame, .. } = &mut *state {
+        let mut state = data.main.state.write().unwrap();
+        if let Some(frame) = state.mode_mut().get_frame_options_mut() {
             frame.offset = sb.value() as u32;
         }
     }));
 
     let cb_bin = bldr.object::<gtk::ComboBoxText>("cb_bin").unwrap();
     cb_bin.connect_active_id_notify(clone!(@strong data => move |cb| {
-        let mut state = data.state.write().unwrap();
-        if let State::Active{ frame, .. } = &mut *state {
-            frame.binning = Binning::from_active_id(
-                cb.active_id().map(|id| id.to_string()).as_deref()
-            );
+        let mut state = data.main.state.write().unwrap();
+        let binning = Binning::from_active_id(
+            cb.active_id().map(|id| id.to_string()).as_deref()
+        );
+        if let Some(frame) = state.mode_mut().get_frame_options_mut() {
+            frame.binning = binning;
         }
     }));
 
     let cb_crop = bldr.object::<gtk::ComboBoxText>("cb_crop").unwrap();
     cb_crop.connect_active_id_notify(clone!(@strong data => move |cb| {
-        let mut state = data.state.write().unwrap();
-        if let State::Active{ frame, .. } = &mut *state {
-            frame.crop = Crop::from_active_id(
-                cb.active_id().map(|id| id.to_string()).as_deref()
-            );
+        let mut state = data.main.state.write().unwrap();
+        let crop = Crop::from_active_id(
+            cb.active_id().map(|id| id.to_string()).as_deref()
+        );
+        if let Some(frame) = state.mode_mut().get_frame_options_mut() {
+            frame.crop = crop;
         }
     }));
 
     let spb_delay = bldr.object::<gtk::SpinButton>("spb_delay").unwrap();
     spb_delay.connect_value_changed(clone!(@strong data => move |sb| {
-        let mut state = data.state.write().unwrap();
-        if let State::Active{ frame, .. } = &mut *state {
+        let mut state = data.main.state.write().unwrap();
+        if let Some(frame) = state.mode_mut().get_frame_options_mut() {
             frame.delay = sb.value();
         }
     }));
 
     let chb_low_noise = bldr.object::<gtk::CheckButton>("chb_low_noise").unwrap();
     chb_low_noise.connect_active_notify(clone!(@strong data => move |chb| {
-        let mut state = data.state.write().unwrap();
-        if let State::Active{ frame, .. } = &mut *state {
+        let mut state = data.main.state.write().unwrap();
+        if let Some(frame) = state.mode_mut().get_frame_options_mut() {
             frame.low_noise = chb.is_active();
         }
     }));
@@ -810,7 +1039,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let ch_hist_logx = bldr.object::<gtk::CheckButton>("ch_hist_logx").unwrap();
     ch_hist_logx.connect_active_notify(clone!(@strong data => move |chb| {
         let Ok(mut options) = data.options.try_borrow_mut() else { return; };
-        options.hist_log_x = chb.is_active();
+        options.hist.log_x = chb.is_active();
         drop(options);
         repaint_histogram(&data)
     }));
@@ -818,9 +1047,17 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let ch_hist_logy = bldr.object::<gtk::CheckButton>("ch_hist_logy").unwrap();
     ch_hist_logy.connect_active_notify(clone!(@strong data => move |chb| {
         let Ok(mut options) = data.options.try_borrow_mut() else { return; };
-        options.hist_log_y = chb.is_active();
+        options.hist.log_y = chb.is_active();
         drop(options);
         repaint_histogram(&data)
+    }));
+
+    let ch_stat_percents = bldr.object::<gtk::CheckButton>("ch_stat_percents").unwrap();
+    ch_stat_percents.connect_active_notify(clone!(@strong data => move |chb| {
+        let Ok(mut options) = data.options.try_borrow_mut() else { return; };
+        options.hist.percents = chb.is_active();
+        drop(options);
+        show_histogram_stat(&data)
     }));
 
 }
@@ -863,25 +1100,16 @@ fn connect_img_mouse_scroll_events(data: &Rc<CameraData>) {
     }));
 }
 
-fn abort_current_shot(data: &Rc<CameraData>, state: &State) -> bool {
-    let result = match state {
-        State::Active { camera, .. } => {
-            _ = data.main.indi.camera_abort_exposure(camera);
-            true
-        },
-        _ => {
-            false
-        },
-    };
-    result
-}
-
 fn handler_close_window(data: &Rc<CameraData>) -> gtk::Inhibit {
-    abort_current_shot(data, &data.state.read().unwrap());
-    read_options_from_widgets(data);
+    data.closed.set(true);
+
+    let mut state = data.main.state.write().unwrap();
+    _ = state.abort_active_mode(&data.main.indi);
+    read_camera_options_from_widgets(data);
 
     let options = data.options.borrow();
     _ = save_json_to_config::<CameraOptions>(&options, "conf_camera");
+    drop(options);
 
     if let Some(indi_conn) = data.indi_conn.borrow_mut().take() {
         data.main.indi.unsubscribe(indi_conn);
@@ -890,84 +1118,9 @@ fn handler_close_window(data: &Rc<CameraData>) -> gtk::Inhibit {
     gtk::Inhibit(false)
 }
 
-fn connect_indi_events(data: &Rc<CameraData>) {
-    let (sender, receiver) = glib::MainContext::channel(glib::PRIORITY_DEFAULT);
-    let state = Arc::clone(&data.state);
-    let indi_clone = Arc::clone(&data.main.indi);
-    let last_exposure = Arc::clone(&data.last_exposure);
-    *data.indi_conn.borrow_mut() = Some(data.main.indi.subscribe_events(move |event| {
-        match event {
-            indi_api::Event::BlobStart(blob_start) =>
-                process_blob_start_event(
-                    &state,
-                    &indi_clone,
-                    &blob_start,
-                    &last_exposure
-                ),
-            _ =>
-                sender.send(event).unwrap(),
-        }
-    }));
-    let data = Rc::downgrade(data);
-    receiver.attach(None, move |item| {
-        let Some(data) = data.upgrade() else { return Continue(false); };
-        match item {
-            indi_api::Event::ConnChange(conn_state) =>
-                process_conn_state_event(&data, conn_state),
-            indi_api::Event::PropChange(event_data) => {
-                match &event_data.change {
-                    indi_api::PropChange::New(value) =>
-                        process_prop_change_event(
-                            &data,
-                            &event_data.device_name,
-                            &event_data.prop_name,
-                            &value.elem_name,
-                            true,
-                            &value.prop_value
-                        ),
-                    indi_api::PropChange::Change(value) =>
-                        process_prop_change_event(
-                            &data,
-                            &event_data.device_name,
-                            &event_data.prop_name,
-                            &value.elem_name,
-                            false,
-                            &value.prop_value
-                        ),
-                    indi_api::PropChange::Delete =>
-                        process_prop_delete_event(
-                            &data,
-                            &event_data.device_name,
-                            &event_data.prop_name,
-                        ),
-                };
-            },
-            _ =>
-                {},
-        }
-        Continue(true)
-    });
-}
-
-fn show_options(data: &Rc<CameraData>) {
+fn show_frame_options(data: &Rc<CameraData>) {
     let options = data.options.borrow();
     let bld = &data.main.builder;
-    let pan_cam1 = bld.object::<gtk::Paned>("pan_cam1").unwrap();
-    let pan_cam2 = bld.object::<gtk::Paned>("pan_cam2").unwrap();
-    let pan_cam3 = bld.object::<gtk::Paned>("pan_cam3").unwrap();
-
-    pan_cam1.set_position(options.paned_pos1);
-    if options.paned_pos2 != -1 {
-        pan_cam2.set_position(pan_cam2.allocation().width()-options.paned_pos2);
-    }
-    pan_cam3.set_position(options.paned_pos3);
-
-    gtk_utils::set_bool     (bld, "chb_shots_cont",      options.live_view);
-
-    gtk_utils::set_bool     (bld, "chb_cooler",          options.ctrl.enable_cooler);
-    gtk_utils::set_f64      (bld, "spb_temp",            options.ctrl.temperature);
-    gtk_utils::set_bool     (bld, "chb_heater",          options.ctrl.enable_heater);
-    gtk_utils::set_bool     (bld, "chb_fan",             options.ctrl.enable_fan);
 
     gtk_utils::set_active_id(bld, "cb_frame_mode",       options.frame.frame_type.to_active_id());
     gtk_utils::set_f64      (bld, "spb_exp",             options.frame.exposure);
@@ -977,6 +1130,32 @@ fn show_options(data: &Rc<CameraData>) {
     gtk_utils::set_active_id(bld, "cb_bin",              options.frame.binning.to_active_id());
     gtk_utils::set_active_id(bld, "cb_crop",             options.frame.crop.to_active_id());
     gtk_utils::set_bool     (bld, "chb_low_noise",       options.frame.low_noise);
+}
+
+fn show_camera_options(data: &Rc<CameraData>) {
+    let options = data.options.borrow();
+
+    let bld = &data.main.builder;
+    let pan_cam1 = bld.object::<gtk::Paned>("pan_cam1").unwrap();
+    let pan_cam2 = bld.object::<gtk::Paned>("pan_cam2").unwrap();
+    let pan_cam3 = bld.object::<gtk::Paned>("pan_cam3").unwrap();
+    let pan_cam4 = bld.object::<gtk::Paned>("pan_cam4").unwrap();
+
+    pan_cam1.set_position(options.gui.paned_pos1);
+    if options.gui.paned_pos2 != -1 {
+        pan_cam2.set_position(pan_cam2.allocation().width()-options.gui.paned_pos2);
+    }
+    pan_cam3.set_position(options.gui.paned_pos3);
+    if options.gui.paned_pos4 != -1 {
+        pan_cam4.set_position(pan_cam4.allocation().height()-options.gui.paned_pos4);
+    }
+
+    gtk_utils::set_bool     (bld, "chb_shots_cont",      options.live_view);
+
+    gtk_utils::set_bool     (bld, "chb_cooler",          options.ctrl.enable_cooler);
+    gtk_utils::set_f64      (bld, "spb_temp",            options.ctrl.temperature);
+    gtk_utils::set_bool     (bld, "chb_heater",          options.ctrl.enable_heater);
+    gtk_utils::set_bool     (bld, "chb_fan",             options.ctrl.enable_fan);
 
     gtk_utils::set_bool     (bld, "chb_master_dark",     options.calibr.dark_frame_en);
     gtk_utils::set_path     (bld, "fch_master_dark",     options.calibr.dark_frame.as_deref());
@@ -992,37 +1171,64 @@ fn show_options(data: &Rc<CameraData>) {
     gtk_utils::set_bool     (bld, "chb_live_save_orig",  options.live.save_orig);
     gtk_utils::set_bool     (bld, "chb_live_save",       options.live.save_enabled);
     gtk_utils::set_f64      (bld, "spb_live_minutes",    options.live.save_minutes as f64);
-    gtk_utils::set_bool     (bld, "chb_max_fwhm",        options.live.use_max_fwhm);
-    gtk_utils::set_f64      (bld, "spb_max_fwhm",        options.live.max_fwhm as f64);
-    gtk_utils::set_bool     (bld, "chb_max_oval",        options.live.use_max_ovality);
-    gtk_utils::set_f64      (bld, "spb_max_oval",        options.live.max_ovality as f64);
-    gtk_utils::set_bool     (bld, "chb_min_stars",       options.live.use_min_stars);
-    gtk_utils::set_f64      (bld, "spb_min_stars",       options.live.min_stars as f64);
     gtk_utils::set_path     (bld, "fch_live_folder",     Some(&options.live.out_dir));
+
+    gtk_utils::set_bool     (bld, "chb_max_fwhm",        options.quality.use_max_fwhm);
+    gtk_utils::set_f64      (bld, "spb_max_fwhm",        options.quality.max_fwhm as f64);
+    gtk_utils::set_bool     (bld, "chb_max_oval",        options.quality.use_max_ovality);
+    gtk_utils::set_f64      (bld, "spb_max_oval",        options.quality.max_ovality as f64);
 
     gtk_utils::set_active_id(bld, "cb_preview_src",      options.preview.source.to_active_id());
     gtk_utils::set_active_id(bld, "cb_preview_scale",    options.preview.scale.to_active_id());
     gtk_utils::set_bool     (bld, "chb_auto_black",      options.preview.auto_black);
     gtk_utils::set_f64      (bld, "scl_gamma",           options.preview.gamma);
-    gtk_utils::set_bool     (bld, "ch_hist_logx",        options.hist_log_x);
-    gtk_utils::set_bool     (bld, "ch_hist_logy",        options.hist_log_y);
-    gtk_utils::set_bool     (bld, "exp_cam_ctrl",        options.cam_ctrl_exp);
-    gtk_utils::set_bool     (bld, "exp_shot_set",        options.shot_exp);
-    gtk_utils::set_bool     (bld, "exp_calibr",          options.calibr_exp);
-    gtk_utils::set_bool     (bld, "exp_raw_frames",      options.raw_frames_exp);
-    gtk_utils::set_bool     (bld, "exp_live",            options.live_exp);
+
+    gtk_utils::set_bool     (bld, "ch_hist_logx",        options.hist.log_x);
+    gtk_utils::set_bool     (bld, "ch_hist_logy",        options.hist.log_y);
+    gtk_utils::set_bool     (bld, "ch_stat_percents",    options.hist.percents);
+
+    gtk_utils::set_bool     (bld, "chb_foc_temp",        options.focuser.on_temp_change);
+    gtk_utils::set_f64      (bld, "spb_foc_temp",        options.focuser.max_temp_change);
+    gtk_utils::set_bool     (bld, "chb_foc_fwhm",        options.focuser.on_fwhm_change);
+    gtk_utils::set_active_id(bld, "cb_foc_fwhm",         Some(options.focuser.max_fwhm_change.to_string()).as_deref());
+    gtk_utils::set_bool     (bld, "chb_foc_period",      options.focuser.periodically);
+    gtk_utils::set_active_id(bld, "cb_foc_period",       Some(options.focuser.period_minutes.to_string()).as_deref());
+    gtk_utils::set_f64      (bld, "spb_foc_measures",    options.focuser.measures as f64);
+    gtk_utils::set_f64      (bld, "spb_foc_auto_step",   options.focuser.step);
+    gtk_utils::set_f64      (bld, "spb_foc_exp",         options.focuser.exposure);
+
+    gtk_utils::set_active_id(bld, "cb_diz_perod",     Some(options.guiding.dith_period.to_string().as_str()));
+    gtk_utils::set_active_id(bld, "cb_diz_distance",  Some(format!("{:.0}", options.guiding.dith_percent * 10.0).as_str()));
+    gtk_utils::set_bool     (bld, "chb_guid_enabled", options.guiding.enabled);
+    gtk_utils::set_f64      (bld, "spb_guid_max_err", options.guiding.max_error);
+    gtk_utils::set_f64      (bld, "spb_mnt_cal_exp",  options.guiding.calibr_exposure);
+
+    gtk_utils::set_bool     (bld, "chb_inv_ns",      options.mount.inv_ns);
+    gtk_utils::set_bool     (bld, "chb_inv_we",      options.mount.inv_we);
+
+    gtk_utils::set_bool_prop(bld, "exp_cam_ctrl",   "expanded", options.gui.cam_ctrl_exp);
+    gtk_utils::set_bool_prop(bld, "exp_shot_set",   "expanded", options.gui.shot_exp);
+    gtk_utils::set_bool_prop(bld, "exp_calibr",     "expanded", options.gui.calibr_exp);
+    gtk_utils::set_bool_prop(bld, "exp_raw_frames", "expanded", options.gui.raw_frames_exp);
+    gtk_utils::set_bool_prop(bld, "exp_live",       "expanded", options.gui.live_exp);
+    gtk_utils::set_bool_prop(bld, "exp_foc",        "expanded", options.gui.foc_exp);
+    gtk_utils::set_bool_prop(bld, "exp_diz",        "expanded", options.gui.diz_exp);
+    gtk_utils::set_bool_prop(bld, "exp_quality",    "expanded", options.gui.quality_exp);
+    gtk_utils::set_bool_prop(bld, "exp_mount",      "expanded", options.gui.mount_exp);
 }
 
-fn read_options_from_widgets(data: &Rc<CameraData>) {
+fn read_camera_options_from_widgets(data: &Rc<CameraData>) {
     let mut options = data.options.borrow_mut();
     let bld = &data.main.builder;
     let pan_cam1 = bld.object::<gtk::Paned>("pan_cam1").unwrap();
     let pan_cam2 = bld.object::<gtk::Paned>("pan_cam2").unwrap();
     let pan_cam3 = bld.object::<gtk::Paned>("pan_cam3").unwrap();
+    let pan_cam4 = bld.object::<gtk::Paned>("pan_cam4").unwrap();
 
-    options.paned_pos1 = pan_cam1.position();
-    options.paned_pos2 = pan_cam2.allocation().width()-pan_cam2.position();
-    options.paned_pos3 = pan_cam3.position();
+    options.gui.paned_pos1 = pan_cam1.position();
+    options.gui.paned_pos2 = pan_cam2.allocation().width()-pan_cam2.position();
+    options.gui.paned_pos3 = pan_cam3.position();
+    options.gui.paned_pos4 = pan_cam4.allocation().height()-pan_cam4.position();
 
     options.preview.scale = {
         let preview_active_id = gtk_utils::get_active_id(bld, "cb_preview_scale");
@@ -1046,7 +1252,7 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
         gtk_utils::get_active_id(bld, "cb_preview_src").as_deref()
     );
 
-    options.camera_name          = gtk_utils::get_active_id(bld, "cb_camera_list");
+    options.device               = gtk_utils::get_active_id(bld, "cb_camera_list");
     options.live_view            = gtk_utils::get_bool     (bld, "chb_shots_cont");
 
     options.ctrl.enable_cooler   = gtk_utils::get_bool     (bld, "chb_cooler");
@@ -1074,22 +1280,52 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.live.save_orig       = gtk_utils::get_bool     (bld, "chb_live_save_orig");
     options.live.save_enabled    = gtk_utils::get_bool     (bld, "chb_live_save");
     options.live.save_minutes    = gtk_utils::get_f64      (bld, "spb_live_minutes") as usize;
-    options.live.use_max_fwhm    = gtk_utils::get_bool     (bld, "chb_max_fwhm");
-    options.live.max_fwhm        = gtk_utils::get_f64      (bld, "spb_max_fwhm") as f32;
-    options.live.use_max_ovality = gtk_utils::get_bool     (bld, "chb_max_oval");
-    options.live.max_ovality     = gtk_utils::get_f64      (bld, "spb_max_oval") as f32;
-    options.live.use_min_stars   = gtk_utils::get_bool     (bld, "chb_min_stars");
-    options.live.min_stars       = gtk_utils::get_f64      (bld, "spb_min_stars") as usize;
     options.live.out_dir         = gtk_utils::get_pathbuf  (bld, "fch_live_folder").unwrap_or_default();
+
+    options.quality.use_max_fwhm    = gtk_utils::get_bool     (bld, "chb_max_fwhm");
+    options.quality.max_fwhm        = gtk_utils::get_f64      (bld, "spb_max_fwhm") as f32;
+    options.quality.use_max_ovality = gtk_utils::get_bool     (bld, "chb_max_oval");
+    options.quality.max_ovality     = gtk_utils::get_f64      (bld, "spb_max_oval") as f32;
+
     options.preview.auto_black   = gtk_utils::get_bool     (bld, "chb_auto_black");
     options.preview.gamma        = (gtk_utils::get_f64     (bld, "scl_gamma") * 10.0).round() / 10.0;
-    options.hist_log_x           = gtk_utils::get_bool     (bld, "ch_hist_logx");
-    options.hist_log_y           = gtk_utils::get_bool     (bld, "ch_hist_logy");
-    options.cam_ctrl_exp         = gtk_utils::get_bool     (bld, "exp_cam_ctrl");
-    options.shot_exp             = gtk_utils::get_bool     (bld, "exp_shot_set");
-    options.calibr_exp           = gtk_utils::get_bool     (bld, "exp_calibr");
-    options.raw_frames_exp       = gtk_utils::get_bool     (bld, "exp_raw_frames");
-    options.live_exp             = gtk_utils::get_bool     (bld, "exp_live");
+
+    options.hist.log_x           = gtk_utils::get_bool(bld, "ch_hist_logx");
+    options.hist.log_y           = gtk_utils::get_bool(bld, "ch_hist_logy");
+    options.hist.percents        = gtk_utils::get_bool(bld, "ch_stat_percents");
+
+    options.focuser.on_temp_change  = gtk_utils::get_bool     (bld, "chb_foc_temp");
+    options.focuser.max_temp_change = gtk_utils::get_f64      (bld, "spb_foc_temp");
+    options.focuser.on_fwhm_change  = gtk_utils::get_bool     (bld, "chb_foc_fwhm");
+    options.focuser.max_fwhm_change = gtk_utils::get_active_id(bld, "cb_foc_fwhm").and_then(|v| v.parse().ok()).unwrap_or(20);
+    options.focuser.periodically    = gtk_utils::get_bool     (bld, "chb_foc_period");
+    options.focuser.period_minutes  = gtk_utils::get_active_id(bld, "cb_foc_period").and_then(|v| v.parse().ok()).unwrap_or(120);
+    options.focuser.measures        = gtk_utils::get_f64      (bld, "spb_foc_measures") as u32;
+    options.focuser.step            = gtk_utils::get_f64      (bld, "spb_foc_auto_step");
+    options.focuser.exposure        = gtk_utils::get_f64      (bld, "spb_foc_exp");
+
+    options.guiding.dith_period     = gtk_utils::get_active_id(bld, "cb_diz_perod").and_then(|v| v.parse().ok()).unwrap_or(0);
+    options.guiding.dith_percent    = gtk_utils::get_active_id(bld, "cb_diz_distance").and_then(|v| v.parse().ok()).unwrap_or(10.0) / 10.0;
+    options.guiding.enabled         = gtk_utils::get_bool     (bld, "chb_guid_enabled");
+    options.guiding.max_error       = gtk_utils::get_f64      (bld, "spb_guid_max_err");
+    options.guiding.calibr_exposure = gtk_utils::get_f64      (bld, "spb_mnt_cal_exp");
+
+    options.mount.inv_ns            = gtk_utils::get_bool     (bld, "chb_inv_ns");
+    options.mount.inv_we            = gtk_utils::get_bool     (bld, "chb_inv_we");
+    let mount_speed                 = gtk_utils::get_active_id(bld, "cb_mnt_speed");
+    if mount_speed.is_some() {
+        options.mount.speed = mount_speed;
+    }
+
+    options.gui.cam_ctrl_exp     = gtk_utils::get_bool_prop(bld, "exp_cam_ctrl",   "expanded");
+    options.gui.shot_exp         = gtk_utils::get_bool_prop(bld, "exp_shot_set",   "expanded");
+    options.gui.calibr_exp       = gtk_utils::get_bool_prop(bld, "exp_calibr",     "expanded");
+    options.gui.raw_frames_exp   = gtk_utils::get_bool_prop(bld, "exp_raw_frames", "expanded");
+    options.gui.live_exp         = gtk_utils::get_bool_prop(bld, "exp_live",       "expanded");
+    options.gui.foc_exp          = gtk_utils::get_bool_prop(bld, "exp_foc",        "expanded");
+    options.gui.diz_exp          = gtk_utils::get_bool_prop(bld, "exp_diz",        "expanded");
+    options.gui.quality_exp      = gtk_utils::get_bool_prop(bld, "exp_quality",    "expanded");
+    options.gui.mount_exp        = gtk_utils::get_bool_prop(bld, "exp_mount",      "expanded");
 }
 
 fn handler_timer(data: &Rc<CameraData>) {
@@ -1099,6 +1335,8 @@ fn handler_timer(data: &Rc<CameraData>) {
         if delayed_action.countdown == 0 {
             let update_cam_list_flag =
                 delayed_action.flags.contains(DelayedFlags::UPDATE_CAM_LIST);
+            let update_foc_list_flag =
+                delayed_action.flags.contains(DelayedFlags::UPDATE_FOC_LIST);
             let start_live_view_flag =
                 delayed_action.flags.contains(DelayedFlags::START_LIVE_VIEW);
             let start_cooling =
@@ -1109,21 +1347,30 @@ fn handler_timer(data: &Rc<CameraData>) {
                 delayed_action.flags.contains(DelayedFlags::UPDATE_RESOLUTION_LIST);
             let sel_max_res =
                 delayed_action.flags.contains(DelayedFlags::SELECT_MAX_RESOLUTION);
+            let upd_foc_pos_new_prop =
+                delayed_action.flags.contains(DelayedFlags::UPDATE_FOC_POS_NEW);
+            let upd_foc_pos =
+                delayed_action.flags.contains(DelayedFlags::UPDATE_FOC_POS);
+            let upd_mount_widgets =
+                delayed_action.flags.contains(DelayedFlags::UPDATE_MOUNT_WIDGETS);
+            let upd_mount_spd_list =
+                delayed_action.flags.contains(DelayedFlags::UPDATE_MOUNT_SPD_LIST);
             delayed_action.flags.bits = 0;
             if update_cam_list_flag {
-                update_camera_list(data);
-                correct_ctrl_widgets_properties(data);
+                update_camera_devices_list(data);
+            }
+            if update_foc_list_flag {
+                update_focuser_devices_list(data);
             }
             if start_live_view_flag
             && data.options.borrow().live_view {
-                start_taking_shots(data, Mode::LiveView, None);
-                correct_ctrl_widgets_properties(data);
+                start_live_view(data);
             }
             if start_cooling {
                 set_temperature_by_options(data, true);
             }
             if update_ctrl_widgets {
-                correct_ctrl_widgets_properties(data);
+                correct_widget_properties(data);
             }
             if update_res {
                 update_resolution_list(data);
@@ -1131,27 +1378,23 @@ fn handler_timer(data: &Rc<CameraData>) {
             if sel_max_res {
                 select_maximum_resolution(data);
             }
+            if upd_foc_pos || upd_foc_pos_new_prop {
+                update_focuser_position_widget(data, upd_foc_pos_new_prop);
+            }
+            if upd_mount_widgets {
+                update_mount_widgets(data);
+            }
+            if upd_mount_spd_list {
+                fill_mount_speed_list_widget(data);
+            }
         }
     }
 }
 
-fn correct_ctrl_widgets_properties(data: &Rc<CameraData>) {
+fn correct_widget_properties(data: &Rc<CameraData>) {
     gtk_utils::exec_and_show_error(&data.main.window, || {
         let bldr = &data.main.builder;
-        let cb_camera_list = bldr.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
-        let cam_count = gtk_utils::combobox_items_count(&cb_camera_list);
-        let tab_active =
-            matches!(*data.conn_state.borrow(), indi_api::ConnState::Connected)
-            && cam_count != 0;
-        gtk_utils::enable_widgets(bldr, &[
-            ("bx_cam_ctrl", tab_active),
-            ("l_camera",    tab_active)
-        ]);
-        if !tab_active { return Ok(()); }
-        let camera = gtk_utils::get_active_id(bldr, "cb_camera_list").unwrap();
-
-        cb_camera_list.set_sensitive(cam_count >= 2);
-
+        let camera = gtk_utils::get_active_id(bldr, "cb_camera_list");
         let correct_num_adjustment_by_prop = |
             prop_info: indi_api::Result<Arc<indi_api::NumPropElemInfo>>,
             adj_name:  &str,
@@ -1160,7 +1403,6 @@ fn correct_ctrl_widgets_properties(data: &Rc<CameraData>) {
                 let adj = bldr.object::<gtk::Adjustment>(adj_name).unwrap();
                 adj.set_lower(info.min);
                 adj.set_upper(info.max);
-
                 let value = adj.value();
                 if value < info.min {
                     adj.set_value(info.min);
@@ -1168,7 +1410,6 @@ fn correct_ctrl_widgets_properties(data: &Rc<CameraData>) {
                 if value > info.max {
                     adj.set_value(info.max);
                 }
-
                 let step =
                     if      info.max <= 1.0   { 0.1 }
                     else if info.max <= 10.0  { 1.0 }
@@ -1180,27 +1421,34 @@ fn correct_ctrl_widgets_properties(data: &Rc<CameraData>) {
                 false
             }
         };
-
-        let temp_supported = correct_num_adjustment_by_prop(
-            data.main.indi.camera_get_temperature_prop_info(&camera),
+        let temp_supported = camera.as_ref().map(|camera| correct_num_adjustment_by_prop(
+            data.main.indi.camera_get_temperature_prop_info(camera),
             "adj_temp"
-        );
-        let exposure_supported = correct_num_adjustment_by_prop(
-            data.main.indi.camera_get_exposure_prop_info(&camera),
+        )).unwrap_or(false);
+        let exposure_supported = camera.as_ref().map(|camera| correct_num_adjustment_by_prop(
+            data.main.indi.camera_get_exposure_prop_info(camera),
             "adj_exp"
-        );
-        let gain_supported = correct_num_adjustment_by_prop(
-            data.main.indi.camera_get_gain_prop_info(&camera),
+        )).unwrap_or(false);
+        let gain_supported = camera.as_ref().map(|camera| correct_num_adjustment_by_prop(
+            data.main.indi.camera_get_gain_prop_info(camera),
             "adj_gain"
-        );
-        let offset_supported = correct_num_adjustment_by_prop(
+        )).unwrap_or(false);
+        let offset_supported = camera.as_ref().map(|camera| correct_num_adjustment_by_prop(
             data.main.indi.camera_get_offset_prop_info(&camera),
             "adj_offset"
-        );
-        let bin_supported = data.main.indi.camera_is_binning_supported(&camera)?;
-        let fan_supported = data.main.indi.camera_is_fan_supported(&camera)?;
-        let heater_supported = data.main.indi.camera_is_heater_supported(&camera)?;
-        let low_noise_supported = data.main.indi.camera_is_low_noise_ctrl_supported(&camera)?;
+        )).unwrap_or(false);
+        let bin_supported = camera.as_ref().map(|camera|
+            data.main.indi.camera_is_binning_supported(&camera)
+        ).unwrap_or(Ok(false))?;
+        let fan_supported = camera.as_ref().map(|camera|
+            data.main.indi.camera_is_fan_supported(&camera)
+        ).unwrap_or(Ok(false))?;
+        let heater_supported = camera.as_ref().map(|camera|
+            data.main.indi.camera_is_heater_supported(&camera)
+        ).unwrap_or(Ok(false))?;
+        let low_noise_supported = camera.as_ref().map(|camera|
+            data.main.indi.camera_is_low_noise_ctrl_supported(&camera)
+        ).unwrap_or(Ok(false))?;
 
         let cooler_active = gtk_utils::get_bool(bldr, "chb_cooler");
 
@@ -1210,38 +1458,50 @@ fn correct_ctrl_widgets_properties(data: &Rc<CameraData>) {
         let frame_mode_is_flat = frame_mode == FrameType::Flats;
         let frame_mode_is_dark = frame_mode == FrameType::Darks;
 
-        let state = data.state.read().unwrap();
-        let waiting = matches!(*state, State::Waiting);
-        let shot_active = matches!(*state, State::Active{mode: Mode::SingleShot, ..});
-        let liveview_active = matches!(*state, State::Active{mode: Mode::LiveView, ..});
-        let saving_frames = matches!(*state, State::Active{mode: Mode::SavingRawFrames, ..});
-        let saving_frames_paused = data.save_raw_pause.borrow().is_some();
-        let live_active = matches!(*state, State::Active{mode: Mode::LiveStacking, ..});
+        let state = data.main.state.read().unwrap();
+        let mode_type = state.mode().get_type();
+        let waiting = mode_type == ModeType::Waiting;
+        let shot_active = mode_type == ModeType::SingleShot;
+        let liveview_active = mode_type == ModeType::LiveView;
+        let saving_frames = mode_type == ModeType::SavingRawFrames;
+        let saving_frames_paused = state.aborted_mode()
+            .as_ref()
+            .map(|mode| mode.get_type() == ModeType::SavingRawFrames)
+            .unwrap_or(false);
+        let live_active = mode_type == ModeType::LiveStacking;
+        let focusing = mode_type == ModeType::Focusing;
+        let dither_calibr = mode_type == ModeType::DitherCalibr;
         drop(state);
 
-        let save_raw_btn_cap = match (frame_mode, saving_frames_paused) {
-            (FrameType::Lights, false) => "Start save\nLIGHTs",
-            (FrameType::Lights, true)  => "Continue\nLIGHTs",
-            (FrameType::Darks,  false) => "Start save\nDARKs",
-            (FrameType::Darks,  true)  => "Continue\nDARKs",
-            (FrameType::Flats,  false) => "Start save\nFLATs",
-            (FrameType::Flats,  true)  => "Continue\nFLATs",
+        let save_raw_btn_cap = match frame_mode {
+            FrameType::Lights => "Start save\nLIGHTs",
+            FrameType::Darks  => "Start save\nDARKs",
+            FrameType::Biases => "Start save\nBIASes",
+            FrameType::Flats  => "Start save\nFLATs",
+            FrameType::Undef  => "Error :(",
         };
         gtk_utils::set_str(bldr, "btn_start_save_raw", save_raw_btn_cap);
 
         let can_change_cam_opts = !saving_frames && !live_active;
         let can_change_mode = waiting || shot_active;
         let can_change_frame_opts = waiting || liveview_active;
-        let can_change_cal_ops = !live_active;
+        let can_change_cal_ops = !live_active && !dither_calibr;
 
         gtk_utils::enable_actions(&data.main.window, &[
             ("take_shot",             exposure_supported && !shot_active && can_change_mode),
             ("stop_shot",             shot_active),
             ("start_live_stacking",   exposure_supported && !live_active && can_change_mode),
             ("stop_live_stacking",    live_active),
+
             ("start_save_raw_frames", exposure_supported && !saving_frames && can_change_mode),
-            ("pause_save_raw_frames", saving_frames),
-            ("stop_save_raw_frames",  saving_frames || saving_frames_paused),
+            ("stop_save_raw_frames",  saving_frames),
+            ("continue_save_raw",     saving_frames_paused && can_change_mode),
+
+            ("manual_focus",          exposure_supported && !focusing && can_change_mode),
+            ("stop_manual_focus",     focusing),
+
+            ("start_dither_calibr",   exposure_supported && !dither_calibr && can_change_mode),
+            ("stop_dither_calibr",    dither_calibr),
         ]);
 
         gtk_utils::show_widgets(bldr, &[
@@ -1250,7 +1510,7 @@ fn correct_ctrl_widgets_properties(data: &Rc<CameraData>) {
             ("chb_low_noise", low_noise_supported),
         ]);
 
-        gtk_utils::enable_widgets(bldr, &[
+        gtk_utils::enable_widgets(bldr, false, &[
             ("chb_fan",            !cooler_active),
             ("chb_cooler",         temp_supported && can_change_cam_opts),
             ("spb_temp",           cooler_active && temp_supported && can_change_cam_opts),
@@ -1268,6 +1528,11 @@ fn correct_ctrl_widgets_properties(data: &Rc<CameraData>) {
             ("fch_master_flat",    can_change_cal_ops),
             ("chb_raw_frames_cnt", !saving_frames_paused),
             ("spb_raw_frames_cnt", !saving_frames_paused),
+
+            ("spb_foc_temp",       gtk_utils::get_bool(bldr, "chb_foc_temp")),
+            ("cb_foc_fwhm",        gtk_utils::get_bool(bldr, "chb_foc_fwhm")),
+            ("cb_foc_period",      gtk_utils::get_bool(bldr, "chb_foc_period")),
+            ("spb_guid_max_err",   gtk_utils::get_bool(bldr, "chb_guid_enabled")),
         ]);
 
         Ok(())
@@ -1275,12 +1540,22 @@ fn correct_ctrl_widgets_properties(data: &Rc<CameraData>) {
 
 }
 
-fn update_camera_list(data: &Rc<CameraData>) {
+fn correct_after_continue_last_mode(data: &Rc<CameraData>) {
+    let state = data.main.state.read().unwrap();
+    let Some(frame) = state.mode().get_frame_options() else {
+        return;
+    };
+    data.options.borrow_mut().frame = frame.clone();
+    drop(state);
+    show_frame_options(data);
+}
+
+fn update_camera_devices_list(data: &Rc<CameraData>) {
     let dev_list = data.main.indi.get_devices_list();
     let cameras = dev_list
         .iter()
         .filter(|device|
-            device.interface.contains(indi_api::DriverInterface::CCD_INTERFACE)
+            device.interface.contains(indi_api::DriverInterface::CCD)
         );
     let cb_camera_list: gtk::ComboBoxText =
         data.main.builder.object("cb_camera_list").unwrap();
@@ -1296,14 +1571,20 @@ fn update_camera_list(data: &Rc<CameraData>) {
         let options = data.options.borrow();
         if last_active_id.is_some() {
             cb_camera_list.set_active_id(last_active_id.as_deref());
-        } else if options.camera_name.is_some() {
-            cb_camera_list.set_active_id(options.camera_name.as_deref());
+        } else if options.device.is_some() {
+            cb_camera_list.set_active_id(options.device.as_deref());
         }
         if cb_camera_list.active_id().is_none() {
             cb_camera_list.set_active(Some(0));
         }
     }
-    data.options.borrow_mut().camera_name = cb_camera_list.active_id().map(|s| s.to_string());
+    let connected = data.main.indi.state() == indi_api::ConnState::Connected;
+    gtk_utils::enable_widgets(&data.main.builder, false, &[
+        ("cb_camera_list", connected && cameras_count > 1),
+        ("bx_cam_ctrl",    connected && cameras_count > 0)
+    ]);
+
+    data.options.borrow_mut().device = cb_camera_list.active_id().map(|s| s.to_string());
 }
 
 fn update_resolution_list(data: &Rc<CameraData>) {
@@ -1312,7 +1593,7 @@ fn update_resolution_list(data: &Rc<CameraData>) {
         let last_bin = cb_bin.active_id();
         cb_bin.remove_all();
         let options = data.options.borrow_mut();
-        let Some(ref camera) = options.camera_name else {
+        let Some(ref camera) = options.device else {
             return Ok(());
         };
         let (max_width, max_height) = data.main.indi.camera_get_max_frame_size(camera)?;
@@ -1348,7 +1629,7 @@ fn select_maximum_resolution(data: &Rc<CameraData>) {
         let cameras = devices
             .iter()
             .filter(|device|
-                device.interface.contains(indi_api::DriverInterface::CCD_INTERFACE)
+                device.interface.contains(indi_api::DriverInterface::CCD)
             );
         for camera in cameras {
             if indi.camera_is_resolution_supported(&camera.name)? {
@@ -1363,118 +1644,51 @@ fn select_maximum_resolution(data: &Rc<CameraData>) {
     });
 }
 
-fn start_taking_shots(
-    data:    &Rc<CameraData>,
-    mode:    Mode,
-    counter: Option<FramesCounter>,
-) {
-    gtk_utils::exec_and_show_error(&data.main.window, move || {
-        data.main.show_progress(0.0, String::new());
-        let live_stacking_mode = mode == Mode::LiveStacking;
-        let saving_frames_mode = mode == Mode::SavingRawFrames;
+fn start_live_view(data: &Rc<CameraData>) {
+    read_camera_options_from_widgets(data);
+
+    gtk_utils::exec_and_show_error(&data.main.window, || {
         let options = data.options.borrow();
-        let Some(ref camera_name) = options.camera_name else {
-            return Ok(());
-        };
-        let mut state = data.state.write().unwrap();
-        data.main.indi.command_enable_blob(
-            camera_name,
-            None,
-            indi_api::BlobEnable::Also
-        )?;
-        if data.main.indi.camera_is_fast_toggle_supported(camera_name)? {
-            let use_fast_toggle =
-                saving_frames_mode &&
-                !options.frame.have_to_use_delay();
-            data.main.indi.camera_enable_fast_toggle(
-                camera_name,
-                use_fast_toggle,
-                true,
-                SET_PROP_TIMEOUT,
-            )?;
-            if use_fast_toggle {
-                let frames_count = if let Some(counter) = &counter {
-                    counter.to_go
-                } else if saving_frames_mode && !options.raw_frames.use_cnt {
-                    100000
-                } else {
-                    1
-                };
-                data.main.indi.camera_set_fast_frames_count(
-                    camera_name,
-                    frames_count,
-                    true,
-                    SET_PROP_TIMEOUT,
-                )?;
-            }
-        }
-        apply_camera_options_and_take_shot(
+        let mut state = data.main.state.write().unwrap();
+        state.start_live_view(
+            &options.device.as_deref().unwrap_or(""),
             &data.main.indi,
-            camera_name,
-            &options.frame,
-            &data.last_exposure
+            &options.frame
         )?;
-        *state = State::Active {
-            mode,
-            camera: camera_name.clone(),
-            frame:  options.frame.clone(),
-            counter,
-            thread_timer: Arc::clone(&data.main.thread_timer),
-        };
-
-        match mode {
-            Mode::SingleShot => {
-                data.main.set_cur_action_text("");
-            },
-            Mode::LiveView => {
-                data.main.set_cur_action_text("Live view mode");
-            },
-            Mode::LiveStacking => {
-                data.main.set_cur_action_text("Live stacking");
-            },
-            Mode::SavingRawFrames => {
-                let text = match options.frame.frame_type {
-                    FrameType::Lights => "Saving LIGHT frames",
-                    FrameType::Flats => "Saving FLAT frames",
-                    FrameType::Darks => "Saving DARK frames",
-                };
-                data.main.set_cur_action_text(text);
-            },
-        };
-
-        drop(options);
-        drop(state);
-        if live_stacking_mode {
-            gtk_utils::set_active_id(
-                &data.main.builder,
-                "cb_preview_src",
-                Some("live")
-            );
-        } else {
-            gtk_utils::set_active_id(
-                &data.main.builder,
-                "cb_preview_src",
-                Some("frame")
-            );
-        }
-        correct_ctrl_widgets_properties(data);
-
+        gtk_utils::set_active_id(
+            &data.main.builder,
+            "cb_preview_src",
+            Some("frame")
+        );
         Ok(())
     });
 }
 
 fn handler_action_take_shot(data: &Rc<CameraData>) {
-    read_options_from_widgets(data);
-    abort_current_shot(data, &data.state.read().unwrap());
-    start_taking_shots(data, Mode::SingleShot, None);
+    read_camera_options_from_widgets(data);
+    gtk_utils::exec_and_show_error(&data.main.window, || {
+        let mut state = data.main.state.write().unwrap();
+        let options = data.options.borrow();
+        state.start_single_shot(
+            &options.device.as_deref().unwrap_or(""),
+            &data.main.indi,
+            &options.frame
+        )?;
+        gtk_utils::set_active_id(
+            &data.main.builder,
+            "cb_preview_src",
+            Some("frame")
+        );
+        Ok(())
+    });
 }
 
 fn handler_action_stop_shot(data: &Rc<CameraData>) {
-    let mut state = data.state.write().unwrap();
-    abort_current_shot(data, &state);
-    *state = State::Waiting;
-    drop(state);
-    correct_ctrl_widgets_properties(data);
+    gtk_utils::exec_and_show_error(&data.main.window, || {
+        let mut state = data.main.state.write().unwrap();
+        state.abort_active_mode(&data.main.indi)?;
+        Ok(())
+    });
 }
 
 fn get_preview_params(
@@ -1522,7 +1736,7 @@ fn show_preview_image(
         let preview_params = get_preview_params(data, &options);
         let result = match options.preview.source {
             PreviewSource::OrigFrame =>
-                &data.main.cur_frame,
+                &data.cur_frame,
             PreviewSource::LiveStacking =>
                 &data.live_staking.result,
         };
@@ -1574,7 +1788,7 @@ fn show_image_info(data: &Rc<CameraData>) {
     let options = data.options.borrow();
     let info = match options.preview.source {
         PreviewSource::OrigFrame =>
-            data.main.cur_frame.info.read().unwrap(),
+            data.cur_frame.info.read().unwrap(),
         PreviewSource::LiveStacking =>
             data.live_staking.result.info.read().unwrap(),
     };
@@ -1600,10 +1814,16 @@ fn show_image_info(data: &Rc<CameraData>) {
                 None => gtk_utils::set_str(bldr, "e_fwhm", ""),
             }
             match info.stars_ovality {
-                Some(value) => gtk_utils::set_str(bldr, "e_ovality", &format!("{:.3}", value)),
+                Some(value) => gtk_utils::set_str(bldr, "e_ovality", &format!("{:.1}", value)),
                 None => gtk_utils::set_str(bldr, "e_ovality", ""),
             }
-            gtk_utils::set_str(bldr, "e_stars", &info.stars.len().to_string());
+            let stars = info.stars.len();
+            let overexp_stars = info.stars.iter().filter(|s| s.overexposured).count();
+            gtk_utils::set_str(
+                bldr,
+                "e_stars",
+                &format!("{} ({})", stars, overexp_stars)
+            );
             let bg = 100_f64 * info.background as f64 / info.max_value as f64;
             gtk_utils::set_str(bldr, "e_background", &format!("{:.2}%", bg));
             let noise = 100_f64 * info.noise as f64 / info.max_value as f64;
@@ -1668,13 +1888,14 @@ fn show_frame_processing_result(
     data:   &Rc<CameraData>,
     result: FrameProcessingResult
 ) {
-    let state = data.state.read().unwrap();
-    let is_single_shot = matches!(&*state, State::Active{mode: Mode::SingleShot, ..});
-    let is_cont_shots = matches!(&*state, State::Active{mode: Mode::LiveView, ..});
-    let is_live_staking = matches!(&*state, State::Active{mode: Mode::LiveStacking, ..});
-    let is_raw_frames = matches!(&*state, State::Active{mode: Mode::SavingRawFrames, ..});
+    let options = data.options.borrow();
+    if options.device != Some(result.camera) { return; }
+    let live_stacking_res = options.preview.source == PreviewSource::LiveStacking;
+    drop(options);
+
+    let state = data.main.state.read().unwrap();
+    let mode_type = state.mode().get_type();
     drop(state);
-    let orig_frame = data.options.borrow().preview.source == PreviewSource::OrigFrame;
 
     let show_resolution_info = |width, height| {
         gtk_utils::set_str(
@@ -1684,65 +1905,79 @@ fn show_frame_processing_result(
         );
     };
 
-    let is_mode_current = |mode: ResultMode| {
-           (is_single_shot && orig_frame && mode == ResultMode::OneShot)
-        || (is_cont_shots && orig_frame && mode == ResultMode::LiveView)
-        || (is_live_staking && orig_frame && mode == ResultMode::LiveFrame)
-        || (is_live_staking && !orig_frame && mode == ResultMode::LiveResult)
-        || (is_raw_frames && orig_frame && mode == ResultMode::RawFrame)
+    let is_mode_current = |mode: ModeType, live_result: bool| {
+        mode_type == mode &&
+        live_result == live_stacking_res
     };
 
     match result.data {
         ProcessingResultData::Error(error_text) => {
-            let mut state = data.state.write().unwrap();
-            abort_current_shot(data, &state);
-            *state = State::Waiting;
+            let mut state = data.main.state.write().unwrap();
+            _ = state.abort_active_mode(&data.main.indi);
             drop(state);
-            correct_ctrl_widgets_properties(data);
+            correct_widget_properties(data);
             show_error_message(&data.main.window, "Fatal Error", &error_text);
-        },
-        ProcessingResultData::LightShortInfo(short_info) => {
+        }
+        ProcessingResultData::LightShortInfo(short_info, mode) => {
+            gtk_utils::exec_and_show_error(&data.main.window, || {
+                let mut state = data.main.state.write().unwrap();
+                if state.mode().get_type() == mode {
+                    state.notify_about_light_short_info(&data.main.indi, &short_info)?;
+                }
+                Ok(())
+            });
             data.light_history.borrow_mut().push(short_info);
             update_light_history_table(data);
-        },
-        ProcessingResultData::SingleShotFinished => {
-            if is_single_shot {
-                *data.state.write().unwrap() = State::Waiting;
-                correct_ctrl_widgets_properties(data);
-                return;
-            }
-            show_shots_progress(data);
-        },
-        ProcessingResultData::Preview(img, mode) if is_mode_current(mode) => {
+        }
+        ProcessingResultData::PreviewFrame(img, mode) if is_mode_current(mode, false) => {
             show_preview_image(data, Some(img.rgb_bytes), Some(img.params));
             show_resolution_info(img.image_width, img.image_height);
-        },
-        ProcessingResultData::Histogram(mode) if is_mode_current(mode) => {
+        }
+        ProcessingResultData::PreviewLiveRes(img, mode) if is_mode_current(mode, true) => {
+            show_preview_image(data, Some(img.rgb_bytes), Some(img.params));
+            show_resolution_info(img.image_width, img.image_height);
+        }
+        ProcessingResultData::Histogram(mode) if is_mode_current(mode, false) => {
             repaint_histogram(data);
             show_histogram_stat(data);
-        },
-        ProcessingResultData::FrameInfo(mode) if is_mode_current(mode) => {
+        }
+        ProcessingResultData::HistogramLiveRes(mode) if is_mode_current(mode, true) => {
+            repaint_histogram(data);
+            show_histogram_stat(data);
+        }
+        ProcessingResultData::FrameInfo(mode) => {
+            gtk_utils::exec_and_show_error(&data.main.window, || {
+                let info = data.cur_frame.info.read().unwrap();
+                if let ResultImageInfo::LightInfo(info) = &*info {
+                    let mut state = data.main.state.write().unwrap();
+                    if state.mode().get_type() == mode {
+                        state.notify_about_light_frame_info(info, &data.main.indi)?;
+                    }
+                }
+                Ok(())
+            });
+            if is_mode_current(mode, false) {
+                show_image_info(data);
+            }
+        }
+        ProcessingResultData::FrameInfoLiveRes(mode) if is_mode_current(mode, true) => {
             show_image_info(data);
-        },
-        _ => {},
-    }
-}
-
-fn show_shots_progress(data: &Rc<CameraData>) {
-    let state = data.state.read().unwrap();
-    let State::Active { counter, .. } = &*state else {
-        return;
-    };
-    if let Some(counter) = counter {
-        let progress = (counter.total - counter.to_go) as f64 / counter.total as f64;
-        let text = format!("{} / {}", counter.total - counter.to_go, counter.total);
-        data.main.show_progress(progress, text);
-    }
-    if matches!(counter, &Some(FramesCounter { to_go: 0, .. })) {
-        drop(state);
-        *data.state.write().unwrap() = State::Waiting;
-        save_master_frame(data);
-        correct_ctrl_widgets_properties(data);
+        }
+        ProcessingResultData::MasterSaved { frame_type: FrameType::Flats, file_name } => {
+            gtk_utils::set_path(
+                &data.main.builder,
+                "fch_master_flat",
+                Some(&file_name)
+            );
+        }
+        ProcessingResultData::MasterSaved { frame_type: FrameType::Darks, file_name } => {
+            gtk_utils::set_path(
+                &data.main.builder,
+                "fch_master_dark",
+                Some(&file_name)
+            );
+        }
+        _ => {}
     }
 }
 
@@ -1751,7 +1986,7 @@ fn set_temperature_by_options(
     force_set: bool,
 ) {
     let options = data.options.borrow();
-    let Some(ref camera_name) = options.camera_name else {
+    let Some(ref camera_name) = options.device else {
         return;
     };
     gtk_utils::exec_and_show_error(&data.main.window, || {
@@ -1809,168 +2044,83 @@ fn show_cur_temperature_value(
 
 fn handler_live_view_changed(data: &Rc<CameraData>) {
     if data.options.borrow().live_view {
-        read_options_from_widgets(data);
-        abort_current_shot(data, &data.state.read().unwrap());
-        start_taking_shots(data, Mode::LiveView, None);
+        read_camera_options_from_widgets(data);
+        start_live_view(data);
     } else {
-        stop_live_view(data);
+        gtk_utils::exec_and_show_error(&data.main.window, || {
+            let mut state = data.main.state.write().unwrap();
+            state.abort_active_mode(&data.main.indi)?;
+            Ok(())
+        });
     }
-}
-
-fn apply_camera_options_and_take_shot(
-    indi:          &indi_api::Connection,
-    camera_name:   &str,
-    frame:         &FrameOptions,
-    last_exposure: &Arc<AtomicI64>
-) -> anyhow::Result<()> {
-    // Polling period
-    indi.set_polling_period(camera_name, 500, false, None)?;
-
-    // Frame type
-    indi.camera_set_frame_type(
-        camera_name,
-        frame.frame_type.to_indi_frame_type(),
-        true,
-        SET_PROP_TIMEOUT
-    )?;
-
-    // Frame size
-    let (width, height) = indi.camera_get_max_frame_size(camera_name)?;
-    let crop_width = frame.crop.translate(width);
-    let crop_height = frame.crop.translate(height);
-    indi.camera_set_frame_size(
-        camera_name,
-        (width - crop_width) / 2,
-        (height - crop_height) / 2,
-        crop_width,
-        crop_height,
-        false,
-        SET_PROP_TIMEOUT
-    )?;
-
-    // Binning mode = AVG
-    if indi.camera_is_binning_mode_supported(camera_name)?
-    && frame.binning != Binning::Orig {
-        indi.camera_set_binning_mode(
-            camera_name,
-            indi_api::BinningMode::Avg,
-            true,
-            None, //SET_PROP_TIMEOUT
-        )?;
-    }
-
-    // Binning
-    if indi.camera_is_binning_supported(camera_name)? {
-        indi.camera_set_binning(
-            camera_name,
-            frame.binning.get_ratio(),
-            frame.binning.get_ratio(),
-            true,
-            SET_PROP_TIMEOUT
-        )?;
-    }
-
-    // Gain
-    if indi.camera_is_gain_supported(camera_name)? {
-        indi.camera_set_gain(
-            camera_name,
-            frame.gain,
-            true,
-            SET_PROP_TIMEOUT
-        )?;
-    }
-
-    // Offset
-    if indi.camera_is_offset_supported(camera_name)? {
-        let offset =
-            if frame.frame_type == FrameType::Flats {
-                0
-            } else {
-                frame.offset
-            };
-        indi.camera_set_offset(
-            camera_name,
-            offset as f64,
-            true,
-            SET_PROP_TIMEOUT
-        )?;
-    }
-
-    // Low noise mode
-    if indi.camera_is_low_noise_ctrl_supported(camera_name)? {
-        indi.camera_control_low_noise(
-            camera_name,
-            frame.low_noise,
-            true,
-            SET_PROP_TIMEOUT
-        )?;
-    }
-
-    // Capture format = RAW
-    if indi.camera_is_capture_format_supported(camera_name)? {
-        indi.camera_set_capture_format(
-            camera_name,
-            indi_api::CaptureFormat::Raw,
-            true,
-            SET_PROP_TIMEOUT
-        )?;
-    }
-
-    // Start exposure
-    indi.camera_start_exposure(camera_name, frame.exposure)?;
-
-    last_exposure.store((frame.exposure * 1000.0) as i64, atomic::Ordering::Relaxed);
-    Ok(())
-}
-
-fn stop_live_view(data: &Rc<CameraData>) {
-    gtk_utils::exec_and_show_error(&data.main.window, || {
-        let mut state = data.state.write().unwrap();
-        if let State::Active {
-            mode: Mode::LiveView,
-            camera,
-            ..
-        } = &*state {
-            data.main.indi.camera_abort_exposure(camera)?;
-            *state = State::Waiting;
-        }
-        drop(state);
-        correct_ctrl_widgets_properties(data);
-        Ok(())
-    });
 }
 
 fn process_conn_state_event(
     data:       &Rc<CameraData>,
     conn_state: indi_api::ConnState
 ) {
+    let update_devices_list =
+        conn_state == indi_api::ConnState::Disconnected ||
+        conn_state == indi_api::ConnState::Disconnecting;
     *data.conn_state.borrow_mut() = conn_state;
-    correct_ctrl_widgets_properties(data);
+    if update_devices_list {
+        update_camera_devices_list(data);
+        update_focuser_devices_list(data);
+    }
+    correct_widget_properties(data);
 }
 
 fn process_prop_change_event(
     data:        &Rc<CameraData>,
+    main_thread_sender: &glib::Sender<MainThreadEvents>,
     device_name: &str,
     prop_name:   &str,
     elem_name:   &str,
     new_prop:    bool,
+    prev_state:  Option<&indi_api::PropState>,
+    new_state:   Option<&indi_api::PropState>,
     value:       &indi_api::PropValue,
 ) {
     if let indi_api::PropValue::Blob(blob) = value {
-        process_blob_event(data, device_name, prop_name, elem_name, new_prop, blob);
+        process_blob_event(
+            data,
+            main_thread_sender,
+            device_name,
+            prop_name,
+            elem_name,
+            new_prop,
+            blob
+        );
     } else {
-        process_simple_prop_change_event(data, device_name, prop_name, elem_name, new_prop, value);
+        process_simple_prop_change_event(
+            data,
+            device_name,
+            prop_name,
+            elem_name,
+            new_prop,
+            prev_state,
+            new_state,
+            value
+        );
     }
 }
 
 fn process_prop_delete_event(
-    data:         &Rc<CameraData>,
-    _device_name: &str,
-    _prop_name:   &str,
+    data:        &Rc<CameraData>,
+    device_name: &str,
+    prop_name:   &str,
 ){
-    data.delayed_action.borrow_mut().set(
-        DelayedFlags::UPDATE_CTRL_WIDGETS
-    );
+    let mut mount_device_name = data.mount_device_name.borrow_mut();
+    if Some(device_name) == mount_device_name.as_deref()
+    && prop_name == "" {
+        data.delayed_action.borrow_mut().set(
+            DelayedFlags::UPDATE_MOUNT_WIDGETS
+        );
+        *mount_device_name = None;
+        data.delayed_action.borrow_mut().set(
+            DelayedFlags::UPDATE_MOUNT_WIDGETS
+        );
+    }
 }
 
 fn process_simple_prop_change_event(
@@ -1979,16 +2129,28 @@ fn process_simple_prop_change_event(
     prop_name:   &str,
     elem_name:   &str,
     new_prop:    bool,
+    _prev_state:  Option<&indi_api::PropState>,
+    _new_state:   Option<&indi_api::PropState>,
     value:       &indi_api::PropValue,
 ) {
-    match (prop_name, elem_name, value)
-    {
+    match (prop_name, elem_name, value) {
         ("DRIVER_INFO", "DRIVER_INTERFACE", _) => {
             let flag_bits = value.as_i32().unwrap_or(0);
             let flags = indi_api::DriverInterface::from_bits_truncate(flag_bits as u32);
-            if flags.contains(indi_api::DriverInterface::CCD_INTERFACE) {
+            if flags.contains(indi_api::DriverInterface::CCD) {
                 data.delayed_action.borrow_mut().set(
                     DelayedFlags::UPDATE_CAM_LIST
+                );
+            }
+            if flags.contains(indi_api::DriverInterface::FOCUSER) {
+                data.delayed_action.borrow_mut().set(
+                    DelayedFlags::UPDATE_FOC_LIST
+                );
+            }
+            if flags.contains(indi_api::DriverInterface::TELESCOPE) {
+                *data.mount_device_name.borrow_mut() = Some(device_name.to_string());
+                data.delayed_action.borrow_mut().set(
+                    DelayedFlags::UPDATE_MOUNT_WIDGETS
                 );
             }
         },
@@ -2037,137 +2199,128 @@ fn process_simple_prop_change_event(
                 DelayedFlags::UPDATE_RESOLUTION_LIST
             ),
 
+        ("ABS_FOCUS_POSITION", ..) => {
+            show_cur_focuser_value(&data);
+                data.delayed_action.borrow_mut().set(
+                    if new_prop { DelayedFlags::UPDATE_FOC_POS_NEW }
+                    else { DelayedFlags::UPDATE_FOC_POS }
+                );
+        },
+        ("FOCUS_MAX", ..) => {
+            data.delayed_action.borrow_mut().set(
+                DelayedFlags::UPDATE_FOC_POS_NEW
+            );
+        },
+
+        ("CONNECTION", ..) => {
+            data.delayed_action.borrow_mut().set(
+                DelayedFlags::UPDATE_MOUNT_WIDGETS
+            );
+        }
+        ("TELESCOPE_SLEW_RATE", ..) if new_prop => {
+            data.delayed_action.borrow_mut().set(
+                DelayedFlags::UPDATE_MOUNT_SPD_LIST
+            );
+        }
+        ("TELESCOPE_TRACK_STATE", "TRACK_ON", indi_api::PropValue::Switch(tracking)) => {
+            show_mount_tracking_state(data, *tracking);
+        }
+        ("TELESCOPE_PARK", "PARK", indi_api::PropValue::Switch(parked)) => {
+            show_mount_parked_state(data, *parked);
+        }
         _ => {},
     }
 }
 
 fn process_blob_event(
-    data:        &Rc<CameraData>,
-    device_name: &str,
-    _prop_name:  &str,
-    _elem_name:  &str,
-    _new_prop:   bool,
-    blob:        &Arc<indi_api::BlobPropValue>,
+    data:               &Rc<CameraData>,
+    main_thread_sender: &glib::Sender<MainThreadEvents>,
+    device_name:        &str,
+    _prop_name:         &str,
+    _elem_name:         &str,
+    _new_prop:          bool,
+    blob:               &Arc<indi_api::BlobPropValue>,
 ) {
     if blob.data.is_empty() { return; }
     log::debug!("process_blob_event, dl_time = {:.2}s", blob.dl_time);
-    let state = data.state.read().unwrap();
-    let State::Active { camera, mode,.. } = &*state else { return; };
+    let state = data.main.state.read().unwrap();
+    let Some(mode_cam_name) = state.mode().cam_device() else {
+        return;
+    };
 
-    if device_name != camera { return; }
+    if device_name != mode_cam_name { return; }
 
-    read_options_from_widgets(data);
+    read_camera_options_from_widgets(data);
     let options = data.options.borrow();
-    let preview_params = get_preview_params(data, &options);
+    let mut command = ProcessImageCommand{
+        mode_type:       state.mode().get_type(),
+        camera:          device_name.to_string(),
+        flags:           ProcessImageFlags::empty(),
+        blob:            Arc::clone(blob),
+        frame:           Arc::clone(&data.cur_frame),
+        ref_stars:       Arc::clone(&data.ref_stars),
+        calibr_params:   options.calibr.into_params(),
+        calibr_images:   Arc::clone(&data.calibr_images),
+        fn_gen:          Arc::clone(&data.fn_gen),
+        view_options:    get_preview_params(data, &options),
+        frame_options:   options.frame.clone(),
+        quality_options: Some(options.quality.clone()),
+        save_path:       None,
+        raw_adder:       None,
+        live_stacking:   None,
+    };
+    let last_in_seq = if let Some(progress) = state.mode().progress() {
+        progress.cur + 1 == progress.total
+    } else {
+        false
+    };
+    match state.mode().get_type() {
+        ModeType::SavingRawFrames => {
+            command.save_path = Some(options.raw_frames.out_path.clone());
+            if options.raw_frames.create_master {
+                command.raw_adder = Some(RawAdderParams {
+                    adder: Arc::clone(&data.raw_adder),
+                    save: last_in_seq,
+                });
+            }
+            let mount_device = data.mount_device_name.borrow();
+            let mount_device = mount_device.as_deref().unwrap_or_default();
+            if options.frame.frame_type == FrameType::Lights
+            && !mount_device.is_empty()
+            && (options.guiding.enabled || options.guiding.dith_period != 0) {
+                command.flags |= ProcessImageFlags::CALC_STARS_OFFSET;
+            }
+        }
+        ModeType::LiveStacking => {
+            command.save_path = Some(options.live.out_dir.clone());
+            command.live_stacking = Some(LiveStackingParams {
+                data:    Arc::clone(&data.live_staking),
+                options: options.live.clone(),
+            });
+            command.flags |= ProcessImageFlags::CALC_STARS_OFFSET;
+        }
+        ModeType::Focusing => {
+            if let Some(quality_options) = &mut command.quality_options {
+                quality_options.use_max_fwhm = false;
+            }
+        }
+        _ => {}
+    };
     let result_fun = {
-        let main_thread_sender = data.main_thread_sender.clone();
+        let main_thread_sender = main_thread_sender.clone();
         move |res: FrameProcessingResult| {
             let send_err = main_thread_sender.send(
-                MainThreadCommands::ShowFrameProcessingResult(res)
+                MainThreadEvents::ShowFrameProcessingResult(res)
             );
             if let Err(err) = send_err {
                 log::error!("process_blob_event: err={:?}", err);
             }
         }
     };
-
-    let command = match mode {
-        Mode::SingleShot | Mode::LiveView | Mode::SavingRawFrames => {
-            let save_path = if *mode == Mode::SavingRawFrames {
-                Some(options.raw_frames.out_path.clone())
-            } else {
-                None
-            };
-            Command::PreviewImage(PreviewImageCommand{
-                camera:     device_name.to_string(),
-                blob:       Arc::clone(blob),
-                frame:      Arc::clone(&data.main.cur_frame),
-                calibr:     options.calibr.into_params(),
-                fn_gen:     Arc::clone(&data.fn_gen),
-                options:    preview_params,
-                save_path,
-                live_view:  *mode == Mode::LiveView,
-                raw_adder:  Arc::clone(&data.raw_adder),
-                result_fun: Box::new(result_fun),
-            })
-        },
-        Mode::LiveStacking => {
-            let max_fwhm = if options.live.use_max_fwhm { Some(options.live.max_fwhm) } else { None };
-            let max_ovality = if options.live.use_max_ovality { Some(options.live.max_ovality) } else { None };
-            let min_stars = if options.live.use_min_stars { Some(options.live.min_stars) } else { None };
-            let save_res_interv = if options.live.save_enabled { Some(options.live.save_minutes*60) } else { None };
-            Command::LiveStacking(LiveStackingCommand{
-                camera:           device_name.to_string(),
-                blob:             Arc::clone(blob),
-                frame:            Arc::clone(&data.main.cur_frame),
-                calibr:           options.calibr.into_params(),
-                data:             Arc::clone(&data.live_staking),
-                fn_gen:           Arc::clone(&data.fn_gen),
-                preview_params,
-                max_fwhm,
-                max_ovality,
-                min_stars,
-                save_path:        options.live.out_dir.clone(),
-                save_orig_frames: options.live.save_orig,
-                save_res_interv,
-                result_fun:       Box::new(result_fun),
-            })
-        },
-    };
-    data.img_cmds_sender.send(command).unwrap();
-}
-
-fn process_blob_start_event(
-    state:         &Arc<RwLock<State>>,
-    indi:          &Arc<indi_api::Connection>,
-    _event:        &Arc<indi_api::BlobStartEvent>,
-    last_exposure: &Arc<AtomicI64>
-) {
-    let mut state = state.write().unwrap();
-    let State::Active { mode, camera, frame, counter, thread_timer, .. } = &mut *state else {
-        return
-    };
-    if *mode == Mode::SingleShot { return; }
-    if let Some(counter) = counter {
-        if counter.to_go != 0 {
-            counter.to_go -= 1;
-            if counter.to_go == 0 { return; }
-        }
-    }
-    let fast_mode_enabled =
-        indi.camera_is_fast_toggle_supported(camera).unwrap_or(false) &&
-        indi.camera_is_fast_toggle_enabled(camera).unwrap_or(false);
-    if !fast_mode_enabled {
-        if !frame.have_to_use_delay() {
-            let res = apply_camera_options_and_take_shot(
-                indi,
-                camera,
-                frame,
-                last_exposure
-            );
-            if let Err(err) = res {
-                log::error!("{} during trying start next shot", err.to_string());
-                // TODO: show error!!!
-            }
-        } else {
-            let indi = Arc::clone(indi);
-            let camera = camera.clone();
-            let frame = frame.clone();
-            let last_exposure = Arc::clone(last_exposure);
-            thread_timer.exec((frame.delay * 1000.0) as u32, move || {
-                let res = apply_camera_options_and_take_shot(
-                    &indi,
-                    &camera,
-                    &frame,
-                    &last_exposure
-                );
-                if let Err(err) = res {
-                    log::error!("{} during trying start next shot", err.to_string());
-                    // TODO: show error!!!
-                }
-            });
-        }
-    }
+    data.img_cmds_sender.send(Command::ProcessImage{
+        command,
+        result_fun: Box::new(result_fun),
+    }).unwrap();
 }
 
 fn repaint_histogram(data: &Rc<CameraData>) {
@@ -2179,7 +2332,7 @@ fn show_histogram_stat(data: &Rc<CameraData>) {
     let options = data.options.borrow();
     let hist = match options.preview.source {
         PreviewSource::OrigFrame =>
-            data.main.cur_frame.hist.read().unwrap(),
+            data.cur_frame.hist.read().unwrap(),
         PreviewSource::LiveStacking =>
             data.live_staking.result.hist.read().unwrap(),
     };
@@ -2187,19 +2340,35 @@ fn show_histogram_stat(data: &Rc<CameraData>) {
     let max = hist.max as f64;
     let show_chan_data = |chan: &Option<HistogramChan>, l_cap, l_mean, l_median, l_dev| {
         if let Some(chan) = chan.as_ref() {
-            gtk_utils::set_str(
-                bldr, l_mean,
-                &format!("{:.1} ({:.1}%)", chan.mean, 100.0 * chan.mean / max)
-            );
             let median = chan.get_nth_element(chan.count/2);
-            gtk_utils::set_str(
-                bldr, l_median,
-                &format!("{:.1} ({:.1}%)", median, 100.0 * median as f64 / max)
-            );
-            gtk_utils::set_str(
-                bldr, l_dev,
-                &format!("{:.1} ({:.1}%)", chan.std_dev, 100.0 * chan.std_dev / max)
-            );
+
+            if options.hist.percents {
+                gtk_utils::set_str(
+                    bldr, l_mean,
+                    &format!("{:.1}%", 100.0 * chan.mean / max)
+                );
+                gtk_utils::set_str(
+                    bldr, l_median,
+                    &format!("{:.1}%", 100.0 * median as f64 / max)
+                );
+                gtk_utils::set_str(
+                    bldr, l_dev,
+                    &format!("{:.1}%", 100.0 * chan.std_dev / max)
+                );
+            } else {
+                gtk_utils::set_str(
+                    bldr, l_mean,
+                    &format!("{:.1}", chan.mean)
+                );
+                gtk_utils::set_str(
+                    bldr, l_median,
+                    &format!("{:.1}", median)
+                );
+                gtk_utils::set_str(
+                    bldr, l_dev,
+                    &format!("{:.1}", chan.std_dev)
+                );
+            }
         }
         gtk_utils::show_widgets(bldr, &[
             (l_cap,    chan.is_some()),
@@ -2223,7 +2392,7 @@ fn handler_draw_histogram(
         let options = data.options.borrow();
         let hist = match options.preview.source {
             PreviewSource::OrigFrame =>
-                data.main.cur_frame.hist.read().unwrap(),
+                data.cur_frame.hist.read().unwrap(),
             PreviewSource::LiveStacking =>
                 data.live_staking.result.hist.read().unwrap(),
         };
@@ -2233,8 +2402,8 @@ fn handler_draw_histogram(
             cr,
             area.allocated_width(),
             area.allocated_height(),
-            options.hist_log_x,
-            options.hist_log_y,
+            options.hist.log_x,
+            options.hist.log_y,
         )?;
         Ok(())
     });
@@ -2251,31 +2420,34 @@ fn paint_histogram(
 ) -> anyhow::Result<()> {
     if width == 0 { return Ok(()); }
 
-    let max_y_text = "100%";
-    let min_y_text = "0%";
+    let p0 = "0%";
+    let p25 = "25%";
+    let p50 = "50%";
+    let p75 = "75%";
+    let p100 = "100%";
 
-    let fg = area.style_context().color(gtk::StateFlags::ACTIVE);
+    let fg = area.style_context().color(gtk::StateFlags::NORMAL);
+    let bg = area.style_context().lookup_color("theme_base_color").unwrap_or(gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
 
     cr.set_font_size(12.0);
 
-    let max_y_text_te = cr.text_extents(max_y_text)?;
+    let max_y_text_te = cr.text_extents(p100)?;
     let left_margin = max_y_text_te.width() + 5.0;
     let right_margin = 3.0;
     let top_margin = 3.0;
-    let bottom_margin = cr.text_extents(min_y_text)?.width() + 3.0;
+    let bottom_margin = cr.text_extents(p0)?.width() + 3.0;
     let area_width = width as f64 - left_margin - right_margin;
     let area_height = height as f64 - top_margin - bottom_margin;
 
-    cr.set_source_rgb(0.5, 0.5, 0.5);
     cr.set_line_width(1.0);
+
+    cr.set_source_rgb(bg.red(), bg.green(), bg.blue());
+    cr.rectangle(left_margin, top_margin, area_width, area_height);
+    cr.fill()?;
+
+    cr.set_source_rgba(fg.red(), fg.green(), fg.blue(), 0.5);
     cr.rectangle(left_margin, top_margin, area_width, area_height);
     cr.stroke()?;
-
-    cr.set_source_rgb(fg.red(), fg.green(), fg.blue());
-    cr.move_to(0.0, top_margin+max_y_text_te.height());
-    cr.show_text(max_y_text)?;
-    cr.move_to(0.0, height as f64 - bottom_margin);
-    cr.show_text(min_y_text)?;
 
     let hist_chans = [ hist.r.as_ref(), hist.g.as_ref(), hist.b.as_ref(), hist.l.as_ref() ];
 
@@ -2290,79 +2462,125 @@ fn paint_histogram(
         .max()
         .unwrap_or(0);
 
-    if total_max_v == 0 || max_count == 0 {
-        return Ok(());
-    }
-
-    let mut total_max_v = total_max_v as f64;
-    if log_y {
-        total_max_v = f64::log10(total_max_v);
-    }
-
-    let paint_channel = |chan: &Option<HistogramChan>, r, g, b, a| -> anyhow::Result<()> {
-        let Some(chan) = chan.as_ref() else { return Ok(()); };
-        let k = max_count as f64 / chan.count as f64;
-        let max_x = if !log_x { hist.max as f64 } else { f64::log10(hist.max as f64) };
-        cr.set_source_rgba(r, g, b, a);
-        cr.set_line_width(2.0);
-        let div = hist.max as usize / width as usize;
-        let mut idx_sum = 0_usize;
-        let mut max_v = 0_usize;
-        let mut cnt = 0_usize;
-        let last_idx = chan.freq.len()-1;
-        cr.move_to(left_margin, top_margin + area_height);
-        for (idx, v) in chan.freq.iter().enumerate() {
-            idx_sum += idx;
-            if *v as usize > max_v {
-                max_v = *v as usize;
-            }
-            cnt += 1;
-            if (cnt == div || idx == last_idx) && cnt != 0 {
-                let mut max_v_f = k * max_v as f64;
-                let mut aver_idx = (idx_sum / cnt) as f64;
-                if log_x && aver_idx != 0.0 {
-                    aver_idx = f64::log10(aver_idx);
-                }
-                if log_y && max_v_f != 0.0 {
-                    max_v_f = f64::log10(max_v_f);
-                }
-
-                let x = area_width * aver_idx / max_x;
-                let y = area_height - area_height * max_v_f / total_max_v;
-                cr.line_to(x + left_margin, y + top_margin);
-                idx_sum = 0;
-                max_v = 0;
-                cnt = 0;
-            }
+    if total_max_v != 0 && max_count != 0 {
+        let mut total_max_v = total_max_v as f64;
+        if log_y {
+            total_max_v = f64::log10(total_max_v);
         }
-        cr.line_to(left_margin + area_width, top_margin + area_height);
-        cr.close_path();
-        cr.fill_preserve()?;
+
+        let paint_channel = |chan: &Option<HistogramChan>, r, g, b, a| -> anyhow::Result<()> {
+            let Some(chan) = chan.as_ref() else { return Ok(()); };
+            let k = max_count as f64 / chan.count as f64;
+            let max_x = if !log_x { hist.max as f64 } else { f64::log10(hist.max as f64) };
+            cr.set_source_rgba(r, g, b, a);
+            cr.set_line_width(2.0);
+            let div = hist.max as usize / width as usize;
+            let mut idx_sum = 0_usize;
+            let mut max_v = 0_usize;
+            let mut cnt = 0_usize;
+            let last_idx = chan.freq.len()-1;
+            cr.move_to(left_margin, top_margin + area_height);
+            for (idx, v) in chan.freq.iter().enumerate() {
+                idx_sum += idx;
+                if *v as usize > max_v {
+                    max_v = *v as usize;
+                }
+                cnt += 1;
+                if (cnt == div || idx == last_idx) && cnt != 0 {
+                    let mut max_v_f = k * max_v as f64;
+                    let mut aver_idx = (idx_sum / cnt) as f64;
+                    if log_x && aver_idx != 0.0 {
+                        aver_idx = f64::log10(aver_idx);
+                    }
+                    if log_y && max_v_f != 0.0 {
+                        max_v_f = f64::log10(max_v_f);
+                    }
+
+                    let x = area_width * aver_idx / max_x;
+                    let y = area_height - area_height * max_v_f / total_max_v;
+                    cr.line_to(x + left_margin, y + top_margin);
+                    idx_sum = 0;
+                    max_v = 0;
+                    cnt = 0;
+                }
+            }
+            cr.line_to(left_margin + area_width, top_margin + area_height);
+            cr.close_path();
+            cr.fill_preserve()?;
+            cr.stroke()?;
+            Ok(())
+        };
+
+        paint_channel(&hist.r, 1.0, 0.0, 0.0, 1.0)?;
+        paint_channel(&hist.g, 0.0, 2.0, 0.0, 0.5)?;
+        paint_channel(&hist.b, 0.0, 0.0, 3.3, 0.33)?;
+        paint_channel(&hist.l, 0.5, 0.5, 0.5, 1.0)?;
+    }
+
+    cr.set_line_width(1.0);
+    cr.set_source_rgb(fg.red(), fg.green(), fg.blue());
+    cr.move_to(0.0, top_margin+max_y_text_te.height());
+    cr.show_text(p100)?;
+    cr.move_to(0.0, height as f64 - bottom_margin);
+    cr.show_text(p0)?;
+
+    let paint_x_percent = |x, text| -> anyhow::Result<()> {
+        let te = cr.text_extents(text)?;
+        let mut tx = x-te.width()/2.0;
+        if tx + te.width() > width as f64 {
+            tx = width as f64 - te.width();
+        }
+
+        cr.move_to(x, top_margin+area_height-3.0);
+        cr.line_to(x, top_margin+area_height+3.0);
         cr.stroke()?;
+
+        cr.move_to(tx, top_margin+area_height-te.y_bearing()+3.0);
+        cr.show_text(text)?;
         Ok(())
     };
 
-    paint_channel(&hist.r, 1.0, 0.0, 0.0, 1.0)?;
-    paint_channel(&hist.g, 0.0, 2.0, 0.0, 0.5)?;
-    paint_channel(&hist.b, 0.0, 0.0, 3.3, 0.33)?;
-    paint_channel(&hist.l, 0.5, 0.5, 0.5, 1.0)?;
+    paint_x_percent(left_margin, p0)?;
+    paint_x_percent(left_margin+area_width*0.25, p25)?;
+    paint_x_percent(left_margin+area_width*0.50, p50)?;
+    paint_x_percent(left_margin+area_width*0.75, p75)?;
+    paint_x_percent(left_margin+area_width, p100)?;
 
     Ok(())
 }
 
 fn handler_action_start_live_stacking(data: &Rc<CameraData>) {
-    *data.raw_adder.lock().unwrap() = None;
-    read_options_from_widgets(data);
-    abort_current_shot(data, &data.state.read().unwrap());
-    start_taking_shots(data, Mode::LiveStacking, None);
+    read_camera_options_from_widgets(data);
+    gtk_utils::exec_and_show_error(&data.main.window, || {
+        let mut state = data.main.state.write().unwrap();
+        let options = data.options.borrow();
+        let mount_device_name = data.mount_device_name.borrow();
+        state.start_live_stacking(
+            options.device.as_deref().unwrap_or(""),
+            mount_device_name.as_deref().unwrap_or(""),
+            &data.main.indi,
+            &data.ref_stars,
+            &data.live_staking,
+            &options.frame,
+            &options.focuser,
+            &options.guiding,
+            &options.live
+        )?;
+        gtk_utils::set_active_id(
+            &data.main.builder,
+            "cb_preview_src",
+            Some("live")
+        );
+        Ok(())
+    });
 }
 
 fn handler_action_stop_live_stacking(data: &Rc<CameraData>) {
-    let mut state = data.state.write().unwrap();
-    abort_current_shot(data, &state);
-    *state = State::Waiting;
-    drop(state);
-    correct_ctrl_widgets_properties(data);
+    gtk_utils::exec_and_show_error(&data.main.window, || {
+        let mut state = data.main.state.write().unwrap();
+        state.abort_active_mode(&data.main.indi)?;
+        Ok(())
+    });
 }
 
 fn update_shot_state(data: &Rc<CameraData>) {
@@ -2375,13 +2593,16 @@ fn handler_draw_shot_state(
     area: &gtk::DrawingArea,
     cr:   &cairo::Context
 ) {
-    let last_exposure = data.last_exposure.load(atomic::Ordering::Relaxed) as f64 / 1000.0;
-    if last_exposure < 1.0 { return; };
+    let state = data.main.state.read().unwrap();
+    let Some(cur_exposure) = state.mode().get_cur_exposure() else {
+        return;
+    };
+    if cur_exposure < 1.0 { return; };
     let options = data.options.borrow();
-    let Some(camera) = options.camera_name.as_ref() else { return; };
+    let Some(camera) = options.device.as_ref() else { return; };
     let Ok(exposure) = data.main.indi.camera_get_exposure(camera) else { return ; };
-    let progress = ((last_exposure - exposure) / last_exposure).max(0.0).min(1.0);
-    let text_to_show = format!("{:.0} / {:.0}", last_exposure - exposure, last_exposure);
+    let progress = ((cur_exposure - exposure) / cur_exposure).max(0.0).min(1.0);
+    let text_to_show = format!("{:.0} / {:.0}", cur_exposure - exposure, cur_exposure);
     gtk_utils::exec_and_show_error(&data.main.window, || {
         gtk_utils::draw_progress_bar(area, cr, progress, &text_to_show)
     });
@@ -2395,20 +2616,22 @@ fn update_light_history_table(data: &Rc<CameraData>) {
         },
         None => {
             let model = gtk::ListStore::new(&[
+                String::static_type(),
                 String::static_type(), String::static_type(),
                 u32   ::static_type(), String::static_type(),
                 String::static_type(), String::static_type(),
                 String::static_type(), String::static_type(),
             ]);
             let columns = [
-                /* 0 */ "FWHM",
-                /* 1 */ "Ovality",
-                /* 2 */ "Stars",
-                /* 3 */ "Noise",
-                /* 4 */ "Background",
-                /* 5 */ "Offs.X",
-                /* 6 */ "Offs.Y",
-                /* 7 */ "Rot."
+                /* 0 */ "Time",
+                /* 1 */ "FWHM",
+                /* 2 */ "Ovality",
+                /* 3 */ "Stars",
+                /* 4 */ "Noise",
+                /* 5 */ "Background",
+                /* 6 */ "Offs.X",
+                /* 7 */ "Offs.Y",
+                /* 8 */ "Rot."
             ];
             for (idx, col_name) in columns.into_iter().enumerate() {
                 let cell_text = gtk::CellRendererText::new();
@@ -2432,37 +2655,57 @@ fn update_light_history_table(data: &Rc<CameraData>) {
     }
     let models_row_cnt = gtk_utils::get_model_row_count(model.upcast_ref());
     let to_index = items.len();
+    let make_bad_str = |s: &str| -> String {
+        format!(r##"<span color="#FF4040"><b>{}</b></span>"##, s)
+    };
     for item in &items[models_row_cnt..to_index] {
-        let fwhm_str = item.stars_fwhm
+        let local_time_str =  {
+            let local_time: DateTime<Local> = DateTime::from(item.time);
+            local_time.format("%H:%M:%S").to_string()
+        };
+        let mut fwhm_str = item.stars_fwhm
             .map(|v| format!("{:.1}", v))
             .unwrap_or_else(String::new);
-        let ovality_str = item.stars_ovality
-            .map(|v| format!("{:.2}", v))
+        if item.flags.contains(LightFrameShortInfoFlags::BAD_STARS_FWHM) {
+            fwhm_str = make_bad_str(&fwhm_str);
+        }
+        let mut ovality_str = item.stars_ovality
+            .map(|v| format!("{:.1}", v))
             .unwrap_or_else(String::new);
+        if item.flags.contains(LightFrameShortInfoFlags::BAD_STARS_OVAL) {
+            ovality_str = make_bad_str(&ovality_str);
+        }
         let stars_cnt = item.stars_count as u32;
         let noise_str = format!("{:.3}%", item.noise);
         let bg_str = format!("{:.1}%", item.background);
-        let x_str = item.offset_x
+        let bad_offset = item.flags.contains(LightFrameShortInfoFlags::BAD_OFFSET);
+        let mut x_str = item.offset_x
             .map(|v| format!("{:.1}", v))
-            .unwrap_or_else(String::new);
-        let y_str = item.offset_y
+            .unwrap_or_else(||if bad_offset {"???".to_string()} else {"".to_string()});
+        let mut y_str = item.offset_y
             .map(|v| format!("{:.1}", v))
-            .unwrap_or_else(String::new);
-        let angle_str = item.angle
+            .unwrap_or_else(||if bad_offset {"???".to_string()} else {"".to_string()});
+        let mut angle_str = item.angle
             .map(|v| format!("{:.1}°", 180.0 * v / PI))
-            .unwrap_or_else(String::new);
+            .unwrap_or_else(||if bad_offset {"???".to_string()} else {"".to_string()});
+        if bad_offset {
+            x_str = make_bad_str(&x_str);
+            y_str = make_bad_str(&y_str);
+            angle_str = make_bad_str(&angle_str);
+        }
         let last_is_selected =
             gtk_utils::get_list_view_selected_row(&tree).map(|v| v+1) ==
             Some(models_row_cnt as i32);
         let last = model.insert_with_values(None, &[
-            (0, &fwhm_str),
-            (1, &ovality_str),
-            (2, &stars_cnt),
-            (3, &noise_str),
-            (4, &bg_str),
-            (5, &x_str),
-            (6, &y_str),
-            (7, &angle_str),
+            (0, &local_time_str),
+            (1, &fwhm_str),
+            (2, &ovality_str),
+            (3, &stars_cnt),
+            (4, &noise_str),
+            (5, &bg_str),
+            (6, &x_str),
+            (7, &y_str),
+            (8, &angle_str),
         ]);
         if last_is_selected || models_row_cnt == 0 {
             // Select and scroll to last row
@@ -2477,109 +2720,55 @@ fn update_light_history_table(data: &Rc<CameraData>) {
 fn handler_action_start_save_raw_frames(data: &Rc<CameraData>) {
     let mut fn_gen = data.fn_gen.lock().unwrap();
     fn_gen.clear();
-    read_options_from_widgets(data);
-    abort_current_shot(data, &data.state.read().unwrap());
 
-    let mut options = data.options.borrow_mut();
-    if options.frame.frame_type != FrameType::Lights
-    && options.raw_frames.create_master {
-        let mut adder = data.raw_adder.lock().unwrap();
-        *adder = Some(RawAdder::new());
-    }
+    read_camera_options_from_widgets(data);
+    let options = data.options.borrow();
 
-    let save_raw_pause = data.save_raw_pause.borrow();
-    let counter = if let Some(save_raw_pause) = &*save_raw_pause {
-        options.frame = save_raw_pause.frame.clone();
-        Some(save_raw_pause.counter.clone())
-    } else {
-        Some(FramesCounter{
-            to_go: options.raw_frames.frame_cnt,
-            total: options.raw_frames.frame_cnt
-        })
-    };
-    drop(options);
+    let mut adder = data.raw_adder.lock().unwrap();
+    adder.clear();
 
-    if save_raw_pause.is_some() {
-        show_options(data);
-    }
-
-    drop(save_raw_pause);
-
-    start_taking_shots(data, Mode::SavingRawFrames, counter);
-    show_shots_progress(data);
-}
-
-fn handler_action_pause_save_raw_frames(data: &Rc<CameraData>) {
-    let mut state = data.state.write().unwrap();
-    let State::Active {
-        mode: Mode::SavingRawFrames,
-        camera,
-        frame,
-        counter,
-        ..
-    } = &*state else {
-        return;
-    };
-    let Some(counter) = counter else { return; };
-    let pause_data = SavingRawPause {
-        camera: camera.clone(),
-        frame: frame.clone(),
-        counter: counter.clone(),
-    };
-    log::info!("Saving raw paused with data {:?}", pause_data);
-    *data.save_raw_pause.borrow_mut() = Some(pause_data);
-    abort_current_shot(data, &state);
-    *state = State::Waiting;
-    drop(state);
-    correct_ctrl_widgets_properties(data);
-}
-
-fn save_master_frame(data: &Rc<CameraData>) { // TODO: move to image_processing.rs
     gtk_utils::exec_and_show_error(&data.main.window, || {
-        let mut adder = data.raw_adder.lock().unwrap();
-        if let Some(adder) = &mut *adder {
-            let options = data.options.borrow_mut();
-            let raw_image = adder.get()?;
-            let (prefix, file_name) = match options.frame.frame_type {
-                FrameType::Flats => ("flat", options.frame.create_master_flat_file_name()),
-                FrameType::Darks => ("dark", options.frame.create_master_dark_file_name()),
-                _ => unreachable!(),
-            };
-            let file_name = format!("{}_{}x{}-{}.fits", prefix, adder.width(), adder.height(), file_name);
-            let full_file_name = options.raw_frames.out_path.join(file_name);
-            raw_image.save_to_fits_file(&full_file_name)?;
-            match options.frame.frame_type {
-                FrameType::Flats => {
-                    gtk_utils::set_path(
-                        &data.main.builder,
-                        "fch_master_flat",
-                        Some(&full_file_name)
-                    );
-                },
-                FrameType::Darks => {
-                    gtk_utils::set_path(
-                        &data.main.builder,
-                        "fch_master_dark",
-                        Some(&full_file_name)
-                    );
-                },
-                _ => {},
-            };
-        }
-        *adder = None;
+        let mut state = data.main.state.write().unwrap();
+        let mount_device_name = data.mount_device_name.borrow();
+        state.start_saving_raw_frames(
+            options.device.as_deref().unwrap_or(""),
+            mount_device_name.as_deref().unwrap_or(""),
+            &data.main.indi,
+            &data.ref_stars,
+            &options.frame,
+            &options.focuser,
+            &options.guiding,
+            &options.raw_frames,
+        )?;
+        gtk_utils::set_active_id(
+            &data.main.builder,
+            "cb_preview_src",
+            Some("frame")
+        );
         Ok(())
     });
 }
 
 
+fn handler_action_continue_save_raw_frames(data: &Rc<CameraData>) {
+    gtk_utils::exec_and_show_error(&data.main.window, || {
+        let mut state = data.main.state.write().unwrap();
+        state.continue_prev_mode(&data.main.indi)?;
+        gtk_utils::set_active_id(
+            &data.main.builder,
+            "cb_preview_src",
+            Some("frame")
+        );
+        Ok(())
+    });
+}
+
 fn handler_action_stop_save_raw_frames(data: &Rc<CameraData>) {
-    *data.save_raw_pause.borrow_mut() = None;
-    let mut state = data.state.write().unwrap();
-    abort_current_shot(data, &state);
-    *state = State::Waiting;
-    drop(state);
-    *data.raw_adder.lock().unwrap() = None;
-    correct_ctrl_widgets_properties(data);
+    gtk_utils::exec_and_show_error(&data.main.window, || {
+        let mut state = data.main.state.write().unwrap();
+        state.abort_active_mode(&data.main.indi)?;
+        Ok(())
+    });
 }
 
 fn handler_action_clear_light_history(data: &Rc<CameraData>) {
@@ -2597,4 +2786,488 @@ fn show_total_raw_time(data: &Rc<CameraData>) {
         seconds_to_total_time_str(total_time, false)
     );
     gtk_utils::set_str(&data.main.builder, "l_raw_time_info", &text);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+fn init_focuser_widgets(data: &Rc<CameraData>) {
+    let spb_foc_temp = data.main.builder.object::<gtk::SpinButton>("spb_foc_temp").unwrap();
+    spb_foc_temp.set_range(1.0, 20.0);
+    spb_foc_temp.set_digits(0);
+    spb_foc_temp.set_increments(1.0, 5.0);
+
+    let spb_foc_measures = data.main.builder.object::<gtk::SpinButton>("spb_foc_measures").unwrap();
+    spb_foc_measures.set_range(7.0, 42.0);
+    spb_foc_measures.set_digits(0);
+    spb_foc_measures.set_increments(1.0, 10.0);
+
+    let spb_foc_auto_step = data.main.builder.object::<gtk::SpinButton>("spb_foc_auto_step").unwrap();
+    spb_foc_auto_step.set_range(1.0, 1_000_000.0);
+    spb_foc_auto_step.set_digits(0);
+    spb_foc_auto_step.set_increments(100.0, 1000.0);
+
+    let spb_foc_exp = data.main.builder.object::<gtk::SpinButton>("spb_foc_exp").unwrap();
+    spb_foc_exp.set_range(0.5, 60.0);
+    spb_foc_exp.set_digits(1);
+    spb_foc_exp.set_increments(0.5, 5.0);
+}
+
+fn update_focuser_devices_list(data: &Rc<CameraData>) {
+    let dev_list = data.main.indi.get_devices_list();
+    let focusers = dev_list
+        .iter()
+        .filter(|device|
+            device.interface.contains(indi_api::DriverInterface::FOCUSER)
+        );
+    let cb_foc_list: gtk::ComboBoxText =
+        data.main.builder.object("cb_foc_list").unwrap();
+    let last_active_id = cb_foc_list.active_id().map(|s| s.to_string());
+    cb_foc_list.remove_all();
+    for camera in focusers {
+        cb_foc_list.append(Some(&camera.name), &camera.name);
+    }
+    let focusers_count = gtk_utils::combobox_items_count(&cb_foc_list);
+    if focusers_count == 1 {
+        cb_foc_list.set_active(Some(0));
+    } else if focusers_count > 1 {
+        let options = data.options.borrow();
+        if last_active_id.is_some() {
+            cb_foc_list.set_active_id(last_active_id.as_deref());
+        } else if options.focuser.device.is_some() {
+            cb_foc_list.set_active_id(options.device.as_deref());
+        }
+        if cb_foc_list.active_id().is_none() {
+            cb_foc_list.set_active(Some(0));
+        }
+    }
+    let connected = data.main.indi.state() == indi_api::ConnState::Connected;
+    gtk_utils::enable_widgets(&data.main.builder, false, &[
+        ("cb_foc_list", connected && focusers_count > 1),
+        ("grd_foc",     connected && focusers_count > 0)
+    ]);
+    data.options.borrow_mut().focuser.device =
+        cb_foc_list.active_id().map(|s| s.to_string());
+}
+
+fn update_focuser_position_widget(data: &Rc<CameraData>, new_prop: bool) {
+    data.excl.exec(|| {
+        let Some(foc_device) = gtk_utils::get_active_id(&data.main.builder, "cb_foc_list") else {
+            return;
+        };
+        let Ok(prop_info) = data.main.indi.focuser_get_abs_value_prop_info(&foc_device) else {
+            return;
+        };
+        let spb_foc_val = data.main.builder.object::<gtk::SpinButton>("spb_foc_val").unwrap();
+        if new_prop || spb_foc_val.value() == 0.0 {
+            spb_foc_val.set_range(0.0, prop_info.max);
+            spb_foc_val.set_digits(0);
+            let step = prop_info.step.unwrap_or(1.0);
+            spb_foc_val.set_increments(step, step * 10.0);
+            let Ok(value) = data.main.indi.focuser_get_abs_value(&foc_device) else {
+                return;
+            };
+            spb_foc_val.set_value(value);
+        }
+    });
+    show_cur_focuser_value(data);
+}
+
+fn show_cur_focuser_value(data: &Rc<CameraData>) {
+    let Some(foc_device) = gtk_utils::get_active_id(&data.main.builder, "cb_foc_list") else {
+        return;
+    };
+    let Ok(value) = data.main.indi.focuser_get_abs_value(&foc_device) else {
+        return;
+    };
+    let l_foc_value = data.main.builder.object::<gtk::Label>("l_foc_value").unwrap();
+    l_foc_value.set_label(&format!("{:.0}", value));
+}
+
+fn update_focuser_position_after_focusing(data: &Rc<CameraData>, pos: f64) {
+    data.excl.exec(|| {
+        let spb_foc_val = data.main.builder.object::<gtk::SpinButton>("spb_foc_val").unwrap();
+        spb_foc_val.set_value(pos);
+    });
+}
+
+fn connect_focuser_widgets_events(data: &Rc<CameraData>) {
+    let bldr = &data.main.builder;
+    let spb_foc_val = bldr.object::<gtk::SpinButton>("spb_foc_val").unwrap();
+    spb_foc_val.connect_value_changed(clone!(@strong data => move |sb| {
+        data.excl.exec(|| {
+            let Some(foc_device) = gtk_utils::get_active_id(&data.main.builder, "cb_foc_list") else {
+                return;
+            };
+            gtk_utils::exec_and_show_error(&data.main.window, || {
+                data.main.indi.focuser_set_abs_value(&foc_device, sb.value(), true, None)?;
+                Ok(())
+            })
+        });
+    }));
+
+    let chb_foc_temp = bldr.object::<gtk::CheckButton>("chb_foc_temp").unwrap();
+    chb_foc_temp.connect_active_notify(clone!(@strong data => move |_| {
+        correct_widget_properties(&data);
+    }));
+
+    let chb_foc_fwhm = bldr.object::<gtk::CheckButton>("chb_foc_fwhm").unwrap();
+    chb_foc_fwhm.connect_active_notify(clone!(@strong data => move |_| {
+        correct_widget_properties(&data);
+    }));
+
+    let chb_foc_period = bldr.object::<gtk::CheckButton>("chb_foc_period").unwrap();
+    chb_foc_period.connect_active_notify(clone!(@strong data => move |_| {
+        correct_widget_properties(&data);
+    }));
+
+    let da_focusing = data.main.builder.object::<gtk::DrawingArea>("da_focusing").unwrap();
+    da_focusing.connect_draw(clone!(@strong data => move |da, ctx| {
+        _ = draw_focusing_samples(&data, da, ctx);
+        Inhibit(true)
+    }));
+}
+
+fn draw_focusing_samples(
+    data: &Rc<CameraData>,
+    da:   &gtk::DrawingArea,
+    ctx:  &gdk::cairo::Context
+) -> anyhow::Result<()> {
+    let Some(focusing_data) = &*data.focusing_data.borrow() else {
+        return Ok(());
+    };
+    const PARABOLA_POINTS: usize = 101;
+    let get_plot_points_cnt = |plot_idx: usize| {
+        match plot_idx {
+            0 => focusing_data.samples.len(),
+            1 => if focusing_data.coeffs.is_some() { PARABOLA_POINTS } else { 0 },
+            2 => if focusing_data.result.is_some() && focusing_data.coeffs.is_some() { 1 } else { 0 },
+            _ => unreachable!(),
+        }
+    };
+    let get_plot_style = |plot_idx| -> PlotLineStyle {
+        match plot_idx {
+            0 => PlotLineStyle {
+                line_width: 2.0,
+                line_color: gdk::RGBA::new(0.0, 0.3, 1.0, 1.0),
+                point_style: PlotPointStyle::Round(8.0),
+            },
+            1 => PlotLineStyle {
+                line_width: 1.0,
+                line_color: gdk::RGBA::new(0.0, 1.0, 0.0, 1.0),
+                point_style: PlotPointStyle::None,
+            },
+            2 => PlotLineStyle {
+                line_width: 1.0,
+                line_color: gdk::RGBA::new(0.0, 1.0, 0.0, 1.0),
+                point_style: PlotPointStyle::Round(10.0),
+            },
+            _ => unreachable!(),
+        }
+    };
+    let min_pos = focusing_data.samples.iter().map(|s| s.focus_pos).min_by(cmp_f64).unwrap_or(0.0);
+    let max_pos = focusing_data.samples.iter().map(|s| s.focus_pos).max_by(cmp_f64).unwrap_or(0.0);
+    let get_plot_point = |plot_idx: usize, point_idx: usize| -> (f64, f64) {
+        match plot_idx {
+            0 => {
+                let sample = &focusing_data.samples[point_idx];
+                (sample.focus_pos, sample.stars_fwhm as f64)
+            }
+            1 => {
+                if let Some(coeffs) = &focusing_data.coeffs {
+                    let x = linear_interpolate(
+                        point_idx as f64,
+                        0.0,
+                        PARABOLA_POINTS as f64,
+                        min_pos,
+                        max_pos,
+                    );
+                    let y = coeffs.calc(x);
+                    (x, y)
+                } else {
+                    unreachable!();
+                }
+            }
+            2 => {
+                if let (Some(coeffs), Some(x)) = (&focusing_data.coeffs, &focusing_data.result) {
+                    let y = coeffs.calc(*x);
+                    (*x, y)
+                } else {
+                    unreachable!();
+                }
+            }
+            _ => unreachable!()
+        }
+    };
+    let mut plots = Plots {
+        plot_count: 3,
+        get_plot_points_cnt: Box::new(get_plot_points_cnt),
+        get_plot_style: Box::new(get_plot_style),
+        get_plot_point: Box::new(get_plot_point),
+        area: PlotAreaStyle::default(),
+        left_axis: AxisStyle::default(),
+        bottom_axis: AxisStyle::default(),
+    };
+    plots.left_axis.dec_digits = 2;
+    plots.bottom_axis.dec_digits = 0;
+    draw_plots(&plots, da, ctx)?;
+    Ok(())
+}
+
+fn handler_action_manual_focus(data: &Rc<CameraData>) {
+    read_camera_options_from_widgets(data);
+    gtk_utils::exec_and_show_error(&data.main.window, || {
+        let mut state = data.main.state.write().unwrap();
+        let options = data.options.borrow();
+        state.start_focusing(
+            &data.main.indi,
+            &options.focuser,
+            &options.frame,
+            options.device.as_deref().unwrap_or_default()
+        )?;
+        Ok(())
+    });
+}
+
+fn handler_action_stop_manual_focus(data: &Rc<CameraData>) {
+    gtk_utils::exec_and_show_error(&data.main.window, || {
+        let mut state = data.main.state.write().unwrap();
+        state.abort_active_mode(&data.main.indi)?;
+        Ok(())
+    });
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+fn init_dizering_widgets(data: &Rc<CameraData>) {
+    let spb_guid_max_err = data.main.builder.object::<gtk::SpinButton>("spb_guid_max_err").unwrap();
+    spb_guid_max_err.set_range(3.0, 50.0);
+    spb_guid_max_err.set_digits(0);
+    spb_guid_max_err.set_increments(1.0, 10.0);
+
+    let spb_mnt_cal_exp = data.main.builder.object::<gtk::SpinButton>("spb_mnt_cal_exp").unwrap();
+    spb_mnt_cal_exp.set_range(0.5, 10.0);
+    spb_mnt_cal_exp.set_digits(1);
+    spb_mnt_cal_exp.set_increments(0.5, 5.0);
+}
+
+fn connect_dizering_widgets_events(data: &Rc<CameraData>) {
+    let chb_guid_enabled = data.main.builder.object::<gtk::CheckButton>("chb_guid_enabled").unwrap();
+    chb_guid_enabled.connect_active_notify(clone!(@strong data => move |_| {
+        correct_widget_properties(&data);
+    }));
+}
+
+fn handler_action_start_dither_calibr(data: &Rc<CameraData>) {
+    gtk_utils::exec_and_show_error(&data.main.window, || {
+        let options = data.options.borrow();
+        let mut state = data.main.state.write().unwrap();
+        let cam_device = options.device.as_deref().unwrap_or_default();
+        let mount_device = data.mount_device_name.borrow();
+        let mount_device = mount_device.as_deref().unwrap_or_default();
+        state.start_mount_calibr(
+            &data.main.indi,
+            &options.frame,
+            &options.guiding,
+            mount_device,
+            cam_device
+        )?;
+        Ok(())
+    });
+}
+
+fn handler_action_stop_dither_calibr(data: &Rc<CameraData>) {
+    gtk_utils::exec_and_show_error(&data.main.window, || {
+        let mut state = data.main.state.write().unwrap();
+        state.abort_active_mode(&data.main.indi)?;
+        Ok(())
+    });
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+const MOUNT_NAV_BUTTON_NAMES: &[&'static str] = &[
+    "btn_left_top",    "btn_top",        "btn_right_top",
+    "btn_left",        "btn_stop_mount", "btn_right",
+    "btn_left_bottom", "btn_bottom",     "btn_right_bottom",
+];
+
+fn connect_mount_widgets_events(data: &Rc<CameraData>) {
+    for &btn_name in MOUNT_NAV_BUTTON_NAMES {
+        let btn = data.main.builder.object::<gtk::Button>(btn_name).unwrap();
+        btn.connect_button_press_event(clone!(@strong data => move |_, eb| {
+            if eb.button() == gtk::gdk::ffi::GDK_BUTTON_PRIMARY as u32 {
+                handler_nav_mount_btn_pressed(&data, btn_name);
+            }
+            Inhibit(false)
+        }));
+        btn.connect_button_release_event(clone!(@strong data => move |_, _| {
+            handler_nav_mount_btn_released(&data, btn_name);
+            Inhibit(false)
+        }));
+    }
+
+    let chb_tracking = data.main.builder.object::<gtk::CheckButton>("chb_tracking").unwrap();
+    chb_tracking.connect_active_notify(clone!(@strong data => move |chb| {
+        data.excl.exec(|| {
+            let Some(mount_device_name) = &*data.mount_device_name.borrow() else {
+                return;
+            };
+            gtk_utils::exec_and_show_error(&data.main.window, || {
+                data.main.indi.mount_set_tracking(mount_device_name, chb.is_active(), true, None)?;
+                Ok(())
+            });
+        });
+    }));
+
+    let chb_parked = data.main.builder.object::<gtk::CheckButton>("chb_parked").unwrap();
+    chb_parked.connect_active_notify(clone!(@strong data => move |chb| {
+        let Some(mount_device_name) = &*data.mount_device_name.borrow() else {
+            return;
+        };
+        let parked = chb.is_active();
+        gtk_utils::enable_widgets(&data.main.builder, true, &[
+            ("chb_tracking", !parked),
+            ("cb_mnt_speed", !parked),
+            ("chb_inv_ns", !parked),
+            ("chb_inv_we", !parked),
+        ]);
+        for &btn_name in MOUNT_NAV_BUTTON_NAMES {
+            gtk_utils::set_bool_prop(&data.main.builder, btn_name, "sensitive", !parked);
+        }
+        data.excl.exec(|| {
+            gtk_utils::exec_and_show_error(&data.main.window, || {
+                data.main.indi.mount_set_parked(mount_device_name, parked, true, None)?;
+                Ok(())
+            });
+        });
+    }));
+}
+
+fn handler_nav_mount_btn_pressed(data: &Rc<CameraData>, button_name: &str) {
+    let Some(mount_device_name) = &*data.mount_device_name.borrow() else {
+        return;
+    };
+    gtk_utils::exec_and_show_error(&data.main.window, || {
+        if button_name != "btn_stop_mount" {
+            let inv_ns = gtk_utils::get_bool(&data.main.builder, "chb_inv_ns");
+            let inv_we = gtk_utils::get_bool(&data.main.builder, "chb_inv_we");
+            data.main.indi.mount_reverse_motion(
+                mount_device_name,
+                inv_ns,
+                inv_we,
+                false,
+                SET_PROP_TIMEOUT
+            )?;
+            let speed = gtk_utils::get_active_id(&data.main.builder, "cb_mnt_speed");
+            if let Some(speed) = speed {
+                data.main.indi.mount_set_slew_speed(
+                    mount_device_name,
+                    &speed,
+                    false, Some(100)
+                )?
+            }
+        }
+        match button_name {
+            "btn_left_top" => {
+                data.main.indi.mount_start_move_west(mount_device_name)?;
+                data.main.indi.mount_start_move_north(mount_device_name)?;
+            }
+            "btn_top" => {
+                data.main.indi.mount_start_move_north(mount_device_name)?;
+            }
+            "btn_right_top" => {
+                data.main.indi.mount_start_move_east(mount_device_name)?;
+                data.main.indi.mount_start_move_north(mount_device_name)?;
+            }
+            "btn_left" => {
+                data.main.indi.mount_start_move_west(mount_device_name)?;
+            }
+            "btn_right" => {
+                data.main.indi.mount_start_move_east(mount_device_name)?;
+            }
+            "btn_left_bottom" => {
+                data.main.indi.mount_start_move_west(mount_device_name)?;
+                data.main.indi.mount_start_move_south(mount_device_name)?;
+            }
+            "btn_bottom" => {
+                data.main.indi.mount_start_move_south(mount_device_name)?;
+            }
+            "btn_right_bottom" => {
+                data.main.indi.mount_start_move_south(mount_device_name)?;
+                data.main.indi.mount_start_move_east(mount_device_name)?;
+            }
+            "btn_stop_mount" => {
+                data.main.indi.mount_abort_motion(mount_device_name)?;
+                data.main.indi.mount_stop_move(mount_device_name)?;
+            }
+            _ => {},
+        };
+        Ok(())
+    });
+}
+
+fn handler_nav_mount_btn_released(data: &Rc<CameraData>, button_name: &str) {
+    let Some(mount_device_name) = &*data.mount_device_name.borrow() else {
+        return;
+    };
+    gtk_utils::exec_and_show_error(&data.main.window, || {
+        if button_name != "btn_stop_mount" {
+            data.main.indi.mount_stop_move(mount_device_name)?;
+        }
+        Ok(())
+    });
+}
+
+fn update_mount_widgets(data: &Rc<CameraData>) {
+    let mount_active = data.mount_device_name.borrow()
+        .as_ref()
+        .map(|device_name| {
+            data.main.indi.is_device_enabled(&device_name).unwrap_or(false)
+        })
+        .unwrap_or(false);
+    gtk_utils::enable_widgets(
+        &data.main.builder,
+        false,
+        &[("bx_simple_mount", mount_active)]
+    );
+}
+
+fn fill_mount_speed_list_widget(data: &Rc<CameraData>) {
+    let Some(mount_device_name) = &*data.mount_device_name.borrow() else {
+        return;
+    };
+    gtk_utils::exec_and_show_error(&data.main.window, || {
+        let list = data.main.indi.mount_get_slew_speed_list(mount_device_name)?;
+        let cb_mnt_speed = data.main.builder.object::<gtk::ComboBoxText>("cb_mnt_speed").unwrap();
+        cb_mnt_speed.remove_all();
+        cb_mnt_speed.append(None, "---");
+        for (id, text) in list {
+            cb_mnt_speed.append(Some(&id), &text);
+        }
+        let options = data.options.borrow();
+        if options.mount.speed.is_some() {
+            cb_mnt_speed.set_active_id(options.mount.speed.as_deref());
+        } else {
+            cb_mnt_speed.set_active(Some(0));
+        }
+        Ok(())
+    });
+}
+
+fn show_mount_tracking_state(data: &Rc<CameraData>, tracking: bool) {
+    if data.mount_device_name.borrow().is_none() {
+        return;
+    };
+    data.excl.exec(|| {
+        gtk_utils::set_bool_prop(&data.main.builder, "chb_tracking", "active", tracking);
+    });
+}
+
+fn show_mount_parked_state(data: &Rc<CameraData>, parked: bool) {
+    if data.mount_device_name.borrow().is_none() {
+        return;
+    };
+    data.excl.exec(|| {
+        gtk_utils::set_bool_prop(&data.main.builder, "chb_parked", "active", parked);
+    });
 }

@@ -21,6 +21,9 @@ mod io_utils;
 mod image_processing;
 mod log_utils;
 mod fits_reader;
+mod state;
+mod math;
+mod plots;
 
 use gtk::prelude::*;
 use crate::io_utils::*;
@@ -67,6 +70,7 @@ fn panic_handler(panic_info: &std::panic::PanicInfo) {
 
     if let Some(payload) = payload_str {
         log::error!("Panic paiload: {}", payload);
+        println!("{}", payload);
     }
 
     if let Some(loc) = panic_info.location() {

@@ -55,21 +55,23 @@ impl CfaType {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy, Default)]
 pub enum FrameType {
-    Light,
-    Flat,
-    Dark,
-    Bias,
+    #[default]
+    Undef,
+    Lights,
+    Flats,
+    Darks,
+    Biases,
 }
 
 impl FrameType {
     fn from_str(text: &str, def: FrameType) -> Self {
         match text {
-            "Light" => FrameType::Light,
-            "Flat"  => FrameType::Flat,
-            "Dark"  => FrameType::Dark,
-            "Bias"  => FrameType::Bias,
+            "Light" => FrameType::Lights,
+            "Flat"  => FrameType::Flats,
+            "Dark"  => FrameType::Darks,
+            "Bias"  => FrameType::Biases,
             _       => def,
 
         }
@@ -77,10 +79,21 @@ impl FrameType {
 
     fn to_str(&self) -> &'static str {
         match self {
-            FrameType::Light => "Light",
-            FrameType::Flat => "Flat",
-            FrameType::Dark => "Dark",
-            FrameType::Bias => "Bias",
+            FrameType::Undef  => "Undefined",
+            FrameType::Lights => "Light",
+            FrameType::Flats  => "Flat",
+            FrameType::Darks  => "Dark",
+            FrameType::Biases => "Bias",
+        }
+    }
+
+    pub fn to_readable_str(&self) -> &'static str {
+        match self {
+            FrameType::Lights => "Saving LIGHT frames",
+            FrameType::Flats  => "Saving FLAT frames",
+            FrameType::Darks  => "Saving DARK frames",
+            FrameType::Biases => "Saving BIAS frames",
+            FrameType::Undef  => "Unknows save frames state :("
         }
     }
 }
@@ -113,7 +126,7 @@ impl RawImage {
             zero: 0,
             cfa: CfaType::None,
             max_value,
-            frame_type: FrameType::Light,
+            frame_type: FrameType::Lights,
             bin: 1,
             exposure: 0.0,
         };
@@ -157,7 +170,7 @@ impl RawImage {
         let cfa_arr = cfa.get_array();
         let frame_type = FrameType::from_str(
             frame_str.as_deref().unwrap_or_default(),
-            FrameType::Light
+            FrameType::Lights
         );
 
         let info = RawImageInfo {
@@ -525,7 +538,7 @@ impl RawImage {
     }
 
     pub fn subtract_dark(&mut self, dark: &RawImage) -> anyhow::Result<()> {
-        self.check_master_frame_is_compatible(dark, FrameType::Dark)?;
+        self.check_master_frame_is_compatible(dark, FrameType::Darks)?;
         debug_assert!(self.data.len() == dark.data.len());
         let dark_sum: i64 = dark
             .as_slice()
@@ -551,7 +564,7 @@ impl RawImage {
     }
 
     pub fn apply_flat(&mut self, flat: &RawImage, mt: bool) -> anyhow::Result<()> {
-        self.check_master_frame_is_compatible(flat, FrameType::Flat)?;
+        self.check_master_frame_is_compatible(flat, FrameType::Flats)?;
         debug_assert!(self.data.len() == flat.data.len());
         let zero = self.info.zero as i64;
         let process_pixel = |s: &mut u16, f: &u16| {
@@ -878,6 +891,14 @@ impl RawAdder {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.data.clear();
+        self.data.shrink_to_fit();
+        self.info = None;
+        self.counter = 0;
+        self.zero_sum = 0;
+    }
+
     pub fn width(&self) -> usize {
         self.info.as_ref().map(|info| info.width).unwrap_or_default()
     }
@@ -918,7 +939,7 @@ impl RawAdder {
         Ok(())
     }
 
-    pub fn get(&mut self) -> anyhow::Result<RawImage> {
+    pub fn get(&self) -> anyhow::Result<RawImage> {
         let Some(info) = &self.info else {
             anyhow::bail!("Raw added is empty");
         };
@@ -927,8 +948,6 @@ impl RawAdder {
             .iter()
             .map(|v| ((*v + counter2) / self.counter) as u16)
             .collect();
-        self.data.clear();
-        self.data.shrink_to_fit();
         let cfa_arr = info.cfa.get_array();
         let mut info = info.clone();
         info.zero = (self.zero_sum + counter2 as i32) / self.counter as i32;

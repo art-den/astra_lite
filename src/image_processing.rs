@@ -1,6 +1,7 @@
 use std::{sync::Arc, sync::{mpsc, RwLock, Mutex}, thread::JoinHandle, path::*, io::Cursor};
 
-use chrono::{DateTime, Local};
+use bitflags::bitflags;
+use chrono::{DateTime, Local, Utc};
 
 use crate::{
     indi_api,
@@ -8,7 +9,8 @@ use crate::{
     image::*,
     image_info::*,
     log_utils::*,
-    stars_offset::*
+    stars_offset::*,
+    gui_camera::{FrameOptions, QualityOptions, LiveStackingOptions}, state::ModeType
 };
 
 pub enum ResultImageInfo {
@@ -16,31 +18,27 @@ pub enum ResultImageInfo {
     LightInfo(LightImageInfo),
     FlatInfo(FlatImageInfo),
     RawInfo(RawImageStat),
+    SaveMaster(SaveMasterResult),
 }
 
-#[derive(Default)]
-struct CalibrImages {
-    master_dark:     Option<RawImage>,
-    master_dark_fn:  Option<PathBuf>,
-    master_flat:     Option<RawImage>,
-    master_flat_fn:  Option<PathBuf>,
-    dark_hot_pixels: Vec<BadPixel>,
+pub struct SaveMasterResult {
+    path:      PathBuf,
+    frametype: FrameType,
 }
 
 pub struct ResultImage {
-    pub image: RwLock<Image>,
-    pub hist:  RwLock<Histogram>,
-    pub info:  RwLock<ResultImageInfo>,
-    calibr:    Mutex<CalibrImages>,
+    pub image:     RwLock<Image>,
+
+    pub hist:      RwLock<Histogram>,
+    pub info:      RwLock<ResultImageInfo>,
 }
 
 impl ResultImage {
     pub fn new() -> Self {
         Self {
-            image:  RwLock::new(Image::new_empty()),
-            hist:   RwLock::new(Histogram::new()),
-            info:   RwLock::new(ResultImageInfo::None),
-            calibr: Mutex::new(CalibrImages::default()),
+            image: RwLock::new(Image::new_empty()),
+            hist:  RwLock::new(Histogram::new()),
+            info:  RwLock::new(ResultImageInfo::None),
         }
     }
 }
@@ -61,26 +59,63 @@ pub struct CalibrParams {
     pub hot_pixels: bool,
 }
 
-pub struct PreviewImageCommand {
-    pub camera:     String,
-    pub blob:       Arc<indi_api::BlobPropValue>,
-    pub frame:      Arc<ResultImage>,
-    pub calibr:     CalibrParams,
-    pub fn_gen:     Arc<Mutex<SeqFileNameGen>>,
-    pub options:    PreviewParams,
-    pub save_path:  Option<PathBuf>,
-    pub live_view:  bool,
-    pub raw_adder:  Arc<Mutex<Option<RawAdder>>>,
-    pub result_fun: Box<dyn Fn(FrameProcessingResult) + Send + 'static>,
+#[derive(Default)]
+pub struct CalibrImages {
+    master_dark:     Option<RawImage>,
+    master_dark_fn:  Option<PathBuf>,
+    master_flat:     Option<RawImage>,
+    master_flat_fn:  Option<PathBuf>,
+    dark_hot_pixels: Vec<BadPixel>,
 }
 
-impl PreviewImageCommand {
-    fn send_result(&self, data: ProcessingResultData) {
-        (self.result_fun)(FrameProcessingResult {
-            camera: self.camera.clone(),
-            data
-        });
+pub struct RawAdderParams {
+    pub adder: Arc<Mutex<RawAdder>>,
+    pub save:  bool,
+}
+
+pub struct LiveStackingData {
+    pub adder:      RwLock<ImageAdder>,
+    pub result:     ResultImage,
+    pub write_time: Mutex<Option<std::time::Instant>>,
+}
+
+impl LiveStackingData {
+    pub fn new() -> Self {
+        Self {
+            adder:      RwLock::new(ImageAdder::new()),
+            result:     ResultImage::new(),
+            write_time: Mutex::new(None),
+        }
     }
+}
+
+pub struct LiveStackingParams {
+    pub data:    Arc<LiveStackingData>,
+    pub options: LiveStackingOptions,
+}
+
+bitflags! {
+    pub struct ProcessImageFlags: u32 {
+        const CALC_STARS_OFFSET = 1;
+    }
+}
+
+pub struct ProcessImageCommand {
+    pub mode_type:       ModeType,
+    pub camera:          String,
+    pub flags:           ProcessImageFlags,
+    pub blob:            Arc<indi_api::BlobPropValue>,
+    pub frame:           Arc<ResultImage>,
+    pub ref_stars:       Arc<RwLock<Option<Vec<Point>>>>,
+    pub calibr_params:   CalibrParams,
+    pub calibr_images:   Arc<Mutex<CalibrImages>>,
+    pub fn_gen:          Arc<Mutex<SeqFileNameGen>>,
+    pub view_options:    PreviewParams,
+    pub frame_options:   FrameOptions,
+    pub quality_options: Option<QualityOptions>,
+    pub save_path:       Option<PathBuf>,
+    pub raw_adder:       Option<RawAdderParams>,
+    pub live_stacking:   Option<LiveStackingParams>,
 }
 
 pub struct PreviewImgData {
@@ -90,85 +125,50 @@ pub struct PreviewImgData {
     pub params:       PreviewParams,
 }
 
-#[derive(Default, Debug)]
-pub struct LightFileShortInfo {
-    pub stars_fwhm:    Option<f32>,
-    pub stars_ovality: Option<f32>,
-    pub stars_count:   usize,
-    pub noise:         f32, // %
-    pub background:    f32, // %
-    pub offset_x:      Option<f32>,
-    pub offset_y:      Option<f32>,
-    pub angle:         Option<f32>,
-}
-
-pub struct LiveStackingData {
-    pub adder:      RwLock<ImageAdder>,
-    pub ref_stars:  RwLock<Option<Vec<Point>>>,
-    pub result:     ResultImage,
-    pub write_time: Mutex<Option<std::time::Instant>>,
-}
-
-impl LiveStackingData {
-    pub fn new() -> Self {
-        Self {
-            adder:      RwLock::new(ImageAdder::new()),
-            ref_stars:  RwLock::new(None),
-            result:     ResultImage::new(),
-            write_time: Mutex::new(None),
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.adder.write().unwrap().clear();
+bitflags! {
+    #[derive(Default)]
+    pub struct LightFrameShortInfoFlags: u32 {
+        const BAD_STARS_FWHM = 1;
+        const BAD_STARS_OVAL = 2;
+        const BAD_OFFSET     = 4;
     }
 }
 
-pub struct LiveStackingCommand {
-    pub camera:           String,
-    pub blob:             Arc<indi_api::BlobPropValue>,
-    pub frame:            Arc<ResultImage>,
-    pub calibr:           CalibrParams,
-    pub data:             Arc<LiveStackingData>,
-    pub fn_gen:           Arc<Mutex<SeqFileNameGen>>,
-    pub preview_params:   PreviewParams,
-    pub max_fwhm:         Option<f32>,
-    pub max_ovality:      Option<f32>,
-    pub min_stars:        Option<usize>,
-    pub save_path:        PathBuf,
-    pub save_orig_frames: bool,
-    pub save_res_interv:  Option<usize>,
-    pub result_fun:       Box<dyn Fn(FrameProcessingResult) + Send + 'static>,
-}
-
-
-impl LiveStackingCommand {
-    fn send_result(&self, data: ProcessingResultData) {
-        (self.result_fun)(FrameProcessingResult {
-            camera: self.camera.clone(),
-            data
-        });
-    }
-}
-
-#[derive(PartialEq, Clone, Copy)]
-pub enum ResultMode {
-    OneShot,
-    LiveView,
-    RawFrame,
-    LiveFrame,
-    LiveResult,
+#[derive(Default, Debug, Clone)]
+pub struct LightFrameShortInfo {
+    pub width:          usize,
+    pub height:         usize,
+    pub time:           DateTime<Utc>,
+    pub exposure:       f64,
+    pub stars_fwhm:     Option<f32>,
+    pub stars_ovality:  Option<f32>,
+    pub stars_count:    usize,
+    pub noise:          f32, // %
+    pub background:     f32, // %
+    pub offset_x:       Option<f64>,
+    pub offset_y:       Option<f64>,
+    pub angle:          Option<f64>,
+    pub flags:          LightFrameShortInfoFlags,
 }
 
 pub enum ProcessingResultData {
     Error(String),
-    SingleShotFinished,
-
-    LightShortInfo(LightFileShortInfo), // for history
-
-    Preview(PreviewImgData, ResultMode),
-    FrameInfo(ResultMode),
-    Histogram(ResultMode),
+    ShotProcessingStarted(ModeType),
+    ShotProcessingFinished {
+        mode_type:   ModeType,
+        frame_is_ok: bool
+    },
+    LightShortInfo(LightFrameShortInfo, ModeType),
+    PreviewFrame(PreviewImgData, ModeType),
+    PreviewLiveRes(PreviewImgData, ModeType),
+    FrameInfo(ModeType),
+    FrameInfoLiveRes(ModeType),
+    Histogram(ModeType),
+    HistogramLiveRes(ModeType),
+    MasterSaved {
+        frame_type: FrameType,
+        file_name: PathBuf
+    }
 }
 
 pub struct FrameProcessingResult {
@@ -176,18 +176,21 @@ pub struct FrameProcessingResult {
     pub data:   ProcessingResultData,
 }
 
+pub type ResultFun = Box<dyn Fn(FrameProcessingResult) + Send + 'static>;
+
 pub enum Command {
-    PreviewImage(PreviewImageCommand),
-    LiveStacking(LiveStackingCommand),
+    ProcessImage {
+        command:    ProcessImageCommand,
+        result_fun: ResultFun,
+    },
     Exit
 }
 
 impl Command {
     fn name(&self) -> &'static str {
         match self {
-            Command::PreviewImage(_) => "PreviewImage",
-            Command::LiveStacking(_) => "LiveStacking",
-            Command::Exit            => "Exit",
+            Command::ProcessImage{..} => "PreviewImage",
+            Command::Exit             => "Exit",
         }
     }
 }
@@ -224,10 +227,8 @@ fn process_blob_thread_fun(receiver: mpsc::Receiver<Command>) {
         match cmd {
             Command::Exit =>
                 break,
-            Command::PreviewImage(command) =>
-                make_preview_image(command),
-            Command::LiveStacking(command) =>
-                append_image_for_live_stacking(command),
+            Command::ProcessImage{command, result_fun} =>
+                make_preview_image(command, result_fun),
         };
     }
 }
@@ -372,32 +373,40 @@ fn apply_calibr_data_and_remove_hot_pixels(
     Ok(())
 }
 
-fn make_preview_image(command: PreviewImageCommand) {
-    let res = make_preview_image_impl(&command);
-    match res {
-        Ok(Some(light_info)) => {
-            command.send_result(ProcessingResultData::LightShortInfo(
-                light_info
-            ));
-        },
-        Err(err) => {
-            command.send_result(ProcessingResultData::Error(
-                err.to_string()
-            ));
-        },
-        _ => {},
+fn send_result(
+    data:       ProcessingResultData,
+    camera:     &str,
+    result_fun: &ResultFun
+) {
+    let result = FrameProcessingResult {
+        data,
+        camera: camera.to_string(),
+    };
+    result_fun(result);
+}
+
+fn make_preview_image(
+    command:    ProcessImageCommand,
+    result_fun: ResultFun
+) {
+    let res = make_preview_image_impl(&command, &result_fun);
+    if let Err(err) = res {
+        send_result(
+            ProcessingResultData::Error(err.to_string()),
+            &command.camera,
+            &result_fun
+        );
     }
 }
 
 fn add_calibr_image(
-    raw_image:  &mut RawImage,
-    adder:      &Arc<Mutex<Option<RawAdder>>>,
+    raw_image: &mut RawImage,
+    raw_adder: &Option<RawAdderParams>,
     frame_type: FrameType
 ) -> anyhow::Result<()> {
-    let mut adder = adder.lock().unwrap();
-    let Some(adder) = &mut *adder else { return Ok(()); };
-
-    if frame_type == FrameType::Flat {
+    let Some(adder) = raw_adder else { return Ok(()); };
+    let mut adder = adder.adder.lock().unwrap();
+    if frame_type == FrameType::Flats {
         let tmr = TimeLogger::start();
         raw_image.normalize_flat();
         tmr.log("Normalizing flat");
@@ -409,9 +418,16 @@ fn add_calibr_image(
 }
 
 fn make_preview_image_impl(
-    command: &PreviewImageCommand
-) -> anyhow::Result<Option<LightFileShortInfo>> {
+    command:    &ProcessImageCommand,
+    result_fun: &ResultFun
+) -> anyhow::Result<()> {
     let total_tmr = TimeLogger::start();
+
+    send_result(
+        ProcessingResultData::ShotProcessingStarted(command.mode_type),
+        &command.camera,
+        result_fun
+    );
 
     let tmr = TimeLogger::start();
     let mut raw_image = create_raw_image_from_blob(&command.blob)?;
@@ -421,8 +437,8 @@ fn make_preview_image_impl(
     let frame_type = raw_image.info().frame_type;
 
     let is_monochrome_img =
-        matches!(frame_type, FrameType::Bias) ||
-        matches!(frame_type, FrameType::Dark);
+        matches!(frame_type, FrameType::Biases) ||
+        matches!(frame_type, FrameType::Darks);
 
     // Histogram
 
@@ -437,41 +453,39 @@ fn make_preview_image_impl(
     drop(hist);
 
     // Applying calibration data
-    if frame_type == FrameType::Light {
-        let mut calibr = command.frame.calibr.lock().unwrap();
-        apply_calibr_data_and_remove_hot_pixels(&command.calibr, &mut raw_image, &mut calibr, true)?;
+    if frame_type == FrameType::Lights {
+        let mut calibr = command.calibr_images.lock().unwrap();
+        apply_calibr_data_and_remove_hot_pixels(&command.calibr_params, &mut raw_image, &mut calibr, true)?;
     }
 
-    let mode = if command.save_path.is_some() {
-        ResultMode::RawFrame
-    } else if command.live_view {
-        ResultMode::LiveView
-    } else  {
-        ResultMode::OneShot
-    };
-
-    command.send_result(ProcessingResultData::Histogram(
-        mode
-    ));
+    send_result(
+        ProcessingResultData::Histogram(command.mode_type),
+        &command.camera,
+        result_fun
+    );
 
     match frame_type {
-        FrameType::Flat => {
+        FrameType::Flats => {
             let hist = command.frame.hist.read().unwrap();
             *command.frame.info.write().unwrap() = ResultImageInfo::FlatInfo(
                 FlatImageInfo::from_histogram(&hist)
             );
-            command.send_result(ProcessingResultData::FrameInfo(
-                mode
-            ));
+            send_result(
+                ProcessingResultData::FrameInfo(command.mode_type),
+                &command.camera,
+                result_fun
+            );
         },
-        FrameType::Dark | FrameType::Bias => {
+        FrameType::Darks | FrameType::Biases => {
             let hist = command.frame.hist.read().unwrap();
             *command.frame.info.write().unwrap() = ResultImageInfo::RawInfo(
                 RawImageStat::from_histogram(&hist)
             );
-            command.send_result(ProcessingResultData::FrameInfo(
-                mode
-            ));
+            send_result(
+                ProcessingResultData::FrameInfo(command.mode_type),
+                &command.camera,
+                result_fun
+            );
         },
 
         _ => {},
@@ -484,13 +498,17 @@ fn make_preview_image_impl(
     let tmr = TimeLogger::start();
     if !is_monochrome_img {
         raw_image.demosaic_into(&mut image, true);
-
     } else {
         raw_image.copy_into_monochrome(&mut image);
     }
     tmr.log("demosaic");
 
-    if let FrameType::Flat| FrameType::Dark | FrameType::Bias = frame_type {
+    let frame_for_raw_adder = matches!(
+        frame_type,
+        FrameType::Flats| FrameType::Darks | FrameType::Biases
+    );
+
+    if frame_for_raw_adder {
         add_calibr_image(&mut raw_image, &command.raw_adder, frame_type)?;
     }
 
@@ -502,49 +520,234 @@ fn make_preview_image_impl(
     let image = command.frame.image.read().unwrap();
     let hist = command.frame.hist.read().unwrap();
     let tmr = TimeLogger::start();
-    let rgb_bytes =
-        get_rgb_bytes_from_preview_image(&image, &hist, &command.options);
+    let rgb_bytes = get_rgb_bytes_from_preview_image(
+        &image,
+        &hist,
+        &command.view_options
+    );
     tmr.log("get_rgb_bytes_from_preview_image");
 
     let preview_data = PreviewImgData {
         rgb_bytes,
         image_width: image.width(),
         image_height: image.height(),
-        params: command.options.clone(),
+        params: command.view_options.clone(),
     };
-    command.send_result(ProcessingResultData::Preview(
-        preview_data,
-        mode
-    ));
+    send_result(
+        ProcessingResultData::PreviewFrame(preview_data, command.mode_type),
+        &command.camera,
+        result_fun
+    );
 
-    let mut light_info_result: Option<LightFileShortInfo> = None;
-    if frame_type == FrameType::Light {
-        // Filtered image for stars
+    let max_stars_fwhm = command.quality_options
+        .as_ref()
+        .and_then(|qo| if qo.use_max_fwhm { Some(qo.max_fwhm) } else { None });
 
+    let max_stars_ovality = command.quality_options
+        .as_ref()
+        .and_then(|qo| if qo.use_max_ovality { Some(qo.max_ovality) } else { None });
+
+    let is_bad_frame = if frame_type == FrameType::Lights {
         let tmr = TimeLogger::start();
+        let info = LightImageInfo::from_image(
+            &image,
+            exposure,
+            max_stars_fwhm,
+            max_stars_ovality,
+            true
+        );
+        tmr.log("TOTAL LightImageInfo::from_image");
 
-        let info = LightImageInfo::from_image(&image, exposure, true);
-
-        let mut light_info = LightFileShortInfo::default();
+        let mut light_info = LightFrameShortInfo::default();
+        light_info.time = Utc::now();
+        light_info.exposure = exposure;
         light_info.noise = 100.0 * info.noise / image.max_value() as f32;
         light_info.background = 100.0 * info.background as f32 / image.max_value() as f32;
         light_info.stars_fwhm = info.stars_fwhm;
         light_info.stars_ovality = info.stars_ovality;
         light_info.stars_count = info.stars.len();
-        light_info_result = Some(light_info);
-        *command.frame.info.write().unwrap() = ResultImageInfo::LightInfo(info);
-        tmr.log("TOTAL LightImageInfo::from_image");
-        command.send_result(ProcessingResultData::FrameInfo(
-            mode
-        ));
-    }
+        light_info.width = info.width;
+        light_info.height = info.height;
 
-    if let Some(save_path) = command.save_path.as_ref() {
+        // Check taken frame is good or bad
+
+        if !info.stars_fwhm_good {
+            light_info.flags |= LightFrameShortInfoFlags::BAD_STARS_FWHM;
+        }
+        if !info.stars_ovality_good {
+            light_info.flags |= LightFrameShortInfoFlags::BAD_STARS_OVAL;
+        }
+
+        let bad_frame = !info.stars_fwhm_good || !info.stars_ovality_good;
+
+        // Stars offset
+        if command.flags.contains(ProcessImageFlags::CALC_STARS_OFFSET) && !bad_frame {
+             // Compare reference stars and new stars
+            // and calculate offset and angle
+            let cur_stars_points: Vec<_> = info.stars.iter()
+                .map(|star| Point {x: star.x, y: star.y })
+                .collect();
+
+            let ref_stars = command.ref_stars.read().unwrap();
+            let (angle, offset_x, offset_y) = if let Some(ref_stars) = &*ref_stars {
+                let tmr = TimeLogger::start();
+                let image_offset = Offset::calculate(
+                    ref_stars,
+                    &cur_stars_points,
+                    image.width() as f64,
+                    image.height() as f64
+                );
+                tmr.log("Offset::calculate");
+                if let Some(image_offset) = image_offset {
+                    (Some(image_offset.angle), Some(image_offset.x), Some(image_offset.y))
+                } else {
+                    light_info.flags |= LightFrameShortInfoFlags::BAD_OFFSET;
+                    (None, None, None)
+                }
+            } else {
+                drop(ref_stars);
+                let mut ref_stars = command.ref_stars.write().unwrap();
+                *ref_stars = Some(cur_stars_points);
+                (Some(0.0), Some(0.0), Some(0.0))
+            };
+
+            light_info.offset_x = offset_x;
+            light_info.offset_y = offset_y;
+            light_info.angle = angle;
+        }
+
+        // Live stacking
+
+        if let (Some(live_stacking), false) = (command.live_stacking.as_ref(), bad_frame) {
+            // Translate/rotate image to reference image and add
+            if let (Some(offset_x), Some(offset_y), Some(angle)) = (light_info.offset_x, light_info.offset_y, light_info.angle) {
+                let mut image_adder = live_stacking.data.adder.write().unwrap();
+                let tmr = TimeLogger::start();
+                image_adder.add(&image, -offset_x, -offset_y, -angle, exposure, true);
+                tmr.log("ImageAdder::add");
+                drop(image_adder);
+
+                let image_adder = live_stacking.data.adder.read().unwrap();
+
+                let mut res_image = live_stacking.data.result.image.write().unwrap();
+                let tmr = TimeLogger::start();
+                image_adder.copy_to_image(&mut res_image, true);
+                tmr.log("ImageAdder::copy_to_image");
+                drop(res_image);
+
+                let res_image = live_stacking.data.result.image.read().unwrap();
+
+                // Histogram for live stacking image
+
+                let mut hist = live_stacking.data.result.hist.write().unwrap();
+                let tmr = TimeLogger::start();
+                hist.from_image(&res_image, true);
+                tmr.log("histogram from live view");
+                drop(hist);
+                let hist = live_stacking.data.result.hist.read().unwrap();
+                send_result(
+                    ProcessingResultData::HistogramLiveRes(command.mode_type),
+                    &command.camera,
+                    result_fun
+                );
+
+                // Live stacking image info
+
+                let tmr = TimeLogger::start();
+                let live_stacking_info = LightImageInfo::from_image(
+                    &res_image,
+                    image_adder.total_exposure(),
+                    max_stars_fwhm,
+                    max_stars_ovality,
+                    true
+                );
+                tmr.log("LightImageInfo::from_image for livestacking");
+
+                *live_stacking.data.result.info.write().unwrap() = ResultImageInfo::LightInfo(
+                    live_stacking_info
+                );
+                send_result(
+                    ProcessingResultData::FrameInfoLiveRes(command.mode_type),
+                    &command.camera,
+                    result_fun
+                );
+
+                // Convert into preview RGB bytes
+
+                if !command.view_options.show_orig_frame {
+                    let tmr = TimeLogger::start();
+                    let rgb_bytes = get_rgb_bytes_from_preview_image(
+                        &res_image,
+                        &hist,
+                        &command.view_options
+                    );
+                    tmr.log("get_rgb_bytes_from_preview_image");
+                    let preview_data = PreviewImgData {
+                        rgb_bytes,
+                        image_width: image.width(),
+                        image_height: image.height(),
+                        params: command.view_options.clone(),
+                    };
+                    send_result(
+                        ProcessingResultData::PreviewLiveRes(preview_data, command.mode_type),
+                        &command.camera,
+                        result_fun
+                    );
+                }
+
+                // save result image
+
+                if live_stacking.options.save_enabled {
+                    let save_res_interv = live_stacking.options.save_minutes as f64 * 60.0;
+                    let mut last_save = live_stacking.data.write_time.lock().unwrap();
+                    let have_to_save = if let Some(last_save) = &*last_save {
+                        last_save.elapsed().as_secs() >= save_res_interv as u64
+                    } else {
+                        true
+                    };
+                    if have_to_save {
+                        let now_time: DateTime<Local> = Local::now();
+                        let now_time_str = now_time.format("%Y%m%d-%H%M%S").to_string();
+                        let file_path = live_stacking.options.out_dir.join(format!("Live_{}.tif", now_time_str));
+                        let tmr = TimeLogger::start();
+                        image_adder.save_to_tiff(&file_path)?;
+                        tmr.log("save live stacking result image");
+                        *last_save = Some(std::time::Instant::now());
+                    }
+                }
+            }
+        }
+
+        // Send message with short light frame info
+
+        send_result(
+            ProcessingResultData::LightShortInfo(light_info, command.mode_type),
+            &command.camera,
+            result_fun
+        );
+
+        // Send message about light frame info stored
+
+        *command.frame.info.write().unwrap() = ResultImageInfo::LightInfo(info);
+        send_result(
+            ProcessingResultData::FrameInfo(command.mode_type),
+            &command.camera,
+            result_fun
+        );
+
+        bad_frame
+    } else {
+        false
+    };
+
+    // Save original raw image
+    if let Some(save_path) = command.save_path.as_ref() { if !is_bad_frame {
         let sub_path = match frame_type {
-            FrameType::Light => "Light",
-            FrameType::Flat => "Flat",
-            FrameType::Dark => "Dark",
-            FrameType::Bias => "Bias",
+            FrameType::Lights => "Light",
+            FrameType::Flats => "Flat",
+            FrameType::Darks => "Dark",
+            FrameType::Biases => "Bias",
+            FrameType::Undef => unreachable!(),
         };
         let full_path = save_path.join(sub_path);
         if !full_path.is_dir() {
@@ -568,301 +771,48 @@ fn make_preview_image_impl(
                 file_name.to_str().unwrap_or_default()
             ))?;
         tmr.log("Saving raw image");
-    }
+    }}
 
     total_tmr.log("TOTAL PREVIEW");
 
-    command.send_result(ProcessingResultData::SingleShotFinished);
+    // Save master file
 
-    Ok(light_info_result)
-}
+    if let (Some(raw_adder), Some(save_path)) = (command.raw_adder.as_ref(), command.save_path.as_ref()) {
+        if raw_adder.save && frame_for_raw_adder {
+            log::debug!("Saving master frame...");
+            let mut adder = raw_adder.adder.lock().unwrap();
+            let raw_image = adder.get()?;
+            adder.clear();
+            let (prefix, file_name_suff) = match frame_type {
+                FrameType::Flats => ("flat", command.frame_options.create_master_flat_file_name_suff()),
+                FrameType::Darks => ("dark", command.frame_options.create_master_dark_file_name_suff()),
+                _ => unreachable!(),
+            };
+            let file_name = format!("{}_{}x{}-{}.fits", prefix, adder.width(), adder.height(), file_name_suff);
+            let full_file_name = save_path.join(file_name);
+            raw_image.save_to_fits_file(&full_file_name)?;
+            send_result(
+                ProcessingResultData::MasterSaved {
+                    frame_type,
+                    file_name: full_file_name
+                },
+                &command.camera,
+                result_fun
+            );
+        }
+        log::debug!("Master frame saved!");
+    }
 
-fn append_image_for_live_stacking(command: LiveStackingCommand) {
-    let res = append_image_for_live_stacking_impl(&command);
-    match res {
-        Ok(Some(light_info)) => {
-            command.send_result(ProcessingResultData::LightShortInfo(
-                light_info
-            ));
+    send_result(
+        ProcessingResultData::ShotProcessingFinished{
+            mode_type:        command.mode_type,
+            frame_is_ok: !is_bad_frame
         },
-        Err(err) => {
-            command.send_result(ProcessingResultData::Error(
-                err.to_string()
-            ));
-        },
-        _ => {},
-    }
-}
-
-fn append_image_for_live_stacking_impl(
-    command: &LiveStackingCommand
-) -> anyhow::Result<Option<LightFileShortInfo>> {
-    let total_tmr = TimeLogger::start();
-
-    // FITS blob -> raw image
-
-    let tmr = TimeLogger::start();
-    let mut raw_image = create_raw_image_from_blob(&command.blob)
-        .map_err(|e| anyhow::anyhow!(
-            "Error: {} when extracting image from indi server blob\nPossible camera is not in RAW mode",
-            e.to_string()
-        ))?;
-    tmr.log("create_raw_image_from_blob");
-    let exposure = raw_image.info().exposure;
-
-    // Histogram
-
-    let mut hist = command.frame.hist.write().unwrap();
-    let tmr = TimeLogger::start();
-    hist.from_raw_image(&raw_image, false, true);
-    tmr.log("histogram from raw image");
-    drop(hist);
-    let hist = command.frame.hist.read().unwrap();
-    command.send_result(
-        ProcessingResultData::Histogram(ResultMode::LiveFrame)
+        &command.camera,
+        result_fun
     );
 
-    // Applying calibration data
-
-    let mut calibr = command.frame.calibr.lock().unwrap();
-    apply_calibr_data_and_remove_hot_pixels(&command.calibr, &mut raw_image, &mut calibr, true)?;
-    drop(calibr);
-
-    // Demosaic
-
-    let mut image = command.frame.image.write().unwrap();
-    let tmr = TimeLogger::start();
-    raw_image.demosaic_into(&mut image, true);
-    tmr.log("demosaic");
-
-    drop(raw_image);
-    drop(image);
-
-    let image = command.frame.image.read().unwrap();
-
-    // Preview current frame
-
-    if command.preview_params.show_orig_frame {
-        let tmr = TimeLogger::start();
-        let rgb_bytes = get_rgb_bytes_from_preview_image(
-            &image,
-            &hist,
-            &command.preview_params
-        );
-        tmr.log("get_rgb_bytes_from_preview_image");
-
-        let preview_data = PreviewImgData {
-            rgb_bytes,
-            image_width: image.width(),
-            image_height: image.height(),
-            params: command.preview_params.clone(),
-        };
-
-        command.send_result(ProcessingResultData::Preview(
-            preview_data,
-            ResultMode::LiveFrame
-        ));
-    }
-
-    // Image info and stars
-
-    let mut light_info = LightFileShortInfo::default();
-
-    let tmr = TimeLogger::start();
-    let light_frame_info = LightImageInfo::from_image(&image, exposure, true);
-    tmr.log("LightImageInfo::from_image");
-
-    light_info.noise = 100.0 * light_frame_info.noise / image.max_value() as f32;
-    light_info.background = 100.0 * light_frame_info.background as f32 / image.max_value() as f32;
-    light_info.stars_fwhm = light_frame_info.stars_fwhm;
-    light_info.stars_ovality = light_frame_info.stars_ovality;
-    light_info.stars_count = light_frame_info.stars.len();
-
-    let cur_stars_points: Vec<_> = light_frame_info.stars.iter()
-        .map(|star| Point {x: star.x, y: star.y })
-        .collect();
-
-    // Check taken frame is good or bad
-
-    let bad_stars_fwhm = match (light_frame_info.stars_fwhm, command.max_fwhm) {
-        (None, _)               => true,
-        (Some(fwhm), Some(max)) => fwhm > max,
-        _                       => false,
-    };
-    let bad_stars_ovality = match (light_frame_info.stars_ovality, command.max_ovality) {
-        (None, _)                  => true,
-        (Some(ovality), Some(max)) => ovality > max,
-        _                          => false,
-    };
-    let bad_stars_cnt = match command.min_stars {
-        Some(min) => light_frame_info.stars.len() < min,
-        _         => false,
-    };
-    let is_bad_frame = bad_stars_fwhm || bad_stars_ovality || bad_stars_cnt;
-
-    // Inform about frame information
-
-    *command.frame.info.write().unwrap() = ResultImageInfo::LightInfo(
-        light_frame_info
-    );
-    command.send_result(ProcessingResultData::FrameInfo(
-        ResultMode::LiveFrame
-    ));
-
-    if is_bad_frame {
-        return Ok(Some(light_info));
-    }
-
-    // Compare reference stars and new stars
-    // and calculate offset and angle
-
-    let ref_stars = command.data.ref_stars.read().unwrap();
-    let (angle, offset_x, offset_y) = if let Some(ref_stars) = &*ref_stars {
-        let tmr = TimeLogger::start();
-        let image_offset = Offset::calculate(
-            ref_stars,
-            &cur_stars_points,
-            image.width() as f64,
-            image.height() as f64
-        );
-        tmr.log("Offset::calculate");
-        if let Some(image_offset) = image_offset {
-            (image_offset.angle, image_offset.x, image_offset.y)
-        } else {
-            return Ok(Some(light_info));
-        }
-    } else {
-        drop(ref_stars);
-        let mut ref_stars = command.data.ref_stars.write().unwrap();
-        *ref_stars = Some(cur_stars_points);
-        (0.0, 0.0, 0.0)
-    };
-
-    light_info.offset_x = Some(offset_x as f32);
-    light_info.offset_y = Some(offset_y as f32);
-    light_info.angle = Some(angle as f32);
-
-    // Translate/rotate image to reference image and add
-
-    let mut image_adder = command.data.adder.write().unwrap();
-    let tmr = TimeLogger::start();
-    image_adder.add(&image, -offset_x, -offset_y, -angle, exposure, true);
-    tmr.log("ImageAdder::add");
-    drop(image_adder);
-
-    let image_adder = command.data.adder.read().unwrap();
-
-    let mut res_image = command.data.result.image.write().unwrap();
-    let tmr = TimeLogger::start();
-    image_adder.copy_to_image(&mut res_image, true);
-    tmr.log("ImageAdder::copy_to_image");
-    drop(res_image);
-
-    let res_image = command.data.result.image.read().unwrap();
-
-    // Histogram for live stacking image
-
-    let mut hist = command.data.result.hist.write().unwrap();
-    let tmr = TimeLogger::start();
-    hist.from_image(&res_image, true);
-    tmr.log("histogram from live view");
-    drop(hist);
-    let hist = command.data.result.hist.read().unwrap();
-    command.send_result(ProcessingResultData::Histogram(
-        ResultMode::LiveResult
-    ));
-
-    // Live stacking image info
-
-    let tmr = TimeLogger::start();
-    let live_stacking_info = LightImageInfo::from_image(
-        &res_image,
-        image_adder.total_exposure(),
-        true
-    );
-    tmr.log("LightImageInfo::from_image for livestacking");
-
-    log::debug!("live_stacking_info.stars.len()={}", live_stacking_info.stars.len());
-
-    *command.data.result.info.write().unwrap() = ResultImageInfo::LightInfo(
-        live_stacking_info
-    );
-    command.send_result(ProcessingResultData::FrameInfo(
-        ResultMode::LiveResult
-    ));
-
-    // Convert into preview RGB bytes
-
-    if !command.preview_params.show_orig_frame {
-        let tmr = TimeLogger::start();
-        let rgb_bytes = get_rgb_bytes_from_preview_image(
-            &res_image,
-            &hist,
-            &command.preview_params
-        );
-        tmr.log("get_rgb_bytes_from_preview_image");
-        let preview_data = PreviewImgData {
-            rgb_bytes,
-            image_width: image.width(),
-            image_height: image.height(),
-            params: command.preview_params.clone(),
-        };
-        command.send_result(ProcessingResultData::Preview(
-            preview_data,
-            ResultMode::LiveResult
-        ));
-    }
-
-    // Save original image
-
-    if command.save_orig_frames {
-        let mut fn_gen = command.fn_gen.lock().unwrap();
-        let mut file_ext = command.blob.format.as_str().trim();
-        while file_ext.starts_with('.') { file_ext = &file_ext[1..]; }
-        let fn_mask = format!("Light_${{num}}.{}", file_ext);
-        let orig_path = command.save_path.join("Original");
-        if !orig_path.is_dir() {
-            std::fs::create_dir_all(&orig_path)
-                .map_err(|e|anyhow::anyhow!(
-                    "Error '{}'\nwhen trying to create directory '{}'",
-                    e.to_string(),
-                    orig_path.to_str().unwrap_or_default()
-                ))?;
-
-        }
-        let file_name = fn_gen.generate(&orig_path, &fn_mask);
-        let tmr = TimeLogger::start();
-        std::fs::write(&file_name, command.blob.data.as_slice())
-            .map_err(|e|anyhow::anyhow!(
-                "Error '{}'\nwhen saving file '{}'",
-                e.to_string(),
-                file_name.to_str().unwrap_or_default()
-            ))?;
-        tmr.log("save original raw image");
-    }
-
-    // save result image
-
-    if let Some(save_res_interv) = command.save_res_interv {
-        let mut last_save = command.data.write_time.lock().unwrap();
-        let have_to_save = if let Some(last_save) = &*last_save {
-            last_save.elapsed().as_secs() >= save_res_interv as u64
-        } else {
-            true
-        };
-        if have_to_save {
-            let now_time: DateTime<Local> = Local::now();
-            let now_time_str = now_time.format("%Y%m%d-%H%M%S").to_string();
-            let file_path = command.save_path.join(format!("Live_{}.tif", now_time_str));
-            let tmr = TimeLogger::start();
-            image_adder.save_to_tiff(&file_path)?;
-            tmr.log("save live stacking result image");
-            *last_save = Some(std::time::Instant::now());
-        }
-    }
-
-    total_tmr.log("TOTAL LIVE STACKING");
-    Ok(Some(light_info))
+    Ok(())
 }
 
 pub struct SeqFileNameGen {

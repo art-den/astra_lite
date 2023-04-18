@@ -3,7 +3,7 @@ use std::f64::consts::PI;
 use std::sync::*;
 use itertools::*;
 use crate::log_utils::TimeLogger;
-use crate::{image::*, image_raw::*};
+use crate::{image::*, image_raw::*, math::*};
 
 const MAX_STAR_DIAM: usize = 32;
 const MAX_STARS_CNT: usize = 500;
@@ -34,7 +34,6 @@ pub fn seconds_to_total_time_str(seconds: f64, short: bool) -> String {
     }
 }
 
-
 #[derive(Clone)]
 pub struct Star {
     pub x: f64,
@@ -51,6 +50,8 @@ pub struct Star {
 pub type Stars = Vec<Star>;
 
 pub struct LightImageInfo {
+    pub width: usize,
+    pub height: usize,
     pub exposure: f64,
     pub noise: f32,
     pub background: i32,
@@ -58,17 +59,25 @@ pub struct LightImageInfo {
     pub stars: Stars,
     pub star_img: ImageLayer<u16>,
     pub stars_fwhm: Option<f32>,
+    pub stars_fwhm_good: bool,
     pub stars_ovality: Option<f32>,
+    pub stars_ovality_good: bool,
 }
 
 impl LightImageInfo {
-    pub fn from_image(image: &Image, exposure: f64, mt: bool) -> Self {
+    pub fn from_image(
+        image:             &Image,
+        exposure:          f64,
+        max_stars_fwhm:    Option<f32>,
+        max_stars_ovality: Option<f32>,
+        mt:                bool
+    ) -> Self {
         let max_value = image.max_value();
-        let overexposured_bord = (97 * max_value as u32 / 100) as u16;
+        let overexposured_bord = (90 * max_value as u32 / 100) as u16;
         let mono_layer = if image.is_color() { &image.g } else { &image.l };
 
         let tmr = TimeLogger::start();
-        let noise = mono_layer.calc_noise(mt);
+        let noise = mono_layer.calc_noise();
         tmr.log("calc image noise");
 
         let tmr = TimeLogger::start();
@@ -86,12 +95,29 @@ impl LightImageInfo {
 
         let tmr = TimeLogger::start();
         const COMMON_STAR_MAG: usize = 4;
+        const COMMON_STAR_MAG_F: f64 = COMMON_STAR_MAG as f64;
         let star_img = Self::calc_common_star_image(&mono_layer, &stars, COMMON_STAR_MAG);
-        let stars_fwhm = Self::calc_fwhm(&star_img, COMMON_STAR_MAG);
-        let stars_ovality = Self::calc_ovality(&star_img);
+        let stars_fwhm = Self::calc_fwhm(&star_img)
+            .map(|v| (v / (COMMON_STAR_MAG_F * COMMON_STAR_MAG_F)) as f32);
+        let stars_ovality = Self::calc_ovality(&star_img)
+            .map(|v| (v / COMMON_STAR_MAG_F) as f32);
         tmr.log("calc fwhm+ovality");
 
+        let stars_fwhm_good = if let Some(max_stars_fwhm) = max_stars_fwhm {
+            stars_fwhm.unwrap_or(999.0) < max_stars_fwhm
+        } else {
+            true
+        };
+
+        let stars_ovality_good = if let Some(max_stars_ovality) = max_stars_ovality {
+            stars_ovality.unwrap_or(999.0) < max_stars_ovality
+        } else {
+            true
+        };
+
         Self {
+            width: image.width(),
+            height: image.height(),
             exposure,
             noise,
             background,
@@ -99,8 +125,14 @@ impl LightImageInfo {
             stars,
             star_img,
             stars_fwhm,
+            stars_fwhm_good,
             stars_ovality,
+            stars_ovality_good,
         }
+    }
+
+    pub fn is_ok(&self) -> bool {
+        self.stars_fwhm_good && self.stars_ovality_good
     }
 
     fn find_stars_in_image(
@@ -293,7 +325,7 @@ impl LightImageInfo {
         let mut result_width = usize::min(aver_width, MAX_STAR_DIAM) * k;
         if result_width % 2 == 0 { result_width += 1; }
         let result_width2 = (result_width / 2) as isize;
-        let mut result_height = usize::min(aver_height, MAX_STAR_DIAM * k) * k;
+        let mut result_height = usize::min(aver_height, MAX_STAR_DIAM) * k;
         if result_height % 2 == 0 { result_height += 1; }
         let result_height2 = (result_height / 2) as isize;
         let mut result = ImageLayer::new_with_size(result_width, result_height);
@@ -321,7 +353,7 @@ impl LightImageInfo {
         result
     }
 
-    fn calc_fwhm(star_image: &ImageLayer<u16>, k: usize) -> Option<f32> {
+    fn calc_fwhm(star_image: &ImageLayer<u16>) -> Option<f64> {
         if star_image.is_empty() {
             return None;
         }
@@ -330,38 +362,54 @@ impl LightImageInfo {
             .iter()
             .filter(|&v| *v > u16::MAX / 2)
             .count();
-        Some((above_cnt as f64 / (k * k) as f64) as f32)
+        Some(above_cnt as f64)
     }
 
-    fn calc_ovality(star_image: &ImageLayer<u16>) -> Option<f32> {
+    fn calc_ovality(star_image: &ImageLayer<u16>) -> Option<f64> {
         if star_image.is_empty() {
             return None;
         }
-        const ANGLE_CNT: usize = 36;
-        const K: usize = 4;
+        const ANGLE_CNT: usize = 32;
+        const K: usize = 16;
         let center_x = (star_image.width() / 2) as f64;
         let center_y = (star_image.height() / 2) as f64;
         let size = (usize::max(star_image.width(), star_image.height()) * K) as i32;
         let mut diamemters = Vec::new();
         for i in 0..ANGLE_CNT {
-            let angle = 2.0 * PI * i as f64 / ANGLE_CNT as f64;
+            let angle = PI * (i as f64) / (ANGLE_CNT as f64);
             let cos_angle = f64::cos(angle);
             let sin_angle = f64::sin(angle);
-            let mut above_count = 0_usize;
-            for j in -size/2..size/2 {
+            let mut inside_star_count1 = 0_usize;
+            let mut inside_star = false;
+            for j in -size/2..0 {
                 let k = j as f64 / K as f64;
                 let x = k * cos_angle + center_x;
                 let y = k * sin_angle + center_y;
                 if let Some(v) = star_image.get_f64_crd(x, y) {
-                    if v > u16::MAX/2 { above_count += 1; }
+                    if v >= u16::MAX/2 { inside_star = true; }
                 }
+                if inside_star { inside_star_count1 += 1; }
             }
-            diamemters.push(above_count);
+            let mut inside_star = false;
+            let mut inside_star_count2 = 0_usize;
+            for j in (1..size/2).rev() {
+                let k = j as f64 / K as f64;
+                let x = k * cos_angle + center_x;
+                let y = k * sin_angle + center_y;
+                if let Some(v) = star_image.get_f64_crd(x, y) {
+                    if v >= u16::MAX/2 { inside_star = true; }
+                }
+                if inside_star { inside_star_count2 += 1; }
+            }
+            let inside_star_count = 2 * usize::min(inside_star_count1, inside_star_count2);
+            diamemters.push(inside_star_count);
         }
-        let max_diameter = diamemters.iter().copied().max().unwrap_or(0) as f32;
-        let min_diameter = diamemters.iter().copied().min().unwrap_or(0) as f32;
-
-        Some(max_diameter / min_diameter - 1.0)
+        let max_diam_pos = diamemters.iter().copied().position_max().unwrap_or_default();
+        let min_diam_pos = (max_diam_pos + ANGLE_CNT/2) % ANGLE_CNT;
+        let max_diameter = diamemters[max_diam_pos] as f64;
+        let min_diameter = diamemters[min_diam_pos] as f64;
+        let diff = max_diameter - min_diameter;
+        Some(diff / K as f64)
     }
 }
 
@@ -381,7 +429,6 @@ impl IirFilterCoeffs {
 
 struct IirFilter {
     y0: Option<f32>,
-
 }
 
 impl IirFilter {
@@ -464,10 +511,6 @@ impl FloodFiller {
             check_neibour(pt_x, pt_y+1);
         }
     }
-}
-
-fn linear_interpolate(x: f64, x1: f64, x2: f64, y1: f64, y2: f64) -> f64 {
-    (x - x1) * (y2 - y1) / (x2 - x1) + y1
 }
 
 pub struct FlatInfoChan {

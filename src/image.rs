@@ -108,11 +108,10 @@ impl<T: Copy + Default> ImageLayer<T> {
 }
 
 impl ImageLayer<u16> {
-    pub fn calc_noise(&self, _mt: bool) -> f32 {
-        const STEP: usize = 8;
+    pub fn calc_noise(&self) -> f32 {
         let mut diffs = Vec::with_capacity(self.data.len()/10);
         for (v1, v2, v3, v4, v5, m, v6, v7, v8, v9, v10)
-        in self.data.iter().tuples() {
+        in self.data.iter().step_by(7).tuples() {
             let aver = (
                 *v1 as u32 + *v2 as u32 +
                 *v3 as u32 + *v4 as u32 +
@@ -126,12 +125,12 @@ impl ImageLayer<u16> {
         }
         let max_pos = 80 * diffs.len() / 100; // 80%
         diffs.select_nth_unstable(max_pos);
-        let mut sum = 0_f64;
+        let mut sum = 0_u64;
         for v in &diffs[..max_pos] {
-            let v = *v as f64;
+            let v = *v as u64;
             sum += v * v;
         }
-        f64::sqrt(sum / max_pos as f64) as f32
+        f64::sqrt(sum as f64 / max_pos as f64) as f32
     }
 
     pub fn calc_background(&self, mt: bool) -> u16 {
@@ -751,6 +750,8 @@ impl ImageAdder {
         self.width = 0;
         self.height = 0;
         self.max_value = 0;
+        self.total_exp = 0.0;
+        self.frames_cnt = 0;
     }
 
     pub fn add(

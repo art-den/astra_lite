@@ -1,8 +1,8 @@
-use std::{sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, rc::Rc, cell::RefCell, time::Duration};
+use std::{sync::{Arc, RwLock}, rc::Rc, cell::RefCell, time::Duration};
 use gtk::{prelude::*, glib, glib::clone, cairo};
 use serde::{Serialize, Deserialize};
 
-use crate::{indi_api, gtk_utils, io_utils::*, image_processing::*};
+use crate::{indi_api, gtk_utils, io_utils::*, state::*};
 
 pub const TIMER_PERIOD_MS: u64 = 250;
 pub type TimerHandlers = Vec<Box<dyn Fn() + 'static>>;
@@ -59,24 +59,17 @@ impl Default for MainOptions {
     }
 }
 
-#[derive(Default)]
-struct ProgressData {
-    progress: f64,
-    text: String,
-}
-
 pub struct MainData {
     options:          RefCell<MainOptions>,
     timer_handlers:   RefCell<TimerHandlers>,
-    progress:         RefCell<ProgressData>,
+    progress:         RefCell<Option<Progress>>,
+    conn_string:      RefCell<String>,
+    dev_string:       RefCell<String>,
+    pub thread_timer: Arc<ThreadTimer>,
+    pub state:        Arc<RwLock<State>>,
     pub indi:         Arc<indi_api::Connection>,
     pub builder:      gtk::Builder,
     pub window:       gtk::ApplicationWindow,
-    pub indi_status:  RefCell<indi_api::ConnState>,
-    pub cur_frame:    Arc<ResultImage>,
-    pub thread_timer: Arc<ThreadTimer>,
-    pub conn_string:  RefCell<String>,
-    pub dev_string:   RefCell<String>,
 }
 
 impl Drop for MainData {
@@ -108,19 +101,22 @@ pub fn build_ui(application: &gtk::Application) {
     gtk_utils::exec_and_show_error(&window, || {
         load_json_from_config_file(&mut options, "conf_main")
     });
+    let thread_timer = Arc::new(ThreadTimer::new());
     let data = Rc::new(MainData {
         options:        RefCell::new(options),
         timer_handlers: RefCell::new(Vec::new()),
-        progress:       RefCell::new(ProgressData::default()),
+        progress:       RefCell::new(None),
+        state:          Arc::new(RwLock::new(State::new())),
+        thread_timer:   Arc::clone(&thread_timer),
         indi:           Arc::new(indi_api::Connection::new()),
         window:         window.clone(),
         builder:        builder.clone(),
-        indi_status:    RefCell::new(indi_api::ConnState::Disconnected),
-        cur_frame:      Arc::new(ResultImage::new()),
-        thread_timer:   Arc::new(ThreadTimer::new()),
         conn_string:    RefCell::new(String::new()),
         dev_string:     RefCell::new(String::new()),
     });
+
+    State::connect_indi_events(&data.state, &data.indi, &thread_timer);
+
     window.set_application(Some(application));
     window.show();
     apply_options(&data);
@@ -140,9 +136,14 @@ pub fn build_ui(application: &gtk::Application) {
             Continue(true)
         }
     );
+
     crate::gui_hardware::build_ui(
         application,
-        &data
+        Rc::clone(&data),
+        Arc::clone(&data.state),
+        Arc::clone(&data.indi),
+        data.builder.clone(),
+        data.window.clone(),
     );
     crate::gui_camera::build_ui(
         application,
@@ -150,7 +151,7 @@ pub fn build_ui(application: &gtk::Application) {
         &mut data.timer_handlers.borrow_mut()
     );
 
-    gtk_utils::enable_widgets(&builder, &[
+    gtk_utils::enable_widgets(&builder, false, &[
         ("mi_color_theme", cfg!(target_os = "windows"))
     ]);
 
@@ -210,9 +211,36 @@ pub fn build_ui(application: &gtk::Application) {
         }
     }));
 
+    gtk_utils::connect_action(&window, &data, "stop", handler_action_stop);
+    gtk_utils::connect_action(&window, &data, "continue", handler_action_continue);
+    correct_widgets_props(&data);
+    connect_state_events(&data);
     update_window_title(&data);
 }
 
+fn connect_state_events(data: &Rc<MainData>) {
+    let (sender, receiver) =
+        glib::MainContext::channel(glib::PRIORITY_DEFAULT);
+    let mut state = data.state.write().unwrap();
+    state.subscribe_events(move |event| {
+        sender.send(event).unwrap();
+    });
+    receiver.attach(None, clone! (@strong data => move |event| {
+        match event {
+            Event::ModeChanged => {
+                correct_widgets_props(&data);
+                show_mode_caption(&data);
+            },
+            Event::Propress(progress) => {
+                *data.progress.borrow_mut() = progress;
+                let da_progress = data.builder.object::<gtk::DrawingArea>("da_progress").unwrap();
+                da_progress.queue_draw();
+            },
+            _ => {},
+        }
+        Continue(true)
+    }));
+}
 
 fn handler_close_window(data: &Rc<MainData>) -> gtk::Inhibit {
     read_options_from_widgets(data);
@@ -277,107 +305,69 @@ fn handler_draw_progress(
     cr:   &cairo::Context
 ) {
     let progress_data = data.progress.borrow();
+    if let Some(progress_data) = progress_data.as_ref() {
+        if progress_data.total == 0 {
+            return;
+        }
+        let progress_ratio = progress_data.cur as f64 / progress_data.total as f64;
+        let progress_text = format!("{} / {}", progress_data.cur, progress_data.total);
+        gtk_utils::exec_and_show_error(&data.window, || {
+            gtk_utils::draw_progress_bar(
+                area,
+                cr,
+                progress_ratio,
+                &progress_text
+            )
+        });
+    }
+}
+
+fn correct_widgets_props(data: &Rc<MainData>) {
+    let state = data.state.read().unwrap();
+    let can_be_continued = state.aborted_mode().as_ref().map(|m| m.can_be_continued_after_stop()).unwrap_or(false);
+    gtk_utils::enable_actions(&data.window, &[
+        ("stop",     state.mode().can_be_stopped()),
+        ("continue", can_be_continued),
+    ]);
+}
+
+fn show_mode_caption(data: &Rc<MainData>) {
+    let state = data.state.read().unwrap();
+    let caption = if let Some(finished) = state.finished_mode() {
+        finished.progress_string() + " (finished)"
+    } else {
+        let mut tmp = state.mode().progress_string();
+        if let Some(aborted) = state.aborted_mode() {
+            tmp += " + ";
+            tmp += &aborted.progress_string();
+            tmp += " (aborted)";
+        }
+        tmp
+    };
+    let lbl_cur_action = data.builder.object::<gtk::Label>("lbl_cur_action").unwrap();
+    lbl_cur_action.set_text(&caption);
+}
+
+fn handler_action_stop(data: &Rc<MainData>) {
     gtk_utils::exec_and_show_error(&data.window, || {
-        gtk_utils::draw_progress_bar(
-            area,
-            cr,
-            progress_data.progress,
-            &progress_data.text
-        )
+        let mut state = data.state.write().unwrap();
+        state.abort_active_mode(&data.indi)?;
+        Ok(())
+    });
+}
+
+fn handler_action_continue(data: &Rc<MainData>) {
+    gtk_utils::exec_and_show_error(&data.window, || {
+        let mut state = data.state.write().unwrap();
+        state.continue_prev_mode(&data.indi)?;
+        Ok(())
     });
 }
 
 impl MainData {
-    pub fn show_progress(&self, progress: f64, text: String) {
-        let mut progress_data = self.progress.borrow_mut();
-        progress_data.progress = progress;
-        progress_data.text = text;
-        drop(progress_data);
-        let da_progress = self.builder.object::<gtk::DrawingArea>("da_progress").unwrap();
-        da_progress.queue_draw();
-    }
-
-    pub fn set_cur_action_text(&self, text: &str) {
-        let lbl_cur_action = self.builder.object::<gtk::Label>("lbl_cur_action").unwrap();
-        lbl_cur_action.set_text(text);
-    }
-
     pub fn set_dev_list_and_conn_status(&self, dev_list: String, conn_status: String) {
         *self.dev_string.borrow_mut() = dev_list;
         *self.conn_string.borrow_mut() = conn_status;
         update_window_title(self);
-    }
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-pub struct ThreadTimer {
-    thread: Option<std::thread::JoinHandle<()>>,
-    commands: Arc<Mutex<Vec<TimerCommand>>>,
-    exit_flag: Arc<AtomicBool>,
-}
-
-struct TimerCommand {
-    fun: Option<Box<dyn FnOnce() + Sync + Send + 'static>>,
-    time: std::time::Instant,
-    to_ms: u32,
-}
-
-impl Drop for ThreadTimer {
-    fn drop(&mut self) {
-        log::info!("Stopping ThreadTimer thread...");
-        self.exit_flag.store(true, Ordering::Relaxed);
-        let thread = self.thread.take().unwrap();
-        _ = thread.join();
-        log::info!("Done!");
-    }
-}
-
-impl ThreadTimer {
-    fn new() -> Self {
-        let commands = Arc::new(Mutex::new(Vec::new()));
-        let exit_flag = Arc::new(AtomicBool::new(false));
-
-        let thread = {
-            let commands = Arc::clone(&commands);
-            let exit_flag = Arc::clone(&exit_flag);
-            std::thread::spawn(move || {
-                Self::thread_fun(&commands, &exit_flag);
-            })
-        };
-        Self {
-            thread: Some(thread),
-            commands,
-            exit_flag,
-        }
-    }
-
-    pub fn exec(&self, to_ms: u32, fun: impl FnOnce() + Sync + Send + 'static) {
-        let mut commands = self.commands.lock().unwrap();
-        let command = TimerCommand {
-            fun: Some(Box::new(fun)),
-            time: std::time::Instant::now(),
-            to_ms,
-        };
-        commands.push(command);
-    }
-
-    fn thread_fun(
-        commands:  &Mutex<Vec<TimerCommand>>,
-        exit_flag: &AtomicBool
-    ) {
-        while !exit_flag.load(Ordering::Relaxed) {
-            let mut commands = commands.lock().unwrap();
-            for cmd in &mut *commands {
-                if cmd.time.elapsed().as_millis() as u32 >= cmd.to_ms {
-                    let fun = cmd.fun.take().unwrap();
-                    fun();
-                }
-            }
-            commands.retain(|cmd| cmd.fun.is_some());
-            drop(commands);
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-
     }
 }
