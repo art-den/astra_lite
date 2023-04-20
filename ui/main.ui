@@ -84,8 +84,17 @@
       <object class="GtkMenuItem">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
-        <property name="action-name">win.help_about</property>
-        <property name="label" translatable="yes">About</property>
+        <property name="action-name">win.help_save_indi</property>
+        <property name="label" translatable="yes">Save INDY properties...</property>
+        <property name="use-underline">True</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="action-name">win.open_logs_folder</property>
+        <property name="label" translatable="yes">Open logs folder</property>
         <property name="use-underline">True</property>
       </object>
     </child>
@@ -99,8 +108,8 @@
       <object class="GtkMenuItem">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
-        <property name="action-name">win.help_save_indi</property>
-        <property name="label" translatable="yes">Save INDY properties...</property>
+        <property name="action-name">win.help_about</property>
+        <property name="label" translatable="yes">About</property>
         <property name="use-underline">True</property>
       </object>
     </child>

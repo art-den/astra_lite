@@ -1,6 +1,7 @@
 /.vscode
 /target
 /dist
+/dist_remote
 /*.sh
 /Cargo.lock
 /.svn

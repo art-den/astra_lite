@@ -51,7 +51,7 @@ fn main() -> anyhow::Result<()> {
         Some(&format!("com.github.art-den.{}", env!("CARGO_PKG_NAME"))),
         Default::default(),
     );
-    application.connect_activate(gui_main::build_ui);
+    application.connect_activate(move |app| gui_main::build_ui(app, &logs_dir));
     application.run();
     Ok(())
 }

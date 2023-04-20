@@ -1,4 +1,4 @@
-use std::{sync::{Arc, RwLock}, rc::Rc, cell::RefCell, time::Duration};
+use std::{sync::{Arc, RwLock}, rc::Rc, cell::RefCell, time::Duration, path::PathBuf};
 use gtk::{prelude::*, glib, glib::clone, cairo};
 use serde::{Serialize, Deserialize};
 
@@ -60,6 +60,7 @@ impl Default for MainOptions {
 }
 
 pub struct MainData {
+    logs_dir:         PathBuf,
     options:          RefCell<MainOptions>,
     timer_handlers:   RefCell<TimerHandlers>,
     progress:         RefCell<Option<Progress>>,
@@ -78,7 +79,10 @@ impl Drop for MainData {
     }
 }
 
-pub fn build_ui(application: &gtk::Application) {
+pub fn build_ui(
+    app:      &gtk::Application,
+    logs_dir: &PathBuf
+) {
     let css_provider = gtk::CssProvider::new();
     css_provider.load_from_data(CSS).unwrap();
     gtk::StyleContext::add_provider_for_screen(
@@ -103,6 +107,7 @@ pub fn build_ui(application: &gtk::Application) {
     });
     let thread_timer = Arc::new(ThreadTimer::new());
     let data = Rc::new(MainData {
+        logs_dir:       logs_dir.clone(),
         options:        RefCell::new(options),
         timer_handlers: RefCell::new(Vec::new()),
         progress:       RefCell::new(None),
@@ -117,7 +122,7 @@ pub fn build_ui(application: &gtk::Application) {
 
     State::connect_indi_events(&data.state, &data.indi, &thread_timer);
 
-    window.set_application(Some(application));
+    window.set_application(Some(app));
     window.show();
     apply_options(&data);
     apply_theme(&data);
@@ -138,7 +143,7 @@ pub fn build_ui(application: &gtk::Application) {
     );
 
     crate::gui_hardware::build_ui(
-        application,
+        app,
         Rc::clone(&data),
         Arc::clone(&data.state),
         Arc::clone(&data.indi),
@@ -146,7 +151,7 @@ pub fn build_ui(application: &gtk::Application) {
         data.window.clone(),
     );
     crate::gui_camera::build_ui(
-        application,
+        app,
         &data,
         &mut data.timer_handlers.borrow_mut()
     );
@@ -211,8 +216,9 @@ pub fn build_ui(application: &gtk::Application) {
         }
     }));
 
-    gtk_utils::connect_action(&window, &data, "stop", handler_action_stop);
-    gtk_utils::connect_action(&window, &data, "continue", handler_action_continue);
+    gtk_utils::connect_action(&window, &data, "stop",             handler_action_stop);
+    gtk_utils::connect_action(&window, &data, "continue",         handler_action_continue);
+    gtk_utils::connect_action(&window, &data, "open_logs_folder", handler_action_open_logs_folder);
     correct_widgets_props(&data);
     connect_state_events(&data);
     update_window_title(&data);
@@ -362,6 +368,12 @@ fn handler_action_continue(data: &Rc<MainData>) {
         state.continue_prev_mode(&data.indi)?;
         Ok(())
     });
+}
+
+fn handler_action_open_logs_folder(data: &Rc<MainData>) {
+    let mut uri = r"file://".to_string();
+    uri += data.logs_dir.as_os_str().to_str().unwrap_or_default();
+    _ = gtk::show_uri_on_window(gtk::Window::NONE, &uri, 0);
 }
 
 impl MainData {
