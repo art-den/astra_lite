@@ -1541,13 +1541,18 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
 }
 
 fn correct_after_continue_last_mode(data: &Rc<CameraData>) {
-    let state = data.main.state.read().unwrap();
-    let Some(frame) = state.mode().get_frame_options() else {
-        return;
-    };
-    data.options.borrow_mut().frame = frame.clone();
-    drop(state);
-    show_frame_options(data);
+    let mut state = data.main.state.write().unwrap();
+    let options = data.options.borrow();
+    let mode = state.mode_mut();
+    mode.set_value(&options.focuser, ModeSetValueReason::Continue);
+    mode.set_value(&options.guiding, ModeSetValueReason::Continue);
+    drop(options);
+
+    if let Some(frame) = state.mode().get_frame_options() {
+        data.options.borrow_mut().frame = frame.clone();
+        drop(state);
+        show_frame_options(data);
+    }
 }
 
 fn update_camera_devices_list(data: &Rc<CameraData>) {

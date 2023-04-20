@@ -3,7 +3,6 @@ use std::{
     collections::VecDeque,
     any::Any,
 };
-use bitflags::bitflags;
 use itertools::Itertools;
 
 use crate::{
@@ -51,9 +50,14 @@ pub enum ModeType {
 
 type Subscribers = Vec<Box<dyn Fn(Event) + Send + Sync + 'static>>;
 
+pub enum ModeSetValueReason {
+    Result,
+    Continue,
+}
+
 pub trait Mode {
     fn get_type(&self) -> ModeType;
-    fn set_value(&mut self, _value: &dyn Any) {}
+    fn set_value(&mut self, _value: &dyn Any, _reason: ModeSetValueReason) {}
     fn progress_string(&self) -> String;
     fn cam_device(&self) -> Option<&str> { None }
     fn progress(&self) -> Option<Progress> { None }
@@ -72,13 +76,6 @@ pub trait Mode {
     fn notify_about_frame_processing_finished(&mut self, _indi: &indi_api::Connection, _frame_is_ok: bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_about_light_short_info(&mut self, _indi: &indi_api::Connection, _info: &LightFrameShortInfo) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
 }
-
-bitflags! { pub struct ChangeResFlags: u32 {
-    const PROGRESS_CHANGED = (1 << 0);
-    const MODE_CHANGED     = (1 << 1);
-    const FINISHED         = (1 << 2);
-    const START_FOCUSING   = (1 << 3);
-}}
 
 pub enum NotifyResult {
     Empty,
@@ -761,11 +758,21 @@ impl Mode for CameraActiveMode {
         }
     }
 
-    fn set_value(&mut self, value: &dyn Any) {
+    fn set_value(&mut self, value: &dyn Any, _reason: ModeSetValueReason) {
         if let Some(value) = value.downcast_ref::<MountMoveCalibrRes>() {
             let dith_data = self.guid_data.get_or_insert_with(|| GuidingData::new());
             dith_data.mnt_calibr = Some(value.clone());
             log::debug!("New mount calibration set: {:?}", dith_data.mnt_calibr);
+        }
+        if let Some(value) = value.downcast_ref::<FocuserOptions>() {
+            if self.focus_options.is_some() {
+                self.focus_options = Some(value.clone());
+            }
+        }
+        if let Some(value) = value.downcast_ref::<GuidingOptions>() {
+            if self.guid_options.is_some() {
+                self.guid_options = Some(value.clone());
+            }
         }
     }
 
@@ -1610,7 +1617,7 @@ impl MountCalibrMode {
                 self.result.move_x_dec = move_x;
                 self.result.move_y_dec = move_y;
                 if let Some(next_mode) = &mut self.next_mode {
-                    next_mode.set_value(&self.result);
+                    next_mode.set_value(&self.result, ModeSetValueReason::Result);
                 }
                 self.restore_orig_coords(indi)?;
                 self.state = DitherCalibrState::WaitForOrigCoords;

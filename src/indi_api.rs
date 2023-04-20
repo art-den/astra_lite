@@ -3447,7 +3447,7 @@ impl XmlReceiver {
                 timestamp,
                 device_name: device_name.to_string(),
                 prop_name:   prop_name.to_string(),
-                change:       PropChange::New(value),
+                change:      PropChange::New(value),
             };
             events_sender.send(Event::PropChange(Arc::new(
                 event
@@ -4058,9 +4058,11 @@ const PROP_CAM_OFFSET: PropsStr = &[
 ];
 const PROP_CAM_FAN_ON: PropsStr = &[
     ("TC_FAN_CONTROL", "TC_FAN_ON"),
+    ("TC_FAN_SPEED",   "INDI_ENABLED"),
 ];
 const PROP_CAM_FAN_OFF: PropsStr = &[
     ("TC_FAN_CONTROL", "TC_FAN_OFF"),
+    ("TC_FAN_SPEED",   "INDI_DISABLED"),
 ];
 const PROP_CAM_HEAT_ON: PropsStr = &[
     ("TC_HEAT_CONTROL", "TC_HEAT_ON"),
@@ -4070,9 +4072,11 @@ const PROP_CAM_HEAT_OFF: PropsStr = &[
 ];
 const PROP_CAM_LOW_NOISE_ON: PropsStr = &[
     ("TC_LOW_NOISE_CONTROL", "INDI_ENABLED"),
+    ("TC_LOW_NOISE",         "INDI_ENABLED"),
 ];
 const PROP_CAM_LOW_NOISE_OFF: PropsStr = &[
     ("TC_LOW_NOISE_CONTROL", "INDI_DISABLED"),
+    ("TC_LOW_NOISE",         "INDI_DISABLED"),
 ];
 const PROP_CAM_VIDEO_FORMAT_RGB: PropsStr = &[
     ("CCD_VIDEO_FORMAT", "TC_VIDEO_COLOR_RGB"),

@@ -579,7 +579,6 @@ impl IndiGui {
             .spacing(5)
             .orientation(gtk::Orientation::Horizontal)
             .build();
-
         grid.attach(&bx, 1, *next_row, 5, 1);
         for elem in elements {
             let button = gtk::ToggleButton::builder()
@@ -698,14 +697,15 @@ impl IndiGui {
         ui_prop:   &UiIndiProp,
         indi_prop: &indi_api::ExportProperty,
     ) {
-        if indi_prop.static_data.perm == indi_api::PropPerm::WO {
-            return;
-        }
         match &indi_prop.static_data.tp {
             indi_api::PropType::Text =>
-                Self::show_text_property_values(ui_prop, indi_prop),
+                if indi_prop.static_data.perm != indi_api::PropPerm::WO {
+                    Self::show_text_property_values(ui_prop, indi_prop)
+                },
             indi_api::PropType::Num(elems_info) =>
-                Self::show_num_property_values(ui_prop, indi_prop, elems_info),
+                if indi_prop.static_data.perm != indi_api::PropPerm::WO {
+                    Self::show_num_property_values(ui_prop, indi_prop, elems_info)
+                },
             indi_api::PropType::Switch(rule) =>
                 Self::show_switch_property_values(ui_prop, indi_prop, rule),
             indi_api::PropType::Blob =>
