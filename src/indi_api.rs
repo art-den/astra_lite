@@ -591,10 +591,9 @@ impl Property {
     fn update_dyn_data_from_xml(
         &mut self,
         xml:         &mut xmltree::Element,
-        mut blob:    Option<Vec<u8>>,
+        mut blobs:   Vec<XmlStreamReaderBlob>,
         device_name: &str, // for error message
         prop_name:   &str, // same
-        dl_time:     f64,
     ) -> anyhow::Result<bool> {
         let mut changed = false;
         if let Some(state_str) = xml.attributes.get("state") {
@@ -640,26 +639,27 @@ impl Property {
                         Some(Self::get_light_value_from_xml_elem(child)?)
                     },
                     PropValue::Blob(_) => {
-                        if let Some(data) = blob.take() {
+                        if let Some(blob_pos) = blobs.iter_mut().position(|b| b.name == elem_name) {
+                            let blob = blobs.remove(blob_pos);
                             let blob_size: usize = child.attributes
                                 .get("size")
                                 .map(|size_str| size_str.parse())
                                 .transpose()?
                                 .ok_or_else(|| anyhow::anyhow!(
-                                    "size attribute of `{}` not found",
+                                    "`size` attribute of `{}` not found",
                                     elem.name
                                 ))?;
-                            if blob_size != data.len() {
+                            if blob_size != blob.data.len() {
                                 anyhow::bail!(
-                                    "Declated size of blob ({}) is not equal real blob size ({})",
-                                    blob_size, data.len()
+                                    "Declared size of blob ({}) is not equal real blob size ({})",
+                                    blob_size, blob.data.len()
                                 );
                             }
                             let format = child.attr_str_or_err("format")?;
                             Some(PropValue::Blob(Arc::new(BlobPropValue {
-                                format: format.to_string(),
-                                data,
-                                dl_time,
+                                format:  format.to_string(),
+                                data:    blob.data,
+                                dl_time: blob.dl_time,
                             })))
                         } else {
                             None
@@ -3230,11 +3230,244 @@ impl XmlSender {
     }
 }
 
-#[derive(Debug)]
-enum ReceiveXmlResult {
-    Xml { xml: String, blob: Option<Vec<u8>>, time: f64},
+struct XmlStreamReaderBlob {
+    format:  String,
+    name:    String,
+    data:    Vec<u8>,
+    dl_time: f64, // in seconds
+}
+
+enum XmlStreamReaderResult {
+    BlobBegin {
+        device_name: String,
+        prop_name:   String,
+        elem_name:   String,
+        len:         Option<usize>,
+    },
+    Xml {
+        xml:   String,
+        blobs: Vec<XmlStreamReaderBlob>,
+    },
     TimeOut,
     Disconnected
+}
+
+#[derive(PartialEq)]
+enum XmlStreamReaderState {
+    Undefined,
+    WaitForTag,
+    WaitForTagEnd,
+    WaitBlobVectorTag,
+    WaitOneBlobTag,
+    ReadingBlob,
+    WaitOneBlobTagEnd,
+}
+
+struct XmlStreamReader {
+    state:               XmlStreamReaderState,
+    read_buffer:         Vec<u8>,
+    stream_buffer:       Vec<u8>,
+    read_len:            usize,
+    base64_decoder:      Base64Decoder,
+    tag_re:              regex::bytes::Regex,
+    tag_end_re:          regex::bytes::Regex,
+    set_blob_vec_re:     regex::bytes::Regex,
+    set_blob_vec_end_re: regex::bytes::Regex,
+    one_blob_re:         regex::bytes::Regex,
+    one_blob_end_re:     regex::bytes::Regex,
+    blob_device:         String,
+    blob_prop:           String,
+    blob_elem:           String,
+    blob_format:         String,
+    blob_size:           Option<usize>,
+    blob_dl_start:       std::time::Instant,
+    blobs:               Vec<XmlStreamReaderBlob>,
+    xml_text:            String,
+
+}
+
+impl XmlStreamReader {
+    fn new() -> Self {
+        Self {
+            state:               XmlStreamReaderState::Undefined,
+            read_buffer:         Vec::new(),
+            stream_buffer:       Vec::new(),
+            read_len:            0,
+            base64_decoder:      Base64Decoder::new(0),
+            tag_re:              regex::bytes::Regex::new(r"<(\w+)[> /]").unwrap(),
+            tag_end_re:          regex::bytes::Regex::new(r".").unwrap(),
+            set_blob_vec_re:     regex::bytes::Regex::new(r"<setBLOBVector.*?>").unwrap(),
+            set_blob_vec_end_re: regex::bytes::Regex::new(r"</setBLOBVector>").unwrap(),
+            one_blob_re:         regex::bytes::Regex::new(r"<oneBLOB.*?>").unwrap(),
+            one_blob_end_re:     regex::bytes::Regex::new(r"</oneBLOB>").unwrap(),
+            blob_device:         String::new(),
+            blob_prop:           String::new(),
+            blob_elem:           String::new(),
+            blob_format:         String::new(),
+            blob_size:           None,
+            blob_dl_start:       std::time::Instant::now(),
+            blobs:               Vec::new(),
+            xml_text:            String::new(),
+        }
+    }
+
+    fn recover_after_error(&mut self) {
+        self.read_buffer.clear();
+        self.blobs.clear();
+        self.base64_decoder.clear(0);
+        self.state = XmlStreamReaderState::WaitForTag;
+        self.read_len = 0;
+    }
+
+    fn receive_xml(
+        &mut self,
+        stream: &mut dyn std::io::Read
+    ) -> anyhow::Result<XmlStreamReaderResult> {
+        loop {
+            match self.state {
+                XmlStreamReaderState::Undefined => {
+                    self.state = XmlStreamReaderState::WaitForTag;
+                    continue;
+                }
+                XmlStreamReaderState::WaitForTag => {
+                    self.read_buffer.extend_from_slice(&self.stream_buffer[..self.read_len]);
+                    self.read_len = 0;
+                    if let Some(re_res) = self.tag_re.captures(&self.read_buffer) {
+                        self.xml_text.clear();
+                        let tag_name = std::str::from_utf8(re_res.get(1).unwrap().as_bytes())?;
+                        let end_tag_re_text = format!(r#"<{0}[^<>]*?/>|</{0}>"#, tag_name);
+                        self.tag_end_re = regex::bytes::Regex::new(&end_tag_re_text)?;
+                        if tag_name == "setBLOBVector" {
+                            self.state = XmlStreamReaderState::WaitBlobVectorTag;
+                        } else {
+                            self.state = XmlStreamReaderState::WaitForTagEnd;
+                        }
+                        continue;
+                    }
+                }
+                XmlStreamReaderState::WaitForTagEnd => {
+                    self.read_buffer.extend_from_slice(&self.stream_buffer[..self.read_len]);
+                    self.read_len = 0;
+                    if let Some(re_res) = self.tag_end_re.captures(&self.read_buffer) {
+                        let end_pos = re_res.get(0).unwrap().end();
+                        let xml_text = std::str::from_utf8(&self.read_buffer[0..end_pos])?;
+                        self.xml_text.push_str(xml_text);
+                        self.read_buffer.drain(0..end_pos);
+                        self.state = XmlStreamReaderState::WaitForTag;
+
+                        return Ok(XmlStreamReaderResult::Xml {
+                            xml:   std::mem::replace(&mut self.xml_text, String::new()),
+                            blobs: std::mem::replace(&mut self.blobs, Vec::new()),
+                        });
+                    }
+                }
+                XmlStreamReaderState::WaitBlobVectorTag => {
+                    self.read_buffer.extend_from_slice(&self.stream_buffer[..self.read_len]);
+                    self.read_len = 0;
+                    if let Some(re_res) = self.set_blob_vec_re.captures(&self.read_buffer) {
+                        let end_pos = re_res.get(0).unwrap().end();
+                        let xml_text = std::str::from_utf8(&self.read_buffer[0..end_pos])?;
+                        self.xml_text.push_str(xml_text);
+                        let mut xml_text = xml_text.trim().to_string();
+                        self.read_buffer.drain(0..end_pos);
+                        xml_text.push_str(r"</setBLOBVector>");
+                        let mut xml_elem = xmltree::Element::parse(xml_text.as_bytes())?;
+                        self.blob_device = xml_elem.attr_string_or_err("device")?;
+                        self.blob_prop = xml_elem.attr_string_or_err("name")?;
+                        self.state = XmlStreamReaderState::WaitOneBlobTag;
+                        continue;
+                    }
+                }
+                XmlStreamReaderState::WaitOneBlobTag => {
+                    self.read_buffer.extend_from_slice(&self.stream_buffer[..self.read_len]);
+                    if let Some(re_res) = self.one_blob_re.captures(&self.read_buffer) {
+                        self.blob_dl_start = std::time::Instant::now();
+                        let end_pos = re_res.get(0).unwrap().end();
+                        let xml_text = std::str::from_utf8(&self.read_buffer[0..end_pos])?;
+                        self.xml_text.push_str(xml_text);
+                        let mut xml_text = xml_text.trim().to_string();
+                        self.read_buffer.drain(0..end_pos);
+                        xml_text.push_str(r"</oneBLOB>");
+                        let mut xml_elem = xmltree::Element::parse(xml_text.as_bytes())?;
+                        self.blob_elem = xml_elem.attr_string_or_err("name")?;
+                        self.blob_format = xml_elem.attr_string_or_err("format")?;
+                        let size = xml_elem.attributes.get("size").and_then(|attr| attr.parse::<usize>().ok());
+                        let len = xml_elem.attributes.get("len").and_then(|attr| attr.parse::<usize>().ok());
+                        self.blob_size = size.or(len);
+                        self.base64_decoder.clear(usize::min(self.blob_size.unwrap_or_default(), 100_000_000));
+                        self.stream_buffer.clear();
+                        self.stream_buffer.extend_from_slice(&self.read_buffer);
+                        self.read_buffer.clear();
+                        self.read_len = self.stream_buffer.len();
+                        self.state = XmlStreamReaderState::ReadingBlob;
+                        return Ok(XmlStreamReaderResult::BlobBegin {
+                            device_name: self.blob_device.clone(),
+                            prop_name: self.blob_prop.clone(),
+                            elem_name: self.blob_elem.clone(),
+                            len:       self.blob_size,
+                        });
+                    }
+                    if self.set_blob_vec_end_re.find(&self.read_buffer).is_some() {
+                        self.state = XmlStreamReaderState::WaitForTagEnd;
+                        self.read_len = 0;
+                        continue;
+                    }
+                }
+                XmlStreamReaderState::ReadingBlob => {
+                    let end_blob_pos = &self.stream_buffer[..self.read_len].iter().position(|b| *b == b'<');
+                    let end_pos = end_blob_pos.unwrap_or(self.read_len);
+                    self.base64_decoder.add_bytes(&self.stream_buffer[..end_pos]);
+                    if let Some(end_blob_pos) = end_blob_pos {
+                        let blob_dl_time = self.blob_dl_start.elapsed().as_secs_f64();
+                        self.read_buffer.extend_from_slice(&self.stream_buffer[*end_blob_pos..self.read_len]);
+                        self.state = XmlStreamReaderState::WaitOneBlobTagEnd;
+                        let blob = XmlStreamReaderBlob {
+                            format:  self.blob_format.clone(),
+                            name:    self.blob_elem.clone(),
+                            data:    self.base64_decoder.take_result(),
+                            dl_time: blob_dl_time,
+                        };
+                        self.blobs.push(blob);
+                        self.read_len = 0;
+                        continue;
+                    }
+                }
+                XmlStreamReaderState::WaitOneBlobTagEnd => {
+                    self.read_buffer.extend_from_slice(&self.stream_buffer[..self.read_len]);
+                    self.read_len = 0;
+                    if let Some(re_res) = self.one_blob_end_re.captures(&self.read_buffer) {
+                        let end_pos = re_res.get(0).unwrap().end();
+                        let xml_text = std::str::from_utf8(&self.read_buffer[0..end_pos])?;
+                        self.xml_text.push_str(xml_text);
+                        self.read_buffer.drain(0..end_pos);
+                        self.state = XmlStreamReaderState::WaitOneBlobTag;
+                        continue;
+                    }
+                }
+            }
+
+            self.stream_buffer.resize(1024*32, 0);
+            let read_res = stream.read(&mut self.stream_buffer);
+            self.read_len = match read_res {
+                Err(e) => match e.kind() {
+                    ErrorKind::NotConnected |
+                    ErrorKind::ConnectionAborted |
+                    ErrorKind::ConnectionReset =>
+                        return Ok(XmlStreamReaderResult::Disconnected),
+                    ErrorKind::TimedOut |
+                    ErrorKind::WouldBlock =>
+                        return Ok(XmlStreamReaderResult::TimeOut),
+                    _ =>
+                        return Err(e.into()),
+                },
+                Ok(0) =>
+                    return Ok(XmlStreamReaderResult::Disconnected),
+                Ok(size) =>
+                    size,
+            };
+        }
+    }
+
 }
 
 enum XmlReceiverState {
@@ -3248,13 +3481,12 @@ struct XmlReceiver {
     conn_state:    Arc<Mutex<ConnState>>,
     devices:       Arc<Mutex<Devices>>,
     stream:        TcpStream,
+    reader:        XmlStreamReader,
     xml_sender:    XmlSender,
     state:         XmlReceiverState,
-    read_buffer:   Vec<u8>,
-    start_tag_re:  regex::bytes::Regex,
-    begin_blob_re: regex::bytes::Regex,
     activate_devs: bool,
 }
+
 
 impl XmlReceiver {
     fn new(
@@ -3268,11 +3500,9 @@ impl XmlReceiver {
             conn_state,
             devices,
             stream,
+            reader: XmlStreamReader::new(),
             xml_sender,
             state: XmlReceiverState::Undef,
-            read_buffer: Vec::new(),
-            start_tag_re: regex::bytes::Regex::new(r"<(\w+)[> /]").unwrap(),
-            begin_blob_re: regex::bytes::Regex::new(r#"(?m)<setBLOBVector\s+device="(.*?)"\s+name="(.*?)"(?:.|\s)*?<oneBLOB[^>]+?name="(.*?)"[^>]+?len="(.*?)"(?:.|\s)*?>"#).unwrap(),
             activate_devs,
         }
     }
@@ -3285,14 +3515,22 @@ impl XmlReceiver {
 
         let mut timeout_processed = false;
         loop {
-            let xml_res = self.receive_xml(&events_sender);
+            let xml_res = self.reader.receive_xml(&mut self.stream);
             match xml_res {
-                Ok(ReceiveXmlResult::Xml{ xml, blob, time }) => {
+                Ok(XmlStreamReaderResult::BlobBegin { device_name, prop_name, elem_name, .. }) => {
+                    self.notify_subcribers_about_blob_start(
+                        &device_name,
+                        &prop_name,
+                        &elem_name,
+                        &events_sender
+                    );
+                }
+                Ok(XmlStreamReaderResult::Xml{ xml, blobs }) => {
                     if log::log_enabled!(log::Level::Trace) {
                         log::trace!("indi_api: incoming xml =\n{}", xml);
                     }
                     timeout_processed = false;
-                    let process_xml_res = self.process_xml(&xml, blob, time, &events_sender);
+                    let process_xml_res = self.process_xml(&xml, blobs, &events_sender);
                     if let Err(err) = process_xml_res {
                         log::error!("indi_api: '{}' for XML\n{}", err, xml);
                     } else {
@@ -3305,12 +3543,12 @@ impl XmlReceiver {
                             )).unwrap();
                         }
                     }
-                },
-                Ok(ReceiveXmlResult::Disconnected) => {
+                }
+                Ok(XmlStreamReaderResult::Disconnected) => {
                     log::debug!("indi_api: Disconnected");
                     break;
                 }
-                Ok(ReceiveXmlResult::TimeOut) => {
+                Ok(XmlStreamReaderResult::TimeOut) => {
                     if !timeout_processed {
                         timeout_processed = true;
                         events_sender.send(Event::ReadTimeOut).unwrap();
@@ -3321,112 +3559,10 @@ impl XmlReceiver {
                     }
                 }
                 Err(err) => {
+                    self.reader.recover_after_error();
                     log::error!("indi_api: {}", err.to_string());
                 },
             }
-        }
-    }
-
-    fn read_buffer_from_network(
-        stream: &mut TcpStream,
-        buffer: &mut [u8],
-    ) -> anyhow::Result<(usize, Option<ReceiveXmlResult>)> {
-        let read_res = stream.read(buffer);
-        match read_res {
-            Err(e) => match e.kind() {
-                ErrorKind::NotConnected |
-                ErrorKind::ConnectionAborted |
-                ErrorKind::ConnectionReset =>
-                    Ok((0, Some(ReceiveXmlResult::Disconnected))),
-                ErrorKind::TimedOut | ErrorKind::WouldBlock =>
-                    Ok((0, Some(ReceiveXmlResult::TimeOut))),
-                _ => Err(e.into()),
-            },
-            Ok(0) => Ok((0, Some(ReceiveXmlResult::Disconnected))),
-            Ok(size) => {
-                Ok((size, None))
-            }
-        }
-    }
-
-    fn receive_xml(
-        &mut self,
-        events_sender: &mpsc::Sender<Event>
-    ) -> anyhow::Result<ReceiveXmlResult> {
-        let mut start_time: Option<std::time::Instant> = None;
-        let mut end_tag_re: Option<regex::bytes::Regex> = None;
-        let mut begin_blob_re: Option<&regex::bytes::Regex> = None;
-        let mut buffer = [0u8; 2048];
-        let mut blob: Option<Vec<u8>> = None;
-        loop {
-            if let Some(end_tag_re) = &end_tag_re {
-                if let Some(end_tag_res) = end_tag_re.captures(&self.read_buffer) {
-                    let end_pos = end_tag_res.get(0).unwrap().end();
-                    let xml_text = std::str::from_utf8(&self.read_buffer[0..end_pos])?;
-                    let xml_text = xml_text.trim().to_string();
-                    self.read_buffer.drain(0..end_pos);
-                    let time = if let Some(start_time) = start_time {
-                        start_time.elapsed().as_secs_f64()
-                    } else {
-                        0.0
-                    };
-                    if time > 0.1 {
-                        log::info!("XML download time = {:.2} s", time);
-                    }
-                    return Ok(ReceiveXmlResult::Xml{
-                        xml: xml_text,
-                        blob,
-                        time,
-                    });
-                }
-            } else if let Some(begin_blob_re) = begin_blob_re {
-                if let Some(begin_blob_res) = begin_blob_re.captures(&self.read_buffer) {
-                    let device_name = std::str::from_utf8(begin_blob_res.get(1).unwrap().as_bytes())?;
-                    let prop_name = std::str::from_utf8(begin_blob_res.get(2).unwrap().as_bytes())?;
-                    let elem_name = std::str::from_utf8(begin_blob_res.get(3).unwrap().as_bytes())?;
-                    let blob_len: usize = std::str::from_utf8(begin_blob_res.get(4).unwrap().as_bytes())?.parse().unwrap_or(0);
-                    self.notify_subcribers_about_blob_start(device_name, prop_name, elem_name, events_sender);
-                    let mut blob_read_buffer = Vec::new();
-                    let blob_start = begin_blob_res.get(0).unwrap().end();
-                    blob_read_buffer.extend_from_slice(&self.read_buffer[blob_start..]);
-                    self.read_buffer.drain(blob_start..);
-                    let mut base64_decoder = Base64Decoder::new(blob_len.min(100_000_000));
-                    loop {
-                        if let Some(blob_end) = blob_read_buffer.iter().position(|&v| v == b'<') {
-                            base64_decoder.add_base64(&blob_read_buffer[..blob_end]);
-                            blob = Some(base64_decoder.take_result());
-                            self.read_buffer.extend_from_slice(&blob_read_buffer[blob_end..]);
-                            break;
-                        } else {
-                            base64_decoder.add_base64(&blob_read_buffer);
-                        }
-                        blob_read_buffer.resize(65536, 0);
-                        let read = Self::read_buffer_from_network(&mut self.stream, &mut blob_read_buffer)?;
-                        if let (_, Some(exit_res)) = read { return Ok(exit_res); }
-                        let (read, _) = read;
-                        if read == 0 { return Ok(ReceiveXmlResult::Disconnected); }
-                        blob_read_buffer.resize(read, 0);
-                    }
-                    end_tag_re = Some(regex::bytes::Regex::new(r#"</setBLOBVector>"#).unwrap());
-                    continue;
-                }
-            } else if let Some(start_tag_res) = self.start_tag_re.captures(&self.read_buffer) {
-                if start_time.is_none() {
-                    start_time = Some(std::time::Instant::now());
-                }
-                let tag_name = std::str::from_utf8(start_tag_res.get(1).unwrap().as_bytes())?;
-                if tag_name == "setBLOBVector" {
-                    begin_blob_re = Some(&self.begin_blob_re);
-                } else {
-                    let end_tag_re_text = format!(r#"<{0}\s+.*?/>|</{0}>"#, tag_name);
-                    end_tag_re = Some(regex::bytes::Regex::new(&end_tag_re_text).unwrap());
-                }
-                continue;
-            }
-            let read = Self::read_buffer_from_network(&mut self.stream, &mut buffer)?;
-            if let (_, Some(exit_res)) = read { return Ok(exit_res); }
-            let (read, _) = read;
-            self.read_buffer.extend_from_slice(&buffer[..read]);
         }
     }
 
@@ -3544,8 +3680,7 @@ impl XmlReceiver {
     fn process_xml(
         &mut self,
         xml_text:      &str,
-        blob:          Option<Vec<u8>>,
-        dl_time:       f64,
+        blobs:         Vec<XmlStreamReaderBlob>,
         events_sender: &mpsc::Sender<Event>
     ) -> anyhow::Result<()> {
         let mut xml_elem = xmltree::Element::parse(xml_text.as_bytes())?;
@@ -3605,10 +3740,9 @@ impl XmlReceiver {
             let prev_state = property.dynamic_data.state.clone();
             let prop_changed = property.update_dyn_data_from_xml(
                 &mut xml_elem,
-                blob,
+                blobs,
                 &device_name,
                 &prop_name,
-                dl_time,
             )?;
             if prop_changed {
                 let values = property.get_values(true);
@@ -3724,7 +3858,14 @@ impl Base64Decoder {
         }
     }
 
-    fn take_result(mut self) -> Vec<u8> {
+    fn clear(&mut self, expected_size: usize) {
+        self.result.clear();
+        self.result.reserve(expected_size);
+        self.buffer = 1;
+        self.eq_count = 0;
+    }
+
+    fn take_result(&mut self) -> Vec<u8> {
         while self.buffer & 0x01000000 != 0 {
             self.add_byte(b'=');
         }
@@ -3732,12 +3873,12 @@ impl Base64Decoder {
             self.eq_count = 2;
         }
         if self.result.len() >= self.eq_count {
-            self.result.resize(self.result.len()-self.eq_count, 0);
+            self.result.resize(self.result.len() - self.eq_count, 0);
         }
-        self.result
+        std::mem::replace(&mut self.result, Vec::new())
     }
 
-    fn add_base64(&mut self, base64_data: &[u8]) {
+    fn add_bytes(&mut self, base64_data: &[u8]) {
         for byte in base64_data {
             self.add_byte(*byte);
         }
@@ -3760,23 +3901,23 @@ impl Base64Decoder {
 #[test]
 fn test_base64_decoder() {
     let mut decoder = Base64Decoder::new(0);
-    decoder.add_base64(b"TWFu");
+    decoder.add_bytes(b"TWFu");
     assert!(&decoder.take_result() == &b"Man");
 
     let mut decoder = Base64Decoder::new(0);
-    decoder.add_base64(b"TWF=");
+    decoder.add_bytes(b"TWF=");
     assert!(&decoder.take_result() == &b"Ma");
 
     let mut decoder = Base64Decoder::new(0);
-    decoder.add_base64(b"TW==");
+    decoder.add_bytes(b"TW==");
     assert!(&decoder.take_result() == &b"M");
 
     let mut decoder = Base64Decoder::new(0);
-    decoder.add_base64(br#"////////"#);
+    decoder.add_bytes(br#"////////"#);
     assert!(&decoder.take_result() == &[255, 255, 255, 255, 255, 255]);
 
     let mut decoder = Base64Decoder::new(0);
-    decoder.add_base64(br#"///////="#);
+    decoder.add_bytes(br#"///////="#);
     assert!(&decoder.take_result() == &[255, 255, 255, 255, 255]);
 }
 
