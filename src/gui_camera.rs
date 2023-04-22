@@ -1456,6 +1456,7 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
         let frame_mode_str = gtk_utils::get_active_id(bldr, "cb_frame_mode");
         let frame_mode = FrameType::from_active_id(frame_mode_str.as_deref());
 
+        let frame_mode_is_lights = frame_mode == FrameType::Lights;
         let frame_mode_is_flat = frame_mode == FrameType::Flats;
         let frame_mode_is_dark = frame_mode == FrameType::Darks;
 
@@ -1496,13 +1497,13 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
             ("take_shot",              exposure_supported && !shot_active && can_change_mode),
             ("stop_shot",              shot_active),
 
-            ("start_live_stacking",    exposure_supported && !live_active && can_change_mode),
-            ("stop_live_stacking",     live_active),
-            ("continue_live_stacking", livestacking_paused && can_change_mode),
-
             ("start_save_raw_frames",  exposure_supported && !saving_frames && can_change_mode),
             ("stop_save_raw_frames",   saving_frames),
             ("continue_save_raw",      saving_frames_paused && can_change_mode),
+
+            ("start_live_stacking",    exposure_supported && !live_active && can_change_mode && frame_mode_is_lights),
+            ("stop_live_stacking",     live_active),
+            ("continue_live_stacking", livestacking_paused && can_change_mode),
 
             ("manual_focus",           exposure_supported && !focusing && can_change_mode),
             ("stop_manual_focus",      focusing),
