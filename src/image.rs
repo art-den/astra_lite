@@ -41,11 +41,6 @@ impl<T: Copy + Default> ImageLayer<T> {
         self.height_1 = height as i64 - 1;
     }
 
-    pub fn swap_data(&mut self, data: &mut Vec<T>) {
-        assert!(self.data.len() == data.len());
-        std::mem::swap(&mut self.data, data);
-    }
-
     pub fn is_empty(&self) -> bool {
         self.width == 0 && self.height == 0
     }

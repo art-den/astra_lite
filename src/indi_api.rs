@@ -3356,8 +3356,8 @@ impl XmlStreamReader {
                         self.state = XmlStreamReaderState::WaitForTag;
 
                         return Ok(XmlStreamReaderResult::Xml {
-                            xml:   std::mem::replace(&mut self.xml_text, String::new()),
-                            blobs: std::mem::replace(&mut self.blobs, Vec::new()),
+                            xml:   std::mem::take(&mut self.xml_text),
+                            blobs: std::mem::take(&mut self.blobs),
                         });
                     }
                 }
@@ -3875,7 +3875,7 @@ impl Base64Decoder {
         if self.result.len() >= self.eq_count {
             self.result.resize(self.result.len() - self.eq_count, 0);
         }
-        std::mem::replace(&mut self.result, Vec::new())
+        std::mem::take(&mut self.result)
     }
 
     fn add_bytes(&mut self, base64_data: &[u8]) {
