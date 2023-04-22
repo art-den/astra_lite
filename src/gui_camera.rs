@@ -832,18 +832,19 @@ fn connect_widgets_events_before_show_options(data: &Rc<CameraData>) {
 
 fn connect_widgets_events(data: &Rc<CameraData>) {
     let bldr = &data.main.builder;
-    gtk_utils::connect_action(&data.main.window, data, "take_shot",             handler_action_take_shot);
-    gtk_utils::connect_action(&data.main.window, data, "stop_shot",             handler_action_stop_shot);
-    gtk_utils::connect_action(&data.main.window, data, "clear_light_history",   handler_action_clear_light_history);
-    gtk_utils::connect_action(&data.main.window, data, "start_save_raw_frames", handler_action_start_save_raw_frames);
-    gtk_utils::connect_action(&data.main.window, data, "stop_save_raw_frames",  handler_action_stop_save_raw_frames);
-    gtk_utils::connect_action(&data.main.window, data, "continue_save_raw",     handler_action_continue_save_raw_frames);
-    gtk_utils::connect_action(&data.main.window, data, "start_live_stacking",   handler_action_start_live_stacking);
-    gtk_utils::connect_action(&data.main.window, data, "stop_live_stacking",    handler_action_stop_live_stacking);
-    gtk_utils::connect_action(&data.main.window, data, "manual_focus",          handler_action_manual_focus);
-    gtk_utils::connect_action(&data.main.window, data, "stop_manual_focus",     handler_action_stop_manual_focus);
-    gtk_utils::connect_action(&data.main.window, data, "start_dither_calibr",   handler_action_start_dither_calibr);
-    gtk_utils::connect_action(&data.main.window, data, "stop_dither_calibr",    handler_action_stop_dither_calibr);
+    gtk_utils::connect_action(&data.main.window, data, "take_shot",              handler_action_take_shot);
+    gtk_utils::connect_action(&data.main.window, data, "stop_shot",              handler_action_stop_shot);
+    gtk_utils::connect_action(&data.main.window, data, "clear_light_history",    handler_action_clear_light_history);
+    gtk_utils::connect_action(&data.main.window, data, "start_save_raw_frames",  handler_action_start_save_raw_frames);
+    gtk_utils::connect_action(&data.main.window, data, "stop_save_raw_frames",   handler_action_stop_save_raw_frames);
+    gtk_utils::connect_action(&data.main.window, data, "continue_save_raw",      handler_action_continue_save_raw_frames);
+    gtk_utils::connect_action(&data.main.window, data, "start_live_stacking",    handler_action_start_live_stacking);
+    gtk_utils::connect_action(&data.main.window, data, "stop_live_stacking",     handler_action_stop_live_stacking);
+    gtk_utils::connect_action(&data.main.window, data, "continue_live_stacking", handler_action_continue_live_stacking);
+    gtk_utils::connect_action(&data.main.window, data, "manual_focus",           handler_action_manual_focus);
+    gtk_utils::connect_action(&data.main.window, data, "stop_manual_focus",      handler_action_stop_manual_focus);
+    gtk_utils::connect_action(&data.main.window, data, "start_dither_calibr",    handler_action_start_dither_calibr);
+    gtk_utils::connect_action(&data.main.window, data, "stop_dither_calibr",     handler_action_stop_dither_calibr);
 
     let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
     cb_frame_mode.connect_active_id_notify(clone!(@strong data => move |cb| {
@@ -1469,6 +1470,10 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
             .map(|mode| mode.get_type() == ModeType::SavingRawFrames)
             .unwrap_or(false);
         let live_active = mode_type == ModeType::LiveStacking;
+        let livestacking_paused = state.aborted_mode()
+            .as_ref()
+            .map(|mode| mode.get_type() == ModeType::LiveStacking)
+            .unwrap_or(false);
         let focusing = mode_type == ModeType::Focusing;
         let dither_calibr = mode_type == ModeType::DitherCalibr;
         drop(state);
@@ -1488,20 +1493,22 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
         let can_change_cal_ops = !live_active && !dither_calibr;
 
         gtk_utils::enable_actions(&data.main.window, &[
-            ("take_shot",             exposure_supported && !shot_active && can_change_mode),
-            ("stop_shot",             shot_active),
-            ("start_live_stacking",   exposure_supported && !live_active && can_change_mode),
-            ("stop_live_stacking",    live_active),
+            ("take_shot",              exposure_supported && !shot_active && can_change_mode),
+            ("stop_shot",              shot_active),
 
-            ("start_save_raw_frames", exposure_supported && !saving_frames && can_change_mode),
-            ("stop_save_raw_frames",  saving_frames),
-            ("continue_save_raw",     saving_frames_paused && can_change_mode),
+            ("start_live_stacking",    exposure_supported && !live_active && can_change_mode),
+            ("stop_live_stacking",     live_active),
+            ("continue_live_stacking", livestacking_paused && can_change_mode),
 
-            ("manual_focus",          exposure_supported && !focusing && can_change_mode),
-            ("stop_manual_focus",     focusing),
+            ("start_save_raw_frames",  exposure_supported && !saving_frames && can_change_mode),
+            ("stop_save_raw_frames",   saving_frames),
+            ("continue_save_raw",      saving_frames_paused && can_change_mode),
 
-            ("start_dither_calibr",   exposure_supported && !dither_calibr && can_change_mode),
-            ("stop_dither_calibr",    dither_calibr),
+            ("manual_focus",           exposure_supported && !focusing && can_change_mode),
+            ("stop_manual_focus",      focusing),
+
+            ("start_dither_calibr",    exposure_supported && !dither_calibr && can_change_mode),
+            ("stop_dither_calibr",     dither_calibr),
         ]);
 
         gtk_utils::show_widgets(bldr, &[
@@ -2584,6 +2591,14 @@ fn handler_action_stop_live_stacking(data: &Rc<CameraData>) {
     gtk_utils::exec_and_show_error(&data.main.window, || {
         let mut state = data.main.state.write().unwrap();
         state.abort_active_mode(&data.main.indi)?;
+        Ok(())
+    });
+}
+
+fn handler_action_continue_live_stacking(data: &Rc<CameraData>) {
+    gtk_utils::exec_and_show_error(&data.main.window, || {
+        let mut state = data.main.state.write().unwrap();
+        state.continue_prev_mode(&data.main.indi)?;
         Ok(())
     });
 }
