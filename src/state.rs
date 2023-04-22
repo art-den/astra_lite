@@ -64,7 +64,7 @@ pub trait Mode {
     fn get_cur_exposure(&self) -> Option<f64> { None }
     fn get_frame_options_mut(&mut self) -> Option<&mut FrameOptions> { None }
     fn get_frame_options(&self) -> Option<&FrameOptions> { None }
-    fn can_be_stopped(&self) -> bool { false }
+    fn can_be_stopped(&self) -> bool { true }
     fn can_be_continued_after_stop(&self) -> bool { false }
     fn start(&mut self, _indi: &indi_api::Connection) -> anyhow::Result<()> { Ok(()) }
     fn abort(&mut self, _indi: &indi_api::Connection) -> anyhow::Result<()> { Ok(()) }
@@ -663,6 +663,10 @@ impl Mode for WaitingMode {
     fn progress_string(&self) -> String {
         "Waiting...".to_string()
     }
+
+    fn can_be_stopped(&self) -> bool {
+        false
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -777,7 +781,7 @@ impl Mode for CameraActiveMode {
     }
 
     fn progress_string(&self) -> String {
-        match (&self.state, &self.cam_mode) {
+        let mut mode_str = match (&self.state, &self.cam_mode) {
             (CamState::MountCorrection, _) =>
                 "Mount position correction".to_string(),
             (_, CamMode::SingleShot) =>
@@ -788,7 +792,28 @@ impl Mode for CameraActiveMode {
                 self.frame_options.frame_type.to_readable_str().to_string(),
             (_, CamMode::LiveStacking) =>
                 "Live stacking".to_string(),
+        };
+        let mut extra_modes = Vec::new();
+        if matches!(self.cam_mode, CamMode::SavingRawFrames|CamMode::LiveStacking) {
+            if let Some(focus_options) = &self.focus_options {
+                if focus_options.on_fwhm_change
+                || focus_options.on_temp_change
+                || focus_options.periodically {
+                    extra_modes.push("F");
+                }
+            }
+            if let Some(guid_options) = &self.guid_options {
+                if guid_options.enabled { extra_modes.push("G"); }
+                if guid_options.dith_period != 0 {
+                    extra_modes.push("D");
+                }
+            }
         }
+        if !extra_modes.is_empty() {
+            mode_str += " ";
+            mode_str += &extra_modes.join(" + ");
+        }
+        mode_str
     }
 
     fn cam_device(&self) -> Option<&str> {
@@ -1242,10 +1267,6 @@ impl Mode for FocusingMode {
 
     fn get_cur_exposure(&self) -> Option<f64> {
         Some(self.frame.exposure)
-    }
-
-    fn can_be_stopped(&self) -> bool {
-        true
     }
 
     fn can_be_continued_after_stop(&self) -> bool {
