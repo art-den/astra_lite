@@ -66,15 +66,15 @@ pub trait Mode {
     fn get_frame_options(&self) -> Option<&FrameOptions> { None }
     fn can_be_stopped(&self) -> bool { true }
     fn can_be_continued_after_stop(&self) -> bool { false }
-    fn start(&mut self, _indi: &indi_api::Connection) -> anyhow::Result<()> { Ok(()) }
-    fn abort(&mut self, _indi: &indi_api::Connection) -> anyhow::Result<()> { Ok(()) }
-    fn continue_work(&mut self, _indi: &indi_api::Connection) -> anyhow::Result<()> { Ok(()) }
-    fn notify_indi_prop_change(&mut self, _prop_change: &indi_api::PropChangeEvent, _indi: &indi_api::Connection) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_blob_start_event(&mut self, _indi: &Arc<indi_api::Connection>, _thread_timer: &ThreadTimer) -> anyhow::Result<()> { Ok(()) }
-    fn notify_about_frame_processing_started(&mut self, _indi: &indi_api::Connection) -> anyhow::Result<()> { Ok(()) }
-    fn notify_about_light_frame_info(&mut self, _info: &LightImageInfo, _indi: &indi_api::Connection, _subscribers: &Subscribers) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_about_frame_processing_finished(&mut self, _indi: &indi_api::Connection, _frame_is_ok: bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_about_light_short_info(&mut self, _indi: &indi_api::Connection, _info: &LightFrameShortInfo) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn start(&mut self) -> anyhow::Result<()> { Ok(()) }
+    fn abort(&mut self) -> anyhow::Result<()> { Ok(()) }
+    fn continue_work(&mut self) -> anyhow::Result<()> { Ok(()) }
+    fn notify_indi_prop_change(&mut self, _prop_change: &indi_api::PropChangeEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_blob_start_event(&mut self, _event: &indi_api::BlobStartEvent) -> anyhow::Result<()> { Ok(()) } // TODO: device name, prop name, elem name
+    fn notify_about_frame_processing_started(&mut self) -> anyhow::Result<()> { Ok(()) }
+    fn notify_about_light_frame_info(&mut self, _info: &LightImageInfo, _subscribers: &Subscribers) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_about_frame_processing_finished(&mut self, _frame_is_ok: bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_about_light_short_info(&mut self, _info: &LightFrameShortInfo) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
 }
 
 pub enum NotifyResult {
@@ -98,6 +98,7 @@ pub enum NotifyResult {
 }
 
 pub struct State {
+    indi:          Arc<indi_api::Connection>,
     mode:          Box<dyn Mode + Send + Sync>,
     finished_mode: Option<Box<dyn Mode + Send + Sync>>,
     aborted_mode:  Option<Box<dyn Mode + Send + Sync>>,
@@ -105,8 +106,9 @@ pub struct State {
 }
 
 impl State {
-    pub fn new() -> Self {
+    pub fn new(indi: &Arc<indi_api::Connection>) -> Self {
         Self {
+            indi:          Arc::clone(indi),
             mode:          Box::new(WaitingMode),
             finished_mode: None,
             aborted_mode:  None,
@@ -130,31 +132,19 @@ impl State {
         &self.aborted_mode
     }
 
-    pub fn connect_indi_events(
-        state:        &Arc<RwLock<State>>,
-        indi:         &Arc<indi_api::Connection>,
-        thread_timer: &Arc<ThreadTimer>
-    ) {
-        let state = Arc::clone(&state);
-        let indi_clone = Arc::clone(&indi);
-        let thread_timer = Arc::clone(&thread_timer);
-        indi.subscribe_events(move |event| {
+    pub fn connect_indi_events(state: &Arc<RwLock<State>>) {
+        let state_clone = Arc::clone(state);
+        state.read().unwrap().indi.subscribe_events(move |event| {
             match event {
-                indi_api::Event::BlobStart(_) => {
-                    let self_ = &mut *state.write().unwrap();
-                    _ = self_.mode.notify_blob_start_event(
-                        &indi_clone,
-                        &thread_timer
-                    ); // TODO: process error
+                indi_api::Event::BlobStart(event) => {
+                    let self_ = &mut *state_clone.write().unwrap();
+                    _ = self_.mode.notify_blob_start_event(&event); // TODO: process error
                 }
                 indi_api::Event::PropChange(prop_change) => {
-                    let mut self_ = state.write().unwrap();
-                    let result = self_.mode.notify_indi_prop_change(
-                        &prop_change,
-                        &indi_clone
-                    );
+                    let mut self_ = state_clone.write().unwrap();
+                    let result = self_.mode.notify_indi_prop_change(&prop_change);
                     if let Ok(result) = result {
-                        _ = self_.apply_change_result(&indi_clone, result); // TODO: process error
+                        _ = self_.apply_change_result(result); // TODO: process error
                     } // TODO: process error
                 }
                 _ => {}
@@ -185,11 +175,17 @@ impl State {
     pub fn start_single_shot(
         &mut self,
         cam_name: &str,
-        indi:     &indi_api::Connection,
         frame:    &FrameOptions,
     ) -> anyhow::Result<()> {
-        let mut mode = CameraActiveMode::new(CamMode::SingleShot, cam_name, "", frame);
-        mode.start(indi)?;
+        let mut mode = CameraActiveMode::new(
+            &self.indi,
+            None,
+            CamMode::SingleShot,
+            cam_name,
+            "",
+            frame
+        );
+        mode.start()?;
         self.mode = Box::new(mode);
         self.finished_mode = None;
         self.inform_subcribers_about_progress();
@@ -199,12 +195,19 @@ impl State {
 
     pub fn start_live_view(
         &mut self,
-        cam_name: &str,
-        indi:     &indi_api::Connection,
-        frame:    &FrameOptions
+        cam_name:     &str,
+        frame:        &FrameOptions,
+        thread_timer: &Arc<ThreadTimer>
     ) -> anyhow::Result<()> {
-        let mut mode = CameraActiveMode::new(CamMode::LiveView, cam_name, "", frame);
-        mode.start(indi)?;
+        let mut mode = CameraActiveMode::new(
+            &self.indi,
+            Some(thread_timer),
+            CamMode::LiveView,
+            cam_name,
+            "",
+            frame
+        );
+        mode.start()?;
         self.mode = Box::new(mode);
         self.finished_mode = None;
         self.inform_subcribers_about_progress();
@@ -216,14 +219,16 @@ impl State {
         &mut self,
         cam_device:    &str,
         mount_device:  &str,
-        indi:          &indi_api::Connection,
         ref_stars:     &Arc<RwLock<Option<Vec<Point>>>>,
         frame_options: &FrameOptions,
         focus_options: &FocuserOptions,
         guid_options:  &GuidingOptions,
         options:       &RawFrameOptions,
+        thread_timer:  &Arc<ThreadTimer>
     ) -> anyhow::Result<()> {
         let mut mode = CameraActiveMode::new(
+            &self.indi,
+            Some(thread_timer),
             CamMode::SavingRawFrames,
             cam_device,
             mount_device,
@@ -237,7 +242,7 @@ impl State {
         mode.focus_options = Some(focus_options.clone());
         mode.guid_options = Some(guid_options.clone());
         mode.ref_stars = Some(Arc::clone(ref_stars));
-        mode.start(indi)?;
+        mode.start()?;
         self.mode = Box::new(mode);
         self.aborted_mode = None;
         self.finished_mode = None;
@@ -250,20 +255,27 @@ impl State {
         &mut self,
         cam_name:      &str,
         mount_device:  &str,
-        indi:          &indi_api::Connection,
         ref_stars:     &Arc<RwLock<Option<Vec<Point>>>>,
         live_stacking: &Arc<LiveStackingData>,
         frame_options: &FrameOptions,
         focus_options: &FocuserOptions,
         guid_options:  &GuidingOptions,
-        _options:      &LiveStackingOptions
+        _options:      &LiveStackingOptions,
+        thread_timer:  &Arc<ThreadTimer>
     ) -> anyhow::Result<()> {
-        let mut mode = CameraActiveMode::new(CamMode::LiveStacking, cam_name, mount_device, frame_options);
+        let mut mode = CameraActiveMode::new(
+            &self.indi,
+            Some(thread_timer),
+            CamMode::LiveStacking,
+            cam_name,
+            mount_device,
+            frame_options
+        );
         mode.focus_options = Some(focus_options.clone());
         mode.guid_options = Some(guid_options.clone());
         mode.ref_stars = Some(Arc::clone(ref_stars));
         mode.live_stacking = Some(Arc::clone(live_stacking));
-        mode.start(indi)?;
+        mode.start()?;
         self.mode = Box::new(mode);
         self.aborted_mode = None;
         self.finished_mode = None;
@@ -274,14 +286,13 @@ impl State {
 
     pub fn start_focusing(
         &mut self,
-        indi:    &indi_api::Connection,
         options: &FocuserOptions,
         frame:   &FrameOptions,
         camera:  &str,
     ) -> anyhow::Result<()> {
-        self.mode.abort(indi)?;
-        let mut mode = FocusingMode::new(options, frame, camera, None);
-        mode.start(indi)?;
+        self.mode.abort()?;
+        let mut mode = FocusingMode::new(&self.indi, options, frame, camera, None);
+        mode.start()?;
         self.mode = Box::new(mode);
         self.inform_subcribers_about_progress();
         self.inform_subcribers_about_mode_changed();
@@ -290,26 +301,29 @@ impl State {
 
     pub fn start_mount_calibr(
         &mut self,
-        indi:          &indi_api::Connection,
         frame:         &FrameOptions,
         options:       &GuidingOptions,
         mount_device:  &str,
         camera_device: &str,
     ) -> anyhow::Result<()> {
-        self.mode.abort(indi)?;
-        let mut mode = MountCalibrMode::new(frame, options, mount_device, camera_device, None);
-        mode.start(indi)?;
+        self.mode.abort()?;
+        let mut mode = MountCalibrMode::new(
+            &self.indi,
+            frame,
+            options,
+            mount_device,
+            camera_device,
+            None
+        );
+        mode.start()?;
         self.mode = Box::new(mode);
         self.inform_subcribers_about_progress();
         self.inform_subcribers_about_mode_changed();
         Ok(())
     }
 
-    pub fn abort_active_mode(
-        &mut self,
-        indi: &indi_api::Connection,
-    ) -> anyhow::Result<()> {
-        self.mode.abort(indi)?;
+    pub fn abort_active_mode(&mut self) -> anyhow::Result<()> {
+        self.mode.abort()?;
         let can_be_continued = self.mode.can_be_continued_after_stop();
         let prev_mode = std::mem::replace(&mut self.mode, Box::new(WaitingMode));
         if can_be_continued {
@@ -320,15 +334,12 @@ impl State {
         Ok(())
     }
 
-    pub fn continue_prev_mode(
-        &mut self,
-        indi: &indi_api::Connection
-    ) -> anyhow::Result<()> {
+    pub fn continue_prev_mode(&mut self) -> anyhow::Result<()> {
         let Some(perv_mode) = self.aborted_mode.take() else {
             anyhow::bail!("Aborted state is empty");
         };
         self.mode = perv_mode;
-        self.mode.continue_work(indi)?;
+        self.mode.continue_work()?;
         for s in &self.subscribers {
             s(Event::ModeContinued);
         }
@@ -338,46 +349,41 @@ impl State {
     }
 
     pub fn notify_about_frame_processing_started(
-        &mut self,
-        indi: &Arc<indi_api::Connection>
+        &mut self
     ) -> anyhow::Result<()> {
-        self.mode.notify_about_frame_processing_started(indi)?;
+        self.mode.notify_about_frame_processing_started()?;
         Ok(())
     }
 
     pub fn notify_about_light_frame_info(
         &mut self,
-        info: &LightImageInfo,
-        indi: &Arc<indi_api::Connection>
+        info: &LightImageInfo
     ) -> anyhow::Result<()> {
-        let res = self.mode.notify_about_light_frame_info(info, indi, &self.subscribers)?;
-        self.apply_change_result(indi, res)?;
+        let res = self.mode.notify_about_light_frame_info(info, &self.subscribers)?;
+        self.apply_change_result(res)?;
         Ok(())
     }
 
     pub fn notify_about_frame_processing_finished(
         &mut self,
-        indi:        &Arc<indi_api::Connection>,
         frame_is_ok: bool,
     ) -> anyhow::Result<()> {
-        let result = self.mode.notify_about_frame_processing_finished(indi, frame_is_ok)?;
-        self.apply_change_result(indi, result)?;
+        let result = self.mode.notify_about_frame_processing_finished(frame_is_ok)?;
+        self.apply_change_result(result)?;
         Ok(())
     }
 
     pub fn notify_about_light_short_info(
         &mut self,
-        indi: &indi_api::Connection,
         info: &LightFrameShortInfo
     ) -> anyhow::Result<()> {
-        let result = self.mode.notify_about_light_short_info(indi, info)?;
-        self.apply_change_result(indi, result)?;
+        let result = self.mode.notify_about_light_short_info(info)?;
+        self.apply_change_result(result)?;
         Ok(())
     }
 
     fn apply_change_result(
         &mut self,
-        indi:   &indi_api::Connection,
         result: NotifyResult
     ) -> anyhow::Result<()> {
         let mut mode_changed = false;
@@ -399,24 +405,31 @@ impl State {
                 if next_is_none {
                     self.finished_mode = Some(prev_mode);
                 }
-                self.mode.continue_work(indi)?;
+                self.mode.continue_work()?;
                 mode_changed = true;
                 progress_changed = true;
             }
             NotifyResult::StartFocusing { options, frame, camera } => {
-                self.mode.abort(indi)?;
+                self.mode.abort()?;
                 let prev_mode = std::mem::replace(&mut self.mode, Box::new(WaitingMode));
-                let mut mode = FocusingMode::new(&options, &frame, &camera, Some(prev_mode));
-                mode.start(indi)?;
+                let mut mode = FocusingMode::new(&self.indi, &options, &frame, &camera, Some(prev_mode));
+                mode.start()?;
                 self.mode = Box::new(mode);
                 mode_changed = true;
                 progress_changed = true;
             }
             NotifyResult::StartMountCalibr { options, frame, camera, mount } => {
-                self.mode.abort(indi)?;
+                self.mode.abort()?;
                 let prev_mode = std::mem::replace(&mut self.mode, Box::new(WaitingMode));
-                let mut mode = MountCalibrMode::new(&frame, &options, &mount, &camera, Some(prev_mode));
-                mode.start(indi)?;
+                let mut mode = MountCalibrMode::new(
+                    &self.indi,
+                    &frame,
+                    &options,
+                    &mount,
+                    &camera,
+                    Some(prev_mode)
+                );
+                mode.start()?;
                 self.mode = Box::new(mode);
                 mode_changed = true;
                 progress_changed = true;
@@ -712,6 +725,8 @@ enum CamState {
 }
 
 struct CameraActiveMode {
+    indi:          Arc<indi_api::Connection>,
+    thread_timer:  Option<Arc<ThreadTimer>>,
     cam_mode:      CamMode,
     state:         CamState,
     device:        String,
@@ -729,12 +744,16 @@ struct CameraActiveMode {
 
 impl CameraActiveMode {
     fn new(
+        indi:         &Arc<indi_api::Connection>,
+        thread_timer: Option<&Arc<ThreadTimer>>,
         cam_mode:     CamMode,
         device:       &str,
         mount_device: &str,
         frame:        &FrameOptions
     ) -> Self {
         Self {
+            indi:          Arc::clone(indi),
+            thread_timer:  thread_timer.cloned(),
             cam_mode,
             state:         CamState::Usual,
             device:        device.to_string(),
@@ -853,7 +872,7 @@ impl Mode for CameraActiveMode {
         )
     }
 
-    fn start(&mut self, indi: &indi_api::Connection) -> anyhow::Result<()> {
+    fn start(&mut self) -> anyhow::Result<()> {
         if let Some(ref_stars) = &mut self.ref_stars {
             let mut ref_stars = ref_stars.write().unwrap();
             *ref_stars = None;
@@ -870,7 +889,7 @@ impl Mode for CameraActiveMode {
             CamMode::LiveStacking => true,
         };
         start_taking_shots(
-            indi,
+            &self.indi,
             &self.frame_options,
             &self.device,
             continuously
@@ -878,15 +897,15 @@ impl Mode for CameraActiveMode {
         Ok(())
     }
 
-    fn abort(&mut self, indi: &indi_api::Connection) -> anyhow::Result<()> {
-        indi.camera_abort_exposure(&self.device)?;
+    fn abort(&mut self) -> anyhow::Result<()> {
+        self.indi.camera_abort_exposure(&self.device)?;
         Ok(())
     }
 
-    fn continue_work(&mut self, indi: &indi_api::Connection) -> anyhow::Result<()> {
+    fn continue_work(&mut self) -> anyhow::Result<()> {
         self.state = CamState::Usual;
         start_taking_shots(
-            indi,
+            &self.indi,
             &self.frame_options,
             &self.device,
             true
@@ -896,52 +915,51 @@ impl Mode for CameraActiveMode {
 
     fn notify_blob_start_event(
         &mut self,
-        indi:         &Arc<indi_api::Connection>,
-        thread_timer: &ThreadTimer
+        event: &indi_api::BlobStartEvent
     ) -> anyhow::Result<()> {
-        if self.cam_mode == CamMode::SingleShot {
+        if self.cam_mode == CamMode::SingleShot
+        || event.device_name != self.device {
             return Ok(());
         }
         self.cur_exposure = self.frame_options.exposure;
         let fast_mode_enabled =
-            indi.camera_is_fast_toggle_supported(&self.device).unwrap_or(false) &&
-            indi.camera_is_fast_toggle_enabled(&self.device).unwrap_or(false);
+            self.indi.camera_is_fast_toggle_supported(&self.device).unwrap_or(false) &&
+            self.indi.camera_is_fast_toggle_enabled(&self.device).unwrap_or(false);
         if !fast_mode_enabled {
             if !self.frame_options.have_to_use_delay() {
                 apply_camera_options_and_take_shot(
-                    indi,
+                    &self.indi,
                     &self.device,
                     &self.frame_options
                 )?;
             } else {
-                let indi = Arc::clone(indi);
+                let indi = Arc::clone(&self.indi);
                 let camera = self.device.clone();
                 let frame = self.frame_options.clone();
 
-                thread_timer.exec((frame.delay * 1000.0) as u32, move || {
-                    let res = apply_camera_options_and_take_shot(
-                        &indi,
-                        &camera,
-                        &frame
-                    );
-                    if let Err(err) = res {
-                        log::error!("{} during trying start next shot", err.to_string());
-                        // TODO: show error!!!
-                    }
-                });
+                if let Some(thread_timer) = &self.thread_timer {
+                    thread_timer.exec((frame.delay * 1000.0) as u32, move || {
+                        let res = apply_camera_options_and_take_shot(
+                            &indi,
+                            &camera,
+                            &frame
+                        );
+                        if let Err(err) = res {
+                            log::error!("{} during trying start next shot", err.to_string());
+                            // TODO: show error!!!
+                        }
+                    });
+                }
             }
         }
         Ok(())
     }
 
-    fn notify_about_frame_processing_started(
-        &mut self,
-        indi: &indi_api::Connection
-    ) -> anyhow::Result<()> {
+    fn notify_about_frame_processing_started(&mut self) -> anyhow::Result<()> {
         if let Some(progress) = &mut self.progress {
             if progress.cur+1 == progress.total &&
-            indi.camera_is_fast_toggle_enabled(&self.device)? {
-                indi.camera_abort_exposure(&self.device)?;
+            self.indi.camera_is_fast_toggle_enabled(&self.device)? {
+                self.indi.camera_abort_exposure(&self.device)?;
             }
         }
         Ok(())
@@ -950,11 +968,10 @@ impl Mode for CameraActiveMode {
     fn notify_about_light_frame_info(
         &mut self,
         info:         &LightImageInfo,
-        indi:         &indi_api::Connection,
         _subscribers: &Subscribers
     ) -> anyhow::Result<NotifyResult> {
         if !info.is_ok() { return Ok(NotifyResult::Empty); }
-        let mount_device_active = indi.is_device_enabled(&self.mount_device).unwrap_or(false);
+        let mount_device_active = self.indi.is_device_enabled(&self.mount_device).unwrap_or(false);
 
         if let Some(guid_options) = &self.guid_options { // Guiding and dithering
             let guid_data = self.guid_data.get_or_insert_with(|| GuidingData::new());
@@ -977,7 +994,7 @@ impl Mode for CameraActiveMode {
             self.cam_mode == CamMode::SavingRawFrames;
         if let (Some(focuser_options), true) = (&self.focus_options, use_focus) {
             let mut have_to_refocus = false;
-            if indi.is_device_enabled(&focuser_options.device).unwrap_or(false) {
+            if self.indi.is_device_enabled(&focuser_options.device).unwrap_or(false) {
                 if focuser_options.periodically && focuser_options.period_minutes != 0 {
                     self.exp_sum += self.frame_options.exposure;
                     let max_exp_sum = (focuser_options.period_minutes * 60) as f64;
@@ -1000,7 +1017,6 @@ impl Mode for CameraActiveMode {
 
     fn notify_about_light_short_info(
         &mut self,
-        indi: &indi_api::Connection,
         info: &LightFrameShortInfo
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
@@ -1009,7 +1025,7 @@ impl Mode for CameraActiveMode {
             return Ok(result);
         }
 
-        let mount_device_active = indi.is_device_enabled(&self.mount_device).unwrap_or(false);
+        let mount_device_active = self.indi.is_device_enabled(&self.mount_device).unwrap_or(false);
 
         if self.state == CamState::Usual {
             if let (true, Some(guid_options), Some(mut offset_x), Some(mut offset_y))
@@ -1046,8 +1062,8 @@ impl Mode for CameraActiveMode {
                             guid_data.cur_timed_guide_s = 0.0;
                             guid_data.cur_timed_guide_w = 0.0;
                             guid_data.cur_timed_guide_e = 0.0;
-                            indi.camera_abort_exposure(&self.device)?;
-                            indi.mount_timed_guide(&self.mount_device, 1000.0 * dec, 1000.0 * ra)?;
+                            self.indi.camera_abort_exposure(&self.device)?;
+                            self.indi.mount_timed_guide(&self.mount_device, 1000.0 * dec, 1000.0 * ra)?;
                             self.state = CamState::MountCorrection;
                             result = NotifyResult::ModeChanged;
                         }
@@ -1060,7 +1076,6 @@ impl Mode for CameraActiveMode {
 
     fn notify_about_frame_processing_finished(
         &mut self,
-        indi:        &indi_api::Connection,
         frame_is_ok: bool
     ) -> anyhow::Result<NotifyResult> {
         if self.cam_mode == CamMode::SingleShot {
@@ -1073,7 +1088,7 @@ impl Mode for CameraActiveMode {
                 result = NotifyResult::ProgressChanges;
             }
             if progress.cur == progress.total {
-                indi.camera_abort_exposure(&self.device)?;
+                self.indi.camera_abort_exposure(&self.device)?;
                 result = NotifyResult::Finished { next_mode: None };
             }
         }
@@ -1082,8 +1097,7 @@ impl Mode for CameraActiveMode {
 
     fn notify_indi_prop_change(
         &mut self,
-        prop_change: &indi_api::PropChangeEvent,
-        indi:        &indi_api::Connection,
+        prop_change: &indi_api::PropChangeEvent
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         if self.state == CamState::MountCorrection {
@@ -1101,7 +1115,7 @@ impl Mode for CameraActiveMode {
                 && guid_data.cur_timed_guide_w == 0.0
                 && guid_data.cur_timed_guide_e == 0.0 {
                     start_taking_shots(
-                        indi,
+                        &self.indi,
                         &self.frame_options,
                         &self.device,
                         true
@@ -1130,6 +1144,7 @@ enum FocusingStage {
 }
 
 struct FocusingMode {
+    indi:       Arc<indi_api::Connection>,
     state:      FocusingState,
     device:     String,
     camera:     String,
@@ -1170,6 +1185,7 @@ pub struct FocuserSample {
 
 impl FocusingMode {
     fn new(
+        indi:      &Arc<indi_api::Connection>,
         options:   &FocuserOptions,
         frame:     &FrameOptions,
         camera:    &str,
@@ -1178,6 +1194,7 @@ impl FocusingMode {
         let mut frame = frame.clone();
         frame.exposure = options.exposure;
         FocusingMode {
+            indi:       Arc::clone(indi),
             state:      FocusingState::Undefined,
             device:     options.device.clone(),
             options:    options.clone(),
@@ -1195,7 +1212,6 @@ impl FocusingMode {
 
     fn start_stage(
         &mut self,
-        indi:       &indi_api::Connection,
         middle_pos: f64,
         stage:      FocusingStage
     ) -> anyhow::Result<()> {
@@ -1208,28 +1224,27 @@ impl FocusingMode {
             self.to_go.push_back(pos_to_go);
         }
         self.stage = stage;
-        self.start_sample(true, indi)?;
+        self.start_sample(true)?;
         Ok(())
     }
 
     fn start_sample(
         &mut self,
-        first_time: bool,
-        indi:       &indi_api::Connection
+        first_time: bool
     ) -> anyhow::Result<()> {
         let Some(pos) = self.to_go.pop_front() else {
             return Ok(());
         };
         if !first_time {
-            indi.focuser_set_abs_value(&self.device, pos, true, None)?;
+            self.indi.focuser_set_abs_value(&self.device, pos, true, None)?;
             self.state = FocusingState::WaitingPosition(pos);
         } else {
             let mut before_pos = pos - self.options.step;
-            let cur_pos = indi.focuser_get_abs_value(&self.device)?;
+            let cur_pos = self.indi.focuser_get_abs_value(&self.device)?;
             if f64::abs(before_pos - cur_pos) < 1.0 {
                 before_pos -= 1.0;
             }
-            indi.focuser_set_abs_value(&self.device, before_pos, true, None)?;
+            self.indi.focuser_set_abs_value(&self.device, before_pos, true, None)?;
             self.state = FocusingState::WaitingPositionAntiBacklash{
                 before_pos,
                 begin_pos: pos
@@ -1273,23 +1288,22 @@ impl Mode for FocusingMode {
         false
     }
 
-    fn start(&mut self, indi: &indi_api::Connection) -> anyhow::Result<()> {
-        let cur_pos = indi.focuser_get_abs_value(&self.device)?.round();
+    fn start(&mut self) -> anyhow::Result<()> {
+        let cur_pos = self.indi.focuser_get_abs_value(&self.device)?.round();
         self.before_pos = cur_pos;
-        self.start_stage(indi, cur_pos, FocusingStage::Preliminary)?;
+        self.start_stage(cur_pos, FocusingStage::Preliminary)?;
         Ok(())
     }
 
-    fn abort(&mut self, indi: &indi_api::Connection) -> anyhow::Result<()> {
-        indi.camera_abort_exposure(&self.camera)?;
-        indi.focuser_set_abs_value(&self.device, self.before_pos, true, None)?;
+    fn abort(&mut self) -> anyhow::Result<()> {
+        self.indi.camera_abort_exposure(&self.camera)?;
+        self.indi.focuser_set_abs_value(&self.device, self.before_pos, true, None)?;
         Ok(())
     }
 
     fn notify_indi_prop_change(
         &mut self,
-        prop_change: &indi_api::PropChangeEvent,
-        indi:        &indi_api::Connection,
+        prop_change: &indi_api::PropChangeEvent
     ) -> anyhow::Result<NotifyResult> {
         if prop_change.device_name != self.device {
             return Ok(NotifyResult::Empty);
@@ -1300,25 +1314,25 @@ impl Mode for FocusingMode {
             match self.state {
                 FocusingState::WaitingPositionAntiBacklash {before_pos, begin_pos} => {
                     if f64::abs(cur_focus-before_pos) < 1.01 {
-                        indi.focuser_set_abs_value(&self.device, begin_pos, true, None)?;
+                        self.indi.focuser_set_abs_value(&self.device, begin_pos, true, None)?;
                         self.state = FocusingState::WaitingPosition(begin_pos);
                     }
                 }
                 FocusingState::WaitingPosition(desired_focus) => {
                     if f64::abs(cur_focus-desired_focus) < 1.01 {
-                        start_taking_shots(indi, &self.frame, &self.camera, false)?;
+                        start_taking_shots(&self.indi, &self.frame, &self.camera, false)?;
                         self.state = FocusingState::WaitingFrame(desired_focus);
                     }
                 }
                 FocusingState::WaitingResultPosAntiBacklash { before_pos, begin_pos } => {
                     if f64::abs(cur_focus-before_pos) < 1.01 {
-                        indi.focuser_set_abs_value(&self.device, begin_pos, true, None)?;
+                        self.indi.focuser_set_abs_value(&self.device, begin_pos, true, None)?;
                         self.state = FocusingState::WaitingResultPos(begin_pos);
                     }
                 }
                 FocusingState::WaitingResultPos(desired_focus) => {
                     if f64::abs(cur_focus-desired_focus) < 1.01 {
-                        start_taking_shots(indi, &self.frame, &self.camera, false)?;
+                        start_taking_shots(&self.indi, &self.frame, &self.camera, false)?;
                         self.state = FocusingState::WaitingResultImg;
                     }
                 }
@@ -1331,7 +1345,6 @@ impl Mode for FocusingMode {
     fn notify_about_light_frame_info(
         &mut self,
         info:        &LightImageInfo,
-        indi:        &indi_api::Connection,
         subscribers: &Subscribers,
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
@@ -1396,7 +1409,7 @@ impl Mode for FocusingMode {
                             result: Some(extr),
                         }));
                     }
-                    let focuser_info = indi.focuser_get_abs_value_prop_info(&self.device)?;
+                    let focuser_info = self.indi.focuser_get_abs_value_prop_info(&self.device)?;
                     if extr < focuser_info.min || extr > focuser_info.max {
                         anyhow::bail!(
                             "Focuser extremum {0:.1} out of focuser range ({1:.1}..{2:.1})",
@@ -1420,18 +1433,18 @@ impl Mode for FocusingMode {
                                 self.to_go.push_back(max_sample_pos + i as f64 * self.options.step);
                             }
                         }
-                        self.start_sample(true, indi)?;
+                        self.start_sample(true)?;
                         return Ok(result);
                     }
                     if self.stage == FocusingStage::Preliminary {
-                        self.start_stage(indi, extr, FocusingStage::Final)?;
+                        self.start_stage(extr, FocusingStage::Final)?;
                         result = NotifyResult::ModeChanged;
                         return Ok(result)
                     }
 
                     self.result_pos = Some(extr);
                     // for anti-backlash first move to minimum position
-                    indi.focuser_set_abs_value(
+                    self.indi.focuser_set_abs_value(
                         &self.device,
                         extr - self.options.step,
                         true,
@@ -1447,11 +1460,11 @@ impl Mode for FocusingMode {
                         });
                     }
                 } else {
-                    self.start_sample(false, indi)?;
+                    self.start_sample(false)?;
                 }
             } else {
                 start_taking_shots(
-                    indi,
+                    &self.indi,
                     &self.frame,
                     &self.camera,
                     false
@@ -1502,6 +1515,7 @@ impl MountMoveCalibrRes {
 }
 
 struct MountCalibrMode {
+    indi:              Arc<indi_api::Connection>,
     state:             DitherCalibrState,
     axis:              DitherCalibrAxis,
     frame:             FrameOptions,
@@ -1544,6 +1558,7 @@ struct DitherCalibrAtempt {
 
 impl MountCalibrMode {
     fn new(
+        indi:          &Arc<indi_api::Connection>,
         frame:         &FrameOptions,
         options:       &GuidingOptions,
         mount_device:  &str,
@@ -1553,6 +1568,7 @@ impl MountCalibrMode {
         let mut frame = frame.clone();
         frame.exposure = options.calibr_exposure;
         Self {
+            indi:              Arc::clone(indi),
             state:             DitherCalibrState::Undefined,
             axis:              DitherCalibrAxis::Undefined,
             frame,
@@ -1575,9 +1591,9 @@ impl MountCalibrMode {
         }
     }
 
-    fn start_for_axis(&mut self, indi: &indi_api::Connection, axis: DitherCalibrAxis) -> anyhow::Result<()> {
+    fn start_for_axis(&mut self, axis: DitherCalibrAxis) -> anyhow::Result<()> {
         start_taking_shots(
-            indi,
+            &self.indi,
             &self.frame,
             &self.camera_device,
             false
@@ -1589,7 +1605,7 @@ impl MountCalibrMode {
         Ok(())
     }
 
-    fn process_axis_results(&mut self, indi: &indi_api::Connection) -> anyhow::Result<()> {
+    fn process_axis_results(&mut self) -> anyhow::Result<()> {
         struct AttemptRes {move_x: f64, move_y: f64, dist: f64}
         let mut result = Vec::new();
         for (prev, cur) in self.attempts.iter().tuple_windows() {
@@ -1632,7 +1648,7 @@ impl MountCalibrMode {
             DitherCalibrAxis::Ra => {
                 self.result.move_x_ra = move_x;
                 self.result.move_y_ra = move_y;
-                self.start_for_axis(indi, DitherCalibrAxis::Dec)?;
+                self.start_for_axis(DitherCalibrAxis::Dec)?;
             }
             DitherCalibrAxis::Dec => {
                 self.result.move_x_dec = move_x;
@@ -1640,7 +1656,7 @@ impl MountCalibrMode {
                 if let Some(next_mode) = &mut self.next_mode {
                     next_mode.set_value(&self.result, ModeSetValueReason::Result);
                 }
-                self.restore_orig_coords(indi)?;
+                self.restore_orig_coords()?;
                 self.state = DitherCalibrState::WaitForOrigCoords;
             }
             _ => unreachable!()
@@ -1648,8 +1664,8 @@ impl MountCalibrMode {
         Ok(())
     }
 
-    fn restore_orig_coords(&self, indi: &indi_api::Connection) -> anyhow::Result<()> {
-        indi.mount_set_eq_coord(
+    fn restore_orig_coords(&self) -> anyhow::Result<()> {
+        self.indi.mount_set_eq_coord(
             &self.mount_device,
             self.start_ra,
             self.start_dec,
@@ -1675,8 +1691,8 @@ impl Mode for MountCalibrMode {
         }
     }
 
-    fn abort(&mut self, indi: &indi_api::Connection) -> anyhow::Result<()> {
-        self.restore_orig_coords(indi)?;
+    fn abort(&mut self) -> anyhow::Result<()> {
+        self.restore_orig_coords()?;
         Ok(())
     }
 
@@ -1695,20 +1711,16 @@ impl Mode for MountCalibrMode {
         })
     }
 
-    fn start(
-        &mut self,
-        indi: &indi_api::Connection
-    ) -> anyhow::Result<()> {
-        self.start_dec = indi.mount_get_eq_dec(&self.mount_device)?;
-        self.start_ra = indi.mount_get_eq_ra(&self.mount_device)?;
-        self.start_for_axis(indi, DitherCalibrAxis::Ra)?;
+    fn start(&mut self) -> anyhow::Result<()> {
+        self.start_dec = self.indi.mount_get_eq_dec(&self.mount_device)?;
+        self.start_ra = self.indi.mount_get_eq_ra(&self.mount_device)?;
+        self.start_for_axis(DitherCalibrAxis::Ra)?;
         Ok(())
     }
 
     fn notify_about_light_frame_info(
         &mut self,
         info:         &LightImageInfo,
-        indi:         &indi_api::Connection,
         _subscribers: &Subscribers,
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
@@ -1720,19 +1732,19 @@ impl Mode for MountCalibrMode {
             result = NotifyResult::ProgressChanges;
             if self.attempt_num >= DITHER_CALIBR_ATTEMPTS_CNT {
                 result = NotifyResult::ModeChanged;
-                self.process_axis_results(indi)?;
+                self.process_axis_results()?;
             } else {
                 let (ns, we) = match self.axis {
                     DitherCalibrAxis::Ra => (0.0, 1000.0 * DITHER_CALIBR_TEST_PERIOD),
                     DitherCalibrAxis::Dec => (1000.0 * DITHER_CALIBR_TEST_PERIOD, 0.0),
                     _ => unreachable!()
                 };
-                indi.mount_timed_guide(&self.mount_device, ns, we)?;
+                self.indi.mount_timed_guide(&self.mount_device, ns, we)?;
                 self.state = DitherCalibrState::WaitForSlew;
             }
         } else {
             start_taking_shots(
-                indi,
+                &self.indi,
                 &self.frame,
                 &self.camera_device,
                 false
@@ -1743,8 +1755,7 @@ impl Mode for MountCalibrMode {
 
     fn notify_indi_prop_change(
         &mut self,
-        prop_change: &indi_api::PropChangeEvent,
-        indi:        &indi_api::Connection,
+        prop_change: &indi_api::PropChangeEvent
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
 
@@ -1765,7 +1776,7 @@ impl Mode for MountCalibrMode {
                     if self.cur_timed_guide_n == 0.0 && self.cur_timed_guide_s == 0.0
                     && self.cur_timed_guide_w == 0.0 && self.cur_timed_guide_e == 0.0 {
                         start_taking_shots(
-                            indi,
+                            &self.indi,
                             &self.frame,
                             &self.camera_device,
                             false

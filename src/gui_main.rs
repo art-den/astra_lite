@@ -105,22 +105,23 @@ pub fn build_ui(
     gtk_utils::exec_and_show_error(&window, || {
         load_json_from_config_file(&mut options, "conf_main")
     });
+    let indi = Arc::new(indi_api::Connection::new());
     let thread_timer = Arc::new(ThreadTimer::new());
     let data = Rc::new(MainData {
         logs_dir:       logs_dir.clone(),
         options:        RefCell::new(options),
         timer_handlers: RefCell::new(Vec::new()),
         progress:       RefCell::new(None),
-        state:          Arc::new(RwLock::new(State::new())),
+        state:          Arc::new(RwLock::new(State::new(&indi))),
         thread_timer:   Arc::clone(&thread_timer),
-        indi:           Arc::new(indi_api::Connection::new()),
+        indi,
         window:         window.clone(),
         builder:        builder.clone(),
         conn_string:    RefCell::new(String::new()),
         dev_string:     RefCell::new(String::new()),
     });
 
-    State::connect_indi_events(&data.state, &data.indi, &thread_timer);
+    State::connect_indi_events(&data.state);
 
     window.set_application(Some(app));
     window.show();
@@ -357,7 +358,7 @@ fn show_mode_caption(data: &Rc<MainData>) {
 fn handler_action_stop(data: &Rc<MainData>) {
     gtk_utils::exec_and_show_error(&data.window, || {
         let mut state = data.state.write().unwrap();
-        state.abort_active_mode(&data.indi)?;
+        state.abort_active_mode()?;
         Ok(())
     });
 }
@@ -365,7 +366,7 @@ fn handler_action_stop(data: &Rc<MainData>) {
 fn handler_action_continue(data: &Rc<MainData>) {
     gtk_utils::exec_and_show_error(&data.window, || {
         let mut state = data.state.write().unwrap();
-        state.continue_prev_mode(&data.indi)?;
+        state.continue_prev_mode()?;
         Ok(())
     });
 }
