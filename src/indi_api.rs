@@ -3795,8 +3795,8 @@ impl XmlReceiver {
             let device = xml_elem.attr_str_or_err("device")?;
             let timestamp = xml_elem.attr_time("timestamp");
             self.notify_subcribers_about_message(timestamp, device, message, events_sender);
-        } else {
-            println!("Unknown tag: {}, xml=\n{}", xml_elem.name, xml_text);
+        } else if !matches!(xml_elem.name.as_str(), "newTextVector"|"newNumberVector"|"newSwitchVector"|"newBLOBVector") {
+            log::error!("Unknown tag: {}, xml=\n{}", xml_elem.name, xml_text);
         }
         Ok(())
     }

@@ -50,6 +50,7 @@ pub enum ModeType {
 
 type Subscribers = Vec<Box<dyn Fn(Event) + Send + Sync + 'static>>;
 
+#[derive(PartialEq)]
 pub enum ModeSetValueReason {
     Result,
     Continue,
@@ -57,7 +58,7 @@ pub enum ModeSetValueReason {
 
 pub trait Mode {
     fn get_type(&self) -> ModeType;
-    fn set_value(&mut self, _value: &dyn Any, _reason: ModeSetValueReason) {}
+    fn set_or_correct_value(&mut self, _value: &mut dyn Any, _reason: ModeSetValueReason) {}
     fn progress_string(&self) -> String;
     fn cam_device(&self) -> Option<&str> { None }
     fn progress(&self) -> Option<Progress> { None }
@@ -69,6 +70,7 @@ pub trait Mode {
     fn start(&mut self) -> anyhow::Result<()> { Ok(()) }
     fn abort(&mut self) -> anyhow::Result<()> { Ok(()) }
     fn continue_work(&mut self) -> anyhow::Result<()> { Ok(()) }
+    fn take_next_mode(&mut self) -> Option<Box<dyn Mode + Send + Sync>> { None }
     fn notify_indi_prop_change(&mut self, _prop_change: &indi_api::PropChangeEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_blob_start_event(&mut self, _event: &indi_api::BlobStartEvent) -> anyhow::Result<()> { Ok(()) } // TODO: device name, prop name, elem name
     fn notify_about_frame_processing_started(&mut self) -> anyhow::Result<()> { Ok(()) }
@@ -324,10 +326,17 @@ impl State {
 
     pub fn abort_active_mode(&mut self) -> anyhow::Result<()> {
         self.mode.abort()?;
-        let can_be_continued = self.mode.can_be_continued_after_stop();
-        let prev_mode = std::mem::replace(&mut self.mode, Box::new(WaitingMode));
-        if can_be_continued {
-            self.aborted_mode = Some(prev_mode);
+        let mut prev_mode = std::mem::replace(&mut self.mode, Box::new(WaitingMode));
+        loop {
+            if prev_mode.can_be_continued_after_stop() {
+                self.aborted_mode = Some(prev_mode);
+                break;
+            }
+            if let Some(next_mode) = prev_mode.take_next_mode() {
+                prev_mode = next_mode;
+            } else {
+                break;
+            }
         }
         self.finished_mode = None;
         self.inform_subcribers_about_mode_changed();
@@ -781,18 +790,23 @@ impl Mode for CameraActiveMode {
         }
     }
 
-    fn set_value(&mut self, value: &dyn Any, _reason: ModeSetValueReason) {
-        if let Some(value) = value.downcast_ref::<MountMoveCalibrRes>() {
+    fn set_or_correct_value(&mut self, value: &mut dyn Any, reason: ModeSetValueReason) {
+        if let Some(value) = value.downcast_mut::<FrameOptions>() {
+            if reason == ModeSetValueReason::Continue {
+                *value = self.frame_options.clone();
+            }
+        }
+        if let Some(value) = value.downcast_mut::<MountMoveCalibrRes>() {
             let dith_data = self.guid_data.get_or_insert_with(|| GuidingData::new());
             dith_data.mnt_calibr = Some(value.clone());
             log::debug!("New mount calibration set: {:?}", dith_data.mnt_calibr);
         }
-        if let Some(value) = value.downcast_ref::<FocuserOptions>() {
+        if let Some(value) = value.downcast_mut::<FocuserOptions>() {
             if self.focus_options.is_some() {
                 self.focus_options = Some(value.clone());
             }
         }
-        if let Some(value) = value.downcast_ref::<GuidingOptions>() {
+        if let Some(value) = value.downcast_mut::<GuidingOptions>() {
             if self.guid_options.is_some() {
                 self.guid_options = Some(value.clone());
             }
@@ -813,7 +827,8 @@ impl Mode for CameraActiveMode {
                 "Live stacking".to_string(),
         };
         let mut extra_modes = Vec::new();
-        if matches!(self.cam_mode, CamMode::SavingRawFrames|CamMode::LiveStacking) {
+        if matches!(self.cam_mode, CamMode::SavingRawFrames|CamMode::LiveStacking)
+        && self.state == CamState::Usual {
             if let Some(focus_options) = &self.focus_options {
                 if focus_options.on_fwhm_change
                 || focus_options.on_temp_change
@@ -1027,11 +1042,13 @@ impl Mode for CameraActiveMode {
 
         let mount_device_active = self.indi.is_device_enabled(&self.mount_device).unwrap_or(false);
 
-        if self.state == CamState::Usual {
-            if let (true, Some(guid_options), Some(mut offset_x), Some(mut offset_y))
-            = (mount_device_active, &self.guid_options, info.offset_x, info.offset_y) {
+        if self.state == CamState::Usual && mount_device_active {
+            let mut move_offset = None;
+            if let Some(guid_options) = &self.guid_options {
                 let guid_data = self.guid_data.get_or_insert_with(|| GuidingData::new());
-
+                let mut prev_dither_x = 0_f64;
+                let mut prev_dither_y = 0_f64;
+                let mut dithering_flag = false;
                 if guid_options.dith_period != 0 { // dithering
                     guid_data.dither_exp_sum += info.exposure;
                     if guid_data.dither_exp_sum > (guid_options.dith_period * 60) as f64 {
@@ -1040,33 +1057,51 @@ impl Mode for CameraActiveMode {
                         let dither_max_size = min_size as f64 * guid_options.dith_percent / 100.0;
                         use rand::prelude::*;
                         let mut rng = rand::thread_rng();
+                        prev_dither_x = guid_data.dither_x;
+                        prev_dither_y = guid_data.dither_y;
                         guid_data.dither_x = dither_max_size * (rng.gen::<f64>() - 0.5);
                         guid_data.dither_y = dither_max_size * (rng.gen::<f64>() - 0.5);
+                        log::debug!("dithering position = {}px,{}px", guid_data.dither_x, guid_data.dither_y);
+                        dithering_flag = true;
+                        dbg!(guid_data.dither_x, guid_data.dither_y);
                     }
                 }
-
-                offset_x -= guid_data.dither_x;
-                offset_y -= guid_data.dither_y;
-                let diff_dist = f64::sqrt(offset_x * offset_x + offset_y * offset_y);
-                log::debug!("diff_dist = {}", diff_dist);
-                if diff_dist > guid_options.max_error { // correvt mount position
-                    log::info!(
-                        "diff_dist > guid_options.max_error ({} > {}), start mount correction",
-                        diff_dist,
-                        guid_options.max_error
-                    );
-                    let mnt_calibr = guid_data.mnt_calibr.clone().unwrap_or_default();
-                    if mnt_calibr.is_ok() {
-                        if let Some((ra, dec)) = mnt_calibr.calc(-offset_x, -offset_y) {
-                            guid_data.cur_timed_guide_n = 0.0;
-                            guid_data.cur_timed_guide_s = 0.0;
-                            guid_data.cur_timed_guide_w = 0.0;
-                            guid_data.cur_timed_guide_e = 0.0;
-                            self.indi.camera_abort_exposure(&self.device)?;
-                            self.indi.mount_timed_guide(&self.mount_device, 1000.0 * dec, 1000.0 * ra)?;
-                            self.state = CamState::MountCorrection;
-                            result = NotifyResult::ModeChanged;
-                        }
+                if let (Some(mut offset_x), Some(mut offset_y), true)
+                = (info.offset_x, info.offset_y, guid_options.enabled) { // guiding
+                    offset_x -= guid_data.dither_x;
+                    offset_y -= guid_data.dither_y;
+                    let diff_dist = f64::sqrt(offset_x * offset_x + offset_y * offset_y);
+                    log::debug!("diff_dist = {}px", diff_dist);
+                    if diff_dist > guid_options.max_error
+                    || dithering_flag {
+                        move_offset = Some((-offset_x, -offset_y));
+                        log::debug!(
+                            "diff_dist > guid_options.max_error ({} > {}), start mount correction",
+                            diff_dist,
+                            guid_options.max_error
+                        );
+                    }
+                } else if dithering_flag {
+                    move_offset = Some((
+                        guid_data.dither_x-prev_dither_x,
+                        guid_data.dither_y-prev_dither_y
+                    ));
+                }
+            }
+            if let Some((offset_x, offset_y)) = move_offset { // Move mount position
+                let guid_data = self.guid_data.get_or_insert_with(|| GuidingData::new());
+                let mnt_calibr = guid_data.mnt_calibr.clone().unwrap_or_default();
+                if mnt_calibr.is_ok() {
+                    if let Some((ra, dec)) = mnt_calibr.calc(offset_x, offset_y) {
+                        log::debug!("mount correction: ra={:.2}s, dec={:.2}s", ra, dec);
+                        guid_data.cur_timed_guide_n = 0.0;
+                        guid_data.cur_timed_guide_s = 0.0;
+                        guid_data.cur_timed_guide_w = 0.0;
+                        guid_data.cur_timed_guide_e = 0.0;
+                        self.indi.camera_abort_exposure(&self.device)?;
+                        self.indi.mount_timed_guide(&self.mount_device, 1000.0 * dec, 1000.0 * ra)?;
+                        self.state = CamState::MountCorrection;
+                        result = NotifyResult::ModeChanged;
                     }
                 }
             }
@@ -1299,6 +1334,10 @@ impl Mode for FocusingMode {
         self.indi.camera_abort_exposure(&self.camera)?;
         self.indi.focuser_set_abs_value(&self.device, self.before_pos, true, None)?;
         Ok(())
+    }
+
+    fn take_next_mode(&mut self) -> Option<Box<dyn Mode + Send + Sync>> {
+        self.next_mode.take()
     }
 
     fn notify_indi_prop_change(
@@ -1654,7 +1693,7 @@ impl MountCalibrMode {
                 self.result.move_x_dec = move_x;
                 self.result.move_y_dec = move_y;
                 if let Some(next_mode) = &mut self.next_mode {
-                    next_mode.set_value(&self.result, ModeSetValueReason::Result);
+                    next_mode.set_or_correct_value(&mut self.result, ModeSetValueReason::Result);
                 }
                 self.restore_orig_coords()?;
                 self.state = DitherCalibrState::WaitForOrigCoords;
@@ -1694,6 +1733,10 @@ impl Mode for MountCalibrMode {
     fn abort(&mut self) -> anyhow::Result<()> {
         self.restore_orig_coords()?;
         Ok(())
+    }
+
+    fn take_next_mode(&mut self) -> Option<Box<dyn Mode + Send + Sync>> {
+        self.next_mode.take()
     }
 
     fn cam_device(&self) -> Option<&str> {
