@@ -459,7 +459,7 @@ struct GuiOptions {
     raw_frames_exp: bool,
     live_exp:       bool,
     foc_exp:        bool,
-    diz_exp:        bool,
+    dith_exp:       bool,
     quality_exp:    bool,
     mount_exp:      bool,
 }
@@ -477,7 +477,7 @@ impl Default for GuiOptions {
             raw_frames_exp: true,
             live_exp:       false,
             foc_exp:        false,
-            diz_exp:        false,
+            dith_exp:        false,
             quality_exp:    true,
             mount_exp:      false,
         }
@@ -521,7 +521,7 @@ impl Default for FocuserOptions {
 pub struct GuidingOptions {
     pub enabled: bool,
     pub max_error: f64,
-    pub dith_period: u32, // in minutes, 0 - do not dizer
+    pub dith_period: u32, // in minutes, 0 - do not dither
     pub dith_percent: f64, // percent of image
     pub calibr_exposure: f64,
 }
@@ -677,7 +677,7 @@ pub fn build_ui(
     connect_widgets_events_before_show_options(&camera_data);
 
     init_focuser_widgets(&camera_data);
-    init_dizering_widgets(&camera_data);
+    init_dithering_widgets(&camera_data);
 
     show_options(&camera_data);
     show_frame_options(&camera_data);
@@ -688,7 +688,7 @@ pub fn build_ui(
     connect_widgets_events(&camera_data);
     connect_img_mouse_scroll_events(&camera_data);
     connect_focuser_widgets_events(&camera_data);
-    connect_dizering_widgets_events(&camera_data);
+    connect_dithering_widgets_events(&camera_data);
     connect_mount_widgets_events(&camera_data);
 
     let weak_camera_data = Rc::downgrade(&camera_data);
@@ -1242,8 +1242,8 @@ fn show_options(data: &Rc<CameraData>) {
         gtk_utils::set_f64      (bld, "spb_foc_auto_step",   options.focuser.step);
         gtk_utils::set_f64      (bld, "spb_foc_exp",         options.focuser.exposure);
 
-        gtk_utils::set_active_id(bld, "cb_diz_perod",     Some(options.guiding.dith_period.to_string().as_str()));
-        gtk_utils::set_active_id(bld, "cb_diz_distance",  Some(format!("{:.0}", options.guiding.dith_percent * 10.0).as_str()));
+        gtk_utils::set_active_id(bld, "cb_dith_perod",     Some(options.guiding.dith_period.to_string().as_str()));
+        gtk_utils::set_active_id(bld, "cb_dith_distance",  Some(format!("{:.0}", options.guiding.dith_percent * 10.0).as_str()));
         gtk_utils::set_bool     (bld, "chb_guid_enabled", options.guiding.enabled);
         gtk_utils::set_f64      (bld, "spb_guid_max_err", options.guiding.max_error);
         gtk_utils::set_f64      (bld, "spb_mnt_cal_exp",  options.guiding.calibr_exposure);
@@ -1257,7 +1257,7 @@ fn show_options(data: &Rc<CameraData>) {
         gtk_utils::set_bool_prop(bld, "exp_raw_frames", "expanded", options.gui.raw_frames_exp);
         gtk_utils::set_bool_prop(bld, "exp_live",       "expanded", options.gui.live_exp);
         gtk_utils::set_bool_prop(bld, "exp_foc",        "expanded", options.gui.foc_exp);
-        gtk_utils::set_bool_prop(bld, "exp_diz",        "expanded", options.gui.diz_exp);
+        gtk_utils::set_bool_prop(bld, "exp_dith",       "expanded", options.gui.dith_exp);
         gtk_utils::set_bool_prop(bld, "exp_quality",    "expanded", options.gui.quality_exp);
         gtk_utils::set_bool_prop(bld, "exp_mount",      "expanded", options.gui.mount_exp);
     });
@@ -1350,8 +1350,8 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.focuser.step            = gtk_utils::get_f64      (bld, "spb_foc_auto_step");
     options.focuser.exposure        = gtk_utils::get_f64      (bld, "spb_foc_exp");
 
-    options.guiding.dith_period     = gtk_utils::get_active_id(bld, "cb_diz_perod").and_then(|v| v.parse().ok()).unwrap_or(0);
-    options.guiding.dith_percent    = gtk_utils::get_active_id(bld, "cb_diz_distance").and_then(|v| v.parse().ok()).unwrap_or(10.0) / 10.0;
+    options.guiding.dith_period     = gtk_utils::get_active_id(bld, "cb_dith_perod").and_then(|v| v.parse().ok()).unwrap_or(0);
+    options.guiding.dith_percent    = gtk_utils::get_active_id(bld, "cb_dith_distance").and_then(|v| v.parse().ok()).unwrap_or(10.0) / 10.0;
     options.guiding.enabled         = gtk_utils::get_bool     (bld, "chb_guid_enabled");
     options.guiding.max_error       = gtk_utils::get_f64      (bld, "spb_guid_max_err");
     options.guiding.calibr_exposure = gtk_utils::get_f64      (bld, "spb_mnt_cal_exp");
@@ -1369,7 +1369,7 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.gui.raw_frames_exp   = gtk_utils::get_bool_prop(bld, "exp_raw_frames", "expanded");
     options.gui.live_exp         = gtk_utils::get_bool_prop(bld, "exp_live",       "expanded");
     options.gui.foc_exp          = gtk_utils::get_bool_prop(bld, "exp_foc",        "expanded");
-    options.gui.diz_exp          = gtk_utils::get_bool_prop(bld, "exp_diz",        "expanded");
+    options.gui.dith_exp         = gtk_utils::get_bool_prop(bld, "exp_dith",        "expanded");
     options.gui.quality_exp      = gtk_utils::get_bool_prop(bld, "exp_quality",    "expanded");
     options.gui.mount_exp        = gtk_utils::get_bool_prop(bld, "exp_mount",      "expanded");
 }
@@ -1496,6 +1496,8 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
             data.main.indi.camera_is_low_noise_ctrl_supported(&camera)
         ).unwrap_or(Ok(false))?;
 
+        let indi_connected = data.main.indi.state() == indi_api::ConnState::Connected;
+
         let cooler_active = gtk_utils::get_bool(bldr, "chb_cooler");
 
         let frame_mode_str = gtk_utils::get_active_id(bldr, "cb_frame_mode");
@@ -1511,6 +1513,8 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
         let shot_active = mode_type == ModeType::SingleShot;
         let liveview_active = mode_type == ModeType::LiveView;
         let saving_frames = mode_type == ModeType::SavingRawFrames;
+        let mnt_calibr = mode_type == ModeType::DitherCalibr;
+        let focusing = mode_type == ModeType::Focusing;
         let saving_frames_paused = state.aborted_mode()
             .as_ref()
             .map(|mode| mode.get_type() == ModeType::SavingRawFrames)
@@ -1520,9 +1524,34 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
             .as_ref()
             .map(|mode| mode.get_type() == ModeType::LiveStacking)
             .unwrap_or(false);
-        let focusing = mode_type == ModeType::Focusing;
         let dither_calibr = mode_type == ModeType::DitherCalibr;
         drop(state);
+
+        let focuser_sensitive =
+            indi_connected &&
+            gtk_utils::get_active_id(bldr, "cb_foc_list").is_some() &&
+            !saving_frames &&
+            !live_active &&
+            !mnt_calibr &&
+            !focusing;
+
+        let dithering_sensitive =
+            indi_connected &&
+            data.mount_device_name.borrow().is_some() &&
+            !saving_frames &&
+            !live_active &&
+            !mnt_calibr &&
+            !focusing;
+
+        let mount_ctrl_sensitive =
+            (indi_connected &&
+            data.mount_device_name.borrow().is_some() &&
+            !saving_frames &&
+            !live_active &&
+            !mnt_calibr &&
+            !focusing) ||
+            (gtk_utils::get_active_id(bldr, "cb_dith_perod").as_deref() == Some("0") &&
+            !gtk_utils::get_bool(bldr, "chb_guid_enabled"));
 
         let save_raw_btn_cap = match frame_mode {
             FrameType::Lights => "Start save\nLIGHTs",
@@ -1582,6 +1611,9 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
             ("chb_raw_frames_cnt", !saving_frames_paused),
             ("spb_raw_frames_cnt", !saving_frames_paused),
 
+            ("grd_foc",            focuser_sensitive),
+            ("grd_dither",         dithering_sensitive),
+            ("bx_simple_mount",    mount_ctrl_sensitive),
             ("spb_foc_temp",       gtk_utils::get_bool(bldr, "chb_foc_temp")),
             ("cb_foc_fwhm",        gtk_utils::get_bool(bldr, "chb_foc_fwhm")),
             ("cb_foc_period",      gtk_utils::get_bool(bldr, "chb_foc_period")),
@@ -2909,10 +2941,10 @@ fn update_focuser_devices_list(data: &Rc<CameraData>) {
     let connected = data.main.indi.state() == indi_api::ConnState::Connected;
     gtk_utils::enable_widgets(&data.main.builder, false, &[
         ("cb_foc_list", connected && focusers_count > 1),
-        ("grd_foc",     connected && focusers_count > 0)
     ]);
     data.options.borrow_mut().focuser.device =
         cb_foc_list.active_id().map(|s| s.to_string()).unwrap_or_else(String::new);
+    correct_widget_properties(data);
 }
 
 fn update_focuser_position_widget(data: &Rc<CameraData>, new_prop: bool) {
@@ -3103,7 +3135,7 @@ fn handler_action_stop_manual_focus(data: &Rc<CameraData>) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-fn init_dizering_widgets(data: &Rc<CameraData>) {
+fn init_dithering_widgets(data: &Rc<CameraData>) {
     let spb_guid_max_err = data.main.builder.object::<gtk::SpinButton>("spb_guid_max_err").unwrap();
     spb_guid_max_err.set_range(3.0, 50.0);
     spb_guid_max_err.set_digits(0);
@@ -3115,7 +3147,7 @@ fn init_dizering_widgets(data: &Rc<CameraData>) {
     spb_mnt_cal_exp.set_increments(0.5, 5.0);
 }
 
-fn connect_dizering_widgets_events(data: &Rc<CameraData>) {
+fn connect_dithering_widgets_events(data: &Rc<CameraData>) {
     let chb_guid_enabled = data.main.builder.object::<gtk::CheckButton>("chb_guid_enabled").unwrap();
     chb_guid_enabled.connect_active_notify(clone!(@strong data => move |_| {
         correct_widget_properties(&data);

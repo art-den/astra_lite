@@ -3596,12 +3596,12 @@ Better use "Subtrack master DARK frame"</property>
                               </packing>
                             </child>
                             <child>
-                              <object class="GtkExpander" id="exp_diz">
+                              <object class="GtkExpander" id="exp_dith">
                                 <property name="visible">True</property>
                                 <property name="can-focus">True</property>
                                 <child>
                                   <!-- n-columns=2 n-rows=9 -->
-                                  <object class="GtkGrid">
+                                  <object class="GtkGrid" id="grd_dither">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
                                     <property name="margin-start">5</property>
@@ -3621,7 +3621,7 @@ Better use "Subtrack master DARK frame"</property>
                                       </packing>
                                     </child>
                                     <child>
-                                      <object class="GtkComboBoxText" id="cb_diz_perod">
+                                      <object class="GtkComboBoxText" id="cb_dith_perod">
                                         <property name="visible">True</property>
                                         <property name="can-focus">False</property>
                                         <property name="hexpand">True</property>
@@ -3656,7 +3656,7 @@ Better use "Subtrack master DARK frame"</property>
                                       </packing>
                                     </child>
                                     <child>
-                                      <object class="GtkComboBoxText" id="cb_diz_distance">
+                                      <object class="GtkComboBoxText" id="cb_dith_distance">
                                         <property name="visible">True</property>
                                         <property name="can-focus">False</property>
                                         <property name="active-id">1</property>
@@ -3867,9 +3867,6 @@ if error larger than (pixels)</property>
                                 <property name="fill">True</property>
                                 <property name="position">4</property>
                               </packing>
-                            </child>
-                            <child>
-                              <placeholder/>
                             </child>
                             <child>
                               <object class="GtkExpander" id="exp_mount">
@@ -4211,12 +4208,6 @@ if error larger than (pixels)</property>
                                         <property name="fill">False</property>
                                         <property name="position">0</property>
                                       </packing>
-                                    </child>
-                                    <child>
-                                      <placeholder/>
-                                    </child>
-                                    <child>
-                                      <placeholder/>
                                     </child>
                                   </object>
                                 </child>
