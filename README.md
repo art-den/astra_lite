@@ -2,7 +2,9 @@
 AstraLite is software for deepsky astrophotography and live stacking
 on low power PCs (like rapsberry Pi or Orange Pi)
 
-The program is under active development!
+```diff
+! The program is under active development!
+```
 
 AstraLite uses INDI server to work with astrophotography hardware.
 See https://www.indilib.org/download.html to install INDI
