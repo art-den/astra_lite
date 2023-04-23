@@ -129,8 +129,9 @@ pub struct PropChangeEvent {
 }
 
 pub struct DeviceDeleteEvent {
-    pub timestamp:   Option<DateTime<Utc>>,
-    pub device_name: String,
+    pub timestamp:     Option<DateTime<Utc>>,
+    pub device_name:   String,
+    pub drv_interface: DriverInterface,
 }
 
 pub struct MessageEvent {
@@ -1176,6 +1177,19 @@ impl Devices {
         Ok(device)
     }
 
+    fn get_driver_interface(&self, device_name: &str) -> Result<DriverInterface> {
+        let interface_i32 = self.get_property_value(
+            &device_name,
+            "DRIVER_INFO",
+            "DRIVER_INTERFACE",
+            |_| true,
+            ""
+        ).map(|prop| prop.as_i32().unwrap_or(0))?;
+        Ok(DriverInterface::from_bits_truncate(
+            interface_i32 as u32
+        ))
+    }
+
     fn get_property<'a>(
         &'a self,
         device_name:     &str,
@@ -1229,7 +1243,6 @@ impl Devices {
             "CONNECT"
         )
     }
-
 }
 
 #[derive(Debug)]
@@ -1600,6 +1613,11 @@ impl Connection {
     pub fn get_device_by_driver(&self, driver_name: &str) -> Option<String> {
         let devices = self.devices.lock().unwrap();
         devices.get_device_by_driver(driver_name)
+    }
+
+    pub fn get_driver_interface(&self, device_name: &str) -> Result<DriverInterface> {
+        let devices = self.devices.lock().unwrap();
+        devices.get_driver_interface(device_name)
     }
 
     pub fn get_properties_list(
@@ -3640,11 +3658,13 @@ impl XmlReceiver {
         &self,
         time:          Option<DateTime<Utc>>,
         device_name:   &str,
-        events_sender: &mpsc::Sender<Event>
+        events_sender: &mpsc::Sender<Event>,
+        drv_interface: DriverInterface,
     ) {
         let event = DeviceDeleteEvent {
             timestamp: time,
             device_name: device_name.to_string(),
+            drv_interface
         };
         events_sender.send(Event::DeviceDelete(Arc::new(event))).unwrap();
     }
@@ -3779,6 +3799,7 @@ impl XmlReceiver {
                     events_sender
                 );
             } else {
+                let drv_interface = devices.get_driver_interface(&device_name)?;
                 let removed = devices.list.remove(&device_name).is_some();
                 if !removed {
                     anyhow::bail!(Error::DeviceNotExists(device_name));
@@ -3786,7 +3807,8 @@ impl XmlReceiver {
                 self.notify_subcribers_about_device_delete(
                     timestamp,
                     &device_name,
-                    events_sender
+                    events_sender,
+                    drv_interface
                 );
             }
         // message

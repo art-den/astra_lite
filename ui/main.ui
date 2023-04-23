@@ -748,7 +748,7 @@
             <property name="can-focus">True</property>
             <property name="wide-handle">True</property>
             <child>
-              <object class="GtkBox" id="bx_cam_ctrl">
+              <object class="GtkBox">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
                 <property name="margin-start">5</property>
@@ -775,7 +775,7 @@
                             <property name="orientation">vertical</property>
                             <property name="spacing">7</property>
                             <child>
-                              <object class="GtkBox">
+                              <object class="GtkBox" id="bx_cam_main">
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
                                 <property name="orientation">vertical</property>
@@ -893,7 +893,7 @@
                                 <property name="label-fill">True</property>
                                 <child>
                                   <!-- n-columns=2 n-rows=2 -->
-                                  <object class="GtkGrid">
+                                  <object class="GtkGrid" id="grd_cam_ctrl">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
                                     <property name="margin-start">5</property>
@@ -1010,7 +1010,7 @@
                                 <property name="can-focus">True</property>
                                 <child>
                                   <!-- n-columns=2 n-rows=8 -->
-                                  <object class="GtkGrid">
+                                  <object class="GtkGrid" id="grd_shot_settings">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
                                     <property name="margin-start">5</property>
@@ -1267,7 +1267,7 @@
                                 <property name="can-focus">True</property>
                                 <child>
                                   <!-- n-columns=2 n-rows=9 -->
-                                  <object class="GtkGrid">
+                                  <object class="GtkGrid" id="grd_cam_calibr">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
                                     <property name="margin-start">5</property>
@@ -1440,7 +1440,7 @@ Better use "Subtrack master DARK frame"</property>
                                 <property name="can-focus">True</property>
                                 <child>
                                   <!-- n-columns=2 n-rows=6 -->
-                                  <object class="GtkGrid">
+                                  <object class="GtkGrid" id="grd_save_raw">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
                                     <property name="margin-top">5</property>
@@ -1635,7 +1635,7 @@ Better use "Subtrack master DARK frame"</property>
                                 <property name="can-focus">True</property>
                                 <child>
                                   <!-- n-columns=2 n-rows=5 -->
-                                  <object class="GtkGrid">
+                                  <object class="GtkGrid" id="grd_live_stack">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
                                     <property name="margin-start">5</property>
@@ -1807,9 +1807,6 @@ Better use "Subtrack master DARK frame"</property>
                                 <property name="fill">True</property>
                                 <property name="position">10</property>
                               </packing>
-                            </child>
-                            <child>
-                              <placeholder/>
                             </child>
                           </object>
                         </child>
@@ -3068,7 +3065,7 @@ Better use "Subtrack master DARK frame"</property>
                                 <property name="visible">True</property>
                                 <property name="can-focus">True</property>
                                 <child>
-                                  <object class="GtkBox">
+                                  <object class="GtkBox" id="bx_light_qual">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
                                     <property name="margin-start">5</property>
@@ -4427,6 +4424,8 @@ if error larger than (pixels)</property>
                   <object class="GtkBox">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
+                    <property name="margin-start">5</property>
+                    <property name="margin-end">5</property>
                     <child>
                       <object class="GtkLabel">
                         <property name="visible">True</property>
@@ -4471,6 +4470,8 @@ if error larger than (pixels)</property>
                   <object class="GtkBox">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
+                    <property name="margin-start">5</property>
+                    <property name="margin-end">5</property>
                     <child>
                       <object class="GtkLabel">
                         <property name="visible">True</property>

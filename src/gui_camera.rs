@@ -704,7 +704,6 @@ pub fn build_ui(
 
     update_camera_devices_list(&camera_data);
     update_focuser_devices_list(&camera_data);
-    update_mount_widgets(&camera_data);
     correct_widget_properties(&camera_data);
 }
 
@@ -745,7 +744,7 @@ fn connect_misc_events(data: &Rc<CameraData>) {
                             None,
                             &value.prop_value
                         ),
-                    indi_api::PropChange::Change{value, prev_state, new_state} =>
+                    indi_api::PropChange::Change{ value, prev_state, new_state } =>
                         process_prop_change_event(
                             &data,
                             &sender,
@@ -757,16 +756,13 @@ fn connect_misc_events(data: &Rc<CameraData>) {
                             Some(new_state),
                             &value.prop_value
                         ),
-                    indi_api::PropChange::Delete =>
-                        process_prop_delete_event(
-                            &data,
-                            &event_data.device_name,
-                            &event_data.prop_name,
-                        ),
+                    indi_api::PropChange::Delete => {}
                 };
             },
 
-            MainThreadEvents::IndiEvent(_) => {},
+            MainThreadEvents::IndiEvent(indi_api::Event::DeviceDelete(event)) => {
+                update_devices_list_and_props_by_drv_interface(&data, event.drv_interface);
+            },
 
             MainThreadEvents::ShowFrameProcessingResult(result) => {
                 gtk_utils::exec_and_show_error(&data.main.window, || {
@@ -1404,9 +1400,11 @@ fn handler_timer(data: &Rc<CameraData>) {
             delayed_action.flags.bits = 0;
             if update_cam_list_flag {
                 update_camera_devices_list(data);
+                correct_widget_properties(data);
             }
             if update_foc_list_flag {
                 update_focuser_devices_list(data);
+                correct_widget_properties(data);
             }
             if start_live_view_flag
             && data.options.borrow().live_view {
@@ -1428,7 +1426,7 @@ fn handler_timer(data: &Rc<CameraData>) {
                 update_focuser_position_widget(data, upd_foc_pos_new_prop);
             }
             if upd_mount_widgets {
-                update_mount_widgets(data);
+                correct_widget_properties(data);
             }
             if upd_mount_spd_list {
                 fill_mount_speed_list_widget(data);
@@ -1527,9 +1525,14 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
         let dither_calibr = mode_type == ModeType::DitherCalibr;
         drop(state);
 
+        let foc_device = gtk_utils::get_active_id(bldr, "cb_foc_list");
+        let foc_active = data.main.indi
+            .is_device_enabled(foc_device.as_deref().unwrap_or(""))
+            .unwrap_or(false);
+
         let focuser_sensitive =
             indi_connected &&
-            gtk_utils::get_active_id(bldr, "cb_foc_list").is_some() &&
+            foc_device.is_some() && foc_active &&
             !saving_frames &&
             !live_active &&
             !mnt_calibr &&
@@ -1543,8 +1546,12 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
             !mnt_calibr &&
             !focusing;
 
+        let mount_device_name = data.mount_device_name.borrow();
+        let mnt_active = data.main.indi.is_device_enabled(mount_device_name.as_deref().unwrap_or("")).unwrap_or(false);
+
         let mount_ctrl_sensitive =
             (indi_connected &&
+            mnt_active &&
             data.mount_device_name.borrow().is_some() &&
             !saving_frames &&
             !live_active &&
@@ -1562,10 +1569,18 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
         };
         gtk_utils::set_str(bldr, "btn_start_save_raw", save_raw_btn_cap);
 
+        let cam_active = data.main.indi
+            .is_device_enabled(camera.as_deref().unwrap_or(""))
+            .unwrap_or(false);
+
         let can_change_cam_opts = !saving_frames && !live_active;
         let can_change_mode = waiting || shot_active;
         let can_change_frame_opts = waiting || liveview_active;
         let can_change_cal_ops = !live_active && !dither_calibr;
+        let cam_sensitive =
+            indi_connected &&
+            cam_active &&
+            camera.is_some();
 
         gtk_utils::enable_actions(&data.main.window, &[
             ("take_shot",              exposure_supported && !shot_active && can_change_mode),
@@ -1611,9 +1626,18 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
             ("chb_raw_frames_cnt", !saving_frames_paused),
             ("spb_raw_frames_cnt", !saving_frames_paused),
 
+            ("bx_cam_main",        cam_sensitive),
+            ("grd_cam_ctrl",       cam_sensitive),
+            ("grd_shot_settings",  cam_sensitive),
+            ("grd_save_raw",       cam_sensitive),
+            ("grd_live_stack",     cam_sensitive),
+            ("grd_cam_calibr",     cam_sensitive),
+            ("bx_light_qual",      cam_sensitive),
+
             ("grd_foc",            focuser_sensitive),
-            ("grd_dither",         dithering_sensitive),
+            ("grd_dither",         dithering_sensitive && cam_sensitive),
             ("bx_simple_mount",    mount_ctrl_sensitive),
+
             ("spb_foc_temp",       gtk_utils::get_bool(bldr, "chb_foc_temp")),
             ("cb_foc_fwhm",        gtk_utils::get_bool(bldr, "chb_foc_fwhm")),
             ("cb_foc_period",      gtk_utils::get_bool(bldr, "chb_foc_period")),
@@ -1672,9 +1696,7 @@ fn update_camera_devices_list(data: &Rc<CameraData>) {
     let connected = data.main.indi.state() == indi_api::ConnState::Connected;
     gtk_utils::enable_widgets(&data.main.builder, false, &[
         ("cb_camera_list", connected && cameras_count > 1),
-        ("bx_cam_ctrl",    connected && cameras_count > 0)
     ]);
-
     data.options.borrow_mut().device = cb_camera_list.active_id().map(|s| s.to_string());
 }
 
@@ -2196,20 +2218,23 @@ fn process_prop_change_event(
     }
 }
 
-fn process_prop_delete_event(
-    data:        &Rc<CameraData>,
-    device_name: &str,
-    prop_name:   &str,
-){
-    let mut mount_device_name = data.mount_device_name.borrow_mut();
-    if Some(device_name) == mount_device_name.as_deref()
-    && prop_name == "" {
+fn update_devices_list_and_props_by_drv_interface(
+    data:          &Rc<CameraData>,
+    drv_interface: indi_api::DriverInterface,
+) {
+    if drv_interface.contains(indi_api::DriverInterface::TELESCOPE) {
         data.delayed_action.borrow_mut().set(
             DelayedFlags::UPDATE_MOUNT_WIDGETS
         );
-        *mount_device_name = None;
+    }
+    if drv_interface.contains(indi_api::DriverInterface::FOCUSER) {
         data.delayed_action.borrow_mut().set(
-            DelayedFlags::UPDATE_MOUNT_WIDGETS
+            DelayedFlags::UPDATE_FOC_LIST
+        );
+    }
+    if drv_interface.contains(indi_api::DriverInterface::CCD) {
+        data.delayed_action.borrow_mut().set(
+            DelayedFlags::UPDATE_CAM_LIST
         );
     }
 }
@@ -2302,11 +2327,11 @@ fn process_simple_prop_change_event(
                 DelayedFlags::UPDATE_FOC_POS_NEW
             );
         },
-
         ("CONNECTION", ..) => {
-            data.delayed_action.borrow_mut().set(
-                DelayedFlags::UPDATE_MOUNT_WIDGETS
-            );
+            let driver_interface = data.main.indi
+                .get_driver_interface(device_name)
+                .unwrap_or(indi_api::DriverInterface::empty());
+            update_devices_list_and_props_by_drv_interface(data, driver_interface);
         }
         ("TELESCOPE_SLEW_RATE", ..) if new_prop => {
             data.delayed_action.borrow_mut().set(
@@ -2944,7 +2969,6 @@ fn update_focuser_devices_list(data: &Rc<CameraData>) {
     ]);
     data.options.borrow_mut().focuser.device =
         cb_foc_list.active_id().map(|s| s.to_string()).unwrap_or_else(String::new);
-    correct_widget_properties(data);
 }
 
 fn update_focuser_position_widget(data: &Rc<CameraData>, new_prop: bool) {
@@ -3312,20 +3336,6 @@ fn handler_nav_mount_btn_released(data: &Rc<CameraData>, button_name: &str) {
         }
         Ok(())
     });
-}
-
-fn update_mount_widgets(data: &Rc<CameraData>) {
-    let mount_active = data.mount_device_name.borrow()
-        .as_ref()
-        .map(|device_name| {
-            data.main.indi.is_device_enabled(&device_name).unwrap_or(false)
-        })
-        .unwrap_or(false);
-    gtk_utils::enable_widgets(
-        &data.main.builder,
-        false,
-        &[("bx_simple_mount", mount_active)]
-    );
 }
 
 fn fill_mount_speed_list_widget(data: &Rc<CameraData>) {
