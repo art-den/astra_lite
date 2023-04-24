@@ -1576,6 +1576,7 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
         let can_change_cam_opts = !saving_frames && !live_active;
         let can_change_mode = waiting || shot_active;
         let can_change_frame_opts = waiting || liveview_active;
+        let can_change_live_stacking_opts = waiting || liveview_active;
         let can_change_cal_ops = !live_active && !dither_calibr;
         let cam_sensitive =
             indi_connected &&
@@ -1626,6 +1627,11 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
             ("chb_raw_frames_cnt", !saving_frames_paused),
             ("spb_raw_frames_cnt", !saving_frames_paused),
 
+            ("chb_live_save",      can_change_live_stacking_opts),
+            ("spb_live_minutes",   can_change_live_stacking_opts),
+            ("chb_live_save_orig", can_change_live_stacking_opts),
+            ("fch_live_folder",    can_change_live_stacking_opts),
+
             ("bx_cam_main",        cam_sensitive),
             ("grd_cam_ctrl",       cam_sensitive),
             ("grd_shot_settings",  cam_sensitive),
@@ -1633,7 +1639,6 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
             ("grd_live_stack",     cam_sensitive),
             ("grd_cam_calibr",     cam_sensitive),
             ("bx_light_qual",      cam_sensitive),
-
             ("grd_foc",            focuser_sensitive),
             ("grd_dither",         dithering_sensitive && cam_sensitive),
             ("bx_simple_mount",    mount_ctrl_sensitive),
@@ -2348,7 +2353,7 @@ fn process_simple_prop_change_event(
     }
 }
 
-fn process_blob_event(
+fn process_blob_event( // TODO: move to state.rs
     data:               &Rc<CameraData>,
     main_thread_sender: &glib::Sender<MainThreadEvents>,
     device_name:        &str,
@@ -2405,6 +2410,7 @@ fn process_blob_event(
             && !mount_device.is_empty() && options.guiding.enabled {
                 command.flags |= ProcessImageFlags::CALC_STARS_OFFSET;
             }
+            command.flags |= ProcessImageFlags::SAVE_RAW;
         }
         ModeType::LiveStacking => {
             command.save_path = Some(options.live.out_dir.clone());
@@ -2413,6 +2419,9 @@ fn process_blob_event(
                 options: options.live.clone(),
             });
             command.flags |= ProcessImageFlags::CALC_STARS_OFFSET;
+            if options.live.save_orig {
+                command.flags |= ProcessImageFlags::SAVE_RAW;
+            }
         }
         ModeType::Focusing => {
             if let Some(quality_options) = &mut command.quality_options {

@@ -27,10 +27,9 @@ pub struct SaveMasterResult {
 }
 
 pub struct ResultImage {
-    pub image:     RwLock<Image>,
-
-    pub hist:      RwLock<Histogram>,
-    pub info:      RwLock<ResultImageInfo>,
+    pub image: RwLock<Image>,
+    pub hist:  RwLock<Histogram>,
+    pub info:  RwLock<ResultImageInfo>,
 }
 
 impl ResultImage {
@@ -74,17 +73,17 @@ pub struct RawAdderParams {
 }
 
 pub struct LiveStackingData {
-    pub adder:      RwLock<ImageAdder>,
-    pub result:     ResultImage,
-    pub write_time: Mutex<Option<std::time::Instant>>,
+    pub adder:    RwLock<ImageAdder>,
+    pub result:   ResultImage,
+    pub time_cnt: Mutex<f64>,
 }
 
 impl LiveStackingData {
     pub fn new() -> Self {
         Self {
-            adder:      RwLock::new(ImageAdder::new()),
-            result:     ResultImage::new(),
-            write_time: Mutex::new(None),
+            adder:    RwLock::new(ImageAdder::new()),
+            result:   ResultImage::new(),
+            time_cnt: Mutex::new(0.0),
         }
     }
 }
@@ -97,6 +96,7 @@ pub struct LiveStackingParams {
 bitflags! {
     pub struct ProcessImageFlags: u32 {
         const CALC_STARS_OFFSET = 1;
+        const SAVE_RAW          = 2;
     }
 }
 
@@ -699,20 +699,27 @@ fn make_preview_image_impl(
 
                 if live_stacking.options.save_enabled {
                     let save_res_interv = live_stacking.options.save_minutes as f64 * 60.0;
-                    let mut last_save = live_stacking.data.write_time.lock().unwrap();
-                    let have_to_save = if let Some(last_save) = &*last_save {
-                        last_save.elapsed().as_secs() >= save_res_interv as u64
-                    } else {
-                        true
-                    };
-                    if have_to_save {
+                    let mut save_cnt = live_stacking.data.time_cnt.lock().unwrap();
+                    *save_cnt += exposure;
+                    if *save_cnt >= save_res_interv {
+                        *save_cnt = 0.0;
+                        drop(save_cnt);
                         let now_time: DateTime<Local> = Local::now();
                         let now_time_str = now_time.format("%Y%m%d-%H%M%S").to_string();
-                        let file_path = live_stacking.options.out_dir.join(format!("Live_{}.tif", now_time_str));
+                        let file_path = live_stacking.options.out_dir
+                            .join("Result");
+                        if !file_path.exists() {
+                            std::fs::create_dir_all(&file_path)
+                                .map_err(|e|anyhow::anyhow!(
+                                    "Error '{}'\nwhen trying to create directory '{}' for saving result live stack image",
+                                    e.to_string(),
+                                    file_path.to_str().unwrap_or_default()
+                                ))?;
+                        }
+                        let file_path = file_path.join(format!("Live_{}.tif", now_time_str));
                         let tmr = TimeLogger::start();
                         image_adder.save_to_tiff(&file_path)?;
                         tmr.log("save live stacking result image");
-                        *last_save = Some(std::time::Instant::now());
                     }
                 }
             }
@@ -741,37 +748,39 @@ fn make_preview_image_impl(
     };
 
     // Save original raw image
-    if let Some(save_path) = command.save_path.as_ref() { if !is_bad_frame {
-        let sub_path = match frame_type {
-            FrameType::Lights => "Light",
-            FrameType::Flats => "Flat",
-            FrameType::Darks => "Dark",
-            FrameType::Biases => "Bias",
-            FrameType::Undef => unreachable!(),
-        };
-        let full_path = save_path.join(sub_path);
-        if !full_path.is_dir() {
-            std::fs::create_dir_all(&full_path)
-                .map_err(|e|anyhow::anyhow!(
-                    "Error '{}'\nwhen trying to create directory '{}'",
+    if !is_bad_frame && command.flags.contains(ProcessImageFlags::SAVE_RAW) {
+        if let Some(save_path) = command.save_path.as_ref() {
+            let sub_path = match frame_type {
+                FrameType::Lights => "Light",
+                FrameType::Flats => "Flat",
+                FrameType::Darks => "Dark",
+                FrameType::Biases => "Bias",
+                FrameType::Undef => unreachable!(),
+            };
+            let full_path = save_path.join(sub_path);
+            if !full_path.is_dir() {
+                std::fs::create_dir_all(&full_path)
+                    .map_err(|e|anyhow::anyhow!(
+                        "Error '{}'\nwhen trying to create directory '{}' for saving RAW frame",
+                        e.to_string(),
+                        full_path.to_str().unwrap_or_default()
+                    ))?;
+            }
+            let mut fs_gen = command.fn_gen.lock().unwrap();
+            let mut file_ext = command.blob.format.as_str().trim();
+            while file_ext.starts_with('.') { file_ext = &file_ext[1..]; }
+            let fn_mask = format!("{}_${{num}}.{}", sub_path, file_ext);
+            let file_name = fs_gen.generate(&full_path, &fn_mask);
+            let tmr = TimeLogger::start();
+            std::fs::write(&file_name, command.blob.data.as_slice())
+                .map_err(|e| anyhow::anyhow!(
+                    "Error '{}'\nwhen saving file '{}'",
                     e.to_string(),
-                    full_path.to_str().unwrap_or_default()
+                    file_name.to_str().unwrap_or_default()
                 ))?;
+            tmr.log("Saving raw image");
         }
-        let mut fs_gen = command.fn_gen.lock().unwrap();
-        let mut file_ext = command.blob.format.as_str().trim();
-        while file_ext.starts_with('.') { file_ext = &file_ext[1..]; }
-        let fn_mask = format!("{}_${{num}}.{}", sub_path, file_ext);
-        let file_name = fs_gen.generate(&full_path, &fn_mask);
-        let tmr = TimeLogger::start();
-        std::fs::write(&file_name, command.blob.data.as_slice())
-            .map_err(|e| anyhow::anyhow!(
-                "Error '{}'\nwhen saving file '{}'",
-                e.to_string(),
-                file_name.to_str().unwrap_or_default()
-            ))?;
-        tmr.log("Saving raw image");
-    }}
+    }
 
     total_tmr.log("TOTAL PREVIEW");
 
