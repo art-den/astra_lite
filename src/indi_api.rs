@@ -2144,6 +2144,16 @@ impl Connection {
         )
     }
 
+    pub fn camera_get_pixel_size(
+        &self,
+        device_name: &str,
+    ) -> Result<(f64/*x*/, f64/*y*/)> {
+        let devices = self.devices.lock().unwrap();
+        let size_x = devices.get_num_property(device_name, "CCD_INFO", "CCD_PIXEL_SIZE_X")?;
+        let size_y = devices.get_num_property(device_name, "CCD_INFO", "CCD_PIXEL_SIZE_Y")?;
+        Ok((size_x, size_y))
+    }
+
     // Fast toggle capability
 
     pub fn camera_is_fast_toggle_supported(
@@ -3090,6 +3100,33 @@ impl Connection {
         Ok(())
     }
 
+    pub fn mount_get_guide_rate_ns(&self, device_name: &str) -> Result<f64> {
+        self.get_num_property(device_name, "GUIDE_RATE", "GUIDE_RATE_NS")
+    }
+
+    pub fn mount_get_guide_rate_we(&self, device_name: &str) -> Result<f64> {
+        self.get_num_property(device_name, "GUIDE_RATE", "GUIDE_RATE_WE")
+    }
+
+    pub fn mount_set_guide_rate(
+        &self,
+        device_name: &str,
+        rate_ns:     f64,
+        rate_we:     f64,
+        force_set:   bool,
+        timeout_ms:  Option<u64>
+    ) -> Result<()> {
+        self.command_set_num_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            "GUIDE_RATE", &[
+            ("GUIDE_RATE_NS", rate_ns),
+            ("GUIDE_RATE_WE", rate_we),
+        ])?;
+        Ok(())
+    }
+    //
 }
 
 struct XmlSender {

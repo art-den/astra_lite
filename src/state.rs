@@ -1,12 +1,13 @@
 use std::{
     sync::{Arc, Mutex, atomic::{AtomicBool, Ordering }, RwLock},
     collections::VecDeque,
-    any::Any,
+    any::Any, f64::consts::PI,
 };
 use itertools::Itertools;
 
 use crate::{
     gui_camera::*,
+    options::*,
     indi_api,
     image_raw::FrameType,
     image_info::{LightImageInfo, Stars},
@@ -92,10 +93,11 @@ pub enum NotifyResult {
         camera:  String,
     },
     StartMountCalibr {
-        options: GuidingOptions,
-        frame:   FrameOptions,
-        mount:   String,
-        camera:  String,
+        options:   GuidingOptions,
+        frame:     FrameOptions,
+        telescope: TelescopeOptions,
+        mount:     String,
+        camera:    String,
     }
 }
 
@@ -219,14 +221,15 @@ impl State {
 
     pub fn start_saving_raw_frames(
         &mut self,
-        cam_device:    &str,
-        mount_device:  &str,
-        ref_stars:     &Arc<RwLock<Option<Vec<Point>>>>,
-        frame_options: &FrameOptions,
-        focus_options: &FocuserOptions,
-        guid_options:  &GuidingOptions,
-        options:       &RawFrameOptions,
-        thread_timer:  &Arc<ThreadTimer>
+        cam_device:     &str,
+        mount_device:   &str,
+        ref_stars:      &Arc<RwLock<Option<Vec<Point>>>>,
+        frame_options:  &FrameOptions,
+        focus_options:  &FocuserOptions,
+        guid_options:   &GuidingOptions,
+        telescope_opts: &TelescopeOptions,
+        options:        &RawFrameOptions,
+        thread_timer:   &Arc<ThreadTimer>
     ) -> anyhow::Result<()> {
         let mut mode = CameraActiveMode::new(
             &self.indi,
@@ -243,6 +246,7 @@ impl State {
         };
         mode.focus_options = Some(focus_options.clone());
         mode.guid_options = Some(guid_options.clone());
+        mode.telescope_opts = Some(telescope_opts.clone());
         mode.ref_stars = Some(Arc::clone(ref_stars));
         mode.start()?;
         self.mode = Box::new(mode);
@@ -255,15 +259,16 @@ impl State {
 
     pub fn start_live_stacking(
         &mut self,
-        cam_name:      &str,
-        mount_device:  &str,
-        ref_stars:     &Arc<RwLock<Option<Vec<Point>>>>,
-        live_stacking: &Arc<LiveStackingData>,
-        frame_options: &FrameOptions,
-        focus_options: &FocuserOptions,
-        guid_options:  &GuidingOptions,
-        _options:      &LiveStackingOptions,
-        thread_timer:  &Arc<ThreadTimer>
+        cam_name:       &str,
+        mount_device:   &str,
+        ref_stars:      &Arc<RwLock<Option<Vec<Point>>>>,
+        live_stacking:  &Arc<LiveStackingData>,
+        frame_options:  &FrameOptions,
+        focus_options:  &FocuserOptions,
+        guid_options:   &GuidingOptions,
+        telescope_opts: &TelescopeOptions,
+        _options:       &LiveStackingOptions,
+        thread_timer:   &Arc<ThreadTimer>
     ) -> anyhow::Result<()> {
         let mut mode = CameraActiveMode::new(
             &self.indi,
@@ -275,6 +280,7 @@ impl State {
         );
         mode.focus_options = Some(focus_options.clone());
         mode.guid_options = Some(guid_options.clone());
+        mode.telescope_opts = Some(telescope_opts.clone());
         mode.ref_stars = Some(Arc::clone(ref_stars));
         mode.live_stacking = Some(Arc::clone(live_stacking));
         mode.start()?;
@@ -304,6 +310,7 @@ impl State {
     pub fn start_mount_calibr(
         &mut self,
         frame:         &FrameOptions,
+        telescope:     &TelescopeOptions,
         options:       &GuidingOptions,
         mount_device:  &str,
         camera_device: &str,
@@ -312,6 +319,7 @@ impl State {
         let mut mode = MountCalibrMode::new(
             &self.indi,
             frame,
+            telescope,
             options,
             mount_device,
             camera_device,
@@ -427,12 +435,13 @@ impl State {
                 mode_changed = true;
                 progress_changed = true;
             }
-            NotifyResult::StartMountCalibr { options, frame, camera, mount } => {
+            NotifyResult::StartMountCalibr { options, telescope, frame, camera, mount } => {
                 self.mode.abort()?;
                 let prev_mode = std::mem::replace(&mut self.mode, Box::new(WaitingMode));
                 let mut mode = MountCalibrMode::new(
                     &self.indi,
                     &frame,
+                    &telescope,
                     &options,
                     &mount,
                     &camera,
@@ -734,21 +743,22 @@ enum CamState {
 }
 
 struct CameraActiveMode {
-    indi:          Arc<indi_api::Connection>,
-    thread_timer:  Option<Arc<ThreadTimer>>,
-    cam_mode:      CamMode,
-    state:         CamState,
-    device:        String,
-    mount_device:  String,
-    ref_stars:     Option<Arc<RwLock<Option<Vec<Point>>>>>,
-    frame_options: FrameOptions,
-    focus_options: Option<FocuserOptions>,
-    guid_options:  Option<GuidingOptions>,
-    progress:      Option<Progress>,
-    cur_exposure:  f64,
-    exp_sum:       f64,
-    guid_data:     Option<GuidingData>,
-    live_stacking: Option<Arc<LiveStackingData>>,
+    indi:           Arc<indi_api::Connection>,
+    thread_timer:   Option<Arc<ThreadTimer>>,
+    cam_mode:       CamMode,
+    state:          CamState,
+    device:         String,
+    mount_device:   String,
+    ref_stars:      Option<Arc<RwLock<Option<Vec<Point>>>>>,
+    frame_options:  FrameOptions,
+    focus_options:  Option<FocuserOptions>,
+    guid_options:   Option<GuidingOptions>,
+    progress:       Option<Progress>,
+    cur_exposure:   f64,
+    exp_sum:        f64,
+    guid_data:      Option<GuidingData>,
+    live_stacking:  Option<Arc<LiveStackingData>>,
+    telescope_opts: Option<TelescopeOptions>,
 }
 
 impl CameraActiveMode {
@@ -761,21 +771,22 @@ impl CameraActiveMode {
         frame:        &FrameOptions
     ) -> Self {
         Self {
-            indi:          Arc::clone(indi),
-            thread_timer:  thread_timer.cloned(),
+            indi:           Arc::clone(indi),
+            thread_timer:   thread_timer.cloned(),
             cam_mode,
-            state:         CamState::Usual,
-            device:        device.to_string(),
-            mount_device:  mount_device.to_string(),
-            ref_stars:     None,
-            frame_options: frame.clone(),
-            focus_options: None,
-            guid_options:  None,
-            progress:      None,
-            cur_exposure:  frame.exposure,
-            exp_sum:       0.0,
-            guid_data:     None,
-            live_stacking: None,
+            state:          CamState::Usual,
+            device:         device.to_string(),
+            mount_device:   mount_device.to_string(),
+            ref_stars:      None,
+            frame_options:  frame.clone(),
+            focus_options:  None,
+            guid_options:   None,
+            progress:       None,
+            cur_exposure:   frame.exposure,
+            exp_sum:        0.0,
+            guid_data:      None,
+            live_stacking:  None,
+            telescope_opts: None,
         }
     }
 }
@@ -988,16 +999,18 @@ impl Mode for CameraActiveMode {
         if !info.is_ok() { return Ok(NotifyResult::Empty); }
         let mount_device_active = self.indi.is_device_enabled(&self.mount_device).unwrap_or(false);
 
-        if let Some(guid_options) = &self.guid_options { // Guiding and dithering
+        if let (Some(guid_options), Some(telescope_opts))
+        = (&self.guid_options, &self.telescope_opts) { // Guiding and dithering
             let guid_data = self.guid_data.get_or_insert_with(|| GuidingData::new());
             if (guid_options.enabled || guid_options.dith_period != 0)
             && mount_device_active {
                 if guid_data.mnt_calibr.is_none() { // mount moving calibration
                     return Ok(NotifyResult::StartMountCalibr {
-                        options: guid_options.clone(),
-                        frame:   self.frame_options.clone(),
-                        camera:  self.device.clone(),
-                        mount:   self.mount_device.clone(),
+                        options:   guid_options.clone(),
+                        frame:     self.frame_options.clone(),
+                        telescope: telescope_opts.clone(),
+                        camera:    self.device.clone(),
+                        mount:     self.mount_device.clone(),
                     });
                 }
             }
@@ -1063,7 +1076,6 @@ impl Mode for CameraActiveMode {
                         guid_data.dither_y = dither_max_size * (rng.gen::<f64>() - 0.5);
                         log::debug!("dithering position = {}px,{}px", guid_data.dither_x, guid_data.dither_y);
                         dithering_flag = true;
-                        dbg!(guid_data.dither_x, guid_data.dither_y);
                     }
                 }
                 if let (Some(mut offset_x), Some(mut offset_y), true)
@@ -1099,6 +1111,13 @@ impl Mode for CameraActiveMode {
                         guid_data.cur_timed_guide_w = 0.0;
                         guid_data.cur_timed_guide_e = 0.0;
                         self.indi.camera_abort_exposure(&self.device)?;
+                        self.indi.mount_set_guide_rate(
+                            &self.mount_device,
+                            DITHER_CALIBR_SPEED,
+                            DITHER_CALIBR_SPEED,
+                            true,
+                            SET_PROP_TIMEOUT
+                        )?;
                         self.indi.mount_timed_guide(&self.mount_device, 1000.0 * dec, 1000.0 * ra)?;
                         self.state = CamState::MountCorrection;
                         result = NotifyResult::ModeChanged;
@@ -1520,7 +1539,7 @@ impl Mode for FocusingMode {
 ///////////////////////////////////////////////////////////////////////////////
 
 const DITHER_CALIBR_ATTEMPTS_CNT: usize = 11;
-const DITHER_CALIBR_TEST_PERIOD: f64 = 3.0; // seconds
+const DITHER_CALIBR_SPEED: f64 = 2.0;
 
 #[derive(Debug, Default, Clone)]
 struct MountMoveCalibrRes {
@@ -1558,6 +1577,7 @@ struct MountCalibrMode {
     state:             DitherCalibrState,
     axis:              DitherCalibrAxis,
     frame:             FrameOptions,
+    telescope:         TelescopeOptions,
     start_dec:         f64,
     start_ra:          f64,
     mount_device:      String,
@@ -1572,6 +1592,7 @@ struct MountCalibrMode {
     cur_dec:           f64,
     image_width:       usize,
     image_height:      usize,
+    move_period:       f64,
     result:            MountMoveCalibrRes,
     next_mode:         Option<Box<dyn Mode + Sync + Send>>,
 }
@@ -1599,6 +1620,7 @@ impl MountCalibrMode {
     fn new(
         indi:          &Arc<indi_api::Connection>,
         frame:         &FrameOptions,
+        telescope:     &TelescopeOptions,
         options:       &GuidingOptions,
         mount_device:  &str,
         camera_device: &str,
@@ -1611,6 +1633,7 @@ impl MountCalibrMode {
             state:             DitherCalibrState::Undefined,
             axis:              DitherCalibrAxis::Undefined,
             frame,
+            telescope:         telescope.clone(),
             start_dec:         0.0,
             start_ra:          0.0,
             mount_device:      mount_device.to_string(),
@@ -1625,6 +1648,7 @@ impl MountCalibrMode {
             cur_dec:           0.0,
             image_width:       0,
             image_height:      0,
+            move_period:       0.0,
             result:            MountMoveCalibrRes::default(),
             next_mode
         }
@@ -1678,10 +1702,10 @@ impl MountCalibrMode {
         let y_sum: f64 = result.iter().map(|r| r.move_y).sum();
         let cnt = result.len() as f64;
         let move_x = x_sum / cnt;
-        let move_x = move_x / DITHER_CALIBR_TEST_PERIOD;
+        let move_x = move_x / self.move_period;
 
         let move_y = y_sum / cnt;
-        let move_y = move_y / DITHER_CALIBR_TEST_PERIOD;
+        let move_y = move_y / self.move_period;
 
         match self.axis {
             DitherCalibrAxis::Ra => {
@@ -1768,6 +1792,27 @@ impl Mode for MountCalibrMode {
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         if info.stars_fwhm_good && info.stars_ovality_good {
+            if self.image_width == 0 || self.image_height == 0 {
+                self.image_width = info.width;
+                self.image_height = info.height;
+                if let Ok((pix_size_x, pix_size_y)) = self.indi.camera_get_pixel_size(&self.camera_device) {
+                    let min_size = f64::min(info.width as f64, info.height as f64);
+                    let min_pix_size = f64::min(pix_size_x, pix_size_y);
+                    let cam_size_mm = min_size * min_pix_size / 1000.0;
+                    let camera_angle = f64::atan2(cam_size_mm, self.telescope.real_focal_length());
+                    let sky_angle_is_second = 2.0 * PI / (60.0 * 60.0 * 24.0);
+                    // time when point went all camera matrix on sky rotation speed = DITHER_CALIBR_SPEED
+                    let cam_time = camera_angle / (sky_angle_is_second * DITHER_CALIBR_SPEED);
+                    let total_time = cam_time * 0.5; // half of matrix
+                    self.move_period = total_time / (DITHER_CALIBR_ATTEMPTS_CNT - 1) as f64;
+                    dbg!(cam_size_mm, 180.0 * camera_angle / PI, cam_time, self.move_period);
+                    if self.move_period > 3.0 {
+                        self.move_period = 3.0;
+                    }
+                } else {
+                    self.move_period = 1.0;
+                }
+            }
             self.attempts.push(DitherCalibrAtempt {
                 stars: info.stars.clone(),
             });
@@ -1778,10 +1823,17 @@ impl Mode for MountCalibrMode {
                 self.process_axis_results()?;
             } else {
                 let (ns, we) = match self.axis {
-                    DitherCalibrAxis::Ra => (0.0, 1000.0 * DITHER_CALIBR_TEST_PERIOD),
-                    DitherCalibrAxis::Dec => (1000.0 * DITHER_CALIBR_TEST_PERIOD, 0.0),
+                    DitherCalibrAxis::Ra => (0.0, 1000.0 * self.move_period),
+                    DitherCalibrAxis::Dec => (1000.0 * self.move_period, 0.0),
                     _ => unreachable!()
                 };
+                self.indi.mount_set_guide_rate(
+                    &self.mount_device,
+                    DITHER_CALIBR_SPEED,
+                    DITHER_CALIBR_SPEED,
+                    true,
+                    SET_PROP_TIMEOUT
+                )?;
                 self.indi.mount_timed_guide(&self.mount_device, ns, we)?;
                 self.state = DitherCalibrState::WaitForSlew;
             }

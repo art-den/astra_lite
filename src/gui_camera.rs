@@ -2,15 +2,15 @@ use std::{
     rc::Rc,
     sync::*,
     cell::{RefCell, Cell},
-    path::PathBuf,
     f64::consts::PI,
     thread::JoinHandle,
 };
 use bitflags::bitflags;
 use chrono::{DateTime, Local};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
-use serde::{Serialize, Deserialize};
+
 use crate::{
+    options::*,
     gui_main::*,
     indi_api,
     gtk_utils::{self, show_error_message},
@@ -22,7 +22,8 @@ use crate::{
     image_raw::{RawAdder, FrameType},
     state::*,
     plots::*,
-    math::*, stars_offset::Point,
+    math::*,
+    stars_offset::Point,
 };
 
 pub const SET_PROP_TIMEOUT: Option<u64> = Some(1000);
@@ -52,13 +53,6 @@ impl DelayedAction {
         self.flags |= flags;
         self.countdown = 2;
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-enum ImgPreviewScale {
-    #[default]
-    FitWindow,
-    Original,
 }
 
 impl ImgPreviewScale {
@@ -110,15 +104,6 @@ impl FrameType {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
-pub enum Binning {
-    #[default]
-    Orig,
-    Bin2,
-    Bin3,
-    Bin4,
-}
-
 impl Binning {
     fn from_active_id(active_id: Option<&str>) -> Self {
         match active_id {
@@ -146,16 +131,6 @@ impl Binning {
             Self::Bin4 => 4,
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Default, Copy, Clone)]
-pub enum Crop {
-    #[default]
-    None,
-    P75,
-    P50,
-    P33,
-    P25
 }
 
 impl Crop {
@@ -190,208 +165,6 @@ impl Crop {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-struct CamCtrlOptions {
-    enable_cooler: bool,
-    enable_fan:    bool,
-    heater_str:    Option<String>,
-    temperature:   f64,
-}
-
-impl Default for CamCtrlOptions {
-    fn default() -> Self {
-        Self {
-            enable_cooler: false,
-            enable_fan:    false,
-            heater_str:    None,
-            temperature:   0.0,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct FrameOptions {
-    pub exposure:   f64,
-    pub gain:       f64,
-    pub offset:     u32,
-    pub frame_type: FrameType,
-    pub binning:    Binning,
-    pub crop:       Crop,
-    pub low_noise:  bool,
-    pub delay:      f64,
-}
-
-impl Default for FrameOptions {
-    fn default() -> Self {
-        Self {
-            exposure:   5.0,
-            gain:       1.0,
-            offset:     0,
-            frame_type: FrameType::default(),
-            binning:    Binning::default(),
-            crop:       Crop::default(),
-            low_noise:  false,
-            delay:      2.0,
-        }
-    }
-}
-
-impl FrameOptions {
-    pub fn create_master_dark_file_name_suff(&self) -> String {
-        format!("{:.1}s_g{:.0}_ofs{}", self.exposure, self.gain, self.offset)
-    }
-
-    pub fn create_master_flat_file_name_suff(&self) -> String {
-        format!("g{:.0}_ofs{}", self.gain, self.offset)
-    }
-
-    pub fn have_to_use_delay(&self) -> bool {
-        self.exposure < 2.0 &&
-        self.delay > 0.0
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-struct CalibrOptions {
-    dark_frame_en: bool,
-    dark_frame:    Option<PathBuf>,
-    flat_frame_en: bool,
-    flat_frame:    Option<PathBuf>,
-    hot_pixels:    bool,
-}
-
-impl Default for CalibrOptions {
-    fn default() -> Self {
-        Self {
-            dark_frame_en: true,
-            dark_frame:    None,
-            flat_frame_en: true,
-            flat_frame:    None,
-            hot_pixels:    true,
-        }
-    }
-}
-
-impl CalibrOptions {
-    fn into_params(&self) -> CalibrParams {
-        let dark = if self.dark_frame_en {
-            self.dark_frame.clone()
-        } else {
-            None
-        };
-        let flat = if self.flat_frame_en {
-            self.flat_frame.clone()
-        } else {
-            None
-        };
-        CalibrParams {
-            dark,
-            flat,
-            hot_pixels: self.hot_pixels
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct RawFrameOptions {
-    pub out_path:      PathBuf,
-    pub frame_cnt:     usize,
-    pub use_cnt:       bool,
-    pub create_master: bool,
-}
-
-impl Default for RawFrameOptions {
-    fn default() -> Self {
-        Self {
-            out_path:      PathBuf::new(),
-            frame_cnt:     100,
-            use_cnt:       true,
-            create_master: true,
-        }
-    }
-}
-
-impl RawFrameOptions {
-    fn check_and_correct(&mut self) -> anyhow::Result<()> {
-        if self.out_path.as_os_str().is_empty() {
-            let mut out_path = dirs::home_dir().unwrap();
-            out_path.push("Astro");
-            out_path.push("RawFrames");
-            if !out_path.is_dir() {
-                std::fs::create_dir_all(&out_path)?;
-            }
-            self.out_path = out_path;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct LiveStackingOptions {
-    pub save_orig:       bool,
-    pub save_minutes:    usize,
-    pub save_enabled:    bool,
-    pub out_dir:         PathBuf,
-}
-
-impl Default for LiveStackingOptions {
-    fn default() -> Self {
-        Self {
-            save_orig:       false,
-            save_minutes:    5,
-            save_enabled:    true,
-            out_dir:         PathBuf::new(),
-        }
-    }
-}
-
-impl LiveStackingOptions {
-    fn check_and_correct(&mut self) -> anyhow::Result<()> {
-        if self.out_dir.as_os_str().is_empty() {
-            let mut save_path = dirs::home_dir().unwrap();
-            save_path.push("Astro");
-            save_path.push("LiveStaking");
-            if !save_path.is_dir() {
-                std::fs::create_dir_all(&save_path)?;
-            }
-            self.out_dir = save_path;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct QualityOptions {
-    pub use_max_fwhm:    bool,
-    pub max_fwhm:        f32,
-    pub use_max_ovality: bool,
-    pub max_ovality:     f32,
-}
-
-impl Default for QualityOptions {
-    fn default() -> Self {
-        Self {
-            use_max_fwhm:    false,
-            max_fwhm:        20.0,
-            use_max_ovality: true,
-            max_ovality:     0.5,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
-enum PreviewSource {
-    #[default]
-    OrigFrame,
-    LiveStacking,
-}
-
 impl PreviewSource {
     fn from_active_id(active_id: Option<&str>) -> Self {
         match active_id {
@@ -409,200 +182,11 @@ impl PreviewSource {
 
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-struct PreviewOptions {
-    scale:         ImgPreviewScale,
-    auto_black:    bool,
-    gamma:         f64,
-    source:        PreviewSource,
-}
-
-impl Default for PreviewOptions {
-    fn default() -> Self {
-        Self {
-            scale:      ImgPreviewScale::default(),
-            auto_black: true,
-            gamma:      5.0,
-            source:     PreviewSource::default(),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-struct HistOptions {
-    log_x:    bool,
-    log_y:    bool,
-    percents: bool,
-}
-
-impl Default for HistOptions {
-    fn default() -> Self {
-        Self {
-            log_x:    false,
-            log_y:    false,
-            percents: true,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-struct GuiOptions {
-    paned_pos1:     i32,
-    paned_pos2:     i32,
-    paned_pos3:     i32,
-    paned_pos4:     i32,
-    cam_ctrl_exp:   bool,
-    shot_exp:       bool,
-    calibr_exp:     bool,
-    raw_frames_exp: bool,
-    live_exp:       bool,
-    foc_exp:        bool,
-    dith_exp:       bool,
-    quality_exp:    bool,
-    mount_exp:      bool,
-}
-
-impl Default for GuiOptions {
-    fn default() -> Self {
-        Self {
-            paned_pos1:     -1,
-            paned_pos2:     -1,
-            paned_pos3:     -1,
-            paned_pos4:     -1,
-            cam_ctrl_exp:   true,
-            shot_exp:       true,
-            calibr_exp:     true,
-            raw_frames_exp: true,
-            live_exp:       false,
-            foc_exp:        false,
-            dith_exp:        false,
-            quality_exp:    true,
-            mount_exp:      false,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct FocuserOptions {
-    pub device:          String,
-    pub on_temp_change:  bool,
-    pub max_temp_change: f64,
-    pub on_fwhm_change:  bool,
-    pub max_fwhm_change: u32,
-    pub periodically:    bool,
-    pub period_minutes:  u32,
-    pub measures:        u32,
-    pub step:            f64,
-    pub exposure:        f64,
-}
-
-impl Default for FocuserOptions {
-    fn default() -> Self {
-        Self {
-            device:          String::new(),
-            on_temp_change:  false,
-            max_temp_change: 5.0,
-            on_fwhm_change:  false,
-            max_fwhm_change: 20,
-            periodically:    false,
-            period_minutes:  120,
-            measures:        11,
-            step:            500.0,
-            exposure:        10.0,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct GuidingOptions {
-    pub enabled: bool,
-    pub max_error: f64,
-    pub dith_period: u32, // in minutes, 0 - do not dither
-    pub dith_percent: f64, // percent of image
-    pub calibr_exposure: f64,
-}
-
-impl Default for GuidingOptions {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            max_error: 5.0,
-            dith_period: 0,
-            dith_percent: 5.0,
-            calibr_exposure: 1.0,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct MountOptions {
-    inv_ns: bool,
-    inv_we: bool,
-    speed:  Option<String>,
-}
-
-impl Default for MountOptions {
-    fn default() -> Self {
-        Self {
-            inv_ns: false,
-            inv_we: false,
-            speed:  None,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-struct CameraOptions {
-    device:     Option<String>,
-    live_view:  bool,
-    ctrl:       CamCtrlOptions,
-    frame:      FrameOptions,
-    calibr:     CalibrOptions,
-    raw_frames: RawFrameOptions,
-    live:       LiveStackingOptions,
-    quality:    QualityOptions,
-    preview:    PreviewOptions,
-    hist:       HistOptions,
-    focuser:    FocuserOptions,
-    guiding:    GuidingOptions,
-    mount:      MountOptions,
-    gui:        GuiOptions,
-}
-
-impl Default for CameraOptions {
-    fn default() -> Self {
-        Self {
-            device:     None,
-            live_view:  false,
-            preview:    PreviewOptions::default(),
-            ctrl:       CamCtrlOptions::default(),
-            frame:      FrameOptions::default(),
-            calibr:     CalibrOptions::default(),
-            raw_frames: RawFrameOptions::default(),
-            live:       LiveStackingOptions::default(),
-            quality:    QualityOptions::default(),
-            hist:       HistOptions::default(),
-            focuser:    FocuserOptions::default(),
-            guiding:    GuidingOptions::default(),
-            mount:      MountOptions::default(),
-            gui:        GuiOptions::default(),
-        }
-    }
-}
-
 enum MainThreadEvents {
     ShowFrameProcessingResult(FrameProcessingResult),
     StateEvent(Event),
     IndiEvent(indi_api::Event),
 }
-
 
 struct CameraData {
     main:               Rc<MainData>,
@@ -610,7 +194,7 @@ struct CameraData {
     ref_stars:          Arc<RwLock<Option<Vec<Point>>>>,
     calibr_images:      Arc<Mutex<CalibrImages>>,
     delayed_action:     RefCell<DelayedAction>,
-    options:            RefCell<CameraOptions>,
+    options:            RefCell<Options>,
     process_thread:     JoinHandle<()>,
     img_cmds_sender:    mpsc::Sender<Command>,
     conn_state:         RefCell<indi_api::ConnState>,
@@ -637,7 +221,7 @@ pub fn build_ui(
     data:           &Rc<MainData>,
     timer_handlers: &mut TimerHandlers
 ) {
-    let mut options = CameraOptions::default();
+    let mut options = Options::default();
     gtk_utils::exec_and_show_error(&data.window, || {
         load_json_from_config_file(&mut options, "conf_camera")?;
         options.raw_frames.check_and_correct()?;
@@ -711,11 +295,24 @@ pub fn build_ui(
 }
 
 fn configure_camera_widget_props(data: &Rc<CameraData>) {
+    let spb_foc_len = data.main.builder.object::<gtk::SpinButton>("spb_foc_len").unwrap();
+    spb_foc_len.set_range(10.0, 10_000.0);
+    spb_foc_len.set_digits(0);
+    spb_foc_len.set_increments(1.0, 10.0);
+
+    let spb_barlow = data.main.builder.object::<gtk::SpinButton>("spb_barlow").unwrap();
+    spb_barlow.set_range(0.1, 10.0);
+    spb_barlow.set_digits(2);
+    spb_barlow.set_increments(0.1, 1.0);
+
     let spb_temp = data.main.builder.object::<gtk::SpinButton>("spb_temp").unwrap();
     spb_temp.set_range(-1000.0, 1000.0);
 
     let spb_exp = data.main.builder.object::<gtk::SpinButton>("spb_exp").unwrap();
     spb_exp.set_range(0.0, 100_000.0);
+
+    let spb_gain = data.main.builder.object::<gtk::SpinButton>("spb_gain").unwrap();
+    spb_gain.set_range(0.0, 1_000_000.0);
 
     let spb_offset = data.main.builder.object::<gtk::SpinButton>("spb_offset").unwrap();
     spb_offset.set_range(0.0, 1_000_000.0);
@@ -1189,7 +786,7 @@ fn handler_close_window(data: &Rc<CameraData>) -> gtk::Inhibit {
     read_options_from_widgets(data);
 
     let options = data.options.borrow();
-    _ = save_json_to_config::<CameraOptions>(&options, "conf_camera");
+    _ = save_json_to_config::<Options>(&options, "conf_camera");
     drop(options);
 
     if let Some(indi_conn) = data.indi_conn.borrow_mut().take() {
@@ -1219,6 +816,9 @@ fn show_options(data: &Rc<CameraData>) {
     data.excl.exec(|| {
         let options = data.options.borrow();
         let bld = &data.main.builder;
+
+        gtk_utils::set_f64(bld, "spb_foc_len", options.telescope.focal_len);
+        gtk_utils::set_f64(bld, "spb_barlow",  options.telescope.barlow);
 
         let pan_cam1 = bld.object::<gtk::Paned>("pan_cam1").unwrap();
         let pan_cam2 = bld.object::<gtk::Paned>("pan_cam2").unwrap();
@@ -1304,6 +904,10 @@ fn show_options(data: &Rc<CameraData>) {
 fn read_options_from_widgets(data: &Rc<CameraData>) {
     let mut options = data.options.borrow_mut();
     let bld = &data.main.builder;
+
+    options.telescope.focal_len = gtk_utils::get_f64(bld, "spb_foc_len");
+    options.telescope.barlow = gtk_utils::get_f64(bld, "spb_barlow");
+
     let pan_cam1 = bld.object::<gtk::Paned>("pan_cam1").unwrap();
     let pan_cam2 = bld.object::<gtk::Paned>("pan_cam2").unwrap();
     let pan_cam3 = bld.object::<gtk::Paned>("pan_cam3").unwrap();
@@ -1893,7 +1497,7 @@ fn handler_action_stop_shot(data: &Rc<CameraData>) {
 
 fn get_preview_params(
     data:    &Rc<CameraData>,
-    options: &CameraOptions
+    options: &Options
 ) -> PreviewParams {
     let img_preview = data.main.builder.object::<gtk::Image>("img_preview").unwrap();
     let parent = img_preview
@@ -2779,6 +2383,7 @@ fn handler_action_start_live_stacking(data: &Rc<CameraData>) {
             &options.frame,
             &options.focuser,
             &options.guiding,
+            &options.telescope,
             &options.live,
             &data.main.thread_timer
         )?;
@@ -2961,6 +2566,7 @@ fn handler_action_start_save_raw_frames(data: &Rc<CameraData>) {
             &options.frame,
             &options.focuser,
             &options.guiding,
+            &options.telescope,
             &options.raw_frames,
             &data.main.thread_timer
         )?;
@@ -3288,6 +2894,7 @@ fn handler_action_start_dither_calibr(data: &Rc<CameraData>) {
         let mount_device = mount_device.as_deref().unwrap_or_default();
         state.start_mount_calibr(
             &options.frame,
+            &options.telescope,
             &options.guiding,
             mount_device,
             cam_device

@@ -1,8 +1,8 @@
 [package]
 name = "astra_lite"
-version = "0.0.39"
+version = "0.0.40"
 edition = "2021"
-description = "Software for deepsky astrophotography"
+description = "Software for deepsky astrophotography and live stacking"
 repository = "https://github.com/art-den/astra_lite"
 license = "MIT"
 build = "build.rs"

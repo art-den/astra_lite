@@ -198,7 +198,7 @@
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
                                 <property name="halign">start</property>
-                                <property name="label" translatable="yes">Barlow / reducer</property>
+                                <property name="label" translatable="yes">Barlow / reducer:</property>
                               </object>
                               <packing>
                                 <property name="left-attach">0</property>
@@ -206,10 +206,10 @@
                               </packing>
                             </child>
                             <child>
-                              <object class="GtkEntry">
+                              <object class="GtkSpinButton" id="spb_foc_len">
                                 <property name="visible">True</property>
                                 <property name="can-focus">True</property>
-                                <property name="width-chars">6</property>
+                                <property name="numeric">True</property>
                               </object>
                               <packing>
                                 <property name="left-attach">1</property>
@@ -217,10 +217,10 @@
                               </packing>
                             </child>
                             <child>
-                              <object class="GtkEntry">
+                              <object class="GtkSpinButton" id="spb_barlow">
                                 <property name="visible">True</property>
                                 <property name="can-focus">True</property>
-                                <property name="width-chars">6</property>
+                                <property name="numeric">True</property>
                               </object>
                               <packing>
                                 <property name="left-attach">1</property>

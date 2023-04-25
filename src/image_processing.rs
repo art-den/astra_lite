@@ -10,7 +10,8 @@ use crate::{
     image_info::*,
     log_utils::*,
     stars_offset::*,
-    gui_camera::{FrameOptions, QualityOptions, LiveStackingOptions}, state::ModeType
+    options::*,
+    state::ModeType,
 };
 
 pub enum ResultImageInfo {

@@ -7,6 +7,7 @@
     clippy::wrong_self_convention
 )]
 
+mod options;
 mod image_raw;
 mod image;
 mod image_info;
