@@ -25,7 +25,7 @@ use crate::{
     math::*, stars_offset::Point,
 };
 
-pub const SET_PROP_TIMEOUT: Option<u64> = Some(2000);
+pub const SET_PROP_TIMEOUT: Option<u64> = Some(1000);
 
 bitflags! { struct DelayedFlags: u32 {
     const UPDATE_CAM_LIST        = 1 << 0;

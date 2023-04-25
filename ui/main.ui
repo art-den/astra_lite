@@ -73,7 +73,7 @@
   </object>
   <object class="GtkAdjustment" id="adj_temp">
     <property name="lower">-100</property>
-    <property name="upper">20</property>
+    <property name="upper">25</property>
     <property name="step-increment">1</property>
     <property name="page-increment">10</property>
   </object>

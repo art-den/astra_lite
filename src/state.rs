@@ -495,13 +495,13 @@ fn start_taking_shots(
 }
 
 fn apply_camera_options_and_take_shot(
-    indi:          &indi_api::Connection,
-    camera_name:   &str,
-    frame:         &FrameOptions
+    indi:        &indi_api::Connection,
+    camera_name: &str,
+    frame:       &FrameOptions
 ) -> anyhow::Result<()> {
     // Polling period
     if indi.device_is_polling_period_supported(camera_name)? {
-        indi.device_set_polling_period(camera_name, 500, false, None)?;
+        indi.device_set_polling_period(camera_name, 500, true, None)?;
     }
 
     // Frame type
@@ -522,7 +522,7 @@ fn apply_camera_options_and_take_shot(
         (height - crop_height) / 2,
         crop_width,
         crop_height,
-        false,
+        true,
         SET_PROP_TIMEOUT
     )?;
 
@@ -533,7 +533,7 @@ fn apply_camera_options_and_take_shot(
             camera_name,
             indi_api::BinningMode::Avg,
             true,
-            None, //SET_PROP_TIMEOUT
+            SET_PROP_TIMEOUT
         )?;
     }
 
@@ -589,7 +589,7 @@ fn apply_camera_options_and_take_shot(
         indi.camera_set_capture_format(
             camera_name,
             indi_api::CaptureFormat::Raw,
-            true,
+            false,
             SET_PROP_TIMEOUT
         )?;
     }

@@ -1873,6 +1873,7 @@ impl Connection {
                 }
                 std::thread::sleep(Duration::from_millis(TIME_QUANT_MS));
                 timeout_ms -= TIME_QUANT_MS;
+                log::debug!("Waiting to set {}.{} property...", device_name, prop_name);
             }
         }
         Ok(())
@@ -1956,6 +1957,7 @@ impl Connection {
                 }
                 std::thread::sleep(Duration::from_millis(TIME_QUANT_MS));
                 timeout_ms -= TIME_QUANT_MS;
+                log::debug!("Waiting to set {}.{} property...", device_name, prop_name);
             }
         }
         Ok(())
