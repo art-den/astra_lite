@@ -911,7 +911,8 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     cb_cam_heater.connect_active_id_notify(clone!(@strong data => move |cb| {
         data.excl.exec(|| {
             let Ok(mut options) = data.options.try_borrow_mut() else { return; };
-            options.ctrl.heater_str = cb.active_id().as_deref().map(|v| v.to_string());
+            let Some(active_id) = cb.active_id() else { return; };
+            options.ctrl.heater_str = Some(active_id.to_string());
             drop(options);
             control_camera_by_options(&data, false);
             correct_widget_properties(&data);
@@ -951,9 +952,8 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
     cb_frame_mode.connect_active_id_notify(clone!(@strong data => move |cb| {
         data.excl.exec(|| {
-            let frame_type = FrameType::from_active_id(
-                cb.active_id().map(|id| id.to_string()).as_deref()
-            );
+            let Some(active_id) = cb.active_id() else { return; };
+            let frame_type = FrameType::from_active_id(Some(active_id.as_str()));
             let mut state = data.main.state.write().unwrap();
             if let Some(frame) = state.mode_mut().get_frame_options_mut() {
                 frame.frame_type = frame_type;
@@ -998,10 +998,9 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let cb_bin = bldr.object::<gtk::ComboBoxText>("cb_bin").unwrap();
     cb_bin.connect_active_id_notify(clone!(@strong data => move |cb| {
         data.excl.exec(|| {
+            let Some(active_id) = cb.active_id() else { return; };
             let mut state = data.main.state.write().unwrap();
-            let binning = Binning::from_active_id(
-                cb.active_id().map(|id| id.to_string()).as_deref()
-            );
+            let binning = Binning::from_active_id(Some(active_id.as_str()));
             if let Some(frame) = state.mode_mut().get_frame_options_mut() {
                 frame.binning = binning;
             }
@@ -1011,10 +1010,9 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let cb_crop = bldr.object::<gtk::ComboBoxText>("cb_crop").unwrap();
     cb_crop.connect_active_id_notify(clone!(@strong data => move |cb| {
         data.excl.exec(|| {
+            let Some(active_id) = cb.active_id() else { return; };
             let mut state = data.main.state.write().unwrap();
-            let crop = Crop::from_active_id(
-                cb.active_id().map(|id| id.to_string()).as_deref()
-            );
+            let crop = Crop::from_active_id(Some(active_id.as_str()));
             if let Some(frame) = state.mode_mut().get_frame_options_mut() {
                 frame.crop = crop;
             }
