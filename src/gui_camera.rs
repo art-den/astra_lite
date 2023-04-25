@@ -672,6 +672,8 @@ pub fn build_ui(
         mount_device_name:  RefCell::new(None),
     });
 
+    configure_camera_widget_props(&camera_data);
+
     connect_misc_events(&camera_data);
 
     connect_widgets_events_before_show_options(&camera_data);
@@ -705,6 +707,48 @@ pub fn build_ui(
     update_camera_devices_list(&camera_data);
     update_focuser_devices_list(&camera_data);
     correct_widget_properties(&camera_data);
+}
+
+fn configure_camera_widget_props(data: &Rc<CameraData>) {
+    let spb_temp = data.main.builder.object::<gtk::SpinButton>("spb_temp").unwrap();
+    spb_temp.set_range(-1000.0, 1000.0);
+
+    let spb_exp = data.main.builder.object::<gtk::SpinButton>("spb_exp").unwrap();
+    spb_exp.set_range(0.0, 100_000.0);
+
+    let spb_offset = data.main.builder.object::<gtk::SpinButton>("spb_offset").unwrap();
+    spb_offset.set_range(0.0, 1_000_000.0);
+
+    let spb_delay = data.main.builder.object::<gtk::SpinButton>("spb_delay").unwrap();
+    spb_delay.set_range(0.0, 100_000.0);
+    spb_delay.set_digits(1);
+    spb_delay.set_increments(0.5, 5.0);
+
+    let spb_raw_frames_cnt = data.main.builder.object::<gtk::SpinButton>("spb_raw_frames_cnt").unwrap();
+    spb_raw_frames_cnt.set_range(1.0, 100_000.0);
+    spb_raw_frames_cnt.set_digits(0);
+    spb_raw_frames_cnt.set_increments(10.0, 100.0);
+
+    let scl_gamma = data.main.builder.object::<gtk::Scale>("scl_gamma").unwrap();
+    scl_gamma.set_range(1.0, 10.0);
+    scl_gamma.set_digits(1);
+    scl_gamma.set_increments(0.5, 2.0);
+    scl_gamma.set_round_digits(1);
+
+    let spb_live_minutes = data.main.builder.object::<gtk::SpinButton>("spb_live_minutes").unwrap();
+    spb_live_minutes.set_range(1.0, 60.0);
+    spb_live_minutes.set_digits(0);
+    spb_live_minutes.set_increments(1.0, 10.0);
+
+    let spb_max_fwhm = data.main.builder.object::<gtk::SpinButton>("spb_max_fwhm").unwrap();
+    spb_max_fwhm.set_range(1.0, 100.0);
+    spb_max_fwhm.set_digits(1);
+    spb_max_fwhm.set_increments(0.1, 1.0);
+
+    let spb_max_oval = data.main.builder.object::<gtk::SpinButton>("spb_max_oval").unwrap();
+    spb_max_oval.set_range(0.2, 2.0);
+    spb_max_oval.set_digits(1);
+    spb_max_oval.set_increments(0.1, 1.0);
 }
 
 fn connect_misc_events(data: &Rc<CameraData>) {
@@ -1054,7 +1098,8 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     scl_gamma.connect_value_changed(clone!(@strong data => move |scl| {
         data.excl.exec(|| {
             let Ok(mut options) = data.options.try_borrow_mut() else { return; };
-            let new_value = (scl.value() * 10.0).round() / 10.0;
+            let new_value = scl.value();
+            dbg!(new_value);
             if options.preview.gamma == new_value { return; }
             options.preview.gamma = new_value;
             drop(options);
@@ -1440,46 +1485,57 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
         let bldr = &data.main.builder;
         let camera = gtk_utils::get_active_id(bldr, "cb_camera_list");
         let correct_num_adjustment_by_prop = |
+            spb_name:  &str,
             prop_info: indi_api::Result<Arc<indi_api::NumPropElemInfo>>,
-            adj_name:  &str,
+            digits:    u32,
+            step:      Option<f64>,
         | -> bool {
             if let Ok(info) = prop_info {
-                let adj = bldr.object::<gtk::Adjustment>(adj_name).unwrap();
-                adj.set_lower(info.min);
-                adj.set_upper(info.max);
-                let value = adj.value();
+                let spb = bldr.object::<gtk::SpinButton>(spb_name).unwrap();
+                spb.set_range(info.min, info.max);
+                let value = spb.value();
                 if value < info.min {
-                    adj.set_value(info.min);
+                    spb.set_value(info.min);
                 }
                 if value > info.max {
-                    adj.set_value(info.max);
+                    spb.set_value(info.max);
                 }
-                let step =
+                let desired_step =
                     if      info.max <= 1.0   { 0.1 }
                     else if info.max <= 10.0  { 1.0 }
                     else if info.max <= 100.0 { 10.0 }
                     else                      { 100.0 };
-                adj.set_step_increment(step);
+                let step = step.unwrap_or(desired_step);
+                spb.set_increments(step, 10.0 * step);
+                spb.set_digits(digits);
                 true
             } else {
                 false
             }
         };
         let temp_supported = camera.as_ref().map(|camera| correct_num_adjustment_by_prop(
+            "spb_temp",
             data.main.indi.camera_get_temperature_prop_info(camera),
-            "adj_temp"
+            0,
+            Some(1.0)
         )).unwrap_or(false);
         let exposure_supported = camera.as_ref().map(|camera| correct_num_adjustment_by_prop(
+            "spb_exp",
             data.main.indi.camera_get_exposure_prop_info(camera),
-            "adj_exp"
+            3,
+            Some(1.0),
         )).unwrap_or(false);
         let gain_supported = camera.as_ref().map(|camera| correct_num_adjustment_by_prop(
+            "spb_gain",
             data.main.indi.camera_get_gain_prop_info(camera),
-            "adj_gain"
+            0,
+            None
         )).unwrap_or(false);
         let offset_supported = camera.as_ref().map(|camera| correct_num_adjustment_by_prop(
+            "spb_offset",
             data.main.indi.camera_get_offset_prop_info(&camera),
-            "adj_offset"
+            0,
+            None
         )).unwrap_or(false);
         let bin_supported = camera.as_ref().map(|camera|
             data.main.indi.camera_is_binning_supported(&camera)

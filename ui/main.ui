@@ -2,81 +2,6 @@
 <!-- Generated with glade 3.38.2 -->
 <interface>
   <requires lib="gtk+" version="3.24"/>
-  <object class="GtkAdjustment" id="adj_calibr_cnt">
-    <property name="upper">9999</property>
-    <property name="value">1</property>
-    <property name="step-increment">1</property>
-    <property name="page-increment">10</property>
-  </object>
-  <object class="GtkAdjustment" id="adj_delay">
-    <property name="upper">100</property>
-    <property name="step-increment">1</property>
-    <property name="page-increment">10</property>
-  </object>
-  <object class="GtkAdjustment" id="adj_exp">
-    <property name="lower">0.001</property>
-    <property name="upper">1000</property>
-    <property name="value">5</property>
-    <property name="step-increment">1</property>
-    <property name="page-increment">10</property>
-  </object>
-  <object class="GtkAdjustment" id="adj_gain">
-    <property name="upper">100000</property>
-    <property name="step-increment">10</property>
-    <property name="page-increment">100</property>
-  </object>
-  <object class="GtkAdjustment" id="adj_gamma">
-    <property name="lower">1</property>
-    <property name="upper">10</property>
-    <property name="value">5</property>
-    <property name="step-increment">0.5</property>
-    <property name="page-increment">1</property>
-  </object>
-  <object class="GtkAdjustment" id="adj_live_save_minutes">
-    <property name="lower">1</property>
-    <property name="upper">60</property>
-    <property name="value">1</property>
-    <property name="step-increment">1</property>
-    <property name="page-increment">10</property>
-  </object>
-  <object class="GtkAdjustment" id="adj_max_fwhm">
-    <property name="lower">1</property>
-    <property name="upper">50</property>
-    <property name="value">1</property>
-    <property name="step-increment">0.10</property>
-    <property name="page-increment">1</property>
-  </object>
-  <object class="GtkAdjustment" id="adj_max_oval">
-    <property name="lower">0.5</property>
-    <property name="upper">5</property>
-    <property name="value">0.20</property>
-    <property name="step-increment">0.10</property>
-    <property name="page-increment">1</property>
-  </object>
-  <object class="GtkAdjustment" id="adj_min_stars">
-    <property name="upper">10000</property>
-    <property name="value">1000</property>
-    <property name="step-increment">100</property>
-    <property name="page-increment">1000</property>
-  </object>
-  <object class="GtkAdjustment" id="adj_offset">
-    <property name="upper">100000</property>
-    <property name="step-increment">100</property>
-    <property name="page-increment">1000</property>
-  </object>
-  <object class="GtkAdjustment" id="adj_raw_cnt">
-    <property name="lower">1</property>
-    <property name="upper">9999</property>
-    <property name="value">1</property>
-    <property name="step-increment">1</property>
-    <property name="page-increment">10</property>
-  </object>
-  <object class="GtkAdjustment" id="adj_temp">
-    <property name="lower">-100</property>
-    <property name="upper">25</property>
-    <property name="step-increment">1</property>
-    <property name="page-increment">10</property>
-  </object>
   <object class="GtkMenu" id="m_help">
     <property name="visible">True</property>
     <property name="can-focus">False</property>
@@ -921,7 +846,6 @@
                                         <property name="can-focus">True</property>
                                         <property name="hexpand">True</property>
                                         <property name="text" translatable="yes">0</property>
-                                        <property name="adjustment">adj_temp</property>
                                       </object>
                                       <packing>
                                         <property name="left-attach">1</property>
@@ -1064,7 +988,6 @@
                                         <property name="can-focus">True</property>
                                         <property name="hexpand">True</property>
                                         <property name="text" translatable="yes">5,000</property>
-                                        <property name="adjustment">adj_exp</property>
                                         <property name="digits">3</property>
                                         <property name="value">5</property>
                                       </object>
@@ -1127,7 +1050,6 @@
                                         <property name="can-focus">True</property>
                                         <property name="hexpand">True</property>
                                         <property name="text" translatable="yes">0</property>
-                                        <property name="adjustment">adj_gain</property>
                                       </object>
                                       <packing>
                                         <property name="left-attach">1</property>
@@ -1140,7 +1062,6 @@
                                         <property name="can-focus">True</property>
                                         <property name="hexpand">True</property>
                                         <property name="text" translatable="yes">100</property>
-                                        <property name="adjustment">adj_offset</property>
                                         <property name="value">100</property>
                                       </object>
                                       <packing>
@@ -1206,7 +1127,6 @@
                                         <property name="can-focus">True</property>
                                         <property name="hexpand">True</property>
                                         <property name="text" translatable="yes">0</property>
-                                        <property name="adjustment">adj_delay</property>
                                       </object>
                                       <packing>
                                         <property name="left-attach">1</property>
@@ -1516,7 +1436,6 @@ Better use "Subtrack master DARK frame"</property>
                                         <property name="visible">True</property>
                                         <property name="can-focus">True</property>
                                         <property name="hexpand">True</property>
-                                        <property name="adjustment">adj_raw_cnt</property>
                                       </object>
                                       <packing>
                                         <property name="left-attach">1</property>
@@ -1725,7 +1644,6 @@ Better use "Subtrack master DARK frame"</property>
                                         <property name="visible">True</property>
                                         <property name="can-focus">True</property>
                                         <property name="hexpand">True</property>
-                                        <property name="adjustment">adj_live_save_minutes</property>
                                       </object>
                                       <packing>
                                         <property name="left-attach">1</property>
@@ -2014,7 +1932,6 @@ Better use "Subtrack master DARK frame"</property>
                                 <property name="width-request">160</property>
                                 <property name="visible">True</property>
                                 <property name="can-focus">True</property>
-                                <property name="adjustment">adj_gamma</property>
                                 <property name="lower-stepper-sensitivity">off</property>
                                 <property name="upper-stepper-sensitivity">off</property>
                                 <property name="restrict-to-fill-level">False</property>
@@ -3109,7 +3026,6 @@ Better use "Subtrack master DARK frame"</property>
                                             <property name="visible">True</property>
                                             <property name="can-focus">True</property>
                                             <property name="hexpand">True</property>
-                                            <property name="adjustment">adj_max_fwhm</property>
                                             <property name="digits">1</property>
                                           </object>
                                           <packing>
@@ -3139,7 +3055,6 @@ Better use "Subtrack master DARK frame"</property>
                                             <property name="visible">True</property>
                                             <property name="can-focus">True</property>
                                             <property name="hexpand">True</property>
-                                            <property name="adjustment">adj_max_oval</property>
                                             <property name="digits">1</property>
                                           </object>
                                           <packing>

@@ -589,7 +589,7 @@ fn apply_camera_options_and_take_shot(
         indi.camera_set_capture_format(
             camera_name,
             indi_api::CaptureFormat::Raw,
-            false,
+            true,
             SET_PROP_TIMEOUT
         )?;
     }

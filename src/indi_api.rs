@@ -2412,7 +2412,6 @@ impl Connection {
             CaptureFormat::Raw =>
                 devices.existing_prop_name(device_name, PROP_CAM_VIDEO_FORMAT_RAW)?,
         };
-
         drop(devices);
         self.command_set_switch_property_and_wait(
             force_set,
@@ -2425,7 +2424,6 @@ impl Connection {
         Ok(true)
     }
 
-
     pub fn camera_set_capture_format(
         &self,
         device_name: &str,
@@ -2437,7 +2435,6 @@ impl Connection {
             CaptureFormat::Rgb => "INDI_RGB",
             CaptureFormat::Raw => "INDI_RAW",
         };
-
         self.command_set_switch_property_and_wait(
             force_set,
             timeout_ms,
