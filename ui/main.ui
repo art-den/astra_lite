@@ -817,7 +817,7 @@
                                 <property name="can-focus">True</property>
                                 <property name="label-fill">True</property>
                                 <child>
-                                  <!-- n-columns=2 n-rows=2 -->
+                                  <!-- n-columns=2 n-rows=3 -->
                                   <object class="GtkGrid" id="grd_cam_ctrl">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
@@ -853,46 +853,43 @@
                                       </packing>
                                     </child>
                                     <child>
-                                      <object class="GtkBox">
+                                      <object class="GtkLabel" id="l_cam_heater">
                                         <property name="visible">True</property>
                                         <property name="can-focus">False</property>
-                                        <property name="spacing">5</property>
-                                        <child>
-                                          <object class="GtkCheckButton" id="chb_heater">
-                                            <property name="label" translatable="yes">Heater</property>
-                                            <property name="visible">True</property>
-                                            <property name="can-focus">True</property>
-                                            <property name="receives-default">False</property>
-                                            <property name="halign">start</property>
-                                            <property name="draw-indicator">True</property>
-                                          </object>
-                                          <packing>
-                                            <property name="expand">False</property>
-                                            <property name="fill">True</property>
-                                            <property name="position">0</property>
-                                          </packing>
-                                        </child>
-                                        <child>
-                                          <object class="GtkCheckButton" id="chb_fan">
-                                            <property name="label" translatable="yes">Fan</property>
-                                            <property name="visible">True</property>
-                                            <property name="can-focus">True</property>
-                                            <property name="receives-default">False</property>
-                                            <property name="halign">start</property>
-                                            <property name="draw-indicator">True</property>
-                                          </object>
-                                          <packing>
-                                            <property name="expand">False</property>
-                                            <property name="fill">True</property>
-                                            <property name="position">1</property>
-                                          </packing>
-                                        </child>
+                                        <property name="halign">start</property>
+                                        <property name="label" translatable="yes">Heater:</property>
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
-                                        <property name="top-attach">1</property>
-                                        <property name="width">2</property>
+                                        <property name="top-attach">2</property>
                                       </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkComboBoxText" id="cb_cam_heater">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">1</property>
+                                        <property name="top-attach">2</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkCheckButton" id="chb_fan">
+                                        <property name="label" translatable="yes">Fan</property>
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">True</property>
+                                        <property name="receives-default">False</property>
+                                        <property name="halign">start</property>
+                                        <property name="draw-indicator">True</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">1</property>
+                                        <property name="top-attach">1</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <placeholder/>
                                     </child>
                                   </object>
                                 </child>

@@ -1121,7 +1121,9 @@ impl Devices {
             let Some(prop) = device.get(prop_name) else {
                 continue;
             };
-            let elem_exists = prop.elements.iter().any(|e| e.name == elem_name);
+            let elem_exists = prop.elements.iter().any(|e|
+                elem_name.is_empty() || e.name == elem_name
+            );
             if elem_exists {
                 return Ok((prop_name, elem_name));
             }
@@ -1982,7 +1984,7 @@ impl Connection {
         }
     }
 
-    pub fn device_get_any_of_prop_info(
+    pub fn device_get_any_of_num_prop_info(
         &self,
         device_name: &str,
         props:       PropsStr
@@ -2289,7 +2291,7 @@ impl Connection {
         &self,
         device_name: &str
     ) -> Result<Arc<NumPropElemInfo>> {
-        self.device_get_any_of_prop_info(
+        self.device_get_any_of_num_prop_info(
             device_name,
             PROP_CAM_TEMPERATURE
         )
@@ -2325,7 +2327,7 @@ impl Connection {
         &self,
         device_name: &str
     ) -> Result<Arc<NumPropElemInfo>> {
-        self.device_get_any_of_prop_info(
+        self.device_get_any_of_num_prop_info(
             device_name,
             PROP_CAM_GAIN
         )
@@ -2363,7 +2365,7 @@ impl Connection {
         &self,
         device_name: &str
     ) -> Result<Arc<NumPropElemInfo>> {
-        self.device_get_any_of_prop_info(
+        self.device_get_any_of_num_prop_info(
             device_name,
             PROP_CAM_OFFSET
         )
@@ -2735,26 +2737,53 @@ impl Connection {
         )
     }
 
+    pub fn camera_is_heater_property(
+        prop_name: &str
+    ) -> bool {
+        PROP_CAM_HEAT_ON.iter().any(|(prop, _)|
+            *prop == prop_name
+        )
+    }
+
+    pub fn camera_get_heater_items(
+        &self,
+        device_name: &str
+    ) -> Result<Option<Vec<(String, String)>>> {
+        let devices = self.devices.lock().unwrap();
+        let (prop_name, _) = devices.existing_prop_name(
+            device_name,
+            PROP_CAM_HEAT_ON
+        )?;
+        let device = devices.get_device(device_name)?;
+        let Some(prop) = device.get(prop_name) else {
+            return Ok(None);
+        };
+        Ok(Some(prop.elements
+            .iter()
+            .map(|e| (e.name.clone(), e.label.as_ref().unwrap_or(&e.name.clone()).to_string()))
+            .collect()
+        ))
+    }
+
     pub fn camera_control_heater(
         &self,
         device_name: &str,
-        enable:      bool,
+        value:       &str,
         force_set:   bool,
         timeout_ms:  Option<u64>,
     ) -> Result<()> {
         let devices = self.devices.lock().unwrap();
-        let ((prop_name, on_elem_name), (_, off_elem_name)) =
-          (devices.existing_prop_name(device_name, PROP_CAM_HEAT_ON)?,
-           devices.existing_prop_name(device_name, PROP_CAM_HEAT_OFF)?);
+        let (prop_name, _) = devices.existing_prop_name(
+            device_name,
+            PROP_CAM_HEAT_ON
+        )?;
         drop(devices);
         self.command_set_switch_property_and_wait(
             force_set,
             timeout_ms,
             device_name,
-            prop_name, &[
-            (on_elem_name,  enable),
-            (off_elem_name, !enable),
-        ])?;
+            prop_name, &[(value, true)]
+        )?;
         Ok(())
     }
 
@@ -2802,7 +2831,7 @@ impl Connection {
         &self,
         device_name: &str
     ) -> Result<Arc<NumPropElemInfo>> {
-        self.device_get_any_of_prop_info(
+        self.device_get_any_of_num_prop_info(
             device_name,
             &[("ABS_FOCUS_POSITION", "FOCUS_ABSOLUTE_POSITION")]
         )
@@ -4227,10 +4256,7 @@ const PROP_CAM_FAN_OFF: PropsStr = &[
     ("TC_FAN_SPEED",   "INDI_DISABLED"),
 ];
 const PROP_CAM_HEAT_ON: PropsStr = &[
-    ("TC_HEAT_CONTROL", "TC_HEAT_ON"),
-];
-const PROP_CAM_HEAT_OFF: PropsStr = &[
-    ("TC_HEAT_CONTROL", "TC_HEAT_OFF"),
+    ("TC_HEAT_CONTROL", ""),
 ];
 const PROP_CAM_LOW_NOISE_ON: PropsStr = &[
     ("TC_LOW_NOISE_CONTROL", "INDI_ENABLED"),

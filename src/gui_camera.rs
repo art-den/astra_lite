@@ -39,6 +39,7 @@ bitflags! { struct DelayedFlags: u32 {
     const UPDATE_FOC_POS         = 1 << 8;
     const UPDATE_MOUNT_WIDGETS   = 1 << 9;
     const UPDATE_MOUNT_SPD_LIST  = 1 << 10;
+    const FILL_HEATER_ITEMS      = 1 << 10;
 }}
 
 struct DelayedAction {
@@ -194,7 +195,7 @@ impl Crop {
 struct CamCtrlOptions {
     enable_cooler: bool,
     enable_fan:    bool,
-    enable_heater: bool,
+    heater_str:    Option<String>,
     temperature:   f64,
 }
 
@@ -203,7 +204,7 @@ impl Default for CamCtrlOptions {
         Self {
             enable_cooler: false,
             enable_fan:    false,
-            enable_heater: false,
+            heater_str:    None,
             temperature:   0.0,
         }
     }
@@ -901,18 +902,18 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
             let Ok(mut options) = data.options.try_borrow_mut() else { return; };
             options.ctrl.enable_cooler = chb.is_active();
             drop(options);
-            set_temperature_by_options(&data, false);
+            control_camera_by_options(&data, false);
             correct_widget_properties(&data);
         });
     }));
 
-    let chb_heater = bldr.object::<gtk::CheckButton>("chb_heater").unwrap();
-    chb_heater.connect_active_notify(clone!(@strong data => move |chb| {
+    let cb_cam_heater = bldr.object::<gtk::ComboBoxText>("cb_cam_heater").unwrap();
+    cb_cam_heater.connect_active_id_notify(clone!(@strong data => move |cb| {
         data.excl.exec(|| {
             let Ok(mut options) = data.options.try_borrow_mut() else { return; };
-            options.ctrl.enable_heater = chb.is_active();
+            options.ctrl.heater_str = cb.active_id().as_deref().map(|v| v.to_string());
             drop(options);
-            set_temperature_by_options(&data, false);
+            control_camera_by_options(&data, false);
             correct_widget_properties(&data);
         });
     }));
@@ -923,7 +924,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
             let Ok(mut options) = data.options.try_borrow_mut() else { return; };
             options.ctrl.enable_fan = chb.is_active();
             drop(options);
-            set_temperature_by_options(&data, false);
+            control_camera_by_options(&data, false);
             correct_widget_properties(&data);
         });
     }));
@@ -934,7 +935,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
             let Ok(mut options) = data.options.try_borrow_mut() else { return; };
             options.ctrl.temperature = spb.value();
             drop(options);
-            set_temperature_by_options(&data, false);
+            control_camera_by_options(&data, false);
         });
     }));
 
@@ -1099,8 +1100,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
         data.excl.exec(|| {
             let Ok(mut options) = data.options.try_borrow_mut() else { return; };
             let new_value = scl.value();
-            dbg!(new_value);
-            if options.preview.gamma == new_value { return; }
+            if f64::abs(options.preview.gamma-new_value) < 0.01 { return; }
             options.preview.gamma = new_value;
             drop(options);
             show_preview_image(&data, None, None);
@@ -1240,7 +1240,6 @@ fn show_options(data: &Rc<CameraData>) {
 
         gtk_utils::set_bool     (bld, "chb_cooler",          options.ctrl.enable_cooler);
         gtk_utils::set_f64      (bld, "spb_temp",            options.ctrl.temperature);
-        gtk_utils::set_bool     (bld, "chb_heater",          options.ctrl.enable_heater);
         gtk_utils::set_bool     (bld, "chb_fan",             options.ctrl.enable_fan);
 
         gtk_utils::set_bool     (bld, "chb_master_dark",     options.calibr.dark_frame_en);
@@ -1344,7 +1343,6 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
 
     options.ctrl.enable_cooler   = gtk_utils::get_bool     (bld, "chb_cooler");
     options.ctrl.temperature     = gtk_utils::get_f64      (bld, "spb_temp");
-    options.ctrl.enable_heater   = gtk_utils::get_bool     (bld, "chb_heater");
     options.ctrl.enable_fan      = gtk_utils::get_bool     (bld, "chb_fan");
 
     options.frame.exposure       = gtk_utils::get_f64      (bld, "spb_exp");
@@ -1410,7 +1408,7 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.gui.raw_frames_exp   = gtk_utils::get_bool_prop(bld, "exp_raw_frames", "expanded");
     options.gui.live_exp         = gtk_utils::get_bool_prop(bld, "exp_live",       "expanded");
     options.gui.foc_exp          = gtk_utils::get_bool_prop(bld, "exp_foc",        "expanded");
-    options.gui.dith_exp         = gtk_utils::get_bool_prop(bld, "exp_dith",        "expanded");
+    options.gui.dith_exp         = gtk_utils::get_bool_prop(bld, "exp_dith",       "expanded");
     options.gui.quality_exp      = gtk_utils::get_bool_prop(bld, "exp_quality",    "expanded");
     options.gui.mount_exp        = gtk_utils::get_bool_prop(bld, "exp_mount",      "expanded");
 }
@@ -1442,6 +1440,8 @@ fn handler_timer(data: &Rc<CameraData>) {
                 delayed_action.flags.contains(DelayedFlags::UPDATE_MOUNT_WIDGETS);
             let upd_mount_spd_list =
                 delayed_action.flags.contains(DelayedFlags::UPDATE_MOUNT_SPD_LIST);
+            let upd_heater_items =
+                delayed_action.flags.contains(DelayedFlags::FILL_HEATER_ITEMS);
             delayed_action.flags.bits = 0;
             if update_cam_list_flag {
                 update_camera_devices_list(data);
@@ -1454,9 +1454,6 @@ fn handler_timer(data: &Rc<CameraData>) {
             if start_live_view_flag
             && data.options.borrow().live_view {
                 start_live_view(data);
-            }
-            if start_cooling {
-                set_temperature_by_options(data, true);
             }
             if update_ctrl_widgets {
                 correct_widget_properties(data);
@@ -1475,6 +1472,12 @@ fn handler_timer(data: &Rc<CameraData>) {
             }
             if upd_mount_spd_list {
                 fill_mount_speed_list_widget(data);
+            }
+            if upd_heater_items {
+                fill_heater_items_list(data);
+            }
+            if start_cooling {
+                control_camera_by_options(data, true);
             }
         }
     }
@@ -1660,7 +1663,8 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
 
         gtk_utils::show_widgets(bldr, &[
             ("chb_fan",       fan_supported),
-            ("chb_heater",    heater_supported),
+            ("l_cam_heater",  heater_supported),
+            ("cb_cam_heater", heater_supported),
             ("chb_low_noise", low_noise_supported),
         ]);
 
@@ -1791,6 +1795,30 @@ fn update_resolution_list(data: &Rc<CameraData>) {
         }
         if cb_bin.active_id().is_none() {
             cb_bin.set_active(Some(0));
+        }
+        Ok(())
+    });
+}
+
+fn fill_heater_items_list(data: &Rc<CameraData>) {
+    gtk_utils::exec_and_show_error(&data.main.window, ||{
+        let cb_cam_heater = data.main.builder.object::<gtk::ComboBoxText>("cb_cam_heater").unwrap();
+        let last_heater_value = cb_cam_heater.active_id();
+        cb_cam_heater.remove_all();
+        let options = data.options.borrow_mut();
+        let Some(ref camera) = options.device else { return Ok(()); };
+        if !data.main.indi.camera_is_heater_supported(camera)? { return Ok(()) }
+        let Some(items) = data.main.indi.camera_get_heater_items(camera)? else { return Ok(()); };
+        for (id, label) in items {
+            cb_cam_heater.append(Some(id.as_str()), &label);
+        }
+        if last_heater_value.is_some() {
+            cb_cam_heater.set_active_id(last_heater_value.as_deref());
+        } else {
+            cb_cam_heater.set_active_id(options.ctrl.heater_str.as_deref());
+        }
+        if cb_cam_heater.active_id().is_none() {
+            cb_cam_heater.set_active(Some(0));
         }
         Ok(())
     });
@@ -2155,7 +2183,7 @@ fn show_frame_processing_result(
     }
 }
 
-fn set_temperature_by_options(
+fn control_camera_by_options(
     data:      &Rc<CameraData>,
     force_set: bool,
 ) {
@@ -2190,12 +2218,14 @@ fn set_temperature_by_options(
         }
         // Window heater
         if data.main.indi.camera_is_heater_supported(camera_name)? {
-            data.main.indi.camera_control_heater(
-                camera_name,
-                options.ctrl.enable_heater,
-                force_set,
-                SET_PROP_TIMEOUT
-            )?;
+            if let Some(heater_str) = &options.ctrl.heater_str {
+                data.main.indi.camera_control_heater(
+                    camera_name,
+                    heater_str,
+                    force_set,
+                    SET_PROP_TIMEOUT
+                )?;
+            }
         }
         Ok(())
     });
@@ -2295,7 +2325,8 @@ fn update_devices_list_and_props_by_drv_interface(
     }
     if drv_interface.contains(indi_api::DriverInterface::CCD) {
         data.delayed_action.borrow_mut().set(
-            DelayedFlags::UPDATE_CAM_LIST
+            DelayedFlags::UPDATE_CAM_LIST |
+            DelayedFlags::FILL_HEATER_ITEMS
         );
     }
 }
@@ -2310,6 +2341,13 @@ fn process_simple_prop_change_event(
     _new_state:   Option<&indi_api::PropState>,
     value:       &indi_api::PropValue,
 ) {
+    if indi_api::Connection::camera_is_heater_property(prop_name) && new_prop {
+        data.delayed_action.borrow_mut().set(
+            DelayedFlags::FILL_HEATER_ITEMS |
+            DelayedFlags::START_COOLING
+        );
+    }
+
     match (prop_name, elem_name, value) {
         ("DRIVER_INFO", "DRIVER_INTERFACE", _) => {
             let flag_bits = value.as_i32().unwrap_or(0);
