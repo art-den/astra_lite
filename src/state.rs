@@ -1539,7 +1539,7 @@ impl Mode for FocusingMode {
 ///////////////////////////////////////////////////////////////////////////////
 
 const DITHER_CALIBR_ATTEMPTS_CNT: usize = 11;
-const DITHER_CALIBR_SPEED: f64 = 2.0;
+const DITHER_CALIBR_SPEED: f64 = 1.0;
 
 #[derive(Debug, Default, Clone)]
 struct MountMoveCalibrRes {

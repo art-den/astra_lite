@@ -843,7 +843,6 @@ impl PropValue {
                 "f64".into()
             )),
         }
-
     }
 
     pub fn as_log_str(&self) -> String {
@@ -852,6 +851,21 @@ impl PropValue {
                 format!("[BLOB len={}]", blob.data.len()),
             _ =>
                 format!("{:?}", &self)
+        }
+    }
+
+    pub fn as_string(&self) -> String {
+        match self {
+            PropValue::Num(num) =>
+               num.to_string(),
+            PropValue::Text(text) =>
+                text.clone(),
+            PropValue::Switch(value) =>
+                value.to_string(),
+            PropValue::Light(text) =>
+                text.clone(),
+            PropValue::Blob(_) =>
+                "[blob]".to_string(),
         }
     }
 }
@@ -2318,6 +2332,41 @@ impl Connection {
             temperature,
             true,
             None
+        )
+    }
+
+    // Camera cooling power
+
+    pub fn camera_is_cooler_pwr_supported(
+        &self,
+        device_name: &str
+    ) -> Result<bool> {
+        self.is_device_support_any_of_props(
+            device_name,
+            PROP_CAM_COOLING_PWR
+        )
+    }
+
+    pub fn camera_get_cooler_pwr_str(
+        &self,
+        device_name: &str
+    ) -> Result<String> {
+        let devices = self.devices.lock().unwrap();
+        let (prop_name, prop_elem) = devices.existing_prop_name(device_name, PROP_CAM_COOLING_PWR)?;
+        let property = devices.get_property(device_name, prop_name)?;
+        let elem = property.elements
+            .iter()
+            .find(|e| e.name == prop_elem)
+            .unwrap();
+        Ok(elem.value.as_string())
+    }
+
+    pub fn camera_is_cooler_pwr_property(
+        prop_name: &str,
+        elem_name: &str
+    ) -> bool {
+        PROP_CAM_COOLING_PWR.iter().any(|(prop, elem)|
+            *prop == prop_name && *elem == elem_name
         )
     }
 
@@ -4275,6 +4324,9 @@ type PropsStr = &'static [(&'static str, &'static str)];
 
 const PROP_CAM_TEMPERATURE: PropsStr = &[
     ("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE"),
+];
+const PROP_CAM_COOLING_PWR: PropsStr = &[
+    ("COOLER_POWER", "COOLER_POWER"),
 ];
 const PROP_CAM_GAIN: PropsStr = &[
     ("CCD_GAIN",     "GAIN"),

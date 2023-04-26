@@ -303,7 +303,7 @@ fn configure_camera_widget_props(data: &Rc<CameraData>) {
     let spb_barlow = data.main.builder.object::<gtk::SpinButton>("spb_barlow").unwrap();
     spb_barlow.set_range(0.1, 10.0);
     spb_barlow.set_digits(2);
-    spb_barlow.set_increments(0.1, 1.0);
+    spb_barlow.set_increments(0.01, 0.1);
 
     let spb_temp = data.main.builder.object::<gtk::SpinButton>("spb_temp").unwrap();
     spb_temp.set_range(-1000.0, 1000.0);
@@ -347,6 +347,12 @@ fn configure_camera_widget_props(data: &Rc<CameraData>) {
     spb_max_oval.set_range(0.2, 2.0);
     spb_max_oval.set_digits(1);
     spb_max_oval.set_increments(0.1, 1.0);
+
+    let l_temp_value = data.main.builder.object::<gtk::Label>("l_temp_value").unwrap();
+    l_temp_value.set_text("");
+
+    let l_coolpwr_value = data.main.builder.object::<gtk::Label>("l_coolpwr_value").unwrap();
+    l_coolpwr_value.set_text("");
 }
 
 fn connect_misc_events(data: &Rc<CameraData>) {
@@ -1843,7 +1849,22 @@ fn show_cur_temperature_value(
         gtk_utils::set_str(
             &data.main.builder,
             "l_temp_value",
-            &format!("{:.1}°C", temparature)
+            &format!("T: {:.1}°C", temparature)
+        );
+    }
+}
+
+fn show_coolpwr_value(
+    data:        &Rc<CameraData>,
+    device_name: &str,
+    pwr_str:     &str
+) {
+    let cur_camera = gtk_utils::get_active_id(&data.main.builder, "cb_camera_list");
+    if cur_camera.as_deref() == Some(device_name) {
+        gtk_utils::set_str(
+            &data.main.builder,
+            "l_coolpwr_value",
+            &format!("Pwr: {}", pwr_str)
         );
     }
 }
@@ -1949,6 +1970,11 @@ fn process_simple_prop_change_event(
             DelayedFlags::START_COOLING
         );
     }
+    if indi_api::Connection::camera_is_cooler_pwr_property(prop_name, elem_name) {
+        show_coolpwr_value(data, device_name, &value.as_string());
+    }
+
+    // show_coolpwr_value
 
     match (prop_name, elem_name, value) {
         ("DRIVER_INFO", "DRIVER_INTERFACE", _) => {
