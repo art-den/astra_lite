@@ -3415,7 +3415,6 @@ struct XmlStreamReader {
     blob_dl_start:       std::time::Instant,
     blobs:               Vec<XmlStreamReaderBlob>,
     xml_text:            String,
-
 }
 
 impl XmlStreamReader {
@@ -3962,12 +3961,10 @@ impl XmlReceiver {
         Ok(())
     }
 }
-
 struct Base64Decoder {
-    table:    [u8; 256],
-    result:   Vec<u8>,
-    buffer:   u32,
-    eq_count: usize,
+    table:  [u8; 256],
+    result: Vec<u8>,
+    buffer: u32,
 }
 
 impl Base64Decoder {
@@ -3981,16 +3978,13 @@ impl Base64Decoder {
                 b'0'..=b'9' => i - b'0' + 52,
                 b'+'        => 62,
                 b'/'        => 63,
-                b'='        => 0,
                 _           => 255,
             }
         }
-
         Self {
             table,
             result: Vec::with_capacity(expected_size),
             buffer: 1,
-            eq_count: 0,
         }
     }
 
@@ -3998,18 +3992,21 @@ impl Base64Decoder {
         self.result.clear();
         self.result.reserve(expected_size);
         self.buffer = 1;
-        self.eq_count = 0;
     }
 
     fn take_result(&mut self) -> Vec<u8> {
-        while self.buffer & 0x01000000 != 0 {
-            self.add_byte(b'=');
-        }
-        if self.eq_count > 2 {
-            self.eq_count = 2;
-        }
-        if self.result.len() >= self.eq_count {
-            self.result.resize(self.result.len() - self.eq_count, 0);
+        if self.buffer != 1 {
+            let mut extra_len = 0;
+            while self.buffer & 0x01000000 == 0 {
+                self.buffer <<= 6;
+                extra_len += 1;
+            }
+            let bytes = self.buffer.to_be_bytes();
+            match extra_len {
+                1 => self.result.extend_from_slice(&bytes[1..=2]),
+                2 => self.result.extend_from_slice(&bytes[1..=1]),
+                _ => unreachable!(),
+            }
         }
         std::mem::take(&mut self.result)
     }
@@ -4022,7 +4019,6 @@ impl Base64Decoder {
 
     #[inline(always)]
     fn add_byte(&mut self, v: u8) {
-        if v == b'=' { self.eq_count += 1; }
         let index = self.table[v as usize] as u32;
         if index == 255 { return; }
         self.buffer = (self.buffer << 6) | index;
@@ -4036,25 +4032,22 @@ impl Base64Decoder {
 
 #[test]
 fn test_base64_decoder() {
-    let mut decoder = Base64Decoder::new(0);
-    decoder.add_bytes(b"TWFu");
-    assert!(&decoder.take_result() == &b"Man");
-
-    let mut decoder = Base64Decoder::new(0);
-    decoder.add_bytes(b"TWF=");
-    assert!(&decoder.take_result() == &b"Ma");
-
-    let mut decoder = Base64Decoder::new(0);
-    decoder.add_bytes(b"TW==");
-    assert!(&decoder.take_result() == &b"M");
-
-    let mut decoder = Base64Decoder::new(0);
-    decoder.add_bytes(br#"////////"#);
-    assert!(&decoder.take_result() == &[255, 255, 255, 255, 255, 255]);
-
-    let mut decoder = Base64Decoder::new(0);
-    decoder.add_bytes(br#"///////="#);
-    assert!(&decoder.take_result() == &[255, 255, 255, 255, 255]);
+    fn test(base64: &[u8], result: &[u8]) {
+        let mut decoder = Base64Decoder::new(0);
+        decoder.add_bytes(base64);
+        assert_eq!(&decoder.take_result(), result);
+    }
+    test(b"",                 b"");
+    test(b"TWFu",             b"Man");
+    test(b"TWF=",             b"Ma");
+    test(b"TW==",             b"M");
+    test(br#"////////"#,      &[255, 255, 255, 255, 255, 255]);
+    test(br#"///////="#,      &[255, 255, 255, 255, 255]);
+    test(b"dGVzdCBhIHRlc3Q=", b"test a test");
+    test(b"c2hvcnRT",         b"shortS");
+    test(b"c2hvcnRTMg==",     b"shortS2");
+    test(b"c2hvcnRTMjM=",     b"shortS23");
+    test(b"c2hvcnRTMjM0",     b"shortS234");
 }
 
 #[derive(Debug)]

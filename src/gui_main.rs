@@ -232,7 +232,6 @@ pub fn build_ui(
 
     let nb_main = builder.object::<gtk::Notebook>("nb_main").unwrap();
     nb_main.connect_switch_page(clone!(@strong data => move |_, _, page| {
-        dbg!(page);
         let enable_fullscreen = match page { 1|2 => true, _ => false };
         btn_fullscreen.set_sensitive(enable_fullscreen);
     }));
