@@ -6,6 +6,7 @@ use crate::{indi_api, gtk_utils, io_utils::*, state::*};
 
 pub const TIMER_PERIOD_MS: u64 = 250;
 pub type TimerHandlers = Vec<Box<dyn Fn() + 'static>>;
+pub type FullscreenHandlers = Vec<Box<dyn Fn(bool) + 'static>>;
 
 const CSS: &[u8] = b"
 .greenbutton {
@@ -63,6 +64,7 @@ pub struct MainData {
     logs_dir:         PathBuf,
     options:          RefCell<MainOptions>,
     timer_handlers:   RefCell<TimerHandlers>,
+    fs_handlers:      RefCell<FullscreenHandlers>,
     progress:         RefCell<Option<Progress>>,
     conn_string:      RefCell<String>,
     dev_string:       RefCell<String>,
@@ -111,6 +113,7 @@ pub fn build_ui(
         logs_dir:       logs_dir.clone(),
         options:        RefCell::new(options),
         timer_handlers: RefCell::new(Vec::new()),
+        fs_handlers:    RefCell::new(Vec::new()),
         progress:       RefCell::new(None),
         state:          Arc::new(RwLock::new(State::new(&indi))),
         thread_timer:   Arc::clone(&thread_timer),
@@ -127,6 +130,7 @@ pub fn build_ui(
     window.show();
     apply_options(&data);
     apply_theme(&data);
+    gtk::main_iteration_do(true);
     gtk::main_iteration_do(true);
     gtk::main_iteration_do(true);
     let data_weak = Rc::downgrade(&data);
@@ -154,7 +158,8 @@ pub fn build_ui(
     crate::gui_camera::build_ui(
         app,
         &data,
-        &mut data.timer_handlers.borrow_mut()
+        &mut data.timer_handlers.borrow_mut(),
+        &mut data.fs_handlers.borrow_mut(),
     );
 
     gtk_utils::enable_widgets(&builder, false, &[
@@ -215,6 +220,21 @@ pub fn build_ui(
             log::info!("Setting verbose log::LevelFilter::Trace level");
             log::set_max_level(log::LevelFilter::Trace);
         }
+    }));
+    mi_max_log_mode.set_sensitive(false);
+
+    let btn_fullscreen = builder.object::<gtk::ToggleButton>("btn_fullscreen").unwrap();
+    btn_fullscreen.connect_active_notify(clone!(@strong data => move |btn| {
+        for fs_handler in data.fs_handlers.borrow().iter() {
+            fs_handler(btn.is_active());
+        }
+    }));
+
+    let nb_main = builder.object::<gtk::Notebook>("nb_main").unwrap();
+    nb_main.connect_switch_page(clone!(@strong data => move |_, _, page| {
+        dbg!(page);
+        let enable_fullscreen = match page { 1|2 => true, _ => false };
+        btn_fullscreen.set_sensitive(enable_fullscreen);
     }));
 
     gtk_utils::connect_action(&window, &data, "stop",             handler_action_stop);

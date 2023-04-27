@@ -127,7 +127,7 @@
     <property name="default-height">768</property>
     <property name="show-menubar">False</property>
     <child>
-      <object class="GtkNotebook">
+      <object class="GtkNotebook" id="nb_main">
         <property name="visible">True</property>
         <property name="can-focus">True</property>
         <property name="show-border">False</property>
@@ -673,7 +673,7 @@
             <property name="can-focus">True</property>
             <property name="wide-handle">True</property>
             <child>
-              <object class="GtkBox">
+              <object class="GtkBox" id="bx_cam_left">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
                 <property name="margin-start">5</property>
@@ -2017,7 +2017,7 @@ Better use "Subtrack master DARK frame"</property>
                           </packing>
                         </child>
                         <child>
-                          <object class="GtkBox">
+                          <object class="GtkBox" id="bx_img_info">
                             <property name="visible">True</property>
                             <property name="can-focus">False</property>
                             <property name="margin-start">5</property>
@@ -2993,7 +2993,7 @@ Better use "Subtrack master DARK frame"</property>
                   </packing>
                 </child>
                 <child>
-                  <object class="GtkScrolledWindow">
+                  <object class="GtkScrolledWindow" id="scr_cam_right">
                     <property name="visible">True</property>
                     <property name="can-focus">True</property>
                     <property name="hscrollbar-policy">never</property>
@@ -4251,9 +4251,9 @@ if error larger than (pixels)</property>
           <object class="GtkBox">
             <property name="visible">True</property>
             <property name="can-focus">False</property>
+            <property name="halign">end</property>
             <property name="margin-top">3</property>
             <property name="margin-bottom">3</property>
-            <property name="hexpand">True</property>
             <property name="spacing">5</property>
             <child>
               <object class="GtkSeparator">
@@ -4304,6 +4304,8 @@ if error larger than (pixels)</property>
               <object class="GtkBox">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
+                <property name="margin-start">5</property>
+                <property name="margin-end">5</property>
                 <property name="spacing">5</property>
                 <property name="homogeneous">True</property>
                 <child>
@@ -4348,12 +4350,11 @@ if error larger than (pixels)</property>
               </packing>
             </child>
             <child>
-              <object class="GtkSeparator">
+              <object class="GtkToggleButton" id="btn_fullscreen">
+                <property name="label" translatable="yes">Fullscreen</property>
                 <property name="visible">True</property>
-                <property name="can-focus">False</property>
-                <property name="margin-start">15</property>
-                <property name="margin-end">15</property>
-                <property name="orientation">vertical</property>
+                <property name="can-focus">True</property>
+                <property name="receives-default">True</property>
               </object>
               <packing>
                 <property name="expand">False</property>
@@ -4455,7 +4456,6 @@ if error larger than (pixels)</property>
             </child>
           </object>
           <packing>
-            <property name="tab-expand">True</property>
             <property name="tab-fill">False</property>
           </packing>
         </child>

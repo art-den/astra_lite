@@ -4,7 +4,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::{image_raw::FrameType, image_processing::CalibrParams};
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
 pub enum ImgPreviewScale {
     #[default]
     FitWindow,

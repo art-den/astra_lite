@@ -364,7 +364,7 @@ impl RawImage {
                 .par_chunks_exact(self.info.width)
                 .enumerate()
                 .skip(y_start)
-                .step_by(4*y_step)
+                .step_by(4*y_step) // skip each 4 row for faster statistics
                 .flat_map_iter(|(y, row)| {
                     let cfa_row = self.cfa_row(y);
                     let x_start = if cfa_row[0] == color { 0 } else { 1 };

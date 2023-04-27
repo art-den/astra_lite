@@ -208,6 +208,7 @@ struct CameraData {
     closed:             Cell<bool>,
     excl:               gtk_utils::ExclusiveCaller,
     mount_device_name:  RefCell<Option<String>>,
+    full_screen_mode:   Cell<bool>,
 }
 
 impl Drop for CameraData {
@@ -219,7 +220,8 @@ impl Drop for CameraData {
 pub fn build_ui(
     _application:   &gtk::Application,
     data:           &Rc<MainData>,
-    timer_handlers: &mut TimerHandlers
+    timer_handlers: &mut TimerHandlers,
+    fs_handlers:    &mut FullscreenHandlers,
 ) {
     let mut options = Options::default();
     gtk_utils::exec_and_show_error(&data.window, || {
@@ -255,6 +257,7 @@ pub fn build_ui(
         closed:             Cell::new(false),
         excl:               gtk_utils::ExclusiveCaller::new(),
         mount_device_name:  RefCell::new(None),
+        full_screen_mode:   Cell::new(false),
     });
 
     configure_camera_widget_props(&camera_data);
@@ -282,6 +285,12 @@ pub fn build_ui(
     timer_handlers.push(Box::new(move || {
         let Some(data) = weak_camera_data.upgrade() else { return; };
         handler_timer(&data);
+    }));
+
+    let weak_camera_data = Rc::downgrade(&camera_data);
+    fs_handlers.push(Box::new(move |full_screen| {
+        let Some(data) = weak_camera_data.upgrade() else { return; };
+        handler_full_screen(&data, full_screen);
     }));
 
     data.window.connect_delete_event(clone!(@weak camera_data => @default-panic, move |_, _| {
@@ -784,6 +793,38 @@ fn connect_img_mouse_scroll_events(data: &Rc<CameraData>) {
     }));
 }
 
+fn handler_full_screen(data: &Rc<CameraData>, full_screen: bool) {
+    let bldr = &data.main.builder;
+
+    let bx_cam_left = bldr.object::<gtk::Widget>("bx_cam_left").unwrap();
+    let scr_cam_right = bldr.object::<gtk::Widget>("scr_cam_right").unwrap();
+    let pan_cam3 = bldr.object::<gtk::Widget>("pan_cam3").unwrap();
+    let bx_img_info = bldr.object::<gtk::Widget>("bx_img_info").unwrap();
+    if full_screen {
+        read_options_from_widgets(data);
+        bx_cam_left.set_visible(false);
+        scr_cam_right.set_visible(false);
+        pan_cam3.set_visible(false);
+        bx_img_info.set_visible(false);
+    } else {
+        bx_cam_left.set_visible(true);
+        scr_cam_right.set_visible(true);
+        pan_cam3.set_visible(true);
+        bx_img_info.set_visible(true);
+    }
+    data.full_screen_mode.set(full_screen);
+
+    let options = data.options.borrow();
+    if options.preview.scale == ImgPreviewScale::FitWindow {
+        drop(options);
+        gtk::main_iteration_do(true);
+        gtk::main_iteration_do(true);
+        gtk::main_iteration_do(true);
+        show_preview_image(&data, None, None);
+    }
+
+}
+
 fn handler_close_window(data: &Rc<CameraData>) -> gtk::Inhibit {
     data.closed.set(true);
 
@@ -914,15 +955,17 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.telescope.focal_len = gtk_utils::get_f64(bld, "spb_foc_len");
     options.telescope.barlow = gtk_utils::get_f64(bld, "spb_barlow");
 
-    let pan_cam1 = bld.object::<gtk::Paned>("pan_cam1").unwrap();
-    let pan_cam2 = bld.object::<gtk::Paned>("pan_cam2").unwrap();
-    let pan_cam3 = bld.object::<gtk::Paned>("pan_cam3").unwrap();
-    let pan_cam4 = bld.object::<gtk::Paned>("pan_cam4").unwrap();
+    if !data.full_screen_mode.get() {
+        let pan_cam1 = bld.object::<gtk::Paned>("pan_cam1").unwrap();
+        let pan_cam2 = bld.object::<gtk::Paned>("pan_cam2").unwrap();
+        let pan_cam3 = bld.object::<gtk::Paned>("pan_cam3").unwrap();
+        let pan_cam4 = bld.object::<gtk::Paned>("pan_cam4").unwrap();
 
-    options.gui.paned_pos1 = pan_cam1.position();
-    options.gui.paned_pos2 = pan_cam2.allocation().width()-pan_cam2.position();
-    options.gui.paned_pos3 = pan_cam3.position();
-    options.gui.paned_pos4 = pan_cam4.allocation().height()-pan_cam4.position();
+        options.gui.paned_pos1 = pan_cam1.position();
+        options.gui.paned_pos2 = pan_cam2.allocation().width()-pan_cam2.position();
+        options.gui.paned_pos3 = pan_cam3.position();
+        options.gui.paned_pos4 = pan_cam4.allocation().height()-pan_cam4.position();
+    }
 
     options.preview.scale = {
         let preview_active_id = gtk_utils::get_active_id(bld, "cb_preview_scale");
