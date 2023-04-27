@@ -1111,13 +1111,17 @@ impl Mode for CameraActiveMode {
                         guid_data.cur_timed_guide_w = 0.0;
                         guid_data.cur_timed_guide_e = 0.0;
                         self.indi.camera_abort_exposure(&self.device)?;
-                        self.indi.mount_set_guide_rate(
-                            &self.mount_device,
-                            DITHER_CALIBR_SPEED,
-                            DITHER_CALIBR_SPEED,
-                            true,
-                            SET_PROP_TIMEOUT
-                        )?;
+                        let guide_rate_prop_perm =
+                            self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.perm;
+                        if guide_rate_prop_perm == indi_api::PropPerm::RW {
+                            self.indi.mount_set_guide_rate(
+                                &self.mount_device,
+                                DITHER_CALIBR_SPEED,
+                                DITHER_CALIBR_SPEED,
+                                true,
+                                SET_PROP_TIMEOUT
+                            )?;
+                        }
                         self.indi.mount_timed_guide(&self.mount_device, 1000.0 * dec, 1000.0 * ra)?;
                         self.state = CamState::MountCorrection;
                         result = NotifyResult::ModeChanged;
@@ -1595,6 +1599,8 @@ struct MountCalibrMode {
     move_period:       f64,
     result:            MountMoveCalibrRes,
     next_mode:         Option<Box<dyn Mode + Sync + Send>>,
+    can_change_g_rate: bool,
+    calibr_speed:      f64,
 }
 
 #[derive(PartialEq)]
@@ -1650,7 +1656,9 @@ impl MountCalibrMode {
             image_height:      0,
             move_period:       0.0,
             result:            MountMoveCalibrRes::default(),
-            next_mode
+            next_mode,
+            can_change_g_rate: false,
+            calibr_speed:      0.0,
         }
     }
 
@@ -1661,6 +1669,13 @@ impl MountCalibrMode {
             &self.camera_device,
             false
         )?;
+        let guide_rate_prop_perm = self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.perm;
+        self.can_change_g_rate = guide_rate_prop_perm == indi_api::PropPerm::RW;
+        if self.can_change_g_rate {
+            self.calibr_speed = DITHER_CALIBR_SPEED;
+        } else {
+            self.calibr_speed = self.indi.mount_get_guide_rate(&self.mount_device)?.0;
+        }
         self.attempt_num = 0;
         self.state = DitherCalibrState::WaitForImage;
         self.axis = axis;
@@ -1802,7 +1817,7 @@ impl Mode for MountCalibrMode {
                     let camera_angle = f64::atan2(cam_size_mm, self.telescope.real_focal_length());
                     let sky_angle_is_second = 2.0 * PI / (60.0 * 60.0 * 24.0);
                     // time when point went all camera matrix on sky rotation speed = DITHER_CALIBR_SPEED
-                    let cam_time = camera_angle / (sky_angle_is_second * DITHER_CALIBR_SPEED);
+                    let cam_time = camera_angle / (sky_angle_is_second * self.calibr_speed);
                     let total_time = cam_time * 0.5; // half of matrix
                     self.move_period = total_time / (DITHER_CALIBR_ATTEMPTS_CNT - 1) as f64;
                     dbg!(cam_size_mm, 180.0 * camera_angle / PI, cam_time, self.move_period);
@@ -1827,13 +1842,15 @@ impl Mode for MountCalibrMode {
                     DitherCalibrAxis::Dec => (1000.0 * self.move_period, 0.0),
                     _ => unreachable!()
                 };
-                self.indi.mount_set_guide_rate(
-                    &self.mount_device,
-                    DITHER_CALIBR_SPEED,
-                    DITHER_CALIBR_SPEED,
-                    true,
-                    SET_PROP_TIMEOUT
-                )?;
+                if self.can_change_g_rate {
+                    self.indi.mount_set_guide_rate(
+                        &self.mount_device,
+                        DITHER_CALIBR_SPEED,
+                        DITHER_CALIBR_SPEED,
+                        true,
+                        SET_PROP_TIMEOUT
+                    )?;
+                }
                 self.indi.mount_timed_guide(&self.mount_device, ns, we)?;
                 self.state = DitherCalibrState::WaitForSlew;
             }

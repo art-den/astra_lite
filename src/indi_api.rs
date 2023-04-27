@@ -387,7 +387,7 @@ impl PropState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum PropPerm { RO, WO, RW }
 
 impl PropPerm {
@@ -3157,6 +3157,24 @@ impl Connection {
         self.get_num_property(device_name, "GUIDE_RATE", "GUIDE_RATE_WE")
     }
 
+    pub fn mount_get_guide_rate_prop_data(
+        &self,
+        device_name: &str
+    ) -> Result<Arc<PropStaticData>> {
+        let devices = self.devices.lock().unwrap();
+        devices.get_property_static_data(device_name, "GUIDE_RATE")
+    }
+
+    pub fn mount_get_guide_rate(
+        &self,
+        device_name: &str,
+    ) -> Result<(f64, f64)> {
+        let devices = self.devices.lock().unwrap();
+        let ns = devices.get_num_property(device_name, "GUIDE_RATE", "GUIDE_RATE_NS")?;
+        let we = devices.get_num_property(device_name, "GUIDE_RATE", "GUIDE_RATE_WE")?;
+        Ok((ns, we))
+    }
+
     pub fn mount_set_guide_rate(
         &self,
         device_name: &str,
@@ -3175,7 +3193,8 @@ impl Connection {
         ])?;
         Ok(())
     }
-    //
+
+
 }
 
 struct XmlSender {
