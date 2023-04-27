@@ -221,9 +221,9 @@ pub fn build_ui(
             log::set_max_level(log::LevelFilter::Trace);
         }
     }));
-    mi_max_log_mode.set_sensitive(false);
 
     let btn_fullscreen = builder.object::<gtk::ToggleButton>("btn_fullscreen").unwrap();
+    btn_fullscreen.set_sensitive(false);
     btn_fullscreen.connect_active_notify(clone!(@strong data => move |btn| {
         for fs_handler in data.fs_handlers.borrow().iter() {
             fs_handler(btn.is_active());
