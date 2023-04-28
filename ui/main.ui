@@ -727,6 +727,7 @@
                                       <object class="GtkComboBoxText" id="cb_camera_list">
                                         <property name="visible">True</property>
                                         <property name="can-focus">False</property>
+                                        <property name="valign">center</property>
                                         <property name="hexpand">True</property>
                                       </object>
                                       <packing>
@@ -1883,6 +1884,7 @@ Better use "Subtrack master DARK frame"</property>
                               <object class="GtkComboBoxText" id="cb_preview_src">
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
+                                <property name="valign">center</property>
                                 <property name="active-id">frame</property>
                                 <items>
                                   <item id="frame" translatable="yes">Current frame</item>
@@ -1911,6 +1913,7 @@ Better use "Subtrack master DARK frame"</property>
                               <object class="GtkComboBoxText" id="cb_preview_scale">
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
+                                <property name="valign">center</property>
                                 <items>
                                   <item id="fit" translatable="yes">Fit window</item>
                                   <item id="orig" translatable="yes">100%</item>
@@ -1940,6 +1943,7 @@ Better use "Subtrack master DARK frame"</property>
                                 <property name="visible">True</property>
                                 <property name="can-focus">True</property>
                                 <property name="receives-default">False</property>
+                                <property name="valign">center</property>
                                 <property name="draw-indicator">True</property>
                               </object>
                               <packing>
@@ -1965,6 +1969,7 @@ Better use "Subtrack master DARK frame"</property>
                                 <property name="width-request">160</property>
                                 <property name="visible">True</property>
                                 <property name="can-focus">True</property>
+                                <property name="valign">center</property>
                                 <property name="lower-stepper-sensitivity">off</property>
                                 <property name="upper-stepper-sensitivity">off</property>
                                 <property name="restrict-to-fill-level">False</property>
