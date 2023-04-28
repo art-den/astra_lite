@@ -271,7 +271,7 @@ fn connect_indi_events(data: &Rc<HardwareData>) {
                 log::debug!("(-) {:20}", &event.device_name);
             },
             indi_api::Event::Message(message) => {
-                log::info!("indi: device={}, text={}", message.device_name, message.text);
+                log::debug!("indi: device={}, text={}", message.device_name, message.text);
                 add_log_record(
                     &data,
                     &message.timestamp,

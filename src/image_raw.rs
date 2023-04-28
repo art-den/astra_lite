@@ -382,6 +382,7 @@ impl RawImage {
                         })
                 })
                 .collect();
+            if diffs.is_empty() { return; }
             let pos = 99 * diffs.len() / 100;
             let percentile_val = *diffs.select_nth_unstable(pos).1;
             let border = 150 * percentile_val as u32 / 100;

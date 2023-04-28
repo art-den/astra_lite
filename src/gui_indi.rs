@@ -665,7 +665,6 @@ impl IndiGui {
         next_row:     &mut i32,
     ) -> Vec<UiIndiPropElem> {
         let mut result = Vec::new();
-
         let bx = gtk::Box::builder()
             .visible(true)
             .spacing(5)
