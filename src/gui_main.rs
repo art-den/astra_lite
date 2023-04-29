@@ -68,7 +68,6 @@ pub struct MainData {
     progress:         RefCell<Option<Progress>>,
     conn_string:      RefCell<String>,
     dev_string:       RefCell<String>,
-    pub thread_timer: Arc<ThreadTimer>,
     pub state:        Arc<RwLock<State>>,
     pub indi:         Arc<indi_api::Connection>,
     pub builder:      gtk::Builder,
@@ -108,7 +107,6 @@ pub fn build_ui(
         load_json_from_config_file(&mut options, "conf_main")
     });
     let indi = Arc::new(indi_api::Connection::new());
-    let thread_timer = Arc::new(ThreadTimer::new());
     let data = Rc::new(MainData {
         logs_dir:       logs_dir.clone(),
         options:        RefCell::new(options),
@@ -116,7 +114,6 @@ pub fn build_ui(
         fs_handlers:    RefCell::new(Vec::new()),
         progress:       RefCell::new(None),
         state:          Arc::new(RwLock::new(State::new(&indi))),
-        thread_timer:   Arc::clone(&thread_timer),
         indi,
         window:         window.clone(),
         builder:        builder.clone(),

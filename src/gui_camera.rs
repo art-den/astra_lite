@@ -1506,8 +1506,6 @@ fn start_live_view(data: &Rc<CameraData>) {
         state.start_live_view(
             &options.device.as_deref().unwrap_or(""),
             &options.frame,
-            &data.main.thread_timer
-
         )?;
         gtk_utils::set_active_id(
             &data.main.builder,
@@ -2454,7 +2452,6 @@ fn handler_action_start_live_stacking(data: &Rc<CameraData>) {
             &options.guiding,
             &options.telescope,
             &options.live,
-            &data.main.thread_timer
         )?;
         gtk_utils::set_active_id(
             &data.main.builder,
@@ -2637,7 +2634,6 @@ fn handler_action_start_save_raw_frames(data: &Rc<CameraData>) {
             &options.guiding,
             &options.telescope,
             &options.raw_frames,
-            &data.main.thread_timer
         )?;
         gtk_utils::set_active_id(
             &data.main.builder,

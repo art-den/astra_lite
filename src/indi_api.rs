@@ -2239,6 +2239,14 @@ impl Connection {
         )
     }
 
+    pub fn camera_is_exposure_property(
+        prop_name: &str,
+        elem_name: &str
+    ) -> bool {
+        prop_name == "CCD_EXPOSURE" &&
+        elem_name == "CCD_EXPOSURE_VALUE"
+    }
+
     pub fn camera_get_exposure(
         &self,
         device_name: &str
@@ -3897,8 +3905,11 @@ impl XmlReceiver {
                 &prop_name,
             )?;
             if prop_changed {
-                let values = property.get_values(true);
                 let cur_state = property.dynamic_data.state.clone();
+                let mut values = property.get_values(true);
+                if values.is_empty() && prev_state != cur_state {
+                    values = property.get_values(false);
+                }
                 drop(devices);
                 self.notify_subcribers_about_prop_change(
                     timestamp,

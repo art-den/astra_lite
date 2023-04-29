@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering }, RwLock},
+    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering, AtomicU16 }, RwLock},
     collections::VecDeque,
     any::Any, f64::consts::PI,
 };
@@ -107,6 +107,8 @@ pub struct State {
     finished_mode: Option<Box<dyn Mode + Send + Sync>>,
     aborted_mode:  Option<Box<dyn Mode + Send + Sync>>,
     subscribers:   Subscribers,
+    timer:         Arc<Timer>,
+    exp_stuck_wd:  Arc<AtomicU16>,
 }
 
 impl State {
@@ -117,6 +119,8 @@ impl State {
             finished_mode: None,
             aborted_mode:  None,
             subscribers:   Vec::new(),
+            timer:         Arc::new(Timer::new()),
+            exp_stuck_wd:  Arc::new(AtomicU16::new(0)),
         }
     }
 
@@ -138,7 +142,8 @@ impl State {
 
     pub fn connect_indi_events(state: &Arc<RwLock<State>>) {
         let state_clone = Arc::clone(state);
-        state.read().unwrap().indi.subscribe_events(move |event| {
+        let state_ = state.read().unwrap();
+        state_.indi.subscribe_events(move |event| {
             match event {
                 indi_api::Event::BlobStart(event) => {
                     let self_ = &mut *state_clone.write().unwrap();
@@ -150,8 +155,52 @@ impl State {
                     if let Ok(result) = result {
                         _ = self_.apply_change_result(result); // TODO: process error
                     } // TODO: process error
-                }
+
+                    if let (indi_api::PropChange::Change { value, new_state, .. }, Some(cur_cam))
+                    = (&prop_change.change, self_.mode.cam_device()) {
+                        if indi_api::Connection::camera_is_exposure_property(&prop_change.prop_name, &value.elem_name)
+                        && cur_cam == prop_change.device_name {
+                            // exposure = 0.0 and state = busy means exposure has ended
+                            // but still no blob received
+                            if value.prop_value.as_f64().unwrap_or(0.0) == 0.0
+                            && *new_state == indi_api::PropState::Busy {
+                                _ = self_.exp_stuck_wd.compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed);
+                            } else {
+                                self_.exp_stuck_wd.store(0, Ordering::Relaxed);
+                            }
+                        }
+                    }
+               }
                 _ => {}
+            }
+        });
+
+        const MAX_EXP_STACK_WD_CNT: u16 = 30;
+        let state_clone = Arc::clone(state);
+        let exp_stuck_wd = Arc::clone(&state_.exp_stuck_wd);
+        state_.timer.exec(1000, true, move || {
+            let prev = exp_stuck_wd.fetch_update(
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |v| {
+                    if v == 0 {
+                        None
+                    } else if v == MAX_EXP_STACK_WD_CNT {
+                        Some(0)
+                    } else {
+                        Some(v+1)
+                    }
+                }
+            );
+            // Restart exposure if image can't be downloaded
+            // from camera during 30 seconds
+            if prev == Ok(MAX_EXP_STACK_WD_CNT) {
+                let self_ = &*state_clone.read().unwrap();
+                let Some(cam_device) = self_.mode.cam_device() else { return; };
+                let Some(cur_exposure) = self_.mode.get_cur_exposure() else { return; };
+                _ = self_.indi.camera_abort_exposure(cam_device); // TODO: process error
+                _ = self_.indi.camera_start_exposure(cam_device, cur_exposure); // TODO: process error
+                log::error!("Camera exposure restarted!");
             }
         });
     }
@@ -199,13 +248,12 @@ impl State {
 
     pub fn start_live_view(
         &mut self,
-        cam_name:     &str,
-        frame:        &FrameOptions,
-        thread_timer: &Arc<ThreadTimer>
+        cam_name: &str,
+        frame:    &FrameOptions,
     ) -> anyhow::Result<()> {
         let mut mode = CameraActiveMode::new(
             &self.indi,
-            Some(thread_timer),
+            Some(&self.timer),
             CamMode::LiveView,
             cam_name,
             "",
@@ -229,11 +277,10 @@ impl State {
         guid_options:   &GuidingOptions,
         telescope_opts: &TelescopeOptions,
         options:        &RawFrameOptions,
-        thread_timer:   &Arc<ThreadTimer>
     ) -> anyhow::Result<()> {
         let mut mode = CameraActiveMode::new(
             &self.indi,
-            Some(thread_timer),
+            Some(&self.timer),
             CamMode::SavingRawFrames,
             cam_device,
             mount_device,
@@ -268,11 +315,10 @@ impl State {
         guid_options:   &GuidingOptions,
         telescope_opts: &TelescopeOptions,
         _options:       &LiveStackingOptions,
-        thread_timer:   &Arc<ThreadTimer>
     ) -> anyhow::Result<()> {
         let mut mode = CameraActiveMode::new(
             &self.indi,
-            Some(thread_timer),
+            Some(&self.timer),
             CamMode::LiveStacking,
             cam_name,
             mount_device,
@@ -348,6 +394,7 @@ impl State {
         }
         self.finished_mode = None;
         self.inform_subcribers_about_mode_changed();
+        self.exp_stuck_wd.store(0, Ordering::Relaxed);
         Ok(())
     }
 
@@ -612,19 +659,20 @@ fn apply_camera_options_and_take_shot(
 
 ///////////////////////////////////////////////////////////////////////////////
 
-pub struct ThreadTimer {
+pub struct Timer {
     thread:    Option<std::thread::JoinHandle<()>>,
     commands:  Arc<Mutex<Vec<TimerCommand>>>,
     exit_flag: Arc<AtomicBool>,
 }
 
 struct TimerCommand {
-    fun: Option<Box<dyn FnOnce() + Sync + Send + 'static>>,
+    fun: Option<Box<dyn Fn() + Sync + Send + 'static>>,
     time: std::time::Instant,
     to_ms: u32,
+    periodic: bool,
 }
 
-impl Drop for ThreadTimer {
+impl Drop for Timer {
     fn drop(&mut self) {
         log::info!("Stopping ThreadTimer thread...");
         self.exit_flag.store(true, Ordering::Relaxed);
@@ -634,7 +682,7 @@ impl Drop for ThreadTimer {
     }
 }
 
-impl ThreadTimer {
+impl Timer {
     pub fn new() -> Self {
         let commands = Arc::new(Mutex::new(Vec::new()));
         let exit_flag = Arc::new(AtomicBool::new(false));
@@ -653,12 +701,13 @@ impl ThreadTimer {
         }
     }
 
-    pub fn exec(&self, to_ms: u32, fun: impl FnOnce() + Sync + Send + 'static) {
+    pub fn exec(&self, to_ms: u32, periodic: bool, fun: impl Fn() + Sync + Send + 'static) {
         let mut commands = self.commands.lock().unwrap();
         let command = TimerCommand {
             fun: Some(Box::new(fun)),
             time: std::time::Instant::now(),
             to_ms,
+            periodic,
         };
         commands.push(command);
     }
@@ -671,8 +720,14 @@ impl ThreadTimer {
             let mut commands = commands.lock().unwrap();
             for cmd in &mut *commands {
                 if cmd.time.elapsed().as_millis() as u32 >= cmd.to_ms {
-                    let fun = cmd.fun.take().unwrap();
-                    fun();
+                    if let Some(fun) = &mut cmd.fun {
+                        fun();
+                    }
+                    if cmd.periodic {
+                        cmd.time = std::time::Instant::now();
+                    } else {
+                        cmd.fun = None;
+                    }
                 }
             }
             commands.retain(|cmd| cmd.fun.is_some());
@@ -744,7 +799,7 @@ enum CamState {
 
 struct CameraActiveMode {
     indi:           Arc<indi_api::Connection>,
-    thread_timer:   Option<Arc<ThreadTimer>>,
+    timer:   Option<Arc<Timer>>,
     cam_mode:       CamMode,
     state:          CamState,
     device:         String,
@@ -764,7 +819,7 @@ struct CameraActiveMode {
 impl CameraActiveMode {
     fn new(
         indi:         &Arc<indi_api::Connection>,
-        thread_timer: Option<&Arc<ThreadTimer>>,
+        timer: Option<&Arc<Timer>>,
         cam_mode:     CamMode,
         device:       &str,
         mount_device: &str,
@@ -772,7 +827,7 @@ impl CameraActiveMode {
     ) -> Self {
         Self {
             indi:           Arc::clone(indi),
-            thread_timer:   thread_timer.cloned(),
+            timer:          timer.cloned(),
             cam_mode,
             state:          CamState::Usual,
             device:         device.to_string(),
@@ -963,8 +1018,8 @@ impl Mode for CameraActiveMode {
                 let camera = self.device.clone();
                 let frame = self.frame_options.clone();
 
-                if let Some(thread_timer) = &self.thread_timer {
-                    thread_timer.exec((frame.delay * 1000.0) as u32, move || {
+                if let Some(thread_timer) = &self.timer {
+                    thread_timer.exec((frame.delay * 1000.0) as u32, false, move || {
                         let res = apply_camera_options_and_take_shot(
                             &indi,
                             &camera,
@@ -1820,7 +1875,6 @@ impl Mode for MountCalibrMode {
                     let cam_time = camera_angle / (sky_angle_is_second * self.calibr_speed);
                     let total_time = cam_time * 0.5; // half of matrix
                     self.move_period = total_time / (DITHER_CALIBR_ATTEMPTS_CNT - 1) as f64;
-                    dbg!(cam_size_mm, 180.0 * camera_angle / PI, cam_time, self.move_period);
                     if self.move_period > 3.0 {
                         self.move_period = 3.0;
                     }

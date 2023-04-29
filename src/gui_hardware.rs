@@ -214,7 +214,7 @@ fn connect_indi_events(data: &Rc<HardwareData>) {
                 *data.indi_status.borrow_mut() = conn_state;
                 correct_ctrls_by_cur_state(&data);
                 update_window_title(&data);
-            },
+            }
             indi_api::Event::PropChange(event) => {
                 match &event.change {
                     indi_api::PropChange::New(value) => {
@@ -266,10 +266,10 @@ fn connect_indi_events(data: &Rc<HardwareData>) {
                         );
                     },
                 };
-            },
+            }
             indi_api::Event::DeviceDelete(event) => {
                 log::debug!("(-) {:20}", &event.device_name);
-            },
+            }
             indi_api::Event::Message(message) => {
                 log::debug!("indi: device={}, text={}", message.device_name, message.text);
                 add_log_record(
@@ -278,8 +278,13 @@ fn connect_indi_events(data: &Rc<HardwareData>) {
                     &message.device_name,
                     &message.text
                 );
-            },
-            _ => {},
+            }
+            indi_api::Event::ReadTimeOut => {
+                log::debug!("indi: read time out");
+            }
+            indi_api::Event::BlobStart(_) => {
+                log::debug!("indi: blob start");
+            }
         }
         Continue(true)
     });
