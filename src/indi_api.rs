@@ -2209,6 +2209,18 @@ impl Connection {
         )
     }
 
+    pub fn camera_get_fast_frames_count_prop_info(
+        &self,
+        device_name: &str
+    ) -> Result<Arc<NumPropElemInfo>> {
+        let devices = self.devices.lock().unwrap();
+        devices.get_num_prop_elem_info(
+            device_name,
+            "CCD_FAST_COUNT",
+            "FRAMES"
+        )
+    }
+
     pub fn camera_set_fast_frames_count(
         &self,
         device_name: &str,

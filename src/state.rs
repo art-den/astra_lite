@@ -195,14 +195,31 @@ impl State {
             // Restart exposure if image can't be downloaded
             // from camera during 30 seconds
             if prev == Ok(MAX_EXP_STACK_WD_CNT) {
-                let self_ = &*state_clone.read().unwrap();
-                let Some(cam_device) = self_.mode.cam_device() else { return; };
-                let Some(cur_exposure) = self_.mode.get_cur_exposure() else { return; };
-                _ = self_.indi.camera_abort_exposure(cam_device); // TODO: process error
-                _ = self_.indi.camera_start_exposure(cam_device, cur_exposure); // TODO: process error
-                log::error!("Camera exposure restarted!");
+                let self_ = state_clone.read().unwrap();
+                _ = self_.restart_camera_exposure(); // TODO: process error
             }
         });
+    }
+
+    fn restart_camera_exposure(&self) -> anyhow::Result<()> {
+        let Some(cam_device) = self.mode.cam_device() else { return Ok(()); };
+        let Some(cur_exposure) = self.mode.get_cur_exposure() else { return Ok(()); };
+        self.indi.camera_abort_exposure(cam_device)?;
+        if self.indi.camera_is_fast_toggle_supported(cam_device)?
+        && self.indi.camera_is_fast_toggle_enabled(cam_device)? {
+            let prop_info = self.indi.camera_get_fast_frames_count_prop_info(
+                cam_device
+            ).unwrap();
+            self.indi.camera_set_fast_frames_count(
+                cam_device,
+                prop_info.max as usize,
+                true,
+                SET_PROP_TIMEOUT,
+            )?;
+        }
+        self.indi.camera_start_exposure(cam_device, cur_exposure)?;
+        log::error!("Camera exposure restarted!");
+        Ok(())
     }
 
     pub fn subscribe_events(
@@ -534,9 +551,12 @@ fn start_taking_shots(
             SET_PROP_TIMEOUT,
         )?;
         if use_fast_toggle {
+            let prop_info = indi.camera_get_fast_frames_count_prop_info(
+                camera_name
+            )?;
             indi.camera_set_fast_frames_count(
                 camera_name,
-                100_000,
+                prop_info.max as usize,
                 true,
                 SET_PROP_TIMEOUT,
             )?;
