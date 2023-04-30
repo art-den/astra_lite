@@ -602,7 +602,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
         data.excl.exec(|| {
             let mut state = data.main.state.write().unwrap();
             if let Some(frame) = state.mode_mut().get_frame_options_mut() {
-                frame.offset = sb.value() as u32;
+                frame.offset = sb.value() as i32;
             }
         });
     }));
@@ -999,7 +999,7 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.frame.exposure       = gtk_utils::get_f64      (bld, "spb_exp");
     options.frame.delay          = gtk_utils::get_f64      (bld, "spb_delay");
     options.frame.gain           = gtk_utils::get_f64      (bld, "spb_gain");
-    options.frame.offset         = gtk_utils::get_f64      (bld, "spb_offset") as u32;
+    options.frame.offset         = gtk_utils::get_f64      (bld, "spb_offset") as i32;
     options.frame.low_noise      = gtk_utils::get_bool     (bld, "chb_low_noise");
 
     options.calibr.dark_frame_en = gtk_utils::get_bool     (bld, "chb_master_dark");
@@ -1328,7 +1328,7 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
             ("spb_exp",            exposure_supported && can_change_frame_opts),
             ("cb_crop",            can_change_frame_opts),
             ("spb_gain",           gain_supported && can_change_frame_opts),
-            ("spb_offset",         offset_supported && can_change_frame_opts && !frame_mode_is_flat),
+            ("spb_offset",         offset_supported && can_change_frame_opts),
             ("cb_bin",             bin_supported && can_change_frame_opts),
             ("chb_master_frame",   can_change_cal_ops && (frame_mode_is_flat || frame_mode_is_dark) && !saving_frames),
             ("chb_master_dark",    can_change_cal_ops),

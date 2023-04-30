@@ -55,7 +55,7 @@ impl Default for CamCtrlOptions {
 pub struct FrameOptions {
     pub exposure:   f64,
     pub gain:       f64,
-    pub offset:     u32,
+    pub offset:     i32,
     pub frame_type: FrameType,
     pub binning:    Binning,
     pub crop:       Crop,

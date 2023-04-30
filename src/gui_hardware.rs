@@ -125,8 +125,13 @@ pub fn build_ui(
         gtk_utils::connect_action(&data.window, &data, "disconn_indi",   handler_action_disconn_indi);
         gtk_utils::connect_action(&data.window, &data, "clear_hw_log",   handler_action_clear_hw_log);
 
+        let chb_remote = data.builder.object::<gtk::CheckButton>("chb_remote").unwrap();
+        chb_remote.connect_active_notify(clone!(@weak data => @default-panic, move |_| {
+            correct_widgets_by_cur_state(&data);
+        }));
+
         connect_indi_events(&data);
-        correct_ctrls_by_cur_state(&data);
+        correct_widgets_by_cur_state(&data);
 
         data.window.connect_delete_event(clone!(@weak data => @default-panic, move |_, _| {
             handler_close_window(&data)
@@ -165,7 +170,7 @@ fn handler_close_window(data: &Rc<HardwareData>) -> gtk::Inhibit {
     gtk::Inhibit(false)
 }
 
-fn correct_ctrls_by_cur_state(data: &Rc<HardwareData>) {
+fn correct_widgets_by_cur_state(data: &Rc<HardwareData>) {
     let status = data.indi_status.borrow();
     let (conn_en, disconn_en) = match *status {
         indi_api::ConnState::Disconnected  => (true,  false),
@@ -189,11 +194,19 @@ fn correct_ctrls_by_cur_state(data: &Rc<HardwareData>) {
         indi_api::ConnState::Disconnected|
         indi_api::ConnState::Error(_)
     );
+    let remote = gtk_utils::get_bool(&data.builder, "chb_remote");
+    let mnt_sensitive = !remote && disconnected && !gtk_utils::is_named_combobox_empty(&data.builder, "cb_mount");
+    let cam_sensitive = !remote && disconnected && !gtk_utils::is_named_combobox_empty(&data.builder, "cb_camera");
+    let foc_sensitive = !remote && disconnected && !gtk_utils::is_named_combobox_empty(&data.builder, "cb_focuser");
     gtk_utils::enable_widgets(&data.builder, false, &[
-        ("cb_mount",   disconnected && !gtk_utils::is_named_combobox_empty(&data.builder, "cb_mount")),
-        ("cb_camera",  disconnected && !gtk_utils::is_named_combobox_empty(&data.builder, "cb_camera")),
-        ("cb_focuser", disconnected && !gtk_utils::is_named_combobox_empty(&data.builder, "cb_focuser")),
-        ("chb_remote", !data.indi_drivers.groups.is_empty()),
+        ("l_mount",       mnt_sensitive),
+        ("cb_mount",      mnt_sensitive),
+        ("l_camera",      cam_sensitive),
+        ("cb_camera",     cam_sensitive),
+        ("l_focuser",     foc_sensitive),
+        ("cb_focuser",    foc_sensitive),
+        ("chb_remote",    !data.indi_drivers.groups.is_empty()),
+        ("e_remote_addr", remote)
     ]);
 }
 
@@ -212,7 +225,7 @@ fn connect_indi_events(data: &Rc<HardwareData>) {
                     add_log_record(&data, &Some(Utc::now()), "", &conn_state.to_str(false))
                 }
                 *data.indi_status.borrow_mut() = conn_state;
-                correct_ctrls_by_cur_state(&data);
+                correct_widgets_by_cur_state(&data);
                 update_window_title(&data);
             }
             indi_api::Event::PropChange(event) => {

@@ -636,15 +636,9 @@ fn apply_camera_options_and_take_shot(
 
     // Offset
     if indi.camera_is_offset_supported(camera_name)? {
-        let offset =
-            if frame.frame_type == FrameType::Flats {
-                0
-            } else {
-                frame.offset
-            };
         indi.camera_set_offset(
             camera_name,
-            offset as f64,
+            frame.offset as f64,
             true,
             SET_PROP_TIMEOUT
         )?;
@@ -914,6 +908,7 @@ impl Mode for CameraActiveMode {
         };
         let mut extra_modes = Vec::new();
         if matches!(self.cam_mode, CamMode::SavingRawFrames|CamMode::LiveStacking)
+        && self.frame_options.frame_type == FrameType::Lights
         && self.state == CamState::Usual {
             if let Some(focus_options) = &self.focus_options {
                 if focus_options.on_fwhm_change

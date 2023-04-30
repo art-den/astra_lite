@@ -141,7 +141,8 @@ impl RawImage {
     }
 
     pub fn new_from_fits_stream(
-        mut stream: impl SeekNRead,
+        mut stream:    impl SeekNRead,
+        config_offset: Option<i32>,
     ) -> anyhow::Result<RawImage> {
         let reader = FitsReader::new(&mut stream)?;
         let Some(image_hdu) = reader.hdus.iter().find(|hdu| {
@@ -150,16 +151,19 @@ impl RawImage {
             anyhow::bail!("No RAW image found in fits data");
         };
 
-        let width     = image_hdu.dims[0];
-        let height    = image_hdu.dims[1];
-        let exposure  = image_hdu.get_f64("EXPTIME" ).unwrap_or(0.0);
-        let bayer     = image_hdu.get_str("BAYERPAT").unwrap_or_default();
-        let bitdepth  = image_hdu.get_i64("BITDEPTH").unwrap_or(16) as i32;
-        let bin       = image_hdu.get_i64("XBINNING").unwrap_or(1) as u8;
-        let offset    = image_hdu.get_i64("OFFSET"  ).unwrap_or(0) as i32;
-        let frame_str = image_hdu.get_str("FRAME"   );
+        let width      = image_hdu.dims[0];
+        let height     = image_hdu.dims[1];
+        let exposure   = image_hdu.get_f64("EXPTIME" ).unwrap_or(0.0);
+        let bayer      = image_hdu.get_str("BAYERPAT").unwrap_or_default();
+        let bitdepth   = image_hdu.get_i64("BITDEPTH").unwrap_or(16) as i32;
+        let bin        = image_hdu.get_i64("XBINNING").unwrap_or(1) as u8;
+        let mut offset = image_hdu.get_i64("OFFSET"  ).unwrap_or(0) as i32;
+        let frame_str  = image_hdu.get_str("FRAME"   );
+        let data       = image_hdu.data_u16(&mut stream).unwrap();
 
-        let data      = image_hdu.data_u16(&mut stream).unwrap();
+        if let (0, Some(config_offset)) = (offset, config_offset) {
+            offset = config_offset;
+        }
 
         if bitdepth > 16 {
             anyhow::bail!("BITDEPTH = {} is not supported", bitdepth);
@@ -186,9 +190,9 @@ impl RawImage {
         Ok(Self {info, data, cfa_arr})
     }
 
-    pub fn new_from_fits_file(file_name: &Path) -> anyhow::Result<RawImage> {
+    pub fn new_from_fits_file(file_name: &Path, offset: Option<i32>) -> anyhow::Result<RawImage> {
         let mut file = File::open(file_name)?;
-        Self::new_from_fits_stream(&mut file)
+        Self::new_from_fits_stream(&mut file, offset)
     }
 
     pub fn save_to_fits_file(&self, file_name: &Path) -> anyhow::Result<()> {
@@ -547,43 +551,34 @@ impl RawImage {
             .map(|v| *v as i64)
             .sum();
         let dark_aver = (dark_sum / dark.data.len() as i64) as i32;
-        let new_zero = self.info.zero + dark_aver - dark.info.zero;
         for (s, d) in self.data.iter_mut().zip(&dark.data) {
-            let mut value = *s as i32 - self.info.zero;
+            let mut value = *s as i32;
             let dark_value = *d as i32 - dark.info.zero;
             value -= dark_value;
-            value += new_zero;
             if value < 0 { value = 0; }
             if value > u16::MAX as i32 { value = u16::MAX as i32; }
             *s = value as u16;
         }
-        self.info.zero = new_zero;
-        let mut new_max_value = self.info.max_value as i32 - dark_aver;
-        if new_max_value < 0 { new_max_value = 0; }
+        let new_max_value = self.info.max_value as i32 - (dark_aver - dark.info.zero);
         self.info.max_value = new_max_value as u16;
         Ok(())
     }
 
-    pub fn apply_flat(&mut self, flat: &RawImage, mt: bool) -> anyhow::Result<()> {
+    pub fn apply_flat(&mut self, flat: &RawImage) -> anyhow::Result<()> {
         self.check_master_frame_is_compatible(flat, FrameType::Flats)?;
         debug_assert!(self.data.len() == flat.data.len());
         let zero = self.info.zero as i64;
-        let process_pixel = |s: &mut u16, f: &u16| {
-            let flat_value = *f as i64 - flat.info.zero as i64;
-            let mut value = (*s as i64 - zero) * u16::MAX as i64 / flat_value + zero;
+        let flat_zero = flat.info.zero as i64;
+        self.data.par_iter_mut().zip(flat.data.par_iter()).for_each(|(s, f)| {
+            let flat_value = *f as i64 - flat_zero;
+            let mut value = *s as i64;
+            value -= zero;
+            value = value * u16::MAX as i64 / flat_value;
+            value += zero;
             if value < 0 { value = 0; }
             if value > u16::MAX as i64 { value = u16::MAX as i64; }
             *s = value as u16;
-        };
-        if !mt {
-            for (s, f) in izip!(&mut self.data, &flat.data) {
-                process_pixel(s, f);
-            };
-        } else {
-            self.data.par_iter_mut().zip(flat.data.par_iter()).for_each(|(s, f)| {
-                process_pixel(s, f);
-            });
-        }
+        });
         Ok(())
     }
 
@@ -616,11 +611,11 @@ impl RawImage {
                 result as i64
             }
         };
-        let l_max = get_99(&mut l_values);
-        let r_max = get_99(&mut r_values);
-        let g_max = get_99(&mut g_values);
-        let b_max = get_99(&mut b_values);
         let zero = self.info.zero as i64;
+        let l_max = get_99(&mut l_values) - zero;
+        let r_max = get_99(&mut r_values) - zero;
+        let g_max = get_99(&mut g_values) - zero;
+        let b_max = get_99(&mut b_values) - zero;
         for y in 0..self.info.height {
             let cfa_arr = self.cfa_row(y);
             let row = self.row_mut(y);
@@ -632,17 +627,18 @@ impl RawImage {
                     CfaColor::B => b_max,
                 };
                 let val = *v as i64 - zero;
-                let normalized: i64 = (u16::MAX as i64 * val) / max + zero;
+                let normalized: i64 = (u16::MAX as i64 * val) / max;
                 let normalized = normalized.max(0).min(u16::MAX as i64);
                 *v = normalized as u16;
             }
         }
+        self.info.zero = 0;
     }
 
     pub fn filter_flat(&mut self) {
         let mut new_data = Vec::new();
         new_data.resize(self.data.len(), 0);
-        new_data.chunks_exact_mut(self.info.width).enumerate().for_each(|(y, dst_row)| {
+        new_data.par_chunks_exact_mut(self.info.width).enumerate().for_each(|(y, dst_row)| {
             let cfa_row = self.cfa_row(y);
             for (x, (dst, c)) in dst_row.iter_mut().zip(cfa_row.iter().cycle()).enumerate() {
                 let mut cnt = 0_u32;

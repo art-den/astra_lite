@@ -235,11 +235,12 @@ fn process_blob_thread_fun(receiver: mpsc::Receiver<Command>) {
 }
 
 fn create_raw_image_from_blob(
-    blob_prop_value: &Arc<indi_api::BlobPropValue>
+    blob_prop_value: &Arc<indi_api::BlobPropValue>,
+    offset:          i32,
 ) -> anyhow::Result<RawImage> {
     if blob_prop_value.format == ".fits" {
         let mem_stream = Cursor::new(blob_prop_value.data.as_slice());
-        let raw_image = RawImage::new_from_fits_stream(mem_stream)?;
+        let raw_image = RawImage::new_from_fits_stream(mem_stream, Some(offset))?;
         return Ok(raw_image);
     }
 
@@ -293,13 +294,12 @@ fn apply_calibr_data_and_remove_hot_pixels(
     params:    &CalibrParams,
     raw_image: &mut RawImage,
     calibr:    &mut CalibrImages,
-    mt:        bool,
 ) -> anyhow::Result<()> {
     if let Some(file_name) = &params.dark {
         if calibr.master_dark.is_none()
         || params.dark != calibr.master_dark_fn {
             let tmr = TimeLogger::start();
-            let master_dark = RawImage::new_from_fits_file(file_name)
+            let master_dark = RawImage::new_from_fits_file(file_name, None)
                 .map_err(|e| anyhow::anyhow!(
                     "Error '{}'\nwhen reading master dark '{}'",
                     e.to_string(),
@@ -341,7 +341,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
         if calibr.master_flat.is_none()
         || params.flat != calibr.master_flat_fn {
             let tmr = TimeLogger::start();
-            let mut master_flat = RawImage::new_from_fits_file(file_name)
+            let mut master_flat = RawImage::new_from_fits_file(file_name, None)
                 .map_err(|e| anyhow::anyhow!(
                     "Error '{}'\nreading master flat '{}'",
                     e.to_string(),
@@ -361,7 +361,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
 
     if let (Some(file_name), Some(flat_image)) = (&params.flat, &calibr.master_flat) {
         let tmr = TimeLogger::start();
-        raw_image.apply_flat(flat_image, mt)
+        raw_image.apply_flat(flat_image)
             .map_err(|err| anyhow::anyhow!(
                 "Error {}\nwher trying to apply flat image {}",
                 err.to_string(),
@@ -431,7 +431,7 @@ fn make_preview_image_impl(
     );
 
     let tmr = TimeLogger::start();
-    let mut raw_image = create_raw_image_from_blob(&command.blob)?;
+    let mut raw_image = create_raw_image_from_blob(&command.blob, command.frame_options.offset)?;
     tmr.log("create_raw_image_from_blob");
     let exposure = raw_image.info().exposure;
 
@@ -456,7 +456,7 @@ fn make_preview_image_impl(
     // Applying calibration data
     if frame_type == FrameType::Lights {
         let mut calibr = command.calibr_images.lock().unwrap();
-        apply_calibr_data_and_remove_hot_pixels(&command.calibr_params, &mut raw_image, &mut calibr, true)?;
+        apply_calibr_data_and_remove_hot_pixels(&command.calibr_params, &mut raw_image, &mut calibr)?;
     }
 
     send_result(
@@ -621,7 +621,8 @@ fn make_preview_image_impl(
 
         if let (Some(live_stacking), false) = (command.live_stacking.as_ref(), bad_frame) {
             // Translate/rotate image to reference image and add
-            if let (Some(offset_x), Some(offset_y), Some(angle)) = (light_info.offset_x, light_info.offset_y, light_info.angle) {
+            if let (Some(offset_x), Some(offset_y), Some(angle))
+            = (light_info.offset_x, light_info.offset_y, light_info.angle) {
                 let mut image_adder = live_stacking.data.adder.write().unwrap();
                 let tmr = TimeLogger::start();
                 image_adder.add(&image, -offset_x, -offset_y, -angle, exposure, true);
@@ -791,6 +792,8 @@ fn make_preview_image_impl(
         if raw_adder.save && frame_for_raw_adder {
             log::debug!("Saving master frame...");
             let mut adder = raw_adder.adder.lock().unwrap();
+            let width = adder.width();
+            let height = adder.height();
             let raw_image = adder.get()?;
             adder.clear();
             let (prefix, file_name_suff) = match frame_type {
@@ -798,7 +801,7 @@ fn make_preview_image_impl(
                 FrameType::Darks => ("dark", command.frame_options.create_master_dark_file_name_suff()),
                 _ => unreachable!(),
             };
-            let file_name = format!("{}_{}x{}-{}.fits", prefix, adder.width(), adder.height(), file_name_suff);
+            let file_name = format!("{}_{}x{}-{}.fits", prefix, width, height, file_name_suff);
             let full_file_name = save_path.join(file_name);
             raw_image.save_to_fits_file(&full_file_name)?;
             send_result(
