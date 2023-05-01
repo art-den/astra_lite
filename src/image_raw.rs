@@ -868,7 +868,6 @@ impl RawImage {
         let cfa_arr = info.cfa.get_array();
         Ok(Self { info, data, cfa_arr })
     }
-
 }
 
 pub struct RawAdder {

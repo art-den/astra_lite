@@ -1585,18 +1585,18 @@ fn show_preview_image(
         rgb_bytes
     } else {
         let preview_params = get_preview_params(data, &options);
-        let result = match options.preview.source {
+        let (image, hist) = match options.preview.source {
             PreviewSource::OrigFrame =>
-                &data.cur_frame,
+                (&data.cur_frame.image, &data.cur_frame.hist),
             PreviewSource::LiveStacking =>
-                &data.live_staking.result,
+                (&data.live_staking.image, &data.live_staking.hist),
         };
-        let image = result.image.read().unwrap();
+        let image = image.read().unwrap();
         if image.is_empty() {
             img_preview.clear();
             return;
         }
-        let hist = result.hist.read().unwrap();
+        let hist = hist.read().unwrap();
         get_rgb_bytes_from_preview_image(
             &image,
             &hist,
@@ -1641,7 +1641,7 @@ fn show_image_info(data: &Rc<CameraData>) {
         PreviewSource::OrigFrame =>
             data.cur_frame.info.read().unwrap(),
         PreviewSource::LiveStacking =>
-            data.live_staking.result.info.read().unwrap(),
+            data.live_staking.info.read().unwrap(),
     };
 
     let bldr = &data.main.builder;
@@ -2219,9 +2219,9 @@ fn show_histogram_stat(data: &Rc<CameraData>) {
     let options = data.options.borrow();
     let hist = match options.preview.source {
         PreviewSource::OrigFrame =>
-            data.cur_frame.hist.read().unwrap(),
+            data.cur_frame.raw_hist.read().unwrap(),
         PreviewSource::LiveStacking =>
-            data.live_staking.result.hist.read().unwrap(),
+            data.live_staking.hist.read().unwrap(),
     };
     let bldr = &data.main.builder;
     let max = hist.max as f64;
@@ -2279,9 +2279,9 @@ fn handler_draw_histogram(
         let options = data.options.borrow();
         let hist = match options.preview.source {
             PreviewSource::OrigFrame =>
-                data.cur_frame.hist.read().unwrap(),
+                data.cur_frame.raw_hist.read().unwrap(),
             PreviewSource::LiveStacking =>
-                data.live_staking.result.hist.read().unwrap(),
+                data.live_staking.hist.read().unwrap(),
         };
         paint_histogram(
             &hist,

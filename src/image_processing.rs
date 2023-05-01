@@ -28,17 +28,19 @@ pub struct SaveMasterResult {
 }
 
 pub struct ResultImage {
-    pub image: RwLock<Image>,
-    pub hist:  RwLock<Histogram>,
-    pub info:  RwLock<ResultImageInfo>,
+    pub image:    RwLock<Image>,
+    pub raw_hist: RwLock<Histogram>,
+    pub hist:     RwLock<Histogram>,
+    pub info:     RwLock<ResultImageInfo>,
 }
 
 impl ResultImage {
     pub fn new() -> Self {
         Self {
-            image: RwLock::new(Image::new_empty()),
-            hist:  RwLock::new(Histogram::new()),
-            info:  RwLock::new(ResultImageInfo::None),
+            image:    RwLock::new(Image::new_empty()),
+            raw_hist: RwLock::new(Histogram::new()),
+            hist:     RwLock::new(Histogram::new()),
+            info:     RwLock::new(ResultImageInfo::None),
         }
     }
 }
@@ -75,7 +77,9 @@ pub struct RawAdderParams {
 
 pub struct LiveStackingData {
     pub adder:    RwLock<ImageAdder>,
-    pub result:   ResultImage,
+    pub image:    RwLock<Image>,
+    pub hist:     RwLock<Histogram>,
+    pub info:     RwLock<ResultImageInfo>,
     pub time_cnt: Mutex<f64>,
 }
 
@@ -83,7 +87,9 @@ impl LiveStackingData {
     pub fn new() -> Self {
         Self {
             adder:    RwLock::new(ImageAdder::new()),
-            result:   ResultImage::new(),
+            image:    RwLock::new(Image::new_empty()),
+            hist:     RwLock::new(Histogram::new()),
+            info:     RwLock::new(ResultImageInfo::None),
             time_cnt: Mutex::new(0.0),
         }
     }
@@ -265,9 +271,9 @@ fn calc_reduct_ratio(options:  &PreviewParams, img_width: usize, img_height: usi
 }
 
 pub fn get_rgb_bytes_from_preview_image(
-    image:    &Image,
-    hist:     &Histogram,
-    options:  &PreviewParams,
+    image:   &Image,
+    hist:    &Histogram,
+    options: &PreviewParams,
 ) -> RgbU8Data {
     let reduct_ratio = calc_reduct_ratio(
         options,
@@ -443,7 +449,7 @@ fn make_preview_image_impl(
 
     // Histogram
 
-    let mut hist = command.frame.hist.write().unwrap();
+    let mut hist = command.frame.raw_hist.write().unwrap();
     let tmr = TimeLogger::start();
     hist.from_raw_image(
         &raw_image,
@@ -467,7 +473,7 @@ fn make_preview_image_impl(
 
     match frame_type {
         FrameType::Flats => {
-            let hist = command.frame.hist.read().unwrap();
+            let hist = command.frame.raw_hist.read().unwrap();
             *command.frame.info.write().unwrap() = ResultImageInfo::FlatInfo(
                 FlatImageInfo::from_histogram(&hist)
             );
@@ -478,7 +484,7 @@ fn make_preview_image_impl(
             );
         },
         FrameType::Darks | FrameType::Biases => {
-            let hist = command.frame.hist.read().unwrap();
+            let hist = command.frame.raw_hist.read().unwrap();
             *command.frame.info.write().unwrap() = ResultImageInfo::RawInfo(
                 RawImageStat::from_histogram(&hist)
             );
@@ -516,9 +522,17 @@ fn make_preview_image_impl(
     drop(image);
     drop(raw_image);
 
-    // Preview image RGB bytes
+    // Result image histogram
 
     let image = command.frame.image.read().unwrap();
+    let mut hist = command.frame.hist.write().unwrap();
+    let tmr = TimeLogger::start();
+    hist.from_image(&image);
+    tmr.log("histogram for result image");
+    drop(hist);
+
+    // Preview image RGB bytes
+
     let hist = command.frame.hist.read().unwrap();
     let tmr = TimeLogger::start();
     let rgb_bytes = get_rgb_bytes_from_preview_image(
@@ -631,22 +645,22 @@ fn make_preview_image_impl(
 
                 let image_adder = live_stacking.data.adder.read().unwrap();
 
-                let mut res_image = live_stacking.data.result.image.write().unwrap();
+                let mut res_image = live_stacking.data.image.write().unwrap();
                 let tmr = TimeLogger::start();
                 image_adder.copy_to_image(&mut res_image, true);
                 tmr.log("ImageAdder::copy_to_image");
                 drop(res_image);
 
-                let res_image = live_stacking.data.result.image.read().unwrap();
+                let res_image = live_stacking.data.image.read().unwrap();
 
                 // Histogram for live stacking image
 
-                let mut hist = live_stacking.data.result.hist.write().unwrap();
+                let mut hist = live_stacking.data.hist.write().unwrap();
                 let tmr = TimeLogger::start();
-                hist.from_image(&res_image, true);
-                tmr.log("histogram from live view");
+                hist.from_image(&res_image);
+                tmr.log("histogram from live view image");
                 drop(hist);
-                let hist = live_stacking.data.result.hist.read().unwrap();
+                let hist = live_stacking.data.hist.read().unwrap();
                 send_result(
                     ProcessingResultData::HistogramLiveRes(command.mode_type),
                     &command.camera,
@@ -665,7 +679,7 @@ fn make_preview_image_impl(
                 );
                 tmr.log("LightImageInfo::from_image for livestacking");
 
-                *live_stacking.data.result.info.write().unwrap() = ResultImageInfo::LightInfo(
+                *live_stacking.data.info.write().unwrap() = ResultImageInfo::LightInfo(
                     live_stacking_info
                 );
                 send_result(
