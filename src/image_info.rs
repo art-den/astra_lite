@@ -650,7 +650,6 @@ impl Histogram {
         &mut self,
         img:        &RawImage,
         monochrome: bool,
-        _mt:        bool
     ) {
         let img_max_value = img.info().max_value;
         self.max = img_max_value;
@@ -674,16 +673,10 @@ impl Histogram {
                     let row_data = img.row(y);
                     for (v, c) in izip!(row_data, cfa.iter().cycle()) {
                         match *c {
-                            CfaColor::R => {
-                                r[*v as usize] += 1;
-                            },
-                            CfaColor::G => {
-                                g[*v as usize] += 1;
-                            },
-                            CfaColor::B => {
-                                b[*v as usize] += 1;
-                            },
-                            _ => {},
+                            CfaColor::R => r[*v as usize] += 1,
+                            CfaColor::G => g[*v as usize] += 1,
+                            CfaColor::B => b[*v as usize] += 1,
+                            _           => {},
                         }
                     }
                 }

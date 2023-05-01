@@ -453,8 +453,7 @@ fn make_preview_image_impl(
     let tmr = TimeLogger::start();
     hist.from_raw_image(
         &raw_image,
-        is_monochrome_img,
-        true
+        is_monochrome_img
     );
     tmr.log("histogram from raw image");
     drop(hist);
