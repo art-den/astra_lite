@@ -143,8 +143,8 @@ impl LightImageInfo {
     ) -> Stars {
         if noise < 1.0 { noise = 1.0; }
         const MAX_STARS_POINTS_CNT: usize = MAX_STAR_DIAM * MAX_STAR_DIAM;
-        let iir_filter_coeffs = IirFilterCoeffs::new(0.95);
-        let border = (noise * 50.0) as u32;
+        let iir_filter_coeffs = IirFilterCoeffs::new(230);
+        let border = (noise * 120.0) as u32;
         let possible_stars = Mutex::new(Vec::new());
         let find_possible_stars_in_rows = |y1: usize, y2: usize| {
             let mut filtered = Vec::new();
@@ -157,7 +157,7 @@ impl LightImageInfo {
                 let mut filter = IirFilter::new();
                 filter.filter_direct_and_revert_u16(&iir_filter_coeffs, row, &mut filtered);
                 for (i, ((v1, v2, v3, v4, v5, v6, v7), f))
-                in row.iter().tuple_windows().zip(&filtered[2..]).enumerate() {
+                in row.iter().tuple_windows().zip(&filtered[3..]).enumerate() {
                     let f1 = *v1 as u32 + *v2 as u32 + *v3 as u32;
                     let f2 = *v3 as u32 + *v4 as u32 + *v5 as u32;
                     let f3 = *v5 as u32 + *v6 as u32 + *v7 as u32;
@@ -193,7 +193,6 @@ impl LightImageInfo {
         }
 
         let mut possible_stars = possible_stars.into_inner().unwrap();
-        log::info!("possible_stars.len() = {}", possible_stars.len());
         possible_stars.sort_by_key(|(_, _, v)| -(*v as i32));
         let mut all_star_coords = HashSet::<(isize, isize)>::new();
         let mut flood_filler = FloodFiller::new();
@@ -411,71 +410,6 @@ impl LightImageInfo {
         Some(diff / K as f64)
     }
 }
-
-struct IirFilterCoeffs {
-    a0: f32,
-    b0: f32,
-}
-
-impl IirFilterCoeffs {
-    fn new(b0: f32) -> IirFilterCoeffs {
-        IirFilterCoeffs {
-            a0: 1.0 - b0,
-            b0: b0,
-        }
-    }
-}
-
-struct IirFilter {
-    y0: Option<f32>,
-}
-
-impl IirFilter {
-    fn new() -> Self {
-        Self {
-            y0: None,
-        }
-    }
-
-    fn set_first_time(&mut self) {
-        self.y0 = None;
-    }
-
-    fn filter(&mut self, coeffs: &IirFilterCoeffs, x: f32) -> f32 {
-        let result = coeffs.a0 * x + coeffs.b0 * self.y0.unwrap_or(x);
-        self.y0 = Some(result);
-        result
-    }
-
-    #[inline(never)]
-    fn filter_direct_and_revert_u16(&mut self, coeffs: &IirFilterCoeffs, src: &[u16], dst: &mut [u16]) {
-        self.filter_direct_u16(coeffs, src, dst);
-        self.filter_revert_u16(coeffs, src, dst);
-    }
-
-    #[inline(never)]
-    fn filter_direct_u16(&mut self, coeffs: &IirFilterCoeffs, src: &[u16], dst: &mut [u16]) {
-        self.set_first_time();
-        for (s, d) in izip!(src, dst) {
-            let mut res = self.filter(coeffs, *s as f32);
-            if res < 0.0 { res = 0.0; }
-            if res > u16::MAX as f32 { res = u16::MAX as f32; }
-            *d = res as u16;
-        }
-    }
-
-    #[inline(never)]
-    fn filter_revert_u16(&mut self, coeffs: &IirFilterCoeffs, src: &[u16], dst: &mut [u16]) {
-        self.set_first_time();
-        for (s, d) in izip!(src.iter().rev(), dst.iter_mut().rev()) {
-            let mut res = (self.filter(coeffs, *s as f32) + *d as f32) * 0.5;
-            if res < 0.0 { res = 0.0; }
-            if res > u16::MAX as f32 { res = u16::MAX as f32; }
-            *d = res as u16;
-        }
-    }
-}
-
 
 struct FloodFiller {
     visited: VecDeque<(isize, isize)>,

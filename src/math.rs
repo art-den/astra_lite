@@ -1,3 +1,5 @@
+use itertools::*;
+
 pub fn cmp_f64(v1: &f64, v2: &f64) -> core::cmp::Ordering {
     if      *v1 < *v2 { core::cmp::Ordering::Less }
     else if *v1 > *v2 { core::cmp::Ordering::Greater }
@@ -115,5 +117,66 @@ pub fn parabola_extremum(sc: &SquareCoeffs) -> Option<f64> {
         Some(-0.5 * sc.a1 / sc.a2)
     } else {
         None
+    }
+}
+pub struct IirFilterCoeffs {
+    a0: u32,
+    b0: u32,
+}
+
+impl IirFilterCoeffs {
+    pub fn new(b0: u32) -> IirFilterCoeffs {
+        IirFilterCoeffs {
+            a0: 256 - b0,
+            b0,
+        }
+    }
+}
+
+pub struct IirFilter {
+    y0: Option<u32>,
+}
+
+impl IirFilter {
+    pub fn new() -> Self {
+        Self {
+            y0: None,
+        }
+    }
+
+    fn set_first_time(&mut self) {
+        self.y0 = None;
+    }
+
+    pub fn filter(&mut self, coeffs: &IirFilterCoeffs, x: u32) -> u32 {
+        let result = (coeffs.a0 * x + coeffs.b0 * self.y0.unwrap_or(x) + (1 << 7)) >> 8;
+        self.y0 = Some(result);
+        result
+    }
+
+    #[inline(never)]
+    pub fn filter_direct_and_revert_u16(&mut self, coeffs: &IirFilterCoeffs, src: &[u16], dst: &mut [u16]) {
+        self.filter_direct_u16(coeffs, src, dst);
+        self.filter_revert_u16(coeffs, src, dst);
+    }
+
+    #[inline(never)]
+    fn filter_direct_u16(&mut self, coeffs: &IirFilterCoeffs, src: &[u16], dst: &mut [u16]) {
+        self.set_first_time();
+        for (s, d) in izip!(src, dst) {
+            let mut res = self.filter(coeffs, *s as u32);
+            if res > u16::MAX as u32 { res = u16::MAX as u32; }
+            *d = res as u16;
+        }
+    }
+
+    #[inline(never)]
+    fn filter_revert_u16(&mut self, coeffs: &IirFilterCoeffs, src: &[u16], dst: &mut [u16]) {
+        self.set_first_time();
+        for (s, d) in izip!(src.iter().rev(), dst.iter_mut().rev()) {
+            let mut res = (self.filter(coeffs, *s as u32) + *d as u32) / 2;
+            if res > u16::MAX as u32 { res = u16::MAX as u32; }
+            *d = res as u16;
+        }
     }
 }
