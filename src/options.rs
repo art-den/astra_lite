@@ -4,13 +4,6 @@ use serde::{Serialize, Deserialize};
 
 use crate::{image_raw::FrameType, image_processing::CalibrParams};
 
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
-pub enum ImgPreviewScale {
-    #[default]
-    FitWindow,
-    Original,
-}
-
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
 pub enum Binning {
     #[default]
@@ -232,6 +225,17 @@ pub enum PreviewSource {
     #[default]
     OrigFrame,
     LiveStacking,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
+pub enum ImgPreviewScale {
+    #[default]
+    FitWindow,
+    Original,
+    P75,
+    P50,
+    P33,
+    P25,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

@@ -60,7 +60,11 @@ impl ImgPreviewScale {
         match id {
             Some("fit")  => Some(ImgPreviewScale::FitWindow),
             Some("orig") => Some(ImgPreviewScale::Original),
-            _            => None,
+            Some("p75")  => Some(ImgPreviewScale::P75),
+            Some("p50")  => Some(ImgPreviewScale::P50),
+            Some("p33")  => Some(ImgPreviewScale::P33),
+            Some("p25")  => Some(ImgPreviewScale::P25),
+            _            => Some(ImgPreviewScale::FitWindow),
         }
     }
 
@@ -68,6 +72,10 @@ impl ImgPreviewScale {
         match self {
             ImgPreviewScale::FitWindow => Some("fit"),
             ImgPreviewScale::Original  => Some("orig"),
+            ImgPreviewScale::P75       => Some("p75"),
+            ImgPreviewScale::P50       => Some("p50"),
+            ImgPreviewScale::P33       => Some("p33"),
+            ImgPreviewScale::P25       => Some("p25"),
         }
     }
 }
@@ -675,7 +683,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
                 cb.active_id().map(|id| id.to_string()).as_deref()
             );
             drop(options);
-            show_preview_image(&data, None, None);
+            create_and_show_preview_image(&data);
             repaint_histogram(&data);
             show_histogram_stat(&data);
             show_image_info(&data);
@@ -691,7 +699,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
                     cb.active_id().map(|id| id.to_string()).as_deref()
                 ).unwrap_or(ImgPreviewScale::FitWindow);
             drop(options);
-            show_preview_image(&data, None, None);
+            create_and_show_preview_image(&data);
         });
     }));
 
@@ -701,7 +709,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
             let Ok(mut options) = data.options.try_borrow_mut() else { return; };
             options.preview.auto_black = chb.is_active();
             drop(options);
-            show_preview_image(&data, None, None);
+            create_and_show_preview_image(&data);
         });
     }));
 
@@ -713,7 +721,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
             if f64::abs(options.preview.gamma-new_value) < 0.01 { return; }
             options.preview.gamma = new_value;
             drop(options);
-            show_preview_image(&data, None, None);
+            create_and_show_preview_image(&data);
         });
     }));
 
@@ -820,7 +828,7 @@ fn handler_full_screen(data: &Rc<CameraData>, full_screen: bool) {
         gtk::main_iteration_do(true);
         gtk::main_iteration_do(true);
         gtk::main_iteration_do(true);
-        show_preview_image(&data, None, None);
+        create_and_show_preview_image(&data);
     }
 
 }
@@ -1552,57 +1560,57 @@ fn get_preview_params(
         .parent().unwrap()
         .parent().unwrap();
 
-    let (max_img_width, max_img_height) =
-    if matches!(options.preview.scale, ImgPreviewScale::FitWindow) {
-        let width = parent.allocation().width();
-        let height = parent.allocation().height();
-        (Some(width as usize), Some(height as usize))
+    let img_size = if options.preview.scale == ImgPreviewScale::FitWindow {
+        let width = parent.allocation().width() as usize;
+        let height = parent.allocation().height() as usize;
+        PreviewImgSize::Fit { width, height }
     } else {
-        (None, None)
+        PreviewImgSize::Scale(options.preview.scale.clone())
     };
 
     PreviewParams {
         auto_min: options.preview.auto_black,
         gamma: options.preview.gamma,
-        max_img_width,
-        max_img_height,
-        show_orig_frame: options.preview.source == PreviewSource::OrigFrame,
+        img_size,
+        orig_frame_in_ls: options.preview.source == PreviewSource::OrigFrame,
     }
 }
 
+fn create_and_show_preview_image(data: &Rc<CameraData>) {
+    let options = data.options.borrow();
+    let preview_params = get_preview_params(data, &options);
+    let (image, hist) = match options.preview.source {
+        PreviewSource::OrigFrame =>
+            (&data.cur_frame.image, &data.cur_frame.hist),
+        PreviewSource::LiveStacking =>
+            (&data.live_staking.image, &data.live_staking.hist),
+    };
+    let image = image.read().unwrap();
+    let hist = hist.read().unwrap();
+    let rgb_bytes = get_rgb_bytes_from_preview_image(
+        &image,
+        &hist,
+        &preview_params
+    );
+    show_preview_image(data, rgb_bytes, None);
+}
+
 fn show_preview_image(
-    data:          &Rc<CameraData>,
-    mut rgb_bytes: Option<RgbU8Data>,
-    src_params:    Option<PreviewParams>,
+    data:       &Rc<CameraData>,
+    rgb_bytes:  RgbU8Data,
+    src_params: Option<PreviewParams>,
 ) {
     let options = data.options.borrow();
     if src_params.is_some()
     && src_params.as_ref() != Some(&get_preview_params(data, &options)) {
-        rgb_bytes = None;
+        create_and_show_preview_image(data);
+        return;
     }
     let img_preview = data.main.builder.object::<gtk::Image>("img_preview").unwrap();
-    let rgb_bytes = if let Some(rgb_bytes) = rgb_bytes {
-        rgb_bytes
-    } else {
-        let preview_params = get_preview_params(data, &options);
-        let (image, hist) = match options.preview.source {
-            PreviewSource::OrigFrame =>
-                (&data.cur_frame.image, &data.cur_frame.hist),
-            PreviewSource::LiveStacking =>
-                (&data.live_staking.image, &data.live_staking.hist),
-        };
-        let image = image.read().unwrap();
-        if image.is_empty() {
-            img_preview.clear();
-            return;
-        }
-        let hist = hist.read().unwrap();
-        get_rgb_bytes_from_preview_image(
-            &image,
-            &hist,
-            &preview_params
-        )
-    };
+    if rgb_bytes.bytes.is_empty() {
+        img_preview.clear();
+        return;
+    }
     let tmr = TimeLogger::start();
     let bytes = glib::Bytes::from_owned(rgb_bytes.bytes);
     let mut pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
@@ -1616,22 +1624,25 @@ fn show_preview_image(
     );
     tmr.log("Pixbuf::from_bytes");
     let pp = get_preview_params(data, &options);
-    if let (Some(width), Some(height)) = (pp.max_img_width, pp.max_img_height) {
+
+    let (img_width, img_height) = pp.img_size.get_preview_img_size(
+        rgb_bytes.orig_width,
+        rgb_bytes.orig_height
+    );
+
+    dbg!(rgb_bytes.width, rgb_bytes.height, img_width, img_height);
+
+    if (img_width != rgb_bytes.width || img_height != rgb_bytes.height)
+    && img_width > 42 && img_height > 42 {
         let tmr = TimeLogger::start();
-        let img_ratio = pixbuf.width() as f64 / pixbuf.height() as f64;
-        let gui_ratio = width as f64 / height as f64;
-        let (new_width, new_height) = if img_ratio > gui_ratio {
-            (width as i32, (width as f64 / img_ratio) as i32)
-        } else {
-            ((height as f64 * img_ratio) as i32, height as i32)
-        };
-        if new_width < 42 || new_height < 42 { return; }
         pixbuf = pixbuf.scale_simple(
-            new_width, new_height,
+            img_width as _,
+            img_height as _,
             gtk::gdk_pixbuf::InterpType::Tiles,
         ).unwrap();
         tmr.log("Pixbuf::scale_simple");
     }
+
     img_preview.set_pixbuf(Some(&pixbuf));
 }
 
@@ -1781,11 +1792,11 @@ fn show_frame_processing_result(
             update_light_history_table(data);
         }
         ProcessingResultData::PreviewFrame(img, mode) if is_mode_current(mode, false) => {
-            show_preview_image(data, Some(img.rgb_bytes), Some(img.params));
+            show_preview_image(data, img.rgb_bytes, Some(img.params));
             show_resolution_info(img.image_width, img.image_height);
         }
         ProcessingResultData::PreviewLiveRes(img, mode) if is_mode_current(mode, true) => {
-            show_preview_image(data, Some(img.rgb_bytes), Some(img.params));
+            show_preview_image(data, img.rgb_bytes, Some(img.params));
             show_resolution_info(img.image_width, img.image_height);
         }
         ProcessingResultData::Histogram(mode) if is_mode_current(mode, false) => {

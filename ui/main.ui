@@ -1910,6 +1910,10 @@ Better use "Subtrack master DARK frame"</property>
                                 <items>
                                   <item id="fit" translatable="yes">Fit window</item>
                                   <item id="orig" translatable="yes">100%</item>
+                                  <item id="p75" translatable="yes">75%</item>
+                                  <item id="p50" translatable="yes">50%</item>
+                                  <item id="p33" translatable="yes">33%</item>
+                                  <item id="p25" translatable="yes">25%</item>
                                 </items>
                               </object>
                               <packing>

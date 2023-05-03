@@ -209,10 +209,13 @@ pub struct Image {
     max_value: u16,
 }
 
+#[derive(Default)]
 pub struct RgbU8Data {
-    pub width:  usize,
-    pub height: usize,
-    pub bytes:  Vec<u8>,
+    pub width:       usize,
+    pub height:      usize,
+    pub orig_width:  usize,
+    pub orig_height: usize,
+    pub bytes:       Vec<u8>,
 }
 
 impl Image {
@@ -371,7 +374,9 @@ impl Image {
         gamma:          f64,
         reduct_ratio:   usize,
     ) -> RgbU8Data {
-        debug_assert!(!self.is_empty());
+        if self.is_empty() {
+            return RgbU8Data::default();
+        }
         let args = ImageToU8BytesArgs {
             width:          self.width,
             height:         self.height,
@@ -426,7 +431,9 @@ impl Image {
         RgbU8Data {
             width: args.width,
             height: args.height,
-            bytes: rgb_bytes
+            bytes: rgb_bytes,
+            orig_width: self.width,
+            orig_height: self.height,
         }
     }
 
@@ -488,7 +495,7 @@ impl Image {
                 }
             }
         }
-        RgbU8Data { width, height, bytes }
+        RgbU8Data { width, height, bytes, orig_width: self.width, orig_height: self.height }
     }
 
     fn to_grb_bytes_reduct3(
@@ -542,9 +549,9 @@ impl Image {
             }
         } else {
             for y in 0..height {
-                let mut l0 = self.r.row(3*y).as_ptr();
-                let mut l1 = self.r.row(3*y+1).as_ptr();
-                let mut l2 = self.r.row(3*y+2).as_ptr();
+                let mut l0 = self.l.row(3*y).as_ptr();
+                let mut l1 = self.l.row(3*y+1).as_ptr();
+                let mut l2 = self.l.row(3*y+2).as_ptr();
                 for _ in 0..width {
                     let l = unsafe {(
                         *l0 as u32 + *l0.offset(1) as u32 + *l0.offset(2) as u32 +
@@ -561,7 +568,7 @@ impl Image {
                 }
             }
         }
-        RgbU8Data { width, height, bytes }
+        RgbU8Data { width, height, bytes, orig_width: self.width, orig_height: self.height }
     }
 
     fn to_grb_bytes_reduct4(
@@ -646,7 +653,7 @@ impl Image {
                 }
             }
         }
-        RgbU8Data { width, height, bytes }
+        RgbU8Data { width, height, bytes, orig_width: self.width, orig_height: self.height }
     }
 }
 

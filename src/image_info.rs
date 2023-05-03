@@ -711,8 +711,8 @@ impl Histogram {
         };
         self.max = img.max_value();
         self.l = from_image_layer(self.l.take(), &img.l);
-        self.r = from_image_layer(self.l.take(), &img.r);
-        self.g = from_image_layer(self.l.take(), &img.g);
-        self.b = from_image_layer(self.l.take(), &img.b);
+        self.r = from_image_layer(self.r.take(), &img.r);
+        self.g = from_image_layer(self.g.take(), &img.g);
+        self.b = from_image_layer(self.b.take(), &img.b);
     }
 }

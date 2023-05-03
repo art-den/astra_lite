@@ -46,12 +46,39 @@ impl ResultImage {
 }
 
 #[derive(PartialEq, Clone)]
+pub enum PreviewImgSize {
+    Fit{ width: usize, height: usize },
+    Scale(ImgPreviewScale),
+}
+
+impl PreviewImgSize {
+    pub fn get_preview_img_size(&self, orig_width: usize, orig_height: usize) -> (usize, usize) {
+        match self {
+            &PreviewImgSize::Fit { width, height } => {
+                let img_ratio = orig_width as f64 / orig_width as f64;
+                let gui_ratio = width as f64 / height as f64;
+                if img_ratio > gui_ratio {
+                    (width, (width as f64 / img_ratio) as usize)
+                } else {
+                    ((height as f64 * img_ratio) as usize, height)
+                }
+            },
+            PreviewImgSize::Scale(ImgPreviewScale::Original) => (orig_width, orig_height),
+            PreviewImgSize::Scale(ImgPreviewScale::P75) => (3*orig_width/4, 3*orig_height/4),
+            PreviewImgSize::Scale(ImgPreviewScale::P50) => (orig_width/2, orig_height/2),
+            PreviewImgSize::Scale(ImgPreviewScale::P33) => (orig_width/3, orig_height/3),
+            PreviewImgSize::Scale(ImgPreviewScale::P25) => (orig_width/4, orig_height/4),
+            PreviewImgSize::Scale(ImgPreviewScale::FitWindow) => unreachable!(),
+        }
+    }
+}
+
+#[derive(PartialEq, Clone)]
 pub struct PreviewParams {
     pub auto_min:        bool,
     pub gamma:           f64,
-    pub max_img_width:   Option<usize>,
-    pub max_img_height:  Option<usize>,
-    pub show_orig_frame: bool,
+    pub img_size:        PreviewImgSize,
+    pub orig_frame_in_ls: bool,
 }
 
 #[derive(Default)]
@@ -253,20 +280,25 @@ fn create_raw_image_from_blob(
     anyhow::bail!("Unsupported blob format: {}", blob_prop_value.format);
 }
 
-fn calc_reduct_ratio(options:  &PreviewParams, img_width: usize, img_height: usize) -> usize {
-    let max_img_width = options.max_img_width.unwrap_or(usize::MAX);
-    let max_img_height = options.max_img_height.unwrap_or(usize::MAX);
-    if img_width / 4  > max_img_width
-    && img_height / 4 > max_img_height {
-        4
-    } else if img_width / 3  > max_img_width
-           && img_height / 3 > max_img_height {
-        3
-    } else if img_width / 2  > max_img_width
-           && img_height / 2 > max_img_height {
-        2
-    } else {
-        1
+fn calc_reduct_ratio(options: &PreviewParams, img_width: usize, img_height: usize) -> usize {
+    match &options.img_size {
+        &PreviewImgSize::Fit{width, height} => {
+            if img_width/4 > width && img_height/4 > height {
+                4
+            } else if img_width/3 > width && img_height/3 > height {
+                3
+            } else if img_width/2 > width && img_height/2 > height {
+                2
+            } else {
+                1
+            }
+        },
+        PreviewImgSize::Scale(ImgPreviewScale::Original) => 1,
+        PreviewImgSize::Scale(ImgPreviewScale::P75) => 1,
+        PreviewImgSize::Scale(ImgPreviewScale::P50) => 2,
+        PreviewImgSize::Scale(ImgPreviewScale::P33) => 3,
+        PreviewImgSize::Scale(ImgPreviewScale::P25) => 4,
+        PreviewImgSize::Scale(ImgPreviewScale::FitWindow) => unreachable!(),
     }
 }
 
@@ -282,15 +314,15 @@ pub fn get_rgb_bytes_from_preview_image(
     );
     log::debug!("reduct_ratio = {}", reduct_ratio);
     const BLACK_PERCENTILE: usize = 5;
-    let l_blk_lvl = hist.l.as_ref().map(|h| h.get_percentile(BLACK_PERCENTILE)).unwrap_or(0);
-    let r_blk_lvl = hist.r.as_ref().map(|h| h.get_percentile(BLACK_PERCENTILE)).unwrap_or(0);
-    let g_blk_lvl = hist.g.as_ref().map(|h| h.get_percentile(BLACK_PERCENTILE)).unwrap_or(0);
-    let b_blk_lvl = hist.b.as_ref().map(|h| h.get_percentile(BLACK_PERCENTILE)).unwrap_or(0);
+    let l_blk_lvl = || hist.l.as_ref().map(|h| h.get_percentile(BLACK_PERCENTILE)).unwrap_or(0);
+    let r_blk_lvl = || hist.r.as_ref().map(|h| h.get_percentile(BLACK_PERCENTILE)).unwrap_or(0);
+    let g_blk_lvl = || hist.g.as_ref().map(|h| h.get_percentile(BLACK_PERCENTILE)).unwrap_or(0);
+    let b_blk_lvl = || hist.b.as_ref().map(|h| h.get_percentile(BLACK_PERCENTILE)).unwrap_or(0);
     image.to_grb_bytes(
-        if options.auto_min { Some(l_blk_lvl as i32) } else { None },
-        if options.auto_min { Some(r_blk_lvl as i32) } else { None },
-        if options.auto_min { Some(g_blk_lvl as i32) } else { None },
-        if options.auto_min { Some(b_blk_lvl as i32) } else { None },
+        if options.auto_min { Some(l_blk_lvl() as i32) } else { None },
+        if options.auto_min { Some(r_blk_lvl() as i32) } else { None },
+        if options.auto_min { Some(g_blk_lvl() as i32) } else { None },
+        if options.auto_min { Some(b_blk_lvl() as i32) } else { None },
         options.gamma,
         reduct_ratio
     )
@@ -689,7 +721,7 @@ fn make_preview_image_impl(
 
                 // Convert into preview RGB bytes
 
-                if !command.view_options.show_orig_frame {
+                if !command.view_options.orig_frame_in_ls {
                     let tmr = TimeLogger::start();
                     let rgb_bytes = get_rgb_bytes_from_preview_image(
                         &res_image,
