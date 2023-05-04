@@ -146,13 +146,13 @@ impl RawImage {
     ) -> anyhow::Result<RawImage> {
         let reader = FitsReader::new(&mut stream)?;
         let Some(image_hdu) = reader.hdus.iter().find(|hdu| {
-            hdu.dims.len() == 2
+            hdu.dims().len() == 2
         }) else {
             anyhow::bail!("No RAW image found in fits data");
         };
 
-        let width      = image_hdu.dims[0];
-        let height     = image_hdu.dims[1];
+        let width      = image_hdu.dims()[0];
+        let height     = image_hdu.dims()[1];
         let exposure   = image_hdu.get_f64("EXPTIME" ).unwrap_or(0.0);
         let bayer      = image_hdu.get_str("BAYERPAT").unwrap_or_default();
         let bitdepth   = image_hdu.get_i64("BITDEPTH").unwrap_or(16) as i32;

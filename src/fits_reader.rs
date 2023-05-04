@@ -11,11 +11,11 @@ struct HduValue {
 }
 
 pub struct Hdu {
-    values: HashMap<String, HduValue>,
-    pub bitpix: i8,
-    pub dims: Vec<usize>,
-    data_pos: usize,
-    data_len: usize,
+    values:    HashMap<String, HduValue>,
+    bitpix:    i8,
+    dims:      Vec<usize>,
+    data_pos:  usize,
+    data_len:  usize,
     bytes_len: usize,
 }
 
@@ -42,6 +42,10 @@ impl Hdu {
             result = &result[1..result.len()-1];
         }
         Some(result.trim())
+    }
+
+    pub fn dims(&self) -> &Vec<usize> {
+        &self.dims
     }
 
     fn get_data_integer<T: VecFormBytes + Copy + Default>(
@@ -171,8 +175,6 @@ impl FitsReader {
 
         Ok(Hdu{values, bitpix, dims, data_pos, data_len, bytes_len})
     }
-
-
 }
 
 trait VecFormBytes where Self: Sized {
