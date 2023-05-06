@@ -3,6 +3,8 @@ use std::{path::Path, io::BufWriter, fs::File};
 use itertools::*;
 use rayon::prelude::*;
 
+use crate::{math::*};
+
 pub struct ImageLayer<T> {
     data: Vec<T>,
     width: usize,
@@ -196,7 +198,100 @@ impl ImageLayer<u16> {
             (y * CRD_DIV as f64) as i64
         )
     }
+
+    pub fn remove_gradient(&mut self) {
+        if self.is_empty() { return; }
+        let Some(gradient) = calc_gradient(self) else { return; };
+        self.data
+            .par_chunks_exact_mut(self.width)
+            .enumerate()
+            .for_each(|(y, row)| {
+                let Some(line) = gradient.intersect_by_xz_plane(y as f64) else { return; };
+                let z1 = line.get(0.0).round() as i32;
+                let z2 = line.get(self.width as f64).round() as i32;
+                let z_diff = i32::abs(z1-z2);
+                if z_diff < self.width as i32 {
+                    let height = z_diff as usize + 1;
+                    let mut sum = self.width/2;
+                    let mut z = z1;
+                    let dz = if z1 < z2 {1} else {-1};
+                    for value in row {
+                        let mut v = *value as i32;
+                        v -= z;
+                        if v < 0 { v = 0; }
+                        else if v > u16::MAX as i32 { v = u16::MAX as i32; }
+                        *value = v as u16;
+                        // simple Bresenham's algorithm
+                        sum += height;
+                        if sum >= self.width {
+                            sum -= self.width;
+                            z += dz;
+                        }
+                    }
+                } else {
+                    for (x, value) in row.iter_mut().enumerate() {
+                        let mut v = *value as f64;
+                        v -= line.get(x as f64);
+                        *value = v as u16;
+                    }
+                }
+            });
+    }
 }
+
+impl GradientCalcSource for ImageLayer<u16> {
+    fn image_width(&self) -> usize {
+        self.width
+    }
+
+    fn image_height(&self) -> usize {
+        self.height
+    }
+
+    fn get_rect_values(&self, x1: usize, y1: usize, x2: usize, y2: usize, result: &mut Vec<u16>) {
+        result.clear();
+        for y in y1..=y2 {
+            let row = self.row(y);
+            result.extend_from_slice(&row[x1..=x2]);
+        }
+    }
+}
+
+pub struct RectIterator<'a, T> {
+    x1: usize,
+    x2: usize,
+    y: usize,
+    y2: usize,
+    iter: std::slice::Iter<'a, T>,
+    img: &'a ImageLayer<T>,
+}
+
+impl<'a, T: Copy + Default> RectIterator<'a, T> {
+    fn init_iter(img: &ImageLayer<T>, x1: usize, x2: usize, y: usize) -> std::slice::Iter<T> {
+        let row = img.row(y);
+        row[x1 ..= x2].iter()
+    }
+}
+
+impl<'a, T: Copy + Default> Iterator for RectIterator<'a, T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self.iter.next();
+        if next.is_some() {
+            next.copied()
+        } else {
+            self.y += 1;
+            if self.y > self.y2 {
+                return None;
+            }
+            self.iter = Self::init_iter(self.img, self.x1, self.x2, self.y);
+            self.next()
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
 
 pub struct Image {
     pub r: ImageLayer<u16>,
@@ -207,15 +302,6 @@ pub struct Image {
     height: usize,
     zero: i32,
     max_value: u16,
-}
-
-#[derive(Default)]
-pub struct RgbU8Data {
-    pub width:       usize,
-    pub height:      usize,
-    pub orig_width:  usize,
-    pub orig_height: usize,
-    pub bytes:       Vec<u8>,
 }
 
 impl Image {
@@ -367,12 +453,12 @@ impl Image {
 
     pub fn to_grb_bytes(
         &self,
-        l_black_level:  Option<i32>,
-        r_black_level:  Option<i32>,
-        g_black_level:  Option<i32>,
-        b_black_level:  Option<i32>,
-        gamma:          f64,
-        reduct_ratio:   usize,
+        l_black_level: Option<i32>,
+        r_black_level: Option<i32>,
+        g_black_level: Option<i32>,
+        b_black_level: Option<i32>,
+        gamma:         f64,
+        reduct_ratio:  usize,
     ) -> RgbU8Data {
         if self.is_empty() {
             return RgbU8Data::default();
@@ -388,7 +474,7 @@ impl Image {
             b_black_level:  b_black_level.unwrap_or(self.zero),
             gamma,
         };
-        let table = create_gamma_table(args.max_value as f32, args.gamma);
+        let table = Self::create_gamma_table(args.max_value as f32, args.gamma);
         match reduct_ratio {
             1 => self.to_grb_bytes_no_reduct(&table, args),
             2 => self.to_grb_bytes_reduct2(&table, args),
@@ -398,6 +484,15 @@ impl Image {
         }
     }
 
+    fn create_gamma_table(max_value: f32, gamma: f64) -> Vec<u8> {
+        let pow_value = 1.0 / gamma as f32;
+        let k = 255_f32 / max_value.powf(pow_value);
+        let mut table = Vec::new();
+        for i in 0..65536 {
+            table.push((k * (i as f32).powf(pow_value)) as u8);
+        }
+        table
+    }
 
     fn to_grb_bytes_no_reduct(
         &self,
@@ -655,51 +750,37 @@ impl Image {
         }
         RgbU8Data { width, height, bytes, orig_width: self.width, orig_height: self.height }
     }
-}
 
-fn create_gamma_table(max_value: f32, gamma: f64) -> Vec<u8> {
-    let pow_value = 1.0 / gamma as f32;
-    let k = 255_f32 / max_value.powf(pow_value);
-    let mut table = Vec::new();
-    for i in 0..65536 {
-        table.push((k * (i as f32).powf(pow_value)) as u8);
-    }
-    table
-}
-
-pub struct RectIterator<'a, T> {
-    x1: usize,
-    x2: usize,
-    y: usize,
-    y2: usize,
-    iter: std::slice::Iter<'a, T>,
-    img: &'a ImageLayer<T>,
-}
-
-impl<'a, T: Copy + Default> RectIterator<'a, T> {
-    fn init_iter(img: &ImageLayer<T>, x1: usize, x2: usize, y: usize) -> std::slice::Iter<T> {
-        let row = img.row(y);
-        row[x1 ..= x2].iter()
+    pub fn remove_gradient(&mut self) {
+        self.l.remove_gradient();
+        self.r.remove_gradient();
+        self.g.remove_gradient();
+        self.b.remove_gradient();
     }
 }
 
-impl<'a, T: Copy + Default> Iterator for RectIterator<'a, T> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let next = self.iter.next();
-        if next.is_some() {
-            next.copied()
-        } else {
-            self.y += 1;
-            if self.y > self.y2 {
-                return None;
-            }
-            self.iter = Self::init_iter(self.img, self.x1, self.x2, self.y);
-            self.next()
-        }
-    }
+#[derive(Default)]
+pub struct RgbU8Data {
+    pub width:       usize,
+    pub height:      usize,
+    pub orig_width:  usize,
+    pub orig_height: usize,
+    pub bytes:       Vec<u8>,
 }
+
+struct ImageToU8BytesArgs {
+    width:          usize,
+    height:         usize,
+    is_color_image: bool,
+    max_value:      u16,
+    l_black_level:  i32,
+    r_black_level:  i32,
+    g_black_level:  i32,
+    b_black_level:  i32,
+    gamma:          f64,
+}
+
+///////////////////////////////////////////////////////////////////////////////
 
 pub struct ImageAdder {
     r: Vec<i32>,
@@ -953,16 +1034,65 @@ impl ImageAdder {
 
 }
 
-// Converting image to RGB u8 values for visualization
+//////////////////////////////////////////////////////////////////////////////
 
-struct ImageToU8BytesArgs {
-    width:          usize,
-    height:         usize,
-    is_color_image: bool,
-    max_value:      u16,
-    l_black_level:  i32,
-    r_black_level:  i32,
-    g_black_level:  i32,
-    b_black_level:  i32,
-    gamma:          f64,
+trait GradientCalcSource {
+    fn image_width(&self) -> usize;
+    fn image_height(&self) -> usize;
+    fn get_rect_values(&self, x1: usize, y1: usize, x2: usize, y2: usize, result: &mut Vec<u16>);
+}
+
+fn calc_gradient(source: &dyn GradientCalcSource) -> Option<Plane> {
+    let width = source.image_width();
+    let height = source.image_height();
+    let min_size = usize::min(width, height);
+    let cell_size = min_size / 30;
+    let border = cell_size / 3;
+    let cells_cnt = (min_size - 2 * border) / cell_size;
+    let corner_cells_cnt = usize::max(cells_cnt / 4, 1);
+    let mut cell_data = Vec::new();
+    let mut points = Vec::new();
+    let mut add_cell = |x, y| {
+        source.get_rect_values(
+            x - cell_size/2,
+            y - cell_size/2,
+            x + cell_size/2,
+            y + cell_size/2,
+            &mut cell_data
+        );
+        let bound1 = cell_data.len()/3;
+        let bound2 = 2*cell_data.len()/3;
+
+        cell_data.select_nth_unstable(bound2);
+        cell_data.select_nth_unstable(bound1);
+        let middle = &cell_data[bound1..bound2];
+        let aver = middle.iter().map(|v| *v as f64).sum::<f64>() / middle.len() as f64;
+
+        points.push(Point3D {
+            x: x as f64,
+            y: y as f64,
+            z: aver,
+        });
+    };
+    let mut add_corner_cell = |x, y| {
+        add_cell(x,       y       );
+        add_cell(width-x, y       );
+        add_cell(x,       height-y);
+        add_cell(width-x, height-y);
+    };
+    for i in 0..corner_cells_cnt {
+        let x = border + cell_size/2 + i * cell_size;
+        let y = border + cell_size/2;
+        add_corner_cell(x, y);
+    }
+    for i in 1..corner_cells_cnt-1 {
+        let x = border + cell_size/2;
+        let y = border + cell_size/2 + i * cell_size;
+        add_corner_cell(x, y);
+    }
+    let z_aver = points.iter().map(|p| p.z).sum::<f64>() / points.len() as f64;
+    for p in &mut points {
+        p.z -= z_aver;
+    }
+    calc_fitting_plane_z_dist(&points)
 }

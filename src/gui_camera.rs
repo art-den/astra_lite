@@ -725,6 +725,16 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
         });
     }));
 
+    let chb_rem_grad = bldr.object::<gtk::CheckButton>("chb_rem_grad").unwrap();
+    chb_rem_grad.connect_active_notify(clone!(@strong data => move |chb| {
+        data.excl.exec(|| {
+            let Ok(mut options) = data.options.try_borrow_mut() else { return; };
+            options.preview.remove_grad = chb.is_active();
+            drop(options);
+            create_and_show_preview_image(&data);
+        });
+    }));
+
     let da_histogram = bldr.object::<gtk::DrawingArea>("da_histogram").unwrap();
     da_histogram.connect_draw(clone!(@strong data => move |area, cr| {
         handler_draw_histogram(&data, area, cr);
@@ -920,6 +930,7 @@ fn show_options(data: &Rc<CameraData>) {
         gtk_utils::set_active_id(bld, "cb_preview_scale",    options.preview.scale.to_active_id());
         gtk_utils::set_bool     (bld, "chb_auto_black",      options.preview.auto_black);
         gtk_utils::set_f64      (bld, "scl_gamma",           options.preview.gamma);
+        gtk_utils::set_bool     (bld, "chb_rem_grad",        options.preview.remove_grad);
 
         gtk_utils::set_bool     (bld, "ch_hist_logx",        options.hist.log_x);
         gtk_utils::set_bool     (bld, "ch_hist_logy",        options.hist.log_y);
@@ -1032,7 +1043,8 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.quality.max_ovality     = gtk_utils::get_f64      (bld, "spb_max_oval") as f32;
 
     options.preview.auto_black   = gtk_utils::get_bool     (bld, "chb_auto_black");
-    options.preview.gamma        = (gtk_utils::get_f64     (bld, "scl_gamma") * 10.0).round() / 10.0;
+    options.preview.gamma        = gtk_utils::get_f64      (bld, "scl_gamma");
+    options.preview.remove_grad  = gtk_utils::get_bool     (bld, "chb_rem_grad");
 
     options.hist.log_x           = gtk_utils::get_bool(bld, "ch_hist_logx");
     options.hist.log_y           = gtk_utils::get_bool(bld, "ch_hist_logy");
@@ -1573,6 +1585,7 @@ fn get_preview_params(
         gamma: options.preview.gamma,
         img_size,
         orig_frame_in_ls: options.preview.source == PreviewSource::OrigFrame,
+        remove_gradient: options.preview.remove_grad,
     }
 }
 
@@ -1629,9 +1642,6 @@ fn show_preview_image(
         rgb_bytes.orig_width,
         rgb_bytes.orig_height
     );
-
-    dbg!(rgb_bytes.width, rgb_bytes.height, img_width, img_height);
-
     if (img_width != rgb_bytes.width || img_height != rgb_bytes.height)
     && img_width > 42 && img_height > 42 {
         let tmr = TimeLogger::start();
@@ -1642,7 +1652,6 @@ fn show_preview_image(
         ).unwrap();
         tmr.log("Pixbuf::scale_simple");
     }
-
     img_preview.set_pixbuf(Some(&pixbuf));
 }
 
@@ -2221,11 +2230,6 @@ fn process_blob_event( // TODO: move to state.rs
     }).unwrap();
 }
 
-fn repaint_histogram(data: &Rc<CameraData>) {
-    let da_histogram = data.main.builder.object::<gtk::DrawingArea>("da_histogram").unwrap();
-    da_histogram.queue_draw();
-}
-
 fn show_histogram_stat(data: &Rc<CameraData>) {
     let options = data.options.borrow();
     let hist = match options.preview.source {
@@ -2279,6 +2283,11 @@ fn show_histogram_stat(data: &Rc<CameraData>) {
     show_chan_data(&hist.g, "l_hist_g_cap", "l_hist_g_mean", "l_hist_g_median", "l_hist_g_dev");
     show_chan_data(&hist.b, "l_hist_b_cap", "l_hist_b_mean", "l_hist_b_median", "l_hist_b_dev");
     show_chan_data(&hist.l, "l_hist_l_cap", "l_hist_l_mean", "l_hist_l_median", "l_hist_l_dev");
+}
+
+fn repaint_histogram(data: &Rc<CameraData>) {
+    let da_histogram = data.main.builder.object::<gtk::DrawingArea>("da_histogram").unwrap();
+    da_histogram.queue_draw();
 }
 
 fn handler_draw_histogram(

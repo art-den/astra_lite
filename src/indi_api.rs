@@ -3138,6 +3138,22 @@ impl Connection {
         )
     }
 
+    pub fn mount_get_timed_guide_max(
+        &self,
+        device_name: &str
+    ) -> Result<(f64, f64)> {
+        let devices = self.devices.lock().unwrap();
+        let ns_data = devices.get_property_static_data(device_name, "TELESCOPE_TIMED_GUIDE_NS")?;
+        let we_data = devices.get_property_static_data(device_name, "TELESCOPE_TIMED_GUIDE_WE")?;
+        let (PropType::Num(ns), PropType::Num(we)) = (&ns_data.tp, &we_data.tp) else {
+            return Err(Error::Internal("Wrong prop types".into()));
+        };
+        if ns.is_empty() || we.is_empty() {
+            return Err(Error::Internal("Wrong prop elem len".into()));
+        }
+        Ok((ns[0].max, we[0].max))
+    }
+
     pub fn mount_timed_guide(
         &self,
         device_name: &str,

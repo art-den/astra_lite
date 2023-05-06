@@ -1192,7 +1192,10 @@ impl Mode for CameraActiveMode {
                                 SET_PROP_TIMEOUT
                             )?;
                         }
-                        self.indi.mount_timed_guide(&self.mount_device, 1000.0 * dec, 1000.0 * ra)?;
+                        let (max_dec, max_ra) = self.indi.mount_get_timed_guide_max(&self.mount_device)?;
+                        let dec_value = f64::min(1000.0 * dec, max_dec);
+                        let ra_value = f64::min(1000.0 * ra, max_ra);
+                        self.indi.mount_timed_guide(&self.mount_device, dec_value, ra_value)?;
                         self.state = CamState::MountCorrection;
                         result = NotifyResult::ModeChanged;
                     }

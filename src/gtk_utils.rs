@@ -223,6 +223,15 @@ pub fn get_bool_prop(
     widget.property::<bool>(prop_name)
 }
 
+pub fn set_str_prop(
+    builder:     &gtk::Builder,
+    widget_name: &str,
+    prop_name:   &str,
+    value:       &str
+) {
+    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
+    widget.set_properties(&[(prop_name, &value)]);
+}
 
 pub fn set_str(
     builder:     &gtk::Builder,

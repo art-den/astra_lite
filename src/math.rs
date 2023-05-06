@@ -64,6 +64,19 @@ fn linear_solve3(
     Some((det1/det, det2/det, det3/det))
 }
 
+#[test]
+fn test_linear_solve3() {
+    let (a, b, c) = linear_solve3(
+        2.0, 3.0, -1.0, 5.0,
+        3.0, -1.0, 4.0, 13.0,
+        5.0, -2.0, 2.0, 7.0,
+    ).unwrap();
+
+    assert!(f64::abs(a - 1.0) < 0.01);
+    assert!(f64::abs(b - 2.0) < 0.01);
+    assert!(f64::abs(c - 3.0) < 0.01);
+}
+
 #[derive(Clone, Debug)]
 pub struct SquareCoeffs {
     pub a2: f64,
@@ -178,5 +191,86 @@ impl IirFilter {
             if res > u16::MAX as u32 { res = u16::MAX as u32; }
             *d = res as u16;
         }
+    }
+}
+
+pub struct Point3D {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
+pub struct Line {
+    a: f64,
+    b: f64
+}
+
+impl Line {
+    pub fn get(&self, x: f64) -> f64 {
+        self.a * x + self.b
+    }
+}
+
+pub struct Plane {
+    pub a: f64,
+    pub b: f64,
+    pub c: f64,
+    pub d: f64,
+}
+
+impl Plane {
+    pub fn intersect_by_xz_plane(&self, y: f64) -> Option<Line> {
+        if self.c != 0.0 {
+            let a = -self.a / self.c;
+            let b = -(self.b * y + self.d) / self.c;
+            Some(Line {a, b})
+        } else {
+            None
+        }
+    }
+
+    pub fn calc_z(&self, x: f64, y: f64) -> f64 {
+        (-self.a * x - self.b * y - self.d) / self.c
+    }
+}
+
+pub fn calc_fitting_plane_z_dist(points: &[Point3D]) -> Option<Plane> {
+    if points.len() < 3 { return None; }
+    let x_sum = points.iter().map(|p| p.x).sum::<f64>();
+    let y_sum = points.iter().map(|p| p.y).sum::<f64>();
+    let z_sum = points.iter().map(|p| p.z).sum::<f64>();
+    let x2_sum = points.iter().map(|p| p.x * p.x).sum::<f64>();
+    let y2_sum = points.iter().map(|p| p.y * p.y).sum::<f64>();
+    let xy_sum = points.iter().map(|p| p.x * p.y).sum::<f64>();
+    let xz_sum = points.iter().map(|p| p.x * p.z).sum::<f64>();
+    let yz_sum = points.iter().map(|p| p.y * p.z).sum::<f64>();
+    let n = points.len() as f64;
+    let Some((a, b, d)) = linear_solve3(
+        x2_sum, xy_sum, x_sum, -xz_sum,
+        xy_sum, y2_sum, y_sum, -yz_sum,
+        x_sum,  y_sum,  n,     -z_sum,
+    ) else { return None; };
+    Some(Plane{a, b, c: 1.0, d})
+}
+
+#[test]
+fn test_fitting_plane_z_dist() {
+    let points = [
+        Point3D { x: 1.0,  y: 2.0,  z: 3.0   },
+        Point3D { x: 11.0, y: -3.0, z: 2.9 },
+        Point3D { x: 6.0,  y: 5.0,  z: 3.1   },
+    ];
+    let plane = calc_fitting_plane_z_dist(&points).unwrap();
+
+    for p in &points {
+        let z = plane.calc_z(p.x, p.y);
+        let f = plane.a * p.x + plane.b * p.y + plane.c * p.z + plane.d;
+
+        assert!(f64::abs(f) < 0.001);
+        assert!(f64::abs(z - p.z) < 0.001);
+
+        let line = plane.intersect_by_xz_plane(p.y).unwrap();
+        let z = line.get(p.x);
+        assert!(f64::abs(z - p.z) < 0.001);
     }
 }

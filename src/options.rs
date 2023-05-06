@@ -245,15 +245,17 @@ pub struct PreviewOptions {
     pub auto_black: bool,
     pub gamma:      f64,
     pub source:     PreviewSource,
+    pub remove_grad: bool,
 }
 
 impl Default for PreviewOptions {
     fn default() -> Self {
         Self {
-            scale:      ImgPreviewScale::default(),
-            auto_black: true,
-            gamma:      5.0,
-            source:     PreviewSource::default(),
+            scale:       ImgPreviewScale::default(),
+            auto_black:  true,
+            gamma:       5.0,
+            source:      PreviewSource::default(),
+            remove_grad: false,
         }
     }
 }

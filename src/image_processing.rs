@@ -55,7 +55,7 @@ impl PreviewImgSize {
     pub fn get_preview_img_size(&self, orig_width: usize, orig_height: usize) -> (usize, usize) {
         match self {
             &PreviewImgSize::Fit { width, height } => {
-                let img_ratio = orig_width as f64 / orig_width as f64;
+                let img_ratio = orig_width as f64 / orig_height as f64;
                 let gui_ratio = width as f64 / height as f64;
                 if img_ratio > gui_ratio {
                     (width, (width as f64 / img_ratio) as usize)
@@ -75,10 +75,11 @@ impl PreviewImgSize {
 
 #[derive(PartialEq, Clone)]
 pub struct PreviewParams {
-    pub auto_min:        bool,
-    pub gamma:           f64,
-    pub img_size:        PreviewImgSize,
+    pub auto_min:         bool,
+    pub gamma:            f64,
+    pub img_size:         PreviewImgSize,
     pub orig_frame_in_ls: bool,
+    pub remove_gradient:  bool,
 }
 
 #[derive(Default)]
@@ -479,16 +480,16 @@ fn make_preview_image_impl(
         matches!(frame_type, FrameType::Biases) ||
         matches!(frame_type, FrameType::Darks);
 
-    // Histogram
+    // Raw histogram
 
-    let mut hist = command.frame.raw_hist.write().unwrap();
+    let mut raw_hist = command.frame.raw_hist.write().unwrap();
     let tmr = TimeLogger::start();
-    hist.from_raw_image(
+    raw_hist.from_raw_image(
         &raw_image,
         is_monochrome_img
     );
     tmr.log("histogram from raw image");
-    drop(hist);
+    drop(raw_hist);
 
     // Applying calibration data
     if frame_type == FrameType::Lights {
@@ -541,6 +542,20 @@ fn make_preview_image_impl(
     }
     tmr.log("demosaic");
 
+    // Remove gradient from light frame
+
+    if frame_type == FrameType::Lights
+    && command.view_options.remove_gradient
+    && command.mode_type != ModeType::LiveStacking {
+        let tmr = TimeLogger::start();
+        image.remove_gradient();
+        tmr.log("remove gradient from light frame");
+    }
+
+    drop(image);
+
+    // Add RAW calibration frame to adder
+
     let frame_for_raw_adder = matches!(
         frame_type,
         FrameType::Flats| FrameType::Darks | FrameType::Biases
@@ -550,7 +565,7 @@ fn make_preview_image_impl(
         add_calibr_image(&mut raw_image, &command.raw_adder, frame_type)?;
     }
 
-    drop(image);
+
     drop(raw_image);
 
     // Result image histogram
@@ -680,6 +695,13 @@ fn make_preview_image_impl(
                 let tmr = TimeLogger::start();
                 image_adder.copy_to_image(&mut res_image, true);
                 tmr.log("ImageAdder::copy_to_image");
+
+                if command.view_options.remove_gradient { // TODO: do gradient removal in image_adder.copy_to_image!
+                    let tmr = TimeLogger::start();
+                    res_image.remove_gradient();
+                    tmr.log("remove gradient from live stacking");
+                }
+
                 drop(res_image);
 
                 let res_image = live_stacking.data.image.read().unwrap();

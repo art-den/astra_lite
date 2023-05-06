@@ -171,6 +171,7 @@ fn handler_close_window(data: &Rc<HardwareData>) -> gtk::Inhibit {
 }
 
 fn correct_widgets_by_cur_state(data: &Rc<HardwareData>) {
+    let bldr = &data.builder;
     let status = data.indi_status.borrow();
     let (conn_en, disconn_en) = match *status {
         indi_api::ConnState::Disconnected  => (true,  false),
@@ -184,7 +185,7 @@ fn correct_widgets_by_cur_state(data: &Rc<HardwareData>) {
         ("disconn_indi", disconn_en),
     ]);
     gtk_utils::set_str(
-        &data.builder,
+        bldr,
         "lbl_indi_conn_status",
         &status.to_str(false)
     );
@@ -194,11 +195,20 @@ fn correct_widgets_by_cur_state(data: &Rc<HardwareData>) {
         indi_api::ConnState::Disconnected|
         indi_api::ConnState::Error(_)
     );
-    let remote = gtk_utils::get_bool(&data.builder, "chb_remote");
-    let mnt_sensitive = !remote && disconnected && !gtk_utils::is_named_combobox_empty(&data.builder, "cb_mount");
-    let cam_sensitive = !remote && disconnected && !gtk_utils::is_named_combobox_empty(&data.builder, "cb_camera");
-    let foc_sensitive = !remote && disconnected && !gtk_utils::is_named_combobox_empty(&data.builder, "cb_focuser");
-    gtk_utils::enable_widgets(&data.builder, false, &[
+    let remote = gtk_utils::get_bool(bldr, "chb_remote");
+
+    let (conn_cap, disconn_cap) = if remote {
+        ("Connect INDI", "Disconnect INDI")
+    } else {
+        ("Start INDI", "Stop INDI")
+    };
+    gtk_utils::set_str_prop(bldr, "btn_conn_indi", "label", conn_cap);
+    gtk_utils::set_str_prop(bldr, "btn_diconn_indi", "label", disconn_cap);
+
+    let mnt_sensitive = !remote && disconnected && !gtk_utils::is_named_combobox_empty(bldr, "cb_mount");
+    let cam_sensitive = !remote && disconnected && !gtk_utils::is_named_combobox_empty(bldr, "cb_camera");
+    let foc_sensitive = !remote && disconnected && !gtk_utils::is_named_combobox_empty(bldr, "cb_focuser");
+    gtk_utils::enable_widgets(bldr, false, &[
         ("l_mount",       mnt_sensitive),
         ("cb_mount",      mnt_sensitive),
         ("l_camera",      cam_sensitive),
