@@ -589,18 +589,20 @@ fn apply_camera_options_and_take_shot(
     )?;
 
     // Frame size
-    let (width, height) = indi.camera_get_max_frame_size(camera_name)?;
-    let crop_width = frame.crop.translate(width);
-    let crop_height = frame.crop.translate(height);
-    indi.camera_set_frame_size(
-        camera_name,
-        (width - crop_width) / 2,
-        (height - crop_height) / 2,
-        crop_width,
-        crop_height,
-        true,
-        SET_PROP_TIMEOUT
-    )?;
+    if indi.camera_is_frame_supported(camera_name)? {
+        let (width, height) = indi.camera_get_max_frame_size(camera_name)?;
+        let crop_width = frame.crop.translate(width);
+        let crop_height = frame.crop.translate(height);
+        indi.camera_set_frame_size(
+            camera_name,
+            (width - crop_width) / 2,
+            (height - crop_height) / 2,
+            crop_width,
+            crop_height,
+            true,
+            SET_PROP_TIMEOUT
+        )?;
+    }
 
     // Binning mode = AVG
     if indi.camera_is_binning_mode_supported(camera_name)?

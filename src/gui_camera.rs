@@ -1223,6 +1223,9 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
         let low_noise_supported = camera.as_ref().map(|camera|
             data.main.indi.camera_is_low_noise_ctrl_supported(&camera)
         ).unwrap_or(Ok(false))?;
+        let crop_supported = camera.as_ref().map(|camera|
+            data.main.indi.camera_is_frame_supported(&camera)
+        ).unwrap_or(Ok(false))?;
 
         let indi_connected = data.main.indi.state() == indi_api::ConnState::Connected;
 
@@ -1346,7 +1349,7 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
             ("chb_shots_cont",     (exposure_supported && liveview_active) || can_change_mode),
             ("cb_frame_mode",      can_change_frame_opts),
             ("spb_exp",            exposure_supported && can_change_frame_opts),
-            ("cb_crop",            can_change_frame_opts),
+            ("cb_crop",            crop_supported && can_change_frame_opts),
             ("spb_gain",           gain_supported && can_change_frame_opts),
             ("spb_offset",         offset_supported && can_change_frame_opts),
             ("cb_bin",             bin_supported && can_change_frame_opts),

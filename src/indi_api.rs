@@ -2612,7 +2612,12 @@ impl Connection {
         &self,
         device_name: &str,
     ) -> Result<bool> {
-        self.property_exists(device_name, "CCD_FRAME", None)
+        let devices = self.devices.lock().unwrap();
+        match devices.get_property_static_data(device_name, "CCD_FRAME") {
+            Err(e @ Error::DeviceNotExists(_)) => Err(e),
+            Err(_) => Ok(false),
+            Ok(s) => Ok(s.perm != PropPerm::RO),
+        }
     }
 
     pub fn camera_set_frame_size(
