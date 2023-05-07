@@ -215,8 +215,8 @@ fn correct_widgets_by_cur_state(data: &Rc<HardwareData>) {
         ("cb_camera",     cam_sensitive),
         ("l_focuser",     foc_sensitive),
         ("cb_focuser",    foc_sensitive),
-        ("chb_remote",    !data.indi_drivers.groups.is_empty()),
-        ("e_remote_addr", remote)
+        ("chb_remote",    !data.indi_drivers.groups.is_empty() && disconnected),
+        ("e_remote_addr", remote && disconnected)
     ]);
 }
 
