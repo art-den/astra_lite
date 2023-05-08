@@ -5,23 +5,10 @@ use serde::{Serialize, Deserialize};
 use crate::{image_raw::FrameType, image_processing::CalibrParams};
 
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
-pub enum Binning {
-    #[default]
-    Orig,
-    Bin2,
-    Bin3,
-    Bin4,
-}
+pub enum Binning {#[default]Orig, Bin2, Bin3, Bin4}
 
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone)]
-pub enum Crop {
-    #[default]
-    None,
-    P75,
-    P50,
-    P33,
-    P25
-}
+pub enum Crop {#[default]None, P75, P50, P33, P25}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
@@ -168,19 +155,19 @@ impl RawFrameOptions {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct LiveStackingOptions {
-    pub save_orig:       bool,
-    pub save_minutes:    usize,
-    pub save_enabled:    bool,
-    pub out_dir:         PathBuf,
+    pub save_orig:    bool,
+    pub save_minutes: usize,
+    pub save_enabled: bool,
+    pub out_dir:      PathBuf,
 }
 
 impl Default for LiveStackingOptions {
     fn default() -> Self {
         Self {
-            save_orig:       false,
-            save_minutes:    5,
-            save_enabled:    true,
-            out_dir:         PathBuf::new(),
+            save_orig:    false,
+            save_minutes: 5,
+            save_enabled: true,
+            out_dir:      PathBuf::new(),
         }
     }
 }
@@ -220,31 +207,19 @@ impl Default for QualityOptions {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
-pub enum PreviewSource {
-    #[default]
-    OrigFrame,
-    LiveStacking,
-}
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
+pub enum PreviewSource {#[default]OrigFrame, LiveStacking}
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
-pub enum ImgPreviewScale {
-    #[default]
-    FitWindow,
-    Original,
-    P75,
-    P50,
-    P33,
-    P25,
-}
+pub enum ImgPreviewScale {#[default]FitWindow, Original, P75, P50, P33, P25}
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct PreviewOptions {
-    pub scale:      ImgPreviewScale,
-    pub auto_black: bool,
-    pub gamma:      f64,
-    pub source:     PreviewSource,
+    pub scale:       ImgPreviewScale,
+    pub auto_black:  bool,
+    pub gamma:       f64,
+    pub source:      PreviewSource,
     pub remove_grad: bool,
 }
 
@@ -278,44 +253,6 @@ impl Default for HistOptions {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-pub struct GuiOptions {
-    pub paned_pos1:     i32,
-    pub paned_pos2:     i32,
-    pub paned_pos3:     i32,
-    pub paned_pos4:     i32,
-    pub cam_ctrl_exp:   bool,
-    pub shot_exp:       bool,
-    pub calibr_exp:     bool,
-    pub raw_frames_exp: bool,
-    pub live_exp:       bool,
-    pub foc_exp:        bool,
-    pub dith_exp:       bool,
-    pub quality_exp:    bool,
-    pub mount_exp:      bool,
-}
-
-impl Default for GuiOptions {
-    fn default() -> Self {
-        Self {
-            paned_pos1:     -1,
-            paned_pos2:     -1,
-            paned_pos3:     -1,
-            paned_pos4:     -1,
-            cam_ctrl_exp:   true,
-            shot_exp:       true,
-            calibr_exp:     true,
-            raw_frames_exp: true,
-            live_exp:       false,
-            foc_exp:        false,
-            dith_exp:        false,
-            quality_exp:    true,
-            mount_exp:      false,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct FocuserOptions {
@@ -343,36 +280,54 @@ impl Default for FocuserOptions {
             period_minutes:  120,
             measures:        11,
             step:            500.0,
-            exposure:        10.0,
+            exposure:        2.0,
         }
+    }
+}
+
+impl FocuserOptions {
+    pub fn is_used(&self) -> bool {
+        !self.device.is_empty() && (
+            self.on_temp_change ||
+            self.on_fwhm_change ||
+            self.periodically
+        )
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct GuidingOptions {
-    pub enabled: bool,
-    pub max_error: f64,
-    pub dith_period: u32, // in minutes, 0 - do not dither
-    pub dith_percent: f64, // percent of image
+    pub enabled:         bool,
+    pub max_error:       f64,
+    pub dith_period:     u32, // in minutes, 0 - do not dither
+    pub dith_percent:    f64, // percent of image
     pub calibr_exposure: f64,
 }
 
 impl Default for GuidingOptions {
     fn default() -> Self {
         Self {
-            enabled: false,
-            max_error: 5.0,
-            dith_period: 0,
-            dith_percent: 5.0,
-            calibr_exposure: 1.0,
+            enabled:         false,
+            max_error:       5.0,
+            dith_period:     0,
+            dith_percent:    5.0,
+            calibr_exposure: 2.0,
         }
+    }
+}
+
+impl GuidingOptions {
+    pub fn is_used(&self) -> bool {
+        self.enabled ||
+        self.dith_period != 0
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct MountOptions {
+    pub device: String,
     pub inv_ns: bool,
     pub inv_we: bool,
     pub speed:  Option<String>,
@@ -381,6 +336,7 @@ pub struct MountOptions {
 impl Default for MountOptions {
     fn default() -> Self {
         Self {
+            device: String::new(),
             inv_ns: false,
             inv_we: false,
             speed:  None,
@@ -412,8 +368,8 @@ impl TelescopeOptions {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
-pub struct Options {
-    pub device:     Option<String>,
+pub struct CamOptions {
+    pub device:     String,
     pub live_view:  bool,
     pub ctrl:       CamCtrlOptions,
     pub frame:      FrameOptions,
@@ -422,18 +378,12 @@ pub struct Options {
     pub live:       LiveStackingOptions,
     pub quality:    QualityOptions,
     pub preview:    PreviewOptions,
-    pub hist:       HistOptions,
-    pub focuser:    FocuserOptions,
-    pub guiding:    GuidingOptions,
-    pub mount:      MountOptions,
-    pub gui:        GuiOptions,
-    pub telescope:  TelescopeOptions,
 }
 
-impl Default for Options {
+impl Default for CamOptions {
     fn default() -> Self {
         Self {
-            device:     None,
+            device:     String::new(),
             live_view:  false,
             preview:    PreviewOptions::default(),
             ctrl:       CamCtrlOptions::default(),
@@ -442,12 +392,17 @@ impl Default for Options {
             raw_frames: RawFrameOptions::default(),
             live:       LiveStackingOptions::default(),
             quality:    QualityOptions::default(),
-            hist:       HistOptions::default(),
-            focuser:    FocuserOptions::default(),
-            guiding:    GuidingOptions::default(),
-            mount:      MountOptions::default(),
-            gui:        GuiOptions::default(),
-            telescope:  TelescopeOptions::default(),
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[serde(default)]
+pub struct Options {
+    pub cam:       CamOptions,
+    pub hist:      HistOptions,
+    pub focuser:   FocuserOptions,
+    pub guiding:   GuidingOptions,
+    pub mount:     MountOptions,
+    pub telescope: TelescopeOptions,
 }

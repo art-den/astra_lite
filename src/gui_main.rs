@@ -2,11 +2,17 @@ use std::{sync::{Arc, RwLock}, rc::Rc, cell::RefCell, time::Duration, path::Path
 use gtk::{prelude::*, glib, glib::clone, cairo};
 use serde::{Serialize, Deserialize};
 
-use crate::{indi_api, gtk_utils, io_utils::*, state::*};
+use crate::{indi_api, gtk_utils, io_utils::*, state::*, options::*};
 
 pub const TIMER_PERIOD_MS: u64 = 250;
-pub type TimerHandlers = Vec<Box<dyn Fn() + 'static>>;
-pub type FullscreenHandlers = Vec<Box<dyn Fn(bool) + 'static>>;
+
+pub enum MainGuiEvent {
+    Timer,
+    FullScreen(bool),
+    BeforeModeContinued
+}
+
+pub type MainGuiHandlers = Vec<Box<dyn Fn(MainGuiEvent) + 'static>>;
 
 const CSS: &[u8] = b"
 .greenbutton {
@@ -61,17 +67,17 @@ impl Default for MainOptions {
 }
 
 pub struct MainData {
-    logs_dir:         PathBuf,
-    options:          RefCell<MainOptions>,
-    timer_handlers:   RefCell<TimerHandlers>,
-    fs_handlers:      RefCell<FullscreenHandlers>,
-    progress:         RefCell<Option<Progress>>,
-    conn_string:      RefCell<String>,
-    dev_string:       RefCell<String>,
-    pub state:        Arc<RwLock<State>>,
-    pub indi:         Arc<indi_api::Connection>,
-    pub builder:      gtk::Builder,
-    pub window:       gtk::ApplicationWindow,
+    logs_dir:     PathBuf,
+    pub options:  Arc<RwLock<Options>>,
+    main_options: RefCell<MainOptions>,
+    handlers:     RefCell<MainGuiHandlers>,
+    progress:     RefCell<Option<Progress>>,
+    conn_string:  RefCell<String>,
+    dev_string:   RefCell<String>,
+    pub state:    Arc<RwLock<State>>,
+    pub indi:     Arc<indi_api::Connection>,
+    pub builder:  gtk::Builder,
+    pub window:   gtk::ApplicationWindow,
 }
 
 impl Drop for MainData {
@@ -102,23 +108,34 @@ pub fn build_ui(
     ).as_slice()).unwrap();
     window.set_icon(Some(&icon));
 
-    let mut options = MainOptions::default();
+    let mut main_options = MainOptions::default();
     gtk_utils::exec_and_show_error(&window, || {
-        load_json_from_config_file(&mut options, "conf_main")
+        load_json_from_config_file(&mut main_options, "conf_main")
     });
     let indi = Arc::new(indi_api::Connection::new());
+
+    let mut options = Options::default();
+    gtk_utils::exec_and_show_error(&window, || {
+        load_json_from_config_file(&mut options, "options")?;
+        options.cam.raw_frames.check_and_correct()?;
+        options.cam.live.check_and_correct()?;
+        Ok(())
+    });
+
+    let options = Arc::new(RwLock::new(options));
+
     let data = Rc::new(MainData {
-        logs_dir:       logs_dir.clone(),
-        options:        RefCell::new(options),
-        timer_handlers: RefCell::new(Vec::new()),
-        fs_handlers:    RefCell::new(Vec::new()),
-        progress:       RefCell::new(None),
-        state:          Arc::new(RwLock::new(State::new(&indi))),
+        logs_dir:     logs_dir.clone(),
+        state:        Arc::new(RwLock::new(State::new(&indi, &options))),
+        options,
+        main_options: RefCell::new(main_options),
+        handlers:     RefCell::new(Vec::new()),
+        progress:     RefCell::new(None),
         indi,
-        window:         window.clone(),
-        builder:        builder.clone(),
-        conn_string:    RefCell::new(String::new()),
-        dev_string:     RefCell::new(String::new()),
+        window:       window.clone(),
+        builder:      builder.clone(),
+        conn_string:  RefCell::new(String::new()),
+        dev_string:   RefCell::new(String::new()),
     });
 
     State::connect_indi_events(&data.state);
@@ -137,8 +154,8 @@ pub fn build_ui(
             let Some(data) = data_weak.upgrade() else {
                 return Continue(false);
             };
-            for handler in data.timer_handlers.borrow().iter() {
-                handler();
+            for handler in data.handlers.borrow().iter() {
+                handler(MainGuiEvent::Timer);
             }
             Continue(true)
         }
@@ -155,8 +172,7 @@ pub fn build_ui(
     crate::gui_camera::build_ui(
         app,
         &data,
-        &mut data.timer_handlers.borrow_mut(),
-        &mut data.fs_handlers.borrow_mut(),
+        &mut data.handlers.borrow_mut()
     );
 
     gtk_utils::enable_widgets(&builder, false, &[
@@ -166,7 +182,7 @@ pub fn build_ui(
     let mi_dark_theme = builder.object::<gtk::RadioMenuItem>("mi_dark_theme").unwrap();
     mi_dark_theme.connect_activate(clone!(@strong data => move |mi| {
         if mi.is_active() {
-            data.options.borrow_mut().theme = Theme::Dark;
+            data.main_options.borrow_mut().theme = Theme::Dark;
             apply_theme(&data);
         }
     }));
@@ -174,7 +190,7 @@ pub fn build_ui(
     let mi_light_theme = builder.object::<gtk::RadioMenuItem>("mi_light_theme").unwrap();
     mi_light_theme.connect_activate(clone!(@strong data => move |mi| {
         if mi.is_active() {
-            data.options.borrow_mut().theme = Theme::Light;
+            data.main_options.borrow_mut().theme = Theme::Light;
             apply_theme(&data);
         }
     }));
@@ -222,8 +238,8 @@ pub fn build_ui(
     let btn_fullscreen = builder.object::<gtk::ToggleButton>("btn_fullscreen").unwrap();
     btn_fullscreen.set_sensitive(false);
     btn_fullscreen.connect_active_notify(clone!(@strong data => move |btn| {
-        for fs_handler in data.fs_handlers.borrow().iter() {
-            fs_handler(btn.is_active());
+        for fs_handler in data.handlers.borrow().iter() {
+            fs_handler(MainGuiEvent::FullScreen(btn.is_active()));
         }
     }));
 
@@ -267,8 +283,12 @@ fn connect_state_events(data: &Rc<MainData>) {
 
 fn handler_close_window(data: &Rc<MainData>) -> gtk::Inhibit {
     read_options_from_widgets(data);
-    let options = data.options.borrow();
+    let options = data.main_options.borrow();
     _ = save_json_to_config::<MainOptions>(&options, "conf_main");
+    drop(options);
+
+    let options = data.options.read().unwrap();
+    _ = save_json_to_config::<Options>(&options, "options");
     drop(options);
 
     gtk::Inhibit(false)
@@ -285,7 +305,7 @@ fn update_window_title(data: &MainData) {
 }
 
 fn apply_options(data: &Rc<MainData>) {
-    let options = data.options.borrow();
+    let options = data.main_options.borrow();
 
     if options.win_width != -1 && options.win_height != -1 {
         data.window.resize(options.win_width, options.win_height);
@@ -306,7 +326,7 @@ fn apply_options(data: &Rc<MainData>) {
 fn apply_theme(data: &Rc<MainData>) {
     if cfg!(target_os = "windows") {
         let gtk_settings = gtk::Settings::default().unwrap();
-        let options = data.options.borrow();
+        let options = data.main_options.borrow();
         gtk_settings.set_property(
             "gtk-application-prefer-dark-theme",
             options.theme == Theme::Dark
@@ -315,7 +335,7 @@ fn apply_theme(data: &Rc<MainData>) {
 }
 
 fn read_options_from_widgets(data: &Rc<MainData>) {
-    let mut options = data.options.borrow_mut();
+    let mut options = data.main_options.borrow_mut();
     let (width, height) = data.window.size();
     options.win_width = width;
     options.win_height = height;
@@ -382,6 +402,9 @@ fn handler_action_stop(data: &Rc<MainData>) {
 fn handler_action_continue(data: &Rc<MainData>) {
     gtk_utils::exec_and_show_error(&data.window, || {
         let mut state = data.state.write().unwrap();
+        for fs_handler in data.handlers.borrow().iter() {
+            fs_handler(MainGuiEvent::BeforeModeContinued);
+        }
         state.continue_prev_mode()?;
         Ok(())
     });
