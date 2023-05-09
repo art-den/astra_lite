@@ -4,6 +4,28 @@ use serde::{Serialize, Deserialize};
 
 use crate::{image_raw::FrameType, image_processing::CalibrParams};
 
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(default)]
+pub struct IndiOptions {
+    pub mount:   Option<String>,
+    pub camera:  Option<String>,
+    pub focuser: Option<String>,
+    pub remote:  bool,
+    pub address: String,
+}
+
+impl Default for IndiOptions {
+    fn default() -> Self {
+        Self {
+            mount:   None,
+            camera:  None,
+            focuser: None,
+            remote:  false,
+            address: "127.0.0.1".to_string(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
 pub enum Binning {#[default]Orig, Bin2, Bin3, Bin4}
 
@@ -399,6 +421,7 @@ impl Default for CamOptions {
 #[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(default)]
 pub struct Options {
+    pub indi:      IndiOptions,
     pub cam:       CamOptions,
     pub hist:      HistOptions,
     pub focuser:   FocuserOptions,

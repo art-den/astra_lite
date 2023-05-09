@@ -5,6 +5,8 @@ use serde::{Serialize, Deserialize};
 use crate::{indi_api, gtk_utils, io_utils::*, state::*, options::*};
 
 pub const TIMER_PERIOD_MS: u64 = 250;
+pub const CONF_FN: &str = "gui_main";
+pub const OPTIONS_FN: &str = "options";
 
 pub enum MainGuiEvent {
     Timer,
@@ -110,13 +112,13 @@ pub fn build_ui(
 
     let mut main_options = MainOptions::default();
     gtk_utils::exec_and_show_error(&window, || {
-        load_json_from_config_file(&mut main_options, "conf_main")
+        load_json_from_config_file(&mut main_options, CONF_FN)
     });
     let indi = Arc::new(indi_api::Connection::new());
 
     let mut options = Options::default();
     gtk_utils::exec_and_show_error(&window, || {
-        load_json_from_config_file(&mut options, "options")?;
+        load_json_from_config_file(&mut options, OPTIONS_FN)?;
         options.cam.raw_frames.check_and_correct()?;
         options.cam.live.check_and_correct()?;
         Ok(())
@@ -284,11 +286,11 @@ fn connect_state_events(data: &Rc<MainData>) {
 fn handler_close_window(data: &Rc<MainData>) -> gtk::Inhibit {
     read_options_from_widgets(data);
     let options = data.main_options.borrow();
-    _ = save_json_to_config::<MainOptions>(&options, "conf_main");
+    _ = save_json_to_config::<MainOptions>(&options, CONF_FN);
     drop(options);
 
     let options = data.options.read().unwrap();
-    _ = save_json_to_config::<Options>(&options, "options");
+    _ = save_json_to_config::<Options>(&options, OPTIONS_FN);
     drop(options);
 
     gtk::Inhibit(false)

@@ -10,8 +10,7 @@ use std::{
 
 use gtk::{prelude::*, glib, glib::clone};
 use itertools::Itertools;
-use serde::{Serialize, Deserialize};
-use crate::{gui_main::*, gtk_utils, indi_api, io_utils::*, gui_indi::*, state::State};
+use crate::{gui_main::*, gtk_utils, indi_api, gui_indi::*, state::State, options::Options};
 use chrono::prelude::*;
 
 impl indi_api::ConnState {
@@ -32,35 +31,14 @@ impl indi_api::ConnState {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-pub struct IndiOptions {
-    mount:   Option<String>,
-    camera:  Option<String>,
-    focuser: Option<String>,
-    remote:  bool,
-    address: String,
-}
-
-impl Default for IndiOptions {
-    fn default() -> Self {
-        Self {
-            mount:   None,
-            camera:  None,
-            focuser: None,
-            remote:  false,
-            address: "127.0.0.1".to_string(),
-        }
-    }
-}
 struct HardwareData {
     main_gui:     Rc<MainData>,
     state:        Arc<RwLock<State>>,
     indi:         Arc<indi_api::Connection>,
+    options:      Arc<RwLock<Options>>,
     builder:      gtk::Builder,
     window:       gtk::ApplicationWindow,
     indi_status:  RefCell<indi_api::ConnState>,
-    options:      RefCell<IndiOptions>,
     indi_drivers: indi_api::Drivers,
     indi_conn:    RefCell<Option<indi_api::Subscription>>,
     indi_gui:     IndiGui,
@@ -83,9 +61,6 @@ pub fn build_ui(
 ) {
     let window = win.clone();
     gtk_utils::exec_and_show_error(&win, || {
-        let mut options = IndiOptions::default();
-        load_json_from_config_file(&mut options, "conf_hardware")?;
-
         let sidebar = builder.object("sdb_indi").unwrap();
         let stack = builder.object("stk_indi").unwrap();
 
@@ -97,23 +72,24 @@ pub fn build_ui(
         };
 
         if drivers.groups.is_empty() {
-            options.remote = true; // force remote mode if no devices info
+            let mut options = main_gui.options.write().unwrap();
+            options.indi.remote = true; // force remote mode if no devices info
         }
 
         let indi_gui = IndiGui::new(&indi, sidebar, stack);
 
         let data = Rc::new(HardwareData {
-            main_gui,
             state,
             indi,
+            options:      Arc::clone(&main_gui.options),
             builder,
             window,
             indi_status:  RefCell::new(indi_api::ConnState::Disconnected),
-            options:      RefCell::new(options),
             indi_drivers: drivers,
             indi_conn:    RefCell::new(None),
             indi_gui,
             remote:       Cell::new(false),
+            main_gui,
         });
 
         fill_devices_name(&data);
@@ -151,9 +127,6 @@ pub fn build_ui(
 }
 
 fn handler_close_window(data: &Rc<HardwareData>) -> gtk::Inhibit {
-    let options = data.options.borrow();
-    _ = save_json_to_config::<IndiOptions>(&options, "conf_hardware");
-
     if let Some(indi_conn) = data.indi_conn.borrow_mut().take() {
         data.indi.unsubscribe(indi_conn);
     }
@@ -315,18 +288,18 @@ fn connect_indi_events(data: &Rc<HardwareData>) {
 fn handler_action_conn_indi(data: &Rc<HardwareData>) {
     read_options_from_widgets(data);
     gtk_utils::exec_and_show_error(&data.window, || {
-        let options = data.options.borrow();
-        let drivers = if !options.remote {
+        let options = data.options.read().unwrap();
+        let drivers = if !options.indi.remote {
             let telescopes = data.indi_drivers.get_group_by_name("Telescopes")?;
             let cameras = data.indi_drivers.get_group_by_name("CCDs")?;
             let focusers = data.indi_drivers.get_group_by_name("Focusers")?;
-            let telescope_driver_name = options.mount.as_ref()
+            let telescope_driver_name = options.indi.mount.as_ref()
                 .and_then(|name| telescopes.get_item_by_device_name(name))
                 .map(|d| &d.driver);
-            let camera_driver_name = options.camera.as_ref()
+            let camera_driver_name = options.indi.camera.as_ref()
                 .and_then(|name| cameras.get_item_by_device_name(name))
                 .map(|d| &d.driver);
-            let focuser_driver_name = options.focuser.as_ref()
+            let focuser_driver_name = options.indi.focuser.as_ref()
                 .and_then(|name| focusers.get_item_by_device_name(name))
                 .map(|d| &d.driver);
             [ telescope_driver_name,
@@ -340,17 +313,17 @@ fn handler_action_conn_indi(data: &Rc<HardwareData>) {
             Vec::new()
         };
 
-        if !options.remote && drivers.is_empty() {
+        if !options.indi.remote && drivers.is_empty() {
             anyhow::bail!("No devices selected");
         }
         let conn_settings = indi_api::ConnSettings {
             drivers,
-            remote:               options.remote,
-            host:                 options.address.clone(),
-            activate_all_devices: !options.remote,
+            remote:               options.indi.remote,
+            host:                 options.indi.address.clone(),
+            activate_all_devices: !options.indi.remote,
             .. Default::default()
         };
-        data.remote.set(options.remote);
+        data.remote.set(options.indi.remote);
         drop(options);
         data.indi.connect(&conn_settings)?;
         Ok(())
@@ -405,30 +378,28 @@ fn fill_devices_name(data: &Rc<HardwareData>) {
         cb.set_entry_text_column(1);
         cb.set_active_iter(active_iter.as_ref());
     }
-    gtk_utils::exec_and_show_error(&data.window, || {
-        let options = data.options.borrow();
-        fill_cb_list(data, "cb_mount",   "Telescopes", &options.mount);
-        fill_cb_list(data, "cb_camera",  "CCDs",       &options.camera);
-        fill_cb_list(data, "cb_focuser", "Focusers",   &options.focuser);
-        Ok(())
-    });
+
+    let options = data.options.read().unwrap();
+    fill_cb_list(data, "cb_mount",   "Telescopes", &options.indi.mount);
+    fill_cb_list(data, "cb_camera",  "CCDs",       &options.indi.camera);
+    fill_cb_list(data, "cb_focuser", "Focusers",   &options.indi.focuser);
 }
 
 fn show_options(data: &Rc<HardwareData>) {
     let bldr = &data.builder;
-    let options = data.options.borrow();
-    gtk_utils::set_bool(bldr, "chb_remote",    options.remote);
-    gtk_utils::set_str (bldr, "e_remote_addr", &options.address);
+    let options = data.options.read().unwrap();
+    gtk_utils::set_bool(bldr, "chb_remote",    options.indi.remote);
+    gtk_utils::set_str (bldr, "e_remote_addr", &options.indi.address);
 }
 
 fn read_options_from_widgets(data: &Rc<HardwareData>) {
     let bldr = &data.builder;
-    let mut options = data.options.borrow_mut();
-    options.mount   = gtk_utils::get_active_id(bldr, "cb_mount");
-    options.camera  = gtk_utils::get_active_id(bldr, "cb_camera");
-    options.focuser = gtk_utils::get_active_id(bldr, "cb_focuser");
-    options.remote  = gtk_utils::get_bool     (bldr, "chb_remote");
-    options.address = gtk_utils::get_string   (bldr, "e_remote_addr");
+    let mut options = data.options.write().unwrap();
+    options.indi.mount   = gtk_utils::get_active_id(bldr, "cb_mount");
+    options.indi.camera  = gtk_utils::get_active_id(bldr, "cb_camera");
+    options.indi.focuser = gtk_utils::get_active_id(bldr, "cb_focuser");
+    options.indi.remote  = gtk_utils::get_bool     (bldr, "chb_remote");
+    options.indi.address = gtk_utils::get_string   (bldr, "e_remote_addr");
 }
 
 fn add_log_record(
@@ -546,17 +517,18 @@ fn handler_action_help_save_indi(data: &Rc<HardwareData>) {
 }
 
 fn update_window_title(data: &Rc<HardwareData>) {
-    let options = data.options.borrow();
+    let options = data.options.read().unwrap();
     let status = data.indi_status.borrow();
     let dev_list = [
-        ("mount",   &options.mount),
-        ("camera",  &options.camera),
-        ("focuser", &options.focuser),
+        ("mount",   &options.indi.mount),
+        ("camera",  &options.indi.camera),
+        ("focuser", &options.indi.focuser),
     ].iter()
         .filter_map(|(str, v)| v.as_deref().map(
             |v| format!("{}: {}", str, v)
         ))
         .join(", ");
+    drop(options);
     data.main_gui.set_dev_list_and_conn_status(
         dev_list,
         status.to_str(true).to_string()

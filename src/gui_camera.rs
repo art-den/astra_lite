@@ -28,6 +28,7 @@ use crate::{
 };
 
 pub const SET_PROP_TIMEOUT: Option<u64> = Some(1000);
+pub const CONF_FN: &str = "gui_cam";
 
 bitflags! { #[derive(Default)] struct DelayedFlags: u32 {
     const UPDATE_CAM_LIST        = 1 << 0;
@@ -272,7 +273,7 @@ pub fn build_ui(
 ) {
     let mut gui_options = GuiOptions::default();
     gtk_utils::exec_and_show_error(&data.window, || {
-        load_json_from_config_file(&mut gui_options, "cam_tab_gui")?;
+        load_json_from_config_file(&mut gui_options, CONF_FN)?;
         Ok(())
     });
 
@@ -842,7 +843,7 @@ fn handler_close_window(data: &Rc<CameraData>) -> gtk::Inhibit {
     read_options_from_widgets(data);
 
     let gui_options = data.gui_options.borrow();
-    _ = save_json_to_config::<GuiOptions>(&gui_options, "cam_tab_gui");
+    _ = save_json_to_config::<GuiOptions>(&gui_options, CONF_FN);
     drop(gui_options);
 
     if let Some(indi_conn) = data.indi_conn.borrow_mut().take() {
