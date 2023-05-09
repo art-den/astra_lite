@@ -697,6 +697,9 @@ impl Mode for WaitingMode {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+
+const MAX_TIMED_GUIDE: f64 = 20.0; // in seconds
+
 struct GuidingData {
     mnt_calibr:        Option<MountMoveCalibrRes>,
     dither_x:          f64,
@@ -1085,8 +1088,7 @@ impl Mode for CameraActiveMode {
                     offset_y -= guid_data.dither_y;
                     let diff_dist = f64::sqrt(offset_x * offset_x + offset_y * offset_y);
                     log::debug!("diff_dist = {}px", diff_dist);
-                    if diff_dist > guid_options.max_error
-                    || dithering_flag {
+                    if diff_dist > guid_options.max_error || dithering_flag {
                         move_offset = Some((-offset_x, -offset_y));
                         log::debug!(
                             "diff_dist > guid_options.max_error ({} > {}), start mount correction",
@@ -1105,8 +1107,7 @@ impl Mode for CameraActiveMode {
                 let guid_data = self.guid_data.get_or_insert_with(|| GuidingData::new());
                 let mnt_calibr = guid_data.mnt_calibr.clone().unwrap_or_default();
                 if mnt_calibr.is_ok() {
-                    if let Some((ra, dec)) = mnt_calibr.calc(offset_x, offset_y) {
-                        log::debug!("mount correction: ra={:.2}s, dec={:.2}s", ra, dec);
+                    if let Some((mut ra, mut dec)) = mnt_calibr.calc(offset_x, offset_y) {
                         guid_data.cur_timed_guide_n = 0.0;
                         guid_data.cur_timed_guide_s = 0.0;
                         guid_data.cur_timed_guide_w = 0.0;
@@ -1124,9 +1125,16 @@ impl Mode for CameraActiveMode {
                             )?;
                         }
                         let (max_dec, max_ra) = self.indi.mount_get_timed_guide_max(&self.mount_device)?;
-                        let dec_value = f64::min(1000.0 * dec, max_dec);
-                        let ra_value = f64::min(1000.0 * ra, max_ra);
-                        self.indi.mount_timed_guide(&self.mount_device, dec_value, ra_value)?;
+                        let max_dec = f64::min(MAX_TIMED_GUIDE * 1000.0, max_dec);
+                        let max_ra = f64::min(MAX_TIMED_GUIDE * 1000.0, max_ra);
+                        ra *= 1000.0;
+                        dec *= 1000.0;
+                        if ra > max_ra { ra = max_ra; }
+                        if ra < -max_ra { ra = -max_ra; }
+                        if dec > max_dec { dec = max_dec; }
+                        if dec < -max_dec { dec = -max_dec; }
+                        log::debug!("Timed guide, NS = {:.2}s, WE = {:.2}s", dec, ra);
+                        self.indi.mount_timed_guide(&self.mount_device, dec, ra)?;
                         self.state = CamState::MountCorrection;
                         result = NotifyResult::ModeChanged;
                     }
