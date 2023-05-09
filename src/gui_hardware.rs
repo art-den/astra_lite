@@ -32,24 +32,23 @@ impl indi_api::ConnState {
     }
 }
 
-
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
-pub struct HardwareOptions {
-    mount_driver: Option<String>,
-    camera_driver: Option<String>,
-    focuser_driver: Option<String>,
-    remote: bool,
+pub struct IndiOptions {
+    mount:   Option<String>,
+    camera:  Option<String>,
+    focuser: Option<String>,
+    remote:  bool,
     address: String,
 }
 
-impl Default for HardwareOptions {
+impl Default for IndiOptions {
     fn default() -> Self {
         Self {
-            mount_driver: None,
-            camera_driver: None,
-            focuser_driver: None,
-            remote: false,
+            mount:   None,
+            camera:  None,
+            focuser: None,
+            remote:  false,
             address: "127.0.0.1".to_string(),
         }
     }
@@ -61,7 +60,7 @@ struct HardwareData {
     builder:      gtk::Builder,
     window:       gtk::ApplicationWindow,
     indi_status:  RefCell<indi_api::ConnState>,
-    options:      RefCell<HardwareOptions>,
+    options:      RefCell<IndiOptions>,
     indi_drivers: indi_api::Drivers,
     indi_conn:    RefCell<Option<indi_api::Subscription>>,
     indi_gui:     IndiGui,
@@ -84,7 +83,7 @@ pub fn build_ui(
 ) {
     let window = win.clone();
     gtk_utils::exec_and_show_error(&win, || {
-        let mut options = HardwareOptions::default();
+        let mut options = IndiOptions::default();
         load_json_from_config_file(&mut options, "conf_hardware")?;
 
         let sidebar = builder.object("sdb_indi").unwrap();
@@ -153,7 +152,7 @@ pub fn build_ui(
 
 fn handler_close_window(data: &Rc<HardwareData>) -> gtk::Inhibit {
     let options = data.options.borrow();
-    _ = save_json_to_config::<HardwareOptions>(&options, "conf_hardware");
+    _ = save_json_to_config::<IndiOptions>(&options, "conf_hardware");
 
     if let Some(indi_conn) = data.indi_conn.borrow_mut().take() {
         data.indi.unsubscribe(indi_conn);
@@ -321,13 +320,13 @@ fn handler_action_conn_indi(data: &Rc<HardwareData>) {
             let telescopes = data.indi_drivers.get_group_by_name("Telescopes")?;
             let cameras = data.indi_drivers.get_group_by_name("CCDs")?;
             let focusers = data.indi_drivers.get_group_by_name("Focusers")?;
-            let telescope_driver_name = options.mount_driver.as_ref()
+            let telescope_driver_name = options.mount.as_ref()
                 .and_then(|name| telescopes.get_item_by_device_name(name))
                 .map(|d| &d.driver);
-            let camera_driver_name = options.camera_driver.as_ref()
+            let camera_driver_name = options.camera.as_ref()
                 .and_then(|name| cameras.get_item_by_device_name(name))
                 .map(|d| &d.driver);
-            let focuser_driver_name = options.focuser_driver.as_ref()
+            let focuser_driver_name = options.focuser.as_ref()
                 .and_then(|name| focusers.get_item_by_device_name(name))
                 .map(|d| &d.driver);
             [ telescope_driver_name,
@@ -408,9 +407,9 @@ fn fill_devices_name(data: &Rc<HardwareData>) {
     }
     gtk_utils::exec_and_show_error(&data.window, || {
         let options = data.options.borrow();
-        fill_cb_list(data, "cb_mount",   "Telescopes", &options.mount_driver);
-        fill_cb_list(data, "cb_camera",  "CCDs",       &options.camera_driver);
-        fill_cb_list(data, "cb_focuser", "Focusers",   &options.focuser_driver);
+        fill_cb_list(data, "cb_mount",   "Telescopes", &options.mount);
+        fill_cb_list(data, "cb_camera",  "CCDs",       &options.camera);
+        fill_cb_list(data, "cb_focuser", "Focusers",   &options.focuser);
         Ok(())
     });
 }
@@ -425,9 +424,9 @@ fn show_options(data: &Rc<HardwareData>) {
 fn read_options_from_widgets(data: &Rc<HardwareData>) {
     let bldr = &data.builder;
     let mut options = data.options.borrow_mut();
-    options.mount_driver   = gtk_utils::get_active_id(bldr, "cb_mount");
-    options.camera_driver  = gtk_utils::get_active_id(bldr, "cb_camera");
-    options.focuser_driver = gtk_utils::get_active_id(bldr, "cb_focuser");
+    options.mount   = gtk_utils::get_active_id(bldr, "cb_mount");
+    options.camera  = gtk_utils::get_active_id(bldr, "cb_camera");
+    options.focuser = gtk_utils::get_active_id(bldr, "cb_focuser");
     options.remote  = gtk_utils::get_bool     (bldr, "chb_remote");
     options.address = gtk_utils::get_string   (bldr, "e_remote_addr");
 }
@@ -550,9 +549,9 @@ fn update_window_title(data: &Rc<HardwareData>) {
     let options = data.options.borrow();
     let status = data.indi_status.borrow();
     let dev_list = [
-        ("mount",   &options.mount_driver),
-        ("camera",  &options.camera_driver),
-        ("focuser", &options.focuser_driver),
+        ("mount",   &options.mount),
+        ("camera",  &options.camera),
+        ("focuser", &options.focuser),
     ].iter()
         .filter_map(|(str, v)| v.as_deref().map(
             |v| format!("{}: {}", str, v)

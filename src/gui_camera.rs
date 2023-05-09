@@ -1404,38 +1404,41 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
 }
 
 fn update_camera_devices_list(data: &Rc<CameraData>) {
-    let dev_list = data.main.indi.get_devices_list();
-    let cameras = dev_list
-        .iter()
-        .filter(|device|
-            device.interface.contains(indi_api::DriverInterface::CCD)
-        );
-    let cb_camera_list: gtk::ComboBoxText =
-        data.main.builder.object("cb_camera_list").unwrap();
-    let last_active_id = cb_camera_list.active_id().map(|s| s.to_string());
-    cb_camera_list.remove_all();
-    for camera in cameras {
-        cb_camera_list.append(Some(&camera.name), &camera.name);
-    }
-    let cameras_count = gtk_utils::combobox_items_count(&cb_camera_list);
-    if cameras_count == 1 {
-        cb_camera_list.set_active(Some(0));
-    } else if cameras_count > 1 {
-        let options = data.options.read().unwrap();
-        if last_active_id.is_some() {
-            cb_camera_list.set_active_id(last_active_id.as_deref());
-        } else if !options.cam.device.is_empty() {
-            cb_camera_list.set_active_id(Some(options.cam.device.as_str()));
+    data.excl.exec(|| {
+        let dev_list = data.main.indi.get_devices_list();
+        let cameras = dev_list
+            .iter()
+            .filter(|device|
+                device.interface.contains(indi_api::DriverInterface::CCD)
+            );
+        let cb_camera_list: gtk::ComboBoxText =
+            data.main.builder.object("cb_camera_list").unwrap();
+        let last_active_id = cb_camera_list.active_id().map(|s| s.to_string());
+        cb_camera_list.remove_all();
+        for camera in cameras {
+            cb_camera_list.append(Some(&camera.name), &camera.name);
         }
-        if cb_camera_list.active_id().is_none() {
+        let cameras_count = gtk_utils::combobox_items_count(&cb_camera_list);
+        if cameras_count == 1 {
             cb_camera_list.set_active(Some(0));
+        } else if cameras_count > 1 {
+            let options = data.options.read().unwrap();
+            if last_active_id.is_some() {
+                cb_camera_list.set_active_id(last_active_id.as_deref());
+            } else if !options.cam.device.is_empty() {
+                cb_camera_list.set_active_id(Some(options.cam.device.as_str()));
+            }
+            if cb_camera_list.active_id().is_none() {
+                cb_camera_list.set_active(Some(0));
+            }
         }
-    }
-    let connected = data.main.indi.state() == indi_api::ConnState::Connected;
-    gtk_utils::enable_widgets(&data.main.builder, false, &[
-        ("cb_camera_list", connected && cameras_count > 1),
-    ]);
-    data.options.write().unwrap().cam.device = cb_camera_list.active_id().map(|s| s.to_string()).unwrap_or_default();
+        let connected = data.main.indi.state() == indi_api::ConnState::Connected;
+        gtk_utils::enable_widgets(&data.main.builder, false, &[
+            ("cb_camera_list", connected && cameras_count > 1),
+        ]);
+        data.options.write().unwrap().cam.device =
+            cb_camera_list.active_id().map(|s| s.to_string()).unwrap_or_default();
+    });
 }
 
 fn update_resolution_list(data: &Rc<CameraData>) {
@@ -1472,7 +1475,7 @@ fn update_resolution_list(data: &Rc<CameraData>) {
 }
 
 fn fill_heater_items_list(data: &Rc<CameraData>) {
-    gtk_utils::exec_and_show_error(&data.main.window, ||{
+    data.excl.exec(|| gtk_utils::exec_and_show_error(&data.main.window, ||{
         let cb_cam_heater = data.main.builder.object::<gtk::ComboBoxText>("cb_cam_heater").unwrap();
         let last_heater_value = cb_cam_heater.active_id();
         cb_cam_heater.remove_all();
@@ -1492,7 +1495,7 @@ fn fill_heater_items_list(data: &Rc<CameraData>) {
             cb_cam_heater.set_active(Some(0));
         }
         Ok(())
-    });
+    }));
 }
 
 fn select_maximum_resolution(data: &Rc<CameraData>) {
@@ -2688,39 +2691,41 @@ fn init_focuser_widgets(data: &Rc<CameraData>) {
 }
 
 fn update_focuser_devices_list(data: &Rc<CameraData>) {
-    let dev_list = data.main.indi.get_devices_list();
-    let focusers = dev_list
-        .iter()
-        .filter(|device|
-            device.interface.contains(indi_api::DriverInterface::FOCUSER)
-        );
-    let cb_foc_list: gtk::ComboBoxText =
-        data.main.builder.object("cb_foc_list").unwrap();
-    let last_active_id = cb_foc_list.active_id().map(|s| s.to_string());
-    cb_foc_list.remove_all();
-    for camera in focusers {
-        cb_foc_list.append(Some(&camera.name), &camera.name);
-    }
-    let focusers_count = gtk_utils::combobox_items_count(&cb_foc_list);
-    if focusers_count == 1 {
-        cb_foc_list.set_active(Some(0));
-    } else if focusers_count > 1 {
-        let options = data.options.read().unwrap();
-        if last_active_id.is_some() {
-            cb_foc_list.set_active_id(last_active_id.as_deref());
-        } else if !options.focuser.device.is_empty() {
-            cb_foc_list.set_active_id(Some(options.focuser.device.as_str()));
+    data.excl.exec(|| {
+        let dev_list = data.main.indi.get_devices_list();
+        let focusers = dev_list
+            .iter()
+            .filter(|device|
+                device.interface.contains(indi_api::DriverInterface::FOCUSER)
+            );
+        let cb_foc_list: gtk::ComboBoxText =
+            data.main.builder.object("cb_foc_list").unwrap();
+        let last_active_id = cb_foc_list.active_id().map(|s| s.to_string());
+        cb_foc_list.remove_all();
+        for camera in focusers {
+            cb_foc_list.append(Some(&camera.name), &camera.name);
         }
-        if cb_foc_list.active_id().is_none() {
+        let focusers_count = gtk_utils::combobox_items_count(&cb_foc_list);
+        if focusers_count == 1 {
             cb_foc_list.set_active(Some(0));
+        } else if focusers_count > 1 {
+            let options = data.options.read().unwrap();
+            if last_active_id.is_some() {
+                cb_foc_list.set_active_id(last_active_id.as_deref());
+            } else if !options.focuser.device.is_empty() {
+                cb_foc_list.set_active_id(Some(options.focuser.device.as_str()));
+            }
+            if cb_foc_list.active_id().is_none() {
+                cb_foc_list.set_active(Some(0));
+            }
         }
-    }
-    let connected = data.main.indi.state() == indi_api::ConnState::Connected;
-    gtk_utils::enable_widgets(&data.main.builder, false, &[
-        ("cb_foc_list", connected && focusers_count > 1),
-    ]);
-    data.options.write().unwrap().focuser.device =
-        cb_foc_list.active_id().map(|s| s.to_string()).unwrap_or_else(String::new);
+        let connected = data.main.indi.state() == indi_api::ConnState::Connected;
+        gtk_utils::enable_widgets(&data.main.builder, false, &[
+            ("cb_foc_list", connected && focusers_count > 1),
+        ]);
+        data.options.write().unwrap().focuser.device =
+            cb_foc_list.active_id().map(|s| s.to_string()).unwrap_or_else(String::new);
+    });
 }
 
 fn update_focuser_position_widget(data: &Rc<CameraData>, new_prop: bool) {
