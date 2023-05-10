@@ -387,10 +387,20 @@ fn configure_camera_widget_props(data: &Rc<CameraData>) {
     spb_raw_frames_cnt.set_digits(0);
     spb_raw_frames_cnt.set_increments(10.0, 100.0);
 
+    let scl_dark = data.main.builder.object::<gtk::Scale>("scl_dark").unwrap();
+    scl_dark.set_range(0.0, 1.0);
+    scl_dark.set_increments(0.01, 0.1);
+    scl_dark.set_round_digits(2);
+
+    let scl_highlight = data.main.builder.object::<gtk::Scale>("scl_highlight").unwrap();
+    scl_highlight.set_range(0.0, 1.0);
+    scl_highlight.set_increments(0.01, 0.1);
+    scl_highlight.set_round_digits(2);
+
     let scl_gamma = data.main.builder.object::<gtk::Scale>("scl_gamma").unwrap();
-    scl_gamma.set_range(1.0, 10.0);
+    scl_gamma.set_range(1.0, 5.0);
     scl_gamma.set_digits(1);
-    scl_gamma.set_increments(0.5, 2.0);
+    scl_gamma.set_increments(0.1, 1.0);
     scl_gamma.set_round_digits(1);
 
     let spb_live_minutes = data.main.builder.object::<gtk::SpinButton>("spb_live_minutes").unwrap();
@@ -546,6 +556,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     gtk_utils::connect_action(&data.main.window, data, "stop_manual_focus",      handler_action_stop_manual_focus);
     gtk_utils::connect_action(&data.main.window, data, "start_dither_calibr",    handler_action_start_dither_calibr);
     gtk_utils::connect_action(&data.main.window, data, "stop_dither_calibr",     handler_action_stop_dither_calibr);
+    gtk_utils::connect_action(&data.main.window, data, "load_image",             handler_action_open_image);
 
     let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
     cb_frame_mode.connect_active_id_notify(clone!(@strong data => move |cb| {
@@ -705,10 +716,22 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
         });
     }));
 
-    let chb_auto_black = bldr.object::<gtk::CheckButton>("chb_auto_black").unwrap();
-    chb_auto_black.connect_active_notify(clone!(@strong data => move |chb| {
+    let scl_dark = bldr.object::<gtk::Scale>("scl_dark").unwrap();
+    scl_dark.connect_value_changed(clone!(@strong data => move |scl| {
         data.excl.exec(|| {
-            data.options.write().unwrap().cam.preview.auto_black = chb.is_active();
+            let mut options = data.options.write().unwrap();
+            options.cam.preview.dark_lvl = scl.value();
+            drop(options);
+            create_and_show_preview_image(&data);
+        });
+    }));
+
+    let scl_highlight = bldr.object::<gtk::Scale>("scl_highlight").unwrap();
+    scl_highlight.connect_value_changed(clone!(@strong data => move |scl| {
+        data.excl.exec(|| {
+            let mut options = data.options.write().unwrap();
+            options.cam.preview.light_lvl = scl.value();
+            drop(options);
             create_and_show_preview_image(&data);
         });
     }));
@@ -717,9 +740,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     scl_gamma.connect_value_changed(clone!(@strong data => move |scl| {
         data.excl.exec(|| {
             let mut options = data.options.write().unwrap();
-            let new_value = scl.value();
-            if f64::abs(options.cam.preview.gamma-new_value) < 0.01 { return; }
-            options.cam.preview.gamma = new_value;
+            options.cam.preview.gamma = scl.value();
             drop(options);
             create_and_show_preview_image(&data);
         });
@@ -930,7 +951,9 @@ fn show_options(data: &Rc<CameraData>) {
 
         gtk_utils::set_active_id(bld, "cb_preview_src",      options.cam.preview.source.to_active_id());
         gtk_utils::set_active_id(bld, "cb_preview_scale",    options.cam.preview.scale.to_active_id());
-        gtk_utils::set_bool     (bld, "chb_auto_black",      options.cam.preview.auto_black);
+
+        gtk_utils::set_f64      (bld, "scl_dark",            options.cam.preview.dark_lvl);
+        gtk_utils::set_f64      (bld, "scl_highlight",       options.cam.preview.light_lvl);
         gtk_utils::set_f64      (bld, "scl_gamma",           options.cam.preview.gamma);
         gtk_utils::set_bool     (bld, "chb_rem_grad",        options.cam.preview.remove_grad);
 
@@ -1044,8 +1067,9 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.cam.quality.use_max_ovality = gtk_utils::get_bool     (bld, "chb_max_oval");
     options.cam.quality.max_ovality     = gtk_utils::get_f64      (bld, "spb_max_oval") as f32;
 
-    options.cam.preview.auto_black   = gtk_utils::get_bool     (bld, "chb_auto_black");
     options.cam.preview.gamma        = gtk_utils::get_f64      (bld, "scl_gamma");
+    options.cam.preview.dark_lvl     = gtk_utils::get_f64      (bld, "scl_dark");
+    options.cam.preview.light_lvl    = gtk_utils::get_f64      (bld, "scl_highlight");
     options.cam.preview.remove_grad  = gtk_utils::get_bool     (bld, "chb_rem_grad");
 
     options.hist.log_x           = gtk_utils::get_bool(bld, "ch_hist_logx");
@@ -1576,7 +1600,8 @@ fn get_preview_params(
     };
 
     PreviewParams {
-        auto_min: options.auto_black,
+        dark_lvl: options.dark_lvl,
+        light_lvl: options.light_lvl,
         gamma: options.gamma,
         img_size,
         orig_frame_in_ls: options.source == PreviewSource::OrigFrame,
@@ -3114,4 +3139,55 @@ fn show_mount_parked_state(data: &Rc<CameraData>, parked: bool) {
     data.excl.exec(|| {
         gtk_utils::set_bool_prop(&data.main.builder, "chb_parked", "active", parked);
     });
+}
+
+fn handler_action_open_image(data: &Rc<CameraData>) {
+    let fc = gtk::FileChooserDialog::builder()
+        .action(gtk::FileChooserAction::Open)
+        .title("Select image file to open")
+        .modal(true)
+        .transient_for(&data.main.window)
+        .build();
+    if cfg!(target_os = "windows") {
+        fc.add_buttons(&[
+            ("_Open", gtk::ResponseType::Accept),
+            ("_Cancel", gtk::ResponseType::Cancel),
+        ]);
+    } else {
+        fc.add_buttons(&[
+            ("_Cancel", gtk::ResponseType::Cancel),
+            ("_Open", gtk::ResponseType::Accept),
+        ]);
+    }
+    fc.connect_response(clone!(@strong data => move |file_chooser, response| {
+        if response == gtk::ResponseType::Accept {
+            gtk_utils::exec_and_show_error(&data.main.window, || {
+                let Some(file_name) = file_chooser.file() else { return Ok(()); };
+                read_options_from_widgets(&data);
+                let mut image = data.cur_frame.image.write().unwrap();
+                image.load_from_file(&file_name.path().unwrap_or_default())?;
+                let options = data.options.read().unwrap();
+                if options.cam.preview.remove_grad {
+                    image.remove_gradient();
+                }
+                drop(image);
+
+                let image = data.cur_frame.image.read().unwrap();
+                let mut hist = data.cur_frame.hist.write().unwrap();
+                hist.from_image(&image);
+                drop(hist);
+                let mut hist = data.cur_frame.raw_hist.write().unwrap();
+                hist.from_image(&image);
+                drop(hist);
+                drop(image);
+
+                create_and_show_preview_image(&data);
+                show_histogram_stat(&data);
+                repaint_histogram(&data);
+                Ok(())
+            });
+        }
+        file_chooser.close();
+    }));
+    fc.show();
 }

@@ -239,7 +239,8 @@ pub enum ImgPreviewScale {#[default]FitWindow, Original, P75, P50, P33, P25}
 #[serde(default)]
 pub struct PreviewOptions {
     pub scale:       ImgPreviewScale,
-    pub auto_black:  bool,
+    pub dark_lvl:    f64,
+    pub light_lvl:   f64,
     pub gamma:       f64,
     pub source:      PreviewSource,
     pub remove_grad: bool,
@@ -249,8 +250,9 @@ impl Default for PreviewOptions {
     fn default() -> Self {
         Self {
             scale:       ImgPreviewScale::default(),
-            auto_black:  true,
-            gamma:       5.0,
+            dark_lvl:    0.2,
+            light_lvl:   0.8,
+            gamma:       2.2,
             source:      PreviewSource::default(),
             remove_grad: false,
         }

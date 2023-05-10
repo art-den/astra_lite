@@ -30,6 +30,21 @@
       </object>
     </child>
     <child>
+      <object class="GtkMenuItem" id="mi_load_image">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="action-name">win.load_image</property>
+        <property name="label" translatable="yes">Load image...</property>
+        <property name="use-underline">True</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkSeparatorMenuItem">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+      </object>
+    </child>
+    <child>
       <object class="GtkMenuItem">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
@@ -1834,20 +1849,7 @@ Better use "Subtrack master DARK frame"</property>
                             <property name="can-focus">False</property>
                             <property name="margin-start">5</property>
                             <property name="margin-end">5</property>
-                            <property name="margin-top">5</property>
                             <property name="spacing">5</property>
-                            <child>
-                              <object class="GtkSeparator">
-                                <property name="visible">True</property>
-                                <property name="can-focus">False</property>
-                                <property name="orientation">vertical</property>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">0</property>
-                              </packing>
-                            </child>
                             <child>
                               <object class="GtkLabel">
                                 <property name="visible">True</property>
@@ -1857,7 +1859,7 @@ Better use "Subtrack master DARK frame"</property>
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="position">1</property>
+                                <property name="position">0</property>
                               </packing>
                             </child>
                             <child>
@@ -1874,7 +1876,7 @@ Better use "Subtrack master DARK frame"</property>
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="position">2</property>
+                                <property name="position">1</property>
                               </packing>
                             </child>
                             <child>
@@ -1886,7 +1888,7 @@ Better use "Subtrack master DARK frame"</property>
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="position">3</property>
+                                <property name="position">2</property>
                               </packing>
                             </child>
                             <child>
@@ -1906,7 +1908,7 @@ Better use "Subtrack master DARK frame"</property>
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="position">4</property>
+                                <property name="position">3</property>
                               </packing>
                             </child>
                             <child>
@@ -1914,6 +1916,102 @@ Better use "Subtrack master DARK frame"</property>
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
                                 <property name="orientation">vertical</property>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">4</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <!-- n-columns=3 n-rows=2 -->
+                              <object class="GtkGrid">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="visible">True</property>
+                                    <property name="can-focus">False</property>
+                                    <property name="label" translatable="yes">Darks</property>
+                                    <property name="width-chars">16</property>
+                                  </object>
+                                  <packing>
+                                    <property name="left-attach">0</property>
+                                    <property name="top-attach">0</property>
+                                  </packing>
+                                </child>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="visible">True</property>
+                                    <property name="can-focus">False</property>
+                                    <property name="label" translatable="yes">Gamma</property>
+                                    <property name="width-chars">16</property>
+                                  </object>
+                                  <packing>
+                                    <property name="left-attach">1</property>
+                                    <property name="top-attach">0</property>
+                                  </packing>
+                                </child>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="visible">True</property>
+                                    <property name="can-focus">False</property>
+                                    <property name="label" translatable="yes">Highlights</property>
+                                    <property name="width-chars">16</property>
+                                  </object>
+                                  <packing>
+                                    <property name="left-attach">2</property>
+                                    <property name="top-attach">0</property>
+                                  </packing>
+                                </child>
+                                <child>
+                                  <object class="GtkScale" id="scl_dark">
+                                    <property name="visible">True</property>
+                                    <property name="can-focus">True</property>
+                                    <property name="lower-stepper-sensitivity">off</property>
+                                    <property name="upper-stepper-sensitivity">off</property>
+                                    <property name="round-digits">1</property>
+                                    <property name="draw-value">False</property>
+                                    <property name="value-pos">left</property>
+                                  </object>
+                                  <packing>
+                                    <property name="left-attach">0</property>
+                                    <property name="top-attach">1</property>
+                                  </packing>
+                                </child>
+                                <child>
+                                  <object class="GtkScale" id="scl_highlight">
+                                    <property name="visible">True</property>
+                                    <property name="can-focus">True</property>
+                                    <property name="lower-stepper-sensitivity">off</property>
+                                    <property name="upper-stepper-sensitivity">off</property>
+                                    <property name="round-digits">1</property>
+                                    <property name="draw-value">False</property>
+                                    <property name="value-pos">left</property>
+                                  </object>
+                                  <packing>
+                                    <property name="left-attach">2</property>
+                                    <property name="top-attach">1</property>
+                                  </packing>
+                                </child>
+                                <child>
+                                  <object class="GtkScale" id="scl_gamma">
+                                    <property name="width-request">-1</property>
+                                    <property name="visible">True</property>
+                                    <property name="can-focus">True</property>
+                                    <property name="valign">center</property>
+                                    <property name="lower-stepper-sensitivity">off</property>
+                                    <property name="upper-stepper-sensitivity">off</property>
+                                    <property name="restrict-to-fill-level">False</property>
+                                    <property name="fill-level">0</property>
+                                    <property name="round-digits">1</property>
+                                    <property name="value-pos">left</property>
+                                  </object>
+                                  <packing>
+                                    <property name="left-attach">1</property>
+                                    <property name="top-attach">1</property>
+                                  </packing>
+                                </child>
                               </object>
                               <packing>
                                 <property name="expand">False</property>
@@ -1922,52 +2020,6 @@ Better use "Subtrack master DARK frame"</property>
                               </packing>
                             </child>
                             <child>
-                              <object class="GtkCheckButton" id="chb_auto_black">
-                                <property name="label" translatable="yes">Auto black</property>
-                                <property name="visible">True</property>
-                                <property name="can-focus">True</property>
-                                <property name="receives-default">False</property>
-                                <property name="valign">center</property>
-                                <property name="draw-indicator">True</property>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">6</property>
-                              </packing>
-                            </child>
-                            <child>
-                              <object class="GtkLabel">
-                                <property name="visible">True</property>
-                                <property name="can-focus">False</property>
-                                <property name="label" translatable="yes">Gamma:</property>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">7</property>
-                              </packing>
-                            </child>
-                            <child>
-                              <object class="GtkScale" id="scl_gamma">
-                                <property name="width-request">160</property>
-                                <property name="visible">True</property>
-                                <property name="can-focus">True</property>
-                                <property name="valign">center</property>
-                                <property name="lower-stepper-sensitivity">off</property>
-                                <property name="upper-stepper-sensitivity">off</property>
-                                <property name="restrict-to-fill-level">False</property>
-                                <property name="fill-level">0</property>
-                                <property name="round-digits">1</property>
-                                <property name="value-pos">left</property>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">8</property>
-                              </packing>
-                            </child>
-                            <child>
                               <object class="GtkSeparator">
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
@@ -1976,7 +2028,7 @@ Better use "Subtrack master DARK frame"</property>
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="position">9</property>
+                                <property name="position">6</property>
                               </packing>
                             </child>
                             <child>
@@ -1992,7 +2044,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="position">10</property>
+                                <property name="position">7</property>
                               </packing>
                             </child>
                           </object>

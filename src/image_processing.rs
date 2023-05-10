@@ -11,7 +11,7 @@ use crate::{
     log_utils::*,
     stars_offset::*,
     options::*,
-    state::ModeType,
+    state::ModeType, math::linear_interpolate,
 };
 
 pub enum ResultImageInfo {
@@ -75,7 +75,8 @@ impl PreviewImgSize {
 
 #[derive(PartialEq, Clone)]
 pub struct PreviewParams {
-    pub auto_min:         bool,
+    pub dark_lvl:         f64,
+    pub light_lvl:        f64,
     pub gamma:            f64,
     pub img_size:         PreviewImgSize,
     pub orig_frame_in_ls: bool,
@@ -314,19 +315,59 @@ pub fn get_rgb_bytes_from_preview_image(
         image.height()
     );
     log::debug!("reduct_ratio = {}", reduct_ratio);
-    const BLACK_PERCENTILE: usize = 5;
-    let l_blk_lvl = || hist.l.as_ref().map(|h| h.get_percentile(BLACK_PERCENTILE)).unwrap_or(0);
-    let r_blk_lvl = || hist.r.as_ref().map(|h| h.get_percentile(BLACK_PERCENTILE)).unwrap_or(0);
-    let g_blk_lvl = || hist.g.as_ref().map(|h| h.get_percentile(BLACK_PERCENTILE)).unwrap_or(0);
-    let b_blk_lvl = || hist.b.as_ref().map(|h| h.get_percentile(BLACK_PERCENTILE)).unwrap_or(0);
-    image.to_grb_bytes(
-        if options.auto_min { Some(l_blk_lvl() as i32) } else { None },
-        if options.auto_min { Some(r_blk_lvl() as i32) } else { None },
-        if options.auto_min { Some(g_blk_lvl() as i32) } else { None },
-        if options.auto_min { Some(b_blk_lvl() as i32) } else { None },
-        options.gamma,
-        reduct_ratio
-    )
+
+    const DARK_MIN_PERCENTILE: usize = 1;
+    const DARK_MAX_PERCENTILE: usize = 50;
+    const LIGHT_MIN_PERCENTILE: usize = 55;
+    const LIGHT_MAX_PERCENTILE: usize = 99;
+
+    let l_levels = if let Some(hist) = &hist.l {
+        let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
+        let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
+        let light_min = hist.get_percentile(LIGHT_MIN_PERCENTILE) as f64;
+        let light_max = 2.0 * hist.get_percentile(LIGHT_MAX_PERCENTILE) as f64;
+        let light_max = f64::min(light_max, image.max_value() as f64);
+        let dark = linear_interpolate(options.dark_lvl, 1.0, 0.0, dark_min, dark_max);
+        let light = linear_interpolate(options.light_lvl, 1.0, 0.0, light_min, light_max);
+        DarkLightLevels { dark, light }
+    } else {
+        DarkLightLevels::default()
+    };
+
+    let g_levels = if let Some(hist) = &hist.g {
+        let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
+        let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
+        let light_min = hist.get_percentile(LIGHT_MIN_PERCENTILE) as f64;
+        let light_max = 2.0 * hist.get_percentile(LIGHT_MAX_PERCENTILE) as f64;
+        let light_max = f64::min(light_max, image.max_value() as f64);
+        let dark = linear_interpolate(options.dark_lvl, 1.0, 0.0, dark_min, dark_max);
+        let light = linear_interpolate(options.light_lvl, 1.0, 0.0, light_min, light_max);
+        DarkLightLevels { dark, light }
+    } else {
+        DarkLightLevels::default()
+    };
+
+    let g_range = g_levels.light - g_levels.dark;
+
+    let r_levels = if let Some(hist) = &hist.r {
+        let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
+        let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
+        let dark = linear_interpolate(options.dark_lvl, 1.0, 0.0, dark_min, dark_max);
+        DarkLightLevels { dark, light: dark + g_range }
+    } else {
+        DarkLightLevels::default()
+    };
+
+    let b_levels = if let Some(hist) = &hist.b {
+        let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
+        let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
+        let dark = linear_interpolate(options.dark_lvl, 1.0, 0.0, dark_min, dark_max);
+        DarkLightLevels { dark, light: dark + g_range }
+    } else {
+        DarkLightLevels::default()
+    };
+
+    image.to_grb_bytes(&l_levels, &r_levels, &g_levels, &b_levels, options.gamma, reduct_ratio)
 }
 
 fn apply_calibr_data_and_remove_hot_pixels(

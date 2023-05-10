@@ -1,4 +1,4 @@
-use std::{path::Path, io::BufWriter, fs::File};
+use std::{path::Path, io::{BufWriter, BufReader}, fs::File};
 
 use itertools::*;
 use rayon::prelude::*;
@@ -418,47 +418,14 @@ impl Image {
         self.max_value
     }
 
-    pub fn save_to_tiff(&self, file_name: &Path) -> anyhow::Result<()> {
-        use tiff::encoder::*;
-
-        let mut file = BufWriter::new(File::create(file_name)?);
-        let mut decoder = TiffEncoder::new(&mut file)?;
-        if self.is_monochrome() {
-            let tiff = decoder.new_image::<colortype::Gray16>(
-                self.width as u32,
-                self.height as u32
-            )?;
-            tiff.write_data(self.l.as_slice())?;
-        }
-        else if self.is_color() {
-            let data: Vec<_> = izip!(self.r.as_slice(), self.g.as_slice(), self.b.as_slice())
-                .map(|(r, g, b)| {
-                    let r = (*r as i32 + self.zero).max(0).min(u16::MAX as i32);
-                    let g = (*g as i32 + self.zero).max(0).min(u16::MAX as i32);
-                    let b = (*b as i32 + self.zero).max(0).min(u16::MAX as i32);
-                    [r as u16, g as u16, b as u16]
-                })
-                .flatten()
-                .collect();
-            let tiff = decoder.new_image::<colortype::RGB16>(
-                self.width as u32,
-                self.height as u32
-            )?;
-            tiff.write_data(&data)?;
-        } else {
-            panic!("Internal error");
-        }
-        Ok(())
-    }
-
     pub fn to_grb_bytes(
         &self,
-        l_black_level: Option<i32>,
-        r_black_level: Option<i32>,
-        g_black_level: Option<i32>,
-        b_black_level: Option<i32>,
-        gamma:         f64,
-        reduct_ratio:  usize,
+        l_levels:     &DarkLightLevels,
+        r_levels:     &DarkLightLevels,
+        g_levels:     &DarkLightLevels,
+        b_levels:     &DarkLightLevels,
+        gamma:        f64,
+        reduct_ratio: usize,
     ) -> RgbU8Data {
         if self.is_empty() {
             return RgbU8Data::default();
@@ -467,37 +434,47 @@ impl Image {
             width:          self.width,
             height:         self.height,
             is_color_image: self.is_color(),
-            max_value:      self.max_value,
-            l_black_level:  l_black_level.unwrap_or(self.zero),
-            r_black_level:  r_black_level.unwrap_or(self.zero),
-            g_black_level:  g_black_level.unwrap_or(self.zero),
-            b_black_level:  b_black_level.unwrap_or(self.zero),
             gamma,
         };
-        let table = Self::create_gamma_table(args.max_value as f32, args.gamma);
+        let r_table = Self::create_gamma_table(r_levels.dark, r_levels.light, gamma);
+        let g_table = Self::create_gamma_table(g_levels.dark, g_levels.light, gamma);
+        let b_table = Self::create_gamma_table(b_levels.dark, b_levels.light, gamma);
+        let l_table = Self::create_gamma_table(l_levels.dark, l_levels.light, gamma);
         match reduct_ratio {
-            1 => self.to_grb_bytes_no_reduct(&table, args),
-            2 => self.to_grb_bytes_reduct2(&table, args),
-            3 => self.to_grb_bytes_reduct3(&table, args),
-            4 => self.to_grb_bytes_reduct4(&table, args),
+            1 => self.to_grb_bytes_no_reduct(&r_table, &g_table, &b_table, &l_table, args),
+            2 => self.to_grb_bytes_reduct2  (&r_table, &g_table, &b_table, &l_table, args),
+            3 => self.to_grb_bytes_reduct3  (&r_table, &g_table, &b_table, &l_table, args),
+            4 => self.to_grb_bytes_reduct4  (&r_table, &g_table, &b_table, &l_table, args),
             _ => panic!("Wrong reduct_ratio ({})", reduct_ratio),
         }
     }
 
-    fn create_gamma_table(max_value: f32, gamma: f64) -> Vec<u8> {
-        let pow_value = 1.0 / gamma as f32;
-        let k = 255_f32 / max_value.powf(pow_value);
+    fn create_gamma_table(min_value: f64, max_value: f64, gamma: f64) -> Vec<u8> {
         let mut table = Vec::new();
-        for i in 0..65536 {
-            table.push((k * (i as f32).powf(pow_value)) as u8);
+        if min_value == 0.0 && max_value == 0.0 {
+            return table;
+        }
+        for i in 0..=u16::MAX {
+            let v = linear_interpolate(i as f64, min_value, max_value, 0.0, 1.0);
+            let table_v = if v < 0.0 {
+                0.0
+            } else if v > 1.0 {
+                u8::MAX as f64
+            } else {
+                v.powf(1.0 / gamma) * u8::MAX as f64
+            };
+            table.push(table_v as u8);
         }
         table
     }
 
     fn to_grb_bytes_no_reduct(
         &self,
-        table: &[u8],
-        args:  ImageToU8BytesArgs,
+        r_table: &[u8],
+        g_table: &[u8],
+        b_table: &[u8],
+        l_table: &[u8],
+        args:    ImageToU8BytesArgs,
     ) -> RgbU8Data {
         let mut rgb_bytes = Vec::with_capacity(3 * args.width * args.height);
         if args.is_color_image {
@@ -507,15 +484,15 @@ impl Image {
                 let b_iter = self.b.row(row).iter();
                 for (r, g, b) in
                 izip!(r_iter, g_iter, b_iter) {
-                    rgb_bytes.push(table[(*r as i32 - args.r_black_level).min(65535).max(0) as usize]);
-                    rgb_bytes.push(table[(*g as i32 - args.g_black_level).min(65535).max(0) as usize]);
-                    rgb_bytes.push(table[(*b as i32 - args.b_black_level).min(65535).max(0) as usize]);
+                    rgb_bytes.push(r_table[*r as usize]);
+                    rgb_bytes.push(g_table[*g as usize]);
+                    rgb_bytes.push(b_table[*b as usize]);
                 }
             }
         } else {
             for row in 0..args.height {
                 for l in self.l.row(row).iter() {
-                    let l = table[(*l as i32 - args.l_black_level).min(65535).max(0) as usize];
+                    let l = l_table[*l as usize];
                     rgb_bytes.push(l);
                     rgb_bytes.push(l);
                     rgb_bytes.push(l);
@@ -534,8 +511,11 @@ impl Image {
 
     fn to_grb_bytes_reduct2(
         &self,
-        table: &[u8],
-        args:  ImageToU8BytesArgs,
+        r_table: &[u8],
+        g_table: &[u8],
+        b_table: &[u8],
+        l_table: &[u8],
+        args:    ImageToU8BytesArgs,
     ) -> RgbU8Data {
         let width = args.width / 2;
         let height = args.height / 2;
@@ -561,9 +541,9 @@ impl Image {
                         *b0 as u32 + *b0.offset(1) as u32 +
                         *b1 as u32 + *b1.offset(1) as u32 + 2
                     ) / 4};
-                    bytes.push(table[(r as i32 - args.r_black_level).min(65535).max(0) as usize]);
-                    bytes.push(table[(g as i32 - args.g_black_level).min(65535).max(0) as usize]);
-                    bytes.push(table[(b as i32 - args.b_black_level).min(65535).max(0) as usize]);
+                    bytes.push(r_table[r as usize]);
+                    bytes.push(g_table[g as usize]);
+                    bytes.push(b_table[b as usize]);
                     r0 = r0.wrapping_offset(2);
                     r1 = r1.wrapping_offset(2);
                     g0 = g0.wrapping_offset(2);
@@ -581,7 +561,7 @@ impl Image {
                         *l0 as u32 + *l0.offset(1) as u32 +
                         *l1 as u32 + *l1.offset(1) as u32 + 2
                     ) / 4};
-                    let l = table[(l as i32 - args.l_black_level).min(65535).max(0) as usize];
+                    let l = l_table[l as usize];
                     bytes.push(l);
                     bytes.push(l);
                     bytes.push(l);
@@ -595,8 +575,11 @@ impl Image {
 
     fn to_grb_bytes_reduct3(
         &self,
-        table: &[u8],
-        args:  ImageToU8BytesArgs,
+        r_table: &[u8],
+        g_table: &[u8],
+        b_table: &[u8],
+        l_table: &[u8],
+        args:    ImageToU8BytesArgs,
     ) -> RgbU8Data {
         let width = args.width / 3;
         let height = args.height / 3;
@@ -628,9 +611,9 @@ impl Image {
                         *b1 as u32 + *b1.offset(1) as u32 + *b1.offset(2) as u32 +
                         *b2 as u32 + *b2.offset(1) as u32 + *b2.offset(2) as u32 + 4
                     ) / 9};
-                    bytes.push(table[(r as i32 - args.r_black_level).min(65535).max(0) as usize]);
-                    bytes.push(table[(g as i32 - args.g_black_level).min(65535).max(0) as usize]);
-                    bytes.push(table[(b as i32 - args.b_black_level).min(65535).max(0) as usize]);
+                    bytes.push(r_table[r as usize]);
+                    bytes.push(g_table[g as usize]);
+                    bytes.push(b_table[b as usize]);
                     r0 = r0.wrapping_offset(3);
                     r1 = r1.wrapping_offset(3);
                     r2 = r2.wrapping_offset(3);
@@ -653,7 +636,7 @@ impl Image {
                         *l1 as u32 + *l1.offset(1) as u32 + *l1.offset(2) as u32 +
                         *l2 as u32 + *l2.offset(1) as u32 + *l2.offset(2) as u32 + 4
                     ) / 9};
-                    let l = table[(l as i32 - args.l_black_level).min(65535).max(0) as usize];
+                    let l = l_table[l as usize];
                     bytes.push(l);
                     bytes.push(l);
                     bytes.push(l);
@@ -668,8 +651,11 @@ impl Image {
 
     fn to_grb_bytes_reduct4(
         &self,
-        table: &[u8],
-        args:  ImageToU8BytesArgs,
+        r_table: &[u8],
+        g_table: &[u8],
+        b_table: &[u8],
+        l_table: &[u8],
+        args:    ImageToU8BytesArgs,
     ) -> RgbU8Data {
         let width = args.width / 4;
         let height = args.height / 4;
@@ -707,9 +693,9 @@ impl Image {
                         *b2 as u32 + *b2.offset(1) as u32 + *b2.offset(2) as u32 + *b2.offset(3) as u32 +
                         *b3 as u32 + *b3.offset(1) as u32 + *b3.offset(2) as u32 + *b3.offset(3) as u32 + 8
                     ) / 16};
-                    bytes.push(table[(r as i32 - args.r_black_level).min(65535).max(0) as usize]);
-                    bytes.push(table[(g as i32 - args.g_black_level).min(65535).max(0) as usize]);
-                    bytes.push(table[(b as i32 - args.b_black_level).min(65535).max(0) as usize]);
+                    bytes.push(r_table[r as usize]);
+                    bytes.push(g_table[g as usize]);
+                    bytes.push(b_table[b as usize]);
                     r0 = r0.wrapping_offset(4);
                     r1 = r1.wrapping_offset(4);
                     r2 = r2.wrapping_offset(4);
@@ -737,7 +723,7 @@ impl Image {
                         *l2 as u32 + *l2.offset(1) as u32 + *l2.offset(2) as u32 + *l2.offset(3) as u32 +
                         *l3 as u32 + *l3.offset(1) as u32 + *l3.offset(2) as u32 + *l3.offset(3) as u32 + 8
                     ) / 16};
-                    let l = table[(l as i32 - args.l_black_level).min(65535).max(0) as usize];
+                    let l = l_table[l as usize];
                     bytes.push(l);
                     bytes.push(l);
                     bytes.push(l);
@@ -757,6 +743,153 @@ impl Image {
         self.g.remove_gradient();
         self.b.remove_gradient();
     }
+
+    pub fn load_from_file(&mut self, file_name: &Path) -> anyhow::Result<()> {
+        let ext = file_name.extension().unwrap_or_default().to_str().unwrap_or_default();
+        if ext.eq_ignore_ascii_case("tif") || ext.eq_ignore_ascii_case("tiff") {
+            self.load_from_tiff_file(file_name)
+        } else {
+            anyhow::bail!("Format is not supported")
+        }
+    }
+
+    pub fn save_to_tiff(&self, file_name: &Path) -> anyhow::Result<()> {
+        use tiff::encoder::*;
+
+        let mut file = BufWriter::new(File::create(file_name)?);
+        let mut decoder = TiffEncoder::new(&mut file)?;
+        if self.is_monochrome() {
+            let tiff = decoder.new_image::<colortype::Gray16>(
+                self.width as u32,
+                self.height as u32
+            )?;
+            tiff.write_data(self.l.as_slice())?;
+        }
+        else if self.is_color() {
+            let data: Vec<_> = izip!(self.r.as_slice(), self.g.as_slice(), self.b.as_slice())
+                .map(|(r, g, b)| {
+                    let r = (*r as i32 + self.zero).max(0).min(u16::MAX as i32);
+                    let g = (*g as i32 + self.zero).max(0).min(u16::MAX as i32);
+                    let b = (*b as i32 + self.zero).max(0).min(u16::MAX as i32);
+                    [r as u16, g as u16, b as u16]
+                })
+                .flatten()
+                .collect();
+            let tiff = decoder.new_image::<colortype::RGB16>(
+                self.width as u32,
+                self.height as u32
+            )?;
+            tiff.write_data(&data)?;
+        } else {
+            panic!("Internal error");
+        }
+        Ok(())
+    }
+
+    pub fn load_from_tiff_file(&mut self, file_name: &Path) -> anyhow::Result<()> {
+        use tiff::decoder::*;
+
+        fn assign_img_data<S: Copy>(
+            src:    &[S],
+            img:    &mut Image,
+            y1:     usize,
+            y2:     usize,
+            is_rgb: bool,
+            cvt:    fn (from: S) -> u16
+        ) -> anyhow::Result<()> {
+            let from = y1 * img.width;
+            let to = y2 * img.width;
+            if is_rgb {
+                let r_dst = &mut img.r.as_slice_mut()[from..to];
+                let g_dst = &mut img.g.as_slice_mut()[from..to];
+                let b_dst = &mut img.b.as_slice_mut()[from..to];
+                for (dr, dg, db, (sr, sg, sb))
+                in izip!(r_dst, g_dst, b_dst, src.iter().tuples()) {
+                    *dr = cvt(*sr);
+                    *dg = cvt(*sg);
+                    *db = cvt(*sb);
+                }
+            } else {
+                let l_dst = &mut img.l.as_slice_mut()[from..to];
+                for (d, s) in izip!(l_dst, src.iter()) {
+                    *d = cvt(*s);
+                }
+            }
+            Ok(())
+        }
+
+        let file = BufReader::new(File::open(file_name)?);
+        let mut decoder = Decoder::new(file)?;
+        let (width, height) = decoder.dimensions()?;
+        let is_rgb = match decoder.colortype()? {
+            tiff::ColorType::Gray(_) => {
+                self.make_monochrome(width as usize, height as usize, 0, u16::MAX);
+                false
+            }
+            tiff::ColorType::RGB(_) => {
+                self.make_color(width as usize, height as usize, 0, u16::MAX);
+                true
+            }
+            ct =>
+                anyhow::bail!("Color type {:?} unsupported", ct)
+        };
+
+        let chunk_size_y = decoder.chunk_dimensions().1 as usize;
+        let chunks_cnt = decoder.strip_count()? as usize;
+        for chunk_index in 0..chunks_cnt {
+            let chunk = decoder.read_chunk(chunk_index as u32)?;
+            let y1 = (chunk_index * chunk_size_y) as usize;
+            let y2 = (y1 + chunk_size_y).min(self.height);
+            match chunk {
+                DecodingResult::U8(data) =>
+                    assign_img_data(
+                        &data,
+                        self,
+                        y1, y2,
+                        is_rgb,
+                        |v| v as u16 * 256
+                    ),
+
+                DecodingResult::U16(data) =>
+                    assign_img_data(
+                        &data,
+                        self,
+                        y1, y2,
+                        is_rgb,
+                        |v| v
+                    ),
+
+                DecodingResult::F32(data) =>
+                    assign_img_data(
+                        &data,
+                        self,
+                        y1, y2,
+                        is_rgb,
+                        |v| (v as f64 * u16::MAX as f64) as u16
+                    ),
+
+                DecodingResult::F64(data) =>
+                    assign_img_data(
+                        &data,
+                        self,
+                        y1, y2,
+                        is_rgb,
+                        |v| (v * u16::MAX as f64) as u16
+                    ),
+
+                _ =>
+                    Err(anyhow::anyhow!("Format unsupported"))
+            }?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub struct DarkLightLevels {
+    pub dark:  f64,
+    pub light: f64,
 }
 
 #[derive(Default)]
@@ -772,11 +905,6 @@ struct ImageToU8BytesArgs {
     width:          usize,
     height:         usize,
     is_color_image: bool,
-    max_value:      u16,
-    l_black_level:  i32,
-    r_black_level:  i32,
-    g_black_level:  i32,
-    b_black_level:  i32,
     gamma:          f64,
 }
 
