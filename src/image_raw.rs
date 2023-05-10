@@ -159,14 +159,14 @@ impl RawImage {
         let bin        = image_hdu.get_i64("XBINNING").unwrap_or(1) as u8;
         let mut offset = image_hdu.get_i64("OFFSET"  ).unwrap_or(0) as i32;
         let frame_str  = image_hdu.get_str("FRAME"   );
-        let data       = image_hdu.data_u16(&mut stream).unwrap();
+        let data       = image_hdu.data_u16(&mut stream)?;
 
         if let (0, Some(config_offset)) = (offset, config_offset) {
             offset = config_offset;
         }
 
         if bitdepth > 16 {
-            anyhow::bail!("BITDEPTH = {} is not supported", bitdepth);
+            anyhow::bail!("BITDEPTH > 16 ({}) is not supported", bitdepth);
         }
 
         let max_value = ((1 << bitdepth) - 1) as u16;
