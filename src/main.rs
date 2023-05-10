@@ -46,8 +46,6 @@ fn main() -> anyhow::Result<()> {
         env!("CARGO_PKG_VERSION")
     );
 
-    std::panic::set_hook(Box::new(panic_handler));
-
     let application = gtk::Application::new(
         Some(&format!("com.github.art-den.{}", env!("CARGO_PKG_NAME"))),
         Default::default(),
@@ -57,24 +55,3 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn panic_handler(panic_info: &std::panic::PanicInfo) {
-    let payload_str =
-        if let Some(msg) = panic_info.payload().downcast_ref::<&'static str>() {
-            Some(*msg)
-        } else if let Some(msg) = panic_info.payload().downcast_ref::<String>() {
-            Some(msg.as_str())
-        } else {
-            None
-        };
-
-    log::error!("(╯°□°）╯︵ ┻━┻ PANIC OCCURRED");
-
-    if let Some(payload) = payload_str {
-        log::error!("Panic paiload: {}", payload);
-        println!("{}", payload);
-    }
-
-    if let Some(loc) = panic_info.location() {
-        log::error!("Panic location: {}", loc);
-    }
-}

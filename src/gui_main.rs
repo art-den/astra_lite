@@ -88,10 +88,43 @@ impl Drop for MainData {
     }
 }
 
+fn panic_handler(panic_info: &std::panic::PanicInfo, indi: &Arc<indi_api::Connection>) {
+    let payload_str =
+        if let Some(msg) = panic_info.payload().downcast_ref::<&'static str>() {
+            Some(*msg)
+        } else if let Some(msg) = panic_info.payload().downcast_ref::<String>() {
+            Some(msg.as_str())
+        } else {
+            None
+        };
+
+    log::error!("(╯°□°）╯︵ ┻━┻ PANIC OCCURRED");
+
+    if let Some(payload) = payload_str {
+        log::error!("Panic paiload: {}", payload);
+        println!("{}", payload);
+    }
+
+    if let Some(loc) = panic_info.location() {
+        log::error!("Panic location: {}", loc);
+    }
+
+    log::info!("Disconnecting (and stop) INDI server after panic...");
+    _ = indi.disconnect_and_wait();
+    log::info!("Done!");
+}
+
 pub fn build_ui(
     app:      &gtk::Application,
     logs_dir: &PathBuf
 ) {
+    let indi = Arc::new(indi_api::Connection::new());
+
+    let indi_clone = Arc::clone(&indi);
+    std::panic::set_hook(Box::new(move |panic_info|
+        panic_handler(panic_info, &indi_clone)
+    ));
+
     let css_provider = gtk::CssProvider::new();
     css_provider.load_from_data(CSS).unwrap();
     gtk::StyleContext::add_provider_for_screen(
@@ -114,7 +147,6 @@ pub fn build_ui(
     gtk_utils::exec_and_show_error(&window, || {
         load_json_from_config_file(&mut main_options, CONF_FN)
     });
-    let indi = Arc::new(indi_api::Connection::new());
 
     let mut options = Options::default();
     gtk_utils::exec_and_show_error(&window, || {
@@ -285,6 +317,7 @@ fn connect_state_events(data: &Rc<MainData>) {
 
 fn handler_close_window(data: &Rc<MainData>) -> gtk::Inhibit {
     read_options_from_widgets(data);
+
     let options = data.main_options.borrow();
     _ = save_json_to_config::<MainOptions>(&options, CONF_FN);
     drop(options);
