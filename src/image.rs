@@ -202,6 +202,14 @@ impl ImageLayer<u16> {
     pub fn remove_gradient(&mut self) {
         if self.is_empty() { return; }
         let Some(gradient) = calc_gradient(self) else { return; };
+
+        let v00 = gradient.calc_z(0.0, 0.0);
+        let v10 = gradient.calc_z(self.width as f64, 0.0);
+        let v01 = gradient.calc_z(0.0, self.height as f64);
+        let v11 = gradient.calc_z(self.width as f64, self.height as f64);
+        let min = [v00, v10, v01, v11].into_iter().min_by(cmp_f64).unwrap_or_default();
+        let max = [v00, v10, v01, v11].into_iter().max_by(cmp_f64).unwrap_or_default();
+        if max - min < 5.0 { return; } // do not remove gradient if difference in corners is small
         self.data
             .par_chunks_exact_mut(self.width)
             .enumerate()

@@ -303,7 +303,7 @@ impl Default for FocuserOptions {
             periodically:    false,
             period_minutes:  120,
             measures:        11,
-            step:            500.0,
+            step:            2000.0,
             exposure:        2.0,
         }
     }

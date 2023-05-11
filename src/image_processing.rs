@@ -316,9 +316,10 @@ pub fn get_rgb_bytes_from_preview_image(
     );
     log::debug!("reduct_ratio = {}", reduct_ratio);
 
-    const DARK_MIN_PERCENTILE: usize = 1;
-    const DARK_MAX_PERCENTILE: usize = 50;
-    const LIGHT_MIN_PERCENTILE: usize = 55;
+    const WB_PERCENTILE:        usize = 45;
+    const DARK_MIN_PERCENTILE:  usize = 1;
+    const DARK_MAX_PERCENTILE:  usize = 60;
+    const LIGHT_MIN_PERCENTILE: usize = 95;
     const LIGHT_MAX_PERCENTILE: usize = 99;
 
     let l_levels = if let Some(hist) = &hist.l {
@@ -334,7 +335,7 @@ pub fn get_rgb_bytes_from_preview_image(
         DarkLightLevels::default()
     };
 
-    let g_levels = if let Some(hist) = &hist.g {
+    let (g_levels, g_wb) = if let Some(hist) = &hist.g {
         let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
         let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
         let light_min = hist.get_percentile(LIGHT_MIN_PERCENTILE) as f64;
@@ -342,26 +343,25 @@ pub fn get_rgb_bytes_from_preview_image(
         let light_max = f64::min(light_max, image.max_value() as f64);
         let dark = linear_interpolate(options.dark_lvl, 1.0, 0.0, dark_min, dark_max);
         let light = linear_interpolate(options.light_lvl, 1.0, 0.0, light_min, light_max);
-        DarkLightLevels { dark, light }
+        let wb = hist.get_percentile(WB_PERCENTILE) as f64;
+        (DarkLightLevels { dark, light }, wb)
     } else {
-        DarkLightLevels::default()
+        (DarkLightLevels::default(), 0.0)
     };
 
     let g_range = g_levels.light - g_levels.dark;
 
     let r_levels = if let Some(hist) = &hist.r {
-        let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
-        let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
-        let dark = linear_interpolate(options.dark_lvl, 1.0, 0.0, dark_min, dark_max);
+        let wb = hist.get_percentile(WB_PERCENTILE) as f64;
+        let dark = g_levels.dark + (wb - g_wb);
         DarkLightLevels { dark, light: dark + g_range }
     } else {
         DarkLightLevels::default()
     };
 
     let b_levels = if let Some(hist) = &hist.b {
-        let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
-        let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
-        let dark = linear_interpolate(options.dark_lvl, 1.0, 0.0, dark_min, dark_max);
+        let wb = hist.get_percentile(WB_PERCENTILE) as f64;
+        let dark = g_levels.dark + (wb - g_wb);
         DarkLightLevels { dark, light: dark + g_range }
     } else {
         DarkLightLevels::default()
