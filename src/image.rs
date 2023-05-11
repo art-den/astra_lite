@@ -3,7 +3,7 @@ use std::{path::Path, io::{BufWriter, BufReader}, fs::File};
 use itertools::*;
 use rayon::prelude::*;
 
-use crate::{math::*};
+use crate::{math::*, image_info::Histogram};
 
 pub struct ImageLayer<T> {
     data: Vec<T>,
@@ -918,11 +918,17 @@ struct ImageToU8BytesArgs {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+#[derive(Default)]
+struct ImageAdderChan {
+    data:   Vec<i32>,
+    median: Option<i32>,
+}
+
 pub struct ImageAdder {
-    r: Vec<i32>,
-    g: Vec<i32>,
-    b: Vec<i32>,
-    l: Vec<i32>,
+    r: ImageAdderChan,
+    g: ImageAdderChan,
+    b: ImageAdderChan,
+    l: ImageAdderChan,
     cnt: Vec<u16>,
     width: usize,
     height: usize,
@@ -934,10 +940,10 @@ pub struct ImageAdder {
 impl ImageAdder {
     pub fn new() -> Self {
         Self {
-            r: Vec::new(),
-            g: Vec::new(),
-            b: Vec::new(),
-            l: Vec::new(),
+            r: ImageAdderChan::default(),
+            g: ImageAdderChan::default(),
+            b: ImageAdderChan::default(),
+            l: ImageAdderChan::default(),
             cnt: Vec::new(),
             width: 0,
             height: 0,
@@ -948,22 +954,18 @@ impl ImageAdder {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.l.is_empty() &&
-        self.r.is_empty() &&
-        self.g.is_empty() &&
-        self.b.is_empty() &&
+        self.l.data.is_empty() &&
+        self.r.data.is_empty() &&
+        self.g.data.is_empty() &&
+        self.b.data.is_empty() &&
         self.cnt.is_empty()
     }
 
     pub fn clear(&mut self) {
-        self.l.clear();
-        self.l.shrink_to_fit();
-        self.r.clear();
-        self.r.shrink_to_fit();
-        self.g.clear();
-        self.g.shrink_to_fit();
-        self.b.clear();
-        self.b.shrink_to_fit();
+        self.l = ImageAdderChan::default();
+        self.r = ImageAdderChan::default();
+        self.g = ImageAdderChan::default();
+        self.b = ImageAdderChan::default();
         self.cnt.clear();
         self.cnt.shrink_to_fit();
         self.width = 0;
@@ -975,23 +977,23 @@ impl ImageAdder {
 
     pub fn add(
             &mut self,
-            image: &Image,
+            image:    &Image,
+            hist:     &Histogram,
             transl_x: f64,
             transl_y: f64,
-            angle: f64,
+            angle:    f64,
             exposure: f64,
-            mt: bool
         ) {
         debug_assert!(!image.is_empty());
 
         if self.width == 0 && self.height == 0 {
             let data_len = image.width * image.height;
             if image.is_color() {
-                self.r.resize(data_len, 0);
-                self.g.resize(data_len, 0);
-                self.b.resize(data_len, 0);
+                self.r.data.resize(data_len, 0);
+                self.g.data.resize(data_len, 0);
+                self.b.data.resize(data_len, 0);
             } else {
-                self.l.resize(data_len, 0);
+                self.l.data.resize(data_len, 0);
             }
             self.cnt.resize(data_len, 0);
             self.width = image.width;
@@ -1001,63 +1003,59 @@ impl ImageAdder {
             self.frames_cnt = 0;
         }
         if image.is_color() {
-            Self::add_layer(&mut self.r, &mut self.cnt, &image.r, image.zero, transl_x, transl_y, angle, false, mt);
-            Self::add_layer(&mut self.g, &mut self.cnt, &image.g, image.zero, transl_x, transl_y, angle, false, mt);
-            Self::add_layer(&mut self.b, &mut self.cnt, &image.b, image.zero, transl_x, transl_y, angle, true, mt);
+            let median_r = hist.r.as_ref().map(|h| h.get_percentile(50)).unwrap_or_default() as i32;
+            let median_g = hist.g.as_ref().map(|h| h.get_percentile(50)).unwrap_or_default() as i32;
+            let median_b = hist.b.as_ref().map(|h| h.get_percentile(50)).unwrap_or_default() as i32;
+            Self::add_layer(&mut self.r, &mut self.cnt, &image.r, median_r, transl_x, transl_y, angle, false);
+            Self::add_layer(&mut self.g, &mut self.cnt, &image.g, median_g, transl_x, transl_y, angle, false);
+            Self::add_layer(&mut self.b, &mut self.cnt, &image.b, median_b, transl_x, transl_y, angle, true);
         } else {
-            Self::add_layer(&mut self.l, &mut self.cnt, &image.l, image.zero, transl_x, transl_y, angle, true, mt);
+            let median_l = hist.l.as_ref().map(|h| h.get_percentile(50)).unwrap_or_default() as i32;
+            Self::add_layer(&mut self.l, &mut self.cnt, &image.l, median_l, transl_x, transl_y, angle, true);
         }
         self.total_exp += exposure;
         self.frames_cnt += 1;
     }
 
     fn add_layer(
-        dst:        &mut [i32],
+        dst:        &mut ImageAdderChan,
         cnt:        &mut [u16],
         src:        &ImageLayer<u16>,
-        src_zero:   i32,
+        src_median: i32,
         transl_x:   f64,
         transl_y:   f64,
         angle:      f64,
-        update_cnt: bool,
-        mt:         bool
+        update_cnt: bool
     ) {
         let center_x = (src.width as f64 - 1.0) / 2.0;
         let center_y = (src.height as f64 - 1.0) / 2.0;
         let cos_a = f64::cos(-angle);
         let sin_a = f64::sin(-angle);
-
-        let add_row = |y: usize, dst_row: &mut [i32], cnt_row: &mut [u16]| {
-            let y = y as f64 - transl_y;
-            let dy = y - center_y;
-            for (x, (dst_v, cnt_v)) in dst_row.iter_mut().zip(cnt_row).enumerate() {
-                let x = x as f64 - transl_x;
-                let dx = x - center_x;
-                let rot_x = center_x + dx * cos_a - dy * sin_a;
-                let rot_y = center_y + dy * cos_a + dx * sin_a;
-                let src_v = src.get_f64_crd(rot_x, rot_y);
-                if let Some(v) = src_v {
-                    *dst_v += v as i32 - src_zero;
-                    if update_cnt { *cnt_v += 1; }
-                }
-            }
-        };
-
-        if !mt {
-            for (y, (dst_row, cnt_row)) in izip!(
-                dst.chunks_exact_mut(src.width),
-                cnt.chunks_exact_mut(src.width)
-            ).enumerate() {
-                add_row(y, dst_row, cnt_row)
-            }
+        let dst_median = if let Some(median) = dst.median {
+            median
         } else {
-            dst.par_chunks_exact_mut(src.width)
-                .zip(cnt.par_chunks_exact_mut(src.width))
-                .enumerate()
-                .for_each(|(y, (dst_row, cnt_row))| {
-                    add_row(y, dst_row, cnt_row)
-                });
-        }
+            dst.median = Some(src_median);
+            src_median
+        };
+        let offs = dst_median - src_median;
+        dst.data.par_chunks_exact_mut(src.width)
+            .zip(cnt.par_chunks_exact_mut(src.width))
+            .enumerate()
+            .for_each(|(y, (dst_row, cnt_row))| {
+                let y = y as f64 - transl_y;
+                let dy = y - center_y;
+                for (x, (dst_v, cnt_v)) in dst_row.iter_mut().zip(cnt_row).enumerate() {
+                    let x = x as f64 - transl_x;
+                    let dx = x - center_x;
+                    let rot_x = center_x + dx * cos_a - dy * sin_a;
+                    let rot_y = center_y + dy * cos_a + dx * sin_a;
+                    let src_v = src.get_f64_crd(rot_x, rot_y);
+                    if let Some(v) = src_v {
+                        *dst_v += v as i32 + offs;
+                        if update_cnt { *cnt_v += 1; }
+                    }
+                }
+            });
     }
 
     pub fn save_to_tiff(&self, file_name: &Path) -> anyhow::Result<()> {
@@ -1072,7 +1070,7 @@ impl ImageAdder {
                 (mult * s as f64 / c as f64) as f32
             }
         };
-        if !self.l.is_empty() {
+        if !self.l.data.is_empty() {
             let mut tiff = decoder.new_image::<colortype::Gray32Float>(
                 self.width as u32,
                 self.height as u32
@@ -1084,7 +1082,7 @@ impl ImageAdder {
                 let samples_count = tiff.next_strip_sample_count() as usize;
                 if samples_count == 0 { break; }
                 strip_data.clear();
-                let l_strip = &self.l[pos..pos+samples_count];
+                let l_strip = &self.l.data[pos..pos+samples_count];
                 let cnt_strip = &self.cnt[pos..pos+samples_count];
                 for (s, c) in l_strip.iter().zip(cnt_strip) {
                     strip_data.push(calc_value(*s, *c));
@@ -1106,9 +1104,9 @@ impl ImageAdder {
                 if samples_count == 0 { break; }
                 samples_count /= 3;
                 strip_data.clear();
-                let r_strip = &self.r[pos..pos+samples_count];
-                let g_strip = &self.g[pos..pos+samples_count];
-                let b_strip = &self.b[pos..pos+samples_count];
+                let r_strip = &self.r.data[pos..pos+samples_count];
+                let g_strip = &self.g.data[pos..pos+samples_count];
+                let b_strip = &self.b.data[pos..pos+samples_count];
                 let cnt_strip = &self.cnt[pos..pos+samples_count];
                 for (r, g, b, c) in izip!(r_strip, g_strip, b_strip, cnt_strip) {
                     strip_data.push(calc_value(*r, *c));
@@ -1154,16 +1152,16 @@ impl ImageAdder {
         image.max_value = self.max_value;
         image.zero = 0;
         if !mt {
-            copy_layer(&self.r, &mut image.r);
-            copy_layer(&self.g, &mut image.g);
-            copy_layer(&self.b, &mut image.b);
-            copy_layer(&self.l, &mut image.l);
+            copy_layer(&self.r.data, &mut image.r);
+            copy_layer(&self.g.data, &mut image.g);
+            copy_layer(&self.b.data, &mut image.b);
+            copy_layer(&self.l.data, &mut image.l);
         } else {
             rayon::scope(|s| {
-                s.spawn(|_| copy_layer(&self.r, &mut image.r));
-                s.spawn(|_| copy_layer(&self.g, &mut image.g));
-                s.spawn(|_| copy_layer(&self.b, &mut image.b));
-                s.spawn(|_| copy_layer(&self.l, &mut image.l));
+                s.spawn(|_| copy_layer(&self.r.data, &mut image.r));
+                s.spawn(|_| copy_layer(&self.g.data, &mut image.g));
+                s.spawn(|_| copy_layer(&self.b.data, &mut image.b));
+                s.spawn(|_| copy_layer(&self.l.data, &mut image.l));
             });
         }
     }

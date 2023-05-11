@@ -322,14 +322,15 @@ pub fn get_rgb_bytes_from_preview_image(
     const LIGHT_MIN_PERCENTILE: usize = 95;
     const LIGHT_MAX_PERCENTILE: usize = 99;
 
+    let light_lvl = options.light_lvl.powf(0.05);
+
     let l_levels = if let Some(hist) = &hist.l {
         let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
         let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
         let light_min = hist.get_percentile(LIGHT_MIN_PERCENTILE) as f64;
-        let light_max = 2.0 * hist.get_percentile(LIGHT_MAX_PERCENTILE) as f64;
-        let light_max = f64::min(light_max, image.max_value() as f64);
+        let light_max = image.max_value() as f64;
         let dark = linear_interpolate(options.dark_lvl, 1.0, 0.0, dark_min, dark_max);
-        let light = linear_interpolate(options.light_lvl, 1.0, 0.0, light_min, light_max);
+        let light = linear_interpolate(light_lvl, 1.0, 0.0, light_min, light_max);
         DarkLightLevels { dark, light }
     } else {
         DarkLightLevels::default()
@@ -339,10 +340,9 @@ pub fn get_rgb_bytes_from_preview_image(
         let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
         let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
         let light_min = hist.get_percentile(LIGHT_MIN_PERCENTILE) as f64;
-        let light_max = 2.0 * hist.get_percentile(LIGHT_MAX_PERCENTILE) as f64;
-        let light_max = f64::min(light_max, image.max_value() as f64);
+        let light_max = image.max_value() as f64;
         let dark = linear_interpolate(options.dark_lvl, 1.0, 0.0, dark_min, dark_max);
-        let light = linear_interpolate(options.light_lvl, 1.0, 0.0, light_min, light_max);
+        let light = linear_interpolate(light_lvl, 1.0, 0.0, light_min, light_max);
         let wb = hist.get_percentile(WB_PERCENTILE) as f64;
         (DarkLightLevels { dark, light }, wb)
     } else {
@@ -586,8 +586,8 @@ fn make_preview_image_impl(
     // Remove gradient from light frame
 
     if frame_type == FrameType::Lights
-    && command.view_options.remove_gradient
-    && command.mode_type != ModeType::LiveStacking {
+    && (command.view_options.remove_gradient
+    || command.mode_type != ModeType::LiveStacking) {
         let tmr = TimeLogger::start();
         image.remove_gradient();
         tmr.log("remove gradient from light frame");
@@ -605,7 +605,6 @@ fn make_preview_image_impl(
     if frame_for_raw_adder {
         add_calibr_image(&mut raw_image, &command.raw_adder, frame_type)?;
     }
-
 
     drop(raw_image);
 
@@ -726,7 +725,7 @@ fn make_preview_image_impl(
             = (light_info.offset_x, light_info.offset_y, light_info.angle) {
                 let mut image_adder = live_stacking.data.adder.write().unwrap();
                 let tmr = TimeLogger::start();
-                image_adder.add(&image, -offset_x, -offset_y, -angle, exposure, true);
+                image_adder.add(&image, &hist, -offset_x, -offset_y, -angle, exposure);
                 tmr.log("ImageAdder::add");
                 drop(image_adder);
 
@@ -740,7 +739,7 @@ fn make_preview_image_impl(
                 if command.view_options.remove_gradient { // TODO: do gradient removal in image_adder.copy_to_image!
                     let tmr = TimeLogger::start();
                     res_image.remove_gradient();
-                    tmr.log("remove gradient from live stacking");
+                    tmr.log("remove gradient from live stacking result");
                 }
 
                 drop(res_image);

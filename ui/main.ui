@@ -1854,6 +1854,7 @@ Better use "Subtrack master DARK frame"</property>
                               <object class="GtkLabel">
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
+                                <property name="valign">center</property>
                                 <property name="label" translatable="yes">Show:</property>
                               </object>
                               <packing>
@@ -1883,6 +1884,7 @@ Better use "Subtrack master DARK frame"</property>
                               <object class="GtkLabel">
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
+                                <property name="valign">center</property>
                                 <property name="label" translatable="yes">Scale:</property>
                               </object>
                               <packing>
@@ -1928,6 +1930,7 @@ Better use "Subtrack master DARK frame"</property>
                               <object class="GtkGrid">
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
+                                <property name="valign">center</property>
                                 <child>
                                   <object class="GtkLabel">
                                     <property name="visible">True</property>
@@ -2039,6 +2042,7 @@ Better use "Subtrack master DARK frame"</property>
                                 <property name="receives-default">False</property>
                                 <property name="tooltip-text" translatable="yes">Remove background gradient.
 Useful when the object is not lagre and is in the center of the image.</property>
+                                <property name="valign">center</property>
                                 <property name="draw-indicator">True</property>
                               </object>
                               <packing>
