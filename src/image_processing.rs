@@ -320,7 +320,6 @@ pub fn get_rgb_bytes_from_preview_image(
     const DARK_MIN_PERCENTILE:  usize = 1;
     const DARK_MAX_PERCENTILE:  usize = 60;
     const LIGHT_MIN_PERCENTILE: usize = 95;
-    const LIGHT_MAX_PERCENTILE: usize = 99;
 
     let light_lvl = options.light_lvl.powf(0.05);
 
