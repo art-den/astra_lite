@@ -569,7 +569,7 @@ impl IndiGui {
         prop_name:    &str,
         _static_data: &indi_api::PropStaticData,
         elements:     &Vec<indi_api::PropElement>,
-        _rule:        &Option<indi_api::SwitchRule>,
+        rule:         &Option<indi_api::SwitchRule>,
         grid:         &gtk::Grid,
         next_row:     &mut i32,
     ) -> Vec<UiIndiPropElem> {
@@ -581,37 +581,51 @@ impl IndiGui {
             .build();
         grid.attach(&bx, 1, *next_row, 5, 1);
         for elem in elements {
-            let button = gtk::ToggleButton::builder()
-                .label(elem.label.as_deref().unwrap_or(&elem.name))
-                .visible(true)
-                .build();
-            bx.add(&button);
-            let data = UiIndiPropElemData::Switch(UiIndiPropSwithElem {
-                button: button.clone()
-            });
-            result.push(UiIndiPropElem{
-                name: elem.name.clone(),
-                data,
-                row: *next_row,
-            });
-
-            let one_btn = elements.len() == 1;
             let indi = Arc::clone(indi);
             let device_string = device.to_string();
             let prop_name_string = prop_name.to_string();
             let elem_name = elem.name.clone();
-            button.connect_clicked(move |btn| {
-                if !btn.is_sensitive() { return; }
-                _ = indi.command_set_switch_property(
-                    &device_string,
-                    &prop_name_string,
-                    &[(&elem_name, true)]
-                );
-                if one_btn {
-                    btn.set_active(false);
-                } else {
-                    btn.set_sensitive(false);
-                }
+            let data = if *rule != Some(indi_api::SwitchRule::AnyOfMany) {
+                let button = gtk::ToggleButton::builder()
+                    .label(elem.label.as_deref().unwrap_or(&elem.name))
+                    .visible(true)
+                    .build();
+                bx.add(&button);
+                let one_btn = elements.len() == 1;
+                button.connect_clicked(move |btn| {
+                    if !btn.is_sensitive() { return; }
+                    _ = indi.command_set_switch_property(
+                        &device_string,
+                        &prop_name_string,
+                        &[(&elem_name, true)]
+                    );
+                    if one_btn {
+                        btn.set_active(false);
+                    } else {
+                        btn.set_sensitive(false);
+                    }
+                });
+                UiIndiPropElemData::Switch(UiIndiPropSwithElem::Button(button))
+            } else {
+                let button = gtk::CheckButton::builder()
+                    .label(elem.label.as_deref().unwrap_or(&elem.name))
+                    .visible(true)
+                    .build();
+                bx.add(&button);
+                button.connect_active_notify(move |btn| {
+                    if !btn.is_sensitive() { return; }
+                    _ = indi.command_set_switch_property(
+                        &device_string,
+                        &prop_name_string,
+                        &[(&elem_name, btn.is_active())]
+                    );
+                });
+                UiIndiPropElemData::Switch(UiIndiPropSwithElem::Check(button))
+            };
+            result.push(UiIndiPropElem{
+                name: elem.name.clone(),
+                data,
+                row: *next_row,
             });
         }
         *next_row += 1;
@@ -753,18 +767,27 @@ impl IndiGui {
             let Some(indi_elem) = indi_elem else { continue; };
             let UiIndiPropElemData::Switch(switch_data) = &ui_elem.data else { continue; };
             let indi_api::PropValue::Switch(value) = &indi_elem.value else { continue; };
-            if *value {
-                switch_data.button.style_context().add_class("indi_on_btn");
-            } else {
-                switch_data.button.style_context().remove_class("indi_on_btn");
-            }
-            if switch_data.button.is_active() != *value {
-                switch_data.button.set_sensitive(false);
-                switch_data.button.set_active(*value);
-                switch_data.button.set_sensitive(true);
-            }
-            if !switch_data.button.is_sensitive() {
-                switch_data.button.set_sensitive(true);
+            match &switch_data {
+                UiIndiPropSwithElem::Button(button) => {
+                    if *value {
+                        button.style_context().add_class("indi_on_btn");
+                    } else {
+                        button.style_context().remove_class("indi_on_btn");
+                    }
+                    if button.is_active() != *value {
+                        button.set_sensitive(false);
+                        button.set_active(*value);
+                        button.set_sensitive(true);
+                    }
+                    if !button.is_sensitive() {
+                        button.set_sensitive(true);
+                    }
+                }
+                UiIndiPropSwithElem::Check(check) => {
+                    check.set_sensitive(false);
+                    check.set_active(*value);
+                    check.set_sensitive(true);
+                },
             }
         }
     }
@@ -832,8 +855,9 @@ struct UiIndiPropNumElem {
     new_value: Option<gtk::SpinButton>,
 }
 
-struct UiIndiPropSwithElem {
-    button: gtk::ToggleButton,
+enum UiIndiPropSwithElem {
+    Button(gtk::ToggleButton),
+    Check(gtk::CheckButton),
 }
 
 struct UiIndiPropBlobElem {
