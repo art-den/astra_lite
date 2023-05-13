@@ -967,7 +967,11 @@ impl Mode for CameraActiveMode {
             (CamMode::SavingRawFrames, FrameType::Biases) => return Ok(()),
             _ => {},
         }
-
+        if self.cam_mode == CamMode::LiveView {
+            // We need fresh frame options in live view mode
+            let options = self.options.read().unwrap();
+            self.frame_options = options.cam.frame.clone();
+        }
         let fast_mode_enabled =
             self.indi.camera_is_fast_toggle_supported(&self.device).unwrap_or(false) &&
             self.indi.camera_is_fast_toggle_enabled(&self.device).unwrap_or(false);

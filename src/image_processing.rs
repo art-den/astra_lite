@@ -394,6 +394,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
         }
     }
 
+    let mut dark_subtracted = false;
     if let (Some(file_name), Some(dark_image)) = (&params.dark, &calibr.master_dark) {
         let tmr = TimeLogger::start();
         raw_image.subtract_dark(dark_image)
@@ -406,9 +407,10 @@ fn apply_calibr_data_and_remove_hot_pixels(
         let tmr = TimeLogger::start();
         raw_image.remove_bad_pixels(&calibr.dark_hot_pixels);
         tmr.log("removing hot pixels from light frame");
+        dark_subtracted = true;
     }
 
-    if params.hot_pixels && calibr.master_dark.is_none() {
+    if params.hot_pixels && !dark_subtracted {
         let tmr = TimeLogger::start();
         let hot_pixels = raw_image.find_hot_pixels_in_light();
         tmr.log("searching hot pixels in light image");
@@ -586,7 +588,7 @@ fn make_preview_image_impl(
 
     if frame_type == FrameType::Lights
     && (command.view_options.remove_gradient
-    || command.mode_type != ModeType::LiveStacking) {
+    || command.mode_type == ModeType::LiveStacking) {
         let tmr = TimeLogger::start();
         image.remove_gradient();
         tmr.log("remove gradient from light frame");

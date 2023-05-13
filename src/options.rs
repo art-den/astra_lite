@@ -90,7 +90,7 @@ impl FrameOptions {
     }
 
     pub fn create_master_bias_file_name_suff(&self) -> String {
-        format!("{:.1}s_g{:.0}_ofs{}", self.exposure, self.gain, self.offset)
+        format!("{:.001}s_g{:.0}_ofs{}", self.exposure, self.gain, self.offset)
     }
 
     pub fn have_to_use_delay(&self) -> bool {
