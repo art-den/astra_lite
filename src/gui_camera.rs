@@ -1421,6 +1421,9 @@ fn correct_widget_properties(data: &Rc<CameraData>) {
             ("cb_foc_fwhm",        gtk_utils::get_bool(bldr, "chb_foc_fwhm")),
             ("cb_foc_period",      gtk_utils::get_bool(bldr, "chb_foc_period")),
             ("spb_guid_max_err",   gtk_utils::get_bool(bldr, "chb_guid_enabled")),
+
+            ("l_delay",            liveview_active),
+            ("spb_delay",          liveview_active),
         ]);
 
         Ok(())

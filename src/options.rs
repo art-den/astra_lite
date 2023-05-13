@@ -75,7 +75,7 @@ impl Default for FrameOptions {
             binning:    Binning::default(),
             crop:       Crop::default(),
             low_noise:  false,
-            delay:      2.0,
+            delay:      1.0,
         }
     }
 }
@@ -87,6 +87,10 @@ impl FrameOptions {
 
     pub fn create_master_flat_file_name_suff(&self) -> String {
         format!("g{:.0}_ofs{}", self.gain, self.offset)
+    }
+
+    pub fn create_master_bias_file_name_suff(&self) -> String {
+        format!("{:.1}s_g{:.0}_ofs{}", self.exposure, self.gain, self.offset)
     }
 
     pub fn have_to_use_delay(&self) -> bool {

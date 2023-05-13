@@ -903,11 +903,12 @@ fn make_preview_image_impl(
             let raw_image = adder.get()?;
             adder.clear();
             let (prefix, file_name_suff) = match frame_type {
-                FrameType::Flats => ("flat", command.frame_options.create_master_flat_file_name_suff()),
-                FrameType::Darks => ("dark", command.frame_options.create_master_dark_file_name_suff()),
+                FrameType::Flats =>  ("flat", command.frame_options.create_master_flat_file_name_suff()),
+                FrameType::Darks =>  ("dark", command.frame_options.create_master_dark_file_name_suff()),
+                FrameType::Biases => ("bias", command.frame_options.create_master_bias_file_name_suff()),
                 _ => unreachable!(),
             };
-            let file_name = format!("{}_{}x{}-{}.fits", prefix, width, height, file_name_suff);
+            let file_name = format!("{}_{}x{}_{}.fits", prefix, width, height, file_name_suff);
             let full_file_name = save_path.join(file_name);
             raw_image.save_to_fits_file(&full_file_name)?;
             send_result(
@@ -924,7 +925,7 @@ fn make_preview_image_impl(
 
     send_result(
         ProcessingResultData::ShotProcessingFinished{
-            mode_type:        command.mode_type,
+            mode_type:   command.mode_type,
             frame_is_ok: !is_bad_frame
         },
         &command.camera,

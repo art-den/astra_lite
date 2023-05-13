@@ -411,17 +411,18 @@ fn correct_widgets_props(data: &Rc<MainData>) {
 
 fn show_mode_caption(data: &Rc<MainData>) {
     let state = data.state.read().unwrap();
-    let caption = if let Some(finished) = state.finished_mode() {
-        finished.progress_string() + " (finished)"
+    let is_cur_mode_active = state.mode().get_type() != ModeType::Waiting;
+    let mut caption = String::new();
+    if let (false, Some(finished)) = (is_cur_mode_active, state.finished_mode()) {
+        caption += &(finished.progress_string() + " (finished)");
     } else {
-        let mut tmp = state.mode().progress_string();
+        caption += &state.mode().progress_string();
         if let Some(aborted) = state.aborted_mode() {
-            tmp += " + ";
-            tmp += &aborted.progress_string();
-            tmp += " (aborted)";
+            caption += " + ";
+            caption += &aborted.progress_string();
+            caption += " (aborted)";
         }
-        tmp
-    };
+    }
     let lbl_cur_action = data.builder.object::<gtk::Label>("lbl_cur_action").unwrap();
     lbl_cur_action.set_text(&caption);
 }

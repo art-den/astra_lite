@@ -813,6 +813,26 @@ impl CameraActiveMode {
             None
         };
     }
+
+    fn start_or_continue(&mut self) -> anyhow::Result<()> {
+        let continuously = match (&self.cam_mode, &self.frame_options.frame_type) {
+            (CamMode::SingleShot,      _                ) => false,
+            (CamMode::LiveView,        _                ) => false,
+            (CamMode::SavingRawFrames, FrameType::Flats ) => false,
+            (CamMode::SavingRawFrames, FrameType::Biases) => false,
+            (CamMode::SavingRawFrames, _                ) => true,
+            (CamMode::LiveStacking,    _                ) => true,
+        };
+        start_taking_shots(
+            &self.indi,
+            &self.frame_options,
+            &self.device,
+            continuously
+        )?;
+        self.state = CamState::Usual;
+        self.cur_exposure = self.frame_options.exposure;
+        Ok(())
+    }
 }
 
 impl Mode for CameraActiveMode {
@@ -902,20 +922,7 @@ impl Mode for CameraActiveMode {
             let mut adder = live_stacking.adder.write().unwrap();
             adder.clear();
         }
-        self.state = CamState::Usual;
-        let continuously = match self.cam_mode {
-            CamMode::SingleShot => false,
-            CamMode::LiveView => false,
-            CamMode::SavingRawFrames => true,
-            CamMode::LiveStacking => true,
-        };
-        start_taking_shots(
-            &self.indi,
-            &self.frame_options,
-            &self.device,
-            continuously
-        )?;
-        self.cur_exposure = self.frame_options.exposure;
+        self.start_or_continue()?;
         Ok(())
     }
 
@@ -927,18 +934,15 @@ impl Mode for CameraActiveMode {
     fn continue_work(&mut self) -> anyhow::Result<()> {
         self.update_options_copies();
         self.state = CamState::Usual;
+
+        // Restore original frame options
+        // in saving raw or live stacking mode
         if self.cam_mode == CamMode::SavingRawFrames
         || self.cam_mode == CamMode::LiveStacking {
             let mut options = self.options.write().unwrap();
             options.cam.frame = self.frame_options.clone();
         }
-        start_taking_shots(
-            &self.indi,
-            &self.frame_options,
-            &self.device,
-            true
-        )?;
-        self.cur_exposure = self.frame_options.exposure;
+        self.start_or_continue()?;
         Ok(())
     }
 
@@ -954,14 +958,16 @@ impl Mode for CameraActiveMode {
         &mut self,
         event: &indi_api::BlobStartEvent
     ) -> anyhow::Result<()> {
-        if self.cam_mode == CamMode::SingleShot
-        || event.device_name != self.device {
+        if event.device_name != self.device {
             return Ok(());
         }
-        if self.cam_mode == CamMode::LiveView {
-            let options = self.options.read().unwrap();
-            self.frame_options = options.cam.frame.clone();
+        match (&self.cam_mode, &self.frame_options.frame_type) {
+            (CamMode::SingleShot,      _                ) => return Ok(()),
+            (CamMode::SavingRawFrames, FrameType::Flats ) => return Ok(()),
+            (CamMode::SavingRawFrames, FrameType::Biases) => return Ok(()),
+            _ => {},
         }
+
         let fast_mode_enabled =
             self.indi.camera_is_fast_toggle_supported(&self.device).unwrap_or(false) &&
             self.indi.camera_is_fast_toggle_enabled(&self.device).unwrap_or(false);
@@ -1056,9 +1062,7 @@ impl Mode for CameraActiveMode {
         || info.flags.contains(LightFrameShortInfoFlags::BAD_STARS_OVAL) {
             return Ok(result);
         }
-
         let mount_device_active = self.indi.is_device_enabled(&self.mount_device).unwrap_or(false);
-
         if self.state == CamState::Usual && mount_device_active {
             let mut move_offset = None;
             if let Some(guid_options) = &self.guid_options {
@@ -1160,6 +1164,19 @@ impl Mode for CameraActiveMode {
             if progress.cur == progress.total {
                 self.indi.camera_abort_exposure(&self.device)?;
                 result = NotifyResult::Finished { next_mode: None };
+            } else {
+                let have_shart_new_shot = match (&self.cam_mode, &self.frame_options.frame_type) {
+                    (CamMode::SavingRawFrames, FrameType::Biases) => true,
+                    (CamMode::SavingRawFrames, FrameType::Flats) => true,
+                    _ => false
+                };
+                if have_shart_new_shot {
+                    apply_camera_options_and_take_shot(
+                        &self.indi,
+                        &self.device,
+                        &self.frame_options
+                    )?;
+                }
             }
         }
         Ok(result)
