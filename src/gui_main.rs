@@ -76,7 +76,7 @@ pub struct MainData {
     progress:     RefCell<Option<Progress>>,
     conn_string:  RefCell<String>,
     dev_string:   RefCell<String>,
-    pub state:    Arc<RwLock<State>>,
+    pub state:    Arc<State>,
     pub indi:     Arc<indi_api::Connection>,
     pub builder:  gtk::Builder,
     pub window:   gtk::ApplicationWindow,
@@ -160,7 +160,7 @@ pub fn build_ui(
 
     let data = Rc::new(MainData {
         logs_dir:     logs_dir.clone(),
-        state:        Arc::new(RwLock::new(State::new(&indi, &options))),
+        state:        Arc::new(State::new(&indi, &options)),
         options,
         main_options: RefCell::new(main_options),
         handlers:     RefCell::new(Vec::new()),
@@ -171,8 +171,6 @@ pub fn build_ui(
         conn_string:  RefCell::new(String::new()),
         dev_string:   RefCell::new(String::new()),
     });
-
-    State::connect_indi_events(&data.state);
 
     window.set_application(Some(app));
     window.show();
@@ -294,8 +292,7 @@ pub fn build_ui(
 fn connect_state_events(data: &Rc<MainData>) {
     let (sender, receiver) =
         glib::MainContext::channel(glib::PRIORITY_DEFAULT);
-    let mut state = data.state.write().unwrap();
-    state.subscribe_events(move |event| {
+    data.state.subscribe_events(move |event| {
         sender.send(event).unwrap();
     });
     receiver.attach(None, clone! (@strong data => move |event| {
@@ -401,23 +398,23 @@ fn handler_draw_progress(
 }
 
 fn correct_widgets_props(data: &Rc<MainData>) {
-    let state = data.state.read().unwrap();
-    let can_be_continued = state.aborted_mode().as_ref().map(|m| m.can_be_continued_after_stop()).unwrap_or(false);
+    let mode_data = data.state.mode_data();
+    let can_be_continued = mode_data.aborted_mode.as_ref().map(|m| m.can_be_continued_after_stop()).unwrap_or(false);
     gtk_utils::enable_actions(&data.window, &[
-        ("stop",     state.mode().can_be_stopped()),
+        ("stop",     mode_data.mode.can_be_stopped()),
         ("continue", can_be_continued),
     ]);
 }
 
 fn show_mode_caption(data: &Rc<MainData>) {
-    let state = data.state.read().unwrap();
-    let is_cur_mode_active = state.mode().get_type() != ModeType::Waiting;
+    let mode_data = data.state.mode_data();
+    let is_cur_mode_active = mode_data.mode.get_type() != ModeType::Waiting;
     let mut caption = String::new();
-    if let (false, Some(finished)) = (is_cur_mode_active, state.finished_mode()) {
+    if let (false, Some(finished)) = (is_cur_mode_active, &mode_data.finished_mode) {
         caption += &(finished.progress_string() + " (finished)");
     } else {
-        caption += &state.mode().progress_string();
-        if let Some(aborted) = state.aborted_mode() {
+        caption += &mode_data.mode.progress_string();
+        if let Some(aborted) = &mode_data.aborted_mode {
             caption += " + ";
             caption += &aborted.progress_string();
             caption += " (aborted)";
@@ -429,19 +426,17 @@ fn show_mode_caption(data: &Rc<MainData>) {
 
 fn handler_action_stop(data: &Rc<MainData>) {
     gtk_utils::exec_and_show_error(&data.window, || {
-        let mut state = data.state.write().unwrap();
-        state.abort_active_mode()?;
+        data.state.abort_active_mode()?;
         Ok(())
     });
 }
 
 fn handler_action_continue(data: &Rc<MainData>) {
     gtk_utils::exec_and_show_error(&data.window, || {
-        let mut state = data.state.write().unwrap();
         for fs_handler in data.handlers.borrow().iter() {
             fs_handler(MainGuiEvent::BeforeModeContinued);
         }
-        state.continue_prev_mode()?;
+        data.state.continue_prev_mode()?;
         Ok(())
     });
 }

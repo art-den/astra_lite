@@ -33,7 +33,7 @@ impl indi_api::ConnState {
 
 struct HardwareData {
     main_gui:     Rc<MainData>,
-    state:        Arc<RwLock<State>>,
+    state:        Arc<State>,
     indi:         Arc<indi_api::Connection>,
     options:      Arc<RwLock<Options>>,
     builder:      gtk::Builder,
@@ -54,7 +54,7 @@ impl Drop for HardwareData {
 pub fn build_ui(
     _application: &gtk::Application,
     main_gui:     Rc<MainData>,
-    state:        Arc<RwLock<State>>,
+    state:        Arc<State>,
     indi:         Arc<indi_api::Connection>,
     builder:      gtk::Builder,
     win:          gtk::ApplicationWindow,

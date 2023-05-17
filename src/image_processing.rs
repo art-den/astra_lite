@@ -145,7 +145,7 @@ pub struct ProcessImageCommand {
     pub ref_stars:       Arc<RwLock<Option<Vec<Point>>>>,
     pub calibr_params:   CalibrParams,
     pub calibr_images:   Arc<Mutex<CalibrImages>>,
-    pub fn_gen:          Arc<Mutex<SeqFileNameGen>>,
+    pub fn_gen:          Option<Arc<Mutex<SeqFileNameGen>>>,
     pub view_options:    PreviewParams,
     pub frame_options:   FrameOptions,
     pub quality_options: Option<QualityOptions>,
@@ -859,7 +859,7 @@ fn make_preview_image_impl(
 
     // Save original raw image
     if !is_bad_frame && command.flags.contains(ProcessImageFlags::SAVE_RAW) {
-        if let Some(save_path) = command.save_path.as_ref() {
+        if let (Some(save_path), Some(fn_gen)) = (&command.save_path, &command.fn_gen) {
             let sub_path = match frame_type {
                 FrameType::Lights => "Light",
                 FrameType::Flats => "Flat",
@@ -876,7 +876,7 @@ fn make_preview_image_impl(
                         full_path.to_str().unwrap_or_default()
                     ))?;
             }
-            let mut fs_gen = command.fn_gen.lock().unwrap();
+            let mut fs_gen = fn_gen.lock().unwrap();
             let mut file_ext = command.blob.format.as_str().trim();
             while file_ext.starts_with('.') { file_ext = &file_ext[1..]; }
             let fn_mask = format!("{}_${{num}}.{}", sub_path, file_ext);

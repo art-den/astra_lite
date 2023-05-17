@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Serialize, Deserialize};
 
-use crate::{image_raw::FrameType, image_processing::CalibrParams};
+use crate::{image_raw::FrameType, image_processing::{CalibrParams, PreviewParams, PreviewImgSize}};
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
@@ -248,17 +248,44 @@ pub struct PreviewOptions {
     pub gamma:       f64,
     pub source:      PreviewSource,
     pub remove_grad: bool,
+
+    // fields for PreviewOptions::preview_params
+    #[serde(skip_serializing)] pub widget_width: usize,
+    #[serde(skip_serializing)] pub widget_height: usize,
 }
 
 impl Default for PreviewOptions {
     fn default() -> Self {
         Self {
-            scale:       ImgPreviewScale::default(),
-            dark_lvl:    0.2,
-            light_lvl:   0.8,
-            gamma:       2.2,
-            source:      PreviewSource::default(),
-            remove_grad: false,
+            scale:         ImgPreviewScale::default(),
+            dark_lvl:      0.2,
+            light_lvl:     0.8,
+            gamma:         2.2,
+            source:        PreviewSource::default(),
+            remove_grad:   false,
+            widget_width:  0,
+            widget_height: 0,
+        }
+    }
+}
+
+impl PreviewOptions {
+    pub fn preview_params(&self) -> PreviewParams {
+        let img_size = if self.scale == ImgPreviewScale::FitWindow {
+            PreviewImgSize::Fit {
+                width: self.widget_width,
+                height: self.widget_height
+            }
+        } else {
+            PreviewImgSize::Scale(self.scale.clone())
+        };
+        PreviewParams {
+            dark_lvl:         self.dark_lvl,
+            light_lvl:        self.light_lvl,
+            gamma:            self.gamma,
+            orig_frame_in_ls: self.source == PreviewSource::OrigFrame,
+            remove_gradient:  self.remove_grad,
+            img_size,
         }
     }
 }
