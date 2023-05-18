@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 
 pub fn save_json_to_config<T: serde::Serialize>(
     obj:       &T,
@@ -39,4 +39,32 @@ fn get_file_name(
     }
     path.push(format!("{}.json", conf_name));
     Ok(path)
+}
+
+pub struct SeqFileNameGen {
+    last_num: u32,
+}
+
+impl SeqFileNameGen {
+    pub fn new() -> Self {
+        Self {
+            last_num: 1,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.last_num = 1;
+    }
+
+    pub fn generate(&mut self, parent_path: &Path, file_mask: &str) -> PathBuf {
+        loop {
+            let num_str = format!("{:04}", self.last_num);
+            let file_name = file_mask.replace("${num}", &num_str);
+            let result = parent_path.join(file_name);
+            self.last_num += 1;
+            if !result.is_file() && !result.is_dir() {
+                return result;
+            }
+        }
+    }
 }

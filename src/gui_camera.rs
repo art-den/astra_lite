@@ -537,7 +537,6 @@ fn connect_widgets_events_before_show_options(data: &Rc<CameraData>) {
         let mut options = data.options.write().unwrap();
         options.cam.preview.widget_width = rect.width() as usize;
         options.cam.preview.widget_height = rect.height() as usize;
-        dbg!(options.cam.preview.widget_width, options.cam.preview.widget_height);
     }));
 }
 

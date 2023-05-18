@@ -14,7 +14,7 @@ use crate::{
     image_info::{LightImageInfo, Stars},
     math::*,
     stars_offset::*,
-    image_processing::*,
+    image_processing::*, io_utils::SeqFileNameGen,
 };
 
 #[derive(Clone)]
