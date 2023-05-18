@@ -1,8 +1,9 @@
 use std::{
     sync::{Arc, Mutex, atomic::{AtomicBool, Ordering, AtomicU16 }, RwLock, RwLockReadGuard, mpsc},
     collections::VecDeque,
-    any::Any, f64::consts::PI,
+    any::Any, f64::consts::PI, path::PathBuf,
 };
+use chrono::Utc;
 use gtk::glib::Sender;
 use itertools::Itertools;
 
@@ -14,7 +15,8 @@ use crate::{
     image_info::{LightImageInfo, Stars},
     math::*,
     stars_offset::*,
-    image_processing::*, io_utils::SeqFileNameGen,
+    image_processing::*,
+    io_utils::{SeqFileNameGen, get_free_folder_name, get_free_file_name},
 };
 
 #[derive(Clone)]
@@ -182,14 +184,6 @@ impl State {
         &self.cur_frame
     }
 
-    pub fn ref_stars(&self) -> &Arc<RwLock<Option<Vec<Point>>>> {
-        &self.ref_stars
-    }
-
-    pub fn calibr_images(&self) -> &Arc<Mutex<CalibrImages>> {
-        &self.calibr_images
-    }
-
     pub fn live_stacking(&self) -> &Arc<LiveStackingData> {
         &self.live_stacking
     }
@@ -327,11 +321,11 @@ impl State {
             blob:            Arc::clone(blob),
             frame:           Arc::clone(&cur_frame),
             ref_stars:       Arc::clone(&ref_stars),
-            calibr_params:   options.cam.calibr.into_params(),
+            calibr_params:   options.calibr.into_params(),
             calibr_images:   Arc::clone(&calibr_images),
-            view_options:    options.cam.preview.preview_params(),
+            view_options:    options.preview.preview_params(),
             frame_options:   options.cam.frame.clone(),
-            quality_options: Some(options.cam.quality.clone()),
+            quality_options: Some(options.quality.clone()),
             fn_gen:          None,
             save_path:       None,
             raw_adder:       None,
@@ -957,6 +951,8 @@ struct CameraActiveMode {
     exp_sum:       f64,
     guid_data:     Option<GuidingData>,
     live_stacking: Option<Arc<LiveStackingData>>,
+    save_dir:      PathBuf,
+    master_file:   PathBuf,
 }
 
 impl CameraActiveMode {
@@ -969,8 +965,8 @@ impl CameraActiveMode {
         let opts = options.read().unwrap();
         let progress = match cam_mode {
             CamMode::SavingRawFrames => {
-                if opts.cam.raw_frames.use_cnt && opts.cam.raw_frames.frame_cnt != 0 {
-                    Some(Progress { cur: 0, total: opts.cam.raw_frames.frame_cnt })
+                if opts.raw_frames.use_cnt && opts.raw_frames.frame_cnt != 0 {
+                    Some(Progress { cur: 0, total: opts.raw_frames.frame_cnt })
                 } else {
                     None
                 }
@@ -995,7 +991,9 @@ impl CameraActiveMode {
             cur_exposure:  0.0,
             exp_sum:       0.0,
             guid_data:     None,
-            live_stacking: None
+            live_stacking: None,
+            save_dir:      PathBuf::new(),
+            master_file:   PathBuf::new(),
         }
     }
 
@@ -1034,6 +1032,84 @@ impl CameraActiveMode {
         self.state = CamState::Usual;
         self.cur_exposure = self.frame_options.exposure;
         Ok(())
+    }
+
+    fn create_file_names_for_raw_saving(&mut self) {
+        let now_date_str = Utc::now().format("%Y-%m-%d").to_string();
+        let options = self.options.read().unwrap();
+        let bin = options.cam.frame.binning.get_ratio();
+        let (width, height) = self.indi.camera_get_max_frame_size(&self.device).unwrap_or((0, 0));
+        let cropped_width = options.cam.frame.crop.translate(width/bin);
+        let cropped_height = options.cam.frame.crop.translate(height/bin);
+        let exp_to_str = |exp: f64| {
+            if exp > 1.0 {
+                format!("{:.0}", exp)
+            } else if exp >= 0.1 {
+                format!("{:.1}", exp)
+            } else {
+                format!("{:.3}", exp)
+            }
+        };
+        let mut common_part = format!(
+            "{}s_g{}_offs{}_{}x{}",
+            exp_to_str(options.cam.frame.exposure),
+            options.cam.frame.gain,
+            options.cam.frame.offset,
+            cropped_width,
+            cropped_height,
+        );
+        if bin != 1 {
+            common_part.push_str(&format!("_bin{}x{}", bin, bin));
+        }
+        let type_part = match options.cam.frame.frame_type {
+            FrameType::Undef => unreachable!(),
+            FrameType::Lights => "light",
+            FrameType::Flats => "flat",
+            FrameType::Darks => "dark",
+            FrameType::Biases => "bias",
+        };
+        let cam_cooler_supported = self.indi.camera_is_cooler_supported(&self.device).unwrap_or(false);
+        let temp_path = if cam_cooler_supported && options.cam.ctrl.enable_cooler {
+            Some(format!("{:+.0}C", options.cam.ctrl.temperature))
+        } else {
+            None
+        };
+        if options.cam.frame.frame_type != FrameType::Lights {
+            let mut master_file = String::new();
+            master_file.push_str(type_part);
+            master_file.push_str("_");
+            master_file.push_str(&common_part);
+            if options.cam.frame.frame_type != FrameType::Flats {
+                if let Some(temp) = &temp_path {
+                    master_file.push_str("_");
+                    master_file.push_str(&temp);
+                }
+            }
+            if options.cam.frame.frame_type == FrameType::Flats {
+                master_file.push_str("_");
+                master_file.push_str(&now_date_str);
+            }
+            master_file.push_str(".fit");
+
+            let mut path = options.raw_frames.out_path.clone();
+            path.push(&master_file);
+            self.master_file = path;
+        }
+        let mut save_dir = String::new();
+        save_dir.push_str(type_part);
+        save_dir.push_str("_");
+        save_dir.push_str(&now_date_str);
+        save_dir.push_str("__");
+        save_dir.push_str(&common_part);
+        if options.cam.frame.frame_type != FrameType::Flats {
+            if let Some(temp) = &temp_path {
+                save_dir.push_str("_");
+                save_dir.push_str(&temp);
+            }
+        }
+        let mut path = options.raw_frames.out_path.clone();
+        path.push(&save_dir);
+        self.save_dir = get_free_folder_name(&path);
     }
 }
 
@@ -1123,6 +1199,11 @@ impl Mode for CameraActiveMode {
         if let Some(live_stacking) = &mut self.live_stacking {
             let mut adder = live_stacking.adder.write().unwrap();
             adder.clear();
+        }
+        match self.cam_mode {
+            CamMode::SavingRawFrames|CamMode::LiveStacking =>
+                self.create_file_names_for_raw_saving(),
+            _ => {}
         }
         self.start_or_continue()?;
         Ok(())
@@ -1398,11 +1479,11 @@ impl Mode for CameraActiveMode {
         };
         match self.cam_mode {
             CamMode::SavingRawFrames => {
-                cmd.save_path = Some(options.cam.raw_frames.out_path.clone());
-                if options.cam.raw_frames.create_master {
+                cmd.save_path = Some(self.save_dir.clone());
+                if options.raw_frames.create_master {
                     cmd.raw_adder = Some(RawAdderParams {
                         adder: Arc::clone(&self.raw_adder),
-                        save: last_in_seq,
+                        save_fn: if last_in_seq { Some(get_free_file_name(&self.master_file)) } else { None },
                     });
                 }
                 if options.cam.frame.frame_type == FrameType::Lights
@@ -1412,13 +1493,13 @@ impl Mode for CameraActiveMode {
                 cmd.flags |= ProcessImageFlags::SAVE_RAW;
             },
             CamMode::LiveStacking => {
-                cmd.save_path = Some(options.cam.live.out_dir.clone());
+                cmd.save_path = Some(self.save_dir.clone());
                 cmd.live_stacking = Some(LiveStackingParams {
                     data:    Arc::clone(self.live_stacking.as_ref().unwrap()),
-                    options: options.cam.live.clone(),
+                    options: options.live.clone(),
                 });
                 cmd.flags |= ProcessImageFlags::CALC_STARS_OFFSET;
-                if options.cam.live.save_orig {
+                if options.live.save_orig {
                     cmd.flags |= ProcessImageFlags::SAVE_RAW;
                 }
             },

@@ -1,5 +1,6 @@
 use itertools::*;
 
+#[inline(always)]
 pub fn cmp_f64(v1: &f64, v2: &f64) -> core::cmp::Ordering {
     if      *v1 < *v2 { core::cmp::Ordering::Less }
     else if *v1 > *v2 { core::cmp::Ordering::Greater }

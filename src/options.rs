@@ -81,18 +81,6 @@ impl Default for FrameOptions {
 }
 
 impl FrameOptions {
-    pub fn create_master_dark_file_name_suff(&self) -> String {
-        format!("{:.1}s_g{:.0}_ofs{}", self.exposure, self.gain, self.offset)
-    }
-
-    pub fn create_master_flat_file_name_suff(&self) -> String {
-        format!("g{:.0}_ofs{}", self.gain, self.offset)
-    }
-
-    pub fn create_master_bias_file_name_suff(&self) -> String {
-        format!("{:.001}s_g{:.0}_ofs{}", self.exposure, self.gain, self.offset)
-    }
-
     pub fn have_to_use_delay(&self) -> bool {
         self.exposure < 2.0 &&
         self.delay > 0.0
@@ -163,7 +151,7 @@ impl Default for RawFrameOptions {
 }
 
 impl RawFrameOptions {
-    pub fn check_and_correct(&mut self) -> anyhow::Result<()> {
+    pub fn check(&mut self) -> anyhow::Result<()> {
         if self.out_path.as_os_str().is_empty() {
             let mut out_path = dirs::home_dir().unwrap();
             out_path.push("Astro");
@@ -199,7 +187,7 @@ impl Default for LiveStackingOptions {
 }
 
 impl LiveStackingOptions {
-    pub fn check_and_correct(&mut self) -> anyhow::Result<()> {
+    pub fn check(&mut self) -> anyhow::Result<()> {
         if self.out_dir.as_os_str().is_empty() {
             let mut save_path = dirs::home_dir().unwrap();
             save_path.push("Astro");
@@ -428,25 +416,15 @@ pub struct CamOptions {
     pub live_view:  bool,
     pub ctrl:       CamCtrlOptions,
     pub frame:      FrameOptions,
-    pub calibr:     CalibrOptions,
-    pub raw_frames: RawFrameOptions,
-    pub live:       LiveStackingOptions,
-    pub quality:    QualityOptions,
-    pub preview:    PreviewOptions,
 }
 
 impl Default for CamOptions {
     fn default() -> Self {
         Self {
-            device:     String::new(),
-            live_view:  false,
-            preview:    PreviewOptions::default(),
-            ctrl:       CamCtrlOptions::default(),
-            frame:      FrameOptions::default(),
-            calibr:     CalibrOptions::default(),
-            raw_frames: RawFrameOptions::default(),
-            live:       LiveStackingOptions::default(),
-            quality:    QualityOptions::default(),
+            device:    String::new(),
+            live_view: false,
+            ctrl:      CamCtrlOptions::default(),
+            frame:     FrameOptions::default(),
         }
     }
 }
@@ -454,11 +432,16 @@ impl Default for CamOptions {
 #[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(default)]
 pub struct Options {
-    pub indi:      IndiOptions,
-    pub cam:       CamOptions,
-    pub hist:      HistOptions,
-    pub focuser:   FocuserOptions,
-    pub guiding:   GuidingOptions,
-    pub mount:     MountOptions,
-    pub telescope: TelescopeOptions,
+    pub indi:       IndiOptions,
+    pub cam:        CamOptions,
+    pub calibr:     CalibrOptions,
+    pub raw_frames: RawFrameOptions,
+    pub live:       LiveStackingOptions,
+    pub quality:    QualityOptions,
+    pub preview:    PreviewOptions,
+    pub hist:       HistOptions,
+    pub focuser:    FocuserOptions,
+    pub guiding:    GuidingOptions,
+    pub mount:      MountOptions,
+    pub telescope:  TelescopeOptions,
 }

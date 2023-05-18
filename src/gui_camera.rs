@@ -241,7 +241,8 @@ struct CameraData {
     options:            Arc<RwLock<Options>>,
     delayed_action:     RefCell<DelayedAction>,
     gui_options:        RefCell<GuiOptions>,
-    process_thread:     JoinHandle<()>,
+    img_cmds_sender:    Sender<Command>,
+    process_thread:     RefCell<Option<JoinHandle<()>>>,
     conn_state:         RefCell<indi_api::ConnState>,
     indi_conn:          RefCell<Option<indi_api::Subscription>>,
     preview_scroll_pos: RefCell<Option<((f64, f64), (f64, f64))>>,
@@ -280,7 +281,8 @@ pub fn build_ui(
         options:            Arc::clone(&data.options),
         delayed_action:     RefCell::new(delayed_action),
         gui_options:        RefCell::new(gui_options),
-        process_thread,
+        img_cmds_sender:    img_cmds_sender.clone(),
+        process_thread:     RefCell::new(Some(process_thread)),
         conn_state:         RefCell::new(indi_api::ConnState::Disconnected),
         indi_conn:          RefCell::new(None),
         preview_scroll_pos: RefCell::new(None),
@@ -535,8 +537,8 @@ fn connect_widgets_events_before_show_options(data: &Rc<CameraData>) {
     let sw_preview_img = data.main.builder.object::<gtk::Widget>("sw_preview_img").unwrap();
     sw_preview_img.connect_size_allocate(clone!(@strong data => move |_, rect| {
         let mut options = data.options.write().unwrap();
-        options.cam.preview.widget_width = rect.width() as usize;
-        options.cam.preview.widget_height = rect.height() as usize;
+        options.preview.widget_width = rect.width() as usize;
+        options.preview.widget_height = rect.height() as usize;
     }));
 }
 
@@ -679,7 +681,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let spb_raw_frames_cnt = bldr.object::<gtk::SpinButton>("spb_raw_frames_cnt").unwrap();
     spb_raw_frames_cnt.connect_value_changed(clone!(@strong data => move |sb| {
         data.excl.exec(|| {
-            data.options.write().unwrap().cam.raw_frames.frame_cnt = sb.value() as usize;
+            data.options.write().unwrap().raw_frames.frame_cnt = sb.value() as usize;
             show_total_raw_time(&data);
         });
     }));
@@ -696,7 +698,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
             let source = PreviewSource::from_active_id(
                 cb.active_id().map(|id| id.to_string()).as_deref()
             );
-            data.options.write().unwrap().cam.preview.source = source;
+            data.options.write().unwrap().preview.source = source;
             create_and_show_preview_image(&data);
             repaint_histogram(&data);
             show_histogram_stat(&data);
@@ -710,7 +712,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
             let scale = ImgPreviewScale::from_active_id(
                 cb.active_id().map(|id| id.to_string()).as_deref()
             ).unwrap_or(ImgPreviewScale::FitWindow);
-            data.options.write().unwrap().cam.preview.scale = scale;
+            data.options.write().unwrap().preview.scale = scale;
             create_and_show_preview_image(&data);
         });
     }));
@@ -719,7 +721,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     scl_dark.connect_value_changed(clone!(@strong data => move |scl| {
         data.excl.exec(|| {
             let mut options = data.options.write().unwrap();
-            options.cam.preview.dark_lvl = scl.value();
+            options.preview.dark_lvl = scl.value();
             drop(options);
             create_and_show_preview_image(&data);
         });
@@ -729,7 +731,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     scl_highlight.connect_value_changed(clone!(@strong data => move |scl| {
         data.excl.exec(|| {
             let mut options = data.options.write().unwrap();
-            options.cam.preview.light_lvl = scl.value();
+            options.preview.light_lvl = scl.value();
             drop(options);
             create_and_show_preview_image(&data);
         });
@@ -739,7 +741,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     scl_gamma.connect_value_changed(clone!(@strong data => move |scl| {
         data.excl.exec(|| {
             let mut options = data.options.write().unwrap();
-            options.cam.preview.gamma = scl.value();
+            options.preview.gamma = scl.value();
             drop(options);
             create_and_show_preview_image(&data);
         });
@@ -748,7 +750,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let chb_rem_grad = bldr.object::<gtk::CheckButton>("chb_rem_grad").unwrap();
     chb_rem_grad.connect_active_notify(clone!(@strong data => move |chb| {
         data.excl.exec(|| {
-            data.options.write().unwrap().cam.preview.remove_grad = chb.is_active();
+            data.options.write().unwrap().preview.remove_grad = chb.is_active();
             create_and_show_preview_image(&data);
         });
     }));
@@ -786,7 +788,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let chb_max_fwhm = bldr.object::<gtk::CheckButton>("chb_max_fwhm").unwrap();
     chb_max_fwhm.connect_active_notify(clone!(@strong data => move |chb| {
         data.excl.exec(|| {
-            data.options.write().unwrap().cam.quality.use_max_fwhm = chb.is_active();
+            data.options.write().unwrap().quality.use_max_fwhm = chb.is_active();
         });
         correct_frame_quality_widgets_props(&data);
     }));
@@ -794,7 +796,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let chb_max_oval = bldr.object::<gtk::CheckButton>("chb_max_oval").unwrap();
     chb_max_oval.connect_active_notify(clone!(@strong data => move |chb| {
         data.excl.exec(|| {
-            data.options.write().unwrap().cam.quality.use_max_ovality = chb.is_active();
+            data.options.write().unwrap().quality.use_max_ovality = chb.is_active();
         });
         correct_frame_quality_widgets_props(&data);
     }));
@@ -802,14 +804,14 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let spb_max_fwhm = bldr.object::<gtk::SpinButton>("spb_max_fwhm").unwrap();
     spb_max_fwhm.connect_value_changed(clone!(@strong data => move |sb| {
         data.excl.exec(|| {
-            data.options.write().unwrap().cam.quality.max_fwhm = sb.value() as f32;
+            data.options.write().unwrap().quality.max_fwhm = sb.value() as f32;
         });
     }));
 
     let spb_max_oval = bldr.object::<gtk::SpinButton>("spb_max_oval").unwrap();
     spb_max_oval.connect_value_changed(clone!(@strong data => move |sb| {
         data.excl.exec(|| {
-            data.options.write().unwrap().cam.quality.max_ovality = sb.value() as f32;
+            data.options.write().unwrap().quality.max_ovality = sb.value() as f32;
         });
     }));
 
@@ -875,7 +877,7 @@ fn handler_full_screen(data: &Rc<CameraData>, full_screen: bool) {
     data.full_screen_mode.set(full_screen);
 
     let options = data.options.read().unwrap();
-    if options.cam.preview.scale == ImgPreviewScale::FitWindow {
+    if options.preview.scale == ImgPreviewScale::FitWindow {
         drop(options);
         gtk::main_iteration_do(true);
         gtk::main_iteration_do(true);
@@ -888,6 +890,8 @@ fn handler_full_screen(data: &Rc<CameraData>, full_screen: bool) {
 fn handler_close_window(data: &Rc<CameraData>) -> gtk::Inhibit {
     data.closed.set(true);
 
+    _ = data.img_cmds_sender.send(Command::Exit);
+
     _ = data.main.state.abort_active_mode();
     read_options_from_widgets(data);
 
@@ -897,6 +901,10 @@ fn handler_close_window(data: &Rc<CameraData>) -> gtk::Inhibit {
 
     if let Some(indi_conn) = data.indi_conn.borrow_mut().take() {
         data.main.indi.unsubscribe(indi_conn);
+    }
+
+    if let Some(process_thread) = data.process_thread.borrow_mut().take() {
+        _ = process_thread.join();
     }
 
     gtk::Inhibit(false)
@@ -957,34 +965,34 @@ fn show_options(data: &Rc<CameraData>) {
         gtk_utils::set_f64      (bld, "spb_temp",            options.cam.ctrl.temperature);
         gtk_utils::set_bool     (bld, "chb_fan",             options.cam.ctrl.enable_fan);
 
-        gtk_utils::set_bool     (bld, "chb_master_dark",     options.cam.calibr.dark_frame_en);
-        gtk_utils::set_path     (bld, "fch_master_dark",     options.cam.calibr.dark_frame.as_deref());
-        gtk_utils::set_bool     (bld, "chb_master_flat",     options.cam.calibr.flat_frame_en);
-        gtk_utils::set_path     (bld, "fch_master_flat",     options.cam.calibr.flat_frame.as_deref());
-        gtk_utils::set_bool     (bld, "chb_hot_pixels",      options.cam.calibr.hot_pixels);
+        gtk_utils::set_bool     (bld, "chb_master_dark",     options.calibr.dark_frame_en);
+        gtk_utils::set_path     (bld, "fch_master_dark",     options.calibr.dark_frame.as_deref());
+        gtk_utils::set_bool     (bld, "chb_master_flat",     options.calibr.flat_frame_en);
+        gtk_utils::set_path     (bld, "fch_master_flat",     options.calibr.flat_frame.as_deref());
+        gtk_utils::set_bool     (bld, "chb_hot_pixels",      options.calibr.hot_pixels);
 
-        gtk_utils::set_bool     (bld, "chb_raw_frames_cnt",  options.cam.raw_frames.use_cnt);
-        gtk_utils::set_f64      (bld, "spb_raw_frames_cnt",  options.cam.raw_frames.frame_cnt as f64);
-        gtk_utils::set_path     (bld, "fcb_raw_frames_path", Some(&options.cam.raw_frames.out_path));
-        gtk_utils::set_bool     (bld, "chb_master_frame",    options.cam.raw_frames.create_master);
+        gtk_utils::set_bool     (bld, "chb_raw_frames_cnt",  options.raw_frames.use_cnt);
+        gtk_utils::set_f64      (bld, "spb_raw_frames_cnt",  options.raw_frames.frame_cnt as f64);
+        gtk_utils::set_path     (bld, "fcb_raw_frames_path", Some(&options.raw_frames.out_path));
+        gtk_utils::set_bool     (bld, "chb_master_frame",    options.raw_frames.create_master);
 
-        gtk_utils::set_bool     (bld, "chb_live_save_orig",  options.cam.live.save_orig);
-        gtk_utils::set_bool     (bld, "chb_live_save",       options.cam.live.save_enabled);
-        gtk_utils::set_f64      (bld, "spb_live_minutes",    options.cam.live.save_minutes as f64);
-        gtk_utils::set_path     (bld, "fch_live_folder",     Some(&options.cam.live.out_dir));
+        gtk_utils::set_bool     (bld, "chb_live_save_orig",  options.live.save_orig);
+        gtk_utils::set_bool     (bld, "chb_live_save",       options.live.save_enabled);
+        gtk_utils::set_f64      (bld, "spb_live_minutes",    options.live.save_minutes as f64);
+        gtk_utils::set_path     (bld, "fch_live_folder",     Some(&options.live.out_dir));
 
-        gtk_utils::set_bool     (bld, "chb_max_fwhm",        options.cam.quality.use_max_fwhm);
-        gtk_utils::set_f64      (bld, "spb_max_fwhm",        options.cam.quality.max_fwhm as f64);
-        gtk_utils::set_bool     (bld, "chb_max_oval",        options.cam.quality.use_max_ovality);
-        gtk_utils::set_f64      (bld, "spb_max_oval",        options.cam.quality.max_ovality as f64);
+        gtk_utils::set_bool     (bld, "chb_max_fwhm",        options.quality.use_max_fwhm);
+        gtk_utils::set_f64      (bld, "spb_max_fwhm",        options.quality.max_fwhm as f64);
+        gtk_utils::set_bool     (bld, "chb_max_oval",        options.quality.use_max_ovality);
+        gtk_utils::set_f64      (bld, "spb_max_oval",        options.quality.max_ovality as f64);
 
-        gtk_utils::set_active_id(bld, "cb_preview_src",      options.cam.preview.source.to_active_id());
-        gtk_utils::set_active_id(bld, "cb_preview_scale",    options.cam.preview.scale.to_active_id());
+        gtk_utils::set_active_id(bld, "cb_preview_src",      options.preview.source.to_active_id());
+        gtk_utils::set_active_id(bld, "cb_preview_scale",    options.preview.scale.to_active_id());
 
-        gtk_utils::set_f64      (bld, "scl_dark",            options.cam.preview.dark_lvl);
-        gtk_utils::set_f64      (bld, "scl_highlight",       options.cam.preview.light_lvl);
-        gtk_utils::set_f64      (bld, "scl_gamma",           options.cam.preview.gamma);
-        gtk_utils::set_bool     (bld, "chb_rem_grad",        options.cam.preview.remove_grad);
+        gtk_utils::set_f64      (bld, "scl_dark",            options.preview.dark_lvl);
+        gtk_utils::set_f64      (bld, "scl_highlight",       options.preview.light_lvl);
+        gtk_utils::set_f64      (bld, "scl_gamma",           options.preview.gamma);
+        gtk_utils::set_bool     (bld, "chb_rem_grad",        options.preview.remove_grad);
 
         gtk_utils::set_bool     (bld, "ch_hist_logx",        options.hist.log_x);
         gtk_utils::set_bool     (bld, "ch_hist_logy",        options.hist.log_y);
@@ -1040,7 +1048,7 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.telescope.focal_len = gtk_utils::get_f64(bld, "spb_foc_len");
     options.telescope.barlow = gtk_utils::get_f64(bld, "spb_barlow");
 
-    options.cam.preview.scale = {
+    options.preview.scale = {
         let preview_active_id = gtk_utils::get_active_id(bld, "cb_preview_scale");
         ImgPreviewScale::from_active_id(preview_active_id.as_deref())
             .expect("Wrong active id")
@@ -1058,7 +1066,7 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
         gtk_utils::get_active_id(bld, "cb_crop").as_deref()
     );
 
-    options.cam.preview.source = PreviewSource::from_active_id(
+    options.preview.source = PreviewSource::from_active_id(
         gtk_utils::get_active_id(bld, "cb_preview_src").as_deref()
     );
 
@@ -1075,31 +1083,31 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.cam.frame.offset         = gtk_utils::get_f64      (bld, "spb_offset") as i32;
     options.cam.frame.low_noise      = gtk_utils::get_bool     (bld, "chb_low_noise");
 
-    options.cam.calibr.dark_frame_en = gtk_utils::get_bool     (bld, "chb_master_dark");
-    options.cam.calibr.dark_frame    = gtk_utils::get_pathbuf  (bld, "fch_master_dark");
-    options.cam.calibr.flat_frame_en = gtk_utils::get_bool     (bld, "chb_master_flat");
-    options.cam.calibr.flat_frame    = gtk_utils::get_pathbuf  (bld, "fch_master_flat");
-    options.cam.calibr.hot_pixels    = gtk_utils::get_bool     (bld, "chb_hot_pixels");
+    options.calibr.dark_frame_en = gtk_utils::get_bool     (bld, "chb_master_dark");
+    options.calibr.dark_frame    = gtk_utils::get_pathbuf  (bld, "fch_master_dark");
+    options.calibr.flat_frame_en = gtk_utils::get_bool     (bld, "chb_master_flat");
+    options.calibr.flat_frame    = gtk_utils::get_pathbuf  (bld, "fch_master_flat");
+    options.calibr.hot_pixels    = gtk_utils::get_bool     (bld, "chb_hot_pixels");
 
-    options.cam.raw_frames.use_cnt       = gtk_utils::get_bool     (bld, "chb_raw_frames_cnt");
-    options.cam.raw_frames.frame_cnt     = gtk_utils::get_f64      (bld, "spb_raw_frames_cnt") as usize;
-    options.cam.raw_frames.out_path      = gtk_utils::get_pathbuf  (bld, "fcb_raw_frames_path").unwrap_or_default();
-    options.cam.raw_frames.create_master = gtk_utils::get_bool     (bld, "chb_master_frame");
+    options.raw_frames.use_cnt       = gtk_utils::get_bool     (bld, "chb_raw_frames_cnt");
+    options.raw_frames.frame_cnt     = gtk_utils::get_f64      (bld, "spb_raw_frames_cnt") as usize;
+    options.raw_frames.out_path      = gtk_utils::get_pathbuf  (bld, "fcb_raw_frames_path").unwrap_or_default();
+    options.raw_frames.create_master = gtk_utils::get_bool     (bld, "chb_master_frame");
 
-    options.cam.live.save_orig       = gtk_utils::get_bool     (bld, "chb_live_save_orig");
-    options.cam.live.save_enabled    = gtk_utils::get_bool     (bld, "chb_live_save");
-    options.cam.live.save_minutes    = gtk_utils::get_f64      (bld, "spb_live_minutes") as usize;
-    options.cam.live.out_dir         = gtk_utils::get_pathbuf  (bld, "fch_live_folder").unwrap_or_default();
+    options.live.save_orig       = gtk_utils::get_bool     (bld, "chb_live_save_orig");
+    options.live.save_enabled    = gtk_utils::get_bool     (bld, "chb_live_save");
+    options.live.save_minutes    = gtk_utils::get_f64      (bld, "spb_live_minutes") as usize;
+    options.live.out_dir         = gtk_utils::get_pathbuf  (bld, "fch_live_folder").unwrap_or_default();
 
-    options.cam.quality.use_max_fwhm    = gtk_utils::get_bool     (bld, "chb_max_fwhm");
-    options.cam.quality.max_fwhm        = gtk_utils::get_f64      (bld, "spb_max_fwhm") as f32;
-    options.cam.quality.use_max_ovality = gtk_utils::get_bool     (bld, "chb_max_oval");
-    options.cam.quality.max_ovality     = gtk_utils::get_f64      (bld, "spb_max_oval") as f32;
+    options.quality.use_max_fwhm    = gtk_utils::get_bool     (bld, "chb_max_fwhm");
+    options.quality.max_fwhm        = gtk_utils::get_f64      (bld, "spb_max_fwhm") as f32;
+    options.quality.use_max_ovality = gtk_utils::get_bool     (bld, "chb_max_oval");
+    options.quality.max_ovality     = gtk_utils::get_f64      (bld, "spb_max_oval") as f32;
 
-    options.cam.preview.gamma        = gtk_utils::get_f64      (bld, "scl_gamma");
-    options.cam.preview.dark_lvl     = gtk_utils::get_f64      (bld, "scl_dark");
-    options.cam.preview.light_lvl    = gtk_utils::get_f64      (bld, "scl_highlight");
-    options.cam.preview.remove_grad  = gtk_utils::get_bool     (bld, "chb_rem_grad");
+    options.preview.gamma        = gtk_utils::get_f64      (bld, "scl_gamma");
+    options.preview.dark_lvl     = gtk_utils::get_f64      (bld, "scl_dark");
+    options.preview.light_lvl    = gtk_utils::get_f64      (bld, "scl_highlight");
+    options.preview.remove_grad  = gtk_utils::get_bool     (bld, "chb_rem_grad");
 
     options.hist.log_x           = gtk_utils::get_bool(bld, "ch_hist_logx");
     options.hist.log_y           = gtk_utils::get_bool(bld, "ch_hist_logy");
@@ -1612,8 +1620,8 @@ fn handler_action_stop_shot(data: &Rc<CameraData>) {
 
 fn create_and_show_preview_image(data: &Rc<CameraData>) {
     let options = data.options.read().unwrap();
-    let preview_params = options.cam.preview.preview_params();
-    let (image, hist) = match options.cam.preview.source {
+    let preview_params = options.preview.preview_params();
+    let (image, hist) = match options.preview.source {
         PreviewSource::OrigFrame =>
             (&data.main.state.cur_frame().image, &data.main.state.cur_frame().hist),
         PreviewSource::LiveStacking =>
@@ -1635,7 +1643,7 @@ fn show_preview_image(
     rgb_bytes:  RgbU8Data,
     src_params: Option<PreviewParams>,
 ) {
-    let preview_options = data.options.read().unwrap().cam.preview.clone();
+    let preview_options = data.options.read().unwrap().preview.clone();
     let pp = preview_options.preview_params();
     if src_params.is_some() && src_params.as_ref() != Some(&pp) {
         create_and_show_preview_image(data);
@@ -1677,7 +1685,7 @@ fn show_preview_image(
 }
 
 fn show_image_info(data: &Rc<CameraData>) {
-    let info = match data.options.read().unwrap().cam.preview.source {
+    let info = match data.options.read().unwrap().preview.source {
         PreviewSource::OrigFrame =>
             data.main.state.cur_frame().info.read().unwrap(),
         PreviewSource::LiveStacking =>
@@ -1781,7 +1789,7 @@ fn show_frame_processing_result(
 ) {
     let options = data.options.read().unwrap();
     if options.cam.device != result.camera { return; }
-    let live_stacking_res = options.cam.preview.source == PreviewSource::LiveStacking;
+    let live_stacking_res = options.preview.source == PreviewSource::LiveStacking;
     drop(options);
 
     let mode_type = data.main.state.mode_data().mode.get_type();
@@ -2115,7 +2123,7 @@ fn process_simple_prop_change_event(
 
 fn show_histogram_stat(data: &Rc<CameraData>) {
     let options = data.options.read().unwrap();
-    let hist = match options.cam.preview.source {
+    let hist = match options.preview.source {
         PreviewSource::OrigFrame =>
             data.main.state.cur_frame().raw_hist.read().unwrap(),
         PreviewSource::LiveStacking =>
@@ -2179,7 +2187,7 @@ fn handler_draw_histogram(
 ) {
     gtk_utils::exec_and_show_error(&data.main.window, || {
         let options = data.options.read().unwrap();
-        let hist = match options.cam.preview.source {
+        let hist = match options.preview.source {
             PreviewSource::OrigFrame =>
                 data.main.state.cur_frame().raw_hist.read().unwrap(),
             PreviewSource::LiveStacking =>
@@ -2536,11 +2544,11 @@ fn handler_action_clear_light_history(data: &Rc<CameraData>) {
 
 fn show_total_raw_time(data: &Rc<CameraData>) {
     let options = data.options.read().unwrap();
-    let total_time = options.cam.frame.exposure * options.cam.raw_frames.frame_cnt as f64;
+    let total_time = options.cam.frame.exposure * options.raw_frames.frame_cnt as f64;
     let text = format!(
         "{:.1}s x {} = {}",
         options.cam.frame.exposure,
-        options.cam.raw_frames.frame_cnt,
+        options.raw_frames.frame_cnt,
         seconds_to_total_time_str(total_time, false)
     );
     gtk_utils::set_str(&data.main.builder, "l_raw_time_info", &text);
@@ -3017,7 +3025,7 @@ fn handler_action_open_image(data: &Rc<CameraData>) {
                 let mut image = data.main.state.cur_frame().image.write().unwrap();
                 image.load_from_file(&file_name.path().unwrap_or_default())?;
                 let options = data.options.read().unwrap();
-                if options.cam.preview.remove_grad {
+                if options.preview.remove_grad {
                     image.remove_gradient();
                 }
                 drop(image);

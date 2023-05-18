@@ -52,10 +52,6 @@ impl SeqFileNameGen {
         }
     }
 
-    pub fn clear(&mut self) {
-        self.last_num = 1;
-    }
-
     pub fn generate(&mut self, parent_path: &Path, file_mask: &str) -> PathBuf {
         loop {
             let num_str = format!("{:04}", self.last_num);
@@ -67,4 +63,29 @@ impl SeqFileNameGen {
             }
         }
     }
+}
+
+pub fn get_free_folder_name(path: &Path) -> PathBuf {
+    if !path.is_dir() && !path.is_file() { return path.to_path_buf(); }
+    let name = path.file_name().unwrap_or_default().to_str().unwrap_or_default();
+    let mut result = path.to_path_buf();
+    for index in 2..1_000_000 {
+        let new_name = format!("{}_{}", name, index);
+        result.set_file_name(new_name);
+        if !result.is_dir() && !result.is_file() { break; }
+    }
+    return result;
+}
+
+pub fn get_free_file_name(path: &Path) -> PathBuf {
+    if !path.is_dir() && !path.is_file() { return path.to_path_buf(); }
+    let stem = path.file_stem().unwrap_or_default().to_str().unwrap_or_default();
+    let ext = path.extension().unwrap_or_default().to_str().unwrap_or_default();
+    let mut result = path.to_path_buf();
+    for index in 2..1_000_000 {
+        let new_name = format!("{}_{}.{}", stem, index, ext);
+        result.set_file_name(new_name);
+        if !result.is_dir() && !result.is_file() { break; }
+    }
+    return result;
 }

@@ -19,12 +19,6 @@ pub enum ResultImageInfo {
     LightInfo(LightImageInfo),
     FlatInfo(FlatImageInfo),
     RawInfo(RawImageStat),
-    SaveMaster(SaveMasterResult),
-}
-
-pub struct SaveMasterResult {
-    path:      PathBuf,
-    frametype: FrameType,
 }
 
 pub struct ResultImage {
@@ -100,8 +94,8 @@ pub struct CalibrImages {
 }
 
 pub struct RawAdderParams {
-    pub adder: Arc<Mutex<RawAdder>>,
-    pub save:  bool,
+    pub adder:   Arc<Mutex<RawAdder>>,
+    pub save_fn: Option<PathBuf>,
 }
 
 pub struct LiveStackingData {
@@ -132,7 +126,7 @@ pub struct LiveStackingParams {
 bitflags! {
     pub struct ProcessImageFlags: u32 {
         const CALC_STARS_OFFSET = 1;
-        const SAVE_RAW          = 2;
+        const SAVE_RAW = 2;
     }
 }
 
@@ -533,6 +527,16 @@ fn make_preview_image_impl(
     tmr.log("histogram from raw image");
     drop(raw_hist);
 
+    // Raw noise
+    let raw_noise = if frame_type == FrameType::Lights {
+        let tmr = TimeLogger::start();
+        let noise = raw_image.calc_noise();
+        tmr.log("light frame raw noise calculation");
+        noise
+    } else {
+        0.0
+    };
+
     // Applying calibration data
     if frame_type == FrameType::Lights {
         let mut calibr = command.calibr_images.lock().unwrap();
@@ -663,7 +667,7 @@ fn make_preview_image_impl(
         let mut light_info = LightFrameShortInfo::default();
         light_info.time = Utc::now();
         light_info.exposure = exposure;
-        light_info.noise = 100.0 * info.noise / image.max_value() as f32;
+        light_info.noise = 100.0 * raw_noise / image.max_value() as f32;
         light_info.background = 100.0 * info.background as f32 / image.max_value() as f32;
         light_info.stars_fwhm = info.stars_fwhm;
         light_info.stars_ovality = info.stars_ovality;
@@ -860,27 +864,26 @@ fn make_preview_image_impl(
     // Save original raw image
     if !is_bad_frame && command.flags.contains(ProcessImageFlags::SAVE_RAW) {
         if let (Some(save_path), Some(fn_gen)) = (&command.save_path, &command.fn_gen) {
-            let sub_path = match frame_type {
-                FrameType::Lights => "Light",
-                FrameType::Flats => "Flat",
-                FrameType::Darks => "Dark",
-                FrameType::Biases => "Bias",
+            let prefix = match frame_type {
+                FrameType::Lights => "light",
+                FrameType::Flats => "flat",
+                FrameType::Darks => "dark",
+                FrameType::Biases => "bias",
                 FrameType::Undef => unreachable!(),
             };
-            let full_path = save_path.join(sub_path);
-            if !full_path.is_dir() {
-                std::fs::create_dir_all(&full_path)
+            if !save_path.is_dir() {
+                std::fs::create_dir_all(save_path)
                     .map_err(|e|anyhow::anyhow!(
                         "Error '{}'\nwhen trying to create directory '{}' for saving RAW frame",
                         e.to_string(),
-                        full_path.to_str().unwrap_or_default()
+                        save_path.to_str().unwrap_or_default()
                     ))?;
             }
             let mut fs_gen = fn_gen.lock().unwrap();
             let mut file_ext = command.blob.format.as_str().trim();
             while file_ext.starts_with('.') { file_ext = &file_ext[1..]; }
-            let fn_mask = format!("{}_${{num}}.{}", sub_path, file_ext);
-            let file_name = fs_gen.generate(&full_path, &fn_mask);
+            let fn_mask = format!("{}_${{num}}.{}", prefix, file_ext);
+            let file_name = fs_gen.generate(save_path, &fn_mask);
             let tmr = TimeLogger::start();
             std::fs::write(&file_name, command.blob.data.as_slice())
                 .map_err(|e| anyhow::anyhow!(
@@ -896,27 +899,21 @@ fn make_preview_image_impl(
 
     // Save master file
 
-    if let (Some(raw_adder), Some(save_path)) = (command.raw_adder.as_ref(), command.save_path.as_ref()) {
-        if raw_adder.save && frame_for_raw_adder {
+    if let Some(RawAdderParams {
+        adder,
+        save_fn: Some(file_name)
+    }) = &command.raw_adder {
+        if frame_for_raw_adder {
             log::debug!("Saving master frame...");
-            let mut adder = raw_adder.adder.lock().unwrap();
-            let width = adder.width();
-            let height = adder.height();
+            let mut adder = adder.lock().unwrap();
             let raw_image = adder.get()?;
             adder.clear();
-            let (prefix, file_name_suff) = match frame_type {
-                FrameType::Flats =>  ("flat", command.frame_options.create_master_flat_file_name_suff()),
-                FrameType::Darks =>  ("dark", command.frame_options.create_master_dark_file_name_suff()),
-                FrameType::Biases => ("bias", command.frame_options.create_master_bias_file_name_suff()),
-                _ => unreachable!(),
-            };
-            let file_name = format!("{}_{}x{}_{}.fits", prefix, width, height, file_name_suff);
-            let full_file_name = save_path.join(file_name);
-            raw_image.save_to_fits_file(&full_file_name)?;
+            drop(adder);
+            raw_image.save_to_fits_file(&file_name)?;
             send_result(
                 ProcessingResultData::MasterSaved {
                     frame_type,
-                    file_name: full_file_name
+                    file_name: file_name.clone()
                 },
                 &command.camera,
                 result_fun

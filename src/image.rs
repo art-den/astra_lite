@@ -108,7 +108,7 @@ impl ImageLayer<u16> {
     pub fn calc_noise(&self) -> f32 {
         let mut diffs = Vec::with_capacity(self.data.len()/10);
         for (v1, v2, v3, v4, v5, m, v6, v7, v8, v9, v10)
-        in self.data.iter().step_by(7).tuples() {
+        in self.data.iter().tuples().step_by(7) {
             let aver = (
                 *v1 as u32 + *v2 as u32 +
                 *v3 as u32 + *v4 as u32 +
@@ -326,24 +326,6 @@ impl Image {
         }
     }
 
-    pub fn new_color(
-        width:     usize,
-        height:    usize,
-        zero:      i32,
-        max_value: u16
-    ) -> Image {
-        Image {
-            l: ImageLayer::new_empty(),
-            r: ImageLayer::new_with_size(width, height),
-            g: ImageLayer::new_with_size(width, height),
-            b: ImageLayer::new_with_size(width, height),
-            width,
-            height,
-            zero,
-            max_value
-        }
-    }
-
     pub fn make_color(
         &mut self,
         width:     usize,
@@ -442,7 +424,6 @@ impl Image {
             width:          self.width,
             height:         self.height,
             is_color_image: self.is_color(),
-            gamma,
         };
         let r_table = Self::create_gamma_table(r_levels.dark, r_levels.light, gamma);
         let g_table = Self::create_gamma_table(g_levels.dark, g_levels.light, gamma);
@@ -913,7 +894,6 @@ struct ImageToU8BytesArgs {
     width:          usize,
     height:         usize,
     is_color_image: bool,
-    gamma:          f64,
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -151,8 +151,8 @@ pub fn build_ui(
     let mut options = Options::default();
     gtk_utils::exec_and_show_error(&window, || {
         load_json_from_config_file(&mut options, OPTIONS_FN)?;
-        options.cam.raw_frames.check_and_correct()?;
-        options.cam.live.check_and_correct()?;
+        options.raw_frames.check()?;
+        options.live.check()?;
         Ok(())
     });
 

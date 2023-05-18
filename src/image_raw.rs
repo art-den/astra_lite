@@ -1,12 +1,9 @@
-use std::{path::Path, collections::HashSet, io::*, fs::File};
+use std::{path::Path, collections::HashSet, fs::File};
 use fitsio::{images::*, FitsFile};
 use rayon::prelude::*;
 use itertools::{izip, Itertools};
 use serde::{Serialize, Deserialize};
-use bitstream_io::*;
 use crate::{image::*, fits_reader::*};
-
-const RAW_IMAGE_FILE_VERSION: u8 = 1;
 
 #[derive(Clone)]
 pub struct BadPixel {
@@ -117,29 +114,6 @@ pub struct RawImage {
 }
 
 impl RawImage {
-    pub fn new(width: usize, height: usize, max_value: u16) -> RawImage {
-        let mut data = Vec::new();
-        data.resize(width * height, 0);
-        let info = RawImageInfo {
-            width,
-            height,
-            zero: 0,
-            cfa: CfaType::None,
-            max_value,
-            frame_type: FrameType::Lights,
-            bin: 1,
-            exposure: 0.0,
-        };
-        Self { info, data, cfa_arr: &[] }
-    }
-
-    pub fn new_from_info(info: RawImageInfo)  -> RawImage {
-        let mut data = Vec::new();
-        data.resize(info.width * info.height, 0);
-        let cfa_arr = info.cfa.get_array();
-        Self { info, data, cfa_arr }
-    }
-
     pub fn new_from_fits_stream(
         mut stream:    impl SeekNRead,
         config_offset: Option<i32>,
@@ -241,10 +215,6 @@ impl RawImage {
         &mut self.data[pos..pos+self.info.width]
     }
 
-    fn col_iter(&self, x: usize) -> std::iter::StepBy<std::slice::Iter<u16>> {
-        self.data[x..].iter().step_by(self.info.width)
-    }
-
     fn get(&self, x: isize, y: isize) -> Option<u16> {
         if x < 0 || y < 0 || x >= self.info.width as isize {
             return None;
@@ -288,7 +258,6 @@ impl RawImage {
             iter: RawRectIterator::init_iter(self, x1 as usize, x2 as usize, y1 as usize),
             cfa_iter: RawRectIterator::init_cfa_iter(self, x1 as usize, y1 as usize),
             x1: x1 as usize,
-            y1: y1 as usize,
             x2: x2 as usize,
             y2: y2 as usize,
             x: x1 as usize,
@@ -656,10 +625,56 @@ impl RawImage {
         self.data = new_data;
     }
 
-    pub fn demosaic(&self, mt: bool) -> Image {
-        let mut result = Image::new_empty();
-        self.demosaic_into(&mut result, mt);
-        result
+    pub fn calc_noise(&self) -> f32 {
+        let rect_size = (self.info.width / 200).max(16).min(42);
+        let step = 7;
+        let rows = self.info.height / rect_size;
+        let cols = self.info.width / rect_size;
+        let mut values = Vec::new();
+        let mut diffs = Vec::new();
+        let cfa_color = if self.info.cfa == CfaType::None {
+            CfaColor::None
+        } else {
+            CfaColor::G
+        };
+        for row in (0..rows).step_by(step) {
+            let y1 = rect_size * row;
+            let y2 = y1 + rect_size - 1;
+            for col in (0..cols).step_by(step) {
+                let x1 = rect_size * col;
+                let x2 = x1 + rect_size - 1;
+                values.clear();
+                for (_, _, v, color)
+                in self.rect_iter(x1 as isize, y1 as isize, x2 as isize, y2 as isize) {
+                    if color != cfa_color { continue; }
+                    values.push(v);
+                }
+                for _ in 0..5 {
+                    let median_pos = values.len() / 2;
+                    let median = *values.select_nth_unstable(median_pos).1 as f64;
+                    let sum: f64 = values
+                        .iter()
+                        .map(|v| {
+                            let diff = *v as f64 - median;
+                            diff * diff
+                        })
+                        .sum();
+                    let std_dev = f64::sqrt(sum / values.len() as f64);
+                    let max = (median + 3.0 * std_dev) as i32;
+                    let len_before = values.len();
+                    values.retain(|v| (*v as i32) < max);
+                    if len_before == values.len() { break; }
+                }
+                let sum: u64 = values.iter().map(|v| *v as u64).sum();
+                let aver = sum as f64 / values.len() as f64;
+                for v in &values {
+                    let diff = *v as f64 - aver;
+                    diffs.push(diff * diff);
+                }
+            }
+        }
+        let sum: f64 = diffs.iter().sum();
+        f64::sqrt(sum / diffs.len() as f64) as f32
     }
 
     pub fn demosaic_into(&self, dst_img: &mut Image, mt: bool) {
@@ -827,47 +842,6 @@ impl RawImage {
             demosaic_pixel_at_border(self.info.width as isize - 1, y as isize, CfaColor::B);
         }
     }
-
-    pub fn save_to_internal_format(&self, file_name: &Path) -> anyhow::Result<()> {
-        let mut file = BufWriter::new(File::create(file_name)?);
-        file.write_all(&[RAW_IMAGE_FILE_VERSION])?;
-        let info_text = serde_json::to_string(&self.info)?;
-        file.write_all(&(info_text.len() as u32).to_be_bytes())?;
-        file.write_all(info_text.as_bytes())?;
-        let mut data_compressor = ValuesCompressor::new();
-        let mut writer = BitWriter::endian(&mut file, BigEndian);
-        for value in &self.data {
-            data_compressor.write_u32(*value as u32, &mut writer)?;
-        }
-        writer.write(32, 0)?;
-        writer.flush()?;
-        Ok(())
-    }
-
-    pub fn load_from_internal_format(file_name: &Path) -> anyhow::Result<Self> {
-        let mut file = BufReader::new(File::open(file_name)?);
-        let mut vers_bytes = [0u8];
-        file.read_exact(&mut vers_bytes)?;
-        if vers_bytes[0] != RAW_IMAGE_FILE_VERSION {
-            anyhow::bail!("Wrong RAW file version");
-        }
-        let mut len_bytes = [0u8; 4];
-        file.read_exact(&mut len_bytes)?;
-        let json_len = u32::from_be_bytes(len_bytes);
-        let mut json_bytes = Vec::new();
-        json_bytes.resize(json_len as usize, 0u8);
-        file.read_exact(&mut json_bytes)?;
-        let json = std::str::from_utf8(&json_bytes)?;
-        let info: RawImageInfo = serde_json::from_str(json)?;
-        let mut data_decompressor = ValuesDecompressor::new();
-        let mut reader = BitReader::endian(&mut file, BigEndian);
-        let mut data = Vec::with_capacity(info.width * info.height);
-        for _ in 0..info.width * info.height {
-            data.push(data_decompressor.read_u32(&mut reader)? as u16);
-        }
-        let cfa_arr = info.cfa.get_array();
-        Ok(Self { info, data, cfa_arr })
-    }
 }
 
 pub struct RawAdder {
@@ -893,14 +867,6 @@ impl RawAdder {
         self.info = None;
         self.counter = 0;
         self.zero_sum = 0;
-    }
-
-    pub fn width(&self) -> usize {
-        self.info.as_ref().map(|info| info.width).unwrap_or_default()
-    }
-
-    pub fn height(&self) -> usize {
-        self.info.as_ref().map(|info| info.height).unwrap_or_default()
     }
 
     pub fn add(&mut self, raw: &RawImage) -> anyhow::Result<()> {
@@ -958,7 +924,6 @@ pub struct RawRectIterator<'a> {
     iter: std::slice::Iter<'a, u16>,
     cfa_iter: RawRectIteratorCfaIter<'a>,
     x1: usize,
-    y1: usize,
     x2: usize,
     y2: usize,
     x: usize,
@@ -1001,110 +966,4 @@ impl<'a> Iterator for RawRectIterator<'a> {
             },
         }
     }
-}
-
-const F32_COMPR_BUF_SIZE: usize = 8;
-
-pub struct ValuesCompressor {
-    data: [u32; F32_COMPR_BUF_SIZE],
-    data_ptr: usize,
-    prev: u32,
-}
-
-impl ValuesCompressor {
-    pub fn new() -> Self {
-        Self {
-            data: [0_u32; F32_COMPR_BUF_SIZE],
-            data_ptr: 0,
-            prev: 0,
-        }
-    }
-
-    pub fn write_u32<T: BitWrite>(&mut self, value: u32, writer: &mut T) -> std::io::Result<()> {
-        self.data[self.data_ptr] = value ^ self.prev;
-        self.prev = value;
-        self.data_ptr += 1;
-        if self.data_ptr == F32_COMPR_BUF_SIZE {
-            self.flush(writer)?;
-        }
-        Ok(())
-    }
-
-    pub fn write_f32<T: BitWrite>(&mut self, value: f32, writer: &mut T) -> std::io::Result<()> {
-        self.write_u32(value.to_bits(), writer)
-    }
-
-    pub fn flush<T: BitWrite>(&mut self, writer: &mut T) -> std::io::Result<()> {
-        if self.data_ptr == 0 {
-            return Ok(())
-        }
-        self.data[self.data_ptr..].fill(0);
-        let min_lz = self.data
-            .iter()
-            .map(|v| v.leading_zeros())
-            .min()
-            .unwrap_or(0);
-        let mut max_len = 32-min_lz;
-        if max_len == 0 { max_len = 1; }
-        writer.write(5, max_len-1)?;
-        for v in self.data {
-            writer.write(max_len, v)?;
-        }
-        self.data_ptr = 0;
-        Ok(())
-    }
-}
-
-pub struct ValuesDecompressor {
-    values: [u32; F32_COMPR_BUF_SIZE],
-    values_ptr: usize,
-    prev_value: u32,
-}
-
-impl ValuesDecompressor {
-    pub fn new() -> Self {
-        Self {
-            values: [0_u32; F32_COMPR_BUF_SIZE],
-            values_ptr: F32_COMPR_BUF_SIZE,
-            prev_value: 0,
-        }
-    }
-
-    pub fn read_f32<T: BitRead>(&mut self, reader: &mut T) -> std::io::Result<f32> {
-        Ok(f32::from_bits(self.read_u32(reader)?))
-    }
-
-    pub fn read_u32<T: BitRead>(&mut self, reader: &mut T) -> std::io::Result<u32> {
-        if self.values_ptr == F32_COMPR_BUF_SIZE {
-            self.values_ptr = 0;
-            let len = reader.read::<u32>(5)? + 1;
-            for v in &mut self.values {
-                self.prev_value ^= reader.read::<u32>(len)?;
-                *v = self.prev_value;
-            }
-        }
-        let result = self.values[self.values_ptr];
-        self.values_ptr += 1;
-        Ok(result)
-    }
-}
-
-
-#[inline(always)]
-pub fn median3<T>(v1: T, v2: T, v3: T) -> T
-where T: std::cmp::Ord {
-    if (v1 > v2) ^ (v1 > v3) {
-        return v1;
-    } else if (v2 < v1) ^ (v2 < v3) {
-        return v2;
-    }
-    return v3;
-}
-
-#[inline(always)]
-pub fn median5<T>(v1: T, v2: T, v3: T, v4: T, v5: T) -> T
-where T: std::cmp::Ord + Copy {
-    let v6 = T::max(T::min(v1, v2), T::min(v3, v4));
-    let v7 = T::min(T::max(v1, v2), T::max(v3, v4));
-    return median3(v5, v6, v7);
 }
