@@ -54,6 +54,28 @@
       </object>
     </child>
   </object>
+  <object class="GtkMenu" id="m_image">
+    <property name="visible">True</property>
+    <property name="can-focus">False</property>
+    <child>
+      <object class="GtkMenuItem">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="action-name">win.save_image_preview</property>
+        <property name="label" translatable="yes">Save preview...</property>
+        <property name="use-underline">True</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="action-name">win.save_image_linear</property>
+        <property name="label" translatable="yes">Save linear...</property>
+        <property name="use-underline">True</property>
+      </object>
+    </child>
+  </object>
   <object class="GtkMenu" id="m_options">
     <property name="visible">True</property>
     <property name="can-focus">False</property>
@@ -1976,7 +1998,7 @@ Better use "Subtrack master DARK frame"</property>
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
                                     <property name="label" translatable="yes">Darks</property>
-                                    <property name="width-chars">16</property>
+                                    <property name="width-chars">15</property>
                                   </object>
                                   <packing>
                                     <property name="left-attach">0</property>
@@ -1988,7 +2010,7 @@ Better use "Subtrack master DARK frame"</property>
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
                                     <property name="label" translatable="yes">Gamma</property>
-                                    <property name="width-chars">16</property>
+                                    <property name="width-chars">15</property>
                                   </object>
                                   <packing>
                                     <property name="left-attach">1</property>
@@ -2000,7 +2022,7 @@ Better use "Subtrack master DARK frame"</property>
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
                                     <property name="label" translatable="yes">Highlights</property>
-                                    <property name="width-chars">16</property>
+                                    <property name="width-chars">15</property>
                                   </object>
                                   <packing>
                                     <property name="left-attach">2</property>
@@ -2063,18 +2085,6 @@ Better use "Subtrack master DARK frame"</property>
                               </packing>
                             </child>
                             <child>
-                              <object class="GtkSeparator">
-                                <property name="visible">True</property>
-                                <property name="can-focus">False</property>
-                                <property name="orientation">vertical</property>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">6</property>
-                              </packing>
-                            </child>
-                            <child>
                               <object class="GtkCheckButton" id="chb_rem_grad">
                                 <property name="label" translatable="yes">Remove gradient</property>
                                 <property name="visible">True</property>
@@ -2088,7 +2098,67 @@ Useful when the object is not lagre and is in the center of the image.</property
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
+                                <property name="position">6</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkSeparator">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                                <property name="orientation">vertical</property>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
                                 <property name="position">7</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkMenuButton">
+                                <property name="visible">True</property>
+                                <property name="can-focus">True</property>
+                                <property name="focus-on-click">False</property>
+                                <property name="receives-default">True</property>
+                                <property name="valign">center</property>
+                                <property name="popup">m_image</property>
+                                <child>
+                                  <object class="GtkBox">
+                                    <property name="visible">True</property>
+                                    <property name="can-focus">False</property>
+                                    <property name="margin-start">5</property>
+                                    <property name="margin-end">5</property>
+                                    <property name="spacing">5</property>
+                                    <child>
+                                      <object class="GtkLabel">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="label" translatable="yes">Image</property>
+                                      </object>
+                                      <packing>
+                                        <property name="expand">False</property>
+                                        <property name="fill">True</property>
+                                        <property name="position">0</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkImage">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="icon-name">pan-down-symbolic</property>
+                                      </object>
+                                      <packing>
+                                        <property name="expand">False</property>
+                                        <property name="fill">True</property>
+                                        <property name="position">1</property>
+                                      </packing>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">8</property>
                               </packing>
                             </child>
                           </object>

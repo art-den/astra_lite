@@ -1014,6 +1014,13 @@ impl CameraActiveMode {
         };
     }
 
+    fn correct_options_before_start(&self) {
+        if self.cam_mode == CamMode::LiveStacking {
+            let mut options = self.options.write().unwrap();
+            options.cam.frame.frame_type = FrameType::Lights;
+        }
+    }
+
     fn start_or_continue(&mut self) -> anyhow::Result<()> {
         let continuously = match (&self.cam_mode, &self.frame_options.frame_type) {
             (CamMode::SingleShot,      _                ) => false,
@@ -1191,6 +1198,7 @@ impl Mode for CameraActiveMode {
     }
 
     fn start(&mut self) -> anyhow::Result<()> {
+        self.correct_options_before_start();
         self.update_options_copies();
         if let Some(ref_stars) = &mut self.ref_stars {
             let mut ref_stars = ref_stars.write().unwrap();
@@ -1200,11 +1208,11 @@ impl Mode for CameraActiveMode {
             let mut adder = live_stacking.adder.write().unwrap();
             adder.clear();
         }
-        match self.cam_mode {
-            CamMode::SavingRawFrames|CamMode::LiveStacking =>
-                self.create_file_names_for_raw_saving(),
-            _ => {}
+
+        if let CamMode::SavingRawFrames|CamMode::LiveStacking = self.cam_mode {
+            self.create_file_names_for_raw_saving();
         }
+
         self.start_or_continue()?;
         Ok(())
     }
@@ -1215,6 +1223,7 @@ impl Mode for CameraActiveMode {
     }
 
     fn continue_work(&mut self) -> anyhow::Result<()> {
+        self.correct_options_before_start();
         self.update_options_copies();
         self.state = CamState::Usual;
 

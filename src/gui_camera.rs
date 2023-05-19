@@ -558,6 +558,8 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     gtk_utils::connect_action(&data.main.window, data, "start_dither_calibr",    handler_action_start_dither_calibr);
     gtk_utils::connect_action(&data.main.window, data, "stop_dither_calibr",     handler_action_stop_dither_calibr);
     gtk_utils::connect_action(&data.main.window, data, "load_image",             handler_action_open_image);
+    gtk_utils::connect_action(&data.main.window, data, "save_image_preview",     handler_action_save_image_preview);
+    gtk_utils::connect_action(&data.main.window, data, "save_image_linear",      handler_action_save_image_linear);
 
     let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
     cb_frame_mode.connect_active_id_notify(clone!(@strong data => move |cb| {
@@ -1783,6 +1785,75 @@ fn show_image_info(data: &Rc<CameraData>) {
     }
 }
 
+fn handler_action_save_image_preview(data: &Rc<CameraData>) {
+    gtk_utils::exec_and_show_error(&data.main.window, || {
+        let options = data.main.options.read().unwrap();
+        let (image, hist) = match options.preview.source {
+            PreviewSource::OrigFrame =>
+                (&data.main.state.cur_frame().image, &data.main.state.cur_frame().hist),
+            PreviewSource::LiveStacking =>
+                (&data.main.state.live_stacking().image, &data.main.state.live_stacking().hist),
+        };
+        if image.read().unwrap().is_empty() { return Ok(()); }
+
+        let mut preview_options = options.preview.clone();
+        preview_options.scale = ImgPreviewScale::Original;
+        drop(options);
+
+        let ff = gtk::FileFilter::new();
+        ff.set_name(Some("Jpeg images"));
+        ff.add_pattern("*.jpg");
+        let fc = gtk::FileChooserDialog::builder()
+            .action(gtk::FileChooserAction::Save)
+            .title("Enter file name to save preview image as jpeg")
+            .filter(&ff)
+            .modal(true)
+            .name("*.jpg")
+            .transient_for(&data.main.window)
+            .build();
+        if cfg!(target_os = "windows") {
+            fc.add_buttons(&[
+                ("_Save", gtk::ResponseType::Accept),
+                ("_Cancel", gtk::ResponseType::Cancel),
+            ]);
+        } else {
+            fc.add_buttons(&[
+                ("_Cancel", gtk::ResponseType::Cancel),
+                ("_Save", gtk::ResponseType::Accept),
+            ]);
+        }
+        let resp = fc.run();
+        fc.close();
+
+        if resp == gtk::ResponseType::Accept {
+            let path = fc.file().ok_or_else(|| anyhow::anyhow!("Can't get file name"))?
+                .path().ok_or_else(|| anyhow::anyhow!("Can't convert file name to path"))?
+                .with_extension("jpg");
+            let image = image.read().unwrap();
+            let hist = hist.read().unwrap();
+            let preview_params = preview_options.preview_params();
+            let rgb_data = get_rgb_bytes_from_preview_image(&image, &hist, &preview_params);
+            let bytes = glib::Bytes::from_owned(rgb_data.bytes);
+            let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
+                &bytes,
+                gtk::gdk_pixbuf::Colorspace::Rgb,
+                false,
+                8,
+                rgb_data.width as i32,
+                rgb_data.height as i32,
+                (rgb_data.width * 3) as i32,
+            );
+            pixbuf.savev(path, "jpeg", &[("quality", "90")])?;
+        };
+        Ok(())
+    });
+}
+
+fn handler_action_save_image_linear(data: &Rc<CameraData>) {
+
+}
+
+
 fn show_frame_processing_result(
     data:   &Rc<CameraData>,
     result: FrameProcessingResult
@@ -2350,6 +2421,7 @@ fn handler_action_start_live_stacking(data: &Rc<CameraData>) {
     read_options_from_widgets(data);
     gtk_utils::exec_and_show_error(&data.main.window, || {
         data.main.state.start_live_stacking()?;
+        show_options(data);
         gtk_utils::set_active_id(
             &data.main.builder,
             "cb_preview_src",
@@ -2512,6 +2584,7 @@ fn handler_action_start_save_raw_frames(data: &Rc<CameraData>) {
     read_options_from_widgets(data);
     gtk_utils::exec_and_show_error(&data.main.window, || {
         data.main.state.start_saving_raw_frames()?;
+        show_options(data);
         gtk_utils::set_active_id(
             &data.main.builder,
             "cb_preview_src",
