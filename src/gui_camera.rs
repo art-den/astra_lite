@@ -1435,8 +1435,8 @@ fn correct_widgets_props(data: &Rc<CameraData>) {
             ("fch_master_dark",    can_change_cal_ops),
             ("chb_master_flat",    can_change_cal_ops),
             ("fch_master_flat",    can_change_cal_ops),
-            ("chb_raw_frames_cnt", !saving_frames_paused),
-            ("spb_raw_frames_cnt", !saving_frames_paused),
+            ("chb_raw_frames_cnt", !saving_frames && can_change_mode),
+            ("spb_raw_frames_cnt", !saving_frames && can_change_mode),
 
             ("chb_live_save",      can_change_live_stacking_opts),
             ("spb_live_minutes",   can_change_live_stacking_opts),
