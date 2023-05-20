@@ -1,5 +1,5 @@
 use std::{rc::Rc, path::{Path, PathBuf}, cell::Cell};
-use gtk::{prelude::*, gio, cairo, glib};
+use gtk::{*, prelude::*, gio, cairo, glib};
 
 
 pub struct ExclusiveCaller {
@@ -366,4 +366,45 @@ pub fn draw_progress_bar(
     cr.show_text(text)?;
 
     Ok(())
+}
+
+pub fn select_file_name_to_save(
+    parent:        &impl IsA<Window>,
+    title:         &str,
+    filter_name:   &str,
+    filter_ext:    &str,
+    ext:           &str,
+    def_file_name: &str,
+) -> Option<PathBuf> {
+    let ff = gtk::FileFilter::new();
+    ff.set_name(Some(filter_name));
+    ff.add_pattern(filter_ext);
+    let fc = gtk::FileChooserDialog::builder()
+        .action(gtk::FileChooserAction::Save)
+        .title(title)
+        .filter(&ff)
+        .modal(true)
+        .transient_for(parent)
+        .build();
+    fc.set_current_name(def_file_name);
+    if cfg!(target_os = "windows") {
+        fc.add_buttons(&[
+            ("_Save", gtk::ResponseType::Accept),
+            ("_Cancel", gtk::ResponseType::Cancel),
+        ]);
+    } else {
+        fc.add_buttons(&[
+            ("_Cancel", gtk::ResponseType::Cancel),
+            ("_Save", gtk::ResponseType::Accept),
+        ]);
+    }
+    let resp = fc.run();
+    fc.close();
+    if resp != gtk::ResponseType::Accept {
+        None
+    } else {
+        Some(fc.file()?
+        .path()?
+        .with_extension(ext))
+    }
 }

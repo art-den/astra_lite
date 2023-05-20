@@ -755,20 +755,30 @@ impl Image {
             tiff.write_data(self.l.as_slice())?;
         }
         else if self.is_color() {
-            let data: Vec<_> = izip!(self.r.as_slice(), self.g.as_slice(), self.b.as_slice())
-                .map(|(r, g, b)| {
-                    let r = (*r as i32 + self.zero).max(0).min(u16::MAX as i32);
-                    let g = (*g as i32 + self.zero).max(0).min(u16::MAX as i32);
-                    let b = (*b as i32 + self.zero).max(0).min(u16::MAX as i32);
-                    [r as u16, g as u16, b as u16]
-                })
-                .flatten()
-                .collect();
-            let tiff = decoder.new_image::<colortype::RGB16>(
+            let mut tiff = decoder.new_image::<colortype::RGB16>(
                 self.width as u32,
                 self.height as u32
             )?;
-            tiff.write_data(&data)?;
+            tiff.rows_per_strip(64)?;
+            let mut strip_data = Vec::new();
+            let mut pos = 0_usize;
+            loop {
+                let mut samples_count = tiff.next_strip_sample_count() as usize;
+                if samples_count == 0 { break; }
+                samples_count /= 3;
+                strip_data.clear();
+                let r_strip = &self.r.data[pos..pos+samples_count];
+                let g_strip = &self.g.data[pos..pos+samples_count];
+                let b_strip = &self.b.data[pos..pos+samples_count];
+                for (r, g, b) in izip!(r_strip, g_strip, b_strip) {
+                    strip_data.push(*r);
+                    strip_data.push(*g);
+                    strip_data.push(*b);
+                }
+                tiff.write_strip(&strip_data)?;
+                pos += samples_count;
+            }
+            tiff.finish()?;
         } else {
             panic!("Internal error");
         }
@@ -1055,7 +1065,7 @@ impl ImageAdder {
                 self.width as u32,
                 self.height as u32
             )?;
-            tiff.rows_per_strip(16)?;
+            tiff.rows_per_strip(64)?;
             let mut strip_data = Vec::new();
             let mut pos = 0_usize;
             loop {
@@ -1076,7 +1086,7 @@ impl ImageAdder {
                 self.width as u32,
                 self.height as u32
             )?;
-            tiff.rows_per_strip(16)?;
+            tiff.rows_per_strip(64)?;
             let mut strip_data = Vec::new();
             let mut pos = 0_usize;
             loop {
