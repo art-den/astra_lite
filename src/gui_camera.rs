@@ -1856,7 +1856,7 @@ fn handler_action_save_image_linear(data: &Rc<CameraData>) {
                 if image.read().unwrap().is_empty() {
                     return Ok(());
                 }
-                let Some(file_name) = ask_to_select_name("live") else {
+                let Some(file_name) = ask_to_select_name("preview") else {
                     return Ok(())
                 };
                 image.read().unwrap().save_to_tiff(&file_name)?;
