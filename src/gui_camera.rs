@@ -1707,6 +1707,10 @@ fn show_preview_image(
         tmr.log("Pixbuf::scale_simple");
     }
     img_preview.set_pixbuf(Some(&pixbuf));
+    gtk_utils::enable_widgets(
+        &data.main.builder, false,
+        &[("cb_preview_color", rgb_bytes.is_color_image)]
+    );
 }
 
 fn show_image_info(data: &Rc<CameraData>) {

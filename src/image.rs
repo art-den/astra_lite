@@ -468,7 +468,8 @@ impl Image {
         color:   PreviewColor,
     ) -> RgbU8Data {
         let mut rgb_bytes = Vec::with_capacity(3 * args.width * args.height);
-        if args.is_color_image && color == PreviewColor::Rgb {
+        let is_color_image = args.is_color_image && color == PreviewColor::Rgb;
+        if is_color_image {
             for row in 0..args.height {
                 let r_iter = self.r.row(row).iter();
                 let g_iter = self.g.row(row).iter();
@@ -503,6 +504,7 @@ impl Image {
             bytes: rgb_bytes,
             orig_width: self.width,
             orig_height: self.height,
+            is_color_image: args.is_color_image,
         }
     }
 
@@ -518,7 +520,8 @@ impl Image {
         let width = args.width / 2;
         let height = args.height / 2;
         let mut bytes = Vec::with_capacity(3 * width * height);
-        if args.is_color_image && color == PreviewColor::Rgb {
+        let is_color_image = args.is_color_image && color == PreviewColor::Rgb;
+        if is_color_image {
             for y in 0..height {
                 let mut r0 = self.r.row(2*y).as_ptr();
                 let mut r1 = self.r.row(2*y+1).as_ptr();
@@ -575,7 +578,12 @@ impl Image {
                 }
             }
         }
-        RgbU8Data { width, height, bytes, orig_width: self.width, orig_height: self.height }
+        RgbU8Data {
+            width, height, bytes,
+            orig_width: self.width,
+            orig_height: self.height,
+            is_color_image: args.is_color_image,
+        }
     }
 
     fn to_grb_bytes_reduct3(
@@ -590,7 +598,8 @@ impl Image {
         let width = args.width / 3;
         let height = args.height / 3;
         let mut bytes = Vec::with_capacity(3 * width * height);
-        if args.is_color_image && color == PreviewColor::Rgb {
+        let is_color_image = args.is_color_image && color == PreviewColor::Rgb;
+        if is_color_image {
             for y in 0..height {
                 let mut r0 = self.r.row(3*y).as_ptr();
                 let mut r1 = self.r.row(3*y+1).as_ptr();
@@ -659,7 +668,12 @@ impl Image {
                 }
             }
         }
-        RgbU8Data { width, height, bytes, orig_width: self.width, orig_height: self.height }
+        RgbU8Data {
+            width, height, bytes,
+            orig_width: self.width,
+            orig_height: self.height,
+            is_color_image: args.is_color_image,
+        }
     }
 
     fn to_grb_bytes_reduct4(
@@ -674,7 +688,8 @@ impl Image {
         let width = args.width / 4;
         let height = args.height / 4;
         let mut bytes = Vec::with_capacity(3 * width * height);
-        if args.is_color_image && color == PreviewColor::Rgb {
+        let is_color_image = args.is_color_image && color == PreviewColor::Rgb;
+        if is_color_image {
             for y in 0..height {
                 let mut r0 = self.r.row(4*y).as_ptr();
                 let mut r1 = self.r.row(4*y+1).as_ptr();
@@ -755,7 +770,12 @@ impl Image {
                 }
             }
         }
-        RgbU8Data { width, height, bytes, orig_width: self.width, orig_height: self.height }
+        RgbU8Data {
+            width, height, bytes,
+            orig_width: self.width,
+            orig_height: self.height,
+            is_color_image: args.is_color_image,
+        }
     }
 
     pub fn remove_gradient(&mut self) {
@@ -925,11 +945,12 @@ pub struct DarkLightLevels {
 
 #[derive(Default)]
 pub struct RgbU8Data {
-    pub width:       usize,
-    pub height:      usize,
-    pub orig_width:  usize,
-    pub orig_height: usize,
-    pub bytes:       Vec<u8>,
+    pub width:          usize,
+    pub height:         usize,
+    pub orig_width:     usize,
+    pub orig_height:    usize,
+    pub bytes:          Vec<u8>,
+    pub is_color_image: bool,
 }
 
 struct ImageToU8BytesArgs {
