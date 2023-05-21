@@ -32,6 +32,7 @@ use crate::io_utils::*;
 fn main() -> anyhow::Result<()> {
     let mut logs_dir = get_app_dir()?;
     logs_dir.push("logs");
+    log_utils::cleanup_old_logs(&logs_dir, 14);
     log_utils::start_logger(&logs_dir)?;
     log::set_max_level(log::LevelFilter::Info);
 
