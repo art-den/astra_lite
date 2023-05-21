@@ -3,7 +3,7 @@ use std::{path::Path, io::{BufWriter, BufReader}, fs::File};
 use itertools::*;
 use rayon::prelude::*;
 
-use crate::{math::*, image_info::Histogram};
+use crate::{math::*, image_info::Histogram, options::PreviewColor};
 
 pub struct ImageLayer<T> {
     data: Vec<T>,
@@ -416,6 +416,7 @@ impl Image {
         b_levels:     &DarkLightLevels,
         gamma:        f64,
         reduct_ratio: usize,
+        color:        PreviewColor,
     ) -> RgbU8Data {
         if self.is_empty() {
             return RgbU8Data::default();
@@ -430,10 +431,10 @@ impl Image {
         let b_table = Self::create_gamma_table(b_levels.dark, b_levels.light, gamma);
         let l_table = Self::create_gamma_table(l_levels.dark, l_levels.light, gamma);
         match reduct_ratio {
-            1 => self.to_grb_bytes_no_reduct(&r_table, &g_table, &b_table, &l_table, args),
-            2 => self.to_grb_bytes_reduct2  (&r_table, &g_table, &b_table, &l_table, args),
-            3 => self.to_grb_bytes_reduct3  (&r_table, &g_table, &b_table, &l_table, args),
-            4 => self.to_grb_bytes_reduct4  (&r_table, &g_table, &b_table, &l_table, args),
+            1 => self.to_grb_bytes_no_reduct(&r_table, &g_table, &b_table, &l_table, args, color),
+            2 => self.to_grb_bytes_reduct2  (&r_table, &g_table, &b_table, &l_table, args, color),
+            3 => self.to_grb_bytes_reduct3  (&r_table, &g_table, &b_table, &l_table, args, color),
+            4 => self.to_grb_bytes_reduct4  (&r_table, &g_table, &b_table, &l_table, args, color),
             _ => panic!("Wrong reduct_ratio ({})", reduct_ratio),
         }
     }
@@ -464,9 +465,10 @@ impl Image {
         b_table: &[u8],
         l_table: &[u8],
         args:    ImageToU8BytesArgs,
+        color:   PreviewColor,
     ) -> RgbU8Data {
         let mut rgb_bytes = Vec::with_capacity(3 * args.width * args.height);
-        if args.is_color_image {
+        if args.is_color_image && color == PreviewColor::Rgb {
             for row in 0..args.height {
                 let r_iter = self.r.row(row).iter();
                 let g_iter = self.g.row(row).iter();
@@ -479,16 +481,22 @@ impl Image {
                 }
             }
         } else {
+            let (m_data, table) = match (args.is_color_image, color) {
+                (false, _)               => (&self.l, l_table),
+                (_, PreviewColor::Red)   => (&self.r, r_table),
+                (_, PreviewColor::Green) => (&self.g, g_table),
+                (_, PreviewColor::Blue)  => (&self.b, b_table),
+                _ => unreachable!(),
+            };
             for row in 0..args.height {
-                for l in self.l.row(row).iter() {
-                    let l = l_table[*l as usize];
+                for l in m_data.row(row).iter() {
+                    let l = table[*l as usize];
                     rgb_bytes.push(l);
                     rgb_bytes.push(l);
                     rgb_bytes.push(l);
                 }
             }
         }
-
         RgbU8Data {
             width: args.width,
             height: args.height,
@@ -505,11 +513,12 @@ impl Image {
         b_table: &[u8],
         l_table: &[u8],
         args:    ImageToU8BytesArgs,
+        color:   PreviewColor,
     ) -> RgbU8Data {
         let width = args.width / 2;
         let height = args.height / 2;
         let mut bytes = Vec::with_capacity(3 * width * height);
-        if args.is_color_image {
+        if args.is_color_image && color == PreviewColor::Rgb {
             for y in 0..height {
                 let mut r0 = self.r.row(2*y).as_ptr();
                 let mut r1 = self.r.row(2*y+1).as_ptr();
@@ -542,15 +551,22 @@ impl Image {
                 }
             }
         } else {
+            let (m_data, table) = match (args.is_color_image, color) {
+                (false, _)               => (&self.l, l_table),
+                (_, PreviewColor::Red)   => (&self.r, r_table),
+                (_, PreviewColor::Green) => (&self.g, g_table),
+                (_, PreviewColor::Blue)  => (&self.b, b_table),
+                _ => unreachable!(),
+            };
             for y in 0..height {
-                let mut l0 = self.l.row(2*y).as_ptr();
-                let mut l1 = self.l.row(2*y+1).as_ptr();
+                let mut l0 = m_data.row(2*y).as_ptr();
+                let mut l1 = m_data.row(2*y+1).as_ptr();
                 for _ in 0..width {
                     let l = unsafe {(
                         *l0 as u32 + *l0.offset(1) as u32 +
                         *l1 as u32 + *l1.offset(1) as u32 + 2
                     ) / 4};
-                    let l = l_table[l as usize];
+                    let l = table[l as usize];
                     bytes.push(l);
                     bytes.push(l);
                     bytes.push(l);
@@ -569,11 +585,12 @@ impl Image {
         b_table: &[u8],
         l_table: &[u8],
         args:    ImageToU8BytesArgs,
+        color:   PreviewColor,
     ) -> RgbU8Data {
         let width = args.width / 3;
         let height = args.height / 3;
         let mut bytes = Vec::with_capacity(3 * width * height);
-        if args.is_color_image {
+        if args.is_color_image && color == PreviewColor::Rgb {
             for y in 0..height {
                 let mut r0 = self.r.row(3*y).as_ptr();
                 let mut r1 = self.r.row(3*y+1).as_ptr();
@@ -615,17 +632,24 @@ impl Image {
                 }
             }
         } else {
+            let (m_data, table) = match (args.is_color_image, color) {
+                (false, _)               => (&self.l, l_table),
+                (_, PreviewColor::Red)   => (&self.r, r_table),
+                (_, PreviewColor::Green) => (&self.g, g_table),
+                (_, PreviewColor::Blue)  => (&self.b, b_table),
+                _ => unreachable!(),
+            };
             for y in 0..height {
-                let mut l0 = self.l.row(3*y).as_ptr();
-                let mut l1 = self.l.row(3*y+1).as_ptr();
-                let mut l2 = self.l.row(3*y+2).as_ptr();
+                let mut l0 = m_data.row(3*y).as_ptr();
+                let mut l1 = m_data.row(3*y+1).as_ptr();
+                let mut l2 = m_data.row(3*y+2).as_ptr();
                 for _ in 0..width {
                     let l = unsafe {(
                         *l0 as u32 + *l0.offset(1) as u32 + *l0.offset(2) as u32 +
                         *l1 as u32 + *l1.offset(1) as u32 + *l1.offset(2) as u32 +
                         *l2 as u32 + *l2.offset(1) as u32 + *l2.offset(2) as u32 + 4
                     ) / 9};
-                    let l = l_table[l as usize];
+                    let l = table[l as usize];
                     bytes.push(l);
                     bytes.push(l);
                     bytes.push(l);
@@ -645,11 +669,12 @@ impl Image {
         b_table: &[u8],
         l_table: &[u8],
         args:    ImageToU8BytesArgs,
+        color:   PreviewColor,
     ) -> RgbU8Data {
         let width = args.width / 4;
         let height = args.height / 4;
         let mut bytes = Vec::with_capacity(3 * width * height);
-        if args.is_color_image {
+        if args.is_color_image && color == PreviewColor::Rgb {
             for y in 0..height {
                 let mut r0 = self.r.row(4*y).as_ptr();
                 let mut r1 = self.r.row(4*y+1).as_ptr();
@@ -700,11 +725,18 @@ impl Image {
                 }
             }
         } else {
+            let (m_data, table) = match (args.is_color_image, color) {
+                (false, _)               => (&self.l, l_table),
+                (_, PreviewColor::Red)   => (&self.r, r_table),
+                (_, PreviewColor::Green) => (&self.g, g_table),
+                (_, PreviewColor::Blue)  => (&self.b, b_table),
+                _ => unreachable!(),
+            };
             for y in 0..height {
-                let mut l0 = self.l.row(4*y).as_ptr();
-                let mut l1 = self.l.row(4*y+1).as_ptr();
-                let mut l2 = self.l.row(4*y+2).as_ptr();
-                let mut l3 = self.l.row(4*y+3).as_ptr();
+                let mut l0 = m_data.row(4*y).as_ptr();
+                let mut l1 = m_data.row(4*y+1).as_ptr();
+                let mut l2 = m_data.row(4*y+2).as_ptr();
+                let mut l3 = m_data.row(4*y+3).as_ptr();
                 for _ in 0..width {
                     let l = unsafe {(
                         *l0 as u32 + *l0.offset(1) as u32 + *l0.offset(2) as u32 + *l0.offset(3) as u32 +
@@ -712,7 +744,7 @@ impl Image {
                         *l2 as u32 + *l2.offset(1) as u32 + *l2.offset(2) as u32 + *l2.offset(3) as u32 +
                         *l3 as u32 + *l3.offset(1) as u32 + *l3.offset(2) as u32 + *l3.offset(3) as u32 + 8
                     ) / 16};
-                    let l = l_table[l as usize];
+                    let l = table[l as usize];
                     bytes.push(l);
                     bytes.push(l);
                     bytes.push(l);

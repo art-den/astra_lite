@@ -221,21 +221,27 @@ impl Default for QualityOptions {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone, Copy)]
+pub enum PreviewColor { #[default]Rgb, Red, Green, Blue }
+
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
 pub enum PreviewSource {#[default]OrigFrame, LiveStacking}
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
-pub enum ImgPreviewScale {#[default]FitWindow, Original, P75, P50, P33, P25}
+pub enum PreviewScale {#[default]FitWindow, Original, P75, P50, P33, P25}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct PreviewOptions {
-    pub scale:       ImgPreviewScale,
+    pub scale:       PreviewScale,
     pub dark_lvl:    f64,
     pub light_lvl:   f64,
     pub gamma:       f64,
     pub source:      PreviewSource,
     pub remove_grad: bool,
+
+    #[serde(skip_serializing)]
+    pub color:       PreviewColor,
 
     // fields for PreviewOptions::preview_params
     #[serde(skip_serializing)] pub widget_width: usize,
@@ -245,7 +251,7 @@ pub struct PreviewOptions {
 impl Default for PreviewOptions {
     fn default() -> Self {
         Self {
-            scale:         ImgPreviewScale::default(),
+            scale:         PreviewScale::default(),
             dark_lvl:      0.2,
             light_lvl:     0.8,
             gamma:         2.2,
@@ -253,13 +259,14 @@ impl Default for PreviewOptions {
             remove_grad:   false,
             widget_width:  0,
             widget_height: 0,
+            color:         PreviewColor::Rgb,
         }
     }
 }
 
 impl PreviewOptions {
     pub fn preview_params(&self) -> PreviewParams {
-        let img_size = if self.scale == ImgPreviewScale::FitWindow {
+        let img_size = if self.scale == PreviewScale::FitWindow {
             PreviewImgSize::Fit {
                 width: self.widget_width,
                 height: self.widget_height
@@ -274,6 +281,7 @@ impl PreviewOptions {
             orig_frame_in_ls: self.source == PreviewSource::OrigFrame,
             remove_gradient:  self.remove_grad,
             img_size,
+            color:            self.color
         }
     }
 }

@@ -1976,6 +1976,25 @@ Better use "Subtrack master DARK frame"</property>
                               </packing>
                             </child>
                             <child>
+                              <object class="GtkComboBoxText" id="cb_preview_color">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                                <property name="valign">center</property>
+                                <property name="active-id">rgb</property>
+                                <items>
+                                  <item id="rgb" translatable="yes">RGB</item>
+                                  <item id="red" translatable="yes">Red</item>
+                                  <item id="green" translatable="yes">Green</item>
+                                  <item id="blue" translatable="yes">Blue</item>
+                                </items>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">4</property>
+                              </packing>
+                            </child>
+                            <child>
                               <object class="GtkSeparator">
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
@@ -1984,7 +2003,7 @@ Better use "Subtrack master DARK frame"</property>
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="position">4</property>
+                                <property name="position">5</property>
                               </packing>
                             </child>
                             <child>
@@ -2081,7 +2100,7 @@ Better use "Subtrack master DARK frame"</property>
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="position">5</property>
+                                <property name="position">6</property>
                               </packing>
                             </child>
                             <child>
@@ -2098,7 +2117,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="position">6</property>
+                                <property name="position">7</property>
                               </packing>
                             </child>
                             <child>
@@ -2110,7 +2129,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="position">7</property>
+                                <property name="position">8</property>
                               </packing>
                             </child>
                             <child>
@@ -2158,7 +2177,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="position">8</property>
+                                <property name="position">9</property>
                               </packing>
                             </child>
                           </object>

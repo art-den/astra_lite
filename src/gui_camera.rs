@@ -57,27 +57,27 @@ impl DelayedAction {
     }
 }
 
-impl ImgPreviewScale {
-    fn from_active_id(id: Option<&str>) -> Option<ImgPreviewScale> {
+impl PreviewScale {
+    fn from_active_id(id: Option<&str>) -> PreviewScale {
         match id {
-            Some("fit")  => Some(ImgPreviewScale::FitWindow),
-            Some("orig") => Some(ImgPreviewScale::Original),
-            Some("p75")  => Some(ImgPreviewScale::P75),
-            Some("p50")  => Some(ImgPreviewScale::P50),
-            Some("p33")  => Some(ImgPreviewScale::P33),
-            Some("p25")  => Some(ImgPreviewScale::P25),
-            _            => Some(ImgPreviewScale::FitWindow),
+            Some("fit")  => PreviewScale::FitWindow,
+            Some("orig") => PreviewScale::Original,
+            Some("p75")  => PreviewScale::P75,
+            Some("p50")  => PreviewScale::P50,
+            Some("p33")  => PreviewScale::P33,
+            Some("p25")  => PreviewScale::P25,
+            _            => PreviewScale::FitWindow,
         }
     }
 
     fn to_active_id(&self) -> Option<&'static str> {
         match self {
-            ImgPreviewScale::FitWindow => Some("fit"),
-            ImgPreviewScale::Original  => Some("orig"),
-            ImgPreviewScale::P75       => Some("p75"),
-            ImgPreviewScale::P50       => Some("p50"),
-            ImgPreviewScale::P33       => Some("p33"),
-            ImgPreviewScale::P25       => Some("p25"),
+            PreviewScale::FitWindow => Some("fit"),
+            PreviewScale::Original  => Some("orig"),
+            PreviewScale::P75       => Some("p75"),
+            PreviewScale::P50       => Some("p50"),
+            PreviewScale::P33       => Some("p33"),
+            PreviewScale::P25       => Some("p25"),
         }
     }
 }
@@ -187,6 +187,26 @@ impl PreviewSource {
         match self {
             Self::OrigFrame    => Some("frame"),
             Self::LiveStacking => Some("live"),
+        }
+    }
+}
+
+impl PreviewColor {
+    fn from_active_id(active_id: Option<&str>) -> Self {
+        match active_id {
+            Some("red")   => Self::Red,
+            Some("green") => Self::Green,
+            Some("blue")  => Self::Blue,
+            _             => Self::Rgb,
+        }
+    }
+
+    fn to_active_id(&self) -> Option<&'static str> {
+        match self {
+            Self::Rgb   => Some("rgb"),
+            Self::Red   => Some("red"),
+            Self::Green => Some("green"),
+            Self::Blue  => Some("blue"),
         }
     }
 }
@@ -564,9 +584,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
     cb_frame_mode.connect_active_id_notify(clone!(@strong data => move |cb| {
         data.excl.exec(|| {
-            let frame_type = FrameType::from_active_id(
-                cb.active_id().map(|v| v.to_string()).as_deref()
-            );
+            let frame_type = FrameType::from_active_id(cb.active_id().as_deref());
             data.options.write().unwrap().cam.frame.frame_type = frame_type;
             correct_widgets_props(&data);
         });
@@ -584,8 +602,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let cb_cam_heater = bldr.object::<gtk::ComboBoxText>("cb_cam_heater").unwrap();
     cb_cam_heater.connect_active_id_notify(clone!(@strong data => move |cb| {
         data.excl.exec(|| {
-            let Some(active_id) = cb.active_id() else { return; };
-            data.options.write().unwrap().cam.ctrl.heater_str = Some(active_id.to_string());
+            data.options.write().unwrap().cam.ctrl.heater_str = cb.active_id().map(|id| id.to_string());
             control_camera_by_options(&data, false);
             correct_widgets_props(&data);
         });
@@ -620,8 +637,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
     cb_frame_mode.connect_active_id_notify(clone!(@strong data => move |cb| {
         data.excl.exec(|| {
-            let Some(active_id) = cb.active_id() else { return; };
-            let frame_type = FrameType::from_active_id(Some(active_id.as_str()));
+            let frame_type = FrameType::from_active_id(cb.active_id().as_deref());
             data.options.write().unwrap().cam.frame.frame_type = frame_type;
         });
     }));
@@ -651,8 +667,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let cb_bin = bldr.object::<gtk::ComboBoxText>("cb_bin").unwrap();
     cb_bin.connect_active_id_notify(clone!(@strong data => move |cb| {
         data.excl.exec(|| {
-            let Some(active_id) = cb.active_id() else { return; };
-            let binning = Binning::from_active_id(Some(active_id.as_str()));
+            let binning = Binning::from_active_id(cb.active_id().as_deref());
             data.options.write().unwrap().cam.frame.binning = binning;
         });
     }));
@@ -660,8 +675,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let cb_crop = bldr.object::<gtk::ComboBoxText>("cb_crop").unwrap();
     cb_crop.connect_active_id_notify(clone!(@strong data => move |cb| {
         data.excl.exec(|| {
-            let Some(active_id) = cb.active_id() else { return; };
-            let crop = Crop::from_active_id(Some(active_id.as_str()));
+            let crop = Crop::from_active_id(cb.active_id().as_deref());
             data.options.write().unwrap().cam.frame.crop = crop;
         });
     }));
@@ -697,9 +711,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let cb_preview_src = bldr.object::<gtk::ComboBoxText>("cb_preview_src").unwrap();
     cb_preview_src.connect_active_id_notify(clone!(@strong data => move |cb| {
         data.excl.exec(|| {
-            let source = PreviewSource::from_active_id(
-                cb.active_id().map(|id| id.to_string()).as_deref()
-            );
+            let source = PreviewSource::from_active_id(cb.active_id().as_deref());
             data.options.write().unwrap().preview.source = source;
             create_and_show_preview_image(&data);
             repaint_histogram(&data);
@@ -711,10 +723,17 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     let cb_preview_scale = bldr.object::<gtk::ComboBoxText>("cb_preview_scale").unwrap();
     cb_preview_scale.connect_active_id_notify(clone!(@strong data => move |cb| {
         data.excl.exec(|| {
-            let scale = ImgPreviewScale::from_active_id(
-                cb.active_id().map(|id| id.to_string()).as_deref()
-            ).unwrap_or(ImgPreviewScale::FitWindow);
+            let scale = PreviewScale::from_active_id(cb.active_id().as_deref());
             data.options.write().unwrap().preview.scale = scale;
+            create_and_show_preview_image(&data);
+        });
+    }));
+
+    let cb_preview_color = bldr.object::<gtk::ComboBoxText>("cb_preview_color").unwrap();
+    cb_preview_color.connect_active_id_notify(clone!(@strong data => move |cb| {
+        data.excl.exec(|| {
+            let color = PreviewColor::from_active_id(cb.active_id().as_deref());
+            data.options.write().unwrap().preview.color = color;
             create_and_show_preview_image(&data);
         });
     }));
@@ -879,7 +898,7 @@ fn handler_full_screen(data: &Rc<CameraData>, full_screen: bool) {
     data.full_screen_mode.set(full_screen);
 
     let options = data.options.read().unwrap();
-    if options.preview.scale == ImgPreviewScale::FitWindow {
+    if options.preview.scale == PreviewScale::FitWindow {
         drop(options);
         gtk::main_iteration_do(true);
         gtk::main_iteration_do(true);
@@ -990,7 +1009,7 @@ fn show_options(data: &Rc<CameraData>) {
 
         gtk_utils::set_active_id(bld, "cb_preview_src",      options.preview.source.to_active_id());
         gtk_utils::set_active_id(bld, "cb_preview_scale",    options.preview.scale.to_active_id());
-
+        gtk_utils::set_active_id(bld, "cb_preview_color",    options.preview.color.to_active_id());
         gtk_utils::set_f64      (bld, "scl_dark",            options.preview.dark_lvl);
         gtk_utils::set_f64      (bld, "scl_highlight",       options.preview.light_lvl);
         gtk_utils::set_f64      (bld, "scl_gamma",           options.preview.gamma);
@@ -1051,9 +1070,13 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.telescope.barlow = gtk_utils::get_f64(bld, "spb_barlow");
 
     options.preview.scale = {
-        let preview_active_id = gtk_utils::get_active_id(bld, "cb_preview_scale");
-        ImgPreviewScale::from_active_id(preview_active_id.as_deref())
-            .expect("Wrong active id")
+        let active_id = gtk_utils::get_active_id(bld, "cb_preview_scale");
+        PreviewScale::from_active_id(active_id.as_deref())
+    };
+
+    options.preview.color = {
+        let active_id = gtk_utils::get_active_id(bld, "cb_preview_color");
+        PreviewColor::from_active_id(active_id.as_deref())
     };
 
     options.cam.frame.frame_type = FrameType::from_active_id(
@@ -1796,7 +1819,7 @@ fn handler_action_save_image_preview(data: &Rc<CameraData>) {
         };
         if image.read().unwrap().is_empty() { return Ok(()); }
         let mut preview_options = options.preview.clone();
-        preview_options.scale = ImgPreviewScale::Original;
+        preview_options.scale = PreviewScale::Original;
         drop(options);
         let def_file_name = format!(
             "{}_{}.jpg",

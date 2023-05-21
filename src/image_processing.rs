@@ -42,7 +42,7 @@ impl ResultImage {
 #[derive(PartialEq, Clone)]
 pub enum PreviewImgSize {
     Fit{ width: usize, height: usize },
-    Scale(ImgPreviewScale),
+    Scale(PreviewScale),
 }
 
 impl PreviewImgSize {
@@ -57,12 +57,12 @@ impl PreviewImgSize {
                     ((height as f64 * img_ratio) as usize, height)
                 }
             },
-            PreviewImgSize::Scale(ImgPreviewScale::Original) => (orig_width, orig_height),
-            PreviewImgSize::Scale(ImgPreviewScale::P75) => (3*orig_width/4, 3*orig_height/4),
-            PreviewImgSize::Scale(ImgPreviewScale::P50) => (orig_width/2, orig_height/2),
-            PreviewImgSize::Scale(ImgPreviewScale::P33) => (orig_width/3, orig_height/3),
-            PreviewImgSize::Scale(ImgPreviewScale::P25) => (orig_width/4, orig_height/4),
-            PreviewImgSize::Scale(ImgPreviewScale::FitWindow) => unreachable!(),
+            PreviewImgSize::Scale(PreviewScale::Original) => (orig_width, orig_height),
+            PreviewImgSize::Scale(PreviewScale::P75) => (3*orig_width/4, 3*orig_height/4),
+            PreviewImgSize::Scale(PreviewScale::P50) => (orig_width/2, orig_height/2),
+            PreviewImgSize::Scale(PreviewScale::P33) => (orig_width/3, orig_height/3),
+            PreviewImgSize::Scale(PreviewScale::P25) => (orig_width/4, orig_height/4),
+            PreviewImgSize::Scale(PreviewScale::FitWindow) => unreachable!(),
         }
     }
 }
@@ -75,6 +75,7 @@ pub struct PreviewParams {
     pub img_size:         PreviewImgSize,
     pub orig_frame_in_ls: bool,
     pub remove_gradient:  bool,
+    pub color:            PreviewColor,
 }
 
 #[derive(Default)]
@@ -289,22 +290,22 @@ fn calc_reduct_ratio(options: &PreviewParams, img_width: usize, img_height: usiz
                 1
             }
         },
-        PreviewImgSize::Scale(ImgPreviewScale::Original) => 1,
-        PreviewImgSize::Scale(ImgPreviewScale::P75) => 1,
-        PreviewImgSize::Scale(ImgPreviewScale::P50) => 2,
-        PreviewImgSize::Scale(ImgPreviewScale::P33) => 3,
-        PreviewImgSize::Scale(ImgPreviewScale::P25) => 4,
-        PreviewImgSize::Scale(ImgPreviewScale::FitWindow) => unreachable!(),
+        PreviewImgSize::Scale(PreviewScale::Original) => 1,
+        PreviewImgSize::Scale(PreviewScale::P75) => 1,
+        PreviewImgSize::Scale(PreviewScale::P50) => 2,
+        PreviewImgSize::Scale(PreviewScale::P33) => 3,
+        PreviewImgSize::Scale(PreviewScale::P25) => 4,
+        PreviewImgSize::Scale(PreviewScale::FitWindow) => unreachable!(),
     }
 }
 
 pub fn get_rgb_bytes_from_preview_image(
-    image:   &Image,
-    hist:    &Histogram,
-    options: &PreviewParams,
+    image:  &Image,
+    hist:   &Histogram,
+    params: &PreviewParams,
 ) -> RgbU8Data {
     let reduct_ratio = calc_reduct_ratio(
-        options,
+        params,
         image.width(),
         image.height()
     );
@@ -315,14 +316,14 @@ pub fn get_rgb_bytes_from_preview_image(
     const DARK_MAX_PERCENTILE:  usize = 60;
     const LIGHT_MIN_PERCENTILE: usize = 95;
 
-    let light_lvl = options.light_lvl.powf(0.05);
+    let light_lvl = params.light_lvl.powf(0.05);
 
     let l_levels = if let Some(hist) = &hist.l {
         let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
         let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
         let light_min = hist.get_percentile(LIGHT_MIN_PERCENTILE) as f64;
         let light_max = image.max_value() as f64;
-        let dark = linear_interpolate(options.dark_lvl, 1.0, 0.0, dark_min, dark_max);
+        let dark = linear_interpolate(params.dark_lvl, 1.0, 0.0, dark_min, dark_max);
         let light = linear_interpolate(light_lvl, 1.0, 0.0, light_min, light_max);
         DarkLightLevels { dark, light }
     } else {
@@ -334,7 +335,7 @@ pub fn get_rgb_bytes_from_preview_image(
         let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
         let light_min = hist.get_percentile(LIGHT_MIN_PERCENTILE) as f64;
         let light_max = image.max_value() as f64;
-        let dark = linear_interpolate(options.dark_lvl, 1.0, 0.0, dark_min, dark_max);
+        let dark = linear_interpolate(params.dark_lvl, 1.0, 0.0, dark_min, dark_max);
         let light = linear_interpolate(light_lvl, 1.0, 0.0, light_min, light_max);
         let wb = hist.get_percentile(WB_PERCENTILE) as f64;
         (DarkLightLevels { dark, light }, wb)
@@ -360,7 +361,15 @@ pub fn get_rgb_bytes_from_preview_image(
         DarkLightLevels::default()
     };
 
-    image.to_grb_bytes(&l_levels, &r_levels, &g_levels, &b_levels, options.gamma, reduct_ratio)
+    image.to_grb_bytes(
+        &l_levels,
+        &r_levels,
+        &g_levels,
+        &b_levels,
+        params.gamma,
+        reduct_ratio,
+        params.color
+    )
 }
 
 fn apply_calibr_data_and_remove_hot_pixels(
