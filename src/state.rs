@@ -33,6 +33,7 @@ pub struct FocusingEvt {
 }
 
 pub enum Event {
+    Error(String),
     ModeChanged,
     ModeContinued,
     Propress(Option<Progress>),
@@ -62,6 +63,12 @@ impl Subscribers {
 
     fn add(&mut self, fun: impl Fn(Event) + Send + Sync + 'static) {
         self.0.push(Box::new(fun));
+    }
+
+    fn inform_error(&self, error_text: &str) {
+        for s in &self.0 {
+            s(Event::Error(error_text.to_string()));
+        }
     }
 
     fn inform_mode_changed(&self) {
@@ -188,6 +195,18 @@ impl State {
         &self.live_stacking
     }
 
+    fn process_error(
+        result:       anyhow::Result<()>,
+        mode_data:    &Arc<RwLock<ModeData>>,
+        subscribers:  &Arc<RwLock<Subscribers>>,
+        exp_stuck_wd: &Arc<AtomicU16>,
+    ) {
+        let Err(err) = result else { return; };
+        Self::abort_active_mode_impl(mode_data, subscribers, exp_stuck_wd);
+        let subscribers = subscribers.read().unwrap();
+        subscribers.inform_error(&err.to_string());
+    }
+
     pub fn connect_indi_events(
         &self,
         main_thread_sndr: Sender<MainThreadEvents>,
@@ -202,37 +221,42 @@ impl State {
         let ref_stars = Arc::clone(&self.ref_stars);
         let calibr_images = Arc::clone(&self.calibr_images);
         self.indi.subscribe_events(move |event| {
-            match event {
-                indi_api::Event::BlobStart(event) => {
-                    let mut mode_data = mode_data.write().unwrap();
-                    _ = mode_data.mode.notify_blob_start_event(&event); // TODO: process error
-                }
-                indi_api::Event::PropChange(prop_change) => {
-                    if let PropChange::Change {
-                        value: PropChangeValue{
-                            prop_value: PropValue::Blob(blob), ..
-                        }, ..
-                    } = &prop_change.change {
-                        _ = Self::process_indi_blob_event(
-                            &blob, &prop_change.device_name, &mode_data,
-                            &options, &cur_frame, &ref_stars,
-                            &calibr_images, &main_thread_sndr, &img_cmds_sender
-                        ); // TODO: process error
-                    } else {
-                        _ = Self::process_indi_prop_change_event(
-                            &prop_change, &mode_data, &indi, &options,
-                            &subscribers, &exp_stuck_wd
-                        ); // TODO: process error
+            let result = || -> anyhow::Result<()> {
+                match event {
+                    indi_api::Event::BlobStart(event) => {
+                        let mut mode_data = mode_data.write().unwrap();
+                        mode_data.mode.notify_blob_start_event(&event)?;
                     }
-                },
-                _ => {}
-            }
+                    indi_api::Event::PropChange(prop_change) => {
+                        if let PropChange::Change {
+                            value: PropChangeValue{
+                                prop_value: PropValue::Blob(blob), ..
+                            }, ..
+                        } = &prop_change.change {
+                            Self::process_indi_blob_event(
+                                &blob, &prop_change.device_name, &mode_data,
+                                &options, &cur_frame, &ref_stars,
+                                &calibr_images, &main_thread_sndr, &img_cmds_sender
+                            )?;
+                        } else {
+                            Self::process_indi_prop_change_event(
+                                &prop_change, &mode_data, &indi, &options,
+                                &subscribers, &exp_stuck_wd
+                            )?;
+                        }
+                    },
+                    _ => {}
+                }
+                Ok(())
+            } ();
+            Self::process_error(result, &mode_data, &subscribers, &exp_stuck_wd);
         });
 
         const MAX_EXP_STACK_WD_CNT: u16 = 30;
         let exp_stuck_wd = Arc::clone(&self.exp_stuck_wd);
         let mode_data = Arc::clone(&self.mode_data);
         let indi = Arc::clone(&self.indi);
+        let subscribers = Arc::clone(&self.subscribers);
         self.timer.exec(1000, true, move || {
             let prev = exp_stuck_wd.fetch_update(
                 Ordering::Relaxed,
@@ -250,7 +274,8 @@ impl State {
             // Restart exposure if image can't be downloaded
             // from camera during 30 seconds
             if prev == Ok(MAX_EXP_STACK_WD_CNT) {
-                _ = Self::restart_camera_exposure(&indi, &mode_data); // TODO: process error
+                let result = Self::restart_camera_exposure(&indi, &mode_data);
+                Self::process_error(result, &mode_data, &subscribers, &exp_stuck_wd);
             }
         });
     }
@@ -264,16 +289,14 @@ impl State {
         exp_stuck_wd: &Arc<AtomicU16>,
     ) -> anyhow::Result<()> {
         let mut mode_data = mode_data.write().unwrap();
-        let result = mode_data.mode.notify_indi_prop_change(&prop_change);
-        if let Ok(result) = result {
-            Self::apply_change_result(
-                result,
-                &mut mode_data,
-                &indi,
-                &options,
-                &subscribers
-            )?; // TODO: process error
-        } // TODO: process error
+        let result = mode_data.mode.notify_indi_prop_change(&prop_change)?;
+        Self::apply_change_result(
+            result,
+            &mut mode_data,
+            &indi,
+            &options,
+            &subscribers
+        )?;
 
         if let (indi_api::PropChange::Change { value, new_state, .. }, Some(cur_cam))
         = (&prop_change.change, mode_data.mode.cam_device()) {
@@ -500,9 +523,21 @@ impl State {
         Ok(())
     }
 
-    pub fn abort_active_mode(&self) -> anyhow::Result<()> {
-        let mut mode_data = self.mode_data.write().unwrap();
-        mode_data.mode.abort()?;
+    pub fn abort_active_mode(&self) {
+        Self::abort_active_mode_impl(
+            &self.mode_data,
+            &self.subscribers,
+            &self.exp_stuck_wd
+        );
+    }
+
+    fn abort_active_mode_impl(
+        mode_data:    &Arc<RwLock<ModeData>>,
+        subscribers:  &Arc<RwLock<Subscribers>>,
+        exp_stuck_wd: &Arc<AtomicU16>,
+    ) {
+        let mut mode_data = mode_data.write().unwrap();
+        _ = mode_data.mode.abort();
         let mut prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
         loop {
             if prev_mode.can_be_continued_after_stop() {
@@ -517,10 +552,9 @@ impl State {
         }
         mode_data.finished_mode = None;
         drop(mode_data);
-        let subscribers = self.subscribers.read().unwrap();
+        let subscribers = subscribers.read().unwrap();
         subscribers.inform_mode_changed();
-        self.exp_stuck_wd.store(0, Ordering::Relaxed);
-        Ok(())
+        exp_stuck_wd.store(0, Ordering::Relaxed);
     }
 
     pub fn continue_prev_mode(&self) -> anyhow::Result<()> {
@@ -539,40 +573,50 @@ impl State {
         Ok(())
     }
 
-    pub fn notify_about_frame_processing_started(&self) -> anyhow::Result<()> {
+    pub fn notify_about_frame_processing_started(&self) {
         let mut mode_data = self.mode_data.write().unwrap();
-        mode_data.mode.notify_about_frame_processing_started()?;
-        Ok(())
+        let result = mode_data.mode.notify_about_frame_processing_started();
+        drop(mode_data);
+        Self::process_error(result, &self.mode_data, &self.subscribers, &self.exp_stuck_wd);
     }
 
     pub fn notify_about_light_frame_info(
         &self,
         info: &LightImageInfo
-    ) -> anyhow::Result<()> {
-        let mut mode_data = self.mode_data.write().unwrap();
-        let res = mode_data.mode.notify_about_light_frame_info(info, &self.subscribers)?;
-        Self::apply_change_result(res, &mut mode_data, &self.indi, &self.options, &self.subscribers)?;
-        Ok(())
+    ) {
+        let result = || -> anyhow::Result<()> {
+            let mut mode_data = self.mode_data.write().unwrap();
+            let res = mode_data.mode.notify_about_light_frame_info(info, &self.subscribers)?;
+            Self::apply_change_result(res, &mut mode_data, &self.indi, &self.options, &self.subscribers)?;
+            Ok(())
+        } ();
+        Self::process_error(result, &self.mode_data, &self.subscribers, &self.exp_stuck_wd);
     }
 
     pub fn notify_about_frame_processing_finished(
         &self,
         frame_is_ok: bool,
-    ) -> anyhow::Result<()> {
-        let mut mode_data = self.mode_data.write().unwrap();
-        let result = mode_data.mode.notify_about_frame_processing_finished(frame_is_ok)?;
-        Self::apply_change_result(result, &mut mode_data, &self.indi, &self.options, &self.subscribers)?;
-        Ok(())
+    ) {
+        let result = || -> anyhow::Result<()> {
+            let mut mode_data = self.mode_data.write().unwrap();
+            let result = mode_data.mode.notify_about_frame_processing_finished(frame_is_ok)?;
+            Self::apply_change_result(result, &mut mode_data, &self.indi, &self.options, &self.subscribers)?;
+            Ok(())
+        } ();
+        Self::process_error(result, &self.mode_data, &self.subscribers, &self.exp_stuck_wd);
     }
 
     pub fn notify_about_light_short_info(
         &self,
         info: &LightFrameShortInfo
-    ) -> anyhow::Result<()> {
-        let mut mode_data = self.mode_data.write().unwrap();
-        let result = mode_data.mode.notify_about_light_short_info(info)?;
-        Self::apply_change_result(result, &mut mode_data, &self.indi, &self.options, &self.subscribers)?;
-        Ok(())
+    ) {
+        let result = || -> anyhow::Result<()> {
+            let mut mode_data = self.mode_data.write().unwrap();
+            let result = mode_data.mode.notify_about_light_short_info(info)?;
+            Self::apply_change_result(result, &mut mode_data, &self.indi, &self.options, &self.subscribers)?;
+            Ok(())
+        } ();
+        Self::process_error(result, &self.mode_data, &self.subscribers, &self.exp_stuck_wd);
     }
 
     fn apply_change_result(

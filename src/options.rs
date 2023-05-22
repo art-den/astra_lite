@@ -216,7 +216,7 @@ impl Default for QualityOptions {
             use_max_fwhm:    false,
             max_fwhm:        20.0,
             use_max_ovality: true,
-            max_ovality:     0.5,
+            max_ovality:     1.0,
         }
     }
 }

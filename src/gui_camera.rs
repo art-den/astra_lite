@@ -495,26 +495,23 @@ fn connect_misc_events(
             },
 
             MainThreadEvents::ShowFrameProcessingResult(result) => {
-                gtk_utils::exec_and_show_error(&data.main.window, || {
-                    match result.data {
-                        ProcessingResultData::ShotProcessingStarted(mode_type) => {
-                            let mode_data = data.main.state.mode_data();
-                            if mode_data.mode.get_type() == mode_type {
-                                drop(mode_data);
-                                data.main.state.notify_about_frame_processing_started()?;
-                            }
-                        },
-                        ProcessingResultData::ShotProcessingFinished {frame_is_ok, mode_type} => {
-                            let mode_data = data.main.state.mode_data();
-                            if mode_data.mode.get_type() == mode_type {
-                                drop(mode_data);
-                                data.main.state.notify_about_frame_processing_finished(frame_is_ok)?;
-                            }
-                        },
-                        _ => {},
-                    }
-                    Ok(())
-                });
+                match result.data {
+                    ProcessingResultData::ShotProcessingStarted(mode_type) => {
+                        let mode_data = data.main.state.mode_data();
+                        if mode_data.mode.get_type() == mode_type {
+                            drop(mode_data);
+                            data.main.state.notify_about_frame_processing_started();
+                        }
+                    },
+                    ProcessingResultData::ShotProcessingFinished {frame_is_ok, mode_type} => {
+                        let mode_data = data.main.state.mode_data();
+                        if mode_data.mode.get_type() == mode_type {
+                            drop(mode_data);
+                            data.main.state.notify_about_frame_processing_finished(frame_is_ok);
+                        }
+                    },
+                    _ => {},
+                }
                 show_frame_processing_result(&data, result);
             },
 
@@ -1637,10 +1634,7 @@ fn handler_action_take_shot(data: &Rc<CameraData>) {
 }
 
 fn handler_action_stop_shot(data: &Rc<CameraData>) {
-    gtk_utils::exec_and_show_error(&data.main.window, || {
-        data.main.state.abort_active_mode()?;
-        Ok(())
-    });
+    data.main.state.abort_active_mode();
 }
 
 fn create_and_show_preview_image(data: &Rc<CameraData>) {
@@ -1935,12 +1929,9 @@ fn show_frame_processing_result(
             show_error_message(&data.main.window, "Fatal Error", &error_text);
         }
         ProcessingResultData::LightShortInfo(short_info, mode) => {
-            gtk_utils::exec_and_show_error(&data.main.window, || {
-                if data.main.state.mode_data().mode.get_type() == mode {
-                    data.main.state.notify_about_light_short_info(&short_info)?;
-                }
-                Ok(())
-            });
+            if data.main.state.mode_data().mode.get_type() == mode {
+                data.main.state.notify_about_light_short_info(&short_info);
+            }
             data.light_history.borrow_mut().push(short_info);
             update_light_history_table(data);
         }
@@ -1961,15 +1952,12 @@ fn show_frame_processing_result(
             show_histogram_stat(data);
         }
         ProcessingResultData::FrameInfo(mode) => {
-            gtk_utils::exec_and_show_error(&data.main.window, || {
-                let info = data.main.state.cur_frame().info.read().unwrap();
-                if let ResultImageInfo::LightInfo(info) = &*info {
-                    if data.main.state.mode_data().mode.get_type() == mode {
-                        data.main.state.notify_about_light_frame_info(info)?;
-                    }
+            let info = data.main.state.cur_frame().info.read().unwrap();
+            if let ResultImageInfo::LightInfo(info) = &*info {
+                if data.main.state.mode_data().mode.get_type() == mode {
+                    data.main.state.notify_about_light_frame_info(info);
                 }
-                Ok(())
-            });
+            }
             if is_mode_current(mode, false) {
                 show_image_info(data);
             }
@@ -2077,10 +2065,7 @@ fn handler_live_view_changed(data: &Rc<CameraData>) {
         read_options_from_widgets(data);
         start_live_view(data);
     } else {
-        gtk_utils::exec_and_show_error(&data.main.window, || {
-            data.main.state.abort_active_mode()?;
-            Ok(())
-        });
+        data.main.state.abort_active_mode();
     }
 }
 
@@ -2482,10 +2467,7 @@ fn handler_action_start_live_stacking(data: &Rc<CameraData>) {
 }
 
 fn handler_action_stop_live_stacking(data: &Rc<CameraData>) {
-    gtk_utils::exec_and_show_error(&data.main.window, || {
-        data.main.state.abort_active_mode()?;
-        Ok(())
-    });
+    data.main.state.abort_active_mode();
 }
 
 fn handler_action_continue_live_stacking(data: &Rc<CameraData>) {
@@ -2654,10 +2636,7 @@ fn handler_action_continue_save_raw_frames(data: &Rc<CameraData>) {
 }
 
 fn handler_action_stop_save_raw_frames(data: &Rc<CameraData>) {
-    gtk_utils::exec_and_show_error(&data.main.window, || {
-        data.main.state.abort_active_mode()?;
-        Ok(())
-    });
+    data.main.state.abort_active_mode();
 }
 
 fn handler_action_clear_light_history(data: &Rc<CameraData>) {
@@ -2912,10 +2891,7 @@ fn handler_action_manual_focus(data: &Rc<CameraData>) {
 }
 
 fn handler_action_stop_manual_focus(data: &Rc<CameraData>) {
-    gtk_utils::exec_and_show_error(&data.main.window, || {
-        data.main.state.abort_active_mode()?;
-        Ok(())
-    });
+    data.main.state.abort_active_mode();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -2947,10 +2923,7 @@ fn handler_action_start_dither_calibr(data: &Rc<CameraData>) {
 }
 
 fn handler_action_stop_dither_calibr(data: &Rc<CameraData>) {
-    gtk_utils::exec_and_show_error(&data.main.window, || {
-        data.main.state.abort_active_mode()?;
-        Ok(())
-    });
+    data.main.state.abort_active_mode();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

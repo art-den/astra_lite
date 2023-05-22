@@ -425,10 +425,7 @@ fn show_mode_caption(data: &Rc<MainData>) {
 }
 
 fn handler_action_stop(data: &Rc<MainData>) {
-    gtk_utils::exec_and_show_error(&data.window, || {
-        data.state.abort_active_mode()?;
-        Ok(())
-    });
+    data.state.abort_active_mode();
 }
 
 fn handler_action_continue(data: &Rc<MainData>) {

@@ -70,7 +70,6 @@ impl FrameType {
             "Dark"  => FrameType::Darks,
             "Bias"  => FrameType::Biases,
             _       => def,
-
         }
     }
 

@@ -5,4 +5,6 @@
 /*.sh
 /Cargo.lock
 /.svn
+*.exe
+*.bat
 **.*~
