@@ -512,7 +512,7 @@ impl PropStaticData {
 pub struct PropDynamicData {
     pub state:      PropState,
     pub timeout:    Option<u32>,
-    pub timestamp:  Option<String>, // TODO: normal timestamp instead of string
+    pub timestamp:  Option<DateTime<Utc>>,
     pub message:    Option<String>,
     pub change_cnt: u64,
 }
@@ -531,7 +531,7 @@ impl PropDynamicData {
         let timeout = xml.attributes.get("timeout")
             .map(|to_str| to_str.parse::<u32>().unwrap_or(0));
         let message = xml.attributes.remove("message");
-        let timestamp = xml.attributes.remove("timestamp");
+        let timestamp = xml.attr_time("timestamp");
         Ok((PropDynamicData { state, timeout, timestamp, message, change_cnt: 1 }, xml))
     }
 }
@@ -617,9 +617,7 @@ impl Property {
                 changed = true;
             }
         }
-        if let Some(timestamp) = xml.attributes.remove("timestamp") {
-            self.dynamic_data.timestamp = Some(timestamp);
-        }
+        self.dynamic_data.timestamp = xml.attr_time("timestamp");
         for elem in &mut self.elements {
             elem.changed = false;
         }
