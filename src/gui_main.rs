@@ -1,4 +1,4 @@
-use std::{sync::{Arc, RwLock}, rc::Rc, cell::RefCell, time::Duration, path::PathBuf};
+use std::{sync::{Arc, RwLock}, rc::Rc, cell::RefCell, time::Duration, path::PathBuf, process::Command};
 use gtk::{prelude::*, glib, glib::clone, cairo};
 use serde::{Serialize, Deserialize};
 
@@ -439,9 +439,17 @@ fn handler_action_continue(data: &Rc<MainData>) {
 }
 
 fn handler_action_open_logs_folder(data: &Rc<MainData>) {
-    let mut uri = r"file://".to_string();
-    uri += data.logs_dir.as_os_str().to_str().unwrap_or_default();
-    _ = gtk::show_uri_on_window(gtk::Window::NONE, &uri, 0);
+    gtk_utils::exec_and_show_error(&data.window, || {
+        if cfg!(target_os = "windows") {
+            Command::new("explorer")
+                .args([data.logs_dir.to_str().unwrap_or_default()])
+                .spawn()?;
+        } else {
+            let uri = glib::filename_to_uri(&data.logs_dir, None)?;
+            gtk::show_uri_on_window(gtk::Window::NONE, &uri, 0)?;
+        }
+        Ok(())
+    });
 }
 
 impl MainData {
