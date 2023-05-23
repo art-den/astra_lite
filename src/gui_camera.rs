@@ -635,14 +635,18 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     cb_frame_mode.connect_active_id_notify(clone!(@strong data => move |cb| {
         data.excl.exec(|| {
             let frame_type = FrameType::from_active_id(cb.active_id().as_deref());
-            data.options.write().unwrap().cam.frame.frame_type = frame_type;
+            let mut options = data.options.write().unwrap();
+            options.cam.frame.frame_type = frame_type;
+            gtk_utils::set_f64(&data.main.builder, "spb_exp", options.cam.frame.exposure());
+            drop(options);
+            show_total_raw_time(&data);
         });
     }));
 
     let spb_exp = bldr.object::<gtk::SpinButton>("spb_exp").unwrap();
     spb_exp.connect_value_changed(clone!(@strong data => move |sb| {
         data.excl.exec(|| {
-            data.options.write().unwrap().cam.frame.exposure = sb.value();
+            data.options.write().unwrap().cam.frame.set_exposure(sb.value());
             show_total_raw_time(&data);
         });
     }));
@@ -934,7 +938,7 @@ fn show_frame_options(data: &Rc<CameraData>) {
         let bld = &data.main.builder;
 
         gtk_utils::set_active_id(bld, "cb_frame_mode", options.cam.frame.frame_type.to_active_id());
-        gtk_utils::set_f64      (bld, "spb_exp",       options.cam.frame.exposure);
+        gtk_utils::set_f64      (bld, "spb_exp",       options.cam.frame.exposure());
         gtk_utils::set_f64      (bld, "spb_delay",     options.cam.frame.delay);
         gtk_utils::set_f64      (bld, "spb_gain",      options.cam.frame.gain);
         gtk_utils::set_f64      (bld, "spb_offset",    options.cam.frame.offset as f64);
@@ -1099,7 +1103,7 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.cam.ctrl.temperature     = gtk_utils::get_f64      (bld, "spb_temp");
     options.cam.ctrl.enable_fan      = gtk_utils::get_bool     (bld, "chb_fan");
 
-    options.cam.frame.exposure       = gtk_utils::get_f64      (bld, "spb_exp");
+    options.cam.frame.set_exposure    (gtk_utils::get_f64      (bld, "spb_exp"));
     options.cam.frame.delay          = gtk_utils::get_f64      (bld, "spb_delay");
     options.cam.frame.gain           = gtk_utils::get_f64      (bld, "spb_gain");
     options.cam.frame.offset         = gtk_utils::get_f64      (bld, "spb_offset") as i32;
@@ -2646,10 +2650,10 @@ fn handler_action_clear_light_history(data: &Rc<CameraData>) {
 
 fn show_total_raw_time(data: &Rc<CameraData>) {
     let options = data.options.read().unwrap();
-    let total_time = options.cam.frame.exposure * options.raw_frames.frame_cnt as f64;
+    let total_time = options.cam.frame.exposure() * options.raw_frames.frame_cnt as f64;
     let text = format!(
         "{:.1}s x {} = {}",
-        options.cam.frame.exposure,
+        options.cam.frame.exposure(),
         options.raw_frames.frame_cnt,
         seconds_to_total_time_str(total_time, false)
     );

@@ -55,7 +55,9 @@ impl Default for CamCtrlOptions {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct FrameOptions {
-    pub exposure:   f64,
+    pub exp_main:   f64,
+    pub exp_bias:   f64,
+    pub exp_flat:   f64,
     pub gain:       f64,
     pub offset:     i32,
     pub frame_type: FrameType,
@@ -68,7 +70,9 @@ pub struct FrameOptions {
 impl Default for FrameOptions {
     fn default() -> Self {
         Self {
-            exposure:   5.0,
+            exp_main:   5.0,
+            exp_bias:   0.01,
+            exp_flat:   0.5,
             gain:       1.0,
             offset:     0,
             frame_type: FrameType::default(),
@@ -82,9 +86,26 @@ impl Default for FrameOptions {
 
 impl FrameOptions {
     pub fn have_to_use_delay(&self) -> bool {
-        self.exposure < 2.0 &&
+        self.exposure() < 2.0 &&
         self.delay > 0.0
     }
+
+    pub fn exposure(&self) -> f64 {
+        match self.frame_type {
+            FrameType::Flats  => self.exp_flat,
+            FrameType::Biases => self.exp_bias,
+            _                 => self.exp_main,
+        }
+    }
+
+    pub fn set_exposure(&mut self, value: f64) {
+        match self.frame_type {
+            FrameType::Flats  => self.exp_flat = value,
+            FrameType::Biases => self.exp_bias = value,
+            _                 => self.exp_main = value,
+        }
+    }
+
 }
 
 #[derive(Serialize, Deserialize, Debug)]

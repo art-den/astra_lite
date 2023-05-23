@@ -827,7 +827,7 @@ fn apply_camera_options_and_take_shot(
     }
 
     // Start exposure
-    indi.camera_start_exposure(camera_name, frame.exposure)?;
+    indi.camera_start_exposure(camera_name, frame.exposure())?;
 
     Ok(())
 }
@@ -1081,7 +1081,7 @@ impl CameraActiveMode {
             continuously
         )?;
         self.state = CamState::Usual;
-        self.cur_exposure = self.frame_options.exposure;
+        self.cur_exposure = self.frame_options.exposure();
         Ok(())
     }
 
@@ -1103,7 +1103,7 @@ impl CameraActiveMode {
         };
         let mut common_part = format!(
             "{}s_g{}_offs{}_{}x{}",
-            exp_to_str(options.cam.frame.exposure),
+            exp_to_str(options.cam.frame.exposure()),
             options.cam.frame.gain,
             options.cam.frame.offset,
             cropped_width,
@@ -1312,7 +1312,7 @@ impl Mode for CameraActiveMode {
             self.indi.camera_is_fast_toggle_supported(&self.device).unwrap_or(false) &&
             self.indi.camera_is_fast_toggle_enabled(&self.device).unwrap_or(false);
         if !fast_mode_enabled {
-            self.cur_exposure = self.frame_options.exposure;
+            self.cur_exposure = self.frame_options.exposure();
             if !self.frame_options.have_to_use_delay() {
                 apply_camera_options_and_take_shot(
                     &self.indi,
@@ -1378,7 +1378,7 @@ impl Mode for CameraActiveMode {
             let mut have_to_refocus = false;
             if self.indi.is_device_enabled(&focuser_options.device).unwrap_or(false) {
                 if focuser_options.periodically && focuser_options.period_minutes != 0 {
-                    self.exp_sum += self.frame_options.exposure;
+                    self.exp_sum += self.frame_options.exposure();
                     let max_exp_sum = (focuser_options.period_minutes * 60) as f64;
                     if self.exp_sum >= max_exp_sum {
                         have_to_refocus = true;
@@ -1655,7 +1655,7 @@ impl FocusingMode {
     ) -> Self {
         let options = options.read().unwrap();
         let mut frame = options.cam.frame.clone();
-        frame.exposure = options.focuser.exposure;
+        frame.exp_main = options.focuser.exposure;
         FocusingMode {
             indi:       Arc::clone(indi),
             state:      FocusingState::Undefined,
@@ -1743,7 +1743,7 @@ impl Mode for FocusingMode {
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
-        Some(self.frame.exposure)
+        Some(self.frame.exposure())
     }
 
     fn can_be_continued_after_stop(&self) -> bool {
@@ -2031,7 +2031,7 @@ impl MountCalibrMode {
     ) -> Self {
         let opts = options.read().unwrap();
         let mut frame = opts.cam.frame.clone();
-        frame.exposure = opts.guiding.calibr_exposure;
+        frame.exp_main = opts.guiding.calibr_exposure;
         Self {
             indi:              Arc::clone(indi),
             state:             DitherCalibrState::Undefined,
@@ -2181,7 +2181,7 @@ impl Mode for MountCalibrMode {
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
-        Some(self.frame.exposure)
+        Some(self.frame.exposure())
     }
 
     fn progress(&self) -> Option<Progress> {
