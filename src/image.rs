@@ -142,51 +142,43 @@ impl ImageLayer<u16> {
     pub fn get_idiv16_crd(&self, x: i64, y: i64) -> Option<u16> {
         let x_i = x / CRD_DIV;
         let y_i = y / CRD_DIV;
-
-        let (v00, v10, v01, v11) =
-            if x_i >= 0 && y_i >= 0 && x_i < self.width_1 && y_i < self.height_1 {
-                let pos = x_i as usize + y_i as usize * self.width;
-                unsafe {(
-                    Some(*self.data.get_unchecked(pos)),
-                    Some(*self.data.get_unchecked(pos+1)),
-                    Some(*self.data.get_unchecked(pos + self.width)),
-                    Some(*self.data.get_unchecked(pos + self.width+1))
-                )}
-            } else {
-                (
-                    self.get(x_i as isize, y_i as isize),
-                    self.get(x_i as isize+1, y_i as isize),
-                    self.get(x_i as isize, y_i as isize+1),
-                    self.get(x_i as isize+1, y_i as isize+1)
-                )
-            };
-
         let x_p1 = x as usize % CRD_DIV as usize;
         let x_p0 = CRD_DIV as usize - x_p1;
-
-        let v0 = match (v00, v10) {
-            (Some(v00), Some(v10)) => Some((v00 as usize * x_p0) + (v10 as usize * x_p1)),
-            (Some(v00), None)      => Some((v00 as usize) * CRD_DIV as usize),
-            (None, Some(v10))      => Some((v10 as usize) * CRD_DIV as usize),
-            _                      => None,
-        };
-        let v1 = match (v01, v11) {
-            (Some(v01), Some(v11)) => Some((v01 as usize * x_p0) + (v11 as usize * x_p1)),
-            (Some(v01), None)      => Some((v01 as usize) * CRD_DIV as usize),
-            (None, Some(v11))      => Some((v11 as usize) * CRD_DIV as usize),
-            _                      => None,
-        };
-
         let y_p1 = y as usize % CRD_DIV as usize;
         let y_p0 = CRD_DIV as usize - y_p1;
-
-        let v = match (v0, v1) {
-            (Some(v0), Some(v1)) => v0 * y_p0 + v1 * y_p1,
-            (Some(v0), None)     => v0 * CRD_DIV as usize,
-            (None, Some(v1))     => v1 * CRD_DIV as usize,
-            _                    => return None,
+        let v = if x_i >= 0 && y_i >= 0 && x_i < self.width_1 && y_i < self.height_1 {
+            let pos = x_i as usize + y_i as usize * self.width;
+            let v00 = unsafe { *self.data.get_unchecked(pos) };
+            let v10 = unsafe { *self.data.get_unchecked(pos+1) };
+            let v01 = unsafe { *self.data.get_unchecked(pos + self.width) };
+            let v11 = unsafe { *self.data.get_unchecked(pos + self.width+1) };
+            let v0 = (v00 as usize * x_p0) + (v10 as usize * x_p1);
+            let v1 = (v01 as usize * x_p0) + (v11 as usize * x_p1);
+            v0 * y_p0 + v1 * y_p1
+        } else {
+            let v00 = self.get(x_i as isize, y_i as isize);
+            let v10 = self.get(x_i as isize+1, y_i as isize);
+            let v01 = self.get(x_i as isize, y_i as isize+1);
+            let v11 = self.get(x_i as isize+1, y_i as isize+1);
+            let v0 = match (v00, v10) {
+                (Some(v00), Some(v10)) => Some((v00 as usize * x_p0) + (v10 as usize * x_p1)),
+                (Some(v00), None)      => Some((v00 as usize) * CRD_DIV as usize),
+                (None, Some(v10))      => Some((v10 as usize) * CRD_DIV as usize),
+                _                      => None,
+            };
+            let v1 = match (v01, v11) {
+                (Some(v01), Some(v11)) => Some((v01 as usize * x_p0) + (v11 as usize * x_p1)),
+                (Some(v01), None)      => Some((v01 as usize) * CRD_DIV as usize),
+                (None, Some(v11))      => Some((v11 as usize) * CRD_DIV as usize),
+                _                      => None,
+            };
+            match (v0, v1) {
+                (Some(v0), Some(v1)) => v0 * y_p0 + v1 * y_p1,
+                (Some(v0), None)     => v0 * CRD_DIV as usize,
+                (None, Some(v1))     => v1 * CRD_DIV as usize,
+                _                    => return None,
+            }
         };
-
         let mut result = v / (CRD_DIV as usize * CRD_DIV as usize);
         if result > u16::MAX as usize { result = u16::MAX as usize; }
         Some(result as u16)
