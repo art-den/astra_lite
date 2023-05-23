@@ -161,34 +161,34 @@ impl ImageLayer<u16> {
                 )
             };
 
-        let x_p1 = x % CRD_DIV;
-        let x_p0 = CRD_DIV - x_p1;
+        let x_p1 = x as usize % CRD_DIV as usize;
+        let x_p0 = CRD_DIV as usize - x_p1;
 
         let v0 = match (v00, v10) {
-            (Some(v00), Some(v10)) => Some((v00 as i64 * x_p0) + (v10 as i64 * x_p1)),
-            (Some(v00), None)      => Some((v00 as i64) * CRD_DIV),
-            (None, Some(v10))      => Some((v10 as i64) * CRD_DIV),
+            (Some(v00), Some(v10)) => Some((v00 as usize * x_p0) + (v10 as usize * x_p1)),
+            (Some(v00), None)      => Some((v00 as usize) * CRD_DIV as usize),
+            (None, Some(v10))      => Some((v10 as usize) * CRD_DIV as usize),
             _                      => None,
         };
         let v1 = match (v01, v11) {
-            (Some(v01), Some(v11)) => Some((v01 as i64 * x_p0) + (v11 as i64 * x_p1)),
-            (Some(v01), None)      => Some((v01 as i64) * CRD_DIV),
-            (None, Some(v11))      => Some((v11 as i64) * CRD_DIV),
+            (Some(v01), Some(v11)) => Some((v01 as usize * x_p0) + (v11 as usize * x_p1)),
+            (Some(v01), None)      => Some((v01 as usize) * CRD_DIV as usize),
+            (None, Some(v11))      => Some((v11 as usize) * CRD_DIV as usize),
             _                      => None,
         };
 
-        let y_p1 = y % CRD_DIV;
-        let y_p0 = CRD_DIV - y_p1;
+        let y_p1 = y as usize % CRD_DIV as usize;
+        let y_p0 = CRD_DIV as usize - y_p1;
 
         let v = match (v0, v1) {
             (Some(v0), Some(v1)) => v0 * y_p0 + v1 * y_p1,
-            (Some(v0), None)     => v0 * CRD_DIV,
-            (None, Some(v1))     => v1 * CRD_DIV,
+            (Some(v0), None)     => v0 * CRD_DIV as usize,
+            (None, Some(v1))     => v1 * CRD_DIV as usize,
             _                    => return None,
         };
 
-        let mut result = v / (CRD_DIV * CRD_DIV);
-        if result > u16::MAX as i64 { result = u16::MAX as i64; }
+        let mut result = v / (CRD_DIV as usize * CRD_DIV as usize);
+        if result > u16::MAX as usize { result = u16::MAX as usize; }
         Some(result as u16)
     }
 
