@@ -186,8 +186,10 @@ pub enum ProcessingResultData {
     Error(String),
     ShotProcessingStarted(ModeType),
     ShotProcessingFinished {
-        mode_type:   ModeType,
-        frame_is_ok: bool
+        mode_type:    ModeType,
+        frame_is_ok:  bool,
+        process_time: f64, // in seconds
+        blob_dl_time: f64, // in seconds
     },
     LightShortInfo(LightFrameShortInfo, ModeType),
     PreviewFrame(PreviewImgData, ModeType),
@@ -904,7 +906,7 @@ fn make_preview_image_impl(
         }
     }
 
-    total_tmr.log("TOTAL PREVIEW");
+    let process_time = total_tmr.log("TOTAL PREVIEW");
 
     // Save master file
 
@@ -933,8 +935,10 @@ fn make_preview_image_impl(
 
     send_result(
         ProcessingResultData::ShotProcessingFinished{
-            mode_type:   command.mode_type,
-            frame_is_ok: !is_bad_frame
+            mode_type:    command.mode_type,
+            frame_is_ok:  !is_bad_frame,
+            blob_dl_time: command.blob.dl_time,
+            process_time
         },
         &command.camera,
         result_fun

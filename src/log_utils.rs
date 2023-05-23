@@ -10,9 +10,10 @@ impl TimeLogger {
         TimeLogger { start_time: std::time::Instant::now() }
     }
 
-    pub fn log(self, text: &str) {
+    pub fn log(self, text: &str) -> f64 {
         let time = self.start_time.elapsed().as_secs_f64();
         log::debug!("BENCH {} time = {:.6} s", text, time);
+        time
     }
 }
 

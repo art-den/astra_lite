@@ -503,7 +503,11 @@ fn connect_misc_events(
                             data.main.state.notify_about_frame_processing_started();
                         }
                     },
-                    ProcessingResultData::ShotProcessingFinished {frame_is_ok, mode_type} => {
+                    ProcessingResultData::ShotProcessingFinished {frame_is_ok, mode_type, process_time, blob_dl_time} => {
+                        let max_fps = if process_time != 0.0 { 1.0/process_time } else { 0.0 };
+                        let perf_str = format!("Download time = {:.2}s, max. FPS={:.1}", blob_dl_time, max_fps);
+                        data.main.set_perf_string(perf_str);
+
                         let mode_data = data.main.state.mode_data();
                         if mode_data.mode.get_type() == mode_type {
                             drop(mode_data);

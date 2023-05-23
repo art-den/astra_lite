@@ -76,6 +76,7 @@ pub struct MainData {
     progress:     RefCell<Option<Progress>>,
     conn_string:  RefCell<String>,
     dev_string:   RefCell<String>,
+    perf_string:   RefCell<String>,
     pub state:    Arc<State>,
     pub indi:     Arc<indi_api::Connection>,
     pub builder:  gtk::Builder,
@@ -170,6 +171,7 @@ pub fn build_ui(
         builder:      builder.clone(),
         conn_string:  RefCell::new(String::new()),
         dev_string:   RefCell::new(String::new()),
+        perf_string:   RefCell::new(String::new()),
     });
 
     window.set_application(Some(app));
@@ -327,11 +329,12 @@ fn handler_close_window(data: &Rc<MainData>) -> gtk::Inhibit {
 }
 
 fn update_window_title(data: &MainData) {
-    let title = "AstraLite (${arch} ver. ${ver})   --   Deepsky astrophotography and livestacking   --   [${devices_list}]   --   [${conn_status}]";
+    let title = "AstraLite (${arch} ver. ${ver})   --   Deepsky astrophotography and livestacking   --   [${devices_list}]   --   [${conn_status}]   --   [${perf}]";
     let title = title.replace("${arch}",         std::env::consts::ARCH);
     let title = title.replace("${ver}",          env!("CARGO_PKG_VERSION"));
     let title = title.replace("${devices_list}", &data.dev_string.borrow());
     let title = title.replace("${conn_status}",  &data.conn_string.borrow());
+    let title = title.replace("${perf}",         &data.perf_string.borrow());
 
     data.window.set_title(&title)
 }
@@ -456,6 +459,11 @@ impl MainData {
     pub fn set_dev_list_and_conn_status(&self, dev_list: String, conn_status: String) {
         *self.dev_string.borrow_mut() = dev_list;
         *self.conn_string.borrow_mut() = conn_status;
+        update_window_title(self);
+    }
+
+    pub fn set_perf_string(&self, perf_string: String) {
+        *self.perf_string.borrow_mut() = perf_string;
         update_window_title(self);
     }
 }
