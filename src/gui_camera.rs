@@ -544,17 +544,6 @@ fn connect_misc_events(
 }
 
 fn connect_widgets_events_before_show_options(data: &Rc<CameraData>) {
-    let chb_hot_pixels = data.main.builder.object::<gtk::CheckButton>("chb_hot_pixels").unwrap();
-    chb_hot_pixels.connect_active_notify(clone!(@strong data => move |chb| {
-        gtk_utils::enable_widgets(
-            &data.main.builder,
-            false,
-            &[("l_hot_pixels_warn", chb.is_active())]
-        )
-    }));
-    chb_hot_pixels.set_active(true);
-    chb_hot_pixels.set_active(false);
-
     let sw_preview_img = data.main.builder.object::<gtk::Widget>("sw_preview_img").unwrap();
     sw_preview_img.connect_size_allocate(clone!(@strong data => move |_, rect| {
         let mut options = data.options.write().unwrap();
@@ -841,6 +830,17 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
         });
     }));
 
+    let chb_hot_pixels = data.main.builder.object::<gtk::CheckButton>("chb_hot_pixels").unwrap();
+    chb_hot_pixels.connect_active_notify(clone!(@strong data => move |chb| {
+        gtk_utils::enable_widgets(
+            &data.main.builder,
+            false,
+            &[("l_hot_pixels_warn", chb.is_active())]
+        );
+        data.excl.exec(|| {
+            data.options.write().unwrap().calibr.hot_pixels = chb.is_active();
+        });
+    }));
 }
 
 fn connect_img_mouse_scroll_events(data: &Rc<CameraData>) {
@@ -1042,6 +1042,8 @@ fn show_options(data: &Rc<CameraData>) {
 
         gtk_utils::set_bool     (bld, "chb_inv_ns",      options.mount.inv_ns);
         gtk_utils::set_bool     (bld, "chb_inv_we",      options.mount.inv_we);
+
+        gtk_utils::enable_widgets(bld, false, &[("l_hot_pixels_warn", options.calibr.hot_pixels)]);
 
         drop(options);
 
