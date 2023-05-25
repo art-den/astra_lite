@@ -1233,7 +1233,7 @@ fn calc_gradient(source: &dyn GradientCalcSource) -> Option<Plane> {
         let bound2 = 2*cell_data.len()/3;
 
         cell_data.select_nth_unstable(bound2);
-        cell_data.select_nth_unstable(bound1);
+        cell_data[..bound2].select_nth_unstable(bound1);
         let middle = &cell_data[bound1..bound2];
         let aver = middle.iter().map(|v| *v as f64).sum::<f64>() / middle.len() as f64;
 

@@ -76,7 +76,7 @@ pub struct MainData {
     progress:     RefCell<Option<Progress>>,
     conn_string:  RefCell<String>,
     dev_string:   RefCell<String>,
-    perf_string:   RefCell<String>,
+    perf_string:  RefCell<String>,
     pub state:    Arc<State>,
     pub indi:     Arc<indi_api::Connection>,
     pub builder:  gtk::Builder,
@@ -89,7 +89,11 @@ impl Drop for MainData {
     }
 }
 
-fn panic_handler(panic_info: &std::panic::PanicInfo, indi: &Arc<indi_api::Connection>) {
+fn panic_handler(
+    panic_info:        &std::panic::PanicInfo,
+    indi:              &Arc<indi_api::Connection>,
+    def_panic_handler: &Box<dyn Fn(&std::panic::PanicInfo<'_>) + 'static + Sync + Send>,
+) {
     let payload_str =
         if let Some(msg) = panic_info.payload().downcast_ref::<&'static str>() {
             Some(*msg)
@@ -103,16 +107,22 @@ fn panic_handler(panic_info: &std::panic::PanicInfo, indi: &Arc<indi_api::Connec
 
     if let Some(payload) = payload_str {
         log::error!("Panic paiload: {}", payload);
-        println!("{}", payload);
     }
 
     if let Some(loc) = panic_info.location() {
         log::error!("Panic location: {}", loc);
     }
 
+    log::error!(
+        "Panic stacktrace: {}",
+        std::backtrace::Backtrace::force_capture().to_string()
+    );
+
     log::info!("Disconnecting (and stop) INDI server after panic...");
     _ = indi.disconnect_and_wait();
     log::info!("Done!");
+
+    def_panic_handler(panic_info);
 }
 
 pub fn build_ui(
@@ -122,8 +132,9 @@ pub fn build_ui(
     let indi = Arc::new(indi_api::Connection::new());
 
     let indi_clone = Arc::clone(&indi);
+    let default_panic_handler = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info|
-        panic_handler(panic_info, &indi_clone)
+        panic_handler(panic_info, &indi_clone, &default_panic_handler)
     ));
 
     let css_provider = gtk::CssProvider::new();
