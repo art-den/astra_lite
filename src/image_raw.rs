@@ -624,7 +624,7 @@ impl RawImage {
         self.data = new_data;
     }
 
-    pub fn calc_noise(&self) -> f32 {
+    pub fn calc_noise(&self) -> Option<f32> {
         let rect_size = (self.info.width / 200).max(16).min(42);
         let step = 7;
         let rows = self.info.height / rect_size;
@@ -648,6 +648,7 @@ impl RawImage {
                     if color != cfa_color { continue; }
                     values.push(v);
                 }
+                if values.is_empty() { continue; }
                 for _ in 0..5 {
                     let median_pos = values.len() / 2;
                     let median = *values.select_nth_unstable(median_pos).1 as f64;
@@ -661,19 +662,27 @@ impl RawImage {
                     let std_dev = f64::sqrt(sum / values.len() as f64);
                     let max = (median + 3.0 * std_dev) as i32;
                     let len_before = values.len();
-                    values.retain(|v| (*v as i32) < max);
-                    if len_before == values.len() { break; }
+                    values.retain(|v| (*v as i32) <= max);
+                    if values.is_empty() || len_before == values.len() {
+                        break;
+                    }
                 }
-                let sum: u64 = values.iter().map(|v| *v as u64).sum();
-                let aver = sum as f64 / values.len() as f64;
-                for v in &values {
-                    let diff = *v as f64 - aver;
-                    diffs.push(diff * diff);
+                if !values.is_empty() {
+                    let sum: u64 = values.iter().map(|v| *v as u64).sum();
+                    let aver = sum as f64 / values.len() as f64;
+                    for v in &values {
+                        let diff = *v as f64 - aver;
+                        diffs.push(diff * diff);
+                    }
                 }
             }
         }
-        let sum: f64 = diffs.iter().sum();
-        f64::sqrt(sum / diffs.len() as f64) as f32
+        if !diffs.is_empty() {
+            let sum: f64 = diffs.iter().sum();
+            Some(f64::sqrt(sum / diffs.len() as f64) as f32)
+        } else {
+            None
+        }
     }
 
     pub fn demosaic_into(&self, dst_img: &mut Image, mt: bool) {

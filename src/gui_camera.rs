@@ -2249,7 +2249,7 @@ fn show_histogram_stat(data: &Rc<CameraData>) {
     let max = hist.max as f64;
     let show_chan_data = |chan: &Option<HistogramChan>, l_cap, l_mean, l_median, l_dev| {
         if let Some(chan) = chan.as_ref() {
-            let median = chan.get_nth_element(chan.count/2);
+            let median = chan.median();
             if options.hist.percents {
                 gtk_utils::set_str(
                     bldr, l_mean,
@@ -2581,7 +2581,9 @@ fn update_light_history_table(data: &Rc<CameraData>) {
             ovality_str = make_bad_str(&ovality_str);
         }
         let stars_cnt = item.stars_count as u32;
-        let noise_str = format!("{:.3}%", item.noise);
+        let noise_str = item.noise
+            .map(|v| format!("{:.3}%", v))
+            .unwrap_or_else(|| "???".to_string());
         let bg_str = format!("{:.1}%", item.background);
         let bad_offset = item.flags.contains(LightFrameShortInfoFlags::BAD_OFFSET);
         let mut x_str = item.offset_x
@@ -2635,7 +2637,6 @@ fn handler_action_start_save_raw_frames(data: &Rc<CameraData>) {
         Ok(())
     });
 }
-
 
 fn handler_action_continue_save_raw_frames(data: &Rc<CameraData>) {
     gtk_utils::exec_and_show_error(&data.main.window, || {

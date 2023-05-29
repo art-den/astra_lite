@@ -174,7 +174,7 @@ pub struct LightFrameShortInfo {
     pub stars_fwhm:     Option<f32>,
     pub stars_ovality:  Option<f32>,
     pub stars_count:    usize,
-    pub noise:          f32, // %
+    pub noise:          Option<f32>, // %
     pub background:     f32, // %
     pub offset_x:       Option<f64>,
     pub offset_y:       Option<f64>,
@@ -516,12 +516,24 @@ fn make_preview_image_impl(
         result_fun
     );
 
+    log::debug!("Starting BLOB processing... Blob len = {}", command.blob.data.len());
+
     let tmr = TimeLogger::start();
     let mut raw_image = create_raw_image_from_blob(&command.blob, command.frame_options.offset)?;
     tmr.log("create_raw_image_from_blob");
-    let exposure = raw_image.info().exposure;
 
-    let frame_type = raw_image.info().frame_type;
+    let raw_info = raw_image.info();
+    log::debug!("Raw type      = {:?}", raw_info.frame_type);
+    log::debug!("Raw width     = {}", raw_info.width);
+    log::debug!("Raw height    = {}", raw_info.height);
+    log::debug!("Raw zero      = {}", raw_info.zero);
+    log::debug!("Raw max_value = {}", raw_info.max_value);
+    log::debug!("Raw CFA       = {:?}", raw_info.cfa);
+    log::debug!("Raw bin       = {}", raw_info.bin);
+    log::debug!("Raw exposure  = {}", raw_info.exposure);
+
+    let exposure = raw_info.exposure;
+    let frame_type = raw_info.frame_type;
 
     let is_monochrome_img =
         matches!(frame_type, FrameType::Biases) ||
@@ -536,6 +548,17 @@ fn make_preview_image_impl(
         is_monochrome_img
     );
     tmr.log("histogram from raw image");
+    let debug_log_hist_chan = |name, chan: &Option<HistogramChan>| {
+        if let Some(chan) = chan {
+            log::debug!("Raw {} median = {}", name, chan.median());
+            log::debug!("Raw {} mean   = {}", name, chan.mean);
+        }
+    };
+    debug_log_hist_chan("L", &raw_hist.l);
+    debug_log_hist_chan("R", &raw_hist.r);
+    debug_log_hist_chan("G", &raw_hist.g);
+    debug_log_hist_chan("B", &raw_hist.b);
+
     drop(raw_hist);
 
     // Raw noise
@@ -545,8 +568,10 @@ fn make_preview_image_impl(
         tmr.log("light frame raw noise calculation");
         noise
     } else {
-        0.0
+        None
     };
+
+    log::debug!("Raw noise = {:?}", raw_noise);
 
     // Applying calibration data
     if frame_type == FrameType::Lights {
@@ -678,7 +703,7 @@ fn make_preview_image_impl(
         let mut light_info = LightFrameShortInfo::default();
         light_info.time = Utc::now();
         light_info.exposure = exposure;
-        light_info.noise = 100.0 * raw_noise / image.max_value() as f32;
+        light_info.noise = raw_noise.map(|v| 100.0 * v / image.max_value() as f32);
         light_info.background = 100.0 * info.background as f32 / image.max_value() as f32;
         light_info.stars_fwhm = info.stars_fwhm;
         light_info.stars_ovality = info.stars_ovality;

@@ -89,6 +89,7 @@ impl LightImageInfo {
             &mono_layer,
             noise,
             overexposured_bord,
+            image.max_value(),
             mt
         );
         tmr.log("searching stars");
@@ -137,14 +138,17 @@ impl LightImageInfo {
 
     fn find_stars_in_image(
         image:              &ImageLayer<u16>,
-        mut noise:          f32,
+        noise:              f32,
         overexposured_bord: u16,
+        max_value:          u16,
         mt:                 bool
     ) -> Stars {
-        if noise < 1.0 { noise = 1.0; }
         const MAX_STARS_POINTS_CNT: usize = MAX_STAR_DIAM * MAX_STAR_DIAM;
         let iir_filter_coeffs = IirFilterCoeffs::new(230);
-        let border = (noise * 120.0) as u32;
+        let mut border = (noise * 120.0) as u32;
+        if border <= 1 {
+            border = u32::max(max_value as u32 / 100, 2);
+        }
         let possible_stars = Mutex::new(Vec::new());
         let find_possible_stars_in_rows = |y1: usize, y2: usize| {
             let mut filtered = Vec::new();
@@ -491,7 +495,7 @@ impl RawImageStat {
         Self {
             max_value: hist.max,
             aver: h.mean,
-            median: h.get_nth_element(h.count / 2),
+            median: h.median(),
             std_dev: h.std_dev,
         }
     }
@@ -537,6 +541,10 @@ impl HistogramChan {
             n -= *v as usize;
         }
         u16::MAX
+    }
+
+    pub fn median(&self) -> u16 {
+        self.get_nth_element(self.count/2)
     }
 
     pub fn get_percentile(&self, n: usize) -> u16 {
