@@ -95,6 +95,10 @@ pub fn build_ui(
         fill_devices_name(&data);
         show_options(&data);
 
+        let l_sel_dev_props = data.builder.object::<gtk::Label>("l_sel_dev_props").unwrap();
+        let l_dev_list = data.builder.object::<gtk::Label>("l_dev_list").unwrap();
+        l_dev_list.set_height_request(l_sel_dev_props.allocation().height());
+
         gtk_utils::connect_action(&data.window, &data, "help_save_indi", handler_action_help_save_indi);
         gtk_utils::connect_action(&data.window, &data, "conn_indi",      handler_action_conn_indi);
         gtk_utils::connect_action(&data.window, &data, "disconn_indi",   handler_action_disconn_indi);
@@ -110,6 +114,11 @@ pub fn build_ui(
 
         data.window.connect_delete_event(clone!(@weak data => @default-panic, move |_, _| {
             handler_close_window(&data)
+        }));
+
+        let srch_indi_prop = data.builder.object::<gtk::SearchEntry>("srch_indi_prop").unwrap();
+        srch_indi_prop.connect_search_changed(clone!(@weak data => @default-panic, move |entry| {
+            data.indi_gui.set_filter_text(entry.text().as_str());
         }));
 
         if let Some(load_drivers_err) = load_drivers_err {

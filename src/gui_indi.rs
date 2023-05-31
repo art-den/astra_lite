@@ -4,9 +4,10 @@ use itertools::{Itertools, izip};
 use crate::indi_api;
 
 pub struct IndiGui {
-    indi:      Arc<indi_api::Connection>,
-    indi_conn: indi_api::Subscription,
-    data:      Rc<RefCell<UiIndiGuiData>>,
+    indi:           Arc<indi_api::Connection>,
+    indi_conn:      indi_api::Subscription,
+    data:           Rc<RefCell<UiIndiGuiData>>,
+    filter_text_lc: Rc<RefCell<String>>,
 }
 
 impl Drop for IndiGui {
@@ -93,9 +94,33 @@ impl IndiGui {
         );
 
         Self {
-            data,
+            data, indi_conn,
             indi: Arc::clone(indi),
-            indi_conn,
+            filter_text_lc: Rc::new(RefCell::new(String::new())),
+        }
+    }
+
+    pub fn set_filter_text(&self, text: &str) {
+        let mut filter_text_lc = self.filter_text_lc.borrow_mut();
+        if *filter_text_lc == text { return; }
+        *filter_text_lc = text.to_lowercase();
+        drop(filter_text_lc);
+        self.update_props_visiblity();
+    }
+
+    pub fn update_props_visiblity(&self) {
+        let data = self.data.borrow();
+        let filter_text_lc = self.filter_text_lc.borrow();
+        for device in &data.devices {
+            for group in &device.groups {
+                let mut group_visible = false;
+                for prop in &group.props {
+                    let visible = prop.test_filter(&filter_text_lc);
+                    prop.set_visible(visible);
+                    group_visible |= visible;
+                }
+                group.scrollwin.set_visible(group_visible);
+            }
         }
     }
 
@@ -238,6 +263,7 @@ impl IndiGui {
             // new props
             for &indi_prop in &indi_group_props {
                 if !ui_group.props.iter().any(|p| p.name == indi_prop.name) {
+                    let mut widgets = Vec::<gtk::Widget>::new();
                     let caption = indi_prop.static_data.label.as_deref().unwrap_or(&indi_prop.name);
                     let prop_label = gtk::Label::builder()
                         .use_markup(true)
@@ -247,24 +273,29 @@ impl IndiGui {
                         .tooltip_text(&indi_prop.name)
                         .build();
                     ui_group.grid.attach(&prop_label, 0, ui_group.next_row, 1, 1);
+                    widgets.push(prop_label.into());
                     let prop_ui_elements = Self::create_property_ui(
                         indi,
                         indi_prop,
                         &ui_group.grid,
+                        &mut widgets,
                         &mut ui_group.next_row,
                     );
-                    ui_group.props.push(UiIndiProp {
-                        device:     indi_prop.device.clone(),
-                        name:       indi_prop.name.clone(),
-                        elements:   prop_ui_elements,
-                        sep_row:    ui_group.next_row,
-                        change_cnt: 0,
-                    });
                     let separator = gtk::Separator::builder()
                         .visible(true)
                         .orientation(gtk::Orientation::Horizontal)
                         .build();
                     ui_group.grid.attach(&separator, 0, ui_group.next_row, 6, 1);
+                    widgets.push(separator.into());
+                    ui_group.props.push(UiIndiProp {
+                        device:       indi_prop.device.clone(),
+                        name:         indi_prop.name.clone(),
+                        label_lc:     caption.to_lowercase(),
+                        elements:     prop_ui_elements,
+                        widgets,
+                        sep_row:      ui_group.next_row,
+                        change_cnt:   0,
+                    });
                     ui_group.next_row += 1;
                 }
             }
@@ -315,6 +346,7 @@ impl IndiGui {
         indi:      &Arc<indi_api::Connection>,
         prop:      &indi_api::ExportProperty,
         grid:      &gtk::Grid,
+        widgets:   &mut Vec<gtk::Widget>,
         next_row:  &mut i32,
     ) -> Vec<UiIndiPropElem> {
         match &prop.static_data.tp {
@@ -325,6 +357,7 @@ impl IndiGui {
                     &prop.name,
                     &prop.static_data,
                     &prop.elements,
+                    widgets,
                     grid,
                     next_row
                 ),
@@ -335,6 +368,7 @@ impl IndiGui {
                     &prop.name,
                     &prop.static_data,
                     &prop.elements,
+                    widgets,
                     elems_info,
                     grid,
                     next_row
@@ -346,6 +380,7 @@ impl IndiGui {
                     &prop.name,
                     &prop.static_data,
                     &prop.elements,
+                    widgets,
                     rule,
                     grid,
                     next_row
@@ -357,6 +392,7 @@ impl IndiGui {
                     &prop.name,
                     &prop.static_data,
                     &prop.elements,
+                    widgets,
                     grid,
                     next_row
                 ),
@@ -367,6 +403,7 @@ impl IndiGui {
                     &prop.name,
                     &prop.static_data,
                     &prop.elements,
+                    widgets,
                     grid,
                     next_row
                 ),
@@ -379,6 +416,7 @@ impl IndiGui {
         prop_name:   &str,
         static_data: &indi_api::PropStaticData,
         elements:    &Vec<indi_api::PropElement>,
+        widgets:     &mut Vec<gtk::Widget>,
         grid:        &gtk::Grid,
         next_row:    &mut i32,
     ) -> Vec<UiIndiPropElem> {
@@ -386,13 +424,15 @@ impl IndiGui {
         let start_row = *next_row;
         let mut btn_click_data = Vec::new();
         for elem in elements {
+            let label_text = elem.label.as_deref().unwrap_or(&elem.name);
             let elem_label = gtk::Label::builder()
-                .label(elem.label.as_deref().unwrap_or(&elem.name))
+                .label(label_text)
                 .visible(true)
                 .halign(gtk::Align::End)
                 .tooltip_text(&format!("{}.{}", prop_name, elem.name))
                 .build();
             grid.attach(&elem_label, 1, *next_row, 1, 1);
+            widgets.push(elem_label.into());
 
             let ro = static_data.perm == indi_api::PropPerm::RO;
             let entry = gtk::Entry::builder()
@@ -407,11 +447,13 @@ impl IndiGui {
             ));
 
             let data = UiIndiPropElemData::Text(UiIndiPropTextElem {
-                entry,
+                entry: entry.clone(),
             });
+            widgets.push(entry.into());
             result.push(UiIndiPropElem{
-                name: elem.name.clone(),
                 data,
+                name: elem.name.clone(),
+                label_lc: label_text.to_lowercase(),
                 row: *next_row,
             });
             *next_row += 1;
@@ -441,6 +483,7 @@ impl IndiGui {
                     &elements
                 );
             });
+            widgets.push(set_button.into());
         }
         result
     }
@@ -451,6 +494,7 @@ impl IndiGui {
         prop_name:   &str,
         static_data: &indi_api::PropStaticData,
         elements:    &Vec<indi_api::PropElement>,
+        widgets:     &mut Vec<gtk::Widget>,
         elems_info:  &Vec<Arc<indi_api::NumPropElemInfo>>,
         grid:        &gtk::Grid,
         next_row:    &mut i32,
@@ -460,13 +504,15 @@ impl IndiGui {
         let mut btn_click_data = Vec::new();
         for (elem_data, elem_info) in izip!(elements, elems_info) {
             let indi_api::PropValue::Num(value) = elem_data.value else { continue; };
+            let label_text = elem_data.label.as_deref().unwrap_or(&elem_data.name);
             let elem_label = gtk::Label::builder()
-                .label(elem_data.label.as_deref().unwrap_or(&elem_data.name))
+                .label(label_text)
                 .visible(true)
                 .halign(gtk::Align::End)
                 .tooltip_text(&format!("{}.{}", prop_name, elem_data.name))
                 .build();
             grid.attach(&elem_label, 1, *next_row, 1, 1);
+            widgets.push(elem_label.into());
             let cur_value = if static_data.perm != indi_api::PropPerm::WO {
                 let entry = gtk::Entry::builder()
                     .editable(false)
@@ -475,6 +521,7 @@ impl IndiGui {
                     .width_chars(16)
                     .build();
                 grid.attach(&entry, 2, *next_row, 1, 1);
+                widgets.push(entry.clone().into());
                 Some(entry)
             } else {
                 None
@@ -524,6 +571,7 @@ impl IndiGui {
                     elem_data.name.clone(),
                     spin.clone(),
                 ));
+                widgets.push(spin.clone().into());
                 Some(spin)
             } else {
                 None
@@ -534,6 +582,7 @@ impl IndiGui {
             });
             result.push(UiIndiPropElem{
                 name: elem_data.name.clone(),
+                label_lc: label_text.to_lowercase(),
                 data,
                 row: *next_row,
             });
@@ -559,6 +608,7 @@ impl IndiGui {
                     &elements
                 );
             });
+            widgets.push(set_button.into());
         }
         result
     }
@@ -569,6 +619,7 @@ impl IndiGui {
         prop_name:    &str,
         _static_data: &indi_api::PropStaticData,
         elements:     &Vec<indi_api::PropElement>,
+        widgets:      &mut Vec<gtk::Widget>,
         rule:         &Option<indi_api::SwitchRule>,
         grid:         &gtk::Grid,
         next_row:     &mut i32,
@@ -585,9 +636,10 @@ impl IndiGui {
             let device_string = device.to_string();
             let prop_name_string = prop_name.to_string();
             let elem_name = elem.name.clone();
+            let label_text = elem.label.as_deref().unwrap_or(&elem.name);
             let data = if *rule != Some(indi_api::SwitchRule::AnyOfMany) {
                 let button = gtk::ToggleButton::builder()
-                    .label(elem.label.as_deref().unwrap_or(&elem.name))
+                    .label(label_text)
                     .visible(true)
                     .build();
                 bx.add(&button);
@@ -608,7 +660,7 @@ impl IndiGui {
                 UiIndiPropElemData::Switch(UiIndiPropSwithElem::Button(button))
             } else {
                 let button = gtk::CheckButton::builder()
-                    .label(elem.label.as_deref().unwrap_or(&elem.name))
+                    .label(label_text)
                     .visible(true)
                     .build();
                 bx.add(&button);
@@ -624,10 +676,12 @@ impl IndiGui {
             };
             result.push(UiIndiPropElem{
                 name: elem.name.clone(),
+                label_lc: label_text.to_lowercase(),
                 data,
                 row: *next_row,
             });
         }
+        widgets.push(bx.into());
         *next_row += 1;
         result
     }
@@ -638,29 +692,34 @@ impl IndiGui {
         prop_name:    &str,
         _static_data: &indi_api::PropStaticData,
         elements:     &Vec<indi_api::PropElement>,
+        widgets:      &mut Vec<gtk::Widget>,
         grid:         &gtk::Grid,
         next_row:     &mut i32,
     ) -> Vec<UiIndiPropElem> {
         let mut result = Vec::new();
         for elem in elements {
+            let label_text = elem.label.as_deref().unwrap_or(&elem.name);
             let elem_label = gtk::Label::builder()
-                .label(elem.label.as_deref().unwrap_or(&elem.name))
+                .label(label_text)
                 .visible(true)
                 .halign(gtk::Align::End)
                 .tooltip_text(&format!("{}.{}", prop_name, elem.name))
                 .build();
             grid.attach(&elem_label, 1, *next_row, 1, 1);
+            widgets.push(elem_label.into());
             let entry = gtk::Entry::builder()
                 .editable(false)
                 .visible(true)
                 .can_focus(false)
                 .build();
             grid.attach(&entry, 2, *next_row, 2, 1);
+            widgets.push(entry.clone().into());
             let data = UiIndiPropElemData::Blob(UiIndiPropBlobElem {
                 entry
             });
             result.push(UiIndiPropElem{
                 name: elem.name.clone(),
+                label_lc: label_text.to_lowercase(),
                 data,
                 row: *next_row,
             });
@@ -675,6 +734,7 @@ impl IndiGui {
         prop_name:    &str,
         _static_data: &indi_api::PropStaticData,
         elements:     &Vec<indi_api::PropElement>,
+        widgets:      &mut Vec<gtk::Widget>,
         grid:         &gtk::Grid,
         next_row:     &mut i32,
     ) -> Vec<UiIndiPropElem> {
@@ -686,22 +746,26 @@ impl IndiGui {
             .build();
         grid.attach(&bx, 2, *next_row, 1, 1);
         for elem in elements {
+            let label_text = elem.label.as_deref().unwrap_or(&elem.name);
             let elem_label = gtk::Label::builder()
                 .visible(true)
+                .label(label_text)
                 .halign(gtk::Align::End)
                 .tooltip_text(&format!("{}.{}", prop_name, elem.name))
                 .build();
             bx.add(&elem_label);
             let data = UiIndiPropElemData::Light(UiIndiPropLightElem {
-                text: elem.label.as_deref().unwrap_or(&elem.name).to_string(),
-                label: elem_label
+                text: label_text.to_string(),
+                label: elem_label,
             });
             result.push(UiIndiPropElem{
                 name: elem.name.clone(),
+                label_lc: label_text.to_lowercase(),
                 data,
                 row: *next_row,
             });
         }
+        widgets.push(bx.into());
         *next_row += 1;
         result
     }
@@ -841,9 +905,52 @@ struct UiIndiPropsGroup {
 struct UiIndiProp {
     device:     String,
     name:       String,
+    label_lc:   String,
     elements:   Vec<UiIndiPropElem>,
+    widgets:    Vec<gtk::Widget>,
     sep_row:    i32,
     change_cnt: u64,
+}
+
+impl UiIndiProp {
+    fn set_visible(&self, value: bool) {
+        for widget in &self.widgets {
+            widget.set_visible(value);
+        }
+    }
+
+    fn test_filter(&self, filter_text_lc: &str) -> bool {
+        if self.label_lc.contains(filter_text_lc) {
+            return true;
+        }
+        for elem in &self.elements {
+            if elem.test_filter(filter_text_lc) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+struct UiIndiPropElem {
+    name:     String,
+    label_lc: String,
+    data:     UiIndiPropElemData,
+    row:      i32,
+}
+
+impl UiIndiPropElem {
+    fn test_filter(&self, filter_text_lc: &str) -> bool {
+        self.label_lc.contains(filter_text_lc)
+    }
+}
+
+enum UiIndiPropElemData {
+    Text(UiIndiPropTextElem),
+    Num(UiIndiPropNumElem),
+    Switch(UiIndiPropSwithElem),
+    Blob(UiIndiPropBlobElem),
+    Light(UiIndiPropLightElem),
 }
 
 struct UiIndiPropTextElem {
@@ -867,20 +974,6 @@ struct UiIndiPropBlobElem {
 struct UiIndiPropLightElem {
     text: String,
     label: gtk::Label,
-}
-
-enum UiIndiPropElemData {
-    Text(UiIndiPropTextElem),
-    Num(UiIndiPropNumElem),
-    Switch(UiIndiPropSwithElem),
-    Blob(UiIndiPropBlobElem),
-    Light(UiIndiPropLightElem),
-}
-
-struct UiIndiPropElem {
-    name: String,
-    data: UiIndiPropElemData,
-    row:  i32,
 }
 
 struct UiIndiGuiData {
