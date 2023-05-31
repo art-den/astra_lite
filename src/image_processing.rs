@@ -318,15 +318,16 @@ pub fn get_rgb_bytes_from_preview_image(
     const DARK_MAX_PERCENTILE:  usize = 60;
     const LIGHT_MIN_PERCENTILE: usize = 95;
 
+    let light_max = image.max_value() as f64;
     let light_lvl = params.light_lvl.powf(0.05);
 
     let l_levels = if let Some(hist) = &hist.l {
         let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
         let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
         let light_min = hist.get_percentile(LIGHT_MIN_PERCENTILE) as f64;
-        let light_max = image.max_value() as f64;
-        let dark = linear_interpolate(params.dark_lvl, 1.0, 0.0, dark_min, dark_max);
-        let light = linear_interpolate(light_lvl, 1.0, 0.0, light_min, light_max);
+        let mut dark = linear_interpolate(params.dark_lvl, 1.0, 0.0, dark_min, dark_max);
+        let mut light = linear_interpolate(light_lvl, 1.0, 0.0, light_min, light_max);
+        if (light - dark) < 2.0 { light += 1.0; dark -= 1.0; }
         DarkLightLevels { dark, light }
     } else {
         DarkLightLevels::default()
@@ -336,9 +337,9 @@ pub fn get_rgb_bytes_from_preview_image(
         let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
         let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
         let light_min = hist.get_percentile(LIGHT_MIN_PERCENTILE) as f64;
-        let light_max = image.max_value() as f64;
-        let dark = linear_interpolate(params.dark_lvl, 1.0, 0.0, dark_min, dark_max);
-        let light = linear_interpolate(light_lvl, 1.0, 0.0, light_min, light_max);
+        let mut dark = linear_interpolate(params.dark_lvl, 1.0, 0.0, dark_min, dark_max);
+        let mut light = linear_interpolate(light_lvl, 1.0, 0.0, light_min, light_max);
+        if (light - dark) < 2.0 { light += 1.0; dark -= 1.0; }
         let wb = hist.get_percentile(WB_PERCENTILE) as f64;
         (DarkLightLevels { dark, light }, wb)
     } else {
