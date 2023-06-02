@@ -776,14 +776,6 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
         Inhibit(false)
     }));
 
-    let ch_hist_logx = bldr.object::<gtk::CheckButton>("ch_hist_logx").unwrap();
-    ch_hist_logx.connect_active_notify(clone!(@strong data => move |chb| {
-        data.excl.exec(|| {
-            data.options.write().unwrap().hist.log_x = chb.is_active();
-            repaint_histogram(&data)
-        });
-    }));
-
     let ch_hist_logy = bldr.object::<gtk::CheckButton>("ch_hist_logy").unwrap();
     ch_hist_logy.connect_active_notify(clone!(@strong data => move |chb| {
         data.excl.exec(|| {
@@ -1020,7 +1012,6 @@ fn show_options(data: &Rc<CameraData>) {
         gtk_utils::set_f64      (bld, "scl_gamma",           options.preview.gamma);
         gtk_utils::set_bool     (bld, "chb_rem_grad",        options.preview.remove_grad);
 
-        gtk_utils::set_bool     (bld, "ch_hist_logx",        options.hist.log_x);
         gtk_utils::set_bool     (bld, "ch_hist_logy",        options.hist.log_y);
         gtk_utils::set_bool     (bld, "ch_stat_percents",    options.hist.percents);
 
@@ -1141,7 +1132,6 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.preview.light_lvl    = gtk_utils::get_f64      (bld, "scl_highlight");
     options.preview.remove_grad  = gtk_utils::get_bool     (bld, "chb_rem_grad");
 
-    options.hist.log_x           = gtk_utils::get_bool(bld, "ch_hist_logx");
     options.hist.log_y           = gtk_utils::get_bool(bld, "ch_hist_logy");
     options.hist.percents        = gtk_utils::get_bool(bld, "ch_stat_percents");
 
@@ -2315,7 +2305,6 @@ fn handler_draw_histogram(
             cr,
             area.allocated_width(),
             area.allocated_height(),
-            options.hist.log_x,
             options.hist.log_y,
         )?;
         Ok(())
@@ -2328,7 +2317,6 @@ fn paint_histogram(
     cr:     &cairo::Context,
     width:  i32,
     height: i32,
-    log_x:  bool,
     log_y:  bool,
 ) -> anyhow::Result<()> {
     if width == 0 { return Ok(()); }
@@ -2384,7 +2372,7 @@ fn paint_histogram(
         let paint_channel = |chan: &Option<HistogramChan>, r, g, b, a| -> anyhow::Result<()> {
             let Some(chan) = chan.as_ref() else { return Ok(()); };
             let k = max_count as f64 / chan.count as f64;
-            let max_x = if !log_x { hist.max as f64 } else { f64::log10(hist.max as f64) };
+            let max_x = hist.max as f64;
             cr.set_source_rgba(r, g, b, a);
             cr.set_line_width(2.0);
             let div = hist.max as usize / width as usize;
@@ -2401,14 +2389,10 @@ fn paint_histogram(
                 cnt += 1;
                 if (cnt == div || idx == last_idx) && cnt != 0 {
                     let mut max_v_f = k * max_v as f64;
-                    let mut aver_idx = (idx_sum / cnt) as f64;
-                    if log_x && aver_idx != 0.0 {
-                        aver_idx = f64::log10(aver_idx);
-                    }
                     if log_y && max_v_f != 0.0 {
                         max_v_f = f64::log10(max_v_f);
                     }
-
+                    let aver_idx = (idx_sum / cnt) as f64;
                     let x = area_width * aver_idx / max_x;
                     let y = area_height - area_height * max_v_f / total_max_v;
                     cr.line_to(x + left_margin, y + top_margin);

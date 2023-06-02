@@ -310,7 +310,6 @@ impl PreviewOptions {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct HistOptions {
-    pub log_x:    bool,
     pub log_y:    bool,
     pub percents: bool,
 }
@@ -318,7 +317,6 @@ pub struct HistOptions {
 impl Default for HistOptions {
     fn default() -> Self {
         Self {
-            log_x:    false,
             log_y:    false,
             percents: true,
         }
