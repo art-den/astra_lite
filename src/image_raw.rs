@@ -606,21 +606,29 @@ impl RawImage {
     pub fn filter_flat(&mut self) {
         let mut new_data = Vec::new();
         new_data.resize(self.data.len(), 0);
-        new_data.par_chunks_exact_mut(self.info.width).enumerate().for_each(|(y, dst_row)| {
-            let cfa_row = self.cfa_row(y);
-            for (x, (dst, c)) in dst_row.iter_mut().zip(cfa_row.iter().cycle()).enumerate() {
-                let mut cnt = 0_u32;
-                let mut sum = 0_u32;
-                let x = x as isize;
-                let y = y as isize;
-                for (_x, _y, v, cfa_c) in self.rect_iter(x-2, y-2, x+2, y+2) {
-                    if *c != cfa_c { continue; }
-                    sum += v as u32;
-                    cnt += 1;
+        new_data
+            .par_chunks_exact_mut(self.info.width)
+            .enumerate()
+            .for_each(|(y, dst_row)| {
+                let cfa_row = self.cfa_row(y);
+                for (x, (dst, c))
+                in dst_row.iter_mut().zip(cfa_row.iter().cycle()).enumerate() {
+                    let mut cnt = 0_u32;
+                    let mut sum = 0_u32;
+                    let x = x as isize;
+                    let y = y as isize;
+                    for (_x, _y, v, cfa_c) in self.rect_iter(x-2, y-2, x+2, y+2) {
+                        if *c != cfa_c { continue; }
+                        sum += v as u32;
+                        cnt += 1;
+                    }
+                    if cnt != 0 {
+                        *dst = ((sum + cnt/2) / cnt) as u16;
+                    } else {
+                        *dst = self.get(x, y).unwrap_or_default();
+                    }
                 }
-                *dst = ((sum + cnt/2) / cnt) as u16;
-            }
-        });
+            });
         self.data = new_data;
     }
 
