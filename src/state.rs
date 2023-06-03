@@ -1199,7 +1199,9 @@ impl Mode for CameraActiveMode {
                 }
             }
             if let Some(guid_options) = &self.guid_options {
-                if guid_options.enabled { extra_modes.push("G"); }
+                if guid_options.enabled {
+                    extra_modes.push("G");
+                }
                 if guid_options.dith_period != 0 {
                     extra_modes.push("D");
                 }
