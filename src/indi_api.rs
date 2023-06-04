@@ -3807,7 +3807,6 @@ fn test_xml_stream_reader() {
     let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else { panic!("Not XML"); };
     assert_eq!(xml.trim(), "<xml3></xml3>");
 
-
     // End of stream
 
     let res = reader.receive_xml(&mut stream);
@@ -3830,7 +3829,6 @@ struct XmlReceiver {
     state:         XmlReceiverState,
     activate_devs: bool,
 }
-
 
 impl XmlReceiver {
     fn new(
@@ -3923,15 +3921,12 @@ impl XmlReceiver {
                 elem_name:  name.to_string(),
                 prop_value: value,
             };
-            let event = PropChangeEvent {
+            events_sender.send(Event::PropChange(Arc::new(PropChangeEvent {
                 timestamp,
                 device_name: device_name.to_string(),
                 prop_name:   prop_name.to_string(),
                 change:      PropChange::New(value),
-            };
-            events_sender.send(Event::PropChange(Arc::new(
-                event
-            ))).unwrap();
+            }))).unwrap();
         }
     }
 
@@ -3950,17 +3945,17 @@ impl XmlReceiver {
                 elem_name:  name.to_string(),
                 prop_value: value,
             };
-            let event = PropChangeEvent {
+            let change = PropChange::Change{
+                value,
+                prev_state: prev_state.clone(),
+                new_state: new_state.clone(),
+            };
+            events_sender.send(Event::PropChange(Arc::new(PropChangeEvent {
                 timestamp,
                 device_name: device_name.to_string(),
                 prop_name:   prop_name.to_string(),
-                change:      PropChange::Change{
-                    value,
-                    prev_state: prev_state.clone(),
-                    new_state: new_state.clone(),
-                },
-            };
-            events_sender.send(Event::PropChange(Arc::new(event))).unwrap();
+                change,
+            }))).unwrap();
         }
     }
 
@@ -3971,13 +3966,12 @@ impl XmlReceiver {
         prop_name:     &str,
         events_sender: &mpsc::Sender<Event>
     ) {
-        let event = PropChangeEvent {
-            timestamp: time,
+        events_sender.send(Event::PropChange(Arc::new(PropChangeEvent {
+            timestamp:   time,
             device_name: device_name.to_string(),
-            prop_name: prop_name.to_string(),
-            change: PropChange::Delete,
-        };
-        events_sender.send(Event::PropChange(Arc::new(event))).unwrap();
+            prop_name:   prop_name.to_string(),
+            change:      PropChange::Delete,
+        }))).unwrap();
     }
 
     fn notify_subcribers_about_device_delete(
@@ -3987,12 +3981,11 @@ impl XmlReceiver {
         events_sender: &mpsc::Sender<Event>,
         drv_interface: DriverInterface,
     ) {
-        let event = DeviceDeleteEvent {
-            timestamp: time,
+        events_sender.send(Event::DeviceDelete(Arc::new(DeviceDeleteEvent {
+            timestamp:   time,
             device_name: device_name.to_string(),
             drv_interface
-        };
-        events_sender.send(Event::DeviceDelete(Arc::new(event))).unwrap();
+        }))).unwrap();
     }
 
     fn notify_subcribers_about_message(
@@ -4018,8 +4011,8 @@ impl XmlReceiver {
     ) {
         events_sender.send(Event::BlobStart(Arc::new(BlobStartEvent {
             device_name: device_name.to_string(),
-            prop_name: prop_name.to_string(),
-            elem_name: elem_name.to_string(),
+            prop_name:   prop_name.to_string(),
+            elem_name:   elem_name.to_string(),
         }))).unwrap();
     }
 
