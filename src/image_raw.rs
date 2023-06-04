@@ -1,9 +1,8 @@
 use std::{path::Path, collections::HashSet, fs::File};
-use fitsio::{images::*, FitsFile};
 use rayon::prelude::*;
 use itertools::{izip, Itertools};
 use serde::{Serialize, Deserialize};
-use crate::{image::*, fits_reader::*};
+use crate::{image::*, simple_fits::*};
 
 #[derive(Clone)]
 pub struct BadPixel {
@@ -169,30 +168,22 @@ impl RawImage {
     }
 
     pub fn save_to_fits_file(&self, file_name: &Path) -> anyhow::Result<()> {
-        _ = std::fs::remove_file(file_name);
-        let dimensions = vec![
-            self.info.height,
-            self.info.width
-        ];
-        let image_description = ImageDescription {
-            data_type: ImageType::UnsignedShort,
-            dimensions: &dimensions,
-        };
-        let mut fptr =
-            FitsFile::create(file_name)
-                .with_custom_primary(&image_description)
-                .open()?;
-        let hdu = fptr.primary_hdu().unwrap();
-        hdu.write_image(&mut fptr, self.data.as_slice())?;
-        hdu.write_key(&mut fptr, "EXPTIME",  self.info.exposure)?;
-        hdu.write_key(&mut fptr, "ROWORDER", "TOP-DOWN")?;
-        hdu.write_key(&mut fptr, "FRAME",    self.info.frame_type.to_str())?;
-        hdu.write_key(&mut fptr, "XBINNING", self.info.bin as i64)?;
-        hdu.write_key(&mut fptr, "YBINNING", self.info.bin as i64)?;
-        hdu.write_key(&mut fptr, "OFFSET",   self.info.zero as i64)?;
+        let mut file = File::create(file_name)?;
+        let writer = FitsWriter::new();
+        let mut hdu = Hdu::new();
+        hdu.set_value("NAXIS",    "2");
+        hdu.set_value("NAXIS1",   &self.info.width.to_string());
+        hdu.set_value("NAXIS2",   &self.info.height.to_string());
+        hdu.set_value("EXPTIME",  &self.info.exposure.to_string());
+        hdu.set_value("ROWORDER", "'TOP-DOWN'");
+        hdu.set_value("FRAME",    &format!("'{}'", self.info.frame_type.to_str()));
+        hdu.set_value("XBINNING", &self.info.bin.to_string());
+        hdu.set_value("YBINNING", &self.info.bin.to_string());
+        hdu.set_value("OFFSET",   &self.info.zero.to_string());
         if let Some(bayer) = self.info.cfa.to_str() {
-            hdu.write_key(&mut fptr, "BAYERPAT", bayer)?;
+            hdu.set_value("BAYERPAT", &format!("'{}'", bayer));
         }
+        writer.write(&mut file, &hdu, &self.data)?;
         Ok(())
     }
 

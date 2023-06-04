@@ -21,7 +21,7 @@ mod gui_camera;
 mod io_utils;
 mod image_processing;
 mod log_utils;
-mod fits_reader;
+mod simple_fits;
 mod state;
 mod math;
 mod plots;
