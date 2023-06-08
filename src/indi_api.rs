@@ -60,7 +60,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct ConnSettings {
     pub remote: bool,
     pub host: String,
-    pub port: u16,
     pub server_exe: String,
     pub drivers: Vec<String>,
     pub activate_all_devices: bool,
@@ -70,8 +69,7 @@ impl Default for ConnSettings {
     fn default() -> Self {
         Self {
             remote: false,
-            host: "127.0.0.1".to_string(),
-            port: 7624,
+            host: "localhost".to_string(),
             server_exe: "indiserver".to_string(),
             drivers: Vec::new(),
             activate_all_devices: true,
@@ -1409,6 +1407,8 @@ impl Connection {
     }
 
     pub fn connect(&self, settings: &ConnSettings) -> Result<()> {
+        use std::net::ToSocketAddrs;
+
         let mut state = self.state.lock().unwrap();
         match *state {
             ConnState::Connecting =>
@@ -1450,10 +1450,11 @@ impl Connection {
                 None
             };
 
-            // Parse indi driver address
-            let addr = format!("{}:{}", settings.host, settings.port);
-            let sock_addr: SocketAddr = match addr.parse() {
-                Ok(sock_addr) => sock_addr,
+            // Resolve host into IP addresses
+            let mut addr = settings.host.clone();
+            if !addr.contains(":") { addr += ":7624"; }
+            let sock_addrs = match addr.to_socket_addrs() {
+                Ok(sock_addrs) => sock_addrs,
                 Err(err) => {
                     if let Some(indiserver) = &mut indiserver {
                         _ = indiserver.kill();
@@ -1468,32 +1469,33 @@ impl Connection {
                 },
             };
 
-            // Try to connect indi driver during 3 seconds
-            let mut try_cnt = 30;
-            let stream = loop {
-                match TcpStream::connect_timeout(
-                    &sock_addr,
-                    Duration::from_millis(10)
-                ) {
-                    Ok(stream) =>
-                        break stream,
-                    Err(err) => {
-                        if try_cnt == 0 {
-                            if let Some(indiserver) = &mut indiserver {
-                                _ = indiserver.kill();
-                                _ = indiserver.wait();
-                            }
-                            Self::set_new_conn_state(
-                                ConnState::Error(err.to_string()),
-                                &mut state.lock().unwrap(),
-                                &subscriptions.lock().unwrap()
-                            );
-                            return;
-                        }
-                        try_cnt -= 1;
-                        std::thread::sleep(Duration::from_millis(90));
+            // Try to connect INDI server during 3 seconds
+            let mut stream: Option<TcpStream> = None;
+            'outer: for addr in sock_addrs {
+                for _ in 0..3 {
+                    let conn_try_res = TcpStream::connect_timeout(
+                        &addr,
+                        Duration::from_millis(1000)
+                    );
+                    if let Ok(res) = conn_try_res {
+                        stream = Some(res);
+                        break 'outer;
                     }
-                };
+                }
+            }
+
+            // Failed to connect. Stop INDI server and exit
+            let Some(stream) = stream else {
+                if let Some(indiserver) = &mut indiserver {
+                    _ = indiserver.kill();
+                    _ = indiserver.wait();
+                }
+                Self::set_new_conn_state(
+                    ConnState::Error(format!("Can't connect to {}", addr)),
+                    &mut state.lock().unwrap(),
+                    &subscriptions.lock().unwrap()
+                );
+                return;
             };
 
             // Subrscibers event thread for XML receiver

@@ -21,7 +21,7 @@ impl Default for IndiOptions {
             camera:  None,
             focuser: None,
             remote:  false,
-            address: "127.0.0.1".to_string(),
+            address: "localhost".to_string(),
         }
     }
 }
