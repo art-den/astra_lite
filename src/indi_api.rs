@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::{prelude::*, BufWriter, Cursor, ErrorKind};
-use std::net::{TcpStream, SocketAddr};
+use std::net::{TcpStream};
 use std::path::Path;
 use std::process::{Command, Child, Stdio};
 use std::sync::{Mutex, Arc, mpsc};
