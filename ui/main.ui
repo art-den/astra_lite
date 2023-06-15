@@ -1936,7 +1936,6 @@ Better use "Subtrack master DARK frame"</property>
                           <object class="GtkScrolledWindow">
                             <property name="visible">True</property>
                             <property name="can-focus">True</property>
-                            <property name="shadow-type">in</property>
                             <property name="kinetic-scrolling">False</property>
                             <property name="propagate-natural-height">True</property>
                             <child>
