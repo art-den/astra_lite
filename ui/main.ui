@@ -1933,241 +1933,18 @@ Better use "Subtrack master DARK frame"</property>
                         <property name="orientation">vertical</property>
                         <property name="spacing">5</property>
                         <child>
-                          <object class="GtkBox">
+                          <object class="GtkScrolledWindow">
                             <property name="visible">True</property>
-                            <property name="can-focus">False</property>
-                            <property name="margin-start">5</property>
-                            <property name="margin-end">5</property>
-                            <property name="spacing">5</property>
+                            <property name="can-focus">True</property>
+                            <property name="shadow-type">in</property>
+                            <property name="kinetic-scrolling">False</property>
+                            <property name="propagate-natural-height">True</property>
                             <child>
-                              <object class="GtkLabel">
+                              <object class="GtkViewport">
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
-                                <property name="valign">center</property>
-                                <property name="label" translatable="yes">Show:</property>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">0</property>
-                              </packing>
-                            </child>
-                            <child>
-                              <object class="GtkComboBoxText" id="cb_preview_src">
-                                <property name="visible">True</property>
-                                <property name="can-focus">False</property>
-                                <property name="valign">center</property>
-                                <property name="active-id">frame</property>
-                                <items>
-                                  <item id="frame" translatable="yes">Current frame</item>
-                                  <item id="live" translatable="yes">Live stacking</item>
-                                </items>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">1</property>
-                              </packing>
-                            </child>
-                            <child>
-                              <object class="GtkLabel">
-                                <property name="visible">True</property>
-                                <property name="can-focus">False</property>
-                                <property name="valign">center</property>
-                                <property name="label" translatable="yes">Scale:</property>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">2</property>
-                              </packing>
-                            </child>
-                            <child>
-                              <object class="GtkComboBoxText" id="cb_preview_scale">
-                                <property name="visible">True</property>
-                                <property name="can-focus">False</property>
-                                <property name="valign">center</property>
-                                <items>
-                                  <item id="fit" translatable="yes">Fit window</item>
-                                  <item id="orig" translatable="yes">100%</item>
-                                  <item id="p75" translatable="yes">75%</item>
-                                  <item id="p50" translatable="yes">50%</item>
-                                  <item id="p33" translatable="yes">33%</item>
-                                  <item id="p25" translatable="yes">25%</item>
-                                </items>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">3</property>
-                              </packing>
-                            </child>
-                            <child>
-                              <object class="GtkComboBoxText" id="cb_preview_color">
-                                <property name="visible">True</property>
-                                <property name="sensitive">False</property>
-                                <property name="can-focus">False</property>
-                                <property name="valign">center</property>
-                                <property name="active-id">rgb</property>
-                                <items>
-                                  <item id="rgb" translatable="yes">RGB</item>
-                                  <item id="red" translatable="yes">Red</item>
-                                  <item id="green" translatable="yes">Green</item>
-                                  <item id="blue" translatable="yes">Blue</item>
-                                </items>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">4</property>
-                              </packing>
-                            </child>
-                            <child>
-                              <object class="GtkSeparator">
-                                <property name="visible">True</property>
-                                <property name="can-focus">False</property>
-                                <property name="orientation">vertical</property>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">5</property>
-                              </packing>
-                            </child>
-                            <child>
-                              <!-- n-columns=3 n-rows=2 -->
-                              <object class="GtkGrid">
-                                <property name="visible">True</property>
-                                <property name="can-focus">False</property>
-                                <property name="valign">center</property>
-                                <child>
-                                  <object class="GtkLabel">
-                                    <property name="visible">True</property>
-                                    <property name="can-focus">False</property>
-                                    <property name="label" translatable="yes">Darks</property>
-                                    <property name="width-chars">15</property>
-                                  </object>
-                                  <packing>
-                                    <property name="left-attach">0</property>
-                                    <property name="top-attach">0</property>
-                                  </packing>
-                                </child>
-                                <child>
-                                  <object class="GtkLabel">
-                                    <property name="visible">True</property>
-                                    <property name="can-focus">False</property>
-                                    <property name="label" translatable="yes">Gamma</property>
-                                    <property name="width-chars">15</property>
-                                  </object>
-                                  <packing>
-                                    <property name="left-attach">1</property>
-                                    <property name="top-attach">0</property>
-                                  </packing>
-                                </child>
-                                <child>
-                                  <object class="GtkLabel">
-                                    <property name="visible">True</property>
-                                    <property name="can-focus">False</property>
-                                    <property name="label" translatable="yes">Highlights</property>
-                                    <property name="width-chars">15</property>
-                                  </object>
-                                  <packing>
-                                    <property name="left-attach">2</property>
-                                    <property name="top-attach">0</property>
-                                  </packing>
-                                </child>
-                                <child>
-                                  <object class="GtkScale" id="scl_dark">
-                                    <property name="visible">True</property>
-                                    <property name="can-focus">True</property>
-                                    <property name="lower-stepper-sensitivity">off</property>
-                                    <property name="upper-stepper-sensitivity">off</property>
-                                    <property name="round-digits">1</property>
-                                    <property name="draw-value">False</property>
-                                    <property name="value-pos">left</property>
-                                  </object>
-                                  <packing>
-                                    <property name="left-attach">0</property>
-                                    <property name="top-attach">1</property>
-                                  </packing>
-                                </child>
-                                <child>
-                                  <object class="GtkScale" id="scl_highlight">
-                                    <property name="visible">True</property>
-                                    <property name="can-focus">True</property>
-                                    <property name="lower-stepper-sensitivity">off</property>
-                                    <property name="upper-stepper-sensitivity">off</property>
-                                    <property name="round-digits">1</property>
-                                    <property name="draw-value">False</property>
-                                    <property name="value-pos">left</property>
-                                  </object>
-                                  <packing>
-                                    <property name="left-attach">2</property>
-                                    <property name="top-attach">1</property>
-                                  </packing>
-                                </child>
-                                <child>
-                                  <object class="GtkScale" id="scl_gamma">
-                                    <property name="width-request">-1</property>
-                                    <property name="visible">True</property>
-                                    <property name="can-focus">True</property>
-                                    <property name="valign">center</property>
-                                    <property name="lower-stepper-sensitivity">off</property>
-                                    <property name="upper-stepper-sensitivity">off</property>
-                                    <property name="restrict-to-fill-level">False</property>
-                                    <property name="fill-level">0</property>
-                                    <property name="round-digits">1</property>
-                                    <property name="value-pos">left</property>
-                                  </object>
-                                  <packing>
-                                    <property name="left-attach">1</property>
-                                    <property name="top-attach">1</property>
-                                  </packing>
-                                </child>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">6</property>
-                              </packing>
-                            </child>
-                            <child>
-                              <object class="GtkCheckButton" id="chb_rem_grad">
-                                <property name="label" translatable="yes">Remove gradient</property>
-                                <property name="visible">True</property>
-                                <property name="can-focus">True</property>
-                                <property name="receives-default">False</property>
-                                <property name="tooltip-text" translatable="yes">Remove background gradient.
-Useful when the object is not lagre and is in the center of the image.</property>
-                                <property name="valign">center</property>
-                                <property name="draw-indicator">True</property>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">7</property>
-                              </packing>
-                            </child>
-                            <child>
-                              <object class="GtkSeparator">
-                                <property name="visible">True</property>
-                                <property name="can-focus">False</property>
-                                <property name="orientation">vertical</property>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">8</property>
-                              </packing>
-                            </child>
-                            <child>
-                              <object class="GtkMenuButton">
-                                <property name="visible">True</property>
-                                <property name="can-focus">True</property>
-                                <property name="focus-on-click">False</property>
-                                <property name="receives-default">True</property>
-                                <property name="valign">center</property>
-                                <property name="popup">m_image</property>
+                                <property name="vscroll-policy">natural</property>
+                                <property name="shadow-type">none</property>
                                 <child>
                                   <object class="GtkBox">
                                     <property name="visible">True</property>
@@ -2179,7 +1956,8 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       <object class="GtkLabel">
                                         <property name="visible">True</property>
                                         <property name="can-focus">False</property>
-                                        <property name="label" translatable="yes">Image actions</property>
+                                        <property name="valign">center</property>
+                                        <property name="label" translatable="yes">Show:</property>
                                       </object>
                                       <packing>
                                         <property name="expand">False</property>
@@ -2188,10 +1966,15 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       </packing>
                                     </child>
                                     <child>
-                                      <object class="GtkImage">
+                                      <object class="GtkComboBoxText" id="cb_preview_src">
                                         <property name="visible">True</property>
                                         <property name="can-focus">False</property>
-                                        <property name="icon-name">pan-down-symbolic</property>
+                                        <property name="valign">center</property>
+                                        <property name="active-id">frame</property>
+                                        <items>
+                                          <item id="frame" translatable="yes">Current frame</item>
+                                          <item id="live" translatable="yes">Live stacking</item>
+                                        </items>
                                       </object>
                                       <packing>
                                         <property name="expand">False</property>
@@ -2199,14 +1982,248 @@ Useful when the object is not lagre and is in the center of the image.</property
                                         <property name="position">1</property>
                                       </packing>
                                     </child>
+                                    <child>
+                                      <object class="GtkLabel">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="valign">center</property>
+                                        <property name="label" translatable="yes">Scale:</property>
+                                      </object>
+                                      <packing>
+                                        <property name="expand">False</property>
+                                        <property name="fill">True</property>
+                                        <property name="position">2</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkComboBoxText" id="cb_preview_scale">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="valign">center</property>
+                                        <items>
+                                          <item id="fit" translatable="yes">Fit window</item>
+                                          <item id="orig" translatable="yes">100%</item>
+                                          <item id="p75" translatable="yes">75%</item>
+                                          <item id="p50" translatable="yes">50%</item>
+                                          <item id="p33" translatable="yes">33%</item>
+                                          <item id="p25" translatable="yes">25%</item>
+                                        </items>
+                                      </object>
+                                      <packing>
+                                        <property name="expand">False</property>
+                                        <property name="fill">True</property>
+                                        <property name="position">3</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkComboBoxText" id="cb_preview_color">
+                                        <property name="visible">True</property>
+                                        <property name="sensitive">False</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="valign">center</property>
+                                        <property name="active-id">rgb</property>
+                                        <items>
+                                          <item id="rgb" translatable="yes">RGB</item>
+                                          <item id="red" translatable="yes">Red</item>
+                                          <item id="green" translatable="yes">Green</item>
+                                          <item id="blue" translatable="yes">Blue</item>
+                                        </items>
+                                      </object>
+                                      <packing>
+                                        <property name="expand">False</property>
+                                        <property name="fill">True</property>
+                                        <property name="position">4</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkSeparator">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="orientation">vertical</property>
+                                      </object>
+                                      <packing>
+                                        <property name="expand">False</property>
+                                        <property name="fill">True</property>
+                                        <property name="position">5</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <!-- n-columns=3 n-rows=2 -->
+                                      <object class="GtkGrid">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="valign">center</property>
+                                        <child>
+                                          <object class="GtkLabel">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">False</property>
+                                            <property name="label" translatable="yes">Darks</property>
+                                            <property name="width-chars">15</property>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">0</property>
+                                            <property name="top-attach">0</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkLabel">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">False</property>
+                                            <property name="label" translatable="yes">Gamma</property>
+                                            <property name="width-chars">15</property>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">1</property>
+                                            <property name="top-attach">0</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkLabel">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">False</property>
+                                            <property name="label" translatable="yes">Highlights</property>
+                                            <property name="width-chars">15</property>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">2</property>
+                                            <property name="top-attach">0</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkScale" id="scl_dark">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">True</property>
+                                            <property name="lower-stepper-sensitivity">off</property>
+                                            <property name="upper-stepper-sensitivity">off</property>
+                                            <property name="round-digits">1</property>
+                                            <property name="draw-value">False</property>
+                                            <property name="value-pos">left</property>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">0</property>
+                                            <property name="top-attach">1</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkScale" id="scl_highlight">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">True</property>
+                                            <property name="lower-stepper-sensitivity">off</property>
+                                            <property name="upper-stepper-sensitivity">off</property>
+                                            <property name="round-digits">1</property>
+                                            <property name="draw-value">False</property>
+                                            <property name="value-pos">left</property>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">2</property>
+                                            <property name="top-attach">1</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkScale" id="scl_gamma">
+                                            <property name="width-request">-1</property>
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">True</property>
+                                            <property name="valign">center</property>
+                                            <property name="lower-stepper-sensitivity">off</property>
+                                            <property name="upper-stepper-sensitivity">off</property>
+                                            <property name="restrict-to-fill-level">False</property>
+                                            <property name="fill-level">0</property>
+                                            <property name="round-digits">1</property>
+                                            <property name="value-pos">left</property>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">1</property>
+                                            <property name="top-attach">1</property>
+                                          </packing>
+                                        </child>
+                                      </object>
+                                      <packing>
+                                        <property name="expand">False</property>
+                                        <property name="fill">True</property>
+                                        <property name="position">6</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkCheckButton" id="chb_rem_grad">
+                                        <property name="label" translatable="yes">Remove gradient</property>
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">True</property>
+                                        <property name="receives-default">False</property>
+                                        <property name="tooltip-text" translatable="yes">Remove background gradient.
+Useful when the object is not lagre and is in the center of the image.</property>
+                                        <property name="valign">center</property>
+                                        <property name="draw-indicator">True</property>
+                                      </object>
+                                      <packing>
+                                        <property name="expand">False</property>
+                                        <property name="fill">True</property>
+                                        <property name="position">7</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkSeparator">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="orientation">vertical</property>
+                                      </object>
+                                      <packing>
+                                        <property name="expand">False</property>
+                                        <property name="fill">True</property>
+                                        <property name="position">8</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkMenuButton">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">True</property>
+                                        <property name="focus-on-click">False</property>
+                                        <property name="receives-default">True</property>
+                                        <property name="valign">center</property>
+                                        <property name="popup">m_image</property>
+                                        <child>
+                                          <object class="GtkBox">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">False</property>
+                                            <property name="margin-start">5</property>
+                                            <property name="margin-end">5</property>
+                                            <property name="spacing">5</property>
+                                            <child>
+                                              <object class="GtkLabel">
+                                                <property name="visible">True</property>
+                                                <property name="can-focus">False</property>
+                                                <property name="label" translatable="yes">Image actions</property>
+                                              </object>
+                                              <packing>
+                                                <property name="expand">False</property>
+                                                <property name="fill">True</property>
+                                                <property name="position">0</property>
+                                              </packing>
+                                            </child>
+                                            <child>
+                                              <object class="GtkImage">
+                                                <property name="visible">True</property>
+                                                <property name="can-focus">False</property>
+                                                <property name="icon-name">pan-down-symbolic</property>
+                                              </object>
+                                              <packing>
+                                                <property name="expand">False</property>
+                                                <property name="fill">True</property>
+                                                <property name="position">1</property>
+                                              </packing>
+                                            </child>
+                                          </object>
+                                        </child>
+                                      </object>
+                                      <packing>
+                                        <property name="expand">False</property>
+                                        <property name="fill">True</property>
+                                        <property name="position">9</property>
+                                      </packing>
+                                    </child>
                                   </object>
                                 </child>
                               </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">9</property>
-                              </packing>
                             </child>
                           </object>
                           <packing>
@@ -2333,7 +2350,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                         <property name="visible">True</property>
                                         <property name="can-focus">True</property>
                                         <property name="editable">False</property>
-                                        <property name="width-chars">8</property>
+                                        <property name="width-chars">7</property>
                                         <property name="xalign">0.5</property>
                                       </object>
                                       <packing>
@@ -2424,7 +2441,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       <object class="GtkLabel">
                                         <property name="visible">True</property>
                                         <property name="can-focus">False</property>
-                                        <property name="label" translatable="yes">Background:</property>
+                                        <property name="label" translatable="yes">Bgnd:</property>
                                       </object>
                                       <packing>
                                         <property name="expand">False</property>
