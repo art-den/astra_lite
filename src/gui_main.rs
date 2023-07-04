@@ -1,5 +1,5 @@
-use std::{sync::{Arc, RwLock}, rc::Rc, cell::RefCell, time::Duration, path::PathBuf, process::Command};
-use gtk::{prelude::*, glib, glib::clone, cairo};
+use std::{sync::{Arc, RwLock}, rc::Rc, cell::RefCell, time::Duration, path::{PathBuf}, process::Command};
+use gtk::{prelude::*, glib, glib::clone, cairo::{self}};
 use serde::{Serialize, Deserialize};
 
 use crate::{indi_api, gtk_utils, io_utils::*, state::*, options::*};
@@ -91,33 +91,9 @@ impl Drop for MainData {
 
 fn panic_handler(
     panic_info:        &std::panic::PanicInfo,
-    indi:              &Arc<indi_api::Connection>,
+    indi:              &indi_api::Connection,
     def_panic_handler: &Box<dyn Fn(&std::panic::PanicInfo<'_>) + 'static + Sync + Send>,
 ) {
-    let payload_str =
-        if let Some(msg) = panic_info.payload().downcast_ref::<&'static str>() {
-            Some(*msg)
-        } else if let Some(msg) = panic_info.payload().downcast_ref::<String>() {
-            Some(msg.as_str())
-        } else {
-            None
-        };
-
-    log::error!("(╯°□°）╯︵ ┻━┻ PANIC OCCURRED");
-
-    if let Some(payload) = payload_str {
-        log::error!("Panic paiload: {}", payload);
-    }
-
-    if let Some(loc) = panic_info.location() {
-        log::error!("Panic location: {}", loc);
-    }
-
-    log::error!(
-        "Panic stacktrace: {}",
-        std::backtrace::Backtrace::force_capture().to_string()
-    );
-
     log::info!("Disconnecting (and stop) INDI server after panic...");
     _ = indi.disconnect_and_wait();
     log::info!("Done!");
@@ -131,10 +107,10 @@ pub fn build_ui(
 ) {
     let indi = Arc::new(indi_api::Connection::new());
 
-    let indi_clone = Arc::clone(&indi);
+    let indi_for_panic = Arc::clone(&indi);
     let default_panic_handler = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info|
-        panic_handler(panic_info, &indi_clone, &default_panic_handler)
+        panic_handler(panic_info, &indi_for_panic, &default_panic_handler)
     ));
 
     let css_provider = gtk::CssProvider::new();

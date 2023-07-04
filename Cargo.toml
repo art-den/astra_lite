@@ -1,6 +1,6 @@
 [package]
 name = "astra_lite"
-version = "0.0.93"
+version = "0.0.94"
 edition = "2021"
 description = "Software for deepsky astrophotography and live stacking"
 repository = "https://github.com/art-den/astra_lite"
@@ -27,6 +27,7 @@ flexi_logger = "0.24"
 chrono = "0.4"
 once_cell = "1"
 rand = "0.8.5"
+msgbox = "0.6"
 
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "1.7"
