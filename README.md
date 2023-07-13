@@ -9,7 +9,8 @@ on low power PCs (like rapsberry Pi or Orange Pi)
 AstraLite uses INDI server to work with astrophotography hardware.
 See https://www.indilib.org/download.html to install INDI
 
-Compiled binaries and discussion here: https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-astrophotography.html
+Compiled binaries and discussion here: 
+https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-astrophotography.html
 
 # Features
 * UI for INDI devices control
@@ -24,6 +25,13 @@ Compiled binaries and discussion here: https://www.indilib.org/forum/clients/130
 * Manual mount control
 
 ![](./docs/screenshot1.jpg)
+
+# Future plans
+* Sky map
+* INDI driver crash recovery
+* Plate solving
+* Sigma clipping for live staking (not sure this is possible with low memory usage)
+* Live view from camera in video mode
 
 # How to build AstraLite
 ## Prerequisites for Linux
