@@ -725,7 +725,7 @@ fn make_preview_image_impl(
 
         // Stars offset
         if command.flags.contains(ProcessImageFlags::CALC_STARS_OFFSET) && !bad_frame {
-             // Compare reference stars and new stars
+            // Compare reference stars and new stars
             // and calculate offset and angle
             let cur_stars_points: Vec<_> = info.stars.iter()
                 .map(|star| Point {x: star.x, y: star.y })

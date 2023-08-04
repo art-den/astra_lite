@@ -2375,31 +2375,18 @@ fn paint_histogram(
             let max_x = hist.max as f64;
             cr.set_source_rgba(r, g, b, a);
             cr.set_line_width(2.0);
-            let div = hist.max as usize / width as usize;
-            let mut idx_sum = 0_usize;
-            let mut max_v = 0_usize;
-            let mut cnt = 0_usize;
-            let last_idx = chan.freq.len()-1;
+            let div = usize::max(hist.max as usize / width as usize, 1);
             cr.move_to(left_margin, top_margin + area_height);
-            for (idx, v) in chan.freq.iter().enumerate() {
-                idx_sum += idx;
-                if *v as usize > max_v {
-                    max_v = *v as usize;
+            for (id, chunk) in chan.freq.chunks(div).enumerate() {
+                let idx = id * div + chunk.len() / 2;
+                let max_v = chunk.iter().sum::<u32>() / chunk.len() as u32;
+                let mut max_v_f = k * max_v as f64;
+                if log_y && max_v_f != 0.0 {
+                    max_v_f = f64::log10(max_v_f);
                 }
-                cnt += 1;
-                if (cnt == div || idx == last_idx) && cnt != 0 {
-                    let mut max_v_f = k * max_v as f64;
-                    if log_y && max_v_f != 0.0 {
-                        max_v_f = f64::log10(max_v_f);
-                    }
-                    let aver_idx = (idx_sum / cnt) as f64;
-                    let x = area_width * aver_idx / max_x;
-                    let y = area_height - area_height * max_v_f / total_max_v;
-                    cr.line_to(x + left_margin, y + top_margin);
-                    idx_sum = 0;
-                    max_v = 0;
-                    cnt = 0;
-                }
+                let x = area_width * idx as f64 / max_x;
+                let y = area_height - area_height * max_v_f / total_max_v;
+                cr.line_to(x + left_margin, y + top_margin);
             }
             cr.line_to(left_margin + area_width, top_margin + area_height);
             cr.close_path();

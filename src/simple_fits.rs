@@ -1,4 +1,4 @@
-use std::{io::*, str::FromStr, mem::size_of};
+use std::{io::*, str::FromStr};
 
 use itertools::{Itertools, izip};
 
@@ -9,15 +9,15 @@ pub trait SeekNWrite: Seek + Write {}
 impl<T: Seek + Write> SeekNWrite for T {}
 
 #[derive(Clone)]
-struct HduValue {
+struct Value {
     name: String,
     value: String,
     comment: Option<String>,
 }
 
 #[derive(Clone)]
-pub struct Hdu {
-    values:    Vec<HduValue>,
+pub struct Header {
+    values:    Vec<Value>,
     bitpix:    i8,
     dims:      Vec<usize>,
     data_pos:  usize,
@@ -25,7 +25,9 @@ pub struct Hdu {
     bytes_len: usize,
 }
 
-impl Hdu {
+const DEFAULT_BITPIX: u16 = 8;
+
+impl Header {
     pub fn new() -> Self {
         Self {
             values: Vec::new(),
@@ -37,7 +39,19 @@ impl Hdu {
         }
     }
 
-    fn get_value_impl<T: FromStr>(values: &Vec<HduValue>, key: &str) -> Option<T> {
+    pub fn new_2d(width: usize, height: usize) -> Self {
+        let dims = vec![width, height];
+        Self {
+            values: Vec::new(),
+            bitpix: 0,
+            dims,
+            data_pos: 0,
+            data_len: 0,
+            bytes_len: 0,
+        }
+    }
+
+    fn get_value_impl<T: FromStr>(values: &Vec<Value>, key: &str) -> Option<T> {
         values.iter()
             .find(|item| item.name.eq_ignore_ascii_case(key))
             .as_deref()?
@@ -46,24 +60,20 @@ impl Hdu {
     }
 
     pub fn set_value(&mut self, key: &str, value: &str) {
-        Self::set_value_impl(&mut self.values, key, value, false);
-    }
-
-    fn set_value_impl(values: &mut Vec<HduValue>, key: &str, value: &str, at_front: bool) {
-        if let Some(item) = values.iter_mut().find(|item| item.name.eq_ignore_ascii_case(key)) {
+        if let Some(item) = self.values.iter_mut().find(|item| item.name.eq_ignore_ascii_case(key)) {
             item.value = value.to_string();
         } else {
-            let value = HduValue {
+            let value = Value {
                 name:   key.to_string(),
                 value:   value.to_string(),
                 comment: None,
             };
-            if !at_front {
-                values.push(value);
-            } else {
-                values.insert(0, value);
-            }
+            self.values.push(value);
         }
+    }
+
+    pub fn bitpix(&self) -> i8 {
+        self.bitpix
     }
 
     pub fn get_i64(&self, key: &str) -> Option<i64> {
@@ -88,85 +98,103 @@ impl Hdu {
         &self.dims
     }
 
-    fn read_integer_from_stream<T: FormBytes + Copy + Default>(
-        &self,
-        stream: &mut dyn SeekNRead,
-        bzero: T
-    ) -> Result<Vec<T>> {
-        const BUF_DATA_LEN: usize = 512;
-        let mut stream_buf = Vec::<u8>::new();
-        stream_buf.resize(BUF_DATA_LEN * size_of::<T>(), 0);
-        let mut tmp_buf = Vec::<T>::new();
-        tmp_buf.resize(BUF_DATA_LEN, T::default());
-        let mut result = Vec::<T>::with_capacity(self.data_len);
-        let mut len = self.data_len;
-        stream.seek(SeekFrom::Start(self.data_pos as u64))?;
-        while len != 0 {
-            let len_to_read = usize::min(len, BUF_DATA_LEN / size_of::<T>());
-            let buf = &mut stream_buf[.. size_of::<T>() * len_to_read];
-            stream.read_exact(buf)?;
-            T::from_bytes(buf, bzero, &mut tmp_buf[..len_to_read]);
-            len -= len_to_read;
-            result.extend_from_slice(&tmp_buf[..len_to_read]);
-        }
-
-        return Ok(result)
-    }
-
-    fn write_integer_to_stream<T: ToBytes + Copy>(
+    fn write_data(
         &self,
         stream: &mut dyn SeekNWrite,
-        data:   &[T],
-        bzero:  T
+        data:   &[u16],
+        bzero:  u16
     ) -> Result<()> {
+        if !matches!(self.bitpix, 8|16) {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                format!("BITPIX = {} is not supported", self.bitpix)
+            ));
+        }
+        let item_len = self.bitpix as usize / 8;
         const BUF_DATA_LEN: usize = 512;
         let mut stream_buf = Vec::<u8>::new();
-        stream_buf.resize(BUF_DATA_LEN * size_of::<T>(), 0);
-        let mut len = data.len();
-        let mut data = data;
-        while len != 0 {
-            let len_to_write = usize::min(len, BUF_DATA_LEN / size_of::<T>());
-            let buf = &mut stream_buf[.. size_of::<T>() * len_to_write];
-            T::to_bytes(buf, bzero, &data[..len_to_write]);
+        stream_buf.resize(BUF_DATA_LEN * item_len, 0);
+        for chunk in data.chunks(BUF_DATA_LEN) {
+            let len_to_write = chunk.len();
+            let buf = &mut stream_buf[.. item_len * len_to_write];
+            match self.bitpix {
+                8 => {
+                    for (b, v) in izip!(buf.iter_mut(), chunk) {
+                        *b = (*v as u8).wrapping_sub(bzero as u8);
+                    }
+                }
+                16 => {
+                    for ((b1, b2), v) in izip!(buf.iter_mut().tuples(), chunk) {
+                        let be_bytes = v.wrapping_sub(bzero).to_be_bytes();
+                        [*b1, *b2] = be_bytes;
+                    }
+                },
+                _ => unreachable!(),
+            }
             stream.write_all(buf)?;
-            len -= len_to_write;
-            data = &data[len_to_write..];
         }
         Ok(())
     }
 
-    pub fn data_u16(&self, stream: &mut dyn SeekNRead) -> Result<Vec<u16>> {
-        let bzero = self.get_i64("BZERO").unwrap_or(0) as u16;
-        let bitpix = self.get_i64("BITPIX").unwrap_or(0);
-        if bitpix != 16 {
+    pub fn read_data(&self, stream: &mut dyn SeekNRead) -> Result<Vec<u16>> {
+        if !matches!(self.bitpix, 8|16) {
             return Err(Error::new(
                 ErrorKind::Unsupported,
-                format!("BITPIX = {} is not supported", bitpix)
-            ))
+                format!("BITPIX = {} is not supported", self.bitpix)
+            ));
         }
-        self.read_integer_from_stream::<u16>(stream, bzero)
+        let bzero = self.get_i64("BZERO").unwrap_or(0) as u16;
+        let elem_len = self.bitpix as usize / 8;
+        const BUF_DATA_LEN: usize = 512;
+        let mut stream_buf = Vec::<u8>::new();
+        stream_buf.resize(BUF_DATA_LEN * elem_len, 0);
+        let mut result = Vec::new();
+        result.resize(self.data_len, 0);
+        stream.seek(SeekFrom::Start(self.data_pos as u64))?;
+        for chunk in result.chunks_mut(BUF_DATA_LEN) {
+            let len_to_read = chunk.len();
+            let buf = &mut stream_buf[.. elem_len * len_to_read];
+            stream.read_exact(buf)?;
+            match self.bitpix {
+                8 => {
+                    let add = bzero as u8;
+                    for (b, dst) in izip!(buf, chunk) {
+                        *dst = b.wrapping_add(add) as u16;
+                    }
+                }
+                16 => {
+                    for ((b1, b2), dst) in izip!(buf.iter().tuples(), chunk) {
+                        let value = u16::from_be_bytes([*b1, *b2]);
+                        *dst = value.wrapping_add(bzero);
+                    }
+                },
+                _ => unreachable!(),
+            }
+        }
+        return Ok(result)
     }
+
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
 pub struct FitsReader {
-    pub hdus: Vec<Hdu>,
+    pub headers: Vec<Header>,
 }
 
 impl FitsReader {
     pub fn new(stream: &mut dyn SeekNRead) -> Result<FitsReader> {
         stream.seek(SeekFrom::Start(0))?;
 
-        let hdus = Self::read_hdus(stream)?;
-        Ok(Self { hdus })
+        let hdus = Self::read_all_headers(stream)?;
+        Ok(Self { headers: hdus })
     }
 
-    fn read_hdus(stream: &mut dyn SeekNRead) -> Result<Vec<Hdu>> {
+    fn read_all_headers(stream: &mut dyn SeekNRead) -> Result<Vec<Header>> {
         let mut result = Vec::new();
 
         loop {
-            let hdu_res = Self::read_hdu(stream);
+            let hdu_res = Self::read_header(stream);
             let hdu = match hdu_res {
                 Ok(hdu) => hdu,
                 Err(err) => {
@@ -183,7 +211,7 @@ impl FitsReader {
         Ok(result)
     }
 
-    fn read_hdu(stream: &mut dyn SeekNRead) -> Result<Hdu> {
+    fn read_header(stream: &mut dyn SeekNRead) -> Result<Header> {
         let mut buf = [0_u8; 2880];
         let mut values = Vec::new();
         let mut last_block = false;
@@ -199,7 +227,7 @@ impl FitsReader {
                         .split_once("/")
                         .unwrap_or((value_and_comment, ""));
                     let value = value.trim();
-                    values.push(HduValue {
+                    values.push(Value {
                         name:    key.trim().to_string(),
                         value:   value.trim().to_string(),
                         comment: Some(comment.trim().to_string())
@@ -214,16 +242,16 @@ impl FitsReader {
             }
         }
 
-        let ndim: usize = Hdu::get_value_impl(&values, "NAXIS").unwrap_or(0);
-        let gcount: usize = Hdu::get_value_impl(&values, "GCOUNT").unwrap_or(1);
-        let pcount: usize = Hdu::get_value_impl(&values, "PCOUNT").unwrap_or(0);
-        let bitpix: i8 = Hdu::get_value_impl(&values, "BITPIX").unwrap_or(8);
+        let ndim: usize = Header::get_value_impl(&values, "NAXIS").unwrap_or(0);
+        let gcount: usize = Header::get_value_impl(&values, "GCOUNT").unwrap_or(1);
+        let pcount: usize = Header::get_value_impl(&values, "PCOUNT").unwrap_or(0);
+        let bitpix: i8 = Header::get_value_impl(&values, "BITPIX").unwrap_or(DEFAULT_BITPIX as i8);
 
         let mut dims = Vec::new();
         let mut data_len = 1_usize;
         for idx in 1 ..= ndim {
             let key = format!("NAXIS{}", idx);
-            let dim: usize = Hdu::get_value_impl(&values, &key).unwrap_or(1);
+            let dim: usize = Header::get_value_impl(&values, &key).unwrap_or(1);
             data_len *= dim;
             dims.push(dim);
         }
@@ -234,24 +262,11 @@ impl FitsReader {
         let bytes_len = data_len * byte_per_value;
         let data_pos = stream.stream_position().unwrap_or(0) as usize;
 
-        Ok(Hdu{values, bitpix, dims, data_pos, data_len, bytes_len})
+        Ok(Header{values, bitpix, dims, data_pos, data_len, bytes_len})
     }
 }
 
-///////////////////////////////////////////////////////////////////////////////
 
-trait FormBytes where Self: Sized {
-    fn from_bytes(bytes: &[u8], add: Self, result: &mut [Self]);
-}
-
-impl FormBytes for u16 {
-    fn from_bytes(bytes: &[u8], add: Self, result: &mut [Self]) {
-        for ((b1, b2), dst) in izip!(bytes.iter().tuples(), result) {
-            let value = u16::from_be_bytes([*b1, *b2]);
-            *dst = value.wrapping_add(add);
-        }
-    }
-}
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -262,17 +277,51 @@ impl FitsWriter {
         Self {}
     }
 
-    pub fn write(&self, stream: &mut dyn SeekNWrite, hdu: &Hdu, data: &[u16]) -> Result<()> {
-        let mut hdu = hdu.clone();
-        Hdu::set_value_impl(&mut hdu.values, "BZERO", "32768", true);
-        Hdu::set_value_impl(&mut hdu.values, "BITPIX", "16", true);
-        Hdu::set_value_impl(&mut hdu.values, "SIMPLE", "T", true);
-        Self::write_hdu(stream, &hdu)?;
-        hdu.write_integer_to_stream(stream, data, 32768)?;
+    pub fn write_header_and_data(
+        &self,
+        stream: &mut dyn SeekNWrite,
+        hdu: &Header,
+        data: &[u16],
+    ) -> Result<()> {
+        assert!(!data.is_empty());
+        const U16_BZERO: u16 = 32768;
+        let mut full_hdr = Header::new();
+        let max_value = data.iter().max().copied().unwrap_or(0);
+        let bzero = if max_value > 255 {
+            full_hdr.bitpix = 16;
+            U16_BZERO
+        } else {
+            full_hdr.bitpix = 8;
+            0_u16
+        };
+
+        full_hdr.set_value("SIMPLE", "T");
+        full_hdr.set_value("BITPIX", &full_hdr.bitpix.to_string());
+        full_hdr.set_value("NAXIS",  &hdu.dims.len().to_string());
+        for (idx, dim) in hdu.dims.iter().enumerate() {
+            let name = format!("NAXIS{}", idx+1);
+            full_hdr.set_value(&name, &dim.to_string());
+        }
+        full_hdr.set_value("EXTEND", "T");
+
+        if bzero != 0 {
+            full_hdr.set_value("BZERO", &bzero.to_string());
+        }
+
+        full_hdr.dims = hdu.dims.clone();
+        full_hdr.data_pos = hdu.data_pos;
+        full_hdr.data_len = hdu.data_len;
+        full_hdr.bytes_len = hdu.bytes_len;
+        for value in &hdu.values {
+            full_hdr.values.push(value.clone());
+        }
+
+        Self::write_header(stream, &full_hdr)?;
+        full_hdr.write_data(stream, data, bzero)?;
         Ok(())
     }
 
-    fn write_hdu(stream: &mut dyn SeekNWrite, hdu: &Hdu) -> Result<()> {
+    fn write_header(stream: &mut dyn SeekNWrite, hdu: &Header) -> Result<()> {
         for item in &hdu.values {
             let mut line = format!("{:8}= ", item.name);
             if item.value.starts_with("'") {
@@ -293,20 +342,5 @@ impl FitsWriter {
             write!(stream, "{:80}", "")?;
         }
         Ok(())
-    }
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-trait ToBytes where Self: Sized {
-    fn to_bytes(result: &mut [u8], sub: Self, data: &[Self]);
-}
-
-impl ToBytes for u16 {
-    fn to_bytes(result: &mut [u8], sub: Self, data: &[Self]) {
-        for ((b1, b2), v) in izip!(result.iter_mut().tuples(), data) {
-            let be_bytes = v.wrapping_sub(sub).to_be_bytes();
-            [*b1, *b2] = be_bytes;
-        }
     }
 }

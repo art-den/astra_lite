@@ -117,7 +117,7 @@ impl RawImage {
         config_offset: Option<i32>,
     ) -> anyhow::Result<RawImage> {
         let reader = FitsReader::new(&mut stream)?;
-        let Some(image_hdu) = reader.hdus.iter().find(|hdu| {
+        let Some(image_hdu) = reader.headers.iter().find(|hdu| {
             hdu.dims().len() == 2
         }) else {
             anyhow::bail!("No RAW image found in fits data");
@@ -127,11 +127,11 @@ impl RawImage {
         let height     = image_hdu.dims()[1];
         let exposure   = image_hdu.get_f64("EXPTIME" ).unwrap_or(0.0);
         let bayer      = image_hdu.get_str("BAYERPAT").unwrap_or_default();
-        let bitdepth   = image_hdu.get_i64("BITDEPTH").unwrap_or(16) as i32;
+        let bitdepth   = image_hdu.get_i64("BITDEPTH").unwrap_or(image_hdu.bitpix() as i64) as i32;
         let bin        = image_hdu.get_i64("XBINNING").unwrap_or(1) as u8;
         let mut offset = image_hdu.get_i64("OFFSET"  ).unwrap_or(0) as i32;
         let frame_str  = image_hdu.get_str("FRAME"   );
-        let data       = image_hdu.data_u16(&mut stream)?;
+        let data       = image_hdu.read_data(&mut stream)?;
 
         if let (0, Some(config_offset)) = (offset, config_offset) {
             offset = config_offset;
@@ -170,10 +170,7 @@ impl RawImage {
     pub fn save_to_fits_file(&self, file_name: &Path) -> anyhow::Result<()> {
         let mut file = File::create(file_name)?;
         let writer = FitsWriter::new();
-        let mut hdu = Hdu::new();
-        hdu.set_value("NAXIS",    "2");
-        hdu.set_value("NAXIS1",   &self.info.width.to_string());
-        hdu.set_value("NAXIS2",   &self.info.height.to_string());
+        let mut hdu = Header::new_2d(self.info.width, self.info.height);
         hdu.set_value("EXPTIME",  &self.info.exposure.to_string());
         hdu.set_value("ROWORDER", "'TOP-DOWN'");
         hdu.set_value("FRAME",    &format!("'{}'", self.info.frame_type.to_str()));
@@ -183,7 +180,7 @@ impl RawImage {
         if let Some(bayer) = self.info.cfa.to_str() {
             hdu.set_value("BAYERPAT", &format!("'{}'", bayer));
         }
-        writer.write(&mut file, &hdu, &self.data)?;
+        writer.write_header_and_data(&mut file, &hdu, &self.data)?;
         Ok(())
     }
 
