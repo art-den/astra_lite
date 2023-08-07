@@ -117,7 +117,7 @@ pub trait Mode {
     fn continue_work(&mut self) -> anyhow::Result<()> { Ok(()) }
     fn take_next_mode(&mut self) -> Option<ModeBox> { None }
     fn set_or_correct_value(&mut self, _value: &mut dyn Any) {}
-    fn complete_img_process_params(&self, _cmd: &mut ProcessImageCommand) {}
+    fn complete_img_process_params(&self, _cmd: &mut FrameProcessCommandData) {}
     fn notify_indi_prop_change(&mut self, _prop_change: &indi_api::PropChangeEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_blob_start_event(&mut self, _event: &indi_api::BlobStartEvent) -> anyhow::Result<()> { Ok(()) }
     fn notify_about_frame_processing_started(&mut self) -> anyhow::Result<()> { Ok(()) }
@@ -210,7 +210,7 @@ impl State {
     pub fn connect_indi_events(
         &self,
         main_thread_sndr: Sender<MainThreadEvents>,
-        img_cmds_sender:  mpsc::Sender<Command>,
+        img_cmds_sender:  mpsc::Sender<FrameProcessCommand>,
     ) {
         let mode_data = Arc::clone(&self.mode_data);
         let exp_stuck_wd = Arc::clone(&self.exp_stuck_wd);
@@ -324,7 +324,7 @@ impl State {
         ref_stars:        &Arc<RwLock<Option<Vec<Point>>>>,
         calibr_images:    &Arc<Mutex<CalibrImages>>,
         main_thread_sndr: &Sender<MainThreadEvents>,
-        img_cmds_sender:  &mpsc::Sender<Command>,
+        img_cmds_sender:  &mpsc::Sender<FrameProcessCommand>,
     ) -> anyhow::Result<()> {
         if blob.data.is_empty() { return Ok(()); }
         log::debug!("process_blob_event, dl_time = {:.2}s", blob.dl_time);
@@ -337,7 +337,7 @@ impl State {
         if device_name != mode_cam_name { return Ok(()); }
 
         let options = options.read().unwrap();
-        let mut command = ProcessImageCommand {
+        let mut command_data = FrameProcessCommandData {
             mode_type:       mode_data.mode.get_type(),
             camera:          device_name.to_string(),
             flags:           ProcessImageFlags::empty(),
@@ -356,11 +356,11 @@ impl State {
         };
         drop(options);
 
-        mode_data.mode.complete_img_process_params(&mut command);
+        mode_data.mode.complete_img_process_params(&mut command_data);
 
         let result_fun = {
             let main_thread_sender = main_thread_sndr.clone();
-            move |res: FrameProcessingResult| {
+            move |res: FrameProcessResult| {
                 let send_err = main_thread_sender.send(
                     MainThreadEvents::ShowFrameProcessingResult(res)
                 );
@@ -369,8 +369,8 @@ impl State {
                 }
             }
         };
-        img_cmds_sender.send(Command::ProcessImage{
-            command,
+        img_cmds_sender.send(FrameProcessCommand::ProcessImage{
+            command: command_data,
             result_fun: Box::new(result_fun),
         }).unwrap();
 
@@ -411,7 +411,7 @@ impl State {
     }
 
     pub fn start_single_shot(&self) -> anyhow::Result<()> {
-        let mut mode = CameraActiveMode::new(
+        let mut mode = TackingFramesMode::new(
             &self.indi,
             None,
             CamMode::SingleShot,
@@ -430,7 +430,7 @@ impl State {
     }
 
     pub fn start_live_view(&self) -> anyhow::Result<()> {
-        let mut mode = CameraActiveMode::new(
+        let mut mode = TackingFramesMode::new(
             &self.indi,
             Some(&self.timer),
             CamMode::LiveView,
@@ -449,7 +449,7 @@ impl State {
     }
 
     pub fn start_saving_raw_frames(&self) -> anyhow::Result<()> {
-        let mut mode = CameraActiveMode::new(
+        let mut mode = TackingFramesMode::new(
             &self.indi,
             Some(&self.timer),
             CamMode::SavingRawFrames,
@@ -470,7 +470,7 @@ impl State {
     }
 
     pub fn start_live_stacking(&self) -> anyhow::Result<()> {
-        let mut mode = CameraActiveMode::new(
+        let mut mode = TackingFramesMode::new(
             &self.indi,
             Some(&self.timer),
             CamMode::LiveStacking,
@@ -936,7 +936,9 @@ impl Mode for WaitingMode {
 
 const MAX_TIMED_GUIDE: f64 = 20.0; // in seconds
 
-struct GuidingData {
+
+// Guider for guiding by main camera
+struct SimpleGuider {
     mnt_calibr:        Option<MountMoveCalibrRes>,
     dither_x:          f64,
     dither_y:          f64,
@@ -947,7 +949,7 @@ struct GuidingData {
     dither_exp_sum:    f64,
 }
 
-impl GuidingData {
+impl SimpleGuider {
     fn new() -> Self {
         Self {
             mnt_calibr: None,
@@ -976,7 +978,7 @@ enum CamState {
     MountCorrection
 }
 
-struct CameraActiveMode {
+struct TackingFramesMode {
     cam_mode:      CamMode,
     state:         CamState,
     device:        String,
@@ -989,17 +991,17 @@ struct CameraActiveMode {
     frame_options: FrameOptions,
     focus_options: Option<FocuserOptions>,
     guid_options:  Option<GuidingOptions>,
-    ref_stars:     Option<Arc<RwLock<Option<Vec<Point>>>>>, // ???
+    ref_stars:     Option<Arc<RwLock<Option<Vec<Point>>>>>,
     progress:      Option<Progress>,
     cur_exposure:  f64,
     exp_sum:       f64,
-    guid_data:     Option<GuidingData>,
+    simple_guider: Option<SimpleGuider>,
     live_stacking: Option<Arc<LiveStackingData>>,
     save_dir:      PathBuf,
     master_file:   PathBuf,
 }
 
-impl CameraActiveMode {
+impl TackingFramesMode {
     fn new(
         indi:     &Arc<indi_api::Connection>,
         timer:    Option<&Arc<Timer>>,
@@ -1034,7 +1036,7 @@ impl CameraActiveMode {
             progress,
             cur_exposure:  0.0,
             exp_sum:       0.0,
-            guid_data:     None,
+            simple_guider:     None,
             live_stacking: None,
             save_dir:      PathBuf::new(),
             master_file:   PathBuf::new(),
@@ -1164,7 +1166,7 @@ impl CameraActiveMode {
     }
 }
 
-impl Mode for CameraActiveMode {
+impl Mode for TackingFramesMode {
     fn get_type(&self) -> ModeType {
         match self.cam_mode {
             CamMode::SingleShot => ModeType::SingleShot,
@@ -1286,7 +1288,7 @@ impl Mode for CameraActiveMode {
 
     fn set_or_correct_value(&mut self, value: &mut dyn Any) {
         if let Some(value) = value.downcast_mut::<MountMoveCalibrRes>() {
-            let dith_data = self.guid_data.get_or_insert_with(|| GuidingData::new());
+            let dith_data = self.simple_guider.get_or_insert_with(|| SimpleGuider::new());
             dith_data.mnt_calibr = Some(value.clone());
             log::debug!("New mount calibration set: {:?}", dith_data.mnt_calibr);
         }
@@ -1363,7 +1365,7 @@ impl Mode for CameraActiveMode {
         let mount_device_active = self.indi.is_device_enabled(&self.mount_device).unwrap_or(false);
 
         if let Some(guid_options) = &self.guid_options { // Guiding and dithering
-            let guid_data = self.guid_data.get_or_insert_with(|| GuidingData::new());
+            let guid_data = self.simple_guider.get_or_insert_with(|| SimpleGuider::new());
             if (guid_options.enabled || guid_options.dith_period != 0)
             && mount_device_active {
                 if guid_data.mnt_calibr.is_none() { // mount moving calibration
@@ -1408,7 +1410,7 @@ impl Mode for CameraActiveMode {
         if self.state == CamState::Usual && mount_device_active {
             let mut move_offset = None;
             if let Some(guid_options) = &self.guid_options {
-                let guid_data = self.guid_data.get_or_insert_with(|| GuidingData::new());
+                let guid_data = self.simple_guider.get_or_insert_with(|| SimpleGuider::new());
                 let mut prev_dither_x = 0_f64;
                 let mut prev_dither_y = 0_f64;
                 let mut dithering_flag = false;
@@ -1450,7 +1452,7 @@ impl Mode for CameraActiveMode {
                 }
             }
             if let Some((offset_x, offset_y)) = move_offset { // Move mount position
-                let guid_data = self.guid_data.get_or_insert_with(|| GuidingData::new());
+                let guid_data = self.simple_guider.get_or_insert_with(|| SimpleGuider::new());
                 let mnt_calibr = guid_data.mnt_calibr.clone().unwrap_or_default();
                 if mnt_calibr.is_ok() {
                     if let Some((mut ra, mut dec)) = mnt_calibr.calc(offset_x, offset_y) {
@@ -1524,7 +1526,7 @@ impl Mode for CameraActiveMode {
         Ok(result)
     }
 
-    fn complete_img_process_params(&self, cmd: &mut ProcessImageCommand) {
+    fn complete_img_process_params(&self, cmd: &mut FrameProcessCommandData) {
         let options = self.options.read().unwrap();
         cmd.fn_gen = Some(Arc::clone(&self.fn_gen));
         let last_in_seq = if let Some(progress) = &self.progress {
@@ -1569,7 +1571,7 @@ impl Mode for CameraActiveMode {
         let mut result = NotifyResult::Empty;
         if self.state == CamState::MountCorrection {
             if let ("TELESCOPE_TIMED_GUIDE_NS"|"TELESCOPE_TIMED_GUIDE_WE", indi_api::PropChange::Change { value, .. }, Some(guid_data))
-            = (prop_change.prop_name.as_str(), &prop_change.change, &mut self.guid_data) {
+            = (prop_change.prop_name.as_str(), &prop_change.change, &mut self.simple_guider) {
                 match value.elem_name.as_str() {
                     "TIMED_GUIDE_N" => guid_data.cur_timed_guide_n = value.prop_value.as_f64()?,
                     "TIMED_GUIDE_S" => guid_data.cur_timed_guide_s = value.prop_value.as_f64()?,
@@ -1769,7 +1771,7 @@ impl Mode for FocusingMode {
         self.next_mode.take()
     }
 
-    fn complete_img_process_params(&self, cmd: &mut ProcessImageCommand) {
+    fn complete_img_process_params(&self, cmd: &mut FrameProcessCommandData) {
         if let Some(quality_options) = &mut cmd.quality_options {
             quality_options.use_max_fwhm = false;
         }

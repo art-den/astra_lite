@@ -251,7 +251,7 @@ impl Default for GuiOptions {
 
 
 pub enum MainThreadEvents {
-    ShowFrameProcessingResult(FrameProcessingResult),
+    ShowFrameProcessingResult(FrameProcessResult),
     StateEvent(Event),
     IndiEvent(indi_api::Event),
 }
@@ -261,7 +261,7 @@ struct CameraData {
     options:            Arc<RwLock<Options>>,
     delayed_action:     RefCell<DelayedAction>,
     gui_options:        RefCell<GuiOptions>,
-    img_cmds_sender:    Sender<Command>,
+    img_cmds_sender:    Sender<FrameProcessCommand>,
     process_thread:     RefCell<Option<JoinHandle<()>>>,
     conn_state:         RefCell<indi_api::ConnState>,
     indi_conn:          RefCell<Option<indi_api::Subscription>>,
@@ -295,7 +295,7 @@ pub fn build_ui(
         flags:     DelayedFlags::empty(),
     };
 
-    let (img_cmds_sender, process_thread) = start_process_blob_thread();
+    let (img_cmds_sender, process_thread) = start_main_cam_frame_processing_thread();
     let camera_data = Rc::new(CameraData {
         main:               Rc::clone(data),
         options:            Arc::clone(&data.options),
@@ -435,7 +435,7 @@ fn configure_camera_widget_props(data: &Rc<CameraData>) {
 
 fn connect_misc_events(
     data:            &Rc<CameraData>,
-    img_cmds_sender: Sender<Command>,
+    img_cmds_sender: Sender<FrameProcessCommand>,
 ) {
     let (main_thread_sender, main_thread_receiver) =
         glib::MainContext::channel(glib::PRIORITY_DEFAULT);
@@ -496,14 +496,14 @@ fn connect_misc_events(
 
             MainThreadEvents::ShowFrameProcessingResult(result) => {
                 match result.data {
-                    ProcessingResultData::ShotProcessingStarted(mode_type) => {
+                    FrameProcessResultData::ShotProcessingStarted(mode_type) => {
                         let mode_data = data.main.state.mode_data();
                         if mode_data.mode.get_type() == mode_type {
                             drop(mode_data);
                             data.main.state.notify_about_frame_processing_started();
                         }
                     },
-                    ProcessingResultData::ShotProcessingFinished {frame_is_ok, mode_type, process_time, blob_dl_time} => {
+                    FrameProcessResultData::ShotProcessingFinished {frame_is_ok, mode_type, process_time, blob_dl_time} => {
                         let max_fps = if process_time != 0.0 { 1.0/process_time } else { 0.0 };
                         let perf_str = format!("Download time = {:.2}s, max. FPS={:.1}", blob_dl_time, max_fps);
                         data.main.set_perf_string(perf_str);
@@ -908,7 +908,7 @@ fn handler_full_screen(data: &Rc<CameraData>, full_screen: bool) {
 fn handler_close_window(data: &Rc<CameraData>) -> gtk::Inhibit {
     data.closed.set(true);
 
-    _ = data.img_cmds_sender.send(Command::Exit);
+    _ = data.img_cmds_sender.send(FrameProcessCommand::Exit);
 
     _ = data.main.state.abort_active_mode();
     read_options_from_widgets(data);
@@ -1900,7 +1900,7 @@ fn handler_action_save_image_linear(data: &Rc<CameraData>) {
 
 fn show_frame_processing_result(
     data:   &Rc<CameraData>,
-    result: FrameProcessingResult
+    result: FrameProcessResult
 ) {
     let options = data.options.read().unwrap();
     if options.cam.device != result.camera { return; }
@@ -1923,35 +1923,35 @@ fn show_frame_processing_result(
     };
 
     match result.data {
-        ProcessingResultData::Error(error_text) => {
+        FrameProcessResultData::Error(error_text) => {
             _ = data.main.state.abort_active_mode();
             correct_widgets_props(data);
             show_error_message(&data.main.window, "Fatal Error", &error_text);
         }
-        ProcessingResultData::LightShortInfo(short_info, mode) => {
+        FrameProcessResultData::LightShortInfo(short_info, mode) => {
             if data.main.state.mode_data().mode.get_type() == mode {
                 data.main.state.notify_about_light_short_info(&short_info);
             }
             data.light_history.borrow_mut().push(short_info);
             update_light_history_table(data);
         }
-        ProcessingResultData::PreviewFrame(img, mode) if is_mode_current(mode, false) => {
+        FrameProcessResultData::PreviewFrame(img, mode) if is_mode_current(mode, false) => {
             show_preview_image(data, img.rgb_bytes, Some(img.params));
             show_resolution_info(img.image_width, img.image_height);
         }
-        ProcessingResultData::PreviewLiveRes(img, mode) if is_mode_current(mode, true) => {
+        FrameProcessResultData::PreviewLiveRes(img, mode) if is_mode_current(mode, true) => {
             show_preview_image(data, img.rgb_bytes, Some(img.params));
             show_resolution_info(img.image_width, img.image_height);
         }
-        ProcessingResultData::Histogram(mode) if is_mode_current(mode, false) => {
+        FrameProcessResultData::Histogram(mode) if is_mode_current(mode, false) => {
             repaint_histogram(data);
             show_histogram_stat(data);
         }
-        ProcessingResultData::HistogramLiveRes(mode) if is_mode_current(mode, true) => {
+        FrameProcessResultData::HistogramLiveRes(mode) if is_mode_current(mode, true) => {
             repaint_histogram(data);
             show_histogram_stat(data);
         }
-        ProcessingResultData::FrameInfo(mode) => {
+        FrameProcessResultData::FrameInfo(mode) => {
             let info = data.main.state.cur_frame().info.read().unwrap();
             if let ResultImageInfo::LightInfo(info) = &*info {
                 if data.main.state.mode_data().mode.get_type() == mode {
@@ -1962,17 +1962,17 @@ fn show_frame_processing_result(
                 show_image_info(data);
             }
         }
-        ProcessingResultData::FrameInfoLiveRes(mode) if is_mode_current(mode, true) => {
+        FrameProcessResultData::FrameInfoLiveRes(mode) if is_mode_current(mode, true) => {
             show_image_info(data);
         }
-        ProcessingResultData::MasterSaved { frame_type: FrameType::Flats, file_name } => {
+        FrameProcessResultData::MasterSaved { frame_type: FrameType::Flats, file_name } => {
             gtk_utils::set_path(
                 &data.main.builder,
                 "fch_master_flat",
                 Some(&file_name)
             );
         }
-        ProcessingResultData::MasterSaved { frame_type: FrameType::Darks, file_name } => {
+        FrameProcessResultData::MasterSaved { frame_type: FrameType::Darks, file_name } => {
             gtk_utils::set_path(
                 &data.main.builder,
                 "fch_master_dark",

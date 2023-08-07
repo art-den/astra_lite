@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration, cell::RefCell, rc::Rc};
 use gtk::{prelude::*, glib};
 use itertools::{Itertools, izip};
-use crate::indi_api;
+use crate::{indi_api, sexagesimal::*};
 
 pub struct IndiGui {
     indi:           Arc<indi_api::Connection>,
@@ -548,8 +548,8 @@ impl IndiGui {
                         };
                         spin.connect_input(move |spin| {
                             let text = spin.text();
-                            let result = indi_api::sexagesimal_to_value(text.as_str())
-                                .map_err(|_| ());
+                            let result = sexagesimal_to_value(&text)
+                                .ok_or_else(|| ());
                             Some(result)
                         });
                         let num_format = num_format.clone();

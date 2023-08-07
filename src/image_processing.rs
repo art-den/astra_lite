@@ -131,7 +131,7 @@ bitflags! {
     }
 }
 
-pub struct ProcessImageCommand {
+pub struct FrameProcessCommandData {
     pub mode_type:       ModeType,
     pub camera:          String,
     pub flags:           ProcessImageFlags,
@@ -149,7 +149,7 @@ pub struct ProcessImageCommand {
     pub live_stacking:   Option<LiveStackingParams>,
 }
 
-pub struct PreviewImgData {
+pub struct Preview8BitImgData {
     pub rgb_bytes:    RgbU8Data,
     pub image_width:  usize,
     pub image_height: usize,
@@ -182,7 +182,7 @@ pub struct LightFrameShortInfo {
     pub flags:          LightFrameShortInfoFlags,
 }
 
-pub enum ProcessingResultData {
+pub enum FrameProcessResultData {
     Error(String),
     ShotProcessingStarted(ModeType),
     ShotProcessingFinished {
@@ -192,8 +192,8 @@ pub enum ProcessingResultData {
         blob_dl_time: f64, // in seconds
     },
     LightShortInfo(LightFrameShortInfo, ModeType),
-    PreviewFrame(PreviewImgData, ModeType),
-    PreviewLiveRes(PreviewImgData, ModeType),
+    PreviewFrame(Preview8BitImgData, ModeType),
+    PreviewLiveRes(Preview8BitImgData, ModeType),
     FrameInfo(ModeType),
     FrameInfoLiveRes(ModeType),
     Histogram(ModeType),
@@ -204,31 +204,31 @@ pub enum ProcessingResultData {
     }
 }
 
-pub struct FrameProcessingResult {
+pub struct FrameProcessResult {
     pub camera: String,
-    pub data:   ProcessingResultData,
+    pub data:   FrameProcessResultData,
 }
 
-pub type ResultFun = Box<dyn Fn(FrameProcessingResult) + Send + 'static>;
+pub type ResultFun = Box<dyn Fn(FrameProcessResult) + Send + 'static>;
 
-pub enum Command {
+pub enum FrameProcessCommand {
     ProcessImage {
-        command:    ProcessImageCommand,
+        command:    FrameProcessCommandData,
         result_fun: ResultFun,
     },
     Exit
 }
 
-impl Command {
+impl FrameProcessCommand {
     fn name(&self) -> &'static str {
         match self {
-            Command::ProcessImage{..} => "PreviewImage",
-            Command::Exit             => "Exit",
+            FrameProcessCommand::ProcessImage{..} => "PreviewImage",
+            FrameProcessCommand::Exit             => "Exit",
         }
     }
 }
 
-pub fn start_process_blob_thread() -> (mpsc::Sender<Command>, JoinHandle<()>) {
+pub fn start_main_cam_frame_processing_thread() -> (mpsc::Sender<FrameProcessCommand>, JoinHandle<()>) {
     let (bg_comands_sender, bg_comands_receiver) = mpsc::channel();
     let thread = std::thread::spawn(|| {
         process_blob_thread_fun(bg_comands_receiver);
@@ -237,11 +237,11 @@ pub fn start_process_blob_thread() -> (mpsc::Sender<Command>, JoinHandle<()>) {
     (bg_comands_sender, thread)
 }
 
-fn process_blob_thread_fun(receiver: mpsc::Receiver<Command>) {
+fn process_blob_thread_fun(receiver: mpsc::Receiver<FrameProcessCommand>) {
     'outer:
     while let Ok(mut cmd) = receiver.recv() {
         loop {
-            if matches!(cmd, Command::Exit) { break; }
+            if matches!(cmd, FrameProcessCommand::Exit) { break; }
             let next_cmd = receiver.try_recv();
             match next_cmd {
                 Ok(next_cmd) => {
@@ -258,9 +258,9 @@ fn process_blob_thread_fun(receiver: mpsc::Receiver<Command>) {
         }
 
         match cmd {
-            Command::Exit =>
+            FrameProcessCommand::Exit =>
                 break,
-            Command::ProcessImage{command, result_fun} =>
+            FrameProcessCommand::ProcessImage{command, result_fun} =>
                 make_preview_image(command, result_fun),
         };
     }
@@ -462,11 +462,11 @@ fn apply_calibr_data_and_remove_hot_pixels(
 }
 
 fn send_result(
-    data:       ProcessingResultData,
+    data:       FrameProcessResultData,
     camera:     &str,
     result_fun: &ResultFun
 ) {
-    let result = FrameProcessingResult {
+    let result = FrameProcessResult {
         data,
         camera: camera.to_string(),
     };
@@ -474,13 +474,13 @@ fn send_result(
 }
 
 fn make_preview_image(
-    command:    ProcessImageCommand,
+    command:    FrameProcessCommandData,
     result_fun: ResultFun
 ) {
     let res = make_preview_image_impl(&command, &result_fun);
     if let Err(err) = res {
         send_result(
-            ProcessingResultData::Error(err.to_string()),
+            FrameProcessResultData::Error(err.to_string()),
             &command.camera,
             &result_fun
         );
@@ -506,13 +506,13 @@ fn add_calibr_image(
 }
 
 fn make_preview_image_impl(
-    command:    &ProcessImageCommand,
+    command:    &FrameProcessCommandData,
     result_fun: &ResultFun
 ) -> anyhow::Result<()> {
     let total_tmr = TimeLogger::start();
 
     send_result(
-        ProcessingResultData::ShotProcessingStarted(command.mode_type),
+        FrameProcessResultData::ShotProcessingStarted(command.mode_type),
         &command.camera,
         result_fun
     );
@@ -525,13 +525,13 @@ fn make_preview_image_impl(
 
     let raw_info = raw_image.info();
     log::debug!("Raw type      = {:?}", raw_info.frame_type);
-    log::debug!("Raw width     = {}", raw_info.width);
-    log::debug!("Raw height    = {}", raw_info.height);
-    log::debug!("Raw zero      = {}", raw_info.zero);
-    log::debug!("Raw max_value = {}", raw_info.max_value);
+    log::debug!("Raw width     = {}",   raw_info.width);
+    log::debug!("Raw height    = {}",   raw_info.height);
+    log::debug!("Raw zero      = {}",   raw_info.zero);
+    log::debug!("Raw max_value = {}",   raw_info.max_value);
     log::debug!("Raw CFA       = {:?}", raw_info.cfa);
-    log::debug!("Raw bin       = {}", raw_info.bin);
-    log::debug!("Raw exposure  = {}", raw_info.exposure);
+    log::debug!("Raw bin       = {}",   raw_info.bin);
+    log::debug!("Raw exposure  = {}s",  raw_info.exposure);
 
     let exposure = raw_info.exposure;
     let frame_type = raw_info.frame_type;
@@ -581,7 +581,7 @@ fn make_preview_image_impl(
     }
 
     send_result(
-        ProcessingResultData::Histogram(command.mode_type),
+        FrameProcessResultData::Histogram(command.mode_type),
         &command.camera,
         result_fun
     );
@@ -593,7 +593,7 @@ fn make_preview_image_impl(
                 FlatImageInfo::from_histogram(&hist)
             );
             send_result(
-                ProcessingResultData::FrameInfo(command.mode_type),
+                FrameProcessResultData::FrameInfo(command.mode_type),
                 &command.camera,
                 result_fun
             );
@@ -604,7 +604,7 @@ fn make_preview_image_impl(
                 RawImageStat::from_histogram(&hist)
             );
             send_result(
-                ProcessingResultData::FrameInfo(command.mode_type),
+                FrameProcessResultData::FrameInfo(command.mode_type),
                 &command.camera,
                 result_fun
             );
@@ -670,14 +670,14 @@ fn make_preview_image_impl(
     );
     tmr.log("get_rgb_bytes_from_preview_image");
 
-    let preview_data = PreviewImgData {
+    let preview_data = Preview8BitImgData {
         rgb_bytes,
         image_width: image.width(),
         image_height: image.height(),
         params: command.view_options.clone(),
     };
     send_result(
-        ProcessingResultData::PreviewFrame(preview_data, command.mode_type),
+        FrameProcessResultData::PreviewFrame(preview_data, command.mode_type),
         &command.camera,
         result_fun
     );
@@ -797,7 +797,7 @@ fn make_preview_image_impl(
                 drop(hist);
                 let hist = live_stacking.data.hist.read().unwrap();
                 send_result(
-                    ProcessingResultData::HistogramLiveRes(command.mode_type),
+                    FrameProcessResultData::HistogramLiveRes(command.mode_type),
                     &command.camera,
                     result_fun
                 );
@@ -818,7 +818,7 @@ fn make_preview_image_impl(
                     live_stacking_info
                 );
                 send_result(
-                    ProcessingResultData::FrameInfoLiveRes(command.mode_type),
+                    FrameProcessResultData::FrameInfoLiveRes(command.mode_type),
                     &command.camera,
                     result_fun
                 );
@@ -833,14 +833,14 @@ fn make_preview_image_impl(
                         &command.view_options
                     );
                     tmr.log("get_rgb_bytes_from_preview_image");
-                    let preview_data = PreviewImgData {
+                    let preview_data = Preview8BitImgData {
                         rgb_bytes,
                         image_width: image.width(),
                         image_height: image.height(),
                         params: command.view_options.clone(),
                     };
                     send_result(
-                        ProcessingResultData::PreviewLiveRes(preview_data, command.mode_type),
+                        FrameProcessResultData::PreviewLiveRes(preview_data, command.mode_type),
                         &command.camera,
                         result_fun
                     );
@@ -879,7 +879,7 @@ fn make_preview_image_impl(
         // Send message with short light frame info
 
         send_result(
-            ProcessingResultData::LightShortInfo(light_info, command.mode_type),
+            FrameProcessResultData::LightShortInfo(light_info, command.mode_type),
             &command.camera,
             result_fun
         );
@@ -888,7 +888,7 @@ fn make_preview_image_impl(
 
         *command.frame.info.write().unwrap() = ResultImageInfo::LightInfo(info);
         send_result(
-            ProcessingResultData::FrameInfo(command.mode_type),
+            FrameProcessResultData::FrameInfo(command.mode_type),
             &command.camera,
             result_fun
         );
@@ -948,7 +948,7 @@ fn make_preview_image_impl(
             drop(adder);
             raw_image.save_to_fits_file(&file_name)?;
             send_result(
-                ProcessingResultData::MasterSaved {
+                FrameProcessResultData::MasterSaved {
                     frame_type,
                     file_name: file_name.clone()
                 },
@@ -960,7 +960,7 @@ fn make_preview_image_impl(
     }
 
     send_result(
-        ProcessingResultData::ShotProcessingFinished{
+        FrameProcessResultData::ShotProcessingFinished{
             mode_type:    command.mode_type,
             frame_is_ok:  !is_bad_frame,
             blob_dl_time: command.blob.dl_time,

@@ -25,6 +25,7 @@ mod simple_fits;
 mod state;
 mod math;
 mod plots;
+mod sexagesimal;
 
 use std::path::Path;
 use gtk::prelude::*;
