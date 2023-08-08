@@ -190,7 +190,7 @@ pub enum NumFormat {
 }
 
 impl NumFormat {
-    pub fn new_from_str(format_str: &str) -> Self {
+    pub fn new_from_indi_format(format_str: &str) -> Self {
         use once_cell::sync::OnceCell;
         static FLOAT_RE: OnceCell<regex::Regex> = OnceCell::new();
         let float_re = FLOAT_RE.get_or_init(|| {

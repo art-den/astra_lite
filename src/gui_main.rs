@@ -1,4 +1,4 @@
-use std::{sync::{Arc, RwLock}, rc::Rc, cell::RefCell, time::Duration, path::{PathBuf}, process::Command};
+use std::{sync::{Arc, RwLock}, rc::Rc, cell::RefCell, time::Duration, path::PathBuf, process::Command};
 use gtk::{prelude::*, glib, glib::clone, cairo::{self}};
 use serde::{Serialize, Deserialize};
 
@@ -50,7 +50,7 @@ enum Theme {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
-pub struct MainOptions {
+struct MainOptions {
     win_width:     i32,
     win_height:    i32,
     win_maximized: bool,
@@ -68,19 +68,17 @@ impl Default for MainOptions {
     }
 }
 
-pub struct MainData {
+struct MainData {
     logs_dir:     PathBuf,
-    pub options:  Arc<RwLock<Options>>,
+    options:      Arc<RwLock<Options>>,
     main_options: RefCell<MainOptions>,
     handlers:     RefCell<MainGuiHandlers>,
     progress:     RefCell<Option<Progress>>,
-    conn_string:  RefCell<String>,
-    dev_string:   RefCell<String>,
-    perf_string:  RefCell<String>,
-    pub state:    Arc<State>,
-    pub indi:     Arc<indi_api::Connection>,
-    pub builder:  gtk::Builder,
-    pub window:   gtk::ApplicationWindow,
+    state:        Arc<State>,
+    indi:         Arc<indi_api::Connection>,
+    builder:      gtk::Builder,
+    window:       gtk::ApplicationWindow,
+    gui:          Rc<Gui>,
 }
 
 impl Drop for MainData {
@@ -145,20 +143,19 @@ pub fn build_ui(
     });
 
     let options = Arc::new(RwLock::new(options));
+    let gui = Rc::new(Gui::new(&builder));
 
     let data = Rc::new(MainData {
         logs_dir:     logs_dir.clone(),
         state:        Arc::new(State::new(&indi, &options)),
-        options,
+        options:      Arc::clone(&options),
         main_options: RefCell::new(main_options),
         handlers:     RefCell::new(Vec::new()),
         progress:     RefCell::new(None),
         indi,
         window:       window.clone(),
         builder:      builder.clone(),
-        conn_string:  RefCell::new(String::new()),
-        dev_string:   RefCell::new(String::new()),
-        perf_string:   RefCell::new(String::new()),
+        gui:          Rc::clone(&gui),
     });
 
     window.set_application(Some(app));
@@ -184,16 +181,27 @@ pub fn build_ui(
 
     crate::gui_hardware::build_ui(
         app,
-        Rc::clone(&data),
-        Arc::clone(&data.state),
-        Arc::clone(&data.indi),
-        data.builder.clone(),
-        data.window.clone(),
+        &data.builder,
+        &gui,
+        &options,
+        &data.state,
+        &data.indi,
     );
+
     crate::gui_camera::build_ui(
         app,
-        &data,
+        &builder,
+        &gui,
+        &options,
+        &data.state,
+        &data.indi,
         &mut data.handlers.borrow_mut()
+    );
+
+    crate::gui_map::build_ui(
+        app,
+        &data.builder,
+        &options
     );
 
     gtk_utils::enable_widgets(&builder, false, &[
@@ -275,7 +283,7 @@ pub fn build_ui(
     gtk_utils::connect_action(&window, &data, "open_logs_folder", handler_action_open_logs_folder);
     correct_widgets_props(&data);
     connect_state_events(&data);
-    update_window_title(&data);
+    gui.update_window_title();
 }
 
 fn connect_state_events(data: &Rc<MainData>) {
@@ -313,17 +321,6 @@ fn handler_close_window(data: &Rc<MainData>) -> gtk::Inhibit {
     drop(options);
 
     gtk::Inhibit(false)
-}
-
-fn update_window_title(data: &MainData) {
-    let title = "AstraLite (${arch} ver. ${ver})   --   Deepsky astrophotography and livestacking   --   [${devices_list}]   --   [${conn_status}]   --   [${perf}]";
-    let title = title.replace("${arch}",         std::env::consts::ARCH);
-    let title = title.replace("${ver}",          env!("CARGO_PKG_VERSION"));
-    let title = title.replace("${devices_list}", &data.dev_string.borrow());
-    let title = title.replace("${conn_status}",  &data.conn_string.borrow());
-    let title = title.replace("${perf}",         &data.perf_string.borrow());
-
-    data.window.set_title(&title)
 }
 
 fn apply_options(data: &Rc<MainData>) {
@@ -442,15 +439,42 @@ fn handler_action_open_logs_folder(data: &Rc<MainData>) {
     });
 }
 
-impl MainData {
+pub struct Gui {
+    builder:     gtk::Builder,
+    conn_string: RefCell<String>,
+    dev_string:  RefCell<String>,
+    perf_string: RefCell<String>,
+}
+
+impl Gui {
+    fn new(builder: &gtk::Builder) -> Self {
+        Self {
+            builder:     builder.clone(),
+            conn_string: RefCell::new(String::new()),
+            dev_string:  RefCell::new(String::new()),
+            perf_string: RefCell::new(String::new()),
+        }
+    }
+
     pub fn set_dev_list_and_conn_status(&self, dev_list: String, conn_status: String) {
         *self.dev_string.borrow_mut() = dev_list;
         *self.conn_string.borrow_mut() = conn_status;
-        update_window_title(self);
+        self.update_window_title();
     }
 
     pub fn set_perf_string(&self, perf_string: String) {
         *self.perf_string.borrow_mut() = perf_string;
-        update_window_title(self);
+        self.update_window_title();
+    }
+
+    fn update_window_title(&self) {
+        let title = "AstraLite (${arch} ver. ${ver})   --   Deepsky astrophotography and livestacking   --   [${devices_list}]   --   [${conn_status}]   --   [${perf}]";
+        let title = title.replace("${arch}",         std::env::consts::ARCH);
+        let title = title.replace("${ver}",          env!("CARGO_PKG_VERSION"));
+        let title = title.replace("${devices_list}", &self.dev_string.borrow());
+        let title = title.replace("${conn_status}",  &self.conn_string.borrow());
+        let title = title.replace("${perf}",         &self.perf_string.borrow());
+        let window = self.builder.object::<gtk::ApplicationWindow>("window").unwrap();
+        window.set_title(&title)
     }
 }

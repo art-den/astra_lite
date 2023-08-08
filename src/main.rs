@@ -26,6 +26,7 @@ mod state;
 mod math;
 mod plots;
 mod sexagesimal;
+mod gui_map;
 
 use std::path::Path;
 use gtk::prelude::*;

@@ -30,9 +30,9 @@ pub fn value_to_sexagesimal(value: f64, zero: bool, frac: u8) -> String {
     }
 }
 
-pub fn sexagesimal_to_value(mut text: &str) -> Option<f64> {
+pub fn sexagesimal_to_value(text: &str) -> Option<f64> {
     use once_cell::sync::OnceCell;
-    text = text.trim();
+    let text = text.trim();
 
     // -00:00:00.00
     static F9_RE: OnceCell<regex::Regex> = OnceCell::new();

@@ -32,7 +32,7 @@ impl indi_api::ConnState {
 }
 
 struct HardwareData {
-    main_gui:     Rc<MainData>,
+    gui:          Rc<Gui>,
     state:        Arc<State>,
     indi:         Arc<indi_api::Connection>,
     options:      Arc<RwLock<Options>>,
@@ -52,87 +52,83 @@ impl Drop for HardwareData {
 }
 
 pub fn build_ui(
-    _application: &gtk::Application,
-    main_gui:     Rc<MainData>,
-    state:        Arc<State>,
-    indi:         Arc<indi_api::Connection>,
-    builder:      gtk::Builder,
-    win:          gtk::ApplicationWindow,
+    _app:     &gtk::Application,
+    builder:  &gtk::Builder,
+    gui:      &Rc<Gui>,
+    options:  &Arc<RwLock<Options>>,
+    state:    &Arc<State>,
+    indi:     &Arc<indi_api::Connection>,
 ) {
-    let window = win.clone();
-    gtk_utils::exec_and_show_error(&win, || {
-        let sidebar = builder.object("sdb_indi").unwrap();
-        let stack = builder.object("stk_indi").unwrap();
+    let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
-        let (drivers, load_drivers_err) = match indi_api::Drivers::new() {
-            Ok(drivers) =>
-                (drivers, None),
-            Err(err) =>
-                (indi_api::Drivers::new_empty(), Some(err.to_string())),
-        };
+    let sidebar = builder.object("sdb_indi").unwrap();
+    let stack = builder.object("stk_indi").unwrap();
 
-        if drivers.groups.is_empty() {
-            let mut options = main_gui.options.write().unwrap();
-            options.indi.remote = true; // force remote mode if no devices info
-        }
+    let (drivers, load_drivers_err) = match indi_api::Drivers::new() {
+        Ok(drivers) =>
+            (drivers, None),
+        Err(err) =>
+            (indi_api::Drivers::new_empty(), Some(err.to_string())),
+    };
 
-        let indi_gui = IndiGui::new(&indi, sidebar, stack);
+    if drivers.groups.is_empty() {
+        let mut options = options.write().unwrap();
+        options.indi.remote = true; // force remote mode if no devices info
+    }
 
-        let data = Rc::new(HardwareData {
-            state,
-            indi,
-            options:      Arc::clone(&main_gui.options),
-            builder,
-            window,
-            indi_status:  RefCell::new(indi_api::ConnState::Disconnected),
-            indi_drivers: drivers,
-            indi_conn:    RefCell::new(None),
-            indi_gui,
-            remote:       Cell::new(false),
-            main_gui,
-        });
+    let indi_gui = IndiGui::new(&indi, sidebar, stack);
 
-        fill_devices_name(&data);
-        show_options(&data);
-
-        let l_sel_dev_props = data.builder.object::<gtk::Label>("l_sel_dev_props").unwrap();
-        let l_dev_list = data.builder.object::<gtk::Label>("l_dev_list").unwrap();
-        l_dev_list.set_height_request(l_sel_dev_props.allocation().height());
-
-        gtk_utils::connect_action(&data.window, &data, "help_save_indi", handler_action_help_save_indi);
-        gtk_utils::connect_action(&data.window, &data, "conn_indi",      handler_action_conn_indi);
-        gtk_utils::connect_action(&data.window, &data, "disconn_indi",   handler_action_disconn_indi);
-        gtk_utils::connect_action(&data.window, &data, "clear_hw_log",   handler_action_clear_hw_log);
-
-        let chb_remote = data.builder.object::<gtk::CheckButton>("chb_remote").unwrap();
-        chb_remote.connect_active_notify(clone!(@weak data => @default-panic, move |_| {
-            correct_widgets_by_cur_state(&data);
-        }));
-
-        connect_indi_events(&data);
-        correct_widgets_by_cur_state(&data);
-
-        data.window.connect_delete_event(clone!(@weak data => @default-panic, move |_, _| {
-            handler_close_window(&data)
-        }));
-
-        let srch_indi_prop = data.builder.object::<gtk::SearchEntry>("srch_indi_prop").unwrap();
-        srch_indi_prop.connect_search_changed(clone!(@weak data => @default-panic, move |entry| {
-            data.indi_gui.set_filter_text(entry.text().as_str());
-        }));
-
-        if let Some(load_drivers_err) = load_drivers_err {
-            add_log_record(
-                &data,
-                &Some(Utc::now()),
-                "",
-                &format!("Load devices info error: {}", load_drivers_err)
-            );
-        }
-
-        Ok(())
+    let data = Rc::new(HardwareData {
+        state:        Arc::clone(state),
+        indi:         Arc::clone(indi),
+        options:      Arc::clone(options),
+        builder:      builder.clone(),
+        indi_status:  RefCell::new(indi_api::ConnState::Disconnected),
+        indi_drivers: drivers,
+        indi_conn:    RefCell::new(None),
+        remote:       Cell::new(false),
+        gui:          Rc::clone(gui),
+        indi_gui,
+        window,
     });
 
+    fill_devices_name(&data);
+    show_options(&data);
+
+    let l_sel_dev_props = data.builder.object::<gtk::Label>("l_sel_dev_props").unwrap();
+    let l_dev_list = data.builder.object::<gtk::Label>("l_dev_list").unwrap();
+    l_dev_list.set_height_request(l_sel_dev_props.allocation().height());
+
+    gtk_utils::connect_action(&data.window, &data, "help_save_indi", handler_action_help_save_indi);
+    gtk_utils::connect_action(&data.window, &data, "conn_indi",      handler_action_conn_indi);
+    gtk_utils::connect_action(&data.window, &data, "disconn_indi",   handler_action_disconn_indi);
+    gtk_utils::connect_action(&data.window, &data, "clear_hw_log",   handler_action_clear_hw_log);
+
+    let chb_remote = data.builder.object::<gtk::CheckButton>("chb_remote").unwrap();
+    chb_remote.connect_active_notify(clone!(@weak data => @default-panic, move |_| {
+        correct_widgets_by_cur_state(&data);
+    }));
+
+    connect_indi_events(&data);
+    correct_widgets_by_cur_state(&data);
+
+    data.window.connect_delete_event(clone!(@weak data => @default-panic, move |_, _| {
+        handler_close_window(&data)
+    }));
+
+    let srch_indi_prop = data.builder.object::<gtk::SearchEntry>("srch_indi_prop").unwrap();
+    srch_indi_prop.connect_search_changed(clone!(@weak data => @default-panic, move |entry| {
+        data.indi_gui.set_filter_text(entry.text().as_str());
+    }));
+
+    if let Some(load_drivers_err) = load_drivers_err {
+        add_log_record(
+            &data,
+            &Some(Utc::now()),
+            "",
+            &format!("Load devices info error: {}", load_drivers_err)
+        );
+    }
 }
 
 fn handler_close_window(data: &Rc<HardwareData>) -> gtk::Inhibit {
@@ -538,7 +534,7 @@ fn update_window_title(data: &Rc<HardwareData>) {
         ))
         .join(", ");
     drop(options);
-    data.main_gui.set_dev_list_and_conn_status(
+    data.gui.set_dev_list_and_conn_status(
         dev_list,
         status.to_str(true).to_string()
     );

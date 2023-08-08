@@ -533,7 +533,7 @@ impl IndiGui {
                 spin.set_range(elem_info.min, elem_info.max);
                 spin.set_value(value);
                 spin.set_width_chars(10);
-                let num_format = indi_api::NumFormat::new_from_str(&elem_info.format);
+                let num_format = indi_api::NumFormat::new_from_indi_format(&elem_info.format);
                 match num_format {
                     indi_api::NumFormat::Float { prec, .. } => {
                         spin.set_numeric(true);
@@ -816,7 +816,7 @@ impl IndiGui {
             let UiIndiPropElemData::Num(num_data) = &ui_elem.data else { continue; };
             let indi_api::PropValue::Num(value) = &indi_elem.value else { continue; };
             let Some(cur_value) = &num_data.cur_value else { continue; };
-            let num_format = indi_api::NumFormat::new_from_str(&elem_info.format);
+            let num_format = indi_api::NumFormat::new_from_indi_format(&elem_info.format);
             cur_value.set_text(&num_format.value_to_string(*value));
         }
     }
