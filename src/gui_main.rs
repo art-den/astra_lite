@@ -5,8 +5,8 @@ use serde::{Serialize, Deserialize};
 use crate::{indi_api, gtk_utils, io_utils::*, state::*, options::*};
 
 pub const TIMER_PERIOD_MS: u64 = 250;
-pub const CONF_FN: &str = "gui_main";
-pub const OPTIONS_FN: &str = "options";
+const CONF_FN: &str = "gui_main";
+const OPTIONS_FN: &str = "options";
 
 pub enum MainGuiEvent {
     Timer,
@@ -75,10 +75,9 @@ struct MainData {
     handlers:     RefCell<MainGuiHandlers>,
     progress:     RefCell<Option<Progress>>,
     state:        Arc<State>,
-    indi:         Arc<indi_api::Connection>,
     builder:      gtk::Builder,
     window:       gtk::ApplicationWindow,
-    gui:          Rc<Gui>,
+    self_:        RefCell<Option<Rc<MainData>>>
 }
 
 impl Drop for MainData {
@@ -87,30 +86,13 @@ impl Drop for MainData {
     }
 }
 
-fn panic_handler(
-    panic_info:        &std::panic::PanicInfo,
-    indi:              &indi_api::Connection,
-    def_panic_handler: &Box<dyn Fn(&std::panic::PanicInfo<'_>) + 'static + Sync + Send>,
-) {
-    log::info!("Disconnecting (and stop) INDI server after panic...");
-    _ = indi.disconnect_and_wait();
-    log::info!("Done!");
-
-    def_panic_handler(panic_info);
-}
-
 pub fn build_ui(
     app:      &gtk::Application,
+    indi:     &Arc<indi_api::Connection>,
+    options:  &Arc<RwLock<Options>>,
+    state:    &Arc<State>,
     logs_dir: &PathBuf
 ) {
-    let indi = Arc::new(indi_api::Connection::new());
-
-    let indi_for_panic = Arc::clone(&indi);
-    let default_panic_handler = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info|
-        panic_handler(panic_info, &indi_for_panic, &default_panic_handler)
-    ));
-
     let css_provider = gtk::CssProvider::new();
     css_provider.load_from_data(CSS).unwrap();
     gtk::StyleContext::add_provider_for_screen(
@@ -129,34 +111,34 @@ pub fn build_ui(
     ).as_slice()).unwrap();
     window.set_icon(Some(&icon));
 
-    let mut main_options = MainOptions::default();
     gtk_utils::exec_and_show_error(&window, || {
-        load_json_from_config_file(&mut main_options, CONF_FN)
-    });
-
-    let mut options = Options::default();
-    gtk_utils::exec_and_show_error(&window, || {
-        load_json_from_config_file(&mut options, OPTIONS_FN)?;
+        let mut options = options.write().unwrap();
+        load_json_from_config_file::<Options>(&mut options, OPTIONS_FN)?;
         options.raw_frames.check()?;
         options.live.check()?;
         Ok(())
     });
 
-    let options = Arc::new(RwLock::new(options));
+    let mut main_options = MainOptions::default();
+    gtk_utils::exec_and_show_error(&window, || {
+        load_json_from_config_file(&mut main_options, CONF_FN)
+    });
+
     let gui = Rc::new(Gui::new(&builder));
 
     let data = Rc::new(MainData {
         logs_dir:     logs_dir.clone(),
-        state:        Arc::new(State::new(&indi, &options)),
-        options:      Arc::clone(&options),
+        state:        Arc::clone(state),
+        options:      Arc::clone(options),
         main_options: RefCell::new(main_options),
         handlers:     RefCell::new(Vec::new()),
         progress:     RefCell::new(None),
-        indi,
         window:       window.clone(),
         builder:      builder.clone(),
-        gui:          Rc::clone(&gui),
+        self_:        RefCell::new(None), // used to drop MainData in window's delete_event
     });
+
+    *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
     window.set_application(Some(app));
     window.show();
@@ -165,51 +147,27 @@ pub fn build_ui(
     gtk::main_iteration_do(true);
     gtk::main_iteration_do(true);
     gtk::main_iteration_do(true);
-    let data_weak = Rc::downgrade(&data);
     glib::timeout_add_local(
         Duration::from_millis(TIMER_PERIOD_MS),
-        move || {
-            let Some(data) = data_weak.upgrade() else {
-                return Continue(false);
-            };
+        clone!(@weak data => @default-return Continue(false), move || {
             for handler in data.handlers.borrow().iter() {
                 handler(MainGuiEvent::Timer);
             }
             Continue(true)
         }
-    );
+    ));
 
-    crate::gui_hardware::build_ui(
-        app,
-        &data.builder,
-        &gui,
-        &options,
-        &data.state,
-        &data.indi,
-    );
-
-    crate::gui_camera::build_ui(
-        app,
-        &builder,
-        &gui,
-        &options,
-        &data.state,
-        &data.indi,
-        &mut data.handlers.borrow_mut()
-    );
-
-    crate::gui_map::build_ui(
-        app,
-        &data.builder,
-        &options
-    );
+    crate::gui_hardware::build_ui(app, &builder, &gui, options, state, indi);
+    crate::gui_camera::build_ui(app, &builder, &gui, options, state, indi, &mut data.handlers.borrow_mut());
+    crate::gui_map::build_ui(app, &builder, &options);
+    crate::gui_guiding::build_ui(app, &builder, options, state, indi);
 
     gtk_utils::enable_widgets(&builder, false, &[
         ("mi_color_theme", cfg!(target_os = "windows"))
     ]);
 
     let mi_dark_theme = builder.object::<gtk::RadioMenuItem>("mi_dark_theme").unwrap();
-    mi_dark_theme.connect_activate(clone!(@strong data => move |mi| {
+    mi_dark_theme.connect_activate(clone!(@weak data => move |mi| {
         if mi.is_active() {
             data.main_options.borrow_mut().theme = Theme::Dark;
             apply_theme(&data);
@@ -217,22 +175,12 @@ pub fn build_ui(
     }));
 
     let mi_light_theme = builder.object::<gtk::RadioMenuItem>("mi_light_theme").unwrap();
-    mi_light_theme.connect_activate(clone!(@strong data => move |mi| {
+    mi_light_theme.connect_activate(clone!(@weak data => move |mi| {
         if mi.is_active() {
             data.main_options.borrow_mut().theme = Theme::Light;
             apply_theme(&data);
         }
     }));
-
-    let data_weak = Rc::downgrade(&data);
-    window.connect_delete_event(move |_, _| {
-        let Some(data) = data_weak.upgrade() else {
-            return gtk::Inhibit(false);
-        };
-        let res = handler_close_window(&data);
-        gtk::main_iteration_do(true);
-        res
-    });
 
     let da_progress = builder.object::<gtk::DrawingArea>("da_progress").unwrap();
     da_progress.connect_draw(clone!(@weak data => @default-panic, move |area, cr| {
@@ -241,7 +189,7 @@ pub fn build_ui(
     }));
 
     let mi_normal_log_mode = builder.object::<gtk::RadioMenuItem>("mi_normal_log_mode").unwrap();
-    mi_normal_log_mode.connect_activate(clone!(@strong data => move |mi| {
+    mi_normal_log_mode.connect_activate(clone!(@weak data => move |mi| {
         if mi.is_active() {
             log::info!("Setting verbose log::LevelFilter::Info level");
             log::set_max_level(log::LevelFilter::Info);
@@ -249,7 +197,7 @@ pub fn build_ui(
     }));
 
     let mi_verbose_log_mode = builder.object::<gtk::RadioMenuItem>("mi_verbose_log_mode").unwrap();
-    mi_verbose_log_mode.connect_activate(clone!(@strong data => move |mi| {
+    mi_verbose_log_mode.connect_activate(clone!(@weak data => move |mi| {
         if mi.is_active() {
             log::info!("Setting verbose log::LevelFilter::Debug level");
             log::set_max_level(log::LevelFilter::Debug);
@@ -257,7 +205,7 @@ pub fn build_ui(
     }));
 
     let mi_max_log_mode = builder.object::<gtk::RadioMenuItem>("mi_max_log_mode").unwrap();
-    mi_max_log_mode.connect_activate(clone!(@strong data => move |mi| {
+    mi_max_log_mode.connect_activate(clone!(@weak data => move |mi| {
         if mi.is_active() {
             log::info!("Setting verbose log::LevelFilter::Trace level");
             log::set_max_level(log::LevelFilter::Trace);
@@ -266,21 +214,29 @@ pub fn build_ui(
 
     let btn_fullscreen = builder.object::<gtk::ToggleButton>("btn_fullscreen").unwrap();
     btn_fullscreen.set_sensitive(false);
-    btn_fullscreen.connect_active_notify(clone!(@strong data => move |btn| {
+    btn_fullscreen.connect_active_notify(clone!(@weak data => move |btn| {
         for fs_handler in data.handlers.borrow().iter() {
             fs_handler(MainGuiEvent::FullScreen(btn.is_active()));
         }
     }));
 
     let nb_main = builder.object::<gtk::Notebook>("nb_main").unwrap();
-    nb_main.connect_switch_page(clone!(@strong data => move |_, _, page| {
-        let enable_fullscreen = match page { 1|2 => true, _ => false };
+    nb_main.connect_switch_page(clone!(@weak data => move |_, _, page| {
+        let enable_fullscreen = match page { 1|2|3 => true, _ => false };
         btn_fullscreen.set_sensitive(enable_fullscreen);
+    }));
+
+    window.connect_delete_event(clone!(@weak data => @default-return gtk::Inhibit(false), move |_, _| {
+        let res = handler_close_window(&data);
+        gtk::main_iteration_do(true);
+        *data.self_.borrow_mut() = None;
+        res
     }));
 
     gtk_utils::connect_action(&window, &data, "stop",             handler_action_stop);
     gtk_utils::connect_action(&window, &data, "continue",         handler_action_continue);
     gtk_utils::connect_action(&window, &data, "open_logs_folder", handler_action_open_logs_folder);
+
     correct_widgets_props(&data);
     connect_state_events(&data);
     gui.update_window_title();
@@ -292,13 +248,13 @@ fn connect_state_events(data: &Rc<MainData>) {
     data.state.subscribe_events(move |event| {
         sender.send(event).unwrap();
     });
-    receiver.attach(None, clone! (@strong data => move |event| {
+    receiver.attach(None, clone! (@weak data => @default-return Continue(false), move |event| {
         match event {
-            Event::ModeChanged => {
+            StateEvent::ModeChanged => {
                 correct_widgets_props(&data);
                 show_mode_caption(&data);
             },
-            Event::Propress(progress) => {
+            StateEvent::Propress(progress) => {
                 *data.progress.borrow_mut() = progress;
                 let da_progress = data.builder.object::<gtk::DrawingArea>("da_progress").unwrap();
                 da_progress.queue_draw();
@@ -386,7 +342,10 @@ fn handler_draw_progress(
 
 fn correct_widgets_props(data: &Rc<MainData>) {
     let mode_data = data.state.mode_data();
-    let can_be_continued = mode_data.aborted_mode.as_ref().map(|m| m.can_be_continued_after_stop()).unwrap_or(false);
+    let can_be_continued = mode_data.aborted_mode
+        .as_ref()
+        .map(|m| m.can_be_continued_after_stop())
+        .unwrap_or(false);
     gtk_utils::enable_actions(&data.window, &[
         ("stop",     mode_data.mode.can_be_stopped()),
         ("continue", can_be_continued),

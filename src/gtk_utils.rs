@@ -1,5 +1,5 @@
 use std::{rc::Rc, path::{Path, PathBuf}, cell::Cell};
-use gtk::{*, prelude::*, gio, cairo, glib};
+use gtk::{*, prelude::*, gio, cairo, glib, glib::clone};
 
 
 pub struct ExclusiveCaller {
@@ -54,9 +54,8 @@ pub fn connect_action<Fun, T: 'static>(
     act_name: &str,
     fun:      Fun
 ) where Fun: Fn(&Rc<T>) + 'static {
-    let data_copy = Rc::clone(data);
     let action = gio::SimpleAction::new(act_name, None);
-    action.connect_activate(move |_, _| fun(&data_copy));
+    action.connect_activate(clone!(@weak data => move |_, _| fun(&data)));
     window.add_action(&action);
 }
 
@@ -174,6 +173,52 @@ pub fn is_named_combobox_empty(builder: &gtk::Builder, widget_name: &str) -> boo
 pub fn combobox_items_count<T: IsA<gtk::ComboBox>>(cb: &T) -> usize {
     let model = cb.model().unwrap();
     get_model_row_count(&model)
+}
+
+enum GtkHelperRoot {
+    Builder(gtk::Builder),
+    Container(gtk::Container),
+}
+
+pub struct GtkHelper {
+    root: GtkHelperRoot,
+}
+
+impl GtkHelper {
+    pub fn new_from_builder(bldr: &gtk::Builder) -> Self {
+        Self {
+            root: GtkHelperRoot::Builder(bldr.clone())
+        }
+    }
+
+    pub fn object_by_id(&self, obj_bldr_id: &str) -> glib::Object {
+        match &self.root {
+            GtkHelperRoot::Builder(bldr) => bldr.object(obj_bldr_id).unwrap(),
+            GtkHelperRoot::Container(_) => todo!(),
+        }
+    }
+
+    pub fn set_bool_prop(&self, obj_bldr_id: &str, prop_name: &str, value: bool) {
+        self.object_by_id(obj_bldr_id)
+            .set_property_from_value(prop_name, &value.into());
+    }
+
+    pub fn bool_prop(&self, obj_bldr_id: &str, prop_name: &str) -> bool {
+        self.object_by_id(obj_bldr_id)
+            .property_value(prop_name)
+            .get::<bool>()
+            .expect("Wrong property type")
+    }
+
+    pub fn set_active_bool_prop(&self, obj_bldr_id: &str, value: bool) {
+        self.set_bool_prop(obj_bldr_id, "active", value);
+    }
+
+    pub fn active_bool_prop(&self, obj_bldr_id: &str) -> bool {
+        self.bool_prop(obj_bldr_id, "active")
+    }
+
+
 }
 
 pub fn set_f64(

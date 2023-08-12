@@ -7,21 +7,23 @@ use crate::{image_raw::FrameType, image_processing::{CalibrParams, PreviewParams
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct IndiOptions {
-    pub mount:   Option<String>,
-    pub camera:  Option<String>,
-    pub focuser: Option<String>,
-    pub remote:  bool,
-    pub address: String,
+    pub mount:    Option<String>,
+    pub camera:   Option<String>,
+    pub guid_cam: Option<String>,
+    pub focuser:  Option<String>,
+    pub remote:   bool,
+    pub address:  String,
 }
 
 impl Default for IndiOptions {
     fn default() -> Self {
         Self {
-            mount:   None,
-            camera:  None,
-            focuser: None,
-            remote:  false,
-            address: "localhost".to_string(),
+            mount:    None,
+            camera:   None,
+            guid_cam: None,
+            focuser:  None,
+            remote:   false,
+            address:  "localhost".to_string(),
         }
     }
 }
@@ -212,7 +214,7 @@ impl LiveStackingOptions {
         if self.out_dir.as_os_str().is_empty() {
             let mut save_path = dirs::home_dir().unwrap();
             save_path.push("Astro");
-            save_path.push("LiveStaking");
+            save_path.push("LiveStacking");
             if !save_path.is_dir() {
                 std::fs::create_dir_all(&save_path)?;
             }
@@ -367,7 +369,8 @@ impl FocuserOptions {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
-pub struct GuidingOptions {
+// Options for guiding by main camera
+pub struct SimpleGuidingOptions {
     pub enabled:         bool,
     pub max_error:       f64,
     pub dith_period:     u32, // in minutes, 0 - do not dither
@@ -375,7 +378,7 @@ pub struct GuidingOptions {
     pub calibr_exposure: f64,
 }
 
-impl Default for GuidingOptions {
+impl Default for SimpleGuidingOptions {
     fn default() -> Self {
         Self {
             enabled:         false,
@@ -387,7 +390,7 @@ impl Default for GuidingOptions {
     }
 }
 
-impl GuidingOptions {
+impl SimpleGuidingOptions {
     pub fn is_used(&self) -> bool {
         self.enabled ||
         self.dith_period != 0
@@ -456,6 +459,24 @@ impl Default for CamOptions {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(default)]
+pub struct GuidingOptions {
+    pub cam_device: String,
+    pub cam_ctrl:   CamCtrlOptions,
+    pub frame:      FrameOptions,
+}
+
+impl Default for GuidingOptions {
+    fn default() -> Self {
+        Self {
+            cam_device: Default::default(),
+            cam_ctrl: Default::default(),
+            frame: Default::default()
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(default)]
 pub struct Options {
@@ -468,7 +489,8 @@ pub struct Options {
     pub preview:    PreviewOptions,
     pub hist:       HistOptions,
     pub focuser:    FocuserOptions,
-    pub guiding:    GuidingOptions,
+    pub simp_guid:  SimpleGuidingOptions,
     pub mount:      MountOptions,
     pub telescope:  TelescopeOptions,
+    pub guiding:    GuidingOptions,
 }

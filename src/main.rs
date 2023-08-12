@@ -27,10 +27,12 @@ mod math;
 mod plots;
 mod sexagesimal;
 mod gui_map;
+mod gui_guiding;
+mod gui_common;
 
-use std::path::Path;
+use std::{path::Path, sync::{Arc, RwLock}};
 use gtk::prelude::*;
-use crate::io_utils::*;
+use crate::{io_utils::*, options::Options, state::State};
 
 fn panic_handler(
     panic_info:        &std::panic::PanicInfo,
@@ -99,18 +101,34 @@ fn main() -> anyhow::Result<()> {
         env!("CARGO_PKG_VERSION")
     );
 
-    let logs_dir_for_panic = logs_dir.clone();
-    let default_panic_handler = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info|
-        panic_handler(panic_info, &logs_dir_for_panic, &default_panic_handler)
-    ));
+    let indi = Arc::new(indi_api::Connection::new());
+    let options = Arc::new(RwLock::new(Options::default()));
+    let state = Arc::new(State::new(&indi, &options));
+
+    std::panic::set_hook({
+        let logs_dir = logs_dir.clone();
+        let default_panic_handler = std::panic::take_hook();
+        let indi = Arc::clone(&indi);
+        Box::new(move |panic_info| {
+            log::info!("Disconnecting (and stop) INDI server after panic...");
+            _ = indi.disconnect_and_wait();
+            log::info!("Done!");
+
+            panic_handler(panic_info, &logs_dir, &default_panic_handler)
+        })
+    });
 
     let application = gtk::Application::new(
         Some(&format!("com.github.art-den.{}", env!("CARGO_PKG_NAME"))),
         Default::default(),
     );
-    application.connect_activate(move |app| gui_main::build_ui(app, &logs_dir));
+
+    application.connect_activate(move |app|
+        gui_main::build_ui(app, &indi, &options, &state, &logs_dir)
+    );
     application.run();
+
+    log::info!("Exited from application.run");
+
     Ok(())
 }
-

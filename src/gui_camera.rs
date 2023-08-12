@@ -1,11 +1,10 @@
 use std::{
     rc::Rc,
-    sync::{*, mpsc::Sender},
+    sync::*,
     cell::{RefCell, Cell},
     f64::consts::PI,
-    thread::JoinHandle, path::PathBuf,
+    path::PathBuf,
 };
-use bitflags::bitflags;
 use chrono::{DateTime, Local, Utc};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use serde::{Serialize, Deserialize};
@@ -14,7 +13,7 @@ use crate::{
     options::*,
     gui_main::*,
     indi_api,
-    gtk_utils::{self, show_error_message},
+    gtk_utils,
     io_utils::*,
     image_processing::*,
     log_utils::*,
@@ -23,39 +22,29 @@ use crate::{
     image_raw::FrameType,
     state::*,
     plots::*,
-    math::*
+    math::*,
+    gui_common::*
 };
 
 pub const SET_PROP_TIMEOUT: Option<u64> = Some(1000);
-pub const CONF_FN: &str = "gui_cam";
+const CONF_FN: &str = "gui_cam";
 
-bitflags! { #[derive(Default)] struct DelayedFlags: u32 {
-    const UPDATE_CAM_LIST        = 1 << 0;
-    const START_LIVE_VIEW        = 1 << 1;
-    const START_COOLING          = 1 << 2;
-    const UPDATE_CTRL_WIDGETS    = 1 << 3;
-    const UPDATE_RESOLUTION_LIST = 1 << 4;
-    const SELECT_MAX_RESOLUTION  = 1 << 5;
-    const UPDATE_FOC_LIST        = 1 << 6;
-    const UPDATE_FOC_POS_NEW     = 1 << 7;
-    const UPDATE_FOC_POS         = 1 << 8;
-    const UPDATE_MOUNT_WIDGETS   = 1 << 9;
-    const UPDATE_MOUNT_SPD_LIST  = 1 << 10;
-    const FILL_HEATER_ITEMS      = 1 << 10;
-}}
-
-#[derive(Default)]
-struct DelayedAction {
-    countdown: u8,
-    flags:     DelayedFlags,
+#[derive(Hash, Eq, PartialEq)]
+enum DelayedActionTypes {
+    UpdateCamList,
+    StartLiveView,
+    StartCooling,
+    UpdateCtrlWidgets,
+    UpdateResolutionList,
+    SelectMaxResolution,
+    UpdateFocList,
+    UpdateFocPosNew,
+    UpdateFocPos,
+    UpdateMountWidgets,
+    UpdateMountSpdList,
+    FillHeaterItems,
 }
 
-impl DelayedAction {
-    fn set(&mut self, flags: DelayedFlags) {
-        self.flags |= flags;
-        self.countdown = 2;
-    }
-}
 
 impl PreviewScale {
     fn from_active_id(id: Option<&str>) -> PreviewScale {
@@ -213,20 +202,20 @@ impl PreviewColor {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
-pub struct GuiOptions {
-    pub paned_pos1:     i32,
-    pub paned_pos2:     i32,
-    pub paned_pos3:     i32,
-    pub paned_pos4:     i32,
-    pub cam_ctrl_exp:   bool,
-    pub shot_exp:       bool,
-    pub calibr_exp:     bool,
-    pub raw_frames_exp: bool,
-    pub live_exp:       bool,
-    pub foc_exp:        bool,
-    pub dith_exp:       bool,
-    pub quality_exp:    bool,
-    pub mount_exp:      bool,
+struct GuiOptions {
+    paned_pos1:     i32,
+    paned_pos2:     i32,
+    paned_pos3:     i32,
+    paned_pos4:     i32,
+    cam_ctrl_exp:   bool,
+    shot_exp:       bool,
+    calibr_exp:     bool,
+    raw_frames_exp: bool,
+    live_exp:       bool,
+    foc_exp:        bool,
+    dith_exp:       bool,
+    quality_exp:    bool,
+    mount_exp:      bool,
 }
 
 impl Default for GuiOptions {
@@ -249,10 +238,9 @@ impl Default for GuiOptions {
     }
 }
 
-
-pub enum MainThreadEvents {
+pub enum MainThreadEvent {
     ShowFrameProcessingResult(FrameProcessResult),
-    StateEvent(Event),
+    StateEvent(StateEvent),
     IndiEvent(indi_api::Event),
 }
 
@@ -263,18 +251,17 @@ struct CameraData {
     options:            Arc<RwLock<Options>>,
     state:              Arc<State>,
     indi:               Arc<indi_api::Connection>,
-    delayed_action:     RefCell<DelayedAction>,
+    delayed_actions:    DelayedActions<DelayedActionTypes>,
     gui_options:        RefCell<GuiOptions>,
-    img_cmds_sender:    Sender<FrameProcessCommand>,
-    process_thread:     RefCell<Option<JoinHandle<()>>>,
     conn_state:         RefCell<indi_api::ConnState>,
-    indi_conn:          RefCell<Option<indi_api::Subscription>>,
+    indi_evt_conn:      RefCell<Option<indi_api::Subscription>>,
     preview_scroll_pos: RefCell<Option<((f64, f64), (f64, f64))>>,
     light_history:      RefCell<Vec<LightFrameShortInfo>>,
     focusing_data:      RefCell<Option<FocusingEvt>>,
     closed:             Cell<bool>,
     excl:               gtk_utils::ExclusiveCaller,
     full_screen_mode:   Cell<bool>,
+    self_:              RefCell<Option<Rc<CameraData>>>,
 }
 
 impl Drop for CameraData {
@@ -284,13 +271,13 @@ impl Drop for CameraData {
 }
 
 pub fn build_ui(
-    _app:      &gtk::Application,
-    builder:   &gtk::Builder,
-    gui:       &Rc<Gui>,
-    options:   &Arc<RwLock<Options>>,
-    state:     &Arc<State>,
-    indi:      &Arc<indi_api::Connection>,
-    handlers:  &mut MainGuiHandlers,
+    _app:     &gtk::Application,
+    builder:  &gtk::Builder,
+    gui:      &Rc<Gui>,
+    options:  &Arc<RwLock<Options>>,
+    state:    &Arc<State>,
+    indi:     &Arc<indi_api::Connection>,
+    handlers: &mut MainGuiHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
@@ -300,75 +287,74 @@ pub fn build_ui(
         Ok(())
     });
 
-    let delayed_action = DelayedAction{
-        countdown: 0,
-        flags:     DelayedFlags::empty(),
-    };
-
-    let (img_cmds_sender, process_thread) = start_main_cam_frame_processing_thread();
-    let camera_data = Rc::new(CameraData {
+    let data = Rc::new(CameraData {
         gui:                Rc::clone(gui),
         builder:            builder.clone(),
         window:             window.clone(),
         state:              Arc::clone(state),
         indi:               Arc::clone(indi),
         options:            Arc::clone(options),
-        delayed_action:     RefCell::new(delayed_action),
+        delayed_actions:    DelayedActions::new(500),
         gui_options:        RefCell::new(gui_options),
-        img_cmds_sender:    img_cmds_sender.clone(),
-        process_thread:     RefCell::new(Some(process_thread)),
         conn_state:         RefCell::new(indi_api::ConnState::Disconnected),
-        indi_conn:          RefCell::new(None),
+        indi_evt_conn:      RefCell::new(None),
         preview_scroll_pos: RefCell::new(None),
         light_history:      RefCell::new(Vec::new()),
         focusing_data:      RefCell::new(None),
         closed:             Cell::new(false),
         excl:               gtk_utils::ExclusiveCaller::new(),
         full_screen_mode:   Cell::new(false),
+        self_:              RefCell::new(None),
     });
 
-    configure_camera_widget_props(&camera_data);
+    *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
-    connect_misc_events(&camera_data, img_cmds_sender);
+    configure_camera_widget_props(&data);
 
-    connect_widgets_events_before_show_options(&camera_data);
+    connect_indi_and_state_events(&data);
 
-    init_focuser_widgets(&camera_data);
-    init_dithering_widgets(&camera_data);
+    connect_widgets_events_before_show_options(&data);
 
-    show_options(&camera_data);
-    show_frame_options(&camera_data);
+    init_focuser_widgets(&data);
+    init_dithering_widgets(&data);
 
-    show_total_raw_time(&camera_data);
-    update_light_history_table(&camera_data);
+    show_options(&data);
+    show_frame_options(&data);
 
-    connect_widgets_events(&camera_data);
-    connect_img_mouse_scroll_events(&camera_data);
-    connect_focuser_widgets_events(&camera_data);
-    connect_dithering_widgets_events(&camera_data);
-    connect_mount_widgets_events(&camera_data);
+    show_total_raw_time(&data);
+    update_light_history_table(&data);
 
-    let weak_camera_data = Rc::downgrade(&camera_data);
-    handlers.push(Box::new(move |event| {
-        let Some(data) = weak_camera_data.upgrade() else { return; };
+    connect_widgets_events(&data);
+    connect_img_mouse_scroll_events(&data);
+    connect_focuser_widgets_events(&data);
+    connect_dithering_widgets_events(&data);
+    connect_mount_widgets_events(&data);
+
+    handlers.push(Box::new(clone!(@weak data => move |event| {
         handler_main_gui_event(&data, event);
-    }));
+    })));
 
-    window.connect_delete_event(clone!(@weak camera_data => @default-panic, move |_, _| {
-        let res = handler_close_window(&camera_data);
+    data.delayed_actions.set_event_handler(
+        clone!(@weak data => move |action| {
+            handler_delayed_action(&data, action);
+        })
+    );
+
+    window.connect_delete_event(clone!(@weak data => @default-return gtk::Inhibit(false), move |_, _| {
+        let res = handler_close_window(&data);
+        *data.self_.borrow_mut() = None;
         res
     }));
 
-    update_camera_devices_list(&camera_data);
-    update_focuser_devices_list(&camera_data);
-    correct_widgets_props(&camera_data);
-    correct_frame_quality_widgets_props(&camera_data);
+    update_camera_devices_list(&data);
+    update_focuser_devices_list(&data);
+    correct_widgets_props(&data);
+    correct_frame_quality_widgets_props(&data);
 }
 
 fn handler_main_gui_event(data: &Rc<CameraData>, event: MainGuiEvent) {
     match event {
-        MainGuiEvent::Timer =>
-            handler_timer(&data),
+        MainGuiEvent::Timer => {}
         MainGuiEvent::FullScreen(full_screen) =>
             handler_full_screen(&data, full_screen),
         MainGuiEvent::BeforeModeContinued =>
@@ -447,119 +433,121 @@ fn configure_camera_widget_props(data: &Rc<CameraData>) {
     l_coolpwr_value.set_text("");
 }
 
-fn connect_misc_events(
-    data:            &Rc<CameraData>,
-    img_cmds_sender: Sender<FrameProcessCommand>,
-) {
+fn connect_indi_and_state_events(data: &Rc<CameraData>) {
     let (main_thread_sender, main_thread_receiver) =
         glib::MainContext::channel(glib::PRIORITY_DEFAULT);
 
     let sender = main_thread_sender.clone();
-    *data.indi_conn.borrow_mut() = Some(data.indi.subscribe_events(move |event| {
-        sender.send(MainThreadEvents::IndiEvent(event)).unwrap();
+    *data.indi_evt_conn.borrow_mut() = Some(data.indi.subscribe_events(move |event| {
+        sender.send(MainThreadEvent::IndiEvent(event)).unwrap();
     }));
 
     let sender = main_thread_sender.clone();
     data.state.subscribe_events(move |event| {
-        sender.send(MainThreadEvents::StateEvent(event)).unwrap();
+        sender.send(MainThreadEvent::StateEvent(event)).unwrap();
     });
 
-    data.state.connect_indi_events(
-        main_thread_sender,
-        img_cmds_sender
+    let sender = main_thread_sender.clone();
+    data.state.connect_main_cam_proc_result_event(move |res| {
+        _ = sender.send(MainThreadEvent::ShowFrameProcessingResult(res));
+    });
+
+    main_thread_receiver.attach(None,
+        clone!(@weak data => @default-return Continue(false),
+        move |event| {
+            if data.closed.get() { return Continue(false); };
+            process_event_in_main_thread(&data, event);
+            Continue(true)
+        })
     );
+}
 
-    let data = Rc::downgrade(data);
-    main_thread_receiver.attach(None, move |item| {
-        let Some(data) = data.upgrade() else { return Continue(false); };
-        if data.closed.get() { return Continue(false); };
-        match item {
-            MainThreadEvents::IndiEvent(indi_api::Event::ConnChange(conn_state)) =>
-                process_conn_state_event(&data, conn_state),
-            MainThreadEvents::IndiEvent(indi_api::Event::PropChange(event_data)) => {
-                match &event_data.change {
-                    indi_api::PropChange::New(value) =>
-                        process_simple_prop_change_event(
-                            &data,
-                            &event_data.device_name,
-                            &event_data.prop_name,
-                            &value.elem_name,
-                            true,
-                            None,
-                            None,
-                            &value.prop_value
-                        ),
-                    indi_api::PropChange::Change{ value, prev_state, new_state } =>
-                        process_simple_prop_change_event(
-                            &data,
-                            &event_data.device_name,
-                            &event_data.prop_name,
-                            &value.elem_name,
-                            false,
-                            Some(prev_state),
-                            Some(new_state),
-                            &value.prop_value
-                        ),
-                    indi_api::PropChange::Delete => {}
-                };
-            },
+fn process_event_in_main_thread(data: &Rc<CameraData>, event: MainThreadEvent) {
+    match event {
+        MainThreadEvent::IndiEvent(indi_api::Event::ConnChange(conn_state)) =>
+            process_conn_state_event(&data, conn_state),
+        MainThreadEvent::IndiEvent(indi_api::Event::PropChange(event_data)) => {
+            match &event_data.change {
+                indi_api::PropChange::New(value) =>
+                    process_simple_prop_change_event(
+                        &data,
+                        &event_data.device_name,
+                        &event_data.prop_name,
+                        &value.elem_name,
+                        true,
+                        None,
+                        None,
+                        &value.prop_value
+                    ),
+                indi_api::PropChange::Change{ value, prev_state, new_state } =>
+                    process_simple_prop_change_event(
+                        &data,
+                        &event_data.device_name,
+                        &event_data.prop_name,
+                        &value.elem_name,
+                        false,
+                        Some(prev_state),
+                        Some(new_state),
+                        &value.prop_value
+                    ),
+                indi_api::PropChange::Delete => {}
+            };
+        },
 
-            MainThreadEvents::IndiEvent(indi_api::Event::DeviceDelete(event)) => {
-                update_devices_list_and_props_by_drv_interface(&data, event.drv_interface);
-            },
+        MainThreadEvent::IndiEvent(indi_api::Event::DeviceDelete(event)) => {
+            update_devices_list_and_props_by_drv_interface(&data, event.drv_interface);
+        },
 
-            MainThreadEvents::ShowFrameProcessingResult(result) => {
-                match result.data {
-                    FrameProcessResultData::ShotProcessingStarted(mode_type) => {
-                        let mode_data = data.state.mode_data();
-                        if mode_data.mode.get_type() == mode_type {
-                            drop(mode_data);
-                            data.state.notify_about_frame_processing_started();
-                        }
-                    },
-                    FrameProcessResultData::ShotProcessingFinished {frame_is_ok, mode_type, process_time, blob_dl_time} => {
-                        let max_fps = if process_time != 0.0 { 1.0/process_time } else { 0.0 };
-                        let perf_str = format!("Download time = {:.2}s, max. FPS={:.1}", blob_dl_time, max_fps);
-                        data.gui.set_perf_string(perf_str);
+        MainThreadEvent::ShowFrameProcessingResult(result) => {
+            match result.data {
+                FrameProcessResultData::ShotProcessingStarted(mode_type) => {
+                    let mode_data = data.state.mode_data();
+                    if mode_data.mode.get_type() == mode_type {
+                        drop(mode_data);
+                        data.state.notify_about_frame_processing_started();
+                    }
+                },
+                FrameProcessResultData::ShotProcessingFinished {frame_is_ok, mode_type, process_time, blob_dl_time} => {
+                    let max_fps = if process_time != 0.0 { 1.0/process_time } else { 0.0 };
+                    let perf_str = format!("Download time = {:.2}s, max. FPS={:.1}", blob_dl_time, max_fps);
+                    data.gui.set_perf_string(perf_str);
 
-                        let mode_data = data.state.mode_data();
-                        if mode_data.mode.get_type() == mode_type {
-                            drop(mode_data);
-                            data.state.notify_about_frame_processing_finished(frame_is_ok);
-                        }
-                    },
-                    _ => {},
-                }
-                show_frame_processing_result(&data, result);
-            },
+                    let mode_data = data.state.mode_data();
+                    if mode_data.mode.get_type() == mode_type {
+                        drop(mode_data);
+                        data.state.notify_about_frame_processing_finished(frame_is_ok);
+                    }
+                },
+                _ => {},
+            }
+            show_frame_processing_result(&data, result);
+        },
 
-            MainThreadEvents::StateEvent(Event::ModeChanged) => {
-                correct_widgets_props(&data);
-            },
+        MainThreadEvent::StateEvent(StateEvent::ModeChanged) => {
+            correct_widgets_props(&data);
+        },
 
-            MainThreadEvents::StateEvent(Event::ModeContinued) => {
-                show_frame_options(&data);
-            },
+        MainThreadEvent::StateEvent(StateEvent::ModeContinued) => {
+            show_frame_options(&data);
+        },
 
-            MainThreadEvents::StateEvent(Event::Focusing(fdata)) => {
-                *data.focusing_data.borrow_mut() = Some(fdata);
-                let da_focusing = data.builder.object::<gtk::DrawingArea>("da_focusing").unwrap();
-                da_focusing.queue_draw();
-            },
+        MainThreadEvent::StateEvent(StateEvent::Focusing(fdata)) => {
+            *data.focusing_data.borrow_mut() = Some(fdata);
+            let da_focusing = data.builder.object::<gtk::DrawingArea>("da_focusing").unwrap();
+            da_focusing.queue_draw();
+        },
 
-            MainThreadEvents::StateEvent(Event::FocusResultValue { value }) => {
-                update_focuser_position_after_focusing(&data, value);
-            },
+        MainThreadEvent::StateEvent(StateEvent::FocusResultValue { value }) => {
+            update_focuser_position_after_focusing(&data, value);
+        },
 
-            _ => {},
-        }
-        Continue(true)
-    });
+        _ => {},
+    }
 }
 
 fn connect_widgets_events_before_show_options(data: &Rc<CameraData>) {
     let sw_preview_img = data.builder.object::<gtk::Widget>("sw_preview_img").unwrap();
-    sw_preview_img.connect_size_allocate(clone!(@strong data => move |_, rect| {
+    sw_preview_img.connect_size_allocate(clone!(@weak data => move |_, rect| {
         let mut options = data.options.write().unwrap();
         options.preview.widget_width = rect.width() as usize;
         options.preview.widget_height = rect.height() as usize;
@@ -586,7 +574,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     gtk_utils::connect_action(&data.window, data, "save_image_linear",      handler_action_save_image_linear);
 
     let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
-    cb_frame_mode.connect_active_id_notify(clone!(@strong data => move |cb| {
+    cb_frame_mode.connect_active_id_notify(clone!(@weak data => move |cb| {
         data.excl.exec(|| {
             let frame_type = FrameType::from_active_id(cb.active_id().as_deref());
             data.options.write().unwrap().cam.frame.frame_type = frame_type;
@@ -595,7 +583,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let chb_cooler = bldr.object::<gtk::CheckButton>("chb_cooler").unwrap();
-    chb_cooler.connect_active_notify(clone!(@strong data => move |chb| {
+    chb_cooler.connect_active_notify(clone!(@weak data => move |chb| {
         data.excl.exec(|| {
             data.options.write().unwrap().cam.ctrl.enable_cooler = chb.is_active();
             control_camera_by_options(&data, false);
@@ -604,7 +592,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let cb_cam_heater = bldr.object::<gtk::ComboBoxText>("cb_cam_heater").unwrap();
-    cb_cam_heater.connect_active_id_notify(clone!(@strong data => move |cb| {
+    cb_cam_heater.connect_active_id_notify(clone!(@weak data => move |cb| {
         data.excl.exec(|| {
             data.options.write().unwrap().cam.ctrl.heater_str = cb.active_id().map(|id| id.to_string());
             control_camera_by_options(&data, false);
@@ -613,7 +601,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let chb_fan = bldr.object::<gtk::CheckButton>("chb_fan").unwrap();
-    chb_fan.connect_active_notify(clone!(@strong data => move |chb| {
+    chb_fan.connect_active_notify(clone!(@weak data => move |chb| {
         data.excl.exec(|| {
             data.options.write().unwrap().cam.ctrl.enable_fan = chb.is_active();
             control_camera_by_options(&data, false);
@@ -622,7 +610,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let spb_temp = bldr.object::<gtk::SpinButton>("spb_temp").unwrap();
-    spb_temp.connect_value_changed(clone!(@strong data => move |spb| {
+    spb_temp.connect_value_changed(clone!(@weak data => move |spb| {
         data.excl.exec(|| {
             data.options.write().unwrap().cam.ctrl.temperature = spb.value();
             control_camera_by_options(&data, false);
@@ -630,7 +618,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let chb_shots_cont = bldr.object::<gtk::CheckButton>("chb_shots_cont").unwrap();
-    chb_shots_cont.connect_active_notify(clone!(@strong data => move |_| {
+    chb_shots_cont.connect_active_notify(clone!(@weak data => move |_| {
         data.excl.exec(|| {
             read_options_from_widgets(&data);
             correct_widgets_props(&data);
@@ -639,7 +627,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
-    cb_frame_mode.connect_active_id_notify(clone!(@strong data => move |cb| {
+    cb_frame_mode.connect_active_id_notify(clone!(@weak data => move |cb| {
         data.excl.exec(|| {
             let frame_type = FrameType::from_active_id(cb.active_id().as_deref());
             let mut options = data.options.write().unwrap();
@@ -651,7 +639,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let spb_exp = bldr.object::<gtk::SpinButton>("spb_exp").unwrap();
-    spb_exp.connect_value_changed(clone!(@strong data => move |sb| {
+    spb_exp.connect_value_changed(clone!(@weak data => move |sb| {
         data.excl.exec(|| {
             data.options.write().unwrap().cam.frame.set_exposure(sb.value());
             show_total_raw_time(&data);
@@ -659,21 +647,21 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let spb_gain = bldr.object::<gtk::SpinButton>("spb_gain").unwrap();
-    spb_gain.connect_value_changed(clone!(@strong data => move |sb| {
+    spb_gain.connect_value_changed(clone!(@weak data => move |sb| {
         data.excl.exec(|| {
             data.options.write().unwrap().cam.frame.gain = sb.value();
         });
     }));
 
     let spb_offset = bldr.object::<gtk::SpinButton>("spb_offset").unwrap();
-    spb_offset.connect_value_changed(clone!(@strong data => move |sb| {
+    spb_offset.connect_value_changed(clone!(@weak data => move |sb| {
         data.excl.exec(|| {
             data.options.write().unwrap().cam.frame.offset = sb.value() as i32;
         });
     }));
 
     let cb_bin = bldr.object::<gtk::ComboBoxText>("cb_bin").unwrap();
-    cb_bin.connect_active_id_notify(clone!(@strong data => move |cb| {
+    cb_bin.connect_active_id_notify(clone!(@weak data => move |cb| {
         data.excl.exec(|| {
             let binning = Binning::from_active_id(cb.active_id().as_deref());
             data.options.write().unwrap().cam.frame.binning = binning;
@@ -681,7 +669,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let cb_crop = bldr.object::<gtk::ComboBoxText>("cb_crop").unwrap();
-    cb_crop.connect_active_id_notify(clone!(@strong data => move |cb| {
+    cb_crop.connect_active_id_notify(clone!(@weak data => move |cb| {
         data.excl.exec(|| {
             let crop = Crop::from_active_id(cb.active_id().as_deref());
             data.options.write().unwrap().cam.frame.crop = crop;
@@ -689,21 +677,21 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let spb_delay = bldr.object::<gtk::SpinButton>("spb_delay").unwrap();
-    spb_delay.connect_value_changed(clone!(@strong data => move |sb| {
+    spb_delay.connect_value_changed(clone!(@weak data => move |sb| {
         data.excl.exec(|| {
             data.options.write().unwrap().cam.frame.delay = sb.value();
         });
     }));
 
     let chb_low_noise = bldr.object::<gtk::CheckButton>("chb_low_noise").unwrap();
-    chb_low_noise.connect_active_notify(clone!(@strong data => move |chb| {
+    chb_low_noise.connect_active_notify(clone!(@weak data => move |chb| {
         data.excl.exec(|| {
             data.options.write().unwrap().cam.frame.low_noise = chb.is_active();
         });
     }));
 
     let spb_raw_frames_cnt = bldr.object::<gtk::SpinButton>("spb_raw_frames_cnt").unwrap();
-    spb_raw_frames_cnt.connect_value_changed(clone!(@strong data => move |sb| {
+    spb_raw_frames_cnt.connect_value_changed(clone!(@weak data => move |sb| {
         data.excl.exec(|| {
             data.options.write().unwrap().raw_frames.frame_cnt = sb.value() as usize;
             show_total_raw_time(&data);
@@ -711,13 +699,13 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let da_shot_state = bldr.object::<gtk::DrawingArea>("da_shot_state").unwrap();
-    da_shot_state.connect_draw(clone!(@strong data => move |area, cr| {
+    da_shot_state.connect_draw(clone!(@weak data => @default-return Inhibit(false), move |area, cr| {
         handler_draw_shot_state(&data, area, cr);
         Inhibit(false)
     }));
 
     let cb_preview_src = bldr.object::<gtk::ComboBoxText>("cb_preview_src").unwrap();
-    cb_preview_src.connect_active_id_notify(clone!(@strong data => move |cb| {
+    cb_preview_src.connect_active_id_notify(clone!(@weak data => move |cb| {
         data.excl.exec(|| {
             let source = PreviewSource::from_active_id(cb.active_id().as_deref());
             data.options.write().unwrap().preview.source = source;
@@ -729,7 +717,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let cb_preview_scale = bldr.object::<gtk::ComboBoxText>("cb_preview_scale").unwrap();
-    cb_preview_scale.connect_active_id_notify(clone!(@strong data => move |cb| {
+    cb_preview_scale.connect_active_id_notify(clone!(@weak data => move |cb| {
         data.excl.exec(|| {
             let scale = PreviewScale::from_active_id(cb.active_id().as_deref());
             data.options.write().unwrap().preview.scale = scale;
@@ -738,7 +726,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let cb_preview_color = bldr.object::<gtk::ComboBoxText>("cb_preview_color").unwrap();
-    cb_preview_color.connect_active_id_notify(clone!(@strong data => move |cb| {
+    cb_preview_color.connect_active_id_notify(clone!(@weak data => move |cb| {
         data.excl.exec(|| {
             let color = PreviewColor::from_active_id(cb.active_id().as_deref());
             data.options.write().unwrap().preview.color = color;
@@ -747,7 +735,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let scl_dark = bldr.object::<gtk::Scale>("scl_dark").unwrap();
-    scl_dark.connect_value_changed(clone!(@strong data => move |scl| {
+    scl_dark.connect_value_changed(clone!(@weak data => move |scl| {
         data.excl.exec(|| {
             let mut options = data.options.write().unwrap();
             options.preview.dark_lvl = scl.value();
@@ -757,7 +745,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let scl_highlight = bldr.object::<gtk::Scale>("scl_highlight").unwrap();
-    scl_highlight.connect_value_changed(clone!(@strong data => move |scl| {
+    scl_highlight.connect_value_changed(clone!(@weak data => move |scl| {
         data.excl.exec(|| {
             let mut options = data.options.write().unwrap();
             options.preview.light_lvl = scl.value();
@@ -767,7 +755,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let scl_gamma = bldr.object::<gtk::Scale>("scl_gamma").unwrap();
-    scl_gamma.connect_value_changed(clone!(@strong data => move |scl| {
+    scl_gamma.connect_value_changed(clone!(@weak data => move |scl| {
         data.excl.exec(|| {
             let mut options = data.options.write().unwrap();
             options.preview.gamma = scl.value();
@@ -777,7 +765,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let chb_rem_grad = bldr.object::<gtk::CheckButton>("chb_rem_grad").unwrap();
-    chb_rem_grad.connect_active_notify(clone!(@strong data => move |chb| {
+    chb_rem_grad.connect_active_notify(clone!(@weak data => move |chb| {
         data.excl.exec(|| {
             data.options.write().unwrap().preview.remove_grad = chb.is_active();
             create_and_show_preview_image(&data);
@@ -785,13 +773,13 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let da_histogram = bldr.object::<gtk::DrawingArea>("da_histogram").unwrap();
-    da_histogram.connect_draw(clone!(@strong data => move |area, cr| {
+    da_histogram.connect_draw(clone!(@weak data => @default-return Inhibit(false), move |area, cr| {
         handler_draw_histogram(&data, area, cr);
         Inhibit(false)
     }));
 
     let ch_hist_logy = bldr.object::<gtk::CheckButton>("ch_hist_logy").unwrap();
-    ch_hist_logy.connect_active_notify(clone!(@strong data => move |chb| {
+    ch_hist_logy.connect_active_notify(clone!(@weak data => move |chb| {
         data.excl.exec(|| {
             data.options.write().unwrap().hist.log_y = chb.is_active();
             repaint_histogram(&data)
@@ -799,7 +787,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let ch_stat_percents = bldr.object::<gtk::CheckButton>("ch_stat_percents").unwrap();
-    ch_stat_percents.connect_active_notify(clone!(@strong data => move |chb| {
+    ch_stat_percents.connect_active_notify(clone!(@weak data => move |chb| {
         data.excl.exec(|| {
             data.options.write().unwrap().hist.percents = chb.is_active();
             show_histogram_stat(&data)
@@ -807,7 +795,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let chb_max_fwhm = bldr.object::<gtk::CheckButton>("chb_max_fwhm").unwrap();
-    chb_max_fwhm.connect_active_notify(clone!(@strong data => move |chb| {
+    chb_max_fwhm.connect_active_notify(clone!(@weak data => move |chb| {
         data.excl.exec(|| {
             data.options.write().unwrap().quality.use_max_fwhm = chb.is_active();
         });
@@ -815,7 +803,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let chb_max_oval = bldr.object::<gtk::CheckButton>("chb_max_oval").unwrap();
-    chb_max_oval.connect_active_notify(clone!(@strong data => move |chb| {
+    chb_max_oval.connect_active_notify(clone!(@weak data => move |chb| {
         data.excl.exec(|| {
             data.options.write().unwrap().quality.use_max_ovality = chb.is_active();
         });
@@ -823,21 +811,49 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let spb_max_fwhm = bldr.object::<gtk::SpinButton>("spb_max_fwhm").unwrap();
-    spb_max_fwhm.connect_value_changed(clone!(@strong data => move |sb| {
+    spb_max_fwhm.connect_value_changed(clone!(@weak data => move |sb| {
         data.excl.exec(|| {
             data.options.write().unwrap().quality.max_fwhm = sb.value() as f32;
         });
     }));
 
     let spb_max_oval = bldr.object::<gtk::SpinButton>("spb_max_oval").unwrap();
-    spb_max_oval.connect_value_changed(clone!(@strong data => move |sb| {
+    spb_max_oval.connect_value_changed(clone!(@weak data => move |sb| {
         data.excl.exec(|| {
             data.options.write().unwrap().quality.max_ovality = sb.value() as f32;
         });
     }));
 
+    let chb_master_dark = data.builder.object::<gtk::CheckButton>("chb_master_dark").unwrap();
+    chb_master_dark.connect_active_notify(clone!(@weak data => move |chb| {
+        data.excl.exec(|| {
+            data.options.write().unwrap().calibr.dark_frame_en = chb.is_active();
+        });
+    }));
+
+    let fch_master_dark = data.builder.object::<gtk::FileChooserButton>("fch_master_dark").unwrap();
+    fch_master_dark.connect_file_set(clone!(@weak data => move |fch| {
+        data.excl.exec(|| {
+            data.options.write().unwrap().calibr.dark_frame = fch.filename();
+        });
+    }));
+
+    let chb_master_flat = data.builder.object::<gtk::CheckButton>("chb_master_flat").unwrap();
+    chb_master_flat.connect_active_notify(clone!(@weak data => move |chb| {
+        data.excl.exec(|| {
+            data.options.write().unwrap().calibr.flat_frame_en = chb.is_active();
+        });
+    }));
+
+    let fch_master_flat = data.builder.object::<gtk::FileChooserButton>("fch_master_flat").unwrap();
+    fch_master_flat.connect_file_set(clone!(@weak data => move |fch| {
+        data.excl.exec(|| {
+            data.options.write().unwrap().calibr.flat_frame = fch.filename();
+        });
+    }));
+
     let chb_hot_pixels = data.builder.object::<gtk::CheckButton>("chb_hot_pixels").unwrap();
-    chb_hot_pixels.connect_active_notify(clone!(@strong data => move |chb| {
+    chb_hot_pixels.connect_active_notify(clone!(@weak data => move |chb| {
         gtk_utils::enable_widgets(
             &data.builder,
             false,
@@ -853,7 +869,7 @@ fn connect_img_mouse_scroll_events(data: &Rc<CameraData>) {
     let eb_preview_img = data.builder.object::<gtk::EventBox>("eb_preview_img").unwrap();
     let sw_preview_img = data.builder.object::<gtk::ScrolledWindow>("sw_preview_img").unwrap();
 
-    eb_preview_img.connect_button_press_event(clone!(@strong data, @strong sw_preview_img => move |_, evt| {
+    eb_preview_img.connect_button_press_event(clone!(@weak data, @weak sw_preview_img => @default-return Inhibit(false), move |_, evt| {
         if evt.button() == gtk::gdk::ffi::GDK_BUTTON_PRIMARY as u32 {
             let hadjustment = sw_preview_img.hadjustment();
             let vadjustment = sw_preview_img.vadjustment();
@@ -865,14 +881,14 @@ fn connect_img_mouse_scroll_events(data: &Rc<CameraData>) {
         Inhibit(false)
     }));
 
-    eb_preview_img.connect_button_release_event(clone!(@strong data => move |_, evt| {
+    eb_preview_img.connect_button_release_event(clone!(@weak data => @default-return Inhibit(false), move |_, evt| {
         if evt.button() == gtk::gdk::ffi::GDK_BUTTON_PRIMARY as u32 {
             *data.preview_scroll_pos.borrow_mut() = None;
         }
         Inhibit(false)
     }));
 
-    eb_preview_img.connect_motion_notify_event(clone!(@strong data, @strong sw_preview_img => move |_, evt| {
+    eb_preview_img.connect_motion_notify_event(clone!(@weak data, @weak sw_preview_img => @default-return Inhibit(false), move |_, evt| {
         const SCROLL_SPEED: f64 = 2.0;
         if let Some((start_mouse_pos, start_scroll_pos)) = &*data.preview_scroll_pos.borrow() {
             let new_pos = evt.root();
@@ -922,7 +938,7 @@ fn handler_full_screen(data: &Rc<CameraData>, full_screen: bool) {
 fn handler_close_window(data: &Rc<CameraData>) -> gtk::Inhibit {
     data.closed.set(true);
 
-    _ = data.img_cmds_sender.send(FrameProcessCommand::Exit);
+    _ = data.state.stop_img_process_thread();
 
     _ = data.state.abort_active_mode();
     read_options_from_widgets(data);
@@ -931,12 +947,8 @@ fn handler_close_window(data: &Rc<CameraData>) -> gtk::Inhibit {
     _ = save_json_to_config::<GuiOptions>(&gui_options, CONF_FN);
     drop(gui_options);
 
-    if let Some(indi_conn) = data.indi_conn.borrow_mut().take() {
+    if let Some(indi_conn) = data.indi_evt_conn.borrow_mut().take() {
         data.indi.unsubscribe(indi_conn);
-    }
-
-    if let Some(process_thread) = data.process_thread.borrow_mut().take() {
-        _ = process_thread.join();
     }
 
     gtk::Inhibit(false)
@@ -980,16 +992,11 @@ fn show_frame_options(data: &Rc<CameraData>) {
 
 fn show_options(data: &Rc<CameraData>) {
     data.excl.exec(|| {
-        let options = data.options.read().unwrap();
         let bld = &data.builder;
 
+        let options = data.options.read().unwrap();
         gtk_utils::set_f64(bld, "spb_foc_len", options.telescope.focal_len);
         gtk_utils::set_f64(bld, "spb_barlow",  options.telescope.barlow);
-
-        let pan_cam1 = bld.object::<gtk::Paned>("pan_cam1").unwrap();
-        let pan_cam2 = bld.object::<gtk::Paned>("pan_cam2").unwrap();
-        let pan_cam3 = bld.object::<gtk::Paned>("pan_cam3").unwrap();
-        let pan_cam4 = bld.object::<gtk::Paned>("pan_cam4").unwrap();
 
         gtk_utils::set_bool     (bld, "chb_shots_cont",      options.cam.live_view);
 
@@ -1039,11 +1046,11 @@ fn show_options(data: &Rc<CameraData>) {
         gtk_utils::set_f64      (bld, "spb_foc_auto_step",   options.focuser.step);
         gtk_utils::set_f64      (bld, "spb_foc_exp",         options.focuser.exposure);
 
-        gtk_utils::set_active_id(bld, "cb_dith_perod",    Some(options.guiding.dith_period.to_string().as_str()));
-        gtk_utils::set_active_id(bld, "cb_dith_distance", Some(format!("{:.0}", options.guiding.dith_percent * 10.0).as_str()));
-        gtk_utils::set_bool     (bld, "chb_guid_enabled", options.guiding.enabled);
-        gtk_utils::set_f64      (bld, "spb_guid_max_err", options.guiding.max_error);
-        gtk_utils::set_f64      (bld, "spb_mnt_cal_exp",  options.guiding.calibr_exposure);
+        gtk_utils::set_active_id(bld, "cb_dith_perod",    Some(options.simp_guid.dith_period.to_string().as_str()));
+        gtk_utils::set_active_id(bld, "cb_dith_distance", Some(format!("{:.0}", options.simp_guid.dith_percent * 10.0).as_str()));
+        gtk_utils::set_bool     (bld, "chb_guid_enabled", options.simp_guid.enabled);
+        gtk_utils::set_f64      (bld, "spb_guid_max_err", options.simp_guid.max_error);
+        gtk_utils::set_f64      (bld, "spb_mnt_cal_exp",  options.simp_guid.calibr_exposure);
 
         gtk_utils::set_bool     (bld, "chb_inv_ns",      options.mount.inv_ns);
         gtk_utils::set_bool     (bld, "chb_inv_we",      options.mount.inv_we);
@@ -1052,25 +1059,30 @@ fn show_options(data: &Rc<CameraData>) {
 
         drop(options);
 
-        let gui = data.gui_options.borrow();
-        pan_cam1.set_position(gui.paned_pos1);
-        if gui.paned_pos2 != -1 {
-            pan_cam2.set_position(pan_cam2.allocation().width()-gui.paned_pos2);
+        let pan_cam1 = bld.object::<gtk::Paned>("pan_cam1").unwrap();
+        let pan_cam2 = bld.object::<gtk::Paned>("pan_cam2").unwrap();
+        let pan_cam3 = bld.object::<gtk::Paned>("pan_cam3").unwrap();
+        let pan_cam4 = bld.object::<gtk::Paned>("pan_cam4").unwrap();
+
+        let gui_options = data.gui_options.borrow();
+        pan_cam1.set_position(gui_options.paned_pos1);
+        if gui_options.paned_pos2 != -1 {
+            pan_cam2.set_position(pan_cam2.allocation().width()-gui_options.paned_pos2);
         }
-        pan_cam3.set_position(gui.paned_pos3);
-        if gui.paned_pos4 != -1 {
-            pan_cam4.set_position(pan_cam4.allocation().height()-gui.paned_pos4);
+        pan_cam3.set_position(gui_options.paned_pos3);
+        if gui_options.paned_pos4 != -1 {
+            pan_cam4.set_position(pan_cam4.allocation().height()-gui_options.paned_pos4);
         }
-        gtk_utils::set_bool_prop(bld, "exp_cam_ctrl",   "expanded", gui.cam_ctrl_exp);
-        gtk_utils::set_bool_prop(bld, "exp_shot_set",   "expanded", gui.shot_exp);
-        gtk_utils::set_bool_prop(bld, "exp_calibr",     "expanded", gui.calibr_exp);
-        gtk_utils::set_bool_prop(bld, "exp_raw_frames", "expanded", gui.raw_frames_exp);
-        gtk_utils::set_bool_prop(bld, "exp_live",       "expanded", gui.live_exp);
-        gtk_utils::set_bool_prop(bld, "exp_foc",        "expanded", gui.foc_exp);
-        gtk_utils::set_bool_prop(bld, "exp_dith",       "expanded", gui.dith_exp);
-        gtk_utils::set_bool_prop(bld, "exp_quality",    "expanded", gui.quality_exp);
-        gtk_utils::set_bool_prop(bld, "exp_mount",      "expanded", gui.mount_exp);
-        drop(gui);
+        gtk_utils::set_bool_prop(bld, "exp_cam_ctrl",   "expanded", gui_options.cam_ctrl_exp);
+        gtk_utils::set_bool_prop(bld, "exp_shot_set",   "expanded", gui_options.shot_exp);
+        gtk_utils::set_bool_prop(bld, "exp_calibr",     "expanded", gui_options.calibr_exp);
+        gtk_utils::set_bool_prop(bld, "exp_raw_frames", "expanded", gui_options.raw_frames_exp);
+        gtk_utils::set_bool_prop(bld, "exp_live",       "expanded", gui_options.live_exp);
+        gtk_utils::set_bool_prop(bld, "exp_foc",        "expanded", gui_options.foc_exp);
+        gtk_utils::set_bool_prop(bld, "exp_dith",       "expanded", gui_options.dith_exp);
+        gtk_utils::set_bool_prop(bld, "exp_quality",    "expanded", gui_options.quality_exp);
+        gtk_utils::set_bool_prop(bld, "exp_mount",      "expanded", gui_options.mount_exp);
+        drop(gui_options);
     });
 }
 
@@ -1159,11 +1171,11 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.focuser.step            = gtk_utils::get_f64      (bld, "spb_foc_auto_step");
     options.focuser.exposure        = gtk_utils::get_f64      (bld, "spb_foc_exp");
 
-    options.guiding.dith_period     = gtk_utils::get_active_id(bld, "cb_dith_perod").and_then(|v| v.parse().ok()).unwrap_or(0);
-    options.guiding.dith_percent    = gtk_utils::get_active_id(bld, "cb_dith_distance").and_then(|v| v.parse().ok()).unwrap_or(10.0) / 10.0;
-    options.guiding.enabled         = gtk_utils::get_bool     (bld, "chb_guid_enabled");
-    options.guiding.max_error       = gtk_utils::get_f64      (bld, "spb_guid_max_err");
-    options.guiding.calibr_exposure = gtk_utils::get_f64      (bld, "spb_mnt_cal_exp");
+    options.simp_guid.dith_period     = gtk_utils::get_active_id(bld, "cb_dith_perod").and_then(|v| v.parse().ok()).unwrap_or(0);
+    options.simp_guid.dith_percent    = gtk_utils::get_active_id(bld, "cb_dith_distance").and_then(|v| v.parse().ok()).unwrap_or(10.0) / 10.0;
+    options.simp_guid.enabled         = gtk_utils::get_bool     (bld, "chb_guid_enabled");
+    options.simp_guid.max_error       = gtk_utils::get_f64      (bld, "spb_guid_max_err");
+    options.simp_guid.calibr_exposure = gtk_utils::get_f64      (bld, "spb_mnt_cal_exp");
 
     options.mount.inv_ns            = gtk_utils::get_bool     (bld, "chb_inv_ns");
     options.mount.inv_we            = gtk_utils::get_bool     (bld, "chb_inv_we");
@@ -1197,73 +1209,49 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     drop(gui);
 }
 
-fn handler_timer(data: &Rc<CameraData>) {
-    let mut delayed_action = data.delayed_action.borrow_mut();
-    if delayed_action.countdown != 0 {
-        delayed_action.countdown -= 1;
-        if delayed_action.countdown == 0 {
-            let update_cam_list_flag =
-                delayed_action.flags.contains(DelayedFlags::UPDATE_CAM_LIST);
-            let update_foc_list_flag =
-                delayed_action.flags.contains(DelayedFlags::UPDATE_FOC_LIST);
-            let start_live_view_flag =
-                delayed_action.flags.contains(DelayedFlags::START_LIVE_VIEW);
-            let start_cooling =
-                delayed_action.flags.contains(DelayedFlags::START_COOLING);
-            let update_ctrl_widgets =
-                delayed_action.flags.contains(DelayedFlags::UPDATE_CTRL_WIDGETS);
-            let update_res =
-                delayed_action.flags.contains(DelayedFlags::UPDATE_RESOLUTION_LIST);
-            let sel_max_res =
-                delayed_action.flags.contains(DelayedFlags::SELECT_MAX_RESOLUTION);
-            let upd_foc_pos_new_prop =
-                delayed_action.flags.contains(DelayedFlags::UPDATE_FOC_POS_NEW);
-            let upd_foc_pos =
-                delayed_action.flags.contains(DelayedFlags::UPDATE_FOC_POS);
-            let upd_mount_widgets =
-                delayed_action.flags.contains(DelayedFlags::UPDATE_MOUNT_WIDGETS);
-            let upd_mount_spd_list =
-                delayed_action.flags.contains(DelayedFlags::UPDATE_MOUNT_SPD_LIST);
-            let upd_heater_items =
-                delayed_action.flags.contains(DelayedFlags::FILL_HEATER_ITEMS);
-            delayed_action.flags.bits = 0;
-            if update_cam_list_flag {
-                update_camera_devices_list(data);
-                correct_widgets_props(data);
-            }
-            if update_foc_list_flag {
-                update_focuser_devices_list(data);
-                correct_widgets_props(data);
-            }
-            if start_live_view_flag
-            && data.options.read().unwrap().cam.live_view {
-                start_live_view(data);
-            }
-            if update_ctrl_widgets {
-                correct_widgets_props(data);
-            }
-            if update_res {
-                update_resolution_list(data);
-            }
-            if sel_max_res {
-                select_maximum_resolution(data);
-            }
-            if upd_foc_pos || upd_foc_pos_new_prop {
-                update_focuser_position_widget(data, upd_foc_pos_new_prop);
-            }
-            if upd_mount_widgets {
-                correct_widgets_props(data);
-            }
-            if upd_mount_spd_list {
-                fill_mount_speed_list_widget(data);
-            }
-            if upd_heater_items {
-                fill_heater_items_list(data);
-            }
-            if start_cooling {
-                control_camera_by_options(data, true);
-            }
+fn handler_delayed_action(data: &Rc<CameraData>, action: &DelayedActionTypes) {
+    match action {
+        DelayedActionTypes::UpdateCamList => {
+            update_camera_devices_list(data);
+            correct_widgets_props(data);
         }
+        DelayedActionTypes::UpdateFocList => {
+            update_focuser_devices_list(data);
+            correct_widgets_props(data);
+        }
+        DelayedActionTypes::StartLiveView
+        if data.options.read().unwrap().cam.live_view => {
+            start_live_view(data);
+        }
+        DelayedActionTypes::StartCooling => {
+            control_camera_by_options(data, true);
+        }
+        DelayedActionTypes::UpdateCtrlWidgets => {
+            correct_widgets_props(data);
+        }
+        DelayedActionTypes::UpdateResolutionList => {
+            update_resolution_list(data);
+        }
+        DelayedActionTypes::SelectMaxResolution => {
+            select_maximum_resolution(data);
+        }
+        DelayedActionTypes::UpdateFocPosNew |
+        DelayedActionTypes::UpdateFocPos => {
+            update_focuser_position_widget(
+                data,
+                *action == DelayedActionTypes::UpdateFocPosNew
+            );
+        }
+        DelayedActionTypes::UpdateMountWidgets => {
+            correct_widgets_props(data); // ???
+        }
+        DelayedActionTypes::UpdateMountSpdList => {
+            fill_mount_speed_list_widget(data);
+        }
+        DelayedActionTypes::FillHeaterItems => {
+            fill_heater_items_list(data);
+        }
+        _ => {}
     }
 }
 
@@ -1504,41 +1492,21 @@ fn correct_widgets_props(data: &Rc<CameraData>) {
 
 }
 
+
 fn update_camera_devices_list(data: &Rc<CameraData>) {
     data.excl.exec(|| {
-        let dev_list = data.indi.get_devices_list();
-        let cameras = dev_list
-            .iter()
-            .filter(|device|
-                device.interface.contains(indi_api::DriverInterface::CCD)
-            );
+        let options = data.options.read().unwrap();
         let cb_camera_list: gtk::ComboBoxText =
             data.builder.object("cb_camera_list").unwrap();
-        let last_active_id = cb_camera_list.active_id().map(|s| s.to_string());
-        cb_camera_list.remove_all();
-        for camera in cameras {
-            cb_camera_list.append(Some(&camera.name), &camera.name);
-        }
-        let cameras_count = gtk_utils::combobox_items_count(&cb_camera_list);
-        if cameras_count == 1 {
-            cb_camera_list.set_active(Some(0));
-        } else if cameras_count > 1 {
-            let options = data.options.read().unwrap();
-            if last_active_id.is_some() {
-                cb_camera_list.set_active_id(last_active_id.as_deref());
-            } else if !options.cam.device.is_empty() {
-                cb_camera_list.set_active_id(Some(options.cam.device.as_str()));
-            }
-            if cb_camera_list.active_id().is_none() {
-                cb_camera_list.set_active(Some(0));
-            }
-        }
+        let cameras_count = fill_combobox_with_cam_list(
+            &data.indi,
+            &cb_camera_list,
+            &options.cam.device
+        );
         let connected = data.indi.state() == indi_api::ConnState::Connected;
         gtk_utils::enable_widgets(&data.builder, false, &[
             ("cb_camera_list", connected && cameras_count > 1),
         ]);
-        data.options.write().unwrap().cam.device =
-            cb_camera_list.active_id().map(|s| s.to_string()).unwrap_or_default();
     });
 }
 
@@ -1940,7 +1908,7 @@ fn show_frame_processing_result(
         FrameProcessResultData::Error(error_text) => {
             _ = data.state.abort_active_mode();
             correct_widgets_props(data);
-            show_error_message(&data.window, "Fatal Error", &error_text);
+            gtk_utils::show_error_message(&data.window, "Fatal Error", &error_text);
         }
         FrameProcessResultData::LightShortInfo(short_info, mode) => {
             if data.state.mode_data().mode.get_type() == mode {
@@ -2103,20 +2071,18 @@ fn update_devices_list_and_props_by_drv_interface(
     drv_interface: indi_api::DriverInterface,
 ) {
     if drv_interface.contains(indi_api::DriverInterface::TELESCOPE) {
-        data.delayed_action.borrow_mut().set(
-            DelayedFlags::UPDATE_MOUNT_WIDGETS
+        data.delayed_actions.schedule(
+            DelayedActionTypes::UpdateMountWidgets
         );
     }
     if drv_interface.contains(indi_api::DriverInterface::FOCUSER) {
-        data.delayed_action.borrow_mut().set(
-            DelayedFlags::UPDATE_FOC_LIST
+        data.delayed_actions.schedule(
+            DelayedActionTypes::UpdateFocList
         );
     }
     if drv_interface.contains(indi_api::DriverInterface::CCD) {
-        data.delayed_action.borrow_mut().set(
-            DelayedFlags::UPDATE_CAM_LIST |
-            DelayedFlags::FILL_HEATER_ITEMS
-        );
+        data.delayed_actions.schedule(DelayedActionTypes::UpdateCamList);
+        data.delayed_actions.schedule(DelayedActionTypes::FillHeaterItems);
     }
 }
 
@@ -2131,10 +2097,8 @@ fn process_simple_prop_change_event(
     value:       &indi_api::PropValue,
 ) {
     if indi_api::Connection::camera_is_heater_property(prop_name) && new_prop {
-        data.delayed_action.borrow_mut().set(
-            DelayedFlags::FILL_HEATER_ITEMS |
-            DelayedFlags::START_COOLING
-        );
+        data.delayed_actions.schedule(DelayedActionTypes::FillHeaterItems);
+        data.delayed_actions.schedule(DelayedActionTypes::StartCooling);
     }
     if indi_api::Connection::camera_is_cooler_pwr_property(prop_name, elem_name) {
         show_coolpwr_value(data, device_name, &value.as_string());
@@ -2147,47 +2111,49 @@ fn process_simple_prop_change_event(
             let flag_bits = value.as_i32().unwrap_or(0);
             let flags = indi_api::DriverInterface::from_bits_truncate(flag_bits as u32);
             if flags.contains(indi_api::DriverInterface::CCD) {
-                data.delayed_action.borrow_mut().set(
-                    DelayedFlags::UPDATE_CAM_LIST
+                data.delayed_actions.schedule(
+                    DelayedActionTypes::UpdateCamList
                 );
             }
             if flags.contains(indi_api::DriverInterface::FOCUSER) {
-                data.delayed_action.borrow_mut().set(
-                    DelayedFlags::UPDATE_FOC_LIST
+                data.delayed_actions.schedule(
+                    DelayedActionTypes::UpdateFocList
                 );
             }
             if flags.contains(indi_api::DriverInterface::TELESCOPE) {
                 data.options.write().unwrap().mount.device = device_name.to_string();
-                data.delayed_action.borrow_mut().set(
-                    DelayedFlags::UPDATE_MOUNT_WIDGETS
+                data.delayed_actions.schedule(
+                    DelayedActionTypes::UpdateMountWidgets
                 );
             }
         },
         ("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE", indi_api::PropValue::Num(temp)) => {
             if new_prop {
-                data.delayed_action.borrow_mut().set(
-                    DelayedFlags::START_COOLING
+                data.delayed_actions.schedule(
+                    DelayedActionTypes::StartCooling
                 );
             }
             show_cur_temperature_value(data, device_name, *temp);
         },
         ("CCD_COOLER", ..)
         if new_prop => {
-            data.delayed_action.borrow_mut().set(
-                DelayedFlags::START_COOLING|
-                DelayedFlags::UPDATE_CTRL_WIDGETS
-            );
+            data.delayed_actions.schedule(DelayedActionTypes::StartCooling);
+            data.delayed_actions.schedule(DelayedActionTypes::UpdateCtrlWidgets);
         },
         ("CCD_OFFSET", ..) | ("CCD_GAIN", ..) | ("CCD_CONTROLS", ..)
         if new_prop => {
-            data.delayed_action.borrow_mut().set(
-                DelayedFlags::UPDATE_CTRL_WIDGETS
+            data.delayed_actions.schedule(
+                DelayedActionTypes::UpdateCtrlWidgets
             );
         },
         ("CCD_EXPOSURE", ..) => {
-            if new_prop {
-                data.delayed_action.borrow_mut().set(
-                    DelayedFlags::START_LIVE_VIEW
+            let options = data.options.read().unwrap();
+            if new_prop && device_name == options.cam.device {
+                data.delayed_actions.schedule_ex(
+                    DelayedActionTypes::StartLiveView,
+                    // 2000 ms pause to start live view from camera
+                    // after connecting to INDI server
+                    2000
                 );
             } else {
                 update_shot_state(data);
@@ -2196,28 +2162,28 @@ fn process_simple_prop_change_event(
 
         ("CCD_RESOLUTION", ..)
         if new_prop => {
-            data.delayed_action.borrow_mut().set(
-                DelayedFlags::SELECT_MAX_RESOLUTION
+            data.delayed_actions.schedule(
+                DelayedActionTypes::SelectMaxResolution
             );
         },
 
         ("CCD_BINNING", ..) |
         ("CCD_INFO", "CCD_MAX_X", ..) |
         ("CCD_INFO", "CCD_MAX_Y", ..) =>
-            data.delayed_action.borrow_mut().set(
-                DelayedFlags::UPDATE_RESOLUTION_LIST
+            data.delayed_actions.schedule(
+                DelayedActionTypes::UpdateResolutionList
             ),
 
         ("ABS_FOCUS_POSITION", ..) => {
             show_cur_focuser_value(&data);
-                data.delayed_action.borrow_mut().set(
-                    if new_prop { DelayedFlags::UPDATE_FOC_POS_NEW }
-                    else { DelayedFlags::UPDATE_FOC_POS }
+                data.delayed_actions.schedule(
+                    if new_prop { DelayedActionTypes::UpdateFocPosNew }
+                    else { DelayedActionTypes::UpdateFocPos }
                 );
         },
         ("FOCUS_MAX", ..) => {
-            data.delayed_action.borrow_mut().set(
-                DelayedFlags::UPDATE_FOC_POS_NEW
+            data.delayed_actions.schedule(
+                DelayedActionTypes::UpdateFocPosNew
             );
         },
         ("CONNECTION", ..) => {
@@ -2227,8 +2193,8 @@ fn process_simple_prop_change_event(
             update_devices_list_and_props_by_drv_interface(data, driver_interface);
         }
         ("TELESCOPE_SLEW_RATE", ..) if new_prop => {
-            data.delayed_action.borrow_mut().set(
-                DelayedFlags::UPDATE_MOUNT_SPD_LIST
+            data.delayed_actions.schedule(
+                DelayedActionTypes::UpdateMountSpdList
             );
         }
         ("TELESCOPE_TRACK_STATE", "TRACK_ON", indi_api::PropValue::Switch(tracking)) => {
@@ -2758,7 +2724,7 @@ fn update_focuser_position_after_focusing(data: &Rc<CameraData>, pos: f64) {
 fn connect_focuser_widgets_events(data: &Rc<CameraData>) {
     let bldr = &data.builder;
     let spb_foc_val = bldr.object::<gtk::SpinButton>("spb_foc_val").unwrap();
-    spb_foc_val.connect_value_changed(clone!(@strong data => move |sb| {
+    spb_foc_val.connect_value_changed(clone!(@weak data => move |sb| {
         data.excl.exec(|| {
             let Some(foc_device) = gtk_utils::get_active_id(&data.builder, "cb_foc_list") else {
                 return;
@@ -2771,22 +2737,22 @@ fn connect_focuser_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let chb_foc_temp = bldr.object::<gtk::CheckButton>("chb_foc_temp").unwrap();
-    chb_foc_temp.connect_active_notify(clone!(@strong data => move |_| {
+    chb_foc_temp.connect_active_notify(clone!(@weak data => move |_| {
         correct_widgets_props(&data);
     }));
 
     let chb_foc_fwhm = bldr.object::<gtk::CheckButton>("chb_foc_fwhm").unwrap();
-    chb_foc_fwhm.connect_active_notify(clone!(@strong data => move |_| {
+    chb_foc_fwhm.connect_active_notify(clone!(@weak data => move |_| {
         correct_widgets_props(&data);
     }));
 
     let chb_foc_period = bldr.object::<gtk::CheckButton>("chb_foc_period").unwrap();
-    chb_foc_period.connect_active_notify(clone!(@strong data => move |_| {
+    chb_foc_period.connect_active_notify(clone!(@weak data => move |_| {
         correct_widgets_props(&data);
     }));
 
     let da_focusing = data.builder.object::<gtk::DrawingArea>("da_focusing").unwrap();
-    da_focusing.connect_draw(clone!(@strong data => move |da, ctx| {
+    da_focusing.connect_draw(clone!(@weak data => @default-return Inhibit(false), move |da, ctx| {
         _ = draw_focusing_samples(&data, da, ctx);
         Inhibit(true)
     }));
@@ -2906,7 +2872,7 @@ fn init_dithering_widgets(data: &Rc<CameraData>) {
 
 fn connect_dithering_widgets_events(data: &Rc<CameraData>) {
     let chb_guid_enabled = data.builder.object::<gtk::CheckButton>("chb_guid_enabled").unwrap();
-    chb_guid_enabled.connect_active_notify(clone!(@strong data => move |_| {
+    chb_guid_enabled.connect_active_notify(clone!(@weak data => move |_| {
         correct_widgets_props(&data);
     }));
 }
@@ -2933,20 +2899,20 @@ const MOUNT_NAV_BUTTON_NAMES: &[&'static str] = &[
 fn connect_mount_widgets_events(data: &Rc<CameraData>) {
     for &btn_name in MOUNT_NAV_BUTTON_NAMES {
         let btn = data.builder.object::<gtk::Button>(btn_name).unwrap();
-        btn.connect_button_press_event(clone!(@strong data => move |_, eb| {
+        btn.connect_button_press_event(clone!(@weak data => @default-return Inhibit(false), move |_, eb| {
             if eb.button() == gtk::gdk::ffi::GDK_BUTTON_PRIMARY as u32 {
                 handler_nav_mount_btn_pressed(&data, btn_name);
             }
             Inhibit(false)
         }));
-        btn.connect_button_release_event(clone!(@strong data => move |_, _| {
+        btn.connect_button_release_event(clone!(@weak data => @default-return Inhibit(false), move |_, _| {
             handler_nav_mount_btn_released(&data, btn_name);
             Inhibit(false)
         }));
     }
 
     let chb_tracking = data.builder.object::<gtk::CheckButton>("chb_tracking").unwrap();
-    chb_tracking.connect_active_notify(clone!(@strong data => move |chb| {
+    chb_tracking.connect_active_notify(clone!(@weak data => move |chb| {
         data.excl.exec(|| {
             let options = data.options.read().unwrap();
             if options.mount.device.is_empty() { return; }
@@ -2958,7 +2924,7 @@ fn connect_mount_widgets_events(data: &Rc<CameraData>) {
     }));
 
     let chb_parked = data.builder.object::<gtk::CheckButton>("chb_parked").unwrap();
-    chb_parked.connect_active_notify(clone!(@strong data => move |chb| {
+    chb_parked.connect_active_notify(clone!(@weak data => move |chb| {
         let options = data.options.read().unwrap();
         if options.mount.device.is_empty() { return; }
         let parked = chb.is_active();
@@ -3109,7 +3075,7 @@ fn handler_action_open_image(data: &Rc<CameraData>) {
             ("_Open", gtk::ResponseType::Accept),
         ]);
     }
-    fc.connect_response(clone!(@strong data => move |file_chooser, response| {
+    fc.connect_response(clone!(@weak data => move |file_chooser, response| {
         if response == gtk::ResponseType::Accept {
             gtk_utils::exec_and_show_error(&data.window, || {
                 let Some(file_name) = file_chooser.file() else { return Ok(()); };

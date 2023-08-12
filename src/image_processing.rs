@@ -230,40 +230,37 @@ impl FrameProcessCommand {
 
 pub fn start_main_cam_frame_processing_thread() -> (mpsc::Sender<FrameProcessCommand>, JoinHandle<()>) {
     let (bg_comands_sender, bg_comands_receiver) = mpsc::channel();
-    let thread = std::thread::spawn(|| {
-        process_blob_thread_fun(bg_comands_receiver);
+    let thread = std::thread::spawn(move || {
+        'outer:
+        while let Ok(mut cmd) = bg_comands_receiver.recv() {
+            loop {
+                if matches!(cmd, FrameProcessCommand::Exit) { break; }
+                let next_cmd = bg_comands_receiver.try_recv();
+                match next_cmd {
+                    Ok(next_cmd) => {
+                        log::error!("command {} skipped", cmd.name());
+                        cmd = next_cmd;
+                    },
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        break 'outer;
+                    },
+                    Err(mpsc::TryRecvError::Empty) => {
+                        break;
+                    },
+                }
+            }
+
+            match cmd {
+                FrameProcessCommand::Exit =>
+                    break,
+                FrameProcessCommand::ProcessImage{command, result_fun} =>
+                    make_preview_image(command, result_fun),
+            };
+        }
+
         log::info!("process_blob_thread_fun finished");
     });
     (bg_comands_sender, thread)
-}
-
-fn process_blob_thread_fun(receiver: mpsc::Receiver<FrameProcessCommand>) {
-    'outer:
-    while let Ok(mut cmd) = receiver.recv() {
-        loop {
-            if matches!(cmd, FrameProcessCommand::Exit) { break; }
-            let next_cmd = receiver.try_recv();
-            match next_cmd {
-                Ok(next_cmd) => {
-                    log::error!("command {} skipped", cmd.name());
-                    cmd = next_cmd;
-                },
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    break 'outer;
-                },
-                Err(mpsc::TryRecvError::Empty) => {
-                    break;
-                },
-            }
-        }
-
-        match cmd {
-            FrameProcessCommand::Exit =>
-                break,
-            FrameProcessCommand::ProcessImage{command, result_fun} =>
-                make_preview_image(command, result_fun),
-        };
-    }
 }
 
 fn create_raw_image_from_blob(
@@ -400,7 +397,6 @@ fn apply_calibr_data_and_remove_hot_pixels(
         }
     }
 
-    let mut dark_subtracted = false;
     if let (Some(file_name), Some(dark_image)) = (&params.dark, &calibr.master_dark) {
         let tmr = TimeLogger::start();
         raw_image.subtract_dark(dark_image)
@@ -413,10 +409,9 @@ fn apply_calibr_data_and_remove_hot_pixels(
         let tmr = TimeLogger::start();
         raw_image.remove_bad_pixels(&calibr.dark_hot_pixels);
         tmr.log("removing hot pixels from light frame");
-        dark_subtracted = true;
     }
 
-    if params.hot_pixels && !dark_subtracted {
+    if params.hot_pixels {
         let tmr = TimeLogger::start();
         let hot_pixels = raw_image.find_hot_pixels_in_light();
         tmr.log("searching hot pixels in light image");

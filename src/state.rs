@@ -1,22 +1,21 @@
 use std::{
     sync::{Arc, Mutex, atomic::{AtomicBool, Ordering, AtomicU16 }, RwLock, RwLockReadGuard, mpsc},
     collections::VecDeque,
-    any::Any, f64::consts::PI, path::PathBuf,
+    any::Any, f64::consts::PI, path::PathBuf, thread::JoinHandle,
 };
 use chrono::Utc;
-use gtk::glib::Sender;
 use itertools::Itertools;
 
 use crate::{
     gui_camera::*,
     options::*,
-    indi_api::{self, PropChangeEvent, PropChange, PropChangeValue, PropValue, BlobPropValue},
+    indi_api,
     image_raw::{FrameType, RawAdder},
     image_info::{LightImageInfo, Stars},
     math::*,
     stars_offset::*,
     image_processing::*,
-    io_utils::{SeqFileNameGen, get_free_folder_name, get_free_file_name},
+    io_utils::*,
 };
 
 #[derive(Clone)]
@@ -32,7 +31,7 @@ pub struct FocusingEvt {
     pub result:  Option<f64>,
 }
 
-pub enum Event {
+pub enum StateEvent {
     Error(String),
     ModeChanged,
     ModeContinued,
@@ -52,52 +51,61 @@ pub enum ModeType {
     DitherCalibr
 }
 
-type SubscribersVec = Vec<Box<dyn Fn(Event) + Send + Sync + 'static>>;
+type SubscribersFun = dyn Fn(StateEvent) + Send + Sync + 'static;
+type FrameProcessResultFun = dyn Fn(FrameProcessResult) + Send + Sync + 'static;
 
-pub struct Subscribers(SubscribersVec);
+pub struct Subscribers {
+    items:        Vec<Box<SubscribersFun>>,
+    main_cam_frame_evt: Option<Box<FrameProcessResultFun>>,
+    guid_cam_frame_evt: Option<Box<FrameProcessResultFun>>,
+}
 
 impl Subscribers {
     fn new() -> Self {
-        Self(Vec::new())
+        Self {
+            items:        Vec::new(),
+            main_cam_frame_evt: None,
+            guid_cam_frame_evt: None,
+        }
     }
 
-    fn add(&mut self, fun: impl Fn(Event) + Send + Sync + 'static) {
-        self.0.push(Box::new(fun));
+    fn add(&mut self, fun: impl Fn(StateEvent) + Send + Sync + 'static) {
+        self.items.push(Box::new(fun));
     }
 
     fn inform_error(&self, error_text: &str) {
-        for s in &self.0 {
-            s(Event::Error(error_text.to_string()));
+        for s in &self.items {
+            s(StateEvent::Error(error_text.to_string()));
         }
     }
 
     fn inform_mode_changed(&self) {
-        for s in &self.0 {
-            s(Event::ModeChanged);
+        for s in &self.items {
+            s(StateEvent::ModeChanged);
         }
     }
 
     fn inform_progress(&self, progress: Option<Progress>) {
-        for s in &self.0 {
-            s(Event::Propress(progress.clone()));
+        for s in &self.items {
+            s(StateEvent::Propress(progress.clone()));
         }
     }
 
     fn inform_mode_continued(&self) {
-        for s in &self.0 {
-            s(Event::ModeContinued);
+        for s in &self.items {
+            s(StateEvent::ModeContinued);
         }
     }
 
     fn inform_focusing(&self, data: FocusingEvt) {
-        for s in &self.0 {
-            s(Event::Focusing(data.clone()));
+        for s in &self.items {
+            s(StateEvent::Focusing(data.clone()));
         }
     }
 
     fn inform_focusing_result(&self, value: f64) {
-        for s in &self.0 {
-            s(Event::FocusResultValue{value});
+        for s in &self.items {
+            s(StateEvent::FocusResultValue{value});
         }
     }
 }
@@ -161,7 +169,9 @@ pub struct State {
     calibr_images:    Arc<Mutex<CalibrImages>>,
     live_stacking:    Arc<LiveStackingData>,
     timer:            Arc<Timer>,
-    exp_stuck_wd:     Arc<AtomicU16>
+    exp_stuck_wd:     Arc<AtomicU16>,
+    process_thread:   Option<JoinHandle<()>>,
+    img_cmds_sender:  mpsc::Sender<FrameProcessCommand>,
 }
 
 impl State {
@@ -169,18 +179,31 @@ impl State {
         indi:    &Arc<indi_api::Connection>,
         options: &Arc<RwLock<Options>>
     ) -> Self {
-        Self {
-            indi:          Arc::clone(indi),
-            options:       Arc::clone(options),
-            mode_data:     Arc::new(RwLock::new(ModeData::new())),
-            subscribers:   Arc::new(RwLock::new(Subscribers::new())),
-            cur_frame:     Arc::new(ResultImage::new()),
-            ref_stars:     Arc::new(RwLock::new(None)),
-            calibr_images: Arc::new(Mutex::new(CalibrImages::default())),
-            live_stacking: Arc::new(LiveStackingData::new()),
-            timer:         Arc::new(Timer::new()),
-            exp_stuck_wd:  Arc::new(AtomicU16::new(0)),
-        }
+        let (img_cmds_sender, process_thread) = start_main_cam_frame_processing_thread();
+        let result = Self {
+            indi:           Arc::clone(indi),
+            options:        Arc::clone(options),
+            mode_data:      Arc::new(RwLock::new(ModeData::new())),
+            subscribers:    Arc::new(RwLock::new(Subscribers::new())),
+            cur_frame:      Arc::new(ResultImage::new()),
+            ref_stars:      Arc::new(RwLock::new(None)),
+            calibr_images:  Arc::new(Mutex::new(CalibrImages::default())),
+            live_stacking:  Arc::new(LiveStackingData::new()),
+            timer:          Arc::new(Timer::new()),
+            exp_stuck_wd:   Arc::new(AtomicU16::new(0)),
+            process_thread: Some(process_thread),
+            img_cmds_sender,
+        };
+        result.connect_indi_events();
+        result.start_taking_frames_restart_timer();
+        result
+    }
+
+    pub fn stop_img_process_thread(&self) -> anyhow::Result<()> {
+        self.img_cmds_sender
+            .send(FrameProcessCommand::Exit)
+            .map_err(|_| anyhow::anyhow!("Can't send exit command"))?;
+        Ok(())
     }
 
     pub fn mode_data(&self) -> RwLockReadGuard<ModeData> {
@@ -207,11 +230,29 @@ impl State {
         subscribers.inform_error(&err.to_string());
     }
 
-    pub fn connect_indi_events(
-        &self,
-        main_thread_sndr: Sender<MainThreadEvents>,
-        img_cmds_sender:  mpsc::Sender<FrameProcessCommand>,
-    ) {
+    pub fn connect_main_cam_proc_result_event(&self, fun: impl Fn(FrameProcessResult) + Send + Sync + 'static) {
+        let mut subscribers = self.subscribers.write().unwrap();
+        assert!(subscribers.main_cam_frame_evt.is_none());
+        subscribers.main_cam_frame_evt = Some(Box::new(fun));
+    }
+
+    pub fn disconnect_main_cam_proc_result_event(&self) {
+        let mut subscribers = self.subscribers.write().unwrap();
+        subscribers.main_cam_frame_evt = None;
+    }
+
+    pub fn connect_guid_cam_proc_result_event(&self, fun: impl Fn(FrameProcessResult) + Send + Sync + 'static) {
+        let mut subscribers = self.subscribers.write().unwrap();
+        assert!(subscribers.guid_cam_frame_evt.is_none());
+        subscribers.guid_cam_frame_evt = Some(Box::new(fun));
+    }
+
+    pub fn disconnect_guid_cam_proc_result_event(&self) {
+        let mut subscribers = self.subscribers.write().unwrap();
+        subscribers.guid_cam_frame_evt = None;
+    }
+
+    fn connect_indi_events(&self) {
         let mode_data = Arc::clone(&self.mode_data);
         let exp_stuck_wd = Arc::clone(&self.exp_stuck_wd);
         let indi = Arc::clone(&self.indi);
@@ -220,6 +261,7 @@ impl State {
         let cur_frame = Arc::clone(&self.cur_frame);
         let ref_stars = Arc::clone(&self.ref_stars);
         let calibr_images = Arc::clone(&self.calibr_images);
+        let img_cmds_sender = self.img_cmds_sender.clone();
         self.indi.subscribe_events(move |event| {
             let result = || -> anyhow::Result<()> {
                 match event {
@@ -228,15 +270,16 @@ impl State {
                         mode_data.mode.notify_blob_start_event(&event)?;
                     }
                     indi_api::Event::PropChange(prop_change) => {
-                        if let PropChange::Change {
-                            value: PropChangeValue{
-                                prop_value: PropValue::Blob(blob), ..
+                        if let indi_api::PropChange::Change {
+                            value: indi_api::PropChangeValue{
+                                prop_value: indi_api::PropValue::Blob(blob), ..
                             }, ..
                         } = &prop_change.change {
                             Self::process_indi_blob_event(
                                 &blob, &prop_change.device_name, &mode_data,
                                 &options, &cur_frame, &ref_stars,
-                                &calibr_images, &main_thread_sndr, &img_cmds_sender
+                                &calibr_images, &subscribers,
+                                &img_cmds_sender,
                             )?;
                         } else {
                             Self::process_indi_prop_change_event(
@@ -251,7 +294,9 @@ impl State {
             } ();
             Self::process_error(result, &mode_data, &subscribers, &exp_stuck_wd);
         });
+    }
 
+    fn start_taking_frames_restart_timer(&self) {
         const MAX_EXP_STACK_WD_CNT: u16 = 30;
         let exp_stuck_wd = Arc::clone(&self.exp_stuck_wd);
         let mode_data = Arc::clone(&self.mode_data);
@@ -281,7 +326,7 @@ impl State {
     }
 
     fn process_indi_prop_change_event(
-        prop_change:  &PropChangeEvent,
+        prop_change:  &indi_api::PropChangeEvent,
         mode_data:    &Arc<RwLock<ModeData>>,
         indi:         &Arc<indi_api::Connection>,
         options:      &Arc<RwLock<Options>>,
@@ -316,15 +361,15 @@ impl State {
     }
 
     fn process_indi_blob_event(
-        blob:             &Arc<BlobPropValue>,
-        device_name:      &str,
-        mode_data:        &Arc<RwLock<ModeData>>,
-        options:          &Arc<RwLock<Options>>,
-        cur_frame:        &Arc<ResultImage>,
-        ref_stars:        &Arc<RwLock<Option<Vec<Point>>>>,
-        calibr_images:    &Arc<Mutex<CalibrImages>>,
-        main_thread_sndr: &Sender<MainThreadEvents>,
-        img_cmds_sender:  &mpsc::Sender<FrameProcessCommand>,
+        blob:              &Arc<indi_api::BlobPropValue>,
+        device_name:       &str,
+        mode_data:         &Arc<RwLock<ModeData>>,
+        options:           &Arc<RwLock<Options>>,
+        cur_frame:         &Arc<ResultImage>,
+        ref_stars:         &Arc<RwLock<Option<Vec<Point>>>>,
+        calibr_images:     &Arc<Mutex<CalibrImages>>,
+        subscribers:       &Arc<RwLock<Subscribers>>,
+        frame_proc_sender: &mpsc::Sender<FrameProcessCommand>,
     ) -> anyhow::Result<()> {
         if blob.data.is_empty() { return Ok(()); }
         log::debug!("process_blob_event, dl_time = {:.2}s", blob.dl_time);
@@ -336,40 +381,44 @@ impl State {
 
         if device_name != mode_cam_name { return Ok(()); }
 
-        let options = options.read().unwrap();
-        let mut command_data = FrameProcessCommandData {
-            mode_type:       mode_data.mode.get_type(),
-            camera:          device_name.to_string(),
-            flags:           ProcessImageFlags::empty(),
-            blob:            Arc::clone(blob),
-            frame:           Arc::clone(&cur_frame),
-            ref_stars:       Arc::clone(&ref_stars),
-            calibr_params:   options.calibr.into_params(),
-            calibr_images:   Arc::clone(&calibr_images),
-            view_options:    options.preview.preview_params(),
-            frame_options:   options.cam.frame.clone(),
-            quality_options: Some(options.quality.clone()),
-            fn_gen:          None,
-            save_path:       None,
-            raw_adder:       None,
-            live_stacking:   None,
+
+        let mut command_data = {
+            let options = options.read().unwrap();
+            FrameProcessCommandData {
+                mode_type:       mode_data.mode.get_type(),
+                camera:          device_name.to_string(),
+                flags:           ProcessImageFlags::empty(),
+                blob:            Arc::clone(blob),
+                frame:           Arc::clone(&cur_frame),
+                ref_stars:       Arc::clone(&ref_stars),
+                calibr_params:   options.calibr.into_params(),
+                calibr_images:   Arc::clone(&calibr_images),
+                view_options:    options.preview.preview_params(),
+                frame_options:   options.cam.frame.clone(),
+                quality_options: Some(options.quality.clone()),
+                fn_gen:          None,
+                save_path:       None,
+                raw_adder:       None,
+                live_stacking:   None,
+            }
         };
-        drop(options);
 
         mode_data.mode.complete_img_process_params(&mut command_data);
 
         let result_fun = {
-            let main_thread_sender = main_thread_sndr.clone();
+            let subscribers = Arc::clone(subscribers);
+            let options = Arc::clone(&options);
             move |res: FrameProcessResult| {
-                let send_err = main_thread_sender.send(
-                    MainThreadEvents::ShowFrameProcessingResult(res)
-                );
-                if let Err(err) = send_err {
-                    log::error!("process_blob_event: err={:?}", err);
+                let subscribers = subscribers.read().unwrap();
+                let options = options.read().unwrap();
+                if options.cam.device == res.camera {
+                    if let Some(main_cam_evt) = &subscribers.main_cam_frame_evt {
+                        main_cam_evt(res);
+                    }
                 }
             }
         };
-        img_cmds_sender.send(FrameProcessCommand::ProcessImage{
+        frame_proc_sender.send(FrameProcessCommand::ProcessImage{
             command: command_data,
             result_fun: Box::new(result_fun),
         }).unwrap();
@@ -404,7 +453,7 @@ impl State {
 
     pub fn subscribe_events(
         &self,
-        fun: impl Fn(Event) + Send + Sync + 'static
+        fun: impl Fn(StateEvent) + Send + Sync + 'static
     ) {
         let mut subscribers = self.subscribers.write().unwrap();
         subscribers.add(fun);
@@ -537,6 +586,9 @@ impl State {
         exp_stuck_wd: &Arc<AtomicU16>,
     ) {
         let mut mode_data = mode_data.write().unwrap();
+        if mode_data.mode.get_type() == ModeType::Waiting {
+            return;
+        }
         _ = mode_data.mode.abort();
         let mut prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
         loop {
@@ -685,6 +737,15 @@ impl State {
         }
 
         Ok(())
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        if let Some(process_thread) = self.process_thread.take() {
+            _ = process_thread.join();
+        }
+        log::info!("State dropped");
     }
 }
 
@@ -990,7 +1051,7 @@ struct TackingFramesMode {
     options:       Arc<RwLock<Options>>,
     frame_options: FrameOptions,
     focus_options: Option<FocuserOptions>,
-    guid_options:  Option<GuidingOptions>,
+    guid_options:  Option<SimpleGuidingOptions>,
     ref_stars:     Option<Arc<RwLock<Option<Vec<Point>>>>>,
     progress:      Option<Progress>,
     cur_exposure:  f64,
@@ -1053,8 +1114,8 @@ impl TackingFramesMode {
         } else {
             None
         };
-        self.guid_options = if opts.guiding.is_used() && work_mode {
-            Some(opts.guiding.clone())
+        self.guid_options = if opts.simp_guid.is_used() && work_mode {
+            Some(opts.simp_guid.clone())
         } else {
             None
         };
@@ -1544,7 +1605,7 @@ impl Mode for TackingFramesMode {
                     });
                 }
                 if options.cam.frame.frame_type == FrameType::Lights
-                && !options.mount.device.is_empty() && options.guiding.enabled {
+                && !options.mount.device.is_empty() && options.simp_guid.enabled {
                     cmd.flags |= ProcessImageFlags::CALC_STARS_OFFSET;
                 }
                 cmd.flags |= ProcessImageFlags::SAVE_RAW;
@@ -2035,7 +2096,7 @@ impl MountCalibrMode {
     ) -> Self {
         let opts = options.read().unwrap();
         let mut frame = opts.cam.frame.clone();
-        frame.exp_main = opts.guiding.calibr_exposure;
+        frame.exp_main = opts.simp_guid.calibr_exposure;
         Self {
             indi:              Arc::clone(indi),
             state:             DitherCalibrState::Undefined,

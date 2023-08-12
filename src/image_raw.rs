@@ -501,22 +501,23 @@ impl RawImage {
     pub fn subtract_dark(&mut self, dark: &RawImage) -> anyhow::Result<()> {
         self.check_master_frame_is_compatible(dark, FrameType::Darks)?;
         debug_assert!(self.data.len() == dark.data.len());
-        let dark_sum: i64 = dark
-            .as_slice()
-            .iter()
-            .map(|v| *v as i64)
-            .sum();
+        let dark_sum: i64 = dark.as_slice().iter().map(|v| *v as i64).sum();
         let dark_aver = (dark_sum / dark.data.len() as i64) as i32;
+
+        let raw_sum: i64 = self.as_slice().iter().map(|v| *v as i64).sum();
+        let raw_aver = (raw_sum / self.data.len() as i64) as i32;
+
+        let diff = raw_aver - dark_aver;
         for (s, d) in self.data.iter_mut().zip(&dark.data) {
             let mut value = *s as i32;
-            let dark_value = *d as i32 - dark.info.zero;
+            let dark_value = *d as i32;
             value -= dark_value;
+            value += diff;
             if value < 0 { value = 0; }
             if value > u16::MAX as i32 { value = u16::MAX as i32; }
             *s = value as u16;
         }
-        let new_max_value = self.info.max_value as i32 - (dark_aver - dark.info.zero);
-        self.info.max_value = new_max_value as u16;
+        self.info.zero += diff;
         Ok(())
     }
 
