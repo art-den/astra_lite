@@ -4990,7 +4990,7 @@ camera:</property>
                   </packing>
                 </child>
                 <child>
-                  <object class="GtkCheckButton">
+                  <object class="GtkCheckButton" id="chb_guid_is_active">
                     <property name="label" translatable="yes">Guiding is active</property>
                     <property name="visible">True</property>
                     <property name="can-focus">True</property>
@@ -5071,7 +5071,7 @@ camera:</property>
                       </packing>
                     </child>
                     <child>
-                      <object class="GtkComboBoxText">
+                      <object class="GtkComboBoxText" id="cb_guid_bin">
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>
                         <property name="hexpand">True</property>
@@ -5082,7 +5082,7 @@ camera:</property>
                       </packing>
                     </child>
                     <child>
-                      <object class="GtkCheckButton">
+                      <object class="GtkCheckButton" id="chb_guid_cooler">
                         <property name="label" translatable="yes">Cooler (°C)</property>
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
@@ -5095,7 +5095,7 @@ camera:</property>
                       </packing>
                     </child>
                     <child>
-                      <object class="GtkSpinButton">
+                      <object class="GtkSpinButton" id="spb_guid_exp">
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
                       </object>
@@ -5105,7 +5105,7 @@ camera:</property>
                       </packing>
                     </child>
                     <child>
-                      <object class="GtkSpinButton">
+                      <object class="GtkSpinButton" id="spb_guid_gain">
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
                       </object>
@@ -5115,7 +5115,7 @@ camera:</property>
                       </packing>
                     </child>
                     <child>
-                      <object class="GtkSpinButton">
+                      <object class="GtkSpinButton" id="spb_guid_offset">
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
                       </object>
@@ -5125,7 +5125,7 @@ camera:</property>
                       </packing>
                     </child>
                     <child>
-                      <object class="GtkSpinButton">
+                      <object class="GtkSpinButton" id="spb_guid_temp">
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
                       </object>
@@ -5153,7 +5153,7 @@ camera:</property>
                   </packing>
                 </child>
                 <child>
-                  <object class="GtkCheckButton">
+                  <object class="GtkCheckButton" id="chb_guid_dark">
                     <property name="label" translatable="yes">Extract dark frame:</property>
                     <property name="visible">True</property>
                     <property name="can-focus">True</property>
@@ -5168,7 +5168,7 @@ camera:</property>
                   </packing>
                 </child>
                 <child>
-                  <object class="GtkFileChooserButton">
+                  <object class="GtkFileChooserButton" id="fch_guid_dark">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
                     <property name="hexpand">True</property>
@@ -5181,7 +5181,7 @@ camera:</property>
                   </packing>
                 </child>
                 <child>
-                  <object class="GtkCheckButton">
+                  <object class="GtkCheckButton" id="chb_guid_hot_pixels">
                     <property name="label" translatable="yes">Find and remove hot pixels</property>
                     <property name="visible">True</property>
                     <property name="can-focus">True</property>
@@ -5218,6 +5218,7 @@ DARK frame</property>
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
                         <property name="receives-default">True</property>
+                        <property name="action-name">win.guid_create_dark_start</property>
                         <style>
                           <class name="greenbutton"/>
                         </style>
@@ -5234,6 +5235,7 @@ DARK frame</property>
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
                         <property name="receives-default">True</property>
+                        <property name="action-name">win.guid_create_dark_stop</property>
                         <style>
                           <class name="redbutton"/>
                         </style>

@@ -78,6 +78,7 @@ pub fn build_ui(
 
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
+    configure_widget_props(&data);
     show_options(&data);
     connect_indi_and_state_events(&data);
 
@@ -103,6 +104,13 @@ fn handler_close_window(data: &Rc<GuidingData>) -> gtk::Inhibit {
     gtk::Inhibit(false)
 }
 
+fn configure_widget_props(data: &Rc<GuidingData>) {
+    let spb_guid_exp = data.builder.object::<gtk::SpinButton>("spb_guid_exp").unwrap();
+    spb_guid_exp.set_range(0.5, 5.0);
+    spb_guid_exp.set_digits(1);
+    spb_guid_exp.set_increments(0.1, 0.5);
+}
+
 fn show_options(data: &Rc<GuidingData>) {
     let pan_guid1 = data.builder.object::<gtk::Paned>("pan_guid1").unwrap();
     let pan_guid2 = data.builder.object::<gtk::Paned>("pan_guid2").unwrap();
@@ -113,15 +121,28 @@ fn show_options(data: &Rc<GuidingData>) {
     if opts.paned_pos2 != -1 {
         pan_guid2.set_position(pan_guid2.allocated_height() - opts.paned_pos2);
     }
-    let _hlp = gtk_utils::GtkHelper::new_from_builder(&data.builder);
     drop(opts);
+
+    let opts = data.options.read().unwrap();
+    let hlp = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+
+    hlp.set_active_id_str_prop("cb_guid_cam",         Some(&opts.guiding.cam_device));
+    hlp.set_f64_value_prop    ("spb_guid_exp",        opts.guiding.frame.exp_main);
+    hlp.set_f64_value_prop    ("spb_guid_gain",       opts.guiding.frame.gain);
+    hlp.set_f64_value_prop    ("spb_guid_offset",     opts.guiding.frame.offset as f64);
+    hlp.set_active_id_str_prop("cb_guid_bin",         opts.guiding.frame.binning.to_active_id());
+    hlp.set_active_bool_prop  ("chb_guid_cooler",     opts.guiding.cam_ctrl.enable_cooler);
+    hlp.set_f64_value_prop    ("spb_guid_temp",       opts.guiding.cam_ctrl.temperature);
+    hlp.set_active_bool_prop  ("chb_guid_dark",       opts.guiding.calibr.dark_frame_en);
+    hlp.set_path              ("fch_guid_dark",       opts.guiding.calibr.dark_frame.as_deref());
+    hlp.set_active_bool_prop  ("chb_guid_hot_pixels", opts.guiding.calibr.hot_pixels);
+
 }
 
 fn read_options_from_widgets(data: &Rc<GuidingData>) {
     let pan_guid1 = data.builder.object::<gtk::Paned>("pan_guid1").unwrap();
     let pan_guid2 = data.builder.object::<gtk::Paned>("pan_guid2").unwrap();
     let mut opts = data.gui_options.borrow_mut();
-    let _hlp = gtk_utils::GtkHelper::new_from_builder(&data.builder);
     if pan_guid1.is_position_set() {
         opts.paned_pos1 = pan_guid1.position();
     }
@@ -129,6 +150,12 @@ fn read_options_from_widgets(data: &Rc<GuidingData>) {
         opts.paned_pos2 = pan_guid2.allocated_height() - pan_guid2.position();
     }
     drop(opts);
+
+    let mut opts = data.options.write().unwrap();
+    let hlp = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+
+    opts.guiding.cam_device     = hlp.active_id_string_prop("cb_guid_cam").unwrap_or_default();
+    opts.guiding.frame.exp_main = hlp.f64_value_prop("spb_guid_exp");
 }
 
 fn connect_indi_and_state_events(data: &Rc<GuidingData>) {

@@ -193,10 +193,12 @@ impl GtkHelper {
 
     pub fn object_by_id(&self, obj_bldr_id: &str) -> glib::Object {
         match &self.root {
-            GtkHelperRoot::Builder(bldr) => bldr.object(obj_bldr_id).unwrap(),
+            GtkHelperRoot::Builder(bldr) => bldr.object(obj_bldr_id).expect("Object not found"),
             GtkHelperRoot::Container(_) => todo!(),
         }
     }
+
+    ///////////////////////////////////////////////////////////////////////////
 
     pub fn set_bool_prop(&self, obj_bldr_id: &str, prop_name: &str, value: bool) {
         self.object_by_id(obj_bldr_id)
@@ -210,6 +212,35 @@ impl GtkHelper {
             .expect("Wrong property type")
     }
 
+    pub fn set_str_prop(&self, obj_bldr_id: &str, prop_name: &str, value: Option<&str>) {
+        self.object_by_id(obj_bldr_id)
+            .set_property_from_value(prop_name, &value.into());
+    }
+
+    pub fn string_prop(&self, obj_bldr_id: &str, prop_name: &str) -> Option<String> {
+        self.object_by_id(obj_bldr_id)
+            .property_value(prop_name)
+            .get::<Option<String>>()
+            .expect("Wrong property type")
+    }
+
+    pub fn set_f64_prop(&self, obj_bldr_id: &str, prop_name: &str, value: f64) {
+        self.object_by_id(obj_bldr_id)
+            .set_property_from_value(prop_name, &value.into());
+    }
+
+    pub fn f64_prop(&self, obj_bldr_id: &str, prop_name: &str) -> f64 {
+        self.object_by_id(obj_bldr_id)
+            .property_value(prop_name)
+            .get::<f64>()
+            .expect("Wrong property type")
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////
+
+    // active: bool
+
     pub fn set_active_bool_prop(&self, obj_bldr_id: &str, value: bool) {
         self.set_bool_prop(obj_bldr_id, "active", value);
     }
@@ -218,6 +249,37 @@ impl GtkHelper {
         self.bool_prop(obj_bldr_id, "active")
     }
 
+    // active-id: Option<&str>
+
+    pub fn set_active_id_str_prop(&self, obj_bldr_id: &str, value: Option<&str>) {
+        self.set_str_prop(obj_bldr_id, "active-id", value);
+    }
+
+    pub fn active_id_string_prop(&self, obj_bldr_id: &str) -> Option<String> {
+        self.string_prop(obj_bldr_id, "active-id")
+    }
+
+    // value: f64
+
+    pub fn set_f64_value_prop(&self, obj_bldr_id: &str, value: f64) {
+        self.set_f64_prop(obj_bldr_id, "value", value);
+    }
+
+    pub fn f64_value_prop(&self, obj_bldr_id: &str) -> f64 {
+        self.f64_prop(obj_bldr_id, "value")
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+
+    pub fn set_path(&self, obj_bldr_id: &str, path: Option<&Path>) {
+        let widget = self.object_by_id(obj_bldr_id);
+        if let Ok(fch) = widget.downcast::<gtk::FileChooserButton>() {
+            let Some(path) = path else { return; };
+            fch.set_filename(path);
+        } else {
+            panic!("Widget named {} is not supported", obj_bldr_id);
+        }
+    }
 
 }
 
@@ -326,6 +388,14 @@ pub fn set_path(
     }
 }
 
+pub fn get_pathbuf(builder: &gtk::Builder, widget_name: &str) -> Option<PathBuf> {
+    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
+    if let Ok(fch) = widget.downcast::<gtk::FileChooserButton>() {
+        return fch.filename();
+    }
+    panic!("Widget named {} is not supported", widget_name);
+}
+
 pub fn get_f64(builder: &gtk::Builder, widget_name: &str) -> f64 {
     let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
     if let Some(spin_button) = widget.downcast_ref::<gtk::SpinButton>() {
@@ -362,13 +432,6 @@ pub fn get_string(builder: &gtk::Builder, widget_name: &str) -> String {
     panic!("Widget named {} is not supported", widget_name);
 }
 
-pub fn get_pathbuf(builder: &gtk::Builder, widget_name: &str) -> Option<PathBuf> {
-    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-    if let Ok(fch) = widget.downcast::<gtk::FileChooserButton>() {
-        return fch.filename();
-    }
-    panic!("Widget named {} is not supported", widget_name);
-}
 
 pub fn draw_progress_bar(
     area:     &gtk::DrawingArea,

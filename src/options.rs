@@ -72,7 +72,7 @@ pub struct FrameOptions {
 impl Default for FrameOptions {
     fn default() -> Self {
         Self {
-            exp_main:   5.0,
+            exp_main:   2.0,
             exp_bias:   0.01,
             exp_flat:   0.5,
             gain:       1.0,
@@ -459,22 +459,13 @@ impl Default for CamOptions {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(default)]
 pub struct GuidingOptions {
     pub cam_device: String,
     pub cam_ctrl:   CamCtrlOptions,
     pub frame:      FrameOptions,
-}
-
-impl Default for GuidingOptions {
-    fn default() -> Self {
-        Self {
-            cam_device: Default::default(),
-            cam_ctrl: Default::default(),
-            frame: Default::default()
-        }
-    }
+    pub calibr:     CalibrOptions,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]

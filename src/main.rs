@@ -31,7 +31,7 @@ mod gui_guiding;
 mod gui_common;
 
 use std::{path::Path, sync::{Arc, RwLock}};
-use gtk::prelude::*;
+use gtk::{prelude::*, glib, glib::clone};
 use crate::{io_utils::*, options::Options, state::State};
 
 fn panic_handler(
@@ -123,12 +123,17 @@ fn main() -> anyhow::Result<()> {
         Default::default(),
     );
 
-    application.connect_activate(move |app|
+    application.connect_activate(clone!(@weak options => move |app|
         gui_main::build_ui(app, &indi, &options, &state, &logs_dir)
-    );
+    ));
     application.run();
 
     log::info!("Exited from application.run");
+
+    let opts = options.read().unwrap();
+    _ = save_json_to_config::<Options>(&opts, "options");
+    drop(opts);
+    log::info!("Options saved");
 
     Ok(())
 }

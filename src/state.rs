@@ -1522,9 +1522,10 @@ impl Mode for TackingFramesMode {
                         guid_data.cur_timed_guide_w = 0.0;
                         guid_data.cur_timed_guide_e = 0.0;
                         self.indi.camera_abort_exposure(&self.device)?;
-                        let guide_rate_prop_perm =
-                            self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.perm;
-                        if guide_rate_prop_perm == indi_api::PropPerm::RW {
+                        let can_set_guide_rate =
+                            self.indi.mount_is_guide_rate_supported(&self.mount_device)? &&
+                            self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.perm == indi_api::PropPerm::RW;
+                        if can_set_guide_rate {
                             self.indi.mount_set_guide_rate(
                                 &self.mount_device,
                                 DITHER_CALIBR_SPEED,
@@ -2132,12 +2133,18 @@ impl MountCalibrMode {
             &self.camera_device,
             false
         )?;
-        let guide_rate_prop_perm = self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.perm;
-        self.can_change_g_rate = guide_rate_prop_perm == indi_api::PropPerm::RW;
+
+        let guid_rate_supported = self.indi.mount_is_guide_rate_supported(&self.mount_device)?;
+        self.can_change_g_rate =
+            guid_rate_supported &&
+            self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.perm == indi_api::PropPerm::RW;
+
         if self.can_change_g_rate {
             self.calibr_speed = DITHER_CALIBR_SPEED;
-        } else {
+        } else if guid_rate_supported {
             self.calibr_speed = self.indi.mount_get_guide_rate(&self.mount_device)?.0;
+        } else {
+            self.calibr_speed = 1.0;
         }
         self.attempt_num = 0;
         self.state = DitherCalibrState::WaitForImage;

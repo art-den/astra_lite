@@ -3068,12 +3068,15 @@ impl Connection {
         Ok(())
     }
 
-    pub fn mount_get_guide_rate_ns(&self, device_name: &str) -> Result<f64> {
-        self.get_num_property(device_name, "GUIDE_RATE", "GUIDE_RATE_NS")
-    }
-
-    pub fn mount_get_guide_rate_we(&self, device_name: &str) -> Result<f64> {
-        self.get_num_property(device_name, "GUIDE_RATE", "GUIDE_RATE_WE")
+    pub fn mount_is_guide_rate_supported(
+        &self,
+        device_name: &str
+    ) -> Result<bool> {
+        self.property_exists(
+            device_name,
+            "GUIDE_RATE",
+            None
+        )
     }
 
     pub fn mount_get_guide_rate_prop_data(
@@ -3082,6 +3085,14 @@ impl Connection {
     ) -> Result<Arc<PropStaticData>> {
         let devices = self.devices.lock().unwrap();
         devices.get_property_static_data(device_name, "GUIDE_RATE")
+    }
+
+    pub fn mount_get_guide_rate_ns(&self, device_name: &str) -> Result<f64> {
+        self.get_num_property(device_name, "GUIDE_RATE", "GUIDE_RATE_NS")
+    }
+
+    pub fn mount_get_guide_rate_we(&self, device_name: &str) -> Result<f64> {
+        self.get_num_property(device_name, "GUIDE_RATE", "GUIDE_RATE_WE")
     }
 
     pub fn mount_get_guide_rate(

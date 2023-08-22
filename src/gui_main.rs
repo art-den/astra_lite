@@ -16,6 +16,11 @@ pub enum MainGuiEvent {
 
 pub type MainGuiHandlers = Vec<Box<dyn Fn(MainGuiEvent) + 'static>>;
 
+pub const TAB_HARDWARE: u32 = 0;
+pub const TAB_MAP:      u32 = 1;
+pub const TAB_CAMERA:   u32 = 2;
+pub const TAB_GUIDE:    u32 = 3;
+
 const CSS: &[u8] = b"
 .greenbutton {
     background: rgba(0, 255, 0, .3);
@@ -140,6 +145,16 @@ pub fn build_ui(
 
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
+
+    if !cfg!(debug_assertions) {
+        // Hide map and guide pages for release build
+        let nb_main = builder.object::<gtk::Notebook>("nb_main").unwrap();
+        let map_tab = nb_main.nth_page(Some(TAB_MAP)).unwrap();
+        map_tab.hide();
+        let guide_page = nb_main.nth_page(Some(TAB_GUIDE)).unwrap();
+        guide_page.hide();
+    }
+
     window.set_application(Some(app));
     window.show();
     apply_options(&data);
@@ -222,7 +237,10 @@ pub fn build_ui(
 
     let nb_main = builder.object::<gtk::Notebook>("nb_main").unwrap();
     nb_main.connect_switch_page(clone!(@weak data => move |_, _, page| {
-        let enable_fullscreen = match page { 1|2|3 => true, _ => false };
+        let enable_fullscreen = match page {
+            TAB_MAP|TAB_CAMERA|TAB_GUIDE => true,
+            _                            => false
+        };
         btn_fullscreen.set_sensitive(enable_fullscreen);
     }));
 
@@ -270,10 +288,6 @@ fn handler_close_window(data: &Rc<MainData>) -> gtk::Inhibit {
 
     let options = data.main_options.borrow();
     _ = save_json_to_config::<MainOptions>(&options, CONF_FN);
-    drop(options);
-
-    let options = data.options.read().unwrap();
-    _ = save_json_to_config::<Options>(&options, OPTIONS_FN);
     drop(options);
 
     gtk::Inhibit(false)
