@@ -7,11 +7,18 @@ use std::{
     fs::File,
     sync::{RwLock, Arc},
 };
-
 use gtk::{prelude::*, glib, glib::clone};
 use itertools::Itertools;
-use crate::{gui_main::*, gtk_utils, indi_api, gui_indi::*, state::State, options::Options};
 use chrono::prelude::*;
+use crate::{
+    gui_main::*,
+    gtk_utils,
+    indi_api,
+    gui_indi::*,
+    state::State,
+    options::*
+};
+
 
 impl indi_api::ConnState {
     fn to_str(&self, short: bool) -> Cow<str> {
@@ -27,6 +34,23 @@ impl indi_api::ConnState {
             indi_api::ConnState::Error(text) =>
                 if short { Cow::from("Connection error") }
                 else { Cow::from(format!("Error: {}", text)) },
+        }
+    }
+}
+
+impl GuidingMode {
+    pub fn from_active_id(id: Option<&str>) -> Self {
+        match id {
+            Some("main_cam")  => Self::MainCamera,
+            Some("phd2")      => Self::Phd2,
+            _                 => Self::MainCamera,
+        }
+    }
+
+    pub fn to_active_id(&self) -> Option<&'static str> {
+        match self {
+            Self::MainCamera => Some("main_cam"),
+            Self::Phd2       => Some("phd2"),
         }
     }
 }
@@ -154,7 +178,7 @@ fn handler_close_window(data: &Rc<HardwareData>) -> gtk::Inhibit {
 }
 
 fn correct_widgets_by_cur_state(data: &Rc<HardwareData>) {
-    let bldr = &data.builder;
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
     let status = data.indi_status.borrow();
     let (conn_en, disconn_en) = match *status {
         indi_api::ConnState::Disconnected  => (true,  false),
@@ -167,32 +191,28 @@ fn correct_widgets_by_cur_state(data: &Rc<HardwareData>) {
         ("conn_indi",    conn_en),
         ("disconn_indi", disconn_en),
     ]);
-    gtk_utils::set_str(
-        bldr,
-        "lbl_indi_conn_status",
-        &status.to_str(false)
-    );
+    ui.set_prop_str("lbl_indi_conn_status.label", Some(&status.to_str(false)));
 
     let disconnected = matches!(
         *status,
         indi_api::ConnState::Disconnected|
         indi_api::ConnState::Error(_)
     );
-    let remote = gtk_utils::get_bool(bldr, "chb_remote");
+    let remote = ui.prop_bool("chb_remote.active");
 
     let (conn_cap, disconn_cap) = if remote {
         ("Connect INDI", "Disconnect INDI")
     } else {
         ("Start INDI", "Stop INDI")
     };
-    gtk_utils::set_str_prop(bldr, "btn_conn_indi", "label", conn_cap);
-    gtk_utils::set_str_prop(bldr, "btn_diconn_indi", "label", disconn_cap);
+    ui.set_prop_str("btn_conn_indi.label", Some(conn_cap));
+    ui.set_prop_str("btn_diconn_indi.label", Some(disconn_cap));
 
-    let mnt_sensitive = !remote && disconnected && !gtk_utils::is_named_combobox_empty(bldr, "cb_mount_drivers");
-    let cam_sensitive = !remote && disconnected && !gtk_utils::is_named_combobox_empty(bldr, "cb_camera_drivers");
-    let guid_cam_sensitive = !remote && disconnected && !gtk_utils::is_named_combobox_empty(bldr, "cb_guid_cam_drivers");
-    let foc_sensitive = !remote && disconnected && !gtk_utils::is_named_combobox_empty(bldr, "cb_focuser_drivers");
-    gtk_utils::enable_widgets(bldr, false, &[
+    let mnt_sensitive = !remote && disconnected && !ui.is_combobox_empty("cb_mount_drivers");
+    let cam_sensitive = !remote && disconnected && !ui.is_combobox_empty("cb_camera_drivers");
+    let guid_cam_sensitive = !remote && disconnected && !ui.is_combobox_empty("cb_guid_cam_drivers");
+    let foc_sensitive = !remote && disconnected && !ui.is_combobox_empty("cb_focuser_drivers");
+    ui.enable_widgets(false, &[
         ("l_mount_drivers",     mnt_sensitive),
         ("cb_mount_drivers",    mnt_sensitive),
         ("l_camera_drivers",    cam_sensitive),
@@ -411,21 +431,24 @@ fn fill_devices_name(data: &Rc<HardwareData>) {
 }
 
 fn show_options(data: &Rc<HardwareData>) {
-    let bldr = &data.builder;
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
     let options = data.options.read().unwrap();
-    gtk_utils::set_bool(bldr, "chb_remote",    options.indi.remote);
-    gtk_utils::set_str (bldr, "e_remote_addr", &options.indi.address);
+
+    ui.set_prop_bool("chb_remote.active", options.indi.remote);
+    ui.set_prop_str("e_remote_addr.text", Some(&options.indi.address));
+    ui.set_prop_str("ch_guide_mode.active-id", options.guid_mode.to_active_id());
 }
 
 fn read_options_from_widgets(data: &Rc<HardwareData>) {
-    let bldr = &data.builder;
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
     let mut options = data.options.write().unwrap();
-    options.indi.mount    = gtk_utils::get_active_id(bldr, "cb_mount_drivers");
-    options.indi.camera   = gtk_utils::get_active_id(bldr, "cb_camera_drivers");
-    options.indi.guid_cam = gtk_utils::get_active_id(bldr, "cb_guid_cam_drivers");
-    options.indi.focuser  = gtk_utils::get_active_id(bldr, "cb_focuser_drivers");
-    options.indi.remote   = gtk_utils::get_bool     (bldr, "chb_remote");
-    options.indi.address  = gtk_utils::get_string   (bldr, "e_remote_addr");
+    options.indi.mount = ui.prop_string("cb_mount_drivers.active-id");
+    options.indi.camera = ui.prop_string("cb_camera_drivers.active-id");
+    options.indi.guid_cam = ui.prop_string("cb_guid_cam_drivers.active-id");
+    options.indi.focuser = ui.prop_string("cb_focuser_drivers.active-id");
+    options.indi.remote = ui.prop_bool("chb_remote.active");
+    options.indi.address = ui.prop_string("e_remote_addr.text").unwrap_or_default();
+    options.guid_mode = GuidingMode::from_active_id(ui.prop_string("ch_guide_mode.active-id").as_deref());
 }
 
 fn add_log_record(
@@ -513,10 +536,11 @@ fn handler_action_help_save_indi(data: &Rc<HardwareData>) {
         .modal(true)
         .transient_for(&data.window)
         .build();
-    fc.add_buttons(&[
-        ("_Cancel", gtk::ResponseType::Cancel),
-        ("_Save", gtk::ResponseType::Accept),
-    ]);
+    gtk_utils::add_ok_and_cancel_buttons(
+        fc.upcast_ref::<gtk::Dialog>(),
+        "_Cancel", gtk::ResponseType::Cancel,
+        "_Save",   gtk::ResponseType::Accept
+    );
     let resp = fc.run();
     fc.close();
     if resp == gtk::ResponseType::Accept {

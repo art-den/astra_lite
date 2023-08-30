@@ -1,25 +1,17 @@
-use std::{rc::Rc, path::{Path, PathBuf}, cell::Cell};
-use gtk::{*, prelude::*, gio, cairo, glib, glib::clone};
+use std::{rc::Rc, path::{Path, PathBuf}};
+use gtk::{*, prelude::*, gio, glib, glib::clone};
 
-
-pub struct ExclusiveCaller {
-    busy: Cell<bool>,
-}
-
-impl ExclusiveCaller {
-    pub fn new() -> Self {
-        Self {
-            busy: Cell::new(false),
-        }
-    }
-
-    pub fn exec(&self, mut fun: impl FnMut()) {
-        if self.busy.get() {
-            return;
-        }
-        self.busy.set(true);
-        fun();
-        self.busy.set(false);
+pub fn add_ok_and_cancel_buttons(
+    dialog:      &gtk::Dialog,
+    ok_cap:      &str,
+    ok_type:     gtk::ResponseType,
+    cancel_cap:  &str,
+    cancel_type: gtk::ResponseType,
+) {
+    if cfg!(target_os = "windows") {
+        dialog.add_buttons(&[(ok_cap, ok_type), (cancel_cap, cancel_type)]);
+    } else {
+        dialog.add_buttons(&[(cancel_cap, cancel_type), (ok_cap, ok_type)]);
     }
 }
 
@@ -111,31 +103,6 @@ pub fn exec_and_show_error(
     }
 }
 
-pub fn enable_widgets(
-    builder:   &gtk::Builder,
-    force_set: bool,
-    names:     &[(&str, bool)]
-) {
-    for (widget_name, enable) in names {
-        let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-        if force_set || widget.is_sensitive() != *enable {
-            widget.set_sensitive(*enable);
-        }
-    }
-}
-
-pub fn show_widgets(
-    builder: &gtk::Builder,
-    names:   &[(&str, bool)]
-) {
-    for (widget_name, visible) in names {
-        let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-        if widget.is_visible() != *visible {
-            widget.set_visible(*visible);
-        }
-    }
-}
-
 pub fn get_model_row_count(model: &gtk::TreeModel) -> usize {
     let Some(iter) = model.iter_first() else {
         return 0;
@@ -163,11 +130,6 @@ pub fn get_list_view_selected_row(tree: &gtk::TreeView) -> Option<i32> {
 pub fn is_combobox_empty<T: IsA<gtk::ComboBox>>(cb: &T) -> bool {
     let Some(model) = cb.model() else { return true; };
     model.iter_first().is_none()
-}
-
-pub fn is_named_combobox_empty(builder: &gtk::Builder, widget_name: &str) -> bool {
-    let cb = builder.object::<gtk::ComboBox>(widget_name).unwrap();
-    is_combobox_empty(&cb)
 }
 
 pub fn combobox_items_count<T: IsA<gtk::ComboBox>>(cb: &T) -> usize {
@@ -200,280 +162,170 @@ impl GtkHelper {
 
     ///////////////////////////////////////////////////////////////////////////
 
-    pub fn set_bool_prop(&self, obj_bldr_id: &str, prop_name: &str, value: bool) {
+    pub fn enable_widgets(&self, force_set: bool, names: &[(&str, bool)]) {
+        for (widget_name, enable) in names {
+            let object = self.object_by_id(widget_name);
+            let widget = object
+                .downcast::<gtk::Widget>()
+                .expect("Is not gtk::Widget");
+            if force_set || widget.is_sensitive() != *enable {
+                widget.set_sensitive(*enable);
+            }
+        }
+    }
+
+    pub fn show_widgets(&self, names: &[(&str, bool)]) {
+        for (widget_name, visible) in names {
+            let object = self.object_by_id(widget_name);
+            let widget = object
+                .downcast::<gtk::Widget>()
+                .expect("Is not gtk::Widget");
+            if widget.is_visible() != *visible {
+                widget.set_visible(*visible);
+            }
+        }
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+
+    // bool
+
+    pub fn set_prop_bool(&self, name_and_prop: &str, value: bool) {
+        let (name, prop) = Self::extract_name_and_prop(name_and_prop);
+        self.object_by_id(name)
+            .set_property_from_value(prop, &value.into());
+    }
+
+    pub fn prop_bool(&self, name_and_prop: &str) -> bool {
+        let (name, prop) = Self::extract_name_and_prop(name_and_prop);
+        self.object_by_id(name)
+            .property_value(prop)
+            .get::<bool>()
+            .expect("Wrong property type")
+    }
+
+    pub fn set_prop_bool_ex(&self, obj_bldr_id: &str, prop_name: &str, value: bool) {
         self.object_by_id(obj_bldr_id)
             .set_property_from_value(prop_name, &value.into());
     }
 
-    pub fn bool_prop(&self, obj_bldr_id: &str, prop_name: &str) -> bool {
+    pub fn prop_bool_ex(&self, obj_bldr_id: &str, prop_name: &str) -> bool {
         self.object_by_id(obj_bldr_id)
             .property_value(prop_name)
             .get::<bool>()
             .expect("Wrong property type")
     }
 
-    pub fn set_str_prop(&self, obj_bldr_id: &str, prop_name: &str, value: Option<&str>) {
+    // &str /  String
+
+    pub fn set_prop_str(&self, name_and_prop: &str, value: Option<&str>) {
+        let (name, prop) = Self::extract_name_and_prop(name_and_prop);
+        self.object_by_id(name)
+            .set_property_from_value(prop, &value.into());
+    }
+
+    pub fn prop_string(&self, name_and_prop: &str) -> Option<String> {
+        let (name, prop) = Self::extract_name_and_prop(name_and_prop);
+        self.object_by_id(name)
+            .property_value(prop)
+            .get::<Option<String>>()
+            .expect("Wrong property type")
+    }
+
+    pub fn set_prop_str_ex(&self, obj_bldr_id: &str, prop_name: &str, value: Option<&str>) {
         self.object_by_id(obj_bldr_id)
             .set_property_from_value(prop_name, &value.into());
     }
 
-    pub fn string_prop(&self, obj_bldr_id: &str, prop_name: &str) -> Option<String> {
+    pub fn prop_string_ex(&self, obj_bldr_id: &str, prop_name: &str) -> Option<String> {
         self.object_by_id(obj_bldr_id)
             .property_value(prop_name)
             .get::<Option<String>>()
             .expect("Wrong property type")
     }
 
-    pub fn set_f64_prop(&self, obj_bldr_id: &str, prop_name: &str, value: f64) {
+    // f64
+
+    pub fn set_prop_f64(&self, name_and_prop: &str, value: f64) {
+        let (name, prop) = Self::extract_name_and_prop(name_and_prop);
+        self.object_by_id(name)
+            .set_property_from_value(prop, &value.into());
+    }
+
+    pub fn prop_f64(&self, name_and_prop: &str) -> f64 {
+        let (name, prop) = Self::extract_name_and_prop(name_and_prop);
+        self.object_by_id(name)
+            .property_value(prop)
+            .get::<f64>()
+            .expect("Wrong property type")
+    }
+
+    pub fn set_prop_f64_ex(&self, obj_bldr_id: &str, prop_name: &str, value: f64) {
         self.object_by_id(obj_bldr_id)
             .set_property_from_value(prop_name, &value.into());
     }
 
-    pub fn f64_prop(&self, obj_bldr_id: &str, prop_name: &str) -> f64 {
+    pub fn prop_f64_ex(&self, obj_bldr_id: &str, prop_name: &str) -> f64 {
         self.object_by_id(obj_bldr_id)
             .property_value(prop_name)
             .get::<f64>()
             .expect("Wrong property type")
     }
 
-
     ///////////////////////////////////////////////////////////////////////////
 
-    // active: bool
-
-    pub fn set_active_bool_prop(&self, obj_bldr_id: &str, value: bool) {
-        self.set_bool_prop(obj_bldr_id, "active", value);
-    }
-
-    pub fn active_bool_prop(&self, obj_bldr_id: &str) -> bool {
-        self.bool_prop(obj_bldr_id, "active")
-    }
-
-    // active-id: Option<&str>
-
-    pub fn set_active_id_str_prop(&self, obj_bldr_id: &str, value: Option<&str>) {
-        self.set_str_prop(obj_bldr_id, "active-id", value);
-    }
-
-    pub fn active_id_string_prop(&self, obj_bldr_id: &str) -> Option<String> {
-        self.string_prop(obj_bldr_id, "active-id")
-    }
-
-    // value: f64
-
-    pub fn set_f64_value_prop(&self, obj_bldr_id: &str, value: f64) {
-        self.set_f64_prop(obj_bldr_id, "value", value);
-    }
-
-    pub fn f64_value_prop(&self, obj_bldr_id: &str) -> f64 {
-        self.f64_prop(obj_bldr_id, "value")
-    }
-
-    ///////////////////////////////////////////////////////////////////////////
-
-    pub fn set_path(&self, obj_bldr_id: &str, path: Option<&Path>) {
+    pub fn set_fch_path(&self, obj_bldr_id: &str, path: Option<&Path>) {
         let widget = self.object_by_id(obj_bldr_id);
-        if let Ok(fch) = widget.downcast::<gtk::FileChooserButton>() {
-            let Some(path) = path else { return; };
-            fch.set_filename(path);
-        } else {
-            panic!("Widget named {} is not supported", obj_bldr_id);
-        }
-    }
-
-}
-
-pub fn set_f64(
-    builder:     &gtk::Builder,
-    widget_name: &str,
-    value:       f64
-) {
-    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-    if let Some(spin_button) = widget.downcast_ref::<gtk::SpinButton>() {
-        spin_button.set_value(value);
-    } else if let Some(scale) = widget.downcast_ref::<gtk::Scale>() {
-        scale.set_value(value);
-    } else {
-        panic!("Widget named {} is not supported", widget_name);
-    }
-}
-
-pub fn set_bool(
-    builder:     &gtk::Builder,
-    widget_name: &str,
-    value:       bool
-) {
-    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-    if let Some(checkbutton) = widget.downcast_ref::<gtk::CheckButton>() {
-        checkbutton.set_active(value);
-    } else {
-        panic!("Widget named {} is not supported", widget_name);
-    }
-}
-
-pub fn set_bool_prop(
-    builder:     &gtk::Builder,
-    widget_name: &str,
-    prop_name:   &str,
-    value:       bool
-) {
-    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-    widget.set_properties(&[(prop_name, &value)]);
-}
-
-pub fn get_bool_prop(
-    builder:     &gtk::Builder,
-    widget_name: &str,
-    prop_name:   &str
-) -> bool {
-    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-    widget.property::<bool>(prop_name)
-}
-
-pub fn set_str_prop(
-    builder:     &gtk::Builder,
-    widget_name: &str,
-    prop_name:   &str,
-    value:       &str
-) {
-    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-    widget.set_properties(&[(prop_name, &value)]);
-}
-
-pub fn set_str(
-    builder:     &gtk::Builder,
-    widget_name: &str,
-    text:        &str
-) {
-    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-    if let Some(label) = widget.downcast_ref::<gtk::Label>() {
-        label.set_label(text);
-    } else if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
-        entry.set_text(text);
-    } else if let Some(button) = widget.downcast_ref::<gtk::Button>() {
-        button.set_label(text);
-    } else {
-        panic!("Widget named {} is not supported", widget_name);
-    }
-}
-
-pub fn set_active_id(
-    builder:     &gtk::Builder,
-    widget_name: &str,
-    active_id:   Option<&str>
-) {
-    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-    if let Ok(combobox) = widget.downcast::<gtk::ComboBox>() {
-        if combobox.active_id().as_deref() != active_id {
-            combobox.set_active_id(active_id);
-        }
-    } else {
-        panic!("Widget named {} is not supported", widget_name);
-    }
-}
-
-pub fn set_path(
-    builder:     &gtk::Builder,
-    widget_name: &str,
-    path:        Option<&Path>
-) {
-    let Some(path) = path else {
-        return;
-    };
-    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-    if let Ok(fch) = widget.downcast::<gtk::FileChooserButton>() {
+        let fch = widget
+            .downcast::<gtk::FileChooserButton>()
+            .expect("Widget is not gtk::FileChooserButton");
+        let Some(path) = path else { return; };
         fch.set_filename(path);
-    } else {
-        panic!("Widget named {} is not supported", widget_name);
-    }
-}
-
-pub fn get_pathbuf(builder: &gtk::Builder, widget_name: &str) -> Option<PathBuf> {
-    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-    if let Ok(fch) = widget.downcast::<gtk::FileChooserButton>() {
-        return fch.filename();
-    }
-    panic!("Widget named {} is not supported", widget_name);
-}
-
-pub fn get_f64(builder: &gtk::Builder, widget_name: &str) -> f64 {
-    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-    if let Some(spin_button) = widget.downcast_ref::<gtk::SpinButton>() {
-        return spin_button.value();
-    } else if let Some(scale) = widget.downcast_ref::<gtk::Scale>() {
-        return scale.value();
-    }
-    panic!("Widget named {} is not supported", widget_name);
-}
-
-pub fn get_bool(builder: &gtk::Builder, widget_name: &str) -> bool {
-    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-    if let Some(checkbutton) = widget.downcast_ref::<gtk::CheckButton>() {
-        return checkbutton.is_active();
-    } else if let Some(exp) = widget.downcast_ref::<gtk::Expander>() {
-        return exp.is_expanded();
-    }
-    panic!("Widget named {} is not supported", widget_name);
-}
-
-pub fn get_active_id(builder: &gtk::Builder, widget_name: &str) -> Option<String> {
-    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-    if let Ok(combobox) = widget.downcast::<gtk::ComboBox>() {
-        return combobox.active_id().map(|s| s.to_string());
-    }
-    panic!("Widget named {} is not supported", widget_name);
-}
-
-pub fn get_string(builder: &gtk::Builder, widget_name: &str) -> String {
-    let widget = builder.object::<gtk::Widget>(widget_name).unwrap();
-    if let Ok(entry) = widget.downcast::<gtk::Entry>() {
-        return entry.text().to_string();
-    }
-    panic!("Widget named {} is not supported", widget_name);
-}
-
-
-pub fn draw_progress_bar(
-    area:     &gtk::DrawingArea,
-    cr:       &cairo::Context,
-    progress: f64,
-    text:     &str,
-) -> anyhow::Result<()> {
-    let width = area.allocated_width() as f64;
-    let height = area.allocated_height() as f64;
-    let style_context = area.style_context();
-    let fg = style_context.color(gtk::StateFlags::ACTIVE);
-    let br = if fg.green() < 0.5 { 1.0 } else { 0.5 };
-    let bg_color = if progress < 1.0 {
-        (br, br, 0.0, 0.7)
-    } else {
-        (0.0, br, 0.0, 0.5)
-    };
-    cr.set_source_rgba(bg_color.0, bg_color.1, bg_color.2, bg_color.3);
-    cr.rectangle(0.0, 0.0, width * progress, height);
-    cr.fill()?;
-    let area_bg = area
-        .style_context()
-        .lookup_color("theme_base_color")
-        .unwrap_or(gtk::gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
-    cr.set_source_rgb(area_bg.red(), area_bg.green(), area_bg.blue());
-    cr.rectangle(width * progress, 0.0, width * (1.0 - progress), height);
-    cr.fill()?;
-
-    cr.set_font_size(height);
-    let te = cr.text_extents(text)?;
-
-    if !text.is_empty() {
-        cr.set_source_rgba(fg.red(), fg.green(), fg.blue(), 0.45);
-        cr.rectangle(0.0, 0.0, width, height);
-        cr.stroke()?;
     }
 
-    cr.set_source_rgb(fg.red(), fg.green(), fg.blue());
-    cr.move_to((width - te.width()) / 2.0, (height - te.height()) / 2.0 - te.y_bearing());
-    cr.show_text(text)?;
+    pub fn fch_pathbuf(&self, obj_bldr_id: &str) -> Option<PathBuf> {
+        let widget = self.object_by_id(obj_bldr_id);
+        let fch = widget
+            .downcast::<gtk::FileChooserButton>()
+            .expect("Widget is not gtk::FileChooserButton");
+        fch.filename()
+    }
 
-    Ok(())
+    pub fn set_range_value(&self, obj_bldr_id: &str, value: f64) {
+        let widget = self.object_by_id(obj_bldr_id);
+        let range = widget
+            .downcast::<gtk::Range>()
+            .expect("Widget is not gtk::Range");
+        range.set_value(value);
+    }
+
+    pub fn range_value(&self, obj_bldr_id: &str) -> f64 {
+        let widget = self.object_by_id(obj_bldr_id);
+        let range = widget
+            .downcast::<gtk::Range>()
+            .expect("Widget is not gtk::Range");
+        range.value()
+    }
+
+    pub fn is_combobox_empty(&self, widget_name: &str) -> bool {
+        let widget = self.object_by_id(widget_name);
+        let cb = widget
+            .downcast::<gtk::ComboBox>()
+            .expect("Widget is not gtk::Range");
+        is_combobox_empty(&cb)
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+
+    fn extract_name_and_prop(name_and_prop: &str) -> (&str, &str) {
+        let split_pos = name_and_prop
+            .bytes()
+            .position(|v| v == b'.')
+            .expect("`.` not found");
+        let name = &name_and_prop[..split_pos];
+        let prop = &name_and_prop[split_pos+1..];
+        (name, prop)
+    }
 }
 
 pub fn select_file_name_to_save(
@@ -495,17 +347,11 @@ pub fn select_file_name_to_save(
         .transient_for(parent)
         .build();
     fc.set_current_name(def_file_name);
-    if cfg!(target_os = "windows") {
-        fc.add_buttons(&[
-            ("_Save", gtk::ResponseType::Accept),
-            ("_Cancel", gtk::ResponseType::Cancel),
-        ]);
-    } else {
-        fc.add_buttons(&[
-            ("_Cancel", gtk::ResponseType::Cancel),
-            ("_Save", gtk::ResponseType::Accept),
-        ]);
-    }
+    add_ok_and_cancel_buttons(
+        fc.upcast_ref::<gtk::Dialog>(),
+        "_Save",   gtk::ResponseType::Accept,
+        "_Cancel", gtk::ResponseType::Cancel,
+    );
     let resp = fc.run();
     fc.close();
     if resp != gtk::ResponseType::Accept {

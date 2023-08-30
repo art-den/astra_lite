@@ -2,7 +2,7 @@ use std::{sync::{Arc, RwLock}, rc::Rc, cell::RefCell, time::Duration, path::Path
 use gtk::{prelude::*, glib, glib::clone, cairo::{self}};
 use serde::{Serialize, Deserialize};
 
-use crate::{indi_api, gtk_utils, io_utils::*, state::*, options::*};
+use crate::{indi_api, gtk_utils, io_utils::*, state::*, options::*, gui_common::*};
 
 pub const TIMER_PERIOD_MS: u64 = 250;
 const CONF_FN: &str = "gui_main";
@@ -177,9 +177,9 @@ pub fn build_ui(
     crate::gui_map::build_ui(app, &builder, &options);
     crate::gui_guiding::build_ui(app, &builder, options, state, indi);
 
-    gtk_utils::enable_widgets(&builder, false, &[
-        ("mi_color_theme", cfg!(target_os = "windows"))
-    ]);
+    let ui = gtk_utils::GtkHelper::new_from_builder(&builder);
+
+    ui.enable_widgets(false, &[("mi_color_theme", cfg!(target_os = "windows"))]);
 
     let mi_dark_theme = builder.object::<gtk::RadioMenuItem>("mi_dark_theme").unwrap();
     mi_dark_theme.connect_activate(clone!(@weak data => move |mi| {
@@ -344,7 +344,7 @@ fn handler_draw_progress(
         let progress_ratio = progress_data.cur as f64 / progress_data.total as f64;
         let progress_text = format!("{} / {}", progress_data.cur, progress_data.total);
         gtk_utils::exec_and_show_error(&data.window, || {
-            gtk_utils::draw_progress_bar(
+            draw_progress_bar(
                 area,
                 cr,
                 progress_ratio,

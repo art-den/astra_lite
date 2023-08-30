@@ -126,17 +126,17 @@ fn show_options(data: &Rc<MapData>) {
     let pan_map1 = data.builder.object::<gtk::Paned>("pan_map1").unwrap();
     let opts = data.gui_options.borrow();
     pan_map1.set_position(opts.paned_pos1);
-    let hlp = gtk_utils::GtkHelper::new_from_builder(&data.builder);
-    hlp.set_active_bool_prop("chb_flt_visible",    opts.filter.visible);
-    hlp.set_active_bool_prop("chb_flt_stars",      opts.filter.visible);
-    hlp.set_active_bool_prop("chb_flt_galaxies",   opts.filter.galaxies);
-    hlp.set_active_bool_prop("chb_flt_clusters",   opts.filter.clusters);
-    hlp.set_active_bool_prop("chb_flt_nebulae",    opts.filter.nebulae);
-    hlp.set_active_bool_prop("chb_flt_pl_nebulae", opts.filter.pl_nebulae);
-    hlp.set_active_bool_prop("chb_flt_other",      opts.filter.other);
-    hlp.set_active_bool_prop("chb_show_stars",     opts.to_show.stars);
-    hlp.set_active_bool_prop("chb_show_dso",       opts.to_show.dso);
-    hlp.set_active_bool_prop("chb_show_solar",     opts.to_show.solar);
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    ui.set_prop_bool("chb_flt_visible.active", opts.filter.visible);
+    ui.set_prop_bool("chb_flt_stars.active", opts.filter.visible);
+    ui.set_prop_bool("chb_flt_galaxies.active", opts.filter.galaxies);
+    ui.set_prop_bool("chb_flt_clusters.active", opts.filter.clusters);
+    ui.set_prop_bool("chb_flt_nebulae.active", opts.filter.nebulae);
+    ui.set_prop_bool("chb_flt_pl_nebulae.active", opts.filter.pl_nebulae);
+    ui.set_prop_bool("chb_flt_other.active", opts.filter.other);
+    ui.set_prop_bool("chb_show_stars.active", opts.to_show.stars);
+    ui.set_prop_bool("chb_show_dso.active", opts.to_show.dso);
+    ui.set_prop_bool("chb_show_solar.active", opts.to_show.solar);
 
     drop(opts);
 }
@@ -144,18 +144,18 @@ fn show_options(data: &Rc<MapData>) {
 fn read_options_from_widgets(data: &Rc<MapData>) {
     let pan_map1 = data.builder.object::<gtk::Paned>("pan_map1").unwrap();
     let mut opts = data.gui_options.borrow_mut();
-    let hlp = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
     opts.paned_pos1 = pan_map1.position();
-    opts.filter.visible    = hlp.active_bool_prop("chb_flt_visible");
-    opts.filter.visible    = hlp.active_bool_prop("chb_flt_stars");
-    opts.filter.galaxies   = hlp.active_bool_prop("chb_flt_galaxies");
-    opts.filter.clusters   = hlp.active_bool_prop("chb_flt_clusters");
-    opts.filter.nebulae    = hlp.active_bool_prop("chb_flt_nebulae");
-    opts.filter.pl_nebulae = hlp.active_bool_prop("chb_flt_pl_nebulae");
-    opts.filter.other      = hlp.active_bool_prop("chb_flt_other");
-    opts.to_show.stars     = hlp.active_bool_prop("chb_show_stars");
-    opts.to_show.dso       = hlp.active_bool_prop("chb_show_dso");
-    opts.to_show.solar     = hlp.active_bool_prop("chb_show_solar");
+    opts.filter.visible    = ui.prop_bool("chb_flt_visible.active");
+    opts.filter.visible    = ui.prop_bool("chb_flt_stars.active");
+    opts.filter.galaxies   = ui.prop_bool("chb_flt_galaxies.active");
+    opts.filter.clusters   = ui.prop_bool("chb_flt_clusters.active");
+    opts.filter.nebulae    = ui.prop_bool("chb_flt_nebulae.active");
+    opts.filter.pl_nebulae = ui.prop_bool("chb_flt_pl_nebulae.active");
+    opts.filter.other      = ui.prop_bool("chb_flt_other.active");
+    opts.to_show.stars     = ui.prop_bool("chb_show_stars.active");
+    opts.to_show.dso       = ui.prop_bool("chb_show_dso.active");
+    opts.to_show.solar     = ui.prop_bool("chb_show_solar.active");
 
     drop(opts);
 }

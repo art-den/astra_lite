@@ -104,7 +104,7 @@ struct CameraData {
     light_history:      RefCell<Vec<LightFrameShortInfo>>,
     focusing_data:      RefCell<Option<FocusingEvt>>,
     closed:             Cell<bool>,
-    excl:               gtk_utils::ExclusiveCaller,
+    excl:               ExclusiveCaller,
     full_screen_mode:   Cell<bool>,
     self_:              RefCell<Option<Rc<CameraData>>>,
 }
@@ -147,7 +147,7 @@ pub fn build_ui(
         light_history:      RefCell::new(Vec::new()),
         focusing_data:      RefCell::new(None),
         closed:             Cell::new(false),
-        excl:               gtk_utils::ExclusiveCaller::new(),
+        excl:               ExclusiveCaller::new(),
         full_screen_mode:   Cell::new(false),
         self_:              RefCell::new(None),
     });
@@ -370,10 +370,12 @@ fn process_event_in_main_thread(data: &Rc<CameraData>, event: MainThreadEvent) {
 
         MainThreadEvent::StateEvent(StateEvent::ModeChanged) => {
             correct_widgets_props(&data);
+            correct_preview_source(&data);
         },
 
         MainThreadEvent::StateEvent(StateEvent::ModeContinued) => {
             show_frame_options(&data);
+            correct_preview_source(&data);
         },
 
         MainThreadEvent::StateEvent(StateEvent::Focusing(fdata)) => {
@@ -401,6 +403,7 @@ fn connect_widgets_events_before_show_options(data: &Rc<CameraData>) {
 
 fn connect_widgets_events(data: &Rc<CameraData>) {
     let bldr = &data.builder;
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
     gtk_utils::connect_action(&data.window, data, "take_shot",              handler_action_take_shot);
     gtk_utils::connect_action(&data.window, data, "stop_shot",              handler_action_stop_shot);
     gtk_utils::connect_action(&data.window, data, "clear_light_history",    handler_action_clear_light_history);
@@ -477,7 +480,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
             let frame_type = FrameType::from_active_id(cb.active_id().as_deref());
             let mut options = data.options.write().unwrap();
             options.cam.frame.frame_type = frame_type;
-            gtk_utils::set_f64(&data.builder, "spb_exp", options.cam.frame.exposure());
+            ui.set_prop_f64("spb_exp.value", options.cam.frame.exposure());
             drop(options);
             show_total_raw_time(&data);
         });
@@ -699,11 +702,8 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
 
     let chb_hot_pixels = data.builder.object::<gtk::CheckButton>("chb_hot_pixels").unwrap();
     chb_hot_pixels.connect_active_notify(clone!(@weak data => move |chb| {
-        gtk_utils::enable_widgets(
-            &data.builder,
-            false,
-            &[("l_hot_pixels_warn", chb.is_active())]
-        );
+        let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+        ui.enable_widgets(false,&[("l_hot_pixels_warn", chb.is_active())]);
         data.excl.exec(|| {
             data.options.write().unwrap().calibr.hot_pixels = chb.is_active();
         });
@@ -802,37 +802,17 @@ fn handler_close_window(data: &Rc<CameraData>) -> gtk::Inhibit {
 fn show_frame_options(data: &Rc<CameraData>) {
     data.excl.exec(|| {
         let options = data.options.read().unwrap();
-        let bld = &data.builder;
+        let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
 
-        gtk_utils::set_active_id(bld, "cb_frame_mode", options.cam.frame.frame_type.to_active_id());
-        gtk_utils::set_f64      (bld, "spb_exp",       options.cam.frame.exposure());
-        gtk_utils::set_f64      (bld, "spb_delay",     options.cam.frame.delay);
-        gtk_utils::set_f64      (bld, "spb_gain",      options.cam.frame.gain);
-        gtk_utils::set_f64      (bld, "spb_offset",    options.cam.frame.offset as f64);
-        gtk_utils::set_active_id(bld, "cb_bin",        options.cam.frame.binning.to_active_id());
-        gtk_utils::set_active_id(bld, "cb_crop",       options.cam.frame.crop.to_active_id());
-        gtk_utils::set_bool     (bld, "chb_low_noise", options.cam.frame.low_noise);
+        ui.set_prop_str ("cb_frame_mode.active-id", options.cam.frame.frame_type.to_active_id());
+        ui.set_prop_f64 ("spb_exp.value",           options.cam.frame.exposure());
+        ui.set_prop_f64 ("spb_delay.value",         options.cam.frame.delay);
+        ui.set_prop_f64 ("spb_gain.value",          options.cam.frame.gain);
+        ui.set_prop_f64 ("spb_offset.value",        options.cam.frame.offset as f64);
+        ui.set_prop_str ("cb_bin.active-id",        options.cam.frame.binning.to_active_id());
+        ui.set_prop_str ("cb_crop.active-id",       options.cam.frame.crop.to_active_id());
+        ui.set_prop_bool("chb_low_noise.active",    options.cam.frame.low_noise);
     });
-
-
-    match data.state.mode_data().mode.get_type() {
-        ModeType::LiveStacking => {
-            gtk_utils::set_active_id(
-                &data.builder,
-                "cb_preview_src",
-                Some("live")
-
-            );
-        },
-        _ => {
-            gtk_utils::set_active_id(
-                &data.builder,
-                "cb_preview_src",
-                Some("frame")
-            );
-        }
-    }
-
 }
 
 fn show_options(data: &Rc<CameraData>) {
@@ -840,67 +820,93 @@ fn show_options(data: &Rc<CameraData>) {
         let bld = &data.builder;
 
         let options = data.options.read().unwrap();
-        gtk_utils::set_f64(bld, "spb_foc_len", options.telescope.focal_len);
-        gtk_utils::set_f64(bld, "spb_barlow",  options.telescope.barlow);
+        let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
 
-        gtk_utils::set_bool     (bld, "chb_shots_cont",      options.cam.live_view);
+        // Telescope
 
-        gtk_utils::set_bool     (bld, "chb_cooler",          options.cam.ctrl.enable_cooler);
-        gtk_utils::set_f64      (bld, "spb_temp",            options.cam.ctrl.temperature);
-        gtk_utils::set_bool     (bld, "chb_fan",             options.cam.ctrl.enable_fan);
+        ui.set_prop_f64("spb_foc_len.value", options.telescope.focal_len);
+        ui.set_prop_f64("spb_barlow.value",  options.telescope.barlow);
 
-        gtk_utils::set_bool     (bld, "chb_master_dark",     options.calibr.dark_frame_en);
-        gtk_utils::set_path     (bld, "fch_master_dark",     options.calibr.dark_frame.as_deref());
-        gtk_utils::set_bool     (bld, "chb_master_flat",     options.calibr.flat_frame_en);
-        gtk_utils::set_path     (bld, "fch_master_flat",     options.calibr.flat_frame.as_deref());
-        gtk_utils::set_bool     (bld, "chb_hot_pixels",      options.calibr.hot_pixels);
+        // Camera
 
-        gtk_utils::set_bool     (bld, "chb_raw_frames_cnt",  options.raw_frames.use_cnt);
-        gtk_utils::set_f64      (bld, "spb_raw_frames_cnt",  options.raw_frames.frame_cnt as f64);
-        gtk_utils::set_path     (bld, "fcb_raw_frames_path", Some(&options.raw_frames.out_path));
-        gtk_utils::set_bool     (bld, "chb_master_frame",    options.raw_frames.create_master);
+        ui.set_prop_bool("chb_shots_cont.active", options.cam.live_view);
 
-        gtk_utils::set_bool     (bld, "chb_live_save_orig",  options.live.save_orig);
-        gtk_utils::set_bool     (bld, "chb_live_save",       options.live.save_enabled);
-        gtk_utils::set_f64      (bld, "spb_live_minutes",    options.live.save_minutes as f64);
-        gtk_utils::set_path     (bld, "fch_live_folder",     Some(&options.live.out_dir));
+        // Camera control
 
-        gtk_utils::set_bool     (bld, "chb_max_fwhm",        options.quality.use_max_fwhm);
-        gtk_utils::set_f64      (bld, "spb_max_fwhm",        options.quality.max_fwhm as f64);
-        gtk_utils::set_bool     (bld, "chb_max_oval",        options.quality.use_max_ovality);
-        gtk_utils::set_f64      (bld, "spb_max_oval",        options.quality.max_ovality as f64);
+        ui.set_prop_bool("chb_cooler.active",     options.cam.ctrl.enable_cooler);
+        ui.set_prop_f64 ("spb_temp.value",        options.cam.ctrl.temperature);
+        ui.set_prop_bool("chb_fan.active",        options.cam.ctrl.enable_fan);
 
-        gtk_utils::set_active_id(bld, "cb_preview_src",      options.preview.source.to_active_id());
-        gtk_utils::set_active_id(bld, "cb_preview_scale",    options.preview.scale.to_active_id());
-        gtk_utils::set_active_id(bld, "cb_preview_color",    options.preview.color.to_active_id());
-        gtk_utils::set_f64      (bld, "scl_dark",            options.preview.dark_lvl);
-        gtk_utils::set_f64      (bld, "scl_highlight",       options.preview.light_lvl);
-        gtk_utils::set_f64      (bld, "scl_gamma",           options.preview.gamma);
-        gtk_utils::set_bool     (bld, "chb_rem_grad",        options.preview.remove_grad);
+        // Calibration
 
-        gtk_utils::set_bool     (bld, "ch_hist_logy",        options.hist.log_y);
-        gtk_utils::set_bool     (bld, "ch_stat_percents",    options.hist.percents);
+        ui.set_prop_bool("chb_master_dark.active", options.calibr.dark_frame_en);
+        ui.set_fch_path ("fch_master_dark",        options.calibr.dark_frame.as_deref());
+        ui.set_prop_bool("chb_master_flat.active", options.calibr.flat_frame_en);
+        ui.set_fch_path ("fch_master_flat",        options.calibr.flat_frame.as_deref());
+        ui.set_prop_bool("chb_hot_pixels.active",  options.calibr.hot_pixels);
 
-        gtk_utils::set_bool     (bld, "chb_foc_temp",        options.focuser.on_temp_change);
-        gtk_utils::set_f64      (bld, "spb_foc_temp",        options.focuser.max_temp_change);
-        gtk_utils::set_bool     (bld, "chb_foc_fwhm",        options.focuser.on_fwhm_change);
-        gtk_utils::set_active_id(bld, "cb_foc_fwhm",         Some(options.focuser.max_fwhm_change.to_string()).as_deref());
-        gtk_utils::set_bool     (bld, "chb_foc_period",      options.focuser.periodically);
-        gtk_utils::set_active_id(bld, "cb_foc_period",       Some(options.focuser.period_minutes.to_string()).as_deref());
-        gtk_utils::set_f64      (bld, "spb_foc_measures",    options.focuser.measures as f64);
-        gtk_utils::set_f64      (bld, "spb_foc_auto_step",   options.focuser.step);
-        gtk_utils::set_f64      (bld, "spb_foc_exp",         options.focuser.exposure);
+        // Raw frames
 
-        gtk_utils::set_active_id(bld, "cb_dith_perod",    Some(options.simp_guid.dith_period.to_string().as_str()));
-        gtk_utils::set_active_id(bld, "cb_dith_distance", Some(format!("{:.0}", options.simp_guid.dith_percent * 10.0).as_str()));
-        gtk_utils::set_bool     (bld, "chb_guid_enabled", options.simp_guid.enabled);
-        gtk_utils::set_f64      (bld, "spb_guid_max_err", options.simp_guid.max_error);
-        gtk_utils::set_f64      (bld, "spb_mnt_cal_exp",  options.simp_guid.calibr_exposure);
+        ui.set_prop_bool("chb_raw_frames_cnt.active", options.raw_frames.use_cnt);
+        ui.set_prop_f64 ("spb_raw_frames_cnt.value",  options.raw_frames.frame_cnt as f64);
+        ui.set_fch_path ("fcb_raw_frames_path",       Some(&options.raw_frames.out_path));
+        ui.set_prop_bool("chb_master_frame.active",   options.raw_frames.create_master);
 
-        gtk_utils::set_bool     (bld, "chb_inv_ns",      options.mount.inv_ns);
-        gtk_utils::set_bool     (bld, "chb_inv_we",      options.mount.inv_we);
+        // Live stacking
 
-        gtk_utils::enable_widgets(bld, false, &[("l_hot_pixels_warn", options.calibr.hot_pixels)]);
+        ui.set_prop_bool("chb_live_save_orig.active", options.live.save_orig);
+        ui.set_prop_bool("chb_live_save.active",      options.live.save_enabled);
+        ui.set_prop_f64 ("spb_live_minutes.value",    options.live.save_minutes as f64);
+        ui.set_fch_path ("fch_live_folder",           Some(&options.live.out_dir));
+
+        // Light frame quality
+
+        ui.set_prop_bool("chb_max_fwhm.active", options.quality.use_max_fwhm);
+        ui.set_prop_f64 ("spb_max_fwhm.value",  options.quality.max_fwhm as f64);
+        ui.set_prop_bool("chb_max_oval.active", options.quality.use_max_ovality);
+        ui.set_prop_f64 ("spb_max_oval.value",  options.quality.max_ovality as f64);
+
+        // Preview
+
+        ui.set_prop_str   ("cb_preview_src.active-id",   options.preview.source.to_active_id());
+        ui.set_prop_str   ("cb_preview_scale.active-id", options.preview.scale.to_active_id());
+        ui.set_prop_str   ("cb_preview_color.active-id", options.preview.color.to_active_id());
+        ui.set_range_value("scl_dark",                   options.preview.dark_lvl);
+        ui.set_range_value("scl_highlight",              options.preview.light_lvl);
+        ui.set_range_value("scl_gamma",                  options.preview.gamma);
+        ui.set_prop_bool  ("chb_rem_grad.active",        options.preview.remove_grad);
+
+        // Histogram
+
+        ui.set_prop_bool("ch_hist_logy.active",     options.hist.log_y);
+        ui.set_prop_bool("ch_stat_percents.active", options.hist.percents);
+
+        // Focuser
+
+        ui.set_prop_bool("chb_foc_temp.active",     options.focuser.on_temp_change);
+        ui.set_prop_f64 ("spb_foc_temp.value",      options.focuser.max_temp_change);
+        ui.set_prop_bool("chb_foc_fwhm.active",     options.focuser.on_fwhm_change);
+        ui.set_prop_str ("cb_foc_fwhm.active-id",   Some(options.focuser.max_fwhm_change.to_string()).as_deref());
+        ui.set_prop_bool("chb_foc_period.active",   options.focuser.periodically);
+        ui.set_prop_str ("cb_foc_period.active-id", Some(options.focuser.period_minutes.to_string()).as_deref());
+        ui.set_prop_f64 ("spb_foc_measures.value",  options.focuser.measures as f64);
+        ui.set_prop_f64 ("spb_foc_auto_step.value", options.focuser.step);
+        ui.set_prop_f64 ("spb_foc_exp.value",       options.focuser.exposure);
+
+        // Simple guiding and dithering
+
+        ui.set_prop_str ("cb_dith_perod.active-id",    Some(options.simp_guide.dith_period.to_string().as_str()));
+        ui.set_prop_str ("cb_dith_distance.active-id", Some(format!("{:.0}", options.simp_guide.dith_percent * 10.0).as_str()));
+        ui.set_prop_bool("chb_guid_enabled.active",    options.simp_guide.enabled);
+        ui.set_prop_f64 ("spb_guid_max_err.value",     options.simp_guide.max_error);
+        ui.set_prop_f64 ("spb_mnt_cal_exp.value",      options.simp_guide.calibr_exposure);
+
+        // Simple mount control
+
+        ui.set_prop_bool("chb_inv_ns.active", options.mount.inv_ns);
+        ui.set_prop_bool("chb_inv_we.active", options.mount.inv_we);
+
+        ui.enable_widgets(false, &[("l_hot_pixels_warn", options.calibr.hot_pixels)]);
 
         drop(options);
 
@@ -918,113 +924,132 @@ fn show_options(data: &Rc<CameraData>) {
         if gui_options.paned_pos4 != -1 {
             pan_cam4.set_position(pan_cam4.allocation().height()-gui_options.paned_pos4);
         }
-        gtk_utils::set_bool_prop(bld, "exp_cam_ctrl",   "expanded", gui_options.cam_ctrl_exp);
-        gtk_utils::set_bool_prop(bld, "exp_shot_set",   "expanded", gui_options.shot_exp);
-        gtk_utils::set_bool_prop(bld, "exp_calibr",     "expanded", gui_options.calibr_exp);
-        gtk_utils::set_bool_prop(bld, "exp_raw_frames", "expanded", gui_options.raw_frames_exp);
-        gtk_utils::set_bool_prop(bld, "exp_live",       "expanded", gui_options.live_exp);
-        gtk_utils::set_bool_prop(bld, "exp_foc",        "expanded", gui_options.foc_exp);
-        gtk_utils::set_bool_prop(bld, "exp_dith",       "expanded", gui_options.dith_exp);
-        gtk_utils::set_bool_prop(bld, "exp_quality",    "expanded", gui_options.quality_exp);
-        gtk_utils::set_bool_prop(bld, "exp_mount",      "expanded", gui_options.mount_exp);
+        ui.set_prop_bool("exp_cam_ctrl.expanded",   gui_options.cam_ctrl_exp);
+        ui.set_prop_bool("exp_shot_set.expanded",   gui_options.shot_exp);
+        ui.set_prop_bool("exp_calibr.expanded",     gui_options.calibr_exp);
+        ui.set_prop_bool("exp_raw_frames.expanded", gui_options.raw_frames_exp);
+        ui.set_prop_bool("exp_live.expanded",       gui_options.live_exp);
+        ui.set_prop_bool("exp_foc.expanded",        gui_options.foc_exp);
+        ui.set_prop_bool("exp_dith.expanded",       gui_options.dith_exp);
+        ui.set_prop_bool("exp_quality.expanded",    gui_options.quality_exp);
+        ui.set_prop_bool("exp_mount.expanded",      gui_options.mount_exp);
         drop(gui_options);
     });
+}
+
+fn correct_preview_source(data: &Rc<CameraData>) {
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    let cb_preview_src_aid = match data.state.mode_data().mode.get_type() {
+        ModeType::LiveStacking => "live",
+        _                      => "frame",
+    };
+    ui.set_prop_str("cb_preview_src.active-id", Some(cb_preview_src_aid));
 }
 
 fn read_options_from_widgets(data: &Rc<CameraData>) {
     let mut options = data.options.write().unwrap();
     let bld = &data.builder;
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
 
-    options.telescope.focal_len = gtk_utils::get_f64(bld, "spb_foc_len");
-    options.telescope.barlow = gtk_utils::get_f64(bld, "spb_barlow");
+    // Telescope
 
-    options.preview.scale = {
-        let active_id = gtk_utils::get_active_id(bld, "cb_preview_scale");
-        PreviewScale::from_active_id(active_id.as_deref())
-    };
+    options.telescope.focal_len = ui.prop_f64("spb_foc_len.value");
+    options.telescope.barlow = ui.prop_f64("spb_barlow.value");
 
-    options.preview.color = {
-        let active_id = gtk_utils::get_active_id(bld, "cb_preview_color");
-        PreviewColor::from_active_id(active_id.as_deref())
-    };
+    // Camera
 
-    options.cam.frame.frame_type = FrameType::from_active_id(
-        gtk_utils::get_active_id(bld, "cb_frame_mode").as_deref()
-    );
+    options.cam.device    = ui.prop_string("cb_camera_list.active-id").unwrap_or_default();
+    options.cam.live_view = ui.prop_bool("chb_shots_cont.active");
 
-    options.cam.frame.binning = Binning::from_active_id(
-        gtk_utils::get_active_id(bld, "cb_bin").as_deref()
-    );
+    // Camera control
 
-    options.cam.frame.crop = Crop::from_active_id(
-        gtk_utils::get_active_id(bld, "cb_crop").as_deref()
-    );
+    options.cam.ctrl.enable_cooler = ui.prop_bool("chb_cooler.active");
+    options.cam.ctrl.temperature   = ui.prop_f64("spb_temp.value");
+    options.cam.ctrl.enable_fan    = ui.prop_bool("chb_fan.active");
 
+    // Frame
+
+    options.cam.frame.frame_type   = FrameType::from_active_id(ui.prop_string("cb_frame_mode.active-id").as_deref());
+    options.cam.frame.set_exposure  (ui.prop_f64("spb_exp.value"));
+    options.cam.frame.delay        = ui.prop_f64("spb_delay.value");
+    options.cam.frame.gain         = ui.prop_f64("spb_gain.value");
+    options.cam.frame.offset       = ui.prop_f64("spb_offset.value") as i32;
+    options.cam.frame.low_noise    = ui.prop_bool("chb_low_noise.active");
+    options.cam.frame.binning      = Binning::from_active_id(ui.prop_string("cb_bin.active-id").as_deref());
+    options.cam.frame.crop         = Crop::from_active_id(ui.prop_string("cb_crop.active-id").as_deref());
+
+    // Frame calibration
+
+    options.calibr.dark_frame_en = ui.prop_bool("chb_master_dark.active");
+    options.calibr.dark_frame    = ui.fch_pathbuf("fch_master_dark");
+    options.calibr.flat_frame_en = ui.prop_bool("chb_master_flat.active");
+    options.calibr.flat_frame    = ui.fch_pathbuf("fch_master_flat");
+    options.calibr.hot_pixels    = ui.prop_bool("chb_hot_pixels.active");
+
+    // Raw frames
+
+    options.raw_frames.use_cnt       = ui.prop_bool("chb_raw_frames_cnt.active");
+    options.raw_frames.frame_cnt     = ui.prop_f64("spb_raw_frames_cnt.value") as usize;
+    options.raw_frames.out_path      = ui.fch_pathbuf("fcb_raw_frames_path").unwrap_or_default();
+    options.raw_frames.create_master = ui.prop_bool("chb_master_frame.active");
+
+    // Live stacking
+
+    options.live.save_orig    = ui.prop_bool("chb_live_save_orig.active");
+    options.live.save_enabled = ui.prop_bool("chb_live_save.active");
+    options.live.save_minutes = ui.prop_f64("spb_live_minutes.value") as usize;
+    options.live.out_dir      = ui.fch_pathbuf("fch_live_folder").unwrap_or_default();
+
+    // Light frame quality
+
+    options.quality.use_max_fwhm    = ui.prop_bool("chb_max_fwhm.active");
+    options.quality.max_fwhm        = ui.prop_f64("spb_max_fwhm.value") as f32;
+    options.quality.use_max_ovality = ui.prop_bool("chb_max_oval.active");
+    options.quality.max_ovality     = ui.prop_f64("spb_max_oval.value") as f32;
+
+    // Preview
+
+    options.preview.scale = PreviewScale::from_active_id(
+        ui.prop_string("cb_preview_scale.active-id").as_deref());
     options.preview.source = PreviewSource::from_active_id(
-        gtk_utils::get_active_id(bld, "cb_preview_src").as_deref()
+        ui.prop_string("cb_preview_src.active-id").as_deref()
     );
+    options.preview.gamma       = ui.range_value("scl_gamma");
+    options.preview.dark_lvl    = ui.range_value("scl_dark");
+    options.preview.light_lvl   = ui.range_value("scl_highlight");
+    options.preview.remove_grad = ui.prop_bool("chb_rem_grad.active");
 
-    options.cam.device               = gtk_utils::get_active_id(bld, "cb_camera_list").unwrap_or_default();
-    options.cam.live_view            = gtk_utils::get_bool     (bld, "chb_shots_cont");
+    // Histogram
 
-    options.cam.ctrl.enable_cooler   = gtk_utils::get_bool     (bld, "chb_cooler");
-    options.cam.ctrl.temperature     = gtk_utils::get_f64      (bld, "spb_temp");
-    options.cam.ctrl.enable_fan      = gtk_utils::get_bool     (bld, "chb_fan");
+    options.hist.log_y    = ui.prop_bool("ch_hist_logy.active");
+    options.hist.percents = ui.prop_bool("ch_stat_percents.active");
 
-    options.cam.frame.set_exposure    (gtk_utils::get_f64      (bld, "spb_exp"));
-    options.cam.frame.delay          = gtk_utils::get_f64      (bld, "spb_delay");
-    options.cam.frame.gain           = gtk_utils::get_f64      (bld, "spb_gain");
-    options.cam.frame.offset         = gtk_utils::get_f64      (bld, "spb_offset") as i32;
-    options.cam.frame.low_noise      = gtk_utils::get_bool     (bld, "chb_low_noise");
+    // Focuser
 
-    options.calibr.dark_frame_en = gtk_utils::get_bool     (bld, "chb_master_dark");
-    options.calibr.dark_frame    = gtk_utils::get_pathbuf  (bld, "fch_master_dark");
-    options.calibr.flat_frame_en = gtk_utils::get_bool     (bld, "chb_master_flat");
-    options.calibr.flat_frame    = gtk_utils::get_pathbuf  (bld, "fch_master_flat");
-    options.calibr.hot_pixels    = gtk_utils::get_bool     (bld, "chb_hot_pixels");
+    options.focuser.on_temp_change  = ui.prop_bool("chb_foc_temp.active");
+    options.focuser.max_temp_change = ui.prop_f64("spb_foc_temp.value");
+    options.focuser.on_fwhm_change  = ui.prop_bool("chb_foc_fwhm.active");
+    options.focuser.max_fwhm_change = ui.prop_string("cb_foc_fwhm.active-id").and_then(|v| v.parse().ok()).unwrap_or(20);
+    options.focuser.periodically    = ui.prop_bool("chb_foc_period.active");
+    options.focuser.period_minutes  = ui.prop_string("cb_foc_period.active-id").and_then(|v| v.parse().ok()).unwrap_or(120);
+    options.focuser.measures        = ui.prop_f64("spb_foc_measures.value") as u32;
+    options.focuser.step            = ui.prop_f64("spb_foc_auto_step.value");
+    options.focuser.exposure        = ui.prop_f64("spb_foc_exp.value");
 
-    options.raw_frames.use_cnt       = gtk_utils::get_bool     (bld, "chb_raw_frames_cnt");
-    options.raw_frames.frame_cnt     = gtk_utils::get_f64      (bld, "spb_raw_frames_cnt") as usize;
-    options.raw_frames.out_path      = gtk_utils::get_pathbuf  (bld, "fcb_raw_frames_path").unwrap_or_default();
-    options.raw_frames.create_master = gtk_utils::get_bool     (bld, "chb_master_frame");
+    // Simple guiding and dithering
 
-    options.live.save_orig       = gtk_utils::get_bool     (bld, "chb_live_save_orig");
-    options.live.save_enabled    = gtk_utils::get_bool     (bld, "chb_live_save");
-    options.live.save_minutes    = gtk_utils::get_f64      (bld, "spb_live_minutes") as usize;
-    options.live.out_dir         = gtk_utils::get_pathbuf  (bld, "fch_live_folder").unwrap_or_default();
+    options.simp_guide.dith_period     = ui.prop_string("cb_dith_perod.active-id").and_then(|v| v.parse().ok()).unwrap_or(0);
+    options.simp_guide.dith_percent    = ui.prop_string("cb_dith_distance.active-id").and_then(|v| v.parse().ok()).unwrap_or(10.0) / 10.0;
+    options.simp_guide.enabled         = ui.prop_bool("chb_guid_enabled.active");
+    options.simp_guide.max_error       = ui.prop_f64("spb_guid_max_err.value");
+    options.simp_guide.calibr_exposure = ui.prop_f64("spb_mnt_cal_exp.value");
 
-    options.quality.use_max_fwhm    = gtk_utils::get_bool     (bld, "chb_max_fwhm");
-    options.quality.max_fwhm        = gtk_utils::get_f64      (bld, "spb_max_fwhm") as f32;
-    options.quality.use_max_ovality = gtk_utils::get_bool     (bld, "chb_max_oval");
-    options.quality.max_ovality     = gtk_utils::get_f64      (bld, "spb_max_oval") as f32;
+    // Simple mount control
 
-    options.preview.gamma        = gtk_utils::get_f64      (bld, "scl_gamma");
-    options.preview.dark_lvl     = gtk_utils::get_f64      (bld, "scl_dark");
-    options.preview.light_lvl    = gtk_utils::get_f64      (bld, "scl_highlight");
-    options.preview.remove_grad  = gtk_utils::get_bool     (bld, "chb_rem_grad");
+    options.mount.inv_ns = ui.prop_bool("chb_inv_ns.active");
+    options.mount.inv_we = ui.prop_bool("chb_inv_we.active");
+    let mount_speed      = ui.prop_string("cb_mnt_speed.active-id");
 
-    options.hist.log_y           = gtk_utils::get_bool(bld, "ch_hist_logy");
-    options.hist.percents        = gtk_utils::get_bool(bld, "ch_stat_percents");
-
-    options.focuser.on_temp_change  = gtk_utils::get_bool     (bld, "chb_foc_temp");
-    options.focuser.max_temp_change = gtk_utils::get_f64      (bld, "spb_foc_temp");
-    options.focuser.on_fwhm_change  = gtk_utils::get_bool     (bld, "chb_foc_fwhm");
-    options.focuser.max_fwhm_change = gtk_utils::get_active_id(bld, "cb_foc_fwhm").and_then(|v| v.parse().ok()).unwrap_or(20);
-    options.focuser.periodically    = gtk_utils::get_bool     (bld, "chb_foc_period");
-    options.focuser.period_minutes  = gtk_utils::get_active_id(bld, "cb_foc_period").and_then(|v| v.parse().ok()).unwrap_or(120);
-    options.focuser.measures        = gtk_utils::get_f64      (bld, "spb_foc_measures") as u32;
-    options.focuser.step            = gtk_utils::get_f64      (bld, "spb_foc_auto_step");
-    options.focuser.exposure        = gtk_utils::get_f64      (bld, "spb_foc_exp");
-
-    options.simp_guid.dith_period     = gtk_utils::get_active_id(bld, "cb_dith_perod").and_then(|v| v.parse().ok()).unwrap_or(0);
-    options.simp_guid.dith_percent    = gtk_utils::get_active_id(bld, "cb_dith_distance").and_then(|v| v.parse().ok()).unwrap_or(10.0) / 10.0;
-    options.simp_guid.enabled         = gtk_utils::get_bool     (bld, "chb_guid_enabled");
-    options.simp_guid.max_error       = gtk_utils::get_f64      (bld, "spb_guid_max_err");
-    options.simp_guid.calibr_exposure = gtk_utils::get_f64      (bld, "spb_mnt_cal_exp");
-
-    options.mount.inv_ns            = gtk_utils::get_bool     (bld, "chb_inv_ns");
-    options.mount.inv_we            = gtk_utils::get_bool     (bld, "chb_inv_we");
-    let mount_speed                 = gtk_utils::get_active_id(bld, "cb_mnt_speed");
     if mount_speed.is_some() {
         options.mount.speed = mount_speed;
     }
@@ -1042,15 +1067,15 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
         gui.paned_pos3 = pan_cam3.position();
         gui.paned_pos4 = pan_cam4.allocation().height()-pan_cam4.position();
     }
-    gui.cam_ctrl_exp   = gtk_utils::get_bool_prop(bld, "exp_cam_ctrl",   "expanded");
-    gui.shot_exp       = gtk_utils::get_bool_prop(bld, "exp_shot_set",   "expanded");
-    gui.calibr_exp     = gtk_utils::get_bool_prop(bld, "exp_calibr",     "expanded");
-    gui.raw_frames_exp = gtk_utils::get_bool_prop(bld, "exp_raw_frames", "expanded");
-    gui.live_exp       = gtk_utils::get_bool_prop(bld, "exp_live",       "expanded");
-    gui.foc_exp        = gtk_utils::get_bool_prop(bld, "exp_foc",        "expanded");
-    gui.dith_exp       = gtk_utils::get_bool_prop(bld, "exp_dith",       "expanded");
-    gui.quality_exp    = gtk_utils::get_bool_prop(bld, "exp_quality",    "expanded");
-    gui.mount_exp      = gtk_utils::get_bool_prop(bld, "exp_mount",      "expanded");
+    gui.cam_ctrl_exp   = ui.prop_bool("exp_cam_ctrl.expanded");
+    gui.shot_exp       = ui.prop_bool("exp_shot_set.expanded");
+    gui.calibr_exp     = ui.prop_bool("exp_calibr.expanded");
+    gui.raw_frames_exp = ui.prop_bool("exp_raw_frames.expanded");
+    gui.live_exp       = ui.prop_bool("exp_live.expanded");
+    gui.foc_exp        = ui.prop_bool("exp_foc.expanded");
+    gui.dith_exp       = ui.prop_bool("exp_dith.expanded");
+    gui.quality_exp    = ui.prop_bool("exp_quality.expanded");
+    gui.mount_exp      = ui.prop_bool("exp_mount.expanded");
     drop(gui);
 }
 
@@ -1102,8 +1127,8 @@ fn handler_delayed_action(data: &Rc<CameraData>, action: &DelayedActionTypes) {
 
 fn correct_widgets_props(data: &Rc<CameraData>) {
     gtk_utils::exec_and_show_error(&data.window, || {
-        let bldr = &data.builder;
-        let camera = gtk_utils::get_active_id(bldr, "cb_camera_list");
+        let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+        let camera = ui.prop_string("cb_camera_list.active-id");
         let mount = data.options.read().unwrap().mount.device.clone();
         let correct_num_adjustment_by_prop = |
             spb_name:  &str,
@@ -1112,7 +1137,7 @@ fn correct_widgets_props(data: &Rc<CameraData>) {
             step:      Option<f64>,
         | -> bool {
             if let Ok(info) = prop_info {
-                let spb = bldr.object::<gtk::SpinButton>(spb_name).unwrap();
+                let spb = data.builder.object::<gtk::SpinButton>(spb_name).unwrap();
                 spb.set_range(info.min, info.max);
                 let value = spb.value();
                 if value < info.min {
@@ -1176,9 +1201,8 @@ fn correct_widgets_props(data: &Rc<CameraData>) {
 
         let indi_connected = data.indi.state() == indi_api::ConnState::Connected;
 
-        let cooler_active = gtk_utils::get_bool(bldr, "chb_cooler");
-
-        let frame_mode_str = gtk_utils::get_active_id(bldr, "cb_frame_mode");
+        let cooler_active = ui.prop_bool("chb_cooler.active");
+        let frame_mode_str = ui.prop_string("cb_frame_mode.active-id");
         let frame_mode = FrameType::from_active_id(frame_mode_str.as_deref());
 
         let frame_mode_is_lights = frame_mode == FrameType::Lights;
@@ -1205,7 +1229,7 @@ fn correct_widgets_props(data: &Rc<CameraData>) {
         let dither_calibr = mode_type == ModeType::DitherCalibr;
         drop(mode_data);
 
-        let foc_device = gtk_utils::get_active_id(bldr, "cb_foc_list");
+        let foc_device = ui.prop_string("cb_foc_list.active-id");
         let foc_active = data.indi
             .is_device_enabled(foc_device.as_deref().unwrap_or(""))
             .unwrap_or(false);
@@ -1236,8 +1260,8 @@ fn correct_widgets_props(data: &Rc<CameraData>) {
             !live_active &&
             !mnt_calibr &&
             !focusing) ||
-            (gtk_utils::get_active_id(bldr, "cb_dith_perod").as_deref() == Some("0") &&
-            !gtk_utils::get_bool(bldr, "chb_guid_enabled"));
+            (ui.prop_string("cb_dith_perod.active-id").as_deref() == Some("0") &&
+            !ui.prop_bool("chb_guid_enabled.active"));
 
         let save_raw_btn_cap = match frame_mode {
             FrameType::Lights => "Start save\nLIGHTs",
@@ -1246,7 +1270,7 @@ fn correct_widgets_props(data: &Rc<CameraData>) {
             FrameType::Flats  => "Start save\nFLATs",
             FrameType::Undef  => "Error :(",
         };
-        gtk_utils::set_str(bldr, "btn_start_save_raw", save_raw_btn_cap);
+        ui.set_prop_str("btn_start_save_raw.label", Some(save_raw_btn_cap));
 
         let cam_active = data.indi
             .is_device_enabled(camera.as_deref().unwrap_or(""))
@@ -1281,14 +1305,14 @@ fn correct_widgets_props(data: &Rc<CameraData>) {
             ("stop_dither_calibr",     dither_calibr),
         ]);
 
-        gtk_utils::show_widgets(bldr, &[
+        ui.show_widgets(&[
             ("chb_fan",       fan_supported),
             ("l_cam_heater",  heater_supported),
             ("cb_cam_heater", heater_supported),
             ("chb_low_noise", low_noise_supported),
         ]);
 
-        gtk_utils::enable_widgets(bldr, false, &[
+        ui.enable_widgets(false, &[
             ("chb_fan",            !cooler_active),
             ("chb_cooler",         temp_supported && can_change_cam_opts),
             ("spb_temp",           cooler_active && temp_supported && can_change_cam_opts),
@@ -1323,10 +1347,10 @@ fn correct_widgets_props(data: &Rc<CameraData>) {
             ("grd_dither",         dithering_sensitive && cam_sensitive),
             ("bx_simple_mount",    mount_ctrl_sensitive),
 
-            ("spb_foc_temp",       gtk_utils::get_bool(bldr, "chb_foc_temp")),
-            ("cb_foc_fwhm",        gtk_utils::get_bool(bldr, "chb_foc_fwhm")),
-            ("cb_foc_period",      gtk_utils::get_bool(bldr, "chb_foc_period")),
-            ("spb_guid_max_err",   gtk_utils::get_bool(bldr, "chb_guid_enabled")),
+            ("spb_foc_temp",       ui.prop_bool("chb_foc_temp.active")),
+            ("cb_foc_fwhm",        ui.prop_bool("chb_foc_fwhm.active")),
+            ("cb_foc_period",      ui.prop_bool("chb_foc_period.active")),
+            ("spb_guid_max_err",   ui.prop_bool("chb_guid_enabled.active")),
 
             ("l_delay",            liveview_active),
             ("spb_delay",          liveview_active),
@@ -1349,7 +1373,8 @@ fn update_camera_devices_list(data: &Rc<CameraData>) {
             &options.cam.device
         );
         let connected = data.indi.state() == indi_api::ConnState::Connected;
-        gtk_utils::enable_widgets(&data.builder, false, &[
+        let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+        ui.enable_widgets(false, &[
             ("cb_camera_list", connected && cameras_count > 1),
         ]);
     });
@@ -1438,11 +1463,6 @@ fn start_live_view(data: &Rc<CameraData>) {
     read_options_from_widgets(data);
     gtk_utils::exec_and_show_error(&data.window, || {
         data.state.start_live_view()?;
-        gtk_utils::set_active_id(
-            &data.builder,
-            "cb_preview_src",
-            Some("frame")
-        );
         Ok(())
     });
 }
@@ -1451,11 +1471,6 @@ fn handler_action_take_shot(data: &Rc<CameraData>) {
     read_options_from_widgets(data);
     gtk_utils::exec_and_show_error(&data.window, || {
         data.state.start_single_shot()?;
-        gtk_utils::set_active_id(
-            &data.builder,
-            "cb_preview_src",
-            Some("frame")
-        );
         Ok(())
     });
 }
@@ -1528,8 +1543,9 @@ fn show_preview_image(
         tmr.log("Pixbuf::scale_simple");
     }
     img_preview.set_pixbuf(Some(&pixbuf));
-    gtk_utils::enable_widgets(
-        &data.builder, false,
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    ui.enable_widgets(
+        false,
         &[("cb_preview_color", rgb_bytes.is_color_image)]
     );
 }
@@ -1542,9 +1558,9 @@ fn show_image_info(data: &Rc<CameraData>) {
             data.state.live_stacking().info.read().unwrap(),
     };
 
-    let bldr = &data.builder;
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
     let update_info_panel_vis = |is_light_info: bool, is_flat_info: bool, is_raw_info: bool| {
-        gtk_utils::show_widgets(bldr, &[
+        ui.show_widgets(&[
             ("bx_light_info", is_light_info),
             ("bx_flat_info",  is_flat_info),
             ("bx_raw_info",   is_raw_info),
@@ -1553,30 +1569,22 @@ fn show_image_info(data: &Rc<CameraData>) {
 
     match &*info {
         ResultImageInfo::LightInfo(info) => {
-            gtk_utils::set_str(
-                bldr,
-                "e_info_exp",
-                &seconds_to_total_time_str(info.exposure, true)
-            );
+            ui.set_prop_str("e_info_exp.text", Some(&seconds_to_total_time_str(info.exposure, true)));
             match info.stars_fwhm {
-                Some(value) => gtk_utils::set_str(bldr, "e_fwhm", &format!("{:.1}", value)),
-                None => gtk_utils::set_str(bldr, "e_fwhm", ""),
+                Some(value) => ui.set_prop_str("e_fwhm.text", Some(&format!("{:.1}", value))),
+                None        => ui.set_prop_str("e_fwhm.text", Some("")),
             }
             match info.stars_ovality {
-                Some(value) => gtk_utils::set_str(bldr, "e_ovality", &format!("{:.1}", value)),
-                None => gtk_utils::set_str(bldr, "e_ovality", ""),
+                Some(value) => ui.set_prop_str("e_ovality.text", Some(&format!("{:.1}", value))),
+                None        => ui.set_prop_str("e_ovality.text", Some("")),
             }
             let stars = info.stars.len();
             let overexp_stars = info.stars.iter().filter(|s| s.overexposured).count();
-            gtk_utils::set_str(
-                bldr,
-                "e_stars",
-                &format!("{} ({})", stars, overexp_stars)
-            );
+            ui.set_prop_str("e_stars.text", Some(&format!("{} ({})", stars, overexp_stars)));
             let bg = 100_f64 * info.background as f64 / info.max_value as f64;
-            gtk_utils::set_str(bldr, "e_background", &format!("{:.2}%", bg));
+            ui.set_prop_str("e_background.text", Some(&format!("{:.2}%", bg)));
             let noise = 100_f64 * info.noise as f64 / info.max_value as f64;
-            gtk_utils::set_str(bldr, "e_noise", &format!("{:.4}%", noise));
+            ui.set_prop_str("e_noise.text", Some(&format!("{:.4}%", noise)));
             update_info_panel_vis(true, false, false);
         },
         ResultImageInfo::FlatInfo(info) => {
@@ -1587,9 +1595,9 @@ fn show_image_info(data: &Rc<CameraData>) {
                         item.max as f64,
                         100.0 * item.max as f64 / info.max_value as f64,
                     );
-                    gtk_utils::set_str(bldr, entry_id, &text);
+                    ui.set_prop_str_ex(entry_id, "text", Some(&text));
                 }
-                gtk_utils::show_widgets(bldr, &[
+                ui.show_widgets(&[
                     (label_id, item.is_some()),
                     (entry_id, item.is_some()),
                 ]);
@@ -1601,30 +1609,24 @@ fn show_image_info(data: &Rc<CameraData>) {
             update_info_panel_vis(false, true, false);
         },
         ResultImageInfo::RawInfo(info) => {
-            gtk_utils::set_str(
-                bldr, "e_aver",
-                &format!(
-                    "{:.1} ({:.1}%)",
-                    info.aver,
-                    100.0 * info.aver / info.max_value as f64
-                )
+            let aver_text = format!(
+                "{:.1} ({:.1}%)",
+                info.aver,
+                100.0 * info.aver / info.max_value as f64
             );
-            gtk_utils::set_str(
-                bldr, "e_median",
-                &format!(
-                    "{} ({:.1}%)",
-                    info.median,
-                    100.0 * info.median as f64 / info.max_value as f64
-                )
+            ui.set_prop_str("e_aver.text", Some(&aver_text));
+            let median_text = format!(
+                "{} ({:.1}%)",
+                info.median,
+                100.0 * info.median as f64 / info.max_value as f64
             );
-            gtk_utils::set_str(
-                bldr, "e_std_dev",
-                &format!(
-                    "{:.1} ({:.3}%)",
-                    info.std_dev,
-                    100.0 * info.std_dev / info.max_value as f64
-                )
+            ui.set_prop_str("e_median.text", Some(&median_text));
+            let dev_text = format!(
+                "{:.1} ({:.3}%)",
+                info.std_dev,
+                100.0 * info.std_dev / info.max_value as f64
             );
+            ui.set_prop_str("e_std_dev.text", Some(&dev_text));
             update_info_panel_vis(false, false, true);
         },
         _ => {
@@ -1736,11 +1738,12 @@ fn show_frame_processing_result(
 
     let mode_type = data.state.mode_data().mode.get_type();
 
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+
     let show_resolution_info = |width, height| {
-        gtk_utils::set_str(
-            &data.builder,
-            "e_res_info",
-            &format!("{} x {}", width, height)
+        ui.set_prop_str(
+            "e_res_info.text",
+            Some(&format!("{} x {}", width, height))
         );
     };
 
@@ -1793,18 +1796,10 @@ fn show_frame_processing_result(
             show_image_info(data);
         }
         FrameProcessResultData::MasterSaved { frame_type: FrameType::Flats, file_name } => {
-            gtk_utils::set_path(
-                &data.builder,
-                "fch_master_flat",
-                Some(&file_name)
-            );
+            ui.set_fch_path("fch_master_flat", Some(&file_name));
         }
         FrameProcessResultData::MasterSaved { frame_type: FrameType::Darks, file_name } => {
-            gtk_utils::set_path(
-                &data.builder,
-                "fch_master_dark",
-                Some(&file_name)
-            );
+            ui.set_fch_path("fch_master_dark", Some(&file_name));
         }
         _ => {}
     }
@@ -1862,12 +1857,12 @@ fn show_cur_temperature_value(
     device_name: &str,
     temparature: f64
 ) {
-    let cur_camera = gtk_utils::get_active_id(&data.builder, "cb_camera_list");
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    let cur_camera = ui.prop_string("cb_camera_list.active-id");
     if cur_camera.as_deref() == Some(device_name) {
-        gtk_utils::set_str(
-            &data.builder,
-            "l_temp_value",
-            &format!("T: {:.1}°C", temparature)
+        ui.set_prop_str(
+            "l_temp_value.label",
+            Some(&format!("T: {:.1}°C", temparature))
         );
     }
 }
@@ -1877,12 +1872,12 @@ fn show_coolpwr_value(
     device_name: &str,
     pwr_str:     &str
 ) {
-    let cur_camera = gtk_utils::get_active_id(&data.builder, "cb_camera_list");
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    let cur_camera = ui.prop_string("cb_camera_list.active-id");
     if cur_camera.as_deref() == Some(device_name) {
-        gtk_utils::set_str(
-            &data.builder,
-            "l_coolpwr_value",
-            &format!("Pwr: {}", pwr_str)
+        ui.set_prop_str(
+            "l_coolpwr_value.label",
+            Some(&format!("Pwr: {}", pwr_str))
         );
     }
 }
@@ -2060,40 +2055,40 @@ fn show_histogram_stat(data: &Rc<CameraData>) {
         PreviewSource::LiveStacking =>
             data.state.live_stacking().hist.read().unwrap(),
     };
-    let bldr = &data.builder;
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
     let max = hist.max as f64;
     let show_chan_data = |chan: &Option<HistogramChan>, l_cap, l_mean, l_median, l_dev| {
         if let Some(chan) = chan.as_ref() {
             let median = chan.median();
             if options.hist.percents {
-                gtk_utils::set_str(
-                    bldr, l_mean,
-                    &format!("{:.1}%", 100.0 * chan.mean / max)
+                ui.set_prop_str_ex(
+                    l_mean, "label",
+                    Some(&format!("{:.1}%", 100.0 * chan.mean / max))
                 );
-                gtk_utils::set_str(
-                    bldr, l_median,
-                    &format!("{:.1}%", 100.0 * median as f64 / max)
+                ui.set_prop_str_ex(
+                    l_median, "label",
+                    Some(&format!("{:.1}%", 100.0 * median as f64 / max))
                 );
-                gtk_utils::set_str(
-                    bldr, l_dev,
-                    &format!("{:.1}%", 100.0 * chan.std_dev / max)
+                ui.set_prop_str_ex(
+                    l_dev, "label",
+                    Some(&format!("{:.1}%", 100.0 * chan.std_dev / max))
                 );
             } else {
-                gtk_utils::set_str(
-                    bldr, l_mean,
-                    &format!("{:.1}", chan.mean)
+                ui.set_prop_str_ex(
+                    l_mean, "label",
+                    Some(&format!("{:.1}", chan.mean))
                 );
-                gtk_utils::set_str(
-                    bldr, l_median,
-                    &format!("{:.1}", median)
+                ui.set_prop_str_ex(
+                    l_median, "label",
+                    Some(&format!("{:.1}", median))
                 );
-                gtk_utils::set_str(
-                    bldr, l_dev,
-                    &format!("{:.1}", chan.std_dev)
+                ui.set_prop_str_ex(
+                    l_dev, "label",
+                    Some(&format!("{:.1}", chan.std_dev))
                 );
             }
         }
-        gtk_utils::show_widgets(bldr, &[
+        ui.show_widgets(&[
             (l_cap,    chan.is_some()),
             (l_mean,   chan.is_some()),
             (l_median, chan.is_some()),
@@ -2124,7 +2119,7 @@ fn handler_draw_histogram(
             PreviewSource::LiveStacking =>
                 data.state.live_stacking().hist.read().unwrap(),
         };
-        paint_histogram(
+        draw_histogram(
             &hist,
             area,
             cr,
@@ -2141,11 +2136,6 @@ fn handler_action_start_live_stacking(data: &Rc<CameraData>) {
     gtk_utils::exec_and_show_error(&data.window, || {
         data.state.start_live_stacking()?;
         show_options(data);
-        gtk_utils::set_active_id(
-            &data.builder,
-            "cb_preview_src",
-            Some("live")
-        );
         Ok(())
     });
 }
@@ -2155,8 +2145,8 @@ fn handler_action_stop_live_stacking(data: &Rc<CameraData>) {
 }
 
 fn handler_action_continue_live_stacking(data: &Rc<CameraData>) {
+    read_options_from_widgets(data);
     gtk_utils::exec_and_show_error(&data.window, || {
-        read_options_from_widgets(data);
         data.state.continue_prev_mode()?;
         Ok(())
     });
@@ -2183,7 +2173,7 @@ fn handler_draw_shot_state(
     let progress = ((cur_exposure - exposure) / cur_exposure).max(0.0).min(1.0);
     let text_to_show = format!("{:.0} / {:.0}", cur_exposure - exposure, cur_exposure);
     gtk_utils::exec_and_show_error(&data.window, || {
-        gtk_utils::draw_progress_bar(area, cr, progress, &text_to_show)
+        draw_progress_bar(area, cr, progress, &text_to_show)
     });
 }
 
@@ -2303,18 +2293,13 @@ fn handler_action_start_save_raw_frames(data: &Rc<CameraData>) {
     gtk_utils::exec_and_show_error(&data.window, || {
         data.state.start_saving_raw_frames()?;
         show_options(data);
-        gtk_utils::set_active_id(
-            &data.builder,
-            "cb_preview_src",
-            Some("frame")
-        );
         Ok(())
     });
 }
 
 fn handler_action_continue_save_raw_frames(data: &Rc<CameraData>) {
+    read_options_from_widgets(data);
     gtk_utils::exec_and_show_error(&data.window, || {
-        read_options_from_widgets(data);
         data.state.continue_prev_mode()?;
         Ok(())
     });
@@ -2338,7 +2323,8 @@ fn show_total_raw_time(data: &Rc<CameraData>) {
         options.raw_frames.frame_cnt,
         seconds_to_total_time_str(total_time, false)
     );
-    gtk_utils::set_str(&data.builder, "l_raw_time_info", &text);
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    ui.set_prop_str("l_raw_time_info.label", Some(&text));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -2367,6 +2353,7 @@ fn init_focuser_widgets(data: &Rc<CameraData>) {
 
 fn update_focuser_devices_list(data: &Rc<CameraData>) {
     data.excl.exec(|| {
+        let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
         let dev_list = data.indi.get_devices_list();
         let focusers = dev_list
             .iter()
@@ -2395,7 +2382,7 @@ fn update_focuser_devices_list(data: &Rc<CameraData>) {
             }
         }
         let connected = data.indi.state() == indi_api::ConnState::Connected;
-        gtk_utils::enable_widgets(&data.builder, false, &[
+        ui.enable_widgets(false, &[
             ("cb_foc_list", connected && focusers_count > 1),
         ]);
         data.options.write().unwrap().focuser.device =
@@ -2405,7 +2392,8 @@ fn update_focuser_devices_list(data: &Rc<CameraData>) {
 
 fn update_focuser_position_widget(data: &Rc<CameraData>, new_prop: bool) {
     data.excl.exec(|| {
-        let Some(foc_device) = gtk_utils::get_active_id(&data.builder, "cb_foc_list") else {
+        let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+        let Some(foc_device) = ui.prop_string("cb_foc_list.active-id") else {
             return;
         };
         let Ok(prop_info) = data.indi.focuser_get_abs_value_prop_info(&foc_device) else {
@@ -2427,7 +2415,8 @@ fn update_focuser_position_widget(data: &Rc<CameraData>, new_prop: bool) {
 }
 
 fn show_cur_focuser_value(data: &Rc<CameraData>) {
-    let Some(foc_device) = gtk_utils::get_active_id(&data.builder, "cb_foc_list") else {
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    let Some(foc_device) = ui.prop_string("cb_foc_list.active-id") else {
         return;
     };
     let Ok(value) = data.indi.focuser_get_abs_value(&foc_device) else {
@@ -2446,10 +2435,11 @@ fn update_focuser_position_after_focusing(data: &Rc<CameraData>, pos: f64) {
 
 fn connect_focuser_widgets_events(data: &Rc<CameraData>) {
     let bldr = &data.builder;
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
     let spb_foc_val = bldr.object::<gtk::SpinButton>("spb_foc_val").unwrap();
     spb_foc_val.connect_value_changed(clone!(@weak data => move |sb| {
         data.excl.exec(|| {
-            let Some(foc_device) = gtk_utils::get_active_id(&data.builder, "cb_foc_list") else {
+            let Some(foc_device) = ui.prop_string("cb_foc_list.active-id") else {
                 return;
             };
             gtk_utils::exec_and_show_error(&data.window, || {
@@ -2601,6 +2591,7 @@ fn connect_dithering_widgets_events(data: &Rc<CameraData>) {
 }
 
 fn handler_action_start_dither_calibr(data: &Rc<CameraData>) {
+    read_options_from_widgets(data);
     gtk_utils::exec_and_show_error(&data.window, || {
         data.state.start_mount_calibr()?;
         Ok(())
@@ -2620,18 +2611,25 @@ const MOUNT_NAV_BUTTON_NAMES: &[&'static str] = &[
 ];
 
 fn connect_mount_widgets_events(data: &Rc<CameraData>) {
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
     for &btn_name in MOUNT_NAV_BUTTON_NAMES {
         let btn = data.builder.object::<gtk::Button>(btn_name).unwrap();
-        btn.connect_button_press_event(clone!(@weak data => @default-return Inhibit(false), move |_, eb| {
-            if eb.button() == gtk::gdk::ffi::GDK_BUTTON_PRIMARY as u32 {
-                handler_nav_mount_btn_pressed(&data, btn_name);
+        btn.connect_button_press_event(clone!(
+            @weak data => @default-return Inhibit(false),
+            move |_, eb| {
+                if eb.button() == gtk::gdk::ffi::GDK_BUTTON_PRIMARY as u32 {
+                    handler_nav_mount_btn_pressed(&data, btn_name);
+                }
+                Inhibit(false)
             }
-            Inhibit(false)
-        }));
-        btn.connect_button_release_event(clone!(@weak data => @default-return Inhibit(false), move |_, _| {
-            handler_nav_mount_btn_released(&data, btn_name);
-            Inhibit(false)
-        }));
+        ));
+        btn.connect_button_release_event(clone!(
+            @weak data => @default-return Inhibit(false),
+            move |_, _| {
+                handler_nav_mount_btn_released(&data, btn_name);
+                Inhibit(false)
+            }
+        ));
     }
 
     let chb_tracking = data.builder.object::<gtk::CheckButton>("chb_tracking").unwrap();
@@ -2651,14 +2649,14 @@ fn connect_mount_widgets_events(data: &Rc<CameraData>) {
         let options = data.options.read().unwrap();
         if options.mount.device.is_empty() { return; }
         let parked = chb.is_active();
-        gtk_utils::enable_widgets(&data.builder, true, &[
+        ui.enable_widgets(true, &[
             ("chb_tracking", !parked),
             ("cb_mnt_speed", !parked),
             ("chb_inv_ns", !parked),
             ("chb_inv_we", !parked),
         ]);
         for &btn_name in MOUNT_NAV_BUTTON_NAMES {
-            gtk_utils::set_bool_prop(&data.builder, btn_name, "sensitive", !parked);
+            ui.set_prop_bool_ex(btn_name, "sensitive", !parked);
         }
         data.excl.exec(|| {
             gtk_utils::exec_and_show_error(&data.window, || {
@@ -2674,9 +2672,10 @@ fn handler_nav_mount_btn_pressed(data: &Rc<CameraData>, button_name: &str) {
     let mount_device_name = &options.mount.device;
     if mount_device_name.is_empty() { return; }
     gtk_utils::exec_and_show_error(&data.window, || {
+        let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
         if button_name != "btn_stop_mount" {
-            let inv_ns = gtk_utils::get_bool(&data.builder, "chb_inv_ns");
-            let inv_we = gtk_utils::get_bool(&data.builder, "chb_inv_we");
+            let inv_ns = ui.prop_bool("chb_inv_ns.active");
+            let inv_we = ui.prop_bool("chb_inv_we.active");
             data.indi.mount_reverse_motion(
                 mount_device_name,
                 inv_ns,
@@ -2684,12 +2683,13 @@ fn handler_nav_mount_btn_pressed(data: &Rc<CameraData>, button_name: &str) {
                 false,
                 SET_PROP_TIMEOUT
             )?;
-            let speed = gtk_utils::get_active_id(&data.builder, "cb_mnt_speed");
+            let speed = ui.prop_string("cb_mnt_speed.active-id");
             if let Some(speed) = speed {
                 data.indi.mount_set_slew_speed(
                     mount_device_name,
                     &speed,
-                    true, Some(100)
+                    true,
+                    Some(100)
                 )?
             }
         }
@@ -2768,7 +2768,8 @@ fn show_mount_tracking_state(data: &Rc<CameraData>, tracking: bool) {
     let options = data.options.read().unwrap();
     if options.mount.device.is_empty() { return; }
     data.excl.exec(|| {
-        gtk_utils::set_bool_prop(&data.builder, "chb_tracking", "active", tracking);
+        let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+        ui.set_prop_bool("chb_tracking.active", tracking);
     });
 }
 
@@ -2776,7 +2777,8 @@ fn show_mount_parked_state(data: &Rc<CameraData>, parked: bool) {
     let options = data.options.read().unwrap();
     if options.mount.device.is_empty() { return; }
     data.excl.exec(|| {
-        gtk_utils::set_bool_prop(&data.builder, "chb_parked", "active", parked);
+        let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+        ui.set_prop_bool("chb_parked.active", parked);
     });
 }
 
@@ -2787,17 +2789,11 @@ fn handler_action_open_image(data: &Rc<CameraData>) {
         .modal(true)
         .transient_for(&data.window)
         .build();
-    if cfg!(target_os = "windows") {
-        fc.add_buttons(&[
-            ("_Open", gtk::ResponseType::Accept),
-            ("_Cancel", gtk::ResponseType::Cancel),
-        ]);
-    } else {
-        fc.add_buttons(&[
-            ("_Cancel", gtk::ResponseType::Cancel),
-            ("_Open", gtk::ResponseType::Accept),
-        ]);
-    }
+    gtk_utils::add_ok_and_cancel_buttons(
+        fc.upcast_ref::<gtk::Dialog>(),
+        "_Open",   gtk::ResponseType::Accept,
+        "_Cancel", gtk::ResponseType::Cancel
+    );
     fc.connect_response(clone!(@weak data => move |file_chooser, response| {
         if response == gtk::ResponseType::Accept {
             gtk_utils::exec_and_show_error(&data.window, || {
@@ -2832,9 +2828,9 @@ fn handler_action_open_image(data: &Rc<CameraData>) {
 }
 
 fn correct_frame_quality_widgets_props(data: &Rc<CameraData>) {
-    let bldr = &data.builder;
-    gtk_utils::enable_widgets(bldr, true, &[
-        ("spb_max_fwhm", gtk_utils::get_bool(bldr, "chb_max_fwhm")),
-        ("spb_max_oval", gtk_utils::get_bool(bldr, "chb_max_oval")),
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    ui.enable_widgets(true, &[
+        ("spb_max_fwhm", ui.prop_bool("chb_max_fwhm.active")),
+        ("spb_max_oval", ui.prop_bool("chb_max_oval.active")),
     ]);
 }

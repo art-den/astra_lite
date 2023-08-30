@@ -16,6 +16,7 @@ use crate::{
     stars_offset::*,
     image_processing::*,
     io_utils::*,
+    phd2_api::*,
 };
 
 #[derive(Clone)]
@@ -161,6 +162,7 @@ impl ModeData {
 
 pub struct State {
     indi:             Arc<indi_api::Connection>,
+    phd2_api:         Arc<Phd2Api>,
     options:          Arc<RwLock<Options>>,
     mode_data:        Arc<RwLock<ModeData>>,
     subscribers:      Arc<RwLock<Subscribers>>,
@@ -182,6 +184,7 @@ impl State {
         let (img_cmds_sender, process_thread) = start_main_cam_frame_processing_thread();
         let result = Self {
             indi:           Arc::clone(indi),
+            phd2_api:       Arc::new(Phd2Api::new()),
             options:        Arc::clone(options),
             mode_data:      Arc::new(RwLock::new(ModeData::new())),
             subscribers:    Arc::new(RwLock::new(Subscribers::new())),
@@ -1114,8 +1117,8 @@ impl TackingFramesMode {
         } else {
             None
         };
-        self.guid_options = if opts.simp_guid.is_used() && work_mode {
-            Some(opts.simp_guid.clone())
+        self.guid_options = if opts.simp_guide.is_used() && work_mode {
+            Some(opts.simp_guide.clone())
         } else {
             None
         };
@@ -1606,7 +1609,7 @@ impl Mode for TackingFramesMode {
                     });
                 }
                 if options.cam.frame.frame_type == FrameType::Lights
-                && !options.mount.device.is_empty() && options.simp_guid.enabled {
+                && !options.mount.device.is_empty() && options.simp_guide.enabled {
                     cmd.flags |= ProcessImageFlags::CALC_STARS_OFFSET;
                 }
                 cmd.flags |= ProcessImageFlags::SAVE_RAW;
@@ -2097,7 +2100,7 @@ impl MountCalibrMode {
     ) -> Self {
         let opts = options.read().unwrap();
         let mut frame = opts.cam.frame.clone();
-        frame.exp_main = opts.simp_guid.calibr_exposure;
+        frame.exp_main = opts.simp_guide.calibr_exposure;
         Self {
             indi:              Arc::clone(indi),
             state:             DitherCalibrState::Undefined,

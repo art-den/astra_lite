@@ -1,6 +1,27 @@
-use std::{rc::Rc, cell::RefCell, time::Duration, collections::HashMap, hash::Hash};
+use std::{rc::Rc, cell::{RefCell, Cell}, time::Duration, collections::HashMap, hash::Hash};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use crate::{indi_api, gtk_utils, options::*, image_raw::FrameType, image_info::*};
+
+pub struct ExclusiveCaller {
+    busy: Cell<bool>,
+}
+
+impl ExclusiveCaller {
+    pub fn new() -> Self {
+        Self {
+            busy: Cell::new(false),
+        }
+    }
+
+    pub fn exec(&self, mut fun: impl FnMut()) {
+        if self.busy.get() {
+            return;
+        }
+        self.busy.set(true);
+        fun();
+        self.busy.set(false);
+    }
+}
 
 impl PreviewScale {
     pub fn from_active_id(id: Option<&str>) -> PreviewScale {
@@ -248,7 +269,7 @@ impl<Action: Hash+Eq + 'static> DelayedActions<Action> {
     }
 }
 
-pub fn paint_histogram(
+pub fn draw_histogram(
     hist:   &Histogram,
     area:   &gtk::DrawingArea,
     cr:     &cairo::Context,
@@ -366,6 +387,49 @@ pub fn paint_histogram(
     paint_x_percent(left_margin+area_width*0.50, p50)?;
     paint_x_percent(left_margin+area_width*0.75, p75)?;
     paint_x_percent(left_margin+area_width, p100)?;
+
+    Ok(())
+}
+
+pub fn draw_progress_bar(
+    area:     &gtk::DrawingArea,
+    cr:       &cairo::Context,
+    progress: f64,
+    text:     &str,
+) -> anyhow::Result<()> {
+    let width = area.allocated_width() as f64;
+    let height = area.allocated_height() as f64;
+    let style_context = area.style_context();
+    let fg = style_context.color(gtk::StateFlags::ACTIVE);
+    let br = if fg.green() < 0.5 { 1.0 } else { 0.5 };
+    let bg_color = if progress < 1.0 {
+        (br, br, 0.0, 0.7)
+    } else {
+        (0.0, br, 0.0, 0.5)
+    };
+    cr.set_source_rgba(bg_color.0, bg_color.1, bg_color.2, bg_color.3);
+    cr.rectangle(0.0, 0.0, width * progress, height);
+    cr.fill()?;
+    let area_bg = area
+        .style_context()
+        .lookup_color("theme_base_color")
+        .unwrap_or(gtk::gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
+    cr.set_source_rgb(area_bg.red(), area_bg.green(), area_bg.blue());
+    cr.rectangle(width * progress, 0.0, width * (1.0 - progress), height);
+    cr.fill()?;
+
+    cr.set_font_size(height);
+    let te = cr.text_extents(text)?;
+
+    if !text.is_empty() {
+        cr.set_source_rgba(fg.red(), fg.green(), fg.blue(), 0.45);
+        cr.rectangle(0.0, 0.0, width, height);
+        cr.stroke()?;
+    }
+
+    cr.set_source_rgb(fg.red(), fg.green(), fg.blue());
+    cr.move_to((width - te.width()) / 2.0, (height - te.height()) / 2.0 - te.y_bearing());
+    cr.show_text(text)?;
 
     Ok(())
 }

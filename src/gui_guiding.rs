@@ -124,18 +124,18 @@ fn show_options(data: &Rc<GuidingData>) {
     drop(opts);
 
     let opts = data.options.read().unwrap();
-    let hlp = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
 
-    hlp.set_active_id_str_prop("cb_guid_cam",         Some(&opts.guiding.cam_device));
-    hlp.set_f64_value_prop    ("spb_guid_exp",        opts.guiding.frame.exp_main);
-    hlp.set_f64_value_prop    ("spb_guid_gain",       opts.guiding.frame.gain);
-    hlp.set_f64_value_prop    ("spb_guid_offset",     opts.guiding.frame.offset as f64);
-    hlp.set_active_id_str_prop("cb_guid_bin",         opts.guiding.frame.binning.to_active_id());
-    hlp.set_active_bool_prop  ("chb_guid_cooler",     opts.guiding.cam_ctrl.enable_cooler);
-    hlp.set_f64_value_prop    ("spb_guid_temp",       opts.guiding.cam_ctrl.temperature);
-    hlp.set_active_bool_prop  ("chb_guid_dark",       opts.guiding.calibr.dark_frame_en);
-    hlp.set_path              ("fch_guid_dark",       opts.guiding.calibr.dark_frame.as_deref());
-    hlp.set_active_bool_prop  ("chb_guid_hot_pixels", opts.guiding.calibr.hot_pixels);
+    ui.set_prop_str ("cb_guid_cam.active-id", Some(&opts.int_guide.cam_device));
+    ui.set_prop_f64 ("spb_guid_exp.value", opts.int_guide.frame.exp_main);
+    ui.set_prop_f64 ("spb_guid_gain.value", opts.int_guide.frame.gain);
+    ui.set_prop_f64 ("spb_guid_offset.value", opts.int_guide.frame.offset as f64);
+    ui.set_prop_str ("cb_guid_bin.active-id", opts.int_guide.frame.binning.to_active_id());
+    ui.set_prop_bool("chb_guid_cooler.active", opts.int_guide.cam_ctrl.enable_cooler);
+    ui.set_prop_f64 ("spb_guid_temp.value", opts.int_guide.cam_ctrl.temperature);
+    ui.set_prop_bool("chb_guid_dark.active", opts.int_guide.calibr.dark_frame_en);
+    ui.set_fch_path ("fch_guid_dark", opts.int_guide.calibr.dark_frame.as_deref());
+    ui.set_prop_bool("chb_guid_hp.active", opts.int_guide.calibr.hot_pixels);
 
 }
 
@@ -152,10 +152,19 @@ fn read_options_from_widgets(data: &Rc<GuidingData>) {
     drop(opts);
 
     let mut opts = data.options.write().unwrap();
-    let hlp = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
 
-    opts.guiding.cam_device     = hlp.active_id_string_prop("cb_guid_cam").unwrap_or_default();
-    opts.guiding.frame.exp_main = hlp.f64_value_prop("spb_guid_exp");
+    opts.int_guide.cam_device = ui.prop_string("cb_guid_cam.active-id").unwrap_or_default();
+    opts.int_guide.frame.exp_main = ui.prop_f64("spb_guid_exp.value");
+    opts.int_guide.frame.gain = ui.prop_f64("spb_guid_gain.value");
+    opts.int_guide.frame.offset = ui.prop_f64("spb_guid_offset.value") as i32;
+    opts.int_guide.frame.binning =  Binning::from_active_id(ui.prop_string("cb_guid_bin.active-id").as_deref());
+    opts.int_guide.cam_ctrl.enable_cooler = ui.prop_bool("chb_guid_cooler.active", );
+    opts.int_guide.cam_ctrl.temperature = ui.prop_f64("spb_guid_temp.value");
+    opts.int_guide.calibr.dark_frame_en = ui.prop_bool("chb_guid_dark.active");
+    opts.int_guide.calibr.dark_frame = ui.fch_pathbuf("fch_guid_dark");
+    opts.int_guide.calibr.hot_pixels = ui.prop_bool("chb_guid_hp.active");
+
 }
 
 fn connect_indi_and_state_events(data: &Rc<GuidingData>) {

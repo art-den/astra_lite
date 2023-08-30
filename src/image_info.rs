@@ -88,6 +88,7 @@ impl LightImageInfo {
         let stars = Self::find_stars_in_image(
             &mono_layer,
             noise,
+            background,
             overexposured_bord,
             image.max_value(),
             mt
@@ -139,6 +140,7 @@ impl LightImageInfo {
     fn find_stars_in_image(
         image:              &ImageLayer<u16>,
         noise:              f32,
+        background:         i32,
         overexposured_bord: u16,
         max_value:          u16,
         mt:                 bool
@@ -146,8 +148,11 @@ impl LightImageInfo {
         const MAX_STARS_POINTS_CNT: usize = MAX_STAR_DIAM * MAX_STAR_DIAM;
         let iir_filter_coeffs = IirFilterCoeffs::new(230);
         let mut border = (noise * 120.0) as u32;
+        let range = max_value as i32 - background;
         if border <= 1 {
             border = u32::max(max_value as u32 / 100, 2);
+        } else if border as i32 > range / 2 {
+            border = (range / 2) as u32;
         }
         let possible_stars = Mutex::new(Vec::new());
         let find_possible_stars_in_rows = |y1: usize, y2: usize| {
