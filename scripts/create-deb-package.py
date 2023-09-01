@@ -1,5 +1,12 @@
-import os, configparser, re, shutil, subprocess
+import os, configparser, re, shutil, subprocess, argparse
 from pathlib import Path
+
+parser = argparse.ArgumentParser(
+                    prog='create-deb-package.py',
+                    description='Generate deb-file for AstraLite')
+parser.add_argument('--arch')
+parser.add_argument('--bin')
+args = parser.parse_args()
 
 # File names and directories
 
@@ -8,7 +15,10 @@ bin = "astra_lite"
 icon = "astra_lite48x48.png"
 this_path = os.path.dirname(os.path.realpath(__file__))
 icon_file = os.path.join(this_path, "..", "ui", icon)
-bin_file = os.path.join(this_path, "..", "target", "release", bin)
+if args.bin != None:
+    bin_file = args.bin
+else:
+    bin_file = os.path.join(this_path, "..", "target", "release", bin)
 dist_dir = os.path.join(this_path, "..", "dist")
 cargo_toml = os.path.join(this_path, "..", "Cargo.toml")
 os.makedirs(dist_dir, exist_ok=True)
@@ -26,10 +36,13 @@ bin_dir='opt/'+package_name
 
 # Processor architecture
 
-arch = subprocess.check_output([
-    'dpkg',
-    '--print-architecture'
-]).decode("utf-8", 'ignore').strip()
+if args.arch != None:
+    arch = args.arch
+else:
+    arch = subprocess.check_output([
+        'dpkg',
+        '--print-architecture'
+    ]).decode("utf-8", 'ignore').strip()
 
 # Full package file name and directory
 
