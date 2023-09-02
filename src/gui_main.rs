@@ -19,7 +19,6 @@ pub type MainGuiHandlers = Vec<Box<dyn Fn(MainGuiEvent) + 'static>>;
 pub const TAB_HARDWARE: u32 = 0;
 pub const TAB_MAP:      u32 = 1;
 pub const TAB_CAMERA:   u32 = 2;
-pub const TAB_GUIDE:    u32 = 3;
 
 const CSS: &[u8] = b"
 .greenbutton {
@@ -151,8 +150,6 @@ pub fn build_ui(
         let nb_main = builder.object::<gtk::Notebook>("nb_main").unwrap();
         let map_tab = nb_main.nth_page(Some(TAB_MAP)).unwrap();
         map_tab.hide();
-        let guide_page = nb_main.nth_page(Some(TAB_GUIDE)).unwrap();
-        guide_page.hide();
     }
 
     window.set_application(Some(app));
@@ -175,9 +172,8 @@ pub fn build_ui(
     crate::gui_hardware::build_ui(app, &builder, &gui, options, state, indi);
     crate::gui_camera::build_ui(app, &builder, &gui, options, state, indi, &mut data.handlers.borrow_mut());
     crate::gui_map::build_ui(app, &builder, &options);
-    crate::gui_guiding::build_ui(app, &builder, options, state, indi);
 
-    let ui = gtk_utils::GtkHelper::new_from_builder(&builder);
+    let ui = gtk_utils::UiHelper::new_from_builder(&builder);
 
     ui.enable_widgets(false, &[("mi_color_theme", cfg!(target_os = "windows"))]);
 
@@ -238,8 +234,8 @@ pub fn build_ui(
     let nb_main = builder.object::<gtk::Notebook>("nb_main").unwrap();
     nb_main.connect_switch_page(clone!(@weak data => move |_, _, page| {
         let enable_fullscreen = match page {
-            TAB_MAP|TAB_CAMERA|TAB_GUIDE => true,
-            _                            => false
+            TAB_MAP|TAB_CAMERA => true,
+            _                  => false
         };
         btn_fullscreen.set_sensitive(enable_fullscreen);
     }));

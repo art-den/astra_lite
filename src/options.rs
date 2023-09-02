@@ -461,24 +461,21 @@ impl Default for CamOptions {
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(default)]
-pub struct InternalGuidingOptions {
-    pub cam_device: String,
-    pub cam_ctrl:   CamCtrlOptions,
-    pub frame:      FrameOptions,
-    pub calibr:     CalibrOptions,
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-#[serde(default)]
-pub struct Phd2GuidingOptions {
+pub struct Phd2Options {
 
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
 pub enum GuidingMode {
     #[default]
     MainCamera,
     Phd2,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct Guiding {
+    pub mode: GuidingMode,
+    pub phd2: Phd2Options,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -496,7 +493,5 @@ pub struct Options {
     pub simp_guide: SimpleGuidingOptions,
     pub mount:      MountOptions,
     pub telescope:  TelescopeOptions,
-    pub int_guide:  InternalGuidingOptions,
-    pub phd2_guide: Phd2GuidingOptions,
-    pub guid_mode:  GuidingMode,
+    pub guiding:    Guiding,
 }

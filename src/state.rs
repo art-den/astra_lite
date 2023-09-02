@@ -16,7 +16,7 @@ use crate::{
     stars_offset::*,
     image_processing::*,
     io_utils::*,
-    phd2_api::*,
+    phd2_conn::*,
 };
 
 #[derive(Clone)]
@@ -56,17 +56,15 @@ type SubscribersFun = dyn Fn(StateEvent) + Send + Sync + 'static;
 type FrameProcessResultFun = dyn Fn(FrameProcessResult) + Send + Sync + 'static;
 
 pub struct Subscribers {
-    items:        Vec<Box<SubscribersFun>>,
-    main_cam_frame_evt: Option<Box<FrameProcessResultFun>>,
-    guid_cam_frame_evt: Option<Box<FrameProcessResultFun>>,
+    items:     Vec<Box<SubscribersFun>>,
+    frame_evt: Option<Box<FrameProcessResultFun>>,
 }
 
 impl Subscribers {
     fn new() -> Self {
         Self {
-            items:        Vec::new(),
-            main_cam_frame_evt: None,
-            guid_cam_frame_evt: None,
+            items:     Vec::new(),
+            frame_evt: None,
         }
     }
 
@@ -162,7 +160,7 @@ impl ModeData {
 
 pub struct State {
     indi:             Arc<indi_api::Connection>,
-    phd2_api:         Arc<Phd2Api>,
+    phd2_conn:        Arc<Phd2Conn>,
     options:          Arc<RwLock<Options>>,
     mode_data:        Arc<RwLock<ModeData>>,
     subscribers:      Arc<RwLock<Subscribers>>,
@@ -184,7 +182,7 @@ impl State {
         let (img_cmds_sender, process_thread) = start_main_cam_frame_processing_thread();
         let result = Self {
             indi:           Arc::clone(indi),
-            phd2_api:       Arc::new(Phd2Api::new()),
+            phd2_conn:      Arc::new(Phd2Conn::new()),
             options:        Arc::clone(options),
             mode_data:      Arc::new(RwLock::new(ModeData::new())),
             subscribers:    Arc::new(RwLock::new(Subscribers::new())),
@@ -200,6 +198,10 @@ impl State {
         result.connect_indi_events();
         result.start_taking_frames_restart_timer();
         result
+    }
+
+    pub fn phd2(&self) -> &Arc<Phd2Conn> {
+        &self.phd2_conn
     }
 
     pub fn stop_img_process_thread(&self) -> anyhow::Result<()> {
@@ -235,24 +237,13 @@ impl State {
 
     pub fn connect_main_cam_proc_result_event(&self, fun: impl Fn(FrameProcessResult) + Send + Sync + 'static) {
         let mut subscribers = self.subscribers.write().unwrap();
-        assert!(subscribers.main_cam_frame_evt.is_none());
-        subscribers.main_cam_frame_evt = Some(Box::new(fun));
+        assert!(subscribers.frame_evt.is_none());
+        subscribers.frame_evt = Some(Box::new(fun));
     }
 
     pub fn disconnect_main_cam_proc_result_event(&self) {
         let mut subscribers = self.subscribers.write().unwrap();
-        subscribers.main_cam_frame_evt = None;
-    }
-
-    pub fn connect_guid_cam_proc_result_event(&self, fun: impl Fn(FrameProcessResult) + Send + Sync + 'static) {
-        let mut subscribers = self.subscribers.write().unwrap();
-        assert!(subscribers.guid_cam_frame_evt.is_none());
-        subscribers.guid_cam_frame_evt = Some(Box::new(fun));
-    }
-
-    pub fn disconnect_guid_cam_proc_result_event(&self) {
-        let mut subscribers = self.subscribers.write().unwrap();
-        subscribers.guid_cam_frame_evt = None;
+        subscribers.frame_evt = None;
     }
 
     fn connect_indi_events(&self) {
@@ -384,7 +375,6 @@ impl State {
 
         if device_name != mode_cam_name { return Ok(()); }
 
-
         let mut command_data = {
             let options = options.read().unwrap();
             FrameProcessCommandData {
@@ -415,8 +405,8 @@ impl State {
                 let subscribers = subscribers.read().unwrap();
                 let options = options.read().unwrap();
                 if options.cam.device == res.camera {
-                    if let Some(main_cam_evt) = &subscribers.main_cam_frame_evt {
-                        main_cam_evt(res);
+                    if let Some(evt) = &subscribers.frame_evt {
+                        evt(res);
                     }
                 }
             }

@@ -126,7 +126,7 @@ fn show_options(data: &Rc<MapData>) {
     let pan_map1 = data.builder.object::<gtk::Paned>("pan_map1").unwrap();
     let opts = data.gui_options.borrow();
     pan_map1.set_position(opts.paned_pos1);
-    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
     ui.set_prop_bool("chb_flt_visible.active", opts.filter.visible);
     ui.set_prop_bool("chb_flt_stars.active", opts.filter.visible);
     ui.set_prop_bool("chb_flt_galaxies.active", opts.filter.galaxies);
@@ -144,7 +144,7 @@ fn show_options(data: &Rc<MapData>) {
 fn read_options_from_widgets(data: &Rc<MapData>) {
     let pan_map1 = data.builder.object::<gtk::Paned>("pan_map1").unwrap();
     let mut opts = data.gui_options.borrow_mut();
-    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
     opts.paned_pos1 = pan_map1.position();
     opts.filter.visible    = ui.prop_bool("chb_flt_visible.active");
     opts.filter.visible    = ui.prop_bool("chb_flt_stars.active");

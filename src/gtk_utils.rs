@@ -142,11 +142,11 @@ enum GtkHelperRoot {
     Container(gtk::Container),
 }
 
-pub struct GtkHelper {
+pub struct UiHelper {
     root: GtkHelperRoot,
 }
 
-impl GtkHelper {
+impl UiHelper {
     pub fn new_from_builder(bldr: &gtk::Builder) -> Self {
         Self {
             root: GtkHelperRoot::Builder(bldr.clone())

@@ -16,9 +16,9 @@ use crate::{
     indi_api,
     gui_indi::*,
     state::State,
-    options::*
+    options::*,
+    phd2_conn::*
 };
-
 
 impl indi_api::ConnState {
     fn to_str(&self, short: bool) -> Cow<str> {
@@ -66,7 +66,7 @@ struct HardwareData {
     indi_drivers:  indi_api::Drivers,
     indi_evt_conn: RefCell<Option<indi_api::Subscription>>,
     indi_gui:      IndiGui,
-    remote:        Cell<bool>,
+    is_remote:     Cell<bool>,
     self_:         RefCell<Option<Rc<HardwareData>>>,
 }
 
@@ -74,6 +74,11 @@ impl Drop for HardwareData {
     fn drop(&mut self) {
         log::info!("HardwareData dropped");
     }
+}
+
+enum HardwareEvent {
+    Indi(indi_api::Event),
+    Phd2(Phd2Event),
 }
 
 pub fn build_ui(
@@ -111,7 +116,7 @@ pub fn build_ui(
         indi_status:   RefCell::new(indi_api::ConnState::Disconnected),
         indi_drivers:  drivers,
         indi_evt_conn: RefCell::new(None),
-        remote:        Cell::new(false),
+        is_remote:     Cell::new(false),
         gui:           Rc::clone(gui),
         indi_gui,
         window,
@@ -130,6 +135,8 @@ pub fn build_ui(
     gtk_utils::connect_action(&data.window, &data, "help_save_indi", handler_action_help_save_indi);
     gtk_utils::connect_action(&data.window, &data, "conn_indi",      handler_action_conn_indi);
     gtk_utils::connect_action(&data.window, &data, "disconn_indi",   handler_action_disconn_indi);
+    gtk_utils::connect_action(&data.window, &data, "conn_guid",      handler_action_conn_guider);
+    gtk_utils::connect_action(&data.window, &data, "disconn_guid",   handler_action_disconn_guider);
     gtk_utils::connect_action(&data.window, &data, "clear_hw_log",   handler_action_clear_hw_log);
 
     let chb_remote = data.builder.object::<gtk::CheckButton>("chb_remote").unwrap();
@@ -151,6 +158,11 @@ pub fn build_ui(
         data.indi_gui.set_filter_text(entry.text().as_str());
     }));
 
+    let ch_guide_mode = data.builder.object::<gtk::ComboBoxText>("ch_guide_mode").unwrap();
+    ch_guide_mode.connect_active_id_notify(clone!(@weak data => move |_| {
+        correct_widgets_by_cur_state(&data);
+    }));
+
     if let Some(load_drivers_err) = load_drivers_err {
         add_log_record(
             &data,
@@ -166,7 +178,7 @@ fn handler_close_window(data: &Rc<HardwareData>) -> gtk::Inhibit {
         data.indi.unsubscribe(indi_conn);
     }
 
-    if !data.remote.get() {
+    if !data.is_remote.get() {
         _ = data.indi.command_enable_all_devices(false, true, Some(2000));
     }
 
@@ -174,11 +186,15 @@ fn handler_close_window(data: &Rc<HardwareData>) -> gtk::Inhibit {
     _ = data.indi.disconnect_and_wait();
     log::info!("Done!");
 
+    log::info!("Stop connection to PHD2...");
+    _ = data.state.phd2().stop();
+    log::info!("Done!");
+
     gtk::Inhibit(false)
 }
 
 fn correct_widgets_by_cur_state(data: &Rc<HardwareData>) {
-    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
     let status = data.indi_status.borrow();
     let (conn_en, disconn_en) = match *status {
         indi_api::ConnState::Disconnected  => (true,  false),
@@ -187,9 +203,13 @@ fn correct_widgets_by_cur_state(data: &Rc<HardwareData>) {
         indi_api::ConnState::Connected     => (false, true),
         indi_api::ConnState::Error(_)      => (true,  false),
     };
+    let phd2_working = data.state.phd2().is_working();
+    let phd2_acessible = GuidingMode::from_active_id(ui.prop_string("ch_guide_mode.active-id").as_deref()) == GuidingMode::Phd2;
     gtk_utils::enable_actions(&data.window, &[
         ("conn_indi",    conn_en),
         ("disconn_indi", disconn_en),
+        ("conn_guid",    !phd2_working && phd2_acessible),
+        ("disconn_guid", phd2_working && phd2_acessible),
     ]);
     ui.set_prop_str("lbl_indi_conn_status.label", Some(&status.to_str(false)));
 
@@ -222,26 +242,42 @@ fn correct_widgets_by_cur_state(data: &Rc<HardwareData>) {
         ("l_focuser_drivers",   foc_sensitive),
         ("cb_focuser_drivers",  foc_sensitive),
         ("chb_remote",          !data.indi_drivers.groups.is_empty() && disconnected),
-        ("e_remote_addr",       remote && disconnected)
+        ("e_remote_addr",       remote && disconnected),
+        ("ch_guide_mode",       !phd2_working),
     ]);
 }
 
 fn connect_indi_events(data: &Rc<HardwareData>) {
     let (sender, receiver) = glib::MainContext::channel(glib::PRIORITY_DEFAULT);
+
+    // Connect INDI events
+    let sender_clone = sender.clone();
     *data.indi_evt_conn.borrow_mut() = Some(data.indi.subscribe_events(move |event| {
-        sender.send(event).unwrap();
+        sender_clone.send(HardwareEvent::Indi(event)).unwrap();
     }));
 
+    // Connect PHD2 events
+    let sender_clone = sender.clone();
+    data.state.phd2().connect_event_handler(move |event| {
+        sender_clone.send(HardwareEvent::Phd2(event)).unwrap();
+    });
+
+    // Process incoming events in main thread
     receiver.attach(None,
         clone!(@weak data => @default-return Continue(false),
         move |event| {
-            process_indi_event_in_main_thread(&data, event);
+            match event {
+                HardwareEvent::Indi(event) =>
+                    process_indi_event(&data, event),
+                HardwareEvent::Phd2(event) =>
+                    process_phd2_event(&data, event),
+            };
             Continue(true)
         })
     );
 }
 
-fn process_indi_event_in_main_thread(data: &Rc<HardwareData>, event: indi_api::Event) {
+fn process_indi_event(data: &Rc<HardwareData>, event: indi_api::Event) {
     match event {
         indi_api::Event::ConnChange(conn_state) => {
             if let indi_api::ConnState::Error(_) = &conn_state {
@@ -324,6 +360,20 @@ fn process_indi_event_in_main_thread(data: &Rc<HardwareData>, event: indi_api::E
     }
 }
 
+fn process_phd2_event(data: &Rc<HardwareData>, event: Phd2Event) {
+    let status_text = match event {
+        Phd2Event::Started|
+        Phd2Event::Disconnected =>
+            "Connecting...",
+        Phd2Event::Connected =>
+            "Connected",
+        _ =>
+            "---",
+    };
+    let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
+    ui.set_prop_str("lbl_phd2_status.label", Some(status_text));
+}
+
 fn handler_action_conn_indi(data: &Rc<HardwareData>) {
     read_options_from_widgets(data);
     gtk_utils::exec_and_show_error(&data.window, || {
@@ -367,7 +417,7 @@ fn handler_action_conn_indi(data: &Rc<HardwareData>) {
             activate_all_devices: !options.indi.remote,
             .. Default::default()
         };
-        data.remote.set(options.indi.remote);
+        data.is_remote.set(options.indi.remote);
         drop(options);
         data.indi.connect(&conn_settings)?;
         Ok(())
@@ -376,10 +426,27 @@ fn handler_action_conn_indi(data: &Rc<HardwareData>) {
 
 fn handler_action_disconn_indi(data: &Rc<HardwareData>) {
     gtk_utils::exec_and_show_error(&data.window, || {
-        if !data.remote.get() {
+        if !data.is_remote.get() {
             data.indi.command_enable_all_devices(false, true, Some(2000))?;
         }
         data.indi.disconnect_and_wait()?;
+
+        Ok(())
+    });
+}
+
+fn handler_action_conn_guider(data: &Rc<HardwareData>) {
+    gtk_utils::exec_and_show_error(&data.window, || {
+        data.state.phd2().work("127.0.0.1", 4400)?;
+        correct_widgets_by_cur_state(data);
+        Ok(())
+    });
+}
+
+fn handler_action_disconn_guider(data: &Rc<HardwareData>) {
+    gtk_utils::exec_and_show_error(&data.window, || {
+        data.state.phd2().stop()?;
+        correct_widgets_by_cur_state(data);
         Ok(())
     });
 }
@@ -431,16 +498,16 @@ fn fill_devices_name(data: &Rc<HardwareData>) {
 }
 
 fn show_options(data: &Rc<HardwareData>) {
-    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
     let options = data.options.read().unwrap();
 
     ui.set_prop_bool("chb_remote.active", options.indi.remote);
     ui.set_prop_str("e_remote_addr.text", Some(&options.indi.address));
-    ui.set_prop_str("ch_guide_mode.active-id", options.guid_mode.to_active_id());
+    ui.set_prop_str("ch_guide_mode.active-id", options.guiding.mode.to_active_id());
 }
 
 fn read_options_from_widgets(data: &Rc<HardwareData>) {
-    let ui = gtk_utils::GtkHelper::new_from_builder(&data.builder);
+    let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
     let mut options = data.options.write().unwrap();
     options.indi.mount = ui.prop_string("cb_mount_drivers.active-id");
     options.indi.camera = ui.prop_string("cb_camera_drivers.active-id");
@@ -448,7 +515,7 @@ fn read_options_from_widgets(data: &Rc<HardwareData>) {
     options.indi.focuser = ui.prop_string("cb_focuser_drivers.active-id");
     options.indi.remote = ui.prop_bool("chb_remote.active");
     options.indi.address = ui.prop_string("e_remote_addr.text").unwrap_or_default();
-    options.guid_mode = GuidingMode::from_active_id(ui.prop_string("ch_guide_mode.active-id").as_deref());
+    options.guiding.mode = GuidingMode::from_active_id(ui.prop_string("ch_guide_mode.active-id").as_deref());
 }
 
 fn add_log_record(

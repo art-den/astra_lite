@@ -27,9 +27,8 @@ mod math;
 mod plots;
 mod sexagesimal;
 mod gui_map;
-mod gui_guiding;
 mod gui_common;
-mod phd2_api;
+mod phd2_conn;
 
 use std::{path::Path, sync::{Arc, RwLock}};
 use gtk::{prelude::*, glib, glib::clone};
