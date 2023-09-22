@@ -19,23 +19,23 @@ pub fn disable_scroll_for_most_of_widgets(builder: &gtk::Builder) {
     for object in builder.objects() {
         if let Some(spin) = object.downcast_ref::<gtk::SpinButton>() {
             spin.connect_scroll_event(|_, _| {
-                glib::signal::Inhibit(true)
+                glib::Propagation::Stop
             });
         }
         if let Some(cb) = object.downcast_ref::<gtk::ComboBox>() {
             cb.connect_scroll_event(|_, _| {
-                glib::signal::Inhibit(true)
+                glib::Propagation::Stop
             });
         }
         if let Some(scale) = object.downcast_ref::<gtk::Scale>() {
             scale.connect_scroll_event(|_, _| {
-                glib::signal::Inhibit(true)
+                glib::Propagation::Stop
             });
         }
         if let Some(btn) = object.downcast_ref::<gtk::FileChooserButton>() {
             btn.connect_scroll_event(|_, _| {
-                glib::signal::Inhibit(true)
-            });
+                glib::Propagation::Stop
+             });
         }
     }
 }
@@ -271,6 +271,35 @@ impl UiHelper {
             .get::<f64>()
             .expect("Wrong property type")
     }
+
+    // i32
+
+    pub fn set_prop_i32(&self, name_and_prop: &str, value: i32) {
+        let (name, prop) = Self::extract_name_and_prop(name_and_prop);
+        self.object_by_id(name)
+            .set_property_from_value(prop, &value.into());
+    }
+
+    pub fn prop_i32(&self, name_and_prop: &str) -> i32 {
+        let (name, prop) = Self::extract_name_and_prop(name_and_prop);
+        self.object_by_id(name)
+            .property_value(prop)
+            .get::<i32>()
+            .expect("Wrong property type")
+    }
+
+    pub fn set_prop_i32_ex(&self, obj_bldr_id: &str, prop_name: &str, value: i32) {
+        self.object_by_id(obj_bldr_id)
+            .set_property_from_value(prop_name, &value.into());
+    }
+
+    pub fn prop_i32_ex(&self, obj_bldr_id: &str, prop_name: &str) -> i32 {
+        self.object_by_id(obj_bldr_id)
+            .property_value(prop_name)
+            .get::<i32>()
+            .expect("Wrong property type")
+    }
+
 
     ///////////////////////////////////////////////////////////////////////////
 

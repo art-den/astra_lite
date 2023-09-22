@@ -294,6 +294,19 @@ impl SwitchRule {
 
 pub enum BlobEnable { Never, Also, Only }
 
+#[derive(Clone, Copy)]
+pub enum CamCcd { Primary, Secondary }
+
+impl CamCcd {
+    pub fn from_ccd_prop_name(name: &str) -> Self {
+        match name {
+            "CCD1"|"" => Self::Primary,
+            "CCD2"    => Self::Secondary,
+            _         => panic!("Wrong CCD property name ({})", name),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct NumPropElemInfo {
     pub name:   String,
@@ -2036,16 +2049,6 @@ impl Connection {
         )
     }
 
-    pub fn camera_get_pixel_size(
-        &self,
-        device_name: &str,
-    ) -> Result<(f64/*x*/, f64/*y*/)> {
-        let devices = self.devices.lock().unwrap();
-        let size_x = devices.get_num_property(device_name, "CCD_INFO", "CCD_PIXEL_SIZE_X")?;
-        let size_y = devices.get_num_property(device_name, "CCD_INFO", "CCD_PIXEL_SIZE_Y")?;
-        Ok((size_x, size_y))
-    }
-
     // Fast toggle capability
 
     pub fn camera_is_fast_toggle_supported(
@@ -2119,56 +2122,75 @@ impl Connection {
 
     pub fn camera_get_exposure_prop_info(
         &self,
-        device_name: &str
+        device_name: &str,
+        ccd:         CamCcd
     ) -> Result<Arc<NumPropElemInfo>> {
         let devices = self.devices.lock().unwrap();
+        let (prop_name, prop_elem) = Self::exposure_prop_name(ccd);
         devices.get_num_prop_elem_info(
             device_name,
-            "CCD_EXPOSURE",
-            "CCD_EXPOSURE_VALUE"
+            prop_name,
+            prop_elem,
         )
     }
 
     pub fn camera_is_exposure_property(
         prop_name: &str,
-        elem_name: &str
+        elem_name: &str,
+        ccd:       CamCcd
     ) -> bool {
-        prop_name == "CCD_EXPOSURE" &&
-        elem_name == "CCD_EXPOSURE_VALUE"
+        let (name, elem) = Self::exposure_prop_name(ccd);
+        prop_name == name && elem_name == elem
     }
 
     pub fn camera_get_exposure(
         &self,
-        device_name: &str
+        device_name: &str,
+        ccd:         CamCcd
     ) -> Result<f64> {
+        let (prop_name, prop_elem) = Self::exposure_prop_name(ccd);
         self.get_num_property(
             device_name,
-            "CCD_EXPOSURE",
-            "CCD_EXPOSURE_VALUE"
+            prop_name,
+            prop_elem
         )
     }
 
     pub fn camera_start_exposure(
         &self,
         device_name: &str,
+        ccd:         CamCcd,
         exposure:    f64
     ) -> Result<()> {
+        let (prop_name, prop_elem) = Self::exposure_prop_name(ccd);
         self.command_set_num_property(
             device_name,
-            "CCD_EXPOSURE",
-            &[("CCD_EXPOSURE_VALUE", exposure)]
+            prop_name,
+            &[(prop_elem, exposure)]
         )
     }
 
     pub fn camera_abort_exposure(
         &self,
-        device_name: &str
+        device_name: &str,
+        ccd:         CamCcd,
     ) -> Result<()> {
+        let prop_name = match ccd {
+            CamCcd::Primary   => "CCD_ABORT_EXPOSURE",
+            CamCcd::Secondary => "GUIDER_ABORT_EXPOSURE",
+        };
         self.command_set_switch_property(
             device_name,
-            "CCD_ABORT_EXPOSURE",
+            prop_name,
             &[("ABORT", true)]
         )
+    }
+
+    fn exposure_prop_name(ccd: CamCcd) -> (&'static str, &'static str) {
+        match ccd {
+            CamCcd::Primary   => ("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE"),
+            CamCcd::Secondary => ("GUIDER_EXPOSURE", "GUIDER_EXPOSURE_VALUE"),
+        }
     }
 
     // Cooler
@@ -2484,14 +2506,31 @@ impl Connection {
         Ok(true)
     }
 
-    // Camera frame size
+    // Camera frame size and information
+
+    pub fn camera_get_pixel_size(
+        &self,
+        device_name: &str,
+        cam_ccd:     CamCcd,
+    ) -> Result<(f64/*x*/, f64/*y*/)> {
+        let devices = self.devices.lock().unwrap();
+        let prop_name = Self::ccd_info_prop_name(cam_ccd);
+        let size_x = devices.get_num_property(device_name, prop_name, "CCD_PIXEL_SIZE_X")?;
+        let size_y = devices.get_num_property(device_name, prop_name, "CCD_PIXEL_SIZE_Y")?;
+        Ok((size_x, size_y))
+    }
 
     pub fn camera_is_frame_supported(
         &self,
         device_name: &str,
+        cam_ccd:     CamCcd,
     ) -> Result<bool> {
         let devices = self.devices.lock().unwrap();
-        match devices.get_property_static_data(device_name, "CCD_FRAME") {
+        let res = devices.get_property_static_data(
+            device_name,
+            Self::ccd_frame_prop_name(cam_ccd)
+        );
+        match res {
             Err(e @ Error::DeviceNotExists(_)) => Err(e),
             Err(_) => Ok(false),
             Ok(s) => Ok(s.perm != PropPerm::RO),
@@ -2501,6 +2540,7 @@ impl Connection {
     pub fn camera_set_frame_size(
         &self,
         device_name: &str,
+        cam_ccd:     CamCcd,
         x:           usize,
         y:           usize,
         width:       usize,
@@ -2512,7 +2552,7 @@ impl Connection {
             force_set,
             timeout_ms,
             device_name,
-            "CCD_FRAME", &[
+            Self::ccd_frame_prop_name(cam_ccd), &[
             ("X",      x as f64),
             ("Y",      y as f64),
             ("WIDTH",  width as f64),
@@ -2523,20 +2563,39 @@ impl Connection {
     pub fn camera_get_max_frame_size(
         &self,
         device_name: &str,
+        cam_ccd:     CamCcd,
     ) -> Result<(usize, usize)> {
         let devices = self.devices.lock().unwrap();
-        let width = devices.get_num_property(device_name, "CCD_INFO", "CCD_MAX_X")?;
-        let height = devices.get_num_property(device_name, "CCD_INFO", "CCD_MAX_Y")?;
+        let prop_name = Self::ccd_info_prop_name(cam_ccd);
+        let width = devices.get_num_property(device_name, prop_name, "CCD_MAX_X")?;
+        let height = devices.get_num_property(device_name, prop_name, "CCD_MAX_Y")?;
         Ok((width as usize, height as usize))
     }
+
+    fn ccd_frame_prop_name(cam_ccd: CamCcd) -> &'static str {
+        match cam_ccd {
+            CamCcd::Primary => "CCD_FRAME",
+            CamCcd::Secondary => "GUIDER_FRAME",
+        }
+    }
+
+    fn ccd_info_prop_name(cam_ccd: CamCcd) -> &'static str {
+        match cam_ccd {
+            CamCcd::Primary => "CCD_INFO",
+            CamCcd::Secondary => "GUIDER_INFO",
+        }
+    }
+
+    // CCD_FRAME
 
     pub fn camera_is_binning_supported(
         &self,
         device_name: &str,
+        cam_ccd:     CamCcd,
     ) -> Result<bool> {
         self.property_exists(
             device_name,
-            "CCD_BINNING",
+            Self::ccd_bin_prop_name(cam_ccd),
             None
         )
     }
@@ -2544,11 +2603,13 @@ impl Connection {
     pub fn camera_get_max_binning(
         &self,
         device_name: &str,
+        cam_ccd:     CamCcd,
     ) -> Result<(usize, usize)> {
         let devices = self.devices.lock().unwrap();
-        if devices.property_exists(device_name, "CCD_BINNING", None)? {
-            let max_hor = devices.get_num_prop_elem_info(device_name, "CCD_BINNING", "HOR_BIN")?.max;
-            let max_vert = devices.get_num_prop_elem_info(device_name, "CCD_BINNING", "VER_BIN")?.max;
+        let prop_name = Self::ccd_bin_prop_name(cam_ccd);
+        if devices.property_exists(device_name, prop_name, None)? {
+            let max_hor = devices.get_num_prop_elem_info(device_name, prop_name, "HOR_BIN")?.max;
+            let max_vert = devices.get_num_prop_elem_info(device_name, prop_name, "VER_BIN")?.max;
             Ok((max_hor as usize, max_vert as usize))
         } else {
             Ok((1, 1))
@@ -2557,18 +2618,19 @@ impl Connection {
 
     pub fn camera_set_binning(
         &self,
-        device_name:   &str,
-        hor_binnging:  usize,
-        vert_binnging: usize,
-        force_set:     bool,
-        timeout_ms:    Option<u64>,
+        device_name:    &str,
+        cam_ccd:        CamCcd,
+        horiz_binnging: usize,
+        vert_binnging:  usize,
+        force_set:      bool,
+        timeout_ms:     Option<u64>,
     ) -> Result<()> {
         self.command_set_num_property_and_wait(
             force_set,
             timeout_ms,
             device_name,
-            "CCD_BINNING", &[
-            ("HOR_BIN", hor_binnging as f64),
+            Self::ccd_bin_prop_name(cam_ccd), &[
+            ("HOR_BIN", horiz_binnging as f64),
             ("VER_BIN", vert_binnging as f64),
         ])
     }
@@ -2576,10 +2638,12 @@ impl Connection {
     pub fn camera_is_binning_mode_supported(
         &self,
         device_name: &str,
+        cam_ccd:     CamCcd,
     ) -> Result<bool> {
-        self.is_device_support_any_of_props(
+        self.property_exists(
             device_name,
-            PROP_CAM_BIN_AVG
+            Self::ccd_bin_mode_prop_name(cam_ccd),
+            None
         )
     }
 
@@ -2629,9 +2693,26 @@ impl Connection {
         }
     }
 
+    fn ccd_bin_prop_name(cam_ccd: CamCcd) -> &'static str {
+        match cam_ccd {
+            CamCcd::Primary => "CCD_BINNING",
+            CamCcd::Secondary => "GUIDER_BINNING",
+        }
+    }
+
+    fn ccd_bin_mode_prop_name(cam_ccd: CamCcd) -> &'static str {
+        match cam_ccd {
+            CamCcd::Primary => "CCD_BINNING_MODE",
+            CamCcd::Secondary => "GUIDER_BINNING_MODE",
+        }
+    }
+
+    // Frame type (light, dark etc)
+
     pub fn camera_set_frame_type(
         &self,
         device_name: &str,
+        cam_ccd:     CamCcd,
         frame_type:  FrameType,
         force_set:   bool,
         timeout_ms:  Option<u64>,
@@ -2646,10 +2727,18 @@ impl Connection {
             force_set,
             timeout_ms,
             device_name,
-            "CCD_FRAME_TYPE",
+            Self::ccd_frame_type_prop_name(cam_ccd),
             &[(elem_name, true)]
         )
     }
+
+    fn ccd_frame_type_prop_name(cam_ccd: CamCcd) -> &'static str {
+        match cam_ccd {
+            CamCcd::Primary => "CCD_FRAME_TYPE",
+            CamCcd::Secondary => "GUIDER_FRAME_TYPE",
+        }
+    }
+
 
     // Camera fan
 
@@ -3496,10 +3585,20 @@ impl XmlStreamReader {
                     }
                 }
                 XmlStreamReaderState::ReadingBlob => {
-                    let end_blob_pos = &self.stream_buffer[..self.read_len].iter().position(|b| *b == b'<');
-                    let end_pos = end_blob_pos.unwrap_or(self.read_len);
-                    self.base64_decoder.add_bytes(&self.stream_buffer[..end_pos]);
-                    if let Some(end_blob_pos) = end_blob_pos {
+                    let mut end_of_blob_found = false;
+                    for &b in &self.stream_buffer[..self.read_len] {
+                        if b != b'<' {
+                            self.base64_decoder.add_byte(b);
+                        } else {
+                            end_of_blob_found = true;
+                            break;
+                        }
+                    }
+                    if end_of_blob_found {
+                        let end_blob_pos = &self.stream_buffer[..self.read_len]
+                            .iter()
+                            .position(|b| *b == b'<')
+                            .unwrap();
                         let blob_dl_time = self.blob_dl_start.elapsed().as_secs_f64();
                         self.read_buffer.extend_from_slice(&self.stream_buffer[*end_blob_pos..self.read_len]);
                         self.state = XmlStreamReaderState::WaitOneBlobTagEnd;

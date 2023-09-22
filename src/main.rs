@@ -77,6 +77,14 @@ fn panic_handler(
         logs_dir.to_str().unwrap_or_default()
     );
 
+    if cfg!(target_os = "linux") {
+        log::info!("Stop INDI server...");
+        _ = std::process::Command::new("pkill")
+            .args(["indiserver"])
+            .spawn();
+        log::info!("Done!");
+    }
+
     _ = msgbox::create(&message_caption, &message_text, msgbox::IconType::Error);
 
     def_panic_handler(panic_info);
@@ -89,6 +97,14 @@ fn main() -> anyhow::Result<()> {
     log_utils::cleanup_old_logs(&logs_dir, 14/*days*/);
     log_utils::start_logger(&logs_dir)?;
     log::set_max_level(log::LevelFilter::Info);
+
+    std::panic::set_hook({
+        let logs_dir = logs_dir.clone();
+        let default_panic_handler = std::panic::take_hook();
+        Box::new(move |panic_info| {
+            panic_handler(panic_info, &logs_dir, &default_panic_handler)
+        })
+    });
 
     #[cfg(debug_assertions)] {
         std::env::set_var("RUST_BACKTRACE", "1");
@@ -104,19 +120,6 @@ fn main() -> anyhow::Result<()> {
     let indi = Arc::new(indi_api::Connection::new());
     let options = Arc::new(RwLock::new(Options::default()));
     let state = Arc::new(State::new(&indi, &options));
-
-    std::panic::set_hook({
-        let logs_dir = logs_dir.clone();
-        let default_panic_handler = std::panic::take_hook();
-        let indi = Arc::clone(&indi);
-        Box::new(move |panic_info| {
-            log::info!("Disconnecting (and stop) INDI server after panic...");
-            _ = indi.disconnect_and_wait();
-            log::info!("Done!");
-
-            panic_handler(panic_info, &logs_dir, &default_panic_handler)
-        })
-    });
 
     let application = gtk::Application::new(
         Some(&format!("com.github.art-den.{}", env!("CARGO_PKG_NAME"))),

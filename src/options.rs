@@ -439,19 +439,26 @@ impl TelescopeOptions {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
+#[serde(default)]
+pub struct DeviceAndProp {
+    pub name: String,
+    pub prop: String, // CCD1, CCD2... or emprty for any
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct CamOptions {
-    pub device:     String,
-    pub live_view:  bool,
-    pub ctrl:       CamCtrlOptions,
-    pub frame:      FrameOptions,
+    pub device:    DeviceAndProp,
+    pub live_view: bool,
+    pub ctrl:      CamCtrlOptions,
+    pub frame:     FrameOptions,
 }
 
 impl Default for CamOptions {
     fn default() -> Self {
         Self {
-            device:    String::new(),
+            device:    DeviceAndProp::default(),
             live_view: false,
             ctrl:      CamCtrlOptions::default(),
             frame:     FrameOptions::default(),

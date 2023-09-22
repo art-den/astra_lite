@@ -1,8 +1,10 @@
 use std::collections::{HashSet, VecDeque};
 use std::f64::consts::PI;
 use std::sync::*;
+use chrono::{DateTime, Utc};
 use itertools::*;
 use crate::log_utils::TimeLogger;
+use crate::stars_offset::{Point, Offset};
 use crate::{image::*, image_raw::*, math::*};
 
 const MAX_STAR_DIAM: usize = 32;
@@ -49,40 +51,54 @@ pub struct Star {
 
 pub type Stars = Vec<Star>;
 
-pub struct LightImageInfo {
-    pub width: usize,
-    pub height: usize,
-    pub exposure: f64,
-    pub noise: f32,
-    pub background: i32,
-    pub max_value: u16,
-    pub stars: Stars,
-    pub star_img: ImageLayer<u16>,
-    pub stars_fwhm: Option<f32>,
-    pub stars_fwhm_good: bool,
+pub struct LightFrameInfo {
+    pub time:          Option<DateTime<Utc>>,
+    pub width:         usize,
+    pub height:        usize,
+    pub exposure:      f64,
+    pub raw_noise:     Option<f32>,
+    pub noise:         f32,
+    pub noise_percent: f32,
+    pub background:    i32,
+    pub bg_percent:    f32,
+    pub max_value:     u16,
+    pub stars:         Stars,
+    pub star_img:      ImageLayer<u16>,
+    pub stars_fwhm:    Option<f32>,
+    pub good_fwhm:     bool,
     pub stars_ovality: Option<f32>,
-    pub stars_ovality_good: bool,
+    pub good_ovality:  bool,
+    pub stars_offset:  Option<Offset>,
+    pub good_offset:   bool,
 }
 
-impl LightImageInfo {
+impl LightFrameInfo {
     pub fn from_image(
         image:             &Image,
         exposure:          f64,
+        raw_noise:         Option<f32>,
         max_stars_fwhm:    Option<f32>,
         max_stars_ovality: Option<f32>,
-        mt:                bool
+        starts_for_offset: Option<&Vec<Point>>,
+        mt:                bool,
     ) -> Self {
         let max_value = image.max_value();
         let overexposured_bord = (90 * max_value as u32 / 100) as u16;
         let mono_layer = if image.is_color() { &image.g } else { &image.l };
 
+        // Noise
+
         let tmr = TimeLogger::start();
         let noise = mono_layer.calc_noise();
         tmr.log("calc image noise");
 
+        // Background
+
         let tmr = TimeLogger::start();
         let background = mono_layer.calc_background(mt) as i32;
         tmr.log("calc image background");
+
+        // Stars
 
         let tmr = TimeLogger::start();
         let stars = Self::find_stars_in_image(
@@ -95,6 +111,8 @@ impl LightImageInfo {
         );
         tmr.log("searching stars");
 
+        // Stars quality (fwhm, ovality)
+
         let tmr = TimeLogger::start();
         const COMMON_STAR_MAG: usize = 4;
         const COMMON_STAR_MAG_F: f64 = COMMON_STAR_MAG as f64;
@@ -105,36 +123,64 @@ impl LightImageInfo {
             .map(|v| (v / COMMON_STAR_MAG_F) as f32);
         tmr.log("calc fwhm+ovality");
 
-        let stars_fwhm_good = if let Some(max_stars_fwhm) = max_stars_fwhm {
+        let good_fwhm = if let Some(max_stars_fwhm) = max_stars_fwhm {
             stars_fwhm.unwrap_or(999.0) < max_stars_fwhm
         } else {
             true
         };
 
-        let stars_ovality_good = if let Some(max_stars_ovality) = max_stars_ovality {
+        let good_ovality = if let Some(max_stars_ovality) = max_stars_ovality {
             stars_ovality.unwrap_or(999.0) < max_stars_ovality
         } else {
             true
         };
 
+        // Offset by reference stars
+
+        let (stars_offset, good_offset) = if let (Some(starts_for_offset), true, true) =
+        (starts_for_offset, good_fwhm, good_ovality) {
+            let tmr = TimeLogger::start();
+            let cur_stars_points: Vec<_> = stars.iter()
+                .map(|star| Point {x: star.x, y: star.y })
+                .collect();
+            let image_offset = Offset::calculate(
+                starts_for_offset,
+                &cur_stars_points,
+                image.width() as f64,
+                image.height() as f64
+            );
+            tmr.log("Offset::calculate");
+            let img_offset_is_ok = !image_offset.is_none();
+            (image_offset, img_offset_is_ok)
+        } else {
+            (None, true)
+        };
+
         Self {
+            time: image.time.clone(),
             width: image.width(),
             height: image.height(),
             exposure,
+            raw_noise,
             noise,
+            noise_percent: (100.0 * noise as f64 / image.max_value() as f64) as f32,
             background,
+            bg_percent: (100.0 * background as f64 / image.max_value() as f64) as f32,
             max_value,
             stars,
             star_img,
             stars_fwhm,
-            stars_fwhm_good,
+            good_fwhm,
             stars_ovality,
-            stars_ovality_good,
+            good_ovality,
+            stars_offset,
+            good_offset,
+
         }
     }
 
     pub fn is_ok(&self) -> bool {
-        self.stars_fwhm_good && self.stars_ovality_good
+        self.good_fwhm && self.good_ovality
     }
 
     fn find_stars_in_image(

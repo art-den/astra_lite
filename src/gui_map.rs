@@ -105,21 +105,24 @@ pub fn build_ui(
 
     show_options(&data);
 
-    window.connect_delete_event(clone!(@weak data => @default-return gtk::Inhibit(false), move |_, _| {
-        let res = handler_close_window(&data);
-        *data.self_.borrow_mut() = None;
-        res
-    }));
+    window.connect_delete_event(
+        clone!(@weak data => @default-return glib::Propagation::Proceed,
+        move |_, _| {
+            let res = handler_close_window(&data);
+            *data.self_.borrow_mut() = None;
+            res
+        })
+    );
 }
 
-fn handler_close_window(data: &Rc<MapData>) -> gtk::Inhibit {
+fn handler_close_window(data: &Rc<MapData>) -> glib::Propagation {
     read_options_from_widgets(data);
 
     let gui_options = data.gui_options.borrow();
     _ = save_json_to_config::<GuiOptions>(&gui_options, CONF_FN);
     drop(gui_options);
 
-    gtk::Inhibit(false)
+    glib::Propagation::Proceed
 }
 
 fn show_options(data: &Rc<MapData>) {

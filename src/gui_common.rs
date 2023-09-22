@@ -180,34 +180,67 @@ impl PreviewColor {
 pub fn fill_combobox_with_cam_list(
     indi:    &indi_api::Connection,
     cb:      &gtk::ComboBoxText,
-    cur_cam: &str
-) -> usize {
+    list:    &mut Vec<DeviceAndProp>,
+    cur_cam: &DeviceAndProp
+) -> anyhow::Result<usize> {
+    let last_item = cb
+        .active()
+        .and_then(|active| list.get(active as usize)).cloned();
+    list.clear();
+
     let dev_list = indi.get_devices_list();
     let cameras = dev_list
         .iter()
         .filter(|device|
             device.interface.contains(indi_api::DriverInterface::CCD)
         );
-    let last_active_id = cb.active_id().map(|s| s.to_string());
+
     cb.remove_all();
     for camera in cameras {
-        cb.append(Some(&camera.name), &camera.name);
+        for (idx, prop) in ["CCD1", "CCD2", "CCD3"].iter().enumerate() {
+            if indi.property_exists(&camera.name, prop, None)? {
+                let mut name_for_user = camera.name.to_string();
+                if idx != 0 {
+                    name_for_user.push_str(" (");
+                    name_for_user.push_str(prop);
+                    name_for_user.push_str(")");
+                }
+                cb.append(None, &name_for_user);
+                list.push(DeviceAndProp {
+                    name: camera.name.clone(),
+                    prop: prop.to_string()
+                });
+            }
+        }
     }
     let cameras_count = gtk_utils::combobox_items_count(cb);
     if cameras_count == 1 {
         cb.set_active(Some(0));
     } else if cameras_count > 1 {
-        if !cur_cam.is_empty() {
-            cb.set_active_id(Some(cur_cam));
+        if !cur_cam.name.is_empty() {
+            let cam_index = list
+                .iter()
+                .position(|item|
+                    item.name == cur_cam.name &&
+                    cur_cam.prop.is_empty() || item.prop == cur_cam.prop
+                )
+                .map(|p| p as u32);
+
+            cb.set_active(cam_index);
         }
-        if cb.active_id().is_none() && last_active_id.is_some() {
-            cb.set_active_id(last_active_id.as_deref());
+        if let Some(last_item) = last_item {
+            let cam_index = list
+                .iter()
+                .position(|item| item == &last_item)
+                .map(|p| p as u32);
+
+            cb.set_active(cam_index);
         }
-        if cb.active_id().is_none() {
+        if cb.active().is_none() {
             cb.set_active(Some(0));
         }
     }
-    cameras_count
+    Ok(cameras_count)
 }
 
 const DELAYED_ACTIONS_TIMER_PERIOD_MS: u64 = 100;
@@ -231,7 +264,7 @@ impl<Action: Hash+Eq + 'static> DelayedActions<Action> {
         }));
         glib::timeout_add_local(
             Duration::from_millis(DELAYED_ACTIONS_TIMER_PERIOD_MS),
-            clone!(@strong data => @default-return Continue(false),
+            clone!(@weak data => @default-return glib::ControlFlow::Break,
             move || {
                 let mut data = data.borrow_mut();
                 if let Some(event_handler) = data.event_handler.take() {
@@ -246,7 +279,7 @@ impl<Action: Hash+Eq + 'static> DelayedActions<Action> {
                     data.event_handler = Some(event_handler);
                     data.items.retain(|_, v| { *v != 0 });
                 }
-                Continue(true)
+                glib::ControlFlow::Continue
             })
         );
         DelayedActions { data }

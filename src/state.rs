@@ -11,7 +11,7 @@ use crate::{
     options::*,
     indi_api,
     image_raw::{FrameType, RawAdder},
-    image_info::{LightImageInfo, Stars},
+    image_info::{LightFrameInfo, Stars},
     math::*,
     stars_offset::*,
     image_processing::*,
@@ -114,7 +114,7 @@ pub type ModeBox = Box<dyn Mode + Send + Sync>;
 pub trait Mode {
     fn get_type(&self) -> ModeType;
     fn progress_string(&self) -> String;
-    fn cam_device(&self) -> Option<&str> { None }
+    fn cam_device(&self) -> Option<&DeviceAndProp> { None }
     fn progress(&self) -> Option<Progress> { None }
     fn get_cur_exposure(&self) -> Option<f64> { None }
     fn can_be_stopped(&self) -> bool { true }
@@ -128,9 +128,8 @@ pub trait Mode {
     fn notify_indi_prop_change(&mut self, _prop_change: &indi_api::PropChangeEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_blob_start_event(&mut self, _event: &indi_api::BlobStartEvent) -> anyhow::Result<()> { Ok(()) }
     fn notify_about_frame_processing_started(&mut self) -> anyhow::Result<()> { Ok(()) }
-    fn notify_about_light_frame_info(&mut self, _info: &LightImageInfo, _subscribers: &Arc<RwLock<Subscribers>>) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_about_light_frame_info(&mut self, _info: &LightFrameInfo, _subscribers: &Arc<RwLock<Subscribers>>) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_about_frame_processing_finished(&mut self, _frame_is_ok: bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_about_light_short_info(&mut self, _info: &LightFrameShortInfo) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
 }
 
 pub enum NotifyResult {
@@ -158,20 +157,61 @@ impl ModeData {
     }
 }
 
+pub enum ExtGuiderType {
+    Phd2,
+}
+
+pub trait ExternalGuider {
+    fn get_type(&self) -> ExtGuiderType;
+    fn connect(&self) -> anyhow::Result<()>;
+    fn pause_guiding(&self, pause: bool) -> anyhow::Result<()>;
+    fn start_dithering(&self) -> anyhow::Result<()>;
+    fn disconnect(&self) -> anyhow::Result<()>;
+}
+
+struct ExternalGuiderPhd2 {
+    phd2: Arc<Phd2Conn>
+}
+
+impl ExternalGuider for ExternalGuiderPhd2 {
+    fn get_type(&self) -> ExtGuiderType {
+        ExtGuiderType::Phd2
+    }
+
+    fn connect(&self) -> anyhow::Result<()> {
+        self.phd2.work("127.0.0.1", 4400)?;
+        Ok(())
+    }
+
+    fn pause_guiding(&self, _pause: bool) -> anyhow::Result<()> {
+        todo!()
+    }
+
+    fn start_dithering(&self) -> anyhow::Result<()> {
+        todo!()
+    }
+
+    fn disconnect(&self) -> anyhow::Result<()> {
+        self.phd2.stop()?;
+        Ok(())
+    }
+}
+
 pub struct State {
-    indi:             Arc<indi_api::Connection>,
-    phd2_conn:        Arc<Phd2Conn>,
-    options:          Arc<RwLock<Options>>,
-    mode_data:        Arc<RwLock<ModeData>>,
-    subscribers:      Arc<RwLock<Subscribers>>,
-    cur_frame:        Arc<ResultImage>,
-    ref_stars:        Arc<RwLock<Option<Vec<Point>>>>,
-    calibr_images:    Arc<Mutex<CalibrImages>>,
-    live_stacking:    Arc<LiveStackingData>,
-    timer:            Arc<Timer>,
-    exp_stuck_wd:     Arc<AtomicU16>,
-    process_thread:   Option<JoinHandle<()>>,
-    img_cmds_sender:  mpsc::Sender<FrameProcessCommand>,
+    indi:            Arc<indi_api::Connection>,
+    phd2:            Arc<Phd2Conn>,
+    options:         Arc<RwLock<Options>>,
+    mode_data:       Arc<RwLock<ModeData>>,
+    subscribers:     Arc<RwLock<Subscribers>>,
+    cur_frame:       Arc<ResultImage>,
+    ref_stars:       Arc<Mutex<Option<Vec<Point>>>>,
+    calibr_images:   Arc<Mutex<CalibrImages>>,
+    live_stacking:   Arc<LiveStackingData>,
+    timer:           Arc<Timer>,
+    exp_stuck_wd:    Arc<AtomicU16>,
+    process_thread:  Option<JoinHandle<()>>,
+    img_cmds_sender: mpsc::Sender<FrameProcessCommand>,
+    ext_guider:      Arc<Mutex<Option<Box<dyn ExternalGuider>>>>,
 }
 
 impl State {
@@ -182,18 +222,19 @@ impl State {
         let (img_cmds_sender, process_thread) = start_main_cam_frame_processing_thread();
         let result = Self {
             indi:           Arc::clone(indi),
-            phd2_conn:      Arc::new(Phd2Conn::new()),
+            phd2:      Arc::new(Phd2Conn::new()),
             options:        Arc::clone(options),
             mode_data:      Arc::new(RwLock::new(ModeData::new())),
             subscribers:    Arc::new(RwLock::new(Subscribers::new())),
             cur_frame:      Arc::new(ResultImage::new()),
-            ref_stars:      Arc::new(RwLock::new(None)),
+            ref_stars:      Arc::new(Mutex::new(None)),
             calibr_images:  Arc::new(Mutex::new(CalibrImages::default())),
             live_stacking:  Arc::new(LiveStackingData::new()),
             timer:          Arc::new(Timer::new()),
             exp_stuck_wd:   Arc::new(AtomicU16::new(0)),
             process_thread: Some(process_thread),
             img_cmds_sender,
+            ext_guider:     Arc::new(Mutex::new(None)),
         };
         result.connect_indi_events();
         result.start_taking_frames_restart_timer();
@@ -201,7 +242,41 @@ impl State {
     }
 
     pub fn phd2(&self) -> &Arc<Phd2Conn> {
-        &self.phd2_conn
+        &self.phd2
+    }
+
+    pub fn connect_ext_guider(&self) -> anyhow::Result<()> {
+        let options = self.options.read().unwrap();
+        let mut ext_guider = self.ext_guider.lock().unwrap();
+        if ext_guider.is_some() {
+            return Err(anyhow::anyhow!("Already connected"));
+        }
+        match options.guiding.mode {
+            GuidingMode::MainCamera =>
+                return Err(anyhow::anyhow!("External guider in not selected")),
+            GuidingMode::Phd2 => {
+                let guider = Box::new(ExternalGuiderPhd2 {
+                    phd2: Arc::clone(&self.phd2)
+                });
+                guider.connect()?;
+                *ext_guider = Some(guider);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn disconnect_ext_guider(&self) -> anyhow::Result<()> {
+        let mut ext_guider = self.ext_guider.lock().unwrap();
+        if let Some(guider) = ext_guider.take() {
+            guider.disconnect()?;
+        } else {
+            return Err(anyhow::anyhow!("Not connected"));
+        }
+        Ok(())
+    }
+
+    pub fn ext_guider(&self) -> &Arc<Mutex<Option<Box<dyn ExternalGuider>>>> {
+        &self.ext_guider
     }
 
     pub fn stop_img_process_thread(&self) -> anyhow::Result<()> {
@@ -270,7 +345,8 @@ impl State {
                             }, ..
                         } = &prop_change.change {
                             Self::process_indi_blob_event(
-                                &blob, &prop_change.device_name, &mode_data,
+                                &blob, &prop_change.device_name,
+                                &prop_change.prop_name, &mode_data,
                                 &options, &cur_frame, &ref_stars,
                                 &calibr_images, &subscribers,
                                 &img_cmds_sender,
@@ -337,10 +413,12 @@ impl State {
             &subscribers
         )?;
 
-        if let (indi_api::PropChange::Change { value, new_state, .. }, Some(cur_cam))
+        if let (indi_api::PropChange::Change { value, new_state, .. }, Some(cur_device))
         = (&prop_change.change, mode_data.mode.cam_device()) {
-            if indi_api::Connection::camera_is_exposure_property(&prop_change.prop_name, &value.elem_name)
-            && cur_cam == prop_change.device_name {
+            let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&cur_device.prop);
+            if indi_api::Connection::camera_is_exposure_property(&prop_change.prop_name, &value.elem_name, cam_ccd)
+            && cur_device.name == prop_change.device_name
+            && cur_device.prop == prop_change.prop_name {
                 // exposure = 0.0 and state = busy means exposure has ended
                 // but still no blob received
                 if value.prop_value.as_f64().unwrap_or(0.0) == 0.0
@@ -357,29 +435,40 @@ impl State {
     fn process_indi_blob_event(
         blob:              &Arc<indi_api::BlobPropValue>,
         device_name:       &str,
+        device_prop:       &str,
         mode_data:         &Arc<RwLock<ModeData>>,
         options:           &Arc<RwLock<Options>>,
         cur_frame:         &Arc<ResultImage>,
-        ref_stars:         &Arc<RwLock<Option<Vec<Point>>>>,
+        ref_stars:         &Arc<Mutex<Option<Vec<Point>>>>,
         calibr_images:     &Arc<Mutex<CalibrImages>>,
         subscribers:       &Arc<RwLock<Subscribers>>,
         frame_proc_sender: &mpsc::Sender<FrameProcessCommand>,
     ) -> anyhow::Result<()> {
         if blob.data.is_empty() { return Ok(()); }
-        log::debug!("process_blob_event, dl_time = {:.2}s", blob.dl_time);
+        log::debug!(
+            "process_blob_event, device_name = {}, device_prop = {}, dl_time = {:.2}s",
+            device_name, device_prop, blob.dl_time
+        );
 
         let mode_data = mode_data.read().unwrap();
-        let Some(mode_cam_name) = mode_data.mode.cam_device() else {
+        let Some(mode_cam) = mode_data.mode.cam_device() else {
             return Ok(());
         };
 
-        if device_name != mode_cam_name { return Ok(()); }
+        if device_name != mode_cam.name
+        || device_prop != mode_cam.prop {
+            return Ok(());
+        }
 
         let mut command_data = {
             let options = options.read().unwrap();
+            let device = DeviceAndProp {
+                name: device_name.to_string(),
+                prop: device_prop.to_string(),
+            };
             FrameProcessCommandData {
                 mode_type:       mode_data.mode.get_type(),
-                camera:          device_name.to_string(),
+                camera:          device,
                 flags:           ProcessImageFlags::empty(),
                 blob:            Arc::clone(blob),
                 frame:           Arc::clone(&cur_frame),
@@ -421,25 +510,26 @@ impl State {
 
     fn restart_camera_exposure(
         indi:      &Arc<indi_api::Connection>,
-        mode_data: &Arc<RwLock<ModeData>>
+        mode_data: &Arc<RwLock<ModeData>>,
     ) -> anyhow::Result<()> {
         let mode_data = mode_data.read().unwrap();
         let Some(cam_device) = mode_data.mode.cam_device() else { return Ok(()); };
         let Some(cur_exposure) = mode_data.mode.get_cur_exposure() else { return Ok(()); };
-        indi.camera_abort_exposure(cam_device)?;
-        if indi.camera_is_fast_toggle_supported(cam_device)?
-        && indi.camera_is_fast_toggle_enabled(cam_device)? {
+        let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&cam_device.prop);
+        indi.camera_abort_exposure(&cam_device.name, cam_ccd)?;
+        if indi.camera_is_fast_toggle_supported(&cam_device.name)?
+        && indi.camera_is_fast_toggle_enabled(&cam_device.name)? {
             let prop_info = indi.camera_get_fast_frames_count_prop_info(
-                cam_device
+                &cam_device.name,
             ).unwrap();
             indi.camera_set_fast_frames_count(
-                cam_device,
+                &cam_device.name,
                 prop_info.max as usize,
                 true,
                 SET_PROP_TIMEOUT,
             )?;
         }
-        indi.camera_start_exposure(cam_device, cur_exposure)?;
+        indi.camera_start_exposure(&cam_device.name, cam_ccd, cur_exposure)?;
         log::error!("Camera exposure restarted!");
         Ok(())
     }
@@ -627,7 +717,7 @@ impl State {
 
     pub fn notify_about_light_frame_info(
         &self,
-        info: &LightImageInfo
+        info: &LightFrameInfo
     ) {
         let result = || -> anyhow::Result<()> {
             let mut mode_data = self.mode_data.write().unwrap();
@@ -645,19 +735,6 @@ impl State {
         let result = || -> anyhow::Result<()> {
             let mut mode_data = self.mode_data.write().unwrap();
             let result = mode_data.mode.notify_about_frame_processing_finished(frame_is_ok)?;
-            Self::apply_change_result(result, &mut mode_data, &self.indi, &self.options, &self.subscribers)?;
-            Ok(())
-        } ();
-        Self::process_error(result, &self.mode_data, &self.subscribers, &self.exp_stuck_wd);
-    }
-
-    pub fn notify_about_light_short_info(
-        &self,
-        info: &LightFrameShortInfo
-    ) {
-        let result = || -> anyhow::Result<()> {
-            let mut mode_data = self.mode_data.write().unwrap();
-            let result = mode_data.mode.notify_about_light_short_info(info)?;
             Self::apply_change_result(result, &mut mode_data, &self.indi, &self.options, &self.subscribers)?;
             Ok(())
         } ();
@@ -747,29 +824,29 @@ impl Drop for State {
 fn start_taking_shots(
     indi:         &indi_api::Connection,
     frame:        &FrameOptions,
-    camera_name:  &str,
+    device:       &DeviceAndProp,
     continuously: bool,
 ) -> anyhow::Result<()> {
     indi.command_enable_blob(
-        camera_name,
+        &device.name,
         None,
         indi_api::BlobEnable::Also
     )?;
-    if indi.camera_is_fast_toggle_supported(camera_name)? {
+    if indi.camera_is_fast_toggle_supported(&device.name,)? {
         let use_fast_toggle =
             continuously && !frame.have_to_use_delay();
         indi.camera_enable_fast_toggle(
-            camera_name,
+            &device.name,
             use_fast_toggle,
             true,
             SET_PROP_TIMEOUT,
         )?;
         if use_fast_toggle {
             let prop_info = indi.camera_get_fast_frames_count_prop_info(
-                camera_name
+                &device.name,
             )?;
             indi.camera_set_fast_frames_count(
-                camera_name,
+                &device.name,
                 prop_info.max as usize,
                 true,
                 SET_PROP_TIMEOUT,
@@ -778,7 +855,7 @@ fn start_taking_shots(
     }
     apply_camera_options_and_take_shot(
         indi,
-        camera_name,
+        device,
         frame
     )?;
     Ok(())
@@ -786,29 +863,33 @@ fn start_taking_shots(
 
 fn apply_camera_options_and_take_shot(
     indi:        &indi_api::Connection,
-    camera_name: &str,
-    frame:       &FrameOptions
+    device:      &DeviceAndProp,
+    frame:       &FrameOptions,
 ) -> anyhow::Result<()> {
+    let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&device.prop);
+
     // Polling period
-    if indi.device_is_polling_period_supported(camera_name)? {
-        indi.device_set_polling_period(camera_name, 500, true, None)?;
+    if indi.device_is_polling_period_supported(&device.name)? {
+        indi.device_set_polling_period(&device.name, 500, true, None)?;
     }
 
     // Frame type
     indi.camera_set_frame_type(
-        camera_name,
+        &device.name,
+        cam_ccd,
         frame.frame_type.to_indi_frame_type(),
         true,
         SET_PROP_TIMEOUT
     )?;
 
     // Frame size
-    if indi.camera_is_frame_supported(camera_name)? {
-        let (width, height) = indi.camera_get_max_frame_size(camera_name)?;
+    if indi.camera_is_frame_supported(&device.name, cam_ccd)? {
+        let (width, height) = indi.camera_get_max_frame_size(&device.name, cam_ccd)?;
         let crop_width = frame.crop.translate(width);
         let crop_height = frame.crop.translate(height);
         indi.camera_set_frame_size(
-            camera_name,
+            &device.name,
+            cam_ccd,
             (width - crop_width) / 2,
             (height - crop_height) / 2,
             crop_width,
@@ -818,11 +899,11 @@ fn apply_camera_options_and_take_shot(
         )?;
     }
 
-    // Binning mode = AVG
-    if indi.camera_is_binning_mode_supported(camera_name)?
+    // Make binning mode is alwais AVG (if camera supports it)
+    if indi.camera_is_binning_mode_supported(&device.name, cam_ccd)?
     && frame.binning != Binning::Orig {
         indi.camera_set_binning_mode(
-            camera_name,
+            &device.name,
             indi_api::BinningMode::Avg,
             true,
             SET_PROP_TIMEOUT
@@ -830,9 +911,10 @@ fn apply_camera_options_and_take_shot(
     }
 
     // Binning
-    if indi.camera_is_binning_supported(camera_name)? {
+    if indi.camera_is_binning_supported(&device.name, cam_ccd)? {
         indi.camera_set_binning(
-            camera_name,
+            &device.name,
+            cam_ccd,
             frame.binning.get_ratio(),
             frame.binning.get_ratio(),
             true,
@@ -841,9 +923,9 @@ fn apply_camera_options_and_take_shot(
     }
 
     // Gain
-    if indi.camera_is_gain_supported(camera_name)? {
+    if indi.camera_is_gain_supported(&device.name)? {
         indi.camera_set_gain(
-            camera_name,
+            &device.name,
             frame.gain,
             true,
             SET_PROP_TIMEOUT
@@ -851,9 +933,9 @@ fn apply_camera_options_and_take_shot(
     }
 
     // Offset
-    if indi.camera_is_offset_supported(camera_name)? {
+    if indi.camera_is_offset_supported(&device.name)? {
         indi.camera_set_offset(
-            camera_name,
+            &device.name,
             frame.offset as f64,
             true,
             SET_PROP_TIMEOUT
@@ -861,9 +943,9 @@ fn apply_camera_options_and_take_shot(
     }
 
     // Low noise mode
-    if indi.camera_is_low_noise_ctrl_supported(camera_name)? {
+    if indi.camera_is_low_noise_ctrl_supported(&device.name)? {
         indi.camera_control_low_noise(
-            camera_name,
+            &device.name,
             frame.low_noise,
             true,
             SET_PROP_TIMEOUT
@@ -871,9 +953,9 @@ fn apply_camera_options_and_take_shot(
     }
 
     // Capture format = RAW
-    if indi.camera_is_capture_format_supported(camera_name)? {
+    if indi.camera_is_capture_format_supported(&device.name)? {
         indi.camera_set_capture_format(
-            camera_name,
+            &device.name,
             indi_api::CaptureFormat::Raw,
             true,
             SET_PROP_TIMEOUT
@@ -881,7 +963,7 @@ fn apply_camera_options_and_take_shot(
     }
 
     // Start exposure
-    indi.camera_start_exposure(camera_name, frame.exposure())?;
+    indi.camera_start_exposure(&device.name, cam_ccd, frame.exposure())?;
 
     Ok(())
 }
@@ -1035,7 +1117,7 @@ enum CamState {
 struct TackingFramesMode {
     cam_mode:      CamMode,
     state:         CamState,
-    device:        String,
+    device:        DeviceAndProp,
     mount_device:  String,
     fn_gen:        Arc<Mutex<SeqFileNameGen>>,
     indi:          Arc<indi_api::Connection>,
@@ -1045,7 +1127,7 @@ struct TackingFramesMode {
     frame_options: FrameOptions,
     focus_options: Option<FocuserOptions>,
     guid_options:  Option<SimpleGuidingOptions>,
-    ref_stars:     Option<Arc<RwLock<Option<Vec<Point>>>>>,
+    ref_stars:     Option<Arc<Mutex<Option<Vec<Point>>>>>,
     progress:      Option<Progress>,
     cur_exposure:  f64,
     exp_sum:       f64,
@@ -1145,7 +1227,11 @@ impl TackingFramesMode {
         let now_date_str = Utc::now().format("%Y-%m-%d").to_string();
         let options = self.options.read().unwrap();
         let bin = options.cam.frame.binning.get_ratio();
-        let (width, height) = self.indi.camera_get_max_frame_size(&self.device).unwrap_or((0, 0));
+        let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&self.device.prop);
+        let (width, height) =
+            self.indi
+                .camera_get_max_frame_size(&self.device.name, cam_ccd)
+                .unwrap_or((0, 0));
         let cropped_width = options.cam.frame.crop.translate(width/bin);
         let cropped_height = options.cam.frame.crop.translate(height/bin);
         let exp_to_str = |exp: f64| {
@@ -1175,7 +1261,9 @@ impl TackingFramesMode {
             FrameType::Darks => "dark",
             FrameType::Biases => "bias",
         };
-        let cam_cooler_supported = self.indi.camera_is_cooler_supported(&self.device).unwrap_or(false);
+        let cam_cooler_supported = self.indi
+            .camera_is_cooler_supported(&self.device.name)
+            .unwrap_or(false);
         let temp_path = if cam_cooler_supported && options.cam.ctrl.enable_cooler {
             Some(format!("{:+.0}C", options.cam.ctrl.temperature))
         } else {
@@ -1270,8 +1358,8 @@ impl Mode for TackingFramesMode {
         mode_str
     }
 
-    fn cam_device(&self) -> Option<&str> {
-        Some(self.device.as_str())
+    fn cam_device(&self) -> Option<&DeviceAndProp> {
+        Some(&self.device)
     }
 
     fn progress(&self) -> Option<Progress> {
@@ -1303,7 +1391,7 @@ impl Mode for TackingFramesMode {
         self.correct_options_before_start();
         self.update_options_copies();
         if let Some(ref_stars) = &mut self.ref_stars {
-            let mut ref_stars = ref_stars.write().unwrap();
+            let mut ref_stars = ref_stars.lock().unwrap();
             *ref_stars = None;
         }
         if let Some(live_stacking) = &mut self.live_stacking {
@@ -1320,7 +1408,8 @@ impl Mode for TackingFramesMode {
     }
 
     fn abort(&mut self) -> anyhow::Result<()> {
-        self.indi.camera_abort_exposure(&self.device)?;
+        let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&self.device.prop);
+        self.indi.camera_abort_exposure(&self.device.name, cam_ccd)?;
         Ok(())
     }
 
@@ -1352,7 +1441,8 @@ impl Mode for TackingFramesMode {
         &mut self,
         event: &indi_api::BlobStartEvent
     ) -> anyhow::Result<()> {
-        if event.device_name != self.device {
+        if event.device_name != self.device.name
+        || event.prop_name != self.device.prop {
             return Ok(());
         }
         match (&self.cam_mode, &self.frame_options.frame_type) {
@@ -1367,8 +1457,8 @@ impl Mode for TackingFramesMode {
             self.frame_options = options.cam.frame.clone();
         }
         let fast_mode_enabled =
-            self.indi.camera_is_fast_toggle_supported(&self.device).unwrap_or(false) &&
-            self.indi.camera_is_fast_toggle_enabled(&self.device).unwrap_or(false);
+            self.indi.camera_is_fast_toggle_supported(&self.device.name).unwrap_or(false) &&
+            self.indi.camera_is_fast_toggle_enabled(&self.device.name).unwrap_or(false);
         if !fast_mode_enabled {
             self.cur_exposure = self.frame_options.exposure();
             if !self.frame_options.have_to_use_delay() {
@@ -1384,11 +1474,7 @@ impl Mode for TackingFramesMode {
 
                 if let Some(thread_timer) = &self.timer {
                     thread_timer.exec((frame.delay * 1000.0) as u32, false, move || {
-                        let res = apply_camera_options_and_take_shot(
-                            &indi,
-                            &camera,
-                            &frame
-                        );
+                        let res = apply_camera_options_and_take_shot(&indi, &camera, &frame);
                         if let Err(err) = res {
                             log::error!("{} during trying start next shot", err.to_string());
                             // TODO: show error!!!
@@ -1403,8 +1489,8 @@ impl Mode for TackingFramesMode {
     fn notify_about_frame_processing_started(&mut self) -> anyhow::Result<()> {
         if let Some(progress) = &mut self.progress {
             if progress.cur+1 == progress.total &&
-            self.indi.camera_is_fast_toggle_enabled(&self.device)? {
-                self.indi.camera_abort_exposure(&self.device)?;
+            self.indi.camera_is_fast_toggle_enabled(&self.device.name)? {
+                self.abort()?;
             }
         }
         Ok(())
@@ -1412,10 +1498,12 @@ impl Mode for TackingFramesMode {
 
     fn notify_about_light_frame_info(
         &mut self,
-        info:         &LightImageInfo,
+        info:         &LightFrameInfo,
         _subscribers: &Arc<RwLock<Subscribers>>
     ) -> anyhow::Result<NotifyResult> {
-        if !info.is_ok() { return Ok(NotifyResult::Empty); }
+        let mut result = NotifyResult::Empty;
+
+        if !info.is_ok() { return Ok(result); }
         let mount_device_active = self.indi.is_device_enabled(&self.mount_device).unwrap_or(false);
 
         if let Some(guid_options) = &self.guid_options { // Guiding and dithering
@@ -1448,18 +1536,7 @@ impl Mode for TackingFramesMode {
                 return Ok(NotifyResult::StartFocusing);
             }
         }
-        Ok(NotifyResult::Empty)
-    }
 
-    fn notify_about_light_short_info(
-        &mut self,
-        info: &LightFrameShortInfo
-    ) -> anyhow::Result<NotifyResult> {
-        let mut result = NotifyResult::Empty;
-        if info.flags.contains(LightFrameShortInfoFlags::BAD_STARS_FWHM)
-        || info.flags.contains(LightFrameShortInfoFlags::BAD_STARS_OVAL) {
-            return Ok(result);
-        }
         let mount_device_active = self.indi.is_device_enabled(&self.mount_device).unwrap_or(false);
         if self.state == CamState::Usual && mount_device_active {
             let mut move_offset = None;
@@ -1484,8 +1561,9 @@ impl Mode for TackingFramesMode {
                         dithering_flag = true;
                     }
                 }
-                if let (Some(mut offset_x), Some(mut offset_y), true)
-                = (info.offset_x, info.offset_y, guid_options.enabled) { // guiding
+                if let (Some(offset), true) = (&info.stars_offset, guid_options.enabled) { // guiding
+                    let mut offset_x = offset.x;
+                    let mut offset_y = offset.y;
                     offset_x -= guid_data.dither_x;
                     offset_y -= guid_data.dither_y;
                     let diff_dist = f64::sqrt(offset_x * offset_x + offset_y * offset_y);
@@ -1514,7 +1592,7 @@ impl Mode for TackingFramesMode {
                         guid_data.cur_timed_guide_s = 0.0;
                         guid_data.cur_timed_guide_w = 0.0;
                         guid_data.cur_timed_guide_e = 0.0;
-                        self.indi.camera_abort_exposure(&self.device)?;
+                        self.abort()?;
                         let can_set_guide_rate =
                             self.indi.mount_is_guide_rate_supported(&self.mount_device)? &&
                             self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.perm == indi_api::PropPerm::RW;
@@ -1544,6 +1622,7 @@ impl Mode for TackingFramesMode {
                 }
             }
         }
+
         Ok(result)
     }
 
@@ -1561,7 +1640,8 @@ impl Mode for TackingFramesMode {
                 result = NotifyResult::ProgressChanges;
             }
             if progress.cur == progress.total {
-                self.indi.camera_abort_exposure(&self.device)?;
+                let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&self.device.prop);
+                self.indi.camera_abort_exposure(&self.device.name, cam_ccd)?;
                 result = NotifyResult::Finished { next_mode: None };
             } else {
                 let have_shart_new_shot = match (&self.cam_mode, &self.frame_options.frame_type) {
@@ -1670,7 +1750,7 @@ enum FocusingStage {
 struct FocusingMode {
     indi:       Arc<indi_api::Connection>,
     state:      FocusingState,
-    camera:     String,
+    camera:     DeviceAndProp,
     options:    FocuserOptions,
     frame:      FrameOptions,
     before_pos: f64,
@@ -1790,8 +1870,8 @@ impl Mode for FocusingMode {
         }
     }
 
-    fn cam_device(&self) -> Option<&str> {
-        Some(self.camera.as_str())
+    fn cam_device(&self) -> Option<&DeviceAndProp> {
+        Some(&self.camera)
     }
 
     fn progress(&self) -> Option<Progress> {
@@ -1817,7 +1897,8 @@ impl Mode for FocusingMode {
     }
 
     fn abort(&mut self) -> anyhow::Result<()> {
-        self.indi.camera_abort_exposure(&self.camera)?;
+        let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&self.camera.prop);
+        self.indi.camera_abort_exposure(&self.camera.name, cam_ccd)?;
         self.indi.focuser_set_abs_value(&self.options.device, self.before_pos, true, None)?;
         Ok(())
     }
@@ -1875,7 +1956,7 @@ impl Mode for FocusingMode {
 
     fn notify_about_light_frame_info(
         &mut self,
-        info:        &LightImageInfo,
+        info:        &LightFrameInfo,
         subscribers: &Arc<RwLock<Subscribers>>,
     ) -> anyhow::Result<NotifyResult> {
         let subscribers = subscribers.read().unwrap();
@@ -2045,7 +2126,7 @@ struct MountCalibrMode {
     start_dec:         f64,
     start_ra:          f64,
     mount_device:      String,
-    camera_device:     String,
+    camera:            DeviceAndProp,
     attempt_num:       usize,
     attempts:          Vec<DitherCalibrAtempt>,
     cur_timed_guide_n: f64,
@@ -2100,7 +2181,7 @@ impl MountCalibrMode {
             start_dec:         0.0,
             start_ra:          0.0,
             mount_device:      opts.mount.device.clone(),
-            camera_device:     opts.cam.device.clone(),
+            camera:            opts.cam.device.clone(),
             attempt_num:       0,
             attempts:          Vec::new(),
             cur_timed_guide_n: 0.0,
@@ -2123,7 +2204,7 @@ impl MountCalibrMode {
         start_taking_shots(
             &self.indi,
             &self.frame,
-            &self.camera_device,
+            &self.camera,
             false
         )?;
 
@@ -2241,8 +2322,8 @@ impl Mode for MountCalibrMode {
         self.next_mode.take()
     }
 
-    fn cam_device(&self) -> Option<&str> {
-        Some(self.camera_device.as_str())
+    fn cam_device(&self) -> Option<&DeviceAndProp> {
+        Some(&self.camera)
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
@@ -2265,15 +2346,16 @@ impl Mode for MountCalibrMode {
 
     fn notify_about_light_frame_info(
         &mut self,
-        info:         &LightImageInfo,
+        info:         &LightFrameInfo,
         _subscribers: &Arc<RwLock<Subscribers>>,
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
-        if info.stars_fwhm_good && info.stars_ovality_good {
+        if info.good_fwhm && info.good_ovality {
             if self.image_width == 0 || self.image_height == 0 {
                 self.image_width = info.width;
                 self.image_height = info.height;
-                if let Ok((pix_size_x, pix_size_y)) = self.indi.camera_get_pixel_size(&self.camera_device) {
+                let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&self.camera.prop);
+                if let Ok((pix_size_x, pix_size_y)) = self.indi.camera_get_pixel_size(&self.camera.name, cam_ccd) {
                     let min_size = f64::min(info.width as f64, info.height as f64);
                     let min_pix_size = f64::min(pix_size_x, pix_size_y);
                     let cam_size_mm = min_size * min_pix_size / 1000.0;
@@ -2320,7 +2402,7 @@ impl Mode for MountCalibrMode {
             start_taking_shots(
                 &self.indi,
                 &self.frame,
-                &self.camera_device,
+                &self.camera,
                 false
             )?;
         }
@@ -2352,7 +2434,7 @@ impl Mode for MountCalibrMode {
                         start_taking_shots(
                             &self.indi,
                             &self.frame,
-                            &self.camera_device,
+                            &self.camera,
                             false
                         )?;
                         self.state = DitherCalibrState::WaitForImage;

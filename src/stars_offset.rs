@@ -14,7 +14,7 @@ impl Point {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Offset {
     pub x:     f64,
     pub y:     f64,

@@ -624,7 +624,7 @@
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
                                 <property name="halign">start</property>
-                                <property name="label" translatable="yes">Status</property>
+                                <property name="label" translatable="yes">---</property>
                                 <property name="wrap">True</property>
                                 <property name="max-width-chars">30</property>
                               </object>
@@ -638,7 +638,7 @@
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
                                 <property name="halign">start</property>
-                                <property name="label" translatable="yes">Status</property>
+                                <property name="label" translatable="yes">---</property>
                                 <property name="wrap">True</property>
                                 <property name="max-width-chars">30</property>
                               </object>

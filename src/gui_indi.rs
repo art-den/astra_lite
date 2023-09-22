@@ -1,5 +1,5 @@
 use std::{sync::Arc, time::Duration, cell::RefCell, rc::Rc};
-use gtk::{prelude::*, glib};
+use gtk::{prelude::*, glib, glib::clone};
 use itertools::{Itertools, izip};
 use crate::{indi_api, sexagesimal::*};
 
@@ -37,7 +37,7 @@ impl IndiGui {
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
 
-        let (sender, receiver) = glib::MainContext::channel(glib::PRIORITY_DEFAULT);
+        let (sender, receiver) = glib::MainContext::channel(glib::Priority::DEFAULT);
 
         let indi_conn = indi.subscribe_events(move |evt| {
             sender.send(evt).unwrap();
@@ -52,45 +52,42 @@ impl IndiGui {
             last_change_cnt: 0,
         }));
 
-        let data_weak = Rc::downgrade(&data);
-        receiver.attach(None, move |event| {
-            let Some(data) = data_weak.upgrade() else {
-                return Continue(false);
-            };
-            let mut data = data.borrow_mut();
-            match event {
-                indi_api::Event::ConnChange(_) |
-                indi_api::Event::DeviceDelete(_) =>
-                    data.list_changed = true,
-                indi_api::Event::PropChange(pch) =>
-                    match pch.change {
-                        indi_api::PropChange::New(_) |
-                        indi_api::PropChange::Delete =>
-                            data.list_changed = true,
-                        indi_api::PropChange::Change{..} =>
-                            data.prop_changed = true,
-                    },
-                _ =>
-                    {},
-            };
-            Continue(true)
-        });
+        receiver.attach(None,
+            clone!(@weak data => @default-return glib::ControlFlow::Break,
+            move |event| {
+                let mut data = data.borrow_mut();
+                match event {
+                    indi_api::Event::ConnChange(_) |
+                    indi_api::Event::DeviceDelete(_) =>
+                        data.list_changed = true,
+                    indi_api::Event::PropChange(pch) =>
+                        match pch.change {
+                            indi_api::PropChange::New(_) |
+                            indi_api::PropChange::Delete =>
+                                data.list_changed = true,
+                            indi_api::PropChange::Change{..} =>
+                                data.prop_changed = true,
+                        },
+                    _ =>
+                        {},
+                };
+                glib::ControlFlow::Continue
+            })
+        );
 
-        let data_weak = Rc::downgrade(&data);
-        let indi_clone = Arc::clone(indi);
         glib::timeout_add_local(
             Duration::from_millis(200),
+            clone!(@weak data, @weak indi => @default-return glib::ControlFlow::Break,
             move || {
-                let Some(data) = data_weak.upgrade() else { return Continue(false); };
                 let mut data = data.borrow_mut();
                 if data.prop_changed || data.list_changed {
                     let list_changed = data.list_changed;
                     data.prop_changed = false;
                     data.list_changed = false;
-                    Self::show_all_props(&indi_clone, &mut data, list_changed);
+                    Self::show_all_props(&indi, &mut data, list_changed);
                 }
-                Continue(true)
-            }
+                glib::ControlFlow::Continue
+            })
         );
 
         Self {
@@ -557,7 +554,7 @@ impl IndiGui {
                             let value = spin.adjustment().value();
                             let text = num_format.value_to_string(value);
                             spin.set_text(&text);
-                            gtk::Inhibit(true)
+                            glib::Propagation::Stop
                         });
                     },
                     _ => {

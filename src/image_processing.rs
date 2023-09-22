@@ -1,7 +1,7 @@
 use std::{sync::Arc, sync::{mpsc, RwLock, Mutex}, thread::JoinHandle, path::*, io::Cursor};
 
 use bitflags::bitflags;
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local};
 
 use crate::{
     indi_api,
@@ -16,7 +16,7 @@ use crate::{
 
 pub enum ResultImageInfo {
     None,
-    LightInfo(LightImageInfo),
+    LightInfo(Arc<LightFrameInfo>),
     FlatInfo(FlatImageInfo),
     RawInfo(RawImageStat),
 }
@@ -133,11 +133,11 @@ bitflags! {
 
 pub struct FrameProcessCommandData {
     pub mode_type:       ModeType,
-    pub camera:          String,
+    pub camera:          DeviceAndProp,
     pub flags:           ProcessImageFlags,
     pub blob:            Arc<indi_api::BlobPropValue>,
     pub frame:           Arc<ResultImage>,
-    pub ref_stars:       Arc<RwLock<Option<Vec<Point>>>>,
+    pub ref_stars:       Arc<Mutex<Option<Vec<Point>>>>,
     pub calibr_params:   CalibrParams,
     pub calibr_images:   Arc<Mutex<CalibrImages>>,
     pub fn_gen:          Option<Arc<Mutex<SeqFileNameGen>>>,
@@ -156,32 +156,6 @@ pub struct Preview8BitImgData {
     pub params:       PreviewParams,
 }
 
-bitflags! {
-    #[derive(Default)]
-    pub struct LightFrameShortInfoFlags: u32 {
-        const BAD_STARS_FWHM = 1;
-        const BAD_STARS_OVAL = 2;
-        const BAD_OFFSET     = 4;
-    }
-}
-
-#[derive(Default, Debug, Clone)]
-pub struct LightFrameShortInfo {
-    pub width:          usize,
-    pub height:         usize,
-    pub time:           DateTime<Utc>,
-    pub exposure:       f64,
-    pub stars_fwhm:     Option<f32>,
-    pub stars_ovality:  Option<f32>,
-    pub stars_count:    usize,
-    pub noise:          Option<f32>, // %
-    pub background:     f32, // %
-    pub offset_x:       Option<f64>,
-    pub offset_y:       Option<f64>,
-    pub angle:          Option<f64>,
-    pub flags:          LightFrameShortInfoFlags,
-}
-
 pub enum FrameProcessResultData {
     Error(String),
     ShotProcessingStarted(ModeType),
@@ -191,9 +165,9 @@ pub enum FrameProcessResultData {
         process_time: f64, // in seconds
         blob_dl_time: f64, // in seconds
     },
-    LightShortInfo(LightFrameShortInfo, ModeType),
     PreviewFrame(Preview8BitImgData, ModeType),
     PreviewLiveRes(Preview8BitImgData, ModeType),
+    LightFrameInfo(Arc<LightFrameInfo>, ModeType),
     FrameInfo(ModeType),
     FrameInfoLiveRes(ModeType),
     Histogram(ModeType),
@@ -205,7 +179,7 @@ pub enum FrameProcessResultData {
 }
 
 pub struct FrameProcessResult {
-    pub camera: String,
+    pub camera: DeviceAndProp,
     pub data:   FrameProcessResultData,
 }
 
@@ -458,12 +432,12 @@ fn apply_calibr_data_and_remove_hot_pixels(
 
 fn send_result(
     data:       FrameProcessResultData,
-    camera:     &str,
+    camera:     &DeviceAndProp,
     result_fun: &ResultFun
 ) {
     let result = FrameProcessResult {
         data,
-        camera: camera.to_string(),
+        camera: camera.clone(),
     };
     result_fun(result);
 }
@@ -686,83 +660,67 @@ fn make_preview_image_impl(
         .and_then(|qo| if qo.use_max_ovality { Some(qo.max_ovality) } else { None });
 
     let is_bad_frame = if frame_type == FrameType::Lights {
+        let mut ref_stars_lock = command.ref_stars.lock().unwrap();
+
+        let ref_stars = if command.flags.contains(ProcessImageFlags::CALC_STARS_OFFSET) {
+            ref_stars_lock.as_ref()
+        } else {
+            None
+        };
+
+        // Light frame information
+
         let tmr = TimeLogger::start();
-        let info = LightImageInfo::from_image(
+        let info = LightFrameInfo::from_image(
             &image,
             exposure,
+            raw_noise,
             max_stars_fwhm,
             max_stars_ovality,
-            true
+            ref_stars,
+            true,
         );
         tmr.log("TOTAL LightImageInfo::from_image");
 
-        let mut light_info = LightFrameShortInfo::default();
-        light_info.time = Utc::now();
-        light_info.exposure = exposure;
-        light_info.noise = raw_noise.map(|v| 100.0 * v / image.max_value() as f32);
-        light_info.background = 100.0 * info.background as f32 / image.max_value() as f32;
-        light_info.stars_fwhm = info.stars_fwhm;
-        light_info.stars_ovality = info.stars_ovality;
-        light_info.stars_count = info.stars.len();
-        light_info.width = info.width;
-        light_info.height = info.height;
+        // Store reference stars for first good light frame
 
-        // Check taken frame is good or bad
-
-        if !info.stars_fwhm_good {
-            light_info.flags |= LightFrameShortInfoFlags::BAD_STARS_FWHM;
-        }
-        if !info.stars_ovality_good {
-            light_info.flags |= LightFrameShortInfoFlags::BAD_STARS_OVAL;
-        }
-
-        let bad_frame = !info.stars_fwhm_good || !info.stars_ovality_good;
-
-        // Stars offset
-        if command.flags.contains(ProcessImageFlags::CALC_STARS_OFFSET) && !bad_frame {
-            // Compare reference stars and new stars
-            // and calculate offset and angle
-            let cur_stars_points: Vec<_> = info.stars.iter()
+        if command.flags.contains(ProcessImageFlags::CALC_STARS_OFFSET)
+        && info.is_ok()
+        && ref_stars_lock.is_none() {
+            *ref_stars_lock = Some(info.stars.iter()
                 .map(|star| Point {x: star.x, y: star.y })
-                .collect();
-
-            let ref_stars = command.ref_stars.read().unwrap();
-            let (angle, offset_x, offset_y) = if let Some(ref_stars) = &*ref_stars {
-                let tmr = TimeLogger::start();
-                let image_offset = Offset::calculate(
-                    ref_stars,
-                    &cur_stars_points,
-                    image.width() as f64,
-                    image.height() as f64
-                );
-                tmr.log("Offset::calculate");
-                if let Some(image_offset) = image_offset {
-                    (Some(image_offset.angle), Some(image_offset.x), Some(image_offset.y))
-                } else {
-                    light_info.flags |= LightFrameShortInfoFlags::BAD_OFFSET;
-                    (None, None, None)
-                }
-            } else {
-                drop(ref_stars);
-                let mut ref_stars = command.ref_stars.write().unwrap();
-                *ref_stars = Some(cur_stars_points);
-                (Some(0.0), Some(0.0), Some(0.0))
-            };
-
-            light_info.offset_x = offset_x;
-            light_info.offset_y = offset_y;
-            light_info.angle = angle;
+                .collect::<Vec<_>>());
         }
+
+        let info = Arc::new(info);
+
+        // Send message about light frame calculated
+
+        send_result(
+            FrameProcessResultData::LightFrameInfo(Arc::clone(&info), command.mode_type),
+            &command.camera,
+            result_fun
+        );
+
+        // Send message about light frame info stored
+
+        *command.frame.info.write().unwrap() = ResultImageInfo::LightInfo(Arc::clone(&info));
+        send_result(
+            FrameProcessResultData::FrameInfo(command.mode_type),
+            &command.camera,
+            result_fun
+        );
+
+        let bad_frame = !info.good_fwhm || !info.good_ovality;
 
         // Live stacking
 
         if let (Some(live_stacking), false) = (command.live_stacking.as_ref(), bad_frame) {
             // Translate/rotate image to reference image and add
-            if let (Some(offset_x), Some(offset_y), Some(angle))
-            = (light_info.offset_x, light_info.offset_y, light_info.angle) {
+            if let Some(offset) = &info.stars_offset {
                 let mut image_adder = live_stacking.data.adder.write().unwrap();
                 let tmr = TimeLogger::start();
-                image_adder.add(&image, &hist, -offset_x, -offset_y, -angle, exposure);
+                image_adder.add(&image, &hist, -offset.x, -offset.y, -offset.angle, exposure);
                 tmr.log("ImageAdder::add");
                 drop(image_adder);
 
@@ -800,17 +758,19 @@ fn make_preview_image_impl(
                 // Live stacking image info
 
                 let tmr = TimeLogger::start();
-                let live_stacking_info = LightImageInfo::from_image(
+                let live_stacking_info = LightFrameInfo::from_image(
                     &res_image,
                     image_adder.total_exposure(),
+                    None,
                     max_stars_fwhm,
                     max_stars_ovality,
-                    true
+                    None,
+                    true,
                 );
                 tmr.log("LightImageInfo::from_image for livestacking");
 
                 *live_stacking.data.info.write().unwrap() = ResultImageInfo::LightInfo(
-                    live_stacking_info
+                    Arc::new(live_stacking_info)
                 );
                 send_result(
                     FrameProcessResultData::FrameInfoLiveRes(command.mode_type),
@@ -870,23 +830,6 @@ fn make_preview_image_impl(
                 }
             }
         }
-
-        // Send message with short light frame info
-
-        send_result(
-            FrameProcessResultData::LightShortInfo(light_info, command.mode_type),
-            &command.camera,
-            result_fun
-        );
-
-        // Send message about light frame info stored
-
-        *command.frame.info.write().unwrap() = ResultImageInfo::LightInfo(info);
-        send_result(
-            FrameProcessResultData::FrameInfo(command.mode_type),
-            &command.camera,
-            result_fun
-        );
 
         bad_frame
     } else {

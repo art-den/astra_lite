@@ -1,4 +1,5 @@
 use std::{path::Path, collections::HashSet, fs::File};
+use chrono::prelude::*;
 use rayon::prelude::*;
 use itertools::{izip, Itertools};
 use serde::{Serialize, Deserialize};
@@ -95,14 +96,15 @@ impl FrameType {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RawImageInfo {
-    pub width: usize,
-    pub height: usize,
-    pub zero: i32,
-    pub max_value: u16,
-    pub cfa: CfaType,
-    pub bin: u8,
+    pub time:       Option<DateTime<Utc>>,
+    pub width:      usize,
+    pub height:     usize,
+    pub zero:       i32,
+    pub max_value:  u16,
+    pub cfa:        CfaType,
+    pub bin:        u8,
     pub frame_type: FrameType,
-    pub exposure: f64,
+    pub exposure:   f64,
 }
 
 pub struct RawImage {
@@ -132,6 +134,7 @@ impl RawImage {
         let mut offset = image_hdu.get_i64("OFFSET"  ).unwrap_or(0) as i32;
         let frame_str  = image_hdu.get_str("FRAME"   );
         let data       = image_hdu.read_data(&mut stream)?;
+        let time_str   = image_hdu.get_str("DATE-OBS").unwrap_or_default();
 
         if let (0, Some(config_offset)) = (offset, config_offset) {
             offset = config_offset;
@@ -148,8 +151,10 @@ impl RawImage {
             frame_str.as_deref().unwrap_or_default(),
             FrameType::Lights
         );
+        let time = Utc.datetime_from_str(time_str, "%Y-%m-%dT%H:%M:%S%.3f").ok();
 
         let info = RawImageInfo {
+            time,
             width,
             height,
             zero: offset,
@@ -202,15 +207,25 @@ impl RawImage {
         &mut self.data[pos..pos+self.info.width]
     }
 
+    #[inline(always)]
     fn get(&self, x: isize, y: isize) -> Option<u16> {
-        if x < 0 || y < 0 || x >= self.info.width as isize {
+        if x < 0
+        || y < 0
+        || x >= self.info.width as isize
+        || y >= self.info.height as isize {
             return None;
         }
-        self.data.get(y as usize * self.info.width + x as usize).copied()
+        Some(unsafe {
+            *self.data.get_unchecked(y as usize * self.info.width + x as usize)
+        })
     }
 
+    #[inline(always)]
     fn set(&mut self, x: isize, y: isize, value: u16) {
-        if x < 0 || y < 0 || x >= self.info.width as isize || y >= self.info.height as isize{
+        if x < 0
+        || y < 0
+        || x >= self.info.width as isize
+        || y >= self.info.height as isize {
             panic!(
                 "Wrong coords =({}, {}), image width = {}, image height = {}",
                 x, y, self.info.width, self.info.height,
@@ -689,6 +704,7 @@ impl RawImage {
             _ =>
                 self.demosaic_linear(mt, dst_img),
         }
+        dst_img.time = self.info.time;
     }
 
     pub fn copy_into_monochrome(&self, dst_img: &mut Image) {

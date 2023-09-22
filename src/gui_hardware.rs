@@ -119,7 +119,7 @@ pub fn build_ui(
         is_remote:     Cell::new(false),
         gui:           Rc::clone(gui),
         indi_gui,
-        window,
+        window:        window.clone(),
         self_:         RefCell::new(None),
     });
 
@@ -132,12 +132,12 @@ pub fn build_ui(
     let l_dev_list = data.builder.object::<gtk::Label>("l_dev_list").unwrap();
     l_dev_list.set_height_request(l_sel_dev_props.allocation().height());
 
-    gtk_utils::connect_action(&data.window, &data, "help_save_indi", handler_action_help_save_indi);
-    gtk_utils::connect_action(&data.window, &data, "conn_indi",      handler_action_conn_indi);
-    gtk_utils::connect_action(&data.window, &data, "disconn_indi",   handler_action_disconn_indi);
-    gtk_utils::connect_action(&data.window, &data, "conn_guid",      handler_action_conn_guider);
-    gtk_utils::connect_action(&data.window, &data, "disconn_guid",   handler_action_disconn_guider);
-    gtk_utils::connect_action(&data.window, &data, "clear_hw_log",   handler_action_clear_hw_log);
+    gtk_utils::connect_action(&window, &data, "help_save_indi", handler_action_help_save_indi);
+    gtk_utils::connect_action(&window, &data, "conn_indi",      handler_action_conn_indi);
+    gtk_utils::connect_action(&window, &data, "disconn_indi",   handler_action_disconn_indi);
+    gtk_utils::connect_action(&window, &data, "conn_guid",      handler_action_conn_guider);
+    gtk_utils::connect_action(&window, &data, "disconn_guid",   handler_action_disconn_guider);
+    gtk_utils::connect_action(&window, &data, "clear_hw_log",   handler_action_clear_hw_log);
 
     let chb_remote = data.builder.object::<gtk::CheckButton>("chb_remote").unwrap();
     chb_remote.connect_active_notify(clone!(@weak data => move |_| {
@@ -147,11 +147,14 @@ pub fn build_ui(
     connect_indi_events(&data);
     correct_widgets_by_cur_state(&data);
 
-    data.window.connect_delete_event(clone!(@weak data => @default-return gtk::Inhibit(false), move |_, _| {
-        let res = handler_close_window(&data);
-        *data.self_.borrow_mut() = None;
-        res
-    }));
+    window.connect_delete_event(
+        clone!(@weak data => @default-return glib::Propagation::Proceed,
+        move |_, _| {
+            let res = handler_close_window(&data);
+            *data.self_.borrow_mut() = None;
+            res
+        })
+    );
 
     let srch_indi_prop = data.builder.object::<gtk::SearchEntry>("srch_indi_prop").unwrap();
     srch_indi_prop.connect_search_changed(clone!(@weak data => move |entry| {
@@ -173,7 +176,7 @@ pub fn build_ui(
     }
 }
 
-fn handler_close_window(data: &Rc<HardwareData>) -> gtk::Inhibit {
+fn handler_close_window(data: &Rc<HardwareData>) -> glib::Propagation {
     if let Some(indi_conn) = data.indi_evt_conn.borrow_mut().take() {
         data.indi.unsubscribe(indi_conn);
     }
@@ -190,7 +193,7 @@ fn handler_close_window(data: &Rc<HardwareData>) -> gtk::Inhibit {
     _ = data.state.phd2().stop();
     log::info!("Done!");
 
-    gtk::Inhibit(false)
+    glib::Propagation::Proceed
 }
 
 fn correct_widgets_by_cur_state(data: &Rc<HardwareData>) {
@@ -248,7 +251,7 @@ fn correct_widgets_by_cur_state(data: &Rc<HardwareData>) {
 }
 
 fn connect_indi_events(data: &Rc<HardwareData>) {
-    let (sender, receiver) = glib::MainContext::channel(glib::PRIORITY_DEFAULT);
+    let (sender, receiver) = glib::MainContext::channel(glib::Priority::DEFAULT);
 
     // Connect INDI events
     let sender_clone = sender.clone();
@@ -264,7 +267,7 @@ fn connect_indi_events(data: &Rc<HardwareData>) {
 
     // Process incoming events in main thread
     receiver.attach(None,
-        clone!(@weak data => @default-return Continue(false),
+        clone!(@weak data => @default-return glib::ControlFlow::Break,
         move |event| {
             match event {
                 HardwareEvent::Indi(event) =>
@@ -272,7 +275,7 @@ fn connect_indi_events(data: &Rc<HardwareData>) {
                 HardwareEvent::Phd2(event) =>
                     process_phd2_event(&data, event),
             };
-            Continue(true)
+            glib::ControlFlow::Continue
         })
     );
 }
@@ -367,8 +370,10 @@ fn process_phd2_event(data: &Rc<HardwareData>, event: Phd2Event) {
             "Connecting...",
         Phd2Event::Connected =>
             "Connected",
-        _ =>
+        Phd2Event::Stopped =>
             "---",
+        _ =>
+            return,
     };
     let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
     ui.set_prop_str("lbl_phd2_status.label", Some(status_text));
@@ -430,14 +435,13 @@ fn handler_action_disconn_indi(data: &Rc<HardwareData>) {
             data.indi.command_enable_all_devices(false, true, Some(2000))?;
         }
         data.indi.disconnect_and_wait()?;
-
         Ok(())
     });
 }
 
 fn handler_action_conn_guider(data: &Rc<HardwareData>) {
     gtk_utils::exec_and_show_error(&data.window, || {
-        data.state.phd2().work("127.0.0.1", 4400)?;
+        data.state.connect_ext_guider()?;
         correct_widgets_by_cur_state(data);
         Ok(())
     });
@@ -445,7 +449,7 @@ fn handler_action_conn_guider(data: &Rc<HardwareData>) {
 
 fn handler_action_disconn_guider(data: &Rc<HardwareData>) {
     gtk_utils::exec_and_show_error(&data.window, || {
-        data.state.phd2().stop()?;
+        data.state.disconnect_ext_guider()?;
         correct_widgets_by_cur_state(data);
         Ok(())
     });

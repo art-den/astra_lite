@@ -1,5 +1,6 @@
 use std::{path::Path, io::{BufWriter, BufReader}, fs::File};
 
+use chrono::{DateTime, Utc};
 use itertools::*;
 use rayon::prelude::*;
 
@@ -65,18 +66,28 @@ impl<T: Copy + Default> ImageLayer<T> {
         &mut self.data[pos..pos+self.width]
     }
 
+    #[inline(always)]
     pub fn set(&mut self, x: isize, y: isize, value: T) {
-        if x < 0 || y < 0 || x >= self.width as isize || y >= self.height as isize {
+        if x < 0
+        || y < 0
+        || x >= self.width as isize
+        || y >= self.height as isize {
             panic!("Wrong coordinates: x={}, y={}", x, y);
         }
         self.data[(y as usize) * self.width + (x as usize)] = value;
     }
 
+    #[inline(always)]
     pub fn get(&self, x: isize, y: isize) -> Option<T> {
-        if x < 0 || y < 0 || x >= self.width as isize {
+        if x < 0
+        || y < 0
+        || x >= self.width as isize
+        || y >= self.height as isize {
             None
         } else {
-            self.data.get(x as usize + y as usize * self.width).copied()
+            Some(unsafe {
+                *self.data.get_unchecked(x as usize + y as usize * self.width)
+            })
         }
     }
 
@@ -302,6 +313,7 @@ pub struct Image {
     height: usize,
     zero: i32,
     max_value: u16,
+    pub time: Option<DateTime<Utc>>,
 }
 
 impl Image {
@@ -315,6 +327,7 @@ impl Image {
             height: 0,
             zero: 0,
             max_value: 0,
+            time: None,
         }
     }
 

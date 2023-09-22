@@ -161,11 +161,12 @@ pub fn build_ui(
     gtk::main_iteration_do(true);
     glib::timeout_add_local(
         Duration::from_millis(TIMER_PERIOD_MS),
-        clone!(@weak data => @default-return Continue(false), move || {
+        clone!(@weak data => @default-return glib::ControlFlow::Break,
+        move || {
             for handler in data.handlers.borrow().iter() {
                 handler(MainGuiEvent::Timer);
             }
-            Continue(true)
+            glib::ControlFlow::Continue
         }
     ));
 
@@ -196,7 +197,7 @@ pub fn build_ui(
     let da_progress = builder.object::<gtk::DrawingArea>("da_progress").unwrap();
     da_progress.connect_draw(clone!(@weak data => @default-panic, move |area, cr| {
         handler_draw_progress(&data, area, cr);
-        Inhibit(false)
+        glib::Propagation::Proceed
     }));
 
     let mi_normal_log_mode = builder.object::<gtk::RadioMenuItem>("mi_normal_log_mode").unwrap();
@@ -240,12 +241,15 @@ pub fn build_ui(
         btn_fullscreen.set_sensitive(enable_fullscreen);
     }));
 
-    window.connect_delete_event(clone!(@weak data => @default-return gtk::Inhibit(false), move |_, _| {
-        let res = handler_close_window(&data);
-        gtk::main_iteration_do(true);
-        *data.self_.borrow_mut() = None;
-        res
-    }));
+    window.connect_delete_event(
+        clone!(@weak data => @default-return glib::Propagation::Proceed,
+        move |_, _| {
+            let res = handler_close_window(&data);
+            gtk::main_iteration_do(true);
+            *data.self_.borrow_mut() = None;
+            res
+        })
+    );
 
     gtk_utils::connect_action(&window, &data, "stop",             handler_action_stop);
     gtk_utils::connect_action(&window, &data, "continue",         handler_action_continue);
@@ -258,35 +262,38 @@ pub fn build_ui(
 
 fn connect_state_events(data: &Rc<MainData>) {
     let (sender, receiver) =
-        glib::MainContext::channel(glib::PRIORITY_DEFAULT);
+        glib::MainContext::channel(glib::Priority::DEFAULT);
     data.state.subscribe_events(move |event| {
         sender.send(event).unwrap();
     });
-    receiver.attach(None, clone! (@weak data => @default-return Continue(false), move |event| {
-        match event {
-            StateEvent::ModeChanged => {
-                correct_widgets_props(&data);
-                show_mode_caption(&data);
-            },
-            StateEvent::Propress(progress) => {
-                *data.progress.borrow_mut() = progress;
-                let da_progress = data.builder.object::<gtk::DrawingArea>("da_progress").unwrap();
-                da_progress.queue_draw();
-            },
-            _ => {},
-        }
-        Continue(true)
-    }));
+    receiver.attach(None,
+        clone! (@weak data => @default-return glib::ControlFlow::Break,
+        move |event| {
+            match event {
+                StateEvent::ModeChanged => {
+                    correct_widgets_props(&data);
+                    show_mode_caption(&data);
+                },
+                StateEvent::Propress(progress) => {
+                    *data.progress.borrow_mut() = progress;
+                    let da_progress = data.builder.object::<gtk::DrawingArea>("da_progress").unwrap();
+                    da_progress.queue_draw();
+                },
+                _ => {},
+            }
+            glib::ControlFlow::Continue
+        })
+    );
 }
 
-fn handler_close_window(data: &Rc<MainData>) -> gtk::Inhibit {
+fn handler_close_window(data: &Rc<MainData>) -> glib::Propagation {
     read_options_from_widgets(data);
 
     let options = data.main_options.borrow();
     _ = save_json_to_config::<MainOptions>(&options, CONF_FN);
     drop(options);
 
-    gtk::Inhibit(false)
+    glib::Propagation::Proceed
 }
 
 fn apply_options(data: &Rc<MainData>) {
