@@ -8,17 +8,25 @@ pub const TIMER_PERIOD_MS: u64 = 250;
 const CONF_FN: &str = "gui_main";
 const OPTIONS_FN: &str = "options";
 
+#[derive(Clone)]
+pub enum TabPage {
+    Hardware,
+    SkyMap,
+    Camera,
+}
+
 pub enum MainGuiEvent {
     Timer,
     FullScreen(bool),
-    BeforeModeContinued
+    BeforeModeContinued,
+    TabPageChanged(TabPage),
 }
 
 pub type MainGuiHandlers = Vec<Box<dyn Fn(MainGuiEvent) + 'static>>;
 
-pub const TAB_HARDWARE: u32 = 0;
-pub const TAB_MAP:      u32 = 1;
-pub const TAB_CAMERA:   u32 = 2;
+const TAB_HARDWARE: u32 = 0;
+const TAB_MAP:      u32 = 1;
+const TAB_CAMERA:   u32 = 2;
 
 const CSS: &[u8] = b"
 .greenbutton {
@@ -239,6 +247,15 @@ pub fn build_ui(
             _                  => false
         };
         btn_fullscreen.set_sensitive(enable_fullscreen);
+        let tab = match page {
+            TAB_HARDWARE => TabPage::Hardware,
+            TAB_MAP      => TabPage::SkyMap,
+            TAB_CAMERA   => TabPage::Camera,
+            _ => unreachable!(),
+        };
+        for handler in data.handlers.borrow().iter() {
+            handler(MainGuiEvent::TabPageChanged(tab.clone()));
+        }
     }));
 
     window.connect_delete_event(

@@ -369,36 +369,6 @@ impl FocuserOptions {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
-// Options for guiding by main camera
-pub struct SimpleGuidingOptions {
-    pub enabled:         bool,
-    pub max_error:       f64,
-    pub dith_period:     u32, // in minutes, 0 - do not dither
-    pub dith_percent:    f64, // percent of image
-    pub calibr_exposure: f64,
-}
-
-impl Default for SimpleGuidingOptions {
-    fn default() -> Self {
-        Self {
-            enabled:         false,
-            max_error:       5.0,
-            dith_period:     0,
-            dith_percent:    5.0,
-            calibr_exposure: 2.0,
-        }
-    }
-}
-
-impl SimpleGuidingOptions {
-    pub fn is_used(&self) -> bool {
-        self.enabled ||
-        self.dith_period != 0
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
 pub struct MountOptions {
     pub device: String,
     pub inv_ns: bool,
@@ -466,23 +436,44 @@ impl Default for CamOptions {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
-#[serde(default)]
-pub struct Phd2Options {
-
-}
-
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
 pub enum GuidingMode {
     #[default]
     MainCamera,
     Phd2,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct Guiding {
-    pub mode: GuidingMode,
-    pub phd2: Phd2Options,
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
+pub struct GuidingOptions {
+    pub mode:                GuidingMode,
+    pub foc_len:             f64,
+    pub simp_guid_enabled:   bool, // by main camera
+    pub simp_guid_max_error: f64,  // by main camera
+    pub dith_period:         u32,  // in minutes, 0 - do not dither
+    pub dith_dist:           i32,  // in pixels
+    pub calibr_exposure:     f64,
+}
+
+impl GuidingOptions {
+    pub fn is_used(&self) -> bool {
+        self.simp_guid_enabled ||
+        self.dith_period != 0
+    }
+}
+
+impl Default for GuidingOptions {
+    fn default() -> Self {
+        Self {
+            mode: GuidingMode::MainCamera,
+            foc_len: 0.0,
+            simp_guid_enabled: false,
+            simp_guid_max_error: 3.0,
+            dith_period: 1,
+            dith_dist: 10,
+            calibr_exposure: 3.0,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -497,8 +488,7 @@ pub struct Options {
     pub preview:    PreviewOptions,
     pub hist:       HistOptions,
     pub focuser:    FocuserOptions,
-    pub simp_guide: SimpleGuidingOptions,
     pub mount:      MountOptions,
     pub telescope:  TelescopeOptions,
-    pub guiding:    Guiding,
+    pub guiding:    GuidingOptions,
 }

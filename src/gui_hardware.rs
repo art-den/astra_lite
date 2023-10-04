@@ -17,7 +17,7 @@ use crate::{
     gui_indi::*,
     state::State,
     options::*,
-    phd2_conn::*
+    phd2_conn,
 };
 
 impl indi_api::ConnState {
@@ -78,7 +78,7 @@ impl Drop for HardwareData {
 
 enum HardwareEvent {
     Indi(indi_api::Event),
-    Phd2(Phd2Event),
+    Phd2(phd2_conn::Event),
 }
 
 pub fn build_ui(
@@ -94,12 +94,17 @@ pub fn build_ui(
     let sidebar = builder.object("sdb_indi").unwrap();
     let stack = builder.object("stk_indi").unwrap();
 
-    let (drivers, load_drivers_err) = match indi_api::Drivers::new() {
-        Ok(drivers) =>
-            (drivers, None),
-        Err(err) =>
-            (indi_api::Drivers::new_empty(), Some(err.to_string())),
-    };
+    let (drivers, load_drivers_err) =
+        if cfg!(target_os = "windows") {
+            (indi_api::Drivers::new_empty(), None)
+        } else {
+            match indi_api::Drivers::new() {
+                Ok(drivers) =>
+                    (drivers, None),
+                Err(err) =>
+                    (indi_api::Drivers::new_empty(), Some(err.to_string())),
+            }
+        };
 
     if drivers.groups.is_empty() {
         let mut options = options.write().unwrap();
@@ -125,6 +130,7 @@ pub fn build_ui(
 
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
+    configure_widget_props(&data);
     fill_devices_name(&data);
     show_options(&data);
 
@@ -194,6 +200,23 @@ fn handler_close_window(data: &Rc<HardwareData>) -> glib::Propagation {
     log::info!("Done!");
 
     glib::Propagation::Proceed
+}
+
+fn configure_widget_props(data: &Rc<HardwareData>) {
+    let spb_foc_len = data.builder.object::<gtk::SpinButton>("spb_foc_len").unwrap();
+    spb_foc_len.set_range(10.0, 10_000.0);
+    spb_foc_len.set_digits(0);
+    spb_foc_len.set_increments(1.0, 10.0);
+
+    let spb_barlow = data.builder.object::<gtk::SpinButton>("spb_barlow").unwrap();
+    spb_barlow.set_range(0.1, 10.0);
+    spb_barlow.set_digits(2);
+    spb_barlow.set_increments(0.01, 0.1);
+
+    let spb_guid_foc_len = data.builder.object::<gtk::SpinButton>("spb_guid_foc_len").unwrap();
+    spb_guid_foc_len.set_range(0.0, 1000.0);
+    spb_guid_foc_len.set_digits(0);
+    spb_guid_foc_len.set_increments(1.0, 10.0);
 }
 
 fn correct_widgets_by_cur_state(data: &Rc<HardwareData>) {
@@ -363,14 +386,14 @@ fn process_indi_event(data: &Rc<HardwareData>, event: indi_api::Event) {
     }
 }
 
-fn process_phd2_event(data: &Rc<HardwareData>, event: Phd2Event) {
+fn process_phd2_event(data: &Rc<HardwareData>, event: phd2_conn::Event) {
     let status_text = match event {
-        Phd2Event::Started|
-        Phd2Event::Disconnected =>
+        phd2_conn::Event::Started|
+        phd2_conn::Event::Disconnected =>
             "Connecting...",
-        Phd2Event::Connected =>
+        phd2_conn::Event::Connected =>
             "Connected",
-        Phd2Event::Stopped =>
+        phd2_conn::Event::Stopped =>
             "---",
         _ =>
             return,
@@ -441,7 +464,8 @@ fn handler_action_disconn_indi(data: &Rc<HardwareData>) {
 
 fn handler_action_conn_guider(data: &Rc<HardwareData>) {
     gtk_utils::exec_and_show_error(&data.window, || {
-        data.state.connect_ext_guider()?;
+        read_options_from_widgets(data);
+        data.state.create_ext_guider()?;
         correct_widgets_by_cur_state(data);
         Ok(())
     });
@@ -505,14 +529,19 @@ fn show_options(data: &Rc<HardwareData>) {
     let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
     let options = data.options.read().unwrap();
 
+    ui.set_prop_f64("spb_foc_len.value", options.telescope.focal_len);
+    ui.set_prop_f64("spb_barlow.value",  options.telescope.barlow);
     ui.set_prop_bool("chb_remote.active", options.indi.remote);
     ui.set_prop_str("e_remote_addr.text", Some(&options.indi.address));
     ui.set_prop_str("ch_guide_mode.active-id", options.guiding.mode.to_active_id());
+    ui.set_prop_f64("spb_guid_foc_len.value", options.guiding.foc_len);
 }
 
 fn read_options_from_widgets(data: &Rc<HardwareData>) {
     let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
     let mut options = data.options.write().unwrap();
+    options.telescope.focal_len = ui.prop_f64("spb_foc_len.value");
+    options.telescope.barlow = ui.prop_f64("spb_barlow.value");
     options.indi.mount = ui.prop_string("cb_mount_drivers.active-id");
     options.indi.camera = ui.prop_string("cb_camera_drivers.active-id");
     options.indi.guid_cam = ui.prop_string("cb_guid_cam_drivers.active-id");
@@ -520,6 +549,7 @@ fn read_options_from_widgets(data: &Rc<HardwareData>) {
     options.indi.remote = ui.prop_bool("chb_remote.active");
     options.indi.address = ui.prop_string("e_remote_addr.text").unwrap_or_default();
     options.guiding.mode = GuidingMode::from_active_id(ui.prop_string("ch_guide_mode.active-id").as_deref());
+    options.guiding.foc_len = ui.prop_f64("spb_guid_foc_len.value");
 }
 
 fn add_log_record(

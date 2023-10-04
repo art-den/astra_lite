@@ -294,7 +294,7 @@ impl SwitchRule {
 
 pub enum BlobEnable { Never, Also, Only }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum CamCcd { Primary, Secondary }
 
 impl CamCcd {

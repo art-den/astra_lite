@@ -222,20 +222,13 @@ fn handler_main_gui_event(data: &Rc<CameraData>, event: MainGuiEvent) {
             handler_full_screen(&data, full_screen),
         MainGuiEvent::BeforeModeContinued =>
             read_options_from_widgets(data),
+        MainGuiEvent::TabPageChanged(TabPage::Camera) =>
+            correct_widgets_props(data),
+        MainGuiEvent::TabPageChanged(_) => {}
     }
 }
 
 fn configure_camera_widget_props(data: &Rc<CameraData>) {
-    let spb_foc_len = data.builder.object::<gtk::SpinButton>("spb_foc_len").unwrap();
-    spb_foc_len.set_range(10.0, 10_000.0);
-    spb_foc_len.set_digits(0);
-    spb_foc_len.set_increments(1.0, 10.0);
-
-    let spb_barlow = data.builder.object::<gtk::SpinButton>("spb_barlow").unwrap();
-    spb_barlow.set_range(0.1, 10.0);
-    spb_barlow.set_digits(2);
-    spb_barlow.set_increments(0.01, 0.1);
-
     let spb_temp = data.builder.object::<gtk::SpinButton>("spb_temp").unwrap();
     spb_temp.set_range(-1000.0, 1000.0);
 
@@ -288,6 +281,11 @@ fn configure_camera_widget_props(data: &Rc<CameraData>) {
     spb_max_oval.set_range(0.2, 2.0);
     spb_max_oval.set_digits(1);
     spb_max_oval.set_increments(0.1, 1.0);
+
+    let sb_dith_dist = data.builder.object::<gtk::SpinButton>("sb_dith_dist").unwrap();
+    sb_dith_dist.set_range(1.0, 200.0);
+    sb_dith_dist.set_digits(0);
+    sb_dith_dist.set_increments(1.0, 10.0);
 
     let l_temp_value = data.builder.object::<gtk::Label>("l_temp_value").unwrap();
     l_temp_value.set_text("");
@@ -771,7 +769,7 @@ fn connect_img_mouse_scroll_events(data: &Rc<CameraData>) {
         clone!(@weak data, @weak sw_preview_img => @default-return glib::Propagation::Proceed,
         move |_, evt| {
             const SCROLL_SPEED: f64 = 2.0;
-            if let Some((start_mouse_pos, start_scroll_pos)) = &*data.preview_scroll_pos.borrow() {
+            if let Some((start_mouse_pos, start_scroll_pos)) = *data.preview_scroll_pos.borrow() {
                 let new_pos = evt.root();
                 let move_x = new_pos.0 - start_mouse_pos.0;
                 let move_y = new_pos.1 - start_mouse_pos.1;
@@ -859,11 +857,6 @@ fn show_options(data: &Rc<CameraData>) {
         let options = data.options.read().unwrap();
         let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
 
-        // Telescope
-
-        ui.set_prop_f64("spb_foc_len.value", options.telescope.focal_len);
-        ui.set_prop_f64("spb_barlow.value",  options.telescope.barlow);
-
         // Camera
 
         ui.set_prop_bool("chb_shots_cont.active", options.cam.live_view);
@@ -932,11 +925,11 @@ fn show_options(data: &Rc<CameraData>) {
 
         // Simple guiding and dithering
 
-        ui.set_prop_str ("cb_dith_perod.active-id",    Some(options.simp_guide.dith_period.to_string().as_str()));
-        ui.set_prop_str ("cb_dith_distance.active-id", Some(format!("{:.0}", options.simp_guide.dith_percent * 10.0).as_str()));
-        ui.set_prop_bool("chb_guid_enabled.active",    options.simp_guide.enabled);
-        ui.set_prop_f64 ("spb_guid_max_err.value",     options.simp_guide.max_error);
-        ui.set_prop_f64 ("spb_mnt_cal_exp.value",      options.simp_guide.calibr_exposure);
+        ui.set_prop_str ("cb_dith_perod.active-id", Some(options.guiding.dith_period.to_string().as_str()));
+        ui.set_prop_f64 ("sb_dith_dist.value",      options.guiding.dith_dist as f64);
+        ui.set_prop_bool("chb_guid_enabled.active", options.guiding.simp_guid_enabled);
+        ui.set_prop_f64 ("spb_guid_max_err.value",  options.guiding.simp_guid_max_error);
+        ui.set_prop_f64 ("spb_mnt_cal_exp.value",   options.guiding.calibr_exposure);
 
         // Simple mount control
 
@@ -992,11 +985,6 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     let mut options = data.options.write().unwrap();
     let bld = &data.builder;
     let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
-
-    // Telescope
-
-    options.telescope.focal_len = ui.prop_f64("spb_foc_len.value");
-    options.telescope.barlow = ui.prop_f64("spb_barlow.value");
 
     // Camera
 
@@ -1082,13 +1070,13 @@ fn read_options_from_widgets(data: &Rc<CameraData>) {
     options.focuser.step            = ui.prop_f64("spb_foc_auto_step.value");
     options.focuser.exposure        = ui.prop_f64("spb_foc_exp.value");
 
-    // Simple guiding and dithering
+    // Guiding and dithering
 
-    options.simp_guide.dith_period     = ui.prop_string("cb_dith_perod.active-id").and_then(|v| v.parse().ok()).unwrap_or(0);
-    options.simp_guide.dith_percent    = ui.prop_string("cb_dith_distance.active-id").and_then(|v| v.parse().ok()).unwrap_or(10.0) / 10.0;
-    options.simp_guide.enabled         = ui.prop_bool("chb_guid_enabled.active");
-    options.simp_guide.max_error       = ui.prop_f64("spb_guid_max_err.value");
-    options.simp_guide.calibr_exposure = ui.prop_f64("spb_mnt_cal_exp.value");
+    options.guiding.dith_period         = ui.prop_string("cb_dith_perod.active-id").and_then(|v| v.parse().ok()).unwrap_or(0);
+    options.guiding.dith_dist           = ui.prop_f64("sb_dith_dist.value") as i32;
+    options.guiding.simp_guid_enabled   = ui.prop_bool("chb_guid_enabled.active");
+    options.guiding.simp_guid_max_error = ui.prop_f64("spb_guid_max_err.value");
+    options.guiding.calibr_exposure     = ui.prop_f64("spb_mnt_cal_exp.value");
 
     // Simple mount control
 
@@ -1129,6 +1117,8 @@ fn handler_delayed_action(data: &Rc<CameraData>, action: &DelayedActionTypes) {
     match action {
         DelayedActionTypes::UpdateCamList => {
             update_camera_devices_list(data);
+            update_resolution_list(data);
+            select_maximum_resolution(data);
             correct_widgets_props(data);
         }
         DelayedActionTypes::UpdateFocList => {
@@ -1331,6 +1321,14 @@ fn correct_widgets_props(data: &Rc<CameraData>) {
         };
         ui.set_prop_str("btn_start_save_raw.label", Some(save_raw_btn_cap));
 
+        let guiding_mode = data.options.read().unwrap().guiding.mode.clone();
+        let guiding_info_cap = match guiding_mode {
+            GuidingMode::MainCamera => "By main camera",
+            GuidingMode::Phd2 => "By PHD2 program",
+        };
+        ui.set_prop_str("l_guide_mode.label", Some(guiding_info_cap));
+        let can_guide_by_main_cam = guiding_mode == GuidingMode::MainCamera;
+
         let cam_active = data.indi
             .is_device_enabled(camera.map(|c| c.name.as_str()).unwrap_or(""))
             .unwrap_or(false);
@@ -1360,7 +1358,7 @@ fn correct_widgets_props(data: &Rc<CameraData>) {
             ("manual_focus",           exposure_supported && !focusing && can_change_mode),
             ("stop_manual_focus",      focusing),
 
-            ("start_dither_calibr",    exposure_supported && !dither_calibr && can_change_mode),
+            ("start_dither_calibr",    exposure_supported && !dither_calibr && can_change_mode && can_guide_by_main_cam),
             ("stop_dither_calibr",     dither_calibr),
         ]);
 
@@ -1413,6 +1411,12 @@ fn correct_widgets_props(data: &Rc<CameraData>) {
 
             ("l_delay",            liveview_active),
             ("spb_delay",          liveview_active),
+
+            ("l_hdr_guid_main_cam", can_guide_by_main_cam),
+            ("chb_guid_enabled",    can_guide_by_main_cam),
+            ("spb_guid_max_err",    can_guide_by_main_cam),
+            ("l_mnt_cal_exp",       can_guide_by_main_cam),
+            ("spb_mnt_cal_exp",     can_guide_by_main_cam),
         ]);
 
         Ok(())
@@ -1498,25 +1502,17 @@ fn fill_heater_items_list(data: &Rc<CameraData>) {
 }
 
 fn select_maximum_resolution(data: &Rc<CameraData>) {
-    gtk_utils::exec_and_show_error(&data.window, || {
-        let indi = &data.indi;
-        let devices = indi.get_devices_list();
-        let cameras = devices
-            .iter()
-            .filter(|device|
-                device.interface.contains(indi_api::DriverInterface::CCD)
-            );
-        for camera in cameras {
-            if indi.camera_is_resolution_supported(&camera.name)? {
-                indi.camera_select_max_resolution(
-                    &camera.name,
-                    true,
-                    None
-                )?;
-            }
-        }
-        Ok(())
-    });
+    let options = data.options.read().unwrap();
+    let cam_name = &options.cam.device.name;
+    if cam_name.is_empty() { return; }
+
+    if data.indi.camera_is_resolution_supported(cam_name).unwrap_or(false) {
+        _ = data.indi.camera_select_max_resolution(
+            cam_name,
+            true,
+            None
+        );
+    }
 }
 
 fn start_live_view(data: &Rc<CameraData>) {
@@ -1983,18 +1979,10 @@ fn update_devices_list_and_props_by_drv_interface(
     drv_interface: indi_api::DriverInterface,
 ) {
     if drv_interface.contains(indi_api::DriverInterface::TELESCOPE) {
-        data.delayed_actions.schedule(
-            DelayedActionTypes::UpdateMountWidgets
-        );
+        data.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
     }
     if drv_interface.contains(indi_api::DriverInterface::FOCUSER) {
-        data.delayed_actions.schedule(
-            DelayedActionTypes::UpdateFocList
-        );
-    }
-    if drv_interface.contains(indi_api::DriverInterface::CCD) {
-        data.delayed_actions.schedule(DelayedActionTypes::UpdateCamList);
-        data.delayed_actions.schedule(DelayedActionTypes::FillHeaterItems);
+        data.delayed_actions.schedule(DelayedActionTypes::UpdateFocList);
     }
 }
 
@@ -2022,11 +2010,6 @@ fn process_simple_prop_change_event(
         ("DRIVER_INFO", "DRIVER_INTERFACE", _) => {
             let flag_bits = value.as_i32().unwrap_or(0);
             let flags = indi_api::DriverInterface::from_bits_truncate(flag_bits as u32);
-            if flags.contains(indi_api::DriverInterface::CCD) {
-                data.delayed_actions.schedule(
-                    DelayedActionTypes::UpdateCamList
-                );
-            }
             if flags.contains(indi_api::DriverInterface::FOCUSER) {
                 data.delayed_actions.schedule(
                     DelayedActionTypes::UpdateFocList
@@ -2103,6 +2086,9 @@ fn process_simple_prop_change_event(
                 .get_driver_interface(device_name)
                 .unwrap_or(indi_api::DriverInterface::empty());
             update_devices_list_and_props_by_drv_interface(data, driver_interface);
+        }
+        ("CCD1"|"CCD2", ..) if new_prop => {
+            data.delayed_actions.schedule(DelayedActionTypes::UpdateCamList);
         }
         ("TELESCOPE_SLEW_RATE", ..) if new_prop => {
             data.delayed_actions.schedule(
@@ -2561,7 +2547,8 @@ fn draw_focusing_samples(
     da:   &gtk::DrawingArea,
     ctx:  &gdk::cairo::Context
 ) -> anyhow::Result<()> {
-    let Some(focusing_data) = &*data.focusing_data.borrow() else {
+    let focusing_data = data.focusing_data.borrow();
+    let Some(ref focusing_data) = *focusing_data else {
         return Ok(());
     };
     const PARABOLA_POINTS: usize = 101;

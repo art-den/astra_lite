@@ -3,20 +3,20 @@
 use std::{
     net::{TcpStream, Shutdown},
     io::*,
-    sync::atomic::{AtomicBool, Ordering}, sync::{Arc, Mutex, RwLock, atomic::AtomicUsize},
+    sync::atomic::{AtomicBool, Ordering, AtomicU64}, sync::{Arc, Mutex, RwLock, atomic::AtomicUsize},
     thread::{JoinHandle, spawn},
-    time::Duration
+    time::Duration, collections::HashMap
 };
 
 use serde::{Serialize, Deserialize};
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "Event")]
-pub enum Phd2IncomingObject {
+pub enum IncomingObject {
     /// Describes the PHD and message protocol versions
     Version {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "PHDVersion")]
         /// the PHD version number
@@ -40,7 +40,7 @@ pub enum Phd2IncomingObject {
     /// The lock position has been established
     LockPositionSet {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "X")]
         /// lock position X-coordinate
@@ -54,7 +54,7 @@ pub enum Phd2IncomingObject {
     /// Calibration step
     Calibrating {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "Mount")]
         /// name of the mount that was calibrated
@@ -86,7 +86,7 @@ pub enum Phd2IncomingObject {
     /// Calibration completed successfully
     CalibrationComplete {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "Mount")]
         /// name of the mount that was calibrated
@@ -96,7 +96,7 @@ pub enum Phd2IncomingObject {
     /// A star has been selected
     StarSelected {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "X")]
         /// lock position X-coordinate
@@ -110,19 +110,19 @@ pub enum Phd2IncomingObject {
     /// Guiding begins
     StartGuiding {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
     },
 
     /// Guiding has been paused
     Paused {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
     },
 
     /// Calibration begins
     StartCalibration {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "Mount")]
         /// the name of the mount being calibrated
@@ -132,17 +132,17 @@ pub enum Phd2IncomingObject {
     /// Current application state
     AppState {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "State")]
         /// the current state of PHD
-        state: Phd2AppState,
+        state: AppState,
     },
 
     /// Calibration failed
     CalibrationFailed {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "Reason")]
         /// an error message string
@@ -152,7 +152,7 @@ pub enum Phd2IncomingObject {
     /// Calibration data has been flipped
     CalibrationDataFlipped {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "Mount")]
         /// the name of the mount
@@ -163,13 +163,13 @@ pub enum Phd2IncomingObject {
     /// has shifted to the edge of the field of view
     LockPositionShiftLimitReached {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
     },
 
     /// Sent for each exposure frame while looping exposures
     LoopingExposures {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "Frame")]
         /// the exposure frame number; starts at 1 each time looping starts
@@ -179,20 +179,20 @@ pub enum Phd2IncomingObject {
     /// Looping exposures has stopped
     LoopingExposuresStopped {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
     },
 
     /// Sent when settling begins after a `dither` or `guide` method invocation
     SettleBegin {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
     },
 
     /// Sent for each exposure frame after a `dither` or `guide`
     /// method invocation until guiding has settled
     Settling {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "Distance")]
         /// the current distance between the guide star and lock position
@@ -219,7 +219,7 @@ pub enum Phd2IncomingObject {
     /// `dither` to complete and settle
     SettleDone {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "Status")]
         /// 0 if settling succeeded, non-zero if it failed
@@ -228,7 +228,7 @@ pub enum Phd2IncomingObject {
         #[serde(rename = "Error")]
         /// a description of the reason why the `guide` or `dither` command
         /// failed to complete and settle
-        error: String,
+        error: Option<String>,
 
         #[serde(rename = "TotalFrames")]
         /// the number of camera frames while settling
@@ -242,7 +242,7 @@ pub enum Phd2IncomingObject {
     /// A frame has been dropped due to the star being lost
     StarLost {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "Frame")]
         /// frame number
@@ -277,20 +277,20 @@ pub enum Phd2IncomingObject {
     /// Guiding has stopped
     GuidingStopped {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
     },
 
     /// PHD has been resumed after having been paused
     Resumed {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
     },
 
     /// This event corresponds to a line in the PHD Guide Log.
     /// The event is sent for each frame while guiding
     GuideStep {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "Frame")]
         /// The frame number; starts at 1 each time guiding starts
@@ -375,7 +375,7 @@ pub enum Phd2IncomingObject {
     /// The lock position has been dithered
     GuidingDithered {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         /// the dither X-offset in pixels
         dx: f64,
@@ -387,13 +387,13 @@ pub enum Phd2IncomingObject {
     /// The lock position has been lost
     LockPositionLost {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
     },
 
     /// An alert message was displayed in PHD2
     Alert {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "Msg")]
         /// the text of the alert message
@@ -406,7 +406,7 @@ pub enum Phd2IncomingObject {
     /// A guiding parameter has been changed
     GuideParamChange {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
 
         #[serde(rename = "Name")]
         /// the name of the parameter that changed
@@ -422,13 +422,13 @@ pub enum Phd2IncomingObject {
     /// settings by exporting settings only when required
     ConfigurationChange {
         #[serde(flatten)]
-        common: Phd2EventCommonData,
+        common: EventCommonData,
     },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 /// All messages contain the following attributes in common
-pub struct Phd2EventCommonData {
+pub struct EventCommonData {
     #[serde(rename = "Timestamp")]
     /// the timesamp of the event in seconds from the epoch, including fractional seconds
     timestamp: f64,
@@ -443,7 +443,7 @@ pub struct Phd2EventCommonData {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum Phd2AppState {
+pub enum AppState {
     Stopped,
     Selected,
     Calibrating,
@@ -481,40 +481,65 @@ pub enum AlertType {
 }
 
 #[derive(Debug, Clone)]
-pub enum Phd2Event {
+pub enum Event {
     Started,
     Stopped,
     Connected,
     Disconnected,
-    Object(Phd2IncomingObject),
+    Object(Arc<IncomingObject>),
+    RpcResult(Arc<RpcResult>),
 }
 
-type Phd2EventFun = dyn Fn(Phd2Event) + 'static + Send + Sync;
-type EventHandlers = Arc<RwLock<Vec<Box<Phd2EventFun>>>>;
+type EventFun = dyn Fn(Event) + 'static + Send + Sync;
+type EventHandlers = Arc<RwLock<HashMap<EventHandlerId, Box<EventFun>>>>;
 
-pub struct Phd2Conn {
+#[derive(Hash, PartialEq, Eq)]
+pub struct EventHandlerId(u64);
+
+pub struct Connection {
     exit_flag:        Arc<AtomicBool>,
-    main_thread:      Arc<Mutex<Option<JoinHandle<()>>>>,
+    main_thread:      Mutex<Option<JoinHandle<()>>>,
     read_tcp_stream:  Arc<Mutex<Option<TcpStream>>>,
     write_tcp_stream: Arc<Mutex<Option<BufWriter<TcpStream>>>>,
     event_handlers:   EventHandlers,
-    cmd_id:           Arc<AtomicUsize>,
+    cmd_id:           AtomicUsize,
+    last_hndlr_id:    AtomicU64,
 }
 
-impl Phd2Conn {
+impl Connection {
     pub fn new() -> Self {
         Self {
             exit_flag:        Arc::new(AtomicBool::new(false)),
-            main_thread:      Arc::new(Mutex::new(None)),
+            main_thread:      Mutex::new(None),
             read_tcp_stream:  Arc::new(Mutex::new(None)),
             write_tcp_stream: Arc::new(Mutex::new(None)),
-            event_handlers:   Arc::new(RwLock::new(Vec::new())),
-            cmd_id:           Arc::new(AtomicUsize::new(1)),
+            event_handlers:   Arc::new(RwLock::new(HashMap::new())),
+            cmd_id:           AtomicUsize::new(1),
+            last_hndlr_id:    AtomicU64::new(0),
         }
     }
 
-    pub fn connect_event_handler(&self, fun: impl Fn(Phd2Event) + 'static + Send + Sync) {
-        self.event_handlers.write().unwrap().push(Box::new(fun));
+    pub fn connect_event_handler(
+        &self,
+        fun: impl Fn(Event) + 'static + Send + Sync
+    ) -> EventHandlerId {
+        let next_id = self.last_hndlr_id.fetch_add(1, Ordering::Relaxed);
+        self.event_handlers.write().unwrap().insert(
+            EventHandlerId(next_id),
+            Box::new(fun)
+        );
+        EventHandlerId(next_id)
+    }
+
+    pub fn is_connected(&self) -> bool {
+        let read_tcp_stream  = self.read_tcp_stream.lock().unwrap();
+        read_tcp_stream.is_some()
+    }
+
+    pub fn diconnect_event_handler(&self, handler_id: &EventHandlerId) {
+        let mut event_handlers = self.event_handlers.write().unwrap();
+        let removed = event_handlers.remove(handler_id).is_some();
+        debug_assert!(removed);
     }
 
     pub fn work(&self, host: &str, port: u16) -> anyhow::Result<()> {
@@ -536,7 +561,7 @@ impl Phd2Conn {
 
         let main_thread = spawn(move || {
             log::debug!("Begin PHD2 stream");
-            Self::notify_event(&event_handlers, Phd2Event::Started);
+            Self::notify_event(&event_handlers, Event::Started);
 
             // Main loop
             'main_loop: loop {
@@ -561,7 +586,7 @@ impl Phd2Conn {
                     break;
                 };
 
-                Self::notify_event(&event_handlers, Phd2Event::Connected);
+                Self::notify_event(&event_handlers, Event::Connected);
                 log::debug!("Connected to PHD2 at {}:{}", host, port);
 
                 *self_send_stream.lock().unwrap() = Some(BufWriter::new(send_stream));
@@ -589,13 +614,13 @@ impl Phd2Conn {
                         if let Err(err) = res {
                             println!("{}", js_str);
                             println!("{}", err.to_string());
-                            log::error!("Error during processing PHD2 json: {}", err.to_string());
+                            log::error!("Error during processing PHD2 json: {}, js_str={}", err.to_string(), js_str);
                         }
                         buffer.clear();
                     }
                 }
 
-                Self::notify_event(&event_handlers, Phd2Event::Disconnected);
+                Self::notify_event(&event_handlers, Event::Disconnected);
 
                 let exit_flag = exit_flag.load(Ordering::Relaxed);
                 log::debug!("Exited from reading PHD2 stream, exit_flag = {}", exit_flag);
@@ -606,7 +631,7 @@ impl Phd2Conn {
                 if exit_flag { break; }
             }
             log::debug!("Exit read PHD2 stream");
-            Self::notify_event(&event_handlers, Phd2Event::Stopped);
+            Self::notify_event(&event_handlers, Event::Stopped);
         });
         *self_main_thread = Some(main_thread);
         Ok(())
@@ -642,26 +667,75 @@ impl Phd2Conn {
     }
 
     pub fn command_pause(&self, pause: bool, full: bool) -> anyhow::Result<()> {
-        log::debug!("Phd2Conn::command_pause, pause = {}, full = {}", pause, full);
-        let full_flag = if full { Some("full") } else { None };
-        let cmd = Command::SetPaused {
+        log::debug!("Conn::command_pause, pause = {}, full = {}", pause, full);
+
+        #[derive(Serialize)]
+        struct Method {
+            method: &'static str,
+            params: (bool/*paused*/, &'static str/*`full` flag*/),
+            id: usize,
+        }
+        let full_flag = if full { "full" } else { "" };
+        let cmd = Method {
+            method: "set_paused",
             params: (pause, full_flag),
-            id:     self.cmd_id.fetch_add(1, Ordering::Relaxed),
+            id: self.cmd_id.fetch_add(1, Ordering::Relaxed),
         };
         self.send_command(&serde_json::to_string(&cmd)?)?;
         Ok(())
     }
 
-    fn notify_event(event_handlers: &EventHandlers, event: Phd2Event) {
+    pub fn command_dither(
+        &self,
+        pixels:  f64,
+        ra_only: bool,
+        settle:  &Settle,
+    ) -> anyhow::Result<()> {
+        log::debug!("Conn::command_dither, pixels = {}, ra_only = {}", pixels, ra_only);
+        #[derive(Serialize)]
+        struct Params<'a> {
+            amount: f64,
+            #[serde(rename = "raOnly")]
+            ra_only: bool,
+            settle: &'a Settle,
+        }
+        #[derive(Serialize)]
+        struct Method<'a> {
+            method: &'static str,
+            params: Params<'a>,
+            id:     usize,
+        }
+        let cmd = Method {
+            method: "dither",
+            params: Params {
+                amount: pixels,
+                ra_only,
+                settle,
+            },
+            id: self.cmd_id.fetch_add(1, Ordering::Relaxed),
+        };
+        self.send_command(&serde_json::to_string(&cmd)?)?;
+        Ok(())
+    }
+
+    fn notify_event(event_handlers: &EventHandlers, event: Event) {
         let event_handlers = event_handlers.read().unwrap();
-        for handler in &*event_handlers {
+        for handler in event_handlers.values() {
             handler(event.clone());
         }
     }
 
     fn process_incoming_json(event_handlers: &EventHandlers, js_str: &str)  -> anyhow::Result<()> {
-        let js_obj: Phd2IncomingObject = serde_json::from_str(js_str)?;
-        Self::notify_event(event_handlers, Phd2Event::Object(js_obj));
+        // First try to pasrce as IncomingObject
+        if let Ok(js_obj) = serde_json::from_str::<IncomingObject>(js_str) {
+            Self::notify_event(event_handlers, Event::Object(Arc::new(js_obj)));
+            return Ok(());
+        }
+
+        // If failed, parce as RpcResult
+        let jsonrpc: RpcResult = serde_json::from_str(js_str)?;
+        Self::notify_event(event_handlers, Event::RpcResult(Arc::new(jsonrpc)));
+
         Ok(())
     }
 
@@ -680,11 +754,46 @@ impl Phd2Conn {
 }
 
 #[derive(Serialize)]
-#[serde(tag = "method")]
-enum Command {
-    #[serde(rename = "set_paused")]
-    SetPaused {
-        params: (bool/*paused*/, Option<&'static str>/*`full` flag*/),
-        id: usize,
+/// The `SETTLE` parameter is used by the `guide` and `dither` commands to specify
+/// when PHD2 should consider guiding to be stable enough for imaging.
+pub struct Settle {
+    /// maximum guide distance for guiding to be considered stable or "in-range"
+    pub pixels: f64,
+
+    /// minimum time to be in-range before considering guiding to be stable
+    pub time: u32,
+
+    /// time limit before settling is considered to have failed
+    pub timeout: u32,
+}
+
+impl Default for Settle {
+    fn default() -> Self {
+        Self {
+            pixels: 1.5,
+            time: 10,
+            timeout: 60,
+        }
     }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(untagged)]
+pub enum RpcResult {
+    Result {
+        jsonrpc: String,
+        result:  serde_json::value::Value,
+        id:      usize,
+    },
+    Error {
+        jsonrpc: String,
+        error:   RpcResultError,
+        id:      usize,
+    }
+}
+
+#[derive(Deserialize, Debug)]
+pub struct RpcResultError {
+    pub code:    i64,
+    pub message: String,
 }
