@@ -150,12 +150,13 @@ pub struct FrameProcessCommandData {
 }
 
 pub struct Preview8BitImgData {
-    pub rgb_bytes:    RgbU8Data,
+    pub rgb_data:     Mutex<RgbU8Data>,
     pub image_width:  usize,
     pub image_height: usize,
     pub params:       PreviewParams,
 }
 
+#[derive(Clone)]
 pub enum FrameProcessResultData {
     Error(String),
     ShotProcessingStarted(ModeType),
@@ -165,8 +166,8 @@ pub enum FrameProcessResultData {
         process_time: f64, // in seconds
         blob_dl_time: f64, // in seconds
     },
-    PreviewFrame(Preview8BitImgData, ModeType),
-    PreviewLiveRes(Preview8BitImgData, ModeType),
+    PreviewFrame(Arc<Preview8BitImgData>, ModeType),
+    PreviewLiveRes(Arc<Preview8BitImgData>, ModeType),
     LightFrameInfo(Arc<LightFrameInfo>, ModeType),
     FrameInfo(ModeType),
     FrameInfoLiveRes(ModeType),
@@ -178,6 +179,7 @@ pub enum FrameProcessResultData {
     }
 }
 
+#[derive(Clone)]
 pub struct FrameProcessResult {
     pub camera: DeviceAndProp,
     pub data:   FrameProcessResultData,
@@ -202,7 +204,7 @@ impl FrameProcessCommand {
     }
 }
 
-pub fn start_main_cam_frame_processing_thread() -> (mpsc::Sender<FrameProcessCommand>, JoinHandle<()>) {
+pub fn start_frame_processing_thread() -> (mpsc::Sender<FrameProcessCommand>, JoinHandle<()>) {
     let (bg_comands_sender, bg_comands_receiver) = mpsc::channel();
     let thread = std::thread::spawn(move || {
         'outer:
@@ -272,7 +274,7 @@ fn calc_reduct_ratio(options: &PreviewParams, img_width: usize, img_height: usiz
     }
 }
 
-pub fn get_rgb_bytes_from_preview_image(
+pub fn get_rgb_data_from_preview_image(
     image:  &Image,
     hist:   &Histogram,
     params: &PreviewParams,
@@ -632,19 +634,19 @@ fn make_preview_image_impl(
 
     let hist = command.frame.hist.read().unwrap();
     let tmr = TimeLogger::start();
-    let rgb_bytes = get_rgb_bytes_from_preview_image(
+    let rgb_data = get_rgb_data_from_preview_image(
         &image,
         &hist,
         &command.view_options
     );
     tmr.log("get_rgb_bytes_from_preview_image");
 
-    let preview_data = Preview8BitImgData {
-        rgb_bytes,
+    let preview_data = Arc::new(Preview8BitImgData {
+        rgb_data: Mutex::new(rgb_data),
         image_width: image.width(),
         image_height: image.height(),
         params: command.view_options.clone(),
-    };
+    });
     send_result(
         FrameProcessResultData::PreviewFrame(preview_data, command.mode_type),
         &command.camera,
@@ -782,18 +784,18 @@ fn make_preview_image_impl(
 
                 if !command.view_options.orig_frame_in_ls {
                     let tmr = TimeLogger::start();
-                    let rgb_bytes = get_rgb_bytes_from_preview_image(
+                    let rgb_data = get_rgb_data_from_preview_image(
                         &res_image,
                         &hist,
                         &command.view_options
                     );
                     tmr.log("get_rgb_bytes_from_preview_image");
-                    let preview_data = Preview8BitImgData {
-                        rgb_bytes,
+                    let preview_data = Arc::new(Preview8BitImgData {
+                        rgb_data: Mutex::new(rgb_data),
                         image_width: image.width(),
                         image_height: image.height(),
                         params: command.view_options.clone(),
-                    };
+                    });
                     send_result(
                         FrameProcessResultData::PreviewLiveRes(preview_data, command.mode_type),
                         &command.camera,

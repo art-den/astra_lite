@@ -361,27 +361,14 @@ fn process_event_in_main_thread(data: &Rc<CameraData>, event: MainThreadEvent) {
 
         MainThreadEvent::ShowFrameProcessingResult(result) => {
             match result.data {
-                FrameProcessResultData::ShotProcessingStarted(mode_type) => {
-                    let mode_data = data.state.mode_data();
-                    if mode_data.mode.get_type() == mode_type {
-                        drop(mode_data);
-                        data.state.notify_about_frame_processing_started();
-                    }
-                },
                 FrameProcessResultData::ShotProcessingFinished {
-                    frame_is_ok, mode_type, process_time, blob_dl_time
+                    process_time, blob_dl_time, ..
                 } => {
                     let perf_str = format!(
                         "Download time = {:.2}s, img. process time = {:.2}s",
                         blob_dl_time, process_time
                     );
                     data.gui.set_perf_string(perf_str);
-
-                    let mode_data = data.state.mode_data();
-                    if mode_data.mode.get_type() == mode_type {
-                        drop(mode_data);
-                        data.state.notify_about_frame_processing_finished(frame_is_ok);
-                    }
                 },
                 _ => {},
             }
@@ -1370,6 +1357,8 @@ fn correct_widgets_props(data: &Rc<CameraData>) {
         ]);
 
         ui.enable_widgets(false, &[
+            ("l_camera_list",      waiting && !cam_list.is_empty()),
+            ("cb_camera_list",     waiting && !cam_list.is_empty()),
             ("chb_fan",            !cooler_active),
             ("chb_cooler",         temp_supported && can_change_cam_opts),
             ("spb_temp",           cooler_active && temp_supported && can_change_cam_opts),
@@ -1448,11 +1437,14 @@ fn update_resolution_list(data: &Rc<CameraData>) {
         let cb_bin = data.builder.object::<gtk::ComboBoxText>("cb_bin").unwrap();
         let last_bin = cb_bin.active_id();
         cb_bin.remove_all();
-        let options = data.options.read().unwrap();
-        if options.cam.device.name.is_empty() { return Ok(()); }
-        let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&options.cam.device.prop);
-        let (max_width, max_height) = data.indi.camera_get_max_frame_size(&options.cam.device.name, cam_ccd)?;
-        let (max_hor_bin, max_vert_bin) = data.indi.camera_get_max_binning(&options.cam.device.name, cam_ccd)?;
+        let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
+        let cam_list = data.cam_list.borrow();
+        let Some(cam_dev) = cam_list.get(ui.prop_i32("cb_camera_list.active") as usize) else {
+            return Ok(());
+        };
+        let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&cam_dev.prop);
+        let (max_width, max_height) = data.indi.camera_get_max_frame_size(&cam_dev.name, cam_ccd)?;
+        let (max_hor_bin, max_vert_bin) = data.indi.camera_get_max_binning(&cam_dev.name, cam_ccd)?;
         let max_bin = usize::min(max_hor_bin, max_vert_bin);
         let bins = [ Binning::Orig, Binning::Bin2, Binning::Bin3, Binning::Bin4 ];
         for bin in bins {
@@ -1468,6 +1460,7 @@ fn update_resolution_list(data: &Rc<CameraData>) {
         if last_bin.is_some() {
             cb_bin.set_active_id(last_bin.as_deref());
         } else {
+            let options = data.options.read().unwrap();
             cb_bin.set_active_id(options.cam.frame.binning.to_active_id());
         }
         if cb_bin.active_id().is_none() {
@@ -1547,7 +1540,7 @@ fn create_and_show_preview_image(data: &Rc<CameraData>) {
     drop(options);
     let image = image.read().unwrap();
     let hist = hist.read().unwrap();
-    let rgb_bytes = get_rgb_bytes_from_preview_image(
+    let rgb_bytes = get_rgb_data_from_preview_image(
         &image,
         &hist,
         &preview_params
@@ -1558,11 +1551,11 @@ fn create_and_show_preview_image(data: &Rc<CameraData>) {
 fn show_preview_image(
     data:       &Rc<CameraData>,
     rgb_bytes:  RgbU8Data,
-    src_params: Option<PreviewParams>,
+    src_params: Option<&PreviewParams>,
 ) {
     let preview_options = data.options.read().unwrap().preview.clone();
     let pp = preview_options.preview_params();
-    if src_params.is_some() && src_params.as_ref() != Some(&pp) {
+    if src_params.is_some() && src_params != Some(&pp) {
         create_and_show_preview_image(data);
         return;
     }
@@ -1721,7 +1714,7 @@ fn handler_action_save_image_preview(data: &Rc<CameraData>) {
         let image = image.read().unwrap();
         let hist = hist.read().unwrap();
         let preview_params = preview_options.preview_params();
-        let rgb_data = get_rgb_bytes_from_preview_image(&image, &hist, &preview_params);
+        let rgb_data = get_rgb_data_from_preview_image(&image, &hist, &preview_params);
         let bytes = glib::Bytes::from_owned(rgb_data.bytes);
         let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
             &bytes,
@@ -1804,6 +1797,10 @@ fn show_frame_processing_result(
     };
 
     let is_mode_current = |mode: ModeType, live_result: bool| {
+        if mode_type == ModeType::Waiting
+        && mode == ModeType::SingleShot {
+            return true;
+        }
         mode_type == mode &&
         live_result == live_stacking_res
     };
@@ -1815,11 +1812,13 @@ fn show_frame_processing_result(
             gtk_utils::show_error_message(&data.window, "Fatal Error", &error_text);
         }
         FrameProcessResultData::PreviewFrame(img, mode) if is_mode_current(mode, false) => {
-            show_preview_image(data, img.rgb_bytes, Some(img.params));
+            let rgb_data = std::mem::take(&mut *img.rgb_data.lock().unwrap());
+            show_preview_image(data, rgb_data, Some(&img.params));
             show_resolution_info(img.image_width, img.image_height);
         }
         FrameProcessResultData::PreviewLiveRes(img, mode) if is_mode_current(mode, true) => {
-            show_preview_image(data, img.rgb_bytes, Some(img.params));
+            let rgb_data = std::mem::take(&mut *img.rgb_data.lock().unwrap());
+            show_preview_image(data, rgb_data, Some(&img.params));
             show_resolution_info(img.image_width, img.image_height);
         }
         FrameProcessResultData::Histogram(mode) if is_mode_current(mode, false) => {
@@ -1830,10 +1829,7 @@ fn show_frame_processing_result(
             repaint_histogram(data);
             show_histogram_stat(data);
         }
-        FrameProcessResultData::LightFrameInfo(info, mode) => {
-            if data.state.mode_data().mode.get_type() == mode {
-                data.state.notify_about_light_frame_info(&info);
-            }
+        FrameProcessResultData::LightFrameInfo(info, _) => {
             let history_item = LightHistoryItem {
                 time:          info.time.clone(),
                 stars_fwhm:    info.stars_fwhm,
@@ -2041,15 +2037,17 @@ fn process_simple_prop_change_event(
                 DelayedActionTypes::UpdateCtrlWidgets
             );
         },
-        ("CCD_EXPOSURE", ..) => {
+        ("CCD_EXPOSURE"|"GUIDER_EXPOSURE", ..) => {
             let options = data.options.read().unwrap();
-            if new_prop && device_name == options.cam.device.name {
-                data.delayed_actions.schedule_ex(
-                    DelayedActionTypes::StartLiveView,
-                    // 2000 ms pause to start live view from camera
-                    // after connecting to INDI server
-                    2000
-                );
+            if new_prop {
+                if device_name == options.cam.device.name {
+                    data.delayed_actions.schedule_ex(
+                        DelayedActionTypes::StartLiveView,
+                        // 2000 ms pause to start live view from camera
+                        // after connecting to INDI server
+                        2000
+                    );
+                }
             } else {
                 update_shot_state(data);
             }

@@ -1,7 +1,7 @@
 use std::{
     sync::{Arc, Mutex, atomic::{AtomicBool, Ordering, AtomicU16 }, RwLock, RwLockReadGuard, mpsc},
     collections::VecDeque,
-    any::Any, f64::consts::PI, path::PathBuf, thread::JoinHandle,
+    any::Any, f64::consts::PI, path::PathBuf,
 };
 use chrono::Utc;
 use itertools::Itertools;
@@ -41,7 +41,7 @@ pub enum StateEvent {
     FocusResultValue{ value: f64 },
 }
 
-#[derive(PartialEq, Copy, Clone)]
+#[derive(PartialEq, Copy, Clone, Debug)]
 pub enum ModeType {
     Waiting,
     SingleShot,
@@ -127,9 +127,8 @@ pub trait Mode {
     fn complete_img_process_params(&self, _cmd: &mut FrameProcessCommandData) {}
     fn notify_indi_prop_change(&mut self, _prop_change: &indi_api::PropChangeEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_blob_start_event(&mut self, _event: &indi_api::BlobStartEvent) -> anyhow::Result<()> { Ok(()) }
-    fn notify_about_frame_processing_started(&mut self) -> anyhow::Result<()> { Ok(()) }
-    fn notify_about_light_frame_info(&mut self, _info: &LightFrameInfo, _subscribers: &Arc<RwLock<Subscribers>>) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_about_frame_processing_finished(&mut self, _frame_is_ok: bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_before_frame_processing_start(&mut self, _should_be_processed: &mut bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult, _subscribers: &Arc<RwLock<Subscribers>>) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
 }
 
@@ -285,19 +284,18 @@ pub struct State {
     live_stacking:   Arc<LiveStackingData>,
     timer:           Arc<Timer>,
     exp_stuck_wd:    Arc<AtomicU16>,
-    process_thread:  Option<JoinHandle<()>>,
 
-    // commands for passing into frame processing thread
-    img_cmds_sender: mpsc::Sender<FrameProcessCommand>,
+    /// commands for passing into frame processing thread
+    img_cmds_sender: mpsc::Sender<FrameProcessCommand>, // TODO: make API
     ext_guider:      Arc<Mutex<Option<Box<dyn ExternalGuider + Send>>>>,
 }
 
 impl State {
     pub fn new(
-        indi:    &Arc<indi_api::Connection>,
-        options: &Arc<RwLock<Options>>
+        indi:            &Arc<indi_api::Connection>,
+        options:         &Arc<RwLock<Options>>,
+        img_cmds_sender: mpsc::Sender<FrameProcessCommand>
     ) -> Self {
-        let (img_cmds_sender, process_thread) = start_main_cam_frame_processing_thread();
         let result = Self {
             indi:           Arc::clone(indi),
             phd2:           Arc::new(phd2_conn::Connection::new()),
@@ -310,7 +308,6 @@ impl State {
             live_stacking:  Arc::new(LiveStackingData::new()),
             timer:          Arc::new(Timer::new()),
             exp_stuck_wd:   Arc::new(AtomicU16::new(0)),
-            process_thread: Some(process_thread),
             ext_guider:     Arc::new(Mutex::new(None)),
             img_cmds_sender,
         };
@@ -353,14 +350,13 @@ impl State {
             let exp_stuck_wd = Arc::clone(&self.exp_stuck_wd);
             ext_guider.connect_event_handler(Box::new(move |event| {
                 log::info!("External guider event = {:?}", event);
-                let run_and_catch_err_fun = || -> anyhow::Result<()> {
+                let result = || -> anyhow::Result<()> {
                     let mut mode = mode_data.write().unwrap();
                     let res = mode.mode.notify_guider_event(event)?;
                     Self::apply_change_result(res, &mut mode, &indi, &options, &subscribers)?;
                     Ok(())
-                };
-                let res = run_and_catch_err_fun();
-                Self::process_error(res, &mode_data, &subscribers, &exp_stuck_wd);
+                } ();
+                Self::process_error(result, &mode_data, &subscribers, &exp_stuck_wd);
             }));
         }
     }
@@ -445,11 +441,11 @@ impl State {
                             }, ..
                         } = &prop_change.change {
                             Self::process_indi_blob_event(
-                                &blob, &prop_change.device_name,
+                                &indi, &blob, &prop_change.device_name,
                                 &prop_change.prop_name, &mode_data,
                                 &options, &cur_frame, &ref_stars,
                                 &calibr_images, &subscribers,
-                                &img_cmds_sender,
+                                &exp_stuck_wd, &img_cmds_sender,
                             )?;
                         } else {
                             Self::process_indi_prop_change_event(
@@ -532,6 +528,7 @@ impl State {
     }
 
     fn process_indi_blob_event(
+        indi:              &Arc<indi_api::Connection>,
         blob:              &Arc<indi_api::BlobPropValue>,
         device_name:       &str,
         device_prop:       &str,
@@ -541,6 +538,7 @@ impl State {
         ref_stars:         &Arc<Mutex<Option<Vec<Point>>>>,
         calibr_images:     &Arc<Mutex<CalibrImages>>,
         subscribers:       &Arc<RwLock<Subscribers>>,
+        exp_stuck_wd:      &Arc<AtomicU16>,
         frame_proc_sender: &mpsc::Sender<FrameProcessCommand>,
     ) -> anyhow::Result<()> {
         if blob.data.is_empty() { return Ok(()); }
@@ -549,13 +547,20 @@ impl State {
             device_name, device_prop, blob.dl_time
         );
 
-        let mode_data = mode_data.read().unwrap();
-        let Some(mode_cam) = mode_data.mode.cam_device() else {
+        let mut mode = mode_data.write().unwrap();
+        let Some(mode_cam) = mode.mode.cam_device() else {
             return Ok(());
         };
 
         if device_name != mode_cam.name
         || device_prop != mode_cam.prop {
+            return Ok(());
+        }
+
+        let mut should_be_processed = true;
+        let res = mode.mode.notify_before_frame_processing_start(&mut should_be_processed)?;
+        Self::apply_change_result(res, &mut mode, indi, options, subscribers)?;
+        if !should_be_processed {
             return Ok(());
         }
 
@@ -566,7 +571,7 @@ impl State {
                 prop: device_prop.to_string(),
             };
             FrameProcessCommandData {
-                mode_type:       mode_data.mode.get_type(),
+                mode_type:       mode.mode.get_type(),
                 camera:          device,
                 flags:           ProcessImageFlags::empty(),
                 blob:            Arc::clone(blob),
@@ -584,22 +589,34 @@ impl State {
             }
         };
 
-        mode_data.mode.complete_img_process_params(&mut command_data);
+        mode.mode.complete_img_process_params(&mut command_data);
 
         let result_fun = {
             let subscribers = Arc::clone(subscribers);
             let options = Arc::clone(&options);
+            let mode_data = Arc::clone(&mode_data);
+            let indi = Arc::clone(&indi);
+            let exp_stuck_wd = Arc::clone(&exp_stuck_wd);
             move |res: FrameProcessResult| {
-                let subscribers = subscribers.read().unwrap();
-                let options = options.read().unwrap();
-                if options.cam.device == res.camera {
-                    if let Some(evt) = &subscribers.frame_evt {
-                        evt(res);
-                    }
+                let mut mode = mode_data.write().unwrap();
+                if Some(&res.camera) != mode.mode.cam_device() {
+                    return;
                 }
+                if let Some(evt) = &subscribers.read().unwrap().frame_evt {
+                    evt(res.clone());
+                }
+                let result = || -> anyhow::Result<()> {
+                    let res = mode.mode.notify_about_frame_processing_result(
+                        &res,
+                        &subscribers
+                    )?;
+                    Self::apply_change_result(res, &mut mode, &indi, &options, &subscribers)?;
+                    Ok(())
+                } ();
+                Self::process_error(result, &mode_data, &subscribers, &exp_stuck_wd);
             }
         };
-        frame_proc_sender.send(FrameProcessCommand::ProcessImage{
+        frame_proc_sender.send(FrameProcessCommand::ProcessImage {
             command: command_data,
             result_fun: Box::new(result_fun),
         }).unwrap();
@@ -809,39 +826,6 @@ impl State {
         Ok(())
     }
 
-    pub fn notify_about_frame_processing_started(&self) {
-        let mut mode_data = self.mode_data.write().unwrap();
-        let result = mode_data.mode.notify_about_frame_processing_started();
-        drop(mode_data);
-        Self::process_error(result, &self.mode_data, &self.subscribers, &self.exp_stuck_wd);
-    }
-
-    pub fn notify_about_light_frame_info(
-        &self,
-        info: &LightFrameInfo
-    ) {
-        let result = || -> anyhow::Result<()> {
-            let mut mode_data = self.mode_data.write().unwrap();
-            let res = mode_data.mode.notify_about_light_frame_info(info, &self.subscribers)?;
-            Self::apply_change_result(res, &mut mode_data, &self.indi, &self.options, &self.subscribers)?;
-            Ok(())
-        } ();
-        Self::process_error(result, &self.mode_data, &self.subscribers, &self.exp_stuck_wd);
-    }
-
-    pub fn notify_about_frame_processing_finished(
-        &self,
-        frame_is_ok: bool,
-    ) {
-        let result = || -> anyhow::Result<()> {
-            let mut mode_data = self.mode_data.write().unwrap();
-            let result = mode_data.mode.notify_about_frame_processing_finished(frame_is_ok)?;
-            Self::apply_change_result(result, &mut mode_data, &self.indi, &self.options, &self.subscribers)?;
-            Ok(())
-        } ();
-        Self::process_error(result, &self.mode_data, &self.subscribers, &self.exp_stuck_wd);
-    }
-
     fn apply_change_result(
         result:      NotifyResult,
         mode_data:   &mut ModeData,
@@ -913,9 +897,6 @@ impl State {
 
 impl Drop for State {
     fn drop(&mut self) {
-        if let Some(process_thread) = self.process_thread.take() {
-            _ = process_thread.join();
-        }
         log::info!("State dropped");
     }
 }
@@ -1209,6 +1190,7 @@ enum CamMode {
 
 #[derive(PartialEq)]
 enum FramesModeState {
+    FrameToSkip,
     Common,
     InternalMountCorrection,
     ExternalDithering,
@@ -1230,27 +1212,28 @@ impl Guider {
 }
 
 struct TackingFramesMode {
-    cam_mode:       CamMode,
-    state:          FramesModeState,
-    device:         DeviceAndProp,
-    mount_device:   String,
-    fn_gen:         Arc<Mutex<SeqFileNameGen>>,
-    indi:           Arc<indi_api::Connection>,
-    timer:          Option<Arc<Timer>>,
-    raw_adder:      Arc<Mutex<RawAdder>>,
-    options:        Arc<RwLock<Options>>,
-    frame_options:  FrameOptions,
-    focus_options:  Option<FocuserOptions>,
-    guider_options: Option<GuidingOptions>,
-    ref_stars:      Option<Arc<Mutex<Option<Vec<Point>>>>>,
-    progress:       Option<Progress>,
-    cur_exposure:   f64,
-    exp_sum:        f64,
-    simple_guider:  Option<SimpleGuider>,
-    guider:         Option<Guider>,
-    live_stacking:  Option<Arc<LiveStackingData>>,
-    save_dir:       PathBuf,
-    master_file:    PathBuf,
+    cam_mode:        CamMode,
+    state:           FramesModeState,
+    device:          DeviceAndProp,
+    mount_device:    String,
+    fn_gen:          Arc<Mutex<SeqFileNameGen>>,
+    indi:            Arc<indi_api::Connection>,
+    timer:           Option<Arc<Timer>>,
+    raw_adder:       Arc<Mutex<RawAdder>>,
+    options:         Arc<RwLock<Options>>,
+    frame_options:   FrameOptions,
+    focus_options:   Option<FocuserOptions>,
+    guider_options:  Option<GuidingOptions>,
+    ref_stars:       Option<Arc<Mutex<Option<Vec<Point>>>>>,
+    progress:        Option<Progress>,
+    cur_exposure:    f64,
+    exp_sum:         f64,
+    simple_guider:   Option<SimpleGuider>,
+    guider:          Option<Guider>,
+    live_stacking:   Option<Arc<LiveStackingData>>,
+    save_dir:        PathBuf,
+    master_file:     PathBuf,
+    skip_frame_done: bool, // first frame was taken and skipped
 }
 
 impl TackingFramesMode {
@@ -1273,26 +1256,27 @@ impl TackingFramesMode {
         };
         Self {
             cam_mode,
-            state:          FramesModeState::Common,
-            device:         opts.cam.device.clone(),
-            mount_device:   opts.mount.device.to_string(),
-            fn_gen:         Arc::new(Mutex::new(SeqFileNameGen::new())),
-            indi:           Arc::clone(indi),
-            timer:          timer.cloned(),
-            raw_adder:      Arc::new(Mutex::new(RawAdder::new())),
-            options:        Arc::clone(options),
-            frame_options:  opts.cam.frame.clone(),
-            focus_options:  None,
-            guider_options: None,
-            ref_stars:      None,
+            state:           FramesModeState::Common,
+            device:          opts.cam.device.clone(),
+            mount_device:    opts.mount.device.to_string(),
+            fn_gen:          Arc::new(Mutex::new(SeqFileNameGen::new())),
+            indi:            Arc::clone(indi),
+            timer:           timer.cloned(),
+            raw_adder:       Arc::new(Mutex::new(RawAdder::new())),
+            options:         Arc::clone(options),
+            frame_options:   opts.cam.frame.clone(),
+            focus_options:   None,
+            guider_options:  None,
+            ref_stars:       None,
             progress,
-            cur_exposure:   0.0,
-            exp_sum:        0.0,
-            simple_guider:  None,
-            guider:         None,
-            live_stacking:  None,
-            save_dir:       PathBuf::new(),
-            master_file:    PathBuf::new(),
+            cur_exposure:    0.0,
+            exp_sum:         0.0,
+            simple_guider:   None,
+            guider:          None,
+            live_stacking:   None,
+            save_dir:        PathBuf::new(),
+            master_file:     PathBuf::new(),
+            skip_frame_done: false,
         }
     }
 
@@ -1321,6 +1305,19 @@ impl TackingFramesMode {
     }
 
     fn start_or_continue(&mut self) -> anyhow::Result<()> {
+        // First frame must be skiped
+        if !self.skip_frame_done && self.cam_mode != CamMode::SingleShot {
+            let mut frame_opts = self.frame_options.clone();
+            const MAX_EXP: f64 = 1.0;
+            if frame_opts.exposure() > MAX_EXP {
+                frame_opts.set_exposure(MAX_EXP);
+            }
+            start_taking_shots(&self.indi, &frame_opts, &self.device, false)?;
+            self.state = FramesModeState::FrameToSkip;
+            self.cur_exposure = frame_opts.exposure();
+            return Ok(());
+        }
+
         let continuously = match (&self.cam_mode, &self.frame_options.frame_type) {
             (CamMode::SingleShot,      _                ) => false,
             (CamMode::LiveView,        _                ) => false,
@@ -1329,12 +1326,7 @@ impl TackingFramesMode {
             (CamMode::SavingRawFrames, _                ) => true,
             (CamMode::LiveStacking,    _                ) => true,
         };
-        start_taking_shots(
-            &self.indi,
-            &self.frame_options,
-            &self.device,
-            continuously
-        )?;
+        start_taking_shots(&self.indi, &self.frame_options, &self.device, continuously)?;
         self.state = FramesModeState::Common;
         self.cur_exposure = self.frame_options.exposure();
         Ok(())
@@ -1605,6 +1597,81 @@ impl TackingFramesMode {
         res
     }
 
+    fn process_frame_processing_finished_event(
+        &mut self,
+        frame_is_ok: bool
+    ) -> anyhow::Result<NotifyResult> {
+        if self.cam_mode == CamMode::SingleShot {
+            return Ok(NotifyResult::Finished { next_mode: None });
+        }
+        let mut result = NotifyResult::Empty;
+        if let Some(progress) = &mut self.progress {
+            if frame_is_ok && progress.cur != progress.total {
+                progress.cur += 1;
+                result = NotifyResult::ProgressChanges;
+            }
+            if progress.cur == progress.total {
+                let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&self.device.prop);
+                self.indi.camera_abort_exposure(&self.device.name, cam_ccd)?;
+                result = NotifyResult::Finished { next_mode: None };
+            } else {
+                let have_shart_new_shot = match (&self.cam_mode, &self.frame_options.frame_type) {
+                    (CamMode::SavingRawFrames, FrameType::Biases) => true,
+                    (CamMode::SavingRawFrames, FrameType::Flats) => true,
+                    _ => false
+                };
+                if have_shart_new_shot {
+                    apply_camera_options_and_take_shot(
+                        &self.indi,
+                        &self.device,
+                        &self.frame_options
+                    )?;
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    fn process_light_frame_info(
+        &mut self,
+        info:         &LightFrameInfo,
+        _subscribers: &Arc<RwLock<Subscribers>>
+    ) -> anyhow::Result<NotifyResult> {
+        if !info.is_ok() {
+            return Ok(NotifyResult::Empty);
+        }
+
+        let res = self.process_light_frame_info_and_refocus(info)?;
+        if matches!(&res, NotifyResult::Empty) == false {
+            return Ok(res);
+        }
+
+        // Guiding and dithering
+        if let Some(guid_options) = &self.guider_options {
+            let res = match guid_options.mode {
+                GuidingMode::MainCamera =>
+                    self.process_light_frame_info_and_dither_by_main_camera(info)?,
+                GuidingMode::Phd2 =>
+                    self.process_light_frame_info_and_dither_by_ext_guider(info)?,
+            };
+            if matches!(&res, NotifyResult::Empty) == false { return Ok(res); }
+        }
+
+        Ok(NotifyResult::Empty)
+    }
+
+    fn process_frame_processing_started_event(&mut self) -> anyhow::Result<NotifyResult> {
+        if self.state == FramesModeState::FrameToSkip {
+            return Ok(NotifyResult::Empty);
+        }
+        if let Some(progress) = &mut self.progress {
+            if progress.cur+1 == progress.total &&
+            self.indi.camera_is_fast_toggle_enabled(&self.device.name)? {
+                self.abort()?;
+            }
+        }
+        Ok(NotifyResult::Empty)
+    }
 }
 
 impl Mode for TackingFramesMode {
@@ -1619,6 +1686,8 @@ impl Mode for TackingFramesMode {
 
     fn progress_string(&self) -> String {
         let mut mode_str = match (&self.state, &self.cam_mode) {
+            (FramesModeState::FrameToSkip, _) =>
+                "First frame (will be skipped)".to_string(),
             (FramesModeState::InternalMountCorrection, _) =>
                 "Mount position correction".to_string(),
             (FramesModeState::ExternalDithering, _) =>
@@ -1668,7 +1737,11 @@ impl Mode for TackingFramesMode {
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
-        Some(self.cur_exposure)
+        if self.state != FramesModeState::FrameToSkip {
+            Some(self.cur_exposure)
+        } else {
+            Some(self.cur_exposure)
+        }
     }
 
     fn can_be_stopped(&self) -> bool {
@@ -1711,6 +1784,7 @@ impl Mode for TackingFramesMode {
     fn abort(&mut self) -> anyhow::Result<()> {
         let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&self.device.prop);
         self.indi.camera_abort_exposure(&self.device.name, cam_ccd)?;
+        self.skip_frame_done = false; // will skip first frame when continue
         Ok(())
     }
 
@@ -1787,76 +1861,44 @@ impl Mode for TackingFramesMode {
         Ok(())
     }
 
-    fn notify_about_frame_processing_started(&mut self) -> anyhow::Result<()> {
-        if let Some(progress) = &mut self.progress {
-            if progress.cur+1 == progress.total &&
-            self.indi.camera_is_fast_toggle_enabled(&self.device.name)? {
-                self.abort()?;
-            }
-        }
-        Ok(())
-    }
-
-    fn notify_about_light_frame_info(
+    fn notify_before_frame_processing_start(
         &mut self,
-        info:         &LightFrameInfo,
-        _subscribers: &Arc<RwLock<Subscribers>>
+        should_be_processed: &mut bool
     ) -> anyhow::Result<NotifyResult> {
-        if !info.is_ok() {
-            return Ok(NotifyResult::Empty);
+        if self.state == FramesModeState::FrameToSkip {
+            *should_be_processed = false;
+            self.state = FramesModeState::Common;
+            self.skip_frame_done = true;
+            self.start_or_continue()?;
+            return Ok(NotifyResult::ModeChanged)
         }
-
-        let res = self.process_light_frame_info_and_refocus(info)?;
-        if matches!(&res, NotifyResult::Empty) == false {
-            return Ok(res);
-        }
-
-        if let Some(guid_options) = &self.guider_options { // Guiding and dithering
-            let res = match guid_options.mode {
-                GuidingMode::MainCamera =>
-                    self.process_light_frame_info_and_dither_by_main_camera(info)?,
-                GuidingMode::Phd2 =>
-                    self.process_light_frame_info_and_dither_by_ext_guider(info)?,
-            };
-            if matches!(&res, NotifyResult::Empty) == false { return Ok(res); }
-        }
-
         Ok(NotifyResult::Empty)
     }
 
-    fn notify_about_frame_processing_finished(
+    fn notify_about_frame_processing_result(
         &mut self,
-        frame_is_ok: bool
-    ) -> anyhow::Result<NotifyResult> {
-        if self.cam_mode == CamMode::SingleShot {
-            return Ok(NotifyResult::Finished { next_mode: None });
+        fp_result: &FrameProcessResult,
+        subscribers: &Arc<RwLock<Subscribers>>
+    ) -> anyhow::Result<NotifyResult>  {
+        let cur_mode_type = self.get_type();
+        match &fp_result.data {
+            FrameProcessResultData::ShotProcessingFinished {
+                frame_is_ok,
+                mode_type, ..
+            } if *mode_type == cur_mode_type =>
+                self.process_frame_processing_finished_event(*frame_is_ok),
+
+            FrameProcessResultData::LightFrameInfo(info, mode_type)
+            if *mode_type == cur_mode_type =>
+                self.process_light_frame_info(info, subscribers),
+
+            FrameProcessResultData::ShotProcessingStarted(mode_type)
+            if *mode_type == cur_mode_type =>
+                self.process_frame_processing_started_event(),
+
+            _ =>
+                Ok(NotifyResult::Empty)
         }
-        let mut result = NotifyResult::Empty;
-        if let Some(progress) = &mut self.progress {
-            if frame_is_ok && progress.cur != progress.total {
-                progress.cur += 1;
-                result = NotifyResult::ProgressChanges;
-            }
-            if progress.cur == progress.total {
-                let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&self.device.prop);
-                self.indi.camera_abort_exposure(&self.device.name, cam_ccd)?;
-                result = NotifyResult::Finished { next_mode: None };
-            } else {
-                let have_shart_new_shot = match (&self.cam_mode, &self.frame_options.frame_type) {
-                    (CamMode::SavingRawFrames, FrameType::Biases) => true,
-                    (CamMode::SavingRawFrames, FrameType::Flats) => true,
-                    _ => false
-                };
-                if have_shart_new_shot {
-                    apply_camera_options_and_take_shot(
-                        &self.indi,
-                        &self.device,
-                        &self.frame_options
-                    )?;
-                }
-            }
-        }
-        Ok(result)
     }
 
     fn complete_img_process_params(&self, cmd: &mut FrameProcessCommandData) {
@@ -1930,7 +1972,10 @@ impl Mode for TackingFramesMode {
         Ok(result)
     }
 
-    fn notify_guider_event(&mut self, event: ExtGuiderEvent) -> anyhow::Result<NotifyResult> {
+    fn notify_guider_event(
+        &mut self,
+        event: ExtGuiderEvent
+    ) -> anyhow::Result<NotifyResult> {
         dbg!(&event);
         if let Some(guid_options) = &self.guider_options {
             if guid_options.mode == GuidingMode::Phd2
@@ -2076,108 +2121,8 @@ impl FocusingMode {
         }
         Ok(())
     }
-}
 
-impl Mode for FocusingMode {
-    fn get_type(&self) -> ModeType {
-        ModeType::Focusing
-    }
-
-    fn progress_string(&self) -> String {
-        match self.stage {
-            FocusingStage::Preliminary =>
-                "Focusing (preliminary)".to_string(),
-            FocusingStage::Final =>
-                "Focusing (final)".to_string(),
-            _ => unreachable!(),
-        }
-    }
-
-    fn cam_device(&self) -> Option<&DeviceAndProp> {
-        Some(&self.camera)
-    }
-
-    fn progress(&self) -> Option<Progress> {
-        Some(Progress {
-            cur: self.samples.len(),
-            total: self.samples.len() + self.to_go.len() + 1
-        })
-    }
-
-    fn get_cur_exposure(&self) -> Option<f64> {
-        Some(self.frame.exposure())
-    }
-
-    fn can_be_continued_after_stop(&self) -> bool {
-        false
-    }
-
-    fn start(&mut self) -> anyhow::Result<()> {
-        let cur_pos = self.indi.focuser_get_abs_value(&self.options.device)?.round();
-        self.before_pos = cur_pos;
-        self.start_stage(cur_pos, FocusingStage::Preliminary)?;
-        Ok(())
-    }
-
-    fn abort(&mut self) -> anyhow::Result<()> {
-        let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&self.camera.prop);
-        self.indi.camera_abort_exposure(&self.camera.name, cam_ccd)?;
-        self.indi.focuser_set_abs_value(&self.options.device, self.before_pos, true, None)?;
-        Ok(())
-    }
-
-    fn take_next_mode(&mut self) -> Option<ModeBox> {
-        self.next_mode.take()
-    }
-
-    fn complete_img_process_params(&self, cmd: &mut FrameProcessCommandData) {
-        if let Some(quality_options) = &mut cmd.quality_options {
-            quality_options.use_max_fwhm = false;
-        }
-    }
-
-    fn notify_indi_prop_change(
-        &mut self,
-        prop_change: &indi_api::PropChangeEvent
-    ) -> anyhow::Result<NotifyResult> {
-        if prop_change.device_name != self.options.device {
-            return Ok(NotifyResult::Empty);
-        }
-        if let ("ABS_FOCUS_POSITION", indi_api::PropChange::Change { value, .. })
-        = (prop_change.prop_name.as_str(), &prop_change.change) {
-            let cur_focus = value.prop_value.as_f64()?;
-            match self.state {
-                FocusingState::WaitingPositionAntiBacklash {before_pos, begin_pos} => {
-                    if f64::abs(cur_focus-before_pos) < 1.01 {
-                        self.indi.focuser_set_abs_value(&self.options.device, begin_pos, true, None)?;
-                        self.state = FocusingState::WaitingPosition(begin_pos);
-                    }
-                }
-                FocusingState::WaitingPosition(desired_focus) => {
-                    if f64::abs(cur_focus-desired_focus) < 1.01 {
-                        start_taking_shots(&self.indi, &self.frame, &self.camera, false)?;
-                        self.state = FocusingState::WaitingFrame(desired_focus);
-                    }
-                }
-                FocusingState::WaitingResultPosAntiBacklash { before_pos, begin_pos } => {
-                    if f64::abs(cur_focus-before_pos) < 1.01 {
-                        self.indi.focuser_set_abs_value(&self.options.device, begin_pos, true, None)?;
-                        self.state = FocusingState::WaitingResultPos(begin_pos);
-                    }
-                }
-                FocusingState::WaitingResultPos(desired_focus) => {
-                    if f64::abs(cur_focus-desired_focus) < 1.01 {
-                        start_taking_shots(&self.indi, &self.frame, &self.camera, false)?;
-                        self.state = FocusingState::WaitingResultImg;
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(NotifyResult::Empty)
-    }
-
-    fn notify_about_light_frame_info(
+    fn process_light_frame_info(
         &mut self,
         info:        &LightFrameInfo,
         subscribers: &Arc<RwLock<Subscribers>>,
@@ -2301,6 +2246,122 @@ impl Mode for FocusingMode {
             result = NotifyResult::Finished { next_mode: self.next_mode.take() };
         }
         Ok(result)
+    }
+}
+
+impl Mode for FocusingMode {
+    fn get_type(&self) -> ModeType {
+        ModeType::Focusing
+    }
+
+    fn progress_string(&self) -> String {
+        match self.stage {
+            FocusingStage::Preliminary =>
+                "Focusing (preliminary)".to_string(),
+            FocusingStage::Final =>
+                "Focusing (final)".to_string(),
+            _ => unreachable!(),
+        }
+    }
+
+    fn cam_device(&self) -> Option<&DeviceAndProp> {
+        Some(&self.camera)
+    }
+
+    fn progress(&self) -> Option<Progress> {
+        Some(Progress {
+            cur: self.samples.len(),
+            total: self.samples.len() + self.to_go.len() + 1
+        })
+    }
+
+    fn get_cur_exposure(&self) -> Option<f64> {
+        Some(self.frame.exposure())
+    }
+
+    fn can_be_continued_after_stop(&self) -> bool {
+        false
+    }
+
+    fn start(&mut self) -> anyhow::Result<()> {
+        let cur_pos = self.indi.focuser_get_abs_value(&self.options.device)?.round();
+        self.before_pos = cur_pos;
+        self.start_stage(cur_pos, FocusingStage::Preliminary)?;
+        Ok(())
+    }
+
+    fn abort(&mut self) -> anyhow::Result<()> {
+        let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&self.camera.prop);
+        self.indi.camera_abort_exposure(&self.camera.name, cam_ccd)?;
+        self.indi.focuser_set_abs_value(&self.options.device, self.before_pos, true, None)?;
+        Ok(())
+    }
+
+    fn take_next_mode(&mut self) -> Option<ModeBox> {
+        self.next_mode.take()
+    }
+
+    fn complete_img_process_params(&self, cmd: &mut FrameProcessCommandData) {
+        if let Some(quality_options) = &mut cmd.quality_options {
+            quality_options.use_max_fwhm = false;
+        }
+    }
+
+    fn notify_indi_prop_change(
+        &mut self,
+        prop_change: &indi_api::PropChangeEvent
+    ) -> anyhow::Result<NotifyResult> {
+        if prop_change.device_name != self.options.device {
+            return Ok(NotifyResult::Empty);
+        }
+        if let ("ABS_FOCUS_POSITION", indi_api::PropChange::Change { value, .. })
+        = (prop_change.prop_name.as_str(), &prop_change.change) {
+            let cur_focus = value.prop_value.as_f64()?;
+            match self.state {
+                FocusingState::WaitingPositionAntiBacklash {before_pos, begin_pos} => {
+                    if f64::abs(cur_focus-before_pos) < 1.01 {
+                        self.indi.focuser_set_abs_value(&self.options.device, begin_pos, true, None)?;
+                        self.state = FocusingState::WaitingPosition(begin_pos);
+                    }
+                }
+                FocusingState::WaitingPosition(desired_focus) => {
+                    if f64::abs(cur_focus-desired_focus) < 1.01 {
+                        start_taking_shots(&self.indi, &self.frame, &self.camera, false)?;
+                        self.state = FocusingState::WaitingFrame(desired_focus);
+                    }
+                }
+                FocusingState::WaitingResultPosAntiBacklash { before_pos, begin_pos } => {
+                    if f64::abs(cur_focus-before_pos) < 1.01 {
+                        self.indi.focuser_set_abs_value(&self.options.device, begin_pos, true, None)?;
+                        self.state = FocusingState::WaitingResultPos(begin_pos);
+                    }
+                }
+                FocusingState::WaitingResultPos(desired_focus) => {
+                    if f64::abs(cur_focus-desired_focus) < 1.01 {
+                        start_taking_shots(&self.indi, &self.frame, &self.camera, false)?;
+                        self.state = FocusingState::WaitingResultImg;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(NotifyResult::Empty)
+    }
+
+    fn notify_about_frame_processing_result(
+        &mut self,
+        fp_result: &FrameProcessResult,
+        subscribers: &Arc<RwLock<Subscribers>>
+    ) -> anyhow::Result<NotifyResult> {
+        let cur_mode_type = self.get_type();
+        match &fp_result.data {
+            FrameProcessResultData::LightFrameInfo(info, mode_type)
+            if *mode_type == cur_mode_type =>
+                self.process_light_frame_info(info, subscribers),
+
+            _ =>
+                Ok(NotifyResult::Empty)
+        }
     }
 }
 
@@ -2518,56 +2579,8 @@ impl MountCalibrMode {
         )?;
         Ok(())
     }
-}
 
-impl Mode for MountCalibrMode {
-    fn get_type(&self) -> ModeType {
-        ModeType::DitherCalibr
-    }
-
-    fn progress_string(&self) -> String {
-        match self.axis {
-            DitherCalibrAxis::Undefined =>
-                "Dithering calibration".to_string(),
-            DitherCalibrAxis::Ra =>
-                "Dithering calibration (RA)".to_string(),
-            DitherCalibrAxis::Dec =>
-                "Dithering calibration (DEC)".to_string(),
-        }
-    }
-
-    fn abort(&mut self) -> anyhow::Result<()> {
-        self.restore_orig_coords()?;
-        Ok(())
-    }
-
-    fn take_next_mode(&mut self) -> Option<ModeBox> {
-        self.next_mode.take()
-    }
-
-    fn cam_device(&self) -> Option<&DeviceAndProp> {
-        Some(&self.camera)
-    }
-
-    fn get_cur_exposure(&self) -> Option<f64> {
-        Some(self.frame.exposure())
-    }
-
-    fn progress(&self) -> Option<Progress> {
-        Some(Progress {
-            cur: self.attempt_num,
-            total: DITHER_CALIBR_ATTEMPTS_CNT
-        })
-    }
-
-    fn start(&mut self) -> anyhow::Result<()> {
-        self.start_dec = self.indi.mount_get_eq_dec(&self.mount_device)?;
-        self.start_ra = self.indi.mount_get_eq_ra(&self.mount_device)?;
-        self.start_for_axis(DitherCalibrAxis::Ra)?;
-        Ok(())
-    }
-
-    fn notify_about_light_frame_info(
+    fn process_light_frame_info(
         &mut self,
         info:         &LightFrameInfo,
         _subscribers: &Arc<RwLock<Subscribers>>,
@@ -2630,6 +2643,70 @@ impl Mode for MountCalibrMode {
             )?;
         }
         Ok(result)
+    }
+}
+
+impl Mode for MountCalibrMode {
+    fn get_type(&self) -> ModeType {
+        ModeType::DitherCalibr
+    }
+
+    fn progress_string(&self) -> String {
+        match self.axis {
+            DitherCalibrAxis::Undefined =>
+                "Dithering calibration".to_string(),
+            DitherCalibrAxis::Ra =>
+                "Dithering calibration (RA)".to_string(),
+            DitherCalibrAxis::Dec =>
+                "Dithering calibration (DEC)".to_string(),
+        }
+    }
+
+    fn abort(&mut self) -> anyhow::Result<()> {
+        self.restore_orig_coords()?;
+        Ok(())
+    }
+
+    fn take_next_mode(&mut self) -> Option<ModeBox> {
+        self.next_mode.take()
+    }
+
+    fn cam_device(&self) -> Option<&DeviceAndProp> {
+        Some(&self.camera)
+    }
+
+    fn get_cur_exposure(&self) -> Option<f64> {
+        Some(self.frame.exposure())
+    }
+
+    fn progress(&self) -> Option<Progress> {
+        Some(Progress {
+            cur: self.attempt_num,
+            total: DITHER_CALIBR_ATTEMPTS_CNT
+        })
+    }
+
+    fn start(&mut self) -> anyhow::Result<()> {
+        self.start_dec = self.indi.mount_get_eq_dec(&self.mount_device)?;
+        self.start_ra = self.indi.mount_get_eq_ra(&self.mount_device)?;
+        self.start_for_axis(DitherCalibrAxis::Ra)?;
+        Ok(())
+    }
+
+    fn notify_about_frame_processing_result(
+        &mut self,
+        fp_result: &FrameProcessResult,
+        subscribers: &Arc<RwLock<Subscribers>>
+    ) -> anyhow::Result<NotifyResult> {
+        let cur_mode_type = self.get_type();
+        match &fp_result.data {
+            FrameProcessResultData::LightFrameInfo(info, mode_type)
+            if *mode_type == cur_mode_type =>
+                self.process_light_frame_info(info, subscribers),
+
+            _ =>
+                Ok(NotifyResult::Empty),
+        }
     }
 
     fn notify_indi_prop_change(

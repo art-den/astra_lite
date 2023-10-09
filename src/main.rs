@@ -32,7 +32,7 @@ mod phd2_conn;
 
 use std::{path::Path, sync::{Arc, RwLock}};
 use gtk::{prelude::*, glib, glib::clone};
-use crate::{io_utils::*, options::Options, state::State};
+use crate::{io_utils::*, options::Options, state::State, image_processing::*};
 
 fn panic_handler(
     panic_info:        &std::panic::PanicInfo,
@@ -119,7 +119,8 @@ fn main() -> anyhow::Result<()> {
 
     let indi = Arc::new(indi_api::Connection::new());
     let options = Arc::new(RwLock::new(Options::default()));
-    let state = Arc::new(State::new(&indi, &options));
+    let (img_cmds_sender, frame_process_thread) = start_frame_processing_thread();
+    let state = Arc::new(State::new(&indi, &options, img_cmds_sender));
 
     let application = gtk::Application::new(
         Some(&format!("com.github.art-den.{}", env!("CARGO_PKG_NAME"))),
@@ -137,6 +138,9 @@ fn main() -> anyhow::Result<()> {
     _ = save_json_to_config::<Options>(&opts, "options");
     drop(opts);
     log::info!("Options saved");
+
+    _ = frame_process_thread.join();
+    log::info!("Process thread joined");
 
     Ok(())
 }
