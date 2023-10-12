@@ -1,6 +1,6 @@
 [package]
 name = "astra_lite"
-version = "0.0.109"
+version = "0.0.112"
 edition = "2021"
 description = "Software for deepsky astrophotography and live stacking"
 repository = "https://github.com/art-den/astra_lite"
@@ -40,11 +40,6 @@ panic = "abort"
 opt-level = 3
 lto = true
 codegen-units = 1
-strip = false
-panic = "abort"
-
-[profile.profiling]
-inherits = "release"
 strip = false
 panic = "abort"
 

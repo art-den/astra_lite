@@ -1927,7 +1927,7 @@
                                 <property name="visible">True</property>
                                 <property name="can-focus">True</property>
                                 <child>
-                                  <!-- n-columns=2 n-rows=9 -->
+                                  <!-- n-columns=1 n-rows=8 -->
                                   <object class="GtkGrid" id="grd_cam_calibr">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
@@ -1947,21 +1947,6 @@
                                       <packing>
                                         <property name="left-attach">0</property>
                                         <property name="top-attach">2</property>
-                                        <property name="width">2</property>
-                                      </packing>
-                                    </child>
-                                    <child>
-                                      <object class="GtkFileChooserButton" id="fch_master_flat">
-                                        <property name="visible">True</property>
-                                        <property name="can-focus">False</property>
-                                        <property name="hexpand">True</property>
-                                        <property name="create-folders">False</property>
-                                        <property name="title" translatable="yes"/>
-                                      </object>
-                                      <packing>
-                                        <property name="left-attach">0</property>
-                                        <property name="top-attach">8</property>
-                                        <property name="width">2</property>
                                       </packing>
                                     </child>
                                     <child>
@@ -1976,22 +1961,6 @@
                                       <packing>
                                         <property name="left-attach">0</property>
                                         <property name="top-attach">1</property>
-                                        <property name="width">2</property>
-                                      </packing>
-                                    </child>
-                                    <child>
-                                      <object class="GtkCheckButton" id="chb_master_flat">
-                                        <property name="label" translatable="yes">Apply master FLAT frame:</property>
-                                        <property name="visible">True</property>
-                                        <property name="can-focus">True</property>
-                                        <property name="receives-default">False</property>
-                                        <property name="halign">start</property>
-                                        <property name="draw-indicator">True</property>
-                                      </object>
-                                      <packing>
-                                        <property name="left-attach">0</property>
-                                        <property name="top-attach">7</property>
-                                        <property name="width">2</property>
                                       </packing>
                                     </child>
                                     <child>
@@ -2005,7 +1974,45 @@
                                       <packing>
                                         <property name="left-attach">0</property>
                                         <property name="top-attach">0</property>
-                                        <property name="width">2</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkCheckButton" id="chb_master_flat">
+                                        <property name="label" translatable="yes">Apply master FLAT frame:</property>
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">True</property>
+                                        <property name="receives-default">False</property>
+                                        <property name="halign">start</property>
+                                        <property name="draw-indicator">True</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">0</property>
+                                        <property name="top-attach">3</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkFileChooserButton" id="fch_master_flat">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="hexpand">True</property>
+                                        <property name="create-folders">False</property>
+                                        <property name="title" translatable="yes"/>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">0</property>
+                                        <property name="top-attach">4</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkSeparator">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="margin-top">3</property>
+                                        <property name="margin-bottom">3</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">0</property>
+                                        <property name="top-attach">5</property>
                                       </packing>
                                     </child>
                                     <child>
@@ -2019,19 +2026,7 @@ if no master dark defined</property>
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
-                                        <property name="top-attach">4</property>
-                                        <property name="width">2</property>
-                                      </packing>
-                                    </child>
-                                    <child>
-                                      <object class="GtkSeparator">
-                                        <property name="visible">True</property>
-                                        <property name="can-focus">False</property>
-                                      </object>
-                                      <packing>
-                                        <property name="left-attach">0</property>
-                                        <property name="top-attach">3</property>
-                                        <property name="width">2</property>
+                                        <property name="top-attach">6</property>
                                       </packing>
                                     </child>
                                     <child>
@@ -2046,19 +2041,7 @@ Better use "Subtrack master DARK frame"</property>
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
-                                        <property name="top-attach">5</property>
-                                        <property name="width">2</property>
-                                      </packing>
-                                    </child>
-                                    <child>
-                                      <object class="GtkSeparator">
-                                        <property name="visible">True</property>
-                                        <property name="can-focus">False</property>
-                                      </object>
-                                      <packing>
-                                        <property name="left-attach">0</property>
-                                        <property name="top-attach">6</property>
-                                        <property name="width">2</property>
+                                        <property name="top-attach">7</property>
                                       </packing>
                                     </child>
                                   </object>
@@ -2310,7 +2293,7 @@ Better use "Subtrack master DARK frame"</property>
                                         <property name="homogeneous">True</property>
                                         <child>
                                           <object class="GtkButton">
-                                            <property name="label" translatable="yes">Start!</property>
+                                            <property name="label" translatable="yes">Start</property>
                                             <property name="visible">True</property>
                                             <property name="can-focus">True</property>
                                             <property name="receives-default">True</property>
@@ -4197,7 +4180,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                         <property name="homogeneous">True</property>
                                         <child>
                                           <object class="GtkButton">
-                                            <property name="label" translatable="yes">Manual run!</property>
+                                            <property name="label" translatable="yes">Manual run</property>
                                             <property name="visible">True</property>
                                             <property name="can-focus">True</property>
                                             <property name="receives-default">True</property>

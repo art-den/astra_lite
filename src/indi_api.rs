@@ -1814,6 +1814,21 @@ impl Connection {
         Ok(())
     }
 
+    fn f64_prop_values_equal(value1: f64, value2: f64) -> bool {
+        if value1.is_nan() && value2.is_nan() {
+            return true;
+        }
+        if value1.is_nan() != value2.is_nan() {
+            return false;
+        }
+        if value1 == value2 {
+            return true;
+        }
+        let aver = (value1.abs() + value2.abs()) / 2.0;
+        let min_diff = aver / 1e6;
+        f64::abs(value1 - value2) < min_diff
+    }
+
     fn check_num_property_is_eq(
         &self,
         device_name: &str,
@@ -1827,9 +1842,9 @@ impl Connection {
                 prop_name,
                 elem_name
             )?;
-            // TODO: better f64 comparsion
-            let diff = f64::abs(prop_value - *expected_value);
-            if diff > 0.001 { return Ok(false); }
+            if !Self::f64_prop_values_equal(prop_value, *expected_value) {
+                return Ok(false);
+            }
         }
         Ok(true)
     }
@@ -4478,8 +4493,10 @@ impl XmlElementHelper for xmltree::Element {
     }
 
     fn attr_time(&self, attr_name: &str) -> Option<DateTime<Utc>> {
-        self.attributes.get(attr_name)
-            .and_then(|s| Utc.datetime_from_str(s, "%Y-%m-%dT%H:%M:%S").ok())
+        self.attributes
+            .get(attr_name)
+            .and_then(|s| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").ok())
+            .map(|dt| Utc.from_utc_datetime(&dt))
     }
 
     fn text_or_err(&self) -> Result<Cow<str>> {

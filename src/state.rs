@@ -1306,7 +1306,9 @@ impl TackingFramesMode {
 
     fn start_or_continue(&mut self) -> anyhow::Result<()> {
         // First frame must be skiped
-        if !self.skip_frame_done && self.cam_mode != CamMode::SingleShot {
+        // for saving frames and live stacking mode
+        if !self.skip_frame_done
+        && matches!(self.cam_mode, CamMode::SavingRawFrames|CamMode::LiveStacking) {
             let mut frame_opts = self.frame_options.clone();
             const MAX_EXP: f64 = 1.0;
             if frame_opts.exposure() > MAX_EXP {
@@ -1976,7 +1978,6 @@ impl Mode for TackingFramesMode {
         &mut self,
         event: ExtGuiderEvent
     ) -> anyhow::Result<NotifyResult> {
-        dbg!(&event);
         if let Some(guid_options) = &self.guider_options {
             if guid_options.mode == GuidingMode::Phd2
             && self.state == FramesModeState::ExternalDithering {

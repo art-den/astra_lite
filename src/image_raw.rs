@@ -151,7 +151,11 @@ impl RawImage {
             frame_str.as_deref().unwrap_or_default(),
             FrameType::Lights
         );
-        let time = Utc.datetime_from_str(time_str, "%Y-%m-%dT%H:%M:%S%.3f").ok();
+
+        let time =
+            NaiveDateTime::parse_from_str(time_str, "%Y-%m-%dT%H:%M:%S%.3f")
+                .map(|dt| Utc.from_utc_datetime(&dt))
+                .ok();
 
         let info = RawImageInfo {
             time,

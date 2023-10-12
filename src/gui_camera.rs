@@ -90,6 +90,7 @@ pub enum MainThreadEvent {
 }
 
 struct LightHistoryItem {
+    mode_type:     ModeType,
     time:          Option<DateTime<Utc>>,
     stars_fwhm:    Option<f32>,
     bad_fwhm:      bool,
@@ -1785,8 +1786,7 @@ fn show_frame_processing_result(
     let live_stacking_res = options.preview.source == PreviewSource::LiveStacking;
     drop(options);
 
-    let mode_type = data.state.mode_data().mode.get_type();
-
+    let cur_mode_type = data.state.mode_data().mode.get_type();
     let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
 
     let show_resolution_info = |width, height| {
@@ -1796,12 +1796,12 @@ fn show_frame_processing_result(
         );
     };
 
-    let is_mode_current = |mode: ModeType, live_result: bool| {
-        if mode_type == ModeType::Waiting
-        && mode == ModeType::SingleShot {
+    let is_mode_current = |mode_type: ModeType, live_result: bool| {
+        if cur_mode_type == ModeType::Waiting
+        && mode_type == ModeType::SingleShot {
             return true;
         }
-        mode_type == mode &&
+        cur_mode_type == mode_type &&
         live_result == live_stacking_res
     };
 
@@ -1811,26 +1811,31 @@ fn show_frame_processing_result(
             correct_widgets_props(data);
             gtk_utils::show_error_message(&data.window, "Fatal Error", &error_text);
         }
-        FrameProcessResultData::PreviewFrame(img, mode) if is_mode_current(mode, false) => {
+        FrameProcessResultData::PreviewFrame(img, mode_type)
+        if is_mode_current(mode_type, false) => {
             let rgb_data = std::mem::take(&mut *img.rgb_data.lock().unwrap());
             show_preview_image(data, rgb_data, Some(&img.params));
             show_resolution_info(img.image_width, img.image_height);
         }
-        FrameProcessResultData::PreviewLiveRes(img, mode) if is_mode_current(mode, true) => {
+        FrameProcessResultData::PreviewLiveRes(img, mode_type)
+        if is_mode_current(mode_type, true) => {
             let rgb_data = std::mem::take(&mut *img.rgb_data.lock().unwrap());
             show_preview_image(data, rgb_data, Some(&img.params));
             show_resolution_info(img.image_width, img.image_height);
         }
-        FrameProcessResultData::Histogram(mode) if is_mode_current(mode, false) => {
+        FrameProcessResultData::Histogram(mode_type)
+        if is_mode_current(mode_type, false) => {
             repaint_histogram(data);
             show_histogram_stat(data);
         }
-        FrameProcessResultData::HistogramLiveRes(mode) if is_mode_current(mode, true) => {
+        FrameProcessResultData::HistogramLiveRes(mode_type)
+        if is_mode_current(mode_type, true) => {
             repaint_histogram(data);
             show_histogram_stat(data);
         }
-        FrameProcessResultData::LightFrameInfo(info, _) => {
+        FrameProcessResultData::LightFrameInfo(info, mode_type) => {
             let history_item = LightHistoryItem {
+                mode_type,
                 time:          info.time.clone(),
                 stars_fwhm:    info.stars_fwhm,
                 bad_fwhm:      !info.good_fwhm,
@@ -1845,12 +1850,12 @@ fn show_frame_processing_result(
             data.light_history.borrow_mut().push(history_item);
             update_light_history_table(data);
         }
-        FrameProcessResultData::FrameInfo(mode) => {
-            if is_mode_current(mode, false) {
-                show_image_info(data);
-            }
+        FrameProcessResultData::FrameInfo(mode_type)
+        if is_mode_current(mode_type, false) => {
+            show_image_info(data);
         }
-        FrameProcessResultData::FrameInfoLiveRes(mode) if is_mode_current(mode, true) => {
+        FrameProcessResultData::FrameInfoLiveRes(mode_type)
+        if is_mode_current(mode_type, true) => {
             show_image_info(data);
         }
         FrameProcessResultData::MasterSaved { frame_type: FrameType::Flats, file_name } => {
@@ -2242,22 +2247,23 @@ fn update_light_history_table(data: &Rc<CameraData>) {
         },
         None => {
             let model = gtk::ListStore::new(&[
-                String::static_type(),
+                String::static_type(), String::static_type(),
                 String::static_type(), String::static_type(),
                 u32   ::static_type(), String::static_type(),
                 String::static_type(), String::static_type(),
                 String::static_type(), String::static_type(),
             ]);
             let columns = [
-                /* 0 */ "Time",
-                /* 1 */ "FWHM",
-                /* 2 */ "Ovality",
-                /* 3 */ "Stars",
-                /* 4 */ "Noise",
-                /* 5 */ "Background",
-                /* 6 */ "Offs.X",
-                /* 7 */ "Offs.Y",
-                /* 8 */ "Rot."
+                /* 0 */ "Type",
+                /* 1 */ "Time",
+                /* 2 */ "FWHM",
+                /* 3 */ "Ovality",
+                /* 4 */ "Stars",
+                /* 5 */ "Noise",
+                /* 6 */ "Background",
+                /* 7 */ "Offs.X",
+                /* 8 */ "Offs.Y",
+                /* 9 */ "Rot."
             ];
             for (idx, col_name) in columns.into_iter().enumerate() {
                 let cell_text = gtk::CellRendererText::new();
@@ -2285,6 +2291,15 @@ fn update_light_history_table(data: &Rc<CameraData>) {
         format!(r##"<span color="#FF4040"><b>{}</b></span>"##, s)
     };
     for item in &items[models_row_cnt..to_index] {
+        let mode_type_str = match item.mode_type {
+            ModeType::SingleShot      => "S",
+            ModeType::LiveView        => "LV",
+            ModeType::SavingRawFrames => "RAW",
+            ModeType::LiveStacking    => "LS",
+            ModeType::Focusing        => "F",
+            ModeType::DitherCalibr    => "MC",
+            _                         => "???",
+        };
         let local_time_str =
             if let Some(time) = item.time.clone() {
                 let local_time: DateTime<Local> = DateTime::from(time);
@@ -2334,15 +2349,16 @@ fn update_light_history_table(data: &Rc<CameraData>) {
             gtk_utils::get_list_view_selected_row(&tree).map(|v| v+1) ==
             Some(models_row_cnt as i32);
         let last = model.insert_with_values(None, &[
-            (0, &local_time_str),
-            (1, &fwhm_str),
-            (2, &ovality_str),
-            (3, &stars_cnt),
-            (4, &noise_str),
-            (5, &bg_str),
-            (6, &x_str),
-            (7, &y_str),
-            (8, &angle_str),
+            (0, &mode_type_str),
+            (1, &local_time_str),
+            (2, &fwhm_str),
+            (3, &ovality_str),
+            (4, &stars_cnt),
+            (5, &noise_str),
+            (6, &bg_str),
+            (7, &x_str),
+            (8, &y_str),
+            (9, &angle_str),
         ]);
         if last_is_selected || models_row_cnt == 0 {
             // Select and scroll to last row
