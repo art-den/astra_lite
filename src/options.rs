@@ -110,7 +110,7 @@ impl FrameOptions {
 
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct CalibrOptions {
     pub dark_frame_en: bool,

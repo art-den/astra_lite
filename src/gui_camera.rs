@@ -1,9 +1,4 @@
-use std::{
-    rc::Rc,
-    sync::*,
-    cell::{RefCell, Cell},
-    path::PathBuf,
-};
+use std::{rc::Rc, sync::*, cell::{RefCell, Cell}, path::PathBuf};
 use chrono::{DateTime, Local, Utc};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use serde::{Serialize, Deserialize};
@@ -45,6 +40,15 @@ enum DelayedActionTypes {
     FillHeaterItems,
 }
 
+#[derive(Serialize, Deserialize, Debug,  Default)]
+#[serde(default)]
+struct StoredCamOptions {
+    cam:    DeviceAndProp,
+    frame:  FrameOptions,
+    ctrl:   CamCtrlOptions,
+    calibr: CalibrOptions,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 struct GuiOptions {
@@ -61,6 +65,7 @@ struct GuiOptions {
     dith_exp:       bool,
     quality_exp:    bool,
     mount_exp:      bool,
+    all_cam_opts:   Vec<StoredCamOptions>,
 }
 
 impl Default for GuiOptions {
@@ -79,6 +84,7 @@ impl Default for GuiOptions {
             dith_exp:       false,
             quality_exp:    true,
             mount_exp:      false,
+            all_cam_opts:   Vec::new(),
         }
     }
 }
@@ -121,6 +127,7 @@ struct CameraData {
     excl:               ExclusiveCaller,
     full_screen_mode:   Cell<bool>,
     cam_list:           RefCell<Vec<DeviceAndProp>>,
+    prev_cam:           RefCell<Option<DeviceAndProp>>,
     self_:              RefCell<Option<Rc<CameraData>>>,
 }
 
@@ -165,6 +172,7 @@ pub fn build_ui(
         excl:               ExclusiveCaller::new(),
         full_screen_mode:   Cell::new(false),
         cam_list:           RefCell::new(Vec::new()),
+        prev_cam:           RefCell::new(None),
         self_:              RefCell::new(None),
     });
 
@@ -181,6 +189,8 @@ pub fn build_ui(
 
     show_options(&data);
     show_frame_options(&data);
+    show_calibr_options(&data);
+    show_cam_ctrl_options(&data);
 
     show_total_raw_time(&data);
     update_light_history_table(&data);
@@ -439,9 +449,45 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
             let cam_list = data.cam_list.borrow();
             if cam_list.is_empty() { return; }
             let Some(cur_index) = cb.active() else { return; };
+            let mut prev_cam = data.prev_cam.borrow_mut();
+
+            // Store previous camera options into GuiOptions::all_cam_opts
+            if let Some(prev_cam) = &*prev_cam {
+                let mut gui_options = data.gui_options.borrow_mut();
+                let options = data.options.read().unwrap();
+                let store_dest = if let Some(existing) = gui_options.all_cam_opts.iter_mut().find(|item| item.cam == *prev_cam) {
+                    existing
+                } else {
+                    let mut new_cam_opts = StoredCamOptions::default();
+                    new_cam_opts.cam = prev_cam.clone();
+                    gui_options.all_cam_opts.push(new_cam_opts);
+                    gui_options.all_cam_opts.last_mut().unwrap()
+                };
+                store_dest.frame = options.cam.frame.clone();
+                store_dest.ctrl = options.cam.ctrl.clone();
+                store_dest.calibr = options.calibr.clone();
+            }
+
             let camera_device = cam_list.get(cur_index as usize);
+
+            // Restore previous options of selected camera
+            let gui_options = data.gui_options.borrow();
+            if let Some(existing) = gui_options.all_cam_opts.iter().find(|item| &Some(&item.cam) == &camera_device) {
+                let mut options = data.options.write().unwrap();
+                options.cam.frame = existing.frame.clone();
+                options.cam.ctrl = existing.ctrl.clone();
+                options.calibr = existing.calibr.clone();
+            }
+            drop(gui_options);
+
             correct_widgets_props_impl(&data, camera_device, false);
             _ = update_resolution_list_impl(&data, camera_device);
+
+            show_frame_options(&data);
+            show_calibr_options(&data);
+            show_cam_ctrl_options(&data);
+
+            *prev_cam = camera_device.cloned();
         });
     }));
 
@@ -849,6 +895,26 @@ fn show_frame_options(data: &Rc<CameraData>) {
     ui.set_prop_bool("chb_low_noise.active",    options.cam.frame.low_noise);
 }
 
+fn show_calibr_options(data: &Rc<CameraData>) {
+    let options = data.options.read().unwrap();
+    let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
+
+    ui.set_prop_bool("chb_master_dark.active", options.calibr.dark_frame_en);
+    ui.set_fch_path ("fch_master_dark",        options.calibr.dark_frame.as_deref());
+    ui.set_prop_bool("chb_master_flat.active", options.calibr.flat_frame_en);
+    ui.set_fch_path ("fch_master_flat",        options.calibr.flat_frame.as_deref());
+    ui.set_prop_bool("chb_hot_pixels.active",  options.calibr.hot_pixels);
+}
+
+fn show_cam_ctrl_options(data: &Rc<CameraData>) {
+    let options = data.options.read().unwrap();
+    let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
+
+    ui.set_prop_bool("chb_cooler.active", options.cam.ctrl.enable_cooler);
+    ui.set_prop_f64 ("spb_temp.value",    options.cam.ctrl.temperature);
+    ui.set_prop_bool("chb_fan.active",    options.cam.ctrl.enable_fan);
+}
+
 fn show_options(data: &Rc<CameraData>) {
     let bld = &data.builder;
 
@@ -858,20 +924,6 @@ fn show_options(data: &Rc<CameraData>) {
     // Camera
 
     ui.set_prop_bool("chb_shots_cont.active", options.cam.live_view);
-
-    // Camera control
-
-    ui.set_prop_bool("chb_cooler.active",     options.cam.ctrl.enable_cooler);
-    ui.set_prop_f64 ("spb_temp.value",        options.cam.ctrl.temperature);
-    ui.set_prop_bool("chb_fan.active",        options.cam.ctrl.enable_fan);
-
-    // Calibration
-
-    ui.set_prop_bool("chb_master_dark.active", options.calibr.dark_frame_en);
-    ui.set_fch_path ("fch_master_dark",        options.calibr.dark_frame.as_deref());
-    ui.set_prop_bool("chb_master_flat.active", options.calibr.flat_frame_en);
-    ui.set_fch_path ("fch_master_flat",        options.calibr.flat_frame.as_deref());
-    ui.set_prop_bool("chb_hot_pixels.active",  options.calibr.hot_pixels);
 
     // Raw frames
 
