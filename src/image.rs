@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use itertools::*;
 use rayon::prelude::*;
 
-use crate::{math::*, image_info::Histogram, options::PreviewColor};
+use crate::{math::*, image_info::Histogram};
 
 pub struct ImageLayer<T> {
     data: Vec<T>,
@@ -304,6 +304,14 @@ impl<'a, T: Copy + Default> Iterator for RectIterator<'a, T> {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+#[derive(PartialEq)]
+pub enum ToBytesColorMode {
+    Rgb,
+    Red,
+    Green,
+    Blue
+}
+
 pub struct Image {
     pub r: ImageLayer<u16>,
     pub g: ImageLayer<u16>,
@@ -421,7 +429,7 @@ impl Image {
         b_levels:     &DarkLightLevels,
         gamma:        f64,
         reduct_ratio: usize,
-        color:        PreviewColor,
+        color_mode:   ToBytesColorMode,
     ) -> RgbU8Data {
         if self.is_empty() {
             return RgbU8Data::default();
@@ -436,10 +444,10 @@ impl Image {
         let b_table = Self::create_gamma_table(b_levels.dark, b_levels.light, gamma);
         let l_table = Self::create_gamma_table(l_levels.dark, l_levels.light, gamma);
         match reduct_ratio {
-            1 => self.to_grb_bytes_no_reduct(&r_table, &g_table, &b_table, &l_table, args, color),
-            2 => self.to_grb_bytes_reduct2  (&r_table, &g_table, &b_table, &l_table, args, color),
-            3 => self.to_grb_bytes_reduct3  (&r_table, &g_table, &b_table, &l_table, args, color),
-            4 => self.to_grb_bytes_reduct4  (&r_table, &g_table, &b_table, &l_table, args, color),
+            1 => self.to_grb_bytes_no_reduct(&r_table, &g_table, &b_table, &l_table, args, color_mode),
+            2 => self.to_grb_bytes_reduct2  (&r_table, &g_table, &b_table, &l_table, args, color_mode),
+            3 => self.to_grb_bytes_reduct3  (&r_table, &g_table, &b_table, &l_table, args, color_mode),
+            4 => self.to_grb_bytes_reduct4  (&r_table, &g_table, &b_table, &l_table, args, color_mode),
             _ => panic!("Wrong reduct_ratio ({})", reduct_ratio),
         }
     }
@@ -465,16 +473,15 @@ impl Image {
 
     fn to_grb_bytes_no_reduct(
         &self,
-        r_table: &[u8],
-        g_table: &[u8],
-        b_table: &[u8],
-        l_table: &[u8],
-        args:    ImageToU8BytesArgs,
-        color:   PreviewColor,
+        r_table:    &[u8],
+        g_table:    &[u8],
+        b_table:    &[u8],
+        l_table:    &[u8],
+        args:       ImageToU8BytesArgs,
+        color_mode: ToBytesColorMode,
     ) -> RgbU8Data {
         let mut rgb_bytes = Vec::with_capacity(3 * args.width * args.height);
-        let is_color_image = args.is_color_image && color == PreviewColor::Rgb;
-        if is_color_image {
+        if args.is_color_image && color_mode == ToBytesColorMode::Rgb {
             for row in 0..args.height {
                 let r_iter = self.r.row(row).iter();
                 let g_iter = self.g.row(row).iter();
@@ -487,11 +494,11 @@ impl Image {
                 }
             }
         } else {
-            let (m_data, table) = match (args.is_color_image, color) {
-                (false, _)               => (&self.l, l_table),
-                (_, PreviewColor::Red)   => (&self.r, r_table),
-                (_, PreviewColor::Green) => (&self.g, g_table),
-                (_, PreviewColor::Blue)  => (&self.b, b_table),
+            let (m_data, table) = match (args.is_color_image, color_mode) {
+                (false, _)                   => (&self.l, l_table),
+                (_, ToBytesColorMode::Red)   => (&self.r, r_table),
+                (_, ToBytesColorMode::Green) => (&self.g, g_table),
+                (_, ToBytesColorMode::Blue)  => (&self.b, b_table),
                 _ => unreachable!(),
             };
             for row in 0..args.height {
@@ -515,18 +522,17 @@ impl Image {
 
     fn to_grb_bytes_reduct2(
         &self,
-        r_table: &[u8],
-        g_table: &[u8],
-        b_table: &[u8],
-        l_table: &[u8],
-        args:    ImageToU8BytesArgs,
-        color:   PreviewColor,
+        r_table:    &[u8],
+        g_table:    &[u8],
+        b_table:    &[u8],
+        l_table:    &[u8],
+        args:       ImageToU8BytesArgs,
+        color_mode: ToBytesColorMode,
     ) -> RgbU8Data {
         let width = args.width / 2;
         let height = args.height / 2;
         let mut bytes = Vec::with_capacity(3 * width * height);
-        let is_color_image = args.is_color_image && color == PreviewColor::Rgb;
-        if is_color_image {
+        if args.is_color_image && color_mode == ToBytesColorMode::Rgb {
             for y in 0..height {
                 let mut r0 = self.r.row(2*y).as_ptr();
                 let mut r1 = self.r.row(2*y+1).as_ptr();
@@ -559,11 +565,11 @@ impl Image {
                 }
             }
         } else {
-            let (m_data, table) = match (args.is_color_image, color) {
-                (false, _)               => (&self.l, l_table),
-                (_, PreviewColor::Red)   => (&self.r, r_table),
-                (_, PreviewColor::Green) => (&self.g, g_table),
-                (_, PreviewColor::Blue)  => (&self.b, b_table),
+            let (m_data, table) = match (args.is_color_image, color_mode) {
+                (false, _)                   => (&self.l, l_table),
+                (_, ToBytesColorMode::Red)   => (&self.r, r_table),
+                (_, ToBytesColorMode::Green) => (&self.g, g_table),
+                (_, ToBytesColorMode::Blue)  => (&self.b, b_table),
                 _ => unreachable!(),
             };
             for y in 0..height {
@@ -593,18 +599,17 @@ impl Image {
 
     fn to_grb_bytes_reduct3(
         &self,
-        r_table: &[u8],
-        g_table: &[u8],
-        b_table: &[u8],
-        l_table: &[u8],
-        args:    ImageToU8BytesArgs,
-        color:   PreviewColor,
+        r_table:    &[u8],
+        g_table:    &[u8],
+        b_table:    &[u8],
+        l_table:    &[u8],
+        args:       ImageToU8BytesArgs,
+        color_mode: ToBytesColorMode,
     ) -> RgbU8Data {
         let width = args.width / 3;
         let height = args.height / 3;
         let mut bytes = Vec::with_capacity(3 * width * height);
-        let is_color_image = args.is_color_image && color == PreviewColor::Rgb;
-        if is_color_image {
+        if args.is_color_image && color_mode == ToBytesColorMode::Rgb {
             for y in 0..height {
                 let mut r0 = self.r.row(3*y).as_ptr();
                 let mut r1 = self.r.row(3*y+1).as_ptr();
@@ -646,11 +651,11 @@ impl Image {
                 }
             }
         } else {
-            let (m_data, table) = match (args.is_color_image, color) {
-                (false, _)               => (&self.l, l_table),
-                (_, PreviewColor::Red)   => (&self.r, r_table),
-                (_, PreviewColor::Green) => (&self.g, g_table),
-                (_, PreviewColor::Blue)  => (&self.b, b_table),
+            let (m_data, table) = match (args.is_color_image, color_mode) {
+                (false, _)                   => (&self.l, l_table),
+                (_, ToBytesColorMode::Red)   => (&self.r, r_table),
+                (_, ToBytesColorMode::Green) => (&self.g, g_table),
+                (_, ToBytesColorMode::Blue)  => (&self.b, b_table),
                 _ => unreachable!(),
             };
             for y in 0..height {
@@ -683,18 +688,17 @@ impl Image {
 
     fn to_grb_bytes_reduct4(
         &self,
-        r_table: &[u8],
-        g_table: &[u8],
-        b_table: &[u8],
-        l_table: &[u8],
-        args:    ImageToU8BytesArgs,
-        color:   PreviewColor,
+        r_table:    &[u8],
+        g_table:    &[u8],
+        b_table:    &[u8],
+        l_table:    &[u8],
+        args:       ImageToU8BytesArgs,
+        color_mode: ToBytesColorMode,
     ) -> RgbU8Data {
         let width = args.width / 4;
         let height = args.height / 4;
         let mut bytes = Vec::with_capacity(3 * width * height);
-        let is_color_image = args.is_color_image && color == PreviewColor::Rgb;
-        if is_color_image {
+        if args.is_color_image && color_mode == ToBytesColorMode::Rgb {
             for y in 0..height {
                 let mut r0 = self.r.row(4*y).as_ptr();
                 let mut r1 = self.r.row(4*y+1).as_ptr();
@@ -745,11 +749,11 @@ impl Image {
                 }
             }
         } else {
-            let (m_data, table) = match (args.is_color_image, color) {
-                (false, _)               => (&self.l, l_table),
-                (_, PreviewColor::Red)   => (&self.r, r_table),
-                (_, PreviewColor::Green) => (&self.g, g_table),
-                (_, PreviewColor::Blue)  => (&self.b, b_table),
+            let (m_data, table) = match (args.is_color_image, color_mode) {
+                (false, _)                   => (&self.l, l_table),
+                (_, ToBytesColorMode::Red)   => (&self.r, r_table),
+                (_, ToBytesColorMode::Green) => (&self.g, g_table),
+                (_, ToBytesColorMode::Blue)  => (&self.b, b_table),
                 _ => unreachable!(),
             };
             for y in 0..height {

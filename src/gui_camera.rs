@@ -1922,14 +1922,14 @@ fn show_frame_processing_result(
                 mode_type,
                 time:          info.time.clone(),
                 stars_fwhm:    info.stars_fwhm,
-                bad_fwhm:      !info.good_fwhm,
+                bad_fwhm:      !info.fwhm_is_ok,
                 stars_ovality: info.stars_ovality,
-                bad_ovality:   !info.good_ovality,
+                bad_ovality:   !info.ovality_is_ok,
                 background:    info.bg_percent,
                 noise:         info.raw_noise.map(|n| 100.0 * n / info.max_value as f32),
                 stars_count:   info.stars.len(),
                 offset:        info.stars_offset.clone(),
-                bad_offset:    !info.good_offset,
+                bad_offset:    !info.offset_is_ok,
             };
             data.light_history.borrow_mut().push(history_item);
             update_light_history_table(data);

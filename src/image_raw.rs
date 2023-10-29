@@ -115,8 +115,7 @@ pub struct RawImage {
 
 impl RawImage {
     pub fn new_from_fits_stream(
-        mut stream:    impl SeekNRead,
-        config_offset: Option<i32>,
+        mut stream: impl SeekNRead
     ) -> anyhow::Result<RawImage> {
         let reader = FitsReader::new(&mut stream)?;
         let Some(image_hdu) = reader.headers.iter().find(|hdu| {
@@ -125,20 +124,16 @@ impl RawImage {
             anyhow::bail!("No RAW image found in fits data");
         };
 
-        let width      = image_hdu.dims()[0];
-        let height     = image_hdu.dims()[1];
-        let exposure   = image_hdu.get_f64("EXPTIME" ).unwrap_or(0.0);
-        let bayer      = image_hdu.get_str("BAYERPAT").unwrap_or_default();
-        let bitdepth   = image_hdu.get_i64("BITDEPTH").unwrap_or(image_hdu.bitpix() as i64) as i32;
-        let bin        = image_hdu.get_i64("XBINNING").unwrap_or(1) as u8;
-        let mut offset = image_hdu.get_i64("OFFSET"  ).unwrap_or(0) as i32;
-        let frame_str  = image_hdu.get_str("FRAME"   );
-        let data       = image_hdu.read_data(&mut stream)?;
-        let time_str   = image_hdu.get_str("DATE-OBS").unwrap_or_default();
-
-        if let (0, Some(config_offset)) = (offset, config_offset) {
-            offset = config_offset;
-        }
+        let width     = image_hdu.dims()[0];
+        let height    = image_hdu.dims()[1];
+        let exposure  = image_hdu.get_f64("EXPTIME" ).unwrap_or(0.0);
+        let bayer     = image_hdu.get_str("BAYERPAT").unwrap_or_default();
+        let bitdepth  = image_hdu.get_i64("BITDEPTH").unwrap_or(image_hdu.bitpix() as i64) as i32;
+        let bin       = image_hdu.get_i64("XBINNING").unwrap_or(1) as u8;
+        let offset    = image_hdu.get_i64("OFFSET"  ).unwrap_or(0) as i32;
+        let frame_str = image_hdu.get_str("FRAME"   );
+        let data      = image_hdu.read_data(&mut stream)?;
+        let time_str  = image_hdu.get_str("DATE-OBS").unwrap_or_default();
 
         if bitdepth > 16 {
             anyhow::bail!("BITDEPTH > 16 ({}) is not supported", bitdepth);
@@ -171,9 +166,9 @@ impl RawImage {
         Ok(Self {info, data, cfa_arr})
     }
 
-    pub fn new_from_fits_file(file_name: &Path, offset: Option<i32>) -> anyhow::Result<RawImage> {
+    pub fn new_from_fits_file(file_name: &Path) -> anyhow::Result<RawImage> {
         let mut file = File::open(file_name)?;
-        Self::new_from_fits_stream(&mut file, offset)
+        Self::new_from_fits_stream(&mut file)
     }
 
     pub fn save_to_fits_file(&self, file_name: &Path) -> anyhow::Result<()> {

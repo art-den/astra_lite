@@ -1,4 +1,4 @@
-use std::f64::consts::PI;
+use std::{f64::consts::PI, collections::HashMap};
 use itertools::Itertools;
 
 pub struct Point {
@@ -29,9 +29,9 @@ impl Offset {
         image_height: f64
     ) -> Option<Self> {
         for (max_points_cnt, max_err, triangulate) in [
-            (50,  3.0, false),
-            (70,  2.0, false),
-            (100, 2.0, false),
+            (50,  2.5, false),
+            (70,  1.5, false),
+            (100, 1.5, false),
         ] {
             let result = try_calculate(
                 ref_points,
@@ -60,12 +60,13 @@ fn try_calculate(
     triangulate:    bool,
 ) -> Option<Offset> {
     const MAX_SIMILAR_TRIANGLES_CNT: usize = 10;
+    const ANGLE_ERR: f64 = 1.5 * PI / 180.0; // 1.5°
 
     let min_triangle_len = (image_width + image_height) / 10.0;
 
     // Generate triangles
-    let ref_triangles = generate_triangles(ref_points, max_points_cnt, min_triangle_len, false, triangulate);
-    let triangles = generate_triangles(points, max_points_cnt, min_triangle_len, true, triangulate);
+    let ref_triangles = generate_triangles(ref_points, max_points_cnt, min_triangle_len, triangulate);
+    let triangles = generate_triangles(points, max_points_cnt, min_triangle_len, triangulate);
 
     // Search similar trinagles
     let max_err2 = max_err*max_err;
@@ -92,60 +93,44 @@ fn try_calculate(
     }
 
     let mut angle_values = Vec::new();
-    let mut angle_diffs = Vec::new();
     let mut x_values = Vec::new();
     let mut y_values = Vec::new();
+    let mut angle_hist = HashMap::<i16, usize>::new();
     for _iteration in 0..10 {
         let start_iteration_count = similar_triangles.len();
 
-        // find largest cluster of angles and average angle of cluster
+        // Build histogram by angles with 1° precision
+        angle_hist.clear();
+        for (angle, ..) in &similar_triangles {
+            let mut i16_angle = (180.0 * angle / PI).round() as i16;
+            if i16_angle <= -180 { i16_angle += 360; }
+            angle_hist.entry(i16_angle).and_modify(|v| *v += 1).or_insert(1);
+        }
+
+        // Find angle at maximum of histogram
+        let (_, Some(i16_angle_at_max)) = angle_hist
+            .iter()
+            .fold((0, None), |(mut max_cnt, mut angle_at_max), (&angle, &cnt)| {
+                if cnt > max_cnt {
+                    max_cnt = cnt;
+                    angle_at_max = Some(angle);
+                }
+                (max_cnt, angle_at_max)
+            })
+        else { return None; };
+        let angle_at_max = PI * (i16_angle_at_max as f64) / 180.0;
+
+        // Filter similar_triangles by (angle_at_max-ANGLE_ERR, angle_at_max+ANGLE_ERR)
+        similar_triangles.retain(|(angle, ..)| {
+            let mut angle_diff = angle - angle_at_max;
+            if angle_diff > PI { angle_diff -= 2.0 * PI; }
+            if angle_diff < -PI { angle_diff += 2.0 * PI; }
+            angle_diff.abs() < ANGLE_ERR
+        });
+
         angle_values.clear();
         for (angle, ..) in &similar_triangles { angle_values.push(*angle); }
-        angle_values.sort_by(cmp_f64);
-        angle_diffs.clear();
-        for (a1, a2) in angle_values.iter().tuple_windows() {
-            angle_diffs.push(a2-a1);
-        }
-        let angle_diffs_pos = angle_diffs.len() / 4;
-        let min_angle_diff = *angle_diffs.select_nth_unstable_by(angle_diffs_pos, cmp_f64).1;
-        struct Cluster {
-            start_index: usize,
-            end_index: usize,
-        }
-        let mut clusters = Vec::new();
-        let mut start_index = 0_usize;
-        for (i, (a1, a2)) in angle_values.iter().tuple_windows().enumerate() {
-            let angle_diff = a2 - a1;
-            if angle_diff > min_angle_diff {
-                if i != start_index {
-                    clusters.push( Cluster { start_index, end_index: i } );
-                }
-                start_index = i+1;
-            }
-        }
-        if start_index != angle_values.len()-1 {
-            clusters.push(Cluster {
-                start_index,
-                end_index: angle_values.len()-1
-            });
-        }
-        let (start_index, end_index) = if !clusters.is_empty() {
-            let largest_cluster = clusters.iter().max_by_key(|cl| cl.end_index - cl.start_index).unwrap();
-            (largest_cluster.start_index, largest_cluster.end_index)
-        } else {
-            (0, angle_values.len()-1)
-        };
-        let for_angle_values = &angle_values[start_index..=end_index];
-        let angle = for_angle_values.iter().sum::<f64>() / for_angle_values.len() as f64;
-
-        // filter similar_triangles by angle
-        const ANGLE_ERR: f64 = 1.0 * PI / 180.0;
-        let min_angle = angle - ANGLE_ERR;
-        let max_angle = angle + ANGLE_ERR;
-        similar_triangles.retain(|(angle, ..)| *angle > min_angle && *angle < max_angle);
-        if similar_triangles.len() < MAX_SIMILAR_TRIANGLES_CNT {
-            return None;
-        }
+        let angle = angles_mean(&angle_values);
 
         // Caluclate x and y offset for similar_triangles and median values
         let center_x = (image_width - 1.0) / 2.0;
@@ -185,7 +170,11 @@ fn try_calculate(
         }
     }
     let count = similar_triangles.len() as f64;
-    let aver_angle = similar_triangles.iter().map(|(angle, ..)| *angle).sum::<f64>() / count;
+    angle_values.clear();
+    for (angle, ..) in &similar_triangles {
+        angle_values.push(*angle);
+    }
+    let aver_angle = angles_mean(&angle_values);
     let aver_x_offs = similar_triangles.iter().map(|(_, _, _, x_offs, _)| *x_offs).sum::<f64>() / count;
     let aver_y_offs = similar_triangles.iter().map(|(_, _, _, _, y_offs)| *y_offs).sum::<f64>() / count;
 
@@ -222,10 +211,12 @@ impl<'a> Triangle<'a> {
             ));
             correct_angle(other_angle - self_angle)
         };
-        let angle1 = calc_angle(0, 1);
-        let angle2 = calc_angle(1, 2);
-        let angle3 = calc_angle(2, 0);
-        (angle1 + angle2 + angle3) / 3.0
+        let angles = [
+            calc_angle(0, 1),
+            calc_angle(1, 2),
+            calc_angle(2, 0)
+        ];
+        angles_mean(&angles)
     }
 
     fn center(&self) -> Point {
@@ -240,7 +231,6 @@ fn generate_triangles(
     points:           &[Point],
     max_points_cnt:   usize,
     min_triangle_len: f64,
-    also_rotated:     bool,
     _triangulate:     bool // TODO: add trinagulation!!!
 ) -> Vec<Triangle> {
     fn add_triangles<'a>(
@@ -249,7 +239,6 @@ fn generate_triangles(
         p2:           &'a Point,
         p3:           &'a Point,
         min_len:      f64,
-        also_rotated: bool,
     ) {
         let len1 = p1.dist_to(p2);
         let len2 = p2.dist_to(p3);
@@ -258,30 +247,26 @@ fn generate_triangles(
         if total_len < min_len {
             return;
         }
-        let c_x = (p1.x + p2.x + p3.x) / 3.0;
-        let c_y = (p1.y + p2.y + p3.y) / 3.0;
-        let mut points = [
-            (f64::atan2(p1.y - c_y, p1.x - c_x), p1, len1),
-            (f64::atan2(p2.y - c_y, p2.x - c_x), p2, len2),
-            (f64::atan2(p3.y - c_y, p3.x - c_x), p3, len3),
-        ];
-        points.sort_by(|(a1, ..), (a2, ..)| cmp_f64(a1, a2));
-        result.push(Triangle {
-            points:    [p1, p2, p3],
-            edge_lens: [len1, len2, len3],
-            len: total_len,
-        });
-        if also_rotated {
-            result.push(Triangle {
+        let len_items = [len1, len2, len3];
+        let min_pos = len_items.iter().copied().position_min_by(cmp_f64);
+
+        match min_pos {
+            Some(0) => result.push(Triangle {
+                points:    [p1, p2, p3],
+                edge_lens: [len1, len2, len3],
+                len: total_len,
+            }),
+            Some(1) => result.push(Triangle {
                 points:    [p2, p3, p1],
                 edge_lens: [len2, len3, len1],
                 len: total_len,
-            });
-            result.push(Triangle {
+            }),
+            Some(2) => result.push(Triangle {
                 points:    [p3, p1, p2],
                 edge_lens: [len3, len1, len2],
                 len: total_len,
-            });
+            }),
+            _ => unreachable!(),
         }
     }
     let max_points = points.len().min(max_points_cnt);
@@ -295,7 +280,6 @@ fn generate_triangles(
                     &points[j],
                     &points[k],
                     min_triangle_len,
-                    also_rotated
                 );
             }
         }
@@ -325,4 +309,10 @@ fn rotate_point(x: f64, y: f64, x0: f64, y0: f64, angle: f64) -> Point {
         x: x0 + dx * cos_a - dy * sin_a,
         y: y0 + dy * cos_a + dx * sin_a
     }
+}
+
+fn angles_mean(angles: &[f64]) -> f64 {
+    let v1 = angles.iter().map(|a| f64::sin(*a)).sum();
+    let v2 = angles.iter().map(|a| f64::cos(*a)).sum();
+    f64::atan2(v1, v2)
 }

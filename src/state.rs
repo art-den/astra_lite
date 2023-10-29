@@ -2587,7 +2587,7 @@ impl MountCalibrMode {
         _subscribers: &Arc<RwLock<Subscribers>>,
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
-        if info.good_fwhm && info.good_ovality {
+        if info.fwhm_is_ok && info.ovality_is_ok {
             if self.image_width == 0 || self.image_height == 0 {
                 self.image_width = info.width;
                 self.image_height = info.height;

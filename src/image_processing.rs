@@ -240,12 +240,11 @@ pub fn start_frame_processing_thread() -> (mpsc::Sender<FrameProcessCommand>, Jo
 }
 
 fn create_raw_image_from_blob(
-    blob_prop_value: &Arc<indi_api::BlobPropValue>,
-    offset:          i32,
+    blob_prop_value: &Arc<indi_api::BlobPropValue>
 ) -> anyhow::Result<RawImage> {
     if blob_prop_value.format == ".fits" {
         let mem_stream = Cursor::new(blob_prop_value.data.as_slice());
-        let raw_image = RawImage::new_from_fits_stream(mem_stream, Some(offset))?;
+        let raw_image = RawImage::new_from_fits_stream(mem_stream)?;
         return Ok(raw_image);
     }
 
@@ -337,6 +336,13 @@ pub fn get_rgb_data_from_preview_image(
         DarkLightLevels::default()
     };
 
+    let color_mode = match params.color {
+        PreviewColor::Rgb   => ToBytesColorMode::Rgb,
+        PreviewColor::Red   => ToBytesColorMode::Red,
+        PreviewColor::Green => ToBytesColorMode::Green,
+        PreviewColor::Blue  => ToBytesColorMode::Blue,
+    };
+
     image.to_grb_bytes(
         &l_levels,
         &r_levels,
@@ -344,7 +350,7 @@ pub fn get_rgb_data_from_preview_image(
         &b_levels,
         params.gamma,
         reduct_ratio,
-        params.color
+        color_mode,
     )
 }
 
@@ -357,7 +363,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
         if calibr.master_dark.is_none()
         || params.dark != calibr.master_dark_fn {
             let tmr = TimeLogger::start();
-            let master_dark = RawImage::new_from_fits_file(file_name, None)
+            let master_dark = RawImage::new_from_fits_file(file_name)
                 .map_err(|e| anyhow::anyhow!(
                     "Error '{}'\nwhen reading master dark '{}'",
                     e.to_string(),
@@ -399,7 +405,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
         if calibr.master_flat.is_none()
         || params.flat != calibr.master_flat_fn {
             let tmr = TimeLogger::start();
-            let mut master_flat = RawImage::new_from_fits_file(file_name, None)
+            let mut master_flat = RawImage::new_from_fits_file(file_name)
                 .map_err(|e| anyhow::anyhow!(
                     "Error '{}'\nreading master flat '{}'",
                     e.to_string(),
@@ -491,7 +497,7 @@ fn make_preview_image_impl(
     log::debug!("Starting BLOB processing... Blob len = {}", command.blob.data.len());
 
     let tmr = TimeLogger::start();
-    let mut raw_image = create_raw_image_from_blob(&command.blob, command.frame_options.offset)?;
+    let mut raw_image = create_raw_image_from_blob(&command.blob)?;
     tmr.log("create_raw_image_from_blob");
 
     let raw_info = raw_image.info();
@@ -673,15 +679,15 @@ fn make_preview_image_impl(
         // Light frame information
 
         let tmr = TimeLogger::start();
-        let info = LightFrameInfo::from_image(
+        let mut info = LightFrameInfo::from_image(
             &image,
-            exposure,
-            raw_noise,
             max_stars_fwhm,
             max_stars_ovality,
             ref_stars,
             true,
         );
+        info.exposure = exposure;
+        info.raw_noise = raw_noise;
         tmr.log("TOTAL LightImageInfo::from_image");
 
         // Store reference stars for first good light frame
@@ -713,7 +719,7 @@ fn make_preview_image_impl(
             result_fun
         );
 
-        let bad_frame = !info.good_fwhm || !info.good_ovality;
+        let bad_frame = !info.fwhm_is_ok || !info.ovality_is_ok;
 
         // Live stacking
 
@@ -760,15 +766,14 @@ fn make_preview_image_impl(
                 // Live stacking image info
 
                 let tmr = TimeLogger::start();
-                let live_stacking_info = LightFrameInfo::from_image(
+                let mut live_stacking_info = LightFrameInfo::from_image(
                     &res_image,
-                    image_adder.total_exposure(),
-                    None,
                     max_stars_fwhm,
                     max_stars_ovality,
                     None,
                     true,
                 );
+                live_stacking_info.exposure = image_adder.total_exposure();
                 tmr.log("LightImageInfo::from_image for livestacking");
 
                 *live_stacking.data.info.write().unwrap() = ResultImageInfo::LightInfo(

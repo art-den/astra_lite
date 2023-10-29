@@ -65,22 +65,20 @@ pub struct LightFrameInfo {
     pub stars:         Stars,
     pub star_img:      ImageLayer<u16>,
     pub stars_fwhm:    Option<f32>,
-    pub good_fwhm:     bool,
+    pub fwhm_is_ok:    bool,
     pub stars_ovality: Option<f32>,
-    pub good_ovality:  bool,
+    pub ovality_is_ok: bool,
     pub stars_offset:  Option<Offset>,
-    pub good_offset:   bool,
+    pub offset_is_ok:   bool,
 }
 
 impl LightFrameInfo {
     pub fn from_image(
-        image:             &Image,
-        exposure:          f64,
-        raw_noise:         Option<f32>,
-        max_stars_fwhm:    Option<f32>,
-        max_stars_ovality: Option<f32>,
-        starts_for_offset: Option<&Vec<Point>>,
-        mt:                bool,
+        image:                &Image,
+        max_stars_fwhm:       Option<f32>,
+        max_stars_ovality:    Option<f32>,
+        stars_pos_for_offset: Option<&Vec<Point>>,
+        mt:                   bool,
     ) -> Self {
         let max_value = image.max_value();
         let overexposured_bord = (90 * max_value as u32 / 100) as u16;
@@ -123,13 +121,13 @@ impl LightFrameInfo {
             .map(|v| (v / COMMON_STAR_MAG_F) as f32);
         tmr.log("calc fwhm+ovality");
 
-        let good_fwhm = if let Some(max_stars_fwhm) = max_stars_fwhm {
+        let fwhm_is_ok = if let Some(max_stars_fwhm) = max_stars_fwhm {
             stars_fwhm.unwrap_or(999.0) < max_stars_fwhm
         } else {
             true
         };
 
-        let good_ovality = if let Some(max_stars_ovality) = max_stars_ovality {
+        let ovality_is_ok = if let Some(max_stars_ovality) = max_stars_ovality {
             stars_ovality.unwrap_or(999.0) < max_stars_ovality
         } else {
             true
@@ -137,8 +135,8 @@ impl LightFrameInfo {
 
         // Offset by reference stars
 
-        let (stars_offset, good_offset) = if let (Some(starts_for_offset), true, true) =
-        (starts_for_offset, good_fwhm, good_ovality) {
+        let (stars_offset, offset_is_ok) = if let (Some(starts_for_offset), true, true) =
+        (stars_pos_for_offset, fwhm_is_ok, ovality_is_ok) {
             let tmr = TimeLogger::start();
             let cur_stars_points: Vec<_> = stars.iter()
                 .map(|star| Point {x: star.x, y: star.y })
@@ -160,8 +158,8 @@ impl LightFrameInfo {
             time: image.time.clone(),
             width: image.width(),
             height: image.height(),
-            exposure,
-            raw_noise,
+            exposure: 0.0,
+            raw_noise: None,
             noise,
             noise_percent: (100.0 * noise as f64 / image.max_value() as f64) as f32,
             background,
@@ -170,17 +168,17 @@ impl LightFrameInfo {
             stars,
             star_img,
             stars_fwhm,
-            good_fwhm,
+            fwhm_is_ok,
             stars_ovality,
-            good_ovality,
+            ovality_is_ok,
             stars_offset,
-            good_offset,
+            offset_is_ok,
 
         }
     }
 
     pub fn is_ok(&self) -> bool {
-        self.good_fwhm && self.good_ovality
+        self.fwhm_is_ok && self.ovality_is_ok
     }
 
     fn find_stars_in_image(
