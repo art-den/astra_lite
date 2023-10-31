@@ -1,4 +1,4 @@
-use std::{sync::Arc, sync::{mpsc, RwLock, Mutex}, thread::JoinHandle, path::*, io::Cursor};
+use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, sync::{mpsc, RwLock, Mutex}, thread::JoinHandle, path::*, io::Cursor};
 
 use bitflags::bitflags;
 use chrono::{DateTime, Local};
@@ -137,6 +137,7 @@ pub struct FrameProcessCommandData {
     pub flags:           ProcessImageFlags,
     pub blob:            Arc<indi_api::BlobPropValue>,
     pub frame:           Arc<ResultImage>,
+    pub stop_flag:       Arc<AtomicBool>,
     pub ref_stars:       Arc<Mutex<Option<Vec<Point>>>>,
     pub calibr_params:   CalibrParams,
     pub calibr_images:   Arc<Mutex<CalibrImages>>,
@@ -486,6 +487,11 @@ fn make_preview_image_impl(
     command:    &FrameProcessCommandData,
     result_fun: &ResultFun
 ) -> anyhow::Result<()> {
+    if command.stop_flag.load(Ordering::Relaxed) {
+        log::debug!("Command stopped");
+        return Ok(());
+    }
+
     let total_tmr = TimeLogger::start();
 
     send_result(
@@ -509,6 +515,11 @@ fn make_preview_image_impl(
     log::debug!("Raw CFA       = {:?}", raw_info.cfa);
     log::debug!("Raw bin       = {}",   raw_info.bin);
     log::debug!("Raw exposure  = {}s",  raw_info.exposure);
+
+    if command.stop_flag.load(Ordering::Relaxed) {
+        log::debug!("Command stopped");
+        return Ok(());
+    }
 
     let exposure = raw_info.exposure;
     let frame_type = raw_info.frame_type;
@@ -539,6 +550,11 @@ fn make_preview_image_impl(
 
     drop(raw_hist);
 
+    if command.stop_flag.load(Ordering::Relaxed) {
+        log::debug!("Command stopped");
+        return Ok(());
+    }
+
     // Raw noise
     let raw_noise = if frame_type == FrameType::Lights {
         let tmr = TimeLogger::start();
@@ -551,10 +567,20 @@ fn make_preview_image_impl(
 
     log::debug!("Raw noise = {:?}", raw_noise);
 
+    if command.stop_flag.load(Ordering::Relaxed) {
+        log::debug!("Command stopped");
+        return Ok(());
+    }
+
     // Applying calibration data
     if frame_type == FrameType::Lights {
         let mut calibr = command.calibr_images.lock().unwrap();
         apply_calibr_data_and_remove_hot_pixels(&command.calibr_params, &mut raw_image, &mut calibr)?;
+    }
+
+    if command.stop_flag.load(Ordering::Relaxed) {
+        log::debug!("Command stopped");
+        return Ok(());
     }
 
     send_result(
@@ -590,6 +616,11 @@ fn make_preview_image_impl(
         _ => {},
     }
 
+    if command.stop_flag.load(Ordering::Relaxed) {
+        log::debug!("Command stopped");
+        return Ok(());
+    }
+
     // Demosaic
 
     let mut image = command.frame.image.write().unwrap();
@@ -602,6 +633,11 @@ fn make_preview_image_impl(
     }
     tmr.log("demosaic");
 
+    if command.stop_flag.load(Ordering::Relaxed) {
+        log::debug!("Command stopped");
+        return Ok(());
+    }
+
     // Remove gradient from light frame
 
     if frame_type == FrameType::Lights
@@ -613,6 +649,11 @@ fn make_preview_image_impl(
     }
 
     drop(image);
+
+    if command.stop_flag.load(Ordering::Relaxed) {
+        log::debug!("Command stopped");
+        return Ok(());
+    }
 
     // Add RAW calibration frame to adder
 
@@ -627,6 +668,11 @@ fn make_preview_image_impl(
 
     drop(raw_image);
 
+    if command.stop_flag.load(Ordering::Relaxed) {
+        log::debug!("Command stopped");
+        return Ok(());
+    }
+
     // Result image histogram
 
     let image = command.frame.image.read().unwrap();
@@ -635,6 +681,11 @@ fn make_preview_image_impl(
     hist.from_image(&image);
     tmr.log("histogram for result image");
     drop(hist);
+
+    if command.stop_flag.load(Ordering::Relaxed) {
+        log::debug!("Command stopped");
+        return Ok(());
+    }
 
     // Preview image RGB bytes
 
@@ -646,6 +697,11 @@ fn make_preview_image_impl(
         &command.view_options
     );
     tmr.log("get_rgb_bytes_from_preview_image");
+
+    if command.stop_flag.load(Ordering::Relaxed) {
+        log::debug!("Command stopped");
+        return Ok(());
+    }
 
     let preview_data = Arc::new(Preview8BitImgData {
         rgb_data: Mutex::new(rgb_data),
@@ -690,12 +746,17 @@ fn make_preview_image_impl(
         info.raw_noise = raw_noise;
         tmr.log("TOTAL LightImageInfo::from_image");
 
+        if command.stop_flag.load(Ordering::Relaxed) {
+            log::debug!("Command stopped");
+            return Ok(());
+        }
+
         // Store reference stars for first good light frame
 
         if command.flags.contains(ProcessImageFlags::CALC_STARS_OFFSET)
-        && info.is_ok()
+        && info.stars.is_ok()
         && ref_stars_lock.is_none() {
-            *ref_stars_lock = Some(info.stars.iter()
+            *ref_stars_lock = Some(info.stars.items.iter()
                 .map(|star| Point {x: star.x, y: star.y })
                 .collect::<Vec<_>>());
         }
@@ -719,7 +780,7 @@ fn make_preview_image_impl(
             result_fun
         );
 
-        let bad_frame = !info.fwhm_is_ok || !info.ovality_is_ok;
+        let bad_frame = !info.stars.fwhm_is_ok || !info.stars.ovality_is_ok;
 
         // Live stacking
 
@@ -731,6 +792,11 @@ fn make_preview_image_impl(
                 image_adder.add(&image, &hist, -offset.x, -offset.y, -offset.angle, exposure);
                 tmr.log("ImageAdder::add");
                 drop(image_adder);
+
+                if command.stop_flag.load(Ordering::Relaxed) {
+                    log::debug!("Command stopped");
+                    return Ok(());
+                }
 
                 let image_adder = live_stacking.data.adder.read().unwrap();
 
@@ -756,6 +822,12 @@ fn make_preview_image_impl(
                 hist.from_image(&res_image);
                 tmr.log("histogram from live view image");
                 drop(hist);
+
+                if command.stop_flag.load(Ordering::Relaxed) {
+                    log::debug!("Command stopped");
+                    return Ok(());
+                }
+
                 let hist = live_stacking.data.hist.read().unwrap();
                 send_result(
                     FrameProcessResultData::HistogramLiveRes(command.mode_type),
@@ -775,6 +847,11 @@ fn make_preview_image_impl(
                 );
                 live_stacking_info.exposure = image_adder.total_exposure();
                 tmr.log("LightImageInfo::from_image for livestacking");
+
+                if command.stop_flag.load(Ordering::Relaxed) {
+                    log::debug!("Command stopped");
+                    return Ok(());
+                }
 
                 *live_stacking.data.info.write().unwrap() = ResultImageInfo::LightInfo(
                     Arc::new(live_stacking_info)
@@ -801,6 +878,12 @@ fn make_preview_image_impl(
                         image_height: image.height(),
                         params: command.view_options.clone(),
                     });
+
+                    if command.stop_flag.load(Ordering::Relaxed) {
+                        log::debug!("Command stopped");
+                        return Ok(());
+                    }
+
                     send_result(
                         FrameProcessResultData::PreviewLiveRes(preview_data, command.mode_type),
                         &command.camera,

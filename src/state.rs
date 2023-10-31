@@ -11,12 +11,13 @@ use crate::{
     options::*,
     indi_api,
     image_raw::{FrameType, RawAdder},
-    image_info::{LightFrameInfo, Stars},
+    stars::Stars,
     math::*,
     stars_offset::*,
     image_processing::*,
     io_utils::*,
     phd2_conn,
+    image_info::LightFrameInfo,
 };
 
 #[derive(Clone)]
@@ -273,21 +274,22 @@ impl ExternalGuider for ExternalGuiderPhd2 {
 }
 
 pub struct State {
-    indi:            Arc<indi_api::Connection>,
-    phd2:            Arc<phd2_conn::Connection>,
-    options:         Arc<RwLock<Options>>,
-    mode_data:       Arc<RwLock<ModeData>>,
-    subscribers:     Arc<RwLock<Subscribers>>,
-    cur_frame:       Arc<ResultImage>,
-    ref_stars:       Arc<Mutex<Option<Vec<Point>>>>,
-    calibr_images:   Arc<Mutex<CalibrImages>>,
-    live_stacking:   Arc<LiveStackingData>,
-    timer:           Arc<Timer>,
-    exp_stuck_wd:    Arc<AtomicU16>,
+    indi:               Arc<indi_api::Connection>,
+    phd2:               Arc<phd2_conn::Connection>,
+    options:            Arc<RwLock<Options>>,
+    mode_data:          Arc<RwLock<ModeData>>,
+    subscribers:        Arc<RwLock<Subscribers>>,
+    cur_frame:          Arc<ResultImage>,
+    ref_stars:          Arc<Mutex<Option<Vec<Point>>>>,
+    calibr_images:      Arc<Mutex<CalibrImages>>,
+    live_stacking:      Arc<LiveStackingData>,
+    timer:              Arc<Timer>,
+    exp_stuck_wd:       Arc<AtomicU16>,
+    img_proc_stop_flag: Arc<Mutex<Arc<AtomicBool>>>, // stop flag for last command
 
     /// commands for passing into frame processing thread
-    img_cmds_sender: mpsc::Sender<FrameProcessCommand>, // TODO: make API
-    ext_guider:      Arc<Mutex<Option<Box<dyn ExternalGuider + Send>>>>,
+    img_cmds_sender:    mpsc::Sender<FrameProcessCommand>, // TODO: make API
+    ext_guider:         Arc<Mutex<Option<Box<dyn ExternalGuider + Send>>>>,
 }
 
 impl State {
@@ -297,18 +299,19 @@ impl State {
         img_cmds_sender: mpsc::Sender<FrameProcessCommand>
     ) -> Self {
         let result = Self {
-            indi:           Arc::clone(indi),
-            phd2:           Arc::new(phd2_conn::Connection::new()),
-            options:        Arc::clone(options),
-            mode_data:      Arc::new(RwLock::new(ModeData::new())),
-            subscribers:    Arc::new(RwLock::new(Subscribers::new())),
-            cur_frame:      Arc::new(ResultImage::new()),
-            ref_stars:      Arc::new(Mutex::new(None)),
-            calibr_images:  Arc::new(Mutex::new(CalibrImages::default())),
-            live_stacking:  Arc::new(LiveStackingData::new()),
-            timer:          Arc::new(Timer::new()),
-            exp_stuck_wd:   Arc::new(AtomicU16::new(0)),
-            ext_guider:     Arc::new(Mutex::new(None)),
+            indi:               Arc::clone(indi),
+            phd2:               Arc::new(phd2_conn::Connection::new()),
+            options:            Arc::clone(options),
+            mode_data:          Arc::new(RwLock::new(ModeData::new())),
+            subscribers:        Arc::new(RwLock::new(Subscribers::new())),
+            cur_frame:          Arc::new(ResultImage::new()),
+            ref_stars:          Arc::new(Mutex::new(None)),
+            calibr_images:      Arc::new(Mutex::new(CalibrImages::default())),
+            live_stacking:      Arc::new(LiveStackingData::new()),
+            timer:              Arc::new(Timer::new()),
+            exp_stuck_wd:       Arc::new(AtomicU16::new(0)),
+            img_proc_stop_flag: Arc::new(Mutex::new(Arc::new(AtomicBool::new(false)))),
+            ext_guider:         Arc::new(Mutex::new(None)),
             img_cmds_sender,
         };
         result.connect_indi_events();
@@ -576,6 +579,7 @@ impl State {
                 flags:           ProcessImageFlags::empty(),
                 blob:            Arc::clone(blob),
                 frame:           Arc::clone(&cur_frame),
+                stop_flag:       Arc::new(AtomicBool::new(false)),
                 ref_stars:       Arc::clone(&ref_stars),
                 calibr_params:   options.calibr.into_params(),
                 calibr_images:   Arc::clone(&calibr_images),
@@ -616,6 +620,8 @@ impl State {
                 Self::process_error(result, &mode_data, &subscribers, &exp_stuck_wd);
             }
         };
+
+        command_data.stop_flag.store(false, Ordering::Relaxed);
         frame_proc_sender.send(FrameProcessCommand::ProcessImage {
             command: command_data,
             result_fun: Box::new(result_fun),
@@ -663,7 +669,8 @@ impl State {
             &self.indi,
             None,
             CamMode::SingleShot,
-            &self.options
+            &self.options,
+            &self.img_proc_stop_flag,
         );
         mode.start()?;
         let mut mode_data = self.mode_data.write().unwrap();
@@ -682,7 +689,8 @@ impl State {
             &self.indi,
             Some(&self.timer),
             CamMode::LiveView,
-            &self.options
+            &self.options,
+            &self.img_proc_stop_flag,
         );
         mode.start()?;
         let mut mode_data = self.mode_data.write().unwrap();
@@ -701,7 +709,8 @@ impl State {
             &self.indi,
             Some(&self.timer),
             CamMode::SavingRawFrames,
-            &self.options
+            &self.options,
+            &self.img_proc_stop_flag,
         );
         mode.guider = Some(Guider::new(&self.ext_guider));
         mode.ref_stars = Some(Arc::clone(&self.ref_stars));
@@ -723,7 +732,8 @@ impl State {
             &self.indi,
             Some(&self.timer),
             CamMode::LiveStacking,
-            &self.options
+            &self.options,
+            &self.img_proc_stop_flag,
         );
         mode.guider = Some(Guider::new(&self.ext_guider));
         mode.ref_stars = Some(Arc::clone(&self.ref_stars));
@@ -1234,6 +1244,7 @@ struct TackingFramesMode {
     save_dir:        PathBuf,
     master_file:     PathBuf,
     skip_frame_done: bool, // first frame was taken and skipped
+    img_proc_stop_flag: Arc<Mutex<Arc<AtomicBool>>>,
 }
 
 impl TackingFramesMode {
@@ -1241,7 +1252,8 @@ impl TackingFramesMode {
         indi:     &Arc<indi_api::Connection>,
         timer:    Option<&Arc<Timer>>,
         cam_mode: CamMode,
-        options:  &Arc<RwLock<Options>>
+        options:  &Arc<RwLock<Options>>,
+        img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
     ) -> Self {
         let opts = options.read().unwrap();
         let progress = match cam_mode {
@@ -1277,6 +1289,7 @@ impl TackingFramesMode {
             save_dir:        PathBuf::new(),
             master_file:     PathBuf::new(),
             skip_frame_done: false,
+            img_proc_stop_flag: Arc::clone(img_proc_stop_flag),
         }
     }
 
@@ -1315,6 +1328,7 @@ impl TackingFramesMode {
                 frame_opts.set_exposure(MAX_EXP);
             }
             start_taking_shots(&self.indi, &frame_opts, &self.device, false)?;
+            *self.img_proc_stop_flag.lock().unwrap() = Arc::new(AtomicBool::new(false));
             self.state = FramesModeState::FrameToSkip;
             self.cur_exposure = frame_opts.exposure();
             return Ok(());
@@ -1329,6 +1343,7 @@ impl TackingFramesMode {
             (CamMode::LiveStacking,    _                ) => true,
         };
         start_taking_shots(&self.indi, &self.frame_options, &self.device, continuously)?;
+        *self.img_proc_stop_flag.lock().unwrap() = Arc::new(AtomicBool::new(false));
         self.state = FramesModeState::Common;
         self.cur_exposure = self.frame_options.exposure();
         Ok(())
@@ -1615,6 +1630,7 @@ impl TackingFramesMode {
             if progress.cur == progress.total {
                 let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&self.device.prop);
                 self.indi.camera_abort_exposure(&self.device.name, cam_ccd)?;
+                self.img_proc_stop_flag.lock().unwrap().store(true, Ordering::Relaxed);
                 result = NotifyResult::Finished { next_mode: None };
             } else {
                 let have_shart_new_shot = match (&self.cam_mode, &self.frame_options.frame_type) {
@@ -1639,7 +1655,7 @@ impl TackingFramesMode {
         info:         &LightFrameInfo,
         _subscribers: &Arc<RwLock<Subscribers>>
     ) -> anyhow::Result<NotifyResult> {
-        if !info.is_ok() {
+        if !info.stars.is_ok() {
             return Ok(NotifyResult::Empty);
         }
 
@@ -1787,6 +1803,7 @@ impl Mode for TackingFramesMode {
         let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&self.device.prop);
         self.indi.camera_abort_exposure(&self.device.name, cam_ccd)?;
         self.skip_frame_done = false; // will skip first frame when continue
+        self.img_proc_stop_flag.lock().unwrap().store(true, Ordering::Relaxed);
         Ok(())
     }
 
@@ -2132,7 +2149,8 @@ impl FocusingMode {
         let mut result = NotifyResult::Empty;
         if let FocusingState::WaitingFrame(focus_pos) = self.state {
             let mut ok = false;
-            if let (Some(stars_ovality), Some(stars_fwhm)) = (info.stars_ovality, info.stars_fwhm) {
+            if let (Some(stars_ovality), Some(stars_fwhm))
+            = (info.stars.ovality, info.stars.fwhm) {
                 self.try_cnt = 0;
                 if stars_ovality < MAX_FOCUS_STAR_OVALITY {
                     let sample = FocuserSample {
@@ -2587,7 +2605,7 @@ impl MountCalibrMode {
         _subscribers: &Arc<RwLock<Subscribers>>,
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
-        if info.fwhm_is_ok && info.ovality_is_ok {
+        if info.stars.fwhm_is_ok && info.stars.ovality_is_ok {
             if self.image_width == 0 || self.image_height == 0 {
                 self.image_width = info.width;
                 self.image_height = info.height;
@@ -2610,7 +2628,7 @@ impl MountCalibrMode {
                 }
             }
             self.attempts.push(DitherCalibrAtempt {
-                stars: info.stars.clone(),
+                stars: info.stars.items.clone(),
             });
             self.attempt_num += 1;
             result = NotifyResult::ProgressChanges;

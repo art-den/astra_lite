@@ -1704,17 +1704,17 @@ fn show_image_info(data: &Rc<CameraData>) {
     match &*info {
         ResultImageInfo::LightInfo(info) => {
             ui.set_prop_str("e_info_exp.text", Some(&seconds_to_total_time_str(info.exposure, true)));
-            match info.stars_fwhm {
+            match info.stars.fwhm {
                 Some(value) => ui.set_prop_str("e_fwhm.text", Some(&format!("{:.1}", value))),
                 None        => ui.set_prop_str("e_fwhm.text", Some("")),
             }
-            match info.stars_ovality {
+            match info.stars.ovality {
                 Some(value) => ui.set_prop_str("e_ovality.text", Some(&format!("{:.1}", value))),
                 None        => ui.set_prop_str("e_ovality.text", Some("")),
             }
-            let stars = info.stars.len();
-            let overexp_stars = info.stars.iter().filter(|s| s.overexposured).count();
-            ui.set_prop_str("e_stars.text", Some(&format!("{} ({})", stars, overexp_stars)));
+            let stars_cnt = info.stars.items.len();
+            let overexp_stars = info.stars.items.iter().filter(|s| s.overexposured).count();
+            ui.set_prop_str("e_stars.text", Some(&format!("{} ({})", stars_cnt, overexp_stars)));
             let bg = 100_f64 * info.background as f64 / info.max_value as f64;
             ui.set_prop_str("e_background.text", Some(&format!("{:.2}%", bg)));
             let noise = 100_f64 * info.noise as f64 / info.max_value as f64;
@@ -1921,13 +1921,13 @@ fn show_frame_processing_result(
             let history_item = LightHistoryItem {
                 mode_type,
                 time:          info.time.clone(),
-                stars_fwhm:    info.stars_fwhm,
-                bad_fwhm:      !info.fwhm_is_ok,
-                stars_ovality: info.stars_ovality,
-                bad_ovality:   !info.ovality_is_ok,
+                stars_fwhm:    info.stars.fwhm,
+                bad_fwhm:      !info.stars.fwhm_is_ok,
+                stars_ovality: info.stars.ovality,
+                bad_ovality:   !info.stars.ovality_is_ok,
                 background:    info.bg_percent,
                 noise:         info.raw_noise.map(|n| 100.0 * n / info.max_value as f32),
-                stars_count:   info.stars.len(),
+                stars_count:   info.stars.items.len(),
                 offset:        info.stars_offset.clone(),
                 bad_offset:    !info.offset_is_ok,
             };

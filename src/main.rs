@@ -11,6 +11,7 @@ mod options;
 mod image_raw;
 mod image;
 mod image_info;
+mod stars;
 mod stars_offset;
 mod indi_api;
 mod gtk_utils;
