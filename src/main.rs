@@ -7,33 +7,25 @@
     clippy::wrong_self_convention
 )]
 
-mod options;
-mod image_raw;
+mod gui;
+mod utils;
 mod image;
-mod image_info;
-mod stars;
-mod stars_offset;
-mod indi_api;
-mod gtk_utils;
-mod gui_main;
-mod gui_hardware;
-mod gui_indi;
-mod gui_camera;
-mod io_utils;
-mod image_processing;
-mod log_utils;
-mod simple_fits;
-mod state;
-mod math;
-mod plots;
-mod sexagesimal;
-mod gui_map;
-mod gui_common;
-mod phd2_conn;
+mod indi;
+mod guiding;
+mod core;
+//mod sky_map;
+
+mod options;
 
 use std::{path::Path, sync::{Arc, RwLock}};
 use gtk::{prelude::*, glib, glib::clone};
-use crate::{io_utils::*, options::Options, state::State, image_processing::*};
+use crate::{
+    utils::io_utils::*,
+    utils::log_utils::*,
+    options::Options,
+    core::state::State,
+    core::frame_processing::*
+};
 
 fn panic_handler(
     panic_info:        &std::panic::PanicInfo,
@@ -95,8 +87,8 @@ fn panic_handler(
 fn main() -> anyhow::Result<()> {
     let mut logs_dir = get_app_dir()?;
     logs_dir.push("logs");
-    log_utils::cleanup_old_logs(&logs_dir, 14/*days*/);
-    log_utils::start_logger(&logs_dir)?;
+    cleanup_old_logs(&logs_dir, 14/*days*/);
+    start_logger(&logs_dir)?;
     log::set_max_level(log::LevelFilter::Info);
 
     std::panic::set_hook({
@@ -118,7 +110,7 @@ fn main() -> anyhow::Result<()> {
         env!("CARGO_PKG_VERSION")
     );
 
-    let indi = Arc::new(indi_api::Connection::new());
+    let indi = Arc::new(indi::indi_api::Connection::new());
     let options = Arc::new(RwLock::new(Options::default()));
     let (img_cmds_sender, frame_process_thread) = start_frame_processing_thread();
     let state = Arc::new(State::new(&indi, &options, img_cmds_sender));
@@ -129,7 +121,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     application.connect_activate(clone!(@weak options => move |app|
-        gui_main::build_ui(app, &indi, &options, &state, &logs_dir)
+        gui::gui_main::build_ui(app, &indi, &options, &state, &logs_dir)
     ));
     application.run();
 

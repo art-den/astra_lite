@@ -2,7 +2,7 @@ use std::{collections::{HashSet, VecDeque}, sync::Mutex, f64::consts::PI};
 
 use itertools::Itertools;
 
-use crate::{image::ImageLayer, math::{IirFilterCoeffs, IirFilter, linear_interpolate}};
+use crate::{ image::image::ImageLayer, utils::math::* };
 
 const MAX_STAR_DIAM: usize = 32;
 const MAX_STARS_CNT: usize = 500;

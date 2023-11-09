@@ -11,13 +11,13 @@ use gtk::{prelude::*, glib, glib::clone};
 use itertools::Itertools;
 use chrono::prelude::*;
 use crate::{
-    gui_main::*,
-    gtk_utils,
-    indi_api,
-    gui_indi::*,
-    state::State,
+    gui::gui_main::*,
+    gui::gtk_utils,
+    indi::indi_api,
+    gui::gui_indi::*,
+    core::state::State,
     options::*,
-    phd2_conn,
+    guiding::phd2_conn,
 };
 
 impl indi_api::ConnState {

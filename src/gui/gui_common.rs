@@ -1,6 +1,12 @@
 use std::{rc::Rc, cell::{RefCell, Cell}, time::Duration, collections::HashMap, hash::Hash};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
-use crate::{indi_api, gtk_utils, options::*, image_raw::FrameType, image_info::*};
+use crate::{
+    indi::indi_api,
+    gui::gtk_utils,
+    options::*,
+    image::image_raw::FrameType,
+    image::image_info::*
+};
 
 pub struct ExclusiveCaller {
     busy: Cell<bool>,
@@ -66,16 +72,6 @@ impl FrameType {
             FrameType::Biases => Some("bias"),
             FrameType::Undef  => Some("light"),
 
-        }
-    }
-
-    pub fn to_indi_frame_type(&self) -> indi_api::FrameType {
-        match self {
-            FrameType::Lights => indi_api::FrameType::Light,
-            FrameType::Flats  => indi_api::FrameType::Flat,
-            FrameType::Darks  => indi_api::FrameType::Dark,
-            FrameType::Biases => indi_api::FrameType::Bias,
-            FrameType::Undef  => panic!("Undefined frame type"),
         }
     }
 }

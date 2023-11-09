@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration, cell::RefCell, rc::Rc};
 use gtk::{prelude::*, glib, glib::clone};
 use itertools::{Itertools, izip};
-use crate::{indi_api, sexagesimal::*};
+use crate::{indi::indi_api, indi::sexagesimal::*};
 
 pub struct IndiGui {
     indi:           Arc<indi_api::Connection>,

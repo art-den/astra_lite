@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use serde::{Serialize, Deserialize};
 
-use crate::{image_raw::FrameType, image_processing::{CalibrParams, PreviewParams, PreviewImgSize}};
+use crate::{
+    image::image_raw::FrameType,
+    core::frame_processing::{CalibrParams, PreviewParams, PreviewImgSize}
+};
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]

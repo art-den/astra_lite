@@ -4,14 +4,16 @@ use bitflags::bitflags;
 use chrono::{DateTime, Local};
 
 use crate::{
-    indi_api,
-    image_raw::*,
-    image::*,
-    image_info::*,
-    log_utils::*,
-    stars_offset::*,
+    indi::indi_api,
+    image::image_raw::*,
+    image::image::*,
+    image::image_info::*,
+    utils::log_utils::*,
+    image::stars_offset::*,
     options::*,
-    state::ModeType, math::linear_interpolate, io_utils::SeqFileNameGen,
+    core::state::ModeType,
+    utils::math::linear_interpolate,
+    utils::io_utils::SeqFileNameGen,
 };
 
 pub enum ResultImageInfo {
@@ -160,20 +162,19 @@ pub struct Preview8BitImgData {
 #[derive(Clone)]
 pub enum FrameProcessResultData {
     Error(String),
-    ShotProcessingStarted(ModeType),
+    ShotProcessingStarted,
     ShotProcessingFinished {
-        mode_type:    ModeType,
         frame_is_ok:  bool,
         process_time: f64, // in seconds
         blob_dl_time: f64, // in seconds
     },
-    PreviewFrame(Arc<Preview8BitImgData>, ModeType),
-    PreviewLiveRes(Arc<Preview8BitImgData>, ModeType),
-    LightFrameInfo(Arc<LightFrameInfo>, ModeType),
-    FrameInfo(ModeType),
-    FrameInfoLiveRes(ModeType),
-    Histogram(ModeType),
-    HistogramLiveRes(ModeType),
+    PreviewFrame(Arc<Preview8BitImgData>),
+    PreviewLiveRes(Arc<Preview8BitImgData>),
+    LightFrameInfo(Arc<LightFrameInfo>),
+    FrameInfo,
+    FrameInfoLiveRes,
+    Histogram,
+    HistogramLiveRes,
     MasterSaved {
         frame_type: FrameType,
         file_name: PathBuf
@@ -182,8 +183,10 @@ pub enum FrameProcessResultData {
 
 #[derive(Clone)]
 pub struct FrameProcessResult {
-    pub camera: DeviceAndProp,
-    pub data:   FrameProcessResultData,
+    pub camera:        DeviceAndProp,
+    pub cmd_stop_flag: Arc<AtomicBool>,
+    pub mode_type:     ModeType,
+    pub data:          FrameProcessResultData,
 }
 
 pub type ResultFun = Box<dyn Fn(FrameProcessResult) + Send + 'static>;
@@ -440,13 +443,17 @@ fn apply_calibr_data_and_remove_hot_pixels(
 }
 
 fn send_result(
-    data:       FrameProcessResultData,
-    camera:     &DeviceAndProp,
-    result_fun: &ResultFun
+    data:          FrameProcessResultData,
+    camera:        &DeviceAndProp,
+    mode_type:     ModeType,
+    cmd_stop_flag: &Arc<AtomicBool>,
+    result_fun:    &ResultFun
 ) {
     let result = FrameProcessResult {
+        camera:        camera.clone(),
+        mode_type,
+        cmd_stop_flag: Arc::clone(cmd_stop_flag),
         data,
-        camera: camera.clone(),
     };
     result_fun(result);
 }
@@ -460,6 +467,8 @@ fn make_preview_image(
         send_result(
             FrameProcessResultData::Error(err.to_string()),
             &command.camera,
+            command.mode_type,
+            &command.stop_flag,
             &result_fun
         );
     }
@@ -495,8 +504,10 @@ fn make_preview_image_impl(
     let total_tmr = TimeLogger::start();
 
     send_result(
-        FrameProcessResultData::ShotProcessingStarted(command.mode_type),
+        FrameProcessResultData::ShotProcessingStarted,
         &command.camera,
+        command.mode_type,
+        &command.stop_flag,
         result_fun
     );
 
@@ -584,8 +595,10 @@ fn make_preview_image_impl(
     }
 
     send_result(
-        FrameProcessResultData::Histogram(command.mode_type),
+        FrameProcessResultData::Histogram,
         &command.camera,
+        command.mode_type,
+        &command.stop_flag,
         result_fun
     );
 
@@ -596,8 +609,10 @@ fn make_preview_image_impl(
                 FlatImageInfo::from_histogram(&hist)
             );
             send_result(
-                FrameProcessResultData::FrameInfo(command.mode_type),
+                FrameProcessResultData::FrameInfo,
                 &command.camera,
+                command.mode_type,
+                &command.stop_flag,
                 result_fun
             );
         },
@@ -607,8 +622,10 @@ fn make_preview_image_impl(
                 RawImageStat::from_histogram(&hist)
             );
             send_result(
-                FrameProcessResultData::FrameInfo(command.mode_type),
+                FrameProcessResultData::FrameInfo,
                 &command.camera,
+                command.mode_type,
+                &command.stop_flag,
                 result_fun
             );
         },
@@ -710,8 +727,10 @@ fn make_preview_image_impl(
         params: command.view_options.clone(),
     });
     send_result(
-        FrameProcessResultData::PreviewFrame(preview_data, command.mode_type),
+        FrameProcessResultData::PreviewFrame(preview_data),
         &command.camera,
+        command.mode_type,
+        &command.stop_flag,
         result_fun
     );
 
@@ -766,8 +785,10 @@ fn make_preview_image_impl(
         // Send message about light frame calculated
 
         send_result(
-            FrameProcessResultData::LightFrameInfo(Arc::clone(&info), command.mode_type),
+            FrameProcessResultData::LightFrameInfo(Arc::clone(&info)),
             &command.camera,
+            command.mode_type,
+            &command.stop_flag,
             result_fun
         );
 
@@ -775,8 +796,10 @@ fn make_preview_image_impl(
 
         *command.frame.info.write().unwrap() = ResultImageInfo::LightInfo(Arc::clone(&info));
         send_result(
-            FrameProcessResultData::FrameInfo(command.mode_type),
+            FrameProcessResultData::FrameInfo,
             &command.camera,
+            command.mode_type,
+            &command.stop_flag,
             result_fun
         );
 
@@ -830,8 +853,10 @@ fn make_preview_image_impl(
 
                 let hist = live_stacking.data.hist.read().unwrap();
                 send_result(
-                    FrameProcessResultData::HistogramLiveRes(command.mode_type),
+                    FrameProcessResultData::HistogramLiveRes,
                     &command.camera,
+                    command.mode_type,
+                    &command.stop_flag,
                     result_fun
                 );
 
@@ -857,8 +882,10 @@ fn make_preview_image_impl(
                     Arc::new(live_stacking_info)
                 );
                 send_result(
-                    FrameProcessResultData::FrameInfoLiveRes(command.mode_type),
+                    FrameProcessResultData::FrameInfoLiveRes,
                     &command.camera,
+                    command.mode_type,
+                    &command.stop_flag,
                     result_fun
                 );
 
@@ -885,8 +912,10 @@ fn make_preview_image_impl(
                     }
 
                     send_result(
-                        FrameProcessResultData::PreviewLiveRes(preview_data, command.mode_type),
+                        FrameProcessResultData::PreviewLiveRes(preview_data),
                         &command.camera,
+                        command.mode_type,
+                        &command.stop_flag,
                         result_fun
                     );
                 }
@@ -975,26 +1004,31 @@ fn make_preview_image_impl(
             adder.clear();
             drop(adder);
             raw_image.save_to_fits_file(&file_name)?;
+            let result = FrameProcessResultData::MasterSaved {
+                frame_type,
+                file_name: file_name.clone()
+            };
             send_result(
-                FrameProcessResultData::MasterSaved {
-                    frame_type,
-                    file_name: file_name.clone()
-                },
+                result,
                 &command.camera,
+                command.mode_type,
+                &command.stop_flag,
                 result_fun
             );
         }
         log::debug!("Master frame saved!");
     }
 
+    let result = FrameProcessResultData::ShotProcessingFinished{
+        frame_is_ok:  !is_bad_frame,
+        blob_dl_time: command.blob.dl_time,
+        process_time
+    };
     send_result(
-        FrameProcessResultData::ShotProcessingFinished{
-            mode_type:    command.mode_type,
-            frame_is_ok:  !is_bad_frame,
-            blob_dl_time: command.blob.dl_time,
-            process_time
-        },
+        result,
         &command.camera,
+        command.mode_type,
+        &command.stop_flag,
         result_fun
     );
 

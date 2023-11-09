@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc, sync::RwLock, sync::Arc};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone};
-use crate::{options::*, io_utils::*, gtk_utils};
+use crate::{options::*, utils::io_utils::*, gui::gtk_utils};
 
 const CONF_FN: &str = "gui_map";
 
