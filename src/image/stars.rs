@@ -1,8 +1,7 @@
 use std::{collections::{HashSet, VecDeque}, sync::Mutex, f64::consts::PI};
-
 use itertools::Itertools;
-
-use crate::{ image::image::ImageLayer, utils::math::* };
+use crate::utils::math::*;
+use super::image::ImageLayer;
 
 const MAX_STAR_DIAM: usize = 32;
 const MAX_STARS_CNT: usize = 500;

@@ -1,18 +1,15 @@
 use std::{sync::{atomic::AtomicBool, Mutex, Arc, RwLock}, f64::consts::PI};
-
 use itertools::Itertools;
-
 use crate::{
     indi::indi_api,
     options::*,
-    core::state::*,
     image::stars::*,
     image::stars_offset::*,
     utils::math::*,
     image::image_info::*,
     gui::gui_camera::SET_PROP_TIMEOUT,
-    core::frame_processing::*,
 };
+use super::{state::*, frame_processing::*};
 
 pub const DITHER_CALIBR_ATTEMPTS_CNT: usize = 11;
 pub const DITHER_CALIBR_SPEED: f64 = 1.0;

@@ -4,12 +4,11 @@ use serde::{Serialize, Deserialize};
 
 use crate::{
     indi::indi_api,
-    gui::gtk_utils,
     utils::io_utils::*,
     core::state::*,
     options::*,
-    gui::gui_common::*
 };
+use super::{gtk_utils, gui_common::*};
 
 pub const TIMER_PERIOD_MS: u64 = 250;
 const CONF_FN: &str = "gui_main";
@@ -185,9 +184,9 @@ pub fn build_ui(
         }
     ));
 
-    crate::gui::gui_hardware::build_ui(app, &builder, &gui, options, state, indi);
-    crate::gui::gui_camera::build_ui(app, &builder, &gui, options, state, indi, &mut data.handlers.borrow_mut());
-    crate::gui::gui_map::build_ui(app, &builder, &options);
+    super::gui_hardware::build_ui(app, &builder, &gui, options, state, indi);
+    super::gui_camera::build_ui(app, &builder, &gui, options, state, indi, &mut data.handlers.borrow_mut());
+    super::gui_map::build_ui(app, &builder, &options);
 
     let ui = gtk_utils::UiHelper::new_from_builder(&builder);
 

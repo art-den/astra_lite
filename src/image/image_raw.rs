@@ -3,7 +3,8 @@ use chrono::prelude::*;
 use rayon::prelude::*;
 use itertools::{izip, Itertools};
 use serde::{Serialize, Deserialize};
-use crate::{image::image::*, image::simple_fits::*, indi::indi_api};
+use crate::indi::indi_api;
+use super::{image::*, simple_fits::*};
 
 #[derive(Clone)]
 pub struct BadPixel {

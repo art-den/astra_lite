@@ -2,24 +2,21 @@ use std::{rc::Rc, sync::*, cell::{RefCell, Cell}, path::PathBuf};
 use chrono::{DateTime, Local, Utc};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use serde::{Serialize, Deserialize};
-
 use crate::{
     options::*,
-    gui::gui_main::*,
     indi::indi_api,
-    gui::gtk_utils,
     utils::io_utils::*,
     core::frame_processing::*,
     utils::log_utils::*,
     image::image_info::*,
+    image::histogram::*,
     image::image::RgbU8Data,
     image::image_raw::FrameType,
     core::state::*,
-    gui::plots::*,
     utils::math::*,
-    gui::gui_common::*,
     image::stars_offset::Offset
 };
+use super::{gui_main::*, gtk_utils, plots::*, gui_common::*};
 
 pub const SET_PROP_TIMEOUT: Option<u64> = Some(1000);
 const CONF_FN: &str = "gui_cam";

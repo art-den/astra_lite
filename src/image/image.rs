@@ -1,10 +1,9 @@
 use std::{path::Path, io::{BufWriter, BufReader}, fs::File};
-
 use chrono::{DateTime, Utc};
 use itertools::*;
 use rayon::prelude::*;
-
-use crate::{utils::math::*, image::image_info::Histogram};
+use crate::utils::math::*;
+use super::histogram::Histogram;
 
 pub struct ImageLayer<T> {
     data: Vec<T>,

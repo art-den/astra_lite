@@ -1,5 +1,4 @@
 use std::{io::*, str::FromStr};
-
 use itertools::{Itertools, izip};
 
 pub trait SeekNRead: Seek + Read {}

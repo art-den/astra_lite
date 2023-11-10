@@ -11,14 +11,12 @@ use gtk::{prelude::*, glib, glib::clone};
 use itertools::Itertools;
 use chrono::prelude::*;
 use crate::{
-    gui::gui_main::*,
-    gui::gtk_utils,
     indi::indi_api,
-    gui::gui_indi::*,
     core::state::State,
     options::*,
     guiding::phd2_conn,
 };
+use super::{gui_main::*, gtk_utils, gui_indi::*};
 
 impl indi_api::ConnState {
     fn to_str(&self, short: bool) -> Cow<str> {

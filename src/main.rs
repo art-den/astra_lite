@@ -14,7 +14,6 @@ mod indi;
 mod guiding;
 mod core;
 //mod sky_map;
-
 mod options;
 
 use std::{path::Path, sync::{Arc, RwLock}};
@@ -22,7 +21,7 @@ use gtk::{prelude::*, glib, glib::clone};
 use crate::{
     utils::io_utils::*,
     utils::log_utils::*,
-    options::Options,
+    options::*,
     core::state::State,
     core::frame_processing::*
 };

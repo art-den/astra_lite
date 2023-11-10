@@ -5,7 +5,7 @@ use crate::{
     gui::gtk_utils,
     options::*,
     image::image_raw::FrameType,
-    image::image_info::*
+    image::histogram::*
 };
 
 pub struct ExclusiveCaller {

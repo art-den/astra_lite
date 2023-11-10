@@ -2,15 +2,13 @@ use std::{
     sync::{atomic::AtomicBool, Mutex, Arc, RwLock},
     collections::VecDeque
 };
-
 use crate::{
     indi::indi_api,
     options::*,
-    core::state::*,
     utils::math::*,
     image::image_info::LightFrameInfo,
-    core::frame_processing::*,
 };
+use super::{state::*, frame_processing::*};
 
 const MAX_FOCUS_TOTAL_TRY_CNT: usize = 8;
 const MAX_FOCUS_SAMPLE_TRY_CNT: usize = 4;

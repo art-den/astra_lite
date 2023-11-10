@@ -11,8 +11,7 @@ use std::time::Duration;
 use itertools::Itertools;
 use bitflags::bitflags;
 use chrono::prelude::*;
-
-use crate::indi::sexagesimal::*;
+use super::sexagesimal::*;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
