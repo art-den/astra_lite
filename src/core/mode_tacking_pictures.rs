@@ -10,7 +10,7 @@ use crate::{
     options::*,
     core::mode_mount_calibration::*,
     core::state::*,
-    utils::io_utils::*,
+    utils::{io_utils::*, timer::Timer},
     indi::indi_api,
     image::image_raw::{RawAdder, FrameType},
     image::stars_offset::*,
