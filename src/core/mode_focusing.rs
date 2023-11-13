@@ -14,6 +14,19 @@ const MAX_FOCUS_TOTAL_TRY_CNT: usize = 8;
 const MAX_FOCUS_SAMPLE_TRY_CNT: usize = 4;
 const MAX_FOCUS_STAR_OVALITY: f32 = 2.0;
 
+#[derive(Clone)]
+pub struct FocusingResultData {
+    pub samples: Vec<FocuserSample>,
+    pub coeffs:  Option<SquareCoeffs>,
+    pub result:  Option<f64>,
+}
+
+#[derive(Clone)]
+pub enum FocusingStateEvent {
+    Data(FocusingResultData),
+    Result { value: f64 }
+}
+
 #[derive(PartialEq)]
 enum FocusingStage {
     Undef,
@@ -154,11 +167,11 @@ impl FocusingMode {
                     ok = true;
                     self.try_cnt = 0;
                 }
-                subscribers.inform_focusing(FocusingEvt {
+                subscribers.inform_focusing(FocusingStateEvent::Data( FocusingResultData {
                     samples: self.samples.clone(),
                     coeffs: None,
                     result: None,
-                });
+                }));
             } else {
                 self.try_cnt += 1;
             }
@@ -180,20 +193,20 @@ impl FocusingMode {
                         .ok_or_else(|| anyhow::anyhow!("Can't find focus function"))?;
 
                     if coeffs.a2 <= 0.0 {
-                        subscribers.inform_focusing(FocusingEvt {
+                        subscribers.inform_focusing(FocusingStateEvent::Data( FocusingResultData {
                             samples: self.samples.clone(),
                             coeffs: Some(coeffs.clone()),
                             result: None,
-                        });
+                        }));
                         anyhow::bail!("Wrong focuser curve result");
                     }
                     let extr = parabola_extremum(&coeffs)
                         .ok_or_else(|| anyhow::anyhow!("Can't find focus extremum"))?;
-                    subscribers.inform_focusing(FocusingEvt {
+                    subscribers.inform_focusing(FocusingStateEvent::Data( FocusingResultData {
                         samples: self.samples.clone(),
                         coeffs: Some(coeffs.clone()),
                         result: Some(extr),
-                    });
+                    }));
                     let focuser_info = self.indi.focuser_get_abs_value_prop_info(&self.options.device)?;
                     if extr < focuser_info.min || extr > focuser_info.max {
                         anyhow::bail!(
@@ -239,7 +252,9 @@ impl FocusingMode {
                         before_pos: extr - self.options.step,
                         begin_pos: extr
                     };
-                    subscribers.inform_focusing_result(extr);
+                    subscribers.inform_focusing(FocusingStateEvent::Result {
+                        value: extr
+                    });
                 } else {
                     self.start_sample(false)?;
                 }

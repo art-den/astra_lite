@@ -13,7 +13,6 @@ use crate::{
     gui::gui_camera::*,
     options::*,
     indi::indi_api,
-    utils::math::*,
     image::stars_offset::*,
     guiding::external_guider::*,
     guiding::phd2_guider::*,
@@ -34,20 +33,12 @@ pub struct Progress {
     pub total: usize,
 }
 
-#[derive(Clone)]
-pub struct FocusingEvt {
-    pub samples: Vec<FocuserSample>,
-    pub coeffs:  Option<SquareCoeffs>,
-    pub result:  Option<f64>,
-}
-
 pub enum StateEvent {
     Error(String),
     ModeChanged,
     ModeContinued,
     Propress(Option<Progress>),
-    Focusing(FocusingEvt),
-    FocusResultValue{ value: f64 },
+    Focusing(FocusingStateEvent),
 }
 
 #[derive(PartialEq, Copy, Clone, Debug)]
@@ -78,7 +69,7 @@ pub trait Mode {
     fn set_or_correct_value(&mut self, _value: &mut dyn Any) {}
     fn complete_img_process_params(&self, _cmd: &mut FrameProcessCommandData) {}
     fn notify_indi_prop_change(&mut self, _prop_change: &indi_api::PropChangeEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_blob_start_event(&mut self, _event: &indi_api::BlobStartEvent) -> anyhow::Result<()> { Ok(()) }
+    fn notify_blob_start_event(&mut self, _event: &indi_api::BlobStartEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_before_frame_processing_start(&mut self, _should_be_processed: &mut bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult, _subscribers: &Arc<RwLock<Subscribers>>) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
@@ -153,15 +144,9 @@ impl Subscribers {
         }
     }
 
-    pub fn inform_focusing(&self, data: FocusingEvt) {
+    pub fn inform_focusing(&self, data: FocusingStateEvent) {
         for s in &self.items {
             s(StateEvent::Focusing(data.clone()));
-        }
-    }
-
-    pub fn inform_focusing_result(&self, value: f64) {
-        for s in &self.items {
-            s(StateEvent::FocusResultValue{value});
         }
     }
 }
@@ -337,7 +322,15 @@ impl State {
                 match event {
                     indi_api::Event::BlobStart(event) => {
                         let mut mode_data = mode_data.write().unwrap();
-                        mode_data.mode.notify_blob_start_event(&event)?;
+                        let result = mode_data.mode.notify_blob_start_event(&event)?;
+                        Self::apply_change_result(
+                            result,
+                            &mut mode_data,
+                            &indi,
+                            &options,
+                            &subscribers,
+                            &img_proc_stop_flag
+                        )?;
                     }
                     indi_api::Event::PropChange(prop_change) => {
                         if let indi_api::PropChange::Change {

@@ -711,15 +711,15 @@ impl Mode for TackingPicturesMode {
     fn notify_blob_start_event(
         &mut self,
         event: &indi_api::BlobStartEvent
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<NotifyResult> {
         if event.device_name != self.device.name
         || event.prop_name != self.device.prop {
-            return Ok(());
+            return Ok(NotifyResult::Empty);
         }
         match (&self.cam_mode, &self.frame_options.frame_type) {
-            (CameraMode::SingleShot,      _                ) => return Ok(()),
-            (CameraMode::SavingRawFrames, FrameType::Flats ) => return Ok(()),
-            (CameraMode::SavingRawFrames, FrameType::Biases) => return Ok(()),
+            (CameraMode::SingleShot,      _                ) => return Ok(NotifyResult::Empty),
+            (CameraMode::SavingRawFrames, FrameType::Flats ) => return Ok(NotifyResult::Empty),
+            (CameraMode::SavingRawFrames, FrameType::Biases) => return Ok(NotifyResult::Empty),
             _ => {},
         }
         if self.cam_mode == CameraMode::LiveView {
@@ -761,7 +761,7 @@ impl Mode for TackingPicturesMode {
                 }
             }
         }
-        Ok(())
+        Ok(NotifyResult::Empty)
     }
 
     fn notify_before_frame_processing_start(

@@ -12,7 +12,7 @@ use crate::{
     image::histogram::*,
     image::image::RgbU8Data,
     image::image_raw::FrameType,
-    core::state::*,
+    core::{state::*, mode_focusing::*},
     utils::math::*,
     image::stars_offset::Offset
 };
@@ -119,7 +119,7 @@ struct CameraData {
     indi_evt_conn:      RefCell<Option<indi_api::Subscription>>,
     preview_scroll_pos: RefCell<Option<((f64, f64), (f64, f64))>>,
     light_history:      RefCell<Vec<LightHistoryItem>>,
-    focusing_data:      RefCell<Option<FocusingEvt>>,
+    focusing_data:      RefCell<Option<FocusingResultData>>,
     closed:             Cell<bool>,
     excl:               ExclusiveCaller,
     full_screen_mode:   Cell<bool>,
@@ -398,13 +398,13 @@ fn process_event_in_main_thread(data: &Rc<CameraData>, event: MainThreadEvent) {
             correct_preview_source(&data);
         },
 
-        MainThreadEvent::StateEvent(StateEvent::Focusing(fdata)) => {
+        MainThreadEvent::StateEvent(StateEvent::Focusing(FocusingStateEvent::Data(fdata))) => {
             *data.focusing_data.borrow_mut() = Some(fdata);
             let da_focusing = data.builder.object::<gtk::DrawingArea>("da_focusing").unwrap();
             da_focusing.queue_draw();
         },
 
-        MainThreadEvent::StateEvent(StateEvent::FocusResultValue { value }) => {
+        MainThreadEvent::StateEvent(StateEvent::Focusing(FocusingStateEvent::Result { value })) => {
             data.excl.exec(|| {
                 update_focuser_position_after_focusing(&data, value);
             });
