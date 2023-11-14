@@ -325,7 +325,7 @@ fn handler_close_window(data: &Rc<MainData>) -> glib::Propagation {
         let dialog = gtk::MessageDialog::builder()
             .transient_for(&data.window)
             .title("Operation is in progress")
-            .text("Terminate current mode?")
+            .text("Terminate current operation?")
             .modal(true)
             .message_type(gtk::MessageType::Question)
             .build();
