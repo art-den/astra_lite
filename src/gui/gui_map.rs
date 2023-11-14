@@ -2,7 +2,7 @@ use std::{cell::RefCell, rc::Rc, sync::RwLock, sync::Arc};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone};
 use crate::{options::*, utils::io_utils::*};
-use super::gtk_utils;
+use super::{gtk_utils, gui_main::*};
 
 const CONF_FN: &str = "gui_map";
 
@@ -83,9 +83,10 @@ impl Drop for MapData {
 }
 
 pub fn build_ui(
-    _app:    &gtk::Application,
-    builder: &gtk::Builder,
-    options: &Arc<RwLock<Options>>,
+    _app:     &gtk::Application,
+    builder:  &gtk::Builder,
+    options:  &Arc<RwLock<Options>>,
+    handlers: &mut MainGuiHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
@@ -106,24 +107,26 @@ pub fn build_ui(
 
     show_options(&data);
 
-    window.connect_delete_event(
-        clone!(@weak data => @default-return glib::Propagation::Proceed,
-        move |_, _| {
-            let res = handler_close_window(&data);
-            *data.self_.borrow_mut() = None;
-            res
-        })
-    );
+    handlers.push(Box::new(clone!(@weak data => move |event| {
+        handler_main_gui_event(&data, event);
+    })));
 }
 
-fn handler_close_window(data: &Rc<MapData>) -> glib::Propagation {
+fn handler_main_gui_event(data: &Rc<MapData>, event: MainGuiEvent) {
+    match event {
+        MainGuiEvent::ProgramClosing =>
+            handler_closing(data),
+        _ => {},
+    }
+}
+
+
+fn handler_closing(data: &Rc<MapData>) {
     read_options_from_widgets(data);
 
     let gui_options = data.gui_options.borrow();
     _ = save_json_to_config::<GuiOptions>(&gui_options, CONF_FN);
     drop(gui_options);
-
-    glib::Propagation::Proceed
 }
 
 fn show_options(data: &Rc<MapData>) {

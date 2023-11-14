@@ -80,12 +80,13 @@ enum HardwareEvent {
 }
 
 pub fn build_ui(
-    _app:    &gtk::Application,
-    builder: &gtk::Builder,
-    gui:     &Rc<Gui>,
-    options: &Arc<RwLock<Options>>,
-    state:   &Arc<State>,
-    indi:    &Arc<indi_api::Connection>,
+    _app:     &gtk::Application,
+    builder:  &gtk::Builder,
+    gui:      &Rc<Gui>,
+    options:  &Arc<RwLock<Options>>,
+    state:    &Arc<State>,
+    indi:     &Arc<indi_api::Connection>,
+    handlers: &mut MainGuiHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
@@ -151,15 +152,6 @@ pub fn build_ui(
     connect_indi_events(&data);
     correct_widgets_by_cur_state(&data);
 
-    window.connect_delete_event(
-        clone!(@weak data => @default-return glib::Propagation::Proceed,
-        move |_, _| {
-            let res = handler_close_window(&data);
-            *data.self_.borrow_mut() = None;
-            res
-        })
-    );
-
     let srch_indi_prop = data.builder.object::<gtk::SearchEntry>("srch_indi_prop").unwrap();
     srch_indi_prop.connect_search_changed(clone!(@weak data => move |entry| {
         data.indi_gui.set_filter_text(entry.text().as_str());
@@ -169,6 +161,10 @@ pub fn build_ui(
     ch_guide_mode.connect_active_id_notify(clone!(@weak data => move |_| {
         correct_widgets_by_cur_state(&data);
     }));
+
+    handlers.push(Box::new(clone!(@weak data => move |event| {
+        handler_main_gui_event(&data, event);
+    })));
 
     if let Some(load_drivers_err) = load_drivers_err {
         add_log_record(
@@ -180,7 +176,15 @@ pub fn build_ui(
     }
 }
 
-fn handler_close_window(data: &Rc<HardwareData>) -> glib::Propagation {
+fn handler_main_gui_event(data: &Rc<HardwareData>, event: MainGuiEvent) {
+    match event {
+        MainGuiEvent::ProgramClosing =>
+            handler_closing(data),
+        _ => {},
+    }
+}
+
+fn handler_closing(data: &Rc<HardwareData>) {
     if let Some(indi_conn) = data.indi_evt_conn.borrow_mut().take() {
         data.indi.unsubscribe(indi_conn);
     }
@@ -196,8 +200,6 @@ fn handler_close_window(data: &Rc<HardwareData>) -> glib::Propagation {
     log::info!("Stop connection to PHD2...");
     _ = data.state.phd2().stop();
     log::info!("Done!");
-
-    glib::Propagation::Proceed
 }
 
 fn configure_widget_props(data: &Rc<HardwareData>) {

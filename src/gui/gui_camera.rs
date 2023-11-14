@@ -210,15 +210,6 @@ pub fn build_ui(
         })
     );
 
-    window.connect_delete_event(
-        clone!(@weak data => @default-return glib::Propagation::Proceed,
-        move |_, _| {
-            let res = handler_close_window(&data);
-            *data.self_.borrow_mut() = None;
-            res
-        })
-    );
-
     update_camera_devices_list(&data);
     update_focuser_devices_list(&data);
     correct_widgets_props(&data);
@@ -234,7 +225,9 @@ fn handler_main_gui_event(data: &Rc<CameraData>, event: MainGuiEvent) {
             read_options_from_widgets(data),
         MainGuiEvent::TabPageChanged(TabPage::Camera) =>
             correct_widgets_props(data),
-        MainGuiEvent::TabPageChanged(_) => {}
+        MainGuiEvent::ProgramClosing =>
+            handler_closing(data),
+        _ => {},
     }
 }
 
@@ -454,18 +447,7 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
 
             // Store previous camera options into GuiOptions::all_cam_opts
             if let Some(prev_cam) = &*prev_cam {
-                let mut gui_options = data.gui_options.borrow_mut();
-                let store_dest = if let Some(existing) = gui_options.all_cam_opts.iter_mut().find(|item| item.cam == *prev_cam) {
-                    existing
-                } else {
-                    let mut new_cam_opts = StoredCamOptions::default();
-                    new_cam_opts.cam = prev_cam.clone();
-                    gui_options.all_cam_opts.push(new_cam_opts);
-                    gui_options.all_cam_opts.last_mut().unwrap()
-                };
-                store_dest.frame = options.cam.frame.clone();
-                store_dest.ctrl = options.cam.ctrl.clone();
-                store_dest.calibr = options.calibr.clone();
+                store_cur_cam_options(&data, prev_cam, &options);
             }
 
             let camera_device = cam_list.get(cur_index as usize);
@@ -777,6 +759,27 @@ fn connect_widgets_events(data: &Rc<CameraData>) {
     }));
 }
 
+fn store_cur_cam_options(
+    data:    &Rc<CameraData>,
+    device:  &DeviceAndProp,
+    options: &Options,
+) {
+    let mut gui_options = data.gui_options.borrow_mut();
+    let store_dest = match gui_options.all_cam_opts.iter_mut().find(|item| item.cam == *device) {
+        Some(existing) => existing,
+        _ => {
+            let mut new_cam_opts = StoredCamOptions::default();
+            new_cam_opts.cam = device.clone();
+            gui_options.all_cam_opts.push(new_cam_opts);
+            gui_options.all_cam_opts.last_mut().unwrap()
+        }
+    };
+
+    store_dest.frame = options.cam.frame.clone();
+    store_dest.ctrl = options.cam.ctrl.clone();
+    store_dest.calibr = options.calibr.clone();
+}
+
 fn select_options_for_camera(
     data:          &Rc<CameraData>,
     camera_device: &Option<&DeviceAndProp>,
@@ -868,13 +871,21 @@ fn handler_full_screen(data: &Rc<CameraData>, full_screen: bool) {
     }
 }
 
-fn handler_close_window(data: &Rc<CameraData>) -> glib::Propagation {
+fn handler_closing(data: &Rc<CameraData>) {
     data.closed.set(true);
 
     _ = data.state.stop_img_process_thread();
 
     _ = data.state.abort_active_mode();
     read_options_from_widgets(data);
+
+    let cam_list = data.cam_list.borrow();
+    let ui = gtk_utils::UiHelper::new_from_builder(&data.builder);
+    let camera_device = cam_list.get(ui.prop_i32("cb_camera_list.active") as usize);
+    if let Some(camera_device) = &camera_device {
+        let options = data.options.read().unwrap();
+        store_cur_cam_options(data, camera_device, &options);
+    }
 
     let gui_options = data.gui_options.borrow();
     _ = save_json_to_config::<GuiOptions>(&gui_options, CONF_FN);
@@ -883,8 +894,6 @@ fn handler_close_window(data: &Rc<CameraData>) -> glib::Propagation {
     if let Some(indi_conn) = data.indi_evt_conn.borrow_mut().take() {
         data.indi.unsubscribe(indi_conn);
     }
-
-    glib::Propagation::Proceed
 }
 
 fn show_frame_options(

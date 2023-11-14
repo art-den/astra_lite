@@ -1,4 +1,4 @@
-use std::{sync::{Arc, RwLock}, rc::Rc, cell::RefCell, time::Duration, path::PathBuf, process::Command};
+use std::{sync::{Arc, RwLock}, rc::Rc, cell::{RefCell, Cell}, time::Duration, path::PathBuf, process::Command};
 use gtk::{prelude::*, glib, glib::clone, cairo::{self}};
 use serde::{Serialize, Deserialize};
 
@@ -26,6 +26,7 @@ pub enum MainGuiEvent {
     FullScreen(bool),
     BeforeModeContinued,
     TabPageChanged(TabPage),
+    ProgramClosing,
 }
 
 pub type MainGuiHandlers = Vec<Box<dyn Fn(MainGuiEvent) + 'static>>;
@@ -87,15 +88,16 @@ impl Default for MainOptions {
 }
 
 struct MainData {
-    logs_dir:     PathBuf,
-    options:      Arc<RwLock<Options>>,
-    main_options: RefCell<MainOptions>,
-    handlers:     RefCell<MainGuiHandlers>,
-    progress:     RefCell<Option<Progress>>,
-    state:        Arc<State>,
-    builder:      gtk::Builder,
-    window:       gtk::ApplicationWindow,
-    self_:        RefCell<Option<Rc<MainData>>>
+    logs_dir:       PathBuf,
+    options:        Arc<RwLock<Options>>,
+    main_options:   RefCell<MainOptions>,
+    handlers:       RefCell<MainGuiHandlers>,
+    progress:       RefCell<Option<Progress>>,
+    state:          Arc<State>,
+    builder:        gtk::Builder,
+    window:         gtk::ApplicationWindow,
+    close_win_flag: Cell<bool>,
+    self_:          RefCell<Option<Rc<MainData>>>
 }
 
 impl Drop for MainData {
@@ -145,15 +147,16 @@ pub fn build_ui(
     let gui = Rc::new(Gui::new(&builder));
 
     let data = Rc::new(MainData {
-        logs_dir:     logs_dir.clone(),
-        state:        Arc::clone(state),
-        options:      Arc::clone(options),
-        main_options: RefCell::new(main_options),
-        handlers:     RefCell::new(Vec::new()),
-        progress:     RefCell::new(None),
-        window:       window.clone(),
-        builder:      builder.clone(),
-        self_:        RefCell::new(None), // used to drop MainData in window's delete_event
+        logs_dir:       logs_dir.clone(),
+        state:          Arc::clone(state),
+        options:        Arc::clone(options),
+        main_options:   RefCell::new(main_options),
+        handlers:       RefCell::new(Vec::new()),
+        progress:       RefCell::new(None),
+        window:         window.clone(),
+        builder:        builder.clone(),
+        close_win_flag: Cell::new(false),
+        self_:          RefCell::new(None), // used to drop MainData in window's delete_event
     });
 
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
@@ -177,6 +180,10 @@ pub fn build_ui(
         Duration::from_millis(TIMER_PERIOD_MS),
         clone!(@weak data => @default-return glib::ControlFlow::Break,
         move || {
+            if data.close_win_flag.get() {
+                data.window.close();
+                return glib::ControlFlow::Break;
+            }
             for handler in data.handlers.borrow().iter() {
                 handler(MainGuiEvent::Timer);
             }
@@ -184,9 +191,10 @@ pub fn build_ui(
         }
     ));
 
-    super::gui_hardware::build_ui(app, &builder, &gui, options, state, indi);
-    super::gui_camera::build_ui(app, &builder, &gui, options, state, indi, &mut data.handlers.borrow_mut());
-    super::gui_map::build_ui(app, &builder, &options);
+    let mut handlers = data.handlers.borrow_mut();
+    super::gui_hardware::build_ui(app, &builder, &gui, options, state, indi, &mut handlers);
+    super::gui_camera::build_ui(app, &builder, &gui, options, state, indi, &mut handlers);
+    super::gui_map::build_ui(app, &builder, &options, &mut handlers);
 
     let ui = gtk_utils::UiHelper::new_from_builder(&builder);
 
@@ -268,8 +276,10 @@ pub fn build_ui(
         clone!(@weak data => @default-return glib::Propagation::Proceed,
         move |_, _| {
             let res = handler_close_window(&data);
-            gtk::main_iteration_do(true);
-            *data.self_.borrow_mut() = None;
+            if res == glib::Propagation::Proceed {
+                gtk::main_iteration_do(true);
+                *data.self_.borrow_mut() = None;
+            }
             res
         })
     );
@@ -310,11 +320,42 @@ fn connect_state_events(data: &Rc<MainData>) {
 }
 
 fn handler_close_window(data: &Rc<MainData>) -> glib::Propagation {
+    if data.state.mode_data().mode.get_type() != ModeType::Waiting {
+        println!("Showing dialog...");
+        let dialog = gtk::MessageDialog::builder()
+            .transient_for(&data.window)
+            .title("Operation is in progress")
+            .text("Terminate current mode?")
+            .modal(true)
+            .message_type(gtk::MessageType::Question)
+            .build();
+        gtk_utils::add_ok_and_cancel_buttons(
+            dialog.upcast_ref::<gtk::Dialog>(),
+            "Yes", gtk::ResponseType::Yes,
+            "No", gtk::ResponseType::No,
+        );
+        dialog.show();
+
+        dialog.connect_response(clone!(@weak data =>
+            move |dlg, response| {
+            if response == gtk::ResponseType::Yes {
+                data.state.abort_active_mode();
+                data.close_win_flag.set(true);
+            }
+            dlg.close();
+        }));
+        return glib::Propagation::Stop
+    }
+
     read_options_from_widgets(data);
 
     let options = data.main_options.borrow();
     _ = save_json_to_config::<MainOptions>(&options, CONF_FN);
     drop(options);
+
+    for handler in data.handlers.borrow().iter() {
+        handler(MainGuiEvent::ProgramClosing);
+    }
 
     glib::Propagation::Proceed
 }
