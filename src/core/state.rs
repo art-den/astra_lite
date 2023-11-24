@@ -904,20 +904,32 @@ pub fn apply_camera_options_and_take_shot(
     let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&device.prop);
 
     // Polling period
+
     if indi.device_is_polling_period_supported(&device.name)? {
         indi.device_set_polling_period(&device.name, 500, true, None)?;
     }
 
     // Frame type
+
+    use crate::image::image_raw::*; // for FrameType::
+    let frame_type = match frame.frame_type {
+        FrameType::Lights => indi_api::FrameType::Light,
+        FrameType::Flats  => indi_api::FrameType::Flat,
+        FrameType::Darks  => indi_api::FrameType::Dark,
+        FrameType::Biases => indi_api::FrameType::Bias,
+        FrameType::Undef  => panic!("Undefined frame type"),
+    };
+
     indi.camera_set_frame_type(
         &device.name,
         cam_ccd,
-        frame.frame_type.to_indi_frame_type(),
+        frame_type,
         true,
         SET_PROP_TIMEOUT
     )?;
 
     // Frame size
+
     if indi.camera_is_frame_supported(&device.name, cam_ccd)? {
         let (width, height) = indi.camera_get_max_frame_size(&device.name, cam_ccd)?;
         let crop_width = frame.crop.translate(width);
@@ -935,6 +947,7 @@ pub fn apply_camera_options_and_take_shot(
     }
 
     // Make binning mode is alwais AVG (if camera supports it)
+
     if indi.camera_is_binning_mode_supported(&device.name, cam_ccd)?
     && frame.binning != Binning::Orig {
         indi.camera_set_binning_mode(
@@ -946,6 +959,7 @@ pub fn apply_camera_options_and_take_shot(
     }
 
     // Binning
+
     if indi.camera_is_binning_supported(&device.name, cam_ccd)? {
         indi.camera_set_binning(
             &device.name,
@@ -958,6 +972,7 @@ pub fn apply_camera_options_and_take_shot(
     }
 
     // Gain
+
     if indi.camera_is_gain_supported(&device.name)? {
         indi.camera_set_gain(
             &device.name,
@@ -968,6 +983,7 @@ pub fn apply_camera_options_and_take_shot(
     }
 
     // Offset
+
     if indi.camera_is_offset_supported(&device.name)? {
         indi.camera_set_offset(
             &device.name,
@@ -978,6 +994,7 @@ pub fn apply_camera_options_and_take_shot(
     }
 
     // Low noise mode
+
     if indi.camera_is_low_noise_ctrl_supported(&device.name)? {
         indi.camera_control_low_noise(
             &device.name,
@@ -988,6 +1005,7 @@ pub fn apply_camera_options_and_take_shot(
     }
 
     // Capture format = RAW
+
     if indi.camera_is_capture_format_supported(&device.name)? {
         indi.camera_set_capture_format(
             &device.name,
@@ -998,6 +1016,7 @@ pub fn apply_camera_options_and_take_shot(
     }
 
     // Start exposure
+
     start_camera_exposure(
         indi,
         device,

@@ -3,7 +3,6 @@ use chrono::prelude::*;
 use rayon::prelude::*;
 use itertools::{izip, Itertools};
 use serde::{Serialize, Deserialize};
-use crate::indi::indi_api;
 use super::{image::*, simple_fits::*};
 
 #[derive(Clone)]
@@ -91,16 +90,6 @@ impl FrameType {
             FrameType::Darks  => "Saving DARK frames",
             FrameType::Biases => "Saving BIAS frames",
             FrameType::Undef  => "Unknows save frames state :("
-        }
-    }
-
-    pub fn to_indi_frame_type(&self) -> indi_api::FrameType {
-        match self {
-            FrameType::Lights => indi_api::FrameType::Light,
-            FrameType::Flats  => indi_api::FrameType::Flat,
-            FrameType::Darks  => indi_api::FrameType::Dark,
-            FrameType::Biases => indi_api::FrameType::Bias,
-            FrameType::Undef  => panic!("Undefined frame type"),
         }
     }
 }
