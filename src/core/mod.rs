@@ -1,5 +1,5 @@
 pub mod frame_processing;
-pub mod state;
+pub mod core;
 pub mod mode_waiting;
 pub mod mode_tacking_pictures;
 pub mod mode_focusing;

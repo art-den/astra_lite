@@ -8,7 +8,7 @@ use crate::{
     utils::math::*,
     image::image_info::LightFrameInfo,
 };
-use super::{state::*, frame_processing::*};
+use super::{core::*, frame_processing::*};
 
 const MAX_FOCUS_TOTAL_TRY_CNT: usize = 8;
 const MAX_FOCUS_SAMPLE_TRY_CNT: usize = 4;
@@ -336,12 +336,12 @@ impl Mode for FocusingMode {
         &mut self,
         prop_change: &indi_api::PropChangeEvent
     ) -> anyhow::Result<NotifyResult> {
-        if prop_change.device_name != self.options.device {
+        if *prop_change.device_name != self.options.device {
             return Ok(NotifyResult::Empty);
         }
         if let ("ABS_FOCUS_POSITION", indi_api::PropChange::Change { value, .. })
         = (prop_change.prop_name.as_str(), &prop_change.change) {
-            let cur_focus = value.prop_value.as_f64()?;
+            let cur_focus = value.prop_value.to_f64()?;
             match self.state {
                 FocusingState::WaitingPositionAntiBacklash {before_pos, begin_pos} => {
                     if f64::abs(cur_focus-before_pos) < 1.01 {

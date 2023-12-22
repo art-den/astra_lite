@@ -22,7 +22,7 @@ use crate::{
     utils::io_utils::*,
     utils::log_utils::*,
     options::*,
-    core::state::State,
+    core::core::Core,
     core::frame_processing::*
 };
 
@@ -112,7 +112,7 @@ fn main() -> anyhow::Result<()> {
     let indi = Arc::new(indi::indi_api::Connection::new());
     let options = Arc::new(RwLock::new(Options::default()));
     let (img_cmds_sender, frame_process_thread) = start_frame_processing_thread();
-    let state = Arc::new(State::new(&indi, &options, img_cmds_sender));
+    let core = Arc::new(Core::new(&indi, &options, img_cmds_sender));
 
     let application = gtk::Application::new(
         Some(&format!("com.github.art-den.{}", env!("CARGO_PKG_NAME"))),
@@ -120,7 +120,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     application.connect_activate(clone!(@weak options => move |app|
-        gui::gui_main::build_ui(app, &indi, &options, &state, &logs_dir)
+        gui::gui_main::init_ui(app, &indi, &options, &core, &logs_dir)
     ));
     application.run();
 

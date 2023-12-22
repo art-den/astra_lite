@@ -9,7 +9,7 @@ use crate::{
     image::image_info::*,
     gui::gui_camera::SET_PROP_TIMEOUT,
 };
-use super::{state::*, frame_processing::*};
+use super::{core::*, frame_processing::*};
 
 pub const DITHER_CALIBR_ATTEMPTS_CNT: usize = 11;
 pub const DITHER_CALIBR_SPEED: f64 = 1.0;
@@ -143,7 +143,7 @@ impl MountCalibrMode {
         let guid_rate_supported = self.indi.mount_is_guide_rate_supported(&self.mount_device)?;
         self.can_change_g_rate =
             guid_rate_supported &&
-            self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.perm == indi_api::PropPerm::RW;
+            self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.permition == indi_api::PropPermition::RW;
 
         if self.can_change_g_rate {
             self.calibr_speed = DITHER_CALIBR_SPEED;
@@ -370,7 +370,7 @@ impl Mode for MountCalibrMode {
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
 
-        if prop_change.device_name != self.mount_device {
+        if *prop_change.device_name != self.mount_device {
             return Ok(result);
         }
         match self.state {
@@ -379,10 +379,10 @@ impl Mode for MountCalibrMode {
                         indi_api::PropChange::Change { value, .. })
                 = (prop_change.prop_name.as_str(), &prop_change.change) {
                     match value.elem_name.as_str() {
-                        "TIMED_GUIDE_N" => self.cur_timed_guide_n = value.prop_value.as_f64()?,
-                        "TIMED_GUIDE_S" => self.cur_timed_guide_s = value.prop_value.as_f64()?,
-                        "TIMED_GUIDE_W" => self.cur_timed_guide_w = value.prop_value.as_f64()?,
-                        "TIMED_GUIDE_E" => self.cur_timed_guide_e = value.prop_value.as_f64()?,
+                        "TIMED_GUIDE_N" => self.cur_timed_guide_n = value.prop_value.to_f64()?,
+                        "TIMED_GUIDE_S" => self.cur_timed_guide_s = value.prop_value.to_f64()?,
+                        "TIMED_GUIDE_W" => self.cur_timed_guide_w = value.prop_value.to_f64()?,
+                        "TIMED_GUIDE_E" => self.cur_timed_guide_e = value.prop_value.to_f64()?,
                         _ => {},
                     }
                     if self.cur_timed_guide_n == 0.0 && self.cur_timed_guide_s == 0.0
@@ -403,8 +403,8 @@ impl Mode for MountCalibrMode {
                 if let ("EQUATORIAL_EOD_COORD", indi_api::PropChange::Change { value, .. })
                 = (prop_change.prop_name.as_str(), &prop_change.change) {
                     match value.elem_name.as_str() {
-                        "RA" => self.cur_ra = value.prop_value.as_f64()?,
-                        "DEC" => self.cur_dec = value.prop_value.as_f64()?,
+                        "RA" => self.cur_ra = value.prop_value.to_f64()?,
+                        "DEC" => self.cur_dec = value.prop_value.to_f64()?,
                         _ => {},
                     }
                     if f64::abs(self.cur_ra-self.start_ra) < 0.001

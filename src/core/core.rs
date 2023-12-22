@@ -33,7 +33,7 @@ pub struct Progress {
     pub total: usize,
 }
 
-pub enum StateEvent {
+pub enum CoreEvent {
     Error(String),
     ModeChanged,
     ModeContinued,
@@ -100,7 +100,7 @@ impl ModeData {
     }
 }
 
-type SubscribersFun = dyn Fn(StateEvent) + Send + Sync + 'static;
+type SubscribersFun = dyn Fn(CoreEvent) + Send + Sync + 'static;
 type FrameProcessResultFun = dyn Fn(FrameProcessResult) + Send + Sync + 'static;
 
 pub struct Subscribers {
@@ -116,42 +116,42 @@ impl Subscribers {
         }
     }
 
-    fn add(&mut self, fun: impl Fn(StateEvent) + Send + Sync + 'static) {
+    fn add(&mut self, fun: impl Fn(CoreEvent) + Send + Sync + 'static) {
         self.items.push(Box::new(fun));
     }
 
     fn inform_error(&self, error_text: &str) {
         for s in &self.items {
-            s(StateEvent::Error(error_text.to_string()));
+            s(CoreEvent::Error(error_text.to_string()));
         }
     }
 
     fn inform_mode_changed(&self) {
         for s in &self.items {
-            s(StateEvent::ModeChanged);
+            s(CoreEvent::ModeChanged);
         }
     }
 
     fn inform_progress(&self, progress: Option<Progress>) {
         for s in &self.items {
-            s(StateEvent::Propress(progress.clone()));
+            s(CoreEvent::Propress(progress.clone()));
         }
     }
 
     fn inform_mode_continued(&self) {
         for s in &self.items {
-            s(StateEvent::ModeContinued);
+            s(CoreEvent::ModeContinued);
         }
     }
 
     pub fn inform_focusing(&self, data: FocusingStateEvent) {
         for s in &self.items {
-            s(StateEvent::Focusing(data.clone()));
+            s(CoreEvent::Focusing(data.clone()));
         }
     }
 }
 
-pub struct State {
+pub struct Core {
     indi:               Arc<indi_api::Connection>,
     phd2:               Arc<phd2_conn::Connection>,
     options:            Arc<RwLock<Options>>,
@@ -170,7 +170,7 @@ pub struct State {
     ext_guider:         Arc<Mutex<Option<Box<dyn ExternalGuider + Send>>>>,
 }
 
-impl State {
+impl Core {
     pub fn new(
         indi:            &Arc<indi_api::Connection>,
         options:         &Arc<RwLock<Options>>,
@@ -260,10 +260,6 @@ impl State {
         Ok(())
     }
 
-    pub fn ext_guider(&self) -> &Arc<Mutex<Option<Box<dyn ExternalGuider + Send>>>> {
-        &self.ext_guider
-    }
-
     pub fn stop_img_process_thread(&self) -> anyhow::Result<()> {
         self.img_cmds_sender
             .send(FrameProcessCommand::Exit)
@@ -295,15 +291,13 @@ impl State {
         subscribers.inform_error(&err.to_string());
     }
 
-    pub fn connect_main_cam_proc_result_event(&self, fun: impl Fn(FrameProcessResult) + Send + Sync + 'static) {
+    pub fn connect_main_cam_proc_result_event(
+        &self,
+        fun: impl Fn(FrameProcessResult) + Send + Sync + 'static
+    ) {
         let mut subscribers = self.subscribers.write().unwrap();
         assert!(subscribers.frame_evt.is_none());
         subscribers.frame_evt = Some(Box::new(fun));
-    }
-
-    pub fn disconnect_main_cam_proc_result_event(&self) {
-        let mut subscribers = self.subscribers.write().unwrap();
-        subscribers.frame_evt = None;
     }
 
     fn connect_indi_events(&self) {
@@ -419,10 +413,10 @@ impl State {
         = (&prop_change.change, mode_data.mode.cam_device()) {
             let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&cur_device.prop);
             if indi_api::Connection::camera_is_exposure_property(&prop_change.prop_name, &value.elem_name, cam_ccd)
-            && cur_device.name == prop_change.device_name {
+            && cur_device.name == *prop_change.device_name {
                 // exposure = 0.0 and state = busy means exposure has ended
                 // but still no blob received
-                if value.prop_value.as_f64().unwrap_or(0.0) == 0.0
+                if value.prop_value.to_f64().unwrap_or(0.0) == 0.0
                 && *new_state == indi_api::PropState::Busy {
                     _ = exp_stuck_wd.compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed);
                 } else {
@@ -585,7 +579,7 @@ impl State {
 
     pub fn subscribe_events(
         &self,
-        fun: impl Fn(StateEvent) + Send + Sync + 'static
+        fun: impl Fn(CoreEvent) + Send + Sync + 'static
     ) {
         let mut subscribers = self.subscribers.write().unwrap();
         subscribers.add(fun);
@@ -845,9 +839,9 @@ impl State {
     }
 }
 
-impl Drop for State {
+impl Drop for Core {
     fn drop(&mut self) {
-        log::info!("State dropped");
+        log::info!("Core dropped");
     }
 }
 

@@ -40,14 +40,16 @@ pub fn disable_scroll_for_most_of_widgets(builder: &gtk::Builder) {
     }
 }
 
-pub fn connect_action<Fun, T: 'static>(
+pub fn connect_action<Fun, T>(
     window:   &gtk::ApplicationWindow,
     data:     &Rc<T>,
     act_name: &str,
     fun:      Fun
-) where Fun: Fn(&Rc<T>) + 'static {
+) where Fun: Fn(&Rc<T>) + 'static, T: 'static {
     let action = gio::SimpleAction::new(act_name, None);
-    action.connect_activate(clone!(@weak data => move |_, _| fun(&data)));
+    action.connect_activate(clone!(@weak data => move |_, _|
+        fun(&data);
+    ));
     window.add_action(&action);
 }
 

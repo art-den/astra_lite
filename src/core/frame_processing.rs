@@ -12,7 +12,7 @@ use crate::{
     utils::log_utils::*,
     image::stars_offset::*,
     options::*,
-    core::state::ModeType,
+    core::core::ModeType,
     utils::math::linear_interpolate,
     utils::io_utils::SeqFileNameGen,
 };

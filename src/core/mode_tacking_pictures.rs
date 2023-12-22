@@ -16,7 +16,7 @@ use crate::{
     gui::gui_camera::SET_PROP_TIMEOUT,
     guiding::external_guider::*
 };
-use super::{state::*, frame_processing::*, mode_mount_calibration::*};
+use super::{core::*, frame_processing::*, mode_mount_calibration::*};
 
 const MAX_TIMED_GUIDE: f64 = 20.0; // in seconds
 
@@ -414,7 +414,7 @@ impl TackingPicturesMode {
                     self.abort()?;
                     let can_set_guide_rate =
                         self.indi.mount_is_guide_rate_supported(&self.mount_device)? &&
-                        self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.perm == indi_api::PropPerm::RW;
+                        self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.permition == indi_api::PropPermition::RW;
                     if can_set_guide_rate {
                         self.indi.mount_set_guide_rate(
                             &self.mount_device,
@@ -712,8 +712,8 @@ impl Mode for TackingPicturesMode {
         &mut self,
         event: &indi_api::BlobStartEvent
     ) -> anyhow::Result<NotifyResult> {
-        if event.device_name != self.device.name
-        || event.prop_name != self.device.prop {
+        if *event.device_name != self.device.name
+        || *event.prop_name != self.device.prop {
             return Ok(NotifyResult::Empty);
         }
         match (&self.cam_mode, &self.frame_options.frame_type) {
@@ -847,10 +847,10 @@ impl Mode for TackingPicturesMode {
             if let ("TELESCOPE_TIMED_GUIDE_NS"|"TELESCOPE_TIMED_GUIDE_WE", indi_api::PropChange::Change { value, .. }, Some(guid_data))
             = (prop_change.prop_name.as_str(), &prop_change.change, &mut self.simple_guider) {
                 match value.elem_name.as_str() {
-                    "TIMED_GUIDE_N" => guid_data.cur_timed_guide_n = value.prop_value.as_f64()?,
-                    "TIMED_GUIDE_S" => guid_data.cur_timed_guide_s = value.prop_value.as_f64()?,
-                    "TIMED_GUIDE_W" => guid_data.cur_timed_guide_w = value.prop_value.as_f64()?,
-                    "TIMED_GUIDE_E" => guid_data.cur_timed_guide_e = value.prop_value.as_f64()?,
+                    "TIMED_GUIDE_N" => guid_data.cur_timed_guide_n = value.prop_value.to_f64()?,
+                    "TIMED_GUIDE_S" => guid_data.cur_timed_guide_s = value.prop_value.to_f64()?,
+                    "TIMED_GUIDE_W" => guid_data.cur_timed_guide_w = value.prop_value.to_f64()?,
+                    "TIMED_GUIDE_E" => guid_data.cur_timed_guide_e = value.prop_value.to_f64()?,
                     _ => {},
                 }
                 if guid_data.cur_timed_guide_n == 0.0

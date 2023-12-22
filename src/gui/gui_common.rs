@@ -201,9 +201,10 @@ pub fn fill_combobox_with_cam_list(
                     name_for_user.push_str(prop);
                     name_for_user.push_str(")");
                 }
-                cb.append(None, &name_for_user);
+                let name_and_prop_str = format!("{}.{}", camera.name, prop);
+                cb.append(Some(&name_and_prop_str), &name_for_user);
                 list.push(DeviceAndProp {
-                    name: camera.name.clone(),
+                    name: camera.name.to_string(),
                     prop: prop.to_string()
                 });
             }
