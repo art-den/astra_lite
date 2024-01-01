@@ -7,7 +7,7 @@ pub struct IndiGui {
     indi:           Arc<indi_api::Connection>,
     indi_conn:      indi_api::Subscription,
     data:           Rc<RefCell<UiIndiGuiData>>,
-    filter_text_lc: Rc<RefCell<String>>,
+    grid:           gtk::Grid,
 }
 
 impl Drop for IndiGui {
@@ -25,10 +25,7 @@ impl IndiGui {
         }
         ";
 
-    pub fn new(
-        indi:  &Arc<indi_api::Connection>,
-        stack: gtk::Stack,
-    ) -> Self {
+    pub fn new(indi: &Arc<indi_api::Connection>) -> Self {
         let css_provider = gtk::CssProvider::new();
         css_provider.load_from_data(Self::CSS).unwrap();
         gtk::StyleContext::add_provider_for_screen(
@@ -43,12 +40,59 @@ impl IndiGui {
             sender.send(evt).unwrap();
         });
 
+        let stack = gtk::Stack::builder()
+            .visible(true)
+            .expand(true)
+            .build();
+
+        let stack_sidebar = gtk::StackSidebar::builder()
+            .visible(true)
+            .stack(&stack)
+            .build();
+
+        let se_label = gtk::Label::builder()
+            .visible(true)
+            .label("Filter:")
+            .build();
+
+        let se = gtk::SearchEntry::builder()
+            .visible(true)
+            .build();
+
+        let bx_se = gtk::Box::builder()
+            .visible(true)
+            .spacing(5)
+            .halign(gtk::Align::End)
+            .orientation(gtk::Orientation::Horizontal)
+            .build();
+
+        bx_se.add(&se_label);
+        bx_se.add(&se);
+
+        let grid = gtk::Grid::builder()
+            .visible(true)
+            .column_spacing(5)
+            .row_spacing(5)
+            .build();
+
+        grid.attach(&bx_se, 1, 0, 1, 1);
+        grid.attach(&stack_sidebar, 0, 1, 1, 1);
+        grid.attach(&stack, 1, 1, 1, 1);
+
         let data = Rc::new(RefCell::new(UiIndiGuiData {
             devices: Vec::new(),
-            stack,
             prop_changed: true,
             list_changed: true,
             last_change_id: 0,
+            filter_text_lc: String::new(),
+        }));
+
+        se.connect_search_changed(clone!(@strong data => move |entry| {
+            let mut data = data.borrow_mut();
+            let text_lc = entry.text().to_lowercase();
+            if data.filter_text_lc == text_lc { return; }
+            data.filter_text_lc = text_lc;
+            Self::update_props_visiblity(&data);
         }));
 
         receiver.attach(None,
@@ -74,6 +118,7 @@ impl IndiGui {
             })
         );
 
+        let stack_for_handler = stack.clone();
         glib::timeout_add_local(
             Duration::from_millis(200),
             clone!(@weak data, @weak indi => @default-return glib::ControlFlow::Break,
@@ -83,7 +128,7 @@ impl IndiGui {
                     let list_changed = data.list_changed;
                     data.prop_changed = false;
                     data.list_changed = false;
-                    Self::show_all_props(&indi, &mut data, list_changed);
+                    Self::show_all_props(&indi, &stack_for_handler, &mut data, list_changed);
                 }
                 glib::ControlFlow::Continue
             })
@@ -92,26 +137,20 @@ impl IndiGui {
         Self {
             data, indi_conn,
             indi: Arc::clone(indi),
-            filter_text_lc: Rc::new(RefCell::new(String::new())),
+            grid,
         }
     }
 
-    pub fn set_filter_text(&self, text: &str) {
-        let mut filter_text_lc = self.filter_text_lc.borrow_mut();
-        if *filter_text_lc == text { return; }
-        *filter_text_lc = text.to_lowercase();
-        drop(filter_text_lc);
-        self.update_props_visiblity();
+    pub fn widget(&self) -> &gtk::Widget {
+        self.grid.upcast_ref::<gtk::Widget>()
     }
 
-    pub fn update_props_visiblity(&self) {
-        let data = self.data.borrow();
-        let filter_text_lc = self.filter_text_lc.borrow();
+    fn update_props_visiblity(data: &UiIndiGuiData) {
         for device in &data.devices {
             for group in &device.groups {
                 let mut group_visible = false;
                 for prop in &group.props {
-                    let visible = prop.test_filter(&filter_text_lc);
+                    let visible = prop.test_filter(&data.filter_text_lc);
                     prop.set_visible(visible);
                     group_visible |= visible;
                 }
@@ -122,6 +161,7 @@ impl IndiGui {
 
     fn show_all_props(
         indi:        &Arc<indi_api::Connection>,
+        stack:       &gtk::Stack,
         data:        &mut UiIndiGuiData,
         update_list: bool
     ) {
@@ -142,7 +182,7 @@ impl IndiGui {
                         .visible(true)
                         .tab_pos(gtk::PositionType::Left)
                         .build();
-                    data.stack.add_titled(&notebook, indi_device, indi_device);
+                    stack.add_titled(&notebook, indi_device, indi_device);
                     data.devices.push(UiIndiDevice {
                         name: indi_device.to_string(),
                         groups: Vec::new(),
@@ -154,7 +194,7 @@ impl IndiGui {
             // remove devices from sidebar
             for ui_device in &data.devices {
                 if !indi_devices.iter().any(|&d| *d == ui_device.name) {
-                    data.stack.remove(&ui_device.notebook);
+                    stack.remove(&ui_device.notebook);
                 }
             }
             data.devices.retain(|existing|
@@ -942,9 +982,9 @@ struct UiIndiPropLightElem {
 }
 
 struct UiIndiGuiData {
-    devices:         Vec<UiIndiDevice>,
-    stack:           gtk::Stack,
-    prop_changed:    bool,
-    list_changed:    bool,
+    devices:        Vec<UiIndiDevice>,
+    prop_changed:   bool,
+    list_changed:   bool,
     last_change_id: u64,
+    filter_text_lc: String,
 }

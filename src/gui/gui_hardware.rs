@@ -29,8 +29,6 @@ pub fn init_ui(
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
-    let stack = builder.object("stk_indi").unwrap();
-
     let (drivers, load_drivers_err) =
         if cfg!(target_os = "windows") {
             (indi_api::Drivers::new_empty(), None)
@@ -48,7 +46,10 @@ pub fn init_ui(
         options.indi.remote = true; // force remote mode if no devices info
     }
 
-    let indi_gui = IndiGui::new(&indi, stack);
+    let indi_gui = IndiGui::new(&indi);
+
+    let bx_indi_ctrl = builder.object::<gtk::Box>("bx_indi_ctrl").unwrap();
+    bx_indi_ctrl.add(indi_gui.widget());
 
     let data = Rc::new(HardwareGui {
         core:          Arc::clone(core),
@@ -71,10 +72,6 @@ pub fn init_ui(
     data.fill_devices_name();
     data.show_options();
 
-    let l_sel_dev_props = data.builder.object::<gtk::Label>("l_sel_dev_props").unwrap();
-    let l_dev_list = data.builder.object::<gtk::Label>("l_dev_list").unwrap();
-    l_dev_list.set_height_request(l_sel_dev_props.allocation().height());
-
     gtk_utils::connect_action(&window, &data, "help_save_indi", HardwareGui::handler_action_help_save_indi);
     gtk_utils::connect_action(&window, &data, "conn_indi",      HardwareGui::handler_action_conn_indi);
     gtk_utils::connect_action(&window, &data, "disconn_indi",   HardwareGui::handler_action_disconn_indi);
@@ -89,11 +86,6 @@ pub fn init_ui(
 
     data.connect_indi_events();
     data.correct_widgets_by_cur_state();
-
-    let srch_indi_prop = data.builder.object::<gtk::SearchEntry>("srch_indi_prop").unwrap();
-    srch_indi_prop.connect_search_changed(clone!(@weak data => move |entry| {
-        data.indi_gui.set_filter_text(entry.text().as_str());
-    }));
 
     let ch_guide_mode = data.builder.object::<gtk::ComboBoxText>("ch_guide_mode").unwrap();
     ch_guide_mode.connect_active_id_notify(clone!(@weak data => move |_| {
