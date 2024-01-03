@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde::{Serialize, Deserialize};
 
 use crate::{
-    image::image_raw::FrameType,
+    image::raw::FrameType,
     core::frame_processing::{CalibrParams, PreviewParams, PreviewImgSize}
 };
 

@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 use itertools::*;
-use super::{image_raw::*, image::*};
+use super::{raw::*, image::*};
 
 pub struct HistogramChan {
     pub mean:    f64,

@@ -10,9 +10,9 @@ use crate::{
     options::*,
     utils::{io_utils::*, timer::Timer},
     indi::indi_api,
-    image::image_raw::{RawAdder, FrameType},
+    image::raw::{RawAdder, FrameType},
     image::stars_offset::*,
-    image::image_info::LightFrameInfo,
+    image::info::LightFrameInfo,
     gui::gui_camera::SET_PROP_TIMEOUT,
     guiding::external_guider::*
 };

@@ -4,7 +4,7 @@ use crate::{
     indi::indi_api,
     gui::gtk_utils,
     options::*,
-    image::image_raw::FrameType,
+    image::raw::FrameType,
     image::histogram::*
 };
 

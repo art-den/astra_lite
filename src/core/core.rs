@@ -905,7 +905,7 @@ pub fn apply_camera_options_and_take_shot(
 
     // Frame type
 
-    use crate::image::image_raw::*; // for FrameType::
+    use crate::image::raw::*; // for FrameType::
     let frame_type = match frame.frame_type {
         FrameType::Lights => indi_api::FrameType::Light,
         FrameType::Flats  => indi_api::FrameType::Flat,

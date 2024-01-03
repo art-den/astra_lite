@@ -5,10 +5,10 @@ use chrono::{DateTime, Local};
 
 use crate::{
     indi::indi_api,
-    image::image_raw::*,
+    image::raw::*,
     image::histogram::*,
     image::image::*,
-    image::image_info::*,
+    image::info::*,
     utils::log_utils::*,
     image::stars_offset::*,
     options::*,

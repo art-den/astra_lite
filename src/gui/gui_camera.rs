@@ -8,10 +8,10 @@ use crate::{
     utils::io_utils::*,
     core::frame_processing::*,
     utils::log_utils::*,
-    image::image_info::*,
+    image::info::*,
     image::histogram::*,
     image::image::RgbU8Data,
-    image::image_raw::FrameType,
+    image::raw::FrameType,
     core::{core::*, mode_focusing::*},
     utils::math::*,
     image::stars_offset::Offset

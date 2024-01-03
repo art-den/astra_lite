@@ -6,7 +6,7 @@ use crate::{
     indi::indi_api,
     options::*,
     utils::math::*,
-    image::image_info::LightFrameInfo,
+    image::info::LightFrameInfo,
 };
 use super::{core::*, frame_processing::*};
 
