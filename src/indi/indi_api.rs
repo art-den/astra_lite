@@ -4079,7 +4079,7 @@ impl XmlReceiver {
             let device_name = Arc::clone(&device.name);
             let Some(property) = device.find_property_mut(&prop_name) else {
                 anyhow::bail!(Error::PropertyNotExists(
-                    Arc::into_inner(device_name).unwrap(),
+                    device_name.to_string(),
                     prop_name
                 ));
             };

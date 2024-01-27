@@ -428,6 +428,14 @@ impl HardwareGui {
             if !options.indi.remote && drivers.is_empty() {
                 anyhow::bail!("No devices selected");
             }
+
+            log::info!(
+                "Connecting to INDI, remote={}, address={}, drivers='{}' ...",
+                options.indi.remote,
+                options.indi.address,
+                drivers.iter().join(",")
+            );
+
             let conn_settings = indi_api::ConnSettings {
                 drivers,
                 remote:               options.indi.remote,
@@ -445,9 +453,13 @@ impl HardwareGui {
     fn handler_action_disconn_indi(self: &Rc<Self>) {
         gtk_utils::exec_and_show_error(&self.window, || {
             if !self.is_remote.get() {
+                log::info!("Disabling all INDI devices before disconnect...");
                 self.indi.command_enable_all_devices(false, true, Some(2000))?;
+                log::info!("Done");
             }
+            log::info!("Disabling disconnecting INDI...");
             self.indi.disconnect_and_wait()?;
+            log::info!("Done");
             Ok(())
         });
     }

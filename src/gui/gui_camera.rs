@@ -2164,9 +2164,12 @@ impl CameraGui {
                 }
             },
 
-            ("CCD_RESOLUTION", ..)
-            if new_prop => {
-                self.delayed_actions.schedule(DelayedActionTypes::SelectMaxResolution);
+            ("CCD_RESOLUTION", ..) => {
+                if new_prop {
+                    self.delayed_actions.schedule(DelayedActionTypes::SelectMaxResolution);
+                } else {
+                    self.delayed_actions.schedule(DelayedActionTypes::UpdateResolutionList);
+                }
             },
 
             ("CCD_BINNING", ..) |
