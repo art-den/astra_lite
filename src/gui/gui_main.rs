@@ -1,6 +1,6 @@
 use std::{
     sync::{Arc, RwLock},
-    rc::Rc,
+    rc::{Rc, Weak},
     cell::{RefCell, Cell},
     time::Duration,
     path::PathBuf,
@@ -54,8 +54,6 @@ pub fn init_ui(
         load_json_from_config_file(&mut main_options, MainGui::CONF_FN)
     });
 
-    let gui = Rc::new(Gui::new(&builder));
-
     let data = Rc::new(MainGui {
         logs_dir:       logs_dir.clone(),
         core:           Arc::clone(core),
@@ -93,13 +91,12 @@ pub fn init_ui(
                 data.window.close();
                 return glib::ControlFlow::Break;
             }
-            for handler in data.handlers.borrow().iter() {
-                handler(MainGuiEvent::Timer);
-            }
+            data.exec_main_gui_handlers(MainGuiEvent::Timer);
             glib::ControlFlow::Continue
         }
     ));
 
+    let gui = Rc::new(Gui::new(&data));
     let mut handlers = data.handlers.borrow_mut();
     super::gui_hardware::init_ui(app, &builder, &gui, options, core, indi, &mut handlers);
     super::gui_camera::init_ui(app, &builder, &gui, options, core, indi, &mut handlers);
@@ -158,9 +155,7 @@ pub fn init_ui(
     let btn_fullscreen = builder.object::<gtk::ToggleButton>("btn_fullscreen").unwrap();
     btn_fullscreen.set_sensitive(false);
     btn_fullscreen.connect_active_notify(clone!(@weak data => move |btn| {
-        for fs_handler in data.handlers.borrow().iter() {
-            fs_handler(MainGuiEvent::FullScreen(btn.is_active()));
-        }
+        data.exec_main_gui_handlers(MainGuiEvent::FullScreen(btn.is_active()));
     }));
 
     let nb_main = builder.object::<gtk::Notebook>("nb_main").unwrap();
@@ -176,9 +171,7 @@ pub fn init_ui(
             TAB_CAMERA   => TabPage::Camera,
             _ => unreachable!(),
         };
-        for handler in data.handlers.borrow().iter() {
-            handler(MainGuiEvent::TabPageChanged(tab.clone()));
-        }
+        data.exec_main_gui_handlers(MainGuiEvent::TabPageChanged(tab.clone()));
     }));
 
     window.connect_delete_event(
@@ -211,12 +204,14 @@ pub enum TabPage {
     Camera,
 }
 
+#[derive(Clone)]
 pub enum MainGuiEvent {
     Timer,
     FullScreen(bool),
     BeforeModeContinued,
     TabPageChanged(TabPage),
     ProgramClosing,
+    BeforeDisconnect,
 }
 
 pub type MainGuiHandlers = Vec<Box<dyn Fn(MainGuiEvent) + 'static>>;
@@ -360,9 +355,7 @@ impl MainGui {
         _ = save_json_to_config::<MainOptions>(&options, MainGui::CONF_FN);
         drop(options);
 
-        for handler in self.handlers.borrow().iter() {
-            handler(MainGuiEvent::ProgramClosing);
-        }
+        self.exec_main_gui_handlers(MainGuiEvent::ProgramClosing);
 
         glib::Propagation::Proceed
     }
@@ -464,12 +457,16 @@ impl MainGui {
 
     fn handler_action_continue(self: &Rc<Self>) {
         gtk_utils::exec_and_show_error(&self.window, || {
-            for fs_handler in self.handlers.borrow().iter() {
-                fs_handler(MainGuiEvent::BeforeModeContinued);
-            }
+            self.exec_main_gui_handlers(MainGuiEvent::BeforeModeContinued);
             self.core.continue_prev_mode()?;
             Ok(())
         });
+    }
+
+    fn exec_main_gui_handlers(self: &Rc<Self>, event: MainGuiEvent) {
+        for fs_handler in self.handlers.borrow().iter() {
+            fs_handler(event.clone());
+        }
     }
 
     fn handler_action_open_logs_folder(self: &Rc<Self>) {
@@ -488,16 +485,16 @@ impl MainGui {
 }
 
 pub struct Gui {
-    builder:     gtk::Builder,
+    main_gui:    Weak<MainGui>,
     conn_string: RefCell<String>,
     dev_string:  RefCell<String>,
     perf_string: RefCell<String>,
 }
 
 impl Gui {
-    fn new(builder: &gtk::Builder) -> Self {
+    fn new(main_gui: &Rc<MainGui>) -> Self {
         Self {
-            builder:     builder.clone(),
+            main_gui:    Rc::downgrade(&main_gui),
             conn_string: RefCell::new(String::new()),
             dev_string:  RefCell::new(String::new()),
             perf_string: RefCell::new(String::new()),
@@ -516,13 +513,21 @@ impl Gui {
     }
 
     fn update_window_title(&self) {
+        let Some(main_gui) = self.main_gui.upgrade() else { return; };
+
         let title = "AstraLite (${arch} ver. ${ver})   --   Deepsky astrophotography and livestacking   --   [${devices_list}]   --   [${conn_status}]   --   [${perf}]";
         let title = title.replace("${arch}",         std::env::consts::ARCH);
         let title = title.replace("${ver}",          env!("CARGO_PKG_VERSION"));
         let title = title.replace("${devices_list}", &self.dev_string.borrow());
         let title = title.replace("${conn_status}",  &self.conn_string.borrow());
         let title = title.replace("${perf}",         &self.perf_string.borrow());
-        let window = self.builder.object::<gtk::ApplicationWindow>("window").unwrap();
+
+        let window = main_gui.builder.object::<gtk::ApplicationWindow>("window").unwrap();
         window.set_title(&title)
+    }
+
+    pub fn exec_before_disconnect_handlers(&self) {
+        let Some(main_gui) = self.main_gui.upgrade() else { return; };
+        main_gui.exec_main_gui_handlers(MainGuiEvent::BeforeDisconnect);
     }
 }

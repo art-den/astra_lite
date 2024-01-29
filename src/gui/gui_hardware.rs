@@ -191,6 +191,8 @@ impl HardwareGui {
         log::info!("Stop connection to PHD2...");
         _ = self.core.phd2().stop();
         log::info!("Done!");
+
+        *self.self_.borrow_mut() = None;
     }
 
     fn configure_widget_props(self: &Rc<Self>) {
@@ -452,6 +454,7 @@ impl HardwareGui {
 
     fn handler_action_disconn_indi(self: &Rc<Self>) {
         gtk_utils::exec_and_show_error(&self.window, || {
+            self.gui.exec_before_disconnect_handlers();
             if !self.is_remote.get() {
                 log::info!("Disabling all INDI devices before disconnect...");
                 self.indi.command_enable_all_devices(false, true, Some(2000))?;

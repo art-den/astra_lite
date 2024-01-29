@@ -192,7 +192,7 @@ struct CameraGui {
     builder:            gtk::Builder,
     window:             gtk::ApplicationWindow,
     options:            Arc<RwLock<Options>>,
-    core:              Arc<Core>,
+    core:               Arc<Core>,
     indi:               Arc<indi_api::Connection>,
     delayed_actions:    DelayedActions<DelayedActionTypes>,
     gui_options:        RefCell<GuiOptions>,
@@ -229,6 +229,10 @@ impl CameraGui {
                 self.correct_widgets_props(),
             MainGuiEvent::ProgramClosing =>
                 self.handler_closing(),
+            MainGuiEvent::BeforeDisconnect => {
+                self.get_options_from_widgets();
+                self.store_cur_cam_options();
+            },
             _ => {},
         }
     }
@@ -447,7 +451,7 @@ impl CameraGui {
 
                 // Store previous camera options into GuiOptions::all_cam_opts
                 if let Some(prev_cam) = &*prev_cam {
-                    self_.store_cur_cam_options(prev_cam, &options);
+                    self_.store_cur_cam_options_impl(prev_cam, &options);
                 }
 
                 let camera_device = cam_list.get(cur_index as usize);
@@ -759,7 +763,7 @@ impl CameraGui {
         }));
     }
 
-    fn store_cur_cam_options(
+    fn store_cur_cam_options_impl(
         self:    &Rc<Self>,
         device:  &DeviceAndProp,
         options: &Options,
@@ -877,15 +881,9 @@ impl CameraGui {
         _ = self.core.stop_img_process_thread();
 
         _ = self.core.abort_active_mode();
-        self.get_options_from_widgets();
 
-        let cam_list = self.cam_list.borrow();
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let camera_device = cam_list.get(ui.prop_i32("cb_camera_list.active") as usize);
-        if let Some(camera_device) = &camera_device {
-            let options = self.options.read().unwrap();
-            self.store_cur_cam_options(camera_device, &options);
-        }
+        self.get_options_from_widgets();
+        self.store_cur_cam_options();
 
         let gui_options = self.gui_options.borrow();
         _ = save_json_to_config::<GuiOptions>(&gui_options, Self::CONF_FN);
@@ -893,6 +891,19 @@ impl CameraGui {
 
         if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
             self.indi.unsubscribe(indi_conn);
+        }
+
+        *self.self_.borrow_mut() = None;
+    }
+
+    /// Stores current camera options for current camera
+    fn store_cur_cam_options(self: &Rc<Self>) {
+        let cam_list = self.cam_list.borrow();
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let camera_device = cam_list.get(ui.prop_i32("cb_camera_list.active") as usize);
+        if let Some(camera_device) = &camera_device {
+            let options = self.options.read().unwrap();
+            self.store_cur_cam_options_impl(camera_device, &options);
         }
     }
 
@@ -2116,8 +2127,6 @@ impl CameraGui {
             self.show_coolpwr_value(device_name, &value.to_string());
         }
 
-        // show_coolpwr_value
-
         match (prop_name, elem_name, value) {
             ("DRIVER_INFO", "DRIVER_INTERFACE", _) => {
                 let flag_bits = value.to_i32().unwrap_or(0);
@@ -2130,7 +2139,7 @@ impl CameraGui {
                     self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
                 }
             },
-            ("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE",
+            ("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE"|"CCD_TEMPERATURE",
              indi_api::PropValue::Num(indi_api::NumPropValue{value, ..})) => {
                 if new_prop {
                     self.delayed_actions.schedule(
@@ -2165,11 +2174,10 @@ impl CameraGui {
             },
 
             ("CCD_RESOLUTION", ..) => {
-                if new_prop {
-                    self.delayed_actions.schedule(DelayedActionTypes::SelectMaxResolution);
-                } else {
-                    self.delayed_actions.schedule(DelayedActionTypes::UpdateResolutionList);
-                }
+                self.delayed_actions.schedule(
+                    if new_prop { DelayedActionTypes::SelectMaxResolution }
+                    else        { DelayedActionTypes::UpdateResolutionList }
+                );
             },
 
             ("CCD_BINNING", ..) |
@@ -2183,7 +2191,7 @@ impl CameraGui {
                 self.show_cur_focuser_value();
                 self.delayed_actions.schedule(
                     if new_prop { DelayedActionTypes::UpdateFocPosNew }
-                    else { DelayedActionTypes::UpdateFocPos }
+                    else        { DelayedActionTypes::UpdateFocPos }
                 );
             },
             ("FOCUS_MAX", ..) => {

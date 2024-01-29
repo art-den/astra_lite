@@ -127,6 +127,8 @@ impl MapGui {
         let gui_options = self.gui_options.borrow();
         _ = save_json_to_config::<GuiOptions>(&gui_options, Self::CONF_FN);
         drop(gui_options);
+
+        *self.self_.borrow_mut() = None;
     }
 
     fn show_options(self: &Rc<Self>) {
