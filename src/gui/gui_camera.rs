@@ -304,32 +304,30 @@ impl CameraGui {
     }
 
     fn connect_indi_and_core_events(self: &Rc<Self>) {
-        let (main_thread_sender, main_thread_receiver) =
-            glib::MainContext::channel(glib::Priority::DEFAULT);
+        let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
 
         let sender = main_thread_sender.clone();
         *self.indi_evt_conn.borrow_mut() = Some(self.indi.subscribe_events(move |event| {
-            sender.send(MainThreadEvent::Indi(event)).unwrap();
+            sender.send_blocking(MainThreadEvent::Indi(event)).unwrap();
         }));
 
         let sender = main_thread_sender.clone();
         self.core.subscribe_events(move |event| {
-            sender.send(MainThreadEvent::Core(event)).unwrap();
+            sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
         });
 
         let sender = main_thread_sender.clone();
         self.core.connect_main_cam_proc_result_event(move |res| {
-            _ = sender.send(MainThreadEvent::FrameProcessing(res));
+            _ = sender.send_blocking(MainThreadEvent::FrameProcessing(res));
         });
 
-        main_thread_receiver.attach(None,
-            clone!(@weak self as self_ => @default-return glib::ControlFlow::Break,
-            move |event| {
-                if self_.closed.get() { return glib::ControlFlow::Break; };
+        glib::spawn_future_local(clone!(@weak self as self_ => async move {
+            while let Ok(event) = main_thread_receiver.recv().await {
+                if self_.closed.get() { return; }
                 self_.process_event_in_main_thread(event);
-                glib::ControlFlow::Continue
-            })
-        );
+            }
+        }));
+
     }
 
     fn process_event_in_main_thread(self: &Rc<Self>, event: MainThreadEvent) {

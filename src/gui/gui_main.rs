@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
     process::Command
 };
-use gtk::{prelude::*, glib, glib::clone, cairo::{self}};
+use gtk::{prelude::*, glib, glib::clone, cairo};
 use serde::{Serialize, Deserialize};
 use crate::{
     indi::indi_api,
@@ -296,14 +296,13 @@ impl MainGui {
     const OPTIONS_FN: &'static str = "options";
 
     fn connect_state_events(self: &Rc<Self>) {
-        let (sender, receiver) =
-            glib::MainContext::channel(glib::Priority::DEFAULT);
-            self.core.subscribe_events(move |event| {
-            sender.send(event).unwrap();
+        let (sender, receiver) = async_channel::unbounded();
+        self.core.subscribe_events(move |event| {
+            sender.send_blocking(event).unwrap();
         });
-        receiver.attach(None,
-            clone! (@weak self as self_ => @default-return glib::ControlFlow::Break,
-            move |event| {
+
+        glib::spawn_future_local(clone! (@weak self as self_ => async move {
+            while let Ok(event) = receiver.recv().await {
                 match event {
                     CoreEvent::ModeChanged => {
                         self_.correct_widgets_props();
@@ -316,9 +315,8 @@ impl MainGui {
                     },
                     _ => {},
                 }
-                glib::ControlFlow::Continue
-            })
-        );
+            }
+        }));
     }
 
     fn handler_close_window(self: &Rc<Self>) -> glib::Propagation {

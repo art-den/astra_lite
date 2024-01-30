@@ -267,33 +267,31 @@ impl HardwareGui {
     }
 
     fn connect_indi_events(self: &Rc<Self>) {
-        let (sender, receiver) = glib::MainContext::channel(glib::Priority::DEFAULT);
+        let (sender, receiver) = async_channel::unbounded();
 
         // Connect INDI events
         let sender_clone = sender.clone();
         *self.indi_evt_conn.borrow_mut() = Some(self.indi.subscribe_events(move |event| {
-            sender_clone.send(HardwareEvent::Indi(event)).unwrap();
+            sender_clone.send_blocking(HardwareEvent::Indi(event)).unwrap();
         }));
 
         // Connect PHD2 events
         let sender_clone = sender.clone();
         self.core.phd2().connect_event_handler(move |event| {
-            sender_clone.send(HardwareEvent::Phd2(event)).unwrap();
+            sender_clone.send_blocking(HardwareEvent::Phd2(event)).unwrap();
         });
 
         // Process incoming events in main thread
-        receiver.attach(None,
-            clone!(@weak self as self_ => @default-return glib::ControlFlow::Break,
-            move |event| {
+        glib::spawn_future_local(clone!(@weak self as self_ => async move {
+            while let Ok(event) = receiver.recv().await {
                 match event {
                     HardwareEvent::Indi(event) =>
                         self_.process_indi_event(event),
                     HardwareEvent::Phd2(event) =>
                         self_.process_phd2_event(event),
                 };
-                glib::ControlFlow::Continue
-            })
-        );
+            }
+        }));
     }
 
     fn process_indi_event(self: &Rc<Self>, event: indi_api::Event) {

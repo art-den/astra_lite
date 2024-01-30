@@ -34,10 +34,10 @@ impl IndiGui {
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
 
-        let (sender, receiver) = glib::MainContext::channel(glib::Priority::DEFAULT);
+        let (sender, receiver) = async_channel::unbounded();
 
         let indi_conn = indi.subscribe_events(move |evt| {
-            sender.send(evt).unwrap();
+            sender.send_blocking(evt).unwrap();
         });
 
         let stack = gtk::Stack::builder()
@@ -95,9 +95,8 @@ impl IndiGui {
             Self::update_props_visiblity(&data);
         }));
 
-        receiver.attach(None,
-            clone!(@weak data => @default-return glib::ControlFlow::Break,
-            move |event| {
+        glib::spawn_future_local(clone!(@weak data => async move {
+            while let Ok(event) = receiver.recv().await {
                 let mut data = data.borrow_mut();
                 match event {
                     indi_api::Event::ConnChange(_) |
@@ -114,9 +113,8 @@ impl IndiGui {
                     _ =>
                         {},
                 };
-                glib::ControlFlow::Continue
-            })
-        );
+            }
+        }));
 
         let stack_for_handler = stack.clone();
         glib::timeout_add_local(
