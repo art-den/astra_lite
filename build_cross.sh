@@ -5,6 +5,8 @@
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
+cargo clean
+
 # arm64
 
 TARGET=aarch64-unknown-linux-gnu

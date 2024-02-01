@@ -223,7 +223,11 @@ impl HardwareGui {
             indi_api::ConnState::Error(_)      => (true,  false),
         };
         let phd2_working = self.core.phd2().is_working();
-        let phd2_acessible = GuidingMode::from_active_id(ui.prop_string("ch_guide_mode.active-id").as_deref()) == GuidingMode::Phd2;
+        let phd2_acessible = {
+            let guiding_mode_str = ui.prop_string("ch_guide_mode.active-id");
+            let guiding_mode = GuidingMode::from_active_id(guiding_mode_str.as_deref());
+            guiding_mode == GuidingMode::Phd2
+        };
         gtk_utils::enable_actions(&self.window, &[
             ("conn_indi",    conn_en),
             ("disconn_indi", disconn_en),
@@ -345,7 +349,6 @@ impl HardwareGui {
                                 );
                             }
                         }
-
                     },
                     indi_api::PropChange::Delete => {
                         log::debug!(
