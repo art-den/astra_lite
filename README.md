@@ -3,7 +3,7 @@ AstraLite is software for deepsky astrophotography and live stacking
 on low power PCs (like rapsberry Pi or Orange Pi)
 
 ```diff
-! The program is under active development!
+! The program is under active development !
 ```
 
 AstraLite uses INDI server to work with astrophotography hardware.
@@ -57,8 +57,20 @@ pacman -S mingw-w64-x86_64-pkg-config base-devel mingw-w64-x86_64-gcc
 
 Don't forget to set your `PATH` environment variable to point to the `mingw64\bin` directory of MSYS
 
-## How to build
+# How to build for you platform
 To build optimized binaries just type
 ```
 cargo build --release
 ```
+# How to build and create deb-packages for ARM64, ARM32 and x64_86 platforms
+## Prerequisites
+* Install podman or docker (I prefer podman):
+```
+sudo apt install podman
+```
+* Install `cross` https://github.com/cross-rs/cross :
+```
+cargo install cross --git https://github.com/cross-rs/cross
+```
+## How to build
+Execute `build_cross.sh`. Once `build_cross.sh` has finished running, you will find the deb packages in the `dist` folder.
