@@ -58,11 +58,11 @@ pacman -S mingw-w64-x86_64-pkg-config base-devel mingw-w64-x86_64-gcc
 Don't forget to set your `PATH` environment variable to point to the `mingw64\bin` directory of MSYS
 
 # How to build for you platform
-To build optimized binaries just type
+To build optimized binaries for your current platform, just type
 ```
 cargo build --release
 ```
-# How to build and create deb-packages for ARM64, ARM32 and x64_86 platforms
+# Building and creating deb-packages for arm64, armhf and x64_86 platforms
 ## Prerequisites
 * Install podman or docker (I prefer podman):
 ```
