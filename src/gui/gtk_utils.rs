@@ -1,5 +1,16 @@
 use std::{rc::Rc, path::{Path, PathBuf}};
-use gtk::{*, prelude::*, gio, glib, glib::clone};
+use gtk::{prelude::*, gio, glib, glib::clone};
+
+pub fn set_dialog_default_button<T: IsA<gtk::Dialog>>(dialog: &T) {
+    use gtk::ResponseType::*;
+    for resp in [Ok, Yes, Accept, Apply] {
+        if let Some(btn) = dialog.widget_for_response(resp) {
+            btn.grab_default();
+            btn.style_context().add_class("suggested-action");
+            break;
+        }
+    }
+}
 
 pub fn add_ok_and_cancel_buttons(
     dialog:      &gtk::Dialog,
@@ -41,16 +52,36 @@ pub fn disable_scroll_for_most_of_widgets(builder: &gtk::Builder) {
 }
 
 pub fn connect_action<Fun, T>(
-    window:   &gtk::ApplicationWindow,
-    data:     &Rc<T>,
-    act_name: &str,
-    fun:      Fun
-) where Fun: Fn(&Rc<T>) + 'static, T: 'static {
+    action_map: &impl IsA<gio::ActionMap>,
+    data:       &Rc<T>,
+    act_name:   &str,
+    fun:        Fun
+) where
+    Fun: Fn(&Rc<T>) + 'static,
+    T: 'static,
+{
     let action = gio::SimpleAction::new(act_name, None);
     action.connect_activate(clone!(@weak data => move |_, _|
         fun(&data);
     ));
-    window.add_action(&action);
+    action_map.add_action(&action);
+}
+
+pub fn enable_action(
+    action_map: &impl IsA<gio::ActionMap>,
+    action:     &str,
+    enabled:    bool,
+) {
+    if let Some(action) = action_map.lookup_action(action) {
+        let sa = action
+            .downcast::<gio::SimpleAction>()
+            .expect("Is not gio::SimpleAction");
+        if sa.is_enabled() != enabled {
+            sa.set_enabled(enabled);
+        }
+    } else {
+        panic!("Action {} not found", action);
+    }
 }
 
 pub fn enable_actions(
@@ -58,36 +89,38 @@ pub fn enable_actions(
     items:  &[(&str, bool)]
 ) {
     for &(action, enabled) in items {
-        if let Some(action) = window.lookup_action(action) {
-            let sa = action
-                .downcast::<gio::SimpleAction>()
-                .expect("Is not gio::SimpleAction");
-            if sa.is_enabled() != enabled {
-                sa.set_enabled(enabled);
-            }
-        } else {
-            panic!("Action {} not found", action);
-        }
+        enable_action(window, action, enabled);
     }
 }
 
-pub fn show_error_message(
-    window:  &gtk::ApplicationWindow,
-    title:   &str,
-    message: &str,
+pub fn show_message(
+    window:   &impl IsA<gtk::Window>,
+    title:    &str,
+    text:     &str,
+    msg_type: gtk::MessageType,
 ) {
     let dialog = gtk::MessageDialog::builder()
         .transient_for(window)
         .title(title)
-        .text(message)
+        .text(text)
         .modal(true)
-        .message_type(gtk::MessageType::Error)
+        .message_type(msg_type)
         .buttons(gtk::ButtonsType::Close)
         .build();
+
     dialog.show();
+
     dialog.connect_response(move |dlg, _| {
         dlg.close();
     });
+}
+
+pub fn show_error_message(
+    window:  &impl IsA<gtk::Window>,
+    title:   &str,
+    message: &str,
+) {
+    show_message(window, title, message, gtk::MessageType::Error);
 }
 
 pub fn exec_and_show_error(
@@ -360,7 +393,7 @@ impl UiHelper {
 }
 
 pub fn select_file_name_to_save(
-    parent:        &impl IsA<Window>,
+    parent:        &impl IsA<gtk::Window>,
     title:         &str,
     filter_name:   &str,
     filter_ext:    &str,
