@@ -11,7 +11,7 @@ use gtk::{prelude::*, glib, glib::clone};
 use itertools::Itertools;
 use chrono::prelude::*;
 use crate::{
-    indi::indi_api,
+    indi,
     core::core::Core,
     options::*,
     guiding::phd2_conn,
@@ -24,20 +24,20 @@ pub fn init_ui(
     gui:      &Rc<Gui>,
     options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
-    indi:     &Arc<indi_api::Connection>,
+    indi:     &Arc<indi::Connection>,
     handlers: &mut MainGuiHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
     let (drivers, load_drivers_err) =
         if cfg!(target_os = "windows") {
-            (indi_api::Drivers::new_empty(), None)
+            (indi::Drivers::new_empty(), None)
         } else {
-            match indi_api::Drivers::new() {
+            match indi::Drivers::new() {
                 Ok(drivers) =>
                     (drivers, None),
                 Err(err) =>
-                    (indi_api::Drivers::new_empty(), Some(err.to_string())),
+                    (indi::Drivers::new_empty(), Some(err.to_string())),
             }
         };
 
@@ -56,7 +56,7 @@ pub fn init_ui(
         indi:          Arc::clone(indi),
         options:       Arc::clone(options),
         builder:       builder.clone(),
-        indi_status:   RefCell::new(indi_api::ConnState::Disconnected),
+        indi_status:   RefCell::new(indi::ConnState::Disconnected),
         indi_drivers:  drivers,
         indi_evt_conn: RefCell::new(None),
         is_remote:     Cell::new(false),
@@ -105,18 +105,18 @@ pub fn init_ui(
     }
 }
 
-impl indi_api::ConnState {
+impl indi::ConnState {
     fn to_str(&self, short: bool) -> Cow<str> {
         match self {
-            indi_api::ConnState::Disconnected =>
+            indi::ConnState::Disconnected =>
                 Cow::from("Disconnected"),
-            indi_api::ConnState::Connecting =>
+            indi::ConnState::Connecting =>
                 Cow::from("Connecting..."),
-            indi_api::ConnState::Connected =>
+            indi::ConnState::Connected =>
                 Cow::from("Connected"),
-            indi_api::ConnState::Disconnecting =>
+            indi::ConnState::Disconnecting =>
                 Cow::from("Disconnecting..."),
-            indi_api::ConnState::Error(text) =>
+            indi::ConnState::Error(text) =>
                 if short { Cow::from("Connection error") }
                 else { Cow::from(format!("Error: {}", text)) },
         }
@@ -141,20 +141,20 @@ impl GuidingMode {
 }
 
 enum HardwareEvent {
-    Indi(indi_api::Event),
+    Indi(indi::Event),
     Phd2(phd2_conn::Event),
 }
 
 struct HardwareGui {
     gui:           Rc<Gui>,
     core:          Arc<Core>,
-    indi:          Arc<indi_api::Connection>,
+    indi:          Arc<indi::Connection>,
     options:       Arc<RwLock<Options>>,
     builder:       gtk::Builder,
     window:        gtk::ApplicationWindow,
-    indi_status:   RefCell<indi_api::ConnState>,
-    indi_drivers:  indi_api::Drivers,
-    indi_evt_conn: RefCell<Option<indi_api::Subscription>>,
+    indi_status:   RefCell<indi::ConnState>,
+    indi_drivers:  indi::Drivers,
+    indi_evt_conn: RefCell<Option<indi::Subscription>>,
     indi_gui:      IndiGui,
     is_remote:     Cell<bool>,
     self_:         RefCell<Option<Rc<HardwareGui>>>,
@@ -216,11 +216,11 @@ impl HardwareGui {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let status = self.indi_status.borrow();
         let (conn_en, disconn_en) = match *status {
-            indi_api::ConnState::Disconnected  => (true,  false),
-            indi_api::ConnState::Connecting    => (false, false),
-            indi_api::ConnState::Disconnecting => (false, false),
-            indi_api::ConnState::Connected     => (false, true),
-            indi_api::ConnState::Error(_)      => (true,  false),
+            indi::ConnState::Disconnected  => (true,  false),
+            indi::ConnState::Connecting    => (false, false),
+            indi::ConnState::Disconnecting => (false, false),
+            indi::ConnState::Connected     => (false, true),
+            indi::ConnState::Error(_)      => (true,  false),
         };
         let phd2_working = self.core.phd2().is_working();
         let phd2_acessible = {
@@ -238,8 +238,8 @@ impl HardwareGui {
 
         let disconnected = matches!(
             *status,
-            indi_api::ConnState::Disconnected|
-            indi_api::ConnState::Error(_)
+            indi::ConnState::Disconnected|
+            indi::ConnState::Error(_)
         );
         let remote = ui.prop_bool("chb_remote.active");
 
@@ -298,19 +298,19 @@ impl HardwareGui {
         }));
     }
 
-    fn process_indi_event(self: &Rc<Self>, event: indi_api::Event) {
+    fn process_indi_event(self: &Rc<Self>, event: indi::Event) {
         match event {
-            indi_api::Event::ConnChange(conn_state) => {
-                if let indi_api::ConnState::Error(_) = &conn_state {
+            indi::Event::ConnChange(conn_state) => {
+                if let indi::ConnState::Error(_) = &conn_state {
                     self.add_log_record(&Some(Utc::now()), "", &conn_state.to_str(false))
                 }
                 *self.indi_status.borrow_mut() = conn_state;
                 self.correct_widgets_by_cur_state();
                 self.update_window_title();
             }
-            indi_api::Event::PropChange(event) => {
+            indi::Event::PropChange(event) => {
                 match &event.change {
-                    indi_api::PropChange::New(value) => {
+                    indi::PropChange::New(value) => {
                         if log::log_enabled!(log::Level::Debug) {
                             let prop_name_string = format!(
                                 "(+) {:20}.{:27}.{:27}",
@@ -325,7 +325,7 @@ impl HardwareGui {
                             );
                         }
                     },
-                    indi_api::PropChange::Change{value, prev_state, new_state} => {
+                    indi::PropChange::Change{value, prev_state, new_state} => {
                         if log::log_enabled!(log::Level::Debug) {
                             let prop_name_string = format!(
                                 "(*) {:20}.{:27}.{:27}",
@@ -350,7 +350,7 @@ impl HardwareGui {
                             }
                         }
                     },
-                    indi_api::PropChange::Delete => {
+                    indi::PropChange::Delete => {
                         log::debug!(
                             "(-) {:20}.{:27}",
                             event.device_name,
@@ -359,10 +359,10 @@ impl HardwareGui {
                     },
                 };
             }
-            indi_api::Event::DeviceDelete(event) => {
+            indi::Event::DeviceDelete(event) => {
                 log::debug!("(-) {:20}", &event.device_name);
             }
-            indi_api::Event::Message(message) => {
+            indi::Event::Message(message) => {
                 log::debug!("indi: device={}, text={}", message.device_name, message.text);
                 self.add_log_record(
                     &message.timestamp,
@@ -370,10 +370,10 @@ impl HardwareGui {
                     &message.text
                 );
             }
-            indi_api::Event::ReadTimeOut => {
+            indi::Event::ReadTimeOut => {
                 log::debug!("indi: read time out");
             }
-            indi_api::Event::BlobStart(_) => {
+            indi::Event::BlobStart(_) => {
                 log::debug!("indi: blob start");
             }
         }
@@ -439,7 +439,7 @@ impl HardwareGui {
                 drivers.iter().join(",")
             );
 
-            let conn_settings = indi_api::ConnSettings {
+            let conn_settings = indi::ConnSettings {
                 drivers,
                 remote:               options.indi.remote,
                 host:                 options.indi.address.clone(),
@@ -661,7 +661,7 @@ impl HardwareGui {
                             &mut file, "{:20}.{:27}.{:27} = ",
                             prop.device, prop.name, elem.name,
                         )?;
-                        if let indi_api::PropValue::Blob(blob) = elem.value {
+                        if let indi::PropValue::Blob(blob) = elem.value {
                             writeln!(&mut file, "[BLOB len={}]", blob.data.len())?;
                         } else {
                             writeln!(&mut file, "{:?}", elem.value)?;

@@ -4,7 +4,7 @@ use bitflags::bitflags;
 use chrono::{DateTime, Local};
 
 use crate::{
-    indi::indi_api,
+    indi,
     image::raw::*,
     image::histogram::*,
     image::image::*,
@@ -138,7 +138,7 @@ pub struct FrameProcessCommandData {
     pub mode_type:       ModeType,
     pub camera:          DeviceAndProp,
     pub flags:           ProcessImageFlags,
-    pub blob:            Arc<indi_api::BlobPropValue>,
+    pub blob:            Arc<indi::BlobPropValue>,
     pub frame:           Arc<ResultImage>,
     pub stop_flag:       Arc<AtomicBool>,
     pub ref_stars:       Arc<Mutex<Option<Vec<Point>>>>,
@@ -245,7 +245,7 @@ pub fn start_frame_processing_thread() -> (mpsc::Sender<FrameProcessCommand>, Jo
 }
 
 fn create_raw_image_from_blob(
-    blob_prop_value: &Arc<indi_api::BlobPropValue>
+    blob_prop_value: &Arc<indi::BlobPropValue>
 ) -> anyhow::Result<RawImage> {
     if blob_prop_value.format == ".fits" {
         let mem_stream = Cursor::new(blob_prop_value.data.as_slice());

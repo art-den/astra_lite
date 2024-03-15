@@ -9,7 +9,7 @@ use std::{
 use gtk::{prelude::*, glib, glib::clone, cairo};
 use serde::{Serialize, Deserialize};
 use crate::{
-    indi::indi_api,
+    indi,
     utils::io_utils::*,
     core::core::*,
     options::*,
@@ -18,7 +18,7 @@ use super::{gtk_utils, gui_common::*};
 
 pub fn init_ui(
     app:      &gtk::Application,
-    indi:     &Arc<indi_api::Connection>,
+    indi:     &Arc<indi::Connection>,
     options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
     logs_dir: &PathBuf

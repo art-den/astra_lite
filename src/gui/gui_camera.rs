@@ -4,7 +4,7 @@ use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use serde::{Serialize, Deserialize};
 use crate::{
     options::*,
-    indi::indi_api,
+    indi,
     utils::io_utils::*,
     core::frame_processing::*,
     utils::log_utils::*,
@@ -24,7 +24,7 @@ pub fn init_ui(
     gui:      &Rc<Gui>,
     options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
-    indi:     &Arc<indi_api::Connection>,
+    indi:     &Arc<indi::Connection>,
     handlers: &mut MainGuiHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
@@ -44,7 +44,7 @@ pub fn init_ui(
         options:            Arc::clone(options),
         delayed_actions:    DelayedActions::new(500),
         gui_options:        RefCell::new(gui_options),
-        conn_state:         RefCell::new(indi_api::ConnState::Disconnected),
+        conn_state:         RefCell::new(indi::ConnState::Disconnected),
         indi_evt_conn:      RefCell::new(None),
         preview_scroll_pos: RefCell::new(None),
         light_history:      RefCell::new(Vec::new()),
@@ -170,7 +170,7 @@ impl Default for GuiOptions {
 pub enum MainThreadEvent {
     FrameProcessing(FrameProcessResult),
     Core(CoreEvent),
-    Indi(indi_api::Event),
+    Indi(indi::Event),
 }
 
 struct LightHistoryItem {
@@ -193,11 +193,11 @@ struct CameraGui {
     window:             gtk::ApplicationWindow,
     options:            Arc<RwLock<Options>>,
     core:               Arc<Core>,
-    indi:               Arc<indi_api::Connection>,
+    indi:               Arc<indi::Connection>,
     delayed_actions:    DelayedActions<DelayedActionTypes>,
     gui_options:        RefCell<GuiOptions>,
-    conn_state:         RefCell<indi_api::ConnState>,
-    indi_evt_conn:      RefCell<Option<indi_api::Subscription>>,
+    conn_state:         RefCell<indi::ConnState>,
+    indi_evt_conn:      RefCell<Option<indi::Subscription>>,
     preview_scroll_pos: RefCell<Option<((f64, f64), (f64, f64))>>,
     light_history:      RefCell<Vec<LightHistoryItem>>,
     focusing_data:      RefCell<Option<FocusingResultData>>,
@@ -332,11 +332,11 @@ impl CameraGui {
 
     fn process_event_in_main_thread(self: &Rc<Self>, event: MainThreadEvent) {
         match event {
-            MainThreadEvent::Indi(indi_api::Event::ConnChange(conn_state)) =>
+            MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) =>
                 self.process_conn_state_event(conn_state),
-            MainThreadEvent::Indi(indi_api::Event::PropChange(event_data)) => {
+            MainThreadEvent::Indi(indi::Event::PropChange(event_data)) => {
                 match &event_data.change {
-                    indi_api::PropChange::New(value) =>
+                    indi::PropChange::New(value) =>
                         self.process_simple_prop_change_event(
                             &event_data.device_name,
                             &event_data.prop_name,
@@ -346,7 +346,7 @@ impl CameraGui {
                             None,
                             &value.prop_value
                         ),
-                    indi_api::PropChange::Change{ value, prev_state, new_state } =>
+                    indi::PropChange::Change{ value, prev_state, new_state } =>
                         self.process_simple_prop_change_event(
                             &event_data.device_name,
                             &event_data.prop_name,
@@ -356,11 +356,11 @@ impl CameraGui {
                             Some(new_state),
                             &value.prop_value
                         ),
-                    indi_api::PropChange::Delete => {}
+                    indi::PropChange::Delete => {}
                 };
             },
 
-            MainThreadEvent::Indi(indi_api::Event::DeviceDelete(event)) => {
+            MainThreadEvent::Indi(indi::Event::DeviceDelete(event)) => {
                 self.update_devices_list_and_props_by_drv_interface(event.drv_interface);
             },
 
@@ -1258,7 +1258,7 @@ impl CameraGui {
             let mount = options.mount.device.clone();
             let correct_num_adjustment_by_prop = |
                 spb_name:  &str,
-                prop_info: indi_api::Result<indi_api::NumPropValue>,
+                prop_info: indi::Result<indi::NumPropValue>,
                 digits:    u32,
                 step:      Option<f64>,
             | -> bool {
@@ -1294,7 +1294,7 @@ impl CameraGui {
                 )
             ).unwrap_or(false);
             let exposure_supported = camera.as_ref().map(|camera| {
-                let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&camera.prop);
+                let cam_ccd = indi::CamCcd::from_ccd_prop_name(&camera.prop);
                 correct_num_adjustment_by_prop(
                     "spb_exp",
                     self.indi.camera_get_exposure_prop_value(&camera.name, cam_ccd),
@@ -1319,7 +1319,7 @@ impl CameraGui {
                 )
             ).unwrap_or(false);
             let bin_supported = camera.as_ref().map(|camera| {
-                let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&camera.prop);
+                let cam_ccd = indi::CamCcd::from_ccd_prop_name(&camera.prop);
                 self.indi.camera_is_binning_supported(&camera.name, cam_ccd)
             }).unwrap_or(Ok(false))?;
             let fan_supported = camera.as_ref().map(|camera|
@@ -1332,11 +1332,11 @@ impl CameraGui {
                 self.indi.camera_is_low_noise_ctrl_supported(&camera.name)
             ).unwrap_or(Ok(false))?;
             let crop_supported = camera.as_ref().map(|camera| {
-                let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&camera.prop);
+                let cam_ccd = indi::CamCcd::from_ccd_prop_name(&camera.prop);
                 self.indi.camera_is_frame_supported(&camera.name, cam_ccd)
             }).unwrap_or(Ok(false))?;
 
-            let indi_connected = self.indi.state() == indi_api::ConnState::Connected;
+            let indi_connected = self.indi.state() == indi::ConnState::Connected;
 
             let cooler_active = ui.prop_bool("chb_cooler.active");
             let frame_mode_str = ui.prop_string("cb_frame_mode.active-id");
@@ -1534,7 +1534,7 @@ impl CameraGui {
             &mut cam_list,
             &options.cam.device
         ).unwrap_or(0);
-        let connected = self.indi.state() == indi_api::ConnState::Connected;
+        let connected = self.indi.state() == indi::ConnState::Connected;
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
 
         if cameras_count > 0 {
@@ -1559,7 +1559,7 @@ impl CameraGui {
         let last_bin = cb_bin.active_id();
         cb_bin.remove_all();
         let Some(cam_dev) = cam_dev else { return Ok(()); };
-        let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&cam_dev.prop);
+        let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_dev.prop);
         let (max_width, max_height) = self.indi.camera_get_max_frame_size(&cam_dev.name, cam_ccd)?;
         let (max_hor_bin, max_vert_bin) = self.indi.camera_get_max_binning(&cam_dev.name, cam_ccd)?;
         let max_bin = usize::min(max_hor_bin, max_vert_bin);
@@ -2080,11 +2080,11 @@ impl CameraGui {
 
     fn process_conn_state_event(
         self:       &Rc<Self>,
-        conn_state: indi_api::ConnState
+        conn_state: indi::ConnState
     ) {
         let update_devices_list =
-            conn_state == indi_api::ConnState::Disconnected ||
-            conn_state == indi_api::ConnState::Disconnecting;
+            conn_state == indi::ConnState::Disconnected ||
+            conn_state == indi::ConnState::Disconnecting;
         *self.conn_state.borrow_mut() = conn_state;
         if update_devices_list {
             self.excl.exec(|| {
@@ -2097,12 +2097,12 @@ impl CameraGui {
 
     fn update_devices_list_and_props_by_drv_interface(
         self:          &Rc<Self>,
-        drv_interface: indi_api::DriverInterface,
+        drv_interface: indi::DriverInterface,
     ) {
-        if drv_interface.contains(indi_api::DriverInterface::TELESCOPE) {
+        if drv_interface.contains(indi::DriverInterface::TELESCOPE) {
             self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
         }
-        if drv_interface.contains(indi_api::DriverInterface::FOCUSER) {
+        if drv_interface.contains(indi::DriverInterface::FOCUSER) {
             self.delayed_actions.schedule(DelayedActionTypes::UpdateFocList);
         }
     }
@@ -2113,32 +2113,32 @@ impl CameraGui {
         prop_name:   &str,
         elem_name:   &str,
         new_prop:    bool,
-        _prev_state:  Option<&indi_api::PropState>,
-        _new_state:   Option<&indi_api::PropState>,
-        value:       &indi_api::PropValue,
+        _prev_state:  Option<&indi::PropState>,
+        _new_state:   Option<&indi::PropState>,
+        value:       &indi::PropValue,
     ) {
-        if indi_api::Connection::camera_is_heater_property(prop_name) && new_prop {
+        if indi::Connection::camera_is_heater_property(prop_name) && new_prop {
             self.delayed_actions.schedule(DelayedActionTypes::FillHeaterItems);
             self.delayed_actions.schedule(DelayedActionTypes::StartCooling);
         }
-        if indi_api::Connection::camera_is_cooler_pwr_property(prop_name, elem_name) {
+        if indi::Connection::camera_is_cooler_pwr_property(prop_name, elem_name) {
             self.show_coolpwr_value(device_name, &value.to_string());
         }
 
         match (prop_name, elem_name, value) {
             ("DRIVER_INFO", "DRIVER_INTERFACE", _) => {
                 let flag_bits = value.to_i32().unwrap_or(0);
-                let flags = indi_api::DriverInterface::from_bits_truncate(flag_bits as u32);
-                if flags.contains(indi_api::DriverInterface::FOCUSER) {
+                let flags = indi::DriverInterface::from_bits_truncate(flag_bits as u32);
+                if flags.contains(indi::DriverInterface::FOCUSER) {
                     self.delayed_actions.schedule(DelayedActionTypes::UpdateFocList);
                 }
-                if flags.contains(indi_api::DriverInterface::TELESCOPE) {
+                if flags.contains(indi::DriverInterface::TELESCOPE) {
                     self.options.write().unwrap().mount.device = device_name.to_string();
                     self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
                 }
             },
             ("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE"|"CCD_TEMPERATURE",
-             indi_api::PropValue::Num(indi_api::NumPropValue{value, ..})) => {
+             indi::PropValue::Num(indi::NumPropValue{value, ..})) => {
                 if new_prop {
                     self.delayed_actions.schedule(
                         DelayedActionTypes::StartCooling
@@ -2198,7 +2198,7 @@ impl CameraGui {
             ("CONNECTION", ..) => {
                 let driver_interface = self.indi
                     .get_driver_interface(device_name)
-                    .unwrap_or(indi_api::DriverInterface::empty());
+                    .unwrap_or(indi::DriverInterface::empty());
                 self.update_devices_list_and_props_by_drv_interface(driver_interface);
             }
             ("CCD1"|"CCD2", ..) if new_prop => {
@@ -2207,12 +2207,12 @@ impl CameraGui {
             ("TELESCOPE_SLEW_RATE", ..) if new_prop => {
                 self.delayed_actions.schedule(DelayedActionTypes::UpdateMountSpdList);
             }
-            ("TELESCOPE_TRACK_STATE", "TRACK_ON", indi_api::PropValue::Switch(tracking)) => {
+            ("TELESCOPE_TRACK_STATE", "TRACK_ON", indi::PropValue::Switch(tracking)) => {
                 self.excl.exec(|| {
                     self.show_mount_tracking_state(*tracking);
                 });
             }
-            ("TELESCOPE_PARK", "PARK", indi_api::PropValue::Switch(parked)) => {
+            ("TELESCOPE_PARK", "PARK", indi::PropValue::Switch(parked)) => {
                 self.excl.exec(|| {
                     self.show_mount_parked_state(*parked);
                 });
@@ -2345,7 +2345,7 @@ impl CameraGui {
         if cur_exposure < 1.0 { return; };
         let options = self.options.read().unwrap();
         if options.cam.device.name.is_empty() { return; }
-        let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&options.cam.device.prop);
+        let cam_ccd = indi::CamCcd::from_ccd_prop_name(&options.cam.device.prop);
         let Ok(exposure) = self.indi.camera_get_exposure(&options.cam.device.name, cam_ccd) else { return; };
         let progress = ((cur_exposure - exposure) / cur_exposure).max(0.0).min(1.0);
         let text_to_show = format!("{:.0} / {:.0}", cur_exposure - exposure, cur_exposure);
@@ -2556,7 +2556,7 @@ impl CameraGui {
         let focusers = dev_list
             .iter()
             .filter(|device|
-                device.interface.contains(indi_api::DriverInterface::FOCUSER)
+                device.interface.contains(indi::DriverInterface::FOCUSER)
             );
         let cb_foc_list: gtk::ComboBoxText =
             self.builder.object("cb_foc_list").unwrap();
@@ -2579,7 +2579,7 @@ impl CameraGui {
                 cb_foc_list.set_active(Some(0));
             }
         }
-        let connected = self.indi.state() == indi_api::ConnState::Connected;
+        let connected = self.indi.state() == indi::ConnState::Connected;
         ui.enable_widgets(false, &[
             ("cb_foc_list", connected && focusers_count > 1),
         ]);

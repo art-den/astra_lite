@@ -1,11 +1,11 @@
 use std::{sync::Arc, time::Duration, cell::RefCell, rc::Rc};
 use gtk::{prelude::*, glib, glib::clone};
 use itertools::{Itertools, izip};
-use crate::{indi::indi_api, indi::sexagesimal::*};
+use crate::indi;
 
 pub struct IndiGui {
-    indi:           Arc<indi_api::Connection>,
-    indi_conn:      indi_api::Subscription,
+    indi:           Arc<indi::Connection>,
+    indi_conn:      indi::Subscription,
     data:           Rc<RefCell<UiIndiGuiData>>,
     grid:           gtk::Grid,
 }
@@ -25,7 +25,7 @@ impl IndiGui {
         }
         ";
 
-    pub fn new(indi: &Arc<indi_api::Connection>) -> Self {
+    pub fn new(indi: &Arc<indi::Connection>) -> Self {
         let css_provider = gtk::CssProvider::new();
         css_provider.load_from_data(Self::CSS).unwrap();
         gtk::StyleContext::add_provider_for_screen(
@@ -99,15 +99,15 @@ impl IndiGui {
             while let Ok(event) = receiver.recv().await {
                 let mut data = data.borrow_mut();
                 match event {
-                    indi_api::Event::ConnChange(_) |
-                    indi_api::Event::DeviceDelete(_) =>
+                    indi::Event::ConnChange(_) |
+                    indi::Event::DeviceDelete(_) =>
                         data.list_changed = true,
-                    indi_api::Event::PropChange(pch) =>
+                    indi::Event::PropChange(pch) =>
                         match pch.change {
-                            indi_api::PropChange::New(_) |
-                            indi_api::PropChange::Delete =>
+                            indi::PropChange::New(_) |
+                            indi::PropChange::Delete =>
                                 data.list_changed = true,
-                            indi_api::PropChange::Change{..} =>
+                            indi::PropChange::Change{..} =>
                                 data.prop_changed = true,
                         },
                     _ =>
@@ -158,7 +158,7 @@ impl IndiGui {
     }
 
     fn show_all_props(
-        indi:        &Arc<indi_api::Connection>,
+        indi:        &Arc<indi::Connection>,
         stack:       &gtk::Stack,
         data:        &mut UiIndiGuiData,
         update_list: bool
@@ -219,9 +219,9 @@ impl IndiGui {
     }
 
     fn show_device_props(
-        indi:        &Arc<indi_api::Connection>,
+        indi:        &Arc<indi::Connection>,
         ui_device:   &mut UiIndiDevice,
-        indi_props:  &Vec<indi_api::Property>,
+        indi_props:  &Vec<indi::Property>,
         update_list: bool
     ) {
         let empty_group = Arc::new(String::new());
@@ -281,10 +281,10 @@ impl IndiGui {
     }
 
     fn show_device_prop_group(
-        indi:        &Arc<indi_api::Connection>,
+        indi:        &Arc<indi::Connection>,
         device_name: &str,
         ui_group:    &mut UiIndiPropsGroup,
-        indi_props:  &Vec<indi_api::Property>,
+        indi_props:  &Vec<indi::Property>,
         update_list: bool
     ) {
         let empty_group = String::new();
@@ -378,14 +378,14 @@ impl IndiGui {
     }
 
     fn create_property_ui(
-        indi:      &Arc<indi_api::Connection>,
-        prop:      &indi_api::Property,
+        indi:      &Arc<indi::Connection>,
+        prop:      &indi::Property,
         grid:      &gtk::Grid,
         widgets:   &mut Vec<gtk::Widget>,
         next_row:  &mut i32,
     ) -> Vec<UiIndiPropElem> {
         match &prop.type_ {
-            indi_api::PropType::Text =>
+            indi::PropType::Text =>
                 Self::create_text_property_ui(
                     indi,
                     prop,
@@ -393,7 +393,7 @@ impl IndiGui {
                     grid,
                     next_row
                 ),
-            indi_api::PropType::Num =>
+            indi::PropType::Num =>
                 Self::create_num_property_ui(
                     indi,
                     prop,
@@ -401,7 +401,7 @@ impl IndiGui {
                     grid,
                     next_row
                 ),
-            indi_api::PropType::Switch(rule) =>
+            indi::PropType::Switch(rule) =>
                 Self::create_switch_property_ui(
                     indi,
                     prop,
@@ -410,7 +410,7 @@ impl IndiGui {
                     grid,
                     next_row
                 ),
-            indi_api::PropType::Blob =>
+            indi::PropType::Blob =>
                 Self::create_blob_property_ui(
                     indi,
                     prop,
@@ -418,7 +418,7 @@ impl IndiGui {
                     grid,
                     next_row
                 ),
-            indi_api::PropType::Light =>
+            indi::PropType::Light =>
                 Self::create_light_property_ui(
                     indi,
                     prop,
@@ -430,8 +430,8 @@ impl IndiGui {
     }
 
     fn create_text_property_ui(
-        indi:     &Arc<indi_api::Connection>,
-        property: &indi_api::Property,
+        indi:     &Arc<indi::Connection>,
+        property: &indi::Property,
         widgets:  &mut Vec<gtk::Widget>,
         grid:     &gtk::Grid,
         next_row: &mut i32,
@@ -450,7 +450,7 @@ impl IndiGui {
             grid.attach(&elem_label, 1, *next_row, 1, 1);
             widgets.push(elem_label.into());
 
-            let ro = property.permition == indi_api::PropPermition::RO;
+            let ro = property.permition == indi::PropPermition::RO;
             let entry = gtk::Entry::builder()
                 .editable(!ro)
                 .visible(true)
@@ -474,7 +474,7 @@ impl IndiGui {
             });
             *next_row += 1;
         }
-        if property.permition != indi_api::PropPermition::RO {
+        if property.permition != indi::PropPermition::RO {
             let set_button = gtk::Button::builder()
                 .visible(true)
                 .label("Set")
@@ -505,8 +505,8 @@ impl IndiGui {
     }
 
     fn create_num_property_ui(
-        indi:     &Arc<indi_api::Connection>,
-        property: &indi_api::Property,
+        indi:     &Arc<indi::Connection>,
+        property: &indi::Property,
         widgets:  &mut Vec<gtk::Widget>,
         grid:     &gtk::Grid,
         next_row: &mut i32,
@@ -515,7 +515,7 @@ impl IndiGui {
         let start_row = *next_row;
         let mut btn_click_data = Vec::new();
         for elem in &property.elements {
-            let indi_api::PropValue::Num(indi_api::NumPropValue {
+            let indi::PropValue::Num(indi::NumPropValue {
                 value,
                 min,
                 max,
@@ -533,7 +533,7 @@ impl IndiGui {
                 .build();
             grid.attach(&elem_label, 1, *next_row, 1, 1);
             widgets.push(elem_label.into());
-            let cur_value = if property.permition != indi_api::PropPermition::WO {
+            let cur_value = if property.permition != indi::PropPermition::WO {
                 let entry = gtk::Entry::builder()
                     .editable(false)
                     .can_focus(false)
@@ -546,21 +546,21 @@ impl IndiGui {
             } else {
                 None
             };
-            if property.permition != indi_api::PropPermition::RO {
+            if property.permition != indi::PropPermition::RO {
                 let spin = gtk::SpinButton::builder()
                     .visible(true)
                     .build();
                 spin.set_range(*min, *max);
                 spin.set_value(*value);
                 spin.set_width_chars(10);
-                let num_format = indi_api::NumFormat::new_from_indi_format(&*format);
+                let num_format = indi::NumFormat::new_from_indi_format(&*format);
                 match num_format {
-                    indi_api::NumFormat::Float { prec, .. } => {
+                    indi::NumFormat::Float { prec, .. } => {
                         spin.set_numeric(true);
                         spin.set_digits(prec as _);
                         spin.set_increments(1.0, 10.0);
                     },
-                    indi_api::NumFormat::Sexagesimal { frac, .. } => {
+                    indi::NumFormat::Sexagesimal { frac, .. } => {
                         spin.set_numeric(false);
                         match frac {
                             3|5 => spin.set_increments(1.0/60.0, 1.0),
@@ -568,7 +568,7 @@ impl IndiGui {
                         };
                         spin.connect_input(move |spin| {
                             let text = spin.text();
-                            let result = sexagesimal_to_value(&text)
+                            let result = indi::sexagesimal_to_value(&text)
                                 .ok_or_else(|| ());
                             Some(result)
                         });
@@ -604,7 +604,7 @@ impl IndiGui {
             });
             *next_row += 1;
         }
-        if property.permition != indi_api::PropPermition::RO {
+        if property.permition != indi::PropPermition::RO {
             let set_button = gtk::Button::builder()
                 .visible(true)
                 .label("Set")
@@ -630,9 +630,9 @@ impl IndiGui {
     }
 
     fn create_switch_property_ui(
-        indi:     &Arc<indi_api::Connection>,
-        property: &indi_api::Property,
-        rule:     &indi_api::SwitchRule,
+        indi:     &Arc<indi::Connection>,
+        property: &indi::Property,
+        rule:     &indi::SwitchRule,
         widgets:  &mut Vec<gtk::Widget>,
         grid:     &gtk::Grid,
         next_row: &mut i32,
@@ -650,7 +650,7 @@ impl IndiGui {
             let prop_name_string = property.name.to_string();
             let elem_name = elem.name.clone();
             let label_text = elem.label.as_deref().unwrap_or(&elem.name);
-            let data = if *rule != indi_api::SwitchRule::AnyOfMany {
+            let data = if *rule != indi::SwitchRule::AnyOfMany {
                 let button = gtk::ToggleButton::builder()
                     .label(label_text)
                     .visible(true)
@@ -700,8 +700,8 @@ impl IndiGui {
     }
 
     fn create_blob_property_ui(
-        _indi:    &Arc<indi_api::Connection>,
-        property: &indi_api::Property,
+        _indi:    &Arc<indi::Connection>,
+        property: &indi::Property,
         widgets:  &mut Vec<gtk::Widget>,
         grid:     &gtk::Grid,
         next_row: &mut i32,
@@ -739,8 +739,8 @@ impl IndiGui {
     }
 
     fn create_light_property_ui(
-        _indi:    &Arc<indi_api::Connection>,
-        property: &indi_api::Property,
+        _indi:    &Arc<indi::Connection>,
+        property: &indi::Property,
         widgets:  &mut Vec<gtk::Widget>,
         grid:     &gtk::Grid,
         next_row: &mut i32,
@@ -779,63 +779,63 @@ impl IndiGui {
 
     fn show_property_values(
         ui_prop:   &UiIndiProp,
-        indi_prop: &indi_api::Property,
+        indi_prop: &indi::Property,
     ) {
         match &indi_prop.type_ {
-            indi_api::PropType::Text =>
-                if indi_prop.permition != indi_api::PropPermition::WO {
+            indi::PropType::Text =>
+                if indi_prop.permition != indi::PropPermition::WO {
                     Self::show_text_property_values(ui_prop, indi_prop)
                 },
-            indi_api::PropType::Num =>
-                if indi_prop.permition != indi_api::PropPermition::WO {
+            indi::PropType::Num =>
+                if indi_prop.permition != indi::PropPermition::WO {
                     Self::show_num_property_values(ui_prop, indi_prop)
                 },
-            indi_api::PropType::Switch(rule) =>
+            indi::PropType::Switch(rule) =>
                 Self::show_switch_property_values(ui_prop, indi_prop, rule),
-            indi_api::PropType::Blob =>
+            indi::PropType::Blob =>
                 Self::show_blob_property_values(ui_prop, indi_prop),
-            indi_api::PropType::Light =>
+            indi::PropType::Light =>
                 Self::show_light_property_values(ui_prop, indi_prop),
         }
     }
 
     fn show_text_property_values(
         ui_prop:   &UiIndiProp,
-        indi_prop: &indi_api::Property,
+        indi_prop: &indi::Property,
     ) {
         for ui_elem in &ui_prop.elements {
             let indi_elem = indi_prop.elements.iter().find(|p| p.name == ui_elem.name);
             let Some(indi_elem) = indi_elem else { continue; };
             let UiIndiPropElemData::Text(text_data) = &ui_elem.data else { continue; };
-            let indi_api::PropValue::Text(value) = &indi_elem.value else { continue; };
+            let indi::PropValue::Text(value) = &indi_elem.value else { continue; };
             text_data.entry.set_text(value);
         }
     }
 
     fn show_num_property_values(
         ui_prop:    &UiIndiProp,
-        indi_prop:  &indi_api::Property
+        indi_prop:  &indi::Property
     ) {
         for (ui_elem, elem_info) in izip!(&ui_prop.elements, &indi_prop.elements) {
             let UiIndiPropElemData::Num(num_data) = &ui_elem.data else { continue; };
-            let indi_api::PropValue::Num(value) = &elem_info.value else { continue; };
+            let indi::PropValue::Num(value) = &elem_info.value else { continue; };
             let Some(cur_value) = &num_data.cur_value else { continue; };
-            let indi_api::PropValue::Num(num_value) = &elem_info.value else { continue; };
-            let num_format = indi_api::NumFormat::new_from_indi_format(&value.format);
+            let indi::PropValue::Num(num_value) = &elem_info.value else { continue; };
+            let num_format = indi::NumFormat::new_from_indi_format(&value.format);
             cur_value.set_text(&num_format.value_to_string(num_value.value));
         }
     }
 
     fn show_switch_property_values(
         ui_prop:   &UiIndiProp,
-        indi_prop: &indi_api::Property,
-        _rule:     &indi_api::SwitchRule,
+        indi_prop: &indi::Property,
+        _rule:     &indi::SwitchRule,
     ) {
         for ui_elem in &ui_prop.elements {
             let indi_elem = indi_prop.elements.iter().find(|p| p.name == ui_elem.name);
             let Some(indi_elem) = indi_elem else { continue; };
             let UiIndiPropElemData::Switch(switch_data) = &ui_elem.data else { continue; };
-            let indi_api::PropValue::Switch(value) = &indi_elem.value else { continue; };
+            let indi::PropValue::Switch(value) = &indi_elem.value else { continue; };
             match &switch_data {
                 UiIndiPropSwithElem::Button(button) => {
                     if *value {
@@ -863,13 +863,13 @@ impl IndiGui {
 
     fn show_blob_property_values(
         ui_prop:   &UiIndiProp,
-        indi_prop: &indi_api::Property,
+        indi_prop: &indi::Property,
     ) {
         for ui_elem in &ui_prop.elements {
             let indi_elem = indi_prop.elements.iter().find(|p| p.name == ui_elem.name);
             let Some(indi_elem) = indi_elem else { continue; };
             let UiIndiPropElemData::Blob(blob_data) = &ui_elem.data else { continue; };
-            let indi_api::PropValue::Blob(value) = &indi_elem.value else { continue; };
+            let indi::PropValue::Blob(value) = &indi_elem.value else { continue; };
             let blob_text = if value.data.is_empty() {
                 "[Empty]".to_string()
             } else {
@@ -881,13 +881,13 @@ impl IndiGui {
 
     fn show_light_property_values(
         ui_prop:   &UiIndiProp,
-        indi_prop: &indi_api::Property,
+        indi_prop: &indi::Property,
     ) {
         for ui_elem in &ui_prop.elements {
             let indi_elem = indi_prop.elements.iter().find(|p| p.name == ui_elem.name);
             let Some(indi_elem) = indi_elem else { continue; };
             let UiIndiPropElemData::Light(light_data) = &ui_elem.data else { continue; };
-            let indi_api::PropValue::Light(value) = &indi_elem.value else { continue; };
+            let indi::PropValue::Light(value) = &indi_elem.value else { continue; };
             light_data.label.set_text(&format!("{}={}", light_data.text, value));
         }
     }

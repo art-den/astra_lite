@@ -9,7 +9,7 @@ use chrono::Utc;
 use crate::{
     options::*,
     utils::{io_utils::*, timer::Timer},
-    indi::indi_api,
+    indi,
     image::raw::{RawAdder, FrameType},
     image::stars_offset::*,
     image::info::LightFrameInfo,
@@ -75,7 +75,7 @@ pub struct TackingPicturesMode {
     device:             DeviceAndProp,
     mount_device:       String,
     fn_gen:             Arc<Mutex<SeqFileNameGen>>,
-    indi:               Arc<indi_api::Connection>,
+    indi:               Arc<indi::Connection>,
     timer:              Option<Arc<Timer>>,
     raw_adder:          Arc<Mutex<RawAdder>>,
     options:            Arc<RwLock<Options>>,
@@ -97,7 +97,7 @@ pub struct TackingPicturesMode {
 
 impl TackingPicturesMode {
     pub fn new(
-        indi:     &Arc<indi_api::Connection>,
+        indi:     &Arc<indi::Connection>,
         timer:    Option<&Arc<Timer>>,
         cam_mode: CameraMode,
         options:  &Arc<RwLock<Options>>,
@@ -229,7 +229,7 @@ impl TackingPicturesMode {
         let now_date_str = Utc::now().format("%Y-%m-%d").to_string();
         let options = self.options.read().unwrap();
         let bin = options.cam.frame.binning.get_ratio();
-        let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&self.device.prop);
+        let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.device.prop);
         let (width, height) =
             self.indi
                 .camera_get_max_frame_size(&self.device.name, cam_ccd)
@@ -414,7 +414,7 @@ impl TackingPicturesMode {
                     self.abort()?;
                     let can_set_guide_rate =
                         self.indi.mount_is_guide_rate_supported(&self.mount_device)? &&
-                        self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.permition == indi_api::PropPermition::RW;
+                        self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.permition == indi::PropPermition::RW;
                     if can_set_guide_rate {
                         self.indi.mount_set_guide_rate(
                             &self.mount_device,
@@ -710,7 +710,7 @@ impl Mode for TackingPicturesMode {
 
     fn notify_blob_start_event(
         &mut self,
-        event: &indi_api::BlobStartEvent
+        event: &indi::BlobStartEvent
     ) -> anyhow::Result<NotifyResult> {
         if *event.device_name != self.device.name
         || *event.prop_name != self.device.prop {
@@ -840,11 +840,11 @@ impl Mode for TackingPicturesMode {
 
     fn notify_indi_prop_change(
         &mut self,
-        prop_change: &indi_api::PropChangeEvent
+        prop_change: &indi::PropChangeEvent
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         if self.state == FramesModeState::InternalMountCorrection {
-            if let ("TELESCOPE_TIMED_GUIDE_NS"|"TELESCOPE_TIMED_GUIDE_WE", indi_api::PropChange::Change { value, .. }, Some(guid_data))
+            if let ("TELESCOPE_TIMED_GUIDE_NS"|"TELESCOPE_TIMED_GUIDE_WE", indi::PropChange::Change { value, .. }, Some(guid_data))
             = (prop_change.prop_name.as_str(), &prop_change.change, &mut self.simple_guider) {
                 match value.elem_name.as_str() {
                     "TIMED_GUIDE_N" => guid_data.cur_timed_guide_n = value.prop_value.to_f64()?,

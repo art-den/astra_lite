@@ -1,7 +1,7 @@
 use std::{sync::{atomic::AtomicBool, Mutex, Arc, RwLock}, f64::consts::PI};
 use itertools::Itertools;
 use crate::{
-    indi::indi_api,
+    indi,
     options::*,
     image::stars::*,
     image::stars_offset::*,
@@ -46,7 +46,7 @@ impl MountMoveCalibrRes {
 }
 
 pub struct MountCalibrMode {
-    indi:               Arc<indi_api::Connection>,
+    indi:               Arc<indi::Connection>,
     state:              DitherCalibrState,
     axis:               DitherCalibrAxis,
     frame:              FrameOptions,
@@ -94,7 +94,7 @@ struct DitherCalibrAtempt {
 
 impl MountCalibrMode {
     pub fn new(
-        indi:               &Arc<indi_api::Connection>,
+        indi:               &Arc<indi::Connection>,
         options:            &Arc<RwLock<Options>>,
         img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
         next_mode:          Option<Box<dyn Mode + Sync + Send>>,
@@ -143,7 +143,7 @@ impl MountCalibrMode {
         let guid_rate_supported = self.indi.mount_is_guide_rate_supported(&self.mount_device)?;
         self.can_change_g_rate =
             guid_rate_supported &&
-            self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.permition == indi_api::PropPermition::RW;
+            self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.permition == indi::PropPermition::RW;
 
         if self.can_change_g_rate {
             self.calibr_speed = DITHER_CALIBR_SPEED;
@@ -245,7 +245,7 @@ impl MountCalibrMode {
             if self.image_width == 0 || self.image_height == 0 {
                 self.image_width = info.width;
                 self.image_height = info.height;
-                let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&self.camera.prop);
+                let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.camera.prop);
                 if let Ok((pix_size_x, pix_size_y))
                 = self.indi.camera_get_pixel_size(&self.camera.name, cam_ccd) {
                     let min_size = f64::min(info.width as f64, info.height as f64);
@@ -366,7 +366,7 @@ impl Mode for MountCalibrMode {
 
     fn notify_indi_prop_change(
         &mut self,
-        prop_change: &indi_api::PropChangeEvent
+        prop_change: &indi::PropChangeEvent
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
 
@@ -376,7 +376,7 @@ impl Mode for MountCalibrMode {
         match self.state {
             DitherCalibrState::WaitForSlew => {
                 if let ("TELESCOPE_TIMED_GUIDE_NS"|"TELESCOPE_TIMED_GUIDE_WE",
-                        indi_api::PropChange::Change { value, .. })
+                        indi::PropChange::Change { value, .. })
                 = (prop_change.prop_name.as_str(), &prop_change.change) {
                     match value.elem_name.as_str() {
                         "TIMED_GUIDE_N" => self.cur_timed_guide_n = value.prop_value.to_f64()?,
@@ -400,7 +400,7 @@ impl Mode for MountCalibrMode {
             }
 
             DitherCalibrState::WaitForOrigCoords => {
-                if let ("EQUATORIAL_EOD_COORD", indi_api::PropChange::Change { value, .. })
+                if let ("EQUATORIAL_EOD_COORD", indi::PropChange::Change { value, .. })
                 = (prop_change.prop_name.as_str(), &prop_change.change) {
                     match value.elem_name.as_str() {
                         "RA" => self.cur_ra = value.prop_value.to_f64()?,

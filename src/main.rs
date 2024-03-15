@@ -109,7 +109,7 @@ fn main() -> anyhow::Result<()> {
         env!("CARGO_PKG_VERSION")
     );
 
-    let indi = Arc::new(indi::indi_api::Connection::new());
+    let indi = Arc::new(indi::Connection::new());
     let options = Arc::new(RwLock::new(Options::default()));
     let (img_cmds_sender, frame_process_thread) = start_frame_processing_thread();
     let core = Arc::new(Core::new(&indi, &options, img_cmds_sender));

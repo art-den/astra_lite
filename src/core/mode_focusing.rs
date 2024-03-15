@@ -3,7 +3,7 @@ use std::{
     collections::VecDeque
 };
 use crate::{
-    indi::indi_api,
+    indi,
     options::*,
     utils::math::*,
     image::info::LightFrameInfo,
@@ -35,7 +35,7 @@ enum FocusingStage {
 }
 
 pub struct FocusingMode {
-    indi:               Arc<indi_api::Connection>,
+    indi:               Arc<indi::Connection>,
     state:              FocusingState,
     camera:             DeviceAndProp,
     options:            FocuserOptions,
@@ -76,7 +76,7 @@ pub struct FocuserSample {
 
 impl FocusingMode {
     pub fn new(
-        indi:               &Arc<indi_api::Connection>,
+        indi:               &Arc<indi::Connection>,
         options:            &Arc<RwLock<Options>>,
         img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
         next_mode:          Option<Box<dyn Mode + Sync + Send>>,
@@ -334,12 +334,12 @@ impl Mode for FocusingMode {
 
     fn notify_indi_prop_change(
         &mut self,
-        prop_change: &indi_api::PropChangeEvent
+        prop_change: &indi::PropChangeEvent
     ) -> anyhow::Result<NotifyResult> {
         if *prop_change.device_name != self.options.device {
             return Ok(NotifyResult::Empty);
         }
-        if let ("ABS_FOCUS_POSITION", indi_api::PropChange::Change { value, .. })
+        if let ("ABS_FOCUS_POSITION", indi::PropChange::Change { value, .. })
         = (prop_change.prop_name.as_str(), &prop_change.change) {
             let cur_focus = value.prop_value.to_f64()?;
             match self.state {

@@ -1,7 +1,7 @@
 use std::{rc::Rc, cell::{RefCell, Cell}, time::Duration, collections::HashMap, hash::Hash};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use crate::{
-    indi::indi_api,
+    indi,
     gui::gtk_utils,
     options::*,
     image::raw::FrameType,
@@ -174,7 +174,7 @@ impl PreviewColor {
 }
 
 pub fn fill_combobox_with_cam_list(
-    indi:    &indi_api::Connection,
+    indi:    &indi::Connection,
     cb:      &gtk::ComboBoxText,
     list:    &mut Vec<DeviceAndProp>,
     cur_cam: &DeviceAndProp
@@ -188,7 +188,7 @@ pub fn fill_combobox_with_cam_list(
     let cameras = dev_list
         .iter()
         .filter(|device|
-            device.interface.contains(indi_api::DriverInterface::CCD)
+            device.interface.contains(indi::DriverInterface::CCD)
         );
 
     cb.remove_all();

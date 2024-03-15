@@ -12,7 +12,7 @@ use std::{
 use crate::{
     gui::gui_camera::*,
     options::*,
-    indi::indi_api,
+    indi,
     image::stars_offset::*,
     guiding::external_guider::*,
     guiding::phd2_guider::*,
@@ -68,8 +68,8 @@ pub trait Mode {
     fn take_next_mode(&mut self) -> Option<ModeBox> { None }
     fn set_or_correct_value(&mut self, _value: &mut dyn Any) {}
     fn complete_img_process_params(&self, _cmd: &mut FrameProcessCommandData) {}
-    fn notify_indi_prop_change(&mut self, _prop_change: &indi_api::PropChangeEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_blob_start_event(&mut self, _event: &indi_api::BlobStartEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_indi_prop_change(&mut self, _prop_change: &indi::PropChangeEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_blob_start_event(&mut self, _event: &indi::BlobStartEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_before_frame_processing_start(&mut self, _should_be_processed: &mut bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult, _subscribers: &Arc<RwLock<Subscribers>>) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
@@ -152,7 +152,7 @@ impl Subscribers {
 }
 
 pub struct Core {
-    indi:               Arc<indi_api::Connection>,
+    indi:               Arc<indi::Connection>,
     phd2:               Arc<phd2_conn::Connection>,
     options:            Arc<RwLock<Options>>,
     mode_data:          Arc<RwLock<ModeData>>,
@@ -172,7 +172,7 @@ pub struct Core {
 
 impl Core {
     pub fn new(
-        indi:            &Arc<indi_api::Connection>,
+        indi:            &Arc<indi::Connection>,
         options:         &Arc<RwLock<Options>>,
         img_cmds_sender: mpsc::Sender<FrameProcessCommand>
     ) -> Self {
@@ -314,7 +314,7 @@ impl Core {
         self.indi.subscribe_events(move |event| {
             let result = || -> anyhow::Result<()> {
                 match event {
-                    indi_api::Event::BlobStart(event) => {
+                    indi::Event::BlobStart(event) => {
                         let mut mode_data = mode_data.write().unwrap();
                         let result = mode_data.mode.notify_blob_start_event(&event)?;
                         Self::apply_change_result(
@@ -326,10 +326,10 @@ impl Core {
                             &img_proc_stop_flag
                         )?;
                     }
-                    indi_api::Event::PropChange(prop_change) => {
-                        if let indi_api::PropChange::Change {
-                            value: indi_api::PropChangeValue{
-                                prop_value: indi_api::PropValue::Blob(blob), ..
+                    indi::Event::PropChange(prop_change) => {
+                        if let indi::PropChange::Change {
+                            value: indi::PropChangeValue{
+                                prop_value: indi::PropValue::Blob(blob), ..
                             }, ..
                         } = &prop_change.change {
                             Self::process_indi_blob_event(
@@ -390,9 +390,9 @@ impl Core {
     }
 
     fn process_indi_prop_change_event(
-        prop_change:        &indi_api::PropChangeEvent,
+        prop_change:        &indi::PropChangeEvent,
         mode_data:          &Arc<RwLock<ModeData>>,
-        indi:               &Arc<indi_api::Connection>,
+        indi:               &Arc<indi::Connection>,
         options:            &Arc<RwLock<Options>>,
         subscribers:        &Arc<RwLock<Subscribers>>,
         exp_stuck_wd:       &Arc<AtomicU16>,
@@ -409,15 +409,15 @@ impl Core {
             img_proc_stop_flag
         )?;
 
-        if let (indi_api::PropChange::Change { value, new_state, .. }, Some(cur_device))
+        if let (indi::PropChange::Change { value, new_state, .. }, Some(cur_device))
         = (&prop_change.change, mode_data.mode.cam_device()) {
-            let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&cur_device.prop);
-            if indi_api::Connection::camera_is_exposure_property(&prop_change.prop_name, &value.elem_name, cam_ccd)
+            let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cur_device.prop);
+            if indi::Connection::camera_is_exposure_property(&prop_change.prop_name, &value.elem_name, cam_ccd)
             && cur_device.name == *prop_change.device_name {
                 // exposure = 0.0 and state = busy means exposure has ended
                 // but still no blob received
                 if value.prop_value.to_f64().unwrap_or(0.0) == 0.0
-                && *new_state == indi_api::PropState::Busy {
+                && *new_state == indi::PropState::Busy {
                     _ = exp_stuck_wd.compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed);
                 } else {
                     exp_stuck_wd.store(0, Ordering::Relaxed);
@@ -428,8 +428,8 @@ impl Core {
     }
 
     fn process_indi_blob_event(
-        indi:               &Arc<indi_api::Connection>,
-        blob:               &Arc<indi_api::BlobPropValue>,
+        indi:               &Arc<indi::Connection>,
+        blob:               &Arc<indi::BlobPropValue>,
         device_name:        &str,
         device_prop:        &str,
         mode_data:          &Arc<RwLock<ModeData>>,
@@ -547,7 +547,7 @@ impl Core {
     }
 
     fn restart_camera_exposure(
-        indi:               &Arc<indi_api::Connection>,
+        indi:               &Arc<indi::Connection>,
         mode_data:          &Arc<RwLock<ModeData>>,
         img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
     ) -> anyhow::Result<()> {
@@ -766,7 +766,7 @@ impl Core {
     fn apply_change_result(
         result:             NotifyResult,
         mode_data:          &mut ModeData,
-        indi:               &Arc<indi_api::Connection>,
+        indi:               &Arc<indi::Connection>,
         options:            &Arc<RwLock<Options>>,
         subscribers:        &Arc<RwLock<Subscribers>>,
         img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
@@ -848,7 +848,7 @@ impl Drop for Core {
 ///////////////////////////////////////////////////////////////////////////////
 
 pub fn start_taking_shots(
-    indi:               &indi_api::Connection,
+    indi:               &indi::Connection,
     frame:              &FrameOptions,
     device:             &DeviceAndProp,
     img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
@@ -857,7 +857,7 @@ pub fn start_taking_shots(
     indi.command_enable_blob(
         &device.name,
         None,
-        indi_api::BlobEnable::Also
+        indi::BlobEnable::Also
     )?;
     if indi.camera_is_fast_toggle_supported(&device.name,)? {
         let use_fast_toggle =
@@ -890,12 +890,12 @@ pub fn start_taking_shots(
 }
 
 pub fn apply_camera_options_and_take_shot(
-    indi:               &indi_api::Connection,
+    indi:               &indi::Connection,
     device:             &DeviceAndProp,
     frame:              &FrameOptions,
     img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
 ) -> anyhow::Result<()> {
-    let cam_ccd = indi_api::CamCcd::from_ccd_prop_name(&device.prop);
+    let cam_ccd = indi::CamCcd::from_ccd_prop_name(&device.prop);
 
     // Polling period
 
@@ -907,10 +907,10 @@ pub fn apply_camera_options_and_take_shot(
 
     use crate::image::raw::*; // for FrameType::
     let frame_type = match frame.frame_type {
-        FrameType::Lights => indi_api::FrameType::Light,
-        FrameType::Flats  => indi_api::FrameType::Flat,
-        FrameType::Darks  => indi_api::FrameType::Dark,
-        FrameType::Biases => indi_api::FrameType::Bias,
+        FrameType::Lights => indi::FrameType::Light,
+        FrameType::Flats  => indi::FrameType::Flat,
+        FrameType::Darks  => indi::FrameType::Dark,
+        FrameType::Biases => indi::FrameType::Bias,
         FrameType::Undef  => panic!("Undefined frame type"),
     };
 
@@ -946,7 +946,7 @@ pub fn apply_camera_options_and_take_shot(
     && frame.binning != Binning::Orig {
         indi.camera_set_binning_mode(
             &device.name,
-            indi_api::BinningMode::Avg,
+            indi::BinningMode::Avg,
             true,
             SET_PROP_TIMEOUT
         )?;
@@ -1003,7 +1003,7 @@ pub fn apply_camera_options_and_take_shot(
     if indi.camera_is_capture_format_supported(&device.name)? {
         indi.camera_set_capture_format(
             &device.name,
-            indi_api::CaptureFormat::Raw,
+            indi::CaptureFormat::Raw,
             true,
             SET_PROP_TIMEOUT
         )?;
@@ -1022,7 +1022,7 @@ pub fn apply_camera_options_and_take_shot(
 }
 
 pub fn start_camera_exposure(
-    indi:               &indi_api::Connection,
+    indi:               &indi::Connection,
     device:             &DeviceAndProp,
     exposure:           f64,
     img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
@@ -1030,20 +1030,20 @@ pub fn start_camera_exposure(
     *img_proc_stop_flag.lock().unwrap() = Arc::new(AtomicBool::new(false));
     indi.camera_start_exposure(
         &device.name,
-        indi_api::CamCcd::from_ccd_prop_name(&device.prop),
+        indi::CamCcd::from_ccd_prop_name(&device.prop),
         exposure
     )?;
     Ok(())
 }
 
 pub fn abort_camera_exposure(
-    indi:               &indi_api::Connection,
+    indi:               &indi::Connection,
     device:             &DeviceAndProp,
     img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
 ) -> anyhow::Result<()> {
     indi.camera_abort_exposure(
         &device.name,
-        indi_api::CamCcd::from_ccd_prop_name(&device.prop)
+        indi::CamCcd::from_ccd_prop_name(&device.prop)
     )?;
     img_proc_stop_flag.lock().unwrap().store(true, Ordering::Relaxed);
     Ok(())
