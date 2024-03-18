@@ -272,155 +272,173 @@ fn test_reader_eof() {
 
 #[test]
 fn test_reader_simple() {
-    let mut reader = XmlStreamReader::new();
-    reader.set_buf_size(1);
+    let do_test = |buf_size| {
+        let mut reader = XmlStreamReader::new();
+        reader.set_buf_size(buf_size);
 
-    let mut test_simple_xml = |test_xml: &str| {
-        let mut stream = std::io::Cursor::new(test_xml);
-        let res = reader.receive_xml(&mut stream);
-        let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else {
-            panic!("Not XML");
+        let mut test_simple_xml = |test_xml: &str| {
+            let mut stream = std::io::Cursor::new(test_xml);
+            let res = reader.receive_xml(&mut stream);
+            let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else {
+                panic!("Not XML");
+            };
+            assert_eq!(xml, test_xml);
+
+            let res = reader.receive_xml(&mut stream);
+            assert!(matches!(res.unwrap(), XmlStreamReaderResult::Disconnected));
         };
-        assert_eq!(xml, test_xml);
 
-        let res = reader.receive_xml(&mut stream);
-        assert!(matches!(res.unwrap(), XmlStreamReaderResult::Disconnected));
+        test_simple_xml("<xml></xml>");
+        test_simple_xml("<xml>1111</xml>");
+        test_simple_xml("<xml><xml2>1111</xml2></xml>");
+        test_simple_xml("<xml/>");
+        test_simple_xml(r#"<xml arg1="aaa"/>"#);
+        test_simple_xml(r#"<xml arg1="aaa" arg2 = "bbb"/>"#);
+
+        let mut test_two_xml = |xml1: &str, xml2: &str| {
+            let mut test_xml = xml1.to_string();
+            test_xml.push_str(xml2);
+            let mut stream = std::io::Cursor::new(test_xml);
+
+            let res = reader.receive_xml(&mut stream);
+            let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else {
+                panic!("Not XML");
+            };
+            assert_eq!(xml, xml1);
+
+            let res = reader.receive_xml(&mut stream);
+            let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else {
+                panic!("Not XML");
+            };
+            assert_eq!(xml, xml2);
+
+            let res = reader.receive_xml(&mut stream);
+            assert!(matches!(res.unwrap(), XmlStreamReaderResult::Disconnected));
+        };
+
+        test_two_xml("<xml/>",      "<xml2/>");
+        test_two_xml("<xml></xml>", "<xml2/>");
+        test_two_xml("<xml2/>",     "<xml></xml>");
+        test_two_xml("<xml></xml>", "<xml></xml>");
+        test_two_xml("<xml></xml>", "<xml2></xml2>");
     };
 
-    test_simple_xml("<xml></xml>");
-    test_simple_xml("<xml>1111</xml>");
-    test_simple_xml("<xml><xml2>1111</xml2></xml>");
-    test_simple_xml("<xml/>");
-    test_simple_xml(r#"<xml arg1="aaa"/>"#);
-    test_simple_xml(r#"<xml arg1="aaa" arg2 = "bbb"/>"#);
-
-    let mut test_two_xml = |xml1: &str, xml2: &str| {
-        let mut test_xml = xml1.to_string();
-        test_xml.push_str(xml2);
-        let mut stream = std::io::Cursor::new(test_xml);
-
-        let res = reader.receive_xml(&mut stream);
-        let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else {
-            panic!("Not XML");
-        };
-        assert_eq!(xml, xml1);
-
-        let res = reader.receive_xml(&mut stream);
-        let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else {
-            panic!("Not XML");
-        };
-        assert_eq!(xml, xml2);
-
-        let res = reader.receive_xml(&mut stream);
-        assert!(matches!(res.unwrap(), XmlStreamReaderResult::Disconnected));
-    };
-
-    test_two_xml("<xml/>",      "<xml2/>");
-    test_two_xml("<xml></xml>", "<xml2/>");
-    test_two_xml("<xml2/>",     "<xml></xml>");
-    test_two_xml("<xml></xml>", "<xml></xml>");
-    test_two_xml("<xml></xml>", "<xml2></xml2>");
+    for buf_size in 1..100 {
+        do_test(buf_size);
+    }
+    do_test(100);
+    do_test(1000);
+    do_test(10000);
 }
 
 #[test]
 fn test_reader() {
-    let mut reader = XmlStreamReader::new();
-    reader.set_buf_size(1);
+    let do_test = |buf_size| {
+        let mut reader = XmlStreamReader::new();
+        reader.set_buf_size(buf_size);
 
-    let mut stream = std::io::Cursor::new(r#"
-        <xml1/>
-        <xml2></xml2>
-        <setBLOBVector device="CCD Simulator" name="CCD1" state="Ok" timeout="60" timestamp="2023-06-03T19:31:34">
-            <oneBLOB name="CCD1" size="8" format=".text1" len="8">dGVzdHRlc3Q=</oneBLOB>
-            <oneBLOB name="CCD2" size="6" format=".text2" len="6">YmxhYmxh</oneBLOB>
-        </setBLOBVector>
-        <setBLOBVector device="TestDev" name="Test1" state="Ok" timeout="60" timestamp="2023-06-03T19:31:34">
-            <oneBLOB name="CCD1" size="6" format=".text3" len="6">bGFsYWxh</oneBLOB>
-        </setBLOBVector>
-        <xml3></xml3>
-    "#);
+        let mut stream = std::io::Cursor::new(r#"
+            <xml1/>
+            <xml2></xml2>
+            <setBLOBVector device="CCD Simulator" name="CCD1" state="Ok" timeout="60" timestamp="2023-06-03T19:31:34">
+                <oneBLOB name="CCD1" size="8" format=".text1" len="8">dGVzdHRlc3Q=</oneBLOB>
+                <oneBLOB name="CCD2" size="6" format=".text2" len="6">YmxhYmxh</oneBLOB>
+            </setBLOBVector>
+            <setBLOBVector device="TestDev" name="Test1" state="Ok" timeout="60" timestamp="2023-06-03T19:31:34">
+                <oneBLOB name="CCD1" size="6" format=".text3" len="6">bGFsYWxh</oneBLOB>
+            </setBLOBVector>
+            <xml3></xml3>
+        "#);
 
-    // xml1
+        // xml1
 
-    let res = reader.receive_xml(&mut stream);
-    let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else { panic!("Not XML"); };
-    assert_eq!(xml.trim(), "<xml1/>");
+        let res = reader.receive_xml(&mut stream);
+        let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else { panic!("Not XML"); };
+        assert_eq!(xml.trim(), "<xml1/>");
 
-    // xml2
+        // xml2
 
-    let res = reader.receive_xml(&mut stream);
-    let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else { panic!("Not XML"); };
-    assert_eq!(xml.trim(), "<xml2></xml2>");
+        let res = reader.receive_xml(&mut stream);
+        let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else { panic!("Not XML"); };
+        assert_eq!(xml.trim(), "<xml2></xml2>");
 
-    // Blob-1 start
+        // Blob-1 start
 
-    let res = reader.receive_xml(&mut stream);
-    let XmlStreamReaderResult::BlobBegin { device_name, prop_name, elem_name, format, len } = res.unwrap() else {
-        panic!("Not Blob begin");
+        let res = reader.receive_xml(&mut stream);
+        let XmlStreamReaderResult::BlobBegin { device_name, prop_name, elem_name, format, len } = res.unwrap() else {
+            panic!("Not Blob begin");
+        };
+        assert_eq!(device_name, "CCD Simulator");
+        assert_eq!(prop_name,   "CCD1");
+        assert_eq!(elem_name,   "CCD1");
+        assert_eq!(format,      ".text1");
+        assert_eq!(len,         Some(8));
+
+        // Blob-2 start
+
+        let res = reader.receive_xml(&mut stream);
+        let XmlStreamReaderResult::BlobBegin { device_name, prop_name, elem_name, format, len } = res.unwrap() else {
+            panic!("Not Blob begin");
+        };
+        assert_eq!(device_name, "CCD Simulator");
+        assert_eq!(prop_name,   "CCD1");
+        assert_eq!(elem_name,   "CCD2");
+        assert_eq!(format,      ".text2");
+        assert_eq!(len,         Some(6));
+
+        // XML + Blobs
+
+        let res = reader.receive_xml(&mut stream);
+        let XmlStreamReaderResult::Xml { blobs, .. } = res.unwrap() else {
+            panic!("Not XML");
+        };
+        assert_eq!(blobs.len(), 2);
+        let blob1 = &blobs[0];
+        assert_eq!(blob1.data.as_slice(), b"testtest");
+        assert_eq!(blob1.format, ".text1");
+        let blob2 = &blobs[1];
+        assert_eq!(blob2.data.as_slice(), b"blabla");
+        assert_eq!(blob2.format, ".text2");
+
+        // Blob-3 start
+
+        let res = reader.receive_xml(&mut stream);
+        let XmlStreamReaderResult::BlobBegin { device_name, prop_name, elem_name, format, len } = res.unwrap() else {
+            panic!("Not Blob begin");
+        };
+        assert_eq!(device_name, "TestDev");
+        assert_eq!(prop_name,   "Test1");
+        assert_eq!(elem_name,   "CCD1");
+        assert_eq!(format,      ".text3");
+        assert_eq!(len,         Some(6));
+
+        // XML + Blob3
+
+        let res = reader.receive_xml(&mut stream);
+        let XmlStreamReaderResult::Xml { blobs, .. } = res.unwrap() else {
+            panic!("Not XML");
+        };
+        assert_eq!(blobs.len(), 1);
+        let blob1 = &blobs[0];
+        assert_eq!(blob1.data.as_slice(), b"lalala");
+        assert_eq!(blob1.format, ".text3");
+
+        // xml3
+
+        let res = reader.receive_xml(&mut stream);
+        let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else { panic!("Not XML"); };
+        assert_eq!(xml.trim(), "<xml3></xml3>");
+
+        // End of stream
+
+        let res = reader.receive_xml(&mut stream);
+        assert!(matches!(res.unwrap(), XmlStreamReaderResult::Disconnected));
     };
-    assert_eq!(device_name, "CCD Simulator");
-    assert_eq!(prop_name,   "CCD1");
-    assert_eq!(elem_name,   "CCD1");
-    assert_eq!(format,      ".text1");
-    assert_eq!(len,         Some(8));
 
-    // Blob-2 start
-
-    let res = reader.receive_xml(&mut stream);
-    let XmlStreamReaderResult::BlobBegin { device_name, prop_name, elem_name, format, len } = res.unwrap() else {
-        panic!("Not Blob begin");
-    };
-    assert_eq!(device_name, "CCD Simulator");
-    assert_eq!(prop_name,   "CCD1");
-    assert_eq!(elem_name,   "CCD2");
-    assert_eq!(format,      ".text2");
-    assert_eq!(len,         Some(6));
-
-    // XML + Blobs
-
-    let res = reader.receive_xml(&mut stream);
-    let XmlStreamReaderResult::Xml { blobs, .. } = res.unwrap() else {
-        panic!("Not XML");
-    };
-    assert_eq!(blobs.len(), 2);
-    let blob1 = &blobs[0];
-    assert_eq!(blob1.data.as_slice(), b"testtest");
-    assert_eq!(blob1.format, ".text1");
-    let blob2 = &blobs[1];
-    assert_eq!(blob2.data.as_slice(), b"blabla");
-    assert_eq!(blob2.format, ".text2");
-
-    // Blob-3 start
-
-    let res = reader.receive_xml(&mut stream);
-    let XmlStreamReaderResult::BlobBegin { device_name, prop_name, elem_name, format, len } = res.unwrap() else {
-        panic!("Not Blob begin");
-    };
-    assert_eq!(device_name, "TestDev");
-    assert_eq!(prop_name,   "Test1");
-    assert_eq!(elem_name,   "CCD1");
-    assert_eq!(format,      ".text3");
-    assert_eq!(len,         Some(6));
-
-    // XML + Blob3
-
-    let res = reader.receive_xml(&mut stream);
-    let XmlStreamReaderResult::Xml { blobs, .. } = res.unwrap() else {
-        panic!("Not XML");
-    };
-    assert_eq!(blobs.len(), 1);
-    let blob1 = &blobs[0];
-    assert_eq!(blob1.data.as_slice(), b"lalala");
-    assert_eq!(blob1.format, ".text3");
-
-    // xml3
-
-    let res = reader.receive_xml(&mut stream);
-    let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else { panic!("Not XML"); };
-    assert_eq!(xml.trim(), "<xml3></xml3>");
-
-    // End of stream
-
-    let res = reader.receive_xml(&mut stream);
-    assert!(matches!(res.unwrap(), XmlStreamReaderResult::Disconnected));
+    for buf_size in 1..100 {
+        do_test(buf_size);
+    }
+    do_test(100);
+    do_test(1000);
+    do_test(10000);
 }

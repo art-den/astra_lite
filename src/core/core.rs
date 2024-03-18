@@ -245,7 +245,10 @@ impl Core {
                     )?;
                     Ok(())
                 } ();
-                Self::process_error(result, &mode_data, &subscribers, &exp_stuck_wd);
+                Self::process_error(
+                    result, "Core::connect_ext_guider_events",
+                    &mode_data, &subscribers, &exp_stuck_wd
+                );
             }));
         }
     }
@@ -281,14 +284,22 @@ impl Core {
 
     fn process_error(
         result:       anyhow::Result<()>,
+        context:      &str,
         mode_data:    &Arc<RwLock<ModeData>>,
         subscribers:  &Arc<RwLock<Subscribers>>,
         exp_stuck_wd: &Arc<AtomicU16>,
     ) {
         let Err(err) = result else { return; };
+        log::error!("Error in {}: {}", context, err.to_string());
+
+        log::info!("Aborting active mode...");
         Self::abort_active_mode_impl(mode_data, subscribers, exp_stuck_wd);
+        log::info!("Active mode aborted!");
+
+        log::info!("Inform about error...");
         let subscribers = subscribers.read().unwrap();
         subscribers.inform_error(&err.to_string());
+        log::info!("Error has informed!");
     }
 
     pub fn connect_main_cam_proc_result_event(
@@ -351,7 +362,10 @@ impl Core {
                 }
                 Ok(())
             } ();
-            Self::process_error(result, &mode_data, &subscribers, &exp_stuck_wd);
+            Self::process_error(
+                result, "Core::connect_indi_events",
+                &mode_data, &subscribers, &exp_stuck_wd
+            );
         });
     }
 
@@ -384,7 +398,10 @@ impl Core {
                     &mode_data,
                     &img_proc_stop_flag
                 );
-                Self::process_error(result, &mode_data, &subscribers, &exp_stuck_wd);
+                Self::process_error(
+                    result, "Core::start_taking_frames_restart_timer",
+                    &mode_data, &subscribers, &exp_stuck_wd
+                );
             }
         });
     }
@@ -453,8 +470,13 @@ impl Core {
             return Ok(());
         };
 
-        if device_name != mode_cam.name
-        || device_prop != mode_cam.prop {
+        if device_name != mode_cam.name {
+            log::debug!("device_name({}) != mode_cam.name({}). Exiting...", device_name, mode_cam.name);
+            return Ok(());
+        }
+
+        if device_prop != mode_cam.prop {
+            log::debug!("device_prop({}) != mode_cam.prop({}). Exiting...", device_prop, mode_cam.prop);
             return Ok(());
         }
 
@@ -534,7 +556,10 @@ impl Core {
                     )?;
                     Ok(())
                 } ();
-                Self::process_error(result, &mode_data, &subscribers, &exp_stuck_wd);
+                Self::process_error(
+                    result, "Core::process_indi_blob_event",
+                    &mode_data, &subscribers, &exp_stuck_wd
+                );
             }
         };
 
@@ -551,6 +576,7 @@ impl Core {
         mode_data:          &Arc<RwLock<ModeData>>,
         img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
     ) -> anyhow::Result<()> {
+        log::error!("Beging camera exposure restarting...");
         let mode_data = mode_data.read().unwrap();
         let Some(cam_device) = mode_data.mode.cam_device() else { return Ok(()); };
         let Some(cur_exposure) = mode_data.mode.get_cur_exposure() else { return Ok(()); };
