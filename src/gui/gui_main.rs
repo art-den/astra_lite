@@ -102,10 +102,6 @@ pub fn init_ui(
     super::gui_camera::init_ui(app, &builder, &gui, options, core, indi, &mut handlers);
     super::gui_map::init_ui(app, &builder, &options, &mut handlers);
 
-    let ui = gtk_utils::UiHelper::new_from_builder(&builder);
-
-    ui.enable_widgets(false, &[("mi_color_theme", cfg!(target_os = "windows"))]);
-
     let mi_dark_theme = builder.object::<gtk::RadioMenuItem>("mi_dark_theme").unwrap();
     mi_dark_theme.connect_activate(clone!(@weak data => move |mi| {
         if mi.is_active() {
@@ -378,14 +374,12 @@ impl MainGui {
     }
 
     fn apply_theme(self: &Rc<Self>) {
-        if cfg!(target_os = "windows") {
-            let gtk_settings = gtk::Settings::default().unwrap();
-            let options = self.main_options.borrow();
-            gtk_settings.set_property(
-                "gtk-application-prefer-dark-theme",
-                options.theme == Theme::Dark
-            );
-        }
+        let gtk_settings = gtk::Settings::default().unwrap();
+        let options = self.main_options.borrow();
+        gtk_settings.set_property(
+            "gtk-application-prefer-dark-theme",
+            options.theme == Theme::Dark
+        );
     }
 
     fn read_options_from_widgets(self: &Rc<Self>) {

@@ -110,12 +110,11 @@ impl Drivers {
             .filter_map(|e| e.ok())
             .filter(|e|
                 e.path()
-                    .is_file()
-            )
-            .filter(|e|
+                    .is_file() &&
                 e.path()
                     .extension()
                     .and_then(|s|s.to_str()) == Some("xml")
+
             );
 
         let mut result = Drivers { groups: Vec::new() };
