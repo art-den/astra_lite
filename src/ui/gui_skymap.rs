@@ -328,7 +328,7 @@ impl MapGui {
     }
 
     fn handler_action_options(self: &Rc<Self>) {
-        let builder = gtk::Builder::from_string(include_str!("../../ui/skymap_options.ui"));
+        let builder = gtk::Builder::from_string(include_str!("resources/skymap_options.ui"));
         let dialog = builder.object::<gtk::Dialog>("dialog").unwrap();
         gtk_utils::add_ok_and_cancel_buttons(
             &dialog,

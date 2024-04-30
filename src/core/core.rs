@@ -10,14 +10,7 @@ use std::{
     any::Any
 };
 use crate::{
-    ui::gui_camera::*,
-    options::*,
-    indi,
-    image::stars_offset::*,
-    guiding::external_guider::*,
-    guiding::phd2_guider::*,
-    guiding::phd2_conn,
-    utils::timer::*,
+    core::consts::INDI_SET_PROP_TIMEOUT, guiding::{external_guider::*, phd2_conn, phd2_guider::*}, image::stars_offset::*, indi, options::*, utils::timer::*
 };
 use super::{
     frame_processing::*,
@@ -590,7 +583,7 @@ impl Core {
                 &cam_device.name,
                 prop_info.max as usize,
                 true,
-                SET_PROP_TIMEOUT,
+                INDI_SET_PROP_TIMEOUT,
             )?;
         }
         start_camera_exposure(
@@ -892,7 +885,7 @@ pub fn start_taking_shots(
             &device.name,
             use_fast_toggle,
             true,
-            SET_PROP_TIMEOUT,
+            INDI_SET_PROP_TIMEOUT,
         )?;
         if use_fast_toggle {
             let prop_info = indi.camera_get_fast_frames_count_prop_info(
@@ -902,7 +895,7 @@ pub fn start_taking_shots(
                 &device.name,
                 prop_info.max as usize,
                 true,
-                SET_PROP_TIMEOUT,
+                INDI_SET_PROP_TIMEOUT,
             )?;
         }
     }
@@ -945,7 +938,7 @@ pub fn apply_camera_options_and_take_shot(
         cam_ccd,
         frame_type,
         true,
-        SET_PROP_TIMEOUT
+        INDI_SET_PROP_TIMEOUT
     )?;
 
     // Frame size
@@ -962,7 +955,7 @@ pub fn apply_camera_options_and_take_shot(
             crop_width,
             crop_height,
             true,
-            SET_PROP_TIMEOUT
+            INDI_SET_PROP_TIMEOUT
         )?;
     }
 
@@ -974,7 +967,7 @@ pub fn apply_camera_options_and_take_shot(
             &device.name,
             indi::BinningMode::Avg,
             true,
-            SET_PROP_TIMEOUT
+            INDI_SET_PROP_TIMEOUT
         )?;
     }
 
@@ -987,7 +980,7 @@ pub fn apply_camera_options_and_take_shot(
             frame.binning.get_ratio(),
             frame.binning.get_ratio(),
             true,
-            SET_PROP_TIMEOUT
+            INDI_SET_PROP_TIMEOUT
         )?;
     }
 
@@ -998,7 +991,7 @@ pub fn apply_camera_options_and_take_shot(
             &device.name,
             frame.gain,
             true,
-            SET_PROP_TIMEOUT
+            INDI_SET_PROP_TIMEOUT
         )?;
     }
 
@@ -1009,7 +1002,7 @@ pub fn apply_camera_options_and_take_shot(
             &device.name,
             frame.offset as f64,
             true,
-            SET_PROP_TIMEOUT
+            INDI_SET_PROP_TIMEOUT
         )?;
     }
 
@@ -1020,7 +1013,7 @@ pub fn apply_camera_options_and_take_shot(
             &device.name,
             frame.low_noise,
             true,
-            SET_PROP_TIMEOUT
+            INDI_SET_PROP_TIMEOUT
         )?;
     }
 
@@ -1031,7 +1024,7 @@ pub fn apply_camera_options_and_take_shot(
             &device.name,
             indi::CaptureFormat::Raw,
             true,
-            SET_PROP_TIMEOUT
+            INDI_SET_PROP_TIMEOUT
         )?;
     }
 

@@ -1,0 +1,1 @@
+pub const INDI_SET_PROP_TIMEOUT: Option<u64> = Some(1000);

@@ -3,18 +3,7 @@ use chrono::{DateTime, Local, Utc};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use serde::{Serialize, Deserialize};
 use crate::{
-    options::*,
-    indi,
-    utils::io_utils::*,
-    core::frame_processing::*,
-    utils::log_utils::*,
-    image::info::*,
-    image::histogram::*,
-    image::image::RgbU8Data,
-    image::raw::FrameType,
-    core::{core::*, mode_focusing::*},
-    utils::math::*,
-    image::stars_offset::Offset
+    core::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*, mode_focusing::*}, image::{histogram::*, image::RgbU8Data, info::*, raw::FrameType, stars_offset::Offset}, indi, options::*, utils::{io_utils::*, log_utils::*, math::*}
 };
 use super::{gui_main::*, gtk_utils, plots::*, gui_common::*};
 
@@ -99,8 +88,6 @@ pub fn init_ui(
     data.correct_widgets_props();
     data.correct_frame_quality_widgets_props();
 }
-
-pub const SET_PROP_TIMEOUT: Option<u64> = Some(1000); // TODO move constant
 
 #[derive(Hash, Eq, PartialEq)]
 enum DelayedActionTypes {
@@ -1986,6 +1973,7 @@ impl CameraGui {
         }
     }
 
+    // TODO: move camera control code into `core` module
     fn control_camera_by_options(
         self:      &Rc<Self>,
         force_set: bool,
@@ -2000,7 +1988,7 @@ impl CameraGui {
                     camera_name,
                     options.cam.ctrl.enable_cooler,
                     true,
-                    SET_PROP_TIMEOUT
+                    INDI_SET_PROP_TIMEOUT
                 )?;
                 if options.cam.ctrl.enable_cooler {
                     self.indi.camera_set_temperature(
@@ -2015,7 +2003,7 @@ impl CameraGui {
                     camera_name,
                     options.cam.ctrl.enable_fan || options.cam.ctrl.enable_cooler,
                     force_set,
-                    SET_PROP_TIMEOUT
+                    INDI_SET_PROP_TIMEOUT
                 )?;
             }
             // Window heater
@@ -2025,7 +2013,7 @@ impl CameraGui {
                         camera_name,
                         heater_str,
                         force_set,
-                        SET_PROP_TIMEOUT
+                        INDI_SET_PROP_TIMEOUT
                     )?;
                 }
             }
@@ -2879,7 +2867,7 @@ impl CameraGui {
                     inv_ns,
                     inv_we,
                     false,
-                    SET_PROP_TIMEOUT
+                    INDI_SET_PROP_TIMEOUT
                 )?;
                 let speed = ui.prop_string("cb_mnt_speed.active-id");
                 if let Some(speed) = speed {

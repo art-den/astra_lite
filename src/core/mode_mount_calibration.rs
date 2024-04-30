@@ -7,9 +7,8 @@ use crate::{
     image::stars_offset::*,
     utils::math::*,
     image::info::*,
-    ui::gui_camera::SET_PROP_TIMEOUT,
 };
-use super::{core::*, frame_processing::*};
+use super::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*};
 
 pub const DITHER_CALIBR_ATTEMPTS_CNT: usize = 11;
 pub const DITHER_CALIBR_SPEED: f64 = 1.0;
@@ -284,7 +283,7 @@ impl MountCalibrMode {
                         DITHER_CALIBR_SPEED,
                         DITHER_CALIBR_SPEED,
                         true,
-                        SET_PROP_TIMEOUT
+                        INDI_SET_PROP_TIMEOUT
                     )?;
                 }
                 self.indi.mount_timed_guide(&self.mount_device, ns, we)?;

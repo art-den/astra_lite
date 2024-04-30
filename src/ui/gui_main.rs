@@ -31,13 +31,13 @@ pub fn init_ui(
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 
-    let builder = gtk::Builder::from_string(include_str!(r"../../ui/main.ui"));
+    let builder = gtk::Builder::from_string(include_str!(r"resources/main.ui"));
     gtk_utils::disable_scroll_for_most_of_widgets(&builder);
 
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
     let icon = gtk::gdk_pixbuf::Pixbuf::from_read(include_bytes!(
-        r"../../ui/astra_lite48x48.png"
+        r"resources/astra_lite48x48.png"
     ).as_slice()).unwrap();
     window.set_icon(Some(&icon));
 

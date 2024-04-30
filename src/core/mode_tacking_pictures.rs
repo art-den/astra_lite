@@ -7,14 +7,7 @@ use std::{
 use chrono::Utc;
 
 use crate::{
-    options::*,
-    utils::{io_utils::*, timer::Timer},
-    indi,
-    image::raw::{RawAdder, FrameType},
-    image::stars_offset::*,
-    image::info::LightFrameInfo,
-    ui::gui_camera::SET_PROP_TIMEOUT,
-    guiding::external_guider::*
+    core::consts::INDI_SET_PROP_TIMEOUT, guiding::external_guider::*, image::{info::LightFrameInfo, raw::{FrameType, RawAdder}, stars_offset::*}, indi, options::*, utils::{io_utils::*, timer::Timer}
 };
 use super::{core::*, frame_processing::*, mode_mount_calibration::*};
 
@@ -421,7 +414,7 @@ impl TackingPicturesMode {
                             DITHER_CALIBR_SPEED,
                             DITHER_CALIBR_SPEED,
                             true,
-                            SET_PROP_TIMEOUT
+                            INDI_SET_PROP_TIMEOUT
                         )?;
                     }
                     let (max_dec, max_ra) = self.indi.mount_get_timed_guide_max(&self.mount_device)?;
