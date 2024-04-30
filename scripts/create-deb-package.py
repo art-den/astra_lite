@@ -14,7 +14,7 @@ name = "AstraLite"
 bin = "astra_lite"
 icon = "astra_lite48x48.png"
 this_path = os.path.dirname(os.path.realpath(__file__))
-icon_file = os.path.join(this_path, "..", "ui", icon)
+icon_file = os.path.join(this_path, "..", "src", "ui", "resources", icon)
 if args.bin != None:
     bin_file = args.bin
 else:
@@ -63,7 +63,7 @@ Version=${vers}
 Type=Application
 Name=${name}
 Comment=${descr}
-Categories=Graphics;Astronomy
+Categories=Education;Science
 TryExec=${bin}
 Exec=${bin}
 Icon=${icon}
