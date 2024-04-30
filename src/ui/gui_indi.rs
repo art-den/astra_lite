@@ -4,10 +4,11 @@ use itertools::{Itertools, izip};
 use crate::indi;
 
 pub struct IndiGui {
-    indi:           Arc<indi::Connection>,
-    indi_conn:      indi::Subscription,
-    data:           Rc<RefCell<UiIndiGuiData>>,
-    grid:           gtk::Grid,
+    indi:      Arc<indi::Connection>,
+    indi_conn: indi::Subscription,
+    data:      Rc<RefCell<UiIndiGuiData>>,
+    grid:      gtk::Grid,
+    stack:     gtk::Stack,
 }
 
 impl Drop for IndiGui {
@@ -80,9 +81,10 @@ impl IndiGui {
         grid.attach(&stack, 1, 1, 1, 1);
 
         let data = Rc::new(RefCell::new(UiIndiGuiData {
-            devices: Vec::new(),
-            prop_changed: true,
-            list_changed: true,
+            enabled:        true,
+            devices:        Vec::new(),
+            prop_changed:   true,
+            list_changed:   true,
             last_change_id: 0,
             filter_text_lc: String::new(),
         }));
@@ -122,7 +124,7 @@ impl IndiGui {
             clone!(@weak data, @weak indi => @default-return glib::ControlFlow::Break,
             move || {
                 let mut data = data.borrow_mut();
-                if data.prop_changed || data.list_changed {
+                if data.enabled && (data.prop_changed || data.list_changed) {
                     let list_changed = data.list_changed;
                     data.prop_changed = false;
                     data.list_changed = false;
@@ -136,11 +138,23 @@ impl IndiGui {
             data, indi_conn,
             indi: Arc::clone(indi),
             grid,
+            stack,
         }
     }
 
     pub fn widget(&self) -> &gtk::Widget {
         self.grid.upcast_ref::<gtk::Widget>()
+    }
+
+    pub fn set_enabled(&self, enabled: bool) {
+        let mut data = self.data.borrow_mut();
+        data.enabled = enabled;
+        if enabled {
+            let list_changed = data.list_changed;
+            data.list_changed = false;
+            data.prop_changed = false;
+            Self::show_all_props(&self.indi, &self.stack, &mut data, list_changed);
+        }
     }
 
     fn update_props_visiblity(data: &UiIndiGuiData) {
@@ -215,7 +229,6 @@ impl IndiGui {
         if let Some(max_change_id) = max_change_id {
             data.last_change_id = max_change_id;
         }
-
     }
 
     fn show_device_props(
@@ -980,6 +993,7 @@ struct UiIndiPropLightElem {
 }
 
 struct UiIndiGuiData {
+    enabled:        bool,
     devices:        Vec<UiIndiDevice>,
     prop_changed:   bool,
     list_changed:   bool,

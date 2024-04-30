@@ -190,7 +190,12 @@ impl UiHelper {
 
     pub fn object_by_id(&self, obj_bldr_id: &str) -> glib::Object {
         match &self.root {
-            GtkHelperRoot::Builder(bldr) => bldr.object(obj_bldr_id).expect("Object not found"),
+            GtkHelperRoot::Builder(bldr) =>
+                if let Some(result) = bldr.object(obj_bldr_id) {
+                    result
+                } else {
+                    panic!("Object named {} not found", obj_bldr_id);
+                },
             GtkHelperRoot::Container(_) => todo!(),
         }
     }

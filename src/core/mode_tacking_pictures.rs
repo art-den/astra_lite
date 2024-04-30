@@ -13,7 +13,7 @@ use crate::{
     image::raw::{RawAdder, FrameType},
     image::stars_offset::*,
     image::info::LightFrameInfo,
-    gui::gui_camera::SET_PROP_TIMEOUT,
+    ui::gui_camera::SET_PROP_TIMEOUT,
     guiding::external_guider::*
 };
 use super::{core::*, frame_processing::*, mode_mount_calibration::*};

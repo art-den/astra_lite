@@ -10,7 +10,7 @@ use std::{
     any::Any
 };
 use crate::{
-    gui::gui_camera::*,
+    ui::gui_camera::*,
     options::*,
     indi,
     image::stars_offset::*,

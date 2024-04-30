@@ -29,6 +29,51 @@ fn det3(
     a13 * det2(a21, a22, a31, a32)
 }
 
+pub fn linear_solve2(
+    a11: f64, a12: f64, b1: f64,
+    a21: f64, a22: f64, b2: f64,
+) -> Option<(f64, f64)> {
+    let det = det2(
+        a11, a12,
+        a21, a22,
+    );
+
+    if det == 0.0 {
+        return None;
+    }
+
+    let det1 = det2(
+        b1, a12,
+        b2, a22,
+    );
+
+    let det2 = det2(
+        a11, b1,
+        a21, b2,
+    );
+
+    Some((det1/det, det2/det))
+}
+
+#[test]
+fn test_linear_solve2() {
+    let (x, y) = linear_solve2(
+        3.0,  2.0, 16.0,
+        2.0, -1.0,  6.0,
+    ).unwrap();
+
+    assert!(f64::abs(x - 4.0) < 0.01);
+    assert!(f64::abs(y - 2.0) < 0.01);
+
+    let (x, y) = linear_solve2(
+        1.0, 2.0, 35.0,
+        1.0, 1.0, 31.0
+    ).unwrap();
+
+    assert!(f64::abs(x - 27.0) < 0.01);
+    assert!(f64::abs(y - 4.0) < 0.01);
+}
+
 fn linear_solve3(
     a11: f64, a12: f64, a13: f64, b1: f64,
     a21: f64, a22: f64, a23: f64, b2: f64,

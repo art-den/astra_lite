@@ -69,13 +69,6 @@ pub fn init_ui(
 
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
-    if !cfg!(debug_assertions) {
-        // Hide map and guide pages for release build
-        let nb_main = builder.object::<gtk::Notebook>("nb_main").unwrap();
-        let map_tab = nb_main.nth_page(Some(TAB_MAP)).unwrap();
-        map_tab.hide();
-    }
-
     window.set_application(Some(app));
     window.show();
     data.apply_options();
@@ -100,7 +93,7 @@ pub fn init_ui(
     let mut handlers = data.handlers.borrow_mut();
     super::gui_hardware::init_ui(app, &builder, &gui, options, core, indi, &mut handlers);
     super::gui_camera::init_ui(app, &builder, &gui, options, core, indi, &mut handlers);
-    super::gui_map::init_ui(app, &builder, &options, &mut handlers);
+    super::gui_skymap::init_ui(app, &builder, &gui, &options, &mut handlers);
 
     let mi_dark_theme = builder.object::<gtk::RadioMenuItem>("mi_dark_theme").unwrap();
     mi_dark_theme.connect_activate(clone!(@weak data => move |mi| {
@@ -161,12 +154,7 @@ pub fn init_ui(
             _                  => false
         };
         btn_fullscreen.set_sensitive(enable_fullscreen);
-        let tab = match page {
-            TAB_HARDWARE => TabPage::Hardware,
-            TAB_MAP      => TabPage::SkyMap,
-            TAB_CAMERA   => TabPage::Camera,
-            _ => unreachable!(),
-        };
+        let tab = TabPage::from_tab_index(page);
         data.exec_main_gui_handlers(MainGuiEvent::TabPageChanged(tab.clone()));
     }));
 
@@ -193,11 +181,22 @@ pub fn init_ui(
 
 pub const TIMER_PERIOD_MS: u64 = 250;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum TabPage {
     Hardware,
     SkyMap,
     Camera,
+}
+
+impl TabPage {
+    fn from_tab_index(index: u32) -> Self {
+        match index {
+            TAB_HARDWARE => TabPage::Hardware,
+            TAB_MAP      => TabPage::SkyMap,
+            TAB_CAMERA   => TabPage::Camera,
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -481,6 +480,7 @@ pub struct Gui {
     conn_string: RefCell<String>,
     dev_string:  RefCell<String>,
     perf_string: RefCell<String>,
+    nb_main:     gtk::Notebook,
 }
 
 impl Gui {
@@ -490,6 +490,7 @@ impl Gui {
             conn_string: RefCell::new(String::new()),
             dev_string:  RefCell::new(String::new()),
             perf_string: RefCell::new(String::new()),
+            nb_main:     main_gui.builder.object("nb_main").unwrap(),
         }
     }
 
@@ -521,5 +522,10 @@ impl Gui {
     pub fn exec_before_disconnect_handlers(&self) {
         let Some(main_gui) = self.main_gui.upgrade() else { return; };
         main_gui.exec_main_gui_handlers(MainGuiEvent::BeforeDisconnect);
+    }
+
+    pub fn current_tab_page(&self) -> TabPage {
+        let page_index = self.nb_main.current_page().unwrap_or_default();
+        TabPage::from_tab_index(page_index)
     }
 }

@@ -68,7 +68,7 @@ pub fn init_ui(
 
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
-    data.configure_widget_props();
+    data.init_widgets();
     data.fill_devices_name();
     data.show_options();
 
@@ -171,6 +171,10 @@ impl HardwareGui {
         match event {
             MainGuiEvent::ProgramClosing =>
                 self.handler_closing(),
+
+            MainGuiEvent::TabPageChanged(tab_page) =>
+                self.indi_gui.set_enabled(tab_page == TabPage::Hardware),
+
             _ => {},
         }
     }
@@ -195,7 +199,7 @@ impl HardwareGui {
         *self.self_.borrow_mut() = None;
     }
 
-    fn configure_widget_props(self: &Rc<Self>) {
+    fn init_widgets(self: &Rc<Self>) {
         let spb_foc_len = self.builder.object::<gtk::SpinButton>("spb_foc_len").unwrap();
         spb_foc_len.set_range(10.0, 10_000.0);
         spb_foc_len.set_digits(0);

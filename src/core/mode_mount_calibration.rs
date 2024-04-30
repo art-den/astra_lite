@@ -7,7 +7,7 @@ use crate::{
     image::stars_offset::*,
     utils::math::*,
     image::info::*,
-    gui::gui_camera::SET_PROP_TIMEOUT,
+    ui::gui_camera::SET_PROP_TIMEOUT,
 };
 use super::{core::*, frame_processing::*};
 

@@ -59,7 +59,7 @@ pub fn init_ui(
 
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
-    data.configure_camera_widget_props();
+    data.init_camera_widgets();
 
     data.connect_indi_and_core_events();
 
@@ -237,7 +237,7 @@ impl CameraGui {
         }
     }
 
-    fn configure_camera_widget_props(self: &Rc<Self>) {
+    fn init_camera_widgets(self: &Rc<Self>) {
         let spb_temp = self.builder.object::<gtk::SpinButton>("spb_temp").unwrap();
         spb_temp.set_range(-1000.0, 1000.0);
 

@@ -479,6 +479,12 @@ impl Default for GuidingOptions {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct SkyMapOptions {
+    pub latitude:  f64,
+    pub longitude: f64,
+}
+
 #[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(default)]
 pub struct Options {
@@ -494,4 +500,5 @@ pub struct Options {
     pub mount:      MountOptions,
     pub telescope:  TelescopeOptions,
     pub guiding:    GuidingOptions,
+    pub sky_map:    SkyMapOptions,
 }

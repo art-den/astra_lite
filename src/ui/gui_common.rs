@@ -2,7 +2,7 @@ use std::{rc::Rc, cell::{RefCell, Cell}, time::Duration, collections::HashMap, h
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use crate::{
     indi,
-    gui::gtk_utils,
+    ui::gtk_utils,
     options::*,
     image::raw::FrameType,
     image::histogram::*

@@ -7,13 +7,12 @@
     clippy::wrong_self_convention
 )]
 
-mod gui;
+mod ui;
 mod utils;
 mod image;
 mod indi;
 mod guiding;
 mod core;
-//mod sky_map;
 mod options;
 
 use std::{path::Path, sync::{Arc, RwLock}};
@@ -44,6 +43,7 @@ fn panic_handler(
 
     if let Some(payload) = &payload_str {
         log::error!("Panic paiload: {}", payload);
+        eprintln!("PANIC: {}", payload);
     }
 
     if let Some(loc) = panic_info.location() {
@@ -120,7 +120,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     application.connect_activate(clone!(@weak options => move |app|
-        gui::gui_main::init_ui(app, &indi, &options, &core, &logs_dir)
+        ui::gui_main::init_ui(app, &indi, &options, &core, &logs_dir)
     ));
     application.run();
 
