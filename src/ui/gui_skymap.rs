@@ -4,7 +4,7 @@ use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone};
 use crate::{indi, options::*, utils::io_utils::*};
 use super::{gtk_utils, gui_common::ExclusiveCaller, gui_main::*};
-use super::sky_map::{data::Observer, skymap_widget::SkymapWidget};
+use super::sky_map::{data::Observer, widget::SkymapWidget};
 
 pub fn init_ui(
     _app:     &gtk::Application,

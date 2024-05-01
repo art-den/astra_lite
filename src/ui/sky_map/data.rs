@@ -1,8 +1,7 @@
 use std::{collections::*, f64::consts::PI, fmt::Debug, io::{BufRead, Read}, path::Path};
 use std::f32::consts::PI as PI_f32;
 use bitstream_io::{BigEndian, BitReader};
-use crate::indi::sexagesimal_to_value;
-use super::compression::ValuesDecompressor;
+use crate::{indi::sexagesimal_to_value, utils::compression::ValuesDecompressor};
 
 
 const ID_CAT_OTHER:   u16 = 0;

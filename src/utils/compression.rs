@@ -281,11 +281,6 @@ fn test_compression_decompression() {
         drop(compressor);
         drop(bit_writer);
 
-        if !mem_data.is_empty() {
-            let compr_coeff = (values.len() * 4) as f64 / mem_data.len() as f64;
-            println!("coeff = {:.2}", compr_coeff);
-        }
-
         let mem_reader = std::io::Cursor::new(&mem_data);
         let mut bit_reader = BitReader::endian(mem_reader, BigEndian);
         let mut decompressor = ValuesDecompressor::new();
