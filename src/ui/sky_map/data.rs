@@ -153,6 +153,7 @@ pub struct Star {
 pub struct StarZone {
     coords: [EqCoord; 4],
     stars:  Vec<Star>,
+    nstars: Vec<NamedStar>,
 }
 
 impl StarZone {
@@ -185,12 +186,12 @@ impl Stars {
         &self.zones
     }
 
-    pub fn add_star(&mut self, star: Star) {
-        let ra = star.data.crd.ra();
-        let dec = star.data.crd.dec();
+    pub fn add_star(&mut self, data: StarData, name: &str) {
+        let ra = data.crd.ra();
+        let dec = data.crd.dec();
         let key = Self::get_key_for_coord(ra, dec);
-        if let Some(zone) = self.zones.get_mut(&key) {
-            zone.stars.push(star);
+        let zone = if let Some(zone) = self.zones.get_mut(&key) {
+            zone
         } else {
             let ra1 = Self::get_ra(key.0);
             let ra2 = Self::get_ra(key.0+1);
@@ -203,9 +204,16 @@ impl Stars {
                     EqCoord {ra: ra2, dec: dec2},
                     EqCoord {ra: ra1, dec: dec2},
                 ],
-                stars: vec![star],
+                stars: Vec::new(),
+                nstars: Vec::new(),
             };
             self.zones.insert(key, new_zone);
+            self.zones.get_mut(&key).unwrap()
+        };
+        if name.is_empty() {
+            zone.stars.push(Star { data });
+        } else {
+            zone.nstars.push(NamedStar { data, name: name.to_string() });
         }
     }
 
@@ -291,6 +299,11 @@ pub struct DsoItem {
     pub maj_axis: Option<f32>,
     pub min_axis: Option<f32>,
     pub angle:    Option<f32>,
+}
+
+pub enum Object {
+    Star(NamedStar),
+    Dso(DsoItem),
 }
 
 pub struct SkyMap {
@@ -469,7 +482,7 @@ impl SkyMap {
                 mag: ObjMagnitude::new(mag as f32),
                 bv:  StarBV::new(bv as f32),
             };
-            self.stars.add_star(Star { data: star_data });
+            self.stars.add_star(star_data, "");
         }
 
         Ok(())
@@ -515,6 +528,10 @@ impl SkyMap {
             }
         }
         Ok(())
+    }
+
+    pub fn get_nearest(&self, crd: EqCoord) -> Option<Object> {
+        todo!()
     }
 
 }

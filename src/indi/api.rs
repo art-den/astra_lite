@@ -3181,6 +3181,14 @@ impl Connection {
         ])?;
         Ok(())
     }
+
+    pub fn gps_get_lat_long_elev(&self, device_name: &str) -> Result<(f64, f64, f64)> {
+        let devices = self.devices.lock().unwrap();
+        let latitude = devices.get_num_property(device_name, "SIM_GEOGRAPHIC_COORD", "SIM_LAT")?.value;
+        let longitude = devices.get_num_property(device_name, "SIM_GEOGRAPHIC_COORD", "SIM_LONG")?.value;
+        let elevation = devices.get_num_property(device_name, "SIM_GEOGRAPHIC_COORD", "SIM_ELEV")?.value;
+        Ok((latitude, longitude, elevation))
+    }
 }
 
 struct XmlSender {

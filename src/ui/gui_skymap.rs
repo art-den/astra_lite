@@ -3,7 +3,7 @@ use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone};
 use crate::{indi, options::*, utils::io_utils::*};
-use super::{gtk_utils, gui_common::ExclusiveCaller, gui_main::*};
+use super::{gtk_utils, gui_common::ExclusiveCaller, gui_main::*, sky_map::{data::SkyMap, painter::PaintConfig}};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
 pub fn init_ui(
@@ -11,6 +11,7 @@ pub fn init_ui(
     builder:  &gtk::Builder,
     gui:      &Rc<Gui>,
     options:  &Arc<RwLock<Options>>,
+    indi:     &Arc<indi::Connection>,
     handlers: &mut MainGuiHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
@@ -27,13 +28,15 @@ pub fn init_ui(
 
     let data = Rc::new(MapGui {
         gui_options: RefCell::new(gui_options),
+        indi:        Arc::clone(indi),
         options:     Arc::clone(options),
         builder:     builder.clone(),
         window:      window.clone(),
         gui:         Rc::clone(gui),
         excl:        ExclusiveCaller::new(),
         map_widget,
-        user_time:        RefCell::new(UserTime::default()),
+        skymap_data: RefCell::new(None),
+        user_time:   RefCell::new(UserTime::default()),
         prev_second: Cell::new(0),
         paint_ts:    RefCell::new(std::time::Instant::now()),
         prev_wdt:    RefCell::new(PrevWidgetsDT::default()),
@@ -49,8 +52,6 @@ pub fn init_ui(
     data.connect_events();
 
     data.set_observer_data_for_widget();
-
-    gtk_utils::connect_action(&window, &data, "skymap_options", MapGui::handler_action_options);
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -98,9 +99,10 @@ impl Default for ObjectsToShow {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 struct GuiOptions {
-    pub paned_pos1: i32,
-    pub filter: FilterOptions,
-    pub to_show: ObjectsToShow,
+    paned_pos1: i32,
+    filter:     FilterOptions,
+    to_show:    ObjectsToShow,
+    max_mag:    f32,
 }
 
 impl Default for GuiOptions {
@@ -109,6 +111,7 @@ impl Default for GuiOptions {
             paned_pos1: -1,
             filter:     Default::default(),
             to_show:    Default::default(),
+            max_mag:    10.0,
         }
     }
 }
@@ -205,12 +208,14 @@ struct PrevWidgetsDT {
 
 struct MapGui {
     gui_options: RefCell<GuiOptions>,
+    indi:        Arc<indi::Connection>,
     options:     Arc<RwLock<Options>>,
     builder:     gtk::Builder,
     window:      gtk::ApplicationWindow,
     gui:         Rc<Gui>,
     excl:        ExclusiveCaller,
     map_widget:  Rc<SkymapWidget>,
+    skymap_data: RefCell<Option<Rc<SkyMap>>>,
     user_time:   RefCell<UserTime>,
     prev_second: Cell<u32>,
     paint_ts:    RefCell<std::time::Instant>, // last paint moment timestamp
@@ -264,6 +269,13 @@ impl MapGui {
         set_range("spb_hour", 0.0, 24.0);
         set_range("spb_min", 0.0, 60.0);
         set_range("spb_sec", 0.0, 60.0);
+
+        let scl_max_dso_mag = self.builder.object::<gtk::Scale>("scl_max_dso_mag").unwrap();
+        scl_max_dso_mag.set_range(0.0, 20.0);
+        scl_max_dso_mag.set_increments(0.5, 2.0);
+
+        let (dpimm_x, _) = gtk_utils::get_widget_dpmm(&self.window).unwrap_or((3.8, 3.8));
+        scl_max_dso_mag.set_width_request((30.0 * dpimm_x) as i32);
     }
 
     fn connect_main_gui_events(self: &Rc<Self>, handlers: &mut MainGuiHandlers) {
@@ -287,8 +299,14 @@ impl MapGui {
         connect_spin_btn_evt("spb_min");
         connect_spin_btn_evt("spb_sec");
 
-        gtk_utils::connect_action(&self.window, self, "map_play", Self::handler_btn_play_pressed);
-        gtk_utils::connect_action(&self.window, self, "map_now", Self::handler_btn_now_pressed);
+        gtk_utils::connect_action(&self.window, self, "map_play",       Self::handler_btn_play_pressed);
+        gtk_utils::connect_action(&self.window, self, "map_now",        Self::handler_btn_now_pressed);
+        gtk_utils::connect_action(&self.window, self, "skymap_options", Self::handler_action_options);
+
+        let scl_max_dso_mag = self.builder.object::<gtk::Scale>("scl_max_dso_mag").unwrap();
+        scl_max_dso_mag.connect_value_changed(clone!(@weak self as self_ => move |scale| {
+            self_.handler_max_magnitude_changed(scale.value());
+        }));
     }
 
     fn show_options(&self) {
@@ -305,6 +323,7 @@ impl MapGui {
         ui.set_prop_bool("chb_flt_other.active", opts.filter.other);
         ui.set_prop_bool("chb_show_stars.active", opts.to_show.stars);
         ui.set_prop_bool("chb_show_dso.active", opts.to_show.dso);
+        ui.set_range_value("scl_max_dso_mag", opts.max_mag as f64);
 
         drop(opts);
     }
@@ -323,6 +342,7 @@ impl MapGui {
         opts.filter.other      = ui.prop_bool("chb_flt_other.active");
         opts.to_show.stars     = ui.prop_bool("chb_show_stars.active");
         opts.to_show.dso       = ui.prop_bool("chb_show_dso.active");
+        opts.max_mag           = ui.range_value("scl_max_dso_mag") as f32;
 
         drop(opts);
     }
@@ -344,6 +364,29 @@ impl MapGui {
         ui.set_prop_str("e_long.text", Some(&indi::value_to_sexagesimal(options.sky_map.longitude, true, 9)));
         drop(options);
         drop(ui);
+
+        let btn_get_from_gps = builder.object::<gtk::Button>("btn_get_from_gps").unwrap();
+        btn_get_from_gps.connect_clicked(clone!(@strong self as self_, @strong builder, @strong dialog => move |_| {
+            gtk_utils::exec_and_show_error(&dialog, || {
+                let indi = &self_.indi;
+                if indi.state() != indi::ConnState::Connected {
+                    anyhow::bail!("INDI is not connected!");
+                }
+                let gps_devices: Vec<_> = indi.get_devices_list()
+                    .into_iter()
+                    .filter(|dev| dev.interface.contains(indi::DriverInterface::GPS))
+                    .collect();
+                if gps_devices.is_empty() {
+                    anyhow::bail!("GPS device not found!");
+                }
+                let dev = &gps_devices[0];
+                let (latitude, longitude, _) = indi.gps_get_lat_long_elev(&dev.name)?;
+                let ui = gtk_utils::UiHelper::new_from_builder(&builder);
+                ui.set_prop_str("e_lat.text", Some(&indi::value_to_sexagesimal(latitude, true, 9)));
+                ui.set_prop_str("e_long.text", Some(&indi::value_to_sexagesimal(longitude, true, 9)));
+                Ok(())
+            });
+        }));
 
         dialog.show();
 
@@ -369,6 +412,7 @@ impl MapGui {
                     gtk_utils::show_error_message(&self_.window, "Error", &err_str);
                     return;
                 }
+                drop(options);
                 self_.set_observer_data_for_widget();
             }
             dlg.close();
@@ -409,11 +453,20 @@ impl MapGui {
     }
 
     fn update_skymap_widget(&self, force: bool) {
+        self.check_data_loaded();
+
         let mut paint_ts = self.paint_ts.borrow_mut();
         if force || paint_ts.elapsed().as_secs_f64() > 0.5 {
             let user_time = self.user_time.borrow().time(false);
             *paint_ts = std::time::Instant::now();
             self.map_widget.set_time(user_time);
+
+            let config = self.gui_options.borrow();
+            let mut paint_config = PaintConfig::default();
+            paint_config.max_magnitude = config.max_mag;
+            drop(config);
+
+            self.map_widget.set_paint_config(&paint_config);
         }
     }
 
@@ -440,6 +493,51 @@ impl MapGui {
             sec: cur_dt.second() as i32,
         };
         *self.prev_wdt.borrow_mut() = prev;
+    }
+
+    fn check_data_loaded(&self) {
+        gtk_utils::exec_and_show_error(&self.window, || {
+            let result = self.check_data_loaded_impl();
+            if let Err(_) = result {
+                *self.skymap_data.borrow_mut() = Some(Rc::new(SkyMap::new()));
+            }
+            result
+        });
+    }
+
+    fn check_data_loaded_impl(&self) -> anyhow::Result<()> {
+        let mut skymap = self.skymap_data.borrow_mut();
+        if skymap.is_some() {
+            return Ok(());
+        }
+        let mut map = SkyMap::new();
+
+        let cur_exe = std::env::current_exe()?;
+
+        let cur_path = cur_exe.parent()
+            .ok_or_else(|| anyhow::anyhow!("Error getting cur_exe.parent()"))?;
+        let skymap_data_path = cur_path.join("data");
+
+        let skymap_local_data_path = dirs::data_local_dir()
+            .ok_or_else(|| anyhow::anyhow!("dirs::data_local_dir"))?
+            .join(env!("CARGO_PKG_NAME"))
+            .join("data");
+
+        if map.load_dso(skymap_local_data_path.join("dso.csv")).is_err() {
+            map.load_dso(skymap_data_path.join("dso.csv"))?;
+        }
+
+        if map.load_stars(skymap_local_data_path.join("stars.bin")).is_err() {
+            map.load_stars(skymap_data_path.join("stars.bin"))?;
+        }
+
+        let map = Rc::new(map);
+        *skymap = Some(Rc::clone(&map));
+        drop(skymap);
+
+        self.map_widget.set_skymap(&map);
+
+        Ok(())
     }
 
     fn handler_time_changed(&self) {
@@ -506,5 +604,17 @@ impl MapGui {
         });
     }
 
+    fn handler_max_magnitude_changed(&self, value: f64) {
+        self.excl.exec(|| {
+            let value = value as f32;
+            let mut options = self.gui_options.borrow_mut();
+            if options.max_mag == value {
+                return;
+            }
+            options.max_mag = value;
+            drop(options);
 
+            self.update_skymap_widget(true);
+        });
+    }
 }

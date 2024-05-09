@@ -124,7 +124,7 @@ pub fn show_error_message(
 }
 
 pub fn exec_and_show_error(
-    window: &gtk::ApplicationWindow,
+    window: &impl IsA<gtk::Window>,
     fun:    impl FnOnce() -> anyhow::Result<()>
 ) {
     let exec_res = fun();
@@ -380,7 +380,7 @@ impl UiHelper {
         let widget = self.object_by_id(widget_name);
         let cb = widget
             .downcast::<gtk::ComboBox>()
-            .expect("Widget is not gtk::Range");
+            .expect("Widget is not gtk::ComboBox");
         is_combobox_empty(&cb)
     }
 
@@ -430,4 +430,16 @@ pub fn select_file_name_to_save(
         .path()?
         .with_extension(ext))
     }
+}
+
+pub fn get_widget_dpmm(widget: &impl IsA<gtk::Widget>) -> Option<(f64, f64)> {
+    widget.window()
+        .and_then(|window|
+            widget.display().monitor_at_window(&window)
+        )
+        .map(|monitor| {
+            let g = monitor.geometry();
+            (g.height() as f64 / monitor.height_mm() as f64,
+            g.width() as f64 / monitor.width_mm() as f64)
+        })
 }

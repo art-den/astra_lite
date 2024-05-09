@@ -10,7 +10,7 @@ struct MousePressedData {
 }
 
 pub struct SkymapWidget {
-    skymap:     RefCell<Option<SkyMap>>,
+    skymap:     RefCell<Option<Rc<SkyMap>>>,
     evt_box:    gtk::EventBox,
     draw_area:  gtk::DrawingArea,
     view_point: RefCell<ViewPoint>,
@@ -176,8 +176,8 @@ impl SkymapWidget {
         self.evt_box.upcast_ref::<gtk::Widget>()
     }
 
-    pub fn set_skymap(&self, skymap: SkyMap) {
-        *self.skymap.borrow_mut() = Some(skymap);
+    pub fn set_skymap(&self, skymap: &Rc<SkyMap>) {
+        *self.skymap.borrow_mut() = Some(Rc::clone(skymap));
         self.draw_area.queue_draw();
     }
 
@@ -188,6 +188,11 @@ impl SkymapWidget {
 
     pub fn set_time(&self, time: NaiveDateTime) {
         *self.time.borrow_mut() = time;
+        self.draw_area.queue_draw();
+    }
+
+    pub fn set_paint_config(&self, config: &PaintConfig) {
+        *self.config.borrow_mut() = config.clone();
         self.draw_area.queue_draw();
     }
 }

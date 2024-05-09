@@ -1,4 +1,4 @@
-use std::f64::consts::PI;
+use std::{f64::consts::PI, rc::Rc};
 use bitflags::bitflags;
 use chrono::NaiveDateTime;
 use gtk::cairo;
@@ -37,6 +37,7 @@ bitflags! {
     }
 }
 
+#[derive(Clone)]
 pub struct HorizonGlowPaintConfig {
     enabled: bool,
     angle:   f64,
@@ -51,6 +52,7 @@ impl Default for HorizonGlowPaintConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct PaintConfig {
     pub flags:         PaintFlags,
     pub max_magnitude: f32,
@@ -80,7 +82,7 @@ impl SkyMapPainter {
 
     pub fn paint(
         &mut self,
-        sky_map:    &Option<SkyMap>,
+        sky_map:    &Option<Rc<SkyMap>>,
         observer:   &Observer,
         utc_time:   &NaiveDateTime,
         config:     &PaintConfig,

@@ -4,7 +4,7 @@ pub fn save_json_to_config<T: serde::Serialize>(
     obj:       &T,
     conf_name: &str
 ) -> anyhow::Result<()> {
-    let file_name = get_file_name(conf_name, true)?;
+    let file_name = get_app_conf_file_name(conf_name, true)?;
     let options_str = serde_json::to_string_pretty(obj)?;
     std::fs::write(file_name, options_str)?;
     Ok(())
@@ -14,7 +14,7 @@ pub fn load_json_from_config_file<T: serde::de::DeserializeOwned>(
     obj:       &mut T,
     conf_name: &str
 ) -> anyhow::Result<()> {
-    let file_name = get_file_name(conf_name, false)?;
+    let file_name = get_app_conf_file_name(conf_name, false)?;
     if !file_name.is_file() { return Ok(()); }
     let file = std::io::BufReader::new(std::fs::File::open(file_name)?);
     *obj = serde_json::from_reader(file)?;
@@ -29,7 +29,7 @@ pub fn get_app_dir() -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
-fn get_file_name(
+fn get_app_conf_file_name(
     conf_name: &str,
     create_dir: bool
 ) -> anyhow::Result<PathBuf> {

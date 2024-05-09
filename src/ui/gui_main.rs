@@ -93,7 +93,7 @@ pub fn init_ui(
     let mut handlers = data.handlers.borrow_mut();
     super::gui_hardware::init_ui(app, &builder, &gui, options, core, indi, &mut handlers);
     super::gui_camera::init_ui(app, &builder, &gui, options, core, indi, &mut handlers);
-    super::gui_skymap::init_ui(app, &builder, &gui, &options, &mut handlers);
+    super::gui_skymap::init_ui(app, &builder, &gui, &options, indi, &mut handlers);
 
     let mi_dark_theme = builder.object::<gtk::RadioMenuItem>("mi_dark_theme").unwrap();
     mi_dark_theme.connect_activate(clone!(@weak data => move |mi| {
@@ -508,12 +508,22 @@ impl Gui {
     fn update_window_title(&self) {
         let Some(main_gui) = self.main_gui.upgrade() else { return; };
 
-        let title = "AstraLite (${arch} ver. ${ver})   --   Deepsky astrophotography and livestacking   --   [${devices_list}]   --   [${conn_status}]   --   [${perf}]";
-        let title = title.replace("${arch}",         std::env::consts::ARCH);
-        let title = title.replace("${ver}",          env!("CARGO_PKG_VERSION"));
-        let title = title.replace("${devices_list}", &self.dev_string.borrow());
-        let title = title.replace("${conn_status}",  &self.conn_string.borrow());
-        let title = title.replace("${perf}",         &self.perf_string.borrow());
+        let mut title = "AstraLite (${arch} ver. ${ver})  --  Deepsky astrophotography and livestacking".to_string();
+        title = title.replace("${arch}", std::env::consts::ARCH);
+        title = title.replace("${ver}",  env!("CARGO_PKG_VERSION"));
+
+        let mut append_if_not_empty = |string_to_append: &str| {
+            if string_to_append.is_empty() {
+                return;
+            }
+            title.push_str("  --  [");
+            title.push_str(string_to_append);
+            title.push_str("]");
+        };
+
+        append_if_not_empty(&self.dev_string.borrow());
+        append_if_not_empty(&self.conn_string.borrow());
+        append_if_not_empty(&self.perf_string.borrow());
 
         let window = main_gui.builder.object::<gtk::ApplicationWindow>("window").unwrap();
         window.set_title(&title)

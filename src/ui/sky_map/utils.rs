@@ -1,7 +1,7 @@
 use std::f64::consts::PI;
 use chrono::{Datelike, Timelike, NaiveDateTime, NaiveDate};
 use gtk::prelude::*;
-use crate::utils::math::linear_solve2;
+use crate::{ui::gtk_utils, utils::math::linear_solve2};
 use super::{data::*, painter::*};
 
 pub fn calc_julian_day(date: &NaiveDate) -> i64 {
@@ -152,17 +152,8 @@ impl ScreenInfo {
         let height = da_size.height() as f64;
         let main_size = 0.5 * f64::max(width, height);
 
-        let (dpmm_x, dpmm_y) = da
-            .window()
-            .and_then(|window|
-                da.display().monitor_at_window(&window)
-            )
-            .map(|monitor| {
-                let g = monitor.geometry();
-                (g.height() as f64 / monitor.height_mm() as f64,
-                 g.width() as f64 / monitor.width_mm() as f64)
-            })
-            .unwrap_or((96.0, 96.0));
+        let (dpmm_x, dpmm_y) = gtk_utils::get_widget_dpmm(da).unwrap_or((3.8, 3.8));
+
         let tolerance = Rect {
             left: -20.0 * dpmm_x,
             top: -20.0 * dpmm_y,
