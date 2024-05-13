@@ -523,12 +523,19 @@ impl MapGui {
             .join(env!("CARGO_PKG_NAME"))
             .join("data");
 
-        if map.load_dso(skymap_local_data_path.join("dso.csv")).is_err() {
-            map.load_dso(skymap_data_path.join("dso.csv"))?;
+        const DSO_FILE: &str = "dso.csv";
+        if map.load_dso(skymap_local_data_path.join(DSO_FILE)).is_err() {
+            map.load_dso(skymap_data_path.join(DSO_FILE))?;
         }
 
-        if map.load_stars(skymap_local_data_path.join("stars.bin")).is_err() {
-            map.load_stars(skymap_data_path.join("stars.bin"))?;
+        const STARS_FILE: &str = "stars.bin";
+        if map.load_stars(skymap_local_data_path.join(STARS_FILE)).is_err() {
+            map.load_stars(skymap_data_path.join(STARS_FILE))?;
+        }
+
+        const NAMED_STARS_FILE: &str = "named_stars.csv";
+        if map.load_named_stars(skymap_local_data_path.join(NAMED_STARS_FILE)).is_err() {
+            map.load_named_stars(skymap_data_path.join(NAMED_STARS_FILE))?;
         }
 
         let map = Rc::new(map);

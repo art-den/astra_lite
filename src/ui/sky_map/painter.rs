@@ -212,12 +212,10 @@ impl SkyMapPainter {
                 continue;
             }
 
-            for star in zone.stars() {
-                if star.data.mag.is_greater_than(max_mag) {
-                    continue;
-                }
+            let mut paint_star = |data: &StarData, name: &str| -> anyhow::Result<bool> {
                 let star_painter = StarPainter {
-                    star,
+                    data,
+                    name,
                     max_size,
                     slow_grow_size,
                     light_size_k,
@@ -228,13 +226,30 @@ impl SkyMapPainter {
                     &eq_hor_cvt,
                     &hor_3d_cvt,
                     ctx,
-                    PainterStage::Objects
+                    PainterStage::ObjectsAndNames
                 )?;
-                stars_count += 1;
-                if star_is_painted {
-                    stars_painted_count += 1;
+
+                Ok(star_is_painted)
+            };
+
+            for star in zone.stars() {
+                if star.data.mag.is_greater_than(max_mag) {
+                    continue;
                 }
+                let star_is_painted = paint_star(&star.data, "")?;
+                stars_count += 1;
+                if star_is_painted { stars_painted_count += 1; }
             }
+
+            for star in zone.named_stars() {
+                if star.data.mag.is_greater_than(max_mag) {
+                    continue;
+                }
+                let star_is_painted = paint_star(&star.data, &star.name)?;
+                stars_count += 1;
+                if star_is_painted { stars_painted_count += 1; }
+            }
+
         }
 
         println!("stars_count={}, stars_painted={}", stars_count, stars_painted_count);
@@ -364,6 +379,7 @@ impl SkyMapPainter {
 enum PainterStage {
     Objects,
     Names,
+    ObjectsAndNames ,
     TestObjVsible,
 }
 
@@ -507,6 +523,10 @@ impl ObjectPainter {
                 obj.paint_object(ctx, &self.points_screen)?,
             PainterStage::Names =>
                 obj.paint_name(ctx, &self.points_screen)?,
+            PainterStage::ObjectsAndNames => {
+                obj.paint_object(ctx, &self.points_screen)?;
+                obj.paint_name(ctx, &self.points_screen)?;
+            },
             PainterStage::TestObjVsible =>
                 return Ok(true),
         }
@@ -595,10 +615,10 @@ fn get_rgb_for_star_bv(bv: f32) -> RgbTuple {
     const RED_V: f32 = 2.5;
     const BLUE_V: f32 = -0.3;
 
-    const RED:    RgbTuple = (1.0,  0.4,  0.4);
-    const ORANGE: RgbTuple = (1.0,  0.94, 0.71);
-    const WELLOW: RgbTuple = (1.0,  1.0,  0.8);
-    const WHITE:  RgbTuple = (1.0,  1.0,  1.0);
+    const RED:    RgbTuple = (1.0, 0.4,  0.4);
+    const ORANGE: RgbTuple = (1.0, 0.94, 0.71);
+    const WELLOW: RgbTuple = (1.0, 1.0,  0.8);
+    const WHITE:  RgbTuple = (1.0, 1.0,  1.0);
     const BLUE:   RgbTuple = (0.4, 0.66, 1.0);
 
     const TABLE: &[(f32, RgbTuple)] = &[
@@ -629,11 +649,30 @@ fn get_rgb_for_star_bv(bv: f32) -> RgbTuple {
 }
 
 struct StarPainter<'a> {
-    star: &'a Star,
+    data: &'a StarData,
+    name: &'a str,
     max_size: f64,
     slow_grow_size: f64,
     light_size_k: f64,
     min_bright_size: f64,
+}
+
+impl<'a> StarPainter<'a> {
+    fn calc_size(&self, star_mag: f32, light: f32) -> f64 {
+        let mut size = (self.light_size_k * light as f64).max(1.0);
+        if star_mag < 1.0 && size < self.min_bright_size {
+            size = self.min_bright_size;
+        }
+        if size > self.slow_grow_size {
+            size -= self.slow_grow_size;
+            size /= 5.0;
+            size += self.slow_grow_size;
+        }
+        if size > self.max_size {
+            size = self.max_size;
+        }
+        size
+    }
 }
 
 impl<'a> ObjectToPaint for StarPainter<'a> {
@@ -643,35 +682,23 @@ impl<'a> ObjectToPaint for StarPainter<'a> {
 
     fn get_point_crd(&self, _index: usize) -> PainterCrd {
         PainterCrd::Eq(EqCoord {
-            dec: self.star.data.crd.dec(),
-            ra: self.star.data.crd.ra(),
+            dec: self.data.crd.dec(),
+            ra: self.data.crd.ra(),
         })
     }
 
     fn paint_object(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         let pt = &points[0];
-        let star_mag = self.star.data.mag.get();
+        let star_mag = self.data.mag.get();
         let (light, light_with_gamma) = calc_light_for_star(star_mag, &ctx.view_point);
         if light_with_gamma < 0.2 { return Ok(()); }
 
-        let (r, g, b) = get_rgb_for_star_bv(self.star.data.bv.get());
+        let (r, g, b) = get_rgb_for_star_bv(self.data.bv.get());
 
         ctx.cairo.save()?;
         ctx.cairo.translate(pt.x, pt.y);
-        let mut size = (self.light_size_k * light as f64).max(1.0);
-        if star_mag < 1.0 && size < self.min_bright_size {
-            size = self.min_bright_size;
-        }
 
-        if size > self.slow_grow_size {
-            size -= self.slow_grow_size;
-            size /= 5.0;
-            size += self.slow_grow_size;
-        }
-
-        if size > self.max_size {
-            size = self.max_size;
-        }
+        let size = self.calc_size(star_mag, light);
 
         if size <= 1.0 {
             ctx.cairo.set_source_rgb(
@@ -699,6 +726,29 @@ impl<'a> ObjectToPaint for StarPainter<'a> {
         ctx.cairo.restore()?;
         Ok(())
     }
+
+    fn paint_name(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+        if !self.name.is_empty() {
+            let star_mag = self.data.mag.get();
+            let (light, light_with_gamma) = calc_light_for_star(star_mag, &ctx.view_point);
+            if light < 2.0 { return Ok(()); }
+            let size = self.calc_size(star_mag, light);
+            let pt = &points[0];
+            let te = ctx.cairo.text_extents(&self.name)?;
+            let t_height = te.height();
+            ctx.cairo.move_to(pt.x + 0.5 * size - 0.1 * t_height, pt.y + t_height + 0.5 * size - 0.1 * t_height);
+            let (r, g, b) = get_rgb_for_star_bv(self.data.bv.get());
+            ctx.cairo.set_source_rgba(
+                light_with_gamma as f64 * r,
+                light_with_gamma as f64 * g,
+                light_with_gamma as f64 * b,
+                0.8,
+            );
+            ctx.cairo.show_text(self.name)?;
+        }
+        Ok(())
+    }
+
 }
 
 struct EqGridItem {

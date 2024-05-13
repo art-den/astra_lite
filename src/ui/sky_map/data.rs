@@ -142,8 +142,10 @@ pub struct StarData {
 }
 
 pub struct NamedStar {
-    pub name: String,
-    pub data: StarData,
+    pub cnst_id: u8,
+    pub name:    String,
+    pub bayer:   String,
+    pub data:    StarData,
 }
 
 pub struct Star {
@@ -164,6 +166,11 @@ impl StarZone {
     pub fn stars(&self) -> &Vec<Star> {
         &self.stars
     }
+
+    pub fn named_stars(&self) -> &Vec<NamedStar> {
+        &self.nstars
+    }
+
 }
 
 pub type StarZoneKey = (u16, u16);
@@ -186,7 +193,7 @@ impl Stars {
         &self.zones
     }
 
-    pub fn add_star(&mut self, data: StarData, name: &str) {
+    pub fn add_star(&mut self, data: StarData, name: Option<String>, bayer: Option<String>, cnst_id: Option<u8>) {
         let ra = data.crd.ra();
         let dec = data.crd.dec();
         let key = Self::get_key_for_coord(ra, dec);
@@ -210,10 +217,16 @@ impl Stars {
             self.zones.insert(key, new_zone);
             self.zones.get_mut(&key).unwrap()
         };
-        if name.is_empty() {
-            zone.stars.push(Star { data });
+
+        if let (Some(name), Some(bayer), Some(cnst_id)) = (name, bayer, cnst_id) {
+            zone.nstars.push(NamedStar {
+                data,
+                name,
+                bayer,
+                cnst_id
+            });
         } else {
-            zone.nstars.push(NamedStar { data, name: name.to_string() });
+            zone.stars.push(Star { data });
         }
     }
 
@@ -482,9 +495,53 @@ impl SkyMap {
                 mag: ObjMagnitude::new(mag as f32),
                 bv:  StarBV::new(bv as f32),
             };
-            self.stars.add_star(star_data, "");
+            self.stars.add_star(star_data, None, None, None);
         }
 
+        Ok(())
+    }
+
+    pub fn load_named_stars(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+        let mut rdr = csv::ReaderBuilder::new()
+            .delimiter(b';')
+            .from_path(path)?;
+        let headers = rdr.headers()?;
+        let find_col = |name| -> anyhow::Result<usize> {
+            headers.iter()
+                .position(|c| c.eq_ignore_ascii_case(name))
+                .ok_or_else(|| anyhow::anyhow!("`{}` col not found", name))
+        };
+        let name_col  = find_col("name")?;
+        let bayer_col = find_col("bayer")?;
+        let ra_col    = find_col("ra")?;
+        let dec_col   = find_col("dec")?;
+        let const_col = find_col("constellation")?;
+        let mag_col   = find_col("mag")?;
+        let bv_col    = find_col("bv")?;
+        for record in rdr.records().filter_map(|record| record.ok()) {
+            if record.is_empty() { continue; }
+            let name = record[name_col].trim();
+            let bayer = record[bayer_col].trim();
+            let Some(ra_hours) = sexagesimal_to_value(record[ra_col].trim()) else { continue; };
+            let Some(dec_degrees) = sexagesimal_to_value(record[dec_col].trim()) else { continue; };
+            let cnst_id = *self.const_id_by_name.get(record[const_col].trim()).unwrap_or(&0);
+            let magnitude = record[mag_col].trim().parse().unwrap_or(f32::NAN);
+            let bv = record[bv_col].trim().parse().unwrap_or(f32::NAN);
+            let ra = 2.0 * PI * ra_hours / 24.0;
+            let dec = 2.0 * PI * dec_degrees / 360.0;
+            let star_data = StarData {
+                crd: ObjEqCoord::new(ra, dec),
+                mag: ObjMagnitude::new(magnitude as f32),
+                bv:  StarBV::new(bv as f32),
+            };
+
+            self.stars.add_star(
+                star_data,
+                Some(name.to_string()),
+                Some(bayer.to_string()),
+                Some(cnst_id)
+            );
+        }
         Ok(())
     }
 
