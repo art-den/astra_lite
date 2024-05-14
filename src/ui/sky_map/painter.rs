@@ -126,7 +126,8 @@ impl SkyMapPainter {
     ) -> anyhow::Result<()> {
         let mut do_paint_stage = |stage| -> anyhow::Result<()> {
             for dso_object in sky_map.objects() {
-                if dso_object.mag.get() > ctx.config.max_magnitude {
+                let mag = dso_object.mag.get();
+                if mag.is_nan() || mag > ctx.config.max_magnitude {
                     continue;
                 }
                 use DsoType::*;
@@ -146,6 +147,15 @@ impl SkyMapPainter {
                 };
                 if visible {
                     self.obj_painter.paint(dso_object, &eq_hor_cvt, &hor_3d_cvt, ctx, stage)?;
+                    if stage == PainterStage::Objects {
+                        if let Some(maj_axis) = dso_object.maj_axis {
+                            let min_axis = dso_object.min_axis.unwrap_or(maj_axis);
+                            let angle = dso_object.angle.unwrap_or_default();
+
+                            dbg!(maj_axis, min_axis, angle);
+                        }
+
+                    }
                 }
             }
             if ctx.config.flags.contains(PaintFlags::PAINT_OUTLINES) {
@@ -182,7 +192,7 @@ impl SkyMapPainter {
 
         let max_mag = ObjMagnitude::new(max_mag);
 
-        let max_size = 10.0 * ctx.screen.dpmm_x;
+        let max_size = 7.0 * ctx.screen.dpmm_x;
         let slow_grow_size = 0.2 * max_size;
         let light_size_k = 0.3 * ctx.screen.dpmm_x;
         let min_bright_size = 1.5 * ctx.screen.dpmm_x;
@@ -375,7 +385,7 @@ impl SkyMapPainter {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum PainterStage {
     Objects,
     Names,
@@ -731,7 +741,7 @@ impl<'a> ObjectToPaint for StarPainter<'a> {
         if !self.name.is_empty() {
             let star_mag = self.data.mag.get();
             let (light, light_with_gamma) = calc_light_for_star(star_mag, &ctx.view_point);
-            if light < 2.0 { return Ok(()); }
+            if light < 3.0 { return Ok(()); }
             let size = self.calc_size(star_mag, light);
             let pt = &points[0];
             let te = ctx.cairo.text_extents(&self.name)?;

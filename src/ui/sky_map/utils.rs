@@ -4,45 +4,80 @@ use gtk::prelude::*;
 use crate::{ui::gtk_utils, utils::math::linear_solve2};
 use super::{data::*, painter::*};
 
-pub fn calc_julian_day(date: &NaiveDate) -> i64 {
-    let mon = date.month() as i64;
-    let day = date.day() as i64;
-    let year = date.year() as i64;
-    let a = (14 - mon) / 12;
-    let y = year + 4800 - a;
-    let m = mon + 12 * a - 3;
-    day + (153 * m + 2)/5 + 365*y + y/4 - y/100 + y/400 - 32045
+#[derive(Debug, Clone)]
+pub struct EqCoord {
+    pub dec: f64,
+    pub ra:  f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct HorizCoord {
+    pub alt: f64,
+    pub az:  f64,
+}
+
+impl HorizCoord {
+    pub fn to_sphere_crd(&self) -> Point3D {
+        let y = f64::sin(self.alt);
+        let r_xz = f64::cos(self.alt);
+        let x = r_xz * f64::sin(self.az);
+        let z = r_xz * f64::cos(self.az);
+        Point3D { x, y, z }
+    }
+}
+
+pub struct RotMatrix {
+    pub sin: f64,
+    pub cos: f64,
+}
+
+impl RotMatrix {
+    fn new(angle: f64) -> Self {
+        Self {
+            sin: f64::sin(angle),
+            cos: f64::cos(angle),
+        }
+    }
+}
+
+//   |y
+//   |  /z
+//   | /
+//   |/      x
+//   *--------
+/// Point on sphere with r = 1
+#[derive(Debug)]
+pub struct Point3D {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
+impl Point3D {
+    pub fn to_horiz_crd(&self) -> HorizCoord {
+        HorizCoord {
+            az: f64::atan2(self.x, self.z),
+            alt: f64::asin(self.y),
+        }
+    }
+
+    pub fn rotate_over_x(&mut self, mat: &RotMatrix) {
+        let z = mat.cos * self.z - mat.sin * self.y;
+        let y = mat.sin * self.z + mat.cos * self.y;
+        self.z = z;
+        self.y = y;
+    }
 }
 
 #[test]
-fn test_calc_julian_day() {
-    assert_eq!(
-        calc_julian_day(&NaiveDate::from_ymd_opt(2001, 1, 1).unwrap()),
-        2_451_911
-    );
-}
+fn test_point3d_rotate() {
+    let mut pt = Point3D { x: 0.0, y: 0.0, z: 1.0 };
 
-pub fn calc_julian_time(dt: &NaiveDateTime) -> f64 {
-    let julain_day = calc_julian_day(&dt.date()) as f64;
-    let hour = dt.hour() as f64;
-    let min = dt.minute() as f64;
-    let mut sec = dt.second() as f64;
-    let msecs = (dt.nanosecond() / 1_000_000) as f64;
-    sec += msecs / 1000.0;
-    julain_day + (hour - 12.0) / 24.0 + min / 1440.0 + sec / 86400.0
-}
-
-pub fn calc_sidereal_time(dt: &NaiveDateTime) -> f64 {
-    let jdt = calc_julian_time(dt);
-    let dtt = jdt - 2451545.0;
-    let t = dtt / 36525.0;
-    let mut result_in_degrees =
-        280.46061837
-        + 360.98564736629 * dtt
-        + 0.000387933 * t * t
-        - (t * t * t) / 38710000.0;
-    result_in_degrees = 360.0 * f64::fract(result_in_degrees / 360.0);
-    PI * result_in_degrees / 180.0
+    let mat = RotMatrix::new(90.0 * 2.0 * PI / 360.0);
+    pt.rotate_over_x(&mat);
+    assert!(f64::abs(pt.x-0.0) < 1e-10);
+    assert!(f64::abs(pt.y-1.0) < 1e-10);
+    assert!(f64::abs(pt.z-0.0) < 1e-10);
 }
 
 pub struct EqToHorizCvt {
@@ -184,41 +219,26 @@ pub struct Point2D {
     pub y: f64,
 }
 
-#[derive(Debug)]
-pub struct Point3D {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
-}
-
 pub struct HorizToScreenCvt<'a> {
-    vp:        &'a ViewPoint,
-    sin_alt:   f64,
-    cos_alt:   f64,
-    sin_n_alt: f64,
-    cos_n_alt: f64,
+    vp:           &'a ViewPoint,
+    vp_alt_mat:   RotMatrix,
+    vp_n_alt_mat: RotMatrix,
 }
 
 impl<'a> HorizToScreenCvt<'a> {
     pub fn new(vp: &'a ViewPoint) -> Self {
         Self {
             vp,
-            sin_alt:   f64::sin(vp.crd.alt),
-            cos_alt:   f64::cos(vp.crd.alt),
-            sin_n_alt: f64::sin(-vp.crd.alt),
-            cos_n_alt: f64::cos(-vp.crd.alt),
+            vp_alt_mat:   RotMatrix::new(vp.crd.alt),
+            vp_n_alt_mat: RotMatrix::new(-vp.crd.alt),
         }
     }
 
     pub fn horiz_to_sphere(&self, pt: &HorizCoord) -> Point3D {
-        let az = pt.az - self.vp.crd.az;
-        let y0 = f64::sin(pt.alt);
-        let r_xz = f64::cos(pt.alt);
-        let x = r_xz * f64::sin(az);
-        let z0 = r_xz * f64::cos(az);
-        let z = self.cos_alt * z0 + self.sin_alt * y0;
-        let y = -self.sin_alt * z0 + self.cos_alt * y0;
-        Point3D { x, y, z }
+        let pt_with_vp_az = HorizCoord { alt: pt.alt, az: pt.az - self.vp.crd.az };
+        let mut result = pt_with_vp_az.to_sphere_crd();
+        result.rotate_over_x(&self.vp_n_alt_mat);
+        result
     }
 
     pub fn sphere_to_screen(&self, pt: &Point3D, screen: &ScreenInfo) -> Point2D {
@@ -232,7 +252,7 @@ impl<'a> HorizToScreenCvt<'a> {
         &self,
         pt:     &Point2D,
         screen: &ScreenInfo
-    ) -> Option<(HorizCoord, HorizCoord)> {
+    ) -> Option<HorizCoord> {
         let div = self.vp.mag_factor * screen.main_size;
         let x = (pt.x - screen.center_x) / div;
         let y = (-pt.y + screen.center_y) / div;
@@ -241,28 +261,19 @@ impl<'a> HorizToScreenCvt<'a> {
             y, y,
             1.0, 0.0
         )?;
-        let crd = if cross_crd1.z > cross_crd2.z { cross_crd1 } else { cross_crd2 };
+        let mut crd = if cross_crd1.z > cross_crd2.z {
+            cross_crd1
+        } else {
+            cross_crd2
+        };
         if crd.z < 0.0 {
             return None;
         }
-        let alt_rot_crd = Point3D {
-            x: crd.x,
-            y: -self.sin_n_alt * crd.z + self.cos_n_alt * crd.y,
-            z: self.cos_n_alt * crd.z + self.sin_n_alt * crd.y,
-        };
-        let mut az_alt_rot_crd = Self::sphere_to_horiz(&alt_rot_crd);
+        crd.rotate_over_x(&self.vp_alt_mat);
+        let mut az_alt_rot_crd = crd.to_horiz_crd();
         az_alt_rot_crd.az -= self.vp.crd.az;
-        Some((
-            Self::sphere_to_horiz(&crd),
-            az_alt_rot_crd,
-        ))
-    }
 
-    fn sphere_to_horiz(pt: &Point3D) -> HorizCoord {
-        HorizCoord {
-            az: f64::atan2(pt.x, pt.z),
-            alt: f64::asin(pt.y),
-        }
+        Some(az_alt_rot_crd)
     }
 
     fn calc_sphere_and_line_cross(
@@ -418,4 +429,45 @@ pub fn find_x_for_zero_y(mut begin_x: f64, mut end_x: f64, min_diff: f64, fun: i
         }
     }
     0.5 * (begin_x + end_x)
+}
+
+pub fn calc_julian_day(date: &NaiveDate) -> i64 {
+    let mon = date.month() as i64;
+    let day = date.day() as i64;
+    let year = date.year() as i64;
+    let a = (14 - mon) / 12;
+    let y = year + 4800 - a;
+    let m = mon + 12 * a - 3;
+    day + (153 * m + 2)/5 + 365*y + y/4 - y/100 + y/400 - 32045
+}
+
+#[test]
+fn test_calc_julian_day() {
+    assert_eq!(
+        calc_julian_day(&NaiveDate::from_ymd_opt(2001, 1, 1).unwrap()),
+        2_451_911
+    );
+}
+
+pub fn calc_julian_time(dt: &NaiveDateTime) -> f64 {
+    let julain_day = calc_julian_day(&dt.date()) as f64;
+    let hour = dt.hour() as f64;
+    let min = dt.minute() as f64;
+    let mut sec = dt.second() as f64;
+    let msecs = (dt.nanosecond() / 1_000_000) as f64;
+    sec += msecs / 1000.0;
+    julain_day + (hour - 12.0) / 24.0 + min / 1440.0 + sec / 86400.0
+}
+
+pub fn calc_sidereal_time(dt: &NaiveDateTime) -> f64 {
+    let jdt = calc_julian_time(dt);
+    let dtt = jdt - 2451545.0;
+    let t = dtt / 36525.0;
+    let mut result_in_degrees =
+        280.46061837
+        + 360.98564736629 * dtt
+        + 0.000387933 * t * t
+        - (t * t * t) / 38710000.0;
+    result_in_degrees = 360.0 * f64::fract(result_in_degrees / 360.0);
+    PI * result_in_degrees / 180.0
 }

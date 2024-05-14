@@ -2,6 +2,7 @@ use std::{collections::*, f64::consts::PI, fmt::Debug, io::{BufRead, Read}, path
 use std::f32::consts::PI as PI_f32;
 use bitstream_io::{BigEndian, BitReader};
 use crate::{indi::sexagesimal_to_value, utils::compression::ValuesDecompressor};
+use super::utils::*;
 
 
 const ID_CAT_OTHER:   u16 = 0;
@@ -13,18 +14,6 @@ const ID_CAT_IC:      u16 = 3;
 pub struct Observer {
     pub latitude:  f64, // ϕ₀
     pub longitude: f64, // λ₀
-}
-
-#[derive(Debug, Clone)]
-pub struct EqCoord {
-    pub dec: f64,
-    pub ra:  f64,
-}
-
-#[derive(Debug, Clone)]
-pub struct HorizCoord {
-    pub alt: f64,
-    pub az:  f64,
 }
 
 #[derive(Copy, Clone)]
@@ -587,7 +576,7 @@ impl SkyMap {
         Ok(())
     }
 
-    pub fn get_nearest(&self, crd: EqCoord) -> Option<Object> {
+    pub fn get_nearest(&self, _crd: &EqCoord) -> Option<Object> {
         todo!()
     }
 

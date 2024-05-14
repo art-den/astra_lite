@@ -78,7 +78,7 @@ impl SkymapWidget {
                 let vp = widget.view_point.borrow();
                 let si = ScreenInfo::new(&widget.draw_area);
                 let cvt = HorizToScreenCvt::new(&*vp);
-                let Some((_, hcrd)) = cvt.screen_to_sphere(&Point2D {x, y}, &si) else {
+                let Some(hcrd) = cvt.screen_to_sphere(&Point2D {x, y}, &si) else {
                     return glib::Propagation::Stop;
                 };
                 *mpress = Some(MousePressedData {
@@ -103,7 +103,7 @@ impl SkymapWidget {
 
                 let si = ScreenInfo::new(&widget.draw_area);
                 let cvt = HorizToScreenCvt::new(&mpress.vp);
-                let Some((_, hcrd)) = cvt.screen_to_sphere(&Point2D {x, y}, &si) else {
+                let Some(hcrd) = cvt.screen_to_sphere(&Point2D {x, y}, &si) else {
                     return glib::Propagation::Stop;
                 };
 
