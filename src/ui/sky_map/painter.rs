@@ -71,12 +71,14 @@ impl Default for PaintConfig {
 
 pub struct SkyMapPainter {
     obj_painter: ObjectPainter,
+    dso_ellipse: DsoEllipse,
 }
 
 impl SkyMapPainter {
     pub fn new() -> Self {
         Self {
             obj_painter: ObjectPainter::new(),
+            dso_ellipse: DsoEllipse::new(),
         }
     }
 
@@ -96,7 +98,8 @@ impl SkyMapPainter {
 
         let eq_hor_cvt = EqToHorizCvt::new(observer, utc_time);
         let hor_3d_cvt = HorizToScreenCvt::new(view_point);
-        let ctx = PaintCtx { cairo, config, screen, view_point };
+        let pxls_per_rad = Self::calc_pixels_per_radian(screen, &hor_3d_cvt, view_point);
+        let ctx = PaintCtx { cairo, config, screen, view_point, pxls_per_rad };
 
         if let Some(sky_map) = sky_map {
             self.paint_dso(sky_map, &eq_hor_cvt, &ctx, &hor_3d_cvt)?;
@@ -115,6 +118,22 @@ impl SkyMapPainter {
         self.paint_ground(cairo, &eq_hor_cvt, &ctx, &hor_3d_cvt, view_point)?;
 
         Ok(())
+    }
+
+    fn calc_pixels_per_radian(
+        screen:     &ScreenInfo,
+        cvt:        &HorizToScreenCvt,
+        view_point: &ViewPoint
+    ) -> f64 {
+        let mut pt = view_point.crd.clone();
+        let scrd1 = cvt. horiz_to_sphere(&pt);
+        const ANGLE_DIFF: f64 = 2.0 * PI / (360.0);
+        pt.az += ANGLE_DIFF;
+        let scrd2 = cvt.horiz_to_sphere(&pt);
+
+        let crd1 = cvt.sphere_to_screen(&scrd1, screen);
+        let crd2 = cvt.sphere_to_screen(&scrd2, screen);
+        Point2D::distance(&crd1, &crd2) / ANGLE_DIFF
     }
 
     fn paint_dso(
@@ -145,16 +164,14 @@ impl SkyMapPainter {
                         ctx.config.flags.contains(PaintFlags::PAINT_NEBULAS) ||
                         ctx.config.flags.contains(PaintFlags::PAINT_CLUSTERS),
                 };
+
                 if visible {
-                    self.obj_painter.paint(dso_object, &eq_hor_cvt, &hor_3d_cvt, ctx, stage)?;
-                    if stage == PainterStage::Objects {
-                        if let Some(maj_axis) = dso_object.maj_axis {
-                            let min_axis = dso_object.min_axis.unwrap_or(maj_axis);
-                            let angle = dso_object.angle.unwrap_or_default();
+                    // Paint object point
+                    let is_visible_on_screen = self.obj_painter.paint(dso_object, &eq_hor_cvt, &hor_3d_cvt, ctx, stage)?;
 
-                            dbg!(maj_axis, min_axis, angle);
-                        }
-
+                    // Paint ellipse of object
+                    if stage == PainterStage::Objects && is_visible_on_screen {
+                        self.paint_dso_ellipse(eq_hor_cvt, ctx, hor_3d_cvt, dso_object)?;
                     }
                 }
             }
@@ -169,6 +186,50 @@ impl SkyMapPainter {
         ctx.cairo.set_font_size(3.0 * ctx.screen.dpmm_y);
         do_paint_stage(PainterStage::Objects)?;
         do_paint_stage(PainterStage::Names)?;
+
+        Ok(())
+    }
+
+    fn paint_dso_ellipse(
+        &mut self,
+        eq_hor_cvt: &EqToHorizCvt,
+        ctx:        &PaintCtx,
+        hor_3d_cvt: &HorizToScreenCvt,
+        dso_object: &DsoItem,
+    ) -> anyhow::Result<()> {
+        let Some(maj_axis) = dso_object.maj_axis else { return Ok(()); };
+
+        let min_axis = dso_object.min_axis.unwrap_or(maj_axis);
+        let maj_axis = 2.0 * PI * maj_axis as f64 / (360.0 * 60.0);
+        let min_axis = 2.0 * PI * min_axis as f64 / (360.0 * 60.0);
+
+        let size_in_pixels = ctx.pxls_per_rad * f64::max(maj_axis, min_axis);
+        if size_in_pixels < 1.5 * ctx.screen.dpmm_x {
+            return Ok(());
+        }
+
+        let angle = dso_object.angle.unwrap_or_default();
+        let obj_dec = dso_object.crd.dec();
+        let obj_ra = dso_object.crd.ra();
+        let dec_rot = RotMatrix::new(0.5 * PI - obj_dec);
+        let ra_rot = RotMatrix::new(PI - obj_ra);
+        const ELLIPSE_PTS_COUNT: usize = 66;
+        let a = 0.5 * maj_axis;
+        let b = 0.5 * min_axis;
+        self.dso_ellipse.points.clear();
+        for i in 0..ELLIPSE_PTS_COUNT {
+            let az = 2.0 * PI * i as f64 / ELLIPSE_PTS_COUNT as f64;
+            let sin_az = f64::sin(az);
+            let cos_az = f64::cos(az);
+            let alt = a * b / f64::sqrt(a * a * sin_az * sin_az + b * b * cos_az * cos_az);
+            let crd = HorizCoord { alt: 0.5 * PI - alt, az: az - angle as f64 };
+            let mut pt = crd.to_sphere_pt();
+            pt.rotate_over_x(&dec_rot);
+            pt.rotate_over_y(&ra_rot);
+            let crd = pt.to_horiz_crd();
+            self.dso_ellipse.points.push(EqCoord { dec: crd.alt, ra: crd.az });
+        }
+        self.obj_painter.paint(&self.dso_ellipse, &eq_hor_cvt, &hor_3d_cvt, ctx, PainterStage::Objects)?;
 
         Ok(())
     }
@@ -399,10 +460,11 @@ enum PainterCrd {
 }
 
 struct PaintCtx<'a> {
-    cairo:      &'a gtk::cairo::Context,
-    config:     &'a PaintConfig,
-    screen:     &'a ScreenInfo,
-    view_point: &'a ViewPoint,
+    cairo:        &'a gtk::cairo::Context,
+    config:       &'a PaintConfig,
+    screen:       &'a ScreenInfo,
+    view_point:   &'a ViewPoint,
+    pxls_per_rad: f64,
 }
 
 struct Area {
@@ -541,6 +603,43 @@ impl ObjectPainter {
                 return Ok(true),
         }
         Ok(true)
+    }
+}
+
+struct DsoEllipse {
+    points: Vec<EqCoord>,
+}
+
+impl DsoEllipse {
+    fn new() -> Self {
+        Self {
+            points: Vec::new(),
+        }
+    }
+}
+
+impl ObjectToPaint for DsoEllipse {
+    fn points_count(&self) -> usize {
+        self.points.len()
+    }
+
+    fn get_point_crd(&self, index: usize) -> PainterCrd {
+        PainterCrd::Eq(self.points[index].clone())
+    }
+
+    fn paint_object(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+        ctx.cairo.move_to(points[0].x, points[0].y);
+        for pt in &points[1..] {
+            ctx.cairo.line_to(pt.x, pt.y);
+        }
+        ctx.cairo.close_path();
+
+        ctx.cairo.set_source_rgb(0.0, 1.0, 0.0);
+        ctx.cairo.set_line_width(1.0);
+        ctx.cairo.set_antialias(gtk::cairo::Antialias::Fast);
+        ctx.cairo.stroke()?;
+
+        Ok(())
     }
 }
 
