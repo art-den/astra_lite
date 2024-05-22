@@ -1,7 +1,7 @@
-use std::{cell::RefCell, f64::consts::PI, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 use chrono::{NaiveDateTime, Utc};
 use gtk::{gdk, glib::{self, clone}, prelude::*};
-use super::{data::*, painter::*, utils::*};
+use super::{consts::*, data::*, painter::*, utils::*};
 
 struct MousePressedData {
     hcrd:  HorizCoord,
@@ -57,14 +57,14 @@ impl SkymapWidget {
                 painter.paint(&skymap, &observer, &time, &config, &vp, &screen, ctx).unwrap();
                 let paint_time = timer.elapsed().as_secs_f64();
 
-                if paint_time != 0.0 {
-                    let fps_str = format!("{:.1} FPS", 1.0/paint_time);
-                    ctx.set_font_size(screen.dpmm_y * 3.0);
-                    let te = ctx.text_extents(&fps_str).unwrap();
-                    ctx.move_to(1.0, 1.0 + te.height());
-                    ctx.set_source_rgb(1.0, 1.0, 1.0);
-                    ctx.show_text(&fps_str).unwrap();
-                }
+                let fps = if paint_time != 0.0 { 1.0/paint_time } else { f64::NAN };
+                let fps_str = format!("x{:.1}, {:.1} FPS", vp.mag_factor, fps);
+                ctx.set_font_size(screen.dpmm_y * 3.0);
+                let te = ctx.text_extents(&fps_str).unwrap();
+                ctx.move_to(1.0, 1.0 + te.height());
+                ctx.set_source_rgb(1.0, 1.0, 1.0);
+                ctx.show_text(&fps_str).unwrap();
+
                 glib::Propagation::Stop
             })
         );
@@ -109,16 +109,9 @@ impl SkymapWidget {
 
                 let mut vp = widget.view_point.borrow_mut();
                 vp.crd.az = mpress.vp.crd.az + mpress.hcrd.az - hcrd.az;
-                vp.crd.alt = mpress.vp.crd.alt + mpress.hcrd.alt - hcrd.alt;
 
-                const MAX_ALT: f64 = PI / 2.0;
-                if vp.crd.alt > MAX_ALT {
-                    vp.crd.alt= MAX_ALT;
-                }
-                const MIN_ALT: f64 = -PI / 6.0;
-                if vp.crd.alt < MIN_ALT {
-                    vp.crd.alt = MIN_ALT;
-                }
+                vp.crd.alt = mpress.vp.crd.alt + mpress.hcrd.alt - hcrd.alt;
+                vp.crd.alt = vp.crd.alt.min(MAX_ALT).max(MIN_ALT);
 
                 widget.draw_area.queue_draw();
                 glib::Propagation::Stop
@@ -146,20 +139,17 @@ impl SkymapWidget {
                     let mut vp = widget.view_point.borrow_mut();
                     let mut mag_factor = vp.mag_factor;
                     match event.direction() {
-                        gdk::ScrollDirection::Up => {
-                            mag_factor *= 1.15;
-                            if mag_factor > 1000.0 {
-                                mag_factor = 1000.0;
-                            }
-                        }
-                        gdk::ScrollDirection::Down => {
-                            mag_factor /= 1.15;
-                            if mag_factor < 0.9 {
-                                mag_factor = 0.9;
-                            }
-                        }
+                        gdk::ScrollDirection::Up =>
+                            mag_factor *= MAX_FACTOR_STEP,
+                        gdk::ScrollDirection::Down =>
+                            mag_factor /= MAX_FACTOR_STEP,
                         _ => {},
                     }
+
+                    mag_factor = mag_factor
+                        .min(MAX_MAG_FACTOR)
+                        .max(MIN_MAG_FACTOR);
+
                     if mag_factor != vp.mag_factor {
                         vp.mag_factor = mag_factor;
                         widget.draw_area.queue_draw();

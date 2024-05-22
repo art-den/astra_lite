@@ -432,6 +432,8 @@ pub fn select_file_name_to_save(
     }
 }
 
+pub const DEFAULT_DPMM: f64 = 3.8;
+
 pub fn get_widget_dpmm(widget: &impl IsA<gtk::Widget>) -> Option<(f64, f64)> {
     widget.window()
         .and_then(|window|

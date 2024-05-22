@@ -1,13 +1,27 @@
 use std::f64::consts::PI;
 use chrono::{Datelike, Timelike, NaiveDateTime, NaiveDate};
 use gtk::prelude::*;
-use crate::{ui::gtk_utils, utils::math::linear_solve2};
-use super::{data::*, painter::*};
+use crate::{
+    ui::gtk_utils::{self, DEFAULT_DPMM},
+    utils::math::{linear_interpolate, linear_solve2}
+};
+use super::{consts::*, data::*, painter::*};
 
 #[derive(Debug, Clone)]
 pub struct EqCoord {
     pub dec: f64,
     pub ra:  f64,
+}
+
+impl EqCoord {
+    pub fn angle_between(crd1: &EqCoord, crd2: &EqCoord) -> f64 {
+        let sin_diff_dec = f64::sin((crd2.dec - crd1.dec) / 2.0);
+        let sin_diff_ra = f64::sin((crd2.ra - crd1.ra) / 2.0);
+        let root_expr =
+            sin_diff_dec * sin_diff_dec +
+            f64::cos(crd1.dec) * f64::cos(crd2.dec) * sin_diff_ra * sin_diff_ra;
+        2.0 * f64::asin(f64::sqrt(root_expr))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -17,7 +31,7 @@ pub struct HorizCoord {
 }
 
 impl HorizCoord {
-    pub fn to_sphere_crd(&self) -> Point3D {
+    pub fn to_sphere_pt(&self) -> Point3D {
         let y = f64::sin(self.alt);
         let r_xz = f64::cos(self.alt);
         let x = r_xz * f64::sin(self.az);
@@ -27,12 +41,12 @@ impl HorizCoord {
 }
 
 pub struct RotMatrix {
-    pub sin: f64,
-    pub cos: f64,
+    sin: f64,
+    cos: f64,
 }
 
 impl RotMatrix {
-    fn new(angle: f64) -> Self {
+    pub fn new(angle: f64) -> Self {
         Self {
             sin: f64::sin(angle),
             cos: f64::cos(angle),
@@ -67,6 +81,14 @@ impl Point3D {
         self.z = z;
         self.y = y;
     }
+
+    pub fn rotate_over_y(&mut self, mat: &RotMatrix) {
+        let x = mat.cos * self.x - mat.sin * self.z;
+        let z = mat.sin * self.x + mat.cos * self.z;
+        self.x = x;
+        self.z = z;
+    }
+
 }
 
 #[test]
@@ -187,7 +209,8 @@ impl ScreenInfo {
         let height = da_size.height() as f64;
         let main_size = 0.5 * f64::max(width, height);
 
-        let (dpmm_x, dpmm_y) = gtk_utils::get_widget_dpmm(da).unwrap_or((3.8, 3.8));
+        let (dpmm_x, dpmm_y) = gtk_utils::get_widget_dpmm(da)
+            .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
 
         let tolerance = Rect {
             left: -20.0 * dpmm_x,
@@ -219,6 +242,14 @@ pub struct Point2D {
     pub y: f64,
 }
 
+impl Point2D {
+    pub fn distance(pt1: &Point2D, pt2: &Point2D) -> f64 {
+        let diff_x = pt1.x - pt2.x;
+        let diff_y = pt1.y - pt2.y;
+        f64::sqrt(diff_x * diff_x + diff_y * diff_y)
+    }
+}
+
 pub struct HorizToScreenCvt<'a> {
     vp:           &'a ViewPoint,
     vp_alt_mat:   RotMatrix,
@@ -236,7 +267,7 @@ impl<'a> HorizToScreenCvt<'a> {
 
     pub fn horiz_to_sphere(&self, pt: &HorizCoord) -> Point3D {
         let pt_with_vp_az = HorizCoord { alt: pt.alt, az: pt.az - self.vp.crd.az };
-        let mut result = pt_with_vp_az.to_sphere_crd();
+        let mut result = pt_with_vp_az.to_sphere_pt();
         result.rotate_over_x(&self.vp_n_alt_mat);
         result
     }
@@ -407,6 +438,16 @@ fn test_2d_lines_intersection() {
         ),
         None
     );
+}
+
+pub fn calc_max_star_magnitude_for_painting(mag_factor: f64) -> f32 {
+    linear_interpolate(
+        mag_factor.log10(),
+        MIN_MAG_FACTOR.log10(),
+        MAX_MAG_FACTOR.log10(),
+        4.0,
+        20.0,
+    ) as f32
 }
 
 pub fn find_x_for_zero_y(mut begin_x: f64, mut end_x: f64, min_diff: f64, fun: impl Fn(f64) -> f64) -> f64 {

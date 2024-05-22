@@ -33,6 +33,13 @@ impl ObjEqCoord {
         }
     }
 
+    pub fn to_eq(&self) -> EqCoord {
+        EqCoord {
+            ra: self.ra(),
+            dec: self.dec(),
+        }
+    }
+
     pub fn new_from_int(ra: u32, dec: i32) -> Self {
         Self { ra, dec }
     }
@@ -86,7 +93,7 @@ impl StarBV {
 }
 
 /// Brightness
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, PartialOrd)]
 pub struct ObjMagnitude(i16);
 
 impl ObjMagnitude {
@@ -124,12 +131,14 @@ impl Debug for ObjMagnitude {
     }
 }
 
+#[derive(Clone)]
 pub struct StarData {
     pub crd: ObjEqCoord,
     pub mag: ObjMagnitude,
     pub bv:  StarBV,
 }
 
+#[derive(Clone)]
 pub struct NamedStar {
     pub cnst_id: u8,
     pub name:    String,
@@ -137,6 +146,7 @@ pub struct NamedStar {
     pub data:    StarData,
 }
 
+#[derive(Clone)]
 pub struct Star {
     pub data: StarData,
 }
@@ -183,16 +193,24 @@ impl Stars {
     }
 
     pub fn add_star(&mut self, data: StarData, name: Option<String>, bayer: Option<String>, cnst_id: Option<u8>) {
+        let zone_ra_key_to_value = |ra_int: u16| -> f64 {
+            2.0 * PI * ra_int as f64 / Self::RA_COUNT as f64
+        };
+
+        let zone_dec_key_to_value = |dec_int: u16| -> f64 {
+            PI * dec_int as f64 / Self::DEC_COUNT as f64 - 0.5 * PI
+        };
+
         let ra = data.crd.ra();
         let dec = data.crd.dec();
         let key = Self::get_key_for_coord(ra, dec);
         let zone = if let Some(zone) = self.zones.get_mut(&key) {
             zone
         } else {
-            let ra1 = Self::get_ra(key.0);
-            let ra2 = Self::get_ra(key.0+1);
-            let dec1 = Self::get_dec(key.1);
-            let dec2 = Self::get_dec(key.1+1);
+            let ra1 = zone_ra_key_to_value(key.0);
+            let ra2 = zone_ra_key_to_value(key.0+1);
+            let dec1 = zone_dec_key_to_value(key.1);
+            let dec2 = zone_dec_key_to_value(key.1+1);
             let new_zone = StarZone {
                 coords: [
                     EqCoord {ra: ra1, dec: dec1},
@@ -230,17 +248,52 @@ impl Stars {
         (ra_int as u16, dec_int as u16)
     }
 
-    fn get_ra(ra_int: u16) -> f64 {
-        2.0 * PI * ra_int as f64 / Self::RA_COUNT as f64
-    }
+    pub fn get_nearest(&self, crd: &EqCoord, max_mag: f32) -> Option<(NamedStar, f64)> {
+        let max_mag = ObjMagnitude::new(max_mag);
 
-    fn get_dec(dec_int: u16) -> f64 {
-        PI * dec_int as f64 / Self::DEC_COUNT as f64 - 0.5 * PI
+        let nearest = self.zones.iter()
+            .flat_map(|(_, zone)| &zone.stars)
+            .filter(|star| star.data.mag < max_mag)
+            .map(|star| (star, EqCoord::angle_between(&star.data.crd.to_eq(), crd)))
+            .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(&angle1, &angle2));
+
+        let nearest_named = self.zones.iter()
+            .flat_map(|(_, zone)| &zone.nstars)
+            .filter(|star| star.data.mag < max_mag)
+            .map(|star| (star, EqCoord::angle_between(&star.data.crd.to_eq(), crd)))
+            .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(&angle1, &angle2));
+
+        let star_to_named_star = |star: &Star| -> NamedStar {
+            NamedStar {
+                data:    star.data.clone(),
+                bayer:   String::new(),
+                cnst_id: 0,
+                name:    String::new(),
+            }
+        };
+
+        if let (Some((nearest, angle)), Some((nearest_named, named_angle)))
+        = (nearest, nearest_named) {
+            if angle < named_angle {
+                let named_star = star_to_named_star(nearest);
+                return Some((named_star, angle))
+            } else {
+                 return Some((nearest_named.clone(), named_angle))
+            }
+        } else if let Some((nearest, angle)) = nearest {
+            let named_star = star_to_named_star(nearest);
+            return Some((named_star, angle))
+        } else if let Some((nearest, named_angle)) = nearest_named {
+            return Some((nearest.clone(), named_angle))
+        }
+
+        None
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum DsoType {
+    None,
     Star,
     DoubleStar,
     Galaxy,
@@ -260,7 +313,7 @@ pub enum DsoType {
 }
 
 impl DsoType {
-    fn from_name(name: &str) -> Option<Self> {
+    fn from_str(name: &str) -> Option<Self> {
         let type_is = |col_name| name.eq_ignore_ascii_case(col_name);
         if      type_is("g")      { Some(DsoType::Galaxy) }
         else if type_is("cl")     { Some(DsoType::StarCluster) }
@@ -285,13 +338,13 @@ pub struct Outline {
     pub polygon: Vec<ObjEqCoord>
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DsoName {
     pub catalogue: u16,
     pub name:      String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DsoItem {
     pub names:    Vec<DsoName>,
     pub crd:      ObjEqCoord,
@@ -404,7 +457,7 @@ impl SkyMap {
 
         for record in rdr.records().filter_map(|record| record.ok()) {
             if record.is_empty() { continue; }
-            let Some(obj_type) = DsoType::from_name(record[type_col].trim()) else { continue; };
+            let Some(obj_type) = DsoType::from_str(record[type_col].trim()) else { continue; };
             let Some(ra) = sexagesimal_to_value(record[ra_col].trim()) else { continue; };
             let Some(dec) = sexagesimal_to_value(record[dec_col].trim()) else { continue; };
             let cnst_id = *self.const_id_by_name.get(record[const_col].trim()).unwrap_or(&0);
@@ -576,8 +629,31 @@ impl SkyMap {
         Ok(())
     }
 
-    pub fn get_nearest(&self, _crd: &EqCoord) -> Option<Object> {
-        todo!()
+    pub fn get_nearest(&self, crd: &EqCoord, max_star_mag: f32) -> Option<Object> {
+        let nearest_star = self.stars.get_nearest(crd, max_star_mag);
+        let nearest_obj = self.get_nearest_dso_object(crd);
+        match (nearest_star, nearest_obj) {
+            (Some((star, star_angle)), Some((obj, obj_angle))) => {
+                if star_angle < obj_angle {
+                    Some(Object::Star(star))
+                } else {
+                    Some(Object::Dso(obj))
+                }
+            }
+            (Some((star, _)), None) =>
+                Some(Object::Star(star)),
+            (None, Some((obj, _))) =>
+                Some(Object::Dso(obj)),
+            _ =>
+                None
+        }
+    }
+
+    fn get_nearest_dso_object(&self, crd: &EqCoord) -> Option<(DsoItem, f64)> {
+        let nearest_obj = self.objects.iter()
+            .map(|obj| (obj, EqCoord::angle_between(&obj.crd.to_eq(), crd)))
+            .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(&angle1, &angle2));
+        nearest_obj.map(|(obj, angle)| (obj.clone(), angle))
     }
 
 }

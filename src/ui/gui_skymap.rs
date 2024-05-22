@@ -3,7 +3,7 @@ use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone};
 use crate::{indi, options::*, utils::io_utils::*};
-use super::{gtk_utils, gui_common::ExclusiveCaller, gui_main::*, sky_map::{data::SkyMap, painter::PaintConfig}};
+use super::{gtk_utils::{self, DEFAULT_DPMM}, gui_common::ExclusiveCaller, gui_main::*, sky_map::{data::SkyMap, painter::{PaintConfig, PaintFlags}}};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
 pub fn init_ui(
@@ -85,13 +85,19 @@ impl Default for FilterOptions {
 struct ObjectsToShow {
     stars: bool,
     dso:   bool,
+    galaxies: bool,
+    nebulas: bool,
+    sclusters: bool,
 }
 
 impl Default for ObjectsToShow {
     fn default() -> Self {
         Self {
-            stars: true,
-            dso:   true,
+            stars:     true,
+            dso:       true,
+            galaxies:  true,
+            nebulas:   true,
+            sclusters: true,
         }
     }
 }
@@ -274,8 +280,9 @@ impl MapGui {
         scl_max_dso_mag.set_range(0.0, 20.0);
         scl_max_dso_mag.set_increments(0.5, 2.0);
 
-        let (dpimm_x, _) = gtk_utils::get_widget_dpmm(&self.window).unwrap_or((3.8, 3.8));
-        scl_max_dso_mag.set_width_request((30.0 * dpimm_x) as i32);
+        let (dpimm_x, _) = gtk_utils::get_widget_dpmm(&self.window)
+            .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
+        scl_max_dso_mag.set_width_request((40.0 * dpimm_x) as i32);
     }
 
     fn connect_main_gui_events(self: &Rc<Self>, handlers: &mut MainGuiHandlers) {
@@ -307,6 +314,19 @@ impl MapGui {
         scl_max_dso_mag.connect_value_changed(clone!(@weak self as self_ => move |scale| {
             self_.handler_max_magnitude_changed(scale.value());
         }));
+
+        let connect_obj_visibility_changed = |widget_name: &str| {
+            let ch = self.builder.object::<gtk::CheckButton>(widget_name).unwrap();
+            ch.connect_active_notify(clone!(@weak self as self_ => move |_| {
+                self_.handler_obj_visibility_changed();
+            }));
+        };
+
+        connect_obj_visibility_changed("chb_show_stars");
+        connect_obj_visibility_changed("chb_show_dso");
+        connect_obj_visibility_changed("chb_show_galaxies");
+        connect_obj_visibility_changed("chb_show_nebulas");
+        connect_obj_visibility_changed("chb_show_sclusters");
     }
 
     fn show_options(&self) {
@@ -321,8 +341,14 @@ impl MapGui {
         ui.set_prop_bool("chb_flt_nebulae.active", opts.filter.nebulae);
         ui.set_prop_bool("chb_flt_pl_nebulae.active", opts.filter.pl_nebulae);
         ui.set_prop_bool("chb_flt_other.active", opts.filter.other);
+
         ui.set_prop_bool("chb_show_stars.active", opts.to_show.stars);
         ui.set_prop_bool("chb_show_dso.active", opts.to_show.dso);
+
+        ui.set_prop_bool("chb_show_galaxies.active", opts.to_show.galaxies);
+        ui.set_prop_bool("chb_show_nebulas.active", opts.to_show.nebulas);
+        ui.set_prop_bool("chb_show_sclusters.active", opts.to_show.sclusters);
+
         ui.set_range_value("scl_max_dso_mag", opts.max_mag as f64);
 
         drop(opts);
@@ -340,11 +366,19 @@ impl MapGui {
         opts.filter.nebulae    = ui.prop_bool("chb_flt_nebulae.active");
         opts.filter.pl_nebulae = ui.prop_bool("chb_flt_pl_nebulae.active");
         opts.filter.other      = ui.prop_bool("chb_flt_other.active");
-        opts.to_show.stars     = ui.prop_bool("chb_show_stars.active");
-        opts.to_show.dso       = ui.prop_bool("chb_show_dso.active");
         opts.max_mag           = ui.range_value("scl_max_dso_mag") as f32;
 
+        Self::read_visibility_options_from_widgets(&mut opts.to_show, &ui);
+
         drop(opts);
+    }
+
+    fn read_visibility_options_from_widgets(opts: &mut ObjectsToShow, ui: &gtk_utils::UiHelper) {
+        opts.stars     = ui.prop_bool("chb_show_stars.active");
+        opts.dso       = ui.prop_bool("chb_show_dso.active");
+        opts.galaxies  = ui.prop_bool("chb_show_galaxies.active");
+        opts.nebulas   = ui.prop_bool("chb_show_nebulas.active");
+        opts.sclusters = ui.prop_bool("chb_show_sclusters.active");
     }
 
     fn handler_action_options(self: &Rc<Self>) {
@@ -463,7 +497,13 @@ impl MapGui {
 
             let config = self.gui_options.borrow();
             let mut paint_config = PaintConfig::default();
+
             paint_config.max_magnitude = config.max_mag;
+            paint_config.flags.set(PaintFlags::PAINT_STARS, config.to_show.stars);
+            paint_config.flags.set(PaintFlags::PAINT_CLUSTERS, config.to_show.dso && config.to_show.sclusters);
+            paint_config.flags.set(PaintFlags::PAINT_NEBULAS, config.to_show.dso && config.to_show.nebulas);
+            paint_config.flags.set(PaintFlags::PAINT_GALAXIES, config.to_show.dso && config.to_show.galaxies);
+
             drop(config);
 
             self.map_widget.set_paint_config(&paint_config);
@@ -623,5 +663,14 @@ impl MapGui {
 
             self.update_skymap_widget(true);
         });
+    }
+
+    fn handler_obj_visibility_changed(&self) {
+        let mut opts = self.gui_options.borrow_mut();
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        Self::read_visibility_options_from_widgets(&mut opts.to_show, &ui);
+        drop(opts);
+
+        self.update_skymap_widget(true);
     }
 }
