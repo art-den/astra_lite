@@ -29,11 +29,11 @@ impl ViewPoint {
 
 bitflags! {
     pub struct PaintFlags: u32 {
-        const PAINT_OUTLINES     = 1 << 0;
-        const PAINT_STARS        = 1 << 1;
-        const PAINT_CLUSTERS     = 1 << 2;
-        const PAINT_NEBULAS      = 1 << 3;
-        const PAINT_GALAXIES     = 1 << 4;
+        const PAINT_OUTLINES = 1 << 0;
+        const PAINT_STARS    = 1 << 1;
+        const PAINT_CLUSTERS = 1 << 2;
+        const PAINT_NEBULAS  = 1 << 3;
+        const PAINT_GALAXIES = 1 << 4;
     }
 }
 
@@ -54,17 +54,17 @@ impl Default for HorizonGlowPaintConfig {
 
 #[derive(Clone)]
 pub struct PaintConfig {
-    pub flags:         PaintFlags,
-    pub max_magnitude: f32,
-    pub horizon_glow:  HorizonGlowPaintConfig,
+    pub flags:        PaintFlags,
+    pub max_dso_mag:  f32,
+    pub horizon_glow: HorizonGlowPaintConfig,
 }
 
 impl Default for PaintConfig {
     fn default() -> Self {
         Self {
-            flags:         PaintFlags::all(),
-            max_magnitude: 10.0,
-            horizon_glow:  HorizonGlowPaintConfig::default(),
+            flags:        PaintFlags::all(),
+            max_dso_mag:  10.0,
+            horizon_glow: HorizonGlowPaintConfig::default(),
         }
     }
 }
@@ -120,6 +120,35 @@ impl SkyMapPainter {
         Ok(())
     }
 
+    pub fn paint_eq_test(
+        &mut self,
+        crd:        &HorizCoord,
+        observer:   &Observer,
+        utc_time:   &NaiveDateTime,
+        config:     &PaintConfig,
+        view_point: &ViewPoint,
+        screen:     &ScreenInfo,
+        cairo:      &gtk::cairo::Context,
+    ) -> anyhow::Result<()> {
+
+        let eq_hor_cvt = EqToHorizCvt::new(observer, utc_time);
+        let hor_3d_cvt = HorizToScreenCvt::new(view_point);
+        let pxls_per_rad = Self::calc_pixels_per_radian(screen, view_point.mag_factor);
+        let ctx = PaintCtx { cairo, config, screen, view_point, pxls_per_rad };
+
+        let circle = TestHorizCircle(crd.clone());
+
+        self.obj_painter.paint(
+            &circle,
+            &eq_hor_cvt,
+            &hor_3d_cvt,
+            &ctx,
+            PainterStage::Objects
+        )?;
+
+        Ok(())
+    }
+
     fn calc_pixels_per_radian(
         screen:     &ScreenInfo,
         mag_factor: f64,
@@ -147,7 +176,7 @@ impl SkyMapPainter {
         let mut do_paint_stage = |stage| -> anyhow::Result<()> {
             for dso_object in sky_map.objects() {
                 let mag = dso_object.mag.get();
-                if mag.is_nan() || mag > ctx.config.max_magnitude {
+                if mag.is_nan() || mag > ctx.config.max_dso_mag {
                     continue;
                 }
                 use DsoType::*;
@@ -280,8 +309,8 @@ impl SkyMapPainter {
         let min_bright_size = 1.5 * ctx.screen.dpmm_x;
 
         let stars = sky_map.stars();
-        let mut stars_count = 0_usize;
-        let mut stars_painted_count = 0_usize;
+        let mut _stars_count = 0_usize;
+        let mut _stars_painted_count = 0_usize;
         for (zone_key, zone) in stars.zones() {
             let zone_is_visible = if &center_zone_key == zone_key {
                 // this zone is visible as center of screen points at it
@@ -330,8 +359,8 @@ impl SkyMapPainter {
                     continue;
                 }
                 let star_is_painted = paint_star(&star.data, "")?;
-                stars_count += 1;
-                if star_is_painted { stars_painted_count += 1; }
+                _stars_count += 1;
+                if star_is_painted { _stars_painted_count += 1; }
             }
 
             for star in zone.named_stars() {
@@ -339,15 +368,10 @@ impl SkyMapPainter {
                     continue;
                 }
                 let star_is_painted = paint_star(&star.data, &star.name)?;
-                stars_count += 1;
-                if star_is_painted { stars_painted_count += 1; }
+                _stars_count += 1;
+                if star_is_painted { _stars_painted_count += 1; }
             }
         }
-
-        /*println!(
-            "stars_count={}, stars_painted={}",
-            stars_count, stars_painted_count
-        )*/;
 
         Ok(())
     }
@@ -1109,5 +1133,25 @@ impl ObjectToPaint for PointVisibilityTestObject {
 
     fn get_point_crd(&self, _index: usize) -> PainterCrd {
         PainterCrd::Eq(self.coord.clone())
+    }
+}
+
+struct TestHorizCircle(HorizCoord);
+
+impl ObjectToPaint for TestHorizCircle {
+    fn points_count(&self) -> usize {
+        1
+    }
+
+    fn get_point_crd(&self, _index: usize) -> PainterCrd {
+        PainterCrd::Horiz(self.0.clone())
+    }
+
+    fn paint_object(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+        ctx.cairo.arc(points[0].x, points[0].y, 4.0, 0.0, 2.0 * PI);
+        ctx.cairo.set_source_rgb(1.0, 1.0, 1.0);
+        ctx.cairo.close_path();
+        ctx.cairo.fill()?;
+        Ok(())
     }
 }

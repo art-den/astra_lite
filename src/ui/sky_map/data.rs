@@ -79,7 +79,7 @@ fn test_obj_coord() {
     assert_eq!(obj.dec(), 90.0);
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct StarBV(i16);
 
 impl StarBV {
@@ -131,14 +131,14 @@ impl Debug for ObjMagnitude {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StarData {
     pub crd: ObjEqCoord,
     pub mag: ObjMagnitude,
     pub bv:  StarBV,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NamedStar {
     pub cnst_id: u8,
     pub name:    String,
@@ -356,9 +356,19 @@ pub struct DsoItem {
     pub angle:    Option<f32>,
 }
 
+#[derive(Debug)]
 pub enum Object {
     Star(NamedStar),
     Dso(DsoItem),
+}
+
+impl Object {
+    pub fn crd(&self) -> EqCoord {
+        match self {
+            Self::Dso(dso) => dso.crd.to_eq(),
+            Self::Star(star) => star.data.crd.to_eq(),
+        }
+    }
 }
 
 pub struct SkyMap {
@@ -629,9 +639,14 @@ impl SkyMap {
         Ok(())
     }
 
-    pub fn get_nearest(&self, crd: &EqCoord, max_star_mag: f32) -> Option<Object> {
+    pub fn get_nearest(
+        &self,
+        crd:          &EqCoord,
+        max_dso_mag:  f32,
+        max_star_mag: f32
+    ) -> Option<Object> {
         let nearest_star = self.stars.get_nearest(crd, max_star_mag);
-        let nearest_obj = self.get_nearest_dso_object(crd);
+        let nearest_obj = self.get_nearest_dso_object(crd, max_dso_mag);
         match (nearest_star, nearest_obj) {
             (Some((star, star_angle)), Some((obj, obj_angle))) => {
                 if star_angle < obj_angle {
@@ -649,8 +664,10 @@ impl SkyMap {
         }
     }
 
-    fn get_nearest_dso_object(&self, crd: &EqCoord) -> Option<(DsoItem, f64)> {
+    pub fn get_nearest_dso_object(&self, crd: &EqCoord, max_dso_mag: f32) -> Option<(DsoItem, f64)> {
+        let max_mag = ObjMagnitude::new(max_dso_mag);
         let nearest_obj = self.objects.iter()
+            .filter(|obj| obj.mag <= max_mag)
             .map(|obj| (obj, EqCoord::angle_between(&obj.crd.to_eq(), crd)))
             .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(&angle1, &angle2));
         nearest_obj.map(|(obj, angle)| (obj.clone(), angle))

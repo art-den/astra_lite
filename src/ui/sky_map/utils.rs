@@ -279,7 +279,7 @@ impl<'a> HorizToScreenCvt<'a> {
         Point2D { x, y }
     }
 
-    pub fn screen_to_sphere(
+    pub fn screen_to_horiz(
         &self,
         pt:     &Point2D,
         screen: &ScreenInfo
@@ -302,7 +302,7 @@ impl<'a> HorizToScreenCvt<'a> {
         }
         crd.rotate_over_x(&self.vp_alt_mat);
         let mut az_alt_rot_crd = crd.to_horiz_crd();
-        az_alt_rot_crd.az -= self.vp.crd.az;
+        az_alt_rot_crd.az += self.vp.crd.az;
 
         Some(az_alt_rot_crd)
     }

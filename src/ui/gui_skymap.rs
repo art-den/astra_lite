@@ -3,7 +3,7 @@ use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone};
 use crate::{indi, options::*, utils::io_utils::*};
-use super::{gtk_utils::{self, DEFAULT_DPMM}, gui_common::ExclusiveCaller, gui_main::*, sky_map::{data::SkyMap, painter::{PaintConfig, PaintFlags}}};
+use super::{gtk_utils::{self, DEFAULT_DPMM}, gui_common::*, gui_main::*, sky_map::{data::*, painter::*}};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
 pub fn init_ui(
@@ -213,20 +213,20 @@ struct PrevWidgetsDT {
 }
 
 struct MapGui {
-    gui_options: RefCell<GuiOptions>,
-    indi:        Arc<indi::Connection>,
-    options:     Arc<RwLock<Options>>,
-    builder:     gtk::Builder,
-    window:      gtk::ApplicationWindow,
-    gui:         Rc<Gui>,
-    excl:        ExclusiveCaller,
-    map_widget:  Rc<SkymapWidget>,
-    skymap_data: RefCell<Option<Rc<SkyMap>>>,
-    user_time:   RefCell<UserTime>,
-    prev_second: Cell<u32>,
-    paint_ts:    RefCell<std::time::Instant>, // last paint moment timestamp
-    prev_wdt:    RefCell<PrevWidgetsDT>,
-    self_:       RefCell<Option<Rc<MapGui>>>
+    gui_options:  RefCell<GuiOptions>,
+    indi:         Arc<indi::Connection>,
+    options:      Arc<RwLock<Options>>,
+    builder:      gtk::Builder,
+    window:       gtk::ApplicationWindow,
+    gui:          Rc<Gui>,
+    excl:         ExclusiveCaller,
+    map_widget:   Rc<SkymapWidget>,
+    skymap_data:  RefCell<Option<Rc<SkyMap>>>,
+    user_time:    RefCell<UserTime>,
+    prev_second:  Cell<u32>,
+    paint_ts:     RefCell<std::time::Instant>, // last paint moment timestamp
+    prev_wdt:     RefCell<PrevWidgetsDT>,
+    self_:        RefCell<Option<Rc<MapGui>>>
 }
 
 impl Drop for MapGui {
@@ -498,7 +498,7 @@ impl MapGui {
             let config = self.gui_options.borrow();
             let mut paint_config = PaintConfig::default();
 
-            paint_config.max_magnitude = config.max_mag;
+            paint_config.max_dso_mag = config.max_mag;
             paint_config.flags.set(PaintFlags::PAINT_STARS, config.to_show.stars);
             paint_config.flags.set(PaintFlags::PAINT_CLUSTERS, config.to_show.dso && config.to_show.sclusters);
             paint_config.flags.set(PaintFlags::PAINT_NEBULAS, config.to_show.dso && config.to_show.nebulas);

@@ -1,6 +1,8 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 use chrono::{NaiveDateTime, Utc};
-use gtk::{gdk, glib::{self, clone}, prelude::*};
+use gtk::{gdk, cairo, glib::{self, clone}, prelude::*};
+use crate::utils::math::linear_interpolate;
+
 use super::{consts::*, data::*, painter::*, utils::*};
 
 struct MousePressedData {
@@ -9,15 +11,25 @@ struct MousePressedData {
     vp:    ViewPoint,
 }
 
+struct AnimatedGotoCrdData {
+    start_crd:  EqCoord,
+    end_crd:    EqCoord,
+    stage:      usize,
+    max_stages: usize,
+}
+
 pub struct SkymapWidget {
-    skymap:     RefCell<Option<Rc<SkyMap>>>,
-    evt_box:    gtk::EventBox,
-    draw_area:  gtk::DrawingArea,
-    view_point: RefCell<ViewPoint>,
-    config:     RefCell<PaintConfig>,
-    mpress:     RefCell<Option<MousePressedData>>,
-    observer:   RefCell<Observer>,
-    time:       RefCell<NaiveDateTime>,
+    skymap:        RefCell<Option<Rc<SkyMap>>>,
+    evt_box:       gtk::EventBox,
+    draw_area:     gtk::DrawingArea,
+    view_point:    RefCell<ViewPoint>,
+    config:        RefCell<PaintConfig>,
+    mpress:        RefCell<Option<MousePressedData>>,
+    observer:      RefCell<Observer>,
+    time:          RefCell<NaiveDateTime>,
+    selected_obj:  RefCell<Option<Object>>,
+    center_crd:    RefCell<Option<EqCoord>>,
+    ani_goto_data: RefCell<Option<AnimatedGotoCrdData>>,
 }
 
 impl SkymapWidget {
@@ -31,133 +43,20 @@ impl SkymapWidget {
             .build();
 
         let widget = Rc::new(Self {
-            skymap:     RefCell::new(None),
-            evt_box:    evt_box.clone(),
-            draw_area:  da.clone(),
-            view_point: RefCell::new(ViewPoint::new()),
-            config:     RefCell::new(PaintConfig::default()),
-            mpress:     RefCell::new(None),
-            observer:   RefCell::new(Observer::default()),
-            time:       RefCell::new(Utc::now().naive_utc()),
+            skymap:        RefCell::new(None),
+            evt_box:       evt_box.clone(),
+            draw_area:     da.clone(),
+            view_point:    RefCell::new(ViewPoint::new()),
+            config:        RefCell::new(PaintConfig::default()),
+            mpress:        RefCell::new(None),
+            observer:      RefCell::new(Observer::default()),
+            time:          RefCell::new(Utc::now().naive_utc()),
+            selected_obj:  RefCell::new(None),
+            center_crd:    RefCell::new(None),
+            ani_goto_data: RefCell::new(None),
         });
 
-        da.connect_draw(
-            clone!(@weak widget => @default-return glib::Propagation::Stop,
-            move |da, ctx| {
-                let skymap = widget.skymap.borrow();
-                let vp = widget.view_point.borrow();
-                let config = widget.config.borrow();
-                let observer = widget.observer.borrow();
-                let time = widget.time.borrow();
-
-                let mut painter = SkyMapPainter::new();
-                let screen = ScreenInfo::new(da);
-
-                let timer = std::time::Instant::now();
-                painter.paint(&skymap, &observer, &time, &config, &vp, &screen, ctx).unwrap();
-                let paint_time = timer.elapsed().as_secs_f64();
-
-                let fps = if paint_time != 0.0 { 1.0/paint_time } else { f64::NAN };
-                let fps_str = format!("x{:.1}, {:.1} FPS", vp.mag_factor, fps);
-                ctx.set_font_size(screen.dpmm_y * 3.0);
-                let te = ctx.text_extents(&fps_str).unwrap();
-                ctx.move_to(1.0, 1.0 + te.height());
-                ctx.set_source_rgb(1.0, 1.0, 1.0);
-                ctx.show_text(&fps_str).unwrap();
-
-                glib::Propagation::Stop
-            })
-        );
-
-        evt_box.connect_button_press_event(
-            clone!(@weak widget => @default-return glib::Propagation::Stop,
-            move |_, event| {
-                let mut mpress = widget.mpress.borrow_mut();
-                let point = event.coords().unwrap_or_default();
-                let (x, y) = event.coords().unwrap_or_default();
-                let vp = widget.view_point.borrow();
-                let si = ScreenInfo::new(&widget.draw_area);
-                let cvt = HorizToScreenCvt::new(&*vp);
-                let Some(hcrd) = cvt.screen_to_sphere(&Point2D {x, y}, &si) else {
-                    return glib::Propagation::Stop;
-                };
-                *mpress = Some(MousePressedData {
-                    hcrd,
-                    point,
-                    vp: widget.view_point.borrow().clone(),
-                });
-                glib::Propagation::Stop
-            }
-        ));
-
-        evt_box.connect_motion_notify_event(
-            clone!(@weak widget => @default-return glib::Propagation::Stop,
-            move |_, event| {
-
-                let mpress = widget.mpress.borrow();
-                let Some(mpress) = &*mpress else {
-                    return glib::Propagation::Proceed;
-                };
-
-                let (x, y) = event.coords().unwrap_or_default();
-
-                let si = ScreenInfo::new(&widget.draw_area);
-                let cvt = HorizToScreenCvt::new(&mpress.vp);
-                let Some(hcrd) = cvt.screen_to_sphere(&Point2D {x, y}, &si) else {
-                    return glib::Propagation::Stop;
-                };
-
-                let mut vp = widget.view_point.borrow_mut();
-                vp.crd.az = mpress.vp.crd.az + mpress.hcrd.az - hcrd.az;
-
-                vp.crd.alt = mpress.vp.crd.alt + mpress.hcrd.alt - hcrd.alt;
-                vp.crd.alt = vp.crd.alt.min(MAX_ALT).max(MIN_ALT);
-
-                widget.draw_area.queue_draw();
-                glib::Propagation::Stop
-            }
-        ));
-
-        evt_box.connect_button_release_event(
-        clone!(@weak widget => @default-return glib::Propagation::Stop,
-            move |_, _| {
-                *widget.mpress.borrow_mut() = None;
-                glib::Propagation::Stop
-            }
-        ));
-
-        evt_box.set_events(
-            gdk::EventMask::SCROLL_MASK |
-            gdk::EventMask::POINTER_MOTION_MASK
-        );
-        evt_box.connect_scroll_event(
-            clone!(@weak widget => @default-return glib::Propagation::Stop,
-                move |_, event| {
-                    if event.event_type() != gdk::EventType::Scroll {
-                        return glib::Propagation::Stop;
-                    }
-                    let mut vp = widget.view_point.borrow_mut();
-                    let mut mag_factor = vp.mag_factor;
-                    match event.direction() {
-                        gdk::ScrollDirection::Up =>
-                            mag_factor *= MAX_FACTOR_STEP,
-                        gdk::ScrollDirection::Down =>
-                            mag_factor /= MAX_FACTOR_STEP,
-                        _ => {},
-                    }
-
-                    mag_factor = mag_factor
-                        .min(MAX_MAG_FACTOR)
-                        .max(MIN_MAG_FACTOR);
-
-                    if mag_factor != vp.mag_factor {
-                        vp.mag_factor = mag_factor;
-                        widget.draw_area.queue_draw();
-                    }
-                    glib::Propagation::Stop
-                }
-            )
-        );
+        widget.connect_event_handlers();
 
         widget
     }
@@ -184,5 +83,231 @@ impl SkymapWidget {
     pub fn set_paint_config(&self, config: &PaintConfig) {
         *self.config.borrow_mut() = config.clone();
         self.draw_area.queue_draw();
+    }
+
+    fn connect_event_handlers(self: &Rc<Self>) {
+        self.draw_area.connect_draw(
+            clone!(@weak self as self_ => @default-return glib::Propagation::Stop,
+            move |da, ctx| {
+                self_.handler_draw(da, ctx)
+            })
+        );
+
+        self.evt_box.connect_button_press_event(
+            clone!(@weak self as self_ => @default-return glib::Propagation::Stop,
+            move |_, event| {
+                self_.handler_button_press(event)
+            }
+        ));
+
+        self.evt_box.connect_motion_notify_event(
+            clone!(@weak self as self_ => @default-return glib::Propagation::Stop,
+            move |_, event| {
+                self_.hanler_motion_notify(event)
+            }
+        ));
+
+        self.evt_box.connect_button_release_event(
+            clone!(@weak self as self_ => @default-return glib::Propagation::Stop,
+            move |_, _| {
+                *self_.mpress.borrow_mut() = None;
+                glib::Propagation::Stop
+            }
+        ));
+
+        self.evt_box.connect_scroll_event(
+            clone!(@weak self as self_ => @default-return glib::Propagation::Stop,
+                move |_, event| {
+                    self_.handler_scroll(event)
+                }
+            )
+        );
+
+        self.evt_box.set_events(
+            gdk::EventMask::SCROLL_MASK |
+            gdk::EventMask::POINTER_MOTION_MASK |
+            gdk::EventMask::BUTTON_PRESS_MASK
+        );
+    }
+
+    fn handler_button_press(self: &Rc<Self>, event: &gdk::EventButton) -> glib::Propagation {
+        if event.button() == gdk::ffi::GDK_BUTTON_PRIMARY as u32 {
+            match event.event_type() {
+                gdk::EventType::ButtonPress =>
+                    self.start_map_drag(event),
+                gdk::EventType::DoubleButtonPress =>
+                    self.select_object(event),
+                _ => {},
+            };
+        }
+        glib::Propagation::Stop
+    }
+
+    fn start_map_drag(&self, event: &gdk::EventButton) {
+        let Some((x, y)) = event.coords() else { return; };
+        let vp = self.view_point.borrow();
+        let si = ScreenInfo::new(&self.draw_area);
+        let cvt = HorizToScreenCvt::new(&*vp);
+        let Some(hcrd) = cvt.screen_to_horiz(&Point2D {x, y}, &si) else { return; };
+        *self.mpress.borrow_mut() = Some(MousePressedData {
+            hcrd,
+            point: (x, y),
+            vp: self.view_point.borrow().clone(),
+        });
+    }
+
+    fn screen_coord_to_eq(&self, x: f64, y: f64) -> Option<EqCoord> {
+        let vp = self.view_point.borrow();
+        let cvt = HorizToScreenCvt::new(&*vp);
+        let si = ScreenInfo::new(&self.draw_area);
+        let Some(hcrd) = cvt.screen_to_horiz(&Point2D {x, y}, &si) else { return None; };
+        let observer = self.observer.borrow();
+        let time = self.time.borrow();
+        let cvt = EqToHorizCvt::new(&observer, &time);
+        Some(cvt.horiz_to_eq(&hcrd))
+    }
+
+    fn select_object(self: &Rc<Self>, event: &gdk::EventButton) {
+        let Some((x, y)) = event.coords() else { return; };
+        let Some(skymap) = &*self.skymap.borrow() else { return; };
+        let Some(eq_crd) = self.screen_coord_to_eq(x, y) else { return; };
+        let config = self.config.borrow();
+        let vp = self.view_point.borrow();
+        let max_stars_mag = calc_max_star_magnitude_for_painting(vp.mag_factor);
+        let selected_obj = skymap.get_nearest(&eq_crd, config.max_dso_mag, max_stars_mag);
+
+        if let Some(selected_obj) = &selected_obj {
+            self.animated_goto_coord(&selected_obj.crd());
+        }
+
+        *self.center_crd.borrow_mut() = selected_obj.as_ref().map(|obj| obj.crd());
+        *self.selected_obj.borrow_mut() = selected_obj;
+    }
+
+    fn hanler_motion_notify(&self, event: &gdk::EventMotion) -> glib::Propagation {
+        let Some(mpress) = &*self.mpress.borrow() else {
+            return glib::Propagation::Proceed;
+        };
+        let Some((x, y)) = event.coords() else {
+            return glib::Propagation::Proceed;
+        };
+        let si = ScreenInfo::new(&self.draw_area);
+        let cvt = HorizToScreenCvt::new(&mpress.vp);
+        let Some(hcrd) = cvt.screen_to_horiz(&Point2D {x, y}, &si) else {
+            return glib::Propagation::Stop;
+        };
+        let mut vp = self.view_point.borrow_mut();
+        vp.crd.az = mpress.vp.crd.az + mpress.hcrd.az - hcrd.az;
+        vp.crd.alt = mpress.vp.crd.alt + mpress.hcrd.alt - hcrd.alt;
+        vp.crd.alt = vp.crd.alt.min(MAX_ALT).max(MIN_ALT);
+        self.draw_area.queue_draw();
+        glib::Propagation::Stop
+    }
+
+    fn handler_draw(&self, da: &gtk::DrawingArea, ctx: &cairo::Context) -> glib::Propagation {
+        let skymap = self.skymap.borrow();
+        let vp = self.view_point.borrow();
+        let config = self.config.borrow();
+        let observer = self.observer.borrow();
+        let time = self.time.borrow();
+        let mut painter = SkyMapPainter::new();
+        let screen = ScreenInfo::new(da);
+        let timer = std::time::Instant::now();
+        painter.paint(&skymap, &observer, &time, &config, &vp, &screen, ctx).unwrap();
+        let paint_time = timer.elapsed().as_secs_f64();
+        let fps = if paint_time != 0.0 { 1.0/paint_time } else { f64::NAN };
+        let fps_str = format!("x{:.1}, {:.1} FPS", vp.mag_factor, fps);
+        ctx.set_font_size(screen.dpmm_y * 3.0);
+        let te = ctx.text_extents(&fps_str).unwrap();
+        ctx.move_to(1.0, 1.0 + te.height());
+        ctx.set_source_rgb(1.0, 1.0, 1.0);
+        ctx.show_text(&fps_str).unwrap();
+        glib::Propagation::Stop
+    }
+
+    fn handler_scroll(&self, event: &gdk::EventScroll) -> glib::Propagation {
+        if event.event_type() != gdk::EventType::Scroll {
+            return glib::Propagation::Stop;
+        }
+        let mut vp = self.view_point.borrow_mut();
+        let mut mag_factor = vp.mag_factor;
+        match event.direction() {
+            gdk::ScrollDirection::Up =>
+                mag_factor *= MAX_FACTOR_STEP,
+            gdk::ScrollDirection::Down =>
+                mag_factor /= MAX_FACTOR_STEP,
+            _ => {},
+        }
+
+        mag_factor = mag_factor
+            .min(MAX_MAG_FACTOR)
+            .max(MIN_MAG_FACTOR);
+
+        if mag_factor != vp.mag_factor {
+            vp.mag_factor = mag_factor;
+            self.draw_area.queue_draw();
+        }
+        glib::Propagation::Stop
+    }
+
+    fn animated_goto_coord(self: &Rc<Self>, coord: &EqCoord) {
+        let already_started = self.ani_goto_data.borrow().is_some();
+        let widget_width = self.draw_area.allocated_width() as f64;
+        let widget_height = self.draw_area.allocated_height() as f64;
+        let Some(start_coord) = self.screen_coord_to_eq(0.5 * widget_width, 0.5 * widget_height) else {
+            return;
+        };
+        *self.ani_goto_data.borrow_mut() = Some(AnimatedGotoCrdData {
+            start_crd:  start_coord,
+            end_crd:    coord.clone(),
+            stage:      0,
+            max_stages: 10,
+        });
+
+        if !already_started {
+            glib::timeout_add_local(
+                Duration::from_millis(50),
+                clone!(@weak self as self_ => @default-return glib::ControlFlow::Break,
+                move || {
+                    let mut ani_goto_data = self_.ani_goto_data.borrow_mut();
+                    let has_to_stop = if let Some(ani_goto_data) = &mut *ani_goto_data {
+                        let ra = linear_interpolate(
+                            ani_goto_data.stage as f64,
+                            0.0,
+                            ani_goto_data.max_stages as f64,
+                            ani_goto_data.start_crd.ra,
+                            ani_goto_data.end_crd.ra
+                        );
+                        let dec = linear_interpolate(
+                            ani_goto_data.stage as f64,
+                            0.0,
+                            ani_goto_data.max_stages as f64,
+                            ani_goto_data.start_crd.dec,
+                            ani_goto_data.end_crd.dec
+                        );
+                        let observer = self_.observer.borrow();
+                        let time = self_.time.borrow();
+                        let cvt = EqToHorizCvt::new(&observer, &time);
+                        let horiz_coord = cvt.eq_to_horiz(&EqCoord { dec, ra });
+                        self_.view_point.borrow_mut().crd = horiz_coord;
+                        self_.draw_area.queue_draw();
+                        let has_to_stop = ani_goto_data.stage == ani_goto_data.max_stages;
+                        if !has_to_stop {
+                            ani_goto_data.stage += 1;
+                        }
+                        has_to_stop
+                    } else {
+                        true
+                    };
+                    match has_to_stop {
+                        false => glib::ControlFlow::Continue,
+                        true => {
+                            *ani_goto_data = None;
+                            glib::ControlFlow::Break
+                        }
+                    }
+                }
+            ));
+        }
     }
 }
