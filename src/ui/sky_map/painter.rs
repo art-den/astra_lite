@@ -10,7 +10,7 @@ const STAR_LIGHT_MIN_VISIBLE: f32 = 0.1;
 
 #[derive(Clone)]
 pub struct ViewPoint {
-    pub crd: HorizCoord,
+    pub crd:        HorizCoord,
     pub mag_factor: f64, // magnification factor
 }
 
@@ -101,15 +101,25 @@ impl SkyMapPainter {
         let pxls_per_rad = Self::calc_pixels_per_radian(screen, view_point.mag_factor);
         let ctx = PaintCtx { cairo, config, screen, view_point, pxls_per_rad };
 
-        if let Some(sky_map) = sky_map {
-            self.paint_dso(sky_map, &eq_hor_cvt, &ctx, &hor_3d_cvt)?;
-        }
-
         self.paint_eq_grid(cairo, &eq_hor_cvt, &ctx, &hor_3d_cvt)?;
 
-        if config.flags.contains(PaintFlags::PAINT_STARS) { if let Some(sky_map) = sky_map {
-            self.paint_stars(sky_map, cairo, &eq_hor_cvt, &ctx, &hor_3d_cvt)?;
-        }}
+        if let Some(sky_map) = sky_map {
+            // DSO objects
+            self.paint_dso(sky_map, &eq_hor_cvt, &ctx, &hor_3d_cvt, PainterMode::Objects)?;
+
+            // Stars objects
+            if config.flags.contains(PaintFlags::PAINT_STARS) {
+                self.paint_stars(sky_map, cairo, &eq_hor_cvt, &ctx, &hor_3d_cvt, PainterMode::Objects)?;
+            }
+
+            // DSO names
+            self.paint_dso(sky_map, &eq_hor_cvt, &ctx, &hor_3d_cvt, PainterMode::Names)?;
+
+            // Stars names
+            if config.flags.contains(PaintFlags::PAINT_STARS) {
+                self.paint_stars(sky_map, cairo, &eq_hor_cvt, &ctx, &hor_3d_cvt, PainterMode::Names)?;
+            }
+        }
 
         if config.horizon_glow.enabled {
             self.paint_horizon_glow(cairo, &eq_hor_cvt, &ctx, &hor_3d_cvt)?;
@@ -142,8 +152,7 @@ impl SkyMapPainter {
             &circle,
             &eq_hor_cvt,
             &hor_3d_cvt,
-            &ctx,
-            PainterStage::Objects
+            &ctx
         )?;
 
         Ok(())
@@ -172,69 +181,56 @@ impl SkyMapPainter {
         eq_hor_cvt: &EqToHorizCvt,
         ctx:        &PaintCtx,
         hor_3d_cvt: &HorizToScreenCvt,
+        mode:       PainterMode,
     ) -> anyhow::Result<()> {
-        let mut do_paint_stage = |stage| -> anyhow::Result<()> {
-            for dso_object in sky_map.objects() {
-                let mag = dso_object.mag.get();
-                if mag.is_nan() || mag > ctx.config.max_dso_mag {
-                    continue;
-                }
-                use DsoType::*;
-                let visible = match dso_object.obj_type {
-                    Star | DoubleStar =>
-                        ctx.config.flags.contains(PaintFlags::PAINT_STARS),
-                    Galaxy | GalaxyPair | GalaxyTriplet | GroupOfGalaxies =>
-                        ctx.config.flags.contains(PaintFlags::PAINT_GALAXIES),
-                    StarCluster | AssociationOfStars =>
-                        ctx.config.flags.contains(PaintFlags::PAINT_CLUSTERS),
-                    PlanetaryNebula | DarkNebula | EmissionNebula | Nebula |
-                    ReflectionNebula | SupernovaRemnant | HIIIonizedRegion =>
-                        ctx.config.flags.contains(PaintFlags::PAINT_NEBULAS),
-                    StarClusterAndNebula =>
-                        ctx.config.flags.contains(PaintFlags::PAINT_NEBULAS) ||
-                        ctx.config.flags.contains(PaintFlags::PAINT_CLUSTERS),
-                    _ => false,
-                };
+        for dso_object in sky_map.objects() {
+            let mag = dso_object.mag.get();
+            if mag.is_nan() || mag > ctx.config.max_dso_mag {
+                continue;
+            }
+            use DsoType::*;
+            let visible = match dso_object.obj_type {
+                Star | DoubleStar =>
+                    ctx.config.flags.contains(PaintFlags::PAINT_STARS),
+                Galaxy | GalaxyPair | GalaxyTriplet | GroupOfGalaxies =>
+                    ctx.config.flags.contains(PaintFlags::PAINT_GALAXIES),
+                StarCluster | AssociationOfStars =>
+                    ctx.config.flags.contains(PaintFlags::PAINT_CLUSTERS),
+                PlanetaryNebula | DarkNebula | EmissionNebula | Nebula |
+                ReflectionNebula | SupernovaRemnant | HIIIonizedRegion =>
+                    ctx.config.flags.contains(PaintFlags::PAINT_NEBULAS),
+                StarClusterAndNebula =>
+                    ctx.config.flags.contains(PaintFlags::PAINT_NEBULAS) ||
+                    ctx.config.flags.contains(PaintFlags::PAINT_CLUSTERS),
+                _ => false,
+            };
 
-                if visible {
-                    match stage {
-                        PainterStage::Objects => {
-                            let test_visiblity = PointVisibilityTestObject { coord: EqCoord {
-                                ra: dso_object.crd.ra(),
-                                dec: dso_object.crd.dec(),
-                            }};
+            if !visible { continue; }
 
-                            let is_visible_on_screen = self.obj_painter.paint(
-                                &test_visiblity,
-                                &eq_hor_cvt,
-                                &hor_3d_cvt,
-                                ctx,
-                                PainterStage::TestObjVsible
-                            )?;
+            match mode {
+                PainterMode::Objects => {
+                    let test_visiblity = PointVisibilityTestObject {
+                        coord: dso_object.crd.to_eq()
+                    };
 
-                            // Paint ellipse of object
-                            if stage == PainterStage::Objects && is_visible_on_screen {
-                                self.paint_dso_ellipse(eq_hor_cvt, ctx, hor_3d_cvt, dso_object)?;
-                            }
-                        }
-                        PainterStage::Names => {
-                            self.obj_painter.paint(dso_object, &eq_hor_cvt, &hor_3d_cvt, ctx, stage)?;
-                        }
-                        _ => {}
+                    let is_visible_on_screen = self.obj_painter.paint(
+                        &test_visiblity,
+                        &eq_hor_cvt,
+                        &hor_3d_cvt,
+                        ctx,
+                    )?;
+
+                    // Paint ellipse of object
+                    if is_visible_on_screen {
+                        self.paint_dso_ellipse(eq_hor_cvt, ctx, hor_3d_cvt, dso_object)?;
                     }
                 }
-            }
-            if ctx.config.flags.contains(PaintFlags::PAINT_OUTLINES) {
-                for outline in sky_map.outlines() {
-                    self.obj_painter.paint(outline, &eq_hor_cvt, &hor_3d_cvt, ctx, stage)?;
+                PainterMode::Names => {
+                    let name_painter = DsoNamePainter(dso_object);
+                    self.obj_painter.paint(&name_painter, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
                 }
             }
-            Ok(())
-        };
-
-        ctx.cairo.set_font_size(3.0 * ctx.screen.dpmm_y);
-        do_paint_stage(PainterStage::Objects)?;
-        do_paint_stage(PainterStage::Names)?;
+        }
 
         Ok(())
     }
@@ -282,7 +278,7 @@ impl SkyMapPainter {
 
         self.dso_ellipse.line_width = line_width;
         self.dso_ellipse.dso_type = dso_object.obj_type;
-        self.obj_painter.paint(&self.dso_ellipse, &eq_hor_cvt, &hor_3d_cvt, ctx, PainterStage::Objects)?;
+        self.obj_painter.paint(&self.dso_ellipse, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
 
         Ok(())
     }
@@ -294,6 +290,7 @@ impl SkyMapPainter {
         eq_hor_cvt: &EqToHorizCvt,
         ctx:        &PaintCtx,
         hor_3d_cvt: &HorizToScreenCvt,
+        mode:       PainterMode,
     ) -> anyhow::Result<()> {
         cairo.set_antialias(gtk::cairo::Antialias::Fast);
 
@@ -325,7 +322,6 @@ impl SkyMapPainter {
                     &eq_hor_cvt,
                     &hor_3d_cvt,
                     ctx,
-                    PainterStage::TestObjVsible
                 ).unwrap_or_default()
             };
 
@@ -335,6 +331,7 @@ impl SkyMapPainter {
 
             let mut paint_star = |data: &StarData, name: &str| -> anyhow::Result<bool> {
                 let star_painter = StarPainter {
+                    mode,
                     data,
                     name,
                     max_mag_value,
@@ -348,19 +345,20 @@ impl SkyMapPainter {
                     &eq_hor_cvt,
                     &hor_3d_cvt,
                     ctx,
-                    PainterStage::ObjectsAndNames
                 )?;
 
                 Ok(star_is_painted)
             };
 
-            for star in zone.stars() {
-                if star.data.mag > max_mag {
-                    continue;
+            if mode == PainterMode::Objects {
+                for star in zone.stars() {
+                    if star.data.mag > max_mag {
+                        continue;
+                    }
+                    let star_is_painted = paint_star(&star.data, "")?;
+                    _stars_count += 1;
+                    if star_is_painted { _stars_painted_count += 1; }
                 }
-                let star_is_painted = paint_star(&star.data, "")?;
-                _stars_count += 1;
-                if star_is_painted { _stars_painted_count += 1; }
             }
 
             for star in zone.named_stars() {
@@ -396,13 +394,7 @@ impl SkyMapPainter {
             for j in 0..(360/RA_STEP) {
                 let ra = PI * (RA_STEP * j) as f64 / 180.0;
                 let dec_line = EqGridItem { dec1, dec2, ra1: ra, ra2: ra };
-                self.obj_painter.paint(
-                    &dec_line,
-                    &eq_hor_cvt,
-                    &hor_3d_cvt,
-                    ctx,
-                    PainterStage::Objects
-                )?;
+                self.obj_painter.paint(&dec_line, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
             }
         }
         for j in 0..(360/STEP) {
@@ -411,13 +403,7 @@ impl SkyMapPainter {
             for i in -90/DEC_STEP..90/DEC_STEP {
                 let dec = PI * (DEC_STEP * i) as f64 / 180.0;
                 let ra_line = EqGridItem { dec1: dec, dec2: dec, ra1, ra2 };
-                self.obj_painter.paint(
-                    &ra_line,
-                    &eq_hor_cvt,
-                    &hor_3d_cvt,
-                    ctx,
-                    PainterStage::Objects
-                )?;
+                self.obj_painter.paint(&ra_line, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
             }
         }
         Ok(())
@@ -432,13 +418,7 @@ impl SkyMapPainter {
         view_point: &ViewPoint,
     ) -> anyhow::Result<()> {
         let ground = Ground { view_point };
-        self.obj_painter.paint(
-            &ground,
-            &eq_hor_cvt,
-            &hor_3d_cvt,
-            ctx,
-            PainterStage::Objects
-        )?;
+        self.obj_painter.paint(&ground, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
         let world_sides = [
             WorldSide { az:   0.0 * PI / 180.0, text: "S",  alpha: 1.0 },
             WorldSide { az:  45.0 * PI / 180.0, text: "SE", alpha: 0.5 },
@@ -451,13 +431,7 @@ impl SkyMapPainter {
         ];
         cairo.set_font_size(6.0 * ctx.screen.dpmm_y);
         for world_side in world_sides {
-            self.obj_painter.paint(
-                &world_side,
-                &eq_hor_cvt,
-                &hor_3d_cvt,
-                ctx,
-                PainterStage::Names
-            )?;
+            self.obj_painter.paint(&world_side, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
         }
         Ok(())
     }
@@ -490,7 +464,6 @@ impl SkyMapPainter {
                 &eq_hor_cvt,
                 &hor_3d_cvt,
                 ctx,
-                PainterStage::Objects
             )?;
         }
 
@@ -499,11 +472,9 @@ impl SkyMapPainter {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum PainterStage {
+enum PainterMode {
     Objects,
     Names,
-    ObjectsAndNames ,
-    TestObjVsible,
 }
 
 enum PainterCrd {
@@ -522,8 +493,7 @@ struct PaintCtx<'a> {
 trait ItemPainter {
     fn points_count(&self) -> usize;
     fn point_crd(&self, index: usize) -> PainterCrd;
-    fn paint_object(&self, _ctx: &PaintCtx, _points: &[Point2D]) -> anyhow::Result<()> { Ok(()) }
-    fn paint_name(&self, _ctx: &PaintCtx, _points: &[Point2D]) -> anyhow::Result<()> { Ok(()) }
+    fn paint(&self, _ctx: &PaintCtx, _points: &[Point2D]) -> anyhow::Result<()> { Ok(()) }
 }
 
 struct ObjectPainter {
@@ -547,7 +517,6 @@ impl ObjectPainter {
         eq_hor_cvt: &EqToHorizCvt,
         hor_3d_cvt: &HorizToScreenCvt,
         ctx:        &PaintCtx,
-        stage:      PainterStage,
     ) -> anyhow::Result<bool> {
         let points_count = obj.points_count();
 
@@ -635,42 +604,34 @@ impl ObjectPainter {
             return Ok(false);
         }
 
-        match stage {
-            PainterStage::Objects =>
-                obj.paint_object(ctx, &self.points_screen)?,
-            PainterStage::Names =>
-                obj.paint_name(ctx, &self.points_screen)?,
-            PainterStage::ObjectsAndNames => {
-                obj.paint_object(ctx, &self.points_screen)?;
-                obj.paint_name(ctx, &self.points_screen)?;
-            },
-            PainterStage::TestObjVsible =>
-                return Ok(true),
-        }
+        obj.paint(ctx, &self.points_screen)?;
+
         Ok(true)
     }
 }
 
 // Paint DSP item
 
-impl ItemPainter for DsoItem {
+struct DsoNamePainter<'a>(&'a DsoItem);
+
+impl<'a> ItemPainter for DsoNamePainter<'a> {
     fn points_count(&self) -> usize {
         1
     }
 
     fn point_crd(&self, _index: usize) -> PainterCrd {
         PainterCrd::Eq(EqCoord {
-            ra: self.crd.ra(),
-            dec: self.crd.dec()
+            ra: self.0.crd.ra(),
+            dec: self.0.crd.dec()
         })
     }
 
-    fn paint_name(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         let crd = &points[0];
         let mut y = crd.y;
         let text_height = ctx.cairo.font_extents()?.height();
         ctx.cairo.set_source_rgba(1.0, 1.0, 1.0, 0.7);
-        for item in &self.names {
+        for item in &self.0.names {
             ctx.cairo.move_to(crd.x, y);
             ctx.cairo.show_text(&item.name)?;
             y += text_height;
@@ -682,9 +643,9 @@ impl ItemPainter for DsoItem {
 // Paint ellipse around DSO object
 
 struct DsoEllipse {
-    points: Vec<EqCoord>,
+    points:     Vec<EqCoord>,
     line_width: f64,
-    dso_type: DsoType,
+    dso_type:   DsoType,
 }
 
 impl DsoEllipse {
@@ -706,7 +667,7 @@ impl ItemPainter for DsoEllipse {
         PainterCrd::Eq(self.points[index].clone())
     }
 
-    fn paint_object(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         ctx.cairo.move_to(points[0].x, points[0].y);
         for pt in &points[1..] {
             ctx.cairo.line_to(pt.x, pt.y);
@@ -769,7 +730,7 @@ impl ItemPainter for Outline {
         })
     }
 
-    fn paint_object(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         ctx.cairo.move_to(points[0].x, points[0].y);
         for pt in &points[1..] {
             ctx.cairo.line_to(pt.x, pt.y);
@@ -784,20 +745,17 @@ impl ItemPainter for Outline {
         ctx.cairo.stroke()?;
         Ok(())
     }
-
-    fn paint_name(&self, _ctx: &PaintCtx, _points: &[Point2D]) -> anyhow::Result<()> {
-        Ok(())
-    }
 }
 
 // Paint star
 struct StarPainter<'a> {
-    data: &'a StarData,
-    name: &'a str,
-    max_size: f64,
-    max_mag_value: f32,
-    slow_grow_size: f64,
-    light_size_k: f64,
+    data:            &'a StarData,
+    mode:            PainterMode,
+    name:            &'a str,
+    max_size:        f64,
+    max_mag_value:   f32,
+    slow_grow_size:  f64,
+    light_size_k:    f64,
     min_bright_size: f64,
 }
 
@@ -864,19 +822,6 @@ impl<'a> StarPainter<'a> {
 
         unreachable!()
     }
-}
-
-impl<'a> ItemPainter for StarPainter<'a> {
-    fn points_count(&self) -> usize {
-        1
-    }
-
-    fn point_crd(&self, _index: usize) -> PainterCrd {
-        PainterCrd::Eq(EqCoord {
-            dec: self.data.crd.dec(),
-            ra: self.data.crd.ra(),
-        })
-    }
 
     fn paint_object(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         let pt = &points[0];
@@ -940,6 +885,28 @@ impl<'a> ItemPainter for StarPainter<'a> {
 
 }
 
+impl<'a> ItemPainter for StarPainter<'a> {
+    fn points_count(&self) -> usize {
+        1
+    }
+
+    fn point_crd(&self, _index: usize) -> PainterCrd {
+        PainterCrd::Eq(EqCoord {
+            dec: self.data.crd.dec(),
+            ra: self.data.crd.ra(),
+        })
+    }
+
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+        match self.mode {
+            PainterMode::Objects =>
+                self.paint_object(ctx, points),
+            PainterMode::Names =>
+                self.paint_name(ctx, points),
+        }
+    }
+}
+
 // Paint equatorial grid
 
 struct EqGridItem {
@@ -962,7 +929,7 @@ impl ItemPainter for EqGridItem {
         }
     }
 
-    fn paint_object(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         let pt1 = &points[0];
         let pt2 = &points[1];
         ctx.cairo.move_to(pt1.x, pt1.y);
@@ -992,7 +959,7 @@ impl<'a> ItemPainter for Ground<'a> {
         })
     }
 
-    fn paint_object(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         let ground_around = self.view_point.crd.alt >= 0.0;
         if ground_around {
             const LAYER: f64 = 100.0;
@@ -1050,11 +1017,7 @@ impl<'a> ItemPainter for WorldSide<'a> {
         })
     }
 
-    fn paint_object(&self, _ctx: &PaintCtx, _points: &[Point2D]) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    fn paint_name(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         let te = ctx.cairo.text_extents(&self.text)?;
         ctx.cairo.move_to(
             points[0].x - 0.5 * te.width(),
@@ -1081,7 +1044,7 @@ impl ItemPainter for HorizonGlowItem {
         PainterCrd::Horiz(self.coords[index].clone())
     }
 
-    fn paint_object(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         let top_pt_x = 0.5 * (points[0].x + points[1].x);
         let top_pt_y = 0.5 * (points[0].y + points[1].y);
         let bottom_pt_x = 0.5 * (points[2].x + points[3].x);
@@ -1145,7 +1108,7 @@ impl ItemPainter for TestHorizCircle {
         PainterCrd::Horiz(self.0.clone())
     }
 
-    fn paint_object(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         ctx.cairo.arc(points[0].x, points[0].y, 4.0, 0.0, 2.0 * PI);
         ctx.cairo.set_source_rgb(1.0, 1.0, 1.0);
         ctx.cairo.close_path();
