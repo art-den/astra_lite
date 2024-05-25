@@ -440,10 +440,14 @@ impl SkyMapPainter {
             PainterStage::Objects
         )?;
         let world_sides = [
-            WorldSide { az: 0.0 * PI / 180.0, text: "S" },
-            WorldSide { az: 90.0 * PI / 180.0, text: "E" },
-            WorldSide { az: 180.0 * PI / 180.0, text: "N" },
-            WorldSide { az: 270.0 * PI / 180.0, text: "W" },
+            WorldSide { az:   0.0 * PI / 180.0, text: "S",  alpha: 1.0 },
+            WorldSide { az:  45.0 * PI / 180.0, text: "SE", alpha: 0.5 },
+            WorldSide { az:  90.0 * PI / 180.0, text: "E",  alpha: 1.0 },
+            WorldSide { az: 135.0 * PI / 180.0, text: "NE", alpha: 0.5 },
+            WorldSide { az: 180.0 * PI / 180.0, text: "N",  alpha: 1.0 },
+            WorldSide { az: 225.0 * PI / 180.0, text: "NW", alpha: 0.5 },
+            WorldSide { az: 270.0 * PI / 180.0, text: "W",  alpha: 1.0 },
+            WorldSide { az: 315.0 * PI / 180.0, text: "SW", alpha: 0.5 },
         ];
         cairo.set_font_size(6.0 * ctx.screen.dpmm_y);
         for world_side in world_sides {
@@ -515,16 +519,9 @@ struct PaintCtx<'a> {
     pxls_per_rad: f64,
 }
 
-struct Area {
-    major_axis: f64,
-    minor_axis: f64,
-    angle: f64,
-}
-
-trait ObjectToPaint {
+trait ItemPainter {
     fn points_count(&self) -> usize;
-    fn get_point_crd(&self, index: usize) -> PainterCrd;
-    fn get_area(&self) -> Option<Area> { None }
+    fn point_crd(&self, index: usize) -> PainterCrd;
     fn paint_object(&self, _ctx: &PaintCtx, _points: &[Point2D]) -> anyhow::Result<()> { Ok(()) }
     fn paint_name(&self, _ctx: &PaintCtx, _points: &[Point2D]) -> anyhow::Result<()> { Ok(()) }
 }
@@ -546,7 +543,7 @@ impl ObjectPainter {
 
     fn paint(
         &mut self,
-        obj:        &dyn ObjectToPaint,
+        obj:        &dyn ItemPainter,
         eq_hor_cvt: &EqToHorizCvt,
         hor_3d_cvt: &HorizToScreenCvt,
         ctx:        &PaintCtx,
@@ -557,7 +554,7 @@ impl ObjectPainter {
         self.points_horiz.clear();
         let mut obj_is_visible = false;
         for i in 0..points_count {
-            let horiz_crd = match obj.get_point_crd(i) {
+            let horiz_crd = match obj.point_crd(i) {
                 PainterCrd::Horiz(horiz) => horiz,
 
                 // equatorial coorinates -> horizontal coorinates
@@ -656,12 +653,12 @@ impl ObjectPainter {
 
 // Paint DSP item
 
-impl ObjectToPaint for DsoItem {
+impl ItemPainter for DsoItem {
     fn points_count(&self) -> usize {
         1
     }
 
-    fn get_point_crd(&self, _index: usize) -> PainterCrd {
+    fn point_crd(&self, _index: usize) -> PainterCrd {
         PainterCrd::Eq(EqCoord {
             ra: self.crd.ra(),
             dec: self.crd.dec()
@@ -700,12 +697,12 @@ impl DsoEllipse {
     }
 }
 
-impl ObjectToPaint for DsoEllipse {
+impl ItemPainter for DsoEllipse {
     fn points_count(&self) -> usize {
         self.points.len()
     }
 
-    fn get_point_crd(&self, index: usize) -> PainterCrd {
+    fn point_crd(&self, index: usize) -> PainterCrd {
         PainterCrd::Eq(self.points[index].clone())
     }
 
@@ -759,12 +756,12 @@ impl ObjectToPaint for DsoEllipse {
 
 // Paint outline
 
-impl ObjectToPaint for Outline {
+impl ItemPainter for Outline {
     fn points_count(&self) -> usize {
         self.polygon.len()
     }
 
-    fn get_point_crd(&self, index: usize) -> PainterCrd {
+    fn point_crd(&self, index: usize) -> PainterCrd {
         let pt = &self.polygon[index];
         PainterCrd::Eq(EqCoord {
             ra: pt.ra(),
@@ -869,12 +866,12 @@ impl<'a> StarPainter<'a> {
     }
 }
 
-impl<'a> ObjectToPaint for StarPainter<'a> {
+impl<'a> ItemPainter for StarPainter<'a> {
     fn points_count(&self) -> usize {
         1
     }
 
-    fn get_point_crd(&self, _index: usize) -> PainterCrd {
+    fn point_crd(&self, _index: usize) -> PainterCrd {
         PainterCrd::Eq(EqCoord {
             dec: self.data.crd.dec(),
             ra: self.data.crd.ra(),
@@ -952,12 +949,12 @@ struct EqGridItem {
     ra2:  f64,
 }
 
-impl ObjectToPaint for EqGridItem {
+impl ItemPainter for EqGridItem {
     fn points_count(&self) -> usize {
         2
     }
 
-    fn get_point_crd(&self, index: usize) -> PainterCrd {
+    fn point_crd(&self, index: usize) -> PainterCrd {
         match index {
             0 => PainterCrd::Eq(EqCoord{ ra: self.ra1, dec: self.dec1 }),
             1 => PainterCrd::Eq(EqCoord{ ra: self.ra2, dec: self.dec2 }),
@@ -983,12 +980,12 @@ struct Ground<'a> {
 
 const GROUND_ANGLE_STEP: usize = 5;
 
-impl<'a> ObjectToPaint for Ground<'a> {
+impl<'a> ItemPainter for Ground<'a> {
     fn points_count(&self) -> usize {
         360 / GROUND_ANGLE_STEP
     }
 
-    fn get_point_crd(&self, index: usize) -> PainterCrd {
+    fn point_crd(&self, index: usize) -> PainterCrd {
         PainterCrd::Horiz(HorizCoord {
             alt: 0.0,
             az: PI * (index * GROUND_ANGLE_STEP) as f64 / 180.0
@@ -1038,14 +1035,15 @@ impl<'a> ObjectToPaint for Ground<'a> {
 struct WorldSide<'a> {
     text: &'a str,
     az: f64,
+    alpha: f64,
 }
 
-impl<'a> ObjectToPaint for WorldSide<'a> {
+impl<'a> ItemPainter for WorldSide<'a> {
     fn points_count(&self) -> usize {
         1
     }
 
-    fn get_point_crd(&self, _index: usize) -> PainterCrd {
+    fn point_crd(&self, _index: usize) -> PainterCrd {
         PainterCrd::Horiz(HorizCoord {
             alt: 0.0,
             az: self.az
@@ -1062,7 +1060,7 @@ impl<'a> ObjectToPaint for WorldSide<'a> {
             points[0].x - 0.5 * te.width(),
             points[0].y + 0.5 * te.height()
         );
-        ctx.cairo.set_source_rgb(0.8, 0.0, 0.0);
+        ctx.cairo.set_source_rgba(0.8, 0.0, 0.0, self.alpha);
         ctx.cairo.show_text(&self.text)?;
         Ok(())
     }
@@ -1074,12 +1072,12 @@ struct HorizonGlowItem {
     coords: [HorizCoord; 4],
 }
 
-impl ObjectToPaint for HorizonGlowItem {
+impl ItemPainter for HorizonGlowItem {
     fn points_count(&self) -> usize {
         self.coords.len()
     }
 
-    fn get_point_crd(&self, index: usize) -> PainterCrd {
+    fn point_crd(&self, index: usize) -> PainterCrd {
         PainterCrd::Horiz(self.coords[index].clone())
     }
 
@@ -1112,12 +1110,12 @@ struct ZoneVisibilityTestObject {
     coords: [EqCoord; 4],
 }
 
-impl ObjectToPaint for ZoneVisibilityTestObject {
+impl ItemPainter for ZoneVisibilityTestObject {
     fn points_count(&self) -> usize {
         self.coords.len()
     }
 
-    fn get_point_crd(&self, index: usize) -> PainterCrd {
+    fn point_crd(&self, index: usize) -> PainterCrd {
         PainterCrd::Eq(self.coords[index].clone())
     }
 }
@@ -1126,24 +1124,24 @@ struct PointVisibilityTestObject {
     coord: EqCoord,
 }
 
-impl ObjectToPaint for PointVisibilityTestObject {
+impl ItemPainter for PointVisibilityTestObject {
     fn points_count(&self) -> usize {
         1
     }
 
-    fn get_point_crd(&self, _index: usize) -> PainterCrd {
+    fn point_crd(&self, _index: usize) -> PainterCrd {
         PainterCrd::Eq(self.coord.clone())
     }
 }
 
 struct TestHorizCircle(HorizCoord);
 
-impl ObjectToPaint for TestHorizCircle {
+impl ItemPainter for TestHorizCircle {
     fn points_count(&self) -> usize {
         1
     }
 
-    fn get_point_crd(&self, _index: usize) -> PainterCrd {
+    fn point_crd(&self, _index: usize) -> PainterCrd {
         PainterCrd::Horiz(self.0.clone())
     }
 
