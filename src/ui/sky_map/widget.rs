@@ -19,17 +19,18 @@ struct AnimatedGotoCrdData {
 }
 
 pub struct SkymapWidget {
-    skymap:        RefCell<Option<Rc<SkyMap>>>,
-    evt_box:       gtk::EventBox,
-    draw_area:     gtk::DrawingArea,
-    view_point:    RefCell<ViewPoint>,
-    config:        RefCell<PaintConfig>,
-    mpress:        RefCell<Option<MousePressedData>>,
-    observer:      RefCell<Observer>,
-    time:          RefCell<NaiveDateTime>,
-    selected_obj:  RefCell<Option<Object>>,
-    center_crd:    RefCell<Option<EqCoord>>,
-    ani_goto_data: RefCell<Option<AnimatedGotoCrdData>>,
+    skymap:          RefCell<Option<Rc<SkyMap>>>,
+    evt_box:         gtk::EventBox,
+    draw_area:       gtk::DrawingArea,
+    view_point:      RefCell<ViewPoint>,
+    config:          RefCell<PaintConfig>,
+    mpress:          RefCell<Option<MousePressedData>>,
+    observer:        RefCell<Observer>,
+    time:            RefCell<NaiveDateTime>,
+    selected_obj:    RefCell<Option<SkymapObject>>,
+    center_crd:      RefCell<Option<EqCoord>>,
+    ani_goto_data:   RefCell<Option<AnimatedGotoCrdData>>,
+    select_handlers: RefCell<Vec<Box<dyn Fn(Option<SkymapObject>)>>>,
 }
 
 impl SkymapWidget {
@@ -43,22 +44,30 @@ impl SkymapWidget {
             .build();
 
         let widget = Rc::new(Self {
-            skymap:        RefCell::new(None),
-            evt_box:       evt_box.clone(),
-            draw_area:     da.clone(),
-            view_point:    RefCell::new(ViewPoint::new()),
-            config:        RefCell::new(PaintConfig::default()),
-            mpress:        RefCell::new(None),
-            observer:      RefCell::new(Observer::default()),
-            time:          RefCell::new(Utc::now().naive_utc()),
-            selected_obj:  RefCell::new(None),
-            center_crd:    RefCell::new(None),
-            ani_goto_data: RefCell::new(None),
+            skymap:          RefCell::new(None),
+            evt_box:         evt_box.clone(),
+            draw_area:       da.clone(),
+            view_point:      RefCell::new(ViewPoint::new()),
+            config:          RefCell::new(PaintConfig::default()),
+            mpress:          RefCell::new(None),
+            observer:        RefCell::new(Observer::default()),
+            time:            RefCell::new(Utc::now().naive_utc()),
+            selected_obj:    RefCell::new(None),
+            center_crd:      RefCell::new(None),
+            ani_goto_data:   RefCell::new(None),
+            select_handlers: RefCell::new(Vec::new()),
         });
 
         widget.connect_event_handlers();
 
         widget
+    }
+
+    pub fn add_obj_sel_handler(
+        &self,
+        obj_sel_handler: impl Fn(Option<SkymapObject>) + 'static
+    ) {
+        self.select_handlers.borrow_mut().push(Box::new(obj_sel_handler));
     }
 
     pub fn get_widget(&self) -> &gtk::Widget {
@@ -78,6 +87,10 @@ impl SkymapWidget {
     pub fn set_time(&self, time: NaiveDateTime) {
         *self.time.borrow_mut() = time;
         self.draw_area.queue_draw();
+    }
+
+    pub fn time(&self) -> NaiveDateTime {
+        *self.time.borrow()
     }
 
     pub fn set_paint_config(&self, config: &PaintConfig) {
@@ -174,14 +187,26 @@ impl SkymapWidget {
         let config = self.config.borrow();
         let vp = self.view_point.borrow();
         let max_stars_mag = calc_max_star_magnitude_for_painting(vp.mag_factor);
-        let selected_obj = skymap.get_nearest(&eq_crd, config.max_dso_mag, max_stars_mag);
+        let selected_obj = skymap.get_nearest(&eq_crd, config.max_dso_mag, max_stars_mag, &config.filter);
 
         if let Some(selected_obj) = &selected_obj {
             self.animated_goto_coord(&selected_obj.crd());
         }
 
+        let select_handlers = self.select_handlers.borrow();
+        for handler in &*select_handlers {
+            handler(selected_obj.clone());
+        }
         *self.center_crd.borrow_mut() = selected_obj.as_ref().map(|obj| obj.crd());
         *self.selected_obj.borrow_mut() = selected_obj;
+    }
+
+    pub fn set_selected_object(self: &Rc<Self>, obj: Option<&SkymapObject>) {
+        *self.center_crd.borrow_mut() = obj.as_ref().map(|obj| obj.crd());
+        *self.selected_obj.borrow_mut() = obj.cloned();
+        if let Some(selected_obj) = &obj {
+            self.animated_goto_coord(&selected_obj.crd());
+        }
     }
 
     fn hanler_motion_notify(&self, event: &gdk::EventMotion) -> glib::Propagation {
@@ -212,8 +237,13 @@ impl SkymapWidget {
         let time = self.time.borrow();
         let mut painter = SkyMapPainter::new();
         let screen = ScreenInfo::new(da);
+        let selection = self.selected_obj.borrow();
         let timer = std::time::Instant::now();
-        painter.paint(&skymap, &observer, &time, &config, &vp, &screen, ctx).unwrap();
+        _ = painter.paint(
+            &skymap, &selection,
+            &observer, &time,
+            &config, &vp, &screen, ctx
+        );
         let paint_time = timer.elapsed().as_secs_f64();
         let fps = if paint_time != 0.0 { 1.0/paint_time } else { f64::NAN };
         let fps_str = format!("x{:.1}, {:.1} FPS", vp.mag_factor, fps);
@@ -251,6 +281,8 @@ impl SkymapWidget {
     }
 
     fn animated_goto_coord(self: &Rc<Self>, coord: &EqCoord) {
+        *self.center_crd.borrow_mut() = None;
+
         let already_started = self.ani_goto_data.borrow().is_some();
         let widget_width = self.draw_area.allocated_width() as f64;
         let widget_height = self.draw_area.allocated_height() as f64;
@@ -290,11 +322,13 @@ impl SkymapWidget {
                         let cvt = EqToHorizCvt::new(&observer, &time);
                         let horiz_coord = cvt.eq_to_horiz(&EqCoord { dec, ra });
                         self_.view_point.borrow_mut().crd = horiz_coord;
-                        self_.draw_area.queue_draw();
                         let has_to_stop = ani_goto_data.stage == ani_goto_data.max_stages;
                         if !has_to_stop {
                             ani_goto_data.stage += 1;
+                        } else {
+                            *self_.center_crd.borrow_mut() = Some(ani_goto_data.end_crd.clone());
                         }
+                        self_.draw_area.queue_draw();
                         has_to_stop
                     } else {
                         true

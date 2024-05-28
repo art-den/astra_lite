@@ -1,5 +1,4 @@
 use std::{f64::consts::PI, rc::Rc};
-use bitflags::bitflags;
 use chrono::NaiveDateTime;
 use gtk::cairo;
 use itertools::Itertools;
@@ -17,23 +16,13 @@ pub struct ViewPoint {
 impl ViewPoint {
     pub fn new() -> Self {
         let crd = HorizCoord {
-            alt: 20.0 * PI / 180.0,
+            alt: degree_to_radian(20.0),
             az:  0.0,
         };
         Self {
             crd,
             mag_factor: 1.0,
         }
-    }
-}
-
-bitflags! {
-    pub struct PaintFlags: u32 {
-        const PAINT_OUTLINES = 1 << 0;
-        const PAINT_STARS    = 1 << 1;
-        const PAINT_CLUSTERS = 1 << 2;
-        const PAINT_NEBULAS  = 1 << 3;
-        const PAINT_GALAXIES = 1 << 4;
     }
 }
 
@@ -54,7 +43,7 @@ impl Default for HorizonGlowPaintConfig {
 
 #[derive(Clone)]
 pub struct PaintConfig {
-    pub flags:        PaintFlags,
+    pub filter:       ItemFilterFlags,
     pub max_dso_mag:  f32,
     pub horizon_glow: HorizonGlowPaintConfig,
 }
@@ -62,7 +51,7 @@ pub struct PaintConfig {
 impl Default for PaintConfig {
     fn default() -> Self {
         Self {
-            flags:        PaintFlags::all(),
+            filter:        ItemFilterFlags::all(),
             max_dso_mag:  10.0,
             horizon_glow: HorizonGlowPaintConfig::default(),
         }
@@ -85,6 +74,7 @@ impl SkyMapPainter {
     pub fn paint(
         &mut self,
         sky_map:    &Option<Rc<SkyMap>>,
+        selection:  &Option<SkymapObject>,
         observer:   &Observer,
         utc_time:   &NaiveDateTime,
         config:     &PaintConfig,
@@ -101,31 +91,53 @@ impl SkyMapPainter {
         let pxls_per_rad = Self::calc_pixels_per_radian(screen, view_point.mag_factor);
         let ctx = PaintCtx { cairo, config, screen, view_point, pxls_per_rad };
 
-        self.paint_eq_grid(cairo, &eq_hor_cvt, &ctx, &hor_3d_cvt)?;
+        let star_painter_options = self.get_star_painter_options(&ctx);
+
+        // Equatorial grid
+        self.paint_eq_grid(&eq_hor_cvt, &ctx, &hor_3d_cvt)?;
 
         if let Some(sky_map) = sky_map {
             // DSO objects
-            self.paint_dso(sky_map, &eq_hor_cvt, &ctx, &hor_3d_cvt, PainterMode::Objects)?;
+            self.paint_dso_items(sky_map, &ctx, &eq_hor_cvt, &hor_3d_cvt, PainterMode::Objects)?;
 
             // Stars objects
-            if config.flags.contains(PaintFlags::PAINT_STARS) {
-                self.paint_stars(sky_map, cairo, &eq_hor_cvt, &ctx, &hor_3d_cvt, PainterMode::Objects)?;
+            if config.filter.contains(ItemFilterFlags::STARS) {
+                self.paint_stars(
+                    sky_map,
+                    &star_painter_options,
+                    &ctx,
+                    &eq_hor_cvt,
+                    &hor_3d_cvt,
+                    PainterMode::Objects
+                )?;
             }
 
             // DSO names
-            self.paint_dso(sky_map, &eq_hor_cvt, &ctx, &hor_3d_cvt, PainterMode::Names)?;
+            self.paint_dso_items(sky_map, &ctx, &eq_hor_cvt, &hor_3d_cvt, PainterMode::Names)?;
 
             // Stars names
-            if config.flags.contains(PaintFlags::PAINT_STARS) {
-                self.paint_stars(sky_map, cairo, &eq_hor_cvt, &ctx, &hor_3d_cvt, PainterMode::Names)?;
+            if config.filter.contains(ItemFilterFlags::STARS) {
+                self.paint_stars(
+                    sky_map,
+                    &star_painter_options,
+                    &ctx,
+                    &eq_hor_cvt,
+                    &hor_3d_cvt,
+                    PainterMode::Names
+                )?;
             }
         }
 
+        // Horizon glow
         if config.horizon_glow.enabled {
             self.paint_horizon_glow(cairo, &eq_hor_cvt, &ctx, &hor_3d_cvt)?;
         }
 
-        self.paint_ground(cairo, &eq_hor_cvt, &ctx, &hor_3d_cvt, view_point)?;
+        // Ground
+        self.paint_ground(&eq_hor_cvt, &ctx, &hor_3d_cvt)?;
+
+        // Selected object
+        self.paint_selection(selection,  &ctx, &eq_hor_cvt, &hor_3d_cvt)?;
 
         Ok(())
     }
@@ -175,36 +187,22 @@ impl SkyMapPainter {
         Point2D::distance(&crd1, &crd2) / ANGLE_DIFF
     }
 
-    fn paint_dso(
+    fn paint_dso_items(
         &mut self,
         sky_map:    &SkyMap,
-        eq_hor_cvt: &EqToHorizCvt,
         ctx:        &PaintCtx,
+        eq_hor_cvt: &EqToHorizCvt,
         hor_3d_cvt: &HorizToScreenCvt,
         mode:       PainterMode,
     ) -> anyhow::Result<()> {
         for dso_object in sky_map.objects() {
-            let mag = dso_object.mag.get();
-            if mag.is_nan() || mag > ctx.config.max_dso_mag {
+            let Some(mag) = dso_object.any_magnitude() else {
+                continue;
+            };
+            if mag.get() > ctx.config.max_dso_mag {
                 continue;
             }
-            use DsoType::*;
-            let visible = match dso_object.obj_type {
-                Star | DoubleStar =>
-                    ctx.config.flags.contains(PaintFlags::PAINT_STARS),
-                Galaxy | GalaxyPair | GalaxyTriplet | GroupOfGalaxies =>
-                    ctx.config.flags.contains(PaintFlags::PAINT_GALAXIES),
-                StarCluster | AssociationOfStars =>
-                    ctx.config.flags.contains(PaintFlags::PAINT_CLUSTERS),
-                PlanetaryNebula | DarkNebula | EmissionNebula | Nebula |
-                ReflectionNebula | SupernovaRemnant | HIIIonizedRegion =>
-                    ctx.config.flags.contains(PaintFlags::PAINT_NEBULAS),
-                StarClusterAndNebula =>
-                    ctx.config.flags.contains(PaintFlags::PAINT_NEBULAS) ||
-                    ctx.config.flags.contains(PaintFlags::PAINT_CLUSTERS),
-                _ => false,
-            };
-
+            let visible = dso_object.obj_type.test_filter_flag(&ctx.config.filter);
             if !visible { continue; }
 
             match mode {
@@ -222,7 +220,7 @@ impl SkyMapPainter {
 
                     // Paint ellipse of object
                     if is_visible_on_screen {
-                        self.paint_dso_ellipse(eq_hor_cvt, ctx, hor_3d_cvt, dso_object)?;
+                        self.paint_dso_ellipse(dso_object, ctx, eq_hor_cvt, hor_3d_cvt)?;
                     }
                 }
                 PainterMode::Names => {
@@ -237,15 +235,15 @@ impl SkyMapPainter {
 
     fn paint_dso_ellipse(
         &mut self,
-        eq_hor_cvt: &EqToHorizCvt,
-        ctx:        &PaintCtx,
-        hor_3d_cvt: &HorizToScreenCvt,
         dso_object: &DsoItem,
+        ctx:        &PaintCtx,
+        eq_hor_cvt: &EqToHorizCvt,
+        hor_3d_cvt: &HorizToScreenCvt,
     ) -> anyhow::Result<()> {
         let maj_axis = dso_object.maj_axis.unwrap_or_default();
         let min_axis = dso_object.min_axis.unwrap_or(maj_axis);
-        let maj_axis = 2.0 * PI * maj_axis as f64 / (360.0 * 60.0);
-        let min_axis = 2.0 * PI * min_axis as f64 / (360.0 * 60.0);
+        let maj_axis = arcmin_to_radian(maj_axis as f64);
+        let min_axis = arcmin_to_radian(min_axis as f64);
 
         let min_axis_value = 2.0 * ctx.screen.dpmm_x / ctx.pxls_per_rad;
         let maj_axis = maj_axis.max(min_axis_value);
@@ -283,28 +281,61 @@ impl SkyMapPainter {
         Ok(())
     }
 
+    fn get_star_painter_options(&self, ctx: &PaintCtx) -> StarPainterOptions {
+        let max_size = 7.0 * ctx.screen.dpmm_x;
+        let slow_grow_size = 3.0 * ctx.screen.dpmm_x;
+        let light_size_k = 0.3 * ctx.screen.dpmm_x;
+        let min_bright_size = 1.5 * ctx.screen.dpmm_x;
+        let max_mag_value = calc_max_star_magnitude_for_painting(ctx.view_point.mag_factor);
+
+        StarPainterOptions {
+            max_mag_value,
+            max_size,
+            slow_grow_size,
+            light_size_k,
+            min_bright_size,
+        }
+    }
+
+    fn paint_star(
+        &mut self,
+        star_data:  &StarData,
+        name:       &str,
+        options:    &StarPainterOptions,
+        ctx:        &PaintCtx,
+        eq_hor_cvt: &EqToHorizCvt,
+        hor_3d_cvt: &HorizToScreenCvt,
+        mode:       PainterMode,
+    ) -> anyhow::Result<bool> {
+        let star_painter = StarPainter {
+            mode,
+            star: star_data,
+            name,
+            options,
+        };
+        let star_is_painted = self.obj_painter.paint(
+            &star_painter,
+            &eq_hor_cvt,
+            &hor_3d_cvt,
+            ctx,
+        )?;
+        Ok(star_is_painted)
+    }
+
     fn paint_stars(
         &mut self,
         sky_map:    &SkyMap,
-        cairo:      &gtk::cairo::Context,
-        eq_hor_cvt: &EqToHorizCvt,
+        options:    &StarPainterOptions,
         ctx:        &PaintCtx,
+        eq_hor_cvt: &EqToHorizCvt,
         hor_3d_cvt: &HorizToScreenCvt,
         mode:       PainterMode,
     ) -> anyhow::Result<()> {
-        cairo.set_antialias(gtk::cairo::Antialias::Fast);
-
+        ctx.cairo.set_antialias(gtk::cairo::Antialias::Fast);
         let center_eq_crd = eq_hor_cvt.horiz_to_eq(&ctx.view_point.crd);
         let center_zone_key = Stars::get_key_for_coord(center_eq_crd.ra, center_eq_crd.dec);
-
         let max_mag_value = calc_max_star_magnitude_for_painting(ctx.view_point.mag_factor);
         let max_mag = ObjMagnitude::new(max_mag_value);
-
-        let max_size = 7.0 * ctx.screen.dpmm_x;
-        let slow_grow_size = 0.2 * max_size;
-        let light_size_k = 0.3 * ctx.screen.dpmm_x;
-        let min_bright_size = 1.5 * ctx.screen.dpmm_x;
-
         let stars = sky_map.stars();
         let mut _stars_count = 0_usize;
         let mut _stars_painted_count = 0_usize;
@@ -329,33 +360,15 @@ impl SkyMapPainter {
                 continue;
             }
 
-            let mut paint_star = |data: &StarData, name: &str| -> anyhow::Result<bool> {
-                let star_painter = StarPainter {
-                    mode,
-                    data,
-                    name,
-                    max_mag_value,
-                    max_size,
-                    slow_grow_size,
-                    light_size_k,
-                    min_bright_size
-                };
-                let star_is_painted = self.obj_painter.paint(
-                    &star_painter,
-                    &eq_hor_cvt,
-                    &hor_3d_cvt,
-                    ctx,
-                )?;
-
-                Ok(star_is_painted)
-            };
-
             if mode == PainterMode::Objects {
                 for star in zone.stars() {
                     if star.data.mag > max_mag {
                         continue;
                     }
-                    let star_is_painted = paint_star(&star.data, "")?;
+                    let star_is_painted = self.paint_star(
+                        &star.data, "",
+                        options, ctx, eq_hor_cvt, hor_3d_cvt, mode,
+                    )?;
                     _stars_count += 1;
                     if star_is_painted { _stars_painted_count += 1; }
                 }
@@ -365,7 +378,10 @@ impl SkyMapPainter {
                 if star.data.mag > max_mag {
                     continue;
                 }
-                let star_is_painted = paint_star(&star.data, &star.name)?;
+                let star_is_painted = self.paint_star(
+                    &star.data, &star.name,
+                    options, ctx, eq_hor_cvt, hor_3d_cvt, mode,
+                )?;
                 _stars_count += 1;
                 if star_is_painted { _stars_painted_count += 1; }
             }
@@ -376,32 +392,31 @@ impl SkyMapPainter {
 
     fn paint_eq_grid(
         &mut self,
-        cairo:      &gtk::cairo::Context,
         eq_hor_cvt: &EqToHorizCvt,
         ctx:        &PaintCtx,
         hor_3d_cvt: &HorizToScreenCvt,
     ) -> anyhow::Result<()> {
-        cairo.set_source_rgba(0.0, 0.0, 1.0, 0.7);
-        cairo.set_line_width(1.0);
-        cairo.set_antialias(gtk::cairo::Antialias::Fast);
+        ctx.cairo.set_source_rgba(0.0, 0.0, 1.0, 0.7);
+        ctx.cairo.set_line_width(1.0);
+        ctx.cairo.set_antialias(gtk::cairo::Antialias::Fast);
 
         const DEC_STEP: i32 = 10; // degree
         const RA_STEP: i32 = 20; // degree
         const STEP: i32 = 5;
         for i in -90/STEP..90/STEP {
-            let dec1 = PI * (STEP * i) as f64 / 180.0;
-            let dec2 = PI * (STEP * (i + 1)) as f64 / 180.0;
+            let dec1 = degree_to_radian((STEP * i) as f64);
+            let dec2 = degree_to_radian((STEP * (i + 1)) as f64);
             for j in 0..(360/RA_STEP) {
-                let ra = PI * (RA_STEP * j) as f64 / 180.0;
+                let ra = degree_to_radian((RA_STEP * j) as f64);
                 let dec_line = EqGridItem { dec1, dec2, ra1: ra, ra2: ra };
                 self.obj_painter.paint(&dec_line, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
             }
         }
         for j in 0..(360/STEP) {
-            let ra1 = PI * (STEP * j) as f64 / 180.0;
-            let ra2 = PI * (STEP * (j + 1)) as f64 / 180.0;
+            let ra1 = degree_to_radian((STEP * j) as f64);
+            let ra2 = degree_to_radian((STEP * (j + 1)) as f64);
             for i in -90/DEC_STEP..90/DEC_STEP {
-                let dec = PI * (DEC_STEP * i) as f64 / 180.0;
+                let dec = degree_to_radian((DEC_STEP * i) as f64);
                 let ra_line = EqGridItem { dec1: dec, dec2: dec, ra1, ra2 };
                 self.obj_painter.paint(&ra_line, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
             }
@@ -411,25 +426,23 @@ impl SkyMapPainter {
 
     fn paint_ground(
         &mut self,
-        cairo:      &gtk::cairo::Context,
         eq_hor_cvt: &EqToHorizCvt,
         ctx:        &PaintCtx,
         hor_3d_cvt: &HorizToScreenCvt,
-        view_point: &ViewPoint,
     ) -> anyhow::Result<()> {
-        let ground = Ground { view_point };
+        let ground = Ground { view_point: ctx.view_point };
         self.obj_painter.paint(&ground, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
         let world_sides = [
-            WorldSide { az:   0.0 * PI / 180.0, text: "S",  alpha: 1.0 },
-            WorldSide { az:  45.0 * PI / 180.0, text: "SE", alpha: 0.5 },
-            WorldSide { az:  90.0 * PI / 180.0, text: "E",  alpha: 1.0 },
-            WorldSide { az: 135.0 * PI / 180.0, text: "NE", alpha: 0.5 },
-            WorldSide { az: 180.0 * PI / 180.0, text: "N",  alpha: 1.0 },
-            WorldSide { az: 225.0 * PI / 180.0, text: "NW", alpha: 0.5 },
-            WorldSide { az: 270.0 * PI / 180.0, text: "W",  alpha: 1.0 },
-            WorldSide { az: 315.0 * PI / 180.0, text: "SW", alpha: 0.5 },
+            WorldSide { az:   0.0, text: "S",  alpha: 1.0 },
+            WorldSide { az:  45.0, text: "SE", alpha: 0.5 },
+            WorldSide { az:  90.0, text: "E",  alpha: 1.0 },
+            WorldSide { az: 135.0, text: "NE", alpha: 0.5 },
+            WorldSide { az: 180.0, text: "N",  alpha: 1.0 },
+            WorldSide { az: 225.0, text: "NW", alpha: 0.5 },
+            WorldSide { az: 270.0, text: "W",  alpha: 1.0 },
+            WorldSide { az: 315.0, text: "SW", alpha: 0.5 },
         ];
-        cairo.set_font_size(6.0 * ctx.screen.dpmm_y);
+        ctx.cairo.set_font_size(6.0 * ctx.screen.dpmm_y);
         for world_side in world_sides {
             self.obj_painter.paint(&world_side, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
         }
@@ -444,13 +457,13 @@ impl SkyMapPainter {
         hor_3d_cvt: &HorizToScreenCvt,
     ) -> anyhow::Result<()> {
         const STEP: i32 = 2;
-        let angle = ctx.config.horizon_glow.angle * PI / 180.0;
+        let angle = degree_to_radian(ctx.config.horizon_glow.angle);
 
         cairo.set_antialias(gtk::cairo::Antialias::None);
 
         for i in 0..(360/STEP) {
-            let az1 = PI * (STEP * i) as f64 / 180.0;
-            let az2 = PI * (STEP * (i+1)) as f64 / 180.0;
+            let az1 = degree_to_radian((STEP * i) as f64);
+            let az2 = degree_to_radian((STEP * (i+1)) as f64);
             let item = HorizonGlowItem {
                 coords: [
                     HorizCoord { alt: angle, az: az1 },
@@ -467,6 +480,27 @@ impl SkyMapPainter {
             )?;
         }
 
+        Ok(())
+    }
+
+    fn paint_selection(
+        &mut self,
+        selection:  &Option<SkymapObject>,
+        ctx:        &PaintCtx,
+        eq_hor_cvt: &EqToHorizCvt,
+        hor_3d_cvt: &HorizToScreenCvt,
+    ) -> anyhow::Result<()> {
+        let Some(selection) = selection else { return Ok(()); };
+        let size = 12.0 * ctx.screen.dpmm_x;
+        let thickness = 1.0 * ctx.screen.dpmm_x;
+        let crd = selection.crd();
+        let selection_painter = SelectionPainter { crd, size, thickness };
+        self.obj_painter.paint(
+            &selection_painter,
+            &eq_hor_cvt,
+            &hor_3d_cvt,
+            ctx,
+        )?;
         Ok(())
     }
 }
@@ -645,7 +679,7 @@ impl<'a> ItemPainter for DsoNamePainter<'a> {
 struct DsoEllipse {
     points:     Vec<EqCoord>,
     line_width: f64,
-    dso_type:   DsoType,
+    dso_type:   SkyItemType,
 }
 
 impl DsoEllipse {
@@ -653,7 +687,7 @@ impl DsoEllipse {
         Self {
             points: Vec::new(),
             line_width: 1.0,
-            dso_type: DsoType::Galaxy
+            dso_type: SkyItemType::Galaxy
         }
     }
 }
@@ -675,27 +709,26 @@ impl ItemPainter for DsoEllipse {
         ctx.cairo.close_path();
 
         match self.dso_type {
-            DsoType::StarCluster => {
+            SkyItemType::StarCluster => {
                 ctx.cairo.set_dash(&[3.0 * self.line_width], 0.0);
                 ctx.cairo.set_line_width(3.0 * self.line_width);
                 ctx.cairo.set_source_rgba(1.0, 1.0, 0.0, 0.8);
             },
 
-            DsoType::Galaxy => {
+            SkyItemType::Galaxy => {
                 ctx.cairo.set_source_rgba(0.0, 1.0, 0.0, 0.8);
                 ctx.cairo.set_line_width(self.line_width);
             },
 
-            DsoType::PlanetaryNebula => {
-                ctx.cairo.set_source_rgba(1.0, 0.0, 1.0, 0.8);
+            SkyItemType::PlanetaryNebula => {
+                ctx.cairo.set_source_rgba(0.2, 0.2, 1.0, 1.0);
                 ctx.cairo.set_line_width(self.line_width);
             },
 
-            DsoType::DarkNebula |
-            DsoType::EmissionNebula |
-            DsoType::Nebula |
-            DsoType::ReflectionNebula |
-            DsoType::HIIIonizedRegion => {
+            SkyItemType::DarkNebula |
+            SkyItemType::EmissionNebula |
+            SkyItemType::Nebula |
+            SkyItemType::HIIIonizedRegion => {
                 ctx.cairo.set_source_rgba(1.0, 0.0, 0.0, 0.8);
                 ctx.cairo.set_line_width(self.line_width);
             },
@@ -748,40 +781,44 @@ impl ItemPainter for Outline {
 }
 
 // Paint star
-struct StarPainter<'a> {
-    data:            &'a StarData,
-    mode:            PainterMode,
-    name:            &'a str,
+
+struct StarPainterOptions {
     max_size:        f64,
     max_mag_value:   f32,
     slow_grow_size:  f64,
     light_size_k:    f64,
     min_bright_size: f64,
 }
+struct StarPainter<'a> {
+    star:    &'a StarData,
+    mode:    PainterMode,
+    name:    &'a str,
+    options: &'a StarPainterOptions,
+}
 
 type RgbTuple = (f64, f64, f64);
 
 impl<'a> StarPainter<'a> {
     fn calc_light(&self, star_mag: f32) -> (f32, f32) {
-        let light = f32::powf(2.0, 0.4 * (self.max_mag_value - star_mag)) - 1.0;
+        let light = f32::powf(2.0, 0.4 * (self.options.max_mag_value - star_mag)) - 1.0;
         let light_with_gamma = light.powf(0.7).min(1.0);
         (light, light_with_gamma)
     }
 
     fn calc_size(&self, light: f32) -> f64 {
-        let mut size = (self.light_size_k * light as f64).max(1.0);
+        let mut size = (self.options.light_size_k * light as f64).max(1.0);
 
-        if self.data.mag.get() < 1.0 {
-            size = size.max(self.min_bright_size)
+        if self.star.mag.get() < 1.0 {
+            size = size.max(self.options.min_bright_size)
         }
 
-        if size > self.slow_grow_size {
-            size -= self.slow_grow_size;
-            size /= 5.0;
-            size += self.slow_grow_size;
+        if size > self.options.slow_grow_size {
+            size -= self.options.slow_grow_size;
+            size /= 2.0;
+            size += self.options.slow_grow_size;
         }
-        if size > self.max_size {
-            size = self.max_size;
+        if size > self.options.max_size {
+            size = self.options.max_size;
         }
         size
     }
@@ -825,10 +862,10 @@ impl<'a> StarPainter<'a> {
 
     fn paint_object(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         let pt = &points[0];
-        let star_mag = self.data.mag.get();
+        let star_mag = self.star.mag.get();
         let (light, light_with_gamma) = self.calc_light(star_mag);
         if light_with_gamma < 0.1 { return Ok(()); }
-        let (r, g, b) = Self::get_rgb_for_star_bv(self.data.bv.get());
+        let (r, g, b) = Self::get_rgb_for_star_bv(self.star.bv.get());
         ctx.cairo.save()?;
         ctx.cairo.translate(pt.x, pt.y);
         let size = self.calc_size(light);
@@ -861,7 +898,7 @@ impl<'a> StarPainter<'a> {
 
     fn paint_name(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         if !self.name.is_empty() {
-            let star_mag = self.data.mag.get();
+            let star_mag = self.star.mag.get();
             let (light, mut light_with_gamma) = self.calc_light(star_mag);
             if light_with_gamma < 0.5 { return Ok(()); }
             light_with_gamma -= 0.5;
@@ -871,7 +908,7 @@ impl<'a> StarPainter<'a> {
             let te = ctx.cairo.text_extents(&self.name)?;
             let t_height = te.height();
             ctx.cairo.move_to(pt.x + 0.5 * size - 0.1 * t_height, pt.y + t_height + 0.5 * size - 0.1 * t_height);
-            let (r, g, b) = Self::get_rgb_for_star_bv(self.data.bv.get());
+            let (r, g, b) = Self::get_rgb_for_star_bv(self.star.bv.get());
             ctx.cairo.set_source_rgba(
                 light_with_gamma as f64 * r,
                 light_with_gamma as f64 * g,
@@ -882,7 +919,6 @@ impl<'a> StarPainter<'a> {
         }
         Ok(())
     }
-
 }
 
 impl<'a> ItemPainter for StarPainter<'a> {
@@ -892,8 +928,8 @@ impl<'a> ItemPainter for StarPainter<'a> {
 
     fn point_crd(&self, _index: usize) -> PainterCrd {
         PainterCrd::Eq(EqCoord {
-            dec: self.data.crd.dec(),
-            ra: self.data.crd.ra(),
+            dec: self.star.crd.dec(),
+            ra: self.star.crd.ra(),
         })
     }
 
@@ -1013,7 +1049,7 @@ impl<'a> ItemPainter for WorldSide<'a> {
     fn point_crd(&self, _index: usize) -> PainterCrd {
         PainterCrd::Horiz(HorizCoord {
             alt: 0.0,
-            az: self.az
+            az: degree_to_radian(self.az)
         })
     }
 
@@ -1116,3 +1152,35 @@ impl ItemPainter for TestHorizCircle {
         Ok(())
     }
 }
+
+struct SelectionPainter {
+    crd:       EqCoord,
+    size:      f64,
+    thickness: f64,
+}
+
+ impl ItemPainter for SelectionPainter {
+    fn points_count(&self) -> usize {
+        1
+    }
+
+    fn point_crd(&self, _index: usize) -> PainterCrd {
+        PainterCrd::Eq(self.crd.clone())
+    }
+
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+        let pt = &points[0];
+        ctx.cairo.set_antialias(cairo::Antialias::Fast);
+        ctx.cairo.set_source_rgb(1.0, 0.0, 1.0);
+        ctx.cairo.set_line_width(self.thickness);
+        ctx.cairo.rectangle(
+            pt.x - 0.5 * self.size,
+            pt.y - 0.5 * self.size,
+            self.size,
+            self.size
+        );
+        ctx.cairo.stroke()?;
+        Ok(())
+    }
+}
+

@@ -1,9 +1,8 @@
 use std::{collections::*, f64::consts::PI, fmt::Debug, io::{BufRead, Read}, path::Path};
-use std::f32::consts::PI as PI_f32;
+use bitflags::bitflags;
 use bitstream_io::{BigEndian, BitReader};
 use crate::{indi::sexagesimal_to_value, utils::compression::ValuesDecompressor};
 use super::utils::*;
-
 
 const ID_CAT_OTHER:   u16 = 0;
 const ID_CAT_MESSIER: u16 = 1;
@@ -131,6 +130,11 @@ impl Debug for ObjMagnitude {
     }
 }
 
+enum SearchMode {
+    StartWith,
+    Contains,
+}
+
 #[derive(Clone, Debug)]
 pub struct StarData {
     pub crd: ObjEqCoord,
@@ -140,10 +144,12 @@ pub struct StarData {
 
 #[derive(Clone, Debug)]
 pub struct NamedStar {
-    pub cnst_id: u8,
-    pub name:    String,
-    pub bayer:   String,
-    pub data:    StarData,
+    pub cnst_id:  u8,
+    pub name:     String,
+    pub name_lc:  String,
+    pub bayer:    String,
+    pub bayer_lc: String,
+    pub data:     StarData,
 }
 
 #[derive(Clone)]
@@ -226,12 +232,10 @@ impl Stars {
         };
 
         if let (Some(name), Some(bayer), Some(cnst_id)) = (name, bayer, cnst_id) {
-            zone.nstars.push(NamedStar {
-                data,
-                name,
-                bayer,
-                cnst_id
-            });
+            let name_lc = name.to_lowercase();
+            let bayer_lc = bayer.to_lowercase();
+            let star = NamedStar{ data, name, name_lc, bayer, bayer_lc, cnst_id };
+            zone.nstars.push(star);
         } else {
             zone.stars.push(Star { data });
         }
@@ -265,10 +269,12 @@ impl Stars {
 
         let star_to_named_star = |star: &Star| -> NamedStar {
             NamedStar {
-                data:    star.data.clone(),
-                bayer:   String::new(),
-                cnst_id: 0,
-                name:    String::new(),
+                data:     star.data.clone(),
+                name:     String::new(),
+                name_lc:  String::new(),
+                bayer:    String::new(),
+                bayer_lc: String::new(),
+                cnst_id:  0,
             }
         };
 
@@ -289,10 +295,39 @@ impl Stars {
 
         None
     }
+
+    fn find(&self, text: &str, mode: SearchMode) -> Vec<SkymapObject> {
+        let mut result = Vec::new();
+        for star in self.zones.iter().flat_map(|(_, zone)| &zone.nstars) {
+            let found = match mode {
+                SearchMode::StartWith =>
+                    star.name_lc.starts_with(text) ||
+                    star.bayer_lc.starts_with(text),
+                SearchMode::Contains =>
+                    star.name_lc.contains(text) ||
+                    star.bayer_lc.contains(text),
+            };
+            if found {
+                result.push(SkymapObject::Star(star.clone()));
+            }
+        }
+        result
+    }
+
+}
+
+bitflags! {
+    pub struct ItemFilterFlags: u32 {
+        const OUTLINES = 1 << 0;
+        const STARS    = 1 << 1;
+        const CLUSTERS = 1 << 2;
+        const NEBULAS  = 1 << 3;
+        const GALAXIES = 1 << 4;
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum DsoType {
+pub enum SkyItemType {
     None,
     Star,
     DoubleStar,
@@ -312,24 +347,43 @@ pub enum DsoType {
     StarClusterAndNebula,
 }
 
-impl DsoType {
+impl SkyItemType {
     fn from_str(name: &str) -> Option<Self> {
         let type_is = |col_name| name.eq_ignore_ascii_case(col_name);
-        if      type_is("g")      { Some(DsoType::Galaxy) }
-        else if type_is("cl")     { Some(DsoType::StarCluster) }
-        else if type_is("pn")     { Some(DsoType::PlanetaryNebula) }
-        else if type_is("drkn")   { Some(DsoType::DarkNebula) }
-        else if type_is("emn")    { Some(DsoType::EmissionNebula) }
-        else if type_is("neb")    { Some(DsoType::Nebula) }
-        else if type_is("rfn")    { Some(DsoType::ReflectionNebula) }
-        else if type_is("hii")    { Some(DsoType::HIIIonizedRegion) }
-        else if type_is("snr")    { Some(DsoType::SupernovaRemnant) }
-        else if type_is("gpair")  { Some(DsoType::GalaxyPair) }
-        else if type_is("gtrpl")  { Some(DsoType::GalaxyTriplet) }
-        else if type_is("ggroup") { Some(DsoType::GroupOfGalaxies) }
-        else if type_is("*ass")   { Some(DsoType::AssociationOfStars) }
-        else if type_is("cl+n")   { Some(DsoType::StarClusterAndNebula) }
+        if      type_is("g")      { Some(SkyItemType::Galaxy) }
+        else if type_is("cl")     { Some(SkyItemType::StarCluster) }
+        else if type_is("pn")     { Some(SkyItemType::PlanetaryNebula) }
+        else if type_is("drkn")   { Some(SkyItemType::DarkNebula) }
+        else if type_is("emn")    { Some(SkyItemType::EmissionNebula) }
+        else if type_is("neb")    { Some(SkyItemType::Nebula) }
+        else if type_is("rfn")    { Some(SkyItemType::ReflectionNebula) }
+        else if type_is("hii")    { Some(SkyItemType::HIIIonizedRegion) }
+        else if type_is("snr")    { Some(SkyItemType::SupernovaRemnant) }
+        else if type_is("gpair")  { Some(SkyItemType::GalaxyPair) }
+        else if type_is("gtrpl")  { Some(SkyItemType::GalaxyTriplet) }
+        else if type_is("ggroup") { Some(SkyItemType::GroupOfGalaxies) }
+        else if type_is("*ass")   { Some(SkyItemType::AssociationOfStars) }
+        else if type_is("cl+n")   { Some(SkyItemType::StarClusterAndNebula) }
         else                      { None }
+    }
+
+    pub fn test_filter_flag(self, flags: &ItemFilterFlags) -> bool {
+        use SkyItemType::*;
+        match self {
+            Star | DoubleStar =>
+                flags.contains(ItemFilterFlags::STARS),
+            Galaxy | GalaxyPair | GalaxyTriplet | GroupOfGalaxies =>
+                flags.contains(ItemFilterFlags::GALAXIES),
+            StarCluster | AssociationOfStars =>
+                flags.contains(ItemFilterFlags::CLUSTERS),
+            PlanetaryNebula | DarkNebula | EmissionNebula | Nebula |
+            ReflectionNebula | SupernovaRemnant | HIIIonizedRegion =>
+                flags.contains(ItemFilterFlags::NEBULAS),
+            StarClusterAndNebula =>
+                flags.contains(ItemFilterFlags::NEBULAS) ||
+                flags.contains(ItemFilterFlags::CLUSTERS),
+            _ => false,
+        }
     }
 }
 
@@ -342,33 +396,97 @@ pub struct Outline {
 pub struct DsoName {
     pub catalogue: u16,
     pub name:      String,
+    pub name_lc:   String,
 }
 
 #[derive(Debug, Clone)]
 pub struct DsoItem {
     pub names:    Vec<DsoName>,
     pub crd:      ObjEqCoord,
-    pub mag:      ObjMagnitude,
+    pub mag_v:    Option<ObjMagnitude>,
+    pub mag_b:    Option<ObjMagnitude>,
     pub cnst_id:  u8,
-    pub obj_type: DsoType,
+    pub obj_type: SkyItemType,
     pub maj_axis: Option<f32>,
     pub min_axis: Option<f32>,
     pub angle:    Option<f32>,
 }
 
-#[derive(Debug)]
-pub enum Object {
+impl DsoItem {
+    pub fn any_magnitude(&self) -> Option<ObjMagnitude> {
+        if self.mag_v.is_some() {
+            self.mag_v
+        } else {
+            self.mag_b
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum SkymapObject {
     Star(NamedStar),
     Dso(DsoItem),
 }
 
-impl Object {
+impl SkymapObject {
+    pub fn names(&self) -> Vec<String> {
+        match self {
+            Self::Dso(dso) =>
+                dso.names.iter().map(|n| n.name.clone()).collect(),
+            Self::Star(star) => {
+                let mut result = Vec::new();
+                if !star.name.is_empty() {
+                    result.push(star.name.clone());
+                }
+                if !star.bayer.is_empty() {
+                    result.push(star.bayer.clone());
+                }
+                result
+            }
+        }
+    }
+
+    pub fn obj_type(&self) -> SkyItemType {
+        match self {
+            Self::Dso(dso) => dso.obj_type,
+            Self::Star(_) => SkyItemType::Star,
+        }
+    }
+
     pub fn crd(&self) -> EqCoord {
         match self {
             Self::Dso(dso) => dso.crd.to_eq(),
             Self::Star(star) => star.data.crd.to_eq(),
         }
     }
+
+    pub fn mag_v(&self) -> Option<f32> {
+        match self {
+            Self::Dso(dso) => dso.mag_v.map(|mag| mag.get()),
+            Self::Star(star) => Some(star.data.mag.get()),
+        }
+    }
+
+    pub fn mag_b(&self) -> Option<f32> {
+        match self {
+            Self::Dso(dso) => dso.mag_b.map(|mag| mag.get()),
+            Self::Star(_) => None,
+        }
+    }
+
+    pub fn bv(&self) -> Option<f32> {
+        match self {
+            Self::Dso(dso) => {
+                if let (Some(mag_v), Some(mag_b)) = (dso.mag_v, dso.mag_b) {
+                    Some(mag_b.get() - mag_v.get())
+                } else {
+                    None
+                }
+            },
+            Self::Star(star) => Some(star.data.bv.get()),
+        }
+    }
+
 }
 
 pub struct SkyMap {
@@ -460,27 +578,30 @@ impl SkyMap {
         let ngc_col      = find_col("ngc")?;
         let ic_col       = find_col("ic")?;
         let other_col    = find_col("other")?;
-        let mag_col      = find_col("mag")?;
+        let mag_v_col    = find_col("mag_v")?;
+        let mag_b_col    = find_col("mag_b")?;
         let maj_axis_col = find_col("major_axis")?;
         let min_axis_col = find_col("minor_axis")?;
         let angle_col    = find_col("angle")?;
 
         for record in rdr.records().filter_map(|record| record.ok()) {
             if record.is_empty() { continue; }
-            let Some(obj_type) = DsoType::from_str(record[type_col].trim()) else { continue; };
+            let Some(obj_type) = SkyItemType::from_str(record[type_col].trim()) else { continue; };
             let Some(ra) = sexagesimal_to_value(record[ra_col].trim()) else { continue; };
             let Some(dec) = sexagesimal_to_value(record[dec_col].trim()) else { continue; };
             let cnst_id = *self.const_id_by_name.get(record[const_col].trim()).unwrap_or(&0);
-            let magnitude = record[mag_col].trim().parse().unwrap_or(f32::NAN);
+            let mag_v = record[mag_v_col].trim().parse().ok();
+            let mag_b = record[mag_b_col].trim().parse().ok();
             let maj_axis = record[maj_axis_col].trim().parse().ok();
             let min_axis = record[min_axis_col].trim().parse().ok();
-            let angle = record[angle_col].trim().parse().ok().map(|v: f32| v * PI_f32 / 180.0);
+            let angle = record[angle_col].trim().parse().ok().map(|v| degree_to_radian(v) as f32);
             let mut names = Vec::new();
             fn append_names (col_str: &str, names: &mut Vec<DsoName>, catalogue: u16) {
                 for name in col_str.split("|").filter(|name| !name.is_empty()) {
                     names.push(DsoName {
                         catalogue,
-                        name: name.to_string(),
+                        name:    name.to_string(),
+                        name_lc: name.to_lowercase(),
                     })
                 }
             }
@@ -489,12 +610,13 @@ impl SkyMap {
             append_names(record[ic_col].trim(), &mut names, ID_CAT_IC);
             append_names(record[other_col].trim(), &mut names, ID_CAT_OTHER);
             let crd = ObjEqCoord::new(
-                2.0 * PI * ra / 24.0,
-                2.0 * PI * dec / 360.0
+                hour_to_radian(ra),
+                degree_to_radian(dec)
             );
-            let mag = ObjMagnitude::new(magnitude);
+            let mag_v = mag_v.map(|v| ObjMagnitude::new(v));
+            let mag_b = mag_b.map(|v| ObjMagnitude::new(v));
             let object = DsoItem {
-                names, crd, mag, cnst_id,
+                names, crd, mag_v, mag_b, cnst_id,
                 obj_type, maj_axis, min_axis, angle
             };
             self.objects.push(object);
@@ -579,8 +701,8 @@ impl SkyMap {
             let cnst_id = *self.const_id_by_name.get(record[const_col].trim()).unwrap_or(&0);
             let magnitude = record[mag_col].trim().parse().unwrap_or(f32::NAN);
             let bv = record[bv_col].trim().parse().unwrap_or(f32::NAN);
-            let ra = 2.0 * PI * ra_hours / 24.0;
-            let dec = 2.0 * PI * dec_degrees / 360.0;
+            let ra = hour_to_radian(ra_hours);
+            let dec = degree_to_radian(dec_degrees);
             let star_data = StarData {
                 crd: ObjEqCoord::new(ra, dec),
                 mag: ObjMagnitude::new(magnitude as f32),
@@ -608,8 +730,8 @@ impl SkyMap {
                 .filter(|item| !item.is_empty())
                 .collect::<Vec<_>>();
             let parse_coords = |ra_str: &str, dec_str: &str| -> anyhow::Result<(f64, f64)> {
-                let ra = 2.0 * PI * ra_str.parse::<f64>()? / 24.0;
-                let dec = 2.0 * PI * dec_str.parse::<f64>()? / 360.0;
+                let ra = hour_to_radian( ra_str.parse::<f64>()?);
+                let dec = hour_to_radian(dec_str.parse::<f64>()?);
                 Ok((ra, dec))
             };
             match line_items.as_slice() {
@@ -643,34 +765,87 @@ impl SkyMap {
         &self,
         crd:          &EqCoord,
         max_dso_mag:  f32,
-        max_star_mag: f32
-    ) -> Option<Object> {
-        let nearest_star = self.stars.get_nearest(crd, max_star_mag);
-        let nearest_obj = self.get_nearest_dso_object(crd, max_dso_mag);
+        max_star_mag: f32,
+        filter:       &ItemFilterFlags,
+    ) -> Option<SkymapObject> {
+        let nearest_star = if filter.contains(ItemFilterFlags::STARS) {
+            self.stars.get_nearest(crd, max_star_mag)
+        } else {
+            None
+        };
+        let nearest_obj = self.get_nearest_dso_object(crd, max_dso_mag, filter);
         match (nearest_star, nearest_obj) {
             (Some((star, star_angle)), Some((obj, obj_angle))) => {
                 if star_angle < obj_angle {
-                    Some(Object::Star(star))
+                    Some(SkymapObject::Star(star))
                 } else {
-                    Some(Object::Dso(obj))
+                    Some(SkymapObject::Dso(obj))
                 }
             }
             (Some((star, _)), None) =>
-                Some(Object::Star(star)),
+                Some(SkymapObject::Star(star)),
             (None, Some((obj, _))) =>
-                Some(Object::Dso(obj)),
+                Some(SkymapObject::Dso(obj)),
             _ =>
                 None
         }
     }
 
-    pub fn get_nearest_dso_object(&self, crd: &EqCoord, max_dso_mag: f32) -> Option<(DsoItem, f64)> {
+    pub fn get_nearest_dso_object(
+        &self,
+        crd:         &EqCoord,
+        max_dso_mag: f32,
+        filter:      &ItemFilterFlags,
+    ) -> Option<(DsoItem, f64)> {
         let max_mag = ObjMagnitude::new(max_dso_mag);
         let nearest_obj = self.objects.iter()
-            .filter(|obj| obj.mag <= max_mag)
+            .filter(|obj| obj.obj_type.test_filter_flag(filter))
+            .filter(|obj| obj.any_magnitude().map(|mag| mag <= max_mag).unwrap_or(false))
             .map(|obj| (obj, EqCoord::angle_between(&obj.crd.to_eq(), crd)))
             .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(&angle1, &angle2));
         nearest_obj.map(|(obj, angle)| (obj.clone(), angle))
     }
+
+    pub fn find_objects(&self, text: &str) -> Vec<SkymapObject> {
+        let mut result = Vec::new();
+        let text_lc = text.trim().to_lowercase();
+        if text_lc.is_empty() {
+            return result;
+        }
+        let mut uniq_names = HashSet::new();
+        let mut apdate_result = |items: Vec<SkymapObject>| {
+            for item in items {
+                let names = item.names().join("|");
+                if uniq_names.contains(&names) { continue; }
+                result.push(item);
+                uniq_names.insert(names);
+            }
+        };
+        apdate_result(self.find_dso_objects(&text_lc, SearchMode::StartWith));
+        apdate_result(self.stars.find(&text_lc, SearchMode::StartWith));
+        apdate_result(self.find_dso_objects(&text_lc, SearchMode::Contains));
+        apdate_result(self.stars.find(&text_lc, SearchMode::Contains));
+        result
+    }
+
+    fn find_dso_objects(&self, text: &str, mode: SearchMode) -> Vec<SkymapObject> {
+        let mut result = Vec::new();
+        for item in &self.objects {
+            let mut matched = false;
+            for name in &item.names {
+                matched |= match mode {
+                    SearchMode::StartWith =>
+                        name.name_lc.starts_with(text),
+                    SearchMode::Contains =>
+                        name.name_lc.contains(text),
+                };
+            }
+            if matched {
+                result.push(SkymapObject::Dso(item.clone()));
+            }
+        }
+        result
+    }
+
 
 }

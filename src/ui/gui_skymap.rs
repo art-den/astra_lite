@@ -1,9 +1,9 @@
-use std::{cell::RefCell, cell::Cell, f64::consts::PI, rc::Rc, sync::{Arc, RwLock}};
+use std::{cell::RefCell, cell::Cell, rc::Rc, sync::{Arc, RwLock}};
 use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone};
-use crate::{indi, options::*, utils::io_utils::*};
-use super::{gtk_utils::{self, DEFAULT_DPMM}, gui_common::*, gui_main::*, sky_map::{data::*, painter::*}};
+use crate::{indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
+use super::{gtk_utils::{self, DEFAULT_DPMM}, gui_common::*, gui_main::*, sky_map::{data::*, painter::*, utils::*}};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
 pub fn init_ui(
@@ -27,25 +27,28 @@ pub fn init_ui(
     pan_map1.add2(map_widget.get_widget());
 
     let data = Rc::new(MapGui {
-        gui_options: RefCell::new(gui_options),
-        indi:        Arc::clone(indi),
-        options:     Arc::clone(options),
-        builder:     builder.clone(),
-        window:      window.clone(),
-        gui:         Rc::clone(gui),
-        excl:        ExclusiveCaller::new(),
+        gui_options:  RefCell::new(gui_options),
+        indi:         Arc::clone(indi),
+        options:      Arc::clone(options),
+        builder:      builder.clone(),
+        window:       window.clone(),
+        gui:          Rc::clone(gui),
+        excl:         ExclusiveCaller::new(),
         map_widget,
-        skymap_data: RefCell::new(None),
-        user_time:   RefCell::new(UserTime::default()),
-        prev_second: Cell::new(0),
-        paint_ts:    RefCell::new(std::time::Instant::now()),
-        prev_wdt:    RefCell::new(PrevWidgetsDT::default()),
-        self_:       RefCell::new(None),
+        skymap_data:  RefCell::new(None),
+        user_time:    RefCell::new(UserTime::default()),
+        prev_second:  Cell::new(0),
+        paint_ts:     RefCell::new(std::time::Instant::now()),
+        prev_wdt:     RefCell::new(PrevWidgetsDT::default()),
+        selected_obj: RefCell::new(None),
+        found_items:  RefCell::new(Vec::new()),
+        self_:        RefCell::new(None),
     });
 
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
     data.init_widgets();
+    data.init_search_result_tv();
     data.show_options();
 
     data.connect_main_gui_events(handlers);
@@ -54,28 +57,26 @@ pub fn init_ui(
     data.set_observer_data_for_widget();
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-struct FilterOptions {
-    visible:    bool,
-    stars:      bool,
-    galaxies:   bool,
-    clusters:   bool, // star clusters
-    nebulae:    bool,
-    pl_nebulae: bool, // planet nebulae
-    other:      bool,
-}
-
-impl Default for FilterOptions {
-    fn default() -> Self {
-        Self {
-            visible:    false,
-            stars:      false,
-            galaxies:   true,
-            clusters:   true,
-            nebulae:    true,
-            pl_nebulae: true,
-            other:      true,
+impl SkyItemType {
+    fn to_str(self) -> &'static str {
+        match self {
+            SkyItemType::None                 => "",
+            SkyItemType::Star                 => "Star",
+            SkyItemType::DoubleStar           => "Double Star",
+            SkyItemType::Galaxy               => "Galaxy",
+            SkyItemType::StarCluster          => "Star Cluster",
+            SkyItemType::PlanetaryNebula      => "Planetary Nebula",
+            SkyItemType::DarkNebula           => "Dark Nebula",
+            SkyItemType::EmissionNebula       => "Emission Nebula",
+            SkyItemType::Nebula               => "Nebula",
+            SkyItemType::ReflectionNebula     => "Reflection Nebula",
+            SkyItemType::HIIIonizedRegion     => "Hii Ionized Region",
+            SkyItemType::SupernovaRemnant     => "Supernova Remnant",
+            SkyItemType::GalaxyPair           => "Galaxy Pair",
+            SkyItemType::GalaxyTriplet        => "Galaxy Triplet",
+            SkyItemType::GroupOfGalaxies      => "Group of Galaxies",
+            SkyItemType::AssociationOfStars   => "Association of Stars",
+            SkyItemType::StarClusterAndNebula => "Star Cluster and Nebula",
         }
     }
 }
@@ -106,7 +107,6 @@ impl Default for ObjectsToShow {
 #[serde(default)]
 struct GuiOptions {
     paned_pos1: i32,
-    filter:     FilterOptions,
     to_show:    ObjectsToShow,
     max_mag:    f32,
 }
@@ -115,7 +115,6 @@ impl Default for GuiOptions {
     fn default() -> Self {
         Self {
             paned_pos1: -1,
-            filter:     Default::default(),
             to_show:    Default::default(),
             max_mag:    10.0,
         }
@@ -226,6 +225,8 @@ struct MapGui {
     prev_second:  Cell<u32>,
     paint_ts:     RefCell<std::time::Instant>, // last paint moment timestamp
     prev_wdt:     RefCell<PrevWidgetsDT>,
+    selected_obj: RefCell<Option<SkymapObject>>,
+    found_items:  RefCell<Vec<SkymapObject>>,
     self_:        RefCell<Option<Rc<MapGui>>>
 }
 
@@ -246,7 +247,7 @@ impl MapGui {
                 self.handler_main_timer(),
             MainGuiEvent::TabPageChanged(page) if page == TabPage::SkyMap => {
                 self.update_date_time_widgets(true);
-                self.update_skymap_widget(true);
+                self.update_skymap_widget_and_selected_info(true);
             }
             _ => {},
         }
@@ -327,6 +328,28 @@ impl MapGui {
         connect_obj_visibility_changed("chb_show_galaxies");
         connect_obj_visibility_changed("chb_show_nebulas");
         connect_obj_visibility_changed("chb_show_sclusters");
+
+        self.map_widget.add_obj_sel_handler(
+            clone!(@weak self as self_ => move |object| {
+                self_.handler_object_selected(object);
+            })
+        );
+
+        let se = self.builder.object::<gtk::SearchEntry>("se_sm_search").unwrap();
+        se.connect_search_changed(
+            clone!(@weak self as self_ => move |handler_search_text_changed| {
+                self_.handler_search_text_changed(handler_search_text_changed);
+            })
+        );
+
+        let search_tv = self.builder.object::<gtk::TreeView>("tv_sm_search_result").unwrap();
+        search_tv.selection().connect_changed(
+            clone!( @weak self as self_ => move |selection| {
+                self_.handler_search_result_selection_chanegd(selection);
+            })
+        );
+
+
     }
 
     fn show_options(&self) {
@@ -334,13 +357,6 @@ impl MapGui {
         let opts = self.gui_options.borrow();
         pan_map1.set_position(opts.paned_pos1);
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        ui.set_prop_bool("chb_flt_visible.active", opts.filter.visible);
-        ui.set_prop_bool("chb_flt_stars.active", opts.filter.visible);
-        ui.set_prop_bool("chb_flt_galaxies.active", opts.filter.galaxies);
-        ui.set_prop_bool("chb_flt_clusters.active", opts.filter.clusters);
-        ui.set_prop_bool("chb_flt_nebulae.active", opts.filter.nebulae);
-        ui.set_prop_bool("chb_flt_pl_nebulae.active", opts.filter.pl_nebulae);
-        ui.set_prop_bool("chb_flt_other.active", opts.filter.other);
 
         ui.set_prop_bool("chb_show_stars.active", opts.to_show.stars);
         ui.set_prop_bool("chb_show_dso.active", opts.to_show.dso);
@@ -359,14 +375,7 @@ impl MapGui {
         let mut opts = self.gui_options.borrow_mut();
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         opts.paned_pos1 = pan_map1.position();
-        opts.filter.visible    = ui.prop_bool("chb_flt_visible.active");
-        opts.filter.visible    = ui.prop_bool("chb_flt_stars.active");
-        opts.filter.galaxies   = ui.prop_bool("chb_flt_galaxies.active");
-        opts.filter.clusters   = ui.prop_bool("chb_flt_clusters.active");
-        opts.filter.nebulae    = ui.prop_bool("chb_flt_nebulae.active");
-        opts.filter.pl_nebulae = ui.prop_bool("chb_flt_pl_nebulae.active");
-        opts.filter.other      = ui.prop_bool("chb_flt_other.active");
-        opts.max_mag           = ui.range_value("scl_max_dso_mag") as f32;
+        opts.max_mag    = ui.range_value("scl_max_dso_mag") as f32;
 
         Self::read_visibility_options_from_widgets(&mut opts.to_show, &ui);
 
@@ -453,12 +462,16 @@ impl MapGui {
         }));
     }
 
-    fn set_observer_data_for_widget(&self) {
+    fn create_observer(&self) -> Observer {
         let sky_map_options = self.options.read().unwrap().sky_map.clone();
-        let observer = Observer {
-            latitude: PI * sky_map_options.latitude / 180.0,
-            longitude: PI * sky_map_options.longitude / 180.0,
-        };
+        Observer {
+            latitude: degree_to_radian(sky_map_options.latitude),
+            longitude: degree_to_radian(sky_map_options.longitude),
+        }
+    }
+
+    fn set_observer_data_for_widget(&self) {
+        let observer = self.create_observer();
         self.map_widget.set_observer(&observer);
     }
 
@@ -471,7 +484,7 @@ impl MapGui {
         self.update_date_time_widgets(false);
 
         // Update map 2 times per second
-        self.update_skymap_widget(false);
+        self.update_skymap_widget_and_selected_info(false);
     }
 
     fn update_date_time_widgets(&self, force: bool) {
@@ -486,7 +499,7 @@ impl MapGui {
         });
     }
 
-    fn update_skymap_widget(&self, force: bool) {
+    fn update_skymap_widget_and_selected_info(&self, force: bool) {
         self.check_data_loaded();
 
         let mut paint_ts = self.paint_ts.borrow_mut();
@@ -499,14 +512,16 @@ impl MapGui {
             let mut paint_config = PaintConfig::default();
 
             paint_config.max_dso_mag = config.max_mag;
-            paint_config.flags.set(PaintFlags::PAINT_STARS, config.to_show.stars);
-            paint_config.flags.set(PaintFlags::PAINT_CLUSTERS, config.to_show.dso && config.to_show.sclusters);
-            paint_config.flags.set(PaintFlags::PAINT_NEBULAS, config.to_show.dso && config.to_show.nebulas);
-            paint_config.flags.set(PaintFlags::PAINT_GALAXIES, config.to_show.dso && config.to_show.galaxies);
+            paint_config.filter.set(ItemFilterFlags::STARS, config.to_show.stars);
+            paint_config.filter.set(ItemFilterFlags::CLUSTERS, config.to_show.dso && config.to_show.sclusters);
+            paint_config.filter.set(ItemFilterFlags::NEBULAS, config.to_show.dso && config.to_show.nebulas);
+            paint_config.filter.set(ItemFilterFlags::GALAXIES, config.to_show.dso && config.to_show.galaxies);
 
             drop(config);
 
             self.map_widget.set_paint_config(&paint_config);
+
+            self.show_selected_objects_info();
         }
     }
 
@@ -627,7 +642,7 @@ impl MapGui {
             drop(user_time);
 
             self.set_time_to_widgets_impl();
-            self.update_skymap_widget(true);
+            self.update_skymap_widget_and_selected_info(true);
         });
     }
 
@@ -647,7 +662,7 @@ impl MapGui {
             user_time.set_now();
             drop(user_time);
             self.set_time_to_widgets_impl();
-            self.update_skymap_widget(true);
+            self.update_skymap_widget_and_selected_info(true);
         });
     }
 
@@ -661,7 +676,7 @@ impl MapGui {
             options.max_mag = value;
             drop(options);
 
-            self.update_skymap_widget(true);
+            self.update_skymap_widget_and_selected_info(true);
         });
     }
 
@@ -671,6 +686,141 @@ impl MapGui {
         Self::read_visibility_options_from_widgets(&mut opts.to_show, &ui);
         drop(opts);
 
-        self.update_skymap_widget(true);
+        self.update_skymap_widget_and_selected_info(true);
+    }
+
+    fn handler_object_selected(&self, obj: Option<SkymapObject>) {
+        *self.selected_obj.borrow_mut() = obj;
+        self.show_selected_objects_info();
+    }
+
+    fn show_selected_objects_info(&self) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let obj = self.selected_obj.borrow();
+
+        let names = obj.as_ref().map(|obj| obj.names().join(", ")).unwrap_or_default();
+        let obj_type = obj.as_ref().map(|obj| obj.obj_type()).unwrap_or(SkyItemType::None);
+        let obj_type_str = obj_type.to_str();
+        let mag_str = obj.as_ref().map(|obj| {
+            if let Some(mag) = obj.mag_v() {
+                format!("{:.2}", mag)
+            } else if let Some(mag) = obj.mag_b() {
+                format!("{:.2}", mag)
+            } else {
+                String::new()
+            }
+        }).unwrap_or_default();
+
+        let mag_cap_str = obj.as_ref().map(|obj| {
+            if obj.mag_v().is_some() {
+                "Magnitude (V)"
+            } else if obj.mag_b().is_some() {
+                "Magnitude (B)"
+            } else {
+                "Magnitude"
+            }
+        }).unwrap_or("Magnitude");
+
+        let bv = obj.as_ref().map(|obj|obj.bv()).flatten();
+        let bv_str = bv.map(|bv| format!("{:.2}", bv)).unwrap_or_default();
+
+        let ra_str = match obj.as_ref().map(|obj| obj.crd()) {
+            Some(crd) => value_to_sexagesimal(radian_to_hour(crd.ra), true, 9),
+            None => String::new(),
+        };
+
+        let dec_str = match obj.as_ref().map(|obj| obj.crd()) {
+            Some(crd) => value_to_sexagesimal(radian_to_degree(crd.dec), true, 8),
+            None => String::new(),
+        };
+
+        let horiz_crd = obj.as_ref().map(|obj| {
+            let observer = self.create_observer();
+            let time = self.map_widget.time();
+            let cvt = EqToHorizCvt::new(&observer, &time);
+            cvt.eq_to_horiz(&obj.crd())
+        });
+
+        let zenith_str = horiz_crd.as_ref().map(|crd|
+            value_to_sexagesimal(radian_to_degree(crd.alt), true, 8)
+        ).unwrap_or_default();
+
+        let azimuth_str = horiz_crd.as_ref().map(|crd|
+            value_to_sexagesimal(radian_to_degree(crd.az), true, 8)
+        ).unwrap_or_default();
+
+        ui.set_prop_str("e_sm_sel_names.text", Some(&names));
+        ui.set_prop_str("l_sm_sel_type.label", Some(&obj_type_str));
+        ui.set_prop_str("l_sm_sel_mag_cap.label", Some(&mag_cap_str));
+        ui.set_prop_str("l_sm_sel_mag.label", Some(&mag_str));
+        ui.set_prop_str("l_sm_sel_bv.label", Some(&bv_str));
+        ui.set_prop_str("l_sm_sel_ra.label", Some(&ra_str));
+        ui.set_prop_str("l_sm_sel_dec.label", Some(&dec_str));
+        ui.set_prop_str("l_sm_sel_zenith.label", Some(&zenith_str));
+        ui.set_prop_str("l_sm_sel_az.label", Some(&azimuth_str));
+    }
+
+    fn init_search_result_tv(&self) {
+        let tv = self.builder.object::<gtk::TreeView>("tv_sm_search_result").unwrap();
+        let columns = [
+            /* 0 */ ("Name", String::static_type()),
+            /* 1 */ ("Type", String::static_type()),
+            /* 2 */ ("",     i32::static_type()),
+        ];
+        let types = columns.iter().map(|(_, t)| *t).collect::<Vec<_>>();
+        let model = gtk::ListStore::new(&types);
+        for (idx, (col_name, _)) in columns.into_iter().enumerate() {
+            if col_name.is_empty() { continue; }
+            let cell_text = gtk::CellRendererText::new();
+            let col = gtk::TreeViewColumn::builder()
+                .title(col_name)
+                .resizable(true)
+                .clickable(true)
+                .visible(true)
+                .build();
+            TreeViewColumnExt::pack_start(&col, &cell_text, true);
+            TreeViewColumnExt::add_attribute(&col, &cell_text, "text", idx as i32);
+            tv.append_column(&col);
+        }
+        tv.set_model(Some(&model));
+    }
+
+    pub fn handler_search_text_changed(&self, se: &gtk::SearchEntry) {
+        let Some(skymap) = &*self.skymap_data.borrow() else { return; };
+        let text = se.text().trim().to_string();
+        *self.found_items.borrow_mut() = skymap.find_objects(&text);
+        self.show_search_result();
+    }
+
+    fn show_search_result(&self) {
+        let tv = self.builder.object::<gtk::TreeView>("tv_sm_search_result").unwrap();
+        let Some(model) = tv.model() else { return; };
+        let Ok(model) = model.downcast::<gtk::ListStore>() else { return; };
+        let result = self.found_items.borrow();
+        model.clear();
+        for (idx, item) in result.iter().enumerate() {
+            model.insert_with_values(
+                None, &[
+                (0, &item.names().join(", ")),
+                (1, &item.obj_type().to_str()),
+                (2, &(idx as i32)),
+            ]);
+        }
+    }
+
+    pub fn handler_search_result_selection_chanegd(&self, selection: &gtk::TreeSelection) {
+        let items = selection
+            .selected_rows().0
+            .iter()
+            .flat_map(|path| path.indices())
+            .collect::<Vec<_>>();
+
+        let &[index] = items.as_slice() else { return; };
+        let index = index as usize;
+        let found_items = self.found_items.borrow();
+        let Some(selected_obj) = found_items.get(index) else { return; };
+        *self.selected_obj.borrow_mut() = Some(selected_obj.clone());
+        self.show_selected_objects_info();
+        self.map_widget.set_selected_object(Some(&selected_obj));
     }
 }

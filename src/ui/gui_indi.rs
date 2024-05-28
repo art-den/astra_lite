@@ -337,11 +337,11 @@ impl IndiGui {
                     ui_group.grid.attach(&separator, 0, ui_group.next_row, 6, 1);
                     widgets.push(separator.into());
                     ui_group.props.push(UiIndiProp {
-                        name:       indi_prop.name.to_string(),
-                        label_lc:   caption.to_lowercase(),
-                        elements:   prop_ui_elements,
+                        name:      indi_prop.name.to_string(),
+                        label_lc:  caption.to_lowercase(),
+                        elements:  prop_ui_elements,
                         widgets,
-                        sep_row:    ui_group.next_row,
+                        sep_row:   ui_group.next_row,
                         change_id: 0,
                     });
                     ui_group.next_row += 1;

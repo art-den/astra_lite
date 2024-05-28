@@ -1,5 +1,5 @@
 pub mod data;
 pub mod painter;
 pub mod widget;
-mod utils;
+pub mod utils;
 mod consts;

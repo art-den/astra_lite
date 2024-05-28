@@ -95,7 +95,7 @@ impl Point3D {
 fn test_point3d_rotate() {
     let mut pt = Point3D { x: 0.0, y: 0.0, z: 1.0 };
 
-    let mat = RotMatrix::new(90.0 * 2.0 * PI / 360.0);
+    let mat = RotMatrix::new(degree_to_radian(90.0));
     pt.rotate_over_x(&mat);
     assert!(f64::abs(pt.x-0.0) < 1e-10);
     assert!(f64::abs(pt.y-1.0) < 1e-10);
@@ -154,8 +154,8 @@ fn test_eq_to_horiz_cvt() {
         let time = chrono::NaiveTime::from_hms_milli_opt(11, 23, 15, 0).unwrap();
         let utc_time = chrono::NaiveDateTime::new(date, time);
         let observer = Observer {
-            latitude:  11.0 * PI / 180.0,
-            longitude: 56.0 * PI / 180.0,
+            latitude:  degree_to_radian(11.0),
+            longitude: degree_to_radian(56.0),
         };
         let cvt = EqToHorizCvt::new(&observer, &utc_time);
         let horiz = cvt.eq_to_horiz(eq);
@@ -164,23 +164,23 @@ fn test_eq_to_horiz_cvt() {
     }
 
     test(&EqCoord {
-        ra: 12.0 * PI / 180.0,
-        dec: 42.0 * PI / 180.0,
+        ra: degree_to_radian(12.0),
+        dec: degree_to_radian(42.0),
     });
 
     test(&EqCoord {
-        ra: 200.0 * PI / 180.0,
-        dec: 42.0 * PI / 180.0,
+        ra: degree_to_radian(200.0),
+        dec: degree_to_radian(42.0),
     });
 
     test(&EqCoord {
-        ra: 200.0 * PI / 180.0,
-        dec: -42.0 * PI / 180.0,
+        ra: degree_to_radian(200.0),
+        dec: degree_to_radian(-42.0),
     });
 
     test(&EqCoord {
-        ra: 12.0 * PI / 180.0,
-        dec: -42.0 * PI / 180.0,
+        ra: degree_to_radian(12.0),
+        dec: degree_to_radian(-42.0),
     });
 
 }
@@ -450,26 +450,24 @@ pub fn calc_max_star_magnitude_for_painting(mag_factor: f64) -> f32 {
     ) as f32
 }
 
-pub fn find_x_for_zero_y(mut begin_x: f64, mut end_x: f64, min_diff: f64, fun: impl Fn(f64) -> f64) -> f64 {
-    let mut begin_y = fun(begin_x);
-    let mut end_y = fun(end_x);
-    while f64::abs(end_y-begin_y) > min_diff {
-        let middle_x = 0.5 * (begin_x + end_x);
-        let middle_y = fun(middle_x);
-        let begin_y_neg = begin_y < 0.0;
-        let end_y_neg = end_y < 0.0;
-        let middle_y_neg = middle_y < 0.0;
-        if begin_y_neg != middle_y_neg {
-            end_x = middle_x;
-            end_y = middle_y;
-        } else if end_y_neg != middle_y_neg {
-            begin_x = middle_x;
-            begin_y = middle_y;
-        } else {
-            break;
-        }
-    }
-    0.5 * (begin_x + end_x)
+pub fn radian_to_degree(radian: f64) -> f64 {
+    180.0 * radian / PI
+}
+
+pub fn degree_to_radian(degree: f64) -> f64 {
+    PI * degree / 180.0
+}
+
+pub fn arcmin_to_radian(arcmin: f64) -> f64 {
+    PI * arcmin / (60.0 * 180.0)
+}
+
+pub fn radian_to_hour(radian: f64) -> f64 {
+    12.0 * radian / PI
+}
+
+pub fn hour_to_radian(hour: f64) -> f64 {
+    PI * hour / 12.0
 }
 
 pub fn calc_julian_day(date: &NaiveDate) -> i64 {
@@ -510,5 +508,5 @@ pub fn calc_sidereal_time(dt: &NaiveDateTime) -> f64 {
         + 0.000387933 * t * t
         - (t * t * t) / 38710000.0;
     result_in_degrees = 360.0 * f64::fract(result_in_degrees / 360.0);
-    PI * result_in_degrees / 180.0
+    degree_to_radian(result_in_degrees)
 }
