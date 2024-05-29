@@ -1,4 +1,4 @@
-use std::{cell::RefCell, cell::Cell, rc::Rc, sync::{Arc, RwLock}};
+use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
 use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone};
@@ -796,17 +796,18 @@ impl MapGui {
         self.search();
     }
 
-    fn handler_above_horizon_changed(&self, _chb: &gtk::CheckButton) {
+    fn handler_above_horizon_changed(&self, chb: &gtk::CheckButton) {
+        self.gui_options.borrow_mut().search_above_horiz = chb.is_active();
         self.search();
     }
 
     pub fn search(&self) {
         let Some(skymap) = &*self.skymap_data.borrow() else { return; };
         let se_sm_search = self.builder.object::<gtk::SearchEntry>("se_sm_search").unwrap();
-        let chb_sm_above_horizon = self.builder.object::<gtk::CheckButton>("chb_sm_above_horizon").unwrap();
         let text = se_sm_search.text().trim().to_string();
         let mut found_items = skymap.search(&text);
-        if chb_sm_above_horizon.is_active() {
+        let options = self.gui_options.borrow();
+        if options.search_above_horiz {
             let observer = self.create_observer();
             let time = self.map_widget.time();
             let cvt = EqToHorizCvt::new(&observer, &time);
