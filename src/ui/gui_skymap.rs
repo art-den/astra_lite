@@ -106,17 +106,19 @@ impl Default for ObjectsToShow {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 struct GuiOptions {
-    paned_pos1: i32,
-    to_show:    ObjectsToShow,
-    max_mag:    f32,
+    paned_pos1:         i32,
+    to_show:            ObjectsToShow,
+    max_mag:            f32,
+    search_above_horiz: bool,
 }
 
 impl Default for GuiOptions {
     fn default() -> Self {
         Self {
-            paned_pos1: -1,
-            to_show:    Default::default(),
-            max_mag:    10.0,
+            paned_pos1:         -1,
+            to_show:            Default::default(),
+            max_mag:            10.0,
+            search_above_horiz: true,
         }
     }
 }
@@ -337,8 +339,15 @@ impl MapGui {
 
         let se = self.builder.object::<gtk::SearchEntry>("se_sm_search").unwrap();
         se.connect_search_changed(
-            clone!(@weak self as self_ => move |handler_search_text_changed| {
-                self_.handler_search_text_changed(handler_search_text_changed);
+            clone!(@weak self as self_ => move |se| {
+                self_.handler_search_text_changed(se);
+            })
+        );
+
+        let chb_sm_above_horizon = self.builder.object::<gtk::CheckButton>("chb_sm_above_horizon").unwrap();
+        chb_sm_above_horizon.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                self_.handler_above_horizon_changed(chb);
             })
         );
 
@@ -348,8 +357,6 @@ impl MapGui {
                 self_.handler_search_result_selection_chanegd(selection);
             })
         );
-
-
     }
 
     fn show_options(&self) {
@@ -360,12 +367,11 @@ impl MapGui {
 
         ui.set_prop_bool("chb_show_stars.active", opts.to_show.stars);
         ui.set_prop_bool("chb_show_dso.active", opts.to_show.dso);
-
         ui.set_prop_bool("chb_show_galaxies.active", opts.to_show.galaxies);
         ui.set_prop_bool("chb_show_nebulas.active", opts.to_show.nebulas);
         ui.set_prop_bool("chb_show_sclusters.active", opts.to_show.sclusters);
-
         ui.set_range_value("scl_max_dso_mag", opts.max_mag as f64);
+        ui.set_prop_bool("chb_sm_above_horizon.active", opts.search_above_horiz);
 
         drop(opts);
     }
@@ -376,6 +382,7 @@ impl MapGui {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         opts.paned_pos1 = pan_map1.position();
         opts.max_mag    = ui.range_value("scl_max_dso_mag") as f32;
+        opts.search_above_horiz = ui.prop_bool("chb_sm_above_horizon.active");
 
         Self::read_visibility_options_from_widgets(&mut opts.to_show, &ui);
 
@@ -785,10 +792,27 @@ impl MapGui {
         tv.set_model(Some(&model));
     }
 
-    pub fn handler_search_text_changed(&self, se: &gtk::SearchEntry) {
+    fn handler_search_text_changed(&self, _se: &gtk::SearchEntry) {
+        self.search();
+    }
+
+    fn handler_above_horizon_changed(&self, _chb: &gtk::CheckButton) {
+        self.search();
+    }
+
+    pub fn search(&self) {
         let Some(skymap) = &*self.skymap_data.borrow() else { return; };
-        let text = se.text().trim().to_string();
-        *self.found_items.borrow_mut() = skymap.find_objects(&text);
+        let se_sm_search = self.builder.object::<gtk::SearchEntry>("se_sm_search").unwrap();
+        let chb_sm_above_horizon = self.builder.object::<gtk::CheckButton>("chb_sm_above_horizon").unwrap();
+        let text = se_sm_search.text().trim().to_string();
+        let mut found_items = skymap.search(&text);
+        if chb_sm_above_horizon.is_active() {
+            let observer = self.create_observer();
+            let time = self.map_widget.time();
+            let cvt = EqToHorizCvt::new(&observer, &time);
+            found_items.retain(|obj| cvt.eq_to_horiz(&obj.crd()).alt > 0.0);
+        }
+        *self.found_items.borrow_mut() = found_items;
         self.show_search_result();
     }
 

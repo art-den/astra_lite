@@ -806,7 +806,7 @@ impl SkyMap {
         nearest_obj.map(|(obj, angle)| (obj.clone(), angle))
     }
 
-    pub fn find_objects(&self, text: &str) -> Vec<SkymapObject> {
+    pub fn search(&self, text: &str) -> Vec<SkymapObject> {
         let mut result = Vec::new();
         let text_lc = text.trim().to_lowercase();
         if text_lc.is_empty() {
