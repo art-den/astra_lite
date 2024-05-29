@@ -86,6 +86,17 @@ impl SkymapWidget {
 
     pub fn set_time(&self, time: NaiveDateTime) {
         *self.time.borrow_mut() = time;
+
+        if self.ani_goto_data.borrow().is_some() {
+            return;
+        }
+
+        if let Some(center_crd) = &*self.center_crd.borrow() {
+            let observer = self.observer.borrow();
+            let cvt = EqToHorizCvt::new(&*observer, &time);
+            self.view_point.borrow_mut().crd = cvt.eq_to_horiz(center_crd);
+        }
+
         self.draw_area.queue_draw();
     }
 
@@ -197,12 +208,10 @@ impl SkymapWidget {
         for handler in &*select_handlers {
             handler(selected_obj.clone());
         }
-        *self.center_crd.borrow_mut() = selected_obj.as_ref().map(|obj| obj.crd());
         *self.selected_obj.borrow_mut() = selected_obj;
     }
 
     pub fn set_selected_object(self: &Rc<Self>, obj: Option<&SkymapObject>) {
-        *self.center_crd.borrow_mut() = obj.as_ref().map(|obj| obj.crd());
         *self.selected_obj.borrow_mut() = obj.cloned();
         if let Some(selected_obj) = &obj {
             self.animated_goto_coord(&selected_obj.crd());
@@ -225,6 +234,7 @@ impl SkymapWidget {
         vp.crd.az = mpress.vp.crd.az + mpress.hcrd.az - hcrd.az;
         vp.crd.alt = mpress.vp.crd.alt + mpress.hcrd.alt - hcrd.alt;
         vp.crd.alt = vp.crd.alt.min(MAX_ALT).max(MIN_ALT);
+        *self.center_crd.borrow_mut() = None;
         self.draw_area.queue_draw();
         glib::Propagation::Stop
     }
