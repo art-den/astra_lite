@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc, time::Duration};
+use std::{cell::RefCell, f64::consts::PI, rc::Rc, time::Duration};
 use chrono::{NaiveDateTime, Utc};
 use gtk::{gdk, cairo, glib::{self, clone}, prelude::*};
 use crate::utils::math::linear_interpolate;
@@ -286,9 +286,18 @@ impl SkymapWidget {
         let already_started = self.ani_goto_data.borrow().is_some();
         let widget_width = self.draw_area.allocated_width() as f64;
         let widget_height = self.draw_area.allocated_height() as f64;
-        let Some(start_coord) = self.screen_coord_to_eq(0.5 * widget_width, 0.5 * widget_height) else {
+        let Some(mut start_coord) = self.screen_coord_to_eq(0.5 * widget_width, 0.5 * widget_height) else {
             return;
         };
+
+        // Correct start coord for shotter path from start_coord to coord
+        while start_coord.ra - coord.ra > PI {
+            start_coord.ra -= 2.0 * PI;
+        }
+        while start_coord.ra - coord.ra < -PI {
+            start_coord.ra += 2.0 * PI;
+        }
+
         *self.ani_goto_data.borrow_mut() = Some(AnimatedGotoCrdData {
             start_crd:  start_coord,
             end_crd:    coord.clone(),
