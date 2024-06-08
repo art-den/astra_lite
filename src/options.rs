@@ -37,6 +37,18 @@ pub enum Binning {#[default]Orig, Bin2, Bin3, Bin4}
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone)]
 pub enum Crop {#[default]None, P75, P50, P33, P25}
 
+impl Crop {
+    pub fn translate(&self, value: usize) -> usize {
+        match self {
+            Crop::None => value,
+            Crop::P75  => 3 * value / 4,
+            Crop::P50  => value / 2,
+            Crop::P33  => value / 3,
+            Crop::P25  => value / 4,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct CamCtrlOptions {

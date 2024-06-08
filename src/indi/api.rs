@@ -2462,7 +2462,7 @@ impl Connection {
 
     // Camera frame size and information
 
-    pub fn camera_get_pixel_size(
+    pub fn camera_get_pixel_size_um(
         &self,
         device_name: &str,
         cam_ccd:     CamCcd,
@@ -2473,6 +2473,8 @@ impl Connection {
         let size_y = devices.get_num_property(device_name, prop_name, "CCD_PIXEL_SIZE_Y")?.value;
         Ok((size_x, size_y))
     }
+
+    // CCD_FRAME
 
     pub fn camera_is_frame_supported(
         &self,
@@ -2540,7 +2542,7 @@ impl Connection {
         }
     }
 
-    // CCD_FRAME
+    // Camera binning
 
     pub fn camera_is_binning_supported(
         &self,
@@ -2588,6 +2590,23 @@ impl Connection {
             ("VER_BIN", vert_binnging as f64),
         ])
     }
+
+    pub fn camera_get_binning(
+        &self,
+        device_name: &str,
+        cam_ccd:     CamCcd,
+    ) -> Result<(usize, usize)> {
+        let devices = self.devices.lock().unwrap();
+        let prop_name = Self::ccd_bin_prop_name(cam_ccd);
+        if devices.property_exists(device_name, prop_name, None)? {
+            let max_hor = devices.get_num_property(device_name, prop_name, "HOR_BIN")?.value;
+            let max_vert = devices.get_num_property(device_name, prop_name, "VER_BIN")?.value;
+            Ok((max_hor as usize, max_vert as usize))
+        } else {
+            Ok((1, 1))
+        }
+    }
+
 
     pub fn camera_is_binning_mode_supported(
         &self,

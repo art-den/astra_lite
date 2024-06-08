@@ -7,7 +7,7 @@ use crate::{
 };
 use super::{consts::*, data::*, painter::*};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct EqCoord {
     pub dec: f64,
     pub ra:  f64,

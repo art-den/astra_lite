@@ -1,7 +1,7 @@
 use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
 use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
-use gtk::{prelude::*, glib, glib::clone};
+use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use crate::{indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
 use super::{gtk_utils::{self, DEFAULT_DPMM}, gui_common::*, gui_main::*, sky_map::{data::*, painter::*, utils::*}};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
@@ -27,28 +27,29 @@ pub fn init_ui(
     pan_map1.add2(map_widget.get_widget());
 
     let data = Rc::new(MapGui {
-        gui_options:  RefCell::new(gui_options),
-        indi:         Arc::clone(indi),
-        options:      Arc::clone(options),
-        builder:      builder.clone(),
-        window:       window.clone(),
-        gui:          Rc::clone(gui),
-        excl:         ExclusiveCaller::new(),
+        gui_options:    RefCell::new(gui_options),
+        indi:           Arc::clone(indi),
+        options:        Arc::clone(options),
+        builder:        builder.clone(),
+        window:         window.clone(),
+        gui:            Rc::clone(gui),
+        excl:           ExclusiveCaller::new(),
         map_widget,
-        skymap_data:  RefCell::new(None),
-        user_time:    RefCell::new(UserTime::default()),
-        prev_second:  Cell::new(0),
-        paint_ts:     RefCell::new(std::time::Instant::now()),
-        prev_wdt:     RefCell::new(PrevWidgetsDT::default()),
-        selected_obj: RefCell::new(None),
-        found_items:  RefCell::new(Vec::new()),
-        self_:        RefCell::new(None),
+        skymap_data:    RefCell::new(None),
+        user_time:      RefCell::new(UserTime::default()),
+        prev_second:    Cell::new(0),
+        paint_ts:       RefCell::new(std::time::Instant::now()),
+        prev_wdt:       RefCell::new(PrevWidgetsDT::default()),
+        selected_item:  RefCell::new(None),
+        search_result:  RefCell::new(Vec::new()),
+        clicked_crd:    RefCell::new(None),
+        self_:          RefCell::new(None),
     });
 
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
     data.init_widgets();
-    data.init_search_result_tv();
+    data.init_search_result_treeview();
     data.show_options();
 
     data.connect_main_gui_events(handlers);
@@ -89,6 +90,7 @@ struct ObjectsToShow {
     galaxies: bool,
     nebulas: bool,
     sclusters: bool,
+    ccd: bool,
 }
 
 impl Default for ObjectsToShow {
@@ -99,6 +101,7 @@ impl Default for ObjectsToShow {
             galaxies:  true,
             nebulas:   true,
             sclusters: true,
+            ccd:       true,
         }
     }
 }
@@ -214,22 +217,23 @@ struct PrevWidgetsDT {
 }
 
 struct MapGui {
-    gui_options:  RefCell<GuiOptions>,
-    indi:         Arc<indi::Connection>,
-    options:      Arc<RwLock<Options>>,
-    builder:      gtk::Builder,
-    window:       gtk::ApplicationWindow,
-    gui:          Rc<Gui>,
-    excl:         ExclusiveCaller,
-    map_widget:   Rc<SkymapWidget>,
-    skymap_data:  RefCell<Option<Rc<SkyMap>>>,
-    user_time:    RefCell<UserTime>,
-    prev_second:  Cell<u32>,
-    paint_ts:     RefCell<std::time::Instant>, // last paint moment timestamp
-    prev_wdt:     RefCell<PrevWidgetsDT>,
-    selected_obj: RefCell<Option<SkymapObject>>,
-    found_items:  RefCell<Vec<SkymapObject>>,
-    self_:        RefCell<Option<Rc<MapGui>>>
+    gui_options:   RefCell<GuiOptions>,
+    indi:          Arc<indi::Connection>,
+    options:       Arc<RwLock<Options>>,
+    builder:       gtk::Builder,
+    window:        gtk::ApplicationWindow,
+    gui:           Rc<Gui>,
+    excl:          ExclusiveCaller,
+    map_widget:    Rc<SkymapWidget>,
+    skymap_data:   RefCell<Option<Rc<SkyMap>>>,
+    user_time:     RefCell<UserTime>,
+    prev_second:   Cell<u32>,
+    paint_ts:      RefCell<std::time::Instant>, // last paint moment timestamp
+    prev_wdt:      RefCell<PrevWidgetsDT>,
+    selected_item: RefCell<Option<SkymapObject>>,
+    search_result: RefCell<Vec<SkymapObject>>,
+    clicked_crd:   RefCell<Option<EqCoord>>,
+    self_:         RefCell<Option<Rc<MapGui>>>
 }
 
 impl Drop for MapGui {
@@ -283,9 +287,12 @@ impl MapGui {
         scl_max_dso_mag.set_range(0.0, 20.0);
         scl_max_dso_mag.set_increments(0.5, 2.0);
 
-        let (dpimm_x, _) = gtk_utils::get_widget_dpmm(&self.window)
+        let (dpimm_x, dpimm_y) = gtk_utils::get_widget_dpmm(&self.window)
             .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
         scl_max_dso_mag.set_width_request((40.0 * dpimm_x) as i32);
+
+        let da_sm_item_graph = self.builder.object::<gtk::DrawingArea>("da_sm_item_graph").unwrap();
+        da_sm_item_graph.set_height_request((20.0 * dpimm_y) as i32);
     }
 
     fn connect_main_gui_events(self: &Rc<Self>, handlers: &mut MainGuiHandlers) {
@@ -295,6 +302,12 @@ impl MapGui {
     }
 
     fn connect_events(self: &Rc<Self>) {
+        gtk_utils::connect_action(&self.window, self, "map_play",         Self::handler_btn_play_pressed);
+        gtk_utils::connect_action(&self.window, self, "map_now",          Self::handler_btn_now_pressed);
+        gtk_utils::connect_action(&self.window, self, "skymap_options",   Self::handler_action_options);
+        gtk_utils::connect_action(&self.window, self, "sm_goto_selected", Self::handler_goto_selected);
+        gtk_utils::connect_action(&self.window, self, "sm_goto_point",    Self::handler_goto_point);
+
         let connect_spin_btn_evt = |widget_name: &str| {
             let spin_btn = self.builder.object::<gtk::SpinButton>(widget_name).unwrap();
             spin_btn.connect_value_changed(clone!(@weak self as self_ => move |_| {
@@ -308,10 +321,6 @@ impl MapGui {
         connect_spin_btn_evt("spb_hour");
         connect_spin_btn_evt("spb_min");
         connect_spin_btn_evt("spb_sec");
-
-        gtk_utils::connect_action(&self.window, self, "map_play",       Self::handler_btn_play_pressed);
-        gtk_utils::connect_action(&self.window, self, "map_now",        Self::handler_btn_now_pressed);
-        gtk_utils::connect_action(&self.window, self, "skymap_options", Self::handler_action_options);
 
         let scl_max_dso_mag = self.builder.object::<gtk::Scale>("scl_max_dso_mag").unwrap();
         scl_max_dso_mag.connect_value_changed(clone!(@weak self as self_ => move |scale| {
@@ -330,6 +339,7 @@ impl MapGui {
         connect_obj_visibility_changed("chb_show_galaxies");
         connect_obj_visibility_changed("chb_show_nebulas");
         connect_obj_visibility_changed("chb_show_sclusters");
+        connect_obj_visibility_changed("chb_sm_show_ccd");
 
         self.map_widget.add_obj_sel_handler(
             clone!(@weak self as self_ => move |object| {
@@ -354,8 +364,27 @@ impl MapGui {
         let search_tv = self.builder.object::<gtk::TreeView>("tv_sm_search_result").unwrap();
         search_tv.selection().connect_changed(
             clone!( @weak self as self_ => move |selection| {
-                self_.handler_search_result_selection_chanegd(selection);
+                self_.handler_search_result_selection_changed(selection);
             })
+        );
+
+        let da_sm_item_graph = self.builder.object::<gtk::DrawingArea>("da_sm_item_graph").unwrap();
+        da_sm_item_graph.connect_draw(
+            clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
+            move |area, cr| {
+                gtk_utils::exec_and_show_error(&self_.window, || {
+                    self_.handler_draw_item_graph(area, cr)?;
+                    Ok(())
+                });
+                glib::Propagation::Proceed
+            })
+        );
+
+        self.map_widget.get_widget().connect_button_press_event(
+            clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
+                move |_, evt| {
+                    self_.handler_widget_mouse_button_press(evt)
+                })
         );
     }
 
@@ -370,6 +399,8 @@ impl MapGui {
         ui.set_prop_bool("chb_show_galaxies.active", opts.to_show.galaxies);
         ui.set_prop_bool("chb_show_nebulas.active", opts.to_show.nebulas);
         ui.set_prop_bool("chb_show_sclusters.active", opts.to_show.sclusters);
+        ui.set_prop_bool("chb_sm_show_ccd.active", opts.to_show.ccd);
+
         ui.set_range_value("scl_max_dso_mag", opts.max_mag as f64);
         ui.set_prop_bool("chb_sm_above_horizon.active", opts.search_above_horiz);
 
@@ -395,6 +426,7 @@ impl MapGui {
         opts.galaxies  = ui.prop_bool("chb_show_galaxies.active");
         opts.nebulas   = ui.prop_bool("chb_show_nebulas.active");
         opts.sclusters = ui.prop_bool("chb_show_sclusters.active");
+        opts.ccd       = ui.prop_bool("chb_sm_show_ccd.active");
     }
 
     fn handler_action_options(self: &Rc<Self>) {
@@ -513,20 +545,59 @@ impl MapGui {
         if force || paint_ts.elapsed().as_secs_f64() > 0.5 {
             let user_time = self.user_time.borrow().time(false);
             *paint_ts = std::time::Instant::now();
-            self.map_widget.set_time(user_time);
 
             let config = self.gui_options.borrow();
+            let show_ccd = config.to_show.ccd;
             let mut paint_config = PaintConfig::default();
-
             paint_config.max_dso_mag = config.max_mag;
             paint_config.filter.set(ItemFilterFlags::STARS, config.to_show.stars);
             paint_config.filter.set(ItemFilterFlags::CLUSTERS, config.to_show.dso && config.to_show.sclusters);
             paint_config.filter.set(ItemFilterFlags::NEBULAS, config.to_show.dso && config.to_show.nebulas);
             paint_config.filter.set(ItemFilterFlags::GALAXIES, config.to_show.dso && config.to_show.galaxies);
-
             drop(config);
 
-            self.map_widget.set_paint_config(&paint_config);
+            let cam_frame = if show_ccd && self.indi.state() == indi::ConnState::Connected {
+                let options = self.options.read().unwrap();
+
+                let calc_cam_frame = || -> anyhow::Result<CameraFrame> {
+                    let cam_name = &options.cam.device.name;
+                    let cam_ccd_prop = &options.cam.device.prop;
+                    let cam_ccd = indi::CamCcd::from_ccd_prop_name(cam_ccd_prop);
+                    if options.telescope.focal_len <= 0.1 {
+                        anyhow::bail!("Wrong telescope focal lenght");
+                    }
+                    let (max_width, max_height) = self.indi.camera_get_max_frame_size(&cam_name, cam_ccd)?;
+                    let bin = options.cam.frame.binning.get_ratio();
+                    let (pixel_width_um, pixel_height_um) = self.indi.camera_get_pixel_size_um(&options.cam.device.name, cam_ccd)?;
+                    let cropped_width = options.cam.frame.crop.translate(max_width / bin) as f64;
+                    let cropped_height = options.cam.frame.crop.translate(max_height / bin) as f64;
+                    let pixel_width_mm = pixel_width_um / 1000.0;
+                    let pixel_height_mm = pixel_height_um / 1000.0;
+                    let width_mm = cropped_width * pixel_width_mm;
+                    let height_mm = cropped_height * pixel_height_mm;
+                    let mut full_cam_name = cam_name.to_string();
+                    if !cam_ccd_prop.is_empty() {
+                        full_cam_name += ", ";
+                        full_cam_name += cam_ccd_prop;
+                    }
+                    Ok(CameraFrame{
+                        name: full_cam_name,
+                        horiz_angle: f64::atan2(width_mm, options.telescope.focal_len),
+                        vert_angle: f64::atan2(height_mm, options.telescope.focal_len),
+                        rot_angle: 0.0,
+                    })
+                };
+                calc_cam_frame().ok()
+            } else {
+                None
+            };
+
+            self.map_widget.set_paint_config(
+                &user_time,
+                &paint_config,
+                &None,
+                &cam_frame
+            );
 
             self.show_selected_objects_info();
         }
@@ -697,13 +768,14 @@ impl MapGui {
     }
 
     fn handler_object_selected(&self, obj: Option<SkymapObject>) {
-        *self.selected_obj.borrow_mut() = obj;
+        *self.selected_item.borrow_mut() = obj;
         self.show_selected_objects_info();
+        self.update_selected_item_graph();
     }
 
     fn show_selected_objects_info(&self) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let obj = self.selected_obj.borrow();
+        let obj = self.selected_item.borrow();
 
         let names = obj.as_ref().map(|obj| obj.names().join(", ")).unwrap_or_default();
         let obj_type = obj.as_ref().map(|obj| obj.obj_type()).unwrap_or(SkyItemType::None);
@@ -767,7 +839,7 @@ impl MapGui {
         ui.set_prop_str("l_sm_sel_az.label", Some(&azimuth_str));
     }
 
-    fn init_search_result_tv(&self) {
+    fn init_search_result_treeview(&self) {
         let tv = self.builder.object::<gtk::TreeView>("tv_sm_search_result").unwrap();
         let columns = [
             /* 0 */ ("Name", String::static_type()),
@@ -813,7 +885,7 @@ impl MapGui {
             let cvt = EqToHorizCvt::new(&observer, &time);
             found_items.retain(|obj| cvt.eq_to_horiz(&obj.crd()).alt > 0.0);
         }
-        *self.found_items.borrow_mut() = found_items;
+        *self.search_result.borrow_mut() = found_items;
         self.show_search_result();
     }
 
@@ -821,7 +893,7 @@ impl MapGui {
         let tv = self.builder.object::<gtk::TreeView>("tv_sm_search_result").unwrap();
         let Some(model) = tv.model() else { return; };
         let Ok(model) = model.downcast::<gtk::ListStore>() else { return; };
-        let result = self.found_items.borrow();
+        let result = self.search_result.borrow();
         model.clear();
         for (idx, item) in result.iter().enumerate() {
             model.insert_with_values(
@@ -833,7 +905,7 @@ impl MapGui {
         }
     }
 
-    pub fn handler_search_result_selection_chanegd(&self, selection: &gtk::TreeSelection) {
+    pub fn handler_search_result_selection_changed(&self, selection: &gtk::TreeSelection) {
         let items = selection
             .selected_rows().0
             .iter()
@@ -842,10 +914,79 @@ impl MapGui {
 
         let &[index] = items.as_slice() else { return; };
         let index = index as usize;
-        let found_items = self.found_items.borrow();
+        let found_items = self.search_result.borrow();
         let Some(selected_obj) = found_items.get(index) else { return; };
-        *self.selected_obj.borrow_mut() = Some(selected_obj.clone());
+        *self.selected_item.borrow_mut() = Some(selected_obj.clone());
         self.show_selected_objects_info();
+        self.update_selected_item_graph();
         self.map_widget.set_selected_object(Some(&selected_obj));
+    }
+
+    fn update_selected_item_graph(&self) {
+        let da_sm_item_graph = self.builder.object::<gtk::DrawingArea>("da_sm_item_graph").unwrap();
+        da_sm_item_graph.queue_draw();
+    }
+
+    fn handler_draw_item_graph(
+        self:  &Rc<Self>,
+        _area: &gtk::DrawingArea,
+        _cr:   &cairo::Context
+    ) -> anyhow::Result<()> {
+        //let Some(item) = &*self.selected_obj.borrow()
+        Ok(())
+    }
+
+    fn handler_widget_mouse_button_press(&self, evt: &gdk::EventButton) -> glib::Propagation {
+        if evt.button() == gdk::ffi::GDK_BUTTON_SECONDARY as u32 {
+            let Some((x, y)) = evt.coords() else {
+                return glib::Propagation::Proceed;
+            };
+            let eq_coord = self.map_widget.widget_crd_to_eq(x, y);
+            *self.clicked_crd.borrow_mut() = eq_coord;
+            let indi_is_active = self.indi.state() == indi::ConnState::Connected;
+            let selected_item = self.selected_item.borrow();
+            gtk_utils::enable_action(&self.window, "sm_goto_selected", indi_is_active && selected_item.is_some());
+            gtk_utils::enable_action(&self.window, "sm_goto_point", indi_is_active && eq_coord.is_some());
+            let m_sm_goto_sel = self.builder.object::<gtk::Menu>("m_sm_widget").unwrap();
+            m_sm_goto_sel.set_attach_widget(Some(self.map_widget.get_widget()));
+            m_sm_goto_sel.popup_at_pointer(None);
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    }
+
+    fn goto_eq_coord(&self, crd: &EqCoord) {
+        let options = self.options.read().unwrap();
+        let mount_device = &options.mount.device;
+        gtk_utils::exec_and_show_error(&self.window, || {
+            self.indi.mount_set_tracking(
+                &mount_device,
+                true,
+                false,
+                Some(1000)
+            )?;
+
+            self.indi.mount_set_eq_coord(
+                &mount_device,
+                radian_to_hour(crd.ra),
+                radian_to_degree(crd.dec),
+                true,
+                None
+            )?;
+            Ok(())
+        });
+    }
+
+    fn handler_goto_selected(self: &Rc<Self>) {
+        let selected_item = self.selected_item.borrow();
+        let Some(selected_item) = &*selected_item else { return; };
+        self.goto_eq_coord(&selected_item.crd());
+    }
+
+    fn handler_goto_point(self: &Rc<Self>) {
+        let clicked_crd = self.clicked_crd.borrow();
+        let Some(clicked_crd) = &*clicked_crd else { return; };
+        self.goto_eq_coord(clicked_crd);
     }
 }

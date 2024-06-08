@@ -877,7 +877,7 @@
                 <property name="spacing">5</property>
                 <child>
                   <object class="GtkButton" id="btn_map_options">
-                    <property name="label" translatable="yes">Options...</property>
+                    <property name="label" translatable="yes">Skymap options...</property>
                     <property name="visible">True</property>
                     <property name="can-focus">True</property>
                     <property name="receives-default">True</property>
@@ -947,7 +947,7 @@
                   <object class="GtkLabel">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
-                    <property name="label" translatable="yes">Filter:</property>
+                    <property name="label" translatable="yes">Show:</property>
                   </object>
                   <packing>
                     <property name="expand">False</property>
@@ -1026,7 +1026,18 @@
                   </packing>
                 </child>
                 <child>
-                  <placeholder/>
+                  <object class="GtkCheckButton" id="chb_sm_show_ccd">
+                    <property name="label" translatable="yes">CCD</property>
+                    <property name="visible">True</property>
+                    <property name="can-focus">True</property>
+                    <property name="receives-default">False</property>
+                    <property name="draw-indicator">True</property>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                    <property name="position">11</property>
+                  </packing>
                 </child>
               </object>
               <packing>
@@ -1283,6 +1294,17 @@
                       </packing>
                     </child>
                     <child>
+                      <object class="GtkDrawingArea" id="da_sm_item_graph">
+                        <property name="height-request">20</property>
+                        <property name="can-focus">False</property>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                        <property name="position">2</property>
+                      </packing>
+                    </child>
+                    <child>
                       <object class="GtkSeparator">
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>
@@ -1291,7 +1313,7 @@
                         <property name="expand">False</property>
                         <property name="fill">True</property>
                         <property name="padding">5</property>
-                        <property name="position">2</property>
+                        <property name="position">3</property>
                       </packing>
                     </child>
                     <child>
@@ -1307,7 +1329,7 @@
                       <packing>
                         <property name="expand">False</property>
                         <property name="fill">True</property>
-                        <property name="position">3</property>
+                        <property name="position">4</property>
                       </packing>
                     </child>
                     <child>
@@ -1483,7 +1505,7 @@
                       <packing>
                         <property name="expand">False</property>
                         <property name="fill">True</property>
-                        <property name="position">4</property>
+                        <property name="position">5</property>
                       </packing>
                     </child>
                     <child>
@@ -1536,7 +1558,7 @@
                       <packing>
                         <property name="expand">False</property>
                         <property name="fill">True</property>
-                        <property name="position">5</property>
+                        <property name="position">6</property>
                       </packing>
                     </child>
                     <child>
@@ -1548,7 +1570,7 @@
                         <property name="expand">False</property>
                         <property name="fill">True</property>
                         <property name="padding">5</property>
-                        <property name="position">6</property>
+                        <property name="position">7</property>
                       </packing>
                     </child>
                     <child>
@@ -1564,7 +1586,7 @@
                       <packing>
                         <property name="expand">False</property>
                         <property name="fill">True</property>
-                        <property name="position">7</property>
+                        <property name="position">8</property>
                       </packing>
                     </child>
                     <child>
@@ -1613,6 +1635,9 @@
                               <object class="GtkTreeView" id="tv_sm_search_result">
                                 <property name="visible">True</property>
                                 <property name="can-focus">True</property>
+                                <child internal-child="selection">
+                                  <object class="GtkTreeSelection"/>
+                                </child>
                               </object>
                             </child>
                           </object>
@@ -1626,7 +1651,7 @@
                       <packing>
                         <property name="expand">False</property>
                         <property name="fill">True</property>
-                        <property name="position">8</property>
+                        <property name="position">9</property>
                       </packing>
                     </child>
                   </object>
@@ -5592,6 +5617,28 @@ if error larger than (pixels)</property>
             <property name="tab-fill">False</property>
           </packing>
         </child>
+      </object>
+    </child>
+  </object>
+  <object class="GtkMenu" id="m_sm_widget">
+    <property name="visible">True</property>
+    <property name="can-focus">False</property>
+    <child>
+      <object class="GtkMenuItem" id="m_sm_goto_selected">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="action-name">win.sm_goto_selected</property>
+        <property name="label" translatable="yes">Goto selected object</property>
+        <property name="use-underline">True</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem" id="m_sm_goto_point">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="action-name">win.sm_goto_point</property>
+        <property name="label" translatable="yes">Goto this point</property>
+        <property name="use-underline">True</property>
       </object>
     </child>
   </object>

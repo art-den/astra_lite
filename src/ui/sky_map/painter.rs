@@ -1,7 +1,7 @@
 use std::{f64::consts::PI, rc::Rc};
 use chrono::NaiveDateTime;
 use gtk::cairo;
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use crate::utils::math::linear_interpolate;
 use super::{utils::*, data::*};
 
@@ -24,6 +24,14 @@ impl ViewPoint {
             mag_factor: 1.0,
         }
     }
+}
+
+#[derive(Clone)]
+pub struct CameraFrame {
+    pub name: String,
+    pub horiz_angle: f64,
+    pub vert_angle: f64,
+    pub rot_angle: f64,
 }
 
 #[derive(Clone)]
@@ -75,6 +83,8 @@ impl SkyMapPainter {
         &mut self,
         sky_map:    &Option<Rc<SkyMap>>,
         selection:  &Option<SkymapObject>,
+        tele_pos:   &Option<EqCoord>,
+        cam_frame:  &Option<CameraFrame>,
         observer:   &Observer,
         utc_time:   &NaiveDateTime,
         config:     &PaintConfig,
@@ -137,7 +147,13 @@ impl SkyMapPainter {
         self.paint_ground(&eq_hor_cvt, &ctx, &hor_3d_cvt)?;
 
         // Selected object
-        self.paint_selection(selection,  &ctx, &eq_hor_cvt, &hor_3d_cvt)?;
+        self.paint_selection(selection, &ctx, &eq_hor_cvt, &hor_3d_cvt)?;
+
+        // Optionally telescope position
+        self.paint_telescope_position(tele_pos, &ctx, &eq_hor_cvt, &hor_3d_cvt)?;
+
+        // Optionally camera frame
+        self.paint_camera_frame(cam_frame, &ctx, &eq_hor_cvt, &hor_3d_cvt)?;
 
         Ok(())
     }
@@ -301,6 +317,7 @@ impl SkyMapPainter {
         &mut self,
         star_data:  &StarData,
         name:       &str,
+        bayer:      &str,
         options:    &StarPainterOptions,
         ctx:        &PaintCtx,
         eq_hor_cvt: &EqToHorizCvt,
@@ -311,6 +328,7 @@ impl SkyMapPainter {
             mode,
             star: star_data,
             name,
+            bayer,
             options,
         };
         let star_is_painted = self.obj_painter.paint(
@@ -366,7 +384,7 @@ impl SkyMapPainter {
                         continue;
                     }
                     let star_is_painted = self.paint_star(
-                        &star.data, "",
+                        &star.data, "", "",
                         options, ctx, eq_hor_cvt, hor_3d_cvt, mode,
                     )?;
                     _stars_count += 1;
@@ -379,7 +397,7 @@ impl SkyMapPainter {
                     continue;
                 }
                 let star_is_painted = self.paint_star(
-                    &star.data, &star.name,
+                    &star.data, &star.name, &star.bayer,
                     options, ctx, eq_hor_cvt, hor_3d_cvt, mode,
                 )?;
                 _stars_count += 1;
@@ -501,6 +519,54 @@ impl SkyMapPainter {
             &hor_3d_cvt,
             ctx,
         )?;
+        Ok(())
+    }
+
+    fn paint_telescope_position(
+        &mut self,
+        tele_pos:   &Option<EqCoord>,
+        ctx:        &PaintCtx,
+        eq_hor_cvt: &EqToHorizCvt,
+        hor_3d_cvt: &HorizToScreenCvt,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn paint_camera_frame(
+        &mut self,
+        cam_frame:  &Option<CameraFrame>,
+        ctx:        &PaintCtx,
+        eq_hor_cvt: &EqToHorizCvt,
+        hor_3d_cvt: &HorizToScreenCvt,
+    ) -> anyhow::Result<()> {
+        if let Some(cam_frame) = cam_frame {
+            let center_crd = eq_hor_cvt.horiz_to_eq(&ctx.view_point.crd);
+            let dec_rot = RotMatrix::new(center_crd.dec);
+            let ra_rot = RotMatrix::new(-center_crd.ra);
+
+            let parts = [ (0.5, 0.5), (0.5, -0.5), (-0.5, -0.5), (-0.5, 0.5) ];
+            let mut coords = [EqCoord {dec: 0.0, ra: 0.0}; 4];
+
+            for ((h, v), crd) in izip!(&parts, &mut coords) {
+                let h_crd = HorizCoord {
+                    alt: h * cam_frame.vert_angle,
+                    az: v * cam_frame.horiz_angle,
+                };
+                let mut pt = h_crd.to_sphere_pt();
+                pt.rotate_over_x(&dec_rot);
+                pt.rotate_over_y(&ra_rot);
+                let h_crd = pt.to_horiz_crd();
+                *crd = EqCoord { dec: h_crd.alt, ra: h_crd.az };
+            }
+
+            let painter = CameraFramePainter { name: &cam_frame.name, coords };
+            self.obj_painter.paint(
+                &painter,
+                &eq_hor_cvt,
+                &hor_3d_cvt,
+                ctx,
+            )?;
+        }
         Ok(())
     }
 }
@@ -793,6 +859,7 @@ struct StarPainter<'a> {
     star:    &'a StarData,
     mode:    PainterMode,
     name:    &'a str,
+    bayer:   &'a str,
     options: &'a StarPainterOptions,
 }
 
@@ -801,7 +868,7 @@ type RgbTuple = (f64, f64, f64);
 impl<'a> StarPainter<'a> {
     fn calc_light(&self, star_mag: f32) -> (f32, f32) {
         let light = f32::powf(2.0, 0.4 * (self.options.max_mag_value - star_mag)) - 1.0;
-        let light_with_gamma = light.powf(0.7).min(1.0);
+        let light_with_gamma = light.powf(0.7);
         (light, light_with_gamma)
     }
 
@@ -871,9 +938,9 @@ impl<'a> StarPainter<'a> {
         let size = self.calc_size(light);
         if size <= 1.0 {
             ctx.cairo.set_source_rgb(
-                size * light_with_gamma as f64 * r,
-                size * light_with_gamma as f64 * g,
-                size * light_with_gamma as f64 * b,
+                size * light_with_gamma.min(1.0) as f64 * r,
+                size * light_with_gamma.min(1.0) as f64 * g,
+                size * light_with_gamma.min(1.0) as f64 * b,
             );
             ctx.cairo.rectangle(-0.5, -0.5, 1.0, 1.0);
         } else if size <= ctx.screen.dpmm_x {
@@ -897,26 +964,43 @@ impl<'a> StarPainter<'a> {
     }
 
     fn paint_name(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
-        if !self.name.is_empty() {
-            let star_mag = self.star.mag.get();
-            let (light, mut light_with_gamma) = self.calc_light(star_mag);
+        if self.name.is_empty() && self.bayer.is_empty() { return Ok(()); }
+        let star_mag = self.star.mag.get();
+        let (light, light_with_gamma) = self.calc_light(star_mag);
+        let (r, g, b) = Self::get_rgb_for_star_bv(self.star.bv.get());
+        let size = self.calc_size(light);
+        let pt = &points[0];
+        let paint_text = |text, index, light_with_gamma| -> anyhow::Result<()> {
+            let mut light_with_gamma = light_with_gamma;
             if light_with_gamma < 0.5 { return Ok(()); }
             light_with_gamma -= 0.5;
             light_with_gamma *= 2.0;
-            let size = self.calc_size(light);
-            let pt = &points[0];
-            let te = ctx.cairo.text_extents(&self.name)?;
+
+            let te = ctx.cairo.text_extents(text)?;
             let t_height = te.height();
-            ctx.cairo.move_to(pt.x + 0.5 * size - 0.1 * t_height, pt.y + t_height + 0.5 * size - 0.1 * t_height);
-            let (r, g, b) = Self::get_rgb_for_star_bv(self.star.bv.get());
+
             ctx.cairo.set_source_rgba(
-                light_with_gamma as f64 * r,
-                light_with_gamma as f64 * g,
-                light_with_gamma as f64 * b,
-                0.8,
+                r, g, b,
+                light_with_gamma as f64,
             );
-            ctx.cairo.show_text(self.name)?;
+            ctx.cairo.move_to(
+                pt.x + 0.5 * size - 0.1 * t_height,
+                pt.y + t_height + 0.5 * size - 0.1 * t_height + index as f64 * 1.2 * t_height
+            );
+            ctx.cairo.show_text(text)?;
+            Ok(())
+        };
+
+        let mut text_index = 0;
+        if !self.name.is_empty() {
+            paint_text(self.name, text_index, light_with_gamma)?;
+            text_index += 1;
         }
+
+        if !self.bayer.is_empty() {
+            paint_text(&self.bayer, text_index, 0.5 * light_with_gamma)?;
+        }
+
         Ok(())
     }
 }
@@ -1180,6 +1264,55 @@ struct SelectionPainter {
             self.size
         );
         ctx.cairo.stroke()?;
+        Ok(())
+    }
+}
+
+struct CameraFramePainter<'a> {
+    name:    &'a str,
+    coords: [EqCoord; 4],
+}
+
+ impl<'a> ItemPainter for CameraFramePainter<'a> {
+    fn points_count(&self) -> usize {
+        self.coords.len()
+    }
+
+    fn point_crd(&self, index: usize) -> PainterCrd {
+        PainterCrd::Eq(self.coords[index].clone())
+    }
+
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+        ctx.cairo.move_to(points[0].x, points[0].y);
+        for pt in &points[1..] {
+            ctx.cairo.line_to(pt.x, pt.y);
+        }
+        ctx.cairo.set_antialias(cairo::Antialias::Fast);
+        ctx.cairo.close_path();
+        ctx.cairo.set_source_rgb(1.0, 1.0, 1.0);
+        ctx.cairo.set_dash(&[], 0.0);
+        ctx.cairo.set_line_width(1.0);
+        ctx.cairo.stroke()?;
+
+        let pt1 = &points[0];
+        let pt2 = &points[1];
+        let dx = pt2.x - pt1.x;
+        let dy = pt2.y - pt1.y;
+        let len = f64::sqrt(dx * dx + dy * dy);
+
+        ctx.cairo.set_font_size(4.0 * ctx.screen.dpmm_y);
+        let te = ctx.cairo.text_extents(&self.name)?;
+        if te.width() <= len {
+            let angle = f64::atan2(dy, dx);
+            ctx.cairo.move_to(pt1.x, pt1.y);
+            ctx.cairo.save()?;
+            ctx.cairo.rotate(angle);
+            let descent = te.height() + te.y_bearing();
+            ctx.cairo.rel_move_to(0.0, -descent);
+            ctx.cairo.show_text(&self.name)?;
+            ctx.cairo.restore()?;
+        }
+
         Ok(())
     }
 }

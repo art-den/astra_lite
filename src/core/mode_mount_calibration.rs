@@ -246,7 +246,7 @@ impl MountCalibrMode {
                 self.image_height = info.height;
                 let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.camera.prop);
                 if let Ok((pix_size_x, pix_size_y))
-                = self.indi.camera_get_pixel_size(&self.camera.name, cam_ccd) {
+                = self.indi.camera_get_pixel_size_um(&self.camera.name, cam_ccd) {
                     let min_size = f64::min(info.width as f64, info.height as f64);
                     let min_pix_size = f64::min(pix_size_x, pix_size_y);
                     let cam_size_mm = min_size * min_pix_size / 1000.0;

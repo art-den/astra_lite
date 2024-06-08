@@ -29,6 +29,8 @@ pub struct SkymapWidget {
     time:            RefCell<NaiveDateTime>,
     selected_obj:    RefCell<Option<SkymapObject>>,
     center_crd:      RefCell<Option<EqCoord>>,
+    telescope_pos:   RefCell<Option<EqCoord>>,
+    camera_frame:    RefCell<Option<CameraFrame>>,
     ani_goto_data:   RefCell<Option<AnimatedGotoCrdData>>,
     select_handlers: RefCell<Vec<Box<dyn Fn(Option<SkymapObject>)>>>,
 }
@@ -54,6 +56,8 @@ impl SkymapWidget {
             time:            RefCell::new(Utc::now().naive_utc()),
             selected_obj:    RefCell::new(None),
             center_crd:      RefCell::new(None),
+            telescope_pos:   RefCell::new(None),
+            camera_frame:    RefCell::new(None),
             ani_goto_data:   RefCell::new(None),
             select_handlers: RefCell::new(Vec::new()),
         });
@@ -84,8 +88,21 @@ impl SkymapWidget {
         self.draw_area.queue_draw();
     }
 
-    pub fn set_time(&self, time: NaiveDateTime) {
-        *self.time.borrow_mut() = time;
+    pub fn time(&self) -> NaiveDateTime {
+        *self.time.borrow()
+    }
+
+    pub fn set_paint_config(
+        &self,
+        time:          &NaiveDateTime,
+        config:        &PaintConfig,
+        telescope_pos: &Option<EqCoord>,
+        camera_frame:  &Option<CameraFrame>,
+    ) {
+        *self.time.borrow_mut() = time.clone();
+        *self.config.borrow_mut() = config.clone();
+        *self.telescope_pos.borrow_mut() = telescope_pos.clone();
+        *self.camera_frame.borrow_mut() = camera_frame.clone();
 
         if self.ani_goto_data.borrow().is_some() {
             return;
@@ -97,15 +114,6 @@ impl SkymapWidget {
             self.view_point.borrow_mut().crd = cvt.eq_to_horiz(center_crd);
         }
 
-        self.draw_area.queue_draw();
-    }
-
-    pub fn time(&self) -> NaiveDateTime {
-        *self.time.borrow()
-    }
-
-    pub fn set_paint_config(&self, config: &PaintConfig) {
-        *self.config.borrow_mut() = config.clone();
         self.draw_area.queue_draw();
     }
 
@@ -164,7 +172,7 @@ impl SkymapWidget {
                 _ => {},
             };
         }
-        glib::Propagation::Stop
+        glib::Propagation::Proceed
     }
 
     fn start_map_drag(&self, event: &gdk::EventButton) {
@@ -180,7 +188,7 @@ impl SkymapWidget {
         });
     }
 
-    fn screen_coord_to_eq(&self, x: f64, y: f64) -> Option<EqCoord> {
+    pub fn widget_crd_to_eq(&self, x: f64, y: f64) -> Option<EqCoord> {
         let vp = self.view_point.borrow();
         let cvt = HorizToScreenCvt::new(&*vp);
         let si = ScreenInfo::new(&self.draw_area);
@@ -194,7 +202,7 @@ impl SkymapWidget {
     fn select_object(self: &Rc<Self>, event: &gdk::EventButton) {
         let Some((x, y)) = event.coords() else { return; };
         let Some(skymap) = &*self.skymap.borrow() else { return; };
-        let Some(eq_crd) = self.screen_coord_to_eq(x, y) else { return; };
+        let Some(eq_crd) = self.widget_crd_to_eq(x, y) else { return; };
         let config = self.config.borrow();
         let vp = self.view_point.borrow();
         let max_stars_mag = calc_max_star_magnitude_for_painting(vp.mag_factor);
@@ -248,9 +256,11 @@ impl SkymapWidget {
         let mut painter = SkyMapPainter::new();
         let screen = ScreenInfo::new(da);
         let selection = self.selected_obj.borrow();
+        let telescope_pos = self.telescope_pos.borrow();
+        let camera_frame = self.camera_frame.borrow();
         let timer = std::time::Instant::now();
         _ = painter.paint(
-            &skymap, &selection,
+            &skymap, &selection, &telescope_pos, &camera_frame,
             &observer, &time,
             &config, &vp, &screen, ctx
         );
@@ -296,7 +306,7 @@ impl SkymapWidget {
         let already_started = self.ani_goto_data.borrow().is_some();
         let widget_width = self.draw_area.allocated_width() as f64;
         let widget_height = self.draw_area.allocated_height() as f64;
-        let Some(mut start_coord) = self.screen_coord_to_eq(0.5 * widget_width, 0.5 * widget_height) else {
+        let Some(mut start_coord) = self.widget_crd_to_eq(0.5 * widget_width, 0.5 * widget_height) else {
             return;
         };
 

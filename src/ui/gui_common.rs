@@ -125,16 +125,6 @@ impl Crop {
             Self::P25  => Some("25"),
         }
     }
-
-    pub fn translate(&self, value: usize) -> usize {
-        match self {
-            Crop::None => value,
-            Crop::P75  => 3 * value / 4,
-            Crop::P50  => value / 2,
-            Crop::P33  => value / 3,
-            Crop::P25  => value / 4,
-        }
-    }
 }
 
 impl PreviewSource {

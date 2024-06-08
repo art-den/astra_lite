@@ -659,7 +659,10 @@ impl CameraGui {
         da_histogram.connect_draw(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |area, cr| {
-                self_.handler_draw_histogram(area, cr);
+                gtk_utils::exec_and_show_error(&self_.window, || {
+                    self_.handler_draw_histogram(area, cr)?;
+                    Ok(())
+                });
                 glib::Propagation::Proceed
             })
         );
@@ -2272,25 +2275,23 @@ impl CameraGui {
         self: &Rc<Self>,
         area: &gtk::DrawingArea,
         cr:   &cairo::Context
-    ) {
-        gtk_utils::exec_and_show_error(&self.window, || {
-            let options = self.options.read().unwrap();
-            let hist = match options.preview.source {
-                PreviewSource::OrigFrame =>
-                    self.core.cur_frame().raw_hist.read().unwrap(),
-                PreviewSource::LiveStacking =>
-                    self.core.live_stacking().hist.read().unwrap(),
-            };
-            draw_histogram(
-                &hist,
-                area,
-                cr,
-                area.allocated_width(),
-                area.allocated_height(),
-                options.hist.log_y,
-            )?;
-            Ok(())
-        });
+    ) ->anyhow::Result<()> {
+        let options = self.options.read().unwrap();
+        let hist = match options.preview.source {
+            PreviewSource::OrigFrame =>
+                self.core.cur_frame().raw_hist.read().unwrap(),
+            PreviewSource::LiveStacking =>
+                self.core.live_stacking().hist.read().unwrap(),
+        };
+        draw_histogram(
+            &hist,
+            area,
+            cr,
+            area.allocated_width(),
+            area.allocated_height(),
+            options.hist.log_y,
+        )?;
+        Ok(())
     }
 
     fn handler_action_start_live_stacking(self: &Rc<Self>) {
