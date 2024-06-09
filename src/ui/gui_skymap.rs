@@ -253,7 +253,8 @@ impl MapGui {
                 self.handler_main_timer(),
             MainGuiEvent::TabPageChanged(page) if page == TabPage::SkyMap => {
                 self.update_date_time_widgets(true);
-                self.update_skymap_widget_and_selected_info(true);
+                self.update_skymap_widget(true);
+                self.show_selected_objects_info();
             }
             _ => {},
         }
@@ -523,7 +524,9 @@ impl MapGui {
         self.update_date_time_widgets(false);
 
         // Update map 2 times per second
-        self.update_skymap_widget_and_selected_info(false);
+        self.update_skymap_widget(false);
+
+        self.show_selected_objects_info();
     }
 
     fn update_date_time_widgets(&self, force: bool) {
@@ -538,7 +541,7 @@ impl MapGui {
         });
     }
 
-    fn update_skymap_widget_and_selected_info(&self, force: bool) {
+    fn update_skymap_widget(&self, force: bool) {
         self.check_data_loaded();
 
         let mut paint_ts = self.paint_ts.borrow_mut();
@@ -556,10 +559,11 @@ impl MapGui {
             paint_config.filter.set(ItemFilterFlags::GALAXIES, config.to_show.dso && config.to_show.galaxies);
             drop(config);
 
-            let cam_frame = if show_ccd && self.indi.state() == indi::ConnState::Connected {
-                let options = self.options.read().unwrap();
+            let indi_is_connected = self.indi.state() == indi::ConnState::Connected;
 
+            let cam_frame = if show_ccd && indi_is_connected {
                 let calc_cam_frame = || -> anyhow::Result<CameraFrame> {
+                    let options = self.options.read().unwrap();
                     let cam_name = &options.cam.device.name;
                     let cam_ccd_prop = &options.cam.device.prop;
                     let cam_ccd = indi::CamCcd::from_ccd_prop_name(cam_ccd_prop);
@@ -592,14 +596,27 @@ impl MapGui {
                 None
             };
 
+            let telescope_pos = if indi_is_connected {
+                let tele_pos_fun = || -> anyhow::Result<EqCoord> {
+                    let options = self.options.read().unwrap();
+                    let device_name = &options.mount.device;
+                    let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(device_name)?;
+                    Ok(EqCoord {
+                        ra: hour_to_radian(ra),
+                        dec: degree_to_radian(dec),
+                    })
+                };
+                tele_pos_fun().ok()
+            } else {
+                None
+            };
+
             self.map_widget.set_paint_config(
                 &user_time,
                 &paint_config,
-                &None,
+                &telescope_pos,
                 &cam_frame
             );
-
-            self.show_selected_objects_info();
         }
     }
 
@@ -720,7 +737,8 @@ impl MapGui {
             drop(user_time);
 
             self.set_time_to_widgets_impl();
-            self.update_skymap_widget_and_selected_info(true);
+            self.update_skymap_widget(true);
+            self.show_selected_objects_info();
         });
     }
 
@@ -740,7 +758,8 @@ impl MapGui {
             user_time.set_now();
             drop(user_time);
             self.set_time_to_widgets_impl();
-            self.update_skymap_widget_and_selected_info(true);
+            self.update_skymap_widget(true);
+            self.show_selected_objects_info();
         });
     }
 
@@ -754,7 +773,7 @@ impl MapGui {
             options.max_mag = value;
             drop(options);
 
-            self.update_skymap_widget_and_selected_info(true);
+            self.update_skymap_widget(true);
         });
     }
 
@@ -764,7 +783,8 @@ impl MapGui {
         Self::read_visibility_options_from_widgets(&mut opts.to_show, &ui);
         drop(opts);
 
-        self.update_skymap_widget_and_selected_info(true);
+        self.update_skymap_widget(true);
+        self.show_selected_objects_info();
     }
 
     fn handler_object_selected(&self, obj: Option<SkymapObject>) {

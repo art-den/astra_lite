@@ -529,6 +529,16 @@ impl SkyMapPainter {
         eq_hor_cvt: &EqToHorizCvt,
         hor_3d_cvt: &HorizToScreenCvt,
     ) -> anyhow::Result<()> {
+        let Some(telescope_pos) = tele_pos else { return Ok(()); };
+        let painter = TelescopePosPainter {
+            crd: *telescope_pos,
+        };
+        self.obj_painter.paint(
+            &painter,
+            &eq_hor_cvt,
+            &hor_3d_cvt,
+            ctx,
+        )?;
         Ok(())
     }
 
@@ -872,22 +882,22 @@ impl<'a> StarPainter<'a> {
         (light, light_with_gamma)
     }
 
-    fn calc_size(&self, light: f32) -> f64 {
-        let mut size = (self.options.light_size_k * light as f64).max(1.0);
+    fn calc_diam(&self, light: f32) -> f64 {
+        let mut diam = (self.options.light_size_k * light as f64).max(1.0);
 
         if self.star.mag.get() < 1.0 {
-            size = size.max(self.options.min_bright_size)
+            diam = diam.max(self.options.min_bright_size)
         }
 
-        if size > self.options.slow_grow_size {
-            size -= self.options.slow_grow_size;
-            size /= 2.0;
-            size += self.options.slow_grow_size;
+        if diam > self.options.slow_grow_size {
+            diam -= self.options.slow_grow_size;
+            diam /= 2.0;
+            diam += self.options.slow_grow_size;
         }
-        if size > self.options.max_size {
-            size = self.options.max_size;
+        if diam > self.options.max_size {
+            diam = self.options.max_size;
         }
-        size
+        diam
     }
 
     fn get_rgb_for_star_bv(bv: f32) -> RgbTuple {
@@ -935,28 +945,28 @@ impl<'a> StarPainter<'a> {
         let (r, g, b) = Self::get_rgb_for_star_bv(self.star.bv.get());
         ctx.cairo.save()?;
         ctx.cairo.translate(pt.x, pt.y);
-        let size = self.calc_size(light);
-        if size <= 1.0 {
+        let diam = self.calc_diam(light);
+        if diam <= 1.0 {
             ctx.cairo.set_source_rgb(
-                size * light_with_gamma.min(1.0) as f64 * r,
-                size * light_with_gamma.min(1.0) as f64 * g,
-                size * light_with_gamma.min(1.0) as f64 * b,
+                diam * light_with_gamma.min(1.0) as f64 * r,
+                diam * light_with_gamma.min(1.0) as f64 * g,
+                diam * light_with_gamma.min(1.0) as f64 * b,
             );
             ctx.cairo.rectangle(-0.5, -0.5, 1.0, 1.0);
-        } else if size <= ctx.screen.dpmm_x {
+        } else if diam <= ctx.screen.dpmm_x {
             ctx.cairo.set_source_rgb(
                 light_with_gamma as f64 * r,
                 light_with_gamma as f64 * g,
                 light_with_gamma as f64 * b,
             );
-            ctx.cairo.arc(0.0, 0.0, 0.5 * size, 0.0, 2.0 * PI);
+            ctx.cairo.arc(0.0, 0.0, 0.5 * diam, 0.0, 2.0 * PI);
         } else {
-            let grad = cairo::RadialGradient::new(0.0, 0.0, 0.1 * size, 0.0, 0.0, 0.75 * size);
+            let grad = cairo::RadialGradient::new(0.0, 0.0, 0.1 * diam, 0.0, 0.0, 0.75 * diam);
             grad.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 1.0);
             grad.add_color_stop_rgba(0.25, r, g, b, 1.0);
             grad.add_color_stop_rgba(1.0, r, g, b, 0.0);
             ctx.cairo.set_source(&grad)?;
-            ctx.cairo.arc(0.0, 0.0, 0.75 * size, 0.0, 2.0 * PI);
+            ctx.cairo.arc(0.0, 0.0, 0.75 * diam, 0.0, 2.0 * PI);
         }
         ctx.cairo.fill()?;
         ctx.cairo.restore()?;
@@ -968,7 +978,7 @@ impl<'a> StarPainter<'a> {
         let star_mag = self.star.mag.get();
         let (light, light_with_gamma) = self.calc_light(star_mag);
         let (r, g, b) = Self::get_rgb_for_star_bv(self.star.bv.get());
-        let size = self.calc_size(light);
+        let diam = self.calc_diam(light);
         let pt = &points[0];
         let paint_text = |text, index, light_with_gamma| -> anyhow::Result<()> {
             let mut light_with_gamma = light_with_gamma;
@@ -984,8 +994,8 @@ impl<'a> StarPainter<'a> {
                 light_with_gamma as f64,
             );
             ctx.cairo.move_to(
-                pt.x + 0.5 * size - 0.1 * t_height,
-                pt.y + t_height + 0.5 * size - 0.1 * t_height + index as f64 * 1.2 * t_height
+                pt.x + 0.5 * diam - 0.1 * t_height,
+                pt.y + t_height + 0.5 * diam - 0.1 * t_height + index as f64 * 1.2 * t_height
             );
             ctx.cairo.show_text(text)?;
             Ok(())
@@ -1233,6 +1243,37 @@ impl ItemPainter for TestHorizCircle {
         ctx.cairo.set_source_rgb(1.0, 1.0, 1.0);
         ctx.cairo.close_path();
         ctx.cairo.fill()?;
+        Ok(())
+    }
+}
+
+struct TelescopePosPainter {
+    crd: EqCoord,
+}
+
+impl ItemPainter for TelescopePosPainter {
+    fn points_count(&self) -> usize {
+        1
+    }
+
+    fn point_crd(&self, _index: usize) -> PainterCrd {
+        PainterCrd::Eq(self.crd.clone())
+    }
+
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+        let pt = &points[0];
+        let line_size = 40.0 * ctx.screen.dpmm_x;
+        ctx.cairo.set_line_width(1.0);
+        ctx.cairo.set_dash(&[], 0.0);
+        ctx.cairo.set_antialias(cairo::Antialias::Fast);
+        ctx.cairo.set_source_rgb(1.0, 1.0, 1.0);
+        ctx.cairo.move_to(pt.x - 0.5 * line_size, pt.y);
+        ctx.cairo.line_to(pt.x + 0.5 * line_size, pt.y);
+        ctx.cairo.move_to(pt.x, pt.y - 0.5 * line_size);
+        ctx.cairo.line_to(pt.x, pt.y + 0.5 * line_size);
+        ctx.cairo.stroke()?;
+        ctx.cairo.arc(pt.x, pt.y, 0.25 * line_size, 0.0, 2.0 * PI);
+        ctx.cairo.stroke()?;
         Ok(())
     }
 }

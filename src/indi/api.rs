@@ -2910,6 +2910,13 @@ impl Connection {
         )
     }
 
+    pub fn mount_get_eq_ra_and_dec(&self, device_name: &str) -> Result<(f64, f64)> {
+        let devices = self.devices.lock().unwrap();
+        let ra = devices.get_num_property(device_name, "EQUATORIAL_EOD_COORD", "RA")?.value;
+        let dec = devices.get_num_property(device_name, "EQUATORIAL_EOD_COORD", "DEC")?.value;
+        Ok((ra, dec))
+    }
+
     pub fn mount_set_eq_coord(
         &self,
         device_name: &str,
