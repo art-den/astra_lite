@@ -51,17 +51,22 @@ impl Default for HorizonGlowPaintConfig {
 
 #[derive(Clone)]
 pub struct PaintConfig {
-    pub filter:       ItemFilterFlags,
-    pub max_dso_mag:  f32,
-    pub horizon_glow: HorizonGlowPaintConfig,
+    pub filter:          ItemFilterFlags,
+    pub max_dso_mag:     f32,
+    pub horizon_glow:    HorizonGlowPaintConfig,
+    pub names_font_size: f32,
+    pub sides_font_size: f32,
 }
 
 impl Default for PaintConfig {
     fn default() -> Self {
         Self {
-            filter:        ItemFilterFlags::all(),
-            max_dso_mag:  10.0,
-            horizon_glow: HorizonGlowPaintConfig::default(),
+            filter:          ItemFilterFlags::all(),
+            max_dso_mag:     10.0,
+            horizon_glow:    HorizonGlowPaintConfig::default(),
+            names_font_size: 3.0,
+            sides_font_size: 5.0,
+
         }
     }
 }
@@ -211,6 +216,7 @@ impl SkyMapPainter {
         hor_3d_cvt: &HorizToScreenCvt,
         mode:       PainterMode,
     ) -> anyhow::Result<()> {
+        ctx.cairo.set_font_size(ctx.config.names_font_size as f64 * ctx.screen.dpmm_y);
         for dso_object in sky_map.objects() {
             let Some(mag) = dso_object.any_magnitude() else {
                 continue;
@@ -350,6 +356,7 @@ impl SkyMapPainter {
         mode:       PainterMode,
     ) -> anyhow::Result<()> {
         ctx.cairo.set_antialias(gtk::cairo::Antialias::Fast);
+        ctx.cairo.set_font_size(ctx.config.names_font_size as f64 * ctx.screen.dpmm_y);
         let center_eq_crd = eq_hor_cvt.horiz_to_eq(&ctx.view_point.crd);
         let center_zone_key = Stars::get_key_for_coord(center_eq_crd.ra, center_eq_crd.dec);
         let max_mag_value = calc_max_star_magnitude_for_painting(ctx.view_point.mag_factor);
@@ -460,7 +467,7 @@ impl SkyMapPainter {
             WorldSide { az: 270.0, text: "W",  alpha: 1.0 },
             WorldSide { az: 315.0, text: "SW", alpha: 0.5 },
         ];
-        ctx.cairo.set_font_size(6.0 * ctx.screen.dpmm_y);
+        ctx.cairo.set_font_size(ctx.config.sides_font_size as f64 * ctx.screen.dpmm_y);
         for world_side in world_sides {
             self.obj_painter.paint(&world_side, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
         }
