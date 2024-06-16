@@ -986,8 +986,8 @@ impl<'a> StarPainter<'a> {
         let (light, light_with_gamma) = self.calc_light(star_mag);
         let (r, g, b) = Self::get_rgb_for_star_bv(self.star.bv.get());
         let diam = self.calc_diam(light);
-        let pt = &points[0];
-        let paint_text = |text, index, light_with_gamma| -> anyhow::Result<()> {
+        let mut pt = points[0];
+        let mut paint_text = |text, light_with_gamma| -> anyhow::Result<()> {
             let mut light_with_gamma = light_with_gamma;
             if light_with_gamma < 0.5 { return Ok(()); }
             light_with_gamma -= 0.5;
@@ -1002,20 +1002,19 @@ impl<'a> StarPainter<'a> {
             );
             ctx.cairo.move_to(
                 pt.x + 0.5 * diam - 0.1 * t_height,
-                pt.y + t_height + 0.5 * diam - 0.1 * t_height + index as f64 * 1.2 * t_height
+                pt.y + t_height + 0.5 * diam - 0.1 * t_height
             );
             ctx.cairo.show_text(text)?;
+            pt.y += 1.2 * t_height;
             Ok(())
         };
 
-        let mut text_index = 0;
         if !self.name.is_empty() {
-            paint_text(self.name, text_index, light_with_gamma)?;
-            text_index += 1;
+            paint_text(self.name, light_with_gamma)?;
         }
 
         if !self.bayer.is_empty() {
-            paint_text(&self.bayer, text_index, 0.5 * light_with_gamma)?;
+            paint_text(&self.bayer, 0.5 * light_with_gamma)?;
         }
 
         Ok(())

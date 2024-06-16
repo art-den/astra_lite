@@ -51,6 +51,7 @@ pub fn init_ui(
     data.init_widgets();
     data.init_search_result_treeview();
     data.show_options();
+    data.updatw_widgets_enable_state();
 
     data.connect_main_gui_events(handlers);
     data.connect_events();
@@ -783,8 +784,19 @@ impl MapGui {
         Self::read_visibility_options_from_widgets(&mut opts.to_show, &ui);
         drop(opts);
 
+        self.updatw_widgets_enable_state();
         self.update_skymap_widget(true);
         self.show_selected_objects_info();
+    }
+
+    fn updatw_widgets_enable_state(&self) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let dso_enabled = ui.prop_bool("chb_show_dso.active");
+        ui.enable_widgets(false, &[
+            ("chb_show_galaxies", dso_enabled),
+            ("chb_show_nebulas", dso_enabled),
+            ("chb_show_sclusters", dso_enabled),
+        ]);
     }
 
     fn handler_object_selected(&self, obj: Option<SkymapObject>) {
@@ -952,6 +964,7 @@ impl MapGui {
         _area: &gtk::DrawingArea,
         _cr:   &cairo::Context
     ) -> anyhow::Result<()> {
+        // TODO: draw graph with zenith by time
         //let Some(item) = &*self.selected_obj.borrow()
         Ok(())
     }
