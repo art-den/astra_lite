@@ -48,8 +48,8 @@ pub fn init_ui(
 
     let indi_gui = IndiGui::new(&indi);
 
-    let bx_indi_ctrl = builder.object::<gtk::Box>("bx_indi_ctrl").unwrap();
-    bx_indi_ctrl.add(indi_gui.widget());
+    let bx_devices_ctrl = builder.object::<gtk::Box>("bx_devices_ctrl").unwrap();
+    bx_devices_ctrl.add(indi_gui.widget());
 
     let data = Rc::new(HardwareGui {
         core:          Arc::clone(core),

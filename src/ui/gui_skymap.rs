@@ -876,12 +876,10 @@ impl MapGui {
         let columns = [
             /* 0 */ ("Name", String::static_type()),
             /* 1 */ ("Type", String::static_type()),
-            /* 2 */ ("",     i32::static_type()),
         ];
         let types = columns.iter().map(|(_, t)| *t).collect::<Vec<_>>();
         let model = gtk::ListStore::new(&types);
         for (idx, (col_name, _)) in columns.into_iter().enumerate() {
-            if col_name.is_empty() { continue; }
             let cell_text = gtk::CellRendererText::new();
             let col = gtk::TreeViewColumn::builder()
                 .title(col_name)
@@ -927,12 +925,11 @@ impl MapGui {
         let Ok(model) = model.downcast::<gtk::ListStore>() else { return; };
         let result = self.search_result.borrow();
         model.clear();
-        for (idx, item) in result.iter().enumerate() {
+        for item in &*result {
             model.insert_with_values(
                 None, &[
                 (0, &item.names().join(", ")),
                 (1, &item.obj_type().to_str()),
-                (2, &(idx as i32)),
             ]);
         }
     }
