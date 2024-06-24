@@ -16,7 +16,7 @@ pub struct ViewPoint {
 impl ViewPoint {
     pub fn new() -> Self {
         let crd = HorizCoord {
-            alt: degree_to_radian(20.0),
+            alt: degree_to_radian(21.31),
             az:  0.0,
         };
         Self {
@@ -72,14 +72,14 @@ impl Default for PaintConfig {
 }
 
 pub struct SkyMapPainter {
-    obj_painter: ObjectPainter,
+    obj_painter: ItemPainter,
     dso_ellipse: DsoEllipse,
 }
 
 impl SkyMapPainter {
     pub fn new() -> Self {
         Self {
-            obj_painter: ObjectPainter::new(),
+            obj_painter: ItemPainter::new(),
             dso_ellipse: DsoEllipse::new(),
         }
     }
@@ -185,7 +185,8 @@ impl SkyMapPainter {
             &circle,
             &eq_hor_cvt,
             &hor_3d_cvt,
-            &ctx
+            &ctx,
+            true,
         )?;
 
         Ok(())
@@ -238,6 +239,7 @@ impl SkyMapPainter {
                         &eq_hor_cvt,
                         &hor_3d_cvt,
                         ctx,
+                        false,
                     )?;
 
                     // Paint ellipse of object
@@ -247,7 +249,7 @@ impl SkyMapPainter {
                 }
                 PainterMode::Names => {
                     let name_painter = DsoNamePainter(dso_object);
-                    self.obj_painter.paint(&name_painter, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
+                    self.obj_painter.paint(&name_painter, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
                 }
             }
         }
@@ -298,7 +300,7 @@ impl SkyMapPainter {
 
         self.dso_ellipse.line_width = line_width;
         self.dso_ellipse.dso_type = dso_object.obj_type;
-        self.obj_painter.paint(&self.dso_ellipse, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
+        self.obj_painter.paint(&self.dso_ellipse, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
 
         Ok(())
     }
@@ -342,6 +344,7 @@ impl SkyMapPainter {
             &eq_hor_cvt,
             &hor_3d_cvt,
             ctx,
+            false,
         )?;
         Ok(star_is_painted)
     }
@@ -378,6 +381,7 @@ impl SkyMapPainter {
                     &eq_hor_cvt,
                     &hor_3d_cvt,
                     ctx,
+                    false,
                 ).unwrap_or_default()
             };
 
@@ -434,7 +438,7 @@ impl SkyMapPainter {
             for j in 0..(360/RA_STEP) {
                 let ra = degree_to_radian((RA_STEP * j) as f64);
                 let dec_line = EqGridItem { dec1, dec2, ra1: ra, ra2: ra };
-                self.obj_painter.paint(&dec_line, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
+                self.obj_painter.paint(&dec_line, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
             }
         }
         for j in 0..(360/STEP) {
@@ -443,7 +447,7 @@ impl SkyMapPainter {
             for i in -90/DEC_STEP..90/DEC_STEP {
                 let dec = degree_to_radian((DEC_STEP * i) as f64);
                 let ra_line = EqGridItem { dec1: dec, dec2: dec, ra1, ra2 };
-                self.obj_painter.paint(&ra_line, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
+                self.obj_painter.paint(&ra_line, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
             }
         }
         Ok(())
@@ -456,7 +460,7 @@ impl SkyMapPainter {
         hor_3d_cvt: &HorizToScreenCvt,
     ) -> anyhow::Result<()> {
         let ground = Ground { view_point: ctx.view_point };
-        self.obj_painter.paint(&ground, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
+        self.obj_painter.paint(&ground, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
         let world_sides = [
             WorldSide { az:   0.0, text: "S",  alpha: 1.0 },
             WorldSide { az:  45.0, text: "SE", alpha: 0.5 },
@@ -469,7 +473,7 @@ impl SkyMapPainter {
         ];
         ctx.cairo.set_font_size(ctx.config.sides_font_size as f64 * ctx.screen.dpmm_y);
         for world_side in world_sides {
-            self.obj_painter.paint(&world_side, &eq_hor_cvt, &hor_3d_cvt, ctx)?;
+            self.obj_painter.paint(&world_side, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
         }
         Ok(())
     }
@@ -502,6 +506,7 @@ impl SkyMapPainter {
                 &eq_hor_cvt,
                 &hor_3d_cvt,
                 ctx,
+                false,
             )?;
         }
 
@@ -525,6 +530,7 @@ impl SkyMapPainter {
             &eq_hor_cvt,
             &hor_3d_cvt,
             ctx,
+            true,
         )?;
         Ok(())
     }
@@ -545,6 +551,7 @@ impl SkyMapPainter {
             &eq_hor_cvt,
             &hor_3d_cvt,
             ctx,
+            true,
         )?;
         Ok(())
     }
@@ -582,6 +589,7 @@ impl SkyMapPainter {
                 &eq_hor_cvt,
                 &hor_3d_cvt,
                 ctx,
+                false,
             )?;
         }
         Ok(())
@@ -607,19 +615,19 @@ struct PaintCtx<'a> {
     pxls_per_rad: f64,
 }
 
-trait ItemPainter {
+trait Item {
     fn points_count(&self) -> usize;
     fn point_crd(&self, index: usize) -> PainterCrd;
     fn paint(&self, _ctx: &PaintCtx, _points: &[Point2D]) -> anyhow::Result<()> { Ok(()) }
 }
 
-struct ObjectPainter {
+struct ItemPainter {
     points_horiz:  Vec<HorizCoord>,
     points_3d:     Vec<Point3D>,
     points_screen: Vec<Point2D>,
 }
 
-impl ObjectPainter {
+impl ItemPainter {
     fn new() -> Self {
         Self {
             points_horiz:  Vec::new(),
@@ -630,15 +638,16 @@ impl ObjectPainter {
 
     fn paint(
         &mut self,
-        obj:        &dyn ItemPainter,
-        eq_hor_cvt: &EqToHorizCvt,
-        hor_3d_cvt: &HorizToScreenCvt,
-        ctx:        &PaintCtx,
+        obj:         &dyn Item,
+        eq_hor_cvt:  &EqToHorizCvt,
+        hor_3d_cvt:  &HorizToScreenCvt,
+        ctx:         &PaintCtx,
+        under_horiz: bool,
     ) -> anyhow::Result<bool> {
         let points_count = obj.points_count();
 
         self.points_horiz.clear();
-        let mut obj_is_visible = false;
+        let mut obj_is_visible = under_horiz;
         for i in 0..points_count {
             let horiz_crd = match obj.point_crd(i) {
                 PainterCrd::Horiz(horiz) => horiz,
@@ -731,7 +740,7 @@ impl ObjectPainter {
 
 struct DsoNamePainter<'a>(&'a DsoItem);
 
-impl<'a> ItemPainter for DsoNamePainter<'a> {
+impl<'a> Item for DsoNamePainter<'a> {
     fn points_count(&self) -> usize {
         1
     }
@@ -775,7 +784,7 @@ impl DsoEllipse {
     }
 }
 
-impl ItemPainter for DsoEllipse {
+impl Item for DsoEllipse {
     fn points_count(&self) -> usize {
         self.points.len()
     }
@@ -833,7 +842,7 @@ impl ItemPainter for DsoEllipse {
 
 // Paint outline
 
-impl ItemPainter for Outline {
+impl Item for Outline {
     fn points_count(&self) -> usize {
         self.polygon.len()
     }
@@ -1021,7 +1030,7 @@ impl<'a> StarPainter<'a> {
     }
 }
 
-impl<'a> ItemPainter for StarPainter<'a> {
+impl<'a> Item for StarPainter<'a> {
     fn points_count(&self) -> usize {
         1
     }
@@ -1052,7 +1061,7 @@ struct EqGridItem {
     ra2:  f64,
 }
 
-impl ItemPainter for EqGridItem {
+impl Item for EqGridItem {
     fn points_count(&self) -> usize {
         2
     }
@@ -1083,7 +1092,7 @@ struct Ground<'a> {
 
 const GROUND_ANGLE_STEP: usize = 5;
 
-impl<'a> ItemPainter for Ground<'a> {
+impl<'a> Item for Ground<'a> {
     fn points_count(&self) -> usize {
         360 / GROUND_ANGLE_STEP
     }
@@ -1141,7 +1150,7 @@ struct WorldSide<'a> {
     alpha: f64,
 }
 
-impl<'a> ItemPainter for WorldSide<'a> {
+impl<'a> Item for WorldSide<'a> {
     fn points_count(&self) -> usize {
         1
     }
@@ -1171,7 +1180,7 @@ struct HorizonGlowItem {
     coords: [HorizCoord; 4],
 }
 
-impl ItemPainter for HorizonGlowItem {
+impl Item for HorizonGlowItem {
     fn points_count(&self) -> usize {
         self.coords.len()
     }
@@ -1209,7 +1218,7 @@ struct ZoneVisibilityTestObject {
     coords: [EqCoord; 4],
 }
 
-impl ItemPainter for ZoneVisibilityTestObject {
+impl Item for ZoneVisibilityTestObject {
     fn points_count(&self) -> usize {
         self.coords.len()
     }
@@ -1223,7 +1232,7 @@ struct PointVisibilityTestObject {
     coord: EqCoord,
 }
 
-impl ItemPainter for PointVisibilityTestObject {
+impl Item for PointVisibilityTestObject {
     fn points_count(&self) -> usize {
         1
     }
@@ -1235,7 +1244,7 @@ impl ItemPainter for PointVisibilityTestObject {
 
 struct TestHorizCircle(HorizCoord);
 
-impl ItemPainter for TestHorizCircle {
+impl Item for TestHorizCircle {
     fn points_count(&self) -> usize {
         1
     }
@@ -1257,7 +1266,7 @@ struct TelescopePosPainter {
     crd: EqCoord,
 }
 
-impl ItemPainter for TelescopePosPainter {
+impl Item for TelescopePosPainter {
     fn points_count(&self) -> usize {
         1
     }
@@ -1290,7 +1299,7 @@ struct SelectionPainter {
     thickness: f64,
 }
 
- impl ItemPainter for SelectionPainter {
+ impl Item for SelectionPainter {
     fn points_count(&self) -> usize {
         1
     }
@@ -1320,7 +1329,7 @@ struct CameraFramePainter<'a> {
     coords: [EqCoord; 4],
 }
 
- impl<'a> ItemPainter for CameraFramePainter<'a> {
+ impl<'a> Item for CameraFramePainter<'a> {
     fn points_count(&self) -> usize {
         self.coords.len()
     }
