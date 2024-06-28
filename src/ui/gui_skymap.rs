@@ -246,7 +246,7 @@ impl Drop for MapGui {
 impl MapGui {
     const CONF_FN: &'static str = "gui_map";
 
-    fn handler_main_gui_event(&self, event: MainGuiEvent) {
+    fn handler_main_gui_event(self: &Rc<Self>, event: MainGuiEvent) {
         match event {
             MainGuiEvent::ProgramClosing =>
                 self.handler_closing(),
@@ -516,7 +516,7 @@ impl MapGui {
         self.map_widget.set_observer(&observer);
     }
 
-    fn handler_main_timer(&self) {
+    fn handler_main_timer(self: &Rc<Self>) {
         if self.gui.current_tab_page() != TabPage::SkyMap {
             return;
         }
@@ -542,7 +542,7 @@ impl MapGui {
         });
     }
 
-    fn update_skymap_widget(&self, force: bool) {
+    fn update_skymap_widget(self: &Rc<Self>, force: bool) {
         self.check_data_loaded();
 
         let mut paint_ts = self.paint_ts.borrow_mut();
@@ -646,7 +646,7 @@ impl MapGui {
         *self.prev_wdt.borrow_mut() = prev;
     }
 
-    fn check_data_loaded(&self) {
+    fn check_data_loaded(self: &Rc<Self>) {
         gtk_utils::exec_and_show_error(&self.window, || {
             let result = self.check_data_loaded_impl();
             if let Err(_) = result {
@@ -656,7 +656,7 @@ impl MapGui {
         });
     }
 
-    fn check_data_loaded_impl(&self) -> anyhow::Result<()> {
+    fn check_data_loaded_impl(self: &Rc<Self>) -> anyhow::Result<()> {
         let mut skymap = self.skymap_data.borrow_mut();
         if skymap.is_some() {
             return Ok(());
@@ -679,11 +679,6 @@ impl MapGui {
             map.load_dso(skymap_data_path.join(DSO_FILE))?;
         }
 
-        const STARS_FILE: &str = "stars.bin";
-        if map.load_stars(skymap_local_data_path.join(STARS_FILE)).is_err() {
-            map.load_stars(skymap_data_path.join(STARS_FILE))?;
-        }
-
         const NAMED_STARS_FILE: &str = "named_stars.csv";
         if map.load_named_stars(skymap_local_data_path.join(NAMED_STARS_FILE)).is_err() {
             map.load_named_stars(skymap_data_path.join(NAMED_STARS_FILE))?;
@@ -695,10 +690,50 @@ impl MapGui {
 
         self.map_widget.set_skymap(&map);
 
+        // Load stars in another thread
+
+        let (main_thread_sender, main_thread_receiver) =
+            async_channel::unbounded::<anyhow::Result<SkyMap>>();
+
+        std::thread::spawn(move || {
+            let mut stars_map = SkyMap::new();
+            const STARS_FILE: &str = "stars.bin";
+            if stars_map.load_stars(skymap_local_data_path.join(STARS_FILE)).is_err() {
+                let res = stars_map.load_stars(skymap_data_path.join(STARS_FILE));
+                if let Err(err) = res {
+                    main_thread_sender.send_blocking(Err(err)).unwrap();
+                    return;
+                }
+            }
+            main_thread_sender.send_blocking(Ok(stars_map)).unwrap();
+        });
+
+        glib::spawn_future_local(clone!(@weak self as self_ => async move {
+            while let Ok(skymaps_with_stars_res) = main_thread_receiver.recv().await {
+                match skymaps_with_stars_res {
+                    Ok(mut skymaps_with_stars) => {
+                        let mut skymap_data_opt = self_.skymap_data.borrow_mut();
+                        let Some(skymap_data) = &*skymap_data_opt else { return; };
+                        skymaps_with_stars.merge_other_skymaps(skymap_data);
+                        let skymaps_with_stars_rc = Rc::new(skymaps_with_stars);
+                        *skymap_data_opt = Some(Rc::clone(&skymaps_with_stars_rc));
+                        self_.map_widget.set_skymap(&skymaps_with_stars_rc);
+                    }
+                    Err(err) => {
+                        gtk_utils::show_error_message(
+                            &self_.window,
+                            "Error loading stars data",
+                            &err.to_string()
+                        );
+                    }
+                }
+            }
+        }));
+
         Ok(())
     }
 
-    fn handler_time_changed(&self) {
+    fn handler_time_changed(self: &Rc<Self>) {
         self.excl.exec(|| {
             let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
             let prev_time = self.prev_wdt.borrow();
@@ -764,7 +799,7 @@ impl MapGui {
         });
     }
 
-    fn handler_max_magnitude_changed(&self, value: f64) {
+    fn handler_max_magnitude_changed(self: &Rc<Self>, value: f64) {
         self.excl.exec(|| {
             let value = value as f32;
             let mut options = self.gui_options.borrow_mut();
@@ -778,7 +813,7 @@ impl MapGui {
         });
     }
 
-    fn handler_obj_visibility_changed(&self) {
+    fn handler_obj_visibility_changed(self: &Rc<Self>) {
         let mut opts = self.gui_options.borrow_mut();
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         Self::read_visibility_options_from_widgets(&mut opts.to_show, &ui);

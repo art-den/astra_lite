@@ -32,15 +32,15 @@ impl ObjEqCoord {
         }
     }
 
+    pub fn new_from_int(ra: u32, dec: i32) -> Self {
+        Self { ra, dec }
+    }
+
     pub fn to_eq(&self) -> EqCoord {
         EqCoord {
             ra: self.ra(),
             dec: self.dec(),
         }
-    }
-
-    pub fn new_from_int(ra: u32, dec: i32) -> Self {
-        Self { ra, dec }
     }
 
     pub fn ra(&self) -> f64 {
@@ -58,7 +58,6 @@ impl ObjEqCoord {
     pub fn dec_int(&self) -> i32 {
         self.dec
     }
-
 }
 
 impl Debug for ObjEqCoord {
@@ -72,10 +71,11 @@ impl Debug for ObjEqCoord {
 
 #[test]
 fn test_obj_coord() {
-    let obj = ObjEqCoord::new(24.0, 90.0);
-    dbg!(&obj);
-    assert_eq!(obj.ra(), 24.0);
-    assert_eq!(obj.dec(), 90.0);
+    let ra = hour_to_radian(24.0);
+    let dec = degree_to_radian(90.0);
+    let obj = ObjEqCoord::new(ra, dec);
+    assert!(f64::abs(obj.ra()-ra) < 1.0 / ObjEqCoord::OBJ_COORD_RA_DIV);
+    assert!(f64::abs(obj.dec()-dec) < 1.0 / ObjEqCoord::OBJ_COORD_RA_DIV);
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -157,6 +157,7 @@ pub struct Star {
     pub data: StarData,
 }
 
+#[derive(Clone)]
 pub struct StarZone {
     coords: [EqCoord; 4],
     stars:  Vec<Star>,
@@ -387,6 +388,7 @@ impl SkyItemType {
     }
 }
 
+#[derive(Clone)]
 pub struct Outline {
     pub name:    String,
     pub polygon: Vec<ObjEqCoord>
@@ -493,10 +495,8 @@ pub struct SkyMap {
     catalogue_by_id:  HashMap<u16, String>,
     constellations:   HashMap<u8, &'static str>,
     const_id_by_name: HashMap<&'static str, u8>,
-    named_stars:      Vec<NamedStar>,
     stars:            Stars,
     objects:          Vec<DsoItem>,
-    obj_idx_by_name:  HashMap<String, usize>,
     outlines:         Vec<Outline>,
 }
 
@@ -540,10 +540,8 @@ impl SkyMap {
             catalogue_by_id,
             constellations,
             const_id_by_name,
-            named_stars:     Vec::new(),
             stars:           Stars::new(),
             objects:         Vec::new(),
-            obj_idx_by_name: HashMap::new(),
             outlines:        Vec::new(),
         }
     }
@@ -558,6 +556,20 @@ impl SkyMap {
 
     pub fn stars(&self) -> &Stars {
         &self.stars
+    }
+
+    pub fn merge_other_skymaps(&mut self, other: &Self) {
+        self.objects.extend_from_slice(&other.objects);
+        self.outlines.extend_from_slice(&other.outlines);
+
+        for (key, star_zone) in &other.stars.zones {
+            self.stars.zones.entry(*key)
+                .and_modify(|existing| {
+                    existing.stars.extend_from_slice(&star_zone.stars);
+                    existing.nstars.extend_from_slice(&star_zone.nstars);
+                })
+                .or_insert(star_zone.clone());
+        }
     }
 
     pub fn load_dso(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
