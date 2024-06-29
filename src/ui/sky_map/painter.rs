@@ -2,6 +2,7 @@ use std::{f64::consts::PI, rc::Rc};
 use chrono::NaiveDateTime;
 use gtk::cairo;
 use itertools::{izip, Itertools};
+use serde::{Deserialize, Serialize};
 use crate::utils::math::linear_interpolate;
 use super::{utils::*, data::*};
 
@@ -34,7 +35,7 @@ pub struct CameraFrame {
     pub rot_angle: f64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct HorizonGlowPaintConfig {
     enabled: bool,
     angle:   f64,
@@ -49,7 +50,7 @@ impl Default for HorizonGlowPaintConfig {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PaintConfig {
     pub filter:          ItemFilterFlags,
     pub max_dso_mag:     f32,

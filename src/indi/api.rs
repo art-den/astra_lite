@@ -1079,25 +1079,29 @@ impl Devices {
     }
 }
 
-bitflags! { pub struct DriverInterface: u32 {
-    const GENERAL       = 0;
-    const TELESCOPE     = (1 << 0);
-    const CCD           = (1 << 1);
-    const GUIDER        = (1 << 2);
-    const FOCUSER       = (1 << 3);
-    const FILTER        = (1 << 4);
-    const DOME          = (1 << 5);
-    const GPS           = (1 << 6);
-    const WEATHER       = (1 << 7);
-    const AO            = (1 << 8);
-    const DUSTCAP       = (1 << 9);
-    const LIGHTBOX      = (1 << 10);
-    const DETECTOR      = (1 << 11);
-    const ROTATOR       = (1 << 12);
-    const SPECTROGRAPH  = (1 << 13);
-    const CORRELATOR    = (1 << 14);
-    const AUX           = (1 << 15);
-}}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct DriverInterface: u32 {
+        const GENERAL       = 0;
+        const TELESCOPE     = (1 << 0);
+        const CCD           = (1 << 1);
+        const GUIDER        = (1 << 2);
+        const FOCUSER       = (1 << 3);
+        const FILTER        = (1 << 4);
+        const DOME          = (1 << 5);
+        const GPS           = (1 << 6);
+        const WEATHER       = (1 << 7);
+        const AO            = (1 << 8);
+        const DUSTCAP       = (1 << 9);
+        const LIGHTBOX      = (1 << 10);
+        const DETECTOR      = (1 << 11);
+        const ROTATOR       = (1 << 12);
+        const SPECTROGRAPH  = (1 << 13);
+        const CORRELATOR    = (1 << 14);
+        const AUX           = (1 << 15);
+    }
+}
 
 pub enum DeviceCap {
     CcdTemperature,

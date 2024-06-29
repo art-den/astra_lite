@@ -1,6 +1,7 @@
 use std::{collections::*, f64::consts::PI, fmt::Debug, io::{BufRead, Read}, path::Path};
 use bitflags::bitflags;
 use bitstream_io::{BigEndian, BitReader};
+use serde::{Deserialize, Serialize};
 use crate::{indi::sexagesimal_to_value, utils::compression::ValuesDecompressor};
 use super::utils::*;
 
@@ -318,12 +319,14 @@ impl Stars {
 }
 
 bitflags! {
+    #[derive(Clone, Serialize, Deserialize)]
     pub struct ItemFilterFlags: u32 {
-        const OUTLINES = 1 << 0;
-        const STARS    = 1 << 1;
-        const CLUSTERS = 1 << 2;
-        const NEBULAS  = 1 << 3;
-        const GALAXIES = 1 << 4;
+        const STARS    = 1 << 0;
+        const DSO      = 1 << 1;
+        const OUTLINES = 1 << 2;
+        const CLUSTERS = 1 << 3;
+        const NEBULAS  = 1 << 4;
+        const GALAXIES = 1 << 5;
     }
 }
 
@@ -374,15 +377,15 @@ impl SkyItemType {
             Star | DoubleStar =>
                 flags.contains(ItemFilterFlags::STARS),
             Galaxy | GalaxyPair | GalaxyTriplet | GroupOfGalaxies =>
-                flags.contains(ItemFilterFlags::GALAXIES),
+                flags.contains(ItemFilterFlags::GALAXIES) && flags.contains(ItemFilterFlags::DSO),
             StarCluster | AssociationOfStars =>
-                flags.contains(ItemFilterFlags::CLUSTERS),
+                flags.contains(ItemFilterFlags::CLUSTERS) && flags.contains(ItemFilterFlags::DSO),
             PlanetaryNebula | DarkNebula | EmissionNebula | Nebula |
             ReflectionNebula | SupernovaRemnant | HIIIonizedRegion =>
-                flags.contains(ItemFilterFlags::NEBULAS),
+                flags.contains(ItemFilterFlags::NEBULAS) && flags.contains(ItemFilterFlags::DSO),
             StarClusterAndNebula =>
-                flags.contains(ItemFilterFlags::NEBULAS) ||
-                flags.contains(ItemFilterFlags::CLUSTERS),
+                flags.contains(ItemFilterFlags::NEBULAS) && flags.contains(ItemFilterFlags::DSO) ||
+                flags.contains(ItemFilterFlags::CLUSTERS) && flags.contains(ItemFilterFlags::DSO),
             _ => false,
         }
     }

@@ -83,36 +83,13 @@ impl SkyItemType {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-struct ObjectsToShow {
-    stars: bool,
-    dso:   bool,
-    galaxies: bool,
-    nebulas: bool,
-    sclusters: bool,
-    ccd: bool,
-}
 
-impl Default for ObjectsToShow {
-    fn default() -> Self {
-        Self {
-            stars:     true,
-            dso:       true,
-            galaxies:  true,
-            nebulas:   true,
-            sclusters: true,
-            ccd:       true,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize)]
 #[serde(default)]
 struct GuiOptions {
     paned_pos1:         i32,
-    to_show:            ObjectsToShow,
-    max_mag:            f32,
+    paint:              PaintConfig,
+    show_ccd:           bool,
     search_above_horiz: bool,
 }
 
@@ -120,8 +97,8 @@ impl Default for GuiOptions {
     fn default() -> Self {
         Self {
             paned_pos1:         -1,
-            to_show:            Default::default(),
-            max_mag:            10.0,
+            paint:              PaintConfig::default(),
+            show_ccd:           true,
             search_above_horiz: true,
         }
     }
@@ -396,14 +373,14 @@ impl MapGui {
         pan_map1.set_position(opts.paned_pos1);
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
 
-        ui.set_prop_bool("chb_show_stars.active", opts.to_show.stars);
-        ui.set_prop_bool("chb_show_dso.active", opts.to_show.dso);
-        ui.set_prop_bool("chb_show_galaxies.active", opts.to_show.galaxies);
-        ui.set_prop_bool("chb_show_nebulas.active", opts.to_show.nebulas);
-        ui.set_prop_bool("chb_show_sclusters.active", opts.to_show.sclusters);
-        ui.set_prop_bool("chb_sm_show_ccd.active", opts.to_show.ccd);
+        ui.set_prop_bool("chb_show_stars.active", opts.paint.filter.contains(ItemFilterFlags::STARS));
+        ui.set_prop_bool("chb_show_dso.active", opts.paint.filter.contains(ItemFilterFlags::DSO));
+        ui.set_prop_bool("chb_show_galaxies.active", opts.paint.filter.contains(ItemFilterFlags::GALAXIES));
+        ui.set_prop_bool("chb_show_nebulas.active", opts.paint.filter.contains(ItemFilterFlags::NEBULAS));
+        ui.set_prop_bool("chb_show_sclusters.active", opts.paint.filter.contains(ItemFilterFlags::CLUSTERS));
+        ui.set_prop_bool("chb_sm_show_ccd.active", opts.show_ccd);
 
-        ui.set_range_value("scl_max_dso_mag", opts.max_mag as f64);
+        ui.set_range_value("scl_max_dso_mag", opts.paint.max_dso_mag as f64);
         ui.set_prop_bool("chb_sm_above_horizon.active", opts.search_above_horiz);
 
         drop(opts);
@@ -414,21 +391,22 @@ impl MapGui {
         let mut opts = self.gui_options.borrow_mut();
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         opts.paned_pos1 = pan_map1.position();
-        opts.max_mag    = ui.range_value("scl_max_dso_mag") as f32;
+        opts.paint.max_dso_mag = ui.range_value("scl_max_dso_mag") as f32;
         opts.search_above_horiz = ui.prop_bool("chb_sm_above_horizon.active");
 
-        Self::read_visibility_options_from_widgets(&mut opts.to_show, &ui);
+        Self::read_visibility_options_from_widgets(&mut opts, &ui);
 
         drop(opts);
     }
 
-    fn read_visibility_options_from_widgets(opts: &mut ObjectsToShow, ui: &gtk_utils::UiHelper) {
-        opts.stars     = ui.prop_bool("chb_show_stars.active");
-        opts.dso       = ui.prop_bool("chb_show_dso.active");
-        opts.galaxies  = ui.prop_bool("chb_show_galaxies.active");
-        opts.nebulas   = ui.prop_bool("chb_show_nebulas.active");
-        opts.sclusters = ui.prop_bool("chb_show_sclusters.active");
-        opts.ccd       = ui.prop_bool("chb_sm_show_ccd.active");
+    fn read_visibility_options_from_widgets(opts: &mut GuiOptions, ui: &gtk_utils::UiHelper) {
+
+        opts.paint.filter.set(ItemFilterFlags::STARS, ui.prop_bool("chb_show_stars.active"));
+        opts.paint.filter.set(ItemFilterFlags::DSO, ui.prop_bool("chb_show_dso.active"));
+        opts.paint.filter.set(ItemFilterFlags::GALAXIES, ui.prop_bool("chb_show_galaxies.active"));
+        opts.paint.filter.set(ItemFilterFlags::NEBULAS, ui.prop_bool("chb_show_nebulas.active"));
+        opts.paint.filter.set(ItemFilterFlags::CLUSTERS, ui.prop_bool("chb_show_sclusters.active"));
+        opts.show_ccd = ui.prop_bool("chb_sm_show_ccd.active");
     }
 
     fn handler_action_options(self: &Rc<Self>) {
@@ -551,13 +529,8 @@ impl MapGui {
             *paint_ts = std::time::Instant::now();
 
             let config = self.gui_options.borrow();
-            let show_ccd = config.to_show.ccd;
-            let mut paint_config = PaintConfig::default();
-            paint_config.max_dso_mag = config.max_mag;
-            paint_config.filter.set(ItemFilterFlags::STARS, config.to_show.stars);
-            paint_config.filter.set(ItemFilterFlags::CLUSTERS, config.to_show.dso && config.to_show.sclusters);
-            paint_config.filter.set(ItemFilterFlags::NEBULAS, config.to_show.dso && config.to_show.nebulas);
-            paint_config.filter.set(ItemFilterFlags::GALAXIES, config.to_show.dso && config.to_show.galaxies);
+            let show_ccd = config.show_ccd;
+            let paint_config = config.paint.clone();
             drop(config);
 
             let indi_is_connected = self.indi.state() == indi::ConnState::Connected;
@@ -675,14 +648,16 @@ impl MapGui {
             .join("data");
 
         const DSO_FILE: &str = "dso.csv";
-        if map.load_dso(skymap_local_data_path.join(DSO_FILE)).is_err() {
-            map.load_dso(skymap_data_path.join(DSO_FILE))?;
-        }
+        map.load_dso(skymap_local_data_path.join(DSO_FILE)).
+            or_else(|_| {
+                map.load_dso(skymap_data_path.join(DSO_FILE))
+            })?;
 
         const NAMED_STARS_FILE: &str = "named_stars.csv";
-        if map.load_named_stars(skymap_local_data_path.join(NAMED_STARS_FILE)).is_err() {
-            map.load_named_stars(skymap_data_path.join(NAMED_STARS_FILE))?;
-        }
+        map.load_named_stars(skymap_local_data_path.join(NAMED_STARS_FILE))
+            .or_else(|_| {
+                map.load_named_stars(skymap_data_path.join(NAMED_STARS_FILE))
+            })?;
 
         let map = Rc::new(map);
         *skymap = Some(Rc::clone(&map));
@@ -692,24 +667,24 @@ impl MapGui {
 
         // Load stars in another thread
 
-        let (main_thread_sender, main_thread_receiver) =
-            async_channel::unbounded::<anyhow::Result<SkyMap>>();
+        let (stars_sender, stars_receiver) = async_channel::unbounded();
 
         std::thread::spawn(move || {
             let mut stars_map = SkyMap::new();
             const STARS_FILE: &str = "stars.bin";
-            if stars_map.load_stars(skymap_local_data_path.join(STARS_FILE)).is_err() {
-                let res = stars_map.load_stars(skymap_data_path.join(STARS_FILE));
-                if let Err(err) = res {
-                    main_thread_sender.send_blocking(Err(err)).unwrap();
-                    return;
-                }
+            let res = stars_map.load_stars(skymap_local_data_path.join(STARS_FILE))
+                .or_else(|_| {
+                    stars_map.load_stars(skymap_data_path.join(STARS_FILE))
+                });
+            if let Err(err) = res {
+                stars_sender.send_blocking(Err(err)).unwrap();
+                return;
             }
-            main_thread_sender.send_blocking(Ok(stars_map)).unwrap();
+            stars_sender.send_blocking(Ok(stars_map)).unwrap();
         });
 
         glib::spawn_future_local(clone!(@weak self as self_ => async move {
-            while let Ok(skymaps_with_stars_res) = main_thread_receiver.recv().await {
+            while let Ok(skymaps_with_stars_res) = stars_receiver.recv().await {
                 match skymaps_with_stars_res {
                     Ok(mut skymaps_with_stars) => {
                         let mut skymap_data_opt = self_.skymap_data.borrow_mut();
@@ -803,10 +778,10 @@ impl MapGui {
         self.excl.exec(|| {
             let value = value as f32;
             let mut options = self.gui_options.borrow_mut();
-            if options.max_mag == value {
+            if options.paint.max_dso_mag == value {
                 return;
             }
-            options.max_mag = value;
+            options.paint.max_dso_mag = value;
             drop(options);
 
             self.update_skymap_widget(true);
@@ -816,12 +791,11 @@ impl MapGui {
     fn handler_obj_visibility_changed(self: &Rc<Self>) {
         let mut opts = self.gui_options.borrow_mut();
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        Self::read_visibility_options_from_widgets(&mut opts.to_show, &ui);
+        Self::read_visibility_options_from_widgets(&mut opts, &ui);
         drop(opts);
 
         self.updatw_widgets_enable_state();
         self.update_skymap_widget(true);
-        self.show_selected_objects_info();
     }
 
     fn updatw_widgets_enable_state(&self) {
