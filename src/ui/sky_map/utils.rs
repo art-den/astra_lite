@@ -192,6 +192,36 @@ pub struct Rect {
     pub bottom: f64,
 }
 
+impl Rect {
+    pub fn top_line(&self) -> Line2D {
+        Line2D {
+            pt1: Point2D { x: self.left, y: self.top },
+            pt2: Point2D { x: self.right, y: self.top }
+        }
+    }
+
+    pub fn bottom_line(&self) -> Line2D {
+        Line2D {
+            pt1: Point2D { x: self.left, y: self.bottom },
+            pt2: Point2D { x: self.right, y: self.bottom }
+        }
+    }
+
+    pub fn left_line(&self) -> Line2D {
+        Line2D {
+            pt1: Point2D { x: self.left, y: self.top },
+            pt2: Point2D { x: self.left, y: self.bottom }
+        }
+    }
+
+    pub fn right_line(&self) -> Line2D {
+        Line2D {
+            pt1: Point2D { x: self.right, y: self.top },
+            pt2: Point2D { x: self.right, y: self.bottom }
+        }
+    }
+}
+
 pub struct ScreenInfo {
     pub rect:      Rect,
     pub tolerance: Rect,
@@ -336,20 +366,20 @@ impl<'a> HorizToScreenCvt<'a> {
 }
 
 pub struct Line2D {
-    pub crd1: Point2D,
-    pub crd2: Point2D,
+    pub pt1: Point2D,
+    pub pt2: Point2D,
 }
 
 impl Line2D {
     pub fn intersection(line1: &Line2D, line2: &Line2D) -> Option<Point2D> {
-        let ax1 = line1.crd1.x;
-        let bx1 = line1.crd2.x - line1.crd1.x;
-        let ay1 = line1.crd1.y;
-        let by1 = line1.crd2.y - line1.crd1.y;
-        let ax2 = line2.crd1.x;
-        let bx2 = line2.crd2.x - line2.crd1.x;
-        let ay2 = line2.crd1.y;
-        let by2 = line2.crd2.y - line2.crd1.y;
+        let ax1 = line1.pt1.x;
+        let bx1 = line1.pt2.x - line1.pt1.x;
+        let ay1 = line1.pt1.y;
+        let by1 = line1.pt2.y - line1.pt1.y;
+        let ax2 = line2.pt1.x;
+        let bx2 = line2.pt2.x - line2.pt1.x;
+        let ay2 = line2.pt1.y;
+        let by2 = line2.pt2.y - line2.pt1.y;
 
         let (t1, t2) = linear_solve2(
             bx1, -bx2, ax2 - ax1,
@@ -372,12 +402,12 @@ fn test_2d_lines_intersection() {
     assert_eq!(
         Line2D::intersection(
             &Line2D {
-                crd1: Point2D { x: -1.0, y: 0.0 },
-                crd2: Point2D { x:  1.0, y: 0.0 },
+                pt1: Point2D { x: -1.0, y: 0.0 },
+                pt2: Point2D { x:  1.0, y: 0.0 },
             },
             &Line2D {
-                crd1: Point2D { x: 0.0, y: -1.0 },
-                crd2: Point2D { x: 0.0, y:  1.0 },
+                pt1: Point2D { x: 0.0, y: -1.0 },
+                pt2: Point2D { x: 0.0, y:  1.0 },
             }
         ),
         Some(Point2D{x: 0.0, y: 0.0})
@@ -386,12 +416,12 @@ fn test_2d_lines_intersection() {
     assert_eq!(
         Line2D::intersection(
             &Line2D {
-                crd1: Point2D { x: -1.0, y:  8.0 },
-                crd2: Point2D { x:  4.0, y: -2.0 },
+                pt1: Point2D { x: -1.0, y:  8.0 },
+                pt2: Point2D { x:  4.0, y: -2.0 },
             },
             &Line2D {
-                crd1: Point2D { x:  4.0, y:  5.0 },
-                crd2: Point2D { x: -2.0, y: -4.0 },
+                pt1: Point2D { x:  4.0, y:  5.0 },
+                pt2: Point2D { x: -2.0, y: -4.0 },
             }
         ),
         Some(Point2D{x: 2.0, y: 2.0})
@@ -400,12 +430,12 @@ fn test_2d_lines_intersection() {
     assert_eq!(
         Line2D::intersection(
             &Line2D {
-                crd1: Point2D { x: 0.0, y: 8.0 },
-                crd2: Point2D { x: 2.0, y: 3.0 },
+                pt1: Point2D { x: 0.0, y: 8.0 },
+                pt2: Point2D { x: 2.0, y: 3.0 },
             },
             &Line2D {
-                crd1: Point2D { x: 3.0, y: 1.0 },
-                crd2: Point2D { x: 2.0, y: 3.0 },
+                pt1: Point2D { x: 3.0, y: 1.0 },
+                pt2: Point2D { x: 2.0, y: 3.0 },
             }
         ),
         Some(Point2D{x: 2.0, y: 3.0})
@@ -414,12 +444,12 @@ fn test_2d_lines_intersection() {
     assert_eq!(
         Line2D::intersection(
             &Line2D {
-                crd1: Point2D { x: 0.0, y: 8.0 },
-                crd2: Point2D { x: 2.0, y: 3.0 },
+                pt1: Point2D { x: 0.0, y: 8.0 },
+                pt2: Point2D { x: 2.0, y: 3.0 },
             },
             &Line2D {
-                crd1: Point2D { x: 3.0, y: 1.0 },
-                crd2: Point2D { x: 1.0, y: 5.0 },
+                pt1: Point2D { x: 3.0, y: 1.0 },
+                pt2: Point2D { x: 1.0, y: 5.0 },
             }
         ),
         Some(Point2D{x: 2.0, y: 3.0})
@@ -428,12 +458,12 @@ fn test_2d_lines_intersection() {
     assert_eq!(
         Line2D::intersection(
             &Line2D {
-                crd1: Point2D { x: 0.0, y: 8.0 },
-                crd2: Point2D { x: 2.0, y: 3.0 },
+                pt1: Point2D { x: 0.0, y: 8.0 },
+                pt2: Point2D { x: 2.0, y: 3.0 },
             },
             &Line2D {
-                crd1: Point2D { x: 3.0, y: 1.0 },
-                crd2: Point2D { x: 2.0, y: 5.0 },
+                pt1: Point2D { x: 3.0, y: 1.0 },
+                pt2: Point2D { x: 2.0, y: 5.0 },
             }
         ),
         None

@@ -426,20 +426,23 @@ impl SkyMapPainter {
         ctx:        &PaintCtx,
         hor_3d_cvt: &HorizToScreenCvt,
     ) -> anyhow::Result<()> {
-        ctx.cairo.set_source_rgba(0.0, 0.0, 1.0, 0.7);
         ctx.cairo.set_line_width(1.0);
         ctx.cairo.set_antialias(gtk::cairo::Antialias::Fast);
 
         const DEC_STEP: i32 = 10; // degree
-        const RA_STEP: i32 = 20; // degree
         const STEP: i32 = 5;
         for i in -90/STEP..90/STEP {
             let dec1 = degree_to_radian((STEP * i) as f64);
             let dec2 = degree_to_radian((STEP * (i + 1)) as f64);
-            for j in 0..(360/RA_STEP) {
-                let ra = degree_to_radian((RA_STEP * j) as f64);
-                let dec_line = EqGridItem { dec1, dec2, ra1: ra, ra2: ra };
-                self.obj_painter.paint(&dec_line, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
+            for j in 0..24 {
+                let ra = hour_to_radian(j as f64);
+                let item = EqGridItem {
+                    tp: EqGridItemType::Ra,
+                    ra1: ra,
+                    ra2: ra,
+                    dec1, dec2,
+                };
+                self.obj_painter.paint(&item, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
             }
         }
         for j in 0..(360/STEP) {
@@ -447,8 +450,13 @@ impl SkyMapPainter {
             let ra2 = degree_to_radian((STEP * (j + 1)) as f64);
             for i in -90/DEC_STEP..90/DEC_STEP {
                 let dec = degree_to_radian((DEC_STEP * i) as f64);
-                let ra_line = EqGridItem { dec1: dec, dec2: dec, ra1, ra2 };
-                self.obj_painter.paint(&ra_line, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
+                let item = EqGridItem {
+                    tp: EqGridItemType::Dec,
+                    dec1: dec,
+                    dec2: dec,
+                    ra1, ra2,
+                };
+                self.obj_painter.paint(&item, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
             }
         }
         Ok(())
@@ -697,28 +705,16 @@ impl ItemPainter {
         // check if 2d lines is crossing by screen boundaries
         if !obj_is_visible && self.points_screen.len() >= 2 {
             let rect = &ctx.screen.tolerance;
-            let top_line = Line2D {
-                crd1: Point2D { x: rect.left, y: rect.top },
-                crd2: Point2D { x: rect.right, y: rect.top }
-            };
-            let bottom_line = Line2D {
-                crd1: Point2D { x: rect.left, y: rect.bottom },
-                crd2: Point2D { x: rect.right, y: rect.bottom }
-            };
-            let left_line = Line2D {
-                crd1: Point2D { x: rect.left, y: rect.top },
-                crd2: Point2D { x: rect.left, y: rect.bottom }
-            };
-            let right_line = Line2D {
-                crd1: Point2D { x: rect.right, y: rect.top },
-                crd2: Point2D { x: rect.right, y: rect.bottom }
-            };
+            let top_line = rect.top_line();
+            let bottom_line = rect.bottom_line();
+            let left_line = rect.left_line();
+            let right_line = rect.right_line();
             obj_is_visible =
                 self.points_screen
                     .iter()
                     .circular_tuple_windows()
                     .any(|(&crd1, &crd2)| {
-                        let line = Line2D { crd1, crd2 };
+                        let line = Line2D { pt1: crd1, pt2: crd2 };
                         Line2D::intersection(&line, &top_line).is_some() ||
                         Line2D::intersection(&line, &bottom_line).is_some() ||
                         Line2D::intersection(&line, &left_line).is_some() ||
@@ -1055,7 +1051,10 @@ impl<'a> Item for StarPainter<'a> {
 
 // Paint equatorial grid
 
+enum EqGridItemType { Ra, Dec }
+
 struct EqGridItem {
+    tp:   EqGridItemType,
     dec1: f64,
     dec2: f64,
     ra1:  f64,
@@ -1078,9 +1077,43 @@ impl Item for EqGridItem {
     fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         let pt1 = &points[0];
         let pt2 = &points[1];
+
         ctx.cairo.move_to(pt1.x, pt1.y);
         ctx.cairo.line_to(pt2.x, pt2.y);
+        ctx.cairo.set_source_rgba(0.0, 0.0, 1.0, 0.7);
         ctx.cairo.stroke()?;
+
+        let line = Line2D { pt1: pt1.clone(), pt2: pt2.clone() };
+        let screen_left = ctx.screen.rect.left_line();
+        let screen_right = ctx.screen.rect.right_line();
+        let screen_top = ctx.screen.rect.top_line();
+        let screen_bottom = ctx.screen.rect.bottom_line();
+
+        let paint_text = |mut x, y, adjust_right| -> anyhow::Result<()> {
+            let text = match  self.tp {
+                EqGridItemType::Ra => format!("{:.0}h", radian_to_hour(self.ra1)),
+                EqGridItemType::Dec => format!("{:.0}°", radian_to_degree(self.dec1)),
+            };
+            let te = ctx.cairo.text_extents(&text)?;
+            if adjust_right {
+                x -= te.width();
+            }
+            ctx.cairo.move_to(x, y + 0.5 * te.height());
+            ctx.cairo.set_source_rgba(1.0, 1.0, 1.0, 1.0);
+            ctx.cairo.show_text(&text)?;
+            Ok(())
+        };
+
+        if let Some(is) = Line2D::intersection(&line, &screen_top) {
+            paint_text(is.x, is.y + 2.0 * ctx.screen.dpmm_y, false)?;
+        } else if let Some(is) = Line2D::intersection(&line, &screen_bottom) {
+            paint_text(is.x, is.y - 2.0 * ctx.screen.dpmm_y, false)?;
+        } else if let Some(is) = Line2D::intersection(&line, &screen_left) {
+            paint_text(is.x + 1.0 * ctx.screen.dpmm_y, is.y, false)?;
+        } else if let Some(is) = Line2D::intersection(&line, &screen_right) {
+            paint_text(is.x - 1.0 * ctx.screen.dpmm_y, is.y, true)?;
+        }
+
         Ok(())
     }
 }
