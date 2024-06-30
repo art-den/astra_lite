@@ -177,7 +177,6 @@ impl StarZone {
     pub fn named_stars(&self) -> &Vec<NamedStar> {
         &self.nstars
     }
-
 }
 
 pub type StarZoneKey = (u16, u16);
@@ -320,7 +319,7 @@ impl Stars {
 
 bitflags! {
     #[derive(Clone, Serialize, Deserialize)]
-    pub struct ItemFilterFlags: u32 {
+    pub struct ItemsToShow: u32 {
         const STARS    = 1 << 0;
         const DSO      = 1 << 1;
         const OUTLINES = 1 << 2;
@@ -371,21 +370,21 @@ impl SkyItemType {
         else                      { None }
     }
 
-    pub fn test_filter_flag(self, flags: &ItemFilterFlags) -> bool {
+    pub fn test_filter_flag(self, flags: &ItemsToShow) -> bool {
         use SkyItemType::*;
         match self {
             Star | DoubleStar =>
-                flags.contains(ItemFilterFlags::STARS),
+                flags.contains(ItemsToShow::STARS),
             Galaxy | GalaxyPair | GalaxyTriplet | GroupOfGalaxies =>
-                flags.contains(ItemFilterFlags::GALAXIES) && flags.contains(ItemFilterFlags::DSO),
+                flags.contains(ItemsToShow::GALAXIES) && flags.contains(ItemsToShow::DSO),
             StarCluster | AssociationOfStars =>
-                flags.contains(ItemFilterFlags::CLUSTERS) && flags.contains(ItemFilterFlags::DSO),
+                flags.contains(ItemsToShow::CLUSTERS) && flags.contains(ItemsToShow::DSO),
             PlanetaryNebula | DarkNebula | EmissionNebula | Nebula |
             ReflectionNebula | SupernovaRemnant | HIIIonizedRegion =>
-                flags.contains(ItemFilterFlags::NEBULAS) && flags.contains(ItemFilterFlags::DSO),
+                flags.contains(ItemsToShow::NEBULAS) && flags.contains(ItemsToShow::DSO),
             StarClusterAndNebula =>
-                flags.contains(ItemFilterFlags::NEBULAS) && flags.contains(ItemFilterFlags::DSO) ||
-                flags.contains(ItemFilterFlags::CLUSTERS) && flags.contains(ItemFilterFlags::DSO),
+                flags.contains(ItemsToShow::NEBULAS) && flags.contains(ItemsToShow::DSO) ||
+                flags.contains(ItemsToShow::CLUSTERS) && flags.contains(ItemsToShow::DSO),
             _ => false,
         }
     }
@@ -781,9 +780,9 @@ impl SkyMap {
         crd:          &EqCoord,
         max_dso_mag:  f32,
         max_star_mag: f32,
-        filter:       &ItemFilterFlags,
+        filter:       &ItemsToShow,
     ) -> Option<SkymapObject> {
-        let nearest_star = if filter.contains(ItemFilterFlags::STARS) {
+        let nearest_star = if filter.contains(ItemsToShow::STARS) {
             self.stars.get_nearest(crd, max_star_mag)
         } else {
             None
@@ -810,7 +809,7 @@ impl SkyMap {
         &self,
         crd:         &EqCoord,
         max_dso_mag: f32,
-        filter:      &ItemFilterFlags,
+        filter:      &ItemsToShow,
     ) -> Option<(DsoItem, f64)> {
         let max_mag = ObjMagnitude::new(max_dso_mag);
         let nearest_obj = self.objects.iter()

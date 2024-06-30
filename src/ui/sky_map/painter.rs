@@ -52,7 +52,7 @@ impl Default for HorizonGlowPaintConfig {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PaintConfig {
-    pub filter:          ItemFilterFlags,
+    pub filter:          ItemsToShow,
     pub max_dso_mag:     f32,
     pub horizon_glow:    HorizonGlowPaintConfig,
     pub names_font_size: f32,
@@ -62,7 +62,7 @@ pub struct PaintConfig {
 impl Default for PaintConfig {
     fn default() -> Self {
         Self {
-            filter:          ItemFilterFlags::all(),
+            filter:          ItemsToShow::all(),
             max_dso_mag:     10.0,
             horizon_glow:    HorizonGlowPaintConfig::default(),
             names_font_size: 3.0,
@@ -117,7 +117,7 @@ impl SkyMapPainter {
             self.paint_dso_items(sky_map, &ctx, &eq_hor_cvt, &hor_3d_cvt, PainterMode::Objects)?;
 
             // Stars objects
-            if config.filter.contains(ItemFilterFlags::STARS) {
+            if config.filter.contains(ItemsToShow::STARS) {
                 self.paint_stars(
                     sky_map,
                     &star_painter_options,
@@ -132,7 +132,7 @@ impl SkyMapPainter {
             self.paint_dso_items(sky_map, &ctx, &eq_hor_cvt, &hor_3d_cvt, PainterMode::Names)?;
 
             // Stars names
-            if config.filter.contains(ItemFilterFlags::STARS) {
+            if config.filter.contains(ItemsToShow::STARS) {
                 self.paint_stars(
                     sky_map,
                     &star_painter_options,

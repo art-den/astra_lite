@@ -373,11 +373,11 @@ impl MapGui {
         pan_map1.set_position(opts.paned_pos1);
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
 
-        ui.set_prop_bool("chb_show_stars.active", opts.paint.filter.contains(ItemFilterFlags::STARS));
-        ui.set_prop_bool("chb_show_dso.active", opts.paint.filter.contains(ItemFilterFlags::DSO));
-        ui.set_prop_bool("chb_show_galaxies.active", opts.paint.filter.contains(ItemFilterFlags::GALAXIES));
-        ui.set_prop_bool("chb_show_nebulas.active", opts.paint.filter.contains(ItemFilterFlags::NEBULAS));
-        ui.set_prop_bool("chb_show_sclusters.active", opts.paint.filter.contains(ItemFilterFlags::CLUSTERS));
+        ui.set_prop_bool("chb_show_stars.active", opts.paint.filter.contains(ItemsToShow::STARS));
+        ui.set_prop_bool("chb_show_dso.active", opts.paint.filter.contains(ItemsToShow::DSO));
+        ui.set_prop_bool("chb_show_galaxies.active", opts.paint.filter.contains(ItemsToShow::GALAXIES));
+        ui.set_prop_bool("chb_show_nebulas.active", opts.paint.filter.contains(ItemsToShow::NEBULAS));
+        ui.set_prop_bool("chb_show_sclusters.active", opts.paint.filter.contains(ItemsToShow::CLUSTERS));
         ui.set_prop_bool("chb_sm_show_ccd.active", opts.show_ccd);
 
         ui.set_range_value("scl_max_dso_mag", opts.paint.max_dso_mag as f64);
@@ -401,11 +401,11 @@ impl MapGui {
 
     fn read_visibility_options_from_widgets(opts: &mut GuiOptions, ui: &gtk_utils::UiHelper) {
 
-        opts.paint.filter.set(ItemFilterFlags::STARS, ui.prop_bool("chb_show_stars.active"));
-        opts.paint.filter.set(ItemFilterFlags::DSO, ui.prop_bool("chb_show_dso.active"));
-        opts.paint.filter.set(ItemFilterFlags::GALAXIES, ui.prop_bool("chb_show_galaxies.active"));
-        opts.paint.filter.set(ItemFilterFlags::NEBULAS, ui.prop_bool("chb_show_nebulas.active"));
-        opts.paint.filter.set(ItemFilterFlags::CLUSTERS, ui.prop_bool("chb_show_sclusters.active"));
+        opts.paint.filter.set(ItemsToShow::STARS, ui.prop_bool("chb_show_stars.active"));
+        opts.paint.filter.set(ItemsToShow::DSO, ui.prop_bool("chb_show_dso.active"));
+        opts.paint.filter.set(ItemsToShow::GALAXIES, ui.prop_bool("chb_show_galaxies.active"));
+        opts.paint.filter.set(ItemsToShow::NEBULAS, ui.prop_bool("chb_show_nebulas.active"));
+        opts.paint.filter.set(ItemsToShow::CLUSTERS, ui.prop_bool("chb_show_sclusters.active"));
         opts.show_ccd = ui.prop_bool("chb_sm_show_ccd.active");
     }
 
