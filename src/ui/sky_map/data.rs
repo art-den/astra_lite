@@ -319,6 +319,7 @@ impl Stars {
 
 bitflags! {
     #[derive(Clone, Serialize, Deserialize)]
+    #[serde(default)]
     pub struct ItemsToShow: u32 {
         const STARS    = 1 << 0;
         const DSO      = 1 << 1;
@@ -326,6 +327,12 @@ bitflags! {
         const CLUSTERS = 1 << 3;
         const NEBULAS  = 1 << 4;
         const GALAXIES = 1 << 5;
+    }
+}
+
+impl Default for ItemsToShow {
+    fn default() -> Self {
+        Self::all()
     }
 }
 

@@ -400,7 +400,6 @@ impl MapGui {
     }
 
     fn read_visibility_options_from_widgets(opts: &mut GuiOptions, ui: &gtk_utils::UiHelper) {
-
         opts.paint.filter.set(ItemsToShow::STARS, ui.prop_bool("chb_show_stars.active"));
         opts.paint.filter.set(ItemsToShow::DSO, ui.prop_bool("chb_show_dso.active"));
         opts.paint.filter.set(ItemsToShow::GALAXIES, ui.prop_bool("chb_show_galaxies.active"));

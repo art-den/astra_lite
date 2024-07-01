@@ -8,6 +8,15 @@ use super::{utils::*, data::*};
 
 const STAR_LIGHT_MIN_VISIBLE: f32 = 0.1;
 
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Color {
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+}
+
 #[derive(Clone)]
 pub struct ViewPoint {
     pub crd:        HorizCoord,
@@ -36,25 +45,29 @@ pub struct CameraFrame {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct HorizonGlowPaintConfig {
+#[serde(default)]
+pub struct HorizonGlowConfig {
     enabled: bool,
     angle:   f64,
+    color:   Color,
 }
 
-impl Default for HorizonGlowPaintConfig {
+impl Default for HorizonGlowConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            angle: 10.0,
+            angle:   10.0, // degrees
+            color:   Color { r: 0.25, g: 0.3, b: 0.3, a: 1.0 },
         }
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PaintConfig {
     pub filter:          ItemsToShow,
     pub max_dso_mag:     f32,
-    pub horizon_glow:    HorizonGlowPaintConfig,
+    pub horizon_glow:    HorizonGlowConfig,
     pub names_font_size: f32,
     pub sides_font_size: f32,
 }
@@ -64,7 +77,7 @@ impl Default for PaintConfig {
         Self {
             filter:          ItemsToShow::all(),
             max_dso_mag:     10.0,
-            horizon_glow:    HorizonGlowPaintConfig::default(),
+            horizon_glow:    HorizonGlowConfig::default(),
             names_font_size: 3.0,
             sides_font_size: 5.0,
 
@@ -1232,11 +1245,9 @@ impl Item for HorizonGlowItem {
             top_pt_x, top_pt_y,
             bottom_pt_x, bottom_pt_y
         );
-        const R: f64 = 0.25;
-        const G: f64 = 0.3;
-        const B: f64 = 0.3;
-        gradient.add_color_stop_rgba(0.0, R, G, B, 0.0);
-        gradient.add_color_stop_rgba(1.0, R, G, B, 1.0);
+        let color = &ctx.config.horizon_glow.color;
+        gradient.add_color_stop_rgba(0.0, color.r, color.g, color.b, 0.0);
+        gradient.add_color_stop_rgba(1.0, color.r, color.g, color.b, 1.0);
         ctx.cairo.move_to(points[0].x, points[0].y);
         for pt in &points[1..] {
             ctx.cairo.line_to(pt.x, pt.y);
