@@ -1,5 +1,6 @@
 import os, configparser, re, shutil, subprocess, argparse
 from pathlib import Path
+from distutils.dir_util import copy_tree
 
 parser = argparse.ArgumentParser(
                     prog='create-deb-package.py',
@@ -22,6 +23,7 @@ else:
 dist_dir = os.path.join(this_path, "..", "dist")
 cargo_toml = os.path.join(this_path, "..", "Cargo.toml")
 os.makedirs(dist_dir, exist_ok=True)
+mapdata_in_dir = os.path.join(this_path, "..", "map_data")
 
 # Package name and version from Cargo.toml
 
@@ -55,6 +57,7 @@ full_bin_dir = os.path.join(package_dir, bin_dir)
 os.makedirs(full_bin_dir, exist_ok=True)
 shutil.copy(bin_file, full_bin_dir)
 shutil.copy(icon_file, full_bin_dir)
+copy_tree(mapdata_in_dir, os.path.join(full_bin_dir, "data"))
 
 # Desktop entry
 

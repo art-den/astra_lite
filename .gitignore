@@ -9,3 +9,4 @@
 *.bat
 **.*~
 *.txt
+/map_data
