@@ -1,5 +1,6 @@
+use core::panic;
 use std::{rc::Rc, path::{Path, PathBuf}};
-use gtk::{prelude::*, gio, glib, glib::clone};
+use gtk::{prelude::*, gio, glib, glib::clone, gdk};
 
 pub fn set_dialog_default_button<T: IsA<gtk::Dialog>>(dialog: &T) {
     use gtk::ResponseType::*;
@@ -382,6 +383,28 @@ impl UiHelper {
             .downcast::<gtk::ComboBox>()
             .expect("Widget is not gtk::ComboBox");
         is_combobox_empty(&cb)
+    }
+
+    pub fn set_color(&self, widget_name: &str, r: f64, g: f64, b: f64, a: f64) {
+        let widget = self.object_by_id(widget_name);
+        let color_button = widget
+            .downcast::<gtk::ColorButton>();
+        if let Ok(color_button) = color_button {
+            color_button.set_rgba(&gdk::RGBA::new(r, g, b, a));
+            return;
+        }
+        panic!("Setting color for widget '{}' not supported", widget_name);
+    }
+
+    pub fn color(&self, widget_name: &str) -> (f64, f64, f64, f64) {
+        let widget = self.object_by_id(widget_name);
+        let color_button = widget
+            .downcast::<gtk::ColorButton>();
+        if let Ok(color_button) = color_button {
+            let color = color_button.rgba();
+            return (color.red(), color.green(), color.blue(), color.alpha());
+        }
+        panic!("Getting color from widget '{}' not supported", widget_name);
     }
 
     ///////////////////////////////////////////////////////////////////////////

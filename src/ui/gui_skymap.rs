@@ -51,7 +51,7 @@ pub fn init_ui(
     data.init_widgets();
     data.init_search_result_treeview();
     data.show_options();
-    data.updatw_widgets_enable_state();
+    data.update_widgets_enable_state();
 
     data.connect_main_gui_events(handlers);
     data.connect_events();
@@ -418,11 +418,27 @@ impl MapGui {
         );
         gtk_utils::set_dialog_default_button(&dialog);
 
+        let spb_horiz_glow_angle = builder.object::<gtk::SpinButton>("spb_horiz_glow_angle").unwrap();
+        spb_horiz_glow_angle.set_range(1.0, 45.0);
+        spb_horiz_glow_angle.set_digits(0);
+        spb_horiz_glow_angle.set_increments(1.0, 5.0);
+
         let ui = gtk_utils::UiHelper::new_from_builder(&builder);
 
         let options = self.options.read().unwrap();
+        let ui_options = self.gui_options.borrow();
+
         ui.set_prop_str("e_lat.text", Some(&indi::value_to_sexagesimal(options.sky_map.latitude, true, 9)));
         ui.set_prop_str("e_long.text", Some(&indi::value_to_sexagesimal(options.sky_map.longitude, true, 9)));
+        ui.set_prop_bool("chb_high_qual.active", ui_options.paint.high_quality);
+        ui.set_prop_bool("chb_horiz_glow.active", ui_options.paint.horizon_glow.enabled);
+        ui.set_prop_f64("spb_horiz_glow_angle.value", ui_options.paint.horizon_glow.angle);
+
+        let hg_color = &ui_options.paint.horizon_glow.color;
+        ui.set_color("clrb_horiz_glow", hg_color.r, hg_color.g, hg_color.b, hg_color.a);
+
+        // chb_horiz_glow
+        drop(ui_options);
         drop(options);
         drop(ui);
 
@@ -453,6 +469,7 @@ impl MapGui {
 
         dialog.connect_response(clone!(@strong self as self_, @strong builder => move |dlg, resp| {
             if resp == gtk::ResponseType::Ok {
+                let mut ui_options = self_.gui_options.borrow_mut();
                 let mut options = self_.options.write().unwrap();
                 let ui = gtk_utils::UiHelper::new_from_builder(&builder);
                 let mut err_str = String::new();
@@ -473,8 +490,18 @@ impl MapGui {
                     gtk_utils::show_error_message(&self_.window, "Error", &err_str);
                     return;
                 }
+
+                ui_options.paint.high_quality = ui.prop_bool("chb_high_qual.active");
+                ui_options.paint.horizon_glow.enabled = ui.prop_bool("chb_horiz_glow.active");
+                let (r, g, b, a) = ui.color("clrb_horiz_glow");
+                ui_options.paint.horizon_glow.color = Color { r, g, b, a };
+
+                ui_options.paint.horizon_glow.angle = ui.prop_f64("spb_horiz_glow_angle.value");
+
                 drop(options);
-                self_.set_observer_data_for_widget();
+                drop(ui_options);
+
+                self_.update_skymap_widget(true);
             }
             dlg.close();
         }));
@@ -793,11 +820,11 @@ impl MapGui {
         Self::read_visibility_options_from_widgets(&mut opts, &ui);
         drop(opts);
 
-        self.updatw_widgets_enable_state();
+        self.update_widgets_enable_state();
         self.update_skymap_widget(true);
     }
 
-    fn updatw_widgets_enable_state(&self) {
+    fn update_widgets_enable_state(&self) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let dso_enabled = ui.prop_bool("chb_show_dso.active");
         ui.enable_widgets(false, &[

@@ -10,6 +10,11 @@ const ID_CAT_MESSIER: u16 = 1;
 const ID_CAT_NGC:     u16 = 2;
 const ID_CAT_IC:      u16 = 3;
 
+enum SearchMode {
+    StartWith,
+    Contains,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Observer {
     pub latitude:  f64, // ϕ₀
@@ -79,19 +84,6 @@ fn test_obj_coord() {
     assert!(f64::abs(obj.dec()-dec) < 1.0 / ObjEqCoord::OBJ_COORD_RA_DIV);
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct StarBV(i16);
-
-impl StarBV {
-    pub fn new(bv: f32) -> Self {
-        Self((bv * 1000.0) as i16)
-    }
-
-    pub fn get(&self) -> f32 {
-        (self.0 as f32) / 1000.0
-    }
-}
-
 /// Brightness
 #[derive(Copy, Clone, PartialEq, PartialOrd)]
 pub struct ObjMagnitude(i16);
@@ -131,10 +123,19 @@ impl Debug for ObjMagnitude {
     }
 }
 
-enum SearchMode {
-    StartWith,
-    Contains,
+#[derive(Clone, Copy, Debug)]
+pub struct StarBV(i16);
+
+impl StarBV {
+    pub fn new(bv: f32) -> Self {
+        Self((bv * 1000.0) as i16)
+    }
+
+    pub fn get(&self) -> f32 {
+        (self.0 as f32) / 1000.0
+    }
 }
+
 
 #[derive(Clone, Debug)]
 pub struct StarData {

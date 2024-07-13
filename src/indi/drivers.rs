@@ -114,7 +114,6 @@ impl Drivers {
                 e.path()
                     .extension()
                     .and_then(|s|s.to_str()) == Some("xml")
-
             );
 
         let mut result = Drivers { groups: Vec::new() };

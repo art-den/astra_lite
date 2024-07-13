@@ -11,10 +11,10 @@ const STAR_LIGHT_MIN_VISIBLE: f32 = 0.1;
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Color {
-    r: f64,
-    g: f64,
-    b: f64,
-    a: f64,
+    pub r: f64,
+    pub g: f64,
+    pub b: f64,
+    pub a: f64,
 }
 
 #[derive(Clone)]
@@ -47,9 +47,9 @@ pub struct CameraFrame {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HorizonGlowConfig {
-    enabled: bool,
-    angle:   f64,
-    color:   Color,
+    pub enabled: bool,
+    pub angle:   f64,
+    pub color:   Color,
 }
 
 impl Default for HorizonGlowConfig {
@@ -70,17 +70,36 @@ pub struct PaintConfig {
     pub horizon_glow:    HorizonGlowConfig,
     pub names_font_size: f32,
     pub sides_font_size: f32,
+    pub grid_font_size:  f32,
+    pub high_quality:    bool,
 }
 
 impl Default for PaintConfig {
     fn default() -> Self {
-        Self {
+        let mut result = Self {
             filter:          ItemsToShow::all(),
             max_dso_mag:     10.0,
             horizon_glow:    HorizonGlowConfig::default(),
             names_font_size: 3.0,
             sides_font_size: 5.0,
+            grid_font_size:  2.8,
+            high_quality:    true,
+        };
 
+        if !cfg!(target_arch = "x86_64") {
+            result.high_quality = false;
+        }
+
+        result
+    }
+}
+
+impl PaintConfig {
+    fn get_antialias(&self) -> gtk::cairo::Antialias {
+        if self.high_quality {
+            gtk::cairo::Antialias::Fast
+        } else {
+            gtk::cairo::Antialias::None
         }
     }
 }
@@ -120,20 +139,21 @@ impl SkyMapPainter {
         let pxls_per_rad = Self::calc_pixels_per_radian(screen, view_point.mag_factor);
         let ctx = PaintCtx { cairo, config, screen, view_point, pxls_per_rad };
 
-        let star_painter_options = self.get_star_painter_options(&ctx);
-
         // Equatorial grid
-        self.paint_eq_grid(&eq_hor_cvt, &ctx, &hor_3d_cvt)?;
+        self.paint_eq_grid(&eq_hor_cvt, &ctx, &hor_3d_cvt, false)?;
+        self.paint_eq_grid(&eq_hor_cvt, &ctx, &hor_3d_cvt, true)?;
 
         if let Some(sky_map) = sky_map {
             // DSO objects
             self.paint_dso_items(sky_map, &ctx, &eq_hor_cvt, &hor_3d_cvt, PainterMode::Objects)?;
 
+            let star_painter_params = self.get_star_painter_params(&ctx);
+
             // Stars objects
             if config.filter.contains(ItemsToShow::STARS) {
                 self.paint_stars(
                     sky_map,
-                    &star_painter_options,
+                    &star_painter_params,
                     &ctx,
                     &eq_hor_cvt,
                     &hor_3d_cvt,
@@ -148,7 +168,7 @@ impl SkyMapPainter {
             if config.filter.contains(ItemsToShow::STARS) {
                 self.paint_stars(
                     sky_map,
-                    &star_painter_options,
+                    &star_painter_params,
                     &ctx,
                     &eq_hor_cvt,
                     &hor_3d_cvt,
@@ -319,14 +339,14 @@ impl SkyMapPainter {
         Ok(())
     }
 
-    fn get_star_painter_options(&self, ctx: &PaintCtx) -> StarPainterOptions {
+    fn get_star_painter_params(&self, ctx: &PaintCtx) -> StarPainterParams {
         let max_size = 7.0 * ctx.screen.dpmm_x;
         let slow_grow_size = 3.0 * ctx.screen.dpmm_x;
         let light_size_k = 0.3 * ctx.screen.dpmm_x;
         let min_bright_size = 1.5 * ctx.screen.dpmm_x;
         let max_mag_value = calc_max_star_magnitude_for_painting(ctx.view_point.mag_factor);
 
-        StarPainterOptions {
+        StarPainterParams {
             max_mag_value,
             max_size,
             slow_grow_size,
@@ -340,7 +360,7 @@ impl SkyMapPainter {
         star_data:  &StarData,
         name:       &str,
         bayer:      &str,
-        options:    &StarPainterOptions,
+        options:    &StarPainterParams,
         ctx:        &PaintCtx,
         eq_hor_cvt: &EqToHorizCvt,
         hor_3d_cvt: &HorizToScreenCvt,
@@ -366,13 +386,13 @@ impl SkyMapPainter {
     fn paint_stars(
         &mut self,
         sky_map:    &SkyMap,
-        options:    &StarPainterOptions,
+        params:     &StarPainterParams,
         ctx:        &PaintCtx,
         eq_hor_cvt: &EqToHorizCvt,
         hor_3d_cvt: &HorizToScreenCvt,
         mode:       PainterMode,
     ) -> anyhow::Result<()> {
-        ctx.cairo.set_antialias(gtk::cairo::Antialias::Fast);
+        ctx.cairo.set_antialias(ctx.config.get_antialias());
         ctx.cairo.set_font_size(ctx.config.names_font_size as f64 * ctx.screen.dpmm_y);
         let center_eq_crd = eq_hor_cvt.horiz_to_eq(&ctx.view_point.crd);
         let center_zone_key = Stars::get_key_for_coord(center_eq_crd.ra, center_eq_crd.dec);
@@ -410,7 +430,7 @@ impl SkyMapPainter {
                     }
                     let star_is_painted = self.paint_star(
                         &star.data, "", "",
-                        options, ctx, eq_hor_cvt, hor_3d_cvt, mode,
+                        params, ctx, eq_hor_cvt, hor_3d_cvt, mode,
                     )?;
                     _stars_count += 1;
                     if star_is_painted { _stars_painted_count += 1; }
@@ -423,7 +443,7 @@ impl SkyMapPainter {
                 }
                 let star_is_painted = self.paint_star(
                     &star.data, &star.name, &star.bayer,
-                    options, ctx, eq_hor_cvt, hor_3d_cvt, mode,
+                    params, ctx, eq_hor_cvt, hor_3d_cvt, mode,
                 )?;
                 _stars_count += 1;
                 if star_is_painted { _stars_painted_count += 1; }
@@ -438,12 +458,22 @@ impl SkyMapPainter {
         eq_hor_cvt: &EqToHorizCvt,
         ctx:        &PaintCtx,
         hor_3d_cvt: &HorizToScreenCvt,
+        text:       bool
     ) -> anyhow::Result<()> {
-        ctx.cairo.set_line_width(1.0);
-        ctx.cairo.set_antialias(gtk::cairo::Antialias::Fast);
+        if !text {
+            ctx.cairo.set_line_width(1.0);
+            ctx.cairo.set_antialias(ctx.config.get_antialias());
+            ctx.cairo.set_source_rgba(0.0, 0.0, 1.0, 0.7);
+        }
+        else
+        {
+            ctx.cairo.set_font_size(ctx.config.grid_font_size as f64 * ctx.screen.dpmm_y);
+            ctx.cairo.set_source_rgba(1.0, 1.0, 1.0, 1.0);
+        }
 
         const DEC_STEP: i32 = 10; // degree
         const STEP: i32 = 5;
+        let mut total = 0;
         for i in -90/STEP..90/STEP {
             let dec1 = degree_to_radian((STEP * i) as f64);
             let dec2 = degree_to_radian((STEP * (i + 1)) as f64);
@@ -454,8 +484,10 @@ impl SkyMapPainter {
                     ra1: ra,
                     ra2: ra,
                     dec1, dec2,
+                    text,
                 };
                 self.obj_painter.paint(&item, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
+                total += 1;
             }
         }
         for j in 0..(360/STEP) {
@@ -468,10 +500,18 @@ impl SkyMapPainter {
                     dec1: dec,
                     dec2: dec,
                     ra1, ra2,
+                    text
                 };
                 self.obj_painter.paint(&item, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
+                total += 1;
             }
         }
+
+        if !text {
+            ctx.cairo.stroke()?;
+        }
+
+        dbg!(total);
         Ok(())
     }
 
@@ -841,7 +881,7 @@ impl Item for DsoEllipse {
             },
         }
 
-        ctx.cairo.set_antialias(gtk::cairo::Antialias::Fast);
+        ctx.cairo.set_antialias(ctx.config.get_antialias());
         ctx.cairo.stroke()?;
 
         ctx.cairo.set_dash(&[], 0.0);
@@ -876,7 +916,7 @@ impl Item for Outline {
         ctx.cairo.fill_preserve()?;
         ctx.cairo.set_source_rgb(0.4, 0.4, 0.4);
         ctx.cairo.set_line_width(1.0);
-        ctx.cairo.set_antialias(gtk::cairo::Antialias::Fast);
+        ctx.cairo.set_antialias(ctx.config.get_antialias());
         ctx.cairo.stroke()?;
         Ok(())
     }
@@ -884,7 +924,7 @@ impl Item for Outline {
 
 // Paint star
 
-struct StarPainterOptions {
+struct StarPainterParams {
     max_size:        f64,
     max_mag_value:   f32,
     slow_grow_size:  f64,
@@ -896,7 +936,7 @@ struct StarPainter<'a> {
     mode:    PainterMode,
     name:    &'a str,
     bayer:   &'a str,
-    options: &'a StarPainterOptions,
+    options: &'a StarPainterParams,
 }
 
 type RgbTuple = (f64, f64, f64);
@@ -964,11 +1004,11 @@ impl<'a> StarPainter<'a> {
     }
 
     fn paint_object(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
-        let pt = &points[0];
         let star_mag = self.star.mag.get();
         let (light, light_with_gamma) = self.calc_light(star_mag);
         if light_with_gamma < 0.1 { return Ok(()); }
         let (r, g, b) = Self::get_rgb_for_star_bv(self.star.bv.get());
+        let pt = &points[0];
         ctx.cairo.save()?;
         ctx.cairo.translate(pt.x, pt.y);
         let diam = self.calc_diam(light);
@@ -1072,6 +1112,7 @@ struct EqGridItem {
     dec2: f64,
     ra1:  f64,
     ra2:  f64,
+    text: bool,
 }
 
 impl Item for EqGridItem {
@@ -1091,40 +1132,39 @@ impl Item for EqGridItem {
         let pt1 = &points[0];
         let pt2 = &points[1];
 
-        ctx.cairo.move_to(pt1.x, pt1.y);
-        ctx.cairo.line_to(pt2.x, pt2.y);
-        ctx.cairo.set_source_rgba(0.0, 0.0, 1.0, 0.7);
-        ctx.cairo.stroke()?;
+        if !self.text {
+            ctx.cairo.move_to(pt1.x, pt1.y);
+            ctx.cairo.line_to(pt2.x, pt2.y);
+        } else {
+            let line = Line2D { pt1: pt1.clone(), pt2: pt2.clone() };
+            let screen_left = ctx.screen.rect.left_line();
+            let screen_right = ctx.screen.rect.right_line();
+            let screen_top = ctx.screen.rect.top_line();
+            let screen_bottom = ctx.screen.rect.bottom_line();
 
-        let line = Line2D { pt1: pt1.clone(), pt2: pt2.clone() };
-        let screen_left = ctx.screen.rect.left_line();
-        let screen_right = ctx.screen.rect.right_line();
-        let screen_top = ctx.screen.rect.top_line();
-        let screen_bottom = ctx.screen.rect.bottom_line();
-
-        let paint_text = |mut x, y, adjust_right| -> anyhow::Result<()> {
-            let text = match  self.tp {
-                EqGridItemType::Ra => format!("{:.0}h", radian_to_hour(self.ra1)),
-                EqGridItemType::Dec => format!("{:.0}°", radian_to_degree(self.dec1)),
+            let paint_text = |mut x, y, adjust_right| -> anyhow::Result<()> {
+                let text = match  self.tp {
+                    EqGridItemType::Ra => format!("{:.0}h", radian_to_hour(self.ra1)),
+                    EqGridItemType::Dec => format!("{:.0}°", radian_to_degree(self.dec1)),
+                };
+                let te = ctx.cairo.text_extents(&text)?;
+                if adjust_right {
+                    x -= te.width();
+                }
+                ctx.cairo.move_to(x, y + 0.5 * te.height());
+                ctx.cairo.show_text(&text)?;
+                Ok(())
             };
-            let te = ctx.cairo.text_extents(&text)?;
-            if adjust_right {
-                x -= te.width();
-            }
-            ctx.cairo.move_to(x, y + 0.5 * te.height());
-            ctx.cairo.set_source_rgba(1.0, 1.0, 1.0, 1.0);
-            ctx.cairo.show_text(&text)?;
-            Ok(())
-        };
 
-        if let Some(is) = Line2D::intersection(&line, &screen_top) {
-            paint_text(is.x, is.y + 2.0 * ctx.screen.dpmm_y, false)?;
-        } else if let Some(is) = Line2D::intersection(&line, &screen_bottom) {
-            paint_text(is.x, is.y - 2.0 * ctx.screen.dpmm_y, false)?;
-        } else if let Some(is) = Line2D::intersection(&line, &screen_left) {
-            paint_text(is.x + 1.0 * ctx.screen.dpmm_y, is.y, false)?;
-        } else if let Some(is) = Line2D::intersection(&line, &screen_right) {
-            paint_text(is.x - 1.0 * ctx.screen.dpmm_y, is.y, true)?;
+            if let Some(is) = Line2D::intersection(&line, &screen_top) {
+                paint_text(is.x, is.y + 2.0 * ctx.screen.dpmm_y, false)?;
+            } else if let Some(is) = Line2D::intersection(&line, &screen_bottom) {
+                paint_text(is.x, is.y - 2.0 * ctx.screen.dpmm_y, false)?;
+            } else if let Some(is) = Line2D::intersection(&line, &screen_left) {
+                paint_text(is.x + 1.0 * ctx.screen.dpmm_y, is.y, false)?;
+            } else if let Some(is) = Line2D::intersection(&line, &screen_right) {
+                paint_text(is.x - 1.0 * ctx.screen.dpmm_y, is.y, true)?;
+            }
         }
 
         Ok(())
@@ -1247,7 +1287,7 @@ impl Item for HorizonGlowItem {
         );
         let color = &ctx.config.horizon_glow.color;
         gradient.add_color_stop_rgba(0.0, color.r, color.g, color.b, 0.0);
-        gradient.add_color_stop_rgba(1.0, color.r, color.g, color.b, 1.0);
+        gradient.add_color_stop_rgba(1.0, color.r, color.g, color.b, color.a);
         ctx.cairo.move_to(points[0].x, points[0].y);
         for pt in &points[1..] {
             ctx.cairo.line_to(pt.x, pt.y);
