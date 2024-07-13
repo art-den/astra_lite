@@ -501,6 +501,7 @@ impl MapGui {
                 drop(options);
                 drop(ui_options);
 
+                self_.set_observer_data_for_widget();
                 self_.update_skymap_widget(true);
             }
             dlg.close();

@@ -473,7 +473,6 @@ impl SkyMapPainter {
 
         const DEC_STEP: i32 = 10; // degree
         const STEP: i32 = 5;
-        let mut total = 0;
         for i in -90/STEP..90/STEP {
             let dec1 = degree_to_radian((STEP * i) as f64);
             let dec2 = degree_to_radian((STEP * (i + 1)) as f64);
@@ -487,7 +486,6 @@ impl SkyMapPainter {
                     text,
                 };
                 self.obj_painter.paint(&item, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
-                total += 1;
             }
         }
         for j in 0..(360/STEP) {
@@ -503,7 +501,6 @@ impl SkyMapPainter {
                     text
                 };
                 self.obj_painter.paint(&item, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
-                total += 1;
             }
         }
 
@@ -511,7 +508,6 @@ impl SkyMapPainter {
             ctx.cairo.stroke()?;
         }
 
-        dbg!(total);
         Ok(())
     }
 
