@@ -105,15 +105,15 @@ impl PaintConfig {
 }
 
 pub struct SkyMapPainter {
-    obj_painter: ItemPainter,
-    dso_ellipse: DsoEllipse,
+    item_painter: ItemPainter,
+    dso_ellipse:  DsoEllipse,
 }
 
 impl SkyMapPainter {
     pub fn new() -> Self {
         Self {
-            obj_painter: ItemPainter::new(),
-            dso_ellipse: DsoEllipse::new(),
+            item_painter: ItemPainter::new(),
+            dso_ellipse:  DsoEllipse::new(),
         }
     }
 
@@ -215,7 +215,7 @@ impl SkyMapPainter {
 
         let circle = TestHorizCircle(crd.clone());
 
-        self.obj_painter.paint(
+        self.item_painter.paint(
             &circle,
             &eq_hor_cvt,
             &hor_3d_cvt,
@@ -268,7 +268,7 @@ impl SkyMapPainter {
                         coord: dso_object.crd.to_eq()
                     };
 
-                    let is_visible_on_screen = self.obj_painter.paint(
+                    let is_visible_on_screen = self.item_painter.paint(
                         &test_visiblity,
                         &eq_hor_cvt,
                         &hor_3d_cvt,
@@ -283,7 +283,7 @@ impl SkyMapPainter {
                 }
                 PainterMode::Names => {
                     let name_painter = DsoNamePainter(dso_object);
-                    self.obj_painter.paint(&name_painter, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
+                    self.item_painter.paint(&name_painter, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
                 }
             }
         }
@@ -334,7 +334,7 @@ impl SkyMapPainter {
 
         self.dso_ellipse.line_width = line_width;
         self.dso_ellipse.dso_type = dso_object.obj_type;
-        self.obj_painter.paint(&self.dso_ellipse, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
+        self.item_painter.paint(&self.dso_ellipse, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
 
         Ok(())
     }
@@ -373,7 +373,7 @@ impl SkyMapPainter {
             bayer,
             options,
         };
-        let star_is_painted = self.obj_painter.paint(
+        let star_is_painted = self.item_painter.paint(
             &star_painter,
             &eq_hor_cvt,
             &hor_3d_cvt,
@@ -395,7 +395,7 @@ impl SkyMapPainter {
         ctx.cairo.set_antialias(ctx.config.get_antialias());
         ctx.cairo.set_font_size(ctx.config.names_font_size as f64 * ctx.screen.dpmm_y);
         let center_eq_crd = eq_hor_cvt.horiz_to_eq(&ctx.view_point.crd);
-        let center_zone_key = Stars::get_key_for_coord(center_eq_crd.ra, center_eq_crd.dec);
+        let center_zone_key = SkyZoneKey::from_coord(center_eq_crd.ra, center_eq_crd.dec);
         let max_mag_value = calc_max_star_magnitude_for_painting(ctx.view_point.mag_factor);
         let max_mag = ObjMagnitude::new(max_mag_value);
         let stars = sky_map.stars();
@@ -410,7 +410,7 @@ impl SkyMapPainter {
                 let vis_test_obj = ZoneVisibilityTestObject {
                     coords: zone.coords().clone(),
                 };
-                self.obj_painter.paint(
+                self.item_painter.paint(
                     &vis_test_obj,
                     &eq_hor_cvt,
                     &hor_3d_cvt,
@@ -485,7 +485,7 @@ impl SkyMapPainter {
                     dec1, dec2,
                     text,
                 };
-                self.obj_painter.paint(&item, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
+                self.item_painter.paint(&item, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
             }
         }
         for j in 0..(360/STEP) {
@@ -500,7 +500,7 @@ impl SkyMapPainter {
                     ra1, ra2,
                     text
                 };
-                self.obj_painter.paint(&item, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
+                self.item_painter.paint(&item, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
             }
         }
 
@@ -518,7 +518,7 @@ impl SkyMapPainter {
         hor_3d_cvt: &HorizToScreenCvt,
     ) -> anyhow::Result<()> {
         let ground = Ground { view_point: ctx.view_point };
-        self.obj_painter.paint(&ground, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
+        self.item_painter.paint(&ground, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
         let world_sides = [
             WorldSide { az:   0.0, text: "S",  alpha: 1.0 },
             WorldSide { az:  45.0, text: "SE", alpha: 0.5 },
@@ -531,7 +531,7 @@ impl SkyMapPainter {
         ];
         ctx.cairo.set_font_size(ctx.config.sides_font_size as f64 * ctx.screen.dpmm_y);
         for world_side in world_sides {
-            self.obj_painter.paint(&world_side, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
+            self.item_painter.paint(&world_side, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
         }
         Ok(())
     }
@@ -559,7 +559,7 @@ impl SkyMapPainter {
                     HorizCoord { alt:   0.0, az: az1 },
                 ]
             };
-            self.obj_painter.paint(
+            self.item_painter.paint(
                 &item,
                 &eq_hor_cvt,
                 &hor_3d_cvt,
@@ -583,7 +583,7 @@ impl SkyMapPainter {
         let thickness = 1.0 * ctx.screen.dpmm_x;
         let crd = selection.crd();
         let selection_painter = SelectionPainter { crd, size, thickness };
-        self.obj_painter.paint(
+        self.item_painter.paint(
             &selection_painter,
             &eq_hor_cvt,
             &hor_3d_cvt,
@@ -604,7 +604,7 @@ impl SkyMapPainter {
         let painter = TelescopePosPainter {
             crd: *telescope_pos,
         };
-        self.obj_painter.paint(
+        self.item_painter.paint(
             &painter,
             &eq_hor_cvt,
             &hor_3d_cvt,
@@ -642,7 +642,7 @@ impl SkyMapPainter {
             }
 
             let painter = CameraFramePainter { name: &cam_frame.name, coords };
-            self.obj_painter.paint(
+            self.item_painter.paint(
                 &painter,
                 &eq_hor_cvt,
                 &hor_3d_cvt,

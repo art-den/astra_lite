@@ -136,7 +136,6 @@ impl StarBV {
     }
 }
 
-
 #[derive(Clone, Debug)]
 pub struct StarData {
     pub crd: ObjEqCoord,
@@ -180,52 +179,78 @@ impl StarZone {
     }
 }
 
-pub type StarZoneKey = (u16, u16);
+#[derive(Hash, PartialEq, Eq, Clone, Copy)]
+pub struct SkyZoneKey {
+    ra_key: u16,
+    dec_key: u16,
+}
+
+impl SkyZoneKey {
+    pub const RA_COUNT: usize = 40;
+    pub const DEC_COUNT: usize = 40;
+
+    pub fn from_indices(ra_key: u16, dec_key: u16) -> Self {
+        Self { ra_key, dec_key }
+    }
+
+    pub fn from_coord(mut ra: f64, mut dec: f64) -> Self {
+        while ra >= 2.0 * PI { ra -= 2.0 * PI; }
+        while ra <= 0.0 { ra += 2.0 * PI; }
+        dec += 0.5*PI;
+        if dec > PI { dec = PI; }
+        if dec < 0.0 { dec = 0.0; }
+        let ra_int = (Self::RA_COUNT as f64 * ra / (2.0 * PI)) as u16;
+        let dec_int = (Self::DEC_COUNT as f64 * dec / PI) as u16;
+        SkyZoneKey {
+            ra_key: ra_int as u16,
+            dec_key: dec_int as u16,
+        }
+    }
+
+    pub fn to_coords(&self) -> [EqCoord; 4] {
+        let zone_ra_key_to_value = |ra_int: u16| -> f64 {
+            2.0 * PI * ra_int as f64 / SkyZoneKey::RA_COUNT as f64
+        };
+        let zone_dec_key_to_value = |dec_int: u16| -> f64 {
+            PI * dec_int as f64 / SkyZoneKey::DEC_COUNT as f64 - 0.5 * PI
+        };
+        let ra1 = zone_ra_key_to_value(self.ra_key);
+        let ra2 = zone_ra_key_to_value(self.ra_key+1);
+        let dec1 = zone_dec_key_to_value(self.dec_key);
+        let dec2 = zone_dec_key_to_value(self.dec_key+1);
+        [
+            EqCoord {ra: ra1, dec: dec1},
+            EqCoord {ra: ra2, dec: dec1},
+            EqCoord {ra: ra2, dec: dec2},
+            EqCoord {ra: ra1, dec: dec2},
+        ]
+    }
+}
 
 pub struct Stars {
-    zones: HashMap<StarZoneKey, StarZone>,
+    zones: HashMap<SkyZoneKey, StarZone>,
 }
 
 impl Stars {
-    const RA_COUNT: usize = 40;
-    const DEC_COUNT: usize = 40;
-
     pub fn new() -> Self {
         Self {
             zones: HashMap::new(),
         }
     }
 
-    pub fn zones(&self) -> &HashMap<StarZoneKey, StarZone> {
+    pub fn zones(&self) -> &HashMap<SkyZoneKey, StarZone> {
         &self.zones
     }
 
     pub fn add_star(&mut self, data: StarData, name: Option<String>, bayer: Option<String>, cnst_id: Option<u8>) {
-        let zone_ra_key_to_value = |ra_int: u16| -> f64 {
-            2.0 * PI * ra_int as f64 / Self::RA_COUNT as f64
-        };
-
-        let zone_dec_key_to_value = |dec_int: u16| -> f64 {
-            PI * dec_int as f64 / Self::DEC_COUNT as f64 - 0.5 * PI
-        };
-
         let ra = data.crd.ra();
         let dec = data.crd.dec();
-        let key = Self::get_key_for_coord(ra, dec);
+        let key = SkyZoneKey::from_coord(ra, dec);
         let zone = if let Some(zone) = self.zones.get_mut(&key) {
             zone
         } else {
-            let ra1 = zone_ra_key_to_value(key.0);
-            let ra2 = zone_ra_key_to_value(key.0+1);
-            let dec1 = zone_dec_key_to_value(key.1);
-            let dec2 = zone_dec_key_to_value(key.1+1);
             let new_zone = StarZone {
-                coords: [
-                    EqCoord {ra: ra1, dec: dec1},
-                    EqCoord {ra: ra2, dec: dec1},
-                    EqCoord {ra: ra2, dec: dec2},
-                    EqCoord {ra: ra1, dec: dec2},
-                ],
+                coords: key.to_coords(),
                 stars: Vec::new(),
                 nstars: Vec::new(),
             };
@@ -241,17 +266,6 @@ impl Stars {
         } else {
             zone.stars.push(Star { data });
         }
-    }
-
-    pub fn get_key_for_coord(mut ra: f64, mut dec: f64) -> StarZoneKey {
-        while ra >= 2.0 * PI { ra -= 2.0 * PI; }
-        while ra <= 0.0 { ra += 2.0 * PI; }
-        dec += 0.5*PI;
-        if dec > PI { dec = PI; }
-        if dec < 0.0 { dec = 0.0; }
-        let ra_int = (Self::RA_COUNT as f64 * ra / (2.0 * PI)) as u16;
-        let dec_int = (Self::DEC_COUNT as f64 * dec / PI) as u16;
-        (ra_int as u16, dec_int as u16)
     }
 
     pub fn get_nearest(&self, crd: &EqCoord, max_mag: f32) -> Option<(NamedStar, f64)> {
