@@ -472,10 +472,9 @@ impl SkyMapPainter {
         }
 
         const DEC_STEP: i32 = 10; // degree
-        const STEP: i32 = 5;
-        for i in -90/STEP..90/STEP {
-            let dec1 = degree_to_radian((STEP * i) as f64);
-            let dec2 = degree_to_radian((STEP * (i + 1)) as f64);
+        for i in -90/DEC_STEP..90/DEC_STEP {
+            let dec1 = degree_to_radian((DEC_STEP * i) as f64);
+            let dec2 = degree_to_radian((DEC_STEP * (i + 1)) as f64);
             for j in 0..24 {
                 let ra = hour_to_radian(j as f64);
                 let item = EqGridItem {
@@ -488,9 +487,9 @@ impl SkyMapPainter {
                 self.item_painter.paint(&item, &eq_hor_cvt, &hor_3d_cvt, ctx, false)?;
             }
         }
-        for j in 0..(360/STEP) {
-            let ra1 = degree_to_radian((STEP * j) as f64);
-            let ra2 = degree_to_radian((STEP * (j + 1)) as f64);
+        for j in 0..24 {
+            let ra1 = hour_to_radian(j as f64);
+            let ra2 = hour_to_radian((j + 1) as f64);
             for i in -90/DEC_STEP..90/DEC_STEP {
                 let dec = degree_to_radian((DEC_STEP * i) as f64);
                 let item = EqGridItem {
@@ -1111,55 +1110,80 @@ struct EqGridItem {
     text: bool,
 }
 
+impl EqGridItem {
+    const POINTS_CNT: usize = 5;
+}
+
 impl Item for EqGridItem {
     fn points_count(&self) -> usize {
-        2
+        Self::POINTS_CNT
     }
 
     fn point_crd(&self, index: usize) -> PainterCrd {
-        match index {
-            0 => PainterCrd::Eq(EqCoord{ ra: self.ra1, dec: self.dec1 }),
-            1 => PainterCrd::Eq(EqCoord{ ra: self.ra2, dec: self.dec2 }),
-            _ => unreachable!(),
+        match self.tp {
+            EqGridItemType::Ra => PainterCrd::Eq(EqCoord{
+                ra: self.ra1,
+                dec: linear_interpolate(
+                    index as f64,
+                    0.0,
+                    (Self::POINTS_CNT-1) as f64,
+                    self.dec1,
+                    self.dec2
+                )
+            }),
+            EqGridItemType::Dec => PainterCrd::Eq(EqCoord{
+                ra: linear_interpolate(
+                    index as f64,
+                    0.0,
+                    (Self::POINTS_CNT-1) as f64,
+                    self.ra1,
+                    self.ra2
+                ),
+                dec: self.dec1
+            }),
         }
     }
 
     fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
-        let pt1 = &points[0];
-        let pt2 = &points[1];
-
         if !self.text {
-            ctx.cairo.move_to(pt1.x, pt1.y);
-            ctx.cairo.line_to(pt2.x, pt2.y);
+            let mut first = true;
+            for pt in points {
+                if first {
+                    ctx.cairo.move_to(pt.x, pt.y);
+                    first = false;
+                } else {
+                    ctx.cairo.line_to(pt.x, pt.y);
+                }
+            }
         } else {
-            let line = Line2D { pt1: pt1.clone(), pt2: pt2.clone() };
             let screen_left = ctx.screen.rect.left_line();
             let screen_right = ctx.screen.rect.right_line();
             let screen_top = ctx.screen.rect.top_line();
             let screen_bottom = ctx.screen.rect.bottom_line();
-
-            let paint_text = |mut x, y, adjust_right| -> anyhow::Result<()> {
-                let text = match  self.tp {
-                    EqGridItemType::Ra => format!("{:.0}h", radian_to_hour(self.ra1)),
-                    EqGridItemType::Dec => format!("{:.0}°", radian_to_degree(self.dec1)),
+            for (pt1, pt2) in points.iter().tuple_windows() {
+                let line = Line2D { pt1: pt1.clone(), pt2: pt2.clone() };
+                let paint_text = |mut x, y, adjust_right| -> anyhow::Result<()> {
+                    let text = match  self.tp {
+                        EqGridItemType::Ra => format!("{:.0}h", radian_to_hour(self.ra1)),
+                        EqGridItemType::Dec => format!("{:.0}°", radian_to_degree(self.dec1)),
+                    };
+                    let te = ctx.cairo.text_extents(&text)?;
+                    if adjust_right {
+                        x -= te.width();
+                    }
+                    ctx.cairo.move_to(x, y + 0.5 * te.height());
+                    ctx.cairo.show_text(&text)?;
+                    Ok(())
                 };
-                let te = ctx.cairo.text_extents(&text)?;
-                if adjust_right {
-                    x -= te.width();
+                if let Some(is) = Line2D::intersection(&line, &screen_top) {
+                    paint_text(is.x, is.y + 2.0 * ctx.screen.dpmm_y, false)?;
+                } else if let Some(is) = Line2D::intersection(&line, &screen_bottom) {
+                    paint_text(is.x, is.y - 2.0 * ctx.screen.dpmm_y, false)?;
+                } else if let Some(is) = Line2D::intersection(&line, &screen_left) {
+                    paint_text(is.x + 1.0 * ctx.screen.dpmm_y, is.y, false)?;
+                } else if let Some(is) = Line2D::intersection(&line, &screen_right) {
+                    paint_text(is.x - 1.0 * ctx.screen.dpmm_y, is.y, true)?;
                 }
-                ctx.cairo.move_to(x, y + 0.5 * te.height());
-                ctx.cairo.show_text(&text)?;
-                Ok(())
-            };
-
-            if let Some(is) = Line2D::intersection(&line, &screen_top) {
-                paint_text(is.x, is.y + 2.0 * ctx.screen.dpmm_y, false)?;
-            } else if let Some(is) = Line2D::intersection(&line, &screen_bottom) {
-                paint_text(is.x, is.y - 2.0 * ctx.screen.dpmm_y, false)?;
-            } else if let Some(is) = Line2D::intersection(&line, &screen_left) {
-                paint_text(is.x + 1.0 * ctx.screen.dpmm_y, is.y, false)?;
-            } else if let Some(is) = Line2D::intersection(&line, &screen_right) {
-                paint_text(is.x - 1.0 * ctx.screen.dpmm_y, is.y, true)?;
             }
         }
 
