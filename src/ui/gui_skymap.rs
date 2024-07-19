@@ -1,8 +1,8 @@
-use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
+use std::{cell::{Cell, RefCell}, f64::consts::PI, rc::Rc, sync::{Arc, RwLock}};
 use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
-use crate::{indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
+use crate::{indi::{self, value_to_sexagesimal}, options::*, utils::{io_utils::*, math::linear_interpolate}};
 use super::{gtk_utils::{self, DEFAULT_DPMM}, gui_common::*, gui_main::*, sky_map::{data::*, painter::*, utils::*}};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
@@ -271,7 +271,7 @@ impl MapGui {
         scl_max_dso_mag.set_width_request((40.0 * dpimm_x) as i32);
 
         let da_sm_item_graph = self.builder.object::<gtk::DrawingArea>("da_sm_item_graph").unwrap();
-        da_sm_item_graph.set_height_request((20.0 * dpimm_y) as i32);
+        da_sm_item_graph.set_height_request((30.0 * dpimm_y) as i32);
     }
 
     fn connect_main_gui_events(self: &Rc<Self>, handlers: &mut MainGuiHandlers) {
@@ -563,7 +563,7 @@ impl MapGui {
             let indi_is_connected = self.indi.state() == indi::ConnState::Connected;
 
             let cam_frame = if show_ccd && indi_is_connected {
-                let calc_cam_frame = || -> anyhow::Result<CameraFrame> {
+                || -> anyhow::Result<CameraFrame> {
                     let options = self.options.read().unwrap();
                     let cam_name = &options.cam.device.name;
                     let cam_ccd_prop = &options.cam.device.prop;
@@ -571,15 +571,12 @@ impl MapGui {
                     if options.telescope.focal_len <= 0.1 {
                         anyhow::bail!("Wrong telescope focal lenght");
                     }
-                    let (max_width, max_height) = self.indi.camera_get_max_frame_size(&cam_name, cam_ccd)?;
-                    let bin = options.cam.frame.binning.get_ratio();
+                    let (sensor_width, sensor_height) = self.indi.camera_get_max_frame_size(&cam_name, cam_ccd)?;
                     let (pixel_width_um, pixel_height_um) = self.indi.camera_get_pixel_size_um(&options.cam.device.name, cam_ccd)?;
-                    let cropped_width = options.cam.frame.crop.translate(max_width / bin) as f64;
-                    let cropped_height = options.cam.frame.crop.translate(max_height / bin) as f64;
-                    let pixel_width_mm = pixel_width_um / 1000.0;
-                    let pixel_height_mm = pixel_height_um / 1000.0;
-                    let width_mm = cropped_width * pixel_width_mm;
-                    let height_mm = cropped_height * pixel_height_mm;
+                    let (width_mm, height_mm) = options.cam.calc_active_zone_mm(
+                        sensor_width, sensor_height,
+                        pixel_width_um, pixel_height_um
+                    );
                     let mut full_cam_name = cam_name.to_string();
                     if !cam_ccd_prop.is_empty() {
                         full_cam_name += ", ";
@@ -591,8 +588,7 @@ impl MapGui {
                         vert_angle: f64::atan2(height_mm, options.telescope.focal_len),
                         rot_angle: 0.0,
                     })
-                };
-                calc_cam_frame().ok()
+                } ().ok()
             } else {
                 None
             };
@@ -994,11 +990,74 @@ impl MapGui {
 
     fn handler_draw_item_graph(
         self:  &Rc<Self>,
-        _area: &gtk::DrawingArea,
-        _cr:   &cairo::Context
+        area: &gtk::DrawingArea,
+        cr:   &cairo::Context
     ) -> anyhow::Result<()> {
-        // TODO: draw graph with zenith by time
-        //let Some(item) = &*self.selected_obj.borrow()
+        let bg_color = gdk::RGBA::new(0.15, 0.15, 0.15, 1.0);
+        let fg_color = gdk::RGBA::new(1.0, 1.0, 1.0, 1.0);
+
+        cr.set_source_rgba(bg_color.red(), bg_color.green(), bg_color.blue(), 1.0);
+        cr.paint()?;
+
+        let selected_item = self.selected_item.borrow();
+        if let Some(selected_item) = &*selected_item {
+            let width = area.allocated_width() as f64;
+            let height = area.allocated_height() as f64;
+            let selected_eq_crd = selected_item.crd();
+            let user_time = self.user_time.borrow();
+            let cur_dt = user_time.time(false);
+            let cur_dt_local = user_time.time(true);
+            drop(user_time);
+            let observer = self.create_observer();
+            const PAST_HOUR: i64 = -12;
+            const FUTU_HOUR: i64 = 12;
+            const STEPS: i64 = 4;
+            let mut max_alt = f64::MIN;
+            for i in STEPS*PAST_HOUR..=STEPS*FUTU_HOUR {
+                let hour_diff = chrono::Duration::minutes(60 * i / STEPS);
+                let pt_time = cur_dt.checked_add_signed(hour_diff).unwrap_or(cur_dt);
+                let eq_hor_cvt = EqToHorizCvt::new(&observer, &pt_time);
+                let horiz_crd = eq_hor_cvt.eq_to_horiz(&selected_eq_crd);
+                if horiz_crd.alt > max_alt { max_alt = horiz_crd.alt; }
+                let x = linear_interpolate(i as f64, (STEPS*PAST_HOUR) as f64, (STEPS*FUTU_HOUR) as f64, 0.0, width);
+                let y = linear_interpolate(horiz_crd.alt, 0.0, 0.5 * PI, height, 0.0);
+                if i == STEPS*PAST_HOUR { cr.move_to(x, y); } else { cr.line_to(x, y); }
+            }
+            max_alt = radian_to_degree(max_alt);
+
+            cr.set_line_width(1.5);
+            cr.set_source_rgba(fg_color.red(), fg_color.green(), fg_color.blue(), 0.6);
+            cr.stroke()?;
+
+            let mut prev_hour = 0;
+            for x in 0..area.allocated_width() {
+                let hour_diff = linear_interpolate(x as f64, 0.0, width, PAST_HOUR as f64, FUTU_HOUR as f64);
+                let pt_diff = chrono::Duration::seconds((60.0 * 60.0 * hour_diff) as i64);
+                let pt_time = cur_dt_local.checked_add_signed(pt_diff).unwrap_or(cur_dt_local);
+                let hour = pt_time.hour();
+                if x != 0 && (hour / 3) != (prev_hour / 3) {
+                    cr.move_to(x as f64, 0.0);
+                    cr.line_to(x as f64, height);
+                    cr.set_line_width(1.0);
+                    cr.set_dash(&[2.0, 2.0], 1.0);
+                    cr.set_source_rgba(fg_color.red(), fg_color.green(), fg_color.blue(), 0.5);
+                    cr.stroke()?;
+
+                    let text = format!("{}h", hour);
+                    let te = cr.text_extents(&text)?;
+                    cr.move_to(x as f64, te.height());
+                    cr.set_source_rgba(fg_color.red(), fg_color.green(), fg_color.blue(), 1.0);
+                    cr.show_text(&text)?;
+                }
+                prev_hour = hour;
+            }
+
+            let max_alt_text = format!("max.alt. = {:.1}°", max_alt);
+            let te = cr.text_extents(&max_alt_text)?;
+            cr.move_to(2.0, height-te.height());
+            cr.set_source_rgba(fg_color.red(), fg_color.green(), fg_color.blue(), 1.0);
+            cr.show_text(&max_alt_text)?;
+        }
         Ok(())
     }
 

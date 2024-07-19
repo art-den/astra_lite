@@ -1063,6 +1063,8 @@
                   <object class="GtkBox">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
+                    <property name="margin-start">5</property>
+                    <property name="margin-end">5</property>
                     <property name="orientation">vertical</property>
                     <property name="spacing">5</property>
                     <child>
@@ -1292,6 +1294,7 @@
                     <child>
                       <object class="GtkDrawingArea" id="da_sm_item_graph">
                         <property name="height-request">20</property>
+                        <property name="visible">True</property>
                         <property name="can-focus">False</property>
                       </object>
                       <packing>

@@ -270,7 +270,7 @@ impl SkymapWidget {
         ctx.set_font_size(screen.dpmm_y * 3.0);
         let te = ctx.text_extents(&fps_str).unwrap();
         ctx.move_to(1.0, 1.0 + te.height());
-        ctx.set_source_rgb(1.0, 1.0, 1.0);
+        ctx.set_source_rgba(1.0, 1.0, 1.0, 0.45);
         ctx.show_text(&fps_str).unwrap();
         glib::Propagation::Stop
     }

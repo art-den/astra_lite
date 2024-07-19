@@ -207,7 +207,6 @@ impl SkyMapPainter {
         screen:     &ScreenInfo,
         cairo:      &gtk::cairo::Context,
     ) -> anyhow::Result<()> {
-
         let eq_hor_cvt = EqToHorizCvt::new(observer, utc_time);
         let hor_3d_cvt = HorizToScreenCvt::new(view_point);
         let pxls_per_rad = Self::calc_pixels_per_radian(screen, view_point.mag_factor);
@@ -1197,17 +1196,20 @@ struct Ground<'a> {
     view_point: &'a ViewPoint,
 }
 
-const GROUND_ANGLE_STEP: usize = 5;
+impl<'a> Ground<'a> {
+    const ANGLE_STEP: usize = 5;
+}
+
 
 impl<'a> Item for Ground<'a> {
     fn points_count(&self) -> usize {
-        360 / GROUND_ANGLE_STEP
+        360 / Self::ANGLE_STEP
     }
 
     fn point_crd(&self, index: usize) -> PainterCrd {
         PainterCrd::Horiz(HorizCoord {
             alt: 0.0,
-            az: PI * (index * GROUND_ANGLE_STEP) as f64 / 180.0
+            az: PI * (index * Self::ANGLE_STEP) as f64 / 180.0
         })
     }
 
