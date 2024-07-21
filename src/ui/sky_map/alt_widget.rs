@@ -1,6 +1,6 @@
 use std::f64::consts::PI;
 
-use chrono::{prelude::*, Days, Duration, Months};
+use chrono::prelude::*;
 use gtk::{prelude::*, gdk, cairo};
 
 use crate::utils::math::linear_interpolate;
