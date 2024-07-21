@@ -468,3 +468,13 @@ pub fn get_widget_dpmm(widget: &impl IsA<gtk::Widget>) -> Option<(f64, f64)> {
             g.width() as f64 / monitor.width_mm() as f64)
         })
 }
+
+pub enum FontSize {
+    Pt(f64)
+}
+
+pub fn font_size_to_pixels(size: FontSize, dpmm_y: f64) -> f64 {
+    match size {
+        FontSize::Pt(pt) => 25.4 * dpmm_y * pt / 72.272
+    }
+}

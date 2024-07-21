@@ -3,7 +3,12 @@ use chrono::{DateTime, Local, Utc};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*, mode_focusing::*}, image::{histogram::*, image::RgbU8Data, info::*, raw::FrameType, stars_offset::Offset}, indi, options::*, utils::{io_utils::*, log_utils::*, math::*}
+    core::{consts::*, core::*, frame_processing::*, mode_focusing::*},
+    image::{histogram::*, image::RgbU8Data, info::*, raw::FrameType, stars_offset::Offset},
+    indi,
+    options::*,
+    ui::gtk_utils::*,
+    utils::{io_utils::*, log_utils::*, math::*}
 };
 use super::{gui_main::*, gtk_utils, plots::*, gui_common::*};
 
@@ -2283,6 +2288,13 @@ impl CameraGui {
             PreviewSource::LiveStacking =>
                 self.core.live_stacking().hist.read().unwrap(),
         };
+
+        let font_size_pt = 8.0;
+        let (_, dpmm_y) = gtk_utils::get_widget_dpmm(area)
+            .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
+        let font_size_px = font_size_to_pixels(FontSize::Pt(font_size_pt), dpmm_y);
+        cr.set_font_size(font_size_px);
+
         draw_histogram(
             &hist,
             area,
@@ -2738,6 +2750,13 @@ impl CameraGui {
         };
         plots.left_axis.dec_digits = 2;
         plots.bottom_axis.dec_digits = 0;
+
+        let font_size_pt = 8.0;
+        let (_, dpmm_y) = gtk_utils::get_widget_dpmm(da)
+            .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
+        let font_size_px = font_size_to_pixels(FontSize::Pt(font_size_pt), dpmm_y);
+        ctx.set_font_size(font_size_px);
+
         draw_plots(&plots, da, ctx)?;
         Ok(())
     }

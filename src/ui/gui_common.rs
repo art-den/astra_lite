@@ -308,7 +308,7 @@ pub fn draw_histogram(
     let fg = area.style_context().color(gtk::StateFlags::NORMAL);
     let bg = area.style_context().lookup_color("theme_base_color").unwrap_or(gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
 
-    cr.set_font_size(12.0);
+
 
     let max_y_text_te = cr.text_extents(p100)?;
     let left_margin = max_y_text_te.width() + 5.0;

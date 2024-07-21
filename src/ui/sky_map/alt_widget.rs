@@ -1,9 +1,9 @@
 use std::f64::consts::PI;
 
 use chrono::prelude::*;
-use gtk::{prelude::*, gdk, cairo};
+use gtk::{cairo, gdk, prelude::*};
 
-use crate::utils::math::linear_interpolate;
+use crate::{ui::gtk_utils::{self, font_size_to_pixels, FontSize, DEFAULT_DPMM}, utils::math::linear_interpolate};
 
 use super::{data::*, utils::*};
 
@@ -15,12 +15,20 @@ pub fn paint_altitude_by_time(
     observer: &Observer,
     crd:      &Option<EqCoord>,
 ) -> anyhow::Result<()> {
-    let bg_color = gdk::RGBA::new(0.15, 0.15, 0.15, 1.0);
-    let fg_color = gdk::RGBA::new(1.0, 1.0, 1.0, 1.0);
+    let (_, dpmm_y) = gtk_utils::get_widget_dpmm(area)
+        .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
+    let sc = area.style_context();
+    let fg_color = sc.color(gtk::StateFlags::NORMAL);
+    let bg_color = sc.lookup_color("theme_base_color").unwrap_or(gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
+
+    let font_size_pt = 8.0;
+    let font_size_px = font_size_to_pixels(FontSize::Pt(font_size_pt), dpmm_y);
+
     let width = area.allocated_width() as f64;
     let height = area.allocated_height() as f64;
 
-    cr.set_source_rgba(bg_color.red(), bg_color.green(), bg_color.blue(), 1.0);
+    cr.set_font_size(font_size_px);
+    cr.set_source_rgb(bg_color.red(), bg_color.green(), bg_color.blue());
     cr.paint()?;
 
     const PAST_HOUR: i64 = -12;
@@ -43,7 +51,7 @@ pub fn paint_altitude_by_time(
         max_alt = Some(radian_to_degree(max_alt_v));
     }
 
-    cr.set_line_width(1.5);
+    cr.set_line_width(f64::max(0.5 * dpmm_y, 1.5));
     cr.set_source_rgba(fg_color.red(), fg_color.green(), fg_color.blue(), 0.6);
     cr.stroke()?;
 
@@ -77,6 +85,12 @@ pub fn paint_altitude_by_time(
         cr.set_source_rgba(fg_color.red(), fg_color.green(), fg_color.blue(), 1.0);
         cr.show_text(&max_alt_text)?;
     }
+
+    cr.rectangle(0.0, 0.0, width, height);
+    cr.set_source_rgba(fg_color.red(), fg_color.green(), fg_color.blue(), 0.33);
+    cr.set_line_width(f64::max(0.3 * dpmm_y, 1.0));
+    cr.set_dash(&[], 0.0);
+    cr.stroke()?;
 
     Ok(())
 }

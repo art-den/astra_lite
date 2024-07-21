@@ -271,7 +271,7 @@ impl MapGui {
         scl_max_dso_mag.set_width_request((40.0 * dpimm_x) as i32);
 
         let da_sm_item_graph = self.builder.object::<gtk::DrawingArea>("da_sm_item_graph").unwrap();
-        da_sm_item_graph.set_height_request((30.0 * dpimm_y) as i32);
+        da_sm_item_graph.set_height_request((25.0 * dpimm_y) as i32);
     }
 
     fn connect_main_gui_events(self: &Rc<Self>, handlers: &mut MainGuiHandlers) {
