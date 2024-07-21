@@ -1,8 +1,8 @@
-use std::{cell::{Cell, RefCell}, f64::consts::PI, rc::Rc, sync::{Arc, RwLock}};
+use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
 use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
-use crate::{indi::{self, value_to_sexagesimal}, options::*, utils::{io_utils::*, math::linear_interpolate}};
+use crate::{indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
 use super::{gtk_utils::{self, DEFAULT_DPMM}, gui_common::*, gui_main::*, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, utils::*}};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
@@ -27,23 +27,23 @@ pub fn init_ui(
     pan_map1.add2(map_widget.get_widget());
 
     let data = Rc::new(MapGui {
-        gui_options:    RefCell::new(gui_options),
-        indi:           Arc::clone(indi),
-        options:        Arc::clone(options),
-        builder:        builder.clone(),
-        window:         window.clone(),
-        gui:            Rc::clone(gui),
-        excl:           ExclusiveCaller::new(),
+        gui_options:   RefCell::new(gui_options),
+        indi:          Arc::clone(indi),
+        options:       Arc::clone(options),
+        builder:       builder.clone(),
+        window:        window.clone(),
+        gui:           Rc::clone(gui),
+        excl:          ExclusiveCaller::new(),
+        skymap_data:   RefCell::new(None),
+        user_time:     RefCell::new(UserTime::default()),
+        prev_second:   Cell::new(0),
+        paint_ts:      RefCell::new(std::time::Instant::now()),
+        prev_wdt:      RefCell::new(PrevWidgetsDT::default()),
+        selected_item: RefCell::new(None),
+        search_result: RefCell::new(Vec::new()),
+        clicked_crd:   RefCell::new(None),
+        self_:         RefCell::new(None),
         map_widget,
-        skymap_data:    RefCell::new(None),
-        user_time:      RefCell::new(UserTime::default()),
-        prev_second:    Cell::new(0),
-        paint_ts:       RefCell::new(std::time::Instant::now()),
-        prev_wdt:       RefCell::new(PrevWidgetsDT::default()),
-        selected_item:  RefCell::new(None),
-        search_result:  RefCell::new(Vec::new()),
-        clicked_crd:    RefCell::new(None),
-        self_:          RefCell::new(None),
     });
 
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
