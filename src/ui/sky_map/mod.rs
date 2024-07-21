@@ -1,3 +1,4 @@
+pub mod alt_widget;
 pub mod data;
 pub mod painter;
 pub mod widget;
