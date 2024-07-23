@@ -399,15 +399,19 @@ impl Mode for MountCalibrMode {
             }
 
             DitherCalibrState::WaitForOrigCoords => {
-                if let ("EQUATORIAL_EOD_COORD", indi::PropChange::Change { value, .. })
+                if let ("EQUATORIAL_EOD_COORD", indi::PropChange::Change { value, new_state, .. })
                 = (prop_change.prop_name.as_str(), &prop_change.change) {
                     match value.elem_name.as_str() {
                         "RA" => self.cur_ra = value.prop_value.to_f64()?,
                         "DEC" => self.cur_dec = value.prop_value.to_f64()?,
                         _ => {},
                     }
-                    if f64::abs(self.cur_ra-self.start_ra) < 0.001
-                    && f64::abs(self.cur_dec-self.start_dec) < 0.001 {
+                    let state_is_ok = *new_state == indi::PropState::Ok;
+                    let coord_is_near =
+                        f64::abs(self.cur_ra-self.start_ra) < 0.001
+                        && f64::abs(self.cur_dec-self.start_dec) < 0.001;
+                    if state_is_ok || coord_is_near {
+                        // TODO: add delay before got next mode
                         result = NotifyResult::Finished {
                             next_mode: self.next_mode.take()
                         };
