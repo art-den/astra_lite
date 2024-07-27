@@ -7,3 +7,4 @@ mod gui_skymap;
 mod gui_common;
 mod plots;
 mod sky_map;
+mod ui_options;

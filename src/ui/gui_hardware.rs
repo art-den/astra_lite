@@ -70,7 +70,6 @@ pub fn init_ui(
 
     data.init_widgets();
     data.fill_devices_name();
-    data.show_options();
 
     gtk_utils::connect_action(&window, &data, "help_save_indi", HardwareGui::handler_action_help_save_indi);
     gtk_utils::connect_action(&window, &data, "conn_indi",      HardwareGui::handler_action_conn_indi);
@@ -535,31 +534,11 @@ impl HardwareGui {
         fill_cb_list(self, "cb_focuser_drivers",  "Focusers",   &options.indi.focuser);
     }
 
-    fn show_options(self: &Rc<Self>) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let options = self.options.read().unwrap();
-
-        ui.set_prop_f64("spb_foc_len.value", options.telescope.focal_len);
-        ui.set_prop_f64("spb_barlow.value",  options.telescope.barlow);
-        ui.set_prop_bool("chb_remote.active", options.indi.remote);
-        ui.set_prop_str("e_remote_addr.text", Some(&options.indi.address));
-        ui.set_prop_str("ch_guide_mode.active-id", options.guiding.mode.to_active_id());
-        ui.set_prop_f64("spb_guid_foc_len.value", options.guiding.foc_len);
-    }
-
     fn read_options_from_widgets(self: &Rc<Self>) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let mut options = self.options.write().unwrap();
-        options.telescope.focal_len = ui.prop_f64("spb_foc_len.value");
-        options.telescope.barlow = ui.prop_f64("spb_barlow.value");
-        options.indi.mount = ui.prop_string("cb_mount_drivers.active-id");
-        options.indi.camera = ui.prop_string("cb_camera_drivers.active-id");
-        options.indi.guid_cam = ui.prop_string("cb_guid_cam_drivers.active-id");
-        options.indi.focuser = ui.prop_string("cb_focuser_drivers.active-id");
-        options.indi.remote = ui.prop_bool("chb_remote.active");
-        options.indi.address = ui.prop_string("e_remote_addr.text").unwrap_or_default();
-        options.guiding.mode = GuidingMode::from_active_id(ui.prop_string("ch_guide_mode.active-id").as_deref());
-        options.guiding.foc_len = ui.prop_f64("spb_guid_foc_len.value");
+        options.read_indi(&self.builder);
+        options.read_telescope(&self.builder);
+        options.read_guiding(&self.builder);
     }
 
     fn add_log_record(

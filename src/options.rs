@@ -324,22 +324,6 @@ impl PreviewOptions {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-pub struct HistOptions {
-    pub log_y:    bool,
-    pub percents: bool,
-}
-
-impl Default for HistOptions {
-    fn default() -> Self {
-        Self {
-            log_y:    false,
-            percents: true,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct FocuserOptions {
@@ -526,7 +510,6 @@ pub struct Options {
     pub live:       LiveStackingOptions,
     pub quality:    QualityOptions,
     pub preview:    PreviewOptions,
-    pub hist:       HistOptions,
     pub focuser:    FocuserOptions,
     pub mount:      MountOptions,
     pub telescope:  TelescopeOptions,

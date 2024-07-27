@@ -42,10 +42,10 @@ pub fn init_ui(
     window.set_icon(Some(&icon));
 
     gtk_utils::exec_and_show_error(&window, || {
-        let mut options = options.write().unwrap();
-        load_json_from_config_file::<Options>(&mut options, MainGui::OPTIONS_FN)?;
-        options.raw_frames.check()?;
-        options.live.check()?;
+        let mut opts = options.write().unwrap();
+        load_json_from_config_file::<Options>(&mut opts, MainGui::OPTIONS_FN)?;
+        opts.raw_frames.check()?;
+        opts.live.check()?;
         Ok(())
     });
 
@@ -89,11 +89,19 @@ pub fn init_ui(
         }
     ));
 
+    let excl = Rc::new(ExclusiveCaller::new());
     let gui = Rc::new(Gui::new(&data));
     let mut handlers = data.handlers.borrow_mut();
     super::gui_hardware::init_ui(app, &builder, &gui, options, core, indi, &mut handlers);
-    super::gui_camera::init_ui(app, &builder, &gui, options, core, indi, &mut handlers);
-    super::gui_skymap::init_ui(app, &builder, &gui, &options, indi, &mut handlers);
+    super::gui_camera::init_ui(app, &builder, &gui, options, core, indi, &excl, &mut handlers);
+    super::gui_skymap::init_ui(app, &builder, &gui, &options, indi, &excl, &mut handlers);
+
+    // show common options
+    excl.exec(|| {
+        let opts = options.read().unwrap();
+        opts.show_all(&builder);
+        drop(opts);
+    });
 
     let mi_dark_theme = builder.object::<gtk::RadioMenuItem>("mi_dark_theme").unwrap();
     mi_dark_theme.connect_activate(clone!(@weak data => move |mi| {
@@ -316,7 +324,6 @@ impl MainGui {
 
     fn handler_close_window(self: &Rc<Self>) -> glib::Propagation {
         if self.core.mode_data().mode.get_type() != ModeType::Waiting {
-            println!("Showing dialog...");
             let dialog = gtk::MessageDialog::builder()
                 .transient_for(&self.window)
                 .title("Operation is in progress")

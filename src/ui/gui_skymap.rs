@@ -12,13 +12,14 @@ pub fn init_ui(
     gui:      &Rc<Gui>,
     options:  &Arc<RwLock<Options>>,
     indi:     &Arc<indi::Connection>,
+    excl:     &Rc<ExclusiveCaller>,
     handlers: &mut MainGuiHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
-    let mut gui_options = GuiOptions::default();
+    let mut ui_options = UiOptions::default();
     gtk_utils::exec_and_show_error(&window, || {
-        load_json_from_config_file(&mut gui_options, MapGui::CONF_FN)?;
+        load_json_from_config_file(&mut ui_options, MapGui::CONF_FN)?;
         Ok(())
     });
 
@@ -27,13 +28,13 @@ pub fn init_ui(
     pan_map1.add2(map_widget.get_widget());
 
     let data = Rc::new(MapGui {
-        gui_options:   RefCell::new(gui_options),
+        ui_options:   RefCell::new(ui_options),
         indi:          Arc::clone(indi),
         options:       Arc::clone(options),
         builder:       builder.clone(),
         window:        window.clone(),
         gui:           Rc::clone(gui),
-        excl:          ExclusiveCaller::new(),
+        excl:          Rc::clone(excl),
         skymap_data:   RefCell::new(None),
         user_time:     RefCell::new(UserTime::default()),
         prev_second:   Cell::new(0),
@@ -86,14 +87,14 @@ impl SkyItemType {
 
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
-struct GuiOptions {
+struct UiOptions {
     paned_pos1:         i32,
     paint:              PaintConfig,
     show_ccd:           bool,
     search_above_horiz: bool,
 }
 
-impl Default for GuiOptions {
+impl Default for UiOptions {
     fn default() -> Self {
         Self {
             paned_pos1:         -1,
@@ -195,13 +196,13 @@ struct PrevWidgetsDT {
 }
 
 struct MapGui {
-    gui_options:   RefCell<GuiOptions>,
+    ui_options:    RefCell<UiOptions>,
     indi:          Arc<indi::Connection>,
     options:       Arc<RwLock<Options>>,
     builder:       gtk::Builder,
     window:        gtk::ApplicationWindow,
     gui:           Rc<Gui>,
-    excl:          ExclusiveCaller,
+    excl:          Rc<ExclusiveCaller>,
     map_widget:    Rc<SkymapWidget>,
     skymap_data:   RefCell<Option<Rc<SkyMap>>>,
     user_time:     RefCell<UserTime>,
@@ -241,9 +242,9 @@ impl MapGui {
     fn handler_closing(&self) {
         self.read_options_from_widgets();
 
-        let gui_options = self.gui_options.borrow();
-        _ = save_json_to_config::<GuiOptions>(&gui_options, Self::CONF_FN);
-        drop(gui_options);
+        let ui_options = self.ui_options.borrow();
+        _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
+        drop(ui_options);
 
         *self.self_.borrow_mut() = None;
     }
@@ -369,7 +370,7 @@ impl MapGui {
 
     fn show_options(&self) {
         let pan_map1 = self.builder.object::<gtk::Paned>("pan_map1").unwrap();
-        let opts = self.gui_options.borrow();
+        let opts = self.ui_options.borrow();
         pan_map1.set_position(opts.paned_pos1);
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
 
@@ -388,7 +389,7 @@ impl MapGui {
 
     fn read_options_from_widgets(&self) {
         let pan_map1 = self.builder.object::<gtk::Paned>("pan_map1").unwrap();
-        let mut opts = self.gui_options.borrow_mut();
+        let mut opts = self.ui_options.borrow_mut();
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         opts.paned_pos1 = pan_map1.position();
         opts.paint.max_dso_mag = ui.range_value("scl_max_dso_mag") as f32;
@@ -399,7 +400,7 @@ impl MapGui {
         drop(opts);
     }
 
-    fn read_visibility_options_from_widgets(opts: &mut GuiOptions, ui: &gtk_utils::UiHelper) {
+    fn read_visibility_options_from_widgets(opts: &mut UiOptions, ui: &gtk_utils::UiHelper) {
         opts.paint.filter.set(ItemsToShow::STARS, ui.prop_bool("chb_show_stars.active"));
         opts.paint.filter.set(ItemsToShow::DSO, ui.prop_bool("chb_show_dso.active"));
         opts.paint.filter.set(ItemsToShow::GALAXIES, ui.prop_bool("chb_show_galaxies.active"));
@@ -426,7 +427,7 @@ impl MapGui {
         let ui = gtk_utils::UiHelper::new_from_builder(&builder);
 
         let options = self.options.read().unwrap();
-        let ui_options = self.gui_options.borrow();
+        let ui_options = self.ui_options.borrow();
 
         ui.set_prop_str("e_lat.text", Some(&indi::value_to_sexagesimal(options.sky_map.latitude, true, 9)));
         ui.set_prop_str("e_long.text", Some(&indi::value_to_sexagesimal(options.sky_map.longitude, true, 9)));
@@ -469,7 +470,7 @@ impl MapGui {
 
         dialog.connect_response(clone!(@strong self as self_, @strong builder => move |dlg, resp| {
             if resp == gtk::ResponseType::Ok {
-                let mut ui_options = self_.gui_options.borrow_mut();
+                let mut ui_options = self_.ui_options.borrow_mut();
                 let mut options = self_.options.write().unwrap();
                 let ui = gtk_utils::UiHelper::new_from_builder(&builder);
                 let mut err_str = String::new();
@@ -555,7 +556,7 @@ impl MapGui {
             let user_time = self.user_time.borrow().time(false);
             *paint_ts = std::time::Instant::now();
 
-            let config = self.gui_options.borrow();
+            let config = self.ui_options.borrow();
             let show_ccd = config.show_ccd;
             let paint_config = config.paint.clone();
             drop(config);
@@ -800,7 +801,7 @@ impl MapGui {
     fn handler_max_magnitude_changed(self: &Rc<Self>, value: f64) {
         self.excl.exec(|| {
             let value = value as f32;
-            let mut options = self.gui_options.borrow_mut();
+            let mut options = self.ui_options.borrow_mut();
             if options.paint.max_dso_mag == value {
                 return;
             }
@@ -812,7 +813,7 @@ impl MapGui {
     }
 
     fn handler_obj_visibility_changed(self: &Rc<Self>) {
-        let mut opts = self.gui_options.borrow_mut();
+        let mut opts = self.ui_options.borrow_mut();
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         Self::read_visibility_options_from_widgets(&mut opts, &ui);
         drop(opts);
@@ -931,7 +932,7 @@ impl MapGui {
     }
 
     fn handler_above_horizon_changed(&self, chb: &gtk::CheckButton) {
-        self.gui_options.borrow_mut().search_above_horiz = chb.is_active();
+        self.ui_options.borrow_mut().search_above_horiz = chb.is_active();
         self.search();
     }
 
@@ -940,7 +941,7 @@ impl MapGui {
         let se_sm_search = self.builder.object::<gtk::SearchEntry>("se_sm_search").unwrap();
         let text = se_sm_search.text().trim().to_string();
         let mut found_items = skymap.search(&text);
-        let options = self.gui_options.borrow();
+        let options = self.ui_options.borrow();
         if options.search_above_horiz {
             let observer = self.create_observer();
             let time = self.map_widget.time();
