@@ -1,8 +1,6 @@
 use std::{rc::Rc, cell::{RefCell, Cell}, time::Duration, collections::HashMap, hash::Hash};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use crate::{
-    indi,
-    ui::gtk_utils,
     options::*,
     image::raw::FrameType,
     image::histogram::*
@@ -161,73 +159,6 @@ impl PreviewColor {
             Self::Blue  => Some("blue"),
         }
     }
-}
-
-pub fn fill_combobox_with_cam_list(
-    indi:    &indi::Connection,
-    cb:      &gtk::ComboBoxText,
-    list:    &mut Vec<DeviceAndProp>,
-    cur_cam: &DeviceAndProp
-) -> anyhow::Result<usize> {
-    let last_item = cb
-        .active()
-        .and_then(|active| list.get(active as usize)).cloned();
-    list.clear();
-
-    let dev_list = indi.get_devices_list();
-    let cameras = dev_list
-        .iter()
-        .filter(|device|
-            device.interface.contains(indi::DriverInterface::CCD)
-        );
-
-    cb.remove_all();
-    for camera in cameras {
-        for (idx, prop) in ["CCD1", "CCD2", "CCD3"].iter().enumerate() {
-            if indi.property_exists(&camera.name, prop, None)? {
-                let mut name_for_user = camera.name.to_string();
-                if idx != 0 {
-                    name_for_user.push_str(" (");
-                    name_for_user.push_str(prop);
-                    name_for_user.push_str(")");
-                }
-                let name_and_prop_str = format!("{}.{}", camera.name, prop);
-                cb.append(Some(&name_and_prop_str), &name_for_user);
-                list.push(DeviceAndProp {
-                    name: camera.name.to_string(),
-                    prop: prop.to_string()
-                });
-            }
-        }
-    }
-    let cameras_count = gtk_utils::combobox_items_count(cb);
-    if cameras_count == 1 {
-        cb.set_active(Some(0));
-    } else if cameras_count > 1 {
-        if !cur_cam.name.is_empty() {
-            let cam_index = list
-                .iter()
-                .position(|item|
-                    item.name == cur_cam.name &&
-                    cur_cam.prop.is_empty() || item.prop == cur_cam.prop
-                )
-                .map(|p| p as u32);
-
-            cb.set_active(cam_index);
-        }
-        if let Some(last_item) = last_item {
-            let cam_index = list
-                .iter()
-                .position(|item| item == &last_item)
-                .map(|p| p as u32);
-
-            cb.set_active(cam_index);
-        }
-        if cb.active().is_none() {
-            cb.set_active(Some(0));
-        }
-    }
-    Ok(cameras_count)
 }
 
 const DELAYED_ACTIONS_TIMER_PERIOD_MS: u64 = 100;

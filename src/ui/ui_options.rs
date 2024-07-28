@@ -1,4 +1,4 @@
-use gtk;
+use gtk::prelude::*;
 use crate::{options::*, image::raw::FrameType};
 use super::gtk_utils;
 
@@ -23,8 +23,8 @@ impl Options {
 
     pub fn read_guiding(&mut self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
-        self.guiding.mode = GuidingMode::from_active_id(ui.prop_string("ch_guide_mode.active-id").as_deref());
-        self.guiding.foc_len = ui.prop_f64("spb_guid_foc_len.value");
+        self.guiding.mode                = GuidingMode::from_active_id(ui.prop_string("ch_guide_mode.active-id").as_deref());
+        self.guiding.foc_len             = ui.prop_f64("spb_guid_foc_len.value");
         self.guiding.dith_period         = ui.prop_string("cb_dith_perod.active-id").and_then(|v| v.parse().ok()).unwrap_or(0);
         self.guiding.dith_dist           = ui.prop_f64("sb_dith_dist.value") as i32;
         self.guiding.simp_guid_enabled   = ui.prop_bool("chb_guid_enabled.active");
@@ -35,6 +35,7 @@ impl Options {
     pub fn read_cam(&mut self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
         self.cam.live_view = ui.prop_bool("chb_shots_cont.active");
+        self.cam.device    = ui.prop_string("cb_camera_list.active-id").map(|str| DeviceAndProp::new(&str)).unwrap_or_default();
     }
 
     pub fn read_cam_ctrl(&mut self, builder: &gtk::Builder) {
@@ -166,6 +167,14 @@ impl Options {
     pub fn show_cam(&self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
         ui.set_prop_bool("chb_shots_cont.active", self.cam.live_view);
+
+        let cb_camera_list = builder.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
+        let device_name = self.cam.device.to_string();
+        cb_camera_list.set_active_id(Some(&device_name));
+        if cb_camera_list.active_id().map(|v| v.as_str() != &device_name).unwrap_or(true) {
+            cb_camera_list.append(Some(&device_name), &device_name);
+            cb_camera_list.set_active_id(Some(&device_name));
+        }
     }
 
     pub fn show_cam_frame(&self, builder: &gtk::Builder) {

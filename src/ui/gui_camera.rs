@@ -47,7 +47,6 @@ pub fn init_ui(
         closed:             Cell::new(false),
         excl:               Rc::clone(&excl),
         full_screen_mode:   Cell::new(false),
-        cam_list:           RefCell::new(Vec::new()),
         prev_cam:           RefCell::new(None),
         self_:              RefCell::new(None),
     });
@@ -84,7 +83,6 @@ pub fn init_ui(
         })
     );
 
-    data.update_camera_devices_list();
     data.update_focuser_devices_list();
     data.correct_widgets_props();
     data.correct_frame_quality_widgets_props();
@@ -196,7 +194,6 @@ struct CameraGui {
     closed:             Cell<bool>,
     excl:               Rc<ExclusiveCaller>,
     full_screen_mode:   Cell<bool>,
-    cam_list:           RefCell<Vec<DeviceAndProp>>,
     prev_cam:           RefCell<Option<DeviceAndProp>>,
     self_:              RefCell<Option<Rc<CameraGui>>>,
 }
@@ -433,9 +430,7 @@ impl CameraGui {
         let cb_camera_list = bldr.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
         cb_camera_list.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
             self_.excl.exec(|| {
-                let cam_list = self_.cam_list.borrow();
-                if cam_list.is_empty() { return; }
-                let Some(cur_index) = cb.active() else { return; };
+                let Some(cur_id) = cb.active_id() else { return; };
                 let mut prev_cam = self_.prev_cam.borrow_mut();
                 let mut options = self_.options.write().unwrap();
 
@@ -444,17 +439,17 @@ impl CameraGui {
                     self_.store_cur_cam_options_impl(prev_cam, &options);
                 }
 
-                let camera_device = cam_list.get(cur_index as usize);
+                let camera_device = DeviceAndProp::new(&cur_id);
                 self_.select_options_for_camera(&camera_device, &mut options);
 
-                self_.correct_widgets_props_impl(&camera_device, &options, false);
+                self_.correct_widgets_props_impl(&Some(&camera_device), &options);
                 _ = self_.update_resolution_list_impl(&camera_device);
 
                 options.show_cam_frame(&self_.builder);
                 options.show_calibr(&self_.builder);
                 options.show_cam_ctrl(&self_.builder);
 
-                *prev_cam = camera_device.cloned();
+                *prev_cam = Some(camera_device.clone());
             });
         }));
 
@@ -779,12 +774,12 @@ impl CameraGui {
 
     fn select_options_for_camera(
         self:          &Rc<Self>,
-        camera_device: &Option<&DeviceAndProp>,
+        camera_device: &DeviceAndProp,
         options:       &mut Options
     ) {
         // Restore previous options of selected camera
         let ui_options = self.ui_options.borrow();
-        if let Some(existing) = ui_options.all_cam_opts.iter().find(|item| &Some(&item.cam) == camera_device) {
+        if let Some(existing) = ui_options.all_cam_opts.iter().find(|item| &item.cam == camera_device) {
             options.cam.frame = existing.frame.clone();
             options.cam.ctrl = existing.ctrl.clone();
             options.calibr = existing.calibr.clone();
@@ -890,14 +885,21 @@ impl CameraGui {
         *self.self_.borrow_mut() = None;
     }
 
+    fn get_cur_cam_device(&self) -> Option<DeviceAndProp> {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let cam_id = ui.prop_string("cb_camera_list.active-id");
+        let Some(cam_id) = cam_id else { return None; };
+        if cam_id.is_empty() { return None; }
+        let device = DeviceAndProp::new(&cam_id);
+        Some(device)
+    }
+
     /// Stores current camera options for current camera
     fn store_cur_cam_options(self: &Rc<Self>) {
-        let cam_list = self.cam_list.borrow();
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let camera_device = cam_list.get(ui.prop_i32("cb_camera_list.active") as usize);
-        if let Some(camera_device) = &camera_device {
+        let cur_cam_device = self.get_cur_cam_device();
+        if let Some(cur_cam_device) = cur_cam_device {
             let options = self.options.read().unwrap();
-            self.store_cur_cam_options_impl(camera_device, &options);
+            self.store_cur_cam_options_impl(&cur_cam_device, &options);
         }
     }
 
@@ -945,15 +947,6 @@ impl CameraGui {
 
     fn get_options_from_widgets(self: &Rc<Self>) {
         let mut options = self.options.write().unwrap();
-
-        // Camera
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let cam_list = self.cam_list.borrow();
-        options.cam.device = cam_list
-            .get(ui.prop_i32("cb_camera_list.active") as usize)
-            .cloned()
-            .unwrap_or_default();
-
         options.read_cam(&self.builder);
         options.read_cam_ctrl(&self.builder);
         options.read_cam_frame(&self.builder);
@@ -1066,8 +1059,7 @@ impl CameraGui {
     fn correct_widgets_props_impl(
         self:              &Rc<Self>,
         camera:            &Option<&DeviceAndProp>,
-        options:           &Options,
-        cam_list_is_empty: bool,
+        options:           &Options
     ) {
         gtk_utils::exec_and_show_error(&self.window, || {
             let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
@@ -1136,21 +1128,21 @@ impl CameraGui {
             ).unwrap_or(false);
             let bin_supported = camera.as_ref().map(|camera| {
                 let cam_ccd = indi::CamCcd::from_ccd_prop_name(&camera.prop);
-                self.indi.camera_is_binning_supported(&camera.name, cam_ccd)
-            }).unwrap_or(Ok(false))?;
+                self.indi.camera_is_binning_supported(&camera.name, cam_ccd).unwrap_or(false)
+            }).unwrap_or(false);
             let fan_supported = camera.as_ref().map(|camera|
-                self.indi.camera_is_fan_supported(&camera.name)
-            ).unwrap_or(Ok(false))?;
+                self.indi.camera_is_fan_supported(&camera.name).unwrap_or(false)
+            ).unwrap_or(false);
             let heater_supported = camera.as_ref().map(|camera|
-                self.indi.camera_is_heater_supported(&camera.name)
-            ).unwrap_or(Ok(false))?;
+                self.indi.camera_is_heater_supported(&camera.name).unwrap_or(false)
+            ).unwrap_or(false);
             let low_noise_supported = camera.as_ref().map(|camera|
-                self.indi.camera_is_low_noise_ctrl_supported(&camera.name)
-            ).unwrap_or(Ok(false))?;
+                self.indi.camera_is_low_noise_ctrl_supported(&camera.name).unwrap_or(false)
+            ).unwrap_or(false);
             let crop_supported = camera.as_ref().map(|camera| {
                 let cam_ccd = indi::CamCcd::from_ccd_prop_name(&camera.prop);
-                self.indi.camera_is_frame_supported(&camera.name, cam_ccd)
-            }).unwrap_or(Ok(false))?;
+                self.indi.camera_is_frame_supported(&camera.name, cam_ccd).unwrap_or(false)
+            }).unwrap_or(false);
 
             let indi_connected = self.indi.state() == indi::ConnState::Connected;
 
@@ -1274,8 +1266,8 @@ impl CameraGui {
             ]);
 
             ui.enable_widgets(false, &[
-                ("l_camera_list",      waiting && !cam_list_is_empty),
-                ("cb_camera_list",     waiting && !cam_list_is_empty),
+                ("l_camera_list",      waiting),
+                ("cb_camera_list",     waiting),
                 ("chb_fan",            !cooler_active),
                 ("chb_cooler",         temp_supported && can_change_cam_opts),
                 ("spb_temp",           cooler_active && temp_supported && can_change_cam_opts),
@@ -1330,51 +1322,81 @@ impl CameraGui {
     }
 
     fn correct_widgets_props(self: &Rc<Self>) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let cam_list = self.cam_list.borrow();
-        let camera = cam_list
-            .get(ui.prop_i32("cb_camera_list.active") as usize);
-        let cam_list_is_empty = cam_list.is_empty();
+        let cur_cam_device = self.get_cur_cam_device();
         let options = self.options.read().unwrap();
-        self.correct_widgets_props_impl(&camera, &options, cam_list_is_empty);
+        self.correct_widgets_props_impl(&cur_cam_device.as_ref(), &options);
     }
 
     fn update_camera_devices_list(self: &Rc<Self>) {
-        let mut options = self.options.write().unwrap();
-        let mut cam_list = self.cam_list.borrow_mut();
-        let cb_camera_list: gtk::ComboBoxText =
-            self.builder.object("cb_camera_list").unwrap();
-        let cameras_count = fill_combobox_with_cam_list(
-            &self.indi,
-            &cb_camera_list,
-            &mut cam_list,
-            &options.cam.device
-        ).unwrap_or(0);
-        let connected = self.indi.state() == indi::ConnState::Connected;
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let cb_camera_list: gtk::ComboBoxText = self.builder.object("cb_camera_list").unwrap();
+        let dev_list = self.indi.get_devices_list();
+        let cameras = dev_list
+            .iter()
+            .filter(|device|
+                device.interface.contains(indi::DriverInterface::CCD)
+            );
 
-        if cameras_count > 0 {
-            let camera_device = cam_list.get(ui.prop_i32("cb_camera_list.active") as usize);
-            self.select_options_for_camera(&camera_device, &mut options);
-            options.show_cam_frame(&self.builder);
-            options.show_calibr(&self.builder);
-            options.show_cam_ctrl(&self.builder);
-            self.correct_widgets_props_impl(&camera_device, &options, false);
+        cb_camera_list.remove_all();
+        let mut cameras_count = 0;
+        for camera in cameras {
+            for prop in ["CCD1", "CCD2", "CCD3"] {
+                if self.indi.property_exists(&camera.name, prop, None).unwrap_or(false) {
+                    let dev_and_prop = DeviceAndProp {
+                        name: camera.name.to_string(),
+                        prop: prop.to_string()
+                    };
+                    let cam_id = dev_and_prop.to_string();
+                    cb_camera_list.append(Some(&cam_id), &cam_id);
+                    cameras_count += 1;
+                }
+            }
         }
 
-        ui.enable_widgets(false, &[
-            ("cb_camera_list", connected && cameras_count > 1),
-        ]);
+        let options = self.options.read().unwrap();
+        let cur_cam_id = options.cam.device.to_string();
+        drop(options);
+        let mut camera_selected = false;
+        if !cur_cam_id.is_empty() {
+            cb_camera_list.set_active_id(Some(&cur_cam_id));
+            if cb_camera_list.active().is_none() {
+                cb_camera_list.insert(0, Some(&cur_cam_id), &cur_cam_id);
+                cb_camera_list.set_active(Some(0));
+                camera_selected = true;
+            }
+        } else if cameras_count != 0 {
+            cb_camera_list.set_active(Some(0));
+            let mut options = self.options.write().unwrap();
+            options.cam.device = self.get_cur_cam_device().unwrap_or_default();
+            drop(options);
+            camera_selected = true;
+        }
+
+        cb_camera_list.set_sensitive(cameras_count != 0);
+
+        let cur_cam_device = self.get_cur_cam_device();
+        if camera_selected {
+            if let Some(cur_cam_device) = &cur_cam_device {
+                let mut options = self.options.write().unwrap();
+                self.select_options_for_camera(&cur_cam_device, &mut options);
+                drop(options);
+
+                let options = self.options.read().unwrap();
+                options.show_cam_frame(&self.builder);
+                options.show_calibr(&self.builder);
+                options.show_cam_ctrl(&self.builder);
+            }
+            let options = self.options.read().unwrap();
+            self.correct_widgets_props_impl(&cur_cam_device.as_ref(), &options);
+        }
     }
 
     fn update_resolution_list_impl(
         self:    &Rc<Self>,
-        cam_dev: &Option<&DeviceAndProp>
+        cam_dev: &DeviceAndProp
     ) -> anyhow::Result<()> {
         let cb_bin = self.builder.object::<gtk::ComboBoxText>("cb_bin").unwrap();
         let last_bin = cb_bin.active_id();
         cb_bin.remove_all();
-        let Some(cam_dev) = cam_dev else { return Ok(()); };
         let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_dev.prop);
         let (max_width, max_height) = self.indi.camera_get_max_frame_size(&cam_dev.name, cam_ccd)?;
         let (max_hor_bin, max_vert_bin) = self.indi.camera_get_max_binning(&cam_dev.name, cam_ccd)?;
@@ -1404,10 +1426,9 @@ impl CameraGui {
 
     fn update_resolution_list(self: &Rc<Self>) {
         gtk_utils::exec_and_show_error(&self.window, || {
-            let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-            let cam_list = self.cam_list.borrow();
-            let cam_dev = cam_list.get(ui.prop_i32("cb_camera_list.active") as usize);
-            self.update_resolution_list_impl(&cam_dev)?;
+            let cur_cam_device = self.get_cur_cam_device();
+            let Some(cur_cam_device) = cur_cam_device else { return Ok(()); };
+            self.update_resolution_list_impl(&cur_cam_device)?;
             Ok(())
         });
     }
@@ -1856,11 +1877,8 @@ impl CameraGui {
         temparature: f64
     ) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let cam_list = self.cam_list.borrow();
-        let cur_camera = cam_list
-            .get(ui.prop_i32("cb_camera_list.active") as usize)
-            .map(|item| item.name.as_str());
-        if cur_camera == Some(device_name) {
+        let Some(cur_cam_device) = self.get_cur_cam_device() else { return; };
+        if cur_cam_device.name == device_name {
             ui.set_prop_str(
                 "l_temp_value.label",
                 Some(&format!("T: {:.1}°C", temparature))
@@ -1874,11 +1892,8 @@ impl CameraGui {
         pwr_str:     &str
     ) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let cam_list = self.cam_list.borrow();
-        let cur_camera = cam_list
-            .get(ui.prop_i32("cb_camera_list.active") as usize)
-            .map(|item| item.name.as_str());
-        if cur_camera == Some(device_name) {
+        let Some(cur_cam_device) = self.get_cur_cam_device() else { return; };
+        if cur_cam_device.name == device_name {
             ui.set_prop_str(
                 "l_coolpwr_value.label",
                 Some(&format!("Pwr: {}", pwr_str))

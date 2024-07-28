@@ -415,6 +415,31 @@ pub struct DeviceAndProp {
     pub prop: String, // CCD1, CCD2... or emprty for any
 }
 
+impl DeviceAndProp {
+    pub fn new(text: &str) -> Self {
+        let mut result = Self::default();
+        let mut splitted = text.split(" | ");
+        if let Some(name) = splitted.next() {
+            result.name = name.trim().to_string();
+            result.prop = if let Some(prop) = splitted.next() {
+                prop.trim().to_string()
+            } else {
+                "CCD1".to_string()
+            };
+        }
+        result
+    }
+
+    pub fn to_string(&self) -> String {
+        let mut result = self.name.clone();
+        if !result.is_empty() && !self.prop.is_empty() && self.prop != "CCD1" {
+            result += " | ";
+            result += &self.prop;
+        }
+        result
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct CamOptions {
