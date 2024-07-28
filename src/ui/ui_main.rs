@@ -14,7 +14,7 @@ use crate::{
     core::core::*,
     options::*,
 };
-use super::{gtk_utils, gui_common::*};
+use super::{gtk_utils, ui_common::*};
 
 pub fn init_ui(
     app:      &gtk::Application,
@@ -84,17 +84,17 @@ pub fn init_ui(
                 data.window.close();
                 return glib::ControlFlow::Break;
             }
-            data.exec_main_gui_handlers(MainGuiEvent::Timer);
+            data.exec_main_gui_handlers(MainUiEvent::Timer);
             glib::ControlFlow::Continue
         }
     ));
 
     let excl = Rc::new(ExclusiveCaller::new());
-    let gui = Rc::new(Gui::new(&data));
+    let gui = Rc::new(MainUi::new(&data));
     let mut handlers = data.handlers.borrow_mut();
-    super::gui_hardware::init_ui(app, &builder, &gui, options, core, indi, &mut handlers);
-    super::gui_camera::init_ui(app, &builder, &gui, options, core, indi, &excl, &mut handlers);
-    super::gui_skymap::init_ui(app, &builder, &gui, &options, indi, &excl, &mut handlers);
+    super::ui_hardware::init_ui(app, &builder, &gui, options, core, indi, &mut handlers);
+    super::ui_camera::init_ui(app, &builder, &gui, options, core, indi, &excl, &mut handlers);
+    super::ui_skymap::init_ui(app, &builder, &gui, &options, indi, &excl, &mut handlers);
 
     // show common options
     excl.exec(|| {
@@ -152,7 +152,7 @@ pub fn init_ui(
     let btn_fullscreen = builder.object::<gtk::ToggleButton>("btn_fullscreen").unwrap();
     btn_fullscreen.set_sensitive(false);
     btn_fullscreen.connect_active_notify(clone!(@weak data => move |btn| {
-        data.exec_main_gui_handlers(MainGuiEvent::FullScreen(btn.is_active()));
+        data.exec_main_gui_handlers(MainUiEvent::FullScreen(btn.is_active()));
     }));
 
     let nb_main = builder.object::<gtk::Notebook>("nb_main").unwrap();
@@ -163,7 +163,7 @@ pub fn init_ui(
         };
         btn_fullscreen.set_sensitive(enable_fullscreen);
         let tab = TabPage::from_tab_index(page);
-        data.exec_main_gui_handlers(MainGuiEvent::TabPageChanged(tab.clone()));
+        data.exec_main_gui_handlers(MainUiEvent::TabPageChanged(tab.clone()));
     }));
 
     window.connect_delete_event(
@@ -208,7 +208,7 @@ impl TabPage {
 }
 
 #[derive(Clone)]
-pub enum MainGuiEvent {
+pub enum MainUiEvent {
     Timer,
     FullScreen(bool),
     BeforeModeContinued,
@@ -217,7 +217,7 @@ pub enum MainGuiEvent {
     BeforeDisconnect,
 }
 
-pub type MainGuiHandlers = Vec<Box<dyn Fn(MainGuiEvent) + 'static>>;
+pub type MainUiHandlers = Vec<Box<dyn Fn(MainUiEvent) + 'static>>;
 
 const TAB_HARDWARE: u32 = 0;
 const TAB_MAP:      u32 = 1;
@@ -279,7 +279,7 @@ struct MainGui {
     logs_dir:       PathBuf,
     options:        Arc<RwLock<Options>>,
     main_options:   RefCell<MainOptions>,
-    handlers:       RefCell<MainGuiHandlers>,
+    handlers:       RefCell<MainUiHandlers>,
     progress:       RefCell<Option<Progress>>,
     core:           Arc<Core>,
     builder:        gtk::Builder,
@@ -295,7 +295,7 @@ impl Drop for MainGui {
 }
 
 impl MainGui {
-    const CONF_FN: &'static str = "gui_main";
+    const CONF_FN: &'static str = "ui_common";
     const OPTIONS_FN: &'static str = "options";
 
     fn connect_state_events(self: &Rc<Self>) {
@@ -355,7 +355,7 @@ impl MainGui {
         _ = save_json_to_config::<MainOptions>(&options, MainGui::CONF_FN);
         drop(options);
 
-        self.exec_main_gui_handlers(MainGuiEvent::ProgramClosing);
+        self.exec_main_gui_handlers(MainUiEvent::ProgramClosing);
 
         glib::Propagation::Proceed
     }
@@ -455,13 +455,13 @@ impl MainGui {
 
     fn handler_action_continue(self: &Rc<Self>) {
         gtk_utils::exec_and_show_error(&self.window, || {
-            self.exec_main_gui_handlers(MainGuiEvent::BeforeModeContinued);
+            self.exec_main_gui_handlers(MainUiEvent::BeforeModeContinued);
             self.core.continue_prev_mode()?;
             Ok(())
         });
     }
 
-    fn exec_main_gui_handlers(self: &Rc<Self>, event: MainGuiEvent) {
+    fn exec_main_gui_handlers(self: &Rc<Self>, event: MainUiEvent) {
         for fs_handler in self.handlers.borrow().iter() {
             fs_handler(event.clone());
         }
@@ -482,7 +482,7 @@ impl MainGui {
     }
 }
 
-pub struct Gui {
+pub struct MainUi {
     main_gui:    Weak<MainGui>,
     conn_string: RefCell<String>,
     dev_string:  RefCell<String>,
@@ -490,7 +490,7 @@ pub struct Gui {
     nb_main:     gtk::Notebook,
 }
 
-impl Gui {
+impl MainUi {
     fn new(main_gui: &Rc<MainGui>) -> Self {
         Self {
             main_gui:    Rc::downgrade(&main_gui),
@@ -538,7 +538,7 @@ impl Gui {
 
     pub fn exec_before_disconnect_handlers(&self) {
         let Some(main_gui) = self.main_gui.upgrade() else { return; };
-        main_gui.exec_main_gui_handlers(MainGuiEvent::BeforeDisconnect);
+        main_gui.exec_main_gui_handlers(MainUiEvent::BeforeDisconnect);
     }
 
     pub fn current_tab_page(&self) -> TabPage {

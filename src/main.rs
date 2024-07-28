@@ -120,7 +120,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     application.connect_activate(clone!(@weak options => move |app|
-        ui::gui_main::init_ui(app, &indi, &options, &core, &logs_dir)
+        ui::ui_main::init_ui(app, &indi, &options, &core, &logs_dir)
     ));
     application.run();
 

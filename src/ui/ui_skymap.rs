@@ -3,23 +3,23 @@ use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use crate::{indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
-use super::{gtk_utils::{self, DEFAULT_DPMM}, gui_common::*, gui_main::*, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, utils::*}};
+use super::{gtk_utils::{self, DEFAULT_DPMM}, ui_common::*, ui_main::*, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, utils::*}};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
 pub fn init_ui(
     _app:     &gtk::Application,
     builder:  &gtk::Builder,
-    gui:      &Rc<Gui>,
+    main_ui:      &Rc<MainUi>,
     options:  &Arc<RwLock<Options>>,
     indi:     &Arc<indi::Connection>,
     excl:     &Rc<ExclusiveCaller>,
-    handlers: &mut MainGuiHandlers,
+    handlers: &mut MainUiHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
     let mut ui_options = UiOptions::default();
     gtk_utils::exec_and_show_error(&window, || {
-        load_json_from_config_file(&mut ui_options, MapGui::CONF_FN)?;
+        load_json_from_config_file(&mut ui_options, MapUi::CONF_FN)?;
         Ok(())
     });
 
@@ -27,13 +27,13 @@ pub fn init_ui(
     let map_widget = SkymapWidget::new();
     pan_map1.add2(map_widget.get_widget());
 
-    let data = Rc::new(MapGui {
+    let data = Rc::new(MapUi {
         ui_options:   RefCell::new(ui_options),
         indi:          Arc::clone(indi),
         options:       Arc::clone(options),
         builder:       builder.clone(),
         window:        window.clone(),
-        gui:           Rc::clone(gui),
+        main_ui:       Rc::clone(main_ui),
         excl:          Rc::clone(excl),
         skymap_data:   RefCell::new(None),
         user_time:     RefCell::new(UserTime::default()),
@@ -54,7 +54,7 @@ pub fn init_ui(
     data.show_options();
     data.update_widgets_enable_state();
 
-    data.connect_main_gui_events(handlers);
+    data.connect_main_ui_events(handlers);
     data.connect_events();
 
     data.set_observer_data_for_widget();
@@ -195,13 +195,13 @@ struct PrevWidgetsDT {
     sec: i32,
 }
 
-struct MapGui {
+struct MapUi {
     ui_options:    RefCell<UiOptions>,
     indi:          Arc<indi::Connection>,
     options:       Arc<RwLock<Options>>,
     builder:       gtk::Builder,
     window:        gtk::ApplicationWindow,
-    gui:           Rc<Gui>,
+    main_ui:       Rc<MainUi>,
     excl:          Rc<ExclusiveCaller>,
     map_widget:    Rc<SkymapWidget>,
     skymap_data:   RefCell<Option<Rc<SkyMap>>>,
@@ -212,25 +212,25 @@ struct MapGui {
     selected_item: RefCell<Option<SkymapObject>>,
     search_result: RefCell<Vec<SkymapObject>>,
     clicked_crd:   RefCell<Option<EqCoord>>,
-    self_:         RefCell<Option<Rc<MapGui>>>
+    self_:         RefCell<Option<Rc<MapUi>>>
 }
 
-impl Drop for MapGui {
+impl Drop for MapUi {
     fn drop(&mut self) {
         log::info!("MapData dropped");
     }
 }
 
-impl MapGui {
-    const CONF_FN: &'static str = "gui_map";
+impl MapUi {
+    const CONF_FN: &'static str = "ui_skymap";
 
-    fn handler_main_gui_event(self: &Rc<Self>, event: MainGuiEvent) {
+    fn handler_main_ui_event(self: &Rc<Self>, event: MainUiEvent) {
         match event {
-            MainGuiEvent::ProgramClosing =>
+            MainUiEvent::ProgramClosing =>
                 self.handler_closing(),
-            MainGuiEvent::Timer =>
+            MainUiEvent::Timer =>
                 self.handler_main_timer(),
-            MainGuiEvent::TabPageChanged(page) if page == TabPage::SkyMap => {
+            MainUiEvent::TabPageChanged(page) if page == TabPage::SkyMap => {
                 self.update_date_time_widgets(true);
                 self.update_skymap_widget(true);
                 self.show_selected_objects_info();
@@ -275,9 +275,9 @@ impl MapGui {
         da_sm_item_graph.set_height_request((25.0 * dpimm_y) as i32);
     }
 
-    fn connect_main_gui_events(self: &Rc<Self>, handlers: &mut MainGuiHandlers) {
+    fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiHandlers) {
         handlers.push(Box::new(clone!(@weak self as self_ => move |event| {
-            self_.handler_main_gui_event(event);
+            self_.handler_main_ui_event(event);
         })));
     }
 
@@ -523,7 +523,7 @@ impl MapGui {
     }
 
     fn handler_main_timer(self: &Rc<Self>) {
-        if self.gui.current_tab_page() != TabPage::SkyMap {
+        if self.main_ui.current_tab_page() != TabPage::SkyMap {
             return;
         }
 

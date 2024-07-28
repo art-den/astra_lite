@@ -10,28 +10,28 @@ use crate::{
     ui::gtk_utils::*,
     utils::{io_utils::*, log_utils::*, math::*}
 };
-use super::{gui_main::*, gtk_utils, plots::*, gui_common::*};
+use super::{ui_main::*, gtk_utils, plots::*, ui_common::*};
 
 pub fn init_ui(
     _app:     &gtk::Application,
     builder:  &gtk::Builder,
-    gui:      &Rc<Gui>,
+    main_ui:  &Rc<MainUi>,
     options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
     indi:     &Arc<indi::Connection>,
     excl:     &Rc<ExclusiveCaller>,
-    handlers: &mut MainGuiHandlers,
+    handlers: &mut MainUiHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
     let mut ui_options = UiOptions::default();
     gtk_utils::exec_and_show_error(&window, || {
-        load_json_from_config_file(&mut ui_options, CameraGui::CONF_FN)?;
+        load_json_from_config_file(&mut ui_options, CameraUi::CONF_FN)?;
         Ok(())
     });
 
-    let data = Rc::new(CameraGui {
-        gui:                Rc::clone(gui),
+    let data = Rc::new(CameraUi {
+        main_ui:            Rc::clone(main_ui),
         builder:            builder.clone(),
         window:             window.clone(),
         core:               Arc::clone(core),
@@ -74,7 +74,7 @@ pub fn init_ui(
     data.connect_mount_widgets_events();
 
     handlers.push(Box::new(clone!(@weak data => move |event| {
-        data.handler_main_gui_event(event);
+        data.handler_main_ui_event(event);
     })));
 
     data.delayed_actions.set_event_handler(
@@ -177,8 +177,8 @@ struct LightHistoryItem {
     bad_offset:    bool,
 }
 
-struct CameraGui {
-    gui:                Rc<Gui>,
+struct CameraUi {
+    main_ui:                Rc<MainUi>,
     builder:            gtk::Builder,
     window:             gtk::ApplicationWindow,
     options:            Arc<RwLock<Options>>,
@@ -195,30 +195,30 @@ struct CameraGui {
     excl:               Rc<ExclusiveCaller>,
     full_screen_mode:   Cell<bool>,
     prev_cam:           RefCell<Option<DeviceAndProp>>,
-    self_:              RefCell<Option<Rc<CameraGui>>>,
+    self_:              RefCell<Option<Rc<CameraUi>>>,
 }
 
-impl Drop for CameraGui {
+impl Drop for CameraUi {
     fn drop(&mut self) {
         log::info!("CameraData dropped");
     }
 }
 
-impl CameraGui {
-    const CONF_FN: &'static str = "gui_cam";
+impl CameraUi {
+    const CONF_FN: &'static str = "ui_camera";
 
-    fn handler_main_gui_event(self: &Rc<Self>, event: MainGuiEvent) {
+    fn handler_main_ui_event(self: &Rc<Self>, event: MainUiEvent) {
         match event {
-            MainGuiEvent::Timer => {}
-            MainGuiEvent::FullScreen(full_screen) =>
+            MainUiEvent::Timer => {}
+            MainUiEvent::FullScreen(full_screen) =>
                 self.handler_full_screen(full_screen),
-            MainGuiEvent::BeforeModeContinued =>
+            MainUiEvent::BeforeModeContinued =>
                 self.get_options_from_widgets(),
-            MainGuiEvent::TabPageChanged(TabPage::Camera) =>
+            MainUiEvent::TabPageChanged(TabPage::Camera) =>
                 self.correct_widgets_props(),
-            MainGuiEvent::ProgramClosing =>
+            MainUiEvent::ProgramClosing =>
                 self.handler_closing(),
-            MainGuiEvent::BeforeDisconnect => {
+            MainUiEvent::BeforeDisconnect => {
                 self.get_options_from_widgets();
                 self.store_cur_cam_options();
             },
@@ -362,7 +362,7 @@ impl CameraGui {
                             "Download time = {:.2}s, img. process time = {:.2}s",
                             blob_dl_time, process_time
                         );
-                        self.gui.set_perf_string(perf_str);
+                        self.main_ui.set_perf_string(perf_str);
                     },
                     _ => {},
                 }

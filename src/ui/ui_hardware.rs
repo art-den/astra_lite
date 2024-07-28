@@ -16,16 +16,16 @@ use crate::{
     options::*,
     guiding::phd2_conn,
 };
-use super::{gui_main::*, gtk_utils, gui_indi::*};
+use super::{ui_main::*, gtk_utils, ui_indi::*};
 
 pub fn init_ui(
     _app:     &gtk::Application,
     builder:  &gtk::Builder,
-    gui:      &Rc<Gui>,
+    main_ui:  &Rc<MainUi>,
     options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
     indi:     &Arc<indi::Connection>,
-    handlers: &mut MainGuiHandlers,
+    handlers: &mut MainUiHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
@@ -46,12 +46,12 @@ pub fn init_ui(
         options.indi.remote = true; // force remote mode if no devices info
     }
 
-    let indi_gui = IndiGui::new(&indi);
+    let indi_ui = IndiUi::new(&indi);
 
     let bx_devices_ctrl = builder.object::<gtk::Box>("bx_devices_ctrl").unwrap();
-    bx_devices_ctrl.add(indi_gui.widget());
+    bx_devices_ctrl.add(indi_ui.widget());
 
-    let data = Rc::new(HardwareGui {
+    let data = Rc::new(HardwareUi {
         core:          Arc::clone(core),
         indi:          Arc::clone(indi),
         options:       Arc::clone(options),
@@ -60,8 +60,8 @@ pub fn init_ui(
         indi_drivers:  drivers,
         indi_evt_conn: RefCell::new(None),
         is_remote:     Cell::new(false),
-        gui:           Rc::clone(gui),
-        indi_gui,
+        main_ui:       Rc::clone(main_ui),
+        indi_ui,
         window:        window.clone(),
         self_:         RefCell::new(None),
     });
@@ -71,12 +71,12 @@ pub fn init_ui(
     data.init_widgets();
     data.fill_devices_name();
 
-    gtk_utils::connect_action(&window, &data, "help_save_indi", HardwareGui::handler_action_help_save_indi);
-    gtk_utils::connect_action(&window, &data, "conn_indi",      HardwareGui::handler_action_conn_indi);
-    gtk_utils::connect_action(&window, &data, "disconn_indi",   HardwareGui::handler_action_disconn_indi);
-    gtk_utils::connect_action(&window, &data, "conn_guid",      HardwareGui::handler_action_conn_guider);
-    gtk_utils::connect_action(&window, &data, "disconn_guid",   HardwareGui::handler_action_disconn_guider);
-    gtk_utils::connect_action(&window, &data, "clear_hw_log",   HardwareGui::handler_action_clear_hw_log);
+    gtk_utils::connect_action(&window, &data, "help_save_indi", HardwareUi::handler_action_help_save_indi);
+    gtk_utils::connect_action(&window, &data, "conn_indi",      HardwareUi::handler_action_conn_indi);
+    gtk_utils::connect_action(&window, &data, "disconn_indi",   HardwareUi::handler_action_disconn_indi);
+    gtk_utils::connect_action(&window, &data, "conn_guid",      HardwareUi::handler_action_conn_guider);
+    gtk_utils::connect_action(&window, &data, "disconn_guid",   HardwareUi::handler_action_disconn_guider);
+    gtk_utils::connect_action(&window, &data, "clear_hw_log",   HardwareUi::handler_action_clear_hw_log);
 
     let chb_remote = data.builder.object::<gtk::CheckButton>("chb_remote").unwrap();
     chb_remote.connect_active_notify(clone!(@weak data => move |_| {
@@ -92,7 +92,7 @@ pub fn init_ui(
     }));
 
     handlers.push(Box::new(clone!(@weak data => move |event| {
-        data.handler_main_gui_event(event);
+        data.handler_main_ui_event(event);
     })));
 
     if let Some(load_drivers_err) = load_drivers_err {
@@ -144,8 +144,8 @@ enum HardwareEvent {
     Phd2(phd2_conn::Event),
 }
 
-struct HardwareGui {
-    gui:           Rc<Gui>,
+struct HardwareUi {
+    main_ui:           Rc<MainUi>,
     core:          Arc<Core>,
     indi:          Arc<indi::Connection>,
     options:       Arc<RwLock<Options>>,
@@ -154,25 +154,25 @@ struct HardwareGui {
     indi_status:   RefCell<indi::ConnState>,
     indi_drivers:  indi::Drivers,
     indi_evt_conn: RefCell<Option<indi::Subscription>>,
-    indi_gui:      IndiGui,
+    indi_ui:      IndiUi,
     is_remote:     Cell<bool>,
-    self_:         RefCell<Option<Rc<HardwareGui>>>,
+    self_:         RefCell<Option<Rc<HardwareUi>>>,
 }
 
-impl Drop for HardwareGui {
+impl Drop for HardwareUi {
     fn drop(&mut self) {
         log::info!("HardwareData dropped");
     }
 }
 
-impl HardwareGui {
-    fn handler_main_gui_event(self: &Rc<Self>, event: MainGuiEvent) {
+impl HardwareUi {
+    fn handler_main_ui_event(self: &Rc<Self>, event: MainUiEvent) {
         match event {
-            MainGuiEvent::ProgramClosing =>
+            MainUiEvent::ProgramClosing =>
                 self.handler_closing(),
 
-            MainGuiEvent::TabPageChanged(tab_page) =>
-                self.indi_gui.set_enabled(tab_page == TabPage::Hardware),
+            MainUiEvent::TabPageChanged(tab_page) =>
+                self.indi_ui.set_enabled(tab_page == TabPage::Hardware),
 
             _ => {},
         }
@@ -458,7 +458,7 @@ impl HardwareGui {
 
     fn handler_action_disconn_indi(self: &Rc<Self>) {
         gtk_utils::exec_and_show_error(&self.window, || {
-            self.gui.exec_before_disconnect_handlers();
+            self.main_ui.exec_before_disconnect_handlers();
             if !self.is_remote.get() {
                 log::info!("Disabling all INDI devices before disconnect...");
                 self.indi.command_enable_all_devices(false, true, Some(2000))?;
@@ -490,7 +490,7 @@ impl HardwareGui {
 
     fn fill_devices_name(self: &Rc<Self>) {
         fn fill_cb_list(
-            data:       &Rc<HardwareGui>,
+            data:       &Rc<HardwareUi>,
             cb_name:    &str,
             group_name: &str,
             active:     &Option<String>
@@ -670,7 +670,7 @@ impl HardwareGui {
             ))
             .join(", ");
         drop(options);
-        self.gui.set_dev_list_and_conn_status(
+        self.main_ui.set_dev_list_and_conn_status(
             dev_list,
             status.to_str(true).to_string()
         );

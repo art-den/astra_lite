@@ -1,10 +1,10 @@
-pub mod gui_main;
+pub mod ui_main;
 mod gtk_utils;
-mod gui_hardware;
-mod gui_indi;
-mod gui_camera;
-mod gui_skymap;
-mod gui_common;
+mod ui_hardware;
+mod ui_indi;
+mod ui_camera;
+mod ui_skymap;
+mod ui_common;
 mod plots;
 mod sky_map;
 mod ui_options;
