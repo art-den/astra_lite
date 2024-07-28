@@ -1,16 +1,16 @@
 use std::{rc::Rc, sync::*, cell::{RefCell, Cell}, path::PathBuf};
 use chrono::{DateTime, Local, Utc};
-use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
+use gtk::{prelude::*, glib, glib::clone, cairo};
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{consts::*, core::*, frame_processing::*, mode_focusing::*},
+    core::{consts::*, core::*, frame_processing::*},
     image::{histogram::*, image::RgbU8Data, info::*, raw::FrameType, stars_offset::Offset},
     indi,
     options::*,
     ui::gtk_utils::*,
-    utils::{io_utils::*, log_utils::*, math::*}
+    utils::{io_utils::*, log_utils::*}
 };
-use super::{ui_main::*, gtk_utils, plots::*, ui_common::*};
+use super::{ui_main::*, gtk_utils, ui_common::*};
 
 pub fn init_ui(
     _app:     &gtk::Application,
@@ -37,15 +37,14 @@ pub fn init_ui(
         core:               Arc::clone(core),
         indi:               Arc::clone(indi),
         options:            Arc::clone(options),
+        excl:               Rc::clone(&excl),
         delayed_actions:    DelayedActions::new(500),
         ui_options:         RefCell::new(ui_options),
         conn_state:         RefCell::new(indi::ConnState::Disconnected),
         indi_evt_conn:      RefCell::new(None),
         preview_scroll_pos: RefCell::new(None),
         light_history:      RefCell::new(Vec::new()),
-        focusing_data:      RefCell::new(None),
         closed:             Cell::new(false),
-        excl:               Rc::clone(&excl),
         full_screen_mode:   Cell::new(false),
         prev_cam:           RefCell::new(None),
         self_:              RefCell::new(None),
@@ -54,22 +53,14 @@ pub fn init_ui(
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
     data.init_camera_widgets();
-
     data.connect_indi_and_core_events();
-
     data.connect_widgets_events_before_show_options();
-
-    data.init_focuser_widgets();
     data.init_dithering_widgets();
-
     data.show_ui_options();
-
     data.show_total_raw_time();
     data.update_light_history_table();
-
     data.connect_widgets_events();
     data.connect_img_mouse_scroll_events();
-    data.connect_focuser_widgets_events();
     data.connect_dithering_widgets_events();
     data.connect_mount_widgets_events();
 
@@ -83,7 +74,7 @@ pub fn init_ui(
         })
     );
 
-    data.update_focuser_devices_list();
+
     data.correct_widgets_props();
     data.correct_frame_quality_widgets_props();
 }
@@ -96,9 +87,6 @@ enum DelayedActionTypes {
     UpdateCtrlWidgets,
     UpdateResolutionList,
     SelectMaxResolution,
-    UpdateFocList,
-    UpdateFocPosNew,
-    UpdateFocPos,
     UpdateMountWidgets,
     UpdateMountSpdList,
     FillHeaterItems,
@@ -125,7 +113,6 @@ struct UiOptions {
     calibr_exp:     bool,
     raw_frames_exp: bool,
     live_exp:       bool,
-    foc_exp:        bool,
     dith_exp:       bool,
     quality_exp:    bool,
     mount_exp:      bool,
@@ -146,7 +133,6 @@ impl Default for UiOptions {
             calibr_exp:     true,
             raw_frames_exp: true,
             live_exp:       false,
-            foc_exp:        false,
             dith_exp:       false,
             quality_exp:    true,
             mount_exp:      false,
@@ -178,7 +164,7 @@ struct LightHistoryItem {
 }
 
 struct CameraUi {
-    main_ui:                Rc<MainUi>,
+    main_ui:            Rc<MainUi>,
     builder:            gtk::Builder,
     window:             gtk::ApplicationWindow,
     options:            Arc<RwLock<Options>>,
@@ -190,7 +176,6 @@ struct CameraUi {
     indi_evt_conn:      RefCell<Option<indi::Subscription>>,
     preview_scroll_pos: RefCell<Option<((f64, f64), (f64, f64))>>,
     light_history:      RefCell<Vec<LightHistoryItem>>,
-    focusing_data:      RefCell<Option<FocusingResultData>>,
     closed:             Cell<bool>,
     excl:               Rc<ExclusiveCaller>,
     full_screen_mode:   Cell<bool>,
@@ -200,7 +185,7 @@ struct CameraUi {
 
 impl Drop for CameraUi {
     fn drop(&mut self) {
-        log::info!("CameraData dropped");
+        log::info!("CameraUi dropped");
     }
 }
 
@@ -326,7 +311,7 @@ impl CameraUi {
             MainThreadEvent::Indi(indi::Event::PropChange(event_data)) => {
                 match &event_data.change {
                     indi::PropChange::New(value) =>
-                        self.process_simple_prop_change_event(
+                        self.process_simple_indi_prop_change_event(
                             &event_data.device_name,
                             &event_data.prop_name,
                             &value.elem_name,
@@ -336,7 +321,7 @@ impl CameraUi {
                             &value.prop_value
                         ),
                     indi::PropChange::Change{ value, prev_state, new_state } =>
-                        self.process_simple_prop_change_event(
+                        self.process_simple_indi_prop_change_event(
                             &event_data.device_name,
                             &event_data.prop_name,
                             &value.elem_name,
@@ -382,18 +367,6 @@ impl CameraUi {
                 self.correct_preview_source();
             },
 
-            MainThreadEvent::Core(CoreEvent::Focusing(FocusingStateEvent::Data(fdata))) => {
-                *self.focusing_data.borrow_mut() = Some(fdata);
-                let da_focusing = self.builder.object::<gtk::DrawingArea>("da_focusing").unwrap();
-                da_focusing.queue_draw();
-            },
-
-            MainThreadEvent::Core(CoreEvent::Focusing(FocusingStateEvent::Result { value })) => {
-                self.excl.exec(|| {
-                    self.update_focuser_position_after_focusing(value);
-                });
-            },
-
             _ => {},
         }
     }
@@ -419,8 +392,6 @@ impl CameraUi {
         gtk_utils::connect_action(&self.window, self, "start_live_stacking",    Self::handler_action_start_live_stacking);
         gtk_utils::connect_action(&self.window, self, "stop_live_stacking",     Self::handler_action_stop_live_stacking);
         gtk_utils::connect_action(&self.window, self, "continue_live_stacking", Self::handler_action_continue_live_stacking);
-        gtk_utils::connect_action(&self.window, self, "manual_focus",           Self::handler_action_manual_focus);
-        gtk_utils::connect_action(&self.window, self, "stop_manual_focus",      Self::handler_action_stop_manual_focus);
         gtk_utils::connect_action(&self.window, self, "start_dither_calibr",    Self::handler_action_start_dither_calibr);
         gtk_utils::connect_action(&self.window, self, "stop_dither_calibr",     Self::handler_action_stop_dither_calibr);
         gtk_utils::connect_action(&self.window, self, "load_image",             Self::handler_action_open_image);
@@ -442,7 +413,7 @@ impl CameraUi {
                 let camera_device = DeviceAndProp::new(&cur_id);
                 self_.select_options_for_camera(&camera_device, &mut options);
 
-                self_.correct_widgets_props_impl(&Some(&camera_device), &options);
+                self_.correct_widgets_props_impl(&options);
                 _ = self_.update_resolution_list_impl(&camera_device);
 
                 options.show_cam_frame(&self_.builder);
@@ -871,6 +842,7 @@ impl CameraUi {
         _ = self.core.abort_active_mode();
 
         self.get_options_from_widgets();
+
         self.get_ui_options_from_widgets();
         self.store_cur_cam_options();
 
@@ -885,20 +857,10 @@ impl CameraUi {
         *self.self_.borrow_mut() = None;
     }
 
-    fn get_cur_cam_device(&self) -> Option<DeviceAndProp> {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let cam_id = ui.prop_string("cb_camera_list.active-id");
-        let Some(cam_id) = cam_id else { return None; };
-        if cam_id.is_empty() { return None; }
-        let device = DeviceAndProp::new(&cam_id);
-        Some(device)
-    }
-
     /// Stores current camera options for current camera
     fn store_cur_cam_options(self: &Rc<Self>) {
-        let cur_cam_device = self.get_cur_cam_device();
-        if let Some(cur_cam_device) = cur_cam_device {
-            let options = self.options.read().unwrap();
+        let options = self.options.read().unwrap();
+        if let Some(cur_cam_device) = &options.cam.device {
             self.store_cur_cam_options_impl(&cur_cam_device, &options);
         }
     }
@@ -910,9 +872,7 @@ impl CameraUi {
         options.show_live_stacking(&self.builder);
         options.show_frame_quality(&self.builder);
         options.show_preview(&self.builder);
-        options.show_focuser(&self.builder);
         options.show_guiding(&self.builder);
-        options.show_mount(&self.builder);
     }
 
     fn show_ui_options(self: &Rc<Self>) {
@@ -937,7 +897,6 @@ impl CameraUi {
         ui.set_prop_bool("exp_calibr.expanded",     options.calibr_exp);
         ui.set_prop_bool("exp_raw_frames.expanded", options.raw_frames_exp);
         ui.set_prop_bool("exp_live.expanded",       options.live_exp);
-        ui.set_prop_bool("exp_foc.expanded",        options.foc_exp);
         ui.set_prop_bool("exp_dith.expanded",       options.dith_exp);
         ui.set_prop_bool("exp_quality.expanded",    options.quality_exp);
         ui.set_prop_bool("exp_mount.expanded",      options.mount_exp);
@@ -955,9 +914,6 @@ impl CameraUi {
         options.read_live_stacking(&self.builder);
         options.read_frame_quality(&self.builder);
         options.read_preview(&self.builder);
-        options.read_focuser(&self.builder);
-        options.read_guiding(&self.builder);
-        options.read_mount(&self.builder);
     }
 
     fn get_ui_options_from_widgets(self: &Rc<Self>) {
@@ -979,7 +935,6 @@ impl CameraUi {
         options.calibr_exp     = ui.prop_bool("exp_calibr.expanded");
         options.raw_frames_exp = ui.prop_bool("exp_raw_frames.expanded");
         options.live_exp       = ui.prop_bool("exp_live.expanded");
-        options.foc_exp        = ui.prop_bool("exp_foc.expanded");
         options.dith_exp       = ui.prop_bool("exp_dith.expanded");
         options.quality_exp    = ui.prop_bool("exp_quality.expanded");
         options.mount_exp      = ui.prop_bool("exp_mount.expanded");
@@ -1008,12 +963,6 @@ impl CameraUi {
                 self.select_maximum_resolution();
                 self.correct_widgets_props();
             }
-            DelayedActionTypes::UpdateFocList => {
-                self.excl.exec(|| {
-                    self.update_focuser_devices_list();
-                    self.correct_widgets_props();
-                });
-            }
             DelayedActionTypes::StartLiveView
             if self.options.read().unwrap().cam.live_view => {
                 self.start_live_view();
@@ -1032,15 +981,6 @@ impl CameraUi {
             DelayedActionTypes::SelectMaxResolution => {
                 self.select_maximum_resolution();
             }
-            DelayedActionTypes::UpdateFocPosNew |
-            DelayedActionTypes::UpdateFocPos => {
-                self.excl.exec(|| {
-                    self.update_focuser_position_widget(
-                        *action == DelayedActionTypes::UpdateFocPosNew
-                    );
-                });
-                self.show_cur_focuser_value();
-            }
             DelayedActionTypes::UpdateMountWidgets => {
                 self.correct_widgets_props(); // ???
             }
@@ -1056,12 +996,9 @@ impl CameraUi {
         }
     }
 
-    fn correct_widgets_props_impl(
-        self:              &Rc<Self>,
-        camera:            &Option<&DeviceAndProp>,
-        options:           &Options
-    ) {
+    fn correct_widgets_props_impl(self: &Rc<Self>, options: &Options) {
         gtk_utils::exec_and_show_error(&self.window, || {
+            let camera = &options.cam.device;
             let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
             let mount = options.mount.device.clone();
             let correct_num_adjustment_by_prop = |
@@ -1157,11 +1094,9 @@ impl CameraUi {
             let mode_data = self.core.mode_data();
             let mode_type = mode_data.mode.get_type();
             let waiting = mode_type == ModeType::Waiting;
-            let shot_active = mode_type == ModeType::SingleShot;
+            let single_shot = mode_type == ModeType::SingleShot;
             let liveview_active = mode_type == ModeType::LiveView;
             let saving_frames = mode_type == ModeType::SavingRawFrames;
-            let mnt_calibr = mode_type == ModeType::DitherCalibr;
-            let focusing = mode_type == ModeType::Focusing;
             let saving_frames_paused = mode_data.aborted_mode
                 .as_ref()
                 .map(|mode| mode.get_type() == ModeType::SavingRawFrames)
@@ -1174,26 +1109,10 @@ impl CameraUi {
             let dither_calibr = mode_type == ModeType::DitherCalibr;
             drop(mode_data);
 
-            let foc_device = ui.prop_string("cb_foc_list.active-id");
-            let foc_active = self.indi
-                .is_device_enabled(foc_device.as_deref().unwrap_or(""))
-                .unwrap_or(false);
-
-            let focuser_sensitive =
-                indi_connected &&
-                foc_device.is_some() && foc_active &&
-                !saving_frames &&
-                !live_active &&
-                !mnt_calibr &&
-                !focusing;
-
             let dithering_sensitive =
                 indi_connected &&
                 !mount.is_empty() &&
-                !saving_frames &&
-                !live_active &&
-                !mnt_calibr &&
-                !focusing;
+                waiting;
 
             let mnt_active = self.indi.is_device_enabled(&mount).unwrap_or(false);
 
@@ -1201,10 +1120,7 @@ impl CameraUi {
                 (indi_connected &&
                 mnt_active &&
                 !mount.is_empty() &&
-                !saving_frames &&
-                !live_active &&
-                !mnt_calibr &&
-                !focusing) ||
+                waiting) ||
                 (ui.prop_string("cb_dith_perod.active-id").as_deref() == Some("0") &&
                 !ui.prop_bool("chb_guid_enabled.active"));
 
@@ -1226,11 +1142,11 @@ impl CameraUi {
             let can_guide_by_main_cam = guiding_mode == GuidingMode::MainCamera;
 
             let cam_active = self.indi
-                .is_device_enabled(camera.map(|c| c.name.as_str()).unwrap_or(""))
+                .is_device_enabled(camera.as_ref().map(|c| c.name.as_str()).unwrap_or(""))
                 .unwrap_or(false);
 
             let can_change_cam_opts = !saving_frames && !live_active;
-            let can_change_mode = waiting || shot_active;
+            let can_change_mode = waiting || single_shot;
             let can_change_frame_opts = waiting || liveview_active;
             let can_change_live_stacking_opts = waiting || liveview_active;
             let can_change_cal_ops = !live_active && !dither_calibr;
@@ -1240,8 +1156,8 @@ impl CameraUi {
                 camera.is_some();
 
             gtk_utils::enable_actions(&self.window, &[
-                ("take_shot",              exposure_supported && !shot_active && can_change_mode),
-                ("stop_shot",              shot_active),
+                ("take_shot",              exposure_supported && !single_shot && can_change_mode),
+                ("stop_shot",              single_shot),
 
                 ("start_save_raw_frames",  exposure_supported && !saving_frames && can_change_mode),
                 ("stop_save_raw_frames",   saving_frames),
@@ -1250,9 +1166,6 @@ impl CameraUi {
                 ("start_live_stacking",    exposure_supported && !live_active && can_change_mode && frame_mode_is_lights),
                 ("stop_live_stacking",     live_active),
                 ("continue_live_stacking", livestacking_paused && can_change_mode),
-
-                ("manual_focus",           exposure_supported && !focusing && can_change_mode),
-                ("stop_manual_focus",      focusing),
 
                 ("start_dither_calibr",    exposure_supported && !dither_calibr && can_change_mode && can_guide_by_main_cam),
                 ("stop_dither_calibr",     dither_calibr),
@@ -1298,13 +1211,9 @@ impl CameraUi {
                 ("grd_live_stack",     cam_sensitive),
                 ("grd_cam_calibr",     cam_sensitive),
                 ("bx_light_qual",      cam_sensitive),
-                ("grd_foc",            focuser_sensitive),
                 ("grd_dither",         dithering_sensitive && cam_sensitive),
                 ("bx_simple_mount",    mount_ctrl_sensitive),
 
-                ("spb_foc_temp",       ui.prop_bool("chb_foc_temp.active")),
-                ("cb_foc_fwhm",        ui.prop_bool("chb_foc_fwhm.active")),
-                ("cb_foc_period",      ui.prop_bool("chb_foc_period.active")),
                 ("spb_guid_max_err",   ui.prop_bool("chb_guid_enabled.active")),
 
                 ("l_delay",            liveview_active),
@@ -1322,9 +1231,8 @@ impl CameraUi {
     }
 
     fn correct_widgets_props(self: &Rc<Self>) {
-        let cur_cam_device = self.get_cur_cam_device();
         let options = self.options.read().unwrap();
-        self.correct_widgets_props_impl(&cur_cam_device.as_ref(), &options);
+        self.correct_widgets_props_impl(&options);
     }
 
     fn update_camera_devices_list(self: &Rc<Self>) {
@@ -1353,28 +1261,34 @@ impl CameraUi {
         }
 
         let options = self.options.read().unwrap();
-        let cur_cam_id = options.cam.device.to_string();
+        let cur_cam_device = options.cam.device.clone();
         drop(options);
         let mut camera_selected = false;
-        if !cur_cam_id.is_empty() {
-            cb_camera_list.set_active_id(Some(&cur_cam_id));
+        if let Some(cur_cam_device) = cur_cam_device {
+            let id = cur_cam_device.to_string();
+            cb_camera_list.set_active_id(Some(&id));
             if cb_camera_list.active().is_none() {
-                cb_camera_list.insert(0, Some(&cur_cam_id), &cur_cam_id);
+                cb_camera_list.insert(0, Some(&id), &id);
                 cb_camera_list.set_active(Some(0));
                 camera_selected = true;
             }
         } else if cameras_count != 0 {
             cb_camera_list.set_active(Some(0));
+
             let mut options = self.options.write().unwrap();
-            options.cam.device = self.get_cur_cam_device().unwrap_or_default();
+            let cam_and_prop = DeviceAndProp::new(&cb_camera_list.active_id().unwrap_or_default());
+            options.cam.device = Some(cam_and_prop);
             drop(options);
             camera_selected = true;
         }
 
-        cb_camera_list.set_sensitive(cameras_count != 0);
+        cb_camera_list.set_sensitive(cameras_count > 1);
 
-        let cur_cam_device = self.get_cur_cam_device();
         if camera_selected {
+            let options = self.options.read().unwrap();
+            let cur_cam_device = options.cam.device.clone();
+            drop(options);
+
             if let Some(cur_cam_device) = &cur_cam_device {
                 let mut options = self.options.write().unwrap();
                 self.select_options_for_camera(&cur_cam_device, &mut options);
@@ -1385,8 +1299,8 @@ impl CameraUi {
                 options.show_calibr(&self.builder);
                 options.show_cam_ctrl(&self.builder);
             }
-            let options = self.options.read().unwrap();
-            self.correct_widgets_props_impl(&cur_cam_device.as_ref(), &options);
+
+            self.correct_widgets_props();
         }
     }
 
@@ -1426,9 +1340,9 @@ impl CameraUi {
 
     fn update_resolution_list(self: &Rc<Self>) {
         gtk_utils::exec_and_show_error(&self.window, || {
-            let cur_cam_device = self.get_cur_cam_device();
-            let Some(cur_cam_device) = cur_cam_device else { return Ok(()); };
-            self.update_resolution_list_impl(&cur_cam_device)?;
+            let options = self.options.read().unwrap();
+            let Some(cur_cam_device) = &options.cam.device else { return Ok(()); };
+            self.update_resolution_list_impl(cur_cam_device)?;
             Ok(())
         });
     }
@@ -1439,9 +1353,10 @@ impl CameraUi {
             let last_heater_value = cb_cam_heater.active_id();
             cb_cam_heater.remove_all();
             let options = self.options.read().unwrap();
-            if options.cam.device.name.is_empty() { return Ok(()); };
-            if !self.indi.camera_is_heater_supported(&options.cam.device.name)? { return Ok(()) }
-            let Some(items) = self.indi.camera_get_heater_items(&options.cam.device.name)? else { return Ok(()); };
+            let Some(device) = &options.cam.device else { return Ok(()); };
+            if device.name.is_empty() { return Ok(()); };
+            if !self.indi.camera_is_heater_supported(&device.name)? { return Ok(()) }
+            let Some(items) = self.indi.camera_get_heater_items(&device.name)? else { return Ok(()); };
             for (id, label) in items {
                 cb_cam_heater.append(Some(id.as_str()), &label);
             }
@@ -1459,7 +1374,8 @@ impl CameraUi {
 
     fn select_maximum_resolution(self: &Rc<Self>) {
         let options = self.options.read().unwrap();
-        let cam_name = &options.cam.device.name;
+        let Some(device) = &options.cam.device else { return; };
+        let cam_name = &device.name;
         if cam_name.is_empty() { return; }
 
         if self.indi.camera_is_resolution_supported(cam_name).unwrap_or(false) {
@@ -1744,7 +1660,7 @@ impl CameraUi {
         result: FrameProcessResult
     ) {
         let options = self.options.read().unwrap();
-        if options.cam.device != result.camera { return; }
+        if options.cam.device != Some(result.camera) { return; }
         let live_stacking_preview = options.preview.source == PreviewSource::LiveStacking;
         drop(options);
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
@@ -1824,12 +1740,10 @@ impl CameraUi {
     }
 
     // TODO: move camera control code into `core` module
-    fn control_camera_by_options(
-        self:      &Rc<Self>,
-        force_set: bool,
-    ) {
+    fn control_camera_by_options(self: &Rc<Self>, force_set: bool) {
         let options = self.options.read().unwrap();
-        let camera_name = &options.cam.device.name;
+        let Some(device) = &options.cam.device else { return; };
+        let camera_name = &device.name;
         if camera_name.is_empty() { return; };
         gtk_utils::exec_and_show_error(&self.window, || {
             // Cooler + Temperature
@@ -1877,7 +1791,8 @@ impl CameraUi {
         temparature: f64
     ) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let Some(cur_cam_device) = self.get_cur_cam_device() else { return; };
+        let options = self.options.read().unwrap();
+        let Some(cur_cam_device) = &options.cam.device else { return; };
         if cur_cam_device.name == device_name {
             ui.set_prop_str(
                 "l_temp_value.label",
@@ -1892,7 +1807,8 @@ impl CameraUi {
         pwr_str:     &str
     ) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let Some(cur_cam_device) = self.get_cur_cam_device() else { return; };
+        let options = self.options.read().unwrap();
+        let Some(cur_cam_device) = &options.cam.device else { return; };
         if cur_cam_device.name == device_name {
             ui.set_prop_str(
                 "l_coolpwr_value.label",
@@ -1921,7 +1837,6 @@ impl CameraUi {
         if update_devices_list {
             self.excl.exec(|| {
                 self.update_camera_devices_list();
-                self.update_focuser_devices_list();
             });
         }
         self.correct_widgets_props();
@@ -1934,12 +1849,9 @@ impl CameraUi {
         if drv_interface.contains(indi::DriverInterface::TELESCOPE) {
             self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
         }
-        if drv_interface.contains(indi::DriverInterface::FOCUSER) {
-            self.delayed_actions.schedule(DelayedActionTypes::UpdateFocList);
-        }
     }
 
-    fn process_simple_prop_change_event(
+    fn process_simple_indi_prop_change_event(
         self:        &Rc<Self>,
         device_name: &str,
         prop_name:   &str,
@@ -1961,9 +1873,6 @@ impl CameraUi {
             ("DRIVER_INFO", "DRIVER_INTERFACE", _) => {
                 let flag_bits = value.to_i32().unwrap_or(0);
                 let flags = indi::DriverInterface::from_bits_truncate(flag_bits as u32);
-                if flags.contains(indi::DriverInterface::FOCUSER) {
-                    self.delayed_actions.schedule(DelayedActionTypes::UpdateFocList);
-                }
                 if flags.contains(indi::DriverInterface::TELESCOPE) {
                     self.options.write().unwrap().mount.device = device_name.to_string();
                     self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
@@ -1990,7 +1899,7 @@ impl CameraUi {
             ("CCD_EXPOSURE"|"GUIDER_EXPOSURE", ..) => {
                 let options = self.options.read().unwrap();
                 if new_prop {
-                    if device_name == options.cam.device.name {
+                    if options.cam.device.as_ref().map(|d| d.name == device_name).unwrap_or(false) {
                         self.delayed_actions.schedule_ex(
                             DelayedActionTypes::StartLiveView,
                             // 2000 ms pause to start live view from camera
@@ -2016,17 +1925,6 @@ impl CameraUi {
                 self.delayed_actions.schedule(
                     DelayedActionTypes::UpdateResolutionList
                 ),
-
-            ("ABS_FOCUS_POSITION", ..) => {
-                self.show_cur_focuser_value();
-                self.delayed_actions.schedule(
-                    if new_prop { DelayedActionTypes::UpdateFocPosNew }
-                    else        { DelayedActionTypes::UpdateFocPos }
-                );
-            },
-            ("FOCUS_MAX", ..) => {
-                self.delayed_actions.schedule(DelayedActionTypes::UpdateFocPosNew);
-            },
             ("CONNECTION", ..) => {
                 let driver_interface = self.indi
                     .get_driver_interface(device_name)
@@ -2185,9 +2083,9 @@ impl CameraUi {
         };
         if cur_exposure < 1.0 { return; };
         let options = self.options.read().unwrap();
-        if options.cam.device.name.is_empty() { return; }
-        let cam_ccd = indi::CamCcd::from_ccd_prop_name(&options.cam.device.prop);
-        let Ok(exposure) = self.indi.camera_get_exposure(&options.cam.device.name, cam_ccd) else { return; };
+        let Some(device) = &options.cam.device else { return; };
+        let cam_ccd = indi::CamCcd::from_ccd_prop_name(&device.prop);
+        let Ok(exposure) = self.indi.camera_get_exposure(&device.name, cam_ccd) else { return; };
         let progress = ((cur_exposure - exposure) / cur_exposure).max(0.0).min(1.0);
         let text_to_show = format!("{:.0} / {:.0}", cur_exposure - exposure, cur_exposure);
         gtk_utils::exec_and_show_error(&self.window, || {
@@ -2369,249 +2267,6 @@ impl CameraUi {
 
     ///////////////////////////////////////////////////////////////////////////////
 
-    fn init_focuser_widgets(self: &Rc<Self>) {
-        let spb_foc_temp = self.builder.object::<gtk::SpinButton>("spb_foc_temp").unwrap();
-        spb_foc_temp.set_range(1.0, 20.0);
-        spb_foc_temp.set_digits(0);
-        spb_foc_temp.set_increments(1.0, 5.0);
-
-        let spb_foc_measures = self.builder.object::<gtk::SpinButton>("spb_foc_measures").unwrap();
-        spb_foc_measures.set_range(7.0, 42.0);
-        spb_foc_measures.set_digits(0);
-        spb_foc_measures.set_increments(1.0, 10.0);
-
-        let spb_foc_auto_step = self.builder.object::<gtk::SpinButton>("spb_foc_auto_step").unwrap();
-        spb_foc_auto_step.set_range(1.0, 1_000_000.0);
-        spb_foc_auto_step.set_digits(0);
-        spb_foc_auto_step.set_increments(100.0, 1000.0);
-
-        let spb_foc_exp = self.builder.object::<gtk::SpinButton>("spb_foc_exp").unwrap();
-        spb_foc_exp.set_range(0.5, 60.0);
-        spb_foc_exp.set_digits(1);
-        spb_foc_exp.set_increments(0.5, 5.0);
-    }
-
-    fn update_focuser_devices_list(self: &Rc<Self>) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let dev_list = self.indi.get_devices_list();
-        let focusers = dev_list
-            .iter()
-            .filter(|device|
-                device.interface.contains(indi::DriverInterface::FOCUSER)
-            );
-        let cb_foc_list: gtk::ComboBoxText =
-            self.builder.object("cb_foc_list").unwrap();
-        let last_active_id = cb_foc_list.active_id().map(|s| s.to_string());
-        cb_foc_list.remove_all();
-        for camera in focusers {
-            cb_foc_list.append(Some(&camera.name), &camera.name);
-        }
-        let focusers_count = gtk_utils::combobox_items_count(&cb_foc_list);
-        if focusers_count == 1 {
-            cb_foc_list.set_active(Some(0));
-        } else if focusers_count > 1 {
-            let options = self.options.read().unwrap();
-            if last_active_id.is_some() {
-                cb_foc_list.set_active_id(last_active_id.as_deref());
-            } else if !options.focuser.device.is_empty() {
-                cb_foc_list.set_active_id(Some(options.focuser.device.as_str()));
-            }
-            if cb_foc_list.active_id().is_none() {
-                cb_foc_list.set_active(Some(0));
-            }
-        }
-        let connected = self.indi.state() == indi::ConnState::Connected;
-        ui.enable_widgets(false, &[
-            ("cb_foc_list", connected && focusers_count > 1),
-        ]);
-        self.options.write().unwrap().focuser.device =
-            cb_foc_list.active_id().map(|s| s.to_string()).unwrap_or_else(String::new);
-    }
-
-    fn update_focuser_position_widget(self: &Rc<Self>, new_prop: bool) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let Some(foc_device) = ui.prop_string("cb_foc_list.active-id") else {
-            return;
-        };
-        let Ok(prop_info) = self.indi.focuser_get_abs_value_prop_info(&foc_device) else {
-            return;
-        };
-        let spb_foc_val = self.builder.object::<gtk::SpinButton>("spb_foc_val").unwrap();
-        if new_prop || spb_foc_val.value() == 0.0 {
-            spb_foc_val.set_range(0.0, prop_info.max);
-            spb_foc_val.set_digits(0);
-            let step = prop_info.step.unwrap_or(1.0);
-            spb_foc_val.set_increments(step, step * 10.0);
-            let Ok(value) = self.indi.focuser_get_abs_value(&foc_device) else {
-                return;
-            };
-            spb_foc_val.set_value(value);
-        }
-    }
-
-    fn show_cur_focuser_value(self: &Rc<Self>) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let Some(foc_device) = ui.prop_string("cb_foc_list.active-id") else {
-            return;
-        };
-        let Ok(value) = self.indi.focuser_get_abs_value(&foc_device) else {
-            return;
-        };
-        let l_foc_value = self.builder.object::<gtk::Label>("l_foc_value").unwrap();
-        l_foc_value.set_label(&format!("{:.0}", value));
-    }
-
-    fn update_focuser_position_after_focusing(self: &Rc<Self>, pos: f64) {
-        let spb_foc_val = self.builder.object::<gtk::SpinButton>("spb_foc_val").unwrap();
-        spb_foc_val.set_value(pos);
-    }
-
-    fn connect_focuser_widgets_events(self: &Rc<Self>) {
-        let bldr = &self.builder;
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let spb_foc_val = bldr.object::<gtk::SpinButton>("spb_foc_val").unwrap();
-        spb_foc_val.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            self_.excl.exec(|| {
-                let Some(foc_device) = ui.prop_string("cb_foc_list.active-id") else {
-                    return;
-                };
-                gtk_utils::exec_and_show_error(&self_.window, || {
-                    self_.indi.focuser_set_abs_value(&foc_device, sb.value(), true, None)?;
-                    Ok(())
-                })
-            });
-        }));
-
-        let chb_foc_temp = bldr.object::<gtk::CheckButton>("chb_foc_temp").unwrap();
-        chb_foc_temp.connect_active_notify(clone!(@weak self as self_ => move |_| {
-            self_.correct_widgets_props();
-        }));
-
-        let chb_foc_fwhm = bldr.object::<gtk::CheckButton>("chb_foc_fwhm").unwrap();
-        chb_foc_fwhm.connect_active_notify(clone!(@weak self as self_ => move |_| {
-            self_.correct_widgets_props();
-        }));
-
-        let chb_foc_period = bldr.object::<gtk::CheckButton>("chb_foc_period").unwrap();
-        chb_foc_period.connect_active_notify(clone!(@weak self as self_ => move |_| {
-            self_.correct_widgets_props();
-        }));
-
-        let da_focusing = self.builder.object::<gtk::DrawingArea>("da_focusing").unwrap();
-        da_focusing.connect_draw(
-            clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
-            move |da, ctx| {
-                _ = self_.draw_focusing_samples(da, ctx);
-                glib::Propagation::Proceed
-            })
-        );
-    }
-
-    fn draw_focusing_samples(
-        self: &Rc<Self>,
-        da:   &gtk::DrawingArea,
-        ctx:  &gdk::cairo::Context
-    ) -> anyhow::Result<()> {
-        let focusing_data = self.focusing_data.borrow();
-        let Some(ref focusing_data) = *focusing_data else {
-            return Ok(());
-        };
-        const PARABOLA_POINTS: usize = 101;
-        let get_plot_points_cnt = |plot_idx: usize| {
-            match plot_idx {
-                0 => focusing_data.samples.len(),
-                1 => if focusing_data.coeffs.is_some() { PARABOLA_POINTS } else { 0 },
-                2 => if focusing_data.result.is_some() && focusing_data.coeffs.is_some() { 1 } else { 0 },
-                _ => unreachable!(),
-            }
-        };
-        let get_plot_style = |plot_idx| -> PlotLineStyle {
-            match plot_idx {
-                0 => PlotLineStyle {
-                    line_width: 2.0,
-                    line_color: gdk::RGBA::new(0.0, 0.3, 1.0, 1.0),
-                    point_style: PlotPointStyle::Round(8.0),
-                },
-                1 => PlotLineStyle {
-                    line_width: 1.0,
-                    line_color: gdk::RGBA::new(0.0, 1.0, 0.0, 1.0),
-                    point_style: PlotPointStyle::None,
-                },
-                2 => PlotLineStyle {
-                    line_width: 1.0,
-                    line_color: gdk::RGBA::new(0.0, 1.0, 0.0, 1.0),
-                    point_style: PlotPointStyle::Round(10.0),
-                },
-                _ => unreachable!(),
-            }
-        };
-        let min_pos = focusing_data.samples.iter().map(|s| s.focus_pos).min_by(cmp_f64).unwrap_or(0.0);
-        let max_pos = focusing_data.samples.iter().map(|s| s.focus_pos).max_by(cmp_f64).unwrap_or(0.0);
-        let get_plot_point = |plot_idx: usize, point_idx: usize| -> (f64, f64) {
-            match plot_idx {
-                0 => {
-                    let sample = &focusing_data.samples[point_idx];
-                    (sample.focus_pos, sample.stars_fwhm as f64)
-                }
-                1 => {
-                    if let Some(coeffs) = &focusing_data.coeffs {
-                        let x = linear_interpolate(
-                            point_idx as f64,
-                            0.0,
-                            PARABOLA_POINTS as f64,
-                            min_pos,
-                            max_pos,
-                        );
-                        let y = coeffs.calc(x);
-                        (x, y)
-                    } else {
-                        unreachable!();
-                    }
-                }
-                2 => {
-                    if let (Some(coeffs), Some(x)) = (&focusing_data.coeffs, &focusing_data.result) {
-                        let y = coeffs.calc(*x);
-                        (*x, y)
-                    } else {
-                        unreachable!();
-                    }
-                }
-                _ => unreachable!()
-            }
-        };
-        let mut plots = Plots {
-            plot_count: 3,
-            get_plot_points_cnt: Box::new(get_plot_points_cnt),
-            get_plot_style: Box::new(get_plot_style),
-            get_plot_point: Box::new(get_plot_point),
-            area: PlotAreaStyle::default(),
-            left_axis: AxisStyle::default(),
-            bottom_axis: AxisStyle::default(),
-        };
-        plots.left_axis.dec_digits = 2;
-        plots.bottom_axis.dec_digits = 0;
-
-        let font_size_pt = 8.0;
-        let (_, dpmm_y) = gtk_utils::get_widget_dpmm(da)
-            .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
-        let font_size_px = font_size_to_pixels(FontSize::Pt(font_size_pt), dpmm_y);
-        ctx.set_font_size(font_size_px);
-
-        draw_plots(&plots, da, ctx)?;
-        Ok(())
-    }
-
-    fn handler_action_manual_focus(self: &Rc<Self>) {
-        self.get_options_from_widgets();
-        gtk_utils::exec_and_show_error(&self.window, || {
-            self.core.start_focusing()?;
-            Ok(())
-        });
-    }
-
-    fn handler_action_stop_manual_focus(self: &Rc<Self>) {
-        self.core.abort_active_mode();
-    }
 
     ///////////////////////////////////////////////////////////////////////////////
 

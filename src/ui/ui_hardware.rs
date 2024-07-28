@@ -145,7 +145,7 @@ enum HardwareEvent {
 }
 
 struct HardwareUi {
-    main_ui:           Rc<MainUi>,
+    main_ui:       Rc<MainUi>,
     core:          Arc<Core>,
     indi:          Arc<indi::Connection>,
     options:       Arc<RwLock<Options>>,
@@ -154,14 +154,14 @@ struct HardwareUi {
     indi_status:   RefCell<indi::ConnState>,
     indi_drivers:  indi::Drivers,
     indi_evt_conn: RefCell<Option<indi::Subscription>>,
-    indi_ui:      IndiUi,
+    indi_ui:       IndiUi,
     is_remote:     Cell<bool>,
     self_:         RefCell<Option<Rc<HardwareUi>>>,
 }
 
 impl Drop for HardwareUi {
     fn drop(&mut self) {
-        log::info!("HardwareData dropped");
+        log::info!("HardwareUi dropped");
     }
 }
 

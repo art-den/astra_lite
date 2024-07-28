@@ -97,11 +97,14 @@ impl MountCalibrMode {
         options:            &Arc<RwLock<Options>>,
         img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
         next_mode:          Option<Box<dyn Mode + Sync + Send>>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
+        let Some(cam_device) = &opts.cam.device else {
+            anyhow::bail!("Camera is not selected");
+        };
         let mut frame = opts.cam.frame.clone();
         frame.exp_main = opts.guiding.calibr_exposure;
-        Self {
+        Ok(Self {
             indi:               Arc::clone(indi),
             state:              DitherCalibrState::Undefined,
             axis:               DitherCalibrAxis::Undefined,
@@ -110,7 +113,7 @@ impl MountCalibrMode {
             start_dec:          0.0,
             start_ra:           0.0,
             mount_device:       opts.mount.device.clone(),
-            camera:             opts.cam.device.clone(),
+            camera:             cam_device.clone(),
             attempt_num:        0,
             attempts:           Vec::new(),
             cur_timed_guide_n:  0.0,
@@ -127,7 +130,7 @@ impl MountCalibrMode {
             can_change_g_rate:  false,
             calibr_speed:       0.0,
             img_proc_stop_flag: Arc::clone(img_proc_stop_flag),
-        }
+        })
     }
 
     fn start_for_axis(&mut self, axis: DitherCalibrAxis) -> anyhow::Result<()> {

@@ -443,7 +443,7 @@ impl DeviceAndProp {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct CamOptions {
-    pub device:    DeviceAndProp,
+    pub device:    Option<DeviceAndProp>,
     pub live_view: bool,
     pub ctrl:      CamCtrlOptions,
     pub frame:     FrameOptions,
@@ -452,7 +452,7 @@ pub struct CamOptions {
 impl Default for CamOptions {
     fn default() -> Self {
         Self {
-            device:    DeviceAndProp::default(),
+            device:    None,
             live_view: false,
             ctrl:      CamCtrlOptions::default(),
             frame:     FrameOptions::default(),

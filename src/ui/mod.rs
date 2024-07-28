@@ -8,3 +8,4 @@ mod ui_common;
 mod plots;
 mod sky_map;
 mod ui_options;
+mod ui_focuser;

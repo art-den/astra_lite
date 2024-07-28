@@ -566,14 +566,15 @@ impl MapUi {
             let cam_frame = if show_ccd && indi_is_connected {
                 || -> anyhow::Result<CameraFrame> {
                     let options = self.options.read().unwrap();
-                    let cam_name = &options.cam.device.name;
-                    let cam_ccd_prop = &options.cam.device.prop;
+                    let Some(device) = &options.cam.device else { anyhow::bail!("Camera is not selected"); };
+                    let cam_name = &device.name;
+                    let cam_ccd_prop = &device.prop;
                     let cam_ccd = indi::CamCcd::from_ccd_prop_name(cam_ccd_prop);
                     if options.telescope.focal_len <= 0.1 {
                         anyhow::bail!("Wrong telescope focal lenght");
                     }
                     let (sensor_width, sensor_height) = self.indi.camera_get_max_frame_size(&cam_name, cam_ccd)?;
-                    let (pixel_width_um, pixel_height_um) = self.indi.camera_get_pixel_size_um(&options.cam.device.name, cam_ccd)?;
+                    let (pixel_width_um, pixel_height_um) = self.indi.camera_get_pixel_size_um(&cam_name, cam_ccd)?;
                     let (width_mm, height_mm) = options.cam.calc_active_zone_mm(
                         sensor_width, sensor_height,
                         pixel_width_um, pixel_height_um

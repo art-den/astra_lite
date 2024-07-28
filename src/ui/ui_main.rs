@@ -1,6 +1,6 @@
 use std::{
     sync::{Arc, RwLock},
-    rc::{Rc, Weak},
+    rc::Rc,
     cell::{RefCell, Cell},
     time::Duration,
     path::PathBuf,
@@ -43,18 +43,18 @@ pub fn init_ui(
 
     gtk_utils::exec_and_show_error(&window, || {
         let mut opts = options.write().unwrap();
-        load_json_from_config_file::<Options>(&mut opts, MainGui::OPTIONS_FN)?;
+        load_json_from_config_file::<Options>(&mut opts, MainUi::OPTIONS_FN)?;
         opts.raw_frames.check()?;
         opts.live.check()?;
         Ok(())
     });
 
-    let mut main_options = MainOptions::default();
+    let mut main_options = MainUiOptions::default();
     gtk_utils::exec_and_show_error(&window, || {
-        load_json_from_config_file(&mut main_options, MainGui::CONF_FN)
+        load_json_from_config_file(&mut main_options, MainUi::CONF_FN)
     });
 
-    let data = Rc::new(MainGui {
+    let data = Rc::new(MainUi {
         logs_dir:       logs_dir.clone(),
         core:           Arc::clone(core),
         options:        Arc::clone(options),
@@ -64,6 +64,9 @@ pub fn init_ui(
         window:         window.clone(),
         builder:        builder.clone(),
         close_win_flag: Cell::new(false),
+        conn_string:    RefCell::new(String::new()),
+        dev_string:     RefCell::new(String::new()),
+        perf_string:    RefCell::new(String::new()),
         self_:          RefCell::new(None), // used to drop MainData in window's delete_event
     });
 
@@ -84,17 +87,17 @@ pub fn init_ui(
                 data.window.close();
                 return glib::ControlFlow::Break;
             }
-            data.exec_main_gui_handlers(MainUiEvent::Timer);
+            data.exec_main_ui_handlers(MainUiEvent::Timer);
             glib::ControlFlow::Continue
         }
     ));
 
     let excl = Rc::new(ExclusiveCaller::new());
-    let gui = Rc::new(MainUi::new(&data));
     let mut handlers = data.handlers.borrow_mut();
-    super::ui_hardware::init_ui(app, &builder, &gui, options, core, indi, &mut handlers);
-    super::ui_camera::init_ui(app, &builder, &gui, options, core, indi, &excl, &mut handlers);
-    super::ui_skymap::init_ui(app, &builder, &gui, &options, indi, &excl, &mut handlers);
+    super::ui_hardware::init_ui(app, &builder, &data, options, core, indi, &mut handlers);
+    super::ui_camera::init_ui(app, &builder, &data, options, core, indi, &excl, &mut handlers);
+    super::ui_focuser::init_ui(app, &builder, &data, options, core, indi, &excl, &mut handlers);
+    super::ui_skymap::init_ui(app, &builder, &data, &options, indi, &excl, &mut handlers);
 
     // show common options
     excl.exec(|| {
@@ -152,7 +155,7 @@ pub fn init_ui(
     let btn_fullscreen = builder.object::<gtk::ToggleButton>("btn_fullscreen").unwrap();
     btn_fullscreen.set_sensitive(false);
     btn_fullscreen.connect_active_notify(clone!(@weak data => move |btn| {
-        data.exec_main_gui_handlers(MainUiEvent::FullScreen(btn.is_active()));
+        data.exec_main_ui_handlers(MainUiEvent::FullScreen(btn.is_active()));
     }));
 
     let nb_main = builder.object::<gtk::Notebook>("nb_main").unwrap();
@@ -163,7 +166,7 @@ pub fn init_ui(
         };
         btn_fullscreen.set_sensitive(enable_fullscreen);
         let tab = TabPage::from_tab_index(page);
-        data.exec_main_gui_handlers(MainUiEvent::TabPageChanged(tab.clone()));
+        data.exec_main_ui_handlers(MainUiEvent::TabPageChanged(tab.clone()));
     }));
 
     window.connect_delete_event(
@@ -172,19 +175,24 @@ pub fn init_ui(
             let res = data.handler_close_window();
             if res == glib::Propagation::Proceed {
                 gtk::main_iteration_do(true);
+
+                let mut opts = data.options.write().unwrap();
+                opts.read_all(&builder);
+                drop(opts);
+
                 *data.self_.borrow_mut() = None;
             }
             res
         })
     );
 
-    gtk_utils::connect_action(&window, &data, "stop",             MainGui::handler_action_stop);
-    gtk_utils::connect_action(&window, &data, "continue",         MainGui::handler_action_continue);
-    gtk_utils::connect_action(&window, &data, "open_logs_folder", MainGui::handler_action_open_logs_folder);
+    gtk_utils::connect_action(&window, &data, "stop",             MainUi::handler_action_stop);
+    gtk_utils::connect_action(&window, &data, "continue",         MainUi::handler_action_continue);
+    gtk_utils::connect_action(&window, &data, "open_logs_folder", MainUi::handler_action_open_logs_folder);
 
     data.correct_widgets_props();
     data.connect_state_events();
-    gui.update_window_title();
+    data.update_window_title();
 }
 
 pub const TIMER_PERIOD_MS: u64 = 250;
@@ -257,14 +265,14 @@ enum Theme {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
-struct MainOptions {
+struct MainUiOptions {
     win_width:     i32,
     win_height:    i32,
     win_maximized: bool,
     theme:         Theme,
 }
 
-impl Default for MainOptions {
+impl Default for MainUiOptions {
     fn default() -> Self {
         Self {
             win_width:     -1,
@@ -275,26 +283,29 @@ impl Default for MainOptions {
     }
 }
 
-struct MainGui {
+pub struct MainUi {
     logs_dir:       PathBuf,
     options:        Arc<RwLock<Options>>,
-    main_options:   RefCell<MainOptions>,
+    main_options:   RefCell<MainUiOptions>,
     handlers:       RefCell<MainUiHandlers>,
     progress:       RefCell<Option<Progress>>,
     core:           Arc<Core>,
     builder:        gtk::Builder,
     window:         gtk::ApplicationWindow,
     close_win_flag: Cell<bool>,
-    self_:          RefCell<Option<Rc<MainGui>>>
+    conn_string:    RefCell<String>,
+    dev_string:     RefCell<String>,
+    perf_string:    RefCell<String>,
+    self_:          RefCell<Option<Rc<MainUi>>>
 }
 
-impl Drop for MainGui {
+impl Drop for MainUi {
     fn drop(&mut self) {
-        log::info!("MainData dropped");
+        log::info!("MainUi dropped");
     }
 }
 
-impl MainGui {
+impl MainUi {
     const CONF_FN: &'static str = "ui_common";
     const OPTIONS_FN: &'static str = "options";
 
@@ -352,10 +363,12 @@ impl MainGui {
         self.read_options_from_widgets();
 
         let options = self.main_options.borrow();
-        _ = save_json_to_config::<MainOptions>(&options, MainGui::CONF_FN);
+        _ = save_json_to_config::<MainUiOptions>(&options, MainUi::CONF_FN);
         drop(options);
 
-        self.exec_main_gui_handlers(MainUiEvent::ProgramClosing);
+        self.exec_main_ui_handlers(MainUiEvent::ProgramClosing);
+
+        self.handlers.borrow_mut().clear();
 
         glib::Propagation::Proceed
     }
@@ -455,13 +468,13 @@ impl MainGui {
 
     fn handler_action_continue(self: &Rc<Self>) {
         gtk_utils::exec_and_show_error(&self.window, || {
-            self.exec_main_gui_handlers(MainUiEvent::BeforeModeContinued);
+            self.exec_main_ui_handlers(MainUiEvent::BeforeModeContinued);
             self.core.continue_prev_mode()?;
             Ok(())
         });
     }
 
-    fn exec_main_gui_handlers(self: &Rc<Self>, event: MainUiEvent) {
+    fn exec_main_ui_handlers(self: &Rc<Self>, event: MainUiEvent) {
         for fs_handler in self.handlers.borrow().iter() {
             fs_handler(event.clone());
         }
@@ -480,26 +493,6 @@ impl MainGui {
             Ok(())
         });
     }
-}
-
-pub struct MainUi {
-    main_gui:    Weak<MainGui>,
-    conn_string: RefCell<String>,
-    dev_string:  RefCell<String>,
-    perf_string: RefCell<String>,
-    nb_main:     gtk::Notebook,
-}
-
-impl MainUi {
-    fn new(main_gui: &Rc<MainGui>) -> Self {
-        Self {
-            main_gui:    Rc::downgrade(&main_gui),
-            conn_string: RefCell::new(String::new()),
-            dev_string:  RefCell::new(String::new()),
-            perf_string: RefCell::new(String::new()),
-            nb_main:     main_gui.builder.object("nb_main").unwrap(),
-        }
-    }
 
     pub fn set_dev_list_and_conn_status(&self, dev_list: String, conn_status: String) {
         *self.dev_string.borrow_mut() = dev_list;
@@ -513,8 +506,6 @@ impl MainUi {
     }
 
     fn update_window_title(&self) {
-        let Some(main_gui) = self.main_gui.upgrade() else { return; };
-
         let mut title = "AstraLite (${arch} ver. ${ver})  --  Deepsky astrophotography and livestacking".to_string();
         title = title.replace("${arch}", std::env::consts::ARCH);
         title = title.replace("${ver}",  env!("CARGO_PKG_VERSION"));
@@ -532,17 +523,17 @@ impl MainUi {
         append_if_not_empty(&self.conn_string.borrow());
         append_if_not_empty(&self.perf_string.borrow());
 
-        let window = main_gui.builder.object::<gtk::ApplicationWindow>("window").unwrap();
-        window.set_title(&title)
+        self.window.set_title(&title)
     }
 
-    pub fn exec_before_disconnect_handlers(&self) {
-        let Some(main_gui) = self.main_gui.upgrade() else { return; };
-        main_gui.exec_main_gui_handlers(MainUiEvent::BeforeDisconnect);
+    pub fn exec_before_disconnect_handlers(self: &Rc<Self>) {
+        self.exec_main_ui_handlers(MainUiEvent::BeforeDisconnect);
     }
 
     pub fn current_tab_page(&self) -> TabPage {
-        let page_index = self.nb_main.current_page().unwrap_or_default();
+        let nb_main = self.builder.object::<gtk::Notebook>("nb_main").unwrap();
+        let page_index = nb_main.current_page().unwrap_or_default();
         TabPage::from_tab_index(page_index)
     }
 }
+

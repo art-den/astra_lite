@@ -5,6 +5,25 @@ use super::gtk_utils;
 impl Options {
     /* read */
 
+    pub fn read_all(&mut self, builder: &gtk::Builder) {
+        self.read_indi(builder);
+        self.read_telescope(builder);
+        self.read_guiding(builder);
+        self.read_cam(builder);
+        self.read_cam_ctrl(builder);
+        self.read_cam_frame(builder);
+        self.read_calibration(builder);
+        self.read_cam_ctrl(builder);
+        self.read_cam_frame(builder);
+        self.read_calibration(builder);
+        self.read_raw(builder);
+        self.read_live_stacking(builder);
+        self.read_frame_quality(builder);
+        self.read_preview(builder);
+        self.read_focuser(builder);
+        self.read_mount(builder);
+    }
+
     pub fn read_indi(&mut self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
         self.indi.mount    = ui.prop_string("cb_mount_drivers.active-id");
@@ -35,7 +54,7 @@ impl Options {
     pub fn read_cam(&mut self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
         self.cam.live_view = ui.prop_bool("chb_shots_cont.active");
-        self.cam.device    = ui.prop_string("cb_camera_list.active-id").map(|str| DeviceAndProp::new(&str)).unwrap_or_default();
+        self.cam.device    = ui.prop_string("cb_camera_list.active-id").map(|str| DeviceAndProp::new(&str));
     }
 
     pub fn read_cam_ctrl(&mut self, builder: &gtk::Builder) {
@@ -169,11 +188,16 @@ impl Options {
         ui.set_prop_bool("chb_shots_cont.active", self.cam.live_view);
 
         let cb_camera_list = builder.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
-        let device_name = self.cam.device.to_string();
-        cb_camera_list.set_active_id(Some(&device_name));
-        if cb_camera_list.active_id().map(|v| v.as_str() != &device_name).unwrap_or(true) {
-            cb_camera_list.append(Some(&device_name), &device_name);
-            cb_camera_list.set_active_id(Some(&device_name));
+
+        if let Some(device) = &self.cam.device {
+            let id = device.to_string();
+            cb_camera_list.set_active_id(Some(&id));
+            if cb_camera_list.active_id().map(|v| v.as_str() != &id).unwrap_or(true) {
+                cb_camera_list.append(Some(&id), &id);
+                cb_camera_list.set_active_id(Some(&id));
+            }
+        } else {
+            cb_camera_list.set_active_id(None);
         }
     }
 

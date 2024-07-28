@@ -80,11 +80,14 @@ impl FocusingMode {
         options:            &Arc<RwLock<Options>>,
         img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
         next_mode:          Option<Box<dyn Mode + Sync + Send>>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let options = options.read().unwrap();
+        let Some(cam_device) = &options.cam.device else {
+            anyhow::bail!("Camera is not selected");
+        };
         let mut frame = options.cam.frame.clone();
         frame.exp_main = options.focuser.exposure;
-        FocusingMode {
+        Ok(FocusingMode {
             indi:               Arc::clone(indi),
             state:              FocusingState::Undefined,
             options:            options.focuser.clone(),
@@ -96,9 +99,9 @@ impl FocusingMode {
             stage:              FocusingStage::Undef,
             try_cnt:            0,
             next_mode,
-            camera:             options.cam.device.clone(),
+            camera:             cam_device.clone(),
             img_proc_stop_flag: Arc::clone(img_proc_stop_flag),
-        }
+        })
     }
 
     fn start_stage(

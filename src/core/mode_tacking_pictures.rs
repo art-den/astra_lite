@@ -95,8 +95,11 @@ impl TackingPicturesMode {
         cam_mode: CameraMode,
         options:  &Arc<RwLock<Options>>,
         img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
+        let Some(cam_device) = &opts.cam.device else {
+            anyhow::bail!("Camera is not selected");
+        };
         let progress = match cam_mode {
             CameraMode::SavingRawFrames => {
                 if opts.raw_frames.use_cnt && opts.raw_frames.frame_cnt != 0 {
@@ -107,10 +110,10 @@ impl TackingPicturesMode {
             },
             _ => None,
         };
-        Self {
+        Ok(Self {
             cam_mode,
             state:           FramesModeState::Common,
-            device:          opts.cam.device.clone(),
+            device:          cam_device.clone(),
             mount_device:    opts.mount.device.to_string(),
             fn_gen:          Arc::new(Mutex::new(SeqFileNameGen::new())),
             indi:            Arc::clone(indi),
@@ -131,7 +134,7 @@ impl TackingPicturesMode {
             master_file:     PathBuf::new(),
             skip_frame_done: false,
             img_proc_stop_flag: Arc::clone(img_proc_stop_flag),
-        }
+        })
     }
 
     pub fn set_guider(

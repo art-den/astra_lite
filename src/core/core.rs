@@ -611,7 +611,7 @@ impl Core {
             CameraMode::SingleShot,
             &self.options,
             &self.img_proc_stop_flag,
-        );
+        )?;
         mode.start()?;
         let mut mode_data = self.mode_data.write().unwrap();
         mode_data.mode = Box::new(mode);
@@ -631,7 +631,7 @@ impl Core {
             CameraMode::LiveView,
             &self.options,
             &self.img_proc_stop_flag,
-        );
+        )?;
         mode.start()?;
         let mut mode_data = self.mode_data.write().unwrap();
         mode_data.mode = Box::new(mode);
@@ -651,7 +651,7 @@ impl Core {
             CameraMode::SavingRawFrames,
             &self.options,
             &self.img_proc_stop_flag,
-        );
+        )?;
         mode.set_guider(&self.ext_guider);
         mode.set_ref_stars(&self.ref_stars);
         mode.start()?;
@@ -674,7 +674,7 @@ impl Core {
             CameraMode::LiveStacking,
             &self.options,
             &self.img_proc_stop_flag,
-        );
+        )?;
         mode.set_guider(&self.ext_guider);
         mode.set_ref_stars(&self.ref_stars);
         mode.set_live_stacking(&self.live_stacking);
@@ -699,7 +699,7 @@ impl Core {
             &self.options,
             &self.img_proc_stop_flag,
             None
-        );
+        )?;
         mode.start()?;
         mode_data.mode = Box::new(mode);
         let progress = mode_data.mode.progress();
@@ -718,7 +718,7 @@ impl Core {
             &self.options,
             &self.img_proc_stop_flag,
             None
-        );
+        )?;
         mode.start()?;
         mode_data.mode = Box::new(mode);
         let progress = mode_data.mode.progress();
@@ -821,7 +821,7 @@ impl Core {
                     options,
                     img_proc_stop_flag,
                     Some(prev_mode)
-                );
+                )?;
                 mode.start()?;
                 mode_data.mode = Box::new(mode);
                 mode_changed = true;
@@ -835,7 +835,7 @@ impl Core {
                     options,
                     img_proc_stop_flag,
                     Some(prev_mode)
-                );
+                )?;
                 mode.start()?;
                 mode_data.mode = Box::new(mode);
                 mode_changed = true;
