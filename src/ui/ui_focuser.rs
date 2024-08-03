@@ -56,7 +56,12 @@ pub fn init_ui(
     data.correct_widgets_props();
 
     handlers.push(Box::new(clone!(@weak data => move |event| {
-        data.handler_main_ui_event(event);
+        match event {
+            MainUiEvent::ProgramClosing =>
+                data.handler_closing(),
+            _ => {},
+        }
+
     })));
 
     data.delayed_actions.set_event_handler(
@@ -117,14 +122,6 @@ impl Default for UiOptions {
 impl FocuserUi {
     const CONF_FN: &'static str = "ui_focuser";
 
-    fn handler_main_ui_event(self: &Rc<Self>, event: MainUiEvent) {
-        match event {
-            MainUiEvent::ProgramClosing =>
-                self.handler_closing(),
-            _ => {},
-        }
-    }
-
     fn connect_indi_and_core_events(self: &Rc<Self>) {
         let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
         let sender = main_thread_sender.clone();
@@ -145,15 +142,14 @@ impl FocuserUi {
         }));
     }
 
-
     fn process_event_in_main_thread(self: &Rc<Self>, event: MainThreadEvent) {
         match event {
             MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) =>
-                self.process_conn_state_event(conn_state),
+                self.process_indi_conn_state_event(conn_state),
             MainThreadEvent::Indi(indi::Event::PropChange(event_data)) => {
                 match &event_data.change {
                     indi::PropChange::New(value) =>
-                        self.process_simple_indi_prop_change_event(
+                        self.process_indi_prop_change(
                             &event_data.device_name,
                             &event_data.prop_name,
                             &value.elem_name,
@@ -163,7 +159,7 @@ impl FocuserUi {
                             &value.prop_value
                         ),
                     indi::PropChange::Change{ value, prev_state, new_state } =>
-                        self.process_simple_indi_prop_change_event(
+                        self.process_indi_prop_change(
                             &event_data.device_name,
                             &event_data.prop_name,
                             &value.elem_name,
@@ -200,7 +196,7 @@ impl FocuserUi {
         }
     }
 
-    fn process_simple_indi_prop_change_event(
+    fn process_indi_prop_change(
         self:         &Rc<Self>,
         _device_name: &str,
         prop_name:    &str,
@@ -241,7 +237,7 @@ impl FocuserUi {
         }
     }
 
-    fn process_conn_state_event(
+    fn process_indi_conn_state_event(
         self:       &Rc<Self>,
         conn_state: indi::ConnState
     ) {
@@ -282,6 +278,8 @@ impl FocuserUi {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let mode_data = self.core.mode_data();
         let mode_type = mode_data.mode.get_type();
+        drop(mode_data);
+
         let waiting = mode_type == ModeType::Waiting;
         let single_shot = mode_type == ModeType::SingleShot;
         let focusing = mode_type == ModeType::Focusing;
@@ -293,7 +291,7 @@ impl FocuserUi {
             .unwrap_or(false);
 
         ui.enable_widgets(false, &[
-            ("grd_foc",       device_enabled && (waiting || focusing)),
+            ("grd_foc",       device_enabled && (waiting || focusing || single_shot)),
             ("spb_foc_temp",  ui.prop_bool("chb_foc_temp.active")),
             ("cb_foc_fwhm",   ui.prop_bool("chb_foc_fwhm.active")),
             ("cb_foc_period", ui.prop_bool("chb_foc_period.active")),
@@ -313,6 +311,9 @@ impl FocuserUi {
         _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
         drop(ui_options);
 
+        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
+            self.indi.unsubscribe(indi_conn);
+        }
 
         *self.self_.borrow_mut() = None;
     }

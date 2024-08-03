@@ -49,16 +49,16 @@ pub fn init_ui(
         Ok(())
     });
 
-    let mut main_options = MainUiOptions::default();
+    let mut ui_options = UiOptions::default();
     gtk_utils::exec_and_show_error(&window, || {
-        load_json_from_config_file(&mut main_options, MainUi::CONF_FN)
+        load_json_from_config_file(&mut ui_options, MainUi::CONF_FN)
     });
 
     let data = Rc::new(MainUi {
         logs_dir:       logs_dir.clone(),
         core:           Arc::clone(core),
         options:        Arc::clone(options),
-        main_options:   RefCell::new(main_options),
+        ui_options:     RefCell::new(ui_options),
         handlers:       RefCell::new(Vec::new()),
         progress:       RefCell::new(None),
         window:         window.clone(),
@@ -98,6 +98,7 @@ pub fn init_ui(
     super::ui_camera::init_ui(app, &builder, &data, options, core, indi, &excl, &mut handlers);
     super::ui_focuser::init_ui(app, &builder, &data, options, core, indi, &excl, &mut handlers);
     super::ui_skymap::init_ui(app, &builder, &data, &options, indi, &excl, &mut handlers);
+    super::ui_dithering::init_ui(app, &builder, &data, options, core, indi, &excl, &mut handlers);
 
     // show common options
     excl.exec(|| {
@@ -109,7 +110,7 @@ pub fn init_ui(
     let mi_dark_theme = builder.object::<gtk::RadioMenuItem>("mi_dark_theme").unwrap();
     mi_dark_theme.connect_activate(clone!(@weak data => move |mi| {
         if mi.is_active() {
-            data.main_options.borrow_mut().theme = Theme::Dark;
+            data.ui_options.borrow_mut().theme = Theme::Dark;
             data.apply_theme();
         }
     }));
@@ -117,7 +118,7 @@ pub fn init_ui(
     let mi_light_theme = builder.object::<gtk::RadioMenuItem>("mi_light_theme").unwrap();
     mi_light_theme.connect_activate(clone!(@weak data => move |mi| {
         if mi.is_active() {
-            data.main_options.borrow_mut().theme = Theme::Light;
+            data.ui_options.borrow_mut().theme = Theme::Light;
             data.apply_theme();
         }
     }));
@@ -265,14 +266,14 @@ enum Theme {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
-struct MainUiOptions {
+struct UiOptions {
     win_width:     i32,
     win_height:    i32,
     win_maximized: bool,
     theme:         Theme,
 }
 
-impl Default for MainUiOptions {
+impl Default for UiOptions {
     fn default() -> Self {
         Self {
             win_width:     -1,
@@ -286,7 +287,7 @@ impl Default for MainUiOptions {
 pub struct MainUi {
     logs_dir:       PathBuf,
     options:        Arc<RwLock<Options>>,
-    main_options:   RefCell<MainUiOptions>,
+    ui_options:     RefCell<UiOptions>,
     handlers:       RefCell<MainUiHandlers>,
     progress:       RefCell<Option<Progress>>,
     core:           Arc<Core>,
@@ -362,8 +363,8 @@ impl MainUi {
 
         self.read_options_from_widgets();
 
-        let options = self.main_options.borrow();
-        _ = save_json_to_config::<MainUiOptions>(&options, MainUi::CONF_FN);
+        let options = self.ui_options.borrow();
+        _ = save_json_to_config::<UiOptions>(&options, MainUi::CONF_FN);
         drop(options);
 
         self.exec_main_ui_handlers(MainUiEvent::ProgramClosing);
@@ -374,7 +375,7 @@ impl MainUi {
     }
 
     fn apply_options(self: &Rc<Self>) {
-        let options = self.main_options.borrow();
+        let options = self.ui_options.borrow();
 
         if options.win_width != -1 && options.win_height != -1 {
             self.window.resize(options.win_width, options.win_height);
@@ -394,7 +395,7 @@ impl MainUi {
 
     fn apply_theme(self: &Rc<Self>) {
         let gtk_settings = gtk::Settings::default().unwrap();
-        let options = self.main_options.borrow();
+        let options = self.ui_options.borrow();
         gtk_settings.set_property(
             "gtk-application-prefer-dark-theme",
             options.theme == Theme::Dark
@@ -402,7 +403,7 @@ impl MainUi {
     }
 
     fn read_options_from_widgets(self: &Rc<Self>) {
-        let mut options = self.main_options.borrow_mut();
+        let mut options = self.ui_options.borrow_mut();
         let (width, height) = self.window.size();
         options.win_width = width;
         options.win_height = height;

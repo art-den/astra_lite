@@ -13,9 +13,6 @@ impl Options {
         self.read_cam_ctrl(builder);
         self.read_cam_frame(builder);
         self.read_calibration(builder);
-        self.read_cam_ctrl(builder);
-        self.read_cam_frame(builder);
-        self.read_calibration(builder);
         self.read_raw(builder);
         self.read_live_stacking(builder);
         self.read_frame_quality(builder);

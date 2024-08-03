@@ -52,16 +52,15 @@ pub fn init_ui(
 
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
-    data.init_camera_widgets();
-    data.connect_indi_and_core_events();
-    data.connect_widgets_events_before_show_options();
-    data.init_dithering_widgets();
+    data.init_widgets();
     data.show_ui_options();
+    data.connect_indi_and_core_events();
+    data.connect_widgets_events();
+
     data.show_total_raw_time();
     data.update_light_history_table();
-    data.connect_widgets_events();
+
     data.connect_img_mouse_scroll_events();
-    data.connect_dithering_widgets_events();
     data.connect_mount_widgets_events();
 
     handlers.push(Box::new(clone!(@weak data => move |event| {
@@ -113,7 +112,6 @@ struct UiOptions {
     calibr_exp:     bool,
     raw_frames_exp: bool,
     live_exp:       bool,
-    dith_exp:       bool,
     quality_exp:    bool,
     mount_exp:      bool,
     all_cam_opts:   Vec<StoredCamOptions>,
@@ -133,7 +131,6 @@ impl Default for UiOptions {
             calibr_exp:     true,
             raw_frames_exp: true,
             live_exp:       false,
-            dith_exp:       false,
             quality_exp:    true,
             mount_exp:      false,
             all_cam_opts:   Vec::new(),
@@ -211,7 +208,7 @@ impl CameraUi {
         }
     }
 
-    fn init_camera_widgets(self: &Rc<Self>) {
+    fn init_widgets(self: &Rc<Self>) {
         let spb_temp = self.builder.object::<gtk::SpinButton>("spb_temp").unwrap();
         spb_temp.set_range(-1000.0, 1000.0);
 
@@ -265,11 +262,6 @@ impl CameraUi {
         spb_max_oval.set_digits(1);
         spb_max_oval.set_increments(0.1, 1.0);
 
-        let sb_dith_dist = self.builder.object::<gtk::SpinButton>("sb_dith_dist").unwrap();
-        sb_dith_dist.set_range(1.0, 200.0);
-        sb_dith_dist.set_digits(0);
-        sb_dith_dist.set_increments(1.0, 10.0);
-
         let l_temp_value = self.builder.object::<gtk::Label>("l_temp_value").unwrap();
         l_temp_value.set_text("");
 
@@ -307,11 +299,11 @@ impl CameraUi {
     fn process_event_in_main_thread(self: &Rc<Self>, event: MainThreadEvent) {
         match event {
             MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) =>
-                self.process_conn_state_event(conn_state),
+                self.process_indi_conn_state_event(conn_state),
             MainThreadEvent::Indi(indi::Event::PropChange(event_data)) => {
                 match &event_data.change {
                     indi::PropChange::New(value) =>
-                        self.process_simple_indi_prop_change_event(
+                        self.process_indi_prop_change(
                             &event_data.device_name,
                             &event_data.prop_name,
                             &value.elem_name,
@@ -321,7 +313,7 @@ impl CameraUi {
                             &value.prop_value
                         ),
                     indi::PropChange::Change{ value, prev_state, new_state } =>
-                        self.process_simple_indi_prop_change_event(
+                        self.process_indi_prop_change(
                             &event_data.device_name,
                             &event_data.prop_name,
                             &value.elem_name,
@@ -371,15 +363,6 @@ impl CameraUi {
         }
     }
 
-    fn connect_widgets_events_before_show_options(self: &Rc<Self>) {
-        let sw_preview_img = self.builder.object::<gtk::Widget>("sw_preview_img").unwrap();
-        sw_preview_img.connect_size_allocate(clone!(@weak self as self_ => move |_, rect| {
-            let mut options = self_.options.write().unwrap();
-            options.preview.widget_width = rect.width() as usize;
-            options.preview.widget_height = rect.height() as usize;
-        }));
-    }
-
     fn connect_widgets_events(self: &Rc<Self>) {
         let bldr = &self.builder;
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
@@ -392,8 +375,6 @@ impl CameraUi {
         gtk_utils::connect_action(&self.window, self, "start_live_stacking",    Self::handler_action_start_live_stacking);
         gtk_utils::connect_action(&self.window, self, "stop_live_stacking",     Self::handler_action_stop_live_stacking);
         gtk_utils::connect_action(&self.window, self, "continue_live_stacking", Self::handler_action_continue_live_stacking);
-        gtk_utils::connect_action(&self.window, self, "start_dither_calibr",    Self::handler_action_start_dither_calibr);
-        gtk_utils::connect_action(&self.window, self, "stop_dither_calibr",     Self::handler_action_stop_dither_calibr);
         gtk_utils::connect_action(&self.window, self, "load_image",             Self::handler_action_open_image);
         gtk_utils::connect_action(&self.window, self, "save_image_preview",     Self::handler_action_save_image_preview);
         gtk_utils::connect_action(&self.window, self, "save_image_linear",      Self::handler_action_save_image_linear);
@@ -568,6 +549,13 @@ impl CameraUi {
                 self_.show_histogram_stat();
                 self_.show_image_info();
             });
+        }));
+
+        let sw_preview_img = self.builder.object::<gtk::Widget>("sw_preview_img").unwrap();
+        sw_preview_img.connect_size_allocate(clone!(@weak self as self_ => move |_, rect| {
+            let mut options = self_.options.write().unwrap();
+            options.preview.widget_width = rect.width() as usize;
+            options.preview.widget_height = rect.height() as usize;
         }));
 
         let cb_preview_scale = bldr.object::<gtk::ComboBoxText>("cb_preview_scale").unwrap();
@@ -897,7 +885,6 @@ impl CameraUi {
         ui.set_prop_bool("exp_calibr.expanded",     options.calibr_exp);
         ui.set_prop_bool("exp_raw_frames.expanded", options.raw_frames_exp);
         ui.set_prop_bool("exp_live.expanded",       options.live_exp);
-        ui.set_prop_bool("exp_dith.expanded",       options.dith_exp);
         ui.set_prop_bool("exp_quality.expanded",    options.quality_exp);
         ui.set_prop_bool("exp_mount.expanded",      options.mount_exp);
         ui.set_prop_bool("ch_hist_logy.active",     options.hist_log_y);
@@ -906,14 +893,7 @@ impl CameraUi {
 
     fn get_options_from_widgets(self: &Rc<Self>) {
         let mut options = self.options.write().unwrap();
-        options.read_cam(&self.builder);
-        options.read_cam_ctrl(&self.builder);
-        options.read_cam_frame(&self.builder);
-        options.read_calibration(&self.builder);
-        options.read_raw(&self.builder);
-        options.read_live_stacking(&self.builder);
-        options.read_frame_quality(&self.builder);
-        options.read_preview(&self.builder);
+        options.read_all(&self.builder);
     }
 
     fn get_ui_options_from_widgets(self: &Rc<Self>) {
@@ -935,7 +915,6 @@ impl CameraUi {
         options.calibr_exp     = ui.prop_bool("exp_calibr.expanded");
         options.raw_frames_exp = ui.prop_bool("exp_raw_frames.expanded");
         options.live_exp       = ui.prop_bool("exp_live.expanded");
-        options.dith_exp       = ui.prop_bool("exp_dith.expanded");
         options.quality_exp    = ui.prop_bool("exp_quality.expanded");
         options.mount_exp      = ui.prop_bool("exp_mount.expanded");
         options.hist_log_y     = ui.prop_bool("ch_hist_logy.active");
@@ -1106,13 +1085,7 @@ impl CameraUi {
                 .as_ref()
                 .map(|mode| mode.get_type() == ModeType::LiveStacking)
                 .unwrap_or(false);
-            let dither_calibr = mode_type == ModeType::DitherCalibr;
             drop(mode_data);
-
-            let dithering_sensitive =
-                indi_connected &&
-                !mount.is_empty() &&
-                waiting;
 
             let mnt_active = self.indi.is_device_enabled(&mount).unwrap_or(false);
 
@@ -1133,14 +1106,6 @@ impl CameraUi {
             };
             ui.set_prop_str("btn_start_save_raw.label", Some(save_raw_btn_cap));
 
-            let guiding_mode = options.guiding.mode.clone();
-            let guiding_info_cap = match guiding_mode {
-                GuidingMode::MainCamera => "By main camera",
-                GuidingMode::Phd2 => "By PHD2 program",
-            };
-            ui.set_prop_str("l_guide_mode.label", Some(guiding_info_cap));
-            let can_guide_by_main_cam = guiding_mode == GuidingMode::MainCamera;
-
             let cam_active = self.indi
                 .is_device_enabled(camera.as_ref().map(|c| c.name.as_str()).unwrap_or(""))
                 .unwrap_or(false);
@@ -1149,7 +1114,7 @@ impl CameraUi {
             let can_change_mode = waiting || single_shot;
             let can_change_frame_opts = waiting || liveview_active;
             let can_change_live_stacking_opts = waiting || liveview_active;
-            let can_change_cal_ops = !live_active && !dither_calibr;
+            let can_change_cal_ops = !liveview_active;
             let cam_sensitive =
                 indi_connected &&
                 cam_active &&
@@ -1166,9 +1131,6 @@ impl CameraUi {
                 ("start_live_stacking",    exposure_supported && !live_active && can_change_mode && frame_mode_is_lights),
                 ("stop_live_stacking",     live_active),
                 ("continue_live_stacking", livestacking_paused && can_change_mode),
-
-                ("start_dither_calibr",    exposure_supported && !dither_calibr && can_change_mode && can_guide_by_main_cam),
-                ("stop_dither_calibr",     dither_calibr),
             ]);
 
             ui.show_widgets(&[
@@ -1211,19 +1173,13 @@ impl CameraUi {
                 ("grd_live_stack",     cam_sensitive),
                 ("grd_cam_calibr",     cam_sensitive),
                 ("bx_light_qual",      cam_sensitive),
-                ("grd_dither",         dithering_sensitive && cam_sensitive),
+
                 ("bx_simple_mount",    mount_ctrl_sensitive),
 
                 ("spb_guid_max_err",   ui.prop_bool("chb_guid_enabled.active")),
 
                 ("l_delay",            liveview_active),
                 ("spb_delay",          liveview_active),
-
-                ("l_hdr_guid_main_cam", can_guide_by_main_cam),
-                ("chb_guid_enabled",    can_guide_by_main_cam),
-                ("spb_guid_max_err",    can_guide_by_main_cam),
-                ("l_mnt_cal_exp",       can_guide_by_main_cam),
-                ("spb_mnt_cal_exp",     can_guide_by_main_cam),
             ]);
 
             Ok(())
@@ -1826,7 +1782,7 @@ impl CameraUi {
         }
     }
 
-    fn process_conn_state_event(
+    fn process_indi_conn_state_event(
         self:       &Rc<Self>,
         conn_state: indi::ConnState
     ) {
@@ -1851,14 +1807,14 @@ impl CameraUi {
         }
     }
 
-    fn process_simple_indi_prop_change_event(
+    fn process_indi_prop_change(
         self:        &Rc<Self>,
         device_name: &str,
         prop_name:   &str,
         elem_name:   &str,
         new_prop:    bool,
-        _prev_state:  Option<&indi::PropState>,
-        _new_state:   Option<&indi::PropState>,
+        _prev_state: Option<&indi::PropState>,
+        _new_state:  Option<&indi::PropState>,
         value:       &indi::PropValue,
     ) {
         if indi::Connection::camera_is_heater_property(prop_name) && new_prop {
@@ -2263,44 +2219,6 @@ impl CameraUi {
         );
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         ui.set_prop_str("l_raw_time_info.label", Some(&text));
-    }
-
-    ///////////////////////////////////////////////////////////////////////////////
-
-
-    ///////////////////////////////////////////////////////////////////////////////
-
-    fn init_dithering_widgets(self: &Rc<Self>) {
-        let spb_guid_max_err = self.builder.object::<gtk::SpinButton>("spb_guid_max_err").unwrap();
-        spb_guid_max_err.set_range(3.0, 50.0);
-        spb_guid_max_err.set_digits(0);
-        spb_guid_max_err.set_increments(1.0, 10.0);
-
-        let spb_mnt_cal_exp = self.builder.object::<gtk::SpinButton>("spb_mnt_cal_exp").unwrap();
-        spb_mnt_cal_exp.set_range(0.5, 10.0);
-        spb_mnt_cal_exp.set_digits(1);
-        spb_mnt_cal_exp.set_increments(0.5, 5.0);
-    }
-
-    fn connect_dithering_widgets_events(self: &Rc<Self>) {
-        let chb_guid_enabled = self.builder.object::<gtk::CheckButton>("chb_guid_enabled").unwrap();
-        chb_guid_enabled.connect_active_notify(
-            clone!(@weak self as self_ => move |_| {
-                self_.correct_widgets_props();
-            })
-        );
-    }
-
-    fn handler_action_start_dither_calibr(self: &Rc<Self>) {
-        self.get_options_from_widgets();
-        gtk_utils::exec_and_show_error(&self.window, || {
-            self.core.start_mount_calibr()?;
-            Ok(())
-        });
-    }
-
-    fn handler_action_stop_dither_calibr(self: &Rc<Self>) {
-        self.core.abort_active_mode();
     }
 
     ///////////////////////////////////////////////////////////////////////////////
