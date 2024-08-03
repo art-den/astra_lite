@@ -52,13 +52,29 @@ pub fn disable_scroll_for_most_of_widgets(builder: &gtk::Builder) {
     }
 }
 
-pub fn connect_action<Fun, T>(
+pub fn connect_action_rc<Fun, T>(
     action_map: &impl IsA<gio::ActionMap>,
     data:       &Rc<T>,
     act_name:   &str,
     fun:        Fun
 ) where
     Fun: Fn(&Rc<T>) + 'static,
+    T: 'static,
+{
+    let action = gio::SimpleAction::new(act_name, None);
+    action.connect_activate(clone!(@weak data => move |_, _|
+        fun(&data);
+    ));
+    action_map.add_action(&action);
+}
+
+pub fn connect_action<Fun, T>(
+    action_map: &impl IsA<gio::ActionMap>,
+    data:       &Rc<T>,
+    act_name:   &str,
+    fun:        Fun
+) where
+    Fun: Fn(&T) + 'static,
     T: 'static,
 {
     let action = gio::SimpleAction::new(act_name, None);

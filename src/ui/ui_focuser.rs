@@ -142,7 +142,7 @@ impl FocuserUi {
         }));
     }
 
-    fn process_event_in_main_thread(self: &Rc<Self>, event: MainThreadEvent) {
+    fn process_event_in_main_thread(&self, event: MainThreadEvent) {
         match event {
             MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) =>
                 self.process_indi_conn_state_event(conn_state),
@@ -197,7 +197,7 @@ impl FocuserUi {
     }
 
     fn process_indi_prop_change(
-        self:         &Rc<Self>,
+        &self,
         _device_name: &str,
         prop_name:    &str,
         elem_name:    &str,
@@ -229,7 +229,7 @@ impl FocuserUi {
     }
 
     fn update_devices_list_and_props_by_drv_interface(
-        self:          &Rc<Self>,
+        &self,
         drv_interface: indi::DriverInterface,
     ) {
         if drv_interface.contains(indi::DriverInterface::FOCUSER) {
@@ -238,7 +238,7 @@ impl FocuserUi {
     }
 
     fn process_indi_conn_state_event(
-        self:       &Rc<Self>,
+        &self,
         conn_state: indi::ConnState
     ) {
         let update_devices_list =
@@ -252,7 +252,7 @@ impl FocuserUi {
         self.correct_widgets_props();
     }
 
-    fn init_focuser_widgets(self: &Rc<Self>) {
+    fn init_focuser_widgets(&self) {
         let spb_foc_temp = self.builder.object::<gtk::SpinButton>("spb_foc_temp").unwrap();
         spb_foc_temp.set_range(1.0, 20.0);
         spb_foc_temp.set_digits(0);
@@ -318,7 +318,7 @@ impl FocuserUi {
         *self.self_.borrow_mut() = None;
     }
 
-    fn update_devices_list(self: &Rc<Self>) {
+    fn update_devices_list(&self) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let dev_list = self.indi.get_devices_list();
         let focusers = dev_list
@@ -355,7 +355,7 @@ impl FocuserUi {
             cb_foc_list.active_id().map(|s| s.to_string()).unwrap_or_else(String::new);
     }
 
-    fn update_focuser_position_widget(self: &Rc<Self>, new_prop: bool) {
+    fn update_focuser_position_widget(&self, new_prop: bool) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let Some(foc_device) = ui.prop_string("cb_foc_list.active-id") else {
             return;
@@ -376,12 +376,12 @@ impl FocuserUi {
         }
     }
 
-    fn update_focuser_position_after_focusing(self: &Rc<Self>, pos: f64) {
+    fn update_focuser_position_after_focusing(&self, pos: f64) {
         let spb_foc_val = self.builder.object::<gtk::SpinButton>("spb_foc_val").unwrap();
         spb_foc_val.set_value(pos);
     }
 
-    fn handler_delayed_action(self: &Rc<Self>, action: &DelayedActionTypes) {
+    fn handler_delayed_action(&self, action: &DelayedActionTypes) {
         match action {
             DelayedActionTypes::UpdateFocList => {
                 self.excl.exec(|| {
@@ -401,7 +401,7 @@ impl FocuserUi {
         }
     }
 
-    fn show_cur_focuser_value(self: &Rc<Self>) {
+    fn show_cur_focuser_value(&self) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let Some(foc_device) = ui.prop_string("cb_foc_list.active-id") else {
             return;
@@ -458,7 +458,7 @@ impl FocuserUi {
     }
 
     fn draw_focusing_samples(
-        self: &Rc<Self>,
+        &self,
         da:   &gtk::DrawingArea,
         ctx:  &gdk::cairo::Context
     ) -> anyhow::Result<()> {
@@ -551,7 +551,7 @@ impl FocuserUi {
         Ok(())
     }
 
-    fn handler_action_manual_focus(self: &Rc<Self>) {
+    fn handler_action_manual_focus(&self) {
         let mut options = self.options.write().unwrap();
         options.read_all(&self.builder);
         drop(options);
@@ -562,11 +562,11 @@ impl FocuserUi {
         });
     }
 
-    fn handler_action_stop_manual_focus(self: &Rc<Self>) {
+    fn handler_action_stop_manual_focus(&self) {
         self.core.abort_active_mode();
     }
 
-    fn apply_ui_options(self: &Rc<Self>) {
+    fn apply_ui_options(&self) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let options = self.ui_options.borrow();
         ui.set_prop_bool("exp_foc.expanded", options.expanded);

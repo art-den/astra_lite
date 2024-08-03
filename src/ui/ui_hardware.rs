@@ -166,7 +166,7 @@ impl Drop for HardwareUi {
 }
 
 impl HardwareUi {
-    fn handler_main_ui_event(self: &Rc<Self>, event: MainUiEvent) {
+    fn handler_main_ui_event(&self, event: MainUiEvent) {
         match event {
             MainUiEvent::ProgramClosing =>
                 self.handler_closing(),
@@ -178,7 +178,7 @@ impl HardwareUi {
         }
     }
 
-    fn handler_closing(self: &Rc<Self>) {
+    fn handler_closing(&self) {
         if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
             self.indi.unsubscribe(indi_conn);
         }
@@ -198,7 +198,7 @@ impl HardwareUi {
         *self.self_.borrow_mut() = None;
     }
 
-    fn init_widgets(self: &Rc<Self>) {
+    fn init_widgets(&self) {
         let spb_foc_len = self.builder.object::<gtk::SpinButton>("spb_foc_len").unwrap();
         spb_foc_len.set_range(10.0, 10_000.0);
         spb_foc_len.set_digits(0);
@@ -215,7 +215,7 @@ impl HardwareUi {
         spb_guid_foc_len.set_increments(1.0, 10.0);
     }
 
-    fn correct_widgets_by_cur_state(self: &Rc<Self>) {
+    fn correct_widgets_by_cur_state(&self) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let status = self.indi_status.borrow();
         let (conn_en, disconn_en) = match *status {
@@ -301,7 +301,7 @@ impl HardwareUi {
         }));
     }
 
-    fn process_indi_event(self: &Rc<Self>, event: indi::Event) {
+    fn process_indi_event(&self, event: indi::Event) {
         match event {
             indi::Event::ConnChange(conn_state) => {
                 if let indi::ConnState::Error(_) = &conn_state {
@@ -382,7 +382,7 @@ impl HardwareUi {
         }
     }
 
-    fn process_phd2_event(self: &Rc<Self>, event: phd2_conn::Event) {
+    fn process_phd2_event(&self, event: phd2_conn::Event) {
         let status_text = match event {
             phd2_conn::Event::Started|
             phd2_conn::Event::Disconnected =>
@@ -398,7 +398,7 @@ impl HardwareUi {
         ui.set_prop_str("lbl_phd2_status.label", Some(status_text));
     }
 
-    fn handler_action_conn_indi(self: &Rc<Self>) {
+    fn handler_action_conn_indi(&self) {
         self.read_options_from_widgets();
         gtk_utils::exec_and_show_error(&self.window, || {
             let options = self.options.read().unwrap();
@@ -456,7 +456,7 @@ impl HardwareUi {
         });
     }
 
-    fn handler_action_disconn_indi(self: &Rc<Self>) {
+    fn handler_action_disconn_indi(&self) {
         gtk_utils::exec_and_show_error(&self.window, || {
             self.main_ui.exec_before_disconnect_handlers();
             if !self.is_remote.get() {
@@ -471,7 +471,7 @@ impl HardwareUi {
         });
     }
 
-    fn handler_action_conn_guider(self: &Rc<Self>) {
+    fn handler_action_conn_guider(&self) {
         gtk_utils::exec_and_show_error(&self.window, || {
             self.read_options_from_widgets();
             self.core.create_ext_guider()?;
@@ -480,7 +480,7 @@ impl HardwareUi {
         });
     }
 
-    fn handler_action_disconn_guider(self: &Rc<Self>) {
+    fn handler_action_disconn_guider(&self) {
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.disconnect_ext_guider()?;
             self.correct_widgets_by_cur_state();
@@ -488,9 +488,9 @@ impl HardwareUi {
         });
     }
 
-    fn fill_devices_name(self: &Rc<Self>) {
+    fn fill_devices_name(&self) {
         fn fill_cb_list(
-            data:       &Rc<HardwareUi>,
+            data:       &HardwareUi,
             cb_name:    &str,
             group_name: &str,
             active:     &Option<String>
@@ -534,7 +534,7 @@ impl HardwareUi {
         fill_cb_list(self, "cb_focuser_drivers",  "Focusers",   &options.indi.focuser);
     }
 
-    fn read_options_from_widgets(self: &Rc<Self>) {
+    fn read_options_from_widgets(&self) {
         let mut options = self.options.write().unwrap();
         options.read_indi(&self.builder);
         options.read_telescope(&self.builder);
@@ -542,7 +542,7 @@ impl HardwareUi {
     }
 
     fn add_log_record(
-        self:        &Rc<Self>,
+        &self,
         timestamp:   &Option<DateTime<Utc>>,
         device_name: &str,
         text:        &str,
@@ -608,14 +608,14 @@ impl HardwareUi {
         }
     }
 
-    fn handler_action_clear_hw_log(self: &Rc<Self>) {
+    fn handler_action_clear_hw_log(&self) {
         let tv_hw_log = self.builder.object::<gtk::TreeView>("tv_hw_log").unwrap();
         let Some(model) = tv_hw_log.model() else { return; };
         let model = model.downcast::<gtk::ListStore>().unwrap();
         model.clear();
     }
 
-    fn handler_action_help_save_indi(self: &Rc<Self>) {
+    fn handler_action_help_save_indi(&self) {
         let ff = gtk::FileFilter::new();
             ff.set_name(Some("Text files"));
             ff.add_pattern("*.txt");
@@ -656,7 +656,7 @@ impl HardwareUi {
         }
     }
 
-    fn update_window_title(self: &Rc<Self>) {
+    fn update_window_title(&self) {
         let options = self.options.read().unwrap();
         let status = self.indi_status.borrow();
         let dev_list = [

@@ -52,7 +52,13 @@ pub fn init_ui(
 
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
-    data.init_widgets();
+    data.init_cam_ctrl_widgets();
+    data.init_cam_widgets();
+    data.init_raw_widgets();
+    data.init_preview_widgets();
+    data.init_live_stacking_widgets();
+    data.init_frame_quality_widgets();
+
     data.show_ui_options();
     data.connect_indi_and_core_events();
     data.connect_widgets_events();
@@ -189,7 +195,7 @@ impl Drop for CameraUi {
 impl CameraUi {
     const CONF_FN: &'static str = "ui_camera";
 
-    fn handler_main_ui_event(self: &Rc<Self>, event: MainUiEvent) {
+    fn handler_main_ui_event(&self, event: MainUiEvent) {
         match event {
             MainUiEvent::Timer => {}
             MainUiEvent::FullScreen(full_screen) =>
@@ -208,10 +214,18 @@ impl CameraUi {
         }
     }
 
-    fn init_widgets(self: &Rc<Self>) {
+    fn init_cam_ctrl_widgets(&self) {
         let spb_temp = self.builder.object::<gtk::SpinButton>("spb_temp").unwrap();
-        spb_temp.set_range(-1000.0, 1000.0);
+        spb_temp.set_range(-100.0, 100.0);
 
+        let l_temp_value = self.builder.object::<gtk::Label>("l_temp_value").unwrap();
+        l_temp_value.set_text("");
+
+        let l_coolpwr_value = self.builder.object::<gtk::Label>("l_coolpwr_value").unwrap();
+        l_coolpwr_value.set_text("");
+    }
+
+    fn init_cam_widgets(&self) {
         let spb_exp = self.builder.object::<gtk::SpinButton>("spb_exp").unwrap();
         spb_exp.set_range(0.0, 100_000.0);
 
@@ -225,12 +239,17 @@ impl CameraUi {
         spb_delay.set_range(0.0, 100_000.0);
         spb_delay.set_digits(1);
         spb_delay.set_increments(0.5, 5.0);
+    }
 
+
+    fn init_raw_widgets(&self) {
         let spb_raw_frames_cnt = self.builder.object::<gtk::SpinButton>("spb_raw_frames_cnt").unwrap();
         spb_raw_frames_cnt.set_range(1.0, 100_000.0);
         spb_raw_frames_cnt.set_digits(0);
         spb_raw_frames_cnt.set_increments(10.0, 100.0);
+    }
 
+    fn init_preview_widgets(&self) {
         let scl_dark = self.builder.object::<gtk::Scale>("scl_dark").unwrap();
         scl_dark.set_range(0.0, 1.0);
         scl_dark.set_increments(0.01, 0.1);
@@ -246,12 +265,16 @@ impl CameraUi {
         scl_gamma.set_digits(1);
         scl_gamma.set_increments(0.1, 1.0);
         scl_gamma.set_round_digits(1);
+    }
 
+    fn init_live_stacking_widgets(&self) {
         let spb_live_minutes = self.builder.object::<gtk::SpinButton>("spb_live_minutes").unwrap();
         spb_live_minutes.set_range(1.0, 60.0);
         spb_live_minutes.set_digits(0);
         spb_live_minutes.set_increments(1.0, 10.0);
+    }
 
+    fn init_frame_quality_widgets(&self) {
         let spb_max_fwhm = self.builder.object::<gtk::SpinButton>("spb_max_fwhm").unwrap();
         spb_max_fwhm.set_range(1.0, 100.0);
         spb_max_fwhm.set_digits(1);
@@ -261,12 +284,6 @@ impl CameraUi {
         spb_max_oval.set_range(0.2, 2.0);
         spb_max_oval.set_digits(1);
         spb_max_oval.set_increments(0.1, 1.0);
-
-        let l_temp_value = self.builder.object::<gtk::Label>("l_temp_value").unwrap();
-        l_temp_value.set_text("");
-
-        let l_coolpwr_value = self.builder.object::<gtk::Label>("l_coolpwr_value").unwrap();
-        l_coolpwr_value.set_text("");
     }
 
     fn connect_indi_and_core_events(self: &Rc<Self>) {
@@ -293,91 +310,23 @@ impl CameraUi {
                 self_.process_event_in_main_thread(event);
             }
         }));
-
-    }
-
-    fn process_event_in_main_thread(self: &Rc<Self>, event: MainThreadEvent) {
-        match event {
-            MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) =>
-                self.process_indi_conn_state_event(conn_state),
-            MainThreadEvent::Indi(indi::Event::PropChange(event_data)) => {
-                match &event_data.change {
-                    indi::PropChange::New(value) =>
-                        self.process_indi_prop_change(
-                            &event_data.device_name,
-                            &event_data.prop_name,
-                            &value.elem_name,
-                            true,
-                            None,
-                            None,
-                            &value.prop_value
-                        ),
-                    indi::PropChange::Change{ value, prev_state, new_state } =>
-                        self.process_indi_prop_change(
-                            &event_data.device_name,
-                            &event_data.prop_name,
-                            &value.elem_name,
-                            false,
-                            Some(prev_state),
-                            Some(new_state),
-                            &value.prop_value
-                        ),
-                    indi::PropChange::Delete => {}
-                };
-            },
-
-            MainThreadEvent::Indi(indi::Event::DeviceDelete(event)) => {
-                self.update_devices_list_and_props_by_drv_interface(event.drv_interface);
-            },
-
-            MainThreadEvent::FrameProcessing(result) => {
-                match result.data {
-                    FrameProcessResultData::ShotProcessingFinished {
-                        process_time, blob_dl_time, ..
-                    } => {
-                        let perf_str = format!(
-                            "Download time = {:.2}s, img. process time = {:.2}s",
-                            blob_dl_time, process_time
-                        );
-                        self.main_ui.set_perf_string(perf_str);
-                    },
-                    _ => {},
-                }
-                self.show_frame_processing_result(result);
-            },
-
-            MainThreadEvent::Core(CoreEvent::ModeChanged) => {
-                self.correct_widgets_props();
-                self.correct_preview_source();
-            },
-
-            MainThreadEvent::Core(CoreEvent::ModeContinued) => {
-                self.excl.exec(|| {
-                    let options = self.options.read().unwrap();
-                    options.show_cam_frame(&self.builder);
-                });
-                self.correct_preview_source();
-            },
-
-            _ => {},
-        }
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
         let bldr = &self.builder;
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        gtk_utils::connect_action(&self.window, self, "take_shot",              Self::handler_action_take_shot);
-        gtk_utils::connect_action(&self.window, self, "stop_shot",              Self::handler_action_stop_shot);
-        gtk_utils::connect_action(&self.window, self, "clear_light_history",    Self::handler_action_clear_light_history);
-        gtk_utils::connect_action(&self.window, self, "start_save_raw_frames",  Self::handler_action_start_save_raw_frames);
-        gtk_utils::connect_action(&self.window, self, "stop_save_raw_frames",   Self::handler_action_stop_save_raw_frames);
-        gtk_utils::connect_action(&self.window, self, "continue_save_raw",      Self::handler_action_continue_save_raw_frames);
-        gtk_utils::connect_action(&self.window, self, "start_live_stacking",    Self::handler_action_start_live_stacking);
-        gtk_utils::connect_action(&self.window, self, "stop_live_stacking",     Self::handler_action_stop_live_stacking);
-        gtk_utils::connect_action(&self.window, self, "continue_live_stacking", Self::handler_action_continue_live_stacking);
-        gtk_utils::connect_action(&self.window, self, "load_image",             Self::handler_action_open_image);
-        gtk_utils::connect_action(&self.window, self, "save_image_preview",     Self::handler_action_save_image_preview);
-        gtk_utils::connect_action(&self.window, self, "save_image_linear",      Self::handler_action_save_image_linear);
+        gtk_utils::connect_action   (&self.window, self, "take_shot",              Self::handler_action_take_shot);
+        gtk_utils::connect_action   (&self.window, self, "stop_shot",              Self::handler_action_stop_shot);
+        gtk_utils::connect_action   (&self.window, self, "clear_light_history",    Self::handler_action_clear_light_history);
+        gtk_utils::connect_action   (&self.window, self, "start_save_raw_frames",  Self::handler_action_start_save_raw_frames);
+        gtk_utils::connect_action   (&self.window, self, "stop_save_raw_frames",   Self::handler_action_stop_save_raw_frames);
+        gtk_utils::connect_action   (&self.window, self, "continue_save_raw",      Self::handler_action_continue_save_raw_frames);
+        gtk_utils::connect_action   (&self.window, self, "start_live_stacking",    Self::handler_action_start_live_stacking);
+        gtk_utils::connect_action   (&self.window, self, "stop_live_stacking",     Self::handler_action_stop_live_stacking);
+        gtk_utils::connect_action   (&self.window, self, "continue_live_stacking", Self::handler_action_continue_live_stacking);
+        gtk_utils::connect_action_rc(&self.window, self, "load_image",             Self::handler_action_open_image);
+        gtk_utils::connect_action   (&self.window, self, "save_image_preview",     Self::handler_action_save_image_preview);
+        gtk_utils::connect_action   (&self.window, self, "save_image_linear",      Self::handler_action_save_image_linear);
 
         let cb_camera_list = bldr.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
         cb_camera_list.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
@@ -710,10 +659,77 @@ impl CameraUi {
         }));
     }
 
+    fn process_event_in_main_thread(&self, event: MainThreadEvent) {
+        match event {
+            MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) =>
+                self.process_indi_conn_state_event(conn_state),
+            MainThreadEvent::Indi(indi::Event::PropChange(event_data)) => {
+                match &event_data.change {
+                    indi::PropChange::New(value) =>
+                        self.process_indi_prop_change(
+                            &event_data.device_name,
+                            &event_data.prop_name,
+                            &value.elem_name,
+                            true,
+                            None,
+                            None,
+                            &value.prop_value
+                        ),
+                    indi::PropChange::Change{ value, prev_state, new_state } =>
+                        self.process_indi_prop_change(
+                            &event_data.device_name,
+                            &event_data.prop_name,
+                            &value.elem_name,
+                            false,
+                            Some(prev_state),
+                            Some(new_state),
+                            &value.prop_value
+                        ),
+                    indi::PropChange::Delete => {}
+                };
+            },
+
+            MainThreadEvent::Indi(indi::Event::DeviceDelete(event)) => {
+                self.update_devices_list_and_props_by_drv_interface(event.drv_interface);
+            },
+
+            MainThreadEvent::FrameProcessing(result) => {
+                match result.data {
+                    FrameProcessResultData::ShotProcessingFinished {
+                        process_time, blob_dl_time, ..
+                    } => {
+                        let perf_str = format!(
+                            "Download time = {:.2}s, img. process time = {:.2}s",
+                            blob_dl_time, process_time
+                        );
+                        self.main_ui.set_perf_string(perf_str);
+                    },
+                    _ => {},
+                }
+                self.show_frame_processing_result(result);
+            },
+
+            MainThreadEvent::Core(CoreEvent::ModeChanged) => {
+                self.correct_widgets_props();
+                self.correct_preview_source();
+            },
+
+            MainThreadEvent::Core(CoreEvent::ModeContinued) => {
+                self.excl.exec(|| {
+                    let options = self.options.read().unwrap();
+                    options.show_cam_frame(&self.builder);
+                });
+                self.correct_preview_source();
+            },
+
+            _ => {},
+        }
+    }
+
     fn store_cur_cam_options_impl(
-        self:    &Rc<Self>,
+        &self,
         device:  &DeviceAndProp,
-        options: &Options,
+        options: &Options
     ) {
         let mut ui_options = self.ui_options.borrow_mut();
         let store_dest = match ui_options.all_cam_opts.iter_mut().find(|item| item.cam == *device) {
@@ -732,7 +748,7 @@ impl CameraUi {
     }
 
     fn select_options_for_camera(
-        self:          &Rc<Self>,
+        &self,
         camera_device: &DeviceAndProp,
         options:       &mut Options
     ) {
@@ -793,7 +809,7 @@ impl CameraUi {
         );
     }
 
-    fn handler_full_screen(self: &Rc<Self>, full_screen: bool) {
+    fn handler_full_screen(&self, full_screen: bool) {
         let bldr = &self.builder;
         let bx_cam_left = bldr.object::<gtk::Widget>("bx_cam_left").unwrap();
         let scr_cam_right = bldr.object::<gtk::Widget>("scr_cam_right").unwrap();
@@ -822,7 +838,7 @@ impl CameraUi {
         }
     }
 
-    fn handler_closing(self: &Rc<Self>) {
+    fn handler_closing(&self) {
         self.closed.set(true);
 
         _ = self.core.stop_img_process_thread();
@@ -846,14 +862,14 @@ impl CameraUi {
     }
 
     /// Stores current camera options for current camera
-    fn store_cur_cam_options(self: &Rc<Self>) {
+    fn store_cur_cam_options(&self) {
         let options = self.options.read().unwrap();
         if let Some(cur_cam_device) = &options.cam.device {
             self.store_cur_cam_options_impl(&cur_cam_device, &options);
         }
     }
 
-    fn show_options(self: &Rc<Self>) {
+    fn show_options(&self) {
         let options = self.options.read().unwrap();
         options.show_cam(&self.builder);
         options.show_raw(&self.builder);
@@ -863,7 +879,7 @@ impl CameraUi {
         options.show_guiding(&self.builder);
     }
 
-    fn show_ui_options(self: &Rc<Self>) {
+    fn show_ui_options(&self) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let bld = &self.builder;
         let pan_cam1 = bld.object::<gtk::Paned>("pan_cam1").unwrap();
@@ -891,12 +907,12 @@ impl CameraUi {
         ui.set_prop_bool("ch_stat_percents.active", options.hist_percents);
     }
 
-    fn get_options_from_widgets(self: &Rc<Self>) {
+    fn get_options_from_widgets(&self) {
         let mut options = self.options.write().unwrap();
         options.read_all(&self.builder);
     }
 
-    fn get_ui_options_from_widgets(self: &Rc<Self>) {
+    fn get_ui_options_from_widgets(&self) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let bld = &self.builder;
         let mut options = self.ui_options.borrow_mut();
@@ -921,7 +937,7 @@ impl CameraUi {
         options.hist_percents  = ui.prop_bool("ch_stat_percents.active");
     }
 
-    fn correct_preview_source(self: &Rc<Self>) {
+    fn correct_preview_source(&self) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let mode_type = self.core.mode_data().mode.get_type();
         let cb_preview_src_aid = match mode_type {
@@ -932,7 +948,7 @@ impl CameraUi {
         ui.set_prop_str("cb_preview_src.active-id", Some(cb_preview_src_aid));
     }
 
-    fn handler_delayed_action(self: &Rc<Self>, action: &DelayedActionTypes) {
+    fn handler_delayed_action(&self, action: &DelayedActionTypes) {
         match action {
             DelayedActionTypes::UpdateCamList => {
                 self.excl.exec(|| {
@@ -975,7 +991,7 @@ impl CameraUi {
         }
     }
 
-    fn correct_widgets_props_impl(self: &Rc<Self>, options: &Options) {
+    fn correct_widgets_props_impl(&self, options: &Options) {
         gtk_utils::exec_and_show_error(&self.window, || {
             let camera = &options.cam.device;
             let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
@@ -1186,12 +1202,20 @@ impl CameraUi {
         });
     }
 
-    fn correct_widgets_props(self: &Rc<Self>) {
+    fn correct_widgets_props(&self) {
         let options = self.options.read().unwrap();
         self.correct_widgets_props_impl(&options);
     }
 
-    fn update_camera_devices_list(self: &Rc<Self>) {
+    fn correct_frame_quality_widgets_props(&self) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        ui.enable_widgets(true, &[
+            ("spb_max_fwhm", ui.prop_bool("chb_max_fwhm.active")),
+            ("spb_max_oval", ui.prop_bool("chb_max_oval.active")),
+        ]);
+    }
+
+    fn update_camera_devices_list(&self) {
         let cb_camera_list: gtk::ComboBoxText = self.builder.object("cb_camera_list").unwrap();
         let dev_list = self.indi.get_devices_list();
         let cameras = dev_list
@@ -1261,7 +1285,7 @@ impl CameraUi {
     }
 
     fn update_resolution_list_impl(
-        self:    &Rc<Self>,
+        &self,
         cam_dev: &DeviceAndProp
     ) -> anyhow::Result<()> {
         let cb_bin = self.builder.object::<gtk::ComboBoxText>("cb_bin").unwrap();
@@ -1294,7 +1318,7 @@ impl CameraUi {
         Ok(())
     }
 
-    fn update_resolution_list(self: &Rc<Self>) {
+    fn update_resolution_list(&self) {
         gtk_utils::exec_and_show_error(&self.window, || {
             let options = self.options.read().unwrap();
             let Some(cur_cam_device) = &options.cam.device else { return Ok(()); };
@@ -1303,7 +1327,7 @@ impl CameraUi {
         });
     }
 
-    fn fill_heater_items_list(self: &Rc<Self>) {
+    fn fill_heater_items_list(&self) {
         gtk_utils::exec_and_show_error(&self.window, ||{
             let cb_cam_heater = self.builder.object::<gtk::ComboBoxText>("cb_cam_heater").unwrap();
             let last_heater_value = cb_cam_heater.active_id();
@@ -1328,7 +1352,7 @@ impl CameraUi {
         });
     }
 
-    fn select_maximum_resolution(self: &Rc<Self>) {
+    fn select_maximum_resolution(&self) {
         let options = self.options.read().unwrap();
         let Some(device) = &options.cam.device else { return; };
         let cam_name = &device.name;
@@ -1343,7 +1367,7 @@ impl CameraUi {
         }
     }
 
-    fn start_live_view(self: &Rc<Self>) {
+    fn start_live_view(&self) {
         self.get_options_from_widgets();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_live_view()?;
@@ -1351,7 +1375,7 @@ impl CameraUi {
         });
     }
 
-    fn handler_action_take_shot(self: &Rc<Self>) {
+    fn handler_action_take_shot(&self) {
         self.get_options_from_widgets();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_single_shot()?;
@@ -1359,11 +1383,11 @@ impl CameraUi {
         });
     }
 
-    fn handler_action_stop_shot(self: &Rc<Self>) {
+    fn handler_action_stop_shot(&self) {
         self.core.abort_active_mode();
     }
 
-    fn create_and_show_preview_image(self: &Rc<Self>) {
+    fn create_and_show_preview_image(&self) {
         let options = self.options.read().unwrap();
         let preview_params = options.preview.preview_params();
         let (image, hist) = match options.preview.source {
@@ -1384,7 +1408,7 @@ impl CameraUi {
     }
 
     fn show_preview_image(
-        self:       &Rc<Self>,
+        &self,
         rgb_bytes:  RgbU8Data,
         src_params: Option<&PreviewParams>,
     ) {
@@ -1434,7 +1458,7 @@ impl CameraUi {
         );
     }
 
-    fn show_image_info(self: &Rc<Self>) {
+    fn show_image_info(&self) {
         let info = match self.options.read().unwrap().preview.source {
             PreviewSource::OrigFrame =>
                 self.core.cur_frame().info.read().unwrap(),
@@ -1519,7 +1543,7 @@ impl CameraUi {
         }
     }
 
-    fn handler_action_save_image_preview(self: &Rc<Self>) {
+    fn handler_action_save_image_preview(&self) {
         gtk_utils::exec_and_show_error(&self.window, || {
             let options = self.options.read().unwrap();
             let (image, hist, fn_prefix) = match options.preview.source {
@@ -1565,7 +1589,7 @@ impl CameraUi {
         });
     }
 
-    fn handler_action_save_image_linear(self: &Rc<Self>) {
+    fn handler_action_save_image_linear(&self) {
         gtk_utils::exec_and_show_error(&self.window, || {
             let options = self.options.read().unwrap();
             let preview_source = options.preview.source.clone();
@@ -1612,7 +1636,7 @@ impl CameraUi {
 
 
     fn show_frame_processing_result(
-        self:   &Rc<Self>,
+        &self,
         result: FrameProcessResult
     ) {
         let options = self.options.read().unwrap();
@@ -1696,7 +1720,7 @@ impl CameraUi {
     }
 
     // TODO: move camera control code into `core` module
-    fn control_camera_by_options(self: &Rc<Self>, force_set: bool) {
+    fn control_camera_by_options(&self, force_set: bool) {
         let options = self.options.read().unwrap();
         let Some(device) = &options.cam.device else { return; };
         let camera_name = &device.name;
@@ -1742,7 +1766,7 @@ impl CameraUi {
     }
 
     fn show_cur_temperature_value(
-        self:        &Rc<Self>,
+        &self,
         device_name: &str,
         temparature: f64
     ) {
@@ -1758,7 +1782,7 @@ impl CameraUi {
     }
 
     fn show_coolpwr_value(
-        self:        &Rc<Self>,
+        &self,
         device_name: &str,
         pwr_str:     &str
     ) {
@@ -1773,7 +1797,7 @@ impl CameraUi {
         }
     }
 
-    fn handler_live_view_changed(self: &Rc<Self>) {
+    fn handler_live_view_changed(&self) {
         if self.options.read().unwrap().cam.live_view {
             self.get_options_from_widgets();
             self.start_live_view();
@@ -1782,10 +1806,7 @@ impl CameraUi {
         }
     }
 
-    fn process_indi_conn_state_event(
-        self:       &Rc<Self>,
-        conn_state: indi::ConnState
-    ) {
+    fn process_indi_conn_state_event(&self, conn_state: indi::ConnState) {
         let update_devices_list =
             conn_state == indi::ConnState::Disconnected ||
             conn_state == indi::ConnState::Disconnecting;
@@ -1799,7 +1820,7 @@ impl CameraUi {
     }
 
     fn update_devices_list_and_props_by_drv_interface(
-        self:          &Rc<Self>,
+        &self,
         drv_interface: indi::DriverInterface,
     ) {
         if drv_interface.contains(indi::DriverInterface::TELESCOPE) {
@@ -1808,7 +1829,7 @@ impl CameraUi {
     }
 
     fn process_indi_prop_change(
-        self:        &Rc<Self>,
+        &self,
         device_name: &str,
         prop_name:   &str,
         elem_name:   &str,
@@ -1907,7 +1928,7 @@ impl CameraUi {
         }
     }
 
-    fn show_histogram_stat(self: &Rc<Self>) {
+    fn show_histogram_stat(&self) {
         let options = self.options.read().unwrap();
         let hist = match options.preview.source {
             PreviewSource::OrigFrame =>
@@ -1963,13 +1984,13 @@ impl CameraUi {
         show_chan_data(&hist.l, "l_hist_l_cap", "l_hist_l_mean", "l_hist_l_median", "l_hist_l_dev");
     }
 
-    fn repaint_histogram(self: &Rc<Self>) {
+    fn repaint_histogram(&self) {
         let da_histogram = self.builder.object::<gtk::DrawingArea>("da_histogram").unwrap();
         da_histogram.queue_draw();
     }
 
     fn handler_draw_histogram(
-        self: &Rc<Self>,
+        &self,
         area: &gtk::DrawingArea,
         cr:   &cairo::Context
     ) ->anyhow::Result<()> {
@@ -2000,7 +2021,7 @@ impl CameraUi {
         Ok(())
     }
 
-    fn handler_action_start_live_stacking(self: &Rc<Self>) {
+    fn handler_action_start_live_stacking(&self) {
         self.get_options_from_widgets();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_live_stacking()?;
@@ -2011,11 +2032,11 @@ impl CameraUi {
         });
     }
 
-    fn handler_action_stop_live_stacking(self: &Rc<Self>) {
+    fn handler_action_stop_live_stacking(&self) {
         self.core.abort_active_mode();
     }
 
-    fn handler_action_continue_live_stacking(self: &Rc<Self>) {
+    fn handler_action_continue_live_stacking(&self) {
         self.get_options_from_widgets();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.continue_prev_mode()?;
@@ -2023,13 +2044,13 @@ impl CameraUi {
         });
     }
 
-    fn update_shot_state(self: &Rc<Self>) {
+    fn update_shot_state(&self) {
         let draw_area = self.builder.object::<gtk::DrawingArea>("da_shot_state").unwrap();
         draw_area.queue_draw();
     }
 
     fn handler_draw_shot_state(
-        self: &Rc<Self>,
+        &self,
         area: &gtk::DrawingArea,
         cr:   &cairo::Context
     ) {
@@ -2049,7 +2070,7 @@ impl CameraUi {
         });
     }
 
-    fn update_light_history_table(self: &Rc<Self>) {
+    fn update_light_history_table(&self) {
         let tree: gtk::TreeView = self.builder.object("tv_light_history").unwrap();
         let model = match tree.model() {
             Some(model) => {
@@ -2180,7 +2201,7 @@ impl CameraUi {
         }
     }
 
-    fn handler_action_start_save_raw_frames(self: &Rc<Self>) {
+    fn handler_action_start_save_raw_frames(&self) {
         self.get_options_from_widgets();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_saving_raw_frames()?;
@@ -2191,7 +2212,7 @@ impl CameraUi {
         });
     }
 
-    fn handler_action_continue_save_raw_frames(self: &Rc<Self>) {
+    fn handler_action_continue_save_raw_frames(&self) {
         self.get_options_from_widgets();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.continue_prev_mode()?;
@@ -2199,16 +2220,16 @@ impl CameraUi {
         });
     }
 
-    fn handler_action_stop_save_raw_frames(self: &Rc<Self>) {
+    fn handler_action_stop_save_raw_frames(&self) {
         self.core.abort_active_mode();
     }
 
-    fn handler_action_clear_light_history(self: &Rc<Self>) {
+    fn handler_action_clear_light_history(&self) {
         self.light_history.borrow_mut().clear();
         self.update_light_history_table();
     }
 
-    fn show_total_raw_time(self: &Rc<Self>) {
+    fn show_total_raw_time(&self) {
         let options = self.options.read().unwrap();
         let total_time = options.cam.frame.exposure() * options.raw_frames.frame_cnt as f64;
         let text = format!(
@@ -2286,7 +2307,7 @@ impl CameraUi {
         }));
     }
 
-    fn handler_nav_mount_btn_pressed(self: &Rc<Self>, button_name: &str) {
+    fn handler_nav_mount_btn_pressed(&self, button_name: &str) {
         let options = self.options.read().unwrap();
         let mount_device_name = &options.mount.device;
         if mount_device_name.is_empty() { return; }
@@ -2351,7 +2372,7 @@ impl CameraUi {
         });
     }
 
-    fn handler_nav_mount_btn_released(self: &Rc<Self>, button_name: &str) {
+    fn handler_nav_mount_btn_released(&self, button_name: &str) {
         let options = self.options.read().unwrap();
         if options.mount.device.is_empty() { return; }
         gtk_utils::exec_and_show_error(&self.window, || {
@@ -2362,7 +2383,7 @@ impl CameraUi {
         });
     }
 
-    fn fill_mount_speed_list_widget(self: &Rc<Self>) {
+    fn fill_mount_speed_list_widget(&self) {
         let options = self.options.read().unwrap();
         if options.mount.device.is_empty() { return; }
         gtk_utils::exec_and_show_error(&self.window, || {
@@ -2386,14 +2407,14 @@ impl CameraUi {
         });
     }
 
-    fn show_mount_tracking_state(self: &Rc<Self>, tracking: bool) {
+    fn show_mount_tracking_state(&self, tracking: bool) {
         let options = self.options.read().unwrap();
         if options.mount.device.is_empty() { return; }
             let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         ui.set_prop_bool("chb_tracking.active", tracking);
     }
 
-    fn show_mount_parked_state(self: &Rc<Self>, parked: bool) {
+    fn show_mount_parked_state(&self, parked: bool) {
         let options = self.options.read().unwrap();
         if options.mount.device.is_empty() { return; }
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
@@ -2443,14 +2464,6 @@ impl CameraUi {
             file_chooser.close();
         }));
         fc.show();
-    }
-
-    fn correct_frame_quality_widgets_props(self: &Rc<Self>) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        ui.enable_widgets(true, &[
-            ("spb_max_fwhm", ui.prop_bool("chb_max_fwhm.active")),
-            ("spb_max_oval", ui.prop_bool("chb_max_oval.active")),
-        ]);
     }
 
 }

@@ -9,7 +9,7 @@ use super::sky_map::{data::Observer, widget::SkymapWidget};
 pub fn init_ui(
     _app:     &gtk::Application,
     builder:  &gtk::Builder,
-    main_ui:      &Rc<MainUi>,
+    main_ui:  &Rc<MainUi>,
     options:  &Arc<RwLock<Options>>,
     indi:     &Arc<indi::Connection>,
     excl:     &Rc<ExclusiveCaller>,
@@ -231,6 +231,7 @@ impl MapUi {
             MainUiEvent::Timer =>
                 self.handler_main_timer(),
             MainUiEvent::TabPageChanged(page) if page == TabPage::SkyMap => {
+                self.check_data_loaded();
                 self.update_date_time_widgets(true);
                 self.update_skymap_widget(true);
                 self.show_selected_objects_info();
@@ -282,11 +283,11 @@ impl MapUi {
     }
 
     fn connect_events(self: &Rc<Self>) {
-        gtk_utils::connect_action(&self.window, self, "map_play",         Self::handler_btn_play_pressed);
-        gtk_utils::connect_action(&self.window, self, "map_now",          Self::handler_btn_now_pressed);
-        gtk_utils::connect_action(&self.window, self, "skymap_options",   Self::handler_action_options);
-        gtk_utils::connect_action(&self.window, self, "sm_goto_selected", Self::handler_goto_selected);
-        gtk_utils::connect_action(&self.window, self, "sm_goto_point",    Self::handler_goto_point);
+        gtk_utils::connect_action   (&self.window, self, "map_play",         Self::handler_btn_play_pressed);
+        gtk_utils::connect_action   (&self.window, self, "map_now",          Self::handler_btn_now_pressed);
+        gtk_utils::connect_action_rc(&self.window, self, "skymap_options",   Self::handler_action_options);
+        gtk_utils::connect_action   (&self.window, self, "sm_goto_selected", Self::handler_goto_selected);
+        gtk_utils::connect_action   (&self.window, self, "sm_goto_point",    Self::handler_goto_point);
 
         let connect_spin_btn_evt = |widget_name: &str| {
             let spin_btn = self.builder.object::<gtk::SpinButton>(widget_name).unwrap();
@@ -522,7 +523,7 @@ impl MapUi {
         self.map_widget.set_observer(&observer);
     }
 
-    fn handler_main_timer(self: &Rc<Self>) {
+    fn handler_main_timer(&self) {
         if self.main_ui.current_tab_page() != TabPage::SkyMap {
             return;
         }
@@ -548,9 +549,7 @@ impl MapUi {
         });
     }
 
-    fn update_skymap_widget(self: &Rc<Self>, force: bool) {
-        self.check_data_loaded();
-
+    fn update_skymap_widget(&self, force: bool) {
         let mut paint_ts = self.paint_ts.borrow_mut();
         if force || paint_ts.elapsed().as_secs_f64() > 0.5 {
             let user_time = self.user_time.borrow().time(false);
@@ -733,7 +732,7 @@ impl MapUi {
         Ok(())
     }
 
-    fn handler_time_changed(self: &Rc<Self>) {
+    fn handler_time_changed(&self) {
         self.excl.exec(|| {
             let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
             let prev_time = self.prev_wdt.borrow();
@@ -778,7 +777,7 @@ impl MapUi {
         });
     }
 
-    fn handler_btn_play_pressed(self: &Rc<Self>) {
+    fn handler_btn_play_pressed(&self) {
         self.excl.exec(|| {
             let btn_play = self.builder.object::<gtk::ToggleButton>("btn_play").unwrap();
             let mut user_time = self.user_time.borrow_mut();
@@ -788,7 +787,7 @@ impl MapUi {
         });
     }
 
-    fn handler_btn_now_pressed(self: &Rc<Self>) {
+    fn handler_btn_now_pressed(&self) {
         self.excl.exec(|| {
             let mut user_time = self.user_time.borrow_mut();
             user_time.set_now();
@@ -799,7 +798,7 @@ impl MapUi {
         });
     }
 
-    fn handler_max_magnitude_changed(self: &Rc<Self>, value: f64) {
+    fn handler_max_magnitude_changed(&self, value: f64) {
         self.excl.exec(|| {
             let value = value as f32;
             let mut options = self.ui_options.borrow_mut();
@@ -813,7 +812,7 @@ impl MapUi {
         });
     }
 
-    fn handler_obj_visibility_changed(self: &Rc<Self>) {
+    fn handler_obj_visibility_changed(&self) {
         let mut opts = self.ui_options.borrow_mut();
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         Self::read_visibility_options_from_widgets(&mut opts, &ui);
@@ -991,7 +990,7 @@ impl MapUi {
     }
 
     fn handler_draw_item_graph(
-        self:  &Rc<Self>,
+        &self,
         area: &gtk::DrawingArea,
         cr:   &cairo::Context
     ) -> anyhow::Result<()> {
@@ -1051,13 +1050,13 @@ impl MapUi {
         });
     }
 
-    fn handler_goto_selected(self: &Rc<Self>) {
+    fn handler_goto_selected(&self) {
         let selected_item = self.selected_item.borrow();
         let Some(selected_item) = &*selected_item else { return; };
         self.goto_eq_coord(&selected_item.crd());
     }
 
-    fn handler_goto_point(self: &Rc<Self>) {
+    fn handler_goto_point(&self) {
         let clicked_crd = self.clicked_crd.borrow();
         let Some(clicked_crd) = &*clicked_crd else { return; };
         self.goto_eq_coord(clicked_crd);

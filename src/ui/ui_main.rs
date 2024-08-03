@@ -361,7 +361,7 @@ impl MainUi {
             return glib::Propagation::Stop
         }
 
-        self.read_options_from_widgets();
+        self.read_ui_options_from_widgets();
 
         let options = self.ui_options.borrow();
         _ = save_json_to_config::<UiOptions>(&options, MainUi::CONF_FN);
@@ -374,7 +374,7 @@ impl MainUi {
         glib::Propagation::Proceed
     }
 
-    fn apply_options(self: &Rc<Self>) {
+    fn apply_options(&self) {
         let options = self.ui_options.borrow();
 
         if options.win_width != -1 && options.win_height != -1 {
@@ -393,7 +393,7 @@ impl MainUi {
         }
     }
 
-    fn apply_theme(self: &Rc<Self>) {
+    fn apply_theme(&self) {
         let gtk_settings = gtk::Settings::default().unwrap();
         let options = self.ui_options.borrow();
         gtk_settings.set_property(
@@ -402,7 +402,7 @@ impl MainUi {
         );
     }
 
-    fn read_options_from_widgets(self: &Rc<Self>) {
+    fn read_ui_options_from_widgets(&self) {
         let mut options = self.ui_options.borrow_mut();
         let (width, height) = self.window.size();
         options.win_width = width;
@@ -411,7 +411,7 @@ impl MainUi {
     }
 
     fn handler_draw_progress(
-        self: &Rc<Self>,
+        &self,
         area: &gtk::DrawingArea,
         cr:   &cairo::Context
     ) {
@@ -433,7 +433,7 @@ impl MainUi {
         }
     }
 
-    fn correct_widgets_props(self: &Rc<Self>) {
+    fn correct_widgets_props(&self) {
         let mode_data = self.core.mode_data();
         let can_be_continued = mode_data.aborted_mode
             .as_ref()
@@ -445,7 +445,7 @@ impl MainUi {
         ]);
     }
 
-    fn show_mode_caption(self: &Rc<Self>) {
+    fn show_mode_caption(&self) {
         let mode_data = self.core.mode_data();
         let is_cur_mode_active = mode_data.mode.get_type() != ModeType::Waiting;
         let mut caption = String::new();
@@ -463,11 +463,11 @@ impl MainUi {
         lbl_cur_action.set_text(&caption);
     }
 
-    fn handler_action_stop(self: &Rc<Self>) {
+    fn handler_action_stop(&self) {
         self.core.abort_active_mode();
     }
 
-    fn handler_action_continue(self: &Rc<Self>) {
+    fn handler_action_continue(&self) {
         gtk_utils::exec_and_show_error(&self.window, || {
             self.exec_main_ui_handlers(MainUiEvent::BeforeModeContinued);
             self.core.continue_prev_mode()?;
@@ -475,13 +475,13 @@ impl MainUi {
         });
     }
 
-    fn exec_main_ui_handlers(self: &Rc<Self>, event: MainUiEvent) {
+    fn exec_main_ui_handlers(&self, event: MainUiEvent) {
         for fs_handler in self.handlers.borrow().iter() {
             fs_handler(event.clone());
         }
     }
 
-    fn handler_action_open_logs_folder(self: &Rc<Self>) {
+    fn handler_action_open_logs_folder(&self) {
         gtk_utils::exec_and_show_error(&self.window, || {
             if cfg!(target_os = "windows") {
                 Command::new("explorer")
@@ -527,7 +527,7 @@ impl MainUi {
         self.window.set_title(&title)
     }
 
-    pub fn exec_before_disconnect_handlers(self: &Rc<Self>) {
+    pub fn exec_before_disconnect_handlers(&self) {
         self.exec_main_ui_handlers(MainUiEvent::BeforeDisconnect);
     }
 

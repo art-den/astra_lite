@@ -135,7 +135,7 @@ impl DitheringUi {
         *self.self_.borrow_mut() = None;
     }
 
-    fn apply_ui_options(self: &Rc<Self>) {
+    fn apply_ui_options(&self) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let options = self.ui_options.borrow();
         ui.set_prop_bool("exp_dith.expanded", options.expanded);
@@ -147,7 +147,7 @@ impl DitheringUi {
         options.expanded = ui.prop_bool("exp_dith.expanded");
     }
 
-    fn init_widgets(self: &Rc<Self>) {
+    fn init_widgets(&self) {
         let spb_guid_max_err = self.builder.object::<gtk::SpinButton>("spb_guid_max_err").unwrap();
         spb_guid_max_err.set_range(3.0, 50.0);
         spb_guid_max_err.set_digits(0);
@@ -176,7 +176,7 @@ impl DitheringUi {
         gtk_utils::connect_action(&self.window, self, "stop_dither_calibr",  Self::handler_action_stop_dither_calibr);
     }
 
-    fn handler_action_start_dither_calibr(self: &Rc<Self>) {
+    fn handler_action_start_dither_calibr(&self) {
         let mut options = self.options.write().unwrap();
         options.read_all(&self.builder);
         drop(options);
@@ -199,7 +199,7 @@ impl DitheringUi {
         }
     }
 
-    fn handler_action_stop_dither_calibr(self: &Rc<Self>) {
+    fn handler_action_stop_dither_calibr(&self) {
         self.core.abort_active_mode();
     }
 
