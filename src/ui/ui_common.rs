@@ -412,7 +412,7 @@ pub fn fill_devices_list_into_combobox(
         device_selected_in_cb = true;
     }
 
-    cb.set_sensitive(list.len() > 1 && connected);
+    cb.set_sensitive(list.len() != 0 && connected);
 
     device_selected_in_cb
 }

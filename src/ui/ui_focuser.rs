@@ -220,7 +220,6 @@ impl FocuserUi {
                 }
             }
             ("ABS_FOCUS_POSITION", ..) => {
-                self.show_cur_focuser_value();
                 self.delayed_actions.schedule(
                     if new_prop { DelayedActionTypes::UpdateFocPosNew }
                     else        { DelayedActionTypes::UpdateFocPos }
@@ -282,10 +281,11 @@ impl FocuserUi {
         let focusing = mode_type == ModeType::Focusing;
         let can_change_mode = waiting || single_shot;
 
-        let device = ui.prop_string("cb_foc_list.active-id");
-        let device_enabled = self.indi
-            .is_device_enabled(device.as_deref().unwrap_or(""))
-            .unwrap_or(false);
+        let options = self.options.read().unwrap();
+        let device = options.focuser.device.clone();
+        drop(options);
+
+        let device_enabled = self.indi.is_device_enabled(&device).unwrap_or(false);
 
         ui.enable_widgets(false, &[
             ("grd_foc",       device_enabled && (waiting || focusing || single_shot)),
@@ -342,10 +342,10 @@ impl FocuserUi {
     }
 
     fn update_focuser_position_widget(&self, new_prop: bool) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let Some(foc_device) = ui.prop_string("cb_foc_list.active-id") else {
-            return;
-        };
+        let options = self.options.read().unwrap();
+        let foc_device = options.focuser.device.clone();
+        drop(options);
+
         let Ok(prop_info) = self.indi.focuser_get_abs_value_prop_info(&foc_device) else {
             return;
         };
@@ -391,13 +391,14 @@ impl FocuserUi {
     }
 
     fn show_cur_focuser_value(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let Some(foc_device) = ui.prop_string("cb_foc_list.active-id") else {
-            return;
-        };
+        let options = self.options.read().unwrap();
+        let foc_device = options.focuser.device.clone();
+        drop(options);
+
         let Ok(value) = self.indi.focuser_get_abs_value(&foc_device) else {
             return;
         };
+
         let l_foc_value = self.builder.object::<gtk::Label>("l_foc_value").unwrap();
         l_foc_value.set_label(&format!("{:.0}", value));
     }
@@ -425,8 +426,8 @@ impl FocuserUi {
             self_.excl.exec(|| {
                 let Some(cur_id) = cb.active_id() else { return; };
                 let mut options = self_.options.write().unwrap();
-                if options.mount.device == cur_id.as_str() { return; }
-                options.mount.device = cur_id.to_string();
+                if options.focuser.device == cur_id.as_str() { return; }
+                options.focuser.device = cur_id.to_string();
                 drop(options);
                 self_.delayed_actions.schedule(DelayedActionTypes::UpdateFocPosNew);
                 self_.delayed_actions.schedule(DelayedActionTypes::ShowCurFocuserValue);

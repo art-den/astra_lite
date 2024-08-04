@@ -668,8 +668,8 @@ impl Property {
                 };
 
                 if elem_changed {
-                    let changed_elem = elem.value.clone();
-                    changed_values.push((Arc::clone(&self.name), changed_elem));
+                    let changed_elem_value = elem.value.clone();
+                    changed_values.push((Arc::clone(&elem.name), changed_elem_value));
                 }
             } else {
                 anyhow::bail!(
@@ -3512,10 +3512,10 @@ impl XmlReceiver {
         changed_values: Vec<(Arc<String>, PropValue)>,
         events_sender:  &mpsc::Sender<Event>
     ) {
-        for (name, value) in changed_values {
+        for (name, prop_value) in changed_values {
             let value = PropChangeValue {
                 elem_name:  Arc::clone(&name),
-                prop_value: value,
+                prop_value,
             };
             let change = PropChange::Change{
                 value,

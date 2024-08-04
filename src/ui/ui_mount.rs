@@ -60,7 +60,6 @@ pub fn init_ui(
                 data.handler_closing(),
             _ => {},
         }
-
     })));
 
     data.delayed_actions.set_event_handler(
@@ -98,10 +97,9 @@ impl Drop for MountUi {
 
 #[derive(Hash, Eq, PartialEq)]
 enum DelayedActionTypes {
-    UpdateMountWidgets,
-    UpdateMountSpdList,
+    CorrectWidgetsProps,
+    FillMountSpdList,
 }
-
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
@@ -171,6 +169,8 @@ impl MountUi {
                 if options.mount.device == cur_id.as_str() { return; }
                 options.mount.device = cur_id.to_string();
                 drop(options);
+                self_.fill_mount_speed_list_widget();
+                self_.show_cur_mount_state();
                 self_.correct_widgets_props();
             });
         }));
@@ -269,14 +269,14 @@ impl MountUi {
             MainThreadEvent::Indi(indi::Event::DeviceDelete(event)) => {
                 if event.drv_interface.contains(indi::DriverInterface::TELESCOPE) {
                     self.fill_devices_list();
-                    self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
+                    self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetsProps);
                 }
             }
             MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) => {
                 if conn_state == indi::ConnState::Disconnected
                 || conn_state == indi::ConnState::Connected {
                     self.fill_devices_list();
-                    self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
+                    self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetsProps);
                 }
             }
             MainThreadEvent::Indi(indi::Event::PropChange(event_data)) => {
@@ -391,7 +391,7 @@ impl MountUi {
 
         let cb = self.builder.object::<gtk::ComboBoxText>("cb_mount_list").unwrap();
         let list = self.indi
-            .get_devices_list_by_interface(indi::DriverInterface::FOCUSER)
+            .get_devices_list_by_interface(indi::DriverInterface::TELESCOPE)
             .iter()
             .map(|dev| dev.name.to_string())
             .collect();
@@ -433,25 +433,31 @@ impl MountUi {
     }
 
     fn show_mount_tracking_state(&self, tracking: bool) {
-        let options = self.options.read().unwrap();
-        if options.mount.device.is_empty() { return; }
-            let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         ui.set_prop_bool("chb_tracking.active", tracking);
     }
 
     fn show_mount_parked_state(&self, parked: bool) {
-        let options = self.options.read().unwrap();
-        if options.mount.device.is_empty() { return; }
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         ui.set_prop_bool("chb_parked.active", parked);
     }
 
+    fn show_cur_mount_state(&self) {
+        let device = self.options.read().unwrap().mount.device.clone();
+
+        let parked = self.indi.mount_get_parked(&device).unwrap_or(false);
+        self.show_mount_parked_state(parked);
+
+        let tracking = self.indi.mount_get_tracking(&device).unwrap_or(false);
+        self.show_mount_tracking_state(tracking);
+    }
+
     fn handler_delayed_action(&self, action: &DelayedActionTypes) {
         match action {
-            DelayedActionTypes::UpdateMountWidgets => {
+            DelayedActionTypes::CorrectWidgetsProps => {
                 self.correct_widgets_props();
             }
-            DelayedActionTypes::UpdateMountSpdList => {
+            DelayedActionTypes::FillMountSpdList => {
                 self.fill_mount_speed_list_widget();
             }
         }
@@ -475,21 +481,38 @@ impl MountUi {
                 if driver_interface.contains(indi::DriverInterface::TELESCOPE) {
                     self.excl.exec(|| {
                         self.fill_devices_list();
-                        self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
+                        self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetsProps);
                     });
                 }
             }
             ("TELESCOPE_SLEW_RATE", ..) if new_prop => {
-                self.delayed_actions.schedule(DelayedActionTypes::UpdateMountSpdList);
+                let selected_device = self.options.read().unwrap().mount.device.clone();
+                if selected_device != device_name { return; }
+
+                self.delayed_actions.schedule(DelayedActionTypes::FillMountSpdList);
             }
-            ("TELESCOPE_TRACK_STATE", "TRACK_ON", indi::PropValue::Switch(tracking)) => {
+            ("TELESCOPE_TRACK_STATE", elem, indi::PropValue::Switch(prop_value)) => {
+                let selected_device = self.options.read().unwrap().mount.device.clone();
+                if selected_device != device_name { return; }
+
                 self.excl.exec(|| {
-                    self.show_mount_tracking_state(*tracking);
+                    let tracking =
+                        if elem == "TRACK_ON" { *prop_value }
+                        else if elem == "TRACK_OFF" { !*prop_value }
+                        else { return; };
+                        self.show_mount_tracking_state(tracking);
                 });
             }
-            ("TELESCOPE_PARK", "PARK", indi::PropValue::Switch(parked)) => {
+            ("TELESCOPE_PARK", elem, indi::PropValue::Switch(prop_value)) => {
+                let selected_device = self.options.read().unwrap().mount.device.clone();
+                if selected_device != device_name { return; }
+
                 self.excl.exec(|| {
-                    self.show_mount_parked_state(*parked);
+                    let parked =
+                        if elem == "PARK" { *prop_value }
+                        else if elem == "UNPARK" { !*prop_value }
+                        else { return; };
+                    self.show_mount_parked_state(parked);
                 });
             }
 
