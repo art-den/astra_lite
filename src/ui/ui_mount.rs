@@ -1,0 +1,475 @@
+use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
+use gtk::{glib, prelude::*, glib::clone};
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    core::{consts::INDI_SET_PROP_TIMEOUT, core::{Core, ModeType}, mode_focusing::*},
+    indi,
+    options::*,
+    utils::io_utils::*,
+};
+
+use super::{gtk_utils, ui_common::*, ui_main::*};
+
+
+pub fn init_ui(
+    _app:     &gtk::Application,
+    builder:  &gtk::Builder,
+    main_ui:  &Rc<MainUi>,
+    options:  &Arc<RwLock<Options>>,
+    core:     &Arc<Core>,
+    indi:     &Arc<indi::Connection>,
+    excl:     &Rc<ExclusiveCaller>,
+    handlers: &mut MainUiHandlers,
+) {
+    let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
+
+    let mut ui_options = UiOptions::default();
+    gtk_utils::exec_and_show_error(&window, || {
+        load_json_from_config_file(&mut ui_options, MountUi::CONF_FN)?;
+        Ok(())
+    });
+
+    let data = Rc::new(MountUi {
+        main_ui:         Rc::clone(main_ui),
+        builder:         builder.clone(),
+        window,
+        options:         Arc::clone(options),
+        core:            Arc::clone(core),
+        indi:            Arc::clone(indi),
+        excl:            Rc::clone(excl),
+        delayed_actions: DelayedActions::new(500),
+        ui_options:      RefCell::new(ui_options),
+        closed:          Cell::new(false),
+        indi_evt_conn:   RefCell::new(None),
+        focusing_data:   RefCell::new(None),
+        self_:           RefCell::new(None),
+    });
+
+    *data.self_.borrow_mut() = Some(Rc::clone(&data));
+
+    data.connect_indi();
+    data.connect_widgets_events();
+    data.apply_ui_options();
+    data.correct_widgets_props();
+
+    handlers.push(Box::new(clone!(@weak data => move |event| {
+        match event {
+            MainUiEvent::ProgramClosing =>
+                data.handler_closing(),
+            _ => {},
+        }
+
+    })));
+
+    data.delayed_actions.set_event_handler(
+        clone!(@weak data => move |action| {
+            data.handler_delayed_action(action);
+        })
+    );
+}
+
+pub enum MainThreadEvent {
+    Indi(indi::Event),
+}
+
+struct MountUi {
+    main_ui:         Rc<MainUi>,
+    builder:         gtk::Builder,
+    window:          gtk::ApplicationWindow,
+    options:         Arc<RwLock<Options>>,
+    core:            Arc<Core>,
+    indi:            Arc<indi::Connection>,
+    excl:            Rc<ExclusiveCaller>,
+    delayed_actions: DelayedActions<DelayedActionTypes>,
+    ui_options:      RefCell<UiOptions>,
+    closed:          Cell<bool>,
+    indi_evt_conn:   RefCell<Option<indi::Subscription>>,
+    focusing_data:   RefCell<Option<FocusingResultData>>,
+    self_:           RefCell<Option<Rc<MountUi>>>,
+}
+
+impl Drop for MountUi {
+    fn drop(&mut self) {
+        log::info!("MountUi dropped");
+    }
+}
+
+#[derive(Hash, Eq, PartialEq)]
+enum DelayedActionTypes {
+    UpdateMountWidgets,
+    UpdateMountSpdList,
+}
+
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(default)]
+struct UiOptions {
+    expanded: bool,
+}
+
+impl Default for UiOptions {
+    fn default() -> Self {
+        Self {
+            expanded: false
+        }
+    }
+}
+
+impl MountUi {
+    const CONF_FN: &'static str = "ui_mount";
+
+    const MOUNT_NAV_BUTTON_NAMES: &'static [&'static str] = &[
+        "btn_left_top",    "btn_top",        "btn_right_top",
+        "btn_left",        "btn_stop_mount", "btn_right",
+        "btn_left_bottom", "btn_bottom",     "btn_right_bottom",
+    ];
+
+    fn connect_indi(self: &Rc<Self>) {
+        let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
+        let sender = main_thread_sender.clone();
+        *self.indi_evt_conn.borrow_mut() = Some(self.indi.subscribe_events(move |event| {
+            sender.send_blocking(MainThreadEvent::Indi(event)).unwrap();
+        }));
+
+        glib::spawn_future_local(clone!(@weak self as self_ => async move {
+            while let Ok(event) = main_thread_receiver.recv().await {
+                if self_.closed.get() { return; }
+                self_.process_event_in_main_thread(event);
+            }
+        }));
+    }
+
+    fn connect_widgets_events(self: &Rc<Self>) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        for &btn_name in Self::MOUNT_NAV_BUTTON_NAMES {
+            let btn = self.builder.object::<gtk::Button>(btn_name).unwrap();
+            btn.connect_button_press_event(clone!(
+                @weak self as self_ => @default-return glib::Propagation::Proceed,
+                move |_, eb| {
+                    if eb.button() == gtk::gdk::ffi::GDK_BUTTON_PRIMARY as u32 {
+                        self_.handler_nav_mount_btn_pressed(btn_name);
+                    }
+                    glib::Propagation::Proceed
+                }
+            ));
+            btn.connect_button_release_event(clone!(
+                @weak self as self_ => @default-return glib::Propagation::Proceed,
+                move |_, _| {
+                    self_.handler_nav_mount_btn_released(btn_name);
+                    glib::Propagation::Proceed
+                }
+            ));
+        }
+
+        let chb_tracking = self.builder.object::<gtk::CheckButton>("chb_tracking").unwrap();
+        chb_tracking.connect_active_notify(clone!(@weak self as self_ => move |chb| {
+            self_.excl.exec(|| {
+                let options = self_.options.read().unwrap();
+                if options.mount.device.is_empty() { return; }
+                gtk_utils::exec_and_show_error(&self_.window, || {
+                    self_.indi.mount_set_tracking(&options.mount.device, chb.is_active(), true, None)?;
+                    Ok(())
+                });
+            });
+        }));
+
+        let chb_parked = self.builder.object::<gtk::CheckButton>("chb_parked").unwrap();
+        chb_parked.connect_active_notify(clone!(@weak self as self_ => move |chb| {
+            let options = self_.options.read().unwrap();
+            if options.mount.device.is_empty() { return; }
+            let parked = chb.is_active();
+            ui.enable_widgets(true, &[
+                ("chb_tracking", !parked),
+                ("cb_mnt_speed", !parked),
+                ("chb_inv_ns", !parked),
+                ("chb_inv_we", !parked),
+            ]);
+            for &btn_name in Self::MOUNT_NAV_BUTTON_NAMES {
+                ui.set_prop_bool_ex(btn_name, "sensitive", !parked);
+            }
+            self_.excl.exec(|| {
+                gtk_utils::exec_and_show_error(&self_.window, || {
+                    self_.indi.mount_set_parked(&options.mount.device, parked, true, None)?;
+                    Ok(())
+                });
+            });
+        }));
+    }
+
+    fn correct_widgets_props(&self) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let options = self.options.read().unwrap();
+        let mount = options.mount.device.clone();
+        drop(options);
+
+        let mnt_active = self.indi.is_device_enabled(&mount).unwrap_or(false);
+        let indi_connected = self.indi.state() == indi::ConnState::Connected;
+
+        let mode_data = self.core.mode_data();
+        let mode_type = mode_data.mode.get_type();
+        let waiting = mode_type == ModeType::Waiting;
+
+        let mount_ctrl_sensitive =
+            indi_connected &&
+            mnt_active &&
+            !mount.is_empty() &&
+            (waiting ||
+            (ui.prop_string("cb_dith_perod.active-id").as_deref() == Some("0") &&
+            !ui.prop_bool("chb_guid_enabled.active")));
+
+
+        ui.enable_widgets(false, &[
+            ("bx_simple_mount", mount_ctrl_sensitive),
+        ]);
+    }
+
+    fn handler_closing(&self) {
+        self.closed.set(true);
+
+        self.get_ui_options_from_widgets();
+        let ui_options = self.ui_options.borrow();
+        _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
+        drop(ui_options);
+
+        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
+            self.indi.unsubscribe(indi_conn);
+        }
+
+        *self.self_.borrow_mut() = None;
+    }
+
+    fn apply_ui_options(&self) {
+        let options = self.ui_options.borrow();
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        ui.set_prop_bool("exp_mount.expanded", options.expanded);
+    }
+
+    fn get_ui_options_from_widgets(&self) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let mut options = self.ui_options.borrow_mut();
+        options.expanded = ui.prop_bool("exp_mount.expanded");
+    }
+
+    fn process_event_in_main_thread(&self, event: MainThreadEvent) {
+        match event {
+            MainThreadEvent::Indi(indi::Event::DeviceDelete(event)) => {
+                if event.drv_interface.contains(indi::DriverInterface::TELESCOPE) {
+                    self.store_mount_device_name();
+                    self.correct_widgets_props();
+                }
+            }
+            MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) => {
+                if conn_state == indi::ConnState::Disconnected
+                || conn_state == indi::ConnState::Connected {
+                    self.correct_widgets_props();
+                }
+            }
+            MainThreadEvent::Indi(indi::Event::PropChange(event_data)) => {
+                match &event_data.change {
+                    indi::PropChange::New(value) =>
+                        self.process_indi_prop_change(
+                            &event_data.device_name,
+                            &event_data.prop_name,
+                            &value.elem_name,
+                            true,
+                            None,
+                            None,
+                            &value.prop_value
+                        ),
+                    indi::PropChange::Change{ value, prev_state, new_state } =>
+                        self.process_indi_prop_change(
+                            &event_data.device_name,
+                            &event_data.prop_name,
+                            &value.elem_name,
+                            false,
+                            Some(prev_state),
+                            Some(new_state),
+                            &value.prop_value
+                        ),
+                    indi::PropChange::Delete => {}
+                };
+            }
+            _ => {}
+        }
+    }
+
+    fn handler_nav_mount_btn_pressed(&self, button_name: &str) {
+        let options = self.options.read().unwrap();
+        let mount_device_name = &options.mount.device;
+        if mount_device_name.is_empty() { return; }
+        gtk_utils::exec_and_show_error(&self.window, || {
+            let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+            if button_name != "btn_stop_mount" {
+                let inv_ns = ui.prop_bool("chb_inv_ns.active");
+                let inv_we = ui.prop_bool("chb_inv_we.active");
+                self.indi.mount_reverse_motion(
+                    mount_device_name,
+                    inv_ns,
+                    inv_we,
+                    false,
+                    INDI_SET_PROP_TIMEOUT
+                )?;
+                let speed = ui.prop_string("cb_mnt_speed.active-id");
+                if let Some(speed) = speed {
+                    self.indi.mount_set_slew_speed(
+                        mount_device_name,
+                        &speed,
+                        true,
+                        Some(100)
+                    )?
+                }
+            }
+            match button_name {
+                "btn_left_top" => {
+                    self.indi.mount_start_move_west(mount_device_name)?;
+                    self.indi.mount_start_move_north(mount_device_name)?;
+                }
+                "btn_top" => {
+                    self.indi.mount_start_move_north(mount_device_name)?;
+                }
+                "btn_right_top" => {
+                    self.indi.mount_start_move_east(mount_device_name)?;
+                    self.indi.mount_start_move_north(mount_device_name)?;
+                }
+                "btn_left" => {
+                    self.indi.mount_start_move_west(mount_device_name)?;
+                }
+                "btn_right" => {
+                    self.indi.mount_start_move_east(mount_device_name)?;
+                }
+                "btn_left_bottom" => {
+                    self.indi.mount_start_move_west(mount_device_name)?;
+                    self.indi.mount_start_move_south(mount_device_name)?;
+                }
+                "btn_bottom" => {
+                    self.indi.mount_start_move_south(mount_device_name)?;
+                }
+                "btn_right_bottom" => {
+                    self.indi.mount_start_move_south(mount_device_name)?;
+                    self.indi.mount_start_move_east(mount_device_name)?;
+                }
+                "btn_stop_mount" => {
+                    self.indi.mount_abort_motion(mount_device_name)?;
+                    self.indi.mount_stop_move(mount_device_name)?;
+                }
+                _ => {},
+            };
+            Ok(())
+        });
+    }
+
+    fn handler_nav_mount_btn_released(&self, button_name: &str) {
+        let options = self.options.read().unwrap();
+        if options.mount.device.is_empty() { return; }
+        gtk_utils::exec_and_show_error(&self.window, || {
+            if button_name != "btn_stop_mount" {
+                self.indi.mount_stop_move(&options.mount.device)?;
+            }
+            Ok(())
+        });
+    }
+
+    fn store_mount_device_name(&self) {
+        let mounts = self.indi.get_devices_list_by_interface(indi::DriverInterface::TELESCOPE);
+        let mut options = self.options.write().unwrap();
+        if !mounts.is_empty() {
+            options.mount.device = mounts[0].name.to_string();
+        } else {
+            options.mount.device.clear();
+        }
+    }
+
+    fn fill_mount_speed_list_widget(&self) {
+        let options = self.options.read().unwrap();
+        if options.mount.device.is_empty() { return; }
+        gtk_utils::exec_and_show_error(&self.window, || {
+            let list = self.indi.mount_get_slew_speed_list(&options.mount.device)?;
+            let cb_mnt_speed = self.builder.object::<gtk::ComboBoxText>("cb_mnt_speed").unwrap();
+            cb_mnt_speed.remove_all();
+            cb_mnt_speed.append(None, "---");
+            for (id, text) in list {
+                cb_mnt_speed.append(
+                    Some(&id),
+                    text.as_ref().unwrap_or(&id).as_str()
+                );
+            }
+            let options = self.options.read().unwrap();
+            if options.mount.speed.is_some() {
+                cb_mnt_speed.set_active_id(options.mount.speed.as_deref());
+            } else {
+                cb_mnt_speed.set_active(Some(0));
+            }
+            Ok(())
+        });
+    }
+
+    fn show_mount_tracking_state(&self, tracking: bool) {
+        let options = self.options.read().unwrap();
+        if options.mount.device.is_empty() { return; }
+            let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        ui.set_prop_bool("chb_tracking.active", tracking);
+    }
+
+    fn show_mount_parked_state(&self, parked: bool) {
+        let options = self.options.read().unwrap();
+        if options.mount.device.is_empty() { return; }
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        ui.set_prop_bool("chb_parked.active", parked);
+    }
+
+    fn handler_delayed_action(&self, action: &DelayedActionTypes) {
+        match action {
+            DelayedActionTypes::UpdateMountWidgets => {
+                self.correct_widgets_props();
+            }
+            DelayedActionTypes::UpdateMountSpdList => {
+                self.fill_mount_speed_list_widget();
+            }
+        }
+    }
+
+    fn process_indi_prop_change(
+        &self,
+        device_name: &str,
+        prop_name:   &str,
+        elem_name:   &str,
+        new_prop:    bool,
+        _prev_state: Option<&indi::PropState>,
+        _new_state:  Option<&indi::PropState>,
+        value:       &indi::PropValue,
+    ) {
+        match (prop_name, elem_name, value) {
+            ("CONNECTION", ..) | ("DRIVER_INFO", "DRIVER_INTERFACE", _) => {
+                let driver_interface = self.indi
+                    .get_driver_interface(device_name)
+                    .unwrap_or(indi::DriverInterface::empty());
+                if driver_interface.contains(indi::DriverInterface::TELESCOPE) {
+                    self.store_mount_device_name();
+                    self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
+                }
+            }
+            ("TELESCOPE_SLEW_RATE", ..) if new_prop => {
+                self.delayed_actions.schedule(DelayedActionTypes::UpdateMountSpdList);
+            }
+            ("TELESCOPE_TRACK_STATE", "TRACK_ON", indi::PropValue::Switch(tracking)) => {
+                self.excl.exec(|| {
+                    self.show_mount_tracking_state(*tracking);
+                });
+            }
+            ("TELESCOPE_PARK", "PARK", indi::PropValue::Switch(parked)) => {
+                self.excl.exec(|| {
+                    self.show_mount_parked_state(*parked);
+                });
+            }
+
+            _ => {}
+        }
+    }
+
+    fn update_devices_list(&self, drv_interface: indi::DriverInterface) {
+        if drv_interface.contains(indi::DriverInterface::TELESCOPE) {
+            self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
+        }
+    }
+}

@@ -384,3 +384,35 @@ pub fn draw_progress_bar(
 
     Ok(())
 }
+
+pub fn fill_devices_list_into_combobox(
+    list: &Vec<String>,
+    cb_camera_list: &gtk::ComboBoxText,
+    cur_id: Option<&str>,
+    connected: bool,
+    set_id_fun: impl Fn(&str)
+) -> bool {
+    cb_camera_list.remove_all();
+
+    for item in list {
+        cb_camera_list.append(Some(item), item);
+    }
+
+    let mut camera_selected = false;
+    if let Some(cur_id) = cur_id {
+        cb_camera_list.set_active_id(Some(cur_id));
+        if cb_camera_list.active().is_none() {
+            cb_camera_list.insert(0, Some(&cur_id), cur_id);
+            cb_camera_list.set_active(Some(0));
+            camera_selected = true;
+        }
+    } else if list.len() != 0 {
+        cb_camera_list.set_active(Some(0));
+        set_id_fun(list[0].as_str());
+        camera_selected = true;
+    }
+
+    cb_camera_list.set_sensitive(list.len() > 1 && connected);
+
+    camera_selected
+}

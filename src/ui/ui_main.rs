@@ -99,6 +99,7 @@ pub fn init_ui(
     super::ui_focuser::init_ui(app, &builder, &data, options, core, indi, &excl, &mut handlers);
     super::ui_skymap::init_ui(app, &builder, &data, &options, indi, &excl, &mut handlers);
     super::ui_dithering::init_ui(app, &builder, &data, options, core, indi, &excl, &mut handlers);
+    super::ui_mount::init_ui(app, &builder, &data, options, core, indi, &excl, &mut handlers);
 
     // show common options
     excl.exec(|| {

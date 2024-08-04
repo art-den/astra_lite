@@ -48,7 +48,7 @@ pub fn init_ui(
 
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
-    data.init_focuser_widgets();
+    data.init_widgets();
     data.connect_indi_and_core_events();
     data.connect_widgets_events();
     data.update_devices_list();
@@ -252,7 +252,7 @@ impl FocuserUi {
         self.correct_widgets_props();
     }
 
-    fn init_focuser_widgets(&self) {
+    fn init_widgets(&self) {
         let spb_foc_temp = self.builder.object::<gtk::SpinButton>("spb_foc_temp").unwrap();
         spb_foc_temp.set_range(1.0, 20.0);
         spb_foc_temp.set_digits(0);
@@ -319,40 +319,29 @@ impl FocuserUi {
     }
 
     fn update_devices_list(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let dev_list = self.indi.get_devices_list();
-        let focusers = dev_list
+        let options = self.options.read().unwrap();
+        let cur_focuser = options.focuser.device.clone();
+        drop(options);
+
+        let cb_foc_list = self.builder.object::<gtk::ComboBoxText>("cb_foc_list").unwrap();
+        let list = self.indi
+            .get_devices_list_by_interface(indi::DriverInterface::FOCUSER)
             .iter()
-            .filter(|device|
-                device.interface.contains(indi::DriverInterface::FOCUSER)
-            );
-        let cb_foc_list: gtk::ComboBoxText =
-            self.builder.object("cb_foc_list").unwrap();
-        let last_active_id = cb_foc_list.active_id().map(|s| s.to_string());
-        cb_foc_list.remove_all();
-        for camera in focusers {
-            cb_foc_list.append(Some(&camera.name), &camera.name);
-        }
-        let focusers_count = gtk_utils::combobox_items_count(&cb_foc_list);
-        if focusers_count == 1 {
-            cb_foc_list.set_active(Some(0));
-        } else if focusers_count > 1 {
-            let options = self.options.read().unwrap();
-            if last_active_id.is_some() {
-                cb_foc_list.set_active_id(last_active_id.as_deref());
-            } else if !options.focuser.device.is_empty() {
-                cb_foc_list.set_active_id(Some(options.focuser.device.as_str()));
-            }
-            if cb_foc_list.active_id().is_none() {
-                cb_foc_list.set_active(Some(0));
-            }
-        }
+            .map(|dev| dev.name.to_string())
+            .collect();
+
         let connected = self.indi.state() == indi::ConnState::Connected;
-        ui.enable_widgets(false, &[
-            ("cb_foc_list", connected && focusers_count > 1),
-        ]);
-        self.options.write().unwrap().focuser.device =
-            cb_foc_list.active_id().map(|s| s.to_string()).unwrap_or_else(String::new);
+
+        fill_devices_list_into_combobox(
+            &list,
+            &cb_foc_list,
+            if !cur_focuser.is_empty() { Some(cur_focuser.as_str()) } else { None },
+            connected,
+            |id| {
+                let mut options = self.options.write().unwrap();
+                options.focuser.device = id.to_string();
+            }
+        );
     }
 
     fn update_focuser_position_widget(&self, new_prop: bool) {
@@ -386,6 +375,7 @@ impl FocuserUi {
             DelayedActionTypes::UpdateFocList => {
                 self.excl.exec(|| {
                     self.update_devices_list();
+                    self.show_cur_focuser_value();
                     self.correct_widgets_props();
                 });
             }
@@ -577,7 +567,5 @@ impl FocuserUi {
         let mut options = self.ui_options.borrow_mut();
         options.expanded = ui.prop_bool("exp_foc.expanded");
     }
-
-
 }
 

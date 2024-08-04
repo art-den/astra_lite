@@ -418,6 +418,16 @@ impl PropValue {
                 "[blob]".to_string(),
         }
     }
+
+    pub fn type_str(&self) -> &'static str {
+        match self {
+            PropValue::Text(_) => "Text",
+            PropValue::Switch(_) => "Switch",
+            PropValue::Light(_) => "Light",
+            PropValue::Blob(_) => "Blob",
+            PropValue::Num(_) => "Num",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -701,13 +711,41 @@ impl Device {
         }
     }
 
-    fn find_property(&self, prop_name: &str) -> Option<&Property> {
+    fn get_property_opt(&self, prop_name: &str) -> Option<&Property> {
         self.props
             .iter()
             .find(|prop| *prop.name == prop_name)
     }
 
-    fn find_property_mut(&mut self, prop_name: &str) -> Option<&mut Property> {
+    fn get_property_element_opt(
+        &self,
+        prop_name: &str,
+        elem_name: &str,
+    ) -> Option<&PropElement> {
+        self
+            .get_property_opt(prop_name)?
+            .get_elem(elem_name)
+    }
+
+    fn get_property_element(
+        &self,
+        prop_name: &str,
+        elem_name: &str,
+    ) -> Result<(&Property, &PropElement)> {
+        let property = self
+            .get_property_opt(prop_name)
+            .ok_or_else(|| Error::PropertyNotExists(self.name.to_string(), prop_name.to_string()))?;
+        let elem = property
+            .get_elem(elem_name)
+            .ok_or_else(|| Error::PropertyElemNotExists(
+                self.name.to_string(),
+                prop_name.to_string(),
+                elem_name.to_string())
+            )?;
+        Ok((property, elem))
+    }
+
+    fn get_property_opt_mut(&mut self, prop_name: &str) -> Option<&mut Property> {
         self.props
             .iter_mut()
             .find(|prop| *prop.name == prop_name)
@@ -721,6 +759,12 @@ impl Device {
             return None;
         };
         Some(self.props.remove(index))
+    }
+
+    fn get_interface(&self) -> Option<DriverInterface> {
+        let elem = self.get_property_element_opt("DRIVER_INFO", "DRIVER_INTERFACE")?;
+        let i32_value = elem.value.to_i32().unwrap_or(0);
+        Some(DriverInterface::from_bits_truncate(i32_value as u32))
     }
 }
 
@@ -782,35 +826,12 @@ impl Devices {
             .collect()
     }
 
-    fn get_list(&self) -> Vec<ExportDevice> {
-        self.get_names()
+    fn get_list_iter(&self) -> Box<dyn Iterator<Item = ExportDevice> + '_> {
+        Box::new(self.list
             .iter()
-            .map(|name| {
-                let interface_i32 = self.get_property_value(
-                    name,
-                    "DRIVER_INFO",
-                    "DRIVER_INTERFACE",
-                    |_| true,
-                    ""
-                ).map(|prop| prop.to_i32().unwrap_or(0)).unwrap_or(0);
-                let interface = DriverInterface::from_bits_truncate(interface_i32 as u32);
-                ExportDevice { name: Arc::clone(name), interface }
-            })
-            .collect()
-    }
-
-    fn get_device_by_driver(&self, driver_name: &str) -> Option<Arc<String>> {
-        self.list
-            .iter()
-            .find(|&device| {
-                let exec_driver_prop = self.get_text_property(
-                    &device.name,
-                    "DRIVER_INFO",
-                    "DRIVER_EXEC"
-                ).ok();
-                exec_driver_prop.as_deref().map(|s| s.as_str()) == Some(driver_name)
-            })
-            .map(|device| Arc::clone(&device.name))
+            .filter_map(|device| device.get_interface().map(|iface| (device, iface)))
+            .map(|(device, interface)| ExportDevice { name: Arc::clone(&device.name), interface })
+        )
     }
 
     fn get_properties_list(
@@ -843,16 +864,16 @@ impl Devices {
         elem_name:   Option<&str>
     ) -> Result<bool> {
         let device = self.find_by_name_res(device_name)?;
-        let Some(property) = device.find_property(prop_name)
-        else { return Ok(false); };
         if let Some(elem_name) = elem_name {
-            Ok(property.elements.iter().any(|e| *e.name == elem_name))
+            let elem_opt = device.get_property_element_opt(prop_name, elem_name);
+            Ok(elem_opt.is_some())
         } else {
-            Ok(true)
+            let property_opt = device.get_property_opt(prop_name);
+            Ok(property_opt.is_some())
         }
     }
 
-    fn check_property_exists<'a>(
+    fn check_property_ok_for_writing<'a>(
         &self,
         device_name:     &str,
         prop_name:       &str,
@@ -861,11 +882,8 @@ impl Devices {
         elem_get_name:   impl Fn(usize) -> &'a str,
         req_type_str:    &str,
     ) -> Result<()> {
-        let Some(device) = self.find_by_name_opt(device_name)
-        else {
-            return Err(Error::DeviceNotExists(device_name.to_string()));
-        };
-        let Some(property) = device.find_property(prop_name)
+        let device = self.find_by_name_res(device_name)?;
+        let Some(property) = device.get_property_opt(prop_name)
         else {
             return Err(Error::PropertyNotExists(
                 device_name.to_string(),
@@ -910,19 +928,22 @@ impl Devices {
         elem_name:   &str
     ) -> Result<bool> {
         Self::basic_check_device_and_prop_name(device_name, prop_name)?;
-        let prop_value = self.get_property_value(
-            device_name,
-            prop_name,
-            elem_name,
-            |type_| matches!(*type_, PropType::Switch(_)),
-            "Switch"
-        )?;
-        if let PropValue::Switch(v) = prop_value {
-            Ok(*v)
+        let device = self.find_by_name_res(device_name)?;
+        let (property, elem_value) = device.get_property_element(prop_name, elem_name)?;
+        if !matches!(property.type_, PropType::Switch(_)) {
+            return Err(Error::WrongPropertyType(
+                device_name.to_string(),
+                prop_name.to_string(),
+                property.type_.to_str().to_string(),
+                "Switch".to_string()
+            ));
+        }
+        if let PropValue::Switch(value) = &elem_value.value {
+            Ok(*value)
         } else {
             Err(Error::Internal(format!(
-                "Swicth property contains value of other type {:?}",
-                prop_value
+                "Switch property contains value of other type {:?}",
+                elem_value.value.type_str()
             )))
         }
     }
@@ -934,19 +955,22 @@ impl Devices {
         elem_name:   &str
     ) -> Result<&NumPropValue> {
         Self::basic_check_device_and_prop_name(device_name, prop_name)?;
-        let prop_value = self.get_property_value(
-            device_name,
-            prop_name,
-            elem_name,
-            |tp| matches!(*tp, PropType::Num{..}),
-            "Num"
-        )?;
-        if let PropValue::Num(value) = prop_value {
+        let device = self.find_by_name_res(device_name)?;
+        let (property, elem_value) = device.get_property_element(prop_name, elem_name)?;
+        if property.type_ != PropType::Num {
+            return Err(Error::WrongPropertyType(
+                device_name.to_string(),
+                prop_name.to_string(),
+                property.type_.to_str().to_string(),
+                "Num".to_string()
+            ));
+        }
+        if let PropValue::Num(value) = &elem_value.value {
             Ok(value)
         } else {
             Err(Error::Internal(format!(
                 "Num property contains value of other type {:?}",
-                prop_value
+                elem_value.value.type_str()
             )))
         }
     }
@@ -958,19 +982,22 @@ impl Devices {
         elem_name:   &str
     ) -> Result<Arc<String>> {
         Self::basic_check_device_and_prop_name(device_name, prop_name)?;
-        let prop_value = self.get_property_value(
-            device_name,
-            prop_name,
-            elem_name,
-            |tp| *tp == PropType::Text,
-            "Text"
-        )?;
-        if let PropValue::Text(v) = prop_value {
-            Ok(v.clone())
+        let device = self.find_by_name_res(device_name)?;
+        let (property, elem_value) = device.get_property_element(prop_name, elem_name)?;
+        if property.type_ != PropType::Text {
+            return Err(Error::WrongPropertyType(
+                device_name.to_string(),
+                prop_name.to_string(),
+                property.type_.to_str().to_string(),
+                "Text".to_string()
+            ));
+        }
+        if let PropValue::Text(value) = &elem_value.value {
+            Ok(Arc::clone(value))
         } else {
             Err(Error::Internal(format!(
-                "Text property contains value of other type {:?}",
-                prop_value
+                "Num property contains value of other type {:?}",
+                elem_value.value.type_str()
             )))
         }
     }
@@ -982,7 +1009,7 @@ impl Devices {
     ) -> Result<(&'a str, &'a str)> {
         let device = self.find_by_name_res(device_name)?;
         for &(prop_name, elem_name) in prop_and_elem {
-            let Some(prop) = device.find_property(prop_name) else {
+            let Some(prop) = device.get_property_opt(prop_name) else {
                 continue;
             };
             let elem_exists = prop.elements.iter().any(|e|
@@ -996,78 +1023,27 @@ impl Devices {
     }
 
     fn get_driver_interface(&self, device_name: &str) -> Result<DriverInterface> {
-        let interface_i32 = self.get_property_value(
-            &device_name,
-            "DRIVER_INFO",
-            "DRIVER_INTERFACE",
-            |_| true,
-            ""
-        ).map(|prop| prop.to_i32().unwrap_or(0))?;
-        Ok(DriverInterface::from_bits_truncate(
-            interface_i32 as u32
-        ))
+        let (_, elem) = self
+            .find_by_name_res(device_name)?
+            .get_property_element("DRIVER_INFO", "DRIVER_INTERFACE")?;
+        let interface_i32 = elem.value.to_i32().unwrap_or(0);
+        let interface = DriverInterface::from_bits_truncate(interface_i32 as u32);
+        Ok(interface)
     }
 
-    fn get_property<'a>(
-        &'a self,
+    fn get_property(
+        &self,
         device_name: &str,
         prop_name:   &str,
-    ) -> Result<&'a Property> {
+    ) -> Result<&Property> {
         let device = self.find_by_name_res(device_name)?;
-        let Some(property) = device.find_property(prop_name) else {
+        let Some(property) = device.get_property_opt(prop_name) else {
             return Err(Error::PropertyNotExists(
                 device_name.to_string(),
                 prop_name.to_string()
             ));
         };
         Ok(property)
-    }
-
-    fn get_property_element<'a>(
-        &'a self,
-        device_name: &str,
-        prop_name:   &str,
-        elem_name:   &str,
-    ) -> Result<&'a PropElement> {
-        let property = self.get_property(device_name, prop_name)?;
-        property
-            .get_elem(elem_name)
-            .ok_or_else(|| Error::PropertyElemNotExists(
-                device_name.to_string(),
-                prop_name.to_string(),
-                elem_name.to_string(),
-            ))
-    }
-
-    fn get_property_value<'a>(
-        &'a self,
-        device_name:     &str,
-        prop_name:       &str,
-        elem_name:       &str,
-        elem_check_type: fn (&PropType) -> bool,
-        req_type_str:    &str,
-    ) -> Result<&'a PropValue> {
-        let property = self.get_property(device_name, prop_name)?;
-        if !elem_check_type(&property.type_) {
-            return Err(Error::WrongPropertyType(
-                device_name.to_string(),
-                prop_name.to_string(),
-                property.type_.to_str().to_string(),
-                req_type_str.to_string(),
-            ));
-        }
-        let Some(elem) = property
-            .elements
-            .iter()
-            .find(|elem| *elem.name == elem_name)
-        else {
-            return Err(Error::PropertyElemNotExists(
-                device_name.to_string(),
-                prop_name.to_string(),
-                elem_name.to_string(),
-            ));
-        };
-        Ok(&elem.value)
     }
 
     fn is_device_enabled(&self, device_name: &str) -> Result<bool> {
@@ -1439,12 +1415,15 @@ impl Connection {
 
     pub fn get_devices_list(&self) -> Vec<ExportDevice> {
         let devices = self.devices.lock().unwrap();
-        devices.get_list()
+        devices.get_list_iter().collect()
     }
 
-    pub fn get_device_by_driver(&self, driver_name: &str) -> Option<Arc<String>> {
+    pub fn get_devices_list_by_interface(&self, iface: DriverInterface) -> Vec<ExportDevice> {
         let devices = self.devices.lock().unwrap();
-        devices.get_device_by_driver(driver_name)
+        devices
+            .get_list_iter()
+            .filter(|device| device.interface.intersects(iface))
+            .collect()
     }
 
     pub fn get_driver_interface(&self, device_name: &str) -> Result<DriverInterface> {
@@ -1584,7 +1563,7 @@ impl Connection {
         timeout_ms:  Option<u64>
     ) -> Result<()> {
         let devices = self.devices.lock().unwrap();
-        let dev_list = devices.get_list();
+        let dev_list = devices.get_list_iter().collect::<Vec<_>>();
         drop(devices);
         for dev in &dev_list {
             self.command_enable_device(
@@ -1607,7 +1586,7 @@ impl Connection {
             device_name,
             prop_name
         )?;
-        self.devices.lock().unwrap().check_property_exists(
+        self.devices.lock().unwrap().check_property_ok_for_writing(
             device_name,
             prop_name,
             elements.len(),
@@ -1635,7 +1614,7 @@ impl Connection {
             device_name,
             prop_name
         )?;
-        self.devices.lock().unwrap().check_property_exists(
+        self.devices.lock().unwrap().check_property_ok_for_writing(
             device_name,
             prop_name,
             elements.len(),
@@ -1719,7 +1698,7 @@ impl Connection {
             device_name,
             prop_name
         )?;
-        self.devices.lock().unwrap().check_property_exists(
+        self.devices.lock().unwrap().check_property_ok_for_writing(
             device_name,
             prop_name,
             elements.len(),
@@ -2234,10 +2213,7 @@ impl Connection {
         let devices = self.devices.lock().unwrap();
         let (prop_name, prop_elem) = devices.existing_prop_name(device_name, PROP_CAM_COOLING_PWR)?;
         let property = devices.get_property(device_name, prop_name)?;
-        let elem = property.elements
-            .iter()
-            .find(|e| *e.name == prop_elem)
-            .unwrap();
+        let elem = property.get_elem(prop_elem).unwrap();
         Ok(elem.value.to_string())
     }
 
@@ -2404,7 +2380,7 @@ impl Connection {
     ) -> Result<Vec<Arc<String>>> {
         let devices = self.devices.lock().unwrap();
         let device = devices.find_by_name_res(device_name)?;
-        let Some(prop) = device.find_property("CCD_RESOLUTION") else {
+        let Some(prop) = device.get_property_opt("CCD_RESOLUTION") else {
             return Ok(Vec::new());
         };
         Ok(prop.elements
@@ -2435,7 +2411,7 @@ impl Connection {
     ) -> Result<Option<Arc<String>>> {
         let devices = self.devices.lock().unwrap();
         let device = devices.find_by_name_res(device_name)?;
-        let Some(prop) = device.find_property("CCD_RESOLUTION") else {
+        let Some(prop) = device.get_property_opt("CCD_RESOLUTION") else {
             return Ok(None);
         };
         Ok(prop.elements
@@ -2783,7 +2759,7 @@ impl Connection {
             PROP_CAM_HEAT_ON
         )?;
         let device = devices.find_by_name_res(device_name)?;
-        let Some(prop) = device.find_property(prop_name) else {
+        let Some(prop) = device.get_property_opt(prop_name) else {
             return Ok(None);
         };
         Ok(Some(prop.elements
@@ -3013,7 +2989,7 @@ impl Connection {
     ) -> Result<Vec<(Arc<String>, Option<Arc<String>>)>> {
         let devices = self.devices.lock().unwrap();
         let device = devices.find_by_name_res(device_name)?;
-        let Some(prop) = device.find_property("TELESCOPE_SLEW_RATE") else {
+        let Some(prop) = device.get_property_opt("TELESCOPE_SLEW_RATE") else {
             return Ok(Vec::new());
         };
         let result = prop.elements
@@ -3635,7 +3611,7 @@ impl XmlReceiver {
                 devices.list.last_mut().unwrap()
             };
             let prop_name = xml_elem.attr_string_or_err("name")?;
-            if device.find_property(&prop_name).is_some() {
+            if device.get_property_opt(&prop_name).is_some() {
                 // simple ignore if INDI server sends defXXXXVector command
                 // for already existing property
                 return Ok(());
@@ -3672,7 +3648,7 @@ impl XmlReceiver {
                 anyhow::bail!(Error::DeviceNotExists(device_name));
             };
             let device_name = Arc::clone(&device.name);
-            let Some(property) = device.find_property_mut(&prop_name) else {
+            let Some(property) = device.get_property_opt_mut(&prop_name) else {
                 anyhow::bail!(Error::PropertyNotExists(
                     device_name.to_string(),
                     prop_name

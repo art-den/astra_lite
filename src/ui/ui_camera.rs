@@ -67,7 +67,6 @@ pub fn init_ui(
     data.update_light_history_table();
 
     data.connect_img_mouse_scroll_events();
-    data.connect_mount_widgets_events();
 
     handlers.push(Box::new(clone!(@weak data => move |event| {
         data.handler_main_ui_event(event);
@@ -78,7 +77,6 @@ pub fn init_ui(
             data.handler_delayed_action(action);
         })
     );
-
 
     data.correct_widgets_props();
     data.correct_frame_quality_widgets_props();
@@ -92,8 +90,6 @@ enum DelayedActionTypes {
     UpdateCtrlWidgets,
     UpdateResolutionList,
     SelectMaxResolution,
-    UpdateMountWidgets,
-    UpdateMountSpdList,
     FillHeaterItems,
 }
 
@@ -119,7 +115,6 @@ struct UiOptions {
     raw_frames_exp: bool,
     live_exp:       bool,
     quality_exp:    bool,
-    mount_exp:      bool,
     all_cam_opts:   Vec<StoredCamOptions>,
     hist_log_y:     bool,
     hist_percents:  bool,
@@ -138,7 +133,6 @@ impl Default for UiOptions {
             raw_frames_exp: true,
             live_exp:       false,
             quality_exp:    true,
-            mount_exp:      false,
             all_cam_opts:   Vec::new(),
             hist_log_y:     false,
             hist_percents:  true,
@@ -689,10 +683,6 @@ impl CameraUi {
                 };
             },
 
-            MainThreadEvent::Indi(indi::Event::DeviceDelete(event)) => {
-                self.update_devices_list_and_props_by_drv_interface(event.drv_interface);
-            },
-
             MainThreadEvent::FrameProcessing(result) => {
                 match result.data {
                     FrameProcessResultData::ShotProcessingFinished {
@@ -902,7 +892,6 @@ impl CameraUi {
         ui.set_prop_bool("exp_raw_frames.expanded", options.raw_frames_exp);
         ui.set_prop_bool("exp_live.expanded",       options.live_exp);
         ui.set_prop_bool("exp_quality.expanded",    options.quality_exp);
-        ui.set_prop_bool("exp_mount.expanded",      options.mount_exp);
         ui.set_prop_bool("ch_hist_logy.active",     options.hist_log_y);
         ui.set_prop_bool("ch_stat_percents.active", options.hist_percents);
     }
@@ -932,7 +921,6 @@ impl CameraUi {
         options.raw_frames_exp = ui.prop_bool("exp_raw_frames.expanded");
         options.live_exp       = ui.prop_bool("exp_live.expanded");
         options.quality_exp    = ui.prop_bool("exp_quality.expanded");
-        options.mount_exp      = ui.prop_bool("exp_mount.expanded");
         options.hist_log_y     = ui.prop_bool("ch_hist_logy.active");
         options.hist_percents  = ui.prop_bool("ch_stat_percents.active");
     }
@@ -952,7 +940,7 @@ impl CameraUi {
         match action {
             DelayedActionTypes::UpdateCamList => {
                 self.excl.exec(|| {
-                    self.update_camera_devices_list();
+                    self.update_devices_list();
                     self.update_resolution_list();
                 });
                 self.select_maximum_resolution();
@@ -976,12 +964,6 @@ impl CameraUi {
             DelayedActionTypes::SelectMaxResolution => {
                 self.select_maximum_resolution();
             }
-            DelayedActionTypes::UpdateMountWidgets => {
-                self.correct_widgets_props(); // ???
-            }
-            DelayedActionTypes::UpdateMountSpdList => {
-                self.fill_mount_speed_list_widget();
-            }
             DelayedActionTypes::FillHeaterItems => {
                 self.excl.exec(|| {
                     self.fill_heater_items_list();
@@ -995,7 +977,6 @@ impl CameraUi {
         gtk_utils::exec_and_show_error(&self.window, || {
             let camera = &options.cam.device;
             let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-            let mount = options.mount.device.clone();
             let correct_num_adjustment_by_prop = |
                 spb_name:  &str,
                 prop_info: indi::Result<indi::NumPropValue>,
@@ -1103,16 +1084,6 @@ impl CameraUi {
                 .unwrap_or(false);
             drop(mode_data);
 
-            let mnt_active = self.indi.is_device_enabled(&mount).unwrap_or(false);
-
-            let mount_ctrl_sensitive =
-                (indi_connected &&
-                mnt_active &&
-                !mount.is_empty() &&
-                waiting) ||
-                (ui.prop_string("cb_dith_perod.active-id").as_deref() == Some("0") &&
-                !ui.prop_bool("chb_guid_enabled.active"));
-
             let save_raw_btn_cap = match frame_mode {
                 FrameType::Lights => "Start save\nLIGHTs",
                 FrameType::Darks  => "Start save\nDARKs",
@@ -1190,8 +1161,6 @@ impl CameraUi {
                 ("grd_cam_calibr",     cam_sensitive),
                 ("bx_light_qual",      cam_sensitive),
 
-                ("bx_simple_mount",    mount_ctrl_sensitive),
-
                 ("spb_guid_max_err",   ui.prop_bool("chb_guid_enabled.active")),
 
                 ("l_delay",            liveview_active),
@@ -1215,17 +1184,14 @@ impl CameraUi {
         ]);
     }
 
-    fn update_camera_devices_list(&self) {
-        let cb_camera_list: gtk::ComboBoxText = self.builder.object("cb_camera_list").unwrap();
-        let dev_list = self.indi.get_devices_list();
-        let cameras = dev_list
-            .iter()
-            .filter(|device|
-                device.interface.contains(indi::DriverInterface::CCD)
-            );
+    fn update_devices_list(&self) {
+        let options = self.options.read().unwrap();
+        let cur_cam_device = options.cam.device.clone();
+        drop(options);
 
-        cb_camera_list.remove_all();
-        let mut cameras_count = 0;
+        let cameras = self.indi.get_devices_list_by_interface(indi::DriverInterface::CCD);
+
+        let mut list = Vec::new();
         for camera in cameras {
             for prop in ["CCD1", "CCD2", "CCD3"] {
                 if self.indi.property_exists(&camera.name, prop, None).unwrap_or(false) {
@@ -1233,36 +1199,25 @@ impl CameraUi {
                         name: camera.name.to_string(),
                         prop: prop.to_string()
                     };
-                    let cam_id = dev_and_prop.to_string();
-                    cb_camera_list.append(Some(&cam_id), &cam_id);
-                    cameras_count += 1;
+                    list.push(dev_and_prop.to_string());
                 }
             }
         }
 
-        let options = self.options.read().unwrap();
-        let cur_cam_device = options.cam.device.clone();
-        drop(options);
-        let mut camera_selected = false;
-        if let Some(cur_cam_device) = cur_cam_device {
-            let id = cur_cam_device.to_string();
-            cb_camera_list.set_active_id(Some(&id));
-            if cb_camera_list.active().is_none() {
-                cb_camera_list.insert(0, Some(&id), &id);
-                cb_camera_list.set_active(Some(0));
-                camera_selected = true;
+        let cb_camera_list = self.builder.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
+
+        let connected = self.indi.state() == indi::ConnState::Connected;
+
+        let camera_selected = fill_devices_list_into_combobox(
+            &list,
+            &cb_camera_list,
+            cur_cam_device.as_ref().map(|d| d.name.as_str()),
+            connected,
+            |id| {
+                let mut options = self.options.write().unwrap();
+                options.cam.device = Some(DeviceAndProp::new(id));
             }
-        } else if cameras_count != 0 {
-            cb_camera_list.set_active(Some(0));
-
-            let mut options = self.options.write().unwrap();
-            let cam_and_prop = DeviceAndProp::new(&cb_camera_list.active_id().unwrap_or_default());
-            options.cam.device = Some(cam_and_prop);
-            drop(options);
-            camera_selected = true;
-        }
-
-        cb_camera_list.set_sensitive(cameras_count > 1);
+        );
 
         if camera_selected {
             let options = self.options.read().unwrap();
@@ -1813,19 +1768,10 @@ impl CameraUi {
         *self.conn_state.borrow_mut() = conn_state;
         if update_devices_list {
             self.excl.exec(|| {
-                self.update_camera_devices_list();
+                self.update_devices_list();
             });
         }
         self.correct_widgets_props();
-    }
-
-    fn update_devices_list_and_props_by_drv_interface(
-        &self,
-        drv_interface: indi::DriverInterface,
-    ) {
-        if drv_interface.contains(indi::DriverInterface::TELESCOPE) {
-            self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
-        }
     }
 
     fn process_indi_prop_change(
@@ -1847,14 +1793,6 @@ impl CameraUi {
         }
 
         match (prop_name, elem_name, value) {
-            ("DRIVER_INFO", "DRIVER_INTERFACE", _) => {
-                let flag_bits = value.to_i32().unwrap_or(0);
-                let flags = indi::DriverInterface::from_bits_truncate(flag_bits as u32);
-                if flags.contains(indi::DriverInterface::TELESCOPE) {
-                    self.options.write().unwrap().mount.device = device_name.to_string();
-                    self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
-                }
-            },
             ("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE"|"CCD_TEMPERATURE",
              indi::PropValue::Num(indi::NumPropValue{value, ..})) => {
                 if new_prop {
@@ -1902,27 +1840,8 @@ impl CameraUi {
                 self.delayed_actions.schedule(
                     DelayedActionTypes::UpdateResolutionList
                 ),
-            ("CONNECTION", ..) => {
-                let driver_interface = self.indi
-                    .get_driver_interface(device_name)
-                    .unwrap_or(indi::DriverInterface::empty());
-                self.update_devices_list_and_props_by_drv_interface(driver_interface);
-            }
             ("CCD1"|"CCD2", ..) if new_prop => {
                 self.delayed_actions.schedule(DelayedActionTypes::UpdateCamList);
-            }
-            ("TELESCOPE_SLEW_RATE", ..) if new_prop => {
-                self.delayed_actions.schedule(DelayedActionTypes::UpdateMountSpdList);
-            }
-            ("TELESCOPE_TRACK_STATE", "TRACK_ON", indi::PropValue::Switch(tracking)) => {
-                self.excl.exec(|| {
-                    self.show_mount_tracking_state(*tracking);
-                });
-            }
-            ("TELESCOPE_PARK", "PARK", indi::PropValue::Switch(parked)) => {
-                self.excl.exec(|| {
-                    self.show_mount_parked_state(*parked);
-                });
             }
             _ => {},
         }
@@ -2240,185 +2159,6 @@ impl CameraUi {
         );
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         ui.set_prop_str("l_raw_time_info.label", Some(&text));
-    }
-
-    ///////////////////////////////////////////////////////////////////////////////
-
-    const MOUNT_NAV_BUTTON_NAMES: &'static [&'static str] = &[
-        "btn_left_top",    "btn_top",        "btn_right_top",
-        "btn_left",        "btn_stop_mount", "btn_right",
-        "btn_left_bottom", "btn_bottom",     "btn_right_bottom",
-    ];
-
-    fn connect_mount_widgets_events(self: &Rc<Self>) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        for &btn_name in Self::MOUNT_NAV_BUTTON_NAMES {
-            let btn = self.builder.object::<gtk::Button>(btn_name).unwrap();
-            btn.connect_button_press_event(clone!(
-                @weak self as self_ => @default-return glib::Propagation::Proceed,
-                move |_, eb| {
-                    if eb.button() == gtk::gdk::ffi::GDK_BUTTON_PRIMARY as u32 {
-                        self_.handler_nav_mount_btn_pressed(btn_name);
-                    }
-                    glib::Propagation::Proceed
-                }
-            ));
-            btn.connect_button_release_event(clone!(
-                @weak self as self_ => @default-return glib::Propagation::Proceed,
-                move |_, _| {
-                    self_.handler_nav_mount_btn_released(btn_name);
-                    glib::Propagation::Proceed
-                }
-            ));
-        }
-
-        let chb_tracking = self.builder.object::<gtk::CheckButton>("chb_tracking").unwrap();
-        chb_tracking.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            self_.excl.exec(|| {
-                let options = self_.options.read().unwrap();
-                if options.mount.device.is_empty() { return; }
-                gtk_utils::exec_and_show_error(&self_.window, || {
-                    self_.indi.mount_set_tracking(&options.mount.device, chb.is_active(), true, None)?;
-                    Ok(())
-                });
-            });
-        }));
-
-        let chb_parked = self.builder.object::<gtk::CheckButton>("chb_parked").unwrap();
-        chb_parked.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            let options = self_.options.read().unwrap();
-            if options.mount.device.is_empty() { return; }
-            let parked = chb.is_active();
-            ui.enable_widgets(true, &[
-                ("chb_tracking", !parked),
-                ("cb_mnt_speed", !parked),
-                ("chb_inv_ns", !parked),
-                ("chb_inv_we", !parked),
-            ]);
-            for &btn_name in Self::MOUNT_NAV_BUTTON_NAMES {
-                ui.set_prop_bool_ex(btn_name, "sensitive", !parked);
-            }
-            self_.excl.exec(|| {
-                gtk_utils::exec_and_show_error(&self_.window, || {
-                    self_.indi.mount_set_parked(&options.mount.device, parked, true, None)?;
-                    Ok(())
-                });
-            });
-        }));
-    }
-
-    fn handler_nav_mount_btn_pressed(&self, button_name: &str) {
-        let options = self.options.read().unwrap();
-        let mount_device_name = &options.mount.device;
-        if mount_device_name.is_empty() { return; }
-        gtk_utils::exec_and_show_error(&self.window, || {
-            let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-            if button_name != "btn_stop_mount" {
-                let inv_ns = ui.prop_bool("chb_inv_ns.active");
-                let inv_we = ui.prop_bool("chb_inv_we.active");
-                self.indi.mount_reverse_motion(
-                    mount_device_name,
-                    inv_ns,
-                    inv_we,
-                    false,
-                    INDI_SET_PROP_TIMEOUT
-                )?;
-                let speed = ui.prop_string("cb_mnt_speed.active-id");
-                if let Some(speed) = speed {
-                    self.indi.mount_set_slew_speed(
-                        mount_device_name,
-                        &speed,
-                        true,
-                        Some(100)
-                    )?
-                }
-            }
-            match button_name {
-                "btn_left_top" => {
-                    self.indi.mount_start_move_west(mount_device_name)?;
-                    self.indi.mount_start_move_north(mount_device_name)?;
-                }
-                "btn_top" => {
-                    self.indi.mount_start_move_north(mount_device_name)?;
-                }
-                "btn_right_top" => {
-                    self.indi.mount_start_move_east(mount_device_name)?;
-                    self.indi.mount_start_move_north(mount_device_name)?;
-                }
-                "btn_left" => {
-                    self.indi.mount_start_move_west(mount_device_name)?;
-                }
-                "btn_right" => {
-                    self.indi.mount_start_move_east(mount_device_name)?;
-                }
-                "btn_left_bottom" => {
-                    self.indi.mount_start_move_west(mount_device_name)?;
-                    self.indi.mount_start_move_south(mount_device_name)?;
-                }
-                "btn_bottom" => {
-                    self.indi.mount_start_move_south(mount_device_name)?;
-                }
-                "btn_right_bottom" => {
-                    self.indi.mount_start_move_south(mount_device_name)?;
-                    self.indi.mount_start_move_east(mount_device_name)?;
-                }
-                "btn_stop_mount" => {
-                    self.indi.mount_abort_motion(mount_device_name)?;
-                    self.indi.mount_stop_move(mount_device_name)?;
-                }
-                _ => {},
-            };
-            Ok(())
-        });
-    }
-
-    fn handler_nav_mount_btn_released(&self, button_name: &str) {
-        let options = self.options.read().unwrap();
-        if options.mount.device.is_empty() { return; }
-        gtk_utils::exec_and_show_error(&self.window, || {
-            if button_name != "btn_stop_mount" {
-                self.indi.mount_stop_move(&options.mount.device)?;
-            }
-            Ok(())
-        });
-    }
-
-    fn fill_mount_speed_list_widget(&self) {
-        let options = self.options.read().unwrap();
-        if options.mount.device.is_empty() { return; }
-        gtk_utils::exec_and_show_error(&self.window, || {
-            let list = self.indi.mount_get_slew_speed_list(&options.mount.device)?;
-            let cb_mnt_speed = self.builder.object::<gtk::ComboBoxText>("cb_mnt_speed").unwrap();
-            cb_mnt_speed.remove_all();
-            cb_mnt_speed.append(None, "---");
-            for (id, text) in list {
-                cb_mnt_speed.append(
-                    Some(&id),
-                    text.as_ref().unwrap_or(&id).as_str()
-                );
-            }
-            let options = self.options.read().unwrap();
-            if options.mount.speed.is_some() {
-                cb_mnt_speed.set_active_id(options.mount.speed.as_deref());
-            } else {
-                cb_mnt_speed.set_active(Some(0));
-            }
-            Ok(())
-        });
-    }
-
-    fn show_mount_tracking_state(&self, tracking: bool) {
-        let options = self.options.read().unwrap();
-        if options.mount.device.is_empty() { return; }
-            let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        ui.set_prop_bool("chb_tracking.active", tracking);
-    }
-
-    fn show_mount_parked_state(&self, parked: bool) {
-        let options = self.options.read().unwrap();
-        if options.mount.device.is_empty() { return; }
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        ui.set_prop_bool("chb_parked.active", parked);
     }
 
     fn handler_action_open_image(self: &Rc<Self>) {
