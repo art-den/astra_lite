@@ -386,33 +386,33 @@ pub fn draw_progress_bar(
 }
 
 pub fn fill_devices_list_into_combobox(
-    list: &Vec<String>,
-    cb_camera_list: &gtk::ComboBoxText,
-    cur_id: Option<&str>,
-    connected: bool,
+    list:       &Vec<String>,
+    cb:         &gtk::ComboBoxText,
+    cur_id:     Option<&str>,
+    connected:  bool,
     set_id_fun: impl Fn(&str)
 ) -> bool {
-    cb_camera_list.remove_all();
+    cb.remove_all();
 
     for item in list {
-        cb_camera_list.append(Some(item), item);
+        cb.append(Some(item), item);
     }
 
-    let mut camera_selected = false;
+    let mut device_selected_in_cb = false;
     if let Some(cur_id) = cur_id {
-        cb_camera_list.set_active_id(Some(cur_id));
-        if cb_camera_list.active().is_none() {
-            cb_camera_list.insert(0, Some(&cur_id), cur_id);
-            cb_camera_list.set_active(Some(0));
-            camera_selected = true;
+        cb.set_active_id(Some(cur_id));
+        if cb.active().is_none() {
+            cb.insert(0, Some(&cur_id), cur_id);
+            cb.set_active(Some(0));
+            device_selected_in_cb = true;
         }
     } else if list.len() != 0 {
-        cb_camera_list.set_active(Some(0));
+        cb.set_active(Some(0));
         set_id_fun(list[0].as_str());
-        camera_selected = true;
+        device_selected_in_cb = true;
     }
 
-    cb_camera_list.set_sensitive(list.len() > 1 && connected);
+    cb.set_sensitive(list.len() > 1 && connected);
 
-    camera_selected
+    device_selected_in_cb
 }

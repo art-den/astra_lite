@@ -329,6 +329,10 @@ impl CameraUi {
                 let mut prev_cam = self_.prev_cam.borrow_mut();
                 let mut options = self_.options.write().unwrap();
 
+                if options.cam.device.as_ref().map(|dev| dev.name == cur_id.as_str()).unwrap_or(false) {
+                    return;
+                }
+
                 // Store previous camera options into UiOptions::all_cam_opts
                 if let Some(prev_cam) = &*prev_cam {
                     self_.store_cur_cam_options_impl(prev_cam, &options);
@@ -1204,13 +1208,13 @@ impl CameraUi {
             }
         }
 
-        let cb_camera_list = self.builder.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
+        let cb = self.builder.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
 
         let connected = self.indi.state() == indi::ConnState::Connected;
 
         let camera_selected = fill_devices_list_into_combobox(
             &list,
-            &cb_camera_list,
+            &cb,
             cur_cam_device.as_ref().map(|d| d.name.as_str()),
             connected,
             |id| {

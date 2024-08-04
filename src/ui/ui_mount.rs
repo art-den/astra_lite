@@ -51,6 +51,7 @@ pub fn init_ui(
     data.connect_indi();
     data.connect_widgets_events();
     data.apply_ui_options();
+    data.fill_devices_list();
     data.correct_widgets_props();
 
     handlers.push(Box::new(clone!(@weak data => move |event| {
@@ -162,6 +163,18 @@ impl MountUi {
             ));
         }
 
+        let cb_mount_list = self.builder.object::<gtk::ComboBoxText>("cb_mount_list").unwrap();
+        cb_mount_list.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
+            self_.excl.exec(|| {
+                let Some(cur_id) = cb.active_id() else { return; };
+                let mut options = self_.options.write().unwrap();
+                if options.mount.device == cur_id.as_str() { return; }
+                options.mount.device = cur_id.to_string();
+                drop(options);
+                self_.correct_widgets_props();
+            });
+        }));
+
         let chb_tracking = self.builder.object::<gtk::CheckButton>("chb_tracking").unwrap();
         chb_tracking.connect_active_notify(clone!(@weak self as self_ => move |chb| {
             self_.excl.exec(|| {
@@ -255,14 +268,15 @@ impl MountUi {
         match event {
             MainThreadEvent::Indi(indi::Event::DeviceDelete(event)) => {
                 if event.drv_interface.contains(indi::DriverInterface::TELESCOPE) {
-                    self.store_mount_device_name();
-                    self.correct_widgets_props();
+                    self.fill_devices_list();
+                    self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
                 }
             }
             MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) => {
                 if conn_state == indi::ConnState::Disconnected
                 || conn_state == indi::ConnState::Connected {
-                    self.correct_widgets_props();
+                    self.fill_devices_list();
+                    self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
                 }
             }
             MainThreadEvent::Indi(indi::Event::PropChange(event_data)) => {
@@ -370,14 +384,28 @@ impl MountUi {
         });
     }
 
-    fn store_mount_device_name(&self) {
-        let mounts = self.indi.get_devices_list_by_interface(indi::DriverInterface::TELESCOPE);
-        let mut options = self.options.write().unwrap();
-        if !mounts.is_empty() {
-            options.mount.device = mounts[0].name.to_string();
-        } else {
-            options.mount.device.clear();
-        }
+    fn fill_devices_list(&self) {
+        let options = self.options.read().unwrap();
+        let cur_mount = options.mount.device.clone();
+        drop(options);
+
+        let cb = self.builder.object::<gtk::ComboBoxText>("cb_mount_list").unwrap();
+        let list = self.indi
+            .get_devices_list_by_interface(indi::DriverInterface::FOCUSER)
+            .iter()
+            .map(|dev| dev.name.to_string())
+            .collect();
+        let connected = self.indi.state() == indi::ConnState::Connected;
+        fill_devices_list_into_combobox(
+            &list,
+            &cb,
+            if !cur_mount.is_empty() { Some(cur_mount.as_str()) } else { None },
+            connected,
+            |id| {
+                let mut options = self.options.write().unwrap();
+                options.mount.device = id.to_string();
+            }
+        );
     }
 
     fn fill_mount_speed_list_widget(&self) {
@@ -445,8 +473,10 @@ impl MountUi {
                     .get_driver_interface(device_name)
                     .unwrap_or(indi::DriverInterface::empty());
                 if driver_interface.contains(indi::DriverInterface::TELESCOPE) {
-                    self.store_mount_device_name();
-                    self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
+                    self.excl.exec(|| {
+                        self.fill_devices_list();
+                        self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
+                    });
                 }
             }
             ("TELESCOPE_SLEW_RATE", ..) if new_prop => {
@@ -464,12 +494,6 @@ impl MountUi {
             }
 
             _ => {}
-        }
-    }
-
-    fn update_devices_list(&self, drv_interface: indi::DriverInterface) {
-        if drv_interface.contains(indi::DriverInterface::TELESCOPE) {
-            self.delayed_actions.schedule(DelayedActionTypes::UpdateMountWidgets);
         }
     }
 }
