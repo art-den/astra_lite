@@ -866,19 +866,18 @@ impl Drop for Core {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-pub fn start_taking_shots(
-    indi:               &indi::Connection,
-    frame:              &FrameOptions,
-    device:             &DeviceAndProp,
-    img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
-    continuously:       bool,
+pub fn init_cam_continuous_mode(
+    indi:         &indi::Connection,
+    device:       &DeviceAndProp,
+    frame:        &FrameOptions,
+    continuously: bool,
 ) -> anyhow::Result<()> {
     indi.command_enable_blob(
         &device.name,
         None,
         indi::BlobEnable::Also
     )?;
-    if indi.camera_is_fast_toggle_supported(&device.name,)? {
+    if indi.camera_is_fast_toggle_supported(&device.name)? {
         let use_fast_toggle =
             continuously && !frame.have_to_use_delay();
         indi.camera_enable_fast_toggle(
@@ -899,12 +898,6 @@ pub fn start_taking_shots(
             )?;
         }
     }
-    apply_camera_options_and_take_shot(
-        indi,
-        device,
-        frame,
-        img_proc_stop_flag,
-    )?;
     Ok(())
 }
 

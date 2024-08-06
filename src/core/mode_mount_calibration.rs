@@ -134,13 +134,8 @@ impl MountCalibrMode {
     }
 
     fn start_for_axis(&mut self, axis: DitherCalibrAxis) -> anyhow::Result<()> {
-        start_taking_shots(
-            &self.indi,
-            &self.frame,
-            &self.camera,
-            &self.img_proc_stop_flag,
-            false
-        )?;
+        init_cam_continuous_mode(&self.indi, &self.camera, &self.frame, false)?;
+        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame, &self.img_proc_stop_flag)?;
 
         let guid_rate_supported = self.indi.mount_is_guide_rate_supported(&self.mount_device)?;
         self.can_change_g_rate =
@@ -293,13 +288,8 @@ impl MountCalibrMode {
                 self.state = DitherCalibrState::WaitForSlew;
             }
         } else {
-            start_taking_shots(
-                &self.indi,
-                &self.frame,
-                &self.camera,
-                &self.img_proc_stop_flag,
-                false
-            )?;
+            init_cam_continuous_mode(&self.indi, &self.camera, &self.frame, false)?;
+            apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame, &self.img_proc_stop_flag)?;
         }
         Ok(result)
     }
@@ -389,13 +379,8 @@ impl Mode for MountCalibrMode {
                     }
                     if self.cur_timed_guide_n == 0.0 && self.cur_timed_guide_s == 0.0
                     && self.cur_timed_guide_w == 0.0 && self.cur_timed_guide_e == 0.0 {
-                        start_taking_shots(
-                            &self.indi,
-                            &self.frame,
-                            &self.camera,
-                            &self.img_proc_stop_flag,
-                            false
-                        )?;
+                        init_cam_continuous_mode(&self.indi, &self.camera, &self.frame, false)?;
+                        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame, &self.img_proc_stop_flag)?;
                         self.state = DitherCalibrState::WaitForImage;
                     }
                 }

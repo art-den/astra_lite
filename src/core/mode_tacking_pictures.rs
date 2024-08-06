@@ -189,36 +189,33 @@ impl TackingPicturesMode {
             if frame_opts.exposure() > MAX_EXP {
                 frame_opts.set_exposure(MAX_EXP);
             }
-            start_taking_shots(
-                &self.indi,
-                &frame_opts,
-                &self.device,
-                &self.img_proc_stop_flag,
-                false
-            )?;
+
+            init_cam_continuous_mode(&self.indi, &self.device, &frame_opts, false)?;
+            apply_camera_options_and_take_shot(&self.indi, &self.device, &frame_opts, &self.img_proc_stop_flag)?;
+
             self.state = FramesModeState::FrameToSkip;
             self.cur_exposure = frame_opts.exposure();
             return Ok(());
         }
 
-        let continuously = match (&self.cam_mode, &self.frame_options.frame_type) {
+        let continuously = self.is_continuous_mode();
+        init_cam_continuous_mode(&self.indi, &self.device, &self.frame_options, continuously)?;
+        apply_camera_options_and_take_shot(&self.indi, &self.device, &self.frame_options, &self.img_proc_stop_flag)?;
+
+        self.state = FramesModeState::Common;
+        self.cur_exposure = self.frame_options.exposure();
+        Ok(())
+    }
+
+    fn is_continuous_mode(&self) -> bool {
+        match (&self.cam_mode, &self.frame_options.frame_type) {
             (CameraMode::SingleShot,      _                ) => false,
             (CameraMode::LiveView,        _                ) => false,
             (CameraMode::SavingRawFrames, FrameType::Flats ) => false,
             (CameraMode::SavingRawFrames, FrameType::Biases) => false,
             (CameraMode::SavingRawFrames, _                ) => true,
             (CameraMode::LiveStacking,    _                ) => true,
-        };
-        start_taking_shots(
-            &self.indi,
-            &self.frame_options,
-            &self.device,
-            &self.img_proc_stop_flag,
-            continuously
-        )?;
-        self.state = FramesModeState::Common;
-        self.cur_exposure = self.frame_options.exposure();
-        Ok(())
+        }
     }
 
     fn create_file_names_for_raw_saving(&mut self) {
@@ -557,12 +554,6 @@ impl TackingPicturesMode {
         if self.state == FramesModeState::FrameToSkip {
             return Ok(NotifyResult::Empty);
         }
-/*        if let Some(progress) = &mut self.progress {
-            if progress.cur+1 == progress.total &&
-            self.indi.camera_is_fast_toggle_enabled(&self.device.name)? {
-                self.abort()?;
-            }
-        } */
         Ok(NotifyResult::Empty)
     }
 }
@@ -853,13 +844,9 @@ impl Mode for TackingPicturesMode {
                 && guid_data.cur_timed_guide_s == 0.0
                 && guid_data.cur_timed_guide_w == 0.0
                 && guid_data.cur_timed_guide_e == 0.0 {
-                    start_taking_shots(
-                        &self.indi,
-                        &self.frame_options,
-                        &self.device,
-                        &self.img_proc_stop_flag,
-                        true
-                    )?;
+                    let continuously = self.is_continuous_mode();
+                    init_cam_continuous_mode(&self.indi, &self.device, &self.frame_options, continuously)?;
+                    apply_camera_options_and_take_shot(&self.indi, &self.device, &self.frame_options, &self.img_proc_stop_flag)?;
                     self.state = FramesModeState::Common;
                     result = NotifyResult::ModeChanged;
                 }

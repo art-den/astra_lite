@@ -262,13 +262,8 @@ impl FocusingMode {
                     self.start_sample(false)?;
                 }
             } else {
-                start_taking_shots(
-                    &self.indi,
-                    &self.frame,
-                    &self.camera,
-                    &self.img_proc_stop_flag,
-                    false
-                )?;
+                init_cam_continuous_mode(&self.indi, &self.camera, &self.frame, false)?;
+                apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame, &self.img_proc_stop_flag)?;
             }
         }
         if self.state == FocusingState::WaitingResultImg {
@@ -354,13 +349,8 @@ impl Mode for FocusingMode {
                 }
                 FocusingState::WaitingPosition(desired_focus) => {
                     if f64::abs(cur_focus-desired_focus) < 1.01 {
-                        start_taking_shots(
-                            &self.indi,
-                            &self.frame,
-                            &self.camera,
-                            &self.img_proc_stop_flag,
-                            false
-                        )?;
+                        init_cam_continuous_mode(&self.indi, &self.camera, &self.frame, false)?;
+                        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame, &self.img_proc_stop_flag)?;
                         self.state = FocusingState::WaitingFrame(desired_focus);
                     }
                 }
@@ -372,13 +362,8 @@ impl Mode for FocusingMode {
                 }
                 FocusingState::WaitingResultPos(desired_focus) => {
                     if f64::abs(cur_focus-desired_focus) < 1.01 {
-                        start_taking_shots(
-                            &self.indi,
-                            &self.frame,
-                            &self.camera,
-                            &self.img_proc_stop_flag,
-                            false
-                        )?;
+                        init_cam_continuous_mode(&self.indi, &self.camera, &self.frame, false)?;
+                        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame, &self.img_proc_stop_flag)?;
                         self.state = FocusingState::WaitingResultImg;
                     }
                 }
