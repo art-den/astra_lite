@@ -2829,6 +2829,36 @@ impl Connection {
         Ok(true)
     }
 
+    // Camera's telescope info
+
+    pub fn camera_is_telescope_info_supported(
+        &self,
+        device_name: &str,
+    ) -> Result<bool> {
+        self.property_exists(device_name, "SCOPE_INFO", None)
+    }
+
+    pub fn camera_set_telescope_info(
+        &self,
+        device_name:  &str,
+        focal_length: f64,
+        aperture:     f64,
+        force_set:    bool,
+        timeout_ms:   Option<u64>,
+    ) -> Result<()> {
+        self.command_set_num_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            "SCOPE_INFO",
+            &[
+                ("FOCAL_LENGTH", focal_length),
+                ("APERTURE",     aperture),
+            ]
+        )?;
+        Ok(())
+    }
+
     // Focuser absolute position
 
     pub fn focuser_get_abs_value_prop_info(

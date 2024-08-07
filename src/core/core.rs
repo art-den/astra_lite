@@ -605,6 +605,7 @@ impl Core {
     }
 
     pub fn start_single_shot(&self) -> anyhow::Result<()> {
+        self.init_cam_before_start()?;
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             None,
@@ -625,6 +626,7 @@ impl Core {
     }
 
     pub fn start_live_view(&self) -> anyhow::Result<()> {
+        self.init_cam_before_start()?;
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             Some(&self.timer),
@@ -645,6 +647,7 @@ impl Core {
     }
 
     pub fn start_saving_raw_frames(&self) -> anyhow::Result<()> {
+        self.init_cam_before_start()?;
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             Some(&self.timer),
@@ -668,6 +671,7 @@ impl Core {
     }
 
     pub fn start_live_stacking(&self) -> anyhow::Result<()> {
+        self.init_cam_before_start()?;
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             Some(&self.timer),
@@ -692,6 +696,7 @@ impl Core {
     }
 
     pub fn start_focusing(&self) -> anyhow::Result<()> {
+        self.init_cam_before_start()?;
         let mut mode_data = self.mode_data.write().unwrap();
         mode_data.mode.abort()?;
         let mut mode = FocusingMode::new(
@@ -711,6 +716,7 @@ impl Core {
     }
 
     pub fn start_mount_calibr(&self) -> anyhow::Result<()> {
+        self.init_cam_before_start()?;
         let mut mode_data = self.mode_data.write().unwrap();
         mode_data.mode.abort()?;
         let mut mode = MountCalibrMode::new(
@@ -726,6 +732,34 @@ impl Core {
         let subscribers = self.subscribers.read().unwrap();
         subscribers.inform_progress(progress);
         subscribers.inform_mode_changed();
+        Ok(())
+    }
+
+    fn init_cam_before_start(&self) -> anyhow::Result<()> {
+        let options = self.options.read().unwrap();
+        let Some(cam_device) = &options.cam.device else {
+            return Ok(());
+        };
+
+        if self.indi.camera_is_telescope_info_supported(&cam_device.name)? {
+            let focal_len = options.telescope.real_focal_length();
+            // Aperture info for simulator only
+            let aperture = 0.2 * focal_len;
+            self.indi.camera_set_telescope_info(
+                &cam_device.name,
+                focal_len,
+                aperture,
+                false,
+                INDI_SET_PROP_TIMEOUT
+            )?;
+        }
+
+        self.indi.command_enable_blob(
+            &cam_device.name,
+            None,
+            indi::BlobEnable::Also
+        )?;
+
         Ok(())
     }
 
@@ -872,11 +906,6 @@ pub fn init_cam_continuous_mode(
     frame:        &FrameOptions,
     continuously: bool,
 ) -> anyhow::Result<()> {
-    indi.command_enable_blob(
-        &device.name,
-        None,
-        indi::BlobEnable::Also
-    )?;
     if indi.camera_is_fast_toggle_supported(&device.name)? {
         let use_fast_toggle =
             continuously && !frame.have_to_use_delay();
