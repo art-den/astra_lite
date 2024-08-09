@@ -217,7 +217,7 @@ struct MapUi {
 
 impl Drop for MapUi {
     fn drop(&mut self) {
-        log::info!("MapData dropped");
+        log::info!("MapUi dropped");
     }
 }
 

@@ -70,26 +70,9 @@ pub fn init_ui(
 
     data.init_widgets();
     data.fill_devices_name();
-
-    gtk_utils::connect_action(&window, &data, "help_save_indi", HardwareUi::handler_action_help_save_indi);
-    gtk_utils::connect_action(&window, &data, "conn_indi",      HardwareUi::handler_action_conn_indi);
-    gtk_utils::connect_action(&window, &data, "disconn_indi",   HardwareUi::handler_action_disconn_indi);
-    gtk_utils::connect_action(&window, &data, "conn_guid",      HardwareUi::handler_action_conn_guider);
-    gtk_utils::connect_action(&window, &data, "disconn_guid",   HardwareUi::handler_action_disconn_guider);
-    gtk_utils::connect_action(&window, &data, "clear_hw_log",   HardwareUi::handler_action_clear_hw_log);
-
-    let chb_remote = data.builder.object::<gtk::CheckButton>("chb_remote").unwrap();
-    chb_remote.connect_active_notify(clone!(@weak data => move |_| {
-        data.correct_widgets_by_cur_state();
-    }));
-
+    data.connect_widgets_events();
     data.connect_indi_events();
     data.correct_widgets_by_cur_state();
-
-    let ch_guide_mode = data.builder.object::<gtk::ComboBoxText>("ch_guide_mode").unwrap();
-    ch_guide_mode.connect_active_id_notify(clone!(@weak data => move |_| {
-        data.correct_widgets_by_cur_state();
-    }));
 
     handlers.push(Box::new(clone!(@weak data => move |event| {
         data.handler_main_ui_event(event);
@@ -166,6 +149,35 @@ impl Drop for HardwareUi {
 }
 
 impl HardwareUi {
+    fn connect_widgets_events(self: &Rc<Self>) {
+        gtk_utils::connect_action(&self.window, self, "help_save_indi", HardwareUi::handler_action_help_save_indi);
+        gtk_utils::connect_action(&self.window, self, "conn_indi",      HardwareUi::handler_action_conn_indi);
+        gtk_utils::connect_action(&self.window, self, "disconn_indi",   HardwareUi::handler_action_disconn_indi);
+        gtk_utils::connect_action(&self.window, self, "conn_guid",      HardwareUi::handler_action_conn_guider);
+        gtk_utils::connect_action(&self.window, self, "disconn_guid",   HardwareUi::handler_action_disconn_guider);
+        gtk_utils::connect_action(&self.window, self, "clear_hw_log",   HardwareUi::handler_action_clear_hw_log);
+        gtk_utils::connect_action(&self.window, self, "enable_all_devs",   HardwareUi::handler_action_enable_all_devices);
+        gtk_utils::connect_action(&self.window, self, "disable_all_devs",   HardwareUi::handler_action_disable_all_devices);
+        gtk_utils::connect_action(&self.window, self, "save_devs_options",   HardwareUi::handler_action_save_devices_options);
+        gtk_utils::connect_action(&self.window, self, "load_devs_options",   HardwareUi::handler_action_load_devices_options);
+
+        let chb_remote = self.builder.object::<gtk::CheckButton>("chb_remote").unwrap();
+        chb_remote.connect_active_notify(clone!(@weak self as self_ => move |_| {
+            self_.correct_widgets_by_cur_state();
+        }));
+
+        let ch_guide_mode = self.builder.object::<gtk::ComboBoxText>("ch_guide_mode").unwrap();
+        ch_guide_mode.connect_active_id_notify(clone!(@weak self as self_ => move |_| {
+            self_.correct_widgets_by_cur_state();
+        }));
+
+        let se_hw_prop_name = self.builder.object::<gtk::SearchEntry>("se_hw_prop_name").unwrap();
+        se_hw_prop_name.connect_search_changed(clone!(@weak self as self_ => move |se| {
+            let text_lc = se.text().to_lowercase();
+            self_.indi_ui.set_filter_text(&text_lc);
+        }));
+    }
+
     fn handler_main_ui_event(&self, event: MainUiEvent) {
         match event {
             MainUiEvent::ProgramClosing =>
@@ -225,6 +237,12 @@ impl HardwareUi {
             indi::ConnState::Connected     => (false, true),
             indi::ConnState::Error(_)      => (true,  false),
         };
+        let connected = *status == indi::ConnState::Connected;
+        let disconnected = matches!(
+            *status,
+            indi::ConnState::Disconnected|
+            indi::ConnState::Error(_)
+        );
         let phd2_working = self.core.phd2().is_working();
         let phd2_acessible = {
             let guiding_mode_str = ui.prop_string("ch_guide_mode.active-id");
@@ -239,11 +257,6 @@ impl HardwareUi {
         ]);
         ui.set_prop_str("lbl_indi_conn_status.label", Some(&status.to_str(false)));
 
-        let disconnected = matches!(
-            *status,
-            indi::ConnState::Disconnected|
-            indi::ConnState::Error(_)
-        );
         let remote = ui.prop_bool("chb_remote.active");
 
         let (conn_cap, disconn_cap) = if remote {
@@ -270,6 +283,13 @@ impl HardwareUi {
             ("chb_remote",          !self.indi_drivers.groups.is_empty() && disconnected),
             ("e_remote_addr",       remote && disconnected),
             ("ch_guide_mode",       !phd2_working),
+        ]);
+
+        gtk_utils::enable_actions(&self.window, &[
+            ("enable_all_devs",   connected),
+            ("disable_all_devs",  connected),
+            ("save_devs_options", connected),
+            ("load_devs_options", connected),
         ]);
     }
 
@@ -674,5 +694,35 @@ impl HardwareUi {
             dev_list,
             status.to_str(true).to_string()
         );
+    }
+
+    fn handler_action_enable_all_devices(&self) {
+        self.set_switch_property_for_all_device("CONNECTION", "CONNECT");
+    }
+
+    fn handler_action_disable_all_devices(&self) {
+        self.set_switch_property_for_all_device("CONNECTION", "DISCONNECT");
+    }
+
+    fn handler_action_save_devices_options(&self) {
+        self.set_switch_property_for_all_device("CONFIG_PROCESS", "CONFIG_SAVE");
+    }
+
+    fn handler_action_load_devices_options(&self) {
+        self.set_switch_property_for_all_device("CONFIG_PROCESS", "CONFIG_LOAD");
+    }
+
+    fn set_switch_property_for_all_device(&self, prop_name: &str, elem_name: &str) {
+        gtk_utils::exec_and_show_error(&self.window, || {
+            let devices = self.indi.get_devices_list();
+            for device in devices {
+                self.indi.command_set_switch_property(
+                    &device.name,
+                    prop_name,
+                    &[(elem_name, true)]
+                )?;
+            }
+            Ok(())
+        });
     }
 }

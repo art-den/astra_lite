@@ -7,13 +7,14 @@ pub struct IndiUi {
     indi:      Arc<indi::Connection>,
     indi_conn: indi::Subscription,
     data:      Rc<RefCell<UiIndiGuiData>>,
-    grid:      gtk::Grid,
+    layout:    gtk::Box,
     stack:     gtk::Stack,
 }
 
 impl Drop for IndiUi {
     fn drop(&mut self) {
         self.indi.unsubscribe(self.indi_conn);
+        log::info!("IndiUi dropped");
     }
 }
 
@@ -51,34 +52,14 @@ impl IndiUi {
             .stack(&stack)
             .build();
 
-        let se_label = gtk::Label::builder()
-            .visible(true)
-            .label("Filter:")
-            .build();
-
-        let se = gtk::SearchEntry::builder()
-            .visible(true)
-            .build();
-
-        let bx_se = gtk::Box::builder()
+        let layout = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
             .visible(true)
             .spacing(5)
-            .halign(gtk::Align::End)
-            .orientation(gtk::Orientation::Horizontal)
             .build();
 
-        bx_se.add(&se_label);
-        bx_se.add(&se);
-
-        let grid = gtk::Grid::builder()
-            .visible(true)
-            .column_spacing(5)
-            .row_spacing(5)
-            .build();
-
-        grid.attach(&bx_se, 1, 0, 1, 1);
-        grid.attach(&stack_sidebar, 0, 1, 1, 1);
-        grid.attach(&stack, 1, 1, 1, 1);
+        layout.add(&stack_sidebar);
+        layout.add(&stack);
 
         let data = Rc::new(RefCell::new(UiIndiGuiData {
             enabled:        true,
@@ -87,14 +68,6 @@ impl IndiUi {
             list_changed:   true,
             last_change_id: 0,
             filter_text_lc: String::new(),
-        }));
-
-        se.connect_search_changed(clone!(@strong data => move |entry| {
-            let mut data = data.borrow_mut();
-            let text_lc = entry.text().to_lowercase();
-            if data.filter_text_lc == text_lc { return; }
-            data.filter_text_lc = text_lc;
-            Self::update_props_visiblity(&data);
         }));
 
         glib::spawn_future_local(clone!(@weak data => async move {
@@ -137,13 +110,13 @@ impl IndiUi {
         Self {
             data, indi_conn,
             indi: Arc::clone(indi),
-            grid,
+            layout,
             stack,
         }
     }
 
     pub fn widget(&self) -> &gtk::Widget {
-        self.grid.upcast_ref::<gtk::Widget>()
+        self.layout.upcast_ref::<gtk::Widget>()
     }
 
     pub fn set_enabled(&self, enabled: bool) {
@@ -157,7 +130,16 @@ impl IndiUi {
         }
     }
 
-    fn update_props_visiblity(data: &UiIndiGuiData) {
+    pub fn set_filter_text(&self, text: &str) {
+        let mut data = self.data.borrow_mut();
+        if data.filter_text_lc == text { return; }
+        data.filter_text_lc = text.to_string();
+        drop(data);
+        self.update_props_visiblity();
+    }
+
+    fn update_props_visiblity(&self) {
+        let data = self.data.borrow();
         for device in &data.devices {
             for group in &device.groups {
                 let mut group_visible = false;

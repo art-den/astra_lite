@@ -87,7 +87,7 @@ struct DitheringUi {
 
 impl Drop for DitheringUi {
     fn drop(&mut self) {
-        log::info!("FocuserUi dropped");
+        log::info!("DitheringUi dropped");
     }
 }
 
