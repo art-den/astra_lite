@@ -113,6 +113,10 @@ impl Subscribers {
         self.items.push(Box::new(fun));
     }
 
+    fn clear(&mut self) {
+        self.items.clear();
+    }
+
     fn inform_error(&self, error_text: &str) {
         for s in &self.items {
             s(CoreEvent::Error(error_text.to_string()));
@@ -602,6 +606,11 @@ impl Core {
     ) {
         let mut subscribers = self.subscribers.write().unwrap();
         subscribers.add(fun);
+    }
+
+    pub fn unsubscribe_all(&self) {
+        let mut subscribers = self.subscribers.write().unwrap();
+        subscribers.clear();
     }
 
     pub fn start_single_shot(&self) -> anyhow::Result<()> {

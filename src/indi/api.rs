@@ -1147,9 +1147,15 @@ impl Connection {
         );
         subscription
     }
+
     pub fn unsubscribe(&self, subscription: Subscription) {
         let mut subscriptions = self.subscriptions.lock().unwrap();
         subscriptions.items.remove(&subscription);
+    }
+
+    pub fn unsubscribe_all(&self) {
+        let mut subscriptions = self.subscriptions.lock().unwrap();
+        subscriptions.items.clear();
     }
 
     fn start_indi_server(

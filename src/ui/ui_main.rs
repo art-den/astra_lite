@@ -57,6 +57,7 @@ pub fn init_ui(
     let data = Rc::new(MainUi {
         logs_dir:       logs_dir.clone(),
         core:           Arc::clone(core),
+        indi:           Arc::clone(indi),
         options:        Arc::clone(options),
         ui_options:     RefCell::new(ui_options),
         handlers:       RefCell::new(Vec::new()),
@@ -108,69 +109,6 @@ pub fn init_ui(
         drop(opts);
     });
 
-    let mi_dark_theme = builder.object::<gtk::RadioMenuItem>("mi_dark_theme").unwrap();
-    mi_dark_theme.connect_activate(clone!(@weak data => move |mi| {
-        if mi.is_active() {
-            data.ui_options.borrow_mut().theme = Theme::Dark;
-            data.apply_theme();
-        }
-    }));
-
-    let mi_light_theme = builder.object::<gtk::RadioMenuItem>("mi_light_theme").unwrap();
-    mi_light_theme.connect_activate(clone!(@weak data => move |mi| {
-        if mi.is_active() {
-            data.ui_options.borrow_mut().theme = Theme::Light;
-            data.apply_theme();
-        }
-    }));
-
-    let da_progress = builder.object::<gtk::DrawingArea>("da_progress").unwrap();
-    da_progress.connect_draw(clone!(@weak data => @default-panic, move |area, cr| {
-        data.handler_draw_progress(area, cr);
-        glib::Propagation::Proceed
-    }));
-
-    let mi_normal_log_mode = builder.object::<gtk::RadioMenuItem>("mi_normal_log_mode").unwrap();
-    mi_normal_log_mode.connect_activate(clone!(@weak data => move |mi| {
-        if mi.is_active() {
-            log::info!("Setting verbose log::LevelFilter::Info level");
-            log::set_max_level(log::LevelFilter::Info);
-        }
-    }));
-
-    let mi_verbose_log_mode = builder.object::<gtk::RadioMenuItem>("mi_verbose_log_mode").unwrap();
-    mi_verbose_log_mode.connect_activate(clone!(@weak data => move |mi| {
-        if mi.is_active() {
-            log::info!("Setting verbose log::LevelFilter::Debug level");
-            log::set_max_level(log::LevelFilter::Debug);
-        }
-    }));
-
-    let mi_max_log_mode = builder.object::<gtk::RadioMenuItem>("mi_max_log_mode").unwrap();
-    mi_max_log_mode.connect_activate(clone!(@weak data => move |mi| {
-        if mi.is_active() {
-            log::info!("Setting verbose log::LevelFilter::Trace level");
-            log::set_max_level(log::LevelFilter::Trace);
-        }
-    }));
-
-    let btn_fullscreen = builder.object::<gtk::ToggleButton>("btn_fullscreen").unwrap();
-    btn_fullscreen.set_sensitive(false);
-    btn_fullscreen.connect_active_notify(clone!(@weak data => move |btn| {
-        data.exec_main_ui_handlers(MainUiEvent::FullScreen(btn.is_active()));
-    }));
-
-    let nb_main = builder.object::<gtk::Notebook>("nb_main").unwrap();
-    nb_main.connect_switch_page(clone!(@weak data => move |_, _, page| {
-        let enable_fullscreen = match page {
-            TAB_MAP|TAB_CAMERA => true,
-            _                  => false
-        };
-        btn_fullscreen.set_sensitive(enable_fullscreen);
-        let tab = TabPage::from_tab_index(page);
-        data.exec_main_ui_handlers(MainUiEvent::TabPageChanged(tab.clone()));
-    }));
-
     window.connect_delete_event(
         clone!(@weak data => @default-return glib::Propagation::Proceed,
         move |_, _| {
@@ -188,10 +126,7 @@ pub fn init_ui(
         })
     );
 
-    gtk_utils::connect_action(&window, &data, "stop",             MainUi::handler_action_stop);
-    gtk_utils::connect_action(&window, &data, "continue",         MainUi::handler_action_continue);
-    gtk_utils::connect_action(&window, &data, "open_logs_folder", MainUi::handler_action_open_logs_folder);
-
+    data.connect_widgets_events();
     data.correct_widgets_props();
     data.connect_state_events();
     data.update_window_title();
@@ -292,6 +227,7 @@ pub struct MainUi {
     handlers:       RefCell<MainUiHandlers>,
     progress:       RefCell<Option<Progress>>,
     core:           Arc<Core>,
+    indi:           Arc<indi::Connection>,
     builder:        gtk::Builder,
     window:         gtk::ApplicationWindow,
     close_win_flag: Cell<bool>,
@@ -310,6 +246,75 @@ impl Drop for MainUi {
 impl MainUi {
     const CONF_FN: &'static str = "ui_common";
     const OPTIONS_FN: &'static str = "options";
+
+    fn connect_widgets_events(self: &Rc<Self>) {
+        let mi_dark_theme = self.builder.object::<gtk::RadioMenuItem>("mi_dark_theme").unwrap();
+        mi_dark_theme.connect_activate(clone!(@weak self as self_ => move |mi| {
+            if mi.is_active() {
+                self_.ui_options.borrow_mut().theme = Theme::Dark;
+                self_.apply_theme();
+            }
+        }));
+
+        let mi_light_theme = self.builder.object::<gtk::RadioMenuItem>("mi_light_theme").unwrap();
+        mi_light_theme.connect_activate(clone!(@weak self as self_ => move |mi| {
+            if mi.is_active() {
+                self_.ui_options.borrow_mut().theme = Theme::Light;
+                self_.apply_theme();
+            }
+        }));
+
+        let da_progress = self.builder.object::<gtk::DrawingArea>("da_progress").unwrap();
+        da_progress.connect_draw(clone!(@weak self as self_ => @default-panic, move |area, cr| {
+            self_.handler_draw_progress(area, cr);
+            glib::Propagation::Proceed
+        }));
+
+        let mi_normal_log_mode = self.builder.object::<gtk::RadioMenuItem>("mi_normal_log_mode").unwrap();
+        mi_normal_log_mode.connect_activate(clone!(@weak self as self_  => move |mi| {
+            if mi.is_active() {
+                log::info!("Setting verbose log::LevelFilter::Info level");
+                log::set_max_level(log::LevelFilter::Info);
+            }
+        }));
+
+        let mi_verbose_log_mode = self.builder.object::<gtk::RadioMenuItem>("mi_verbose_log_mode").unwrap();
+        mi_verbose_log_mode.connect_activate(move |mi| {
+            if mi.is_active() {
+                log::info!("Setting verbose log::LevelFilter::Debug level");
+                log::set_max_level(log::LevelFilter::Debug);
+            }
+        });
+
+        let mi_max_log_mode = self.builder.object::<gtk::RadioMenuItem>("mi_max_log_mode").unwrap();
+        mi_max_log_mode.connect_activate(move |mi| {
+            if mi.is_active() {
+                log::info!("Setting verbose log::LevelFilter::Trace level");
+                log::set_max_level(log::LevelFilter::Trace);
+            }
+        });
+
+        let btn_fullscreen = self.builder.object::<gtk::ToggleButton>("btn_fullscreen").unwrap();
+        btn_fullscreen.set_sensitive(false);
+        btn_fullscreen.connect_active_notify(clone!(@weak self as self_  => move |btn| {
+            self_.exec_main_ui_handlers(MainUiEvent::FullScreen(btn.is_active()));
+        }));
+
+        let nb_main = self.builder.object::<gtk::Notebook>("nb_main").unwrap();
+        nb_main.connect_switch_page(clone!(@weak self as self_  => move |_, _, page| {
+            let enable_fullscreen = match page {
+                TAB_MAP|TAB_CAMERA => true,
+                _                  => false
+            };
+            btn_fullscreen.set_sensitive(enable_fullscreen);
+            let tab = TabPage::from_tab_index(page);
+            self_.exec_main_ui_handlers(MainUiEvent::TabPageChanged(tab.clone()));
+        }));
+
+        gtk_utils::connect_action(&self.window, self, "stop",             MainUi::handler_action_stop);
+        gtk_utils::connect_action(&self.window, self, "continue",         MainUi::handler_action_continue);
+        gtk_utils::connect_action(&self.window, self, "open_logs_folder", MainUi::handler_action_open_logs_folder);
+    }
 
     fn connect_state_events(self: &Rc<Self>) {
         let (sender, receiver) = async_channel::unbounded();
@@ -371,6 +376,11 @@ impl MainUi {
         self.exec_main_ui_handlers(MainUiEvent::ProgramClosing);
 
         self.handlers.borrow_mut().clear();
+
+        self.core.unsubscribe_all();
+        self.indi.unsubscribe_all();
+
+        *self.self_.borrow_mut() = None;
 
         glib::Propagation::Proceed
     }

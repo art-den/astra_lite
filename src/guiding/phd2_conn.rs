@@ -531,6 +531,10 @@ impl Connection {
         EventHandlerId(next_id)
     }
 
+    pub fn discnnect_all(&self) {
+        self.event_handlers.write().unwrap().clear();
+    }
+
     pub fn is_connected(&self) -> bool {
         let read_tcp_stream  = self.read_tcp_stream.lock().unwrap();
         read_tcp_stream.is_some()

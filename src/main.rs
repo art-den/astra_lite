@@ -109,11 +109,19 @@ fn main() -> anyhow::Result<()> {
         env!("CARGO_PKG_VERSION")
     );
 
+    log::info!("Creating indi::Connection...");
     let indi = Arc::new(indi::Connection::new());
+
+    log::info!("Creating Options...");
     let options = Arc::new(RwLock::new(Options::default()));
+
+    log::info!("Staring frame processing thread");
     let (img_cmds_sender, frame_process_thread) = start_frame_processing_thread();
+
+    log::info!("Creating Core...");
     let core = Arc::new(Core::new(&indi, &options, img_cmds_sender));
 
+    log::info!("Creating gtk::Application...");
     let application = gtk::Application::new(
         Some(&format!("com.github.art-den.{}", env!("CARGO_PKG_NAME"))),
         Default::default(),
@@ -122,10 +130,13 @@ fn main() -> anyhow::Result<()> {
     application.connect_activate(clone!(@weak options => move |app|
         ui::ui_main::init_ui(app, &indi, &options, &core, &logs_dir)
     ));
+
+    log::info!("Running application.run...");
     application.run();
 
     log::info!("Exited from application.run");
 
+    log::info!("Saving options...");
     let opts = options.read().unwrap();
     _ = save_json_to_config::<Options>(&opts, "options");
     drop(opts);

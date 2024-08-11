@@ -150,14 +150,14 @@ impl Drop for HardwareUi {
 
 impl HardwareUi {
     fn connect_widgets_events(self: &Rc<Self>) {
-        gtk_utils::connect_action(&self.window, self, "help_save_indi", HardwareUi::handler_action_help_save_indi);
-        gtk_utils::connect_action(&self.window, self, "conn_indi",      HardwareUi::handler_action_conn_indi);
-        gtk_utils::connect_action(&self.window, self, "disconn_indi",   HardwareUi::handler_action_disconn_indi);
-        gtk_utils::connect_action(&self.window, self, "conn_guid",      HardwareUi::handler_action_conn_guider);
-        gtk_utils::connect_action(&self.window, self, "disconn_guid",   HardwareUi::handler_action_disconn_guider);
-        gtk_utils::connect_action(&self.window, self, "clear_hw_log",   HardwareUi::handler_action_clear_hw_log);
-        gtk_utils::connect_action(&self.window, self, "enable_all_devs",   HardwareUi::handler_action_enable_all_devices);
-        gtk_utils::connect_action(&self.window, self, "disable_all_devs",   HardwareUi::handler_action_disable_all_devices);
+        gtk_utils::connect_action(&self.window, self, "help_save_indi",      HardwareUi::handler_action_help_save_indi);
+        gtk_utils::connect_action(&self.window, self, "conn_indi",           HardwareUi::handler_action_conn_indi);
+        gtk_utils::connect_action(&self.window, self, "disconn_indi",        HardwareUi::handler_action_disconn_indi);
+        gtk_utils::connect_action(&self.window, self, "conn_guid",           HardwareUi::handler_action_conn_guider);
+        gtk_utils::connect_action(&self.window, self, "disconn_guid",        HardwareUi::handler_action_disconn_guider);
+        gtk_utils::connect_action(&self.window, self, "clear_hw_log",        HardwareUi::handler_action_clear_hw_log);
+        gtk_utils::connect_action(&self.window, self, "enable_all_devs",     HardwareUi::handler_action_enable_all_devices);
+        gtk_utils::connect_action(&self.window, self, "disable_all_devs",    HardwareUi::handler_action_disable_all_devices);
         gtk_utils::connect_action(&self.window, self, "save_devs_options",   HardwareUi::handler_action_save_devices_options);
         gtk_utils::connect_action(&self.window, self, "load_devs_options",   HardwareUi::handler_action_load_devices_options);
 
@@ -206,6 +206,8 @@ impl HardwareUi {
         log::info!("Stop connection to PHD2...");
         _ = self.core.phd2().stop();
         log::info!("Done!");
+
+        self.core.phd2().discnnect_all();
 
         *self.self_.borrow_mut() = None;
     }
