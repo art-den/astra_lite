@@ -11,13 +11,13 @@ const HEADER_LZ_2:      u32 = 0b011;
 const HEADER_LZ_TZ:     u32 = 0b100;
 const HEADER_LZ_TZ_2:   u32 = 0b101;
 
+/// Compression for u32, i32 and f32 values
 pub struct ValuesCompressor {
     data:       [u32; COMPR_BUF_SIZE],
     data_ptr:   usize,
     prev_value: u32,
 }
 
-// Compression for u32, i32 and f32 values
 impl ValuesCompressor {
     pub fn new() -> Self {
         Self {
