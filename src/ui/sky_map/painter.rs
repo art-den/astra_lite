@@ -627,10 +627,13 @@ impl SkyMapPainter {
             let parts = [ (0.5, 0.5), (0.5, -0.5), (-0.5, -0.5), (-0.5, 0.5) ];
             let mut coords = [EqCoord {dec: 0.0, ra: 0.0}; 4];
 
-            for ((h, v), crd) in izip!(&parts, &mut coords) {
+            let cam_rotate_matrix = RotMatrix::new(cam_frame.rot_angle);
+            for ((h, v), crd) in izip!(parts, &mut coords) {
+                let mut pt = Point2D { x: h, y: v };
+                pt.rotate(&cam_rotate_matrix);
                 let h_crd = HorizCoord {
-                    alt: h * cam_frame.vert_angle,
-                    az: v * cam_frame.horiz_angle,
+                    alt: pt.x * cam_frame.vert_angle,
+                    az: pt.y * cam_frame.horiz_angle,
                 };
                 let mut pt = h_crd.to_sphere_pt();
                 pt.rotate_over_x(&dec_rot);

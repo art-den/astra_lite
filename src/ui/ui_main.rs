@@ -93,21 +93,18 @@ pub fn init_ui(
         }
     ));
 
-    let excl = Rc::new(ExclusiveCaller::new());
     let mut handlers = data.handlers.borrow_mut();
     super::ui_hardware::init_ui(app, &builder, &data, options, core, indi, &mut handlers);
-    super::ui_camera::init_ui(app, &builder, &data, options, core, indi, &excl, &mut handlers);
-    super::ui_focuser::init_ui(app, &builder, &data, options, core, indi, &excl, &mut handlers);
-    super::ui_skymap::init_ui(app, &builder, &data, &options, indi, &excl, &mut handlers);
-    super::ui_dithering::init_ui(app, &builder, &data, options, core, indi, &excl, &mut handlers);
-    super::ui_mount::init_ui(app, &builder, &data, options, core, indi, &excl, &mut handlers);
+    super::ui_camera::init_ui(app, &builder, &data, options, core, indi, &mut handlers);
+    super::ui_focuser::init_ui(app, &builder, &data, options, core, indi, &mut handlers);
+    super::ui_skymap::init_ui(app, &builder, &data, &options, indi, &mut handlers);
+    super::ui_dithering::init_ui(app, &builder, &data, options, core, indi, &mut handlers);
+    super::ui_mount::init_ui(app, &builder, &data, options, core, indi, &mut handlers);
 
     // show common options
-    excl.exec(|| {
-        let opts = options.read().unwrap();
-        opts.show_all(&builder);
-        drop(opts);
-    });
+    let opts = options.read().unwrap();
+    opts.show_all(&builder);
+    drop(opts);
 
     window.connect_delete_event(
         clone!(@weak data => @default-return glib::Propagation::Proceed,

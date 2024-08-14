@@ -19,7 +19,6 @@ pub fn init_ui(
     options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
     indi:     &Arc<indi::Connection>,
-    excl:     &Rc<ExclusiveCaller>,
     handlers: &mut MainUiHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
@@ -37,9 +36,9 @@ pub fn init_ui(
         options:         Arc::clone(options),
         core:            Arc::clone(core),
         indi:            Arc::clone(indi),
-        excl:            Rc::clone(excl),
         ui_options:      RefCell::new(ui_options),
         closed:          Cell::new(false),
+        manual_change:   Cell::new(false),
         indi_evt_conn:   RefCell::new(None),
         delayed_actions: DelayedActions::new(500),
         focusing_data:   RefCell::new(None),
@@ -78,9 +77,9 @@ struct FocuserUi {
     options:         Arc<RwLock<Options>>,
     core:            Arc<Core>,
     indi:            Arc<indi::Connection>,
-    excl:            Rc<ExclusiveCaller>,
     ui_options:      RefCell<UiOptions>,
     closed:          Cell<bool>,
+    manual_change:   Cell<bool>,
     indi_evt_conn:   RefCell<Option<indi::Subscription>>,
     delayed_actions: DelayedActions<DelayedActionTypes>,
     focusing_data:   RefCell<Option<FocusingResultData>>,
@@ -176,6 +175,7 @@ impl FocuserUi {
             MainThreadEvent::Indi(indi::Event::DeviceDelete(event)) => {
                 if event.drv_interface.contains(indi::DriverInterface::FOCUSER) {
                     self.update_devices_list();
+                    self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetProps);
                     self.delayed_actions.schedule(DelayedActionTypes::UpdateFocPosNew);
                     self.delayed_actions.schedule(DelayedActionTypes::ShowCurFocuserValue);
                 }
@@ -192,9 +192,7 @@ impl FocuserUi {
             }
 
             MainThreadEvent::Core(CoreEvent::Focusing(FocusingStateEvent::Result { value })) => {
-                self.excl.exec(|| {
-                    self.update_focuser_position_after_focusing(value);
-                });
+                self.update_focuser_position_after_focusing(value);
             }
 
             _ => {}
@@ -214,8 +212,8 @@ impl FocuserUi {
         match (prop_name, elem_name, value) {
             ("DRIVER_INFO", "DRIVER_INTERFACE", _) => {
                 let flag_bits = value.to_i32().unwrap_or(0);
-                let flags = indi::DriverInterface::from_bits_truncate(flag_bits as u32);
-                if flags.contains(indi::DriverInterface::FOCUSER) {
+                let interface = indi::DriverInterface::from_bits_truncate(flag_bits as u32);
+                if interface.contains(indi::DriverInterface::FOCUSER) {
                     self.update_devices_list();
                 }
             }
@@ -241,9 +239,7 @@ impl FocuserUi {
             conn_state == indi::ConnState::Disconnected ||
             conn_state == indi::ConnState::Disconnecting;
         if update_devices_list {
-            self.excl.exec(|| {
-                self.update_devices_list();
-            });
+            self.update_devices_list();
         }
         self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetProps);
     }
@@ -288,10 +284,12 @@ impl FocuserUi {
         let device_enabled = self.indi.is_device_enabled(&device).unwrap_or(false);
 
         ui.enable_widgets(false, &[
-            ("grd_foc",       device_enabled && (waiting || focusing || single_shot)),
+            ("grd_foc",       device_enabled),
             ("spb_foc_temp",  ui.prop_bool("chb_foc_temp.active")),
             ("cb_foc_fwhm",   ui.prop_bool("chb_foc_fwhm.active")),
             ("cb_foc_period", ui.prop_bool("chb_foc_period.active")),
+            ("spb_foc_val",   device_enabled && !focusing),
+            ("cb_foc_list",   !focusing),
         ]);
 
         gtk_utils::enable_actions(&self.window, &[
@@ -358,7 +356,9 @@ impl FocuserUi {
             let Ok(value) = self.indi.focuser_get_abs_value(&foc_device) else {
                 return;
             };
+            self.manual_change.set(true);
             spb_foc_val.set_value(value);
+            self.manual_change.set(false);
         }
     }
 
@@ -370,22 +370,16 @@ impl FocuserUi {
     fn handler_delayed_action(&self, action: &DelayedActionTypes) {
         match action {
             DelayedActionTypes::ShowCurFocuserValue => {
-                self.excl.exec(|| {
-                    self.show_cur_focuser_value();
-                });
+                self.show_cur_focuser_value();
             }
             DelayedActionTypes::CorrectWidgetProps => {
-                self.excl.exec(|| {
-                    self.correct_widgets_props();
-                });
+                self.correct_widgets_props();
             }
             DelayedActionTypes::UpdateFocPosNew |
             DelayedActionTypes::UpdateFocPos => {
-                self.excl.exec(|| {
-                    self.update_focuser_position_widget(
-                        *action == DelayedActionTypes::UpdateFocPosNew
-                    );
-                });
+                self.update_focuser_position_widget(
+                    *action == DelayedActionTypes::UpdateFocPosNew
+                );
             }
         }
     }
@@ -410,29 +404,26 @@ impl FocuserUi {
         let bldr = &self.builder;
         let spb_foc_val = bldr.object::<gtk::SpinButton>("spb_foc_val").unwrap();
         spb_foc_val.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            self_.excl.exec(|| {
-                let options = self_.options.read().unwrap();
-                if options.focuser.device.is_empty() { return; }
+            if self_.manual_change.get() { return; }
+            let options = self_.options.read().unwrap();
+            if options.focuser.device.is_empty() { return; }
 
-                gtk_utils::exec_and_show_error(&self_.window, || {
-                    self_.indi.focuser_set_abs_value(&options.focuser.device, sb.value(), true, None)?;
-                    Ok(())
-                })
-            });
+            gtk_utils::exec_and_show_error(&self_.window, || {
+                self_.indi.focuser_set_abs_value(&options.focuser.device, sb.value(), true, None)?;
+                Ok(())
+            })
         }));
 
         let cb = self.builder.object::<gtk::ComboBoxText>("cb_foc_list").unwrap();
         cb.connect_active_notify(clone!(@weak self as self_ => move |cb| {
-            self_.excl.exec(|| {
-                let Some(cur_id) = cb.active_id() else { return; };
-                let mut options = self_.options.write().unwrap();
-                if options.focuser.device == cur_id.as_str() { return; }
-                options.focuser.device = cur_id.to_string();
-                drop(options);
-                self_.delayed_actions.schedule(DelayedActionTypes::UpdateFocPosNew);
-                self_.delayed_actions.schedule(DelayedActionTypes::ShowCurFocuserValue);
-                self_.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetProps);
-            });
+            let Some(cur_id) = cb.active_id() else { return; };
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            if options.focuser.device == cur_id.as_str() { return; }
+            options.focuser.device = cur_id.to_string();
+            drop(options);
+            self_.delayed_actions.schedule(DelayedActionTypes::UpdateFocPosNew);
+            self_.delayed_actions.schedule(DelayedActionTypes::ShowCurFocuserValue);
+            self_.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetProps);
         }));
 
         let chb_foc_temp = bldr.object::<gtk::CheckButton>("chb_foc_temp").unwrap();

@@ -6,7 +6,7 @@ use crate::{
     core::core::*, indi, options::*, utils::io_utils::*
 };
 
-use super::{gtk_utils, ui_common::*, ui_main::*};
+use super::{gtk_utils, ui_main::*};
 
 pub fn init_ui(
     _app:     &gtk::Application,
@@ -15,7 +15,6 @@ pub fn init_ui(
     options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
     indi:     &Arc<indi::Connection>,
-    excl:     &Rc<ExclusiveCaller>,
     handlers: &mut MainUiHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
@@ -33,7 +32,6 @@ pub fn init_ui(
         options:       Arc::clone(options),
         core:          Arc::clone(core),
         indi:          Arc::clone(indi),
-        excl:          Rc::clone(excl),
         ui_options:    RefCell::new(ui_options),
         closed:        Cell::new(false),
         indi_evt_conn: RefCell::new(None),
@@ -78,7 +76,6 @@ struct DitheringUi {
     options:       Arc<RwLock<Options>>,
     core:          Arc<Core>,
     indi:          Arc<indi::Connection>,
-    excl:          Rc<ExclusiveCaller>,
     ui_options:    RefCell<UiOptions>,
     closed:        Cell<bool>,
     indi_evt_conn: RefCell<Option<indi::Subscription>>,

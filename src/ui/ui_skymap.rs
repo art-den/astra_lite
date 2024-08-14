@@ -12,7 +12,6 @@ pub fn init_ui(
     main_ui:  &Rc<MainUi>,
     options:  &Arc<RwLock<Options>>,
     indi:     &Arc<indi::Connection>,
-    excl:     &Rc<ExclusiveCaller>,
     handlers: &mut MainUiHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
@@ -34,7 +33,7 @@ pub fn init_ui(
         builder:       builder.clone(),
         window:        window.clone(),
         main_ui:       Rc::clone(main_ui),
-        excl:          Rc::clone(excl),
+        excl:          ExclusiveCaller::new(),
         skymap_data:   RefCell::new(None),
         user_time:     RefCell::new(UserTime::default()),
         prev_second:   Cell::new(0),
@@ -202,7 +201,7 @@ struct MapUi {
     builder:       gtk::Builder,
     window:        gtk::ApplicationWindow,
     main_ui:       Rc<MainUi>,
-    excl:          Rc<ExclusiveCaller>,
+    excl:          ExclusiveCaller,
     map_widget:    Rc<SkymapWidget>,
     skymap_data:   RefCell<Option<Rc<SkyMap>>>,
     user_time:     RefCell<UserTime>,

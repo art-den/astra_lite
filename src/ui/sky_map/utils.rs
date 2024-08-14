@@ -278,6 +278,13 @@ impl Point2D {
         let diff_y = pt1.y - pt2.y;
         f64::sqrt(diff_x * diff_x + diff_y * diff_y)
     }
+
+    pub fn rotate(&mut self, mat: &RotMatrix) {
+        let x = mat.cos * self.x - mat.sin * self.y;
+        let y = mat.sin * self.x + mat.cos * self.y;
+        self.x = x;
+        self.y = y;
+    }
 }
 
 pub struct HorizToScreenCvt<'a> {

@@ -19,7 +19,6 @@ pub fn init_ui(
     options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
     indi:     &Arc<indi::Connection>,
-    excl:     &Rc<ExclusiveCaller>,
     handlers: &mut MainUiHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
@@ -37,7 +36,6 @@ pub fn init_ui(
         options:         Arc::clone(options),
         core:            Arc::clone(core),
         indi:            Arc::clone(indi),
-        excl:            Rc::clone(excl),
         delayed_actions: DelayedActions::new(500),
         ui_options:      RefCell::new(ui_options),
         closed:          Cell::new(false),
@@ -80,7 +78,6 @@ struct MountUi {
     options:         Arc<RwLock<Options>>,
     core:            Arc<Core>,
     indi:            Arc<indi::Connection>,
-    excl:            Rc<ExclusiveCaller>,
     delayed_actions: DelayedActions<DelayedActionTypes>,
     ui_options:      RefCell<UiOptions>,
     closed:          Cell<bool>,
@@ -163,27 +160,23 @@ impl MountUi {
 
         let cb_mount_list = self.builder.object::<gtk::ComboBoxText>("cb_mount_list").unwrap();
         cb_mount_list.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            self_.excl.exec(|| {
-                let Some(cur_id) = cb.active_id() else { return; };
-                let mut options = self_.options.write().unwrap();
-                if options.mount.device == cur_id.as_str() { return; }
-                options.mount.device = cur_id.to_string();
-                drop(options);
-                self_.fill_mount_speed_list_widget();
-                self_.show_cur_mount_state();
-                self_.correct_widgets_props();
-            });
+            let Some(cur_id) = cb.active_id() else { return; };
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            if options.mount.device == cur_id.as_str() { return; }
+            options.mount.device = cur_id.to_string();
+            drop(options);
+            self_.fill_mount_speed_list_widget();
+            self_.show_cur_mount_state();
+            self_.correct_widgets_props();
         }));
 
         let chb_tracking = self.builder.object::<gtk::CheckButton>("chb_tracking").unwrap();
         chb_tracking.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            self_.excl.exec(|| {
-                let options = self_.options.read().unwrap();
-                if options.mount.device.is_empty() { return; }
-                gtk_utils::exec_and_show_error(&self_.window, || {
-                    self_.indi.mount_set_tracking(&options.mount.device, chb.is_active(), true, None)?;
-                    Ok(())
-                });
+            let options = self_.options.read().unwrap();
+            if options.mount.device.is_empty() { return; }
+            gtk_utils::exec_and_show_error(&self_.window, || {
+                self_.indi.mount_set_tracking(&options.mount.device, chb.is_active(), true, None)?;
+                Ok(())
             });
         }));
 
@@ -201,11 +194,9 @@ impl MountUi {
             for &btn_name in Self::MOUNT_NAV_BUTTON_NAMES {
                 ui.set_prop_bool_ex(btn_name, "sensitive", !parked);
             }
-            self_.excl.exec(|| {
-                gtk_utils::exec_and_show_error(&self_.window, || {
-                    self_.indi.mount_set_parked(&options.mount.device, parked, true, None)?;
-                    Ok(())
-                });
+            gtk_utils::exec_and_show_error(&self_.window, || {
+                self_.indi.mount_set_parked(&options.mount.device, parked, true, None)?;
+                Ok(())
             });
         }));
     }
@@ -402,7 +393,7 @@ impl MountUi {
             if !cur_mount.is_empty() { Some(cur_mount.as_str()) } else { None },
             connected,
             |id| {
-                let mut options = self.options.write().unwrap();
+                let Ok(mut options) = self.options.try_write() else { return; };
                 options.mount.device = id.to_string();
             }
         );
@@ -422,7 +413,6 @@ impl MountUi {
                     text.as_ref().unwrap_or(&id).as_str()
                 );
             }
-            let options = self.options.read().unwrap();
             if options.mount.speed.is_some() {
                 cb_mnt_speed.set_active_id(options.mount.speed.as_deref());
             } else {
@@ -475,14 +465,11 @@ impl MountUi {
     ) {
         match (prop_name, elem_name, value) {
             ("CONNECTION", ..) | ("DRIVER_INFO", "DRIVER_INTERFACE", _) => {
-                let driver_interface = self.indi
-                    .get_driver_interface(device_name)
-                    .unwrap_or(indi::DriverInterface::empty());
-                if driver_interface.contains(indi::DriverInterface::TELESCOPE) {
-                    self.excl.exec(|| {
-                        self.fill_devices_list();
-                        self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetsProps);
-                    });
+                let flag_bits = value.to_i32().unwrap_or(0);
+                let interface = indi::DriverInterface::from_bits_truncate(flag_bits as u32);
+                if interface.contains(indi::DriverInterface::TELESCOPE) {
+                    self.fill_devices_list();
+                    self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetsProps);
                 }
             }
             ("TELESCOPE_SLEW_RATE", ..) if new_prop => {
@@ -494,26 +481,20 @@ impl MountUi {
             ("TELESCOPE_TRACK_STATE", elem, indi::PropValue::Switch(prop_value)) => {
                 let selected_device = self.options.read().unwrap().mount.device.clone();
                 if selected_device != device_name { return; }
-
-                self.excl.exec(|| {
-                    let tracking =
-                        if elem == "TRACK_ON" { *prop_value }
-                        else if elem == "TRACK_OFF" { !*prop_value }
-                        else { return; };
-                        self.show_mount_tracking_state(tracking);
-                });
+                let tracking =
+                    if elem == "TRACK_ON" { *prop_value }
+                    else if elem == "TRACK_OFF" { !*prop_value }
+                    else { return; };
+                self.show_mount_tracking_state(tracking);
             }
             ("TELESCOPE_PARK", elem, indi::PropValue::Switch(prop_value)) => {
                 let selected_device = self.options.read().unwrap().mount.device.clone();
                 if selected_device != device_name { return; }
-
-                self.excl.exec(|| {
-                    let parked =
-                        if elem == "PARK" { *prop_value }
-                        else if elem == "UNPARK" { !*prop_value }
-                        else { return; };
-                    self.show_mount_parked_state(parked);
-                });
+                let parked =
+                    if elem == "PARK" { *prop_value }
+                    else if elem == "UNPARK" { !*prop_value }
+                    else { return; };
+                self.show_mount_parked_state(parked);
             }
 
             _ => {}

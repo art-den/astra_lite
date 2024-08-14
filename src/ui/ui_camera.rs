@@ -19,7 +19,6 @@ pub fn init_ui(
     options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
     indi:     &Arc<indi::Connection>,
-    excl:     &Rc<ExclusiveCaller>,
     handlers: &mut MainUiHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
@@ -37,7 +36,6 @@ pub fn init_ui(
         core:               Arc::clone(core),
         indi:               Arc::clone(indi),
         options:            Arc::clone(options),
-        excl:               Rc::clone(&excl),
         delayed_actions:    DelayedActions::new(500),
         ui_options:         RefCell::new(ui_options),
         conn_state:         RefCell::new(indi::ConnState::Disconnected),
@@ -174,7 +172,6 @@ struct CameraUi {
     preview_scroll_pos: RefCell<Option<((f64, f64), (f64, f64))>>,
     light_history:      RefCell<Vec<LightHistoryItem>>,
     closed:             Cell<bool>,
-    excl:               Rc<ExclusiveCaller>,
     full_screen_mode:   Cell<bool>,
     prev_cam:           RefCell<Option<DeviceAndProp>>,
     self_:              RefCell<Option<Rc<CameraUi>>>,
@@ -324,157 +321,145 @@ impl CameraUi {
 
         let cb_camera_list = bldr.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
         cb_camera_list.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            self_.excl.exec(|| {
-                let Some(cur_id) = cb.active_id() else { return; };
-                let mut prev_cam = self_.prev_cam.borrow_mut();
-                let mut options = self_.options.write().unwrap();
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            let Some(cur_id) = cb.active_id() else { return; };
+            let mut prev_cam = self_.prev_cam.borrow_mut();
 
-                if options.cam.device.as_ref().map(|dev| dev.name == cur_id.as_str()).unwrap_or(false) {
-                    return;
-                }
+            if options.cam.device.as_ref().map(|dev| dev.name == cur_id.as_str()).unwrap_or(false) {
+                return;
+            }
 
-                // Store previous camera options into UiOptions::all_cam_opts
-                if let Some(prev_cam) = &*prev_cam {
-                    self_.store_cur_cam_options_impl(prev_cam, &options);
-                }
+            // Store previous camera options into UiOptions::all_cam_opts
+            if let Some(prev_cam) = &*prev_cam {
+                self_.store_cur_cam_options_impl(prev_cam, &options);
+            }
 
-                let camera_device = DeviceAndProp::new(&cur_id);
-                self_.select_options_for_camera(&camera_device, &mut options);
+            let camera_device = DeviceAndProp::new(&cur_id);
+            self_.select_options_for_camera(&camera_device, &mut options);
 
-                self_.correct_widgets_props_impl(&options);
-                _ = self_.update_resolution_list_impl(&camera_device);
+            self_.correct_widgets_props_impl(&options);
+            _ = self_.update_resolution_list_impl(&camera_device);
 
-                options.show_cam_frame(&self_.builder);
-                options.show_calibr(&self_.builder);
-                options.show_cam_ctrl(&self_.builder);
+            options.show_cam_frame(&self_.builder);
+            options.show_calibr(&self_.builder);
+            options.show_cam_ctrl(&self_.builder);
 
-                *prev_cam = Some(camera_device.clone());
-            });
+            *prev_cam = Some(camera_device.clone());
         }));
 
         let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
         cb_frame_mode.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            self_.excl.exec(|| {
-                let frame_type = FrameType::from_active_id(cb.active_id().as_deref());
-                self_.options.write().unwrap().cam.frame.frame_type = frame_type;
-                self_.correct_widgets_props();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            let frame_type = FrameType::from_active_id(cb.active_id().as_deref());
+            options.cam.frame.frame_type = frame_type;
+            drop(options);
+            self_.correct_widgets_props();
         }));
 
         let chb_cooler = bldr.object::<gtk::CheckButton>("chb_cooler").unwrap();
         chb_cooler.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().cam.ctrl.enable_cooler = chb.is_active();
-                self_.control_camera_by_options(false);
-                self_.correct_widgets_props();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.cam.ctrl.enable_cooler = chb.is_active();
+            drop(options);
+            self_.control_camera_by_options(false);
+            self_.correct_widgets_props();
         }));
 
         let cb_cam_heater = bldr.object::<gtk::ComboBoxText>("cb_cam_heater").unwrap();
         cb_cam_heater.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().cam.ctrl.heater_str = cb.active_id().map(|id| id.to_string());
-                self_.control_camera_by_options(false);
-                self_.correct_widgets_props();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.cam.ctrl.heater_str = cb.active_id().map(|id| id.to_string());
+            drop(options);
+            self_.control_camera_by_options(false);
+            self_.correct_widgets_props();
         }));
 
         let chb_fan = bldr.object::<gtk::CheckButton>("chb_fan").unwrap();
         chb_fan.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().cam.ctrl.enable_fan = chb.is_active();
-                self_.control_camera_by_options(false);
-                self_.correct_widgets_props();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.cam.ctrl.enable_fan = chb.is_active();
+            drop(options);
+            self_.control_camera_by_options(false);
+            self_.correct_widgets_props();
         }));
 
         let spb_temp = bldr.object::<gtk::SpinButton>("spb_temp").unwrap();
         spb_temp.connect_value_changed(clone!(@weak self as self_ => move |spb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().cam.ctrl.temperature = spb.value();
-                self_.control_camera_by_options(false);
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.cam.ctrl.temperature = spb.value();
+            drop(options);
+            self_.control_camera_by_options(false);
         }));
 
         let chb_shots_cont = bldr.object::<gtk::CheckButton>("chb_shots_cont").unwrap();
         chb_shots_cont.connect_active_notify(clone!(@weak self as self_ => move |_| {
-            self_.excl.exec(|| {
-                self_.get_options_from_widgets();
-                self_.correct_widgets_props();
-                self_.handler_live_view_changed();
-            });
+            self_.get_options_from_widgets();
+            self_.correct_widgets_props();
+            self_.handler_live_view_changed();
         }));
 
         let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
         cb_frame_mode.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            self_.excl.exec(|| {
-                let frame_type = FrameType::from_active_id(cb.active_id().as_deref());
-                let mut options = self_.options.write().unwrap();
-                options.cam.frame.frame_type = frame_type;
-                ui.set_prop_f64("spb_exp.value", options.cam.frame.exposure());
-                drop(options);
-                self_.show_total_raw_time();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            let frame_type = FrameType::from_active_id(cb.active_id().as_deref());
+            options.cam.frame.frame_type = frame_type;
+            ui.set_prop_f64("spb_exp.value", options.cam.frame.exposure());
+            drop(options);
+            self_.show_total_raw_time();
         }));
 
         let spb_exp = bldr.object::<gtk::SpinButton>("spb_exp").unwrap();
         spb_exp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().cam.frame.set_exposure(sb.value());
-                self_.show_total_raw_time();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.cam.frame.set_exposure(sb.value());
+            drop(options);
+            self_.show_total_raw_time();
         }));
 
         let spb_gain = bldr.object::<gtk::SpinButton>("spb_gain").unwrap();
         spb_gain.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().cam.frame.gain = sb.value();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.cam.frame.gain = sb.value();
         }));
 
         let spb_offset = bldr.object::<gtk::SpinButton>("spb_offset").unwrap();
         spb_offset.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().cam.frame.offset = sb.value() as i32;
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.cam.frame.offset = sb.value() as i32;
         }));
 
         let cb_bin = bldr.object::<gtk::ComboBoxText>("cb_bin").unwrap();
         cb_bin.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            self_.excl.exec(|| {
-                let binning = Binning::from_active_id(cb.active_id().as_deref());
-                self_.options.write().unwrap().cam.frame.binning = binning;
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            let binning = Binning::from_active_id(cb.active_id().as_deref());
+            options.cam.frame.binning = binning;
         }));
 
         let cb_crop = bldr.object::<gtk::ComboBoxText>("cb_crop").unwrap();
         cb_crop.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            self_.excl.exec(|| {
-                let crop = Crop::from_active_id(cb.active_id().as_deref());
-                self_.options.write().unwrap().cam.frame.crop = crop;
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            let crop = Crop::from_active_id(cb.active_id().as_deref());
+            options.cam.frame.crop = crop;
         }));
 
         let spb_delay = bldr.object::<gtk::SpinButton>("spb_delay").unwrap();
         spb_delay.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().cam.frame.delay = sb.value();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.cam.frame.delay = sb.value();
         }));
 
         let chb_low_noise = bldr.object::<gtk::CheckButton>("chb_low_noise").unwrap();
         chb_low_noise.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().cam.frame.low_noise = chb.is_active();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.cam.frame.low_noise = chb.is_active();
         }));
 
         let spb_raw_frames_cnt = bldr.object::<gtk::SpinButton>("spb_raw_frames_cnt").unwrap();
         spb_raw_frames_cnt.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().raw_frames.frame_cnt = sb.value() as usize;
-                self_.show_total_raw_time();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.raw_frames.frame_cnt = sb.value() as usize;
+            drop(options);
+            self_.show_total_raw_time();
         }));
 
         let da_shot_state = bldr.object::<gtk::DrawingArea>("da_shot_state").unwrap();
@@ -488,77 +473,71 @@ impl CameraUi {
 
         let cb_preview_src = bldr.object::<gtk::ComboBoxText>("cb_preview_src").unwrap();
         cb_preview_src.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            self_.excl.exec(|| {
-                let source = PreviewSource::from_active_id(cb.active_id().as_deref());
-                self_.options.write().unwrap().preview.source = source;
-                self_.create_and_show_preview_image();
-                self_.repaint_histogram();
-                self_.show_histogram_stat();
-                self_.show_image_info();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            let source = PreviewSource::from_active_id(cb.active_id().as_deref());
+            options.preview.source = source;
+            drop(options);
+            self_.create_and_show_preview_image();
+            self_.repaint_histogram();
+            self_.show_histogram_stat();
+            self_.show_image_info();
         }));
 
         let sw_preview_img = self.builder.object::<gtk::Widget>("sw_preview_img").unwrap();
         sw_preview_img.connect_size_allocate(clone!(@weak self as self_ => move |_, rect| {
-            let mut options = self_.options.write().unwrap();
+            let Ok(mut options) = self_.options.try_write() else { return; };
             options.preview.widget_width = rect.width() as usize;
             options.preview.widget_height = rect.height() as usize;
         }));
 
         let cb_preview_scale = bldr.object::<gtk::ComboBoxText>("cb_preview_scale").unwrap();
         cb_preview_scale.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            self_.excl.exec(|| {
-                let scale = PreviewScale::from_active_id(cb.active_id().as_deref());
-                self_.options.write().unwrap().preview.scale = scale;
-                self_.create_and_show_preview_image();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            let scale = PreviewScale::from_active_id(cb.active_id().as_deref());
+            options.preview.scale = scale;
+            drop(options);
+            self_.create_and_show_preview_image();
         }));
 
         let cb_preview_color = bldr.object::<gtk::ComboBoxText>("cb_preview_color").unwrap();
         cb_preview_color.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            self_.excl.exec(|| {
-                let color = PreviewColor::from_active_id(cb.active_id().as_deref());
-                self_.options.write().unwrap().preview.color = color;
-                self_.create_and_show_preview_image();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            let color = PreviewColor::from_active_id(cb.active_id().as_deref());
+            options.preview.color = color;
+            drop(options);
+            self_.create_and_show_preview_image();
         }));
 
         let scl_dark = bldr.object::<gtk::Scale>("scl_dark").unwrap();
         scl_dark.connect_value_changed(clone!(@weak self as self_ => move |scl| {
-            self_.excl.exec(|| {
-                let mut options = self_.options.write().unwrap();
-                options.preview.dark_lvl = scl.value();
-                drop(options);
-                self_.create_and_show_preview_image();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.preview.dark_lvl = scl.value();
+            drop(options);
+            self_.create_and_show_preview_image();
         }));
 
         let scl_highlight = bldr.object::<gtk::Scale>("scl_highlight").unwrap();
         scl_highlight.connect_value_changed(clone!(@weak self as self_ => move |scl| {
-            self_.excl.exec(|| {
-                let mut options = self_.options.write().unwrap();
-                options.preview.light_lvl = scl.value();
-                drop(options);
-                self_.create_and_show_preview_image();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.preview.light_lvl = scl.value();
+            drop(options);
+            self_.create_and_show_preview_image();
         }));
 
         let scl_gamma = bldr.object::<gtk::Scale>("scl_gamma").unwrap();
         scl_gamma.connect_value_changed(clone!(@weak self as self_ => move |scl| {
-            self_.excl.exec(|| {
-                let mut options = self_.options.write().unwrap();
-                options.preview.gamma = scl.value();
-                drop(options);
-                self_.create_and_show_preview_image();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.preview.gamma = scl.value();
+            drop(options);
+            self_.create_and_show_preview_image();
         }));
 
         let chb_rem_grad = bldr.object::<gtk::CheckButton>("chb_rem_grad").unwrap();
         chb_rem_grad.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().preview.remove_grad = chb.is_active();
-                self_.create_and_show_preview_image();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.preview.remove_grad = chb.is_active();
+            drop(options);
+            self_.create_and_show_preview_image();
         }));
 
         let da_histogram = bldr.object::<gtk::DrawingArea>("da_histogram").unwrap();
@@ -575,85 +554,77 @@ impl CameraUi {
 
         let ch_hist_logy = bldr.object::<gtk::CheckButton>("ch_hist_logy").unwrap();
         ch_hist_logy.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            self_.excl.exec(|| {
-                self_.ui_options.borrow_mut().hist_log_y = chb.is_active();
-                self_.repaint_histogram();
-            });
+            let Ok(mut ui_options) = self_.ui_options.try_borrow_mut() else { return; };
+            ui_options.hist_log_y = chb.is_active();
+            self_.repaint_histogram();
         }));
 
         let ch_stat_percents = bldr.object::<gtk::CheckButton>("ch_stat_percents").unwrap();
         ch_stat_percents.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            self_.excl.exec(|| {
-                self_.ui_options.borrow_mut().hist_percents = chb.is_active();
-                self_.show_histogram_stat();
-            });
+            let Ok(mut ui_options) = self_.ui_options.try_borrow_mut() else { return; };
+            ui_options.hist_percents = chb.is_active();
+            drop(ui_options);
+            self_.show_histogram_stat();
         }));
 
         let chb_max_fwhm = bldr.object::<gtk::CheckButton>("chb_max_fwhm").unwrap();
         chb_max_fwhm.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().quality.use_max_fwhm = chb.is_active();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.quality.use_max_fwhm = chb.is_active();
+            drop(options);
             self_.correct_frame_quality_widgets_props();
         }));
 
         let chb_max_oval = bldr.object::<gtk::CheckButton>("chb_max_oval").unwrap();
         chb_max_oval.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().quality.use_max_ovality = chb.is_active();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.quality.use_max_ovality = chb.is_active();
             self_.correct_frame_quality_widgets_props();
         }));
 
         let spb_max_fwhm = bldr.object::<gtk::SpinButton>("spb_max_fwhm").unwrap();
         spb_max_fwhm.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().quality.max_fwhm = sb.value() as f32;
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.quality.max_fwhm = sb.value() as f32;
         }));
 
         let spb_max_oval = bldr.object::<gtk::SpinButton>("spb_max_oval").unwrap();
         spb_max_oval.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().quality.max_ovality = sb.value() as f32;
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.quality.max_ovality = sb.value() as f32;
         }));
 
         let chb_master_dark = bldr.object::<gtk::CheckButton>("chb_master_dark").unwrap();
         chb_master_dark.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().calibr.dark_frame_en = chb.is_active();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.calibr.dark_frame_en = chb.is_active();
         }));
 
         let fch_master_dark = bldr.object::<gtk::FileChooserButton>("fch_master_dark").unwrap();
         fch_master_dark.connect_file_set(clone!(@weak self as self_ => move |fch| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().calibr.dark_frame = fch.filename();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.calibr.dark_frame = fch.filename();
         }));
 
         let chb_master_flat = bldr.object::<gtk::CheckButton>("chb_master_flat").unwrap();
         chb_master_flat.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().calibr.flat_frame_en = chb.is_active();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.calibr.flat_frame_en = chb.is_active();
         }));
 
         let fch_master_flat = bldr.object::<gtk::FileChooserButton>("fch_master_flat").unwrap();
         fch_master_flat.connect_file_set(clone!(@weak self as self_ => move |fch| {
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().calibr.flat_frame = fch.filename();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.calibr.flat_frame = fch.filename();
         }));
 
         let chb_hot_pixels = bldr.object::<gtk::CheckButton>("chb_hot_pixels").unwrap();
         chb_hot_pixels.connect_active_notify(clone!(@weak self as self_ => move |chb| {
             let ui = gtk_utils::UiHelper::new_from_builder(&self_.builder);
             ui.enable_widgets(false,&[("l_hot_pixels_warn", chb.is_active())]);
-            self_.excl.exec(|| {
-                self_.options.write().unwrap().calibr.hot_pixels = chb.is_active();
-            });
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.calibr.hot_pixels = chb.is_active();
+            drop(options);
         }));
     }
 
@@ -709,10 +680,9 @@ impl CameraUi {
             },
 
             MainThreadEvent::Core(CoreEvent::ModeContinued) => {
-                self.excl.exec(|| {
-                    let options = self.options.read().unwrap();
-                    options.show_cam_frame(&self.builder);
-                });
+                let options = self.options.read().unwrap();
+                options.show_cam_frame(&self.builder);
+                drop(options);
                 self.correct_preview_source();
             },
 
@@ -901,7 +871,7 @@ impl CameraUi {
     }
 
     fn get_options_from_widgets(&self) {
-        let mut options = self.options.write().unwrap();
+        let Ok(mut options) = self.options.try_write() else { return; };
         options.read_all(&self.builder);
     }
 
@@ -943,16 +913,15 @@ impl CameraUi {
     fn handler_delayed_action(&self, action: &DelayedActionTypes) {
         match action {
             DelayedActionTypes::UpdateCamList => {
-                self.excl.exec(|| {
-                    self.update_devices_list();
-                    self.update_resolution_list();
-                });
+                self.update_devices_list();
+                self.update_resolution_list();
                 self.select_maximum_resolution();
                 self.correct_widgets_props();
             }
-            DelayedActionTypes::StartLiveView
-            if self.options.read().unwrap().cam.live_view => {
-                self.start_live_view();
+            DelayedActionTypes::StartLiveView => {
+                if self.options.read().unwrap().cam.live_view {
+                    self.start_live_view();
+                }
             }
             DelayedActionTypes::StartCooling => {
                 self.control_camera_by_options(true);
@@ -961,19 +930,14 @@ impl CameraUi {
                 self.correct_widgets_props();
             }
             DelayedActionTypes::UpdateResolutionList => {
-                self.excl.exec(|| {
-                    self.update_resolution_list();
-                });
+                self.update_resolution_list();
             }
             DelayedActionTypes::SelectMaxResolution => {
                 self.select_maximum_resolution();
             }
             DelayedActionTypes::FillHeaterItems => {
-                self.excl.exec(|| {
-                    self.fill_heater_items_list();
-                });
+                self.fill_heater_items_list();
             }
-            _ => {}
         }
     }
 
@@ -1218,7 +1182,7 @@ impl CameraUi {
             cur_cam_device.as_ref().map(|d| d.name.as_str()),
             connected,
             |id| {
-                let mut options = self.options.write().unwrap();
+                let Ok(mut options) = self.options.try_write() else { return; };
                 options.cam.device = Some(DeviceAndProp::new(id));
             }
         );
@@ -1229,7 +1193,7 @@ impl CameraUi {
             drop(options);
 
             if let Some(cur_cam_device) = &cur_cam_device {
-                let mut options = self.options.write().unwrap();
+                let Ok(mut options) = self.options.try_write() else { return; };
                 self.select_options_for_camera(&cur_cam_device, &mut options);
                 drop(options);
 
@@ -1757,6 +1721,9 @@ impl CameraUi {
     }
 
     fn handler_live_view_changed(&self) {
+        if self.indi.state() != indi::ConnState::Connected {
+            return;
+        }
         if self.options.read().unwrap().cam.live_view {
             self.get_options_from_widgets();
             self.start_live_view();
@@ -1771,9 +1738,7 @@ impl CameraUi {
             conn_state == indi::ConnState::Disconnecting;
         *self.conn_state.borrow_mut() = conn_state;
         if update_devices_list {
-            self.excl.exec(|| {
-                self.update_devices_list();
-            });
+            self.update_devices_list();
         }
         self.correct_widgets_props();
     }
@@ -1948,9 +1913,7 @@ impl CameraUi {
         self.get_options_from_widgets();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_live_stacking()?;
-            self.excl.exec(|| {
-                self.show_options();
-            });
+            self.show_options();
             Ok(())
         });
     }
@@ -2128,9 +2091,7 @@ impl CameraUi {
         self.get_options_from_widgets();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_saving_raw_frames()?;
-            self.excl.exec(|| {
-                self.show_options();
-            });
+            self.show_options();
             Ok(())
         });
     }
