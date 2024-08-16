@@ -55,6 +55,20 @@ pub enum ConnState {
     Error(String)
 }
 
+#[derive(Clone)]
+pub struct NewDeviceEvent {
+    pub timestamp:   Option<DateTime<Utc>>,
+    pub device_name: Arc<String>,
+    pub interface:   DriverInterface,
+}
+
+pub struct DeviceConnectEvent {
+    pub timestamp:   Option<DateTime<Utc>>,
+    pub device_name: Arc<String>,
+    pub connected:   bool,
+    pub interface:   DriverInterface,
+}
+
 #[derive(Debug)]
 pub struct PropChangeValue {
     pub elem_name:  Arc<String>,
@@ -101,6 +115,8 @@ pub struct BlobStartEvent {
 #[derive(Clone)]
 pub enum Event {
     ConnChange(ConnState),
+    NewDevice(NewDeviceEvent),
+    DeviceConnected(Arc<DeviceConnectEvent>),
     PropChange(Arc<PropChangeEvent>),
     DeviceDelete(Arc<DeviceDeleteEvent>),
     ReadTimeOut,
@@ -382,6 +398,35 @@ impl PropValue {
                 "switch".into(),
                 "f64".into()
             )),
+            Self::Light(text) => Err(Error::CantConvertPropValue(
+                text.to_string(),
+                "light".into(),
+                "f64".into()
+            )),
+            Self::Blob(_) => Err(Error::CantConvertPropValue(
+                "[blob]".into(),
+                "Blob".into(),
+                "f64".into()
+            )),
+        }
+    }
+
+    pub fn to_bool(&self) -> Result<bool> {
+        match self {
+            Self::Num(NumPropValue{value, ..}) => Err(Error::CantConvertPropValue(
+                value.to_string(),
+                "switch".into(),
+                "f64".into()
+            )),
+            Self::Text(text) =>
+                text.parse()
+                    .map_err(|_| Error::CantConvertPropValue(
+                        text.to_string(),
+                        "Text".into(),
+                        "f64".into()
+                    )),
+            Self::Switch(value) =>
+                Ok(*value),
             Self::Light(text) => Err(Error::CantConvertPropValue(
                 text.to_string(),
                 "light".into(),
@@ -3525,16 +3570,28 @@ impl XmlReceiver {
         events_sender:  &mpsc::Sender<Event>
     ) {
         for (name, value) in changed_values {
-            let value = PropChangeValue {
+            let prop_change_value = PropChangeValue {
                 elem_name:  Arc::clone(&name),
-                prop_value: value,
+                prop_value: value.clone(),
             };
             events_sender.send(Event::PropChange(Arc::new(PropChangeEvent {
                 timestamp,
                 device_name: Arc::clone(device_name),
                 prop_name:   Arc::clone(prop_name),
-                change:      PropChange::New(value),
+                change:      PropChange::New(prop_change_value),
             }))).unwrap();
+
+            if prop_name.as_str() == "DRIVER_INFO"
+            && name.as_str() == "DRIVER_INTERFACE" {
+                let flag_bits = value.to_i32().unwrap_or(0);
+                let interface = DriverInterface::from_bits_truncate(flag_bits as u32);
+                let event_data = NewDeviceEvent {
+                    device_name: Arc::clone(device_name),
+                    interface,
+                    timestamp,
+                };
+                events_sender.send(Event::NewDevice(event_data)).unwrap();
+            }
         }
     }
 
@@ -3551,7 +3608,7 @@ impl XmlReceiver {
         for (name, prop_value) in changed_values {
             let value = PropChangeValue {
                 elem_name:  Arc::clone(&name),
-                prop_value,
+                prop_value: prop_value.clone(),
             };
             let change = PropChange::Change{
                 value,
@@ -3561,9 +3618,28 @@ impl XmlReceiver {
             events_sender.send(Event::PropChange(Arc::new(PropChangeEvent {
                 timestamp,
                 device_name: Arc::clone(device_name),
-                prop_name:   Arc::clone(prop_name),
+                prop_name: Arc::clone(prop_name),
                 change,
             }))).unwrap();
+
+            if prop_name.as_str() == "CONNECTION"
+            && name.as_str() == "CONNECT" {
+                let connected = prop_value.to_bool().unwrap_or(false);
+                let devices = self.devices.lock().unwrap();
+                let interface = devices.get_driver_interface(&device_name);
+                drop(devices);
+
+                let event_data = DeviceConnectEvent {
+                    device_name: Arc::clone(device_name),
+                    interface: interface.unwrap_or(DriverInterface::empty()),
+                    timestamp,
+                    connected,
+                };
+
+                events_sender.send(Event::DeviceConnected(
+                    Arc::new(event_data)
+                )).unwrap();
+            }
         }
     }
 

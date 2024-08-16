@@ -438,7 +438,6 @@ impl MapUi {
         let hg_color = &ui_options.paint.horizon_glow.color;
         ui.set_color("clrb_horiz_glow", hg_color.r, hg_color.g, hg_color.b, hg_color.a);
 
-        // chb_horiz_glow
         drop(ui_options);
         drop(options);
         drop(ui);

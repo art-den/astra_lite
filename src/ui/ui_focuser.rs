@@ -144,8 +144,19 @@ impl FocuserUi {
 
     fn process_event_in_main_thread(&self, event: MainThreadEvent) {
         match event {
+            MainThreadEvent::Indi(indi::Event::NewDevice(event)) =>
+                if event.interface.contains(indi::DriverInterface::FOCUSER) {
+                    self.update_devices_list();
+                },
+
+            MainThreadEvent::Indi(indi::Event::DeviceConnected(event)) =>
+                if event.interface.contains(indi::DriverInterface::FOCUSER) {
+                    self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetProps);
+                },
+
             MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) =>
                 self.process_indi_conn_state_event(conn_state),
+
             MainThreadEvent::Indi(indi::Event::PropChange(event_data)) => {
                 match &event_data.change {
                     indi::PropChange::New(value) =>
@@ -210,13 +221,6 @@ impl FocuserUi {
         value:        &indi::PropValue,
     ) {
         match (prop_name, elem_name, value) {
-            ("DRIVER_INFO", "DRIVER_INTERFACE", _) => {
-                let flag_bits = value.to_i32().unwrap_or(0);
-                let interface = indi::DriverInterface::from_bits_truncate(flag_bits as u32);
-                if interface.contains(indi::DriverInterface::FOCUSER) {
-                    self.update_devices_list();
-                }
-            }
             ("ABS_FOCUS_POSITION", ..) => {
                 self.delayed_actions.schedule(
                     if new_prop { DelayedActionTypes::UpdateFocPosNew }
@@ -284,7 +288,6 @@ impl FocuserUi {
         let device_enabled = self.indi.is_device_enabled(&device).unwrap_or(false);
 
         ui.enable_widgets(false, &[
-            ("grd_foc",       device_enabled),
             ("spb_foc_temp",  ui.prop_bool("chb_foc_temp.active")),
             ("cb_foc_fwhm",   ui.prop_bool("chb_foc_fwhm.active")),
             ("cb_foc_period", ui.prop_bool("chb_foc_period.active")),
@@ -389,12 +392,12 @@ impl FocuserUi {
         let foc_device = options.focuser.device.clone();
         drop(options);
 
-        let Ok(value) = self.indi.focuser_get_abs_value(&foc_device) else {
-            return;
-        };
-
         let l_foc_value = self.builder.object::<gtk::Label>("l_foc_value").unwrap();
-        l_foc_value.set_label(&format!("{:.0}", value));
+        if let Ok(value) = self.indi.focuser_get_abs_value(&foc_device) {
+            l_foc_value.set_label(&format!("{:.0}", value));
+        } else {
+            l_foc_value.set_label("---");
+        }
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {

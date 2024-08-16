@@ -401,6 +401,14 @@ impl HardwareUi {
             indi::Event::BlobStart(_) => {
                 log::debug!("indi: blob start");
             }
+            indi::Event::DeviceConnected(dev) => {
+                log::debug!(
+                    "indi: device {} {}",
+                    dev.device_name,
+                    if dev.connected { "connected" } else { "disconnected" }
+                );
+            }
+            _ => {}
         }
     }
 

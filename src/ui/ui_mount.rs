@@ -257,6 +257,16 @@ impl MountUi {
 
     fn process_event_in_main_thread(&self, event: MainThreadEvent) {
         match event {
+            MainThreadEvent::Indi(indi::Event::NewDevice(event)) =>
+                if event.interface.contains(indi::DriverInterface::FOCUSER) {
+                    self.fill_devices_list();
+                },
+
+            MainThreadEvent::Indi(indi::Event::DeviceConnected(event)) =>
+                if event.interface.contains(indi::DriverInterface::FOCUSER) {
+                    self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetsProps);
+                },
+
             MainThreadEvent::Indi(indi::Event::DeviceDelete(event)) => {
                 if event.drv_interface.contains(indi::DriverInterface::TELESCOPE) {
                     self.fill_devices_list();
@@ -270,6 +280,7 @@ impl MountUi {
                     self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetsProps);
                 }
             }
+
             MainThreadEvent::Indi(indi::Event::PropChange(event_data)) => {
                 match &event_data.change {
                     indi::PropChange::New(value) =>
@@ -464,20 +475,12 @@ impl MountUi {
         value:       &indi::PropValue,
     ) {
         match (prop_name, elem_name, value) {
-            ("CONNECTION", ..) | ("DRIVER_INFO", "DRIVER_INTERFACE", _) => {
-                let flag_bits = value.to_i32().unwrap_or(0);
-                let interface = indi::DriverInterface::from_bits_truncate(flag_bits as u32);
-                if interface.contains(indi::DriverInterface::TELESCOPE) {
-                    self.fill_devices_list();
-                    self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetsProps);
-                }
-            }
             ("TELESCOPE_SLEW_RATE", ..) if new_prop => {
                 let selected_device = self.options.read().unwrap().mount.device.clone();
                 if selected_device != device_name { return; }
-
                 self.delayed_actions.schedule(DelayedActionTypes::FillMountSpdList);
             }
+
             ("TELESCOPE_TRACK_STATE", elem, indi::PropValue::Switch(prop_value)) => {
                 let selected_device = self.options.read().unwrap().mount.device.clone();
                 if selected_device != device_name { return; }
@@ -487,6 +490,7 @@ impl MountUi {
                     else { return; };
                 self.show_mount_tracking_state(tracking);
             }
+
             ("TELESCOPE_PARK", elem, indi::PropValue::Switch(prop_value)) => {
                 let selected_device = self.options.read().unwrap().mount.device.clone();
                 if selected_device != device_name { return; }

@@ -1770,16 +1770,19 @@ impl CameraUi {
                     );
                 }
                 self.show_cur_temperature_value(device_name, *value);
-            },
+            }
+
             ("CCD_COOLER", ..)
             if new_prop => {
                 self.delayed_actions.schedule(DelayedActionTypes::StartCooling);
                 self.delayed_actions.schedule(DelayedActionTypes::UpdateCtrlWidgets);
-            },
+            }
+
             ("CCD_OFFSET", ..) | ("CCD_GAIN", ..) | ("CCD_CONTROLS", ..)
             if new_prop => {
                 self.delayed_actions.schedule(DelayedActionTypes::UpdateCtrlWidgets);
-            },
+            }
+
             ("CCD_EXPOSURE"|"GUIDER_EXPOSURE", ..) => {
                 let options = self.options.read().unwrap();
                 if new_prop {
@@ -1794,21 +1797,23 @@ impl CameraUi {
                 } else {
                     self.update_shot_state();
                 }
-            },
+            }
 
             ("CCD_RESOLUTION", ..) => {
                 self.delayed_actions.schedule(
                     if new_prop { DelayedActionTypes::SelectMaxResolution }
                     else        { DelayedActionTypes::UpdateResolutionList }
                 );
-            },
+            }
 
             ("CCD_BINNING", ..) |
             ("CCD_INFO", "CCD_MAX_X", ..) |
-            ("CCD_INFO", "CCD_MAX_Y", ..) =>
+            ("CCD_INFO", "CCD_MAX_Y", ..) => {
                 self.delayed_actions.schedule(
                     DelayedActionTypes::UpdateResolutionList
-                ),
+                );
+            }
+
             ("CCD1"|"CCD2", ..) if new_prop => {
                 self.delayed_actions.schedule(DelayedActionTypes::UpdateCamList);
             }
