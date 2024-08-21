@@ -442,25 +442,61 @@ impl MapUi {
         drop(options);
         drop(ui);
 
-        let btn_get_from_gps = builder.object::<gtk::Button>("btn_get_from_gps").unwrap();
-        btn_get_from_gps.connect_clicked(clone!(@strong self as self_, @strong builder, @strong dialog => move |_| {
+        let btn_get_from_devs = builder.object::<gtk::Button>("btn_get_from_devs").unwrap();
+        btn_get_from_devs.connect_clicked(clone!(@strong self as self_, @strong builder, @strong dialog, @strong btn_get_from_devs => move |_| {
             gtk_utils::exec_and_show_error(&dialog, || {
                 let indi = &self_.indi;
                 if indi.state() != indi::ConnState::Connected {
                     anyhow::bail!("INDI is not connected!");
                 }
-                let gps_devices: Vec<_> = indi.get_devices_list()
-                    .into_iter()
-                    .filter(|dev| dev.interface.contains(indi::DriverInterface::GPS))
+                let devices = indi.get_devices_list_by_interface(
+                    indi::DriverInterface::GPS |
+                    indi::DriverInterface::TELESCOPE
+                );
+
+                let result: Vec<_> = devices
+                    .iter()
+                    .filter_map(|dev|
+                        indi.get_geo_lat_long_elev(&dev.name)
+                            .ok()
+                            .map(|(lat,long,_)| (dev, lat, long))
+                    )
+                    .filter(|(_, lat,long)| *lat != 0.0 && *long != 0.0)
                     .collect();
-                if gps_devices.is_empty() {
-                    anyhow::bail!("GPS device not found!");
+
+                if result.is_empty() {
+                    anyhow::bail!("No GPS or geographic data found!");
                 }
-                let dev = &gps_devices[0];
-                let (latitude, longitude, _) = indi.gps_get_lat_long_elev(&dev.name)?;
-                let ui = gtk_utils::UiHelper::new_from_builder(&builder);
-                ui.set_prop_str("e_lat.text", Some(&indi::value_to_sexagesimal(latitude, true, 9)));
-                ui.set_prop_str("e_long.text", Some(&indi::value_to_sexagesimal(longitude, true, 9)));
+
+                if result.len() == 1 {
+                    let (_, latitude, longitude) = result[0];
+                    let ui = gtk_utils::UiHelper::new_from_builder(&builder);
+                    ui.set_prop_str("e_lat.text", Some(&indi::value_to_sexagesimal(latitude, true, 9)));
+                    ui.set_prop_str("e_long.text", Some(&indi::value_to_sexagesimal(longitude, true, 9)));
+                    return Ok(());
+                }
+
+                let menu = gtk::Menu::new();
+                for (dev, lat, long) in result {
+                    let mi_text = format!(
+                        "{} {} ({})",
+                        indi::value_to_sexagesimal(lat, true, 9),
+                        indi::value_to_sexagesimal(long, true, 9),
+                        dev.name
+                    );
+                    let menu_item = gtk::MenuItem::builder().label(mi_text).build();
+                    menu.append(&menu_item);
+                    let builder = builder.clone();
+                    menu_item.connect_activate(move |_| {
+                        let ui = gtk_utils::UiHelper::new_from_builder(&builder);
+                        ui.set_prop_str("e_lat.text", Some(&indi::value_to_sexagesimal(lat, true, 9)));
+                        ui.set_prop_str("e_long.text", Some(&indi::value_to_sexagesimal(long, true, 9)));
+                    });
+                }
+                menu.set_attach_widget(Some(&btn_get_from_devs));
+                menu.show_all();
+                menu.popup_easy(gtk::gdk::ffi::GDK_BUTTON_SECONDARY as u32, 0);
+
                 Ok(())
             });
         }));
