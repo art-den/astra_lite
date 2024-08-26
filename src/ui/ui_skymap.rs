@@ -42,6 +42,7 @@ pub fn init_ui(
         selected_item: RefCell::new(None),
         search_result: RefCell::new(Vec::new()),
         clicked_crd:   RefCell::new(None),
+        full_screen:   Cell::new(false),
         self_:         RefCell::new(None),
         map_widget,
     });
@@ -211,6 +212,7 @@ struct MapUi {
     selected_item: RefCell<Option<SkymapObject>>,
     search_result: RefCell<Vec<SkymapObject>>,
     clicked_crd:   RefCell<Option<EqCoord>>,
+    full_screen:   Cell<bool>,
     self_:         RefCell<Option<Rc<MapUi>>>
 }
 
@@ -235,12 +237,14 @@ impl MapUi {
                 self.update_skymap_widget(true);
                 self.show_selected_objects_info();
             }
+            MainUiEvent::FullScreen(full_screen) =>
+                self.set_full_screen_mode(full_screen),
             _ => {},
         }
     }
 
     fn handler_closing(&self) {
-        self.read_options_from_widgets();
+        self.read_ui_options_from_widgets();
 
         let ui_options = self.ui_options.borrow();
         _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
@@ -387,11 +391,13 @@ impl MapUi {
         drop(opts);
     }
 
-    fn read_options_from_widgets(&self) {
+    fn read_ui_options_from_widgets(&self) {
         let pan_map1 = self.builder.object::<gtk::Paned>("pan_map1").unwrap();
         let mut opts = self.ui_options.borrow_mut();
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        opts.paned_pos1 = pan_map1.position();
+        if !self.full_screen.get() {
+            opts.paned_pos1 = pan_map1.position();
+        }
         opts.paint.max_dso_mag = ui.range_value("scl_max_dso_mag") as f32;
         opts.search_above_horiz = ui.prop_bool("chb_sm_above_horizon.active");
 
@@ -1095,4 +1101,16 @@ impl MapUi {
         let Some(clicked_crd) = &*clicked_crd else { return; };
         self.goto_eq_coord(clicked_crd);
     }
+
+    fn set_full_screen_mode(&self, full_screen: bool) {
+        let bx_skymap_panel = self.builder.object::<gtk::Widget>("bx_skymap_panel").unwrap();
+        if full_screen {
+            self.read_ui_options_from_widgets();
+            bx_skymap_panel.set_visible(false);
+        } else {
+            bx_skymap_panel.set_visible(true);
+        }
+        self.full_screen.set(full_screen);
+    }
+
 }

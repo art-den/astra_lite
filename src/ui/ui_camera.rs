@@ -190,7 +190,7 @@ impl CameraUi {
         match event {
             MainUiEvent::Timer => {}
             MainUiEvent::FullScreen(full_screen) =>
-                self.handler_full_screen(full_screen),
+                self.set_full_screen_mode(full_screen),
             MainUiEvent::BeforeModeContinued =>
                 self.get_options_from_widgets(),
             MainUiEvent::TabPageChanged(TabPage::Camera) =>
@@ -773,7 +773,7 @@ impl CameraUi {
         );
     }
 
-    fn handler_full_screen(&self, full_screen: bool) {
+    fn set_full_screen_mode(&self, full_screen: bool) {
         let bldr = &self.builder;
         let bx_cam_left = bldr.object::<gtk::Widget>("bx_cam_left").unwrap();
         let scr_cam_right = bldr.object::<gtk::Widget>("scr_cam_right").unwrap();
