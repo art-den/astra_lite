@@ -942,201 +942,197 @@ impl CameraUi {
     }
 
     fn correct_widgets_props_impl(&self, options: &Options) {
-        gtk_utils::exec_and_show_error(&self.window, || {
-            let camera = &options.cam.device;
-            let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-            let correct_num_adjustment_by_prop = |
-                spb_name:  &str,
-                prop_info: indi::Result<indi::NumPropValue>,
-                digits:    u32,
-                step:      Option<f64>,
-            | -> bool {
-                if let Ok(info) = prop_info {
-                    let spb = self.builder.object::<gtk::SpinButton>(spb_name).unwrap();
-                    spb.set_range(info.min, info.max);
-                    let value = spb.value();
-                    if value < info.min {
-                        spb.set_value(info.min);
-                    }
-                    if value > info.max {
-                        spb.set_value(info.max);
-                    }
-                    let desired_step =
-                        if      info.max <= 1.0   { 0.1 }
-                        else if info.max <= 10.0  { 1.0 }
-                        else if info.max <= 100.0 { 10.0 }
-                        else                      { 100.0 };
-                    let step = step.unwrap_or(desired_step);
-                    spb.set_increments(step, 10.0 * step);
-                    spb.set_digits(digits);
-                    true
-                } else {
-                    false
+        let camera = &options.cam.device;
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let correct_num_adjustment_by_prop = |
+            spb_name:  &str,
+            prop_info: indi::Result<indi::NumPropValue>,
+            digits:    u32,
+            step:      Option<f64>,
+        | -> bool {
+            if let Ok(info) = prop_info {
+                let spb = self.builder.object::<gtk::SpinButton>(spb_name).unwrap();
+                spb.set_range(info.min, info.max);
+                let value = spb.value();
+                if value < info.min {
+                    spb.set_value(info.min);
                 }
-            };
-            let temp_supported = camera.as_ref().map(|camera|
-                correct_num_adjustment_by_prop(
-                    "spb_temp",
-                    self.indi.camera_get_temperature_prop_value(&camera.name),
-                    0,
-                    Some(1.0)
-                )
-            ).unwrap_or(false);
-            let exposure_supported = camera.as_ref().map(|camera| {
-                let cam_ccd = indi::CamCcd::from_ccd_prop_name(&camera.prop);
-                correct_num_adjustment_by_prop(
-                    "spb_exp",
-                    self.indi.camera_get_exposure_prop_value(&camera.name, cam_ccd),
-                    3,
-                    Some(1.0),
-                )
-            }).unwrap_or(false);
-            let gain_supported = camera.as_ref().map(|camera|
-                correct_num_adjustment_by_prop(
-                    "spb_gain",
-                    self.indi.camera_get_gain_prop_value(&camera.name),
-                    0,
-                    None
-                )
-            ).unwrap_or(false);
-            let offset_supported = camera.as_ref().map(|camera|
-                correct_num_adjustment_by_prop(
-                    "spb_offset",
-                    self.indi.camera_get_offset_prop_value(&camera.name),
-                    0,
-                    None
-                )
-            ).unwrap_or(false);
-            let bin_supported = camera.as_ref().map(|camera| {
-                let cam_ccd = indi::CamCcd::from_ccd_prop_name(&camera.prop);
-                self.indi.camera_is_binning_supported(&camera.name, cam_ccd).unwrap_or(false)
-            }).unwrap_or(false);
-            let fan_supported = camera.as_ref().map(|camera|
-                self.indi.camera_is_fan_supported(&camera.name).unwrap_or(false)
-            ).unwrap_or(false);
-            let heater_supported = camera.as_ref().map(|camera|
-                self.indi.camera_is_heater_supported(&camera.name).unwrap_or(false)
-            ).unwrap_or(false);
-            let low_noise_supported = camera.as_ref().map(|camera|
-                self.indi.camera_is_low_noise_ctrl_supported(&camera.name).unwrap_or(false)
-            ).unwrap_or(false);
-            let crop_supported = camera.as_ref().map(|camera| {
-                let cam_ccd = indi::CamCcd::from_ccd_prop_name(&camera.prop);
-                self.indi.camera_is_frame_supported(&camera.name, cam_ccd).unwrap_or(false)
-            }).unwrap_or(false);
+                if value > info.max {
+                    spb.set_value(info.max);
+                }
+                let desired_step =
+                    if      info.max <= 1.0   { 0.1 }
+                    else if info.max <= 10.0  { 1.0 }
+                    else if info.max <= 100.0 { 10.0 }
+                    else                      { 100.0 };
+                let step = step.unwrap_or(desired_step);
+                spb.set_increments(step, 10.0 * step);
+                spb.set_digits(digits);
+                true
+            } else {
+                false
+            }
+        };
+        let temp_supported = camera.as_ref().map(|camera|
+            correct_num_adjustment_by_prop(
+                "spb_temp",
+                self.indi.camera_get_temperature_prop_value(&camera.name),
+                0,
+                Some(1.0)
+            )
+        ).unwrap_or(false);
+        let exposure_supported = camera.as_ref().map(|camera| {
+            let cam_ccd = indi::CamCcd::from_ccd_prop_name(&camera.prop);
+            correct_num_adjustment_by_prop(
+                "spb_exp",
+                self.indi.camera_get_exposure_prop_value(&camera.name, cam_ccd),
+                3,
+                Some(1.0),
+            )
+        }).unwrap_or(false);
+        let gain_supported = camera.as_ref().map(|camera|
+            correct_num_adjustment_by_prop(
+                "spb_gain",
+                self.indi.camera_get_gain_prop_value(&camera.name),
+                0,
+                None
+            )
+        ).unwrap_or(false);
+        let offset_supported = camera.as_ref().map(|camera|
+            correct_num_adjustment_by_prop(
+                "spb_offset",
+                self.indi.camera_get_offset_prop_value(&camera.name),
+                0,
+                None
+            )
+        ).unwrap_or(false);
+        let bin_supported = camera.as_ref().map(|camera| {
+            let cam_ccd = indi::CamCcd::from_ccd_prop_name(&camera.prop);
+            self.indi.camera_is_binning_supported(&camera.name, cam_ccd).unwrap_or(false)
+        }).unwrap_or(false);
+        let fan_supported = camera.as_ref().map(|camera|
+            self.indi.camera_is_fan_supported(&camera.name).unwrap_or(false)
+        ).unwrap_or(false);
+        let heater_supported = camera.as_ref().map(|camera|
+            self.indi.camera_is_heater_supported(&camera.name).unwrap_or(false)
+        ).unwrap_or(false);
+        let low_noise_supported = camera.as_ref().map(|camera|
+            self.indi.camera_is_low_noise_ctrl_supported(&camera.name).unwrap_or(false)
+        ).unwrap_or(false);
+        let crop_supported = camera.as_ref().map(|camera| {
+            let cam_ccd = indi::CamCcd::from_ccd_prop_name(&camera.prop);
+            self.indi.camera_is_frame_supported(&camera.name, cam_ccd).unwrap_or(false)
+        }).unwrap_or(false);
 
-            let indi_connected = self.indi.state() == indi::ConnState::Connected;
+        let indi_connected = self.indi.state() == indi::ConnState::Connected;
 
-            let cooler_active = ui.prop_bool("chb_cooler.active");
-            let frame_mode_str = ui.prop_string("cb_frame_mode.active-id");
-            let frame_mode = FrameType::from_active_id(frame_mode_str.as_deref());
+        let cooler_active = ui.prop_bool("chb_cooler.active");
+        let frame_mode_str = ui.prop_string("cb_frame_mode.active-id");
+        let frame_mode = FrameType::from_active_id(frame_mode_str.as_deref());
 
-            let frame_mode_is_lights = frame_mode == FrameType::Lights;
-            let frame_mode_is_flat = frame_mode == FrameType::Flats;
-            let frame_mode_is_dark = frame_mode == FrameType::Darks;
+        let frame_mode_is_lights = frame_mode == FrameType::Lights;
+        let frame_mode_is_flat = frame_mode == FrameType::Flats;
+        let frame_mode_is_dark = frame_mode == FrameType::Darks;
 
-            let mode_data = self.core.mode_data();
-            let mode_type = mode_data.mode.get_type();
-            let waiting = mode_type == ModeType::Waiting;
-            let single_shot = mode_type == ModeType::SingleShot;
-            let liveview_active = mode_type == ModeType::LiveView;
-            let saving_frames = mode_type == ModeType::SavingRawFrames;
-            let saving_frames_paused = mode_data.aborted_mode
-                .as_ref()
-                .map(|mode| mode.get_type() == ModeType::SavingRawFrames)
-                .unwrap_or(false);
-            let live_active = mode_type == ModeType::LiveStacking;
-            let livestacking_paused = mode_data.aborted_mode
-                .as_ref()
-                .map(|mode| mode.get_type() == ModeType::LiveStacking)
-                .unwrap_or(false);
-            drop(mode_data);
+        let mode_data = self.core.mode_data();
+        let mode_type = mode_data.mode.get_type();
+        let waiting = mode_type == ModeType::Waiting;
+        let single_shot = mode_type == ModeType::SingleShot;
+        let liveview_active = mode_type == ModeType::LiveView;
+        let saving_frames = mode_type == ModeType::SavingRawFrames;
+        let saving_frames_paused = mode_data.aborted_mode
+            .as_ref()
+            .map(|mode| mode.get_type() == ModeType::SavingRawFrames)
+            .unwrap_or(false);
+        let live_active = mode_type == ModeType::LiveStacking;
+        let livestacking_paused = mode_data.aborted_mode
+            .as_ref()
+            .map(|mode| mode.get_type() == ModeType::LiveStacking)
+            .unwrap_or(false);
+        drop(mode_data);
 
-            let save_raw_btn_cap = match frame_mode {
-                FrameType::Lights => "Start save\nLIGHTs",
-                FrameType::Darks  => "Start save\nDARKs",
-                FrameType::Biases => "Start save\nBIASes",
-                FrameType::Flats  => "Start save\nFLATs",
-                FrameType::Undef  => "Error :(",
-            };
-            ui.set_prop_str("btn_start_save_raw.label", Some(save_raw_btn_cap));
+        let save_raw_btn_cap = match frame_mode {
+            FrameType::Lights => "Start save\nLIGHTs",
+            FrameType::Darks  => "Start save\nDARKs",
+            FrameType::Biases => "Start save\nBIASes",
+            FrameType::Flats  => "Start save\nFLATs",
+            FrameType::Undef  => "Error :(",
+        };
+        ui.set_prop_str("btn_start_save_raw.label", Some(save_raw_btn_cap));
 
-            let cam_active = self.indi
-                .is_device_enabled(camera.as_ref().map(|c| c.name.as_str()).unwrap_or(""))
-                .unwrap_or(false);
+        let cam_active = self.indi
+            .is_device_enabled(camera.as_ref().map(|c| c.name.as_str()).unwrap_or(""))
+            .unwrap_or(false);
 
-            let can_change_cam_opts = !saving_frames && !live_active;
-            let can_change_mode = waiting || single_shot;
-            let can_change_frame_opts = waiting || liveview_active;
-            let can_change_live_stacking_opts = waiting || liveview_active;
-            let can_change_cal_ops = !liveview_active;
-            let cam_sensitive =
-                indi_connected &&
-                cam_active &&
-                camera.is_some();
+        let can_change_cam_opts = !saving_frames && !live_active;
+        let can_change_mode = waiting || single_shot;
+        let can_change_frame_opts = waiting || liveview_active;
+        let can_change_live_stacking_opts = waiting || liveview_active;
+        let can_change_cal_ops = !liveview_active;
+        let cam_sensitive =
+            indi_connected &&
+            cam_active &&
+            camera.is_some();
 
-            gtk_utils::enable_actions(&self.window, &[
-                ("take_shot",              exposure_supported && !single_shot && can_change_mode),
-                ("stop_shot",              single_shot),
+        gtk_utils::enable_actions(&self.window, &[
+            ("take_shot",              exposure_supported && !single_shot && can_change_mode),
+            ("stop_shot",              single_shot),
 
-                ("start_save_raw_frames",  exposure_supported && !saving_frames && can_change_mode),
-                ("stop_save_raw_frames",   saving_frames),
-                ("continue_save_raw",      saving_frames_paused && can_change_mode),
+            ("start_save_raw_frames",  exposure_supported && !saving_frames && can_change_mode),
+            ("stop_save_raw_frames",   saving_frames),
+            ("continue_save_raw",      saving_frames_paused && can_change_mode),
 
-                ("start_live_stacking",    exposure_supported && !live_active && can_change_mode && frame_mode_is_lights),
-                ("stop_live_stacking",     live_active),
-                ("continue_live_stacking", livestacking_paused && can_change_mode),
-            ]);
+            ("start_live_stacking",    exposure_supported && !live_active && can_change_mode && frame_mode_is_lights),
+            ("stop_live_stacking",     live_active),
+            ("continue_live_stacking", livestacking_paused && can_change_mode),
+        ]);
 
-            ui.show_widgets(&[
-                ("chb_fan",       fan_supported),
-                ("l_cam_heater",  heater_supported),
-                ("cb_cam_heater", heater_supported),
-                ("chb_low_noise", low_noise_supported),
-            ]);
+        ui.show_widgets(&[
+            ("chb_fan",       fan_supported),
+            ("l_cam_heater",  heater_supported),
+            ("cb_cam_heater", heater_supported),
+            ("chb_low_noise", low_noise_supported),
+        ]);
 
-            ui.enable_widgets(false, &[
-                ("l_camera_list",      waiting),
-                ("cb_camera_list",     waiting),
-                ("chb_fan",            !cooler_active),
-                ("chb_cooler",         temp_supported && can_change_cam_opts),
-                ("spb_temp",           cooler_active && temp_supported && can_change_cam_opts),
-                ("chb_shots_cont",     (exposure_supported && liveview_active) || can_change_mode),
-                ("cb_frame_mode",      can_change_frame_opts),
-                ("spb_exp",            exposure_supported && can_change_frame_opts),
-                ("cb_crop",            crop_supported && can_change_frame_opts),
-                ("spb_gain",           gain_supported && can_change_frame_opts),
-                ("spb_offset",         offset_supported && can_change_frame_opts),
-                ("cb_bin",             bin_supported && can_change_frame_opts),
-                ("chb_master_frame",   can_change_cal_ops && (frame_mode_is_flat || frame_mode_is_dark) && !saving_frames),
-                ("chb_master_dark",    can_change_cal_ops),
-                ("fch_master_dark",    can_change_cal_ops),
-                ("chb_master_flat",    can_change_cal_ops),
-                ("fch_master_flat",    can_change_cal_ops),
-                ("chb_raw_frames_cnt", !saving_frames && can_change_mode),
-                ("spb_raw_frames_cnt", !saving_frames && can_change_mode),
+        ui.enable_widgets(false, &[
+            ("l_camera_list",      waiting),
+            ("cb_camera_list",     waiting),
+            ("chb_fan",            !cooler_active),
+            ("chb_cooler",         temp_supported && can_change_cam_opts),
+            ("spb_temp",           cooler_active && temp_supported && can_change_cam_opts),
+            ("chb_shots_cont",     (exposure_supported && liveview_active) || can_change_mode),
+            ("cb_frame_mode",      can_change_frame_opts),
+            ("spb_exp",            exposure_supported && can_change_frame_opts),
+            ("cb_crop",            crop_supported && can_change_frame_opts),
+            ("spb_gain",           gain_supported && can_change_frame_opts),
+            ("spb_offset",         offset_supported && can_change_frame_opts),
+            ("cb_bin",             bin_supported && can_change_frame_opts),
+            ("chb_master_frame",   can_change_cal_ops && (frame_mode_is_flat || frame_mode_is_dark) && !saving_frames),
+            ("chb_master_dark",    can_change_cal_ops),
+            ("fch_master_dark",    can_change_cal_ops),
+            ("chb_master_flat",    can_change_cal_ops),
+            ("fch_master_flat",    can_change_cal_ops),
+            ("chb_raw_frames_cnt", !saving_frames && can_change_mode),
+            ("spb_raw_frames_cnt", !saving_frames && can_change_mode),
 
-                ("chb_live_save",      can_change_live_stacking_opts),
-                ("spb_live_minutes",   can_change_live_stacking_opts),
-                ("chb_live_save_orig", can_change_live_stacking_opts),
-                ("fch_live_folder",    can_change_live_stacking_opts),
+            ("chb_live_save",      can_change_live_stacking_opts),
+            ("spb_live_minutes",   can_change_live_stacking_opts),
+            ("chb_live_save_orig", can_change_live_stacking_opts),
+            ("fch_live_folder",    can_change_live_stacking_opts),
 
-                ("bx_cam_main",        cam_sensitive),
-                ("grd_cam_ctrl",       cam_sensitive),
-                ("grd_shot_settings",  cam_sensitive),
-                ("grd_save_raw",       cam_sensitive),
-                ("grd_live_stack",     cam_sensitive),
-                ("grd_cam_calibr",     cam_sensitive),
-                ("bx_light_qual",      cam_sensitive),
+            ("bx_cam_main",        cam_sensitive),
+            ("grd_cam_ctrl",       cam_sensitive),
+            ("grd_shot_settings",  cam_sensitive),
+            ("grd_save_raw",       cam_sensitive),
+            ("grd_live_stack",     cam_sensitive),
+            ("grd_cam_calibr",     cam_sensitive),
+            ("bx_light_qual",      cam_sensitive),
 
-                ("spb_guid_max_err",   ui.prop_bool("chb_guid_enabled.active")),
+            ("spb_guid_max_err",   ui.prop_bool("chb_guid_enabled.active")),
 
-                ("l_delay",            liveview_active),
-                ("spb_delay",          liveview_active),
-            ]);
-
-            Ok(())
-        });
+            ("l_delay",            liveview_active),
+            ("spb_delay",          liveview_active),
+        ]);
     }
 
     fn correct_widgets_props(&self) {
