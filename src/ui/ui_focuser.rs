@@ -10,7 +10,7 @@ use crate::{
     utils::{io_utils::*, math::{cmp_f64, linear_interpolate}},
 };
 
-use super::{gtk_utils, ui_common::*, ui_main::*};
+use super::{gtk_utils, utils::*, ui_main::*};
 
 pub fn init_ui(
     _app:     &gtk::Application,

@@ -10,7 +10,7 @@ use crate::{
     ui::gtk_utils::*,
     utils::{io_utils::*, log_utils::*}
 };
-use super::{ui_main::*, gtk_utils, ui_common::*};
+use super::{ui_main::*, gtk_utils, utils::*};
 
 pub fn init_ui(
     _app:     &gtk::Application,

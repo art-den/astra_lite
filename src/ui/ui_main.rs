@@ -14,7 +14,7 @@ use crate::{
     core::core::*,
     options::*,
 };
-use super::{gtk_utils, ui_common::*};
+use super::{gtk_utils, utils::*};
 
 pub fn init_ui(
     app:      &gtk::Application,

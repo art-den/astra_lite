@@ -16,7 +16,7 @@ use crate::{
     options::*,
     guiding::phd2_conn,
 };
-use super::{ui_main::*, gtk_utils, ui_indi::*};
+use super::{ui_main::*, gtk_utils, indi_widget::*};
 
 pub fn init_ui(
     _app:     &gtk::Application,
@@ -46,7 +46,7 @@ pub fn init_ui(
         options.indi.remote = true; // force remote mode if no devices info
     }
 
-    let indi_ui = IndiUi::new(&indi);
+    let indi_ui = IndiWidget::new(&indi);
 
     let bx_devices_ctrl = builder.object::<gtk::Box>("bx_devices_ctrl").unwrap();
     bx_devices_ctrl.add(indi_ui.widget());
@@ -137,7 +137,7 @@ struct HardwareUi {
     indi_status:   RefCell<indi::ConnState>,
     indi_drivers:  indi::Drivers,
     indi_evt_conn: RefCell<Option<indi::Subscription>>,
-    indi_ui:       IndiUi,
+    indi_ui:       IndiWidget,
     is_remote:     Cell<bool>,
     self_:         RefCell<Option<Rc<HardwareUi>>>,
 }

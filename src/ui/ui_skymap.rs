@@ -3,7 +3,7 @@ use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use crate::{indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
-use super::{gtk_utils::{self, DEFAULT_DPMM}, ui_common::*, ui_main::*, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, utils::*}};
+use super::{gtk_utils::{self, DEFAULT_DPMM}, utils::*, ui_main::*, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, utils::*}};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
 pub fn init_ui(

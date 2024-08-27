@@ -3,7 +3,7 @@ use gtk::{prelude::*, glib, glib::clone};
 use itertools::{Itertools, izip};
 use crate::indi;
 
-pub struct IndiUi {
+pub struct IndiWidget {
     indi:      Arc<indi::Connection>,
     indi_conn: indi::Subscription,
     data:      Rc<RefCell<UiIndiGuiData>>,
@@ -11,14 +11,14 @@ pub struct IndiUi {
     stack:     gtk::Stack,
 }
 
-impl Drop for IndiUi {
+impl Drop for IndiWidget {
     fn drop(&mut self) {
         self.indi.unsubscribe(self.indi_conn);
         log::info!("IndiUi dropped");
     }
 }
 
-impl IndiUi {
+impl IndiWidget {
     const CSS: &'static [u8] = b"
         .indi_on_btn {
             text-decoration: underline;
