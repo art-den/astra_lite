@@ -46,10 +46,10 @@ pub fn init_ui(
         options.indi.remote = true; // force remote mode if no devices info
     }
 
-    let indi_ui = IndiWidget::new(&indi);
+    let widget = IndiWidget::new(&indi);
 
     let bx_devices_ctrl = builder.object::<gtk::Box>("bx_devices_ctrl").unwrap();
-    bx_devices_ctrl.add(indi_ui.widget());
+    bx_devices_ctrl.add(widget.widget());
 
     let data = Rc::new(HardwareUi {
         core:          Arc::clone(core),
@@ -61,7 +61,7 @@ pub fn init_ui(
         indi_evt_conn: RefCell::new(None),
         is_remote:     Cell::new(false),
         main_ui:       Rc::clone(main_ui),
-        indi_ui,
+        widget,
         window:        window.clone(),
         self_:         RefCell::new(None),
     });
@@ -137,7 +137,7 @@ struct HardwareUi {
     indi_status:   RefCell<indi::ConnState>,
     indi_drivers:  indi::Drivers,
     indi_evt_conn: RefCell<Option<indi::Subscription>>,
-    indi_ui:       IndiWidget,
+    widget:        IndiWidget,
     is_remote:     Cell<bool>,
     self_:         RefCell<Option<Rc<HardwareUi>>>,
 }
@@ -174,7 +174,7 @@ impl HardwareUi {
         let se_hw_prop_name = self.builder.object::<gtk::SearchEntry>("se_hw_prop_name").unwrap();
         se_hw_prop_name.connect_search_changed(clone!(@weak self as self_ => move |se| {
             let text_lc = se.text().to_lowercase();
-            self_.indi_ui.set_filter_text(&text_lc);
+            self_.widget.set_filter_text(&text_lc);
         }));
     }
 
@@ -184,7 +184,7 @@ impl HardwareUi {
                 self.handler_closing(),
 
             MainUiEvent::TabPageChanged(tab_page) =>
-                self.indi_ui.set_enabled(tab_page == TabPage::Hardware),
+                self.widget.set_enabled(tab_page == TabPage::Hardware),
 
             _ => {},
         }
