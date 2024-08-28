@@ -143,7 +143,7 @@ pub fn show_error_message(
 pub fn exec_and_show_error(
     window: &impl IsA<gtk::Window>,
     fun:    impl FnOnce() -> anyhow::Result<()>
-) {
+) -> bool {
     let exec_res = fun();
     if let Err(err) = exec_res {
         let message = if cfg!(debug_assertions) {
@@ -152,7 +152,9 @@ pub fn exec_and_show_error(
             err.to_string()
         };
         show_error_message(window, "Error", &message);
+        return false;
     }
+    return true;
 }
 
 pub fn get_model_row_count(model: &gtk::TreeModel) -> usize {

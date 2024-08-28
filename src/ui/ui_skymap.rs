@@ -3,7 +3,7 @@ use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use crate::{indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
-use super::{gtk_utils::{self, DEFAULT_DPMM}, utils::*, ui_main::*, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, utils::*}};
+use super::{gtk_utils::{self, DEFAULT_DPMM}, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, utils::*}, ui_main::*, ui_skymap_options::SkymapOptionsDialog, utils::*};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
 pub fn init_ui(
@@ -27,7 +27,7 @@ pub fn init_ui(
     pan_map1.add2(map_widget.get_widget());
 
     let data = Rc::new(MapUi {
-        ui_options:   RefCell::new(ui_options),
+        ui_options:    RefCell::new(ui_options),
         indi:          Arc::clone(indi),
         options:       Arc::clone(options),
         builder:       builder.clone(),
@@ -87,10 +87,10 @@ impl SkyItemType {
 
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
-struct UiOptions {
+pub struct UiOptions {
     paned_pos1:         i32,
-    paint:              PaintConfig,
-    show_ccd:           bool,
+    pub paint:          PaintConfig,
+    pub show_ccd:       bool,
     search_above_horiz: bool,
 }
 
@@ -416,137 +416,19 @@ impl MapUi {
     }
 
     fn handler_action_options(self: &Rc<Self>) {
-        let builder = gtk::Builder::from_string(include_str!("resources/skymap_options.ui"));
-        let dialog = builder.object::<gtk::Dialog>("dialog").unwrap();
-        gtk_utils::add_ok_and_cancel_buttons(
-            &dialog,
-            "Ok",     gtk::ResponseType::Ok,
-            "Cancel", gtk::ResponseType::Cancel,
-        );
-        gtk_utils::set_dialog_default_button(&dialog);
-
-        let spb_horiz_glow_angle = builder.object::<gtk::SpinButton>("spb_horiz_glow_angle").unwrap();
-        spb_horiz_glow_angle.set_range(1.0, 45.0);
-        spb_horiz_glow_angle.set_digits(0);
-        spb_horiz_glow_angle.set_increments(1.0, 5.0);
-
-        let ui = gtk_utils::UiHelper::new_from_builder(&builder);
+        let dialog = SkymapOptionsDialog::new(&self.indi);
 
         let options = self.options.read().unwrap();
         let ui_options = self.ui_options.borrow();
-
-        ui.set_prop_str("e_lat.text", Some(&indi::value_to_sexagesimal(options.sky_map.latitude, true, 9)));
-        ui.set_prop_str("e_long.text", Some(&indi::value_to_sexagesimal(options.sky_map.longitude, true, 9)));
-        ui.set_prop_bool("chb_high_qual.active", ui_options.paint.high_quality);
-        ui.set_prop_bool("chb_horiz_glow.active", ui_options.paint.horizon_glow.enabled);
-        ui.set_prop_f64("spb_horiz_glow_angle.value", ui_options.paint.horizon_glow.angle);
-
-        let hg_color = &ui_options.paint.horizon_glow.color;
-        ui.set_color("clrb_horiz_glow", hg_color.r, hg_color.g, hg_color.b, hg_color.a);
-
+        dialog.show_options(&ui_options, &options);
         drop(ui_options);
         drop(options);
-        drop(ui);
 
-        let btn_get_from_devs = builder.object::<gtk::Button>("btn_get_from_devs").unwrap();
-        btn_get_from_devs.connect_clicked(clone!(@strong self as self_, @strong builder, @strong dialog, @strong btn_get_from_devs => move |_| {
-            gtk_utils::exec_and_show_error(&dialog, || {
-                let indi = &self_.indi;
-                if indi.state() != indi::ConnState::Connected {
-                    anyhow::bail!("INDI is not connected!");
-                }
-                let devices = indi.get_devices_list_by_interface(
-                    indi::DriverInterface::GPS |
-                    indi::DriverInterface::TELESCOPE
-                );
-
-                let result: Vec<_> = devices
-                    .iter()
-                    .filter_map(|dev|
-                        indi.get_geo_lat_long_elev(&dev.name)
-                            .ok()
-                            .map(|(lat,long,_)| (dev, lat, long))
-                    )
-                    .filter(|(_, lat,long)| *lat != 0.0 && *long != 0.0)
-                    .collect();
-
-                if result.is_empty() {
-                    anyhow::bail!("No GPS or geographic data found!");
-                }
-
-                if result.len() == 1 {
-                    let (_, latitude, longitude) = result[0];
-                    let ui = gtk_utils::UiHelper::new_from_builder(&builder);
-                    ui.set_prop_str("e_lat.text", Some(&indi::value_to_sexagesimal(latitude, true, 9)));
-                    ui.set_prop_str("e_long.text", Some(&indi::value_to_sexagesimal(longitude, true, 9)));
-                    return Ok(());
-                }
-
-                let menu = gtk::Menu::new();
-                for (dev, lat, long) in result {
-                    let mi_text = format!(
-                        "{} {} ({})",
-                        indi::value_to_sexagesimal(lat, true, 9),
-                        indi::value_to_sexagesimal(long, true, 9),
-                        dev.name
-                    );
-                    let menu_item = gtk::MenuItem::builder().label(mi_text).build();
-                    menu.append(&menu_item);
-                    let builder = builder.clone();
-                    menu_item.connect_activate(move |_| {
-                        let ui = gtk_utils::UiHelper::new_from_builder(&builder);
-                        ui.set_prop_str("e_lat.text", Some(&indi::value_to_sexagesimal(lat, true, 9)));
-                        ui.set_prop_str("e_long.text", Some(&indi::value_to_sexagesimal(long, true, 9)));
-                    });
-                }
-                menu.set_attach_widget(Some(&btn_get_from_devs));
-                menu.show_all();
-                menu.popup_easy(gtk::gdk::ffi::GDK_BUTTON_SECONDARY as u32, 0);
-
-                Ok(())
-            });
-        }));
-
-        dialog.show();
-
-        dialog.connect_response(clone!(@strong self as self_, @strong builder => move |dlg, resp| {
-            if resp == gtk::ResponseType::Ok {
-                let mut ui_options = self_.ui_options.borrow_mut();
-                let mut options = self_.options.write().unwrap();
-                let ui = gtk_utils::UiHelper::new_from_builder(&builder);
-                let mut err_str = String::new();
-
-                let latitude_str = ui.prop_string("e_lat.text").unwrap_or_default();
-                if let Some(latitude) = indi::sexagesimal_to_value(&latitude_str) {
-                    options.sky_map.latitude = latitude;
-                } else {
-                    err_str += &format!("Wrong latitude: {}\n", latitude_str);
-                }
-                let longitude_str = ui.prop_string("e_long.text").unwrap_or_default();
-                if let Some(longitude) = indi::sexagesimal_to_value(&longitude_str) {
-                    options.sky_map.longitude = longitude;
-                } else {
-                    err_str += &format!("Wrong longitude: {}\n", longitude_str);
-                }
-                if !err_str.is_empty() {
-                    gtk_utils::show_error_message(&self_.window, "Error", &err_str);
-                    return;
-                }
-
-                ui_options.paint.high_quality = ui.prop_bool("chb_high_qual.active");
-                ui_options.paint.horizon_glow.enabled = ui.prop_bool("chb_horiz_glow.active");
-                let (r, g, b, a) = ui.color("clrb_horiz_glow");
-                ui_options.paint.horizon_glow.color = Color { r, g, b, a };
-
-                ui_options.paint.horizon_glow.angle = ui.prop_f64("spb_horiz_glow_angle.value");
-
-                drop(options);
-                drop(ui_options);
-
-                self_.set_observer_data_for_widget();
-                self_.update_skymap_widget(true);
-            }
-            dlg.close();
+        dialog.exec(clone!(@strong self as self_, @strong dialog => move || {
+            let mut options = self_.options.write().unwrap();
+            let mut ui_options = self_.ui_options.borrow_mut();
+            dialog.get_options(&mut ui_options, &mut options)?;
+            Ok(())
         }));
     }
 

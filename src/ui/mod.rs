@@ -6,6 +6,7 @@ mod ui_hardware;
 mod indi_widget;
 mod ui_camera;
 mod ui_skymap;
+mod ui_skymap_options;
 mod utils;
 mod ui_options;
 mod ui_focuser;

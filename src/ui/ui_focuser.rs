@@ -414,7 +414,7 @@ impl FocuserUi {
             gtk_utils::exec_and_show_error(&self_.window, || {
                 self_.indi.focuser_set_abs_value(&options.focuser.device, sb.value(), true, None)?;
                 Ok(())
-            })
+            });
         }));
 
         let cb = self.builder.object::<gtk::ComboBoxText>("cb_foc_list").unwrap();
