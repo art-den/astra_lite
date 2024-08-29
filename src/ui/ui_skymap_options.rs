@@ -14,10 +14,11 @@ impl SkymapOptionsDialog {
         let builder = gtk::Builder::from_string(include_str!("resources/skymap_options.ui"));
         let dialog = builder.object::<gtk::Dialog>("dialog").unwrap();
 
-        gtk_utils::add_ok_and_cancel_buttons(
+        gtk_utils::add_ok_cancel_and_apply_buttons(
             &dialog,
             "Ok",     gtk::ResponseType::Ok,
             "Cancel", gtk::ResponseType::Cancel,
+            "Apply",  gtk::ResponseType::Apply,
         );
         gtk_utils::set_dialog_default_button(&dialog);
 
@@ -53,8 +54,14 @@ impl SkymapOptionsDialog {
         ui.set_prop_bool("chb_horiz_glow.active", ui_options.paint.horizon_glow.enabled);
         ui.set_prop_f64("spb_horiz_glow_angle.value", ui_options.paint.horizon_glow.angle);
 
-        let hg_color = &ui_options.paint.horizon_glow.color;
-        ui.set_color("clrb_horiz_glow", hg_color.r, hg_color.g, hg_color.b, hg_color.a);
+        let c = &ui_options.paint.horizon_glow.color;
+        ui.set_color("clrb_horiz_glow", c.r, c.g, c.b, c.a);
+
+        let c = &ui_options.paint.eq_grid_line_color;
+        ui.set_color("clrb_eq_grid_line", c.r, c.g, c.b, c.a);
+
+        let c = &ui_options.paint.eq_grid_text_color;
+        ui.set_color("clrb_eq_grid_text", c.r, c.g, c.b, c.a);
     }
 
     pub fn get_options(
@@ -88,19 +95,26 @@ impl SkymapOptionsDialog {
 
         ui_options.paint.horizon_glow.angle = ui.prop_f64("spb_horiz_glow_angle.value");
 
+        let (r, g, b, a) = ui.color("clrb_eq_grid_line");
+        ui_options.paint.eq_grid_line_color = Color { r, g, b, a };
+
+        let (r, g, b, a) = ui.color("clrb_eq_grid_text");
+        ui_options.paint.eq_grid_text_color = Color { r, g, b, a };
+
         return Ok(());
     }
 
     pub fn exec(self: &Rc<Self>, on_apply: impl Fn() -> anyhow::Result<()> + 'static) {
         self.dialog.connect_response(clone!(@strong self as self_ => move |dlg, resp| {
-            if resp == gtk::ResponseType::Ok {
-                let ok = gtk_utils::exec_and_show_error(dlg, || {
-                    on_apply()?;
-                    Ok(())
-                });
-                if ok {
-                    dlg.close();
-                }
+            if resp == gtk::ResponseType::Cancel {
+                dlg.close();
+            }
+            let ok = gtk_utils::exec_and_show_error(dlg, || {
+                on_apply()?;
+                Ok(())
+            });
+            if ok && resp == gtk::ResponseType::Ok {
+                dlg.close();
             }
         }));
         self.dialog.show();

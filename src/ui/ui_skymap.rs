@@ -428,6 +428,9 @@ impl MapUi {
             let mut options = self_.options.write().unwrap();
             let mut ui_options = self_.ui_options.borrow_mut();
             dialog.get_options(&mut ui_options, &mut options)?;
+            drop(ui_options);
+            drop(options);
+            self_.update_skymap_widget(true);
             Ok(())
         }));
     }

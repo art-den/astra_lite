@@ -65,25 +65,29 @@ impl Default for HorizonGlowConfig {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PaintConfig {
-    pub filter:          ItemsToShow,
-    pub max_dso_mag:     f32,
-    pub horizon_glow:    HorizonGlowConfig,
-    pub names_font_size: f32,
-    pub sides_font_size: f32,
-    pub grid_font_size:  f32,
-    pub high_quality:    bool,
+    pub high_quality:       bool,
+    pub filter:             ItemsToShow,
+    pub max_dso_mag:        f32,
+    pub horizon_glow:       HorizonGlowConfig,
+    pub names_font_size:    f32,
+    pub sides_font_size:    f32,
+    pub grid_font_size:     f32,
+    pub eq_grid_line_color: Color,
+    pub eq_grid_text_color: Color,
 }
 
 impl Default for PaintConfig {
     fn default() -> Self {
         let mut result = Self {
-            filter:          ItemsToShow::all(),
-            max_dso_mag:     10.0,
-            horizon_glow:    HorizonGlowConfig::default(),
-            names_font_size: 3.0,
-            sides_font_size: 5.0,
-            grid_font_size:  2.8,
-            high_quality:    true,
+            high_quality:        true,
+            filter:              ItemsToShow::all(),
+            max_dso_mag:         10.0,
+            horizon_glow:        HorizonGlowConfig::default(),
+            names_font_size:     3.0,
+            sides_font_size:     5.0,
+            grid_font_size:      2.8,
+            eq_grid_line_color:  Color { r: 0.0, g: 0.0, b: 0.7, a: 1.0 },
+            eq_grid_text_color:  Color { r: 0.6, g: 0.6, b: 0.6, a: 1.0 },
         };
 
         if !cfg!(target_arch = "x86_64") {
@@ -462,12 +466,14 @@ impl SkyMapPainter {
         if !text {
             ctx.cairo.set_line_width(1.0);
             ctx.cairo.set_antialias(ctx.config.get_antialias());
-            ctx.cairo.set_source_rgba(0.0, 0.0, 1.0, 0.7);
+            let c = &ctx.config.eq_grid_line_color;
+            ctx.cairo.set_source_rgba(c.r, c.g, c.b, c.a);
         }
         else
         {
             ctx.cairo.set_font_size(ctx.config.grid_font_size as f64 * ctx.screen.dpmm_y);
-            ctx.cairo.set_source_rgba(1.0, 1.0, 1.0, 1.0);
+            let c = &ctx.config.eq_grid_text_color;
+            ctx.cairo.set_source_rgba(c.r, c.g, c.b, c.a);
         }
 
         const DEC_STEP: i32 = 10; // degree

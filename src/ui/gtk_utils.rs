@@ -27,6 +27,31 @@ pub fn add_ok_and_cancel_buttons(
     }
 }
 
+pub fn add_ok_cancel_and_apply_buttons(
+    dialog:      &gtk::Dialog,
+    ok_cap:      &str,
+    ok_type:     gtk::ResponseType,
+    cancel_cap:  &str,
+    cancel_type: gtk::ResponseType,
+    apply_cap:   &str,
+    apply_type:  gtk::ResponseType,
+) {
+    if cfg!(target_os = "windows") {
+        dialog.add_buttons(&[
+            (ok_cap,     ok_type),
+            (cancel_cap, cancel_type),
+            (apply_cap,  apply_type),
+        ]);
+    } else {
+        dialog.add_buttons(&[
+            (apply_cap,  apply_type),
+            (cancel_cap, cancel_type),
+            (ok_cap,     ok_type)
+        ]);
+    }
+}
+
+
 pub fn disable_scroll_for_most_of_widgets(builder: &gtk::Builder) {
     for object in builder.objects() {
         if let Some(spin) = object.downcast_ref::<gtk::SpinButton>() {
