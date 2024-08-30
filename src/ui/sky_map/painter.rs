@@ -47,7 +47,7 @@ pub struct CameraFrame {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HorizonGlowConfig {
-    pub enabled: bool,
+    pub visible: bool,
     pub angle:   f64,
     pub color:   Color,
 }
@@ -55,7 +55,7 @@ pub struct HorizonGlowConfig {
 impl Default for HorizonGlowConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            visible: true,
             angle:   10.0, // degrees
             color:   Color { r: 0.25, g: 0.3, b: 0.3, a: 1.0 },
         }
@@ -64,30 +64,46 @@ impl Default for HorizonGlowConfig {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct EqGridConfig {
+    pub visible:    bool,
+    pub line_color: Color,
+    pub text_color: Color,
+}
+
+impl Default for EqGridConfig {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            line_color: Color { r: 0.0, g: 0.0, b: 0.7, a: 1.0 },
+            text_color: Color { r: 0.6, g: 0.6, b: 0.6, a: 1.0 },
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PaintConfig {
-    pub high_quality:       bool,
-    pub filter:             ItemsToShow,
-    pub max_dso_mag:        f32,
-    pub horizon_glow:       HorizonGlowConfig,
-    pub names_font_size:    f32,
-    pub sides_font_size:    f32,
-    pub grid_font_size:     f32,
-    pub eq_grid_line_color: Color,
-    pub eq_grid_text_color: Color,
+    pub high_quality:    bool,
+    pub filter:          ItemsToShow,
+    pub max_dso_mag:     f32,
+    pub horizon_glow:    HorizonGlowConfig,
+    pub names_font_size: f32,
+    pub sides_font_size: f32,
+    pub grid_font_size:  f32,
+    pub eq_grid:         EqGridConfig,
 }
 
 impl Default for PaintConfig {
     fn default() -> Self {
         let mut result = Self {
-            high_quality:        true,
-            filter:              ItemsToShow::all(),
-            max_dso_mag:         10.0,
-            horizon_glow:        HorizonGlowConfig::default(),
-            names_font_size:     3.0,
-            sides_font_size:     5.0,
-            grid_font_size:      2.8,
-            eq_grid_line_color:  Color { r: 0.0, g: 0.0, b: 0.7, a: 1.0 },
-            eq_grid_text_color:  Color { r: 0.6, g: 0.6, b: 0.6, a: 1.0 },
+            high_quality:    true,
+            filter:          ItemsToShow::all(),
+            max_dso_mag:     10.0,
+            horizon_glow:    HorizonGlowConfig::default(),
+            names_font_size: 3.0,
+            sides_font_size: 5.0,
+            grid_font_size:  2.8,
+            eq_grid:         EqGridConfig::default(),
         };
 
         if !cfg!(target_arch = "x86_64") {
@@ -144,8 +160,10 @@ impl SkyMapPainter {
         let ctx = PaintCtx { cairo, config, screen, view_point, pxls_per_rad };
 
         // Equatorial grid
-        self.paint_eq_grid(&eq_hor_cvt, &ctx, &hor_3d_cvt, false)?;
-        self.paint_eq_grid(&eq_hor_cvt, &ctx, &hor_3d_cvt, true)?;
+        if config.eq_grid.visible {
+            self.paint_eq_grid(&eq_hor_cvt, &ctx, &hor_3d_cvt, false)?;
+            self.paint_eq_grid(&eq_hor_cvt, &ctx, &hor_3d_cvt, true)?;
+        }
 
         if let Some(sky_map) = sky_map {
             // DSO objects
@@ -182,7 +200,7 @@ impl SkyMapPainter {
         }
 
         // Horizon glow
-        if config.horizon_glow.enabled {
+        if config.horizon_glow.visible {
             self.paint_horizon_glow(cairo, &eq_hor_cvt, &ctx, &hor_3d_cvt)?;
         }
 
@@ -466,13 +484,13 @@ impl SkyMapPainter {
         if !text {
             ctx.cairo.set_line_width(1.0);
             ctx.cairo.set_antialias(ctx.config.get_antialias());
-            let c = &ctx.config.eq_grid_line_color;
+            let c = &ctx.config.eq_grid.line_color;
             ctx.cairo.set_source_rgba(c.r, c.g, c.b, c.a);
         }
         else
         {
             ctx.cairo.set_font_size(ctx.config.grid_font_size as f64 * ctx.screen.dpmm_y);
-            let c = &ctx.config.eq_grid_text_color;
+            let c = &ctx.config.eq_grid.text_color;
             ctx.cairo.set_source_rgba(c.r, c.g, c.b, c.a);
         }
 

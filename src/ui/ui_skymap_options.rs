@@ -51,16 +51,16 @@ impl SkymapOptionsDialog {
         ui.set_prop_str("e_lat.text", Some(&indi::value_to_sexagesimal(options.sky_map.latitude, true, 9)));
         ui.set_prop_str("e_long.text", Some(&indi::value_to_sexagesimal(options.sky_map.longitude, true, 9)));
         ui.set_prop_bool("chb_high_qual.active", ui_options.paint.high_quality);
-        ui.set_prop_bool("chb_horiz_glow.active", ui_options.paint.horizon_glow.enabled);
+        ui.set_prop_bool("chb_horiz_glow.active", ui_options.paint.horizon_glow.visible);
         ui.set_prop_f64("spb_horiz_glow_angle.value", ui_options.paint.horizon_glow.angle);
 
         let c = &ui_options.paint.horizon_glow.color;
         ui.set_color("clrb_horiz_glow", c.r, c.g, c.b, c.a);
 
-        let c = &ui_options.paint.eq_grid_line_color;
+        let c = &ui_options.paint.eq_grid.line_color;
         ui.set_color("clrb_eq_grid_line", c.r, c.g, c.b, c.a);
 
-        let c = &ui_options.paint.eq_grid_text_color;
+        let c = &ui_options.paint.eq_grid.text_color;
         ui.set_color("clrb_eq_grid_text", c.r, c.g, c.b, c.a);
     }
 
@@ -89,17 +89,17 @@ impl SkymapOptionsDialog {
         }
 
         ui_options.paint.high_quality = ui.prop_bool("chb_high_qual.active");
-        ui_options.paint.horizon_glow.enabled = ui.prop_bool("chb_horiz_glow.active");
+        ui_options.paint.horizon_glow.visible = ui.prop_bool("chb_horiz_glow.active");
         let (r, g, b, a) = ui.color("clrb_horiz_glow");
         ui_options.paint.horizon_glow.color = Color { r, g, b, a };
 
         ui_options.paint.horizon_glow.angle = ui.prop_f64("spb_horiz_glow_angle.value");
 
         let (r, g, b, a) = ui.color("clrb_eq_grid_line");
-        ui_options.paint.eq_grid_line_color = Color { r, g, b, a };
+        ui_options.paint.eq_grid.line_color = Color { r, g, b, a };
 
         let (r, g, b, a) = ui.color("clrb_eq_grid_text");
-        ui_options.paint.eq_grid_text_color = Color { r, g, b, a };
+        ui_options.paint.eq_grid.text_color = Color { r, g, b, a };
 
         return Ok(());
     }
@@ -176,6 +176,5 @@ impl SkymapOptionsDialog {
 
             Ok(())
         });
-
     }
 }

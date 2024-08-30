@@ -324,6 +324,7 @@ impl MapUi {
         connect_obj_visibility_changed("chb_show_nebulas");
         connect_obj_visibility_changed("chb_show_sclusters");
         connect_obj_visibility_changed("chb_sm_show_ccd");
+        connect_obj_visibility_changed("chb_sm_show_eq_grid");
 
         self.map_widget.add_obj_sel_handler(
             clone!(@weak self as self_ => move |object| {
@@ -384,6 +385,7 @@ impl MapUi {
         ui.set_prop_bool("chb_show_nebulas.active", opts.paint.filter.contains(ItemsToShow::NEBULAS));
         ui.set_prop_bool("chb_show_sclusters.active", opts.paint.filter.contains(ItemsToShow::CLUSTERS));
         ui.set_prop_bool("chb_sm_show_ccd.active", opts.show_ccd);
+        ui.set_prop_bool("chb_sm_show_eq_grid.active", opts.paint.eq_grid.visible);
 
         ui.set_range_value("scl_max_dso_mag", opts.paint.max_dso_mag as f64);
         ui.set_prop_bool("chb_sm_above_horizon.active", opts.search_above_horiz);
@@ -413,6 +415,7 @@ impl MapUi {
         opts.paint.filter.set(ItemsToShow::NEBULAS, ui.prop_bool("chb_show_nebulas.active"));
         opts.paint.filter.set(ItemsToShow::CLUSTERS, ui.prop_bool("chb_show_sclusters.active"));
         opts.show_ccd = ui.prop_bool("chb_sm_show_ccd.active");
+        opts.paint.eq_grid.visible = ui.prop_bool("chb_sm_show_eq_grid.active");
     }
 
     fn handler_action_options(self: &Rc<Self>) {
