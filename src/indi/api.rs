@@ -115,6 +115,7 @@ pub struct BlobStartEvent {
 #[derive(Clone)]
 pub enum Event {
     ConnChange(ConnState),
+    ConnectionLost,
     NewDevice(NewDeviceEvent),
     DeviceConnected(Arc<DeviceConnectEvent>),
     PropChange(Arc<PropChangeEvent>),
@@ -1250,7 +1251,7 @@ impl Connection {
         Ok(child)
     }
 
-    pub fn connect(&self, settings: &ConnSettings) -> Result<()> {
+    pub fn connect(self: &Arc<Self>, settings: &ConnSettings) -> Result<()> {
         use std::net::ToSocketAddrs;
 
         let mut state = self.state.lock().unwrap();
@@ -1266,13 +1267,10 @@ impl Connection {
             &mut state,
             &self.subscriptions.lock().unwrap()
         );
-        let data = Arc::clone(&self.data);
-        let state = Arc::clone(&self.state);
+        drop(state);
         let settings = settings.clone();
-        let devices = Arc::clone(&self.devices);
-        let subscriptions = Arc::clone(&self.subscriptions);
+        let self_ = Arc::clone(&self);
         std::thread::spawn(move || {
-            let subscriptions = Arc::clone(&subscriptions);
             // Start indi drivers
             let mut indiserver = if !settings.remote {
                 let start_result = Self::start_indi_server(
@@ -1284,8 +1282,8 @@ impl Connection {
                     Err(err) => {
                         Self::set_new_conn_state(
                             ConnState::Error(err.to_string()),
-                            &mut state.lock().unwrap(),
-                            &subscriptions.lock().unwrap()
+                            &mut self_.state.lock().unwrap(),
+                            &self_.subscriptions.lock().unwrap()
                         );
                         return;
                     }
@@ -1306,8 +1304,8 @@ impl Connection {
                     }
                     Self::set_new_conn_state(
                         ConnState::Error(err.to_string()),
-                        &mut state.lock().unwrap(),
-                        &subscriptions.lock().unwrap()
+                        &mut self_.state.lock().unwrap(),
+                        &self_.subscriptions.lock().unwrap()
                     );
                     return;
                 },
@@ -1336,8 +1334,8 @@ impl Connection {
                 }
                 Self::set_new_conn_state(
                     ConnState::Error(format!("Can't connect to {}", addr)),
-                    &mut state.lock().unwrap(),
-                    &subscriptions.lock().unwrap()
+                    &mut self_.state.lock().unwrap(),
+                    &self_.subscriptions.lock().unwrap()
                 );
                 return;
             };
@@ -1345,10 +1343,20 @@ impl Connection {
             // Subrscibers event thread for XML receiver
             let (events_sender, events_receiver) = mpsc::channel();
             let events_thread = {
-                let subscriptions = Arc::clone(&subscriptions);
+                let self_ = Arc::clone(&self_);
                 std::thread::spawn(move || {
                     while let Ok(event) = events_receiver.recv() {
-                        subscriptions.lock().unwrap().inform_all(event);
+                        if let Event::ConnChange(state) = &event {
+                            if *state == ConnState::Disconnected &&
+                            *self_.state.lock().unwrap() == ConnState::Connected {
+                                self_.subscriptions.lock().unwrap().inform_all(Event::ConnectionLost);
+                                std::thread::spawn(move || {
+                                    _ = self_.disconnect_and_wait();
+                                });
+                                break;
+                            }
+                        }
+                        self_.subscriptions.lock().unwrap().inform_all(event);
                     }
                 })
             };
@@ -1358,11 +1366,11 @@ impl Connection {
             let read_thread = {
                 let xml_sender = xml_sender.clone();
                 let stream = stream.try_clone().unwrap();
-                let conn_state = Arc::clone(&state);
+                let self_ = Arc::clone(&self_);
                 std::thread::spawn(move || {
                     let mut receiver = XmlReceiver::new(
-                        conn_state,
-                        devices,
+                        Arc::clone(&self_.state),
+                        Arc::clone(&self_.devices),
                         stream,
                         XmlSender { xml_sender },
                         settings.activate_all_devices,
@@ -1385,7 +1393,7 @@ impl Connection {
                 .and_then(|v| v.stderr.take());
 
             // Assign active connection data
-            *data.lock().unwrap() = Some(ActiveConnData{
+            *self_.data.lock().unwrap() = Some(ActiveConnData{
                 indiserver,
                 tcp_stream: stream,
                 xml_sender: XmlSender { xml_sender },
@@ -3541,6 +3549,9 @@ impl XmlReceiver {
                 }
                 Ok(XmlStreamReaderResult::Disconnected) => {
                     log::debug!("indi_api: Disconnected");
+                    events_sender.send(Event::ConnChange(
+                        ConnState::Disconnected
+                    )).unwrap();
                     break;
                 }
                 Ok(XmlStreamReaderResult::TimeOut) => {

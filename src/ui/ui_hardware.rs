@@ -325,6 +325,9 @@ impl HardwareUi {
 
     fn process_indi_event(&self, event: indi::Event) {
         match event {
+            indi::Event::ConnectionLost => {
+                gtk_utils::show_error_message(&self.window, "INDI server", "Lost connection to INDI server ;-(");
+            },
             indi::Event::ConnChange(conn_state) => {
                 if let indi::ConnState::Error(_) = &conn_state {
                     self.add_log_record(&Some(Utc::now()), "", &conn_state.to_str(false))
