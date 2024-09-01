@@ -1,10 +1,6 @@
 use std::f64::consts::PI;
 use chrono::{Datelike, Timelike, NaiveDateTime, NaiveDate};
-use gtk::prelude::*;
-use crate::{
-    ui::gtk_utils::{self, DEFAULT_DPMM},
-    utils::math::{linear_interpolate, linear_solve2}
-};
+use crate::utils::math::{linear_interpolate, linear_solve2};
 use super::{consts::*, data::*, painter::*};
 
 #[derive(Debug, Clone, Copy)]
@@ -24,7 +20,7 @@ impl EqCoord {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct HorizCoord {
     pub alt: f64,
     pub az:  f64,
@@ -218,50 +214,6 @@ impl Rect {
         Line2D {
             pt1: Point2D { x: self.right, y: self.top },
             pt2: Point2D { x: self.right, y: self.bottom }
-        }
-    }
-}
-
-pub struct ScreenInfo {
-    pub rect:      Rect,
-    pub tolerance: Rect,
-    pub main_size: f64,
-    pub center_x:  f64,
-    pub center_y:  f64,
-    pub dpmm_x:    f64,
-    pub dpmm_y:    f64,
-}
-
-impl ScreenInfo {
-    pub fn new(da: &gtk::DrawingArea) -> Self {
-        let da_size = da.allocation();
-        let width = da_size.width() as f64;
-        let height = da_size.height() as f64;
-        let main_size = 0.5 * f64::max(width, height);
-
-        let (dpmm_x, dpmm_y) = gtk_utils::get_widget_dpmm(da)
-            .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
-
-        let tolerance = Rect {
-            left: -20.0 * dpmm_x,
-            top: -20.0 * dpmm_y,
-            right: width + 20.0 * dpmm_x,
-            bottom: height + 20.0 * dpmm_y,
-        };
-        let rect = Rect {
-            left: 0.0,
-            top: 0.0,
-            right: width,
-            bottom: height,
-        };
-        Self {
-            rect,
-            tolerance,
-            main_size,
-            center_x: 0.5 * width,
-            center_y: 0.5 * height,
-            dpmm_x,
-            dpmm_y,
         }
     }
 }
@@ -533,6 +485,11 @@ pub fn calc_julian_time(dt: &NaiveDateTime) -> f64 {
     let msecs = (dt.nanosecond() / 1_000_000) as f64;
     sec += msecs / 1000.0;
     julain_day + (hour - 12.0) / 24.0 + min / 1440.0 + sec / 86400.0
+}
+
+pub fn calc_julian_centuries(dt: &NaiveDateTime) -> f64 {
+    let jdt = calc_julian_time(dt);
+    (jdt - 2451545.0) / 36525.0
 }
 
 pub fn calc_sidereal_time(dt: &NaiveDateTime) -> f64 {
