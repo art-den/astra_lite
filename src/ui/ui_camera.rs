@@ -330,15 +330,25 @@ impl CameraUi {
             }
 
             // Store previous camera options into UiOptions::all_cam_opts
+
             if let Some(prev_cam) = &*prev_cam {
                 self_.store_cur_cam_options_impl(prev_cam, &options);
             }
 
             let camera_device = DeviceAndProp::new(&cur_id);
+
+            // Copy some options for specific camera from UiOptions::all_cam_opts
+
             self_.select_options_for_camera(&camera_device, &mut options);
+
+            // Assign new camera name
+
+            options.cam.device = Some(camera_device.clone());
 
             self_.correct_widgets_props_impl(&options);
             _ = self_.update_resolution_list_impl(&camera_device);
+
+            // Show some options for specific camera
 
             options.show_cam_frame(&self_.builder);
             options.show_calibr(&self_.builder);
