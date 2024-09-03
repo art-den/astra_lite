@@ -19,18 +19,63 @@ pub fn paint_altitude_by_time(
         .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
     let sc = area.style_context();
     let fg_color = sc.color(gtk::StateFlags::NORMAL);
+    let bg_color = area.style_context()
+        .lookup_color("theme_base_color")
+        .unwrap_or(gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
 
     let font_size_pt = 8.0;
     let font_size_px = font_size_to_pixels(FontSize::Pt(font_size_pt), dpmm_y);
+    cr.set_font_size(font_size_px);
 
     let width = area.allocated_width() as f64;
     let height = area.allocated_height() as f64;
+
+    let te = cr.text_extents("#")?;
+    let legend_height = 3.0 * te.height();
+    let legend_rect_size = 1.5 * te.height();
+
+    let day_color = (0.45, 0.45, 0.0);
+    let twilight_color = (0.3, 0.3, 0.0);
+    let night_color = (0.0, 0.0, 0.0);
+    let moon_color = (0.02, 0.2, 0.2);
+
+    // Legend
+
+    cr.set_source_rgb(bg_color.red(), bg_color.green(), bg_color.blue());
+    cr.rectangle(0.0, 0.0, width, legend_height);
+    cr.fill()?;
+
+    let mut x = 3.0;
+    let mut draw_legend = |text, (r, g, b)| -> anyhow::Result<()> {
+        cr.rectangle(x, 0.5 * (legend_height-legend_rect_size), legend_rect_size, legend_rect_size);
+        cr.set_source_rgb(0.5, 0.5, 0.5);
+        cr.stroke_preserve()?;
+        cr.set_source_rgb(r, g, b);
+        cr.fill()?;
+        x += 1.5 * legend_rect_size;
+
+        cr.set_source_rgb(1.0, 1.0, 1.0);
+        let te = cr.text_extents(text)?;
+        cr.move_to(x, 0.5 * legend_height - (0.5 * te.height() + te.y_bearing()));
+        cr.show_text(text)?;
+        x += te.width() + legend_rect_size;
+
+        Ok(())
+    };
+
+    draw_legend("Day", day_color)?;
+    draw_legend("Twilight", twilight_color)?;
+    draw_legend("Night", night_color)?;
+    draw_legend("Moon", moon_color)?;
+
+    let data_height = height - legend_height;
 
     const PAST_HOUR: i64 = -12;
     const FUTU_HOUR: i64 = 12;
     const STEPS: i64 = 4;
 
     // Background (with sun and moon)
+
     let sun_alt_theshold = degree_to_radian(-18.0);
     let sun_bg = gdk::cairo::LinearGradient::new(0.0, 0.0, width, 0.0);
     let mut max_moon_phase = None;
@@ -45,21 +90,20 @@ pub fn paint_altitude_by_time(
         let moon_crd = mini_moon(julian_centuries);
         let moon_h_crd = eq_hor_cvt.eq_to_horiz(&moon_crd);
 
-        let (r, g, b) = if sun_h_crd.alt > sun_alt_theshold {
-            let ratio = if sun_h_crd.alt >= 0.0 { 1.0 } else { 0.66 };
-            (ratio * 0.4, ratio * 0.4, 0.0)
-        } else if moon_h_crd.alt > 0.0 {
-            let phase = moon_phase(julian_centuries);
-            if let Some(max_moon_phase) = &mut max_moon_phase {
-                if phase > *max_moon_phase {
-                    *max_moon_phase = phase;
-                }
+        let (r, g, b) = if sun_h_crd.alt < sun_alt_theshold {
+            if moon_h_crd.alt > 0.0 {
+                let phase = moon_phase(julian_centuries);
+                max_moon_phase = max_moon_phase
+                    .map(|v| f64::max(v, phase))
+                    .or_else(|| Some(phase));
+                moon_color
             } else {
-                max_moon_phase = Some(phase);
+                night_color
             }
-            (0.02, 0.2, 0.2)
+        } else if sun_h_crd.alt < 0.0 {
+            twilight_color
         } else {
-            (0.0, 0.0, 0.0)
+            day_color
         };
 
         let offset = x as f64 / area.allocated_width() as f64;
@@ -67,7 +111,7 @@ pub fn paint_altitude_by_time(
     }
 
     cr.set_source(&sun_bg)?;
-    cr.rectangle(0.0, 0.0, width, height);
+    cr.rectangle(0.0, legend_height, width, data_height);
     cr.fill()?;
 
     // Altitude plot
@@ -98,7 +142,7 @@ pub fn paint_altitude_by_time(
                 0.0,
                 width
             );
-            let y = linear_interpolate(horiz_crd.alt, 0.0, 0.5 * PI, height, 0.0);
+            let y = linear_interpolate(horiz_crd.alt, 0.0, 0.5 * PI, height, legend_height);
             if i == STEPS*PAST_HOUR { cr.move_to(x, y); } else { cr.line_to(x, y); }
         }
     }
@@ -108,7 +152,7 @@ pub fn paint_altitude_by_time(
     cr.stroke()?;
 
     // hours scale
-    cr.set_font_size(font_size_px);
+
     let mut prev_hour = 0;
     for x in 0..=area.allocated_width() {
         let hour_diff = linear_interpolate(x as f64, 0.0, width, PAST_HOUR as f64, FUTU_HOUR as f64);
@@ -116,7 +160,7 @@ pub fn paint_altitude_by_time(
         let pt_time = dt_local.checked_add_signed(pt_diff).unwrap_or(dt_local);
         let hour = pt_time.hour();
         if x != 0 && (hour / 3) != (prev_hour / 3) {
-            cr.move_to(x as f64, 0.0);
+            cr.move_to(x as f64, legend_height);
             cr.line_to(x as f64, height);
             cr.set_line_width(1.0);
             cr.set_dash(&[2.0, 2.0], 1.0);
@@ -132,6 +176,8 @@ pub fn paint_altitude_by_time(
         prev_hour = hour;
     }
 
+    // Text
+
     let mut text = String::new();
     if let (Some(max_alt), Some(min_alt)) = (max_alt, min_alt) {
         text += &format!(
@@ -145,7 +191,7 @@ pub fn paint_altitude_by_time(
     }
     if !text.is_empty() {
         let te = cr.text_extents(&text)?;
-        cr.move_to(3.0, te.height() + 0.25 * te.height());
+        cr.move_to(3.0, legend_height + te.height() + 0.25 * te.height());
         cr.set_source_rgba(fg_color.red(), fg_color.green(), fg_color.blue(), 1.0);
         cr.show_text(&text)?;
     }
