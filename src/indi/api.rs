@@ -2939,6 +2939,16 @@ impl Connection {
         )
     }
 
+    pub fn focuser_get_temperature(&self, device_name: &str) -> Result<f64> {
+        Ok(self.device_get_num_prop(
+            device_name,
+            &[
+                ("FOCUS_TEMPERATURE", "TEMPERATURE"),
+                ("FOCUS_TEMPERATURE", "FOCUS_TEMPERATURE"),
+            ]
+        )?.value)
+    }
+
     pub fn focuser_set_abs_value(
         &self,
         device_name: &str,

@@ -62,6 +62,13 @@ struct ExtGuiderData {
     ext_guider:     Arc<Mutex<Option<Box<dyn ExternalGuider + Send>>>>,
 }
 
+struct RefocusData {
+    exp_sum: f64,
+    min_temp: Option<f64>,
+    max_temp: Option<f64>,
+    fwhm:     Vec<f32>,
+}
+
 pub struct TackingPicturesMode {
     cam_mode:           CameraMode,
     state:              FramesModeState,
@@ -78,12 +85,12 @@ pub struct TackingPicturesMode {
     ref_stars:          Option<Arc<Mutex<Option<Vec<Point>>>>>,
     progress:           Option<Progress>,
     cur_exposure:       f64,
-    exp_sum:            f64,
     simple_guider:      Option<SimpleGuider>,
     guider:             Option<ExtGuiderData>,
     live_stacking:      Option<Arc<LiveStackingData>>,
     save_dir:           PathBuf,
     master_file:        PathBuf,
+    refocus:            RefocusData,
     skip_frame_done:    bool, // first frame was taken and skipped
     img_proc_stop_flag: Arc<Mutex<Arc<AtomicBool>>>,
 }
@@ -110,6 +117,14 @@ impl TackingPicturesMode {
             },
             _ => None,
         };
+
+        let refocus = RefocusData {
+            exp_sum:  0.0,
+            min_temp: None,
+            max_temp: None,
+            fwhm:     Vec::new(),
+        };
+
         Ok(Self {
             cam_mode,
             state:           FramesModeState::Common,
@@ -124,9 +139,7 @@ impl TackingPicturesMode {
             focus_options:   None,
             guider_options:  None,
             ref_stars:       None,
-            progress,
             cur_exposure:    0.0,
-            exp_sum:         0.0,
             simple_guider:   None,
             guider:          None,
             live_stacking:   None,
@@ -134,6 +147,8 @@ impl TackingPicturesMode {
             master_file:     PathBuf::new(),
             skip_frame_done: false,
             img_proc_stop_flag: Arc::clone(img_proc_stop_flag),
+            refocus,
+            progress,
         })
     }
 
@@ -304,27 +319,89 @@ impl TackingPicturesMode {
 
     fn process_light_frame_info_and_refocus(
         &mut self,
-        _info: &LightFrameInfo
+        info: &LightFrameInfo
     ) -> anyhow::Result<NotifyResult> {
-        // Refocus
         let use_focus =
             self.cam_mode == CameraMode::LiveStacking ||
             self.cam_mode == CameraMode::SavingRawFrames;
-        if let (Some(focuser_options), true) = (&self.focus_options, use_focus) {
-            let mut have_to_refocus = false;
-            if self.indi.is_device_enabled(&focuser_options.device).unwrap_or(false) {
-                if focuser_options.periodically && focuser_options.period_minutes != 0 {
-                    self.exp_sum += self.frame_options.exposure();
-                    let max_exp_sum = (focuser_options.period_minutes * 60) as f64;
-                    if self.exp_sum >= max_exp_sum {
-                        have_to_refocus = true;
-                        self.exp_sum = 0.0;
-                    }
+        if !use_focus {
+            return Ok(NotifyResult::Empty);
+        }
+
+        // push fwhm
+        if let Some(fwhm) = info.stars.fwhm {
+            self.refocus.fwhm.push(fwhm);
+        }
+
+        // Update exposure sum
+        self.refocus.exp_sum += self.frame_options.exposure();
+
+        let Some(focuser_options) = &self.focus_options else {
+            return Ok(NotifyResult::Empty);
+        };
+
+        // Update min and max temperature
+        let temperature = self.indi.focuser_get_temperature(&focuser_options.device)?;
+        if !temperature.is_nan() && !temperature.is_infinite() {
+            self.refocus.min_temp = self.refocus.min_temp
+                .map(|v| f64::min(v, temperature))
+                .or_else(|| Some(temperature));
+            self.refocus.max_temp = self.refocus.max_temp
+                .map(|v| f64::max(v, temperature))
+                .or_else(|| Some(temperature));
+        }
+
+        if !self.indi.is_device_enabled(&focuser_options.device).unwrap_or(false) {
+            return Ok(NotifyResult::Empty);
+        }
+
+        let mut have_to_refocus = false;
+
+        // Periodically
+        if focuser_options.periodically
+        && focuser_options.period_minutes != 0 {
+            let max_exp_sum = (focuser_options.period_minutes * 60) as f64;
+            if self.refocus.exp_sum >= max_exp_sum {
+                have_to_refocus = true;
+            }
+        }
+
+        // When temperature changed
+        if focuser_options.on_temp_change
+        && focuser_options.max_temp_change > 0.0 {
+            if let (Some(min), Some(max)) = (self.refocus.min_temp, self.refocus.max_temp) {
+                if max - min > focuser_options.max_temp_change {
+                    have_to_refocus = true;
                 }
             }
-            if have_to_refocus {
-                return Ok(NotifyResult::StartFocusing);
+        }
+
+        // On FWHM increase
+        if focuser_options.on_fwhm_change
+        && focuser_options.max_fwhm_change != 0
+        && self.refocus.fwhm.len() >= 6 {
+            let pos = self.refocus.fwhm.len() - 3;
+            let before = &self.refocus.fwhm[..pos];
+            let after = &self.refocus.fwhm[pos..];
+            let before_best = before.iter()
+                .copied()
+                .min_by(f32::total_cmp)
+                .unwrap_or_default() as f64;
+            let after_aver = after.iter().sum::<f32>() as f64 / after.len() as f64;
+            if before_best != 0.0 {
+                let percent = 100.0 * (after_aver - before_best) / before_best;
+                if percent > focuser_options.max_fwhm_change as f64 {
+                    have_to_refocus = true;
+                }
             }
+        }
+
+        if have_to_refocus {
+            self.refocus.exp_sum = 0.0;
+            self.refocus.min_temp = None;
+            self.refocus.max_temp = None;
+            self.refocus.fwhm.clear();
+            return Ok(NotifyResult::StartFocusing);
         }
 
         Ok(NotifyResult::Empty)
