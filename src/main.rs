@@ -119,7 +119,7 @@ fn main() -> anyhow::Result<()> {
     let (img_cmds_sender, frame_process_thread) = start_frame_processing_thread();
 
     log::info!("Creating Core...");
-    let core = Arc::new(Core::new(&indi, &options, img_cmds_sender));
+    let core = Core::new(&indi, &options, img_cmds_sender);
 
     log::info!("Creating gtk::Application...");
     let application = gtk::Application::new(
