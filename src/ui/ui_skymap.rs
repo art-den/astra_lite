@@ -433,6 +433,8 @@ impl MapUi {
             dialog.get_options(&mut ui_options, &mut options)?;
             drop(ui_options);
             drop(options);
+            let observer = self_.create_observer();
+            self_.map_widget.set_observer(&observer);
             self_.update_skymap_widget(true);
             Ok(())
         }));
