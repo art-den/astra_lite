@@ -159,6 +159,11 @@ impl DitheringUi {
         sb_dith_dist.set_range(1.0, 200.0);
         sb_dith_dist.set_digits(0);
         sb_dith_dist.set_increments(1.0, 10.0);
+
+        let spb_mnt_cal_gain = self.builder.object::<gtk::SpinButton>("spb_mnt_cal_gain").unwrap();
+        spb_mnt_cal_gain.set_range(0.0, 100_000.0);
+        spb_mnt_cal_gain.set_digits(0);
+        spb_mnt_cal_gain.set_increments(100.0, 1000.0);
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
@@ -243,6 +248,8 @@ impl DitheringUi {
             ("spb_guid_max_err",    can_guide_by_main_cam),
             ("l_mnt_cal_exp",       can_guide_by_main_cam && !dither_calibr),
             ("spb_mnt_cal_exp",     can_guide_by_main_cam && !dither_calibr),
+            ("l_mnt_cal_gain",      can_guide_by_main_cam && !dither_calibr),
+            ("spb_mnt_cal_gain",    can_guide_by_main_cam && !dither_calibr),
         ]);
     }
 

@@ -93,23 +93,27 @@ enum DelayedActionTypes {
 #[derive(Serialize, Deserialize, Debug,)]
 #[serde(default)]
 struct StoredCamOptions {
-    cam:          DeviceAndProp,
-    frame:        FrameOptions,
-    ctrl:         CamCtrlOptions,
-    calibr:       CalibrOptions,
-    focuser_exp:  f64,
-    focuser_gain: f64,
+    cam:            DeviceAndProp,
+    frame:          FrameOptions,
+    ctrl:           CamCtrlOptions,
+    calibr:         CalibrOptions,
+    focuser_exp:    f64,
+    focuser_gain:   f64,
+    guidecal_exp:   f64,
+    guidecal_gain:  f64,
 }
 
 impl Default for StoredCamOptions {
     fn default() -> Self {
         Self {
-            cam:          DeviceAndProp::default(),
-            frame:        FrameOptions::default(),
-            ctrl:         CamCtrlOptions::default(),
-            calibr:       CalibrOptions::default(),
-            focuser_exp:  2.0,
-            focuser_gain: 100_000.0,
+            cam:           DeviceAndProp::default(),
+            frame:         FrameOptions::default(),
+            ctrl:          CamCtrlOptions::default(),
+            calibr:        CalibrOptions::default(),
+            focuser_exp:   2.0,
+            focuser_gain:  1000.0,
+            guidecal_exp:  2.0,
+            guidecal_gain: 1000.0,
         }
     }
 }
@@ -344,7 +348,8 @@ impl CameraUi {
             // Store previous camera options into UiOptions::all_cam_opts
 
             if let Some(prev_cam) = options.cam.device.clone() {
-                options.read_focuser(&self_.builder);
+                options.read_focuser_cam(&self_.builder);
+                options.read_guiding_cam(&self_.builder);
                 self_.store_cur_cam_options_impl(&prev_cam, &options);
             }
 
@@ -367,6 +372,7 @@ impl CameraUi {
             options.show_calibr(&self_.builder);
             options.show_cam_ctrl(&self_.builder);
             options.show_focuser_cam(&self_.builder);
+            options.show_guiding_cam(&self_.builder);
         }));
 
         let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
@@ -733,6 +739,8 @@ impl CameraUi {
         store_dest.calibr = options.calibr.clone();
         store_dest.focuser_exp = options.focuser.exposure;
         store_dest.focuser_gain = options.focuser.gain;
+        store_dest.guidecal_exp = options.guiding.calibr_exposure;
+        store_dest.guidecal_gain = options.guiding.calibr_gain;
     }
 
     fn select_options_for_camera(
@@ -742,12 +750,14 @@ impl CameraUi {
     ) {
         // Restore previous options of selected camera
         let ui_options = self.ui_options.borrow();
-        if let Some(existing) = ui_options.all_cam_opts.iter().find(|item| &item.cam == camera_device) {
-            options.cam.frame = existing.frame.clone();
-            options.cam.ctrl = existing.ctrl.clone();
-            options.calibr = existing.calibr.clone();
-            options.focuser.exposure = existing.focuser_exp;
-            options.focuser.gain = existing.focuser_gain;
+        if let Some(stored) = ui_options.all_cam_opts.iter().find(|item| &item.cam == camera_device) {
+            options.cam.frame = stored.frame.clone();
+            options.cam.ctrl = stored.ctrl.clone();
+            options.calibr = stored.calibr.clone();
+            options.focuser.exposure = stored.focuser_exp;
+            options.focuser.gain = stored.focuser_gain;
+            options.guiding.calibr_exposure = stored.guidecal_exp;
+            options.guiding.calibr_gain = stored.guidecal_gain;
         }
         drop(ui_options);
     }
@@ -1008,12 +1018,14 @@ impl CameraUi {
             let exp_value = self.indi.camera_get_exposure_prop_value(&camera.name, cam_ccd);
             let result = correct_num_adjustment_by_prop("spb_exp", &exp_value, 3, Some(1.0));
             correct_num_adjustment_by_prop("spb_foc_exp", &exp_value, 1, Some(1.0));
+            correct_num_adjustment_by_prop("spb_mnt_cal_exp", &exp_value, 1, Some(1.0));
             result
         }).unwrap_or(false);
         let gain_supported = camera.as_ref().map(|camera| {
             let gain_value = self.indi.camera_get_gain_prop_value(&camera.name);
             let result = correct_num_adjustment_by_prop("spb_gain", &gain_value, 0, None);
             correct_num_adjustment_by_prop("spb_foc_gain", &gain_value, 0, None);
+            correct_num_adjustment_by_prop("spb_mnt_cal_gain", &gain_value, 0, None);
             result
         }).unwrap_or(false);
         let offset_supported = camera.as_ref().map(|camera| {

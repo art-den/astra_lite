@@ -104,6 +104,7 @@ impl MountCalibrMode {
         };
         let mut frame = opts.cam.frame.clone();
         frame.exp_main = opts.guiding.calibr_exposure;
+        frame.gain = opts.guiding.calibr_gain;
         Ok(Self {
             indi:               Arc::clone(indi),
             state:              DitherCalibrState::Undefined,

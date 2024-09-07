@@ -353,7 +353,7 @@ impl Default for FocuserOptions {
             measures:        11,
             step:            2000.0,
             exposure:        2.0,
-            gain:            100_000.0,
+            gain:            1000.0,
         }
     }
 }
@@ -498,6 +498,7 @@ pub struct GuidingOptions {
     pub dith_period:         u32,  // in minutes, 0 - do not dither
     pub dith_dist:           i32,  // in pixels
     pub calibr_exposure:     f64,
+    pub calibr_gain:         f64,
 }
 
 impl GuidingOptions {
@@ -510,13 +511,14 @@ impl GuidingOptions {
 impl Default for GuidingOptions {
     fn default() -> Self {
         Self {
-            mode: GuidingMode::MainCamera,
-            foc_len: 0.0,
-            simp_guid_enabled: false,
+            mode:                GuidingMode::MainCamera,
+            foc_len:             0.0,
+            simp_guid_enabled:   false,
             simp_guid_max_error: 3.0,
-            dith_period: 1,
-            dith_dist: 10,
-            calibr_exposure: 3.0,
+            dith_period:         1,
+            dith_dist:           10,
+            calibr_exposure:     2.0,
+            calibr_gain:         1000.0,
         }
     }
 }

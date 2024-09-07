@@ -270,7 +270,7 @@ impl FocuserUi {
         spb_foc_exp.set_increments(0.5, 5.0);
 
         let spb_foc_gain = self.builder.object::<gtk::SpinButton>("spb_foc_gain").unwrap();
-        spb_foc_gain.set_range(0.0, 100000.0);
+        spb_foc_gain.set_range(0.0, 100_000.0);
         spb_foc_gain.set_digits(0);
         spb_foc_gain.set_increments(100.0, 1000.0);
     }

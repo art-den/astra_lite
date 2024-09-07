@@ -9,6 +9,7 @@ impl Options {
         self.read_indi(builder);
         self.read_telescope(builder);
         self.read_guiding(builder);
+        self.read_guiding_cam(builder);
         self.read_cam(builder);
         self.read_cam_ctrl(builder);
         self.read_cam_frame(builder);
@@ -18,6 +19,7 @@ impl Options {
         self.read_frame_quality(builder);
         self.read_preview(builder);
         self.read_focuser(builder);
+        self.read_focuser_cam(builder);
         self.read_mount(builder);
     }
 
@@ -45,7 +47,12 @@ impl Options {
         self.guiding.dith_dist           = ui.prop_f64("sb_dith_dist.value") as i32;
         self.guiding.simp_guid_enabled   = ui.prop_bool("chb_guid_enabled.active");
         self.guiding.simp_guid_max_error = ui.prop_f64("spb_guid_max_err.value");
-        self.guiding.calibr_exposure     = ui.prop_f64("spb_mnt_cal_exp.value");
+    }
+
+    pub fn read_guiding_cam(&mut self, builder: &gtk::Builder) {
+        let ui = gtk_utils::UiHelper::new_from_builder(builder);
+        self.guiding.calibr_exposure = ui.prop_f64("spb_mnt_cal_exp.value");
+        self.guiding.calibr_gain     = ui.prop_f64 ("spb_mnt_cal_gain.value");
     }
 
     pub fn read_cam(&mut self, builder: &gtk::Builder) {
@@ -129,8 +136,12 @@ impl Options {
         self.focuser.period_minutes  = ui.prop_string("cb_foc_period.active-id").and_then(|v| v.parse().ok()).unwrap_or(120);
         self.focuser.measures        = ui.prop_f64("spb_foc_measures.value") as u32;
         self.focuser.step            = ui.prop_f64("spb_foc_auto_step.value");
-        self.focuser.exposure        = ui.prop_f64("spb_foc_exp.value");
-        self.focuser.gain            = ui.prop_f64("spb_foc_gain.value");
+    }
+
+    pub fn read_focuser_cam(&mut self, builder: &gtk::Builder) {
+        let ui = gtk_utils::UiHelper::new_from_builder(builder);
+        self.focuser.exposure = ui.prop_f64("spb_foc_exp.value");
+        self.focuser.gain     = ui.prop_f64("spb_foc_gain.value");
     }
 
     pub fn read_mount(&mut self, builder: &gtk::Builder) {
@@ -146,6 +157,7 @@ impl Options {
         self.show_indi(builder);
         self.show_telescope(builder);
         self.show_guiding(builder);
+        self.show_guiding_cam(builder);
         self.show_cam(builder);
         self.show_cam_frame(builder);
         self.show_calibr(builder);
@@ -179,7 +191,12 @@ impl Options {
         ui.set_prop_f64 ("sb_dith_dist.value",      self.guiding.dith_dist as f64);
         ui.set_prop_bool("chb_guid_enabled.active", self.guiding.simp_guid_enabled);
         ui.set_prop_f64 ("spb_guid_max_err.value",  self.guiding.simp_guid_max_error);
-        ui.set_prop_f64 ("spb_mnt_cal_exp.value",   self.guiding.calibr_exposure);
+    }
+
+    pub fn show_guiding_cam(&self, builder: &gtk::Builder) {
+        let ui = gtk_utils::UiHelper::new_from_builder(builder);
+        ui.set_prop_f64 ("spb_mnt_cal_exp.value",  self.guiding.calibr_exposure);
+        ui.set_prop_f64 ("spb_mnt_cal_gain.value", self.guiding.calibr_gain);
     }
 
     pub fn show_cam(&self, builder: &gtk::Builder) {
