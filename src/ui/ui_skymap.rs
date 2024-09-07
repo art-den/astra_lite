@@ -12,7 +12,7 @@ pub fn init_ui(
     main_ui:  &Rc<MainUi>,
     options:  &Arc<RwLock<Options>>,
     indi:     &Arc<indi::Connection>,
-    handlers: &mut MainUiHandlers,
+    handlers: &mut MainUiEventHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
@@ -279,10 +279,10 @@ impl MapUi {
         da_sm_item_graph.set_height_request((30.0 * dpimm_y) as i32);
     }
 
-    fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiHandlers) {
-        handlers.push(Box::new(clone!(@weak self as self_ => move |event| {
+    fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
+        handlers.subscribe(clone!(@weak self as self_ => move |event| {
             self_.handler_main_ui_event(event);
-        })));
+        }));
     }
 
     fn connect_events(self: &Rc<Self>) {
@@ -1000,5 +1000,4 @@ impl MapUi {
         }
         self.full_screen.set(full_screen);
     }
-
 }

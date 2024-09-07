@@ -130,6 +130,7 @@ impl Options {
         self.focuser.measures        = ui.prop_f64("spb_foc_measures.value") as u32;
         self.focuser.step            = ui.prop_f64("spb_foc_auto_step.value");
         self.focuser.exposure        = ui.prop_f64("spb_foc_exp.value");
+        self.focuser.gain            = ui.prop_f64("spb_foc_gain.value");
     }
 
     pub fn read_mount(&mut self, builder: &gtk::Builder) {
@@ -154,6 +155,7 @@ impl Options {
         self.show_frame_quality(builder);
         self.show_preview(builder);
         self.show_focuser(builder);
+        self.show_focuser_cam(builder);
         self.show_mount(builder);
     }
 
@@ -273,7 +275,12 @@ impl Options {
         ui.set_prop_str ("cb_foc_period.active-id", Some(self.focuser.period_minutes.to_string()).as_deref());
         ui.set_prop_f64 ("spb_foc_measures.value",  self.focuser.measures as f64);
         ui.set_prop_f64 ("spb_foc_auto_step.value", self.focuser.step);
-        ui.set_prop_f64 ("spb_foc_exp.value",       self.focuser.exposure);
+    }
+
+    pub fn show_focuser_cam(&self, builder: &gtk::Builder) {
+        let ui = gtk_utils::UiHelper::new_from_builder(builder);
+        ui.set_prop_f64 ("spb_foc_exp.value",  self.focuser.exposure);
+        ui.set_prop_f64 ("spb_foc_gain.value", self.focuser.gain);
     }
 
     pub fn show_mount(&self, builder: &gtk::Builder) {

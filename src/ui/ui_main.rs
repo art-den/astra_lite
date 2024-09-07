@@ -60,7 +60,7 @@ pub fn init_ui(
         indi:           Arc::clone(indi),
         options:        Arc::clone(options),
         ui_options:     RefCell::new(ui_options),
-        handlers:       RefCell::new(Vec::new()),
+        handlers:       RefCell::new(MainUiEventHandlers::new()),
         progress:       RefCell::new(None),
         window:         window.clone(),
         builder:        builder.clone(),
@@ -88,7 +88,7 @@ pub fn init_ui(
                 data.window.close();
                 return glib::ControlFlow::Break;
             }
-            data.exec_main_ui_handlers(MainUiEvent::Timer);
+            data.handlers.borrow().notify_all(MainUiEvent::Timer);
             glib::ControlFlow::Continue
         }
     ));
@@ -159,7 +159,33 @@ pub enum MainUiEvent {
     BeforeDisconnect,
 }
 
-pub type MainUiHandlers = Vec<Box<dyn Fn(MainUiEvent) + 'static>>;
+pub type MainUiEventFun = Box<dyn Fn(MainUiEvent) + 'static>;
+
+pub struct MainUiEventHandlers {
+    funs: Vec<MainUiEventFun>
+}
+
+impl MainUiEventHandlers {
+    fn new() -> Self {
+        Self {
+            funs: Vec::new(),
+        }
+    }
+
+    pub fn subscribe(&mut self, fun: impl Fn(MainUiEvent) + 'static) {
+        self.funs.push(Box::new(fun));
+    }
+
+    pub fn notify_all(&self, event: MainUiEvent) {
+        for fun in &self.funs {
+            fun(event.clone());
+        }
+    }
+
+    fn clear(&mut self) {
+        self.funs.clear();
+    }
+}
 
 const TAB_HARDWARE: u32 = 0;
 const TAB_MAP:      u32 = 1;
@@ -221,7 +247,7 @@ pub struct MainUi {
     logs_dir:       PathBuf,
     options:        Arc<RwLock<Options>>,
     ui_options:     RefCell<UiOptions>,
-    handlers:       RefCell<MainUiHandlers>,
+    handlers:       RefCell<MainUiEventHandlers>,
     progress:       RefCell<Option<Progress>>,
     core:           Arc<Core>,
     indi:           Arc<indi::Connection>,
@@ -294,7 +320,7 @@ impl MainUi {
         let btn_fullscreen = self.builder.object::<gtk::ToggleButton>("btn_fullscreen").unwrap();
         btn_fullscreen.set_sensitive(false);
         btn_fullscreen.connect_active_notify(clone!(@weak self as self_  => move |btn| {
-            self_.exec_main_ui_handlers(MainUiEvent::FullScreen(btn.is_active()));
+            self_.handlers.borrow().notify_all(MainUiEvent::FullScreen(btn.is_active()));
         }));
 
         let nb_main = self.builder.object::<gtk::Notebook>("nb_main").unwrap();
@@ -305,7 +331,7 @@ impl MainUi {
             };
             btn_fullscreen.set_sensitive(enable_fullscreen);
             let tab = TabPage::from_tab_index(page);
-            self_.exec_main_ui_handlers(MainUiEvent::TabPageChanged(tab.clone()));
+            self_.handlers.borrow().notify_all(MainUiEvent::TabPageChanged(tab.clone()));
         }));
 
         gtk_utils::connect_action(&self.window, self, "stop",             MainUi::handler_action_stop);
@@ -370,7 +396,7 @@ impl MainUi {
         _ = save_json_to_config::<UiOptions>(&options, MainUi::CONF_FN);
         drop(options);
 
-        self.exec_main_ui_handlers(MainUiEvent::ProgramClosing);
+        self.handlers.borrow().notify_all(MainUiEvent::ProgramClosing);
 
         self.handlers.borrow_mut().clear();
 
@@ -477,16 +503,10 @@ impl MainUi {
 
     fn handler_action_continue(&self) {
         gtk_utils::exec_and_show_error(&self.window, || {
-            self.exec_main_ui_handlers(MainUiEvent::BeforeModeContinued);
+            self.handlers.borrow().notify_all(MainUiEvent::BeforeModeContinued);
             self.core.continue_prev_mode()?;
             Ok(())
         });
-    }
-
-    fn exec_main_ui_handlers(&self, event: MainUiEvent) {
-        for fs_handler in self.handlers.borrow().iter() {
-            fs_handler(event.clone());
-        }
     }
 
     fn handler_action_open_logs_folder(&self) {
@@ -536,7 +556,7 @@ impl MainUi {
     }
 
     pub fn exec_before_disconnect_handlers(&self) {
-        self.exec_main_ui_handlers(MainUiEvent::BeforeDisconnect);
+        self.handlers.borrow().notify_all(MainUiEvent::BeforeDisconnect);
     }
 
     pub fn current_tab_page(&self) -> TabPage {

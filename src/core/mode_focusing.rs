@@ -87,6 +87,7 @@ impl FocusingMode {
         };
         let mut frame = options.cam.frame.clone();
         frame.exp_main = options.focuser.exposure;
+        frame.gain = options.focuser.gain;
         Ok(FocusingMode {
             indi:               Arc::clone(indi),
             state:              FocusingState::Undefined,

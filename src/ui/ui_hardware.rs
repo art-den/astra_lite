@@ -25,7 +25,7 @@ pub fn init_ui(
     options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
     indi:     &Arc<indi::Connection>,
-    handlers: &mut MainUiHandlers,
+    handlers: &mut MainUiEventHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
@@ -74,9 +74,9 @@ pub fn init_ui(
     data.connect_indi_events();
     data.correct_widgets_by_cur_state();
 
-    handlers.push(Box::new(clone!(@weak data => move |event| {
+    handlers.subscribe(clone!(@weak data => move |event| {
         data.handler_main_ui_event(event);
-    })));
+    }));
 
     if let Some(load_drivers_err) = load_drivers_err {
         data.add_log_record(

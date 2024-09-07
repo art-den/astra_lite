@@ -15,7 +15,7 @@ pub fn init_ui(
     options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
     indi:     &Arc<indi::Connection>,
-    handlers: &mut MainUiHandlers,
+    handlers: &mut MainUiEventHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
@@ -46,13 +46,13 @@ pub fn init_ui(
     data.connect_indi_and_core_events();
     data.correct_widgets_props();
 
-    handlers.push(Box::new(clone!(@weak data => move |event| {
+    handlers.subscribe(clone!(@weak data => move |event| {
         match event {
             MainUiEvent::ProgramClosing =>
                 data.handler_closing(),
             _ => {},
         }
-    })));
+    }));
 }
 
 #[derive(Serialize, Deserialize, Debug)]

@@ -337,6 +337,7 @@ pub struct FocuserOptions {
     pub measures:        u32,
     pub step:            f64,
     pub exposure:        f64,
+    pub gain:            f64,
 }
 
 impl Default for FocuserOptions {
@@ -352,6 +353,7 @@ impl Default for FocuserOptions {
             measures:        11,
             step:            2000.0,
             exposure:        2.0,
+            gain:            100_000.0,
         }
     }
 }
