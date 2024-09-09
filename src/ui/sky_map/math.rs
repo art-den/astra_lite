@@ -1,5 +1,7 @@
-use std::f64::consts::PI;
+use std::{f64::consts::PI, ops::Mul};
 use chrono::{Datelike, Timelike, NaiveDateTime, NaiveDate};
+
+use super::solar_system::pn_matrix;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EqCoord {
@@ -34,10 +36,12 @@ impl EqCoord {
     }
 
     pub fn from_sphere_pt(pt: &Point3D) -> Self {
-        Self {
-            dec: f64::atan2(pt.z, f64::sqrt(pt.x * pt.x + pt.y * pt.y)),
-            ra:  f64::atan2(pt.y, pt.x),
+        let dec = f64::atan2(pt.z, f64::sqrt(pt.x * pt.x + pt.y * pt.y));
+        let mut ra = f64::atan2(pt.y, pt.x);
+        if ra < 0.0 {
+            ra += 2.0 * PI;
         }
+        Self { dec, ra }
     }
 }
 
@@ -135,6 +139,18 @@ impl Point3D {
     }
 }
 
+impl Mul<&Matrix33> for &Point3D {
+    type Output = Point3D;
+
+    fn mul(self, mat: &Matrix33) -> Self::Output {
+        Point3D {
+            x: mat.a11 * self.x + mat.a12 * self.y + mat.a13 * self.z,
+            y: mat.a21 * self.x + mat.a22 * self.y + mat.a23 * self.z,
+            z: mat.a31 * self.x + mat.a32 * self.y + mat.a33 * self.z,
+        }
+    }
+}
+
 #[test]
 fn test_point3d_rotate() {
     let mut pt = Point3D { x: 0.0, y: 0.0, z: 1.0 };
@@ -143,6 +159,36 @@ fn test_point3d_rotate() {
     assert!(f64::abs(pt.x-0.0) < 1e-10);
     assert!(f64::abs(pt.y-1.0) < 1e-10);
     assert!(f64::abs(pt.z-0.0) < 1e-10);
+}
+
+pub struct Matrix33 {
+    pub a11: f64, pub a12: f64, pub a13: f64,
+    pub a21: f64, pub a22: f64, pub a23: f64,
+    pub a31: f64, pub a32: f64, pub a33: f64,
+}
+
+pub struct EpochCvt {
+    pn_mat: Matrix33,
+}
+
+impl EpochCvt {
+    pub fn new(time0: &NaiveDateTime, time: &NaiveDateTime) -> Self {
+        let centuries0 = calc_julian_centuries(&time0);
+        let centuries = calc_julian_centuries(&time);
+        Self {
+            pn_mat: pn_matrix(centuries0, centuries),
+        }
+    }
+
+    pub fn convert_eq(&self, crd: &EqCoord) -> EqCoord {
+        let pt = crd.to_sphere_pt();
+        let pt = &pt * &self.pn_mat;
+        EqCoord::from_sphere_pt(&pt)
+    }
+
+    pub fn convert_pt(&self, pt: &Point3D) -> Point3D {
+        pt * &self.pn_mat
+    }
 }
 
 #[derive(Default)]
@@ -161,19 +207,23 @@ impl EqToSphereCvt {
     ) -> Self {
         let lst = calc_sidereal_time(utc_time) + longitude;
 
-        let z_rot = RotMatrix::new(lst);
-        let y_rot = RotMatrix::new(latitude);
+        let ra_rot = RotMatrix::new(lst);
+        let dec_rot = RotMatrix::new(latitude);
 
-        let n_z_rot = RotMatrix::new(-lst);
-        let n_y_rot = RotMatrix::new(-latitude);
+        let n_ra_rot = RotMatrix::new(-lst);
+        let n_dec_rot = RotMatrix::new(-latitude);
 
-        Self { z_rot, y_rot, n_z_rot, n_y_rot }
+        Self { z_rot: ra_rot, y_rot: dec_rot, n_z_rot: n_ra_rot, n_y_rot: n_dec_rot }
+    }
+
+    pub fn apply(&self, pt: &mut Point3D) {
+        pt.rotate_over_z(&self.z_rot);
+        pt.rotate_over_y(&self.y_rot);
     }
 
     pub fn eq_to_sphere(&self, eq_crd: &EqCoord) -> Point3D {
         let mut result = eq_crd.to_sphere_pt();
-        result.rotate_over_z(&self.z_rot);
-        result.rotate_over_y(&self.y_rot);
+        self.apply(&mut result);
         result
     }
 
@@ -282,4 +332,8 @@ pub fn calc_sidereal_time(dt: &NaiveDateTime) -> f64 {
         - (t * t * t) / 38710000.0;
     result_in_degrees = 360.0 * f64::fract(result_in_degrees / 360.0);
     degree_to_radian(result_in_degrees)
+}
+
+pub fn j2000_time() -> NaiveDateTime {
+    NaiveDate::from_ymd_opt(2000, 1, 1).unwrap().and_hms_opt(12, 0, 0).unwrap()
 }

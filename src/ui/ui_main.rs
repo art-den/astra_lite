@@ -214,6 +214,9 @@ const CSS: &[u8] = b"
     color: mix(@theme_fg_color, rgb(0, 64, 255), 0.4);
     background: rgba(0, 64, 255, .1);
 }
+.bold {
+  font-weight: bold;
+}
 ";
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq)]

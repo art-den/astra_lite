@@ -772,56 +772,61 @@ impl MapUi {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let obj = self.selected_item.borrow();
 
-        let names = obj.as_ref().map(|obj| obj.names().join(", ")).unwrap_or_default();
-        let obj_type = obj.as_ref().map(|obj| obj.obj_type()).unwrap_or(SkyItemType::None);
-        let obj_type_str = obj_type.to_str();
-        let mag_str = obj.as_ref().map(|obj| {
+        let mut names = String::new();
+        let mut obj_type_str = "";
+        let mut mag_cap_str = "";
+        let mut mag_str = String::new();
+        let mut bv_str = String::new();
+        let mut ra_str = String::new();
+        let mut dec_str = String::new();
+        let mut ra_now_str = String::new();
+        let mut dec_now_str = String::new();
+
+        let mut zenith_str = String::new();
+        let mut azimuth_str = String::new();
+
+        if let Some(obj) = &*obj {
+
+            names = obj.names().join(", ");
+            obj_type_str = obj.obj_type().to_str();
+
             if let Some(mag) = obj.mag_v() {
-                format!("{:.2}", mag)
+                mag_str = format!("{:.2}", mag);
             } else if let Some(mag) = obj.mag_b() {
-                format!("{:.2}", mag)
-            } else {
-                String::new()
+                mag_str = format!("{:.2}", mag);
             }
-        }).unwrap_or_default();
 
-        let mag_cap_str = obj.as_ref().map(|obj| {
             if obj.mag_v().is_some() {
-                "Magnitude (V)"
+                mag_cap_str = "Magnitude (V)";
             } else if obj.mag_b().is_some() {
-                "Magnitude (B)"
+                mag_cap_str = "Magnitude (B)";
             } else {
-                "Magnitude"
+                mag_cap_str = "Magnitude";
             }
-        }).unwrap_or("Magnitude");
 
-        let bv = obj.as_ref().map(|obj|obj.bv()).flatten();
-        let bv_str = bv.map(|bv| format!("{:.2}", bv)).unwrap_or_default();
+            bv_str = obj.bv().map(|bv| format!("{:.2}", bv)).unwrap_or_default();
 
-        let ra_str = match obj.as_ref().map(|obj| obj.crd()) {
-            Some(crd) => value_to_sexagesimal(radian_to_hour(crd.ra), true, 9),
-            None => String::new(),
-        };
-
-        let dec_str = match obj.as_ref().map(|obj| obj.crd()) {
-            Some(crd) => value_to_sexagesimal(radian_to_degree(crd.dec), true, 8),
-            None => String::new(),
-        };
-
-        let horiz_crd = obj.as_ref().map(|obj| {
-            let observer = self.create_observer();
+            let j2000 = j2000_time();
             let time = self.map_widget.time();
+            let epoch_cvt = EpochCvt::new(&j2000, &time);
+
+            let crd = obj.crd();
+
+            ra_str = value_to_sexagesimal(radian_to_hour(crd.ra), true, 9);
+            dec_str = value_to_sexagesimal(radian_to_degree(crd.dec), true, 8);
+
+            let now_crd = epoch_cvt.convert_eq(&crd);
+            ra_now_str = value_to_sexagesimal(radian_to_hour(now_crd.ra), true, 9);
+            dec_now_str = value_to_sexagesimal(radian_to_degree(now_crd.dec), true, 8);
+
+            let observer = self.create_observer();
             let cvt = EqToSphereCvt::new(observer.longitude, observer.latitude, &time);
-            HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&obj.crd()))
-        });
 
-        let zenith_str = horiz_crd.as_ref().map(|crd|
-            value_to_sexagesimal(radian_to_degree(crd.alt), true, 8)
-        ).unwrap_or_default();
+            let h_crd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&obj.crd()));
 
-        let azimuth_str = horiz_crd.as_ref().map(|crd|
-            value_to_sexagesimal(radian_to_degree(crd.az), true, 8)
-        ).unwrap_or_default();
+            zenith_str = value_to_sexagesimal(radian_to_degree(h_crd.alt), true, 8);
+            azimuth_str = value_to_sexagesimal(radian_to_degree(h_crd.az), true, 8);
+        }
 
         ui.set_prop_str("e_sm_sel_names.text", Some(&names));
         ui.set_prop_str("l_sm_sel_type.label", Some(&obj_type_str));
@@ -830,6 +835,8 @@ impl MapUi {
         ui.set_prop_str("l_sm_sel_bv.label", Some(&bv_str));
         ui.set_prop_str("l_sm_sel_ra.label", Some(&ra_str));
         ui.set_prop_str("l_sm_sel_dec.label", Some(&dec_str));
+        ui.set_prop_str("l_sm_sel_ra_now.label", Some(&ra_now_str));
+        ui.set_prop_str("l_sm_sel_dec_now.label", Some(&dec_now_str));
         ui.set_prop_str("l_sm_sel_zenith.label", Some(&zenith_str));
         ui.set_prop_str("l_sm_sel_az.label", Some(&azimuth_str));
     }
@@ -986,7 +993,12 @@ impl MapUi {
     fn handler_goto_selected(&self) {
         let selected_item = self.selected_item.borrow();
         let Some(selected_item) = &*selected_item else { return; };
-        self.goto_eq_coord(&selected_item.crd());
+        let j2000 = j2000_time();
+        let time = self.map_widget.time();
+        let epoch_cvt = EpochCvt::new(&j2000, &time);
+        let crd = selected_item.crd();
+        let now_crd = epoch_cvt.convert_eq(&crd);
+        self.goto_eq_coord(&now_crd);
     }
 
     fn handler_goto_point(&self) {

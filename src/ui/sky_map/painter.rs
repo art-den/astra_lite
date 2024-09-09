@@ -171,8 +171,13 @@ impl SkyMapPainter {
         cairo.paint()?;
 
         let pxls_per_rad = self.calc_pixels_per_radian(screen, view_point.mag_factor);
+
+        let j2000 = j2000_time();
+        let epoch_cvt = EpochCvt::new(&j2000, &utc_time);
+
         let ctx = PaintCtx {
             cairo, config, screen, view_point, pxls_per_rad,
+            epoch_cvt: &epoch_cvt,
             eq_sphere_cvt: &eq_sphere_cvt,
             sphere_scr_cvt: &sphere_scr_cvt
         };
@@ -266,7 +271,8 @@ impl SkyMapPainter {
             match mode {
                 PainterMode::Objects => {
                     let test_visiblity = PointVisibilityTestObject {
-                        coord: dso_object.crd.to_eq()
+                        coord: dso_object.crd.to_eq(),
+                        use_now_epoch: true
                     };
 
                     let is_visible_on_screen = self.item_painter.paint(
@@ -619,11 +625,13 @@ struct PaintCtx<'a> {
     screen:         &'a ScreenInfo,
     view_point:     &'a ViewPoint,
     pxls_per_rad:   f64,
+    epoch_cvt:      &'a EpochCvt,
     eq_sphere_cvt:  &'a EqToSphereCvt,
     sphere_scr_cvt: &'a SphereToScreenCvt
 }
 
 trait Item {
+    fn use_now_epoch(&self) -> bool { false }
     fn points_count(&self) -> usize;
     fn point_crd(&self, index: usize) -> PainterCrd;
     fn paint(&self, _ctx: &PaintCtx, _points: &[Point2D]) -> anyhow::Result<()> { Ok(()) }
@@ -649,6 +657,7 @@ impl ItemPainter {
         under_horiz: bool,
     ) -> anyhow::Result<bool> {
         let points_count = obj.points_count();
+        let use_now_epoch = obj.use_now_epoch();
 
         self.points_3d.clear();
         let mut obj_is_visible = false;
@@ -657,7 +666,14 @@ impl ItemPainter {
 
             let crd_sphere = match obj.point_crd(i) {
                 PainterCrd::Horiz(horiz) => horiz.to_sphere_pt(),
-                PainterCrd::Eq(eq)       => ctx.eq_sphere_cvt.eq_to_sphere(&eq)
+                PainterCrd::Eq(eq) => {
+                    let mut sphere_pt = eq.to_sphere_pt();
+                    if use_now_epoch {
+                        sphere_pt = ctx.epoch_cvt.convert_pt(&sphere_pt);
+                    }
+                    ctx.eq_sphere_cvt.apply(&mut sphere_pt);
+                    sphere_pt
+                }
             };
 
             invisible |= !under_horiz && crd_sphere.x < 0.0;
@@ -725,6 +741,10 @@ impl ItemPainter {
 struct DsoNamePainter<'a>(&'a DsoItem);
 
 impl<'a> Item for DsoNamePainter<'a> {
+    fn use_now_epoch(&self) -> bool {
+        true
+    }
+
     fn points_count(&self) -> usize {
         1
     }
@@ -769,6 +789,10 @@ impl DsoEllipse {
 }
 
 impl Item for DsoEllipse {
+    fn use_now_epoch(&self) -> bool {
+        true
+    }
+
     fn points_count(&self) -> usize {
         self.points.len()
     }
@@ -827,6 +851,10 @@ impl Item for DsoEllipse {
 // Paint outline
 
 impl Item for Outline {
+    fn use_now_epoch(&self) -> bool {
+        true
+    }
+
     fn points_count(&self) -> usize {
         self.polygon.len()
     }
@@ -876,6 +904,10 @@ struct StarPainter<'a> {
 type RgbTuple = (f64, f64, f64);
 
 impl<'a> StarPainter<'a> {
+    fn use_now_epoch(&self) -> bool {
+        true
+    }
+
     fn calc_light(&self, star_mag: f32) -> (f32, f32) {
         let light = f32::powf(2.0, 0.4 * (self.options.max_mag_value - star_mag)) - 1.0;
         let light_with_gamma = light.powf(0.7);
@@ -1015,6 +1047,10 @@ impl<'a> StarPainter<'a> {
 }
 
 impl<'a> Item for StarPainter<'a> {
+    fn use_now_epoch(&self) -> bool {
+        true
+    }
+
     fn points_count(&self) -> usize {
         1
     }
@@ -1277,35 +1313,20 @@ impl Item for ZoneVisibilityTestObject {
 
 struct PointVisibilityTestObject {
     coord: EqCoord,
+    use_now_epoch: bool,
 }
 
 impl Item for PointVisibilityTestObject {
+    fn use_now_epoch(&self) -> bool {
+        self.use_now_epoch
+    }
+
     fn points_count(&self) -> usize {
         1
     }
 
     fn point_crd(&self, _index: usize) -> PainterCrd {
         PainterCrd::Eq(self.coord.clone())
-    }
-}
-
-struct TestHorizCircle(HorizCoord);
-
-impl Item for TestHorizCircle {
-    fn points_count(&self) -> usize {
-        1
-    }
-
-    fn point_crd(&self, _index: usize) -> PainterCrd {
-        PainterCrd::Horiz(self.0.clone())
-    }
-
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
-        ctx.cairo.arc(points[0].x, points[0].y, 4.0, 0.0, 2.0 * PI);
-        ctx.cairo.set_source_rgb(1.0, 1.0, 1.0);
-        ctx.cairo.close_path();
-        ctx.cairo.fill()?;
-        Ok(())
     }
 }
 
@@ -1346,7 +1367,11 @@ struct SelectionPainter {
     thickness: f64,
 }
 
- impl Item for SelectionPainter {
+impl Item for SelectionPainter {
+    fn use_now_epoch(&self) -> bool {
+        true
+    }
+
     fn points_count(&self) -> usize {
         1
     }

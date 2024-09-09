@@ -221,13 +221,21 @@ impl SkymapWidget {
         let Some((x, y)) = event.coords() else { return; };
         let Some(skymap) = &*self.skymap.borrow() else { return; };
         let Some(eq_crd) = self.widget_crd_to_eq(x, y) else { return; };
+
+        let time = self.time.borrow();
+        let j2000 = j2000_time();
+        let rev_epoch_cvt = EpochCvt::new(&time, &j2000);
+        let eq_crd = rev_epoch_cvt.convert_eq(&eq_crd);
+
         let config = self.config.borrow();
         let vp = self.view_point.borrow();
         let max_stars_mag = calc_max_star_magnitude_for_painting(vp.mag_factor);
         let selected_obj = skymap.get_nearest(&eq_crd, config.max_dso_mag, max_stars_mag, &config.filter);
 
         if let Some(selected_obj) = &selected_obj {
-            self.animated_goto_coord(&selected_obj.crd());
+            let epoch_cvt = EpochCvt::new(&j2000, &time);
+            let crd = epoch_cvt.convert_eq(&selected_obj.crd());
+            self.animated_goto_coord(&crd);
         }
 
         let select_handlers = self.select_handlers.borrow();
@@ -240,7 +248,11 @@ impl SkymapWidget {
     pub fn set_selected_object(self: &Rc<Self>, obj: Option<&SkymapObject>) {
         *self.selected_obj.borrow_mut() = obj.cloned();
         if let Some(selected_obj) = &obj {
-            self.animated_goto_coord(&selected_obj.crd());
+            let time = self.time.borrow();
+            let j2000 = j2000_time();
+            let epoch_cvt = EpochCvt::new(&j2000, &time);
+            let crd = epoch_cvt.convert_eq(&selected_obj.crd());
+            self.animated_goto_coord(&crd);
         }
     }
 

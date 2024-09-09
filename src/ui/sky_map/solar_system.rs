@@ -1,5 +1,5 @@
 use std::f64::consts::PI;
-use super::math::{EqCoord, Point3D};
+use super::math::*;
 
 // t = (JD - 2451545) / 36525
 
@@ -142,12 +142,6 @@ fn sin360(x: f64) -> f64 {
     return f64::sin(x * RAD);
 }
 
-pub struct Matrix33 {
-    pub a11: f64, pub a12: f64, pub a13: f64,
-    pub a21: f64, pub a22: f64, pub a23: f64,
-    pub a31: f64, pub a32: f64, pub a33: f64,
-}
-
 fn prec_mat_equ(t1: f64, t2: f64) -> Matrix33 {
     const SEC: f64 = 3600.0;
     let dt = t2 - t1;
@@ -156,12 +150,14 @@ fn prec_mat_equ(t1: f64, t2: f64) -> Matrix33 {
     let z = zeta + ((0.79280 + 0.000411 * t1) + 0.000205 * dt) * dt * dt / SEC;
     let theta = ((2004.3109 - (0.85330 + 0.000217 * t1) * t1) -
         ((0.42665 + 0.000217 * t1) + 0.041833 * dt) * dt) * dt / SEC;
+
     let c1 = cos360(z);
     let c2 = cos360(theta);
     let c3 = cos360(zeta);
     let s1 = sin360(z);
     let s2 = sin360(theta);
     let s3 = sin360(zeta);
+
     Matrix33 {
         a11: -s1 * s3 + c1 * c2 * c3,
         a12: -s1 * c3 - c1 * c2 * s3,
@@ -248,20 +244,13 @@ fn polar(x: f64, y: f64, z: f64, r: &mut f64, dec: &mut f64, ra: &mut f64) {
     *dec = f64::atan2(z, rho);
 }
 
-fn prec_art(mat: &Matrix33, pt: &Point3D) -> Point3D {
-    let x = mat.a11 * pt.x + mat.a12 * pt.y + mat.a13 * pt.z;
-    let y = mat.a21 * pt.x + mat.a22 * pt.y + mat.a23 * pt.z;
-    let z = mat.a31 * pt.x + mat.a32 * pt.y + mat.a33 * pt.z;
-    Point3D {x, y, z}
-}
-
 fn apparent(
     pn_mat:  &Matrix33,
     aberrat: Option<&Point3D>,
     coord:   &EqCoord
 ) -> EqCoord {
     let crd3d = cart(1.0, coord.dec, coord.ra);
-    let mut pt = prec_art(pn_mat, &crd3d);
+    let mut pt = &crd3d * pn_mat;
     if let Some(aberrat) = aberrat {
         pt.x += aberrat.x;
         pt.y += aberrat.y;
