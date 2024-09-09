@@ -3,7 +3,7 @@ use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use crate::{indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
-use super::{gtk_utils::{self, DEFAULT_DPMM}, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, utils::*}, ui_main::*, ui_skymap_options::SkymapOptionsDialog, utils::*};
+use super::{gtk_utils::{self, DEFAULT_DPMM}, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, math::*}, ui_main::*, ui_skymap_options::SkymapOptionsDialog, utils::*};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
 pub fn init_ui(
@@ -811,8 +811,8 @@ impl MapUi {
         let horiz_crd = obj.as_ref().map(|obj| {
             let observer = self.create_observer();
             let time = self.map_widget.time();
-            let cvt = EqToHorizCvt::new(&observer, &time);
-            cvt.eq_to_horiz(&obj.crd())
+            let cvt = EqToSphereCvt::new(observer.longitude, observer.latitude, &time);
+            HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&obj.crd()))
         });
 
         let zenith_str = horiz_crd.as_ref().map(|crd|
@@ -875,8 +875,11 @@ impl MapUi {
         if options.search_above_horiz {
             let observer = self.create_observer();
             let time = self.map_widget.time();
-            let cvt = EqToHorizCvt::new(&observer, &time);
-            found_items.retain(|obj| cvt.eq_to_horiz(&obj.crd()).alt > 0.0);
+            let cvt = EqToSphereCvt::new(observer.longitude, observer.latitude, &time);
+            found_items.retain(|obj| {
+                let hcrd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&obj.crd()));
+                hcrd.alt > 0.0
+            });
         }
         *self.search_result.borrow_mut() = found_items;
         self.show_search_result();

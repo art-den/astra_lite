@@ -3,7 +3,7 @@ use bitflags::bitflags;
 use bitstream_io::{BigEndian, BitReader};
 use serde::{Deserialize, Serialize};
 use crate::{indi::sexagesimal_to_value, utils::compression::ValuesDecompressor};
-use super::utils::*;
+use super::math::*;
 
 const ID_CAT_OTHER:   u16 = 0;
 const ID_CAT_MESSIER: u16 = 1;

@@ -5,7 +5,7 @@ use gtk::{cairo, gdk, prelude::*};
 
 use crate::{ui::gtk_utils::{self, font_size_to_pixels, FontSize, DEFAULT_DPMM}, utils::math::linear_interpolate};
 
-use super::{data::*, utils::*, solar_system::*};
+use super::{data::*, math::*, solar_system::*};
 
 pub fn paint_altitude_by_time(
     area:     &gtk::DrawingArea,
@@ -83,12 +83,14 @@ pub fn paint_altitude_by_time(
         let hour_diff = linear_interpolate(x as f64, 0.0, width, PAST_HOUR as f64, FUTU_HOUR as f64);
         let pt_diff = chrono::Duration::seconds((60.0 * 60.0 * hour_diff) as i64);
         let pt_time = dt.checked_add_signed(pt_diff).unwrap_or(dt);
-        let eq_hor_cvt = EqToHorizCvt::new(&observer, &pt_time);
+
+        let cvt = EqToSphereCvt::new(observer.longitude, observer.latitude, &pt_time);
+
         let julian_centuries = calc_julian_centuries(&pt_time);
         let sun_crd = mini_sun(julian_centuries);
-        let sun_h_crd = eq_hor_cvt.eq_to_horiz(&sun_crd);
+        let sun_h_crd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&sun_crd));
         let moon_crd = mini_moon(julian_centuries);
-        let moon_h_crd = eq_hor_cvt.eq_to_horiz(&moon_crd);
+        let moon_h_crd =  HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&moon_crd));
 
         let (r, g, b) = if sun_h_crd.alt < sun_alt_theshold {
             if moon_h_crd.alt > 0.0 {
@@ -122,11 +124,11 @@ pub fn paint_altitude_by_time(
         for i in STEPS*PAST_HOUR..=STEPS*FUTU_HOUR {
             let hour_diff = chrono::Duration::minutes(60 * i / STEPS);
             let pt_time = dt.checked_add_signed(hour_diff).unwrap_or(dt);
-            let eq_hor_cvt = EqToHorizCvt::new(&observer, &pt_time);
-            let horiz_crd = eq_hor_cvt.eq_to_horiz(&crd);
+            let cvt = EqToSphereCvt::new(observer.longitude, observer.latitude, &pt_time);
+            let horiz_crd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&crd));
             let julian_centuries = calc_julian_centuries(&pt_time);
             let sun_crd = mini_sun(julian_centuries);
-            let sun_h_crd = eq_hor_cvt.eq_to_horiz(&sun_crd);
+            let sun_h_crd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&sun_crd));
             if sun_h_crd.alt < sun_alt_theshold {
                 max_alt = max_alt
                     .map(|v| f64::max(v, horiz_crd.alt))

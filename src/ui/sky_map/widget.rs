@@ -3,11 +3,10 @@ use chrono::{NaiveDateTime, Utc};
 use gtk::{gdk, cairo, glib::{self, clone}, prelude::*};
 use crate::utils::math::linear_interpolate;
 
-use super::{consts::*, data::*, painter::*, utils::*};
+use super::{consts::*, data::*, math::*, painter::*, utils::*};
 
 struct MousePressedData {
     hcrd:  HorizCoord,
-    point: (f64, f64),
     vp:    ViewPoint,
 }
 
@@ -110,8 +109,9 @@ impl SkymapWidget {
 
         if let Some(center_crd) = &*self.center_crd.borrow() {
             let observer = self.observer.borrow();
-            let cvt = EqToHorizCvt::new(&*observer, &time);
-            self.view_point.borrow_mut().crd = cvt.eq_to_horiz(center_crd);
+            let cvt = EqToSphereCvt::new(observer.longitude, observer.latitude, &time);
+            let sphere_pt = cvt.eq_to_sphere(center_crd);
+            self.view_point.borrow_mut().crd = HorizCoord::from_sphere_pt(&sphere_pt);
         }
 
         self.draw_area.queue_draw();
@@ -179,24 +179,42 @@ impl SkymapWidget {
         let Some((x, y)) = event.coords() else { return; };
         let vp = self.view_point.borrow();
         let si = ScreenInfo::new(&self.draw_area);
-        let cvt = HorizToScreenCvt::new(&*vp);
-        let Some(hcrd) = cvt.screen_to_horiz(&Point2D {x, y}, &si) else { return; };
+
+        let sphere_pt = screen_to_sphere(&Point2D {x, y}, &si, vp.mag_factor);
+        let Some(sphere_pt) = sphere_pt else { return; };
+        let cvt = SphereToScreenCvt::new(&HorizCoord { alt: 0.0, az: 0.0 });
+        let pt = cvt.remove_viewpoint(&sphere_pt);
+        let hcrd = HorizCoord::from_sphere_pt(&pt);
+
         *self.mpress.borrow_mut() = Some(MousePressedData {
             hcrd,
-            point: (x, y),
             vp: self.view_point.borrow().clone(),
         });
     }
 
     pub fn widget_crd_to_eq(&self, x: f64, y: f64) -> Option<EqCoord> {
         let vp = self.view_point.borrow();
-        let cvt = HorizToScreenCvt::new(&*vp);
         let si = ScreenInfo::new(&self.draw_area);
-        let Some(hcrd) = cvt.screen_to_horiz(&Point2D {x, y}, &si) else { return None; };
+
+        let sphere_pt = screen_to_sphere(&Point2D {x, y}, &si, vp.mag_factor);
+        let Some(sphere_pt) = sphere_pt else { return None; };
+
         let observer = self.observer.borrow();
+
         let time = self.time.borrow();
-        let cvt = EqToHorizCvt::new(&observer, &time);
-        Some(cvt.horiz_to_eq(&hcrd))
+
+        let vp_cvt = SphereToScreenCvt::new(&vp.crd);
+
+        let sphere_pt = vp_cvt.remove_viewpoint(&sphere_pt);
+
+        let cvt = EqToSphereCvt::new(
+            observer.longitude,
+            observer.latitude,
+            &time,
+        );
+
+        let result = cvt.sphere_to_eq(&sphere_pt);
+        Some(result)
     }
 
     fn select_object(self: &Rc<Self>, event: &gdk::EventButton) {
@@ -227,18 +245,21 @@ impl SkymapWidget {
     }
 
     fn hanler_motion_notify(&self, event: &gdk::EventMotion) -> glib::Propagation {
-        let Some(mpress) = &*self.mpress.borrow() else {
-            return glib::Propagation::Proceed;
-        };
         let Some((x, y)) = event.coords() else {
             return glib::Propagation::Proceed;
         };
-        let si = ScreenInfo::new(&self.draw_area);
-        let cvt = HorizToScreenCvt::new(&mpress.vp);
-        let Some(hcrd) = cvt.screen_to_horiz(&Point2D {x, y}, &si) else {
-            return glib::Propagation::Stop;
+        let Some(mpress) = &*self.mpress.borrow() else {
+            return glib::Propagation::Proceed;
         };
+        let si = ScreenInfo::new(&self.draw_area);
+
         let mut vp = self.view_point.borrow_mut();
+        let sphere_pt = screen_to_sphere(&Point2D {x, y}, &si, vp.mag_factor);
+        let Some(sphere_pt) = sphere_pt else { return glib::Propagation::Stop; };
+        let cvt = SphereToScreenCvt::new(&HorizCoord { alt: 0.0, az: 0.0 });
+        let pt = cvt.remove_viewpoint(&sphere_pt);
+        let hcrd = HorizCoord::from_sphere_pt(&pt);
+
         vp.crd.az = mpress.vp.crd.az + mpress.hcrd.az - hcrd.az;
         vp.crd.alt = mpress.vp.crd.alt + mpress.hcrd.alt - hcrd.alt;
         vp.crd.alt = vp.crd.alt.min(MAX_ALT).max(MIN_ALT);
@@ -348,8 +369,8 @@ impl SkymapWidget {
                         );
                         let observer = self_.observer.borrow();
                         let time = self_.time.borrow();
-                        let cvt = EqToHorizCvt::new(&observer, &time);
-                        let horiz_coord = cvt.eq_to_horiz(&EqCoord { dec, ra });
+                        let cvt = EqToSphereCvt::new(observer.longitude, observer.latitude, &time);
+                        let horiz_coord = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&EqCoord { dec, ra }));
                         self_.view_point.borrow_mut().crd = horiz_coord;
                         let has_to_stop = ani_goto_data.stage == ani_goto_data.max_stages;
                         if !has_to_stop {
