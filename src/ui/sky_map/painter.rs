@@ -1327,7 +1327,7 @@ impl Item for TelescopePosPainter {
         let line_size = 40.0 * ctx.screen.dpmm_x;
         ctx.cairo.set_line_width(1.0);
         ctx.cairo.set_dash(&[], 0.0);
-        ctx.cairo.set_antialias(cairo::Antialias::Fast);
+        ctx.cairo.set_antialias(ctx.config.get_antialias());
         ctx.cairo.set_source_rgb(1.0, 1.0, 1.0);
         ctx.cairo.move_to(pt.x - 0.5 * line_size, pt.y);
         ctx.cairo.line_to(pt.x + 0.5 * line_size, pt.y);
@@ -1357,7 +1357,7 @@ struct SelectionPainter {
 
     fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         let pt = &points[0];
-        ctx.cairo.set_antialias(cairo::Antialias::Fast);
+        ctx.cairo.set_antialias(ctx.config.get_antialias());
         ctx.cairo.set_source_rgb(1.0, 0.0, 1.0);
         ctx.cairo.set_line_width(self.thickness);
         ctx.cairo.rectangle(
@@ -1390,7 +1390,7 @@ struct CameraFramePainter<'a> {
         for pt in &points[1..] {
             ctx.cairo.line_to(pt.x, pt.y);
         }
-        ctx.cairo.set_antialias(cairo::Antialias::Fast);
+        ctx.cairo.set_antialias(ctx.config.get_antialias());
         ctx.cairo.close_path();
         ctx.cairo.set_source_rgb(1.0, 1.0, 1.0);
         ctx.cairo.set_dash(&[], 0.0);
