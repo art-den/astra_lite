@@ -2661,7 +2661,7 @@ Better use "Subtrack master DARK frame"</property>
                                   <object class="GtkLabel">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
-                                    <property name="label" translatable="yes">[ Calibration frames and hot pixels ]</property>
+                                    <property name="label" translatable="yes">[ Calibration &amp; hot pixels ]</property>
                                     <attributes>
                                       <attribute name="weight" value="bold"/>
                                       <attribute name="underline" value="True"/>
@@ -5847,7 +5847,7 @@ if error larger than (pixels)</property>
           <object class="GtkLabel" id="l_camera_and_foc">
             <property name="visible">True</property>
             <property name="can-focus">False</property>
-            <property name="label" translatable="yes">Camera &amp; focuser</property>
+            <property name="label" translatable="yes">Photo</property>
             <attributes>
               <attribute name="weight" value="bold"/>
             </attributes>
