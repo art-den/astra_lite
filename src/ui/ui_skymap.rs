@@ -90,8 +90,9 @@ impl SkyItemType {
 pub struct UiOptions {
     paned_pos1:         i32,
     pub paint:          PaintConfig,
-    pub show_ccd:       bool,
+    show_ccd:           bool,
     search_above_horiz: bool,
+    exp_dt:             bool,
 }
 
 impl Default for UiOptions {
@@ -101,6 +102,7 @@ impl Default for UiOptions {
             paint:              PaintConfig::default(),
             show_ccd:           true,
             search_above_horiz: true,
+            exp_dt:             true,
         }
     }
 }
@@ -390,6 +392,8 @@ impl MapUi {
         ui.set_range_value("scl_max_dso_mag", opts.paint.max_dso_mag as f64);
         ui.set_prop_bool("chb_sm_above_horizon.active", opts.search_above_horiz);
 
+        ui.set_prop_bool("exp_sm_dt.expanded", opts.exp_dt);
+
         drop(opts);
     }
 
@@ -402,6 +406,7 @@ impl MapUi {
         }
         opts.paint.max_dso_mag = ui.range_value("scl_max_dso_mag") as f32;
         opts.search_above_horiz = ui.prop_bool("chb_sm_above_horizon.active");
+        opts.exp_dt = ui.prop_bool("exp_sm_dt.expanded");
 
         Self::read_visibility_options_from_widgets(&mut opts, &ui);
 
