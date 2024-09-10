@@ -54,7 +54,7 @@ pub fn paint_altitude_by_time(
         cr.fill()?;
         x += 1.5 * legend_rect_size;
 
-        cr.set_source_rgb(1.0, 1.0, 1.0);
+        cr.set_source_rgb(fg_color.red(), fg_color.green(), fg_color.blue());
         let te = cr.text_extents(text)?;
         cr.move_to(x, 0.5 * legend_height - (0.5 * te.height() + te.y_bearing()));
         cr.show_text(text)?;
