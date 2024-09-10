@@ -1,4 +1,4 @@
-use std::{f64::consts::PI, rc::Rc};
+use std::{collections::HashSet, f64::consts::PI, rc::Rc};
 use chrono::NaiveDateTime;
 use gtk::cairo;
 use itertools::{izip, Itertools};
@@ -135,13 +135,15 @@ pub fn calc_max_star_magnitude_for_painting(mag_factor: f64) -> f32 {
 pub struct SkyMapPainter {
     item_painter: ItemPainter,
     dso_ellipse:  DsoEllipse,
+    visible_zones: HashSet<SkyZoneKey>,
 }
 
 impl SkyMapPainter {
     pub fn new() -> Self {
         Self {
-            item_painter: ItemPainter::new(),
-            dso_ellipse:  DsoEllipse::new(),
+            item_painter:  ItemPainter::new(),
+            dso_ellipse:   DsoEllipse::new(),
+            visible_zones: HashSet::new(),
         }
     }
 
@@ -196,6 +198,8 @@ impl SkyMapPainter {
 
             // Stars objects
             if config.filter.contains(ItemsToShow::STARS) {
+                self.fill_visible_zones(&ctx);
+
                 self.paint_stars(
                     sky_map,
                     &star_painter_params,
@@ -236,6 +240,27 @@ impl SkyMapPainter {
         self.paint_camera_frame(cam_frame, &ctx)?;
 
         Ok(())
+    }
+
+    fn fill_visible_zones(&mut self, ctx: &PaintCtx) {
+        self.visible_zones.clear();
+
+        let center_crd = ctx.view_point.crd.to_sphere_pt();
+        let center_eq_crd = ctx.eq_sphere_cvt.sphere_to_eq(&center_crd);
+        let center_zone_key = SkyZoneKey::from_coord(center_eq_crd.ra, center_eq_crd.dec);
+        self.visible_zones.insert(center_zone_key);
+        for ra_key in 0..SkyZoneKey::RA_COUNT {
+            for dec_key in 0..SkyZoneKey::DEC_COUNT {
+                let key = SkyZoneKey::from_indices(ra_key as u16, dec_key as u16);
+                let vis_test_obj = ZoneVisibilityTestObject {
+                    coords: key.to_coords(),
+                };
+                let is_visible = self.item_painter.paint(&vis_test_obj, ctx, false).unwrap_or_default();
+                if is_visible {
+                    self.visible_zones.insert(key);
+                }
+            }
+        }
     }
 
     fn calc_pixels_per_radian(
@@ -392,28 +417,13 @@ impl SkyMapPainter {
         ctx.cairo.set_antialias(ctx.config.get_antialias());
         ctx.cairo.set_font_size(ctx.config.names_font_size as f64 * ctx.screen.dpmm_y);
 
-        let center_crd = ctx.view_point.crd.to_sphere_pt();
-        let center_eq_crd = ctx.eq_sphere_cvt.sphere_to_eq(&center_crd);
-
-        let center_zone_key = SkyZoneKey::from_coord(center_eq_crd.ra, center_eq_crd.dec);
         let max_mag_value = calc_max_star_magnitude_for_painting(ctx.view_point.mag_factor);
         let max_mag = ObjMagnitude::new(max_mag_value);
         let stars = sky_map.stars();
         let mut _stars_count = 0_usize;
         let mut _stars_painted_count = 0_usize;
         for (zone_key, zone) in stars.zones() {
-            let zone_is_visible = if &center_zone_key == zone_key {
-                // this zone is visible as center of screen points at it
-                true
-            } else {
-                // test if zone is visible
-                let vis_test_obj = ZoneVisibilityTestObject {
-                    coords: zone.coords().clone(),
-                };
-                self.item_painter.paint(&vis_test_obj, ctx, false).unwrap_or_default()
-            };
-
-            if !zone_is_visible {
+            if !self.visible_zones.contains(zone_key) {
                 continue;
             }
 
@@ -1302,6 +1312,10 @@ struct ZoneVisibilityTestObject {
 }
 
 impl Item for ZoneVisibilityTestObject {
+    fn use_now_epoch(&self) -> bool {
+        true
+    }
+
     fn points_count(&self) -> usize {
         self.coords.len()
     }
