@@ -340,8 +340,8 @@ impl CameraUi {
         cb_camera_list.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
             let Ok(mut options) = self_.options.try_write() else { return; };
             let Some(cur_id) = cb.active_id() else { return; };
-
-            if options.cam.device.as_ref().map(|dev| dev.name == cur_id.as_str()).unwrap_or(false) {
+            let new_device = DeviceAndProp::new(&cur_id);
+            if options.cam.device.as_ref() == Some(&new_device) {
                 return;
             }
 
@@ -353,18 +353,17 @@ impl CameraUi {
                 self_.store_cur_cam_options_impl(&prev_cam, &options);
             }
 
-            let camera_device = DeviceAndProp::new(&cur_id);
-
             // Copy some options for specific camera from UiOptions::all_cam_opts
 
-            self_.select_options_for_camera(&camera_device, &mut options);
+            self_.select_options_for_camera(&new_device, &mut options);
 
             // Assign new camera name
 
-            options.cam.device = Some(camera_device.clone());
+            options.cam.device = Some(new_device.clone());
 
             self_.correct_widgets_props_impl(&options);
-            _ = self_.update_resolution_list_impl(&camera_device, &options);
+            _ = self_.update_resolution_list_impl(&new_device, &options);
+            self_.fill_heater_items_list_impl(&options);
 
             // Show some options for specific camera
 
@@ -1270,11 +1269,15 @@ impl CameraUi {
     }
 
     fn fill_heater_items_list(&self) {
+        let options = self.options.read().unwrap();
+        self.fill_heater_items_list_impl(&options);
+    }
+
+    fn fill_heater_items_list_impl(&self, options: &Options) {
         gtk_utils::exec_and_show_error(&self.window, ||{
             let cb_cam_heater = self.builder.object::<gtk::ComboBoxText>("cb_cam_heater").unwrap();
             let last_heater_value = cb_cam_heater.active_id();
             cb_cam_heater.remove_all();
-            let options = self.options.read().unwrap();
             let Some(device) = &options.cam.device else { return Ok(()); };
             if device.name.is_empty() { return Ok(()); };
             if !self.indi.camera_is_heater_supported(&device.name)? { return Ok(()) }
