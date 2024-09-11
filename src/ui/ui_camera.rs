@@ -364,7 +364,7 @@ impl CameraUi {
             options.cam.device = Some(camera_device.clone());
 
             self_.correct_widgets_props_impl(&options);
-            _ = self_.update_resolution_list_impl(&camera_device);
+            _ = self_.update_resolution_list_impl(&camera_device, &options);
 
             // Show some options for specific camera
 
@@ -1146,7 +1146,6 @@ impl CameraUi {
             ("chb_live_save_orig", can_change_live_stacking_opts),
             ("fch_live_folder",    can_change_live_stacking_opts),
 
-            ("bx_cam_main",        cam_sensitive),
             ("grd_cam_ctrl",       cam_sensitive),
             ("grd_shot_settings",  cam_sensitive),
             ("grd_save_raw",       cam_sensitive),
@@ -1231,7 +1230,8 @@ impl CameraUi {
 
     fn update_resolution_list_impl(
         &self,
-        cam_dev: &DeviceAndProp
+        cam_dev: &DeviceAndProp,
+        options: &Options
     ) -> anyhow::Result<()> {
         let cb_bin = self.builder.object::<gtk::ComboBoxText>("cb_bin").unwrap();
         let last_bin = cb_bin.active_id();
@@ -1254,7 +1254,6 @@ impl CameraUi {
         if last_bin.is_some() {
             cb_bin.set_active_id(last_bin.as_deref());
         } else {
-            let options = self.options.read().unwrap();
             cb_bin.set_active_id(options.cam.frame.binning.to_active_id());
         }
         if cb_bin.active_id().is_none() {
@@ -1267,7 +1266,7 @@ impl CameraUi {
         gtk_utils::exec_and_show_error(&self.window, || {
             let options = self.options.read().unwrap();
             let Some(cur_cam_device) = &options.cam.device else { return Ok(()); };
-            self.update_resolution_list_impl(cur_cam_device)?;
+            self.update_resolution_list_impl(cur_cam_device, &options)?;
             Ok(())
         });
     }
