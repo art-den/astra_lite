@@ -950,8 +950,6 @@ impl CameraUi {
         match action {
             DelayedActionTypes::UpdateCamList => {
                 self.update_devices_list();
-                self.update_resolution_list();
-                self.select_maximum_resolution();
                 self.correct_widgets_props();
             }
             DelayedActionTypes::StartLiveView => {
@@ -1232,13 +1230,17 @@ impl CameraUi {
         &self,
         cam_dev: &DeviceAndProp,
         options: &Options
-    ) -> anyhow::Result<()> {
+    ) {
         let cb_bin = self.builder.object::<gtk::ComboBoxText>("cb_bin").unwrap();
         let last_bin = cb_bin.active_id();
         cb_bin.remove_all();
         let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_dev.prop);
-        let (max_width, max_height) = self.indi.camera_get_max_frame_size(&cam_dev.name, cam_ccd)?;
-        let (max_hor_bin, max_vert_bin) = self.indi.camera_get_max_binning(&cam_dev.name, cam_ccd)?;
+        let Ok((max_width, max_height)) = self.indi.camera_get_max_frame_size(&cam_dev.name, cam_ccd) else {
+            return;
+        };
+        let Ok((max_hor_bin, max_vert_bin)) = self.indi.camera_get_max_binning(&cam_dev.name, cam_ccd) else {
+            return;
+        };
         let max_bin = usize::min(max_hor_bin, max_vert_bin);
         let bins = [ Binning::Orig, Binning::Bin2, Binning::Bin3, Binning::Bin4 ];
         for bin in bins {
@@ -1259,16 +1261,12 @@ impl CameraUi {
         if cb_bin.active_id().is_none() {
             cb_bin.set_active(Some(0));
         }
-        Ok(())
     }
 
     fn update_resolution_list(&self) {
-        gtk_utils::exec_and_show_error(&self.window, || {
-            let options = self.options.read().unwrap();
-            let Some(cur_cam_device) = &options.cam.device else { return Ok(()); };
-            self.update_resolution_list_impl(cur_cam_device, &options)?;
-            Ok(())
-        });
+        let options = self.options.read().unwrap();
+        let Some(cur_cam_device) = &options.cam.device else { return; };
+        self.update_resolution_list_impl(cur_cam_device, &options);
     }
 
     fn fill_heater_items_list(&self) {
@@ -1296,7 +1294,7 @@ impl CameraUi {
         });
     }
 
-    fn select_maximum_resolution(&self) {
+    fn select_maximum_resolution(&self) { // TODO: move to Core
         let options = self.options.read().unwrap();
         let Some(device) = &options.cam.device else { return; };
         let cam_name = &device.name;
@@ -1820,14 +1818,12 @@ impl CameraUi {
                 }
             }
 
-            ("CCD_RESOLUTION", ..) => {
+            ("CCD_RESOLUTION", ..) if new_prop => {
                 self.delayed_actions.schedule(
-                    if new_prop { DelayedActionTypes::SelectMaxResolution }
-                    else        { DelayedActionTypes::UpdateResolutionList }
+                    DelayedActionTypes::SelectMaxResolution
                 );
             }
 
-            ("CCD_BINNING", ..) |
             ("CCD_INFO", "CCD_MAX_X", ..) |
             ("CCD_INFO", "CCD_MAX_Y", ..) => {
                 self.delayed_actions.schedule(

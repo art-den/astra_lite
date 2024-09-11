@@ -452,8 +452,10 @@ impl PropValue {
 
     pub fn to_string(&self) -> String {
         match self {
-            Self::Num(NumPropValue{value, ..}) =>
-               value.to_string(),
+            Self::Num(NumPropValue{value, format, ..}) => {
+                let num_format = NumFormat::new_from_indi_format(format);
+                num_format.value_to_string(*value)
+            }
             Self::Text(text) =>
                 text.to_string(),
             Self::Switch(value) =>
@@ -2265,15 +2267,15 @@ impl Connection {
         )
     }
 
-    pub fn camera_get_cooler_pwr_str(
+    pub fn camera_get_cooler_pwr_property(
         &self,
         device_name: &str
-    ) -> Result<String> {
+    ) -> Result<(Property, PropElement)> {
         let devices = self.devices.lock().unwrap();
         let (prop_name, prop_elem) = devices.existing_prop_name(device_name, PROP_CAM_COOLING_PWR)?;
         let property = devices.get_property(device_name, prop_name)?;
         let elem = property.get_elem(prop_elem).unwrap();
-        Ok(elem.value.to_string())
+        Ok((property.clone(), elem.clone()))
     }
 
     pub fn camera_is_cooler_pwr_property(
@@ -3891,7 +3893,8 @@ const PROP_CAM_TEMPERATURE: PropsNamePairs = &[
     ("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE"),
 ];
 const PROP_CAM_COOLING_PWR: PropsNamePairs = &[
-    ("COOLER_POWER", "COOLER_POWER"),
+    ("COOLER_POWER",     "COOLER_POWER"),
+    ("CCD_COOLER_POWER", "COOLER_POWER"),
 ];
 const PROP_CAM_GAIN: PropsNamePairs = &[
     ("CCD_GAIN",     "GAIN"),
