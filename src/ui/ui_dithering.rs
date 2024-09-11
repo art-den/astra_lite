@@ -236,20 +236,21 @@ impl DitheringUi {
         ui.set_prop_str("l_guide_mode.label", Some(guiding_info_cap));
         let can_guide_by_main_cam = guiding_mode == GuidingMode::MainCamera;
 
+        let guiding_enabled = ui.prop_bool("chb_guid_enabled.active");
+
         gtk_utils::enable_actions(&self.window, &[
             ("start_dither_calibr", !dither_calibr && can_change_mode && can_guide_by_main_cam),
             ("stop_dither_calibr",  dither_calibr),
         ]);
 
         ui.enable_widgets(false, &[
-            ("grd_dither",          dithering_sensitive),
-            ("l_hdr_guid_main_cam", can_guide_by_main_cam),
-            ("chb_guid_enabled",    can_guide_by_main_cam),
-            ("spb_guid_max_err",    can_guide_by_main_cam),
-            ("l_mnt_cal_exp",       can_guide_by_main_cam && !dither_calibr),
-            ("spb_mnt_cal_exp",     can_guide_by_main_cam && !dither_calibr),
-            ("l_mnt_cal_gain",      can_guide_by_main_cam && !dither_calibr),
-            ("spb_mnt_cal_gain",    can_guide_by_main_cam && !dither_calibr),
+            ("grd_dither",       dithering_sensitive),
+            ("chb_guid_enabled", can_guide_by_main_cam),
+            ("spb_guid_max_err", can_guide_by_main_cam && guiding_enabled),
+            ("l_mnt_cal_exp",    can_guide_by_main_cam && !dither_calibr),
+            ("spb_mnt_cal_exp",  can_guide_by_main_cam && !dither_calibr),
+            ("l_mnt_cal_gain",   can_guide_by_main_cam && !dither_calibr),
+            ("spb_mnt_cal_gain", can_guide_by_main_cam && !dither_calibr),
         ]);
     }
 

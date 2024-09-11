@@ -4733,7 +4733,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                     </child>
                                     <child>
                                       <object class="GtkCheckButton" id="chb_foc_temp">
-                                        <property name="label" translatable="yes">On temp. change (°C):</property>
+                                        <property name="label" translatable="yes">On T (°C) change:</property>
                                         <property name="visible">True</property>
                                         <property name="can-focus">True</property>
                                         <property name="receives-default">False</property>
@@ -5205,20 +5205,6 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       </packing>
                                     </child>
                                     <child>
-                                      <object class="GtkCheckButton" id="chb_guid_enabled">
-                                        <property name="label" translatable="yes">Correct mount position
-if error larger than (pixels)</property>
-                                        <property name="visible">True</property>
-                                        <property name="can-focus">True</property>
-                                        <property name="receives-default">False</property>
-                                        <property name="draw-indicator">True</property>
-                                      </object>
-                                      <packing>
-                                        <property name="left-attach">0</property>
-                                        <property name="top-attach">5</property>
-                                      </packing>
-                                    </child>
-                                    <child>
                                       <object class="GtkSpinButton" id="spb_guid_max_err">
                                         <property name="visible">True</property>
                                         <property name="can-focus">True</property>
@@ -5322,13 +5308,15 @@ if error larger than (pixels)</property>
                                         <property name="can-focus">False</property>
                                         <property name="spacing">5</property>
                                         <child>
-                                          <object class="GtkLabel" id="l_hdr_guid_main_cam">
-                                            <property name="visible">True</property>
-                                            <property name="can-focus">False</property>
+                                          <object class="GtkCheckButton" id="chb_guid_enabled">
                                             <property name="label" translatable="yes">Guiding by main camera</property>
-                                            <attributes>
-                                              <attribute name="weight" value="bold"/>
-                                            </attributes>
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">True</property>
+                                            <property name="receives-default">False</property>
+                                            <property name="draw-indicator">True</property>
+                                            <style>
+                                              <class name="bold"/>
+                                            </style>
                                           </object>
                                           <packing>
                                             <property name="expand">False</property>
@@ -5376,6 +5364,18 @@ if error larger than (pixels)</property>
                                       <packing>
                                         <property name="left-attach">1</property>
                                         <property name="top-attach">8</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkLabel">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="halign">start</property>
+                                        <property name="label" translatable="yes">Max stars drift (pixels):</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">0</property>
+                                        <property name="top-attach">5</property>
                                       </packing>
                                     </child>
                                   </object>

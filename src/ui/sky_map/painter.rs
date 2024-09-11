@@ -252,6 +252,9 @@ impl SkyMapPainter {
         for ra_key in 0..SkyZoneKey::RA_COUNT {
             for dec_key in 0..SkyZoneKey::DEC_COUNT {
                 let key = SkyZoneKey::from_indices(ra_key as u16, dec_key as u16);
+                if key == center_zone_key {
+                    continue;
+                }
                 let vis_test_obj = ZoneVisibilityTestObject {
                     coords: key.to_coords(),
                 };

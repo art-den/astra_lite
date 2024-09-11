@@ -882,6 +882,4 @@ impl SkyMap {
         }
         result
     }
-
-
 }
