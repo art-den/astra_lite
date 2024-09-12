@@ -22,13 +22,13 @@ https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-ast
 * Simple guiding by main camera
 * Dithering
 * Autofocus
+* Sky map
 * Manual mount control
 * PHD2 support for dithering
 
 ![](./docs/screenshot1.jpg)
 
 # Future plans
-* Sky map
 * INDI driver crash recovery
 * Plate solving
 * Sigma clipping for live staking (not sure this is possible with low memory usage)

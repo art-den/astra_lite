@@ -2166,7 +2166,7 @@
                                 <property name="can-focus">True</property>
                                 <property name="label-fill">True</property>
                                 <child>
-                                  <!-- n-columns=2 n-rows=3 -->
+                                  <!-- n-columns=2 n-rows=4 -->
                                   <object class="GtkGrid" id="grd_cam_ctrl">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
@@ -2239,6 +2239,23 @@
                                       </packing>
                                     </child>
                                     <child>
+                                      <object class="GtkCheckButton" id="chb_low_noise">
+                                        <property name="label" translatable="yes">Low noise mode</property>
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">True</property>
+                                        <property name="receives-default">False</property>
+                                        <property name="halign">start</property>
+                                        <property name="draw-indicator">True</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">1</property>
+                                        <property name="top-attach">3</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <placeholder/>
+                                    </child>
+                                    <child>
                                       <placeholder/>
                                     </child>
                                   </object>
@@ -2280,7 +2297,7 @@
                                 <property name="visible">True</property>
                                 <property name="can-focus">True</property>
                                 <child>
-                                  <!-- n-columns=2 n-rows=8 -->
+                                  <!-- n-columns=2 n-rows=7 -->
                                   <object class="GtkGrid" id="grd_shot_settings">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
@@ -2455,20 +2472,6 @@
                                       </packing>
                                     </child>
                                     <child>
-                                      <object class="GtkCheckButton" id="chb_low_noise">
-                                        <property name="label" translatable="yes">Low noise mode</property>
-                                        <property name="visible">True</property>
-                                        <property name="can-focus">True</property>
-                                        <property name="receives-default">False</property>
-                                        <property name="halign">start</property>
-                                        <property name="draw-indicator">True</property>
-                                      </object>
-                                      <packing>
-                                        <property name="left-attach">1</property>
-                                        <property name="top-attach">6</property>
-                                      </packing>
-                                    </child>
-                                    <child>
                                       <object class="GtkLabel" id="l_delay">
                                         <property name="visible">True</property>
                                         <property name="can-focus">False</property>
@@ -2479,7 +2482,7 @@
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
-                                        <property name="top-attach">7</property>
+                                        <property name="top-attach">6</property>
                                       </packing>
                                     </child>
                                     <child>
@@ -2493,11 +2496,8 @@
                                       </object>
                                       <packing>
                                         <property name="left-attach">1</property>
-                                        <property name="top-attach">7</property>
+                                        <property name="top-attach">6</property>
                                       </packing>
-                                    </child>
-                                    <child>
-                                      <placeholder/>
                                     </child>
                                   </object>
                                 </child>

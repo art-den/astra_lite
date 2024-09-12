@@ -364,6 +364,7 @@ impl CameraUi {
             self_.correct_widgets_props_impl(&options);
             _ = self_.update_resolution_list_impl(&new_device, &options);
             self_.fill_heater_items_list_impl(&options);
+            self_.show_total_raw_time_impl(&options);
 
             // Show some options for specific camera
 
@@ -1118,8 +1119,8 @@ impl CameraUi {
         ]);
 
         ui.enable_widgets(false, &[
-            ("l_camera_list",      waiting),
-            ("cb_camera_list",     waiting),
+            ("l_camera_list",      waiting && indi_connected),
+            ("cb_camera_list",     waiting && indi_connected),
             ("chb_fan",            !cooler_active),
             ("chb_cooler",         temp_supported && can_change_cam_opts),
             ("spb_temp",           cooler_active && temp_supported && can_change_cam_opts),
@@ -2138,8 +2139,7 @@ impl CameraUi {
         self.update_light_history_table();
     }
 
-    fn show_total_raw_time(&self) {
-        let options = self.options.read().unwrap();
+    fn show_total_raw_time_impl(&self, options: &Options) {
         let total_time = options.cam.frame.exposure() * options.raw_frames.frame_cnt as f64;
         let text = format!(
             "{:.1}s x {} = {}",
@@ -2149,6 +2149,11 @@ impl CameraUi {
         );
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         ui.set_prop_str("l_raw_time_info.label", Some(&text));
+    }
+
+    fn show_total_raw_time(&self) {
+        let options = self.options.read().unwrap();
+        self.show_total_raw_time_impl(&options);
     }
 
     fn handler_action_open_image(self: &Rc<Self>) {
