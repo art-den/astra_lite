@@ -94,6 +94,7 @@ impl Drop for MountUi {
 
 #[derive(Hash, Eq, PartialEq)]
 enum DelayedActionTypes {
+    FillDevicesList,
     CorrectWidgetsProps,
     FillMountSpdList,
 }
@@ -259,7 +260,7 @@ impl MountUi {
         match event {
             MainThreadEvent::Indi(indi::Event::NewDevice(event)) =>
                 if event.interface.contains(indi::DriverInterface::FOCUSER) {
-                    self.fill_devices_list();
+                    self.delayed_actions.schedule(DelayedActionTypes::FillDevicesList);
                 },
 
             MainThreadEvent::Indi(indi::Event::DeviceConnected(event)) =>
@@ -269,14 +270,13 @@ impl MountUi {
 
             MainThreadEvent::Indi(indi::Event::DeviceDelete(event)) => {
                 if event.drv_interface.contains(indi::DriverInterface::TELESCOPE) {
-                    self.fill_devices_list();
+                    self.delayed_actions.schedule(DelayedActionTypes::FillDevicesList);
                     self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetsProps);
                 }
             }
             MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) => {
                 if conn_state == indi::ConnState::Disconnected
                 || conn_state == indi::ConnState::Connected {
-                    self.fill_devices_list();
                     self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetsProps);
                 }
             }
@@ -460,6 +460,9 @@ impl MountUi {
             }
             DelayedActionTypes::FillMountSpdList => {
                 self.fill_mount_speed_list_widget();
+            }
+            DelayedActionTypes::FillDevicesList => {
+                self.fill_devices_list();
             }
         }
     }

@@ -2,7 +2,7 @@ use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
 use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
-use crate::{indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
+use crate::{core::consts::INDI_SET_PROP_TIMEOUT, indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
 use super::{gtk_utils::{self, DEFAULT_DPMM}, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, math::*}, ui_main::*, ui_skymap_options::SkymapOptionsDialog, utils::*};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
@@ -43,6 +43,7 @@ pub fn init_ui(
         search_result: RefCell::new(Vec::new()),
         clicked_crd:   RefCell::new(None),
         full_screen:   Cell::new(false),
+        goto_started:  Cell::new(false),
         self_:         RefCell::new(None),
         map_widget,
     });
@@ -215,6 +216,7 @@ struct MapUi {
     search_result: RefCell<Vec<SkymapObject>>,
     clicked_crd:   RefCell<Option<EqCoord>>,
     full_screen:   Cell<bool>,
+    goto_started:  Cell<bool>,
     self_:         RefCell<Option<Rc<MapUi>>>
 }
 
@@ -291,8 +293,8 @@ impl MapUi {
         gtk_utils::connect_action   (&self.window, self, "map_play",         Self::handler_btn_play_pressed);
         gtk_utils::connect_action   (&self.window, self, "map_now",          Self::handler_btn_now_pressed);
         gtk_utils::connect_action_rc(&self.window, self, "skymap_options",   Self::handler_action_options);
-        gtk_utils::connect_action   (&self.window, self, "sm_goto_selected", Self::handler_goto_selected);
-        gtk_utils::connect_action   (&self.window, self, "sm_goto_point",    Self::handler_goto_point);
+        gtk_utils::connect_action_rc(&self.window, self, "sm_goto_selected", Self::handler_goto_selected);
+        gtk_utils::connect_action_rc(&self.window, self, "sm_goto_point",    Self::handler_goto_point);
 
         let connect_spin_btn_evt = |widget_name: &str| {
             let spin_btn = self.builder.object::<gtk::SpinButton>(widget_name).unwrap();
@@ -962,8 +964,16 @@ impl MapUi {
             *self.clicked_crd.borrow_mut() = eq_coord;
             let indi_is_active = self.indi.state() == indi::ConnState::Connected;
             let selected_item = self.selected_item.borrow();
-            gtk_utils::enable_action(&self.window, "sm_goto_selected", indi_is_active && selected_item.is_some());
-            gtk_utils::enable_action(&self.window, "sm_goto_point", indi_is_active && eq_coord.is_some());
+            gtk_utils::enable_action(
+                &self.window,
+                "sm_goto_selected",
+                indi_is_active && selected_item.is_some() && !self.goto_started.get(),
+            );
+            gtk_utils::enable_action(
+                &self.window,
+                "sm_goto_point",
+                indi_is_active && eq_coord.is_some() && !self.goto_started.get(),
+            );
             let m_sm_goto_sel = self.builder.object::<gtk::Menu>("m_sm_widget").unwrap();
             m_sm_goto_sel.set_attach_widget(Some(self.map_widget.get_widget()));
             m_sm_goto_sel.popup_at_pointer(None);
@@ -973,29 +983,65 @@ impl MapUi {
         }
     }
 
-    fn goto_eq_coord(&self, crd: &EqCoord) {
-        let options = self.options.read().unwrap();
-        let mount_device = &options.mount.device;
-        gtk_utils::exec_and_show_error(&self.window, || {
-            self.indi.mount_set_tracking(
-                &mount_device,
-                true,
-                false,
-                Some(1000)
-            )?;
+    fn goto_eq_coord(self: &Rc<Self>, crd: &EqCoord) {
+        self.goto_started.set(true);
 
-            self.indi.mount_set_eq_coord(
-                &mount_device,
-                radian_to_hour(crd.ra),
-                radian_to_degree(crd.dec),
-                true,
-                None
-            )?;
-            Ok(())
+        let (main_thread_sender, main_thread_receiver) =
+            async_channel::unbounded::<anyhow::Result<()>>();
+        let indi = Arc::clone(&self.indi);
+        let options = Arc::clone(&self.options);
+        let crd = crd.clone();
+
+        glib::spawn_future_local(clone!(@weak self as self_ => async move {
+            while let Ok(event) = main_thread_receiver.recv().await {
+                self_.goto_started.set(false);
+                if let Err(err) = event {
+                    gtk_utils::show_error_message(
+                        &self_.window,
+                        "Error during executing command for mount",
+                        &err.to_string()
+                    )
+                }
+            }
+            println!("Exited!");
+        }));
+
+        std::thread::spawn(move || {
+            let exec = || -> anyhow::Result<()> {
+                let options = options.read().unwrap();
+                let mount_device = &options.mount.device;
+                if indi.mount_get_parked(&mount_device)? {
+                    indi.mount_set_parked(
+                        &mount_device,
+                        false,
+                        true,
+                        Some(5000)
+                    )?;
+                }
+                if indi.mount_get_parked(&mount_device)? {
+                    anyhow::bail!("Mount is still parked! Can't goto specified coordinate");
+                }
+                indi.set_after_coord_set_action(
+                    &mount_device,
+                    indi::AfterCoordSetAction::Track,
+                    true,
+                    INDI_SET_PROP_TIMEOUT
+                )?;
+                indi.mount_set_eq_coord(
+                    &mount_device,
+                    radian_to_hour(crd.ra),
+                    radian_to_degree(crd.dec),
+                    true,
+                    None
+                )?;
+                Ok(())
+            };
+            let res = exec();
+            main_thread_sender.send_blocking(res).unwrap();
         });
     }
 
-    fn handler_goto_selected(&self) {
+    fn handler_goto_selected(self: &Rc<Self>) {
         let selected_item = self.selected_item.borrow();
         let Some(selected_item) = &*selected_item else { return; };
         let j2000 = j2000_time();
@@ -1006,7 +1052,7 @@ impl MapUi {
         self.goto_eq_coord(&now_crd);
     }
 
-    fn handler_goto_point(&self) {
+    fn handler_goto_point(self: &Rc<Self>) {
         let clicked_crd = self.clicked_crd.borrow();
         let Some(clicked_crd) = &*clicked_crd else { return; };
         self.goto_eq_coord(clicked_crd);

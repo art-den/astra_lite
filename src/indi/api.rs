@@ -1157,6 +1157,12 @@ pub enum BinningMode {
     Avg,
 }
 
+pub enum AfterCoordSetAction {
+    Track,
+    Slew,
+    Sync,
+}
+
 pub struct Connection {
     data:          Arc<Mutex<Option<ActiveConnData>>>,
     state:         Arc<Mutex<ConnState>>,
@@ -2998,11 +3004,33 @@ impl Connection {
         Ok((ra, dec))
     }
 
+    pub fn set_after_coord_set_action(
+        &self,
+        device_name:  &str,
+        after_action: AfterCoordSetAction,
+        force_set:    bool,
+        timeout_ms:   Option<u64>,
+    ) -> Result<()> {
+        let after_action_elem = match after_action {
+            AfterCoordSetAction::Track => "TRACK",
+            AfterCoordSetAction::Slew => "SLEW",
+            AfterCoordSetAction::Sync => "SYNC",
+        };
+
+        self.command_set_switch_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            "ON_COORD_SET",
+            &[(after_action_elem, true)]
+        )
+    }
+
     pub fn mount_set_eq_coord(
         &self,
         device_name: &str,
-        ra: f64,
-        dec: f64,
+        ra:          f64,
+        dec:         f64,
         force_set:   bool,
         timeout_ms:  Option<u64>,
     ) -> Result<()> {

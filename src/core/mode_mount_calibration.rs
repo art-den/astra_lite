@@ -224,11 +224,19 @@ impl MountCalibrMode {
     }
 
     fn restore_orig_coords(&self) -> anyhow::Result<()> {
+        self.indi.set_after_coord_set_action(
+            &self.mount_device,
+            indi::AfterCoordSetAction::Track,
+            true,
+            INDI_SET_PROP_TIMEOUT
+        )?;
+
         self.indi.mount_set_eq_coord(
             &self.mount_device,
             self.start_ra,
             self.start_dec,
-            true, None
+            true,
+            None
         )?;
         Ok(())
     }
@@ -400,6 +408,14 @@ impl Mode for MountCalibrMode {
                         f64::abs(self.cur_ra-self.start_ra) < 0.001
                         && f64::abs(self.cur_dec-self.start_dec) < 0.001;
                     if state_is_ok || coord_is_near {
+                        // Make sure mount is in tracking state
+                        self.indi.mount_set_tracking(
+                            &self.mount_device,
+                            true,
+                            true,
+                            INDI_SET_PROP_TIMEOUT
+                        )?;
+
                         // TODO: add delay before got next mode
                         result = NotifyResult::Finished {
                             next_mode: self.next_mode.take()
