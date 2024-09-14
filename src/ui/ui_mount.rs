@@ -259,12 +259,12 @@ impl MountUi {
     fn process_event_in_main_thread(&self, event: MainThreadEvent) {
         match event {
             MainThreadEvent::Indi(indi::Event::NewDevice(event)) =>
-                if event.interface.contains(indi::DriverInterface::FOCUSER) {
+                if event.interface.contains(indi::DriverInterface::TELESCOPE) {
                     self.delayed_actions.schedule(DelayedActionTypes::FillDevicesList);
                 },
 
             MainThreadEvent::Indi(indi::Event::DeviceConnected(event)) =>
-                if event.interface.contains(indi::DriverInterface::FOCUSER) {
+                if event.interface.contains(indi::DriverInterface::TELESCOPE) {
                     self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetsProps);
                 },
 
