@@ -178,9 +178,9 @@ impl SkymapWidget {
     fn start_map_drag(&self, event: &gdk::EventButton) {
         let Some((x, y)) = event.coords() else { return; };
         let vp = self.view_point.borrow();
-        let si = ScreenInfo::new(&self.draw_area);
+        let scr = Screen::new(&self.draw_area);
 
-        let sphere_pt = screen_to_sphere(&Point2D {x, y}, &si, vp.mag_factor);
+        let sphere_pt = scr.screen_to_sphere(&Point2D {x, y}, vp.mag_factor);
         let Some(sphere_pt) = sphere_pt else { return; };
         let cvt = SphereToScreenCvt::new(&HorizCoord { alt: 0.0, az: 0.0 });
         let pt = cvt.remove_viewpoint(&sphere_pt);
@@ -194,9 +194,9 @@ impl SkymapWidget {
 
     pub fn widget_crd_to_eq(&self, x: f64, y: f64) -> Option<EqCoord> {
         let vp = self.view_point.borrow();
-        let si = ScreenInfo::new(&self.draw_area);
+        let scr = Screen::new(&self.draw_area);
 
-        let sphere_pt = screen_to_sphere(&Point2D {x, y}, &si, vp.mag_factor);
+        let sphere_pt = scr.screen_to_sphere(&Point2D {x, y}, vp.mag_factor);
         let Some(sphere_pt) = sphere_pt else { return None; };
 
         let observer = self.observer.borrow();
@@ -263,10 +263,10 @@ impl SkymapWidget {
         let Some(mpress) = &*self.mpress.borrow() else {
             return glib::Propagation::Proceed;
         };
-        let si = ScreenInfo::new(&self.draw_area);
+        let scr = Screen::new(&self.draw_area);
 
         let mut vp = self.view_point.borrow_mut();
-        let sphere_pt = screen_to_sphere(&Point2D {x, y}, &si, vp.mag_factor);
+        let sphere_pt = scr.screen_to_sphere(&Point2D {x, y}, vp.mag_factor);
         let Some(sphere_pt) = sphere_pt else { return glib::Propagation::Stop; };
         let cvt = SphereToScreenCvt::new(&HorizCoord { alt: 0.0, az: 0.0 });
         let pt = cvt.remove_viewpoint(&sphere_pt);
@@ -287,7 +287,7 @@ impl SkymapWidget {
         let observer = self.observer.borrow();
         let time = self.time.borrow();
         let mut painter = SkyMapPainter::new();
-        let screen = ScreenInfo::new(da);
+        let scr = Screen::new(da);
         let selection = self.selected_obj.borrow();
         let telescope_pos = self.telescope_pos.borrow();
         let camera_frame = self.camera_frame.borrow();
@@ -295,12 +295,12 @@ impl SkymapWidget {
         _ = painter.paint(
             &skymap, &selection, &telescope_pos, &camera_frame,
             &observer, &time,
-            &config, &vp, &screen, ctx
+            &config, &vp, &scr, ctx
         );
         let paint_time = timer.elapsed().as_secs_f64();
         let fps = if paint_time != 0.0 { 1.0/paint_time } else { f64::NAN };
         let fps_str = format!("x{:.1}, {:.1} FPS", vp.mag_factor, fps);
-        ctx.set_font_size(screen.dpmm_y * 3.0);
+        ctx.set_font_size(scr.dpmm_y() * 3.0);
         let te = ctx.text_extents(&fps_str).unwrap();
         ctx.move_to(1.0, 1.0 + te.height());
         ctx.set_source_rgba(1.0, 1.0, 1.0, 0.45);

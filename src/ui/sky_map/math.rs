@@ -235,39 +235,6 @@ impl EqToSphereCvt {
     }
 }
 
-#[derive(Default)]
-pub struct SphereToScreenCvt {
-    vp_rot_y: RotMatrix,
-    vp_rot_x: RotMatrix,
-    n_vp_rot_y: RotMatrix,
-    n_vp_rot_x: RotMatrix,
-}
-
-impl SphereToScreenCvt {
-    pub fn new(vp_crd: &HorizCoord) -> Self {
-        let vp_rot_y   = RotMatrix::new(-vp_crd.alt);
-        let vp_rot_x   = RotMatrix::new(-vp_crd.az);
-        let n_vp_rot_y = RotMatrix::new(vp_crd.alt);
-        let n_vp_rot_x = RotMatrix::new(vp_crd.az);
-
-        Self { vp_rot_y, vp_rot_x, n_vp_rot_y, n_vp_rot_x }
-    }
-
-    pub fn apply_viewpoint(&self, pt: &Point3D) -> Point3D {
-        let mut result = pt.clone();
-        result.rotate_over_x(&self.vp_rot_x);
-        result.rotate_over_y(&self.vp_rot_y);
-        result
-    }
-
-    pub fn remove_viewpoint(&self, pt: &Point3D) -> Point3D {
-        let mut pt = pt.clone();
-        pt.rotate_over_y(&self.n_vp_rot_y);
-        pt.rotate_over_x(&self.n_vp_rot_x);
-        pt
-    }
-}
-
 pub fn radian_to_degree(radian: f64) -> f64 {
     180.0 * radian / PI
 }

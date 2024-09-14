@@ -1003,7 +1003,6 @@ impl MapUi {
                     )
                 }
             }
-            println!("Exited!");
         }));
 
         std::thread::spawn(move || {

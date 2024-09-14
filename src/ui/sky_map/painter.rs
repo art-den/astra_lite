@@ -157,7 +157,7 @@ impl SkyMapPainter {
         utc_time:   &NaiveDateTime,
         config:     &PaintConfig,
         view_point: &ViewPoint,
-        screen:     &ScreenInfo,
+        screen:     &Screen,
         cairo:      &gtk::cairo::Context,
     ) -> anyhow::Result<()> {
         let eq_sphere_cvt = EqToSphereCvt::new(
@@ -268,14 +268,14 @@ impl SkyMapPainter {
 
     fn calc_pixels_per_radian(
         &self,
-        screen:     &ScreenInfo,
+        screen:     &Screen,
         mag_factor: f64,
     ) -> f64 {
         const ANGLE_DIFF: f64 = 2.0 * PI / (360.0 * 60.0);
         let mut pt = Point3D { x: 0.0, y: 0.0, z: 1.0 };
-        let crd1 = sphere_to_screen(&pt, screen, mag_factor);
+        let crd1 = screen.sphere_to_screen(&pt, mag_factor);
         pt.rotate_over_x(&RotMatrix::new(ANGLE_DIFF));
-        let crd2 = sphere_to_screen(&pt, screen, mag_factor);
+        let crd2 = screen.sphere_to_screen(&pt, mag_factor);
         Point2D::distance(&crd1, &crd2) / ANGLE_DIFF
     }
 
@@ -285,7 +285,7 @@ impl SkyMapPainter {
         ctx:        &PaintCtx,
         mode:       PainterMode,
     ) -> anyhow::Result<()> {
-        ctx.cairo.set_font_size(ctx.config.names_font_size as f64 * ctx.screen.dpmm_y);
+        ctx.cairo.set_font_size(ctx.config.names_font_size as f64 * ctx.screen.dpmm_y());
         for dso_object in sky_map.objects() {
             let Some(mag) = dso_object.any_magnitude() else {
                 continue;
@@ -338,7 +338,7 @@ impl SkyMapPainter {
         let maj_axis = arcmin_to_radian(maj_axis as f64);
         let min_axis = arcmin_to_radian(min_axis as f64);
 
-        let min_axis_value = 2.0 * ctx.screen.dpmm_x / ctx.pxls_per_rad;
+        let min_axis_value = 2.0 * ctx.screen.dpmm_x() / ctx.pxls_per_rad;
         let maj_axis = maj_axis.max(min_axis_value);
         let min_axis = min_axis.max(min_axis_value);
 
@@ -365,7 +365,7 @@ impl SkyMapPainter {
         }
         let mut line_width = 0.01 * f64::max(maj_axis, min_axis) * ctx.pxls_per_rad;
         line_width = line_width.max(1.0);
-        line_width = line_width.min(5.0 * ctx.screen.dpmm_x);
+        line_width = line_width.min(5.0 * ctx.screen.dpmm_x());
 
         self.dso_ellipse.line_width = line_width;
         self.dso_ellipse.dso_type = dso_object.obj_type;
@@ -375,10 +375,10 @@ impl SkyMapPainter {
     }
 
     fn get_star_painter_params(&self, ctx: &PaintCtx) -> StarPainterParams {
-        let max_size = 7.0 * ctx.screen.dpmm_x;
-        let slow_grow_size = 3.0 * ctx.screen.dpmm_x;
-        let light_size_k = 0.3 * ctx.screen.dpmm_x;
-        let min_bright_size = 1.5 * ctx.screen.dpmm_x;
+        let max_size = 7.0 * ctx.screen.dpmm_x();
+        let slow_grow_size = 3.0 * ctx.screen.dpmm_x();
+        let light_size_k = 0.3 * ctx.screen.dpmm_x();
+        let min_bright_size = 1.5 * ctx.screen.dpmm_x();
         let max_mag_value = calc_max_star_magnitude_for_painting(ctx.view_point.mag_factor);
 
         StarPainterParams {
@@ -418,7 +418,7 @@ impl SkyMapPainter {
         mode:    PainterMode,
     ) -> anyhow::Result<()> {
         ctx.cairo.set_antialias(ctx.config.get_antialias());
-        ctx.cairo.set_font_size(ctx.config.names_font_size as f64 * ctx.screen.dpmm_y);
+        ctx.cairo.set_font_size(ctx.config.names_font_size as f64 * ctx.screen.dpmm_y());
 
         let max_mag_value = calc_max_star_magnitude_for_painting(ctx.view_point.mag_factor);
         let max_mag = ObjMagnitude::new(max_mag_value);
@@ -469,7 +469,7 @@ impl SkyMapPainter {
         }
         else
         {
-            ctx.cairo.set_font_size(ctx.config.grid_font_size as f64 * ctx.screen.dpmm_y);
+            ctx.cairo.set_font_size(ctx.config.grid_font_size as f64 * ctx.screen.dpmm_y());
             let c = &ctx.config.eq_grid.text_color;
             ctx.cairo.set_source_rgba(c.r, c.g, c.b, c.a);
         }
@@ -526,7 +526,7 @@ impl SkyMapPainter {
             WorldSide { az: 270.0, text: "W",  alpha: 1.0 },
             WorldSide { az: 315.0, text: "NW", alpha: 0.5 },
         ];
-        ctx.cairo.set_font_size(ctx.config.sides_font_size as f64 * ctx.screen.dpmm_y);
+        ctx.cairo.set_font_size(ctx.config.sides_font_size as f64 * ctx.screen.dpmm_y());
         for world_side in world_sides {
             self.item_painter.paint(&world_side, ctx, false)?;
         }
@@ -562,8 +562,8 @@ impl SkyMapPainter {
         ctx:       &PaintCtx,
     ) -> anyhow::Result<()> {
         let Some(selection) = selection else { return Ok(()); };
-        let size = 12.0 * ctx.screen.dpmm_x;
-        let thickness = 1.0 * ctx.screen.dpmm_x;
+        let size = 12.0 * ctx.screen.dpmm_x();
+        let thickness = 1.0 * ctx.screen.dpmm_x();
         let crd = selection.crd();
         let selection_painter = SelectionPainter { crd, size, thickness };
         self.item_painter.paint(&selection_painter, ctx, true)?;
@@ -635,7 +635,7 @@ enum PainterCrd {
 struct PaintCtx<'a> {
     cairo:          &'a gtk::cairo::Context,
     config:         &'a PaintConfig,
-    screen:         &'a ScreenInfo,
+    screen:         &'a Screen,
     view_point:     &'a ViewPoint,
     pxls_per_rad:   f64,
     epoch_cvt:      &'a EpochCvt,
@@ -705,14 +705,16 @@ impl ItemPainter {
             return Ok(false);
         }
 
+        let scr_tolerance = ctx.screen.tolerance();
+
         // 3d coordinates -> screen coordinates
         self.points_screen.clear();
         obj_is_visible = false;
         for pt in &self.points_3d {
-            let pt_s = sphere_to_screen(pt, ctx.screen, ctx.view_point.mag_factor);
+            let pt_s = ctx.screen.sphere_to_screen(pt, ctx.view_point.mag_factor);
             if !obj_is_visible
-            && ctx.screen.tolerance.left < pt_s.x && pt_s.x < ctx.screen.tolerance.right
-            && ctx.screen.tolerance.top < pt_s.y && pt_s.y < ctx.screen.tolerance.bottom {
+            && scr_tolerance.left < pt_s.x && pt_s.x < scr_tolerance.right
+            && scr_tolerance.top < pt_s.y && pt_s.y < scr_tolerance.bottom {
                 obj_is_visible = true;
             }
             self.points_screen.push(pt_s);
@@ -720,11 +722,10 @@ impl ItemPainter {
 
         // check if 2d lines is crossing by screen boundaries
         if !obj_is_visible && self.points_screen.len() >= 2 {
-            let rect = &ctx.screen.tolerance;
-            let top_line = rect.top_line();
-            let bottom_line = rect.bottom_line();
-            let left_line = rect.left_line();
-            let right_line = rect.right_line();
+            let top_line = scr_tolerance.top_line();
+            let bottom_line = scr_tolerance.bottom_line();
+            let left_line = scr_tolerance.left_line();
+            let right_line = scr_tolerance.right_line();
             obj_is_visible =
                 self.points_screen
                     .iter()
@@ -998,7 +999,7 @@ impl<'a> StarPainter<'a> {
                 diam * light_with_gamma.min(1.0) as f64 * b,
             );
             ctx.cairo.rectangle(-0.5, -0.5, 1.0, 1.0);
-        } else if diam <= ctx.screen.dpmm_x {
+        } else if diam <= ctx.screen.dpmm_x() {
             ctx.cairo.set_source_rgb(
                 light_with_gamma as f64 * r,
                 light_with_gamma as f64 * g,
@@ -1144,10 +1145,11 @@ impl Item for EqGridItem {
                 }
             }
         } else {
-            let screen_left = ctx.screen.rect.left_line();
-            let screen_right = ctx.screen.rect.right_line();
-            let screen_top = ctx.screen.rect.top_line();
-            let screen_bottom = ctx.screen.rect.bottom_line();
+            let scr_rect = ctx.screen.rect();
+            let screen_left = scr_rect.left_line();
+            let screen_right = scr_rect.right_line();
+            let screen_top = scr_rect.top_line();
+            let screen_bottom = scr_rect.bottom_line();
             for (pt1, pt2) in points.iter().tuple_windows() {
                 let line = Line2D { pt1: pt1.clone(), pt2: pt2.clone() };
                 let paint_text = |mut x, y, adjust_right| -> anyhow::Result<()> {
@@ -1164,13 +1166,13 @@ impl Item for EqGridItem {
                     Ok(())
                 };
                 if let Some(is) = Line2D::intersection(&line, &screen_top) {
-                    paint_text(is.x, is.y + 2.0 * ctx.screen.dpmm_y, false)?;
+                    paint_text(is.x, is.y + 2.0 * ctx.screen.dpmm_y(), false)?;
                 } else if let Some(is) = Line2D::intersection(&line, &screen_bottom) {
-                    paint_text(is.x, is.y - 2.0 * ctx.screen.dpmm_y, false)?;
+                    paint_text(is.x, is.y - 2.0 * ctx.screen.dpmm_y(), false)?;
                 } else if let Some(is) = Line2D::intersection(&line, &screen_left) {
-                    paint_text(is.x + 1.0 * ctx.screen.dpmm_y, is.y, false)?;
+                    paint_text(is.x + 1.0 * ctx.screen.dpmm_y(), is.y, false)?;
                 } else if let Some(is) = Line2D::intersection(&line, &screen_right) {
-                    paint_text(is.x - 1.0 * ctx.screen.dpmm_y, is.y, true)?;
+                    paint_text(is.x - 1.0 * ctx.screen.dpmm_y(), is.y, true)?;
                 }
             }
         }
@@ -1210,17 +1212,19 @@ impl<'a> Item for Ground<'a> {
             let mut min_y = points.iter().map(|p| p.y).min_by(f64::total_cmp).unwrap_or_default() - LAYER;
             let mut max_x = points.iter().map(|p| p.x).max_by(f64::total_cmp).unwrap_or_default() + LAYER;
             let mut max_y = points.iter().map(|p| p.y).max_by(f64::total_cmp).unwrap_or_default() + LAYER;
-            if min_x > ctx.screen.rect.left {
-                min_x = ctx.screen.rect.left;
+
+            let scr_rect = ctx.screen.rect();
+            if min_x > scr_rect.left {
+                min_x = scr_rect.left;
             }
-            if min_y > ctx.screen.rect.top {
-                min_y = ctx.screen.rect.top;
+            if min_y > scr_rect.top {
+                min_y = scr_rect.top;
             }
-            if max_x < ctx.screen.rect.right {
-                max_x = ctx.screen.rect.right;
+            if max_x < scr_rect.right {
+                max_x = scr_rect.right;
             }
-            if max_y < ctx.screen.rect.bottom {
-                max_y = ctx.screen.rect.bottom;
+            if max_y < scr_rect.bottom {
+                max_y = scr_rect.bottom;
             }
             ctx.cairo.rectangle(min_x, min_y, max_x-min_x, max_y-min_y);
             ctx.cairo.close_path();
@@ -1362,7 +1366,7 @@ impl Item for TelescopePosPainter {
 
     fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         let pt = &points[0];
-        let line_size = 40.0 * ctx.screen.dpmm_x;
+        let line_size = 40.0 * ctx.screen.dpmm_x();
         ctx.cairo.set_line_width(1.0);
         ctx.cairo.set_dash(&[], 0.0);
         ctx.cairo.set_antialias(ctx.config.get_antialias());
@@ -1445,7 +1449,7 @@ struct CameraFramePainter<'a> {
         let dy = pt2.y - pt1.y;
         let len = f64::sqrt(dx * dx + dy * dy);
 
-        ctx.cairo.set_font_size(4.0 * ctx.screen.dpmm_y);
+        ctx.cairo.set_font_size(4.0 * ctx.screen.dpmm_y());
         let te = ctx.cairo.text_extents(&self.name)?;
         if te.width() <= len {
             let angle = f64::atan2(dy, dx);

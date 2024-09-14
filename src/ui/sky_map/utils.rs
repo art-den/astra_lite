@@ -2,17 +2,17 @@ use gtk::prelude::*;
 use crate::{ui::gtk_utils::{self, DEFAULT_DPMM}, utils::math::linear_solve2};
 use super::math::*;
 
-pub struct ScreenInfo {
-    pub rect:      Rect,
-    pub tolerance: Rect,
-    pub main_size: f64,
-    pub center_x:  f64,
-    pub center_y:  f64,
-    pub dpmm_x:    f64,
-    pub dpmm_y:    f64,
+pub struct Screen {
+    rect:      Rect,
+    tolerance: Rect,
+    main_size: f64,
+    center_x:  f64,
+    center_y:  f64,
+    dpmm_x:    f64,
+    dpmm_y:    f64,
 }
 
-impl ScreenInfo {
+impl Screen {
     pub fn new(da: &gtk::DrawingArea) -> Self {
         let da_size = da.allocation();
         let width = da_size.width() as f64;
@@ -44,45 +44,61 @@ impl ScreenInfo {
             dpmm_y,
         }
     }
-}
 
-
-pub fn sphere_to_screen(
-    pt:         &Point3D,
-    screen:     &ScreenInfo,
-    mag_factor: f64
-) -> Point2D {
-    let pt = Point3D { x: pt.y, y: pt.x, z: pt.z };
-    let mul = mag_factor * screen.main_size / (pt.z + 1.0);
-    let x = mul * pt.x + screen.center_x;
-    let y = -mul * pt.y + screen.center_y;
-    Point2D { x, y }
-}
-
-pub fn screen_to_sphere(
-    pt:         &Point2D,
-    screen:     &ScreenInfo,
-    mag_factor: f64
-) -> Option<Point3D> {
-    let div = mag_factor * screen.main_size;
-    let x = (pt.x - screen.center_x) / div;
-    let y = (-pt.y + screen.center_y) / div;
-    let (cross_crd1, cross_crd2) = calc_sphere_and_line_cross(
-        x, x,
-        y, y,
-        1.0, 0.0
-    )?;
-    let crd = if cross_crd1.z > cross_crd2.z {
-        cross_crd1
-    } else {
-        cross_crd2
-    };
-    if crd.z < 0.0 {
-        return None;
+    pub fn rect(&self) -> &Rect {
+        &self.rect
     }
 
-    Some(Point3D {x: crd.y, y: crd.x, z: crd.z})
+    pub fn tolerance(&self) -> &Rect {
+        &self.tolerance
+    }
+
+    pub fn dpmm_x(&self) -> f64 {
+        self.dpmm_x
+    }
+
+    pub fn dpmm_y(&self) -> f64 {
+        self.dpmm_y
+    }
+
+    pub fn sphere_to_screen(
+        &self,
+        pt:         &Point3D,
+        mag_factor: f64
+    ) -> Point2D {
+        let pt = Point3D { x: pt.y, y: pt.x, z: pt.z };
+        let mul = mag_factor * self.main_size / (pt.z + 1.0);
+        let x = mul * pt.x + self.center_x;
+        let y = -mul * pt.y + self.center_y;
+        Point2D { x, y }
+    }
+
+    pub fn screen_to_sphere(
+        &self,
+        pt:         &Point2D,
+        mag_factor: f64
+    ) -> Option<Point3D> {
+        let div = mag_factor * self.main_size;
+        let x = (pt.x - self.center_x) / div;
+        let y = (-pt.y + self.center_y) / div;
+        let (cross_crd1, cross_crd2) = calc_sphere_and_line_cross(
+            x, x,
+            y, y,
+            1.0, 0.0
+        )?;
+        let crd = if cross_crd1.z > cross_crd2.z {
+            cross_crd1
+        } else {
+            cross_crd2
+        };
+        if crd.z < 0.0 {
+            return None;
+        }
+
+        Some(Point3D {x: crd.y, y: crd.x, z: crd.z})
+    }
 }
+
 
 fn calc_sphere_and_line_cross(
     ax: f64, bx: f64,
@@ -109,6 +125,39 @@ fn calc_sphere_and_line_cross(
         z: az * t2 + bz,
     };
     Some((crd1, crd2))
+}
+
+#[derive(Default)]
+pub struct SphereToScreenCvt {
+    vp_rot_y: RotMatrix,
+    vp_rot_x: RotMatrix,
+    n_vp_rot_y: RotMatrix,
+    n_vp_rot_x: RotMatrix,
+}
+
+impl SphereToScreenCvt {
+    pub fn new(vp_crd: &HorizCoord) -> Self {
+        let vp_rot_y   = RotMatrix::new(-vp_crd.alt);
+        let vp_rot_x   = RotMatrix::new(-vp_crd.az);
+        let n_vp_rot_y = RotMatrix::new(vp_crd.alt);
+        let n_vp_rot_x = RotMatrix::new(vp_crd.az);
+
+        Self { vp_rot_y, vp_rot_x, n_vp_rot_y, n_vp_rot_x }
+    }
+
+    pub fn apply_viewpoint(&self, pt: &Point3D) -> Point3D {
+        let mut result = pt.clone();
+        result.rotate_over_x(&self.vp_rot_x);
+        result.rotate_over_y(&self.vp_rot_y);
+        result
+    }
+
+    pub fn remove_viewpoint(&self, pt: &Point3D) -> Point3D {
+        let mut pt = pt.clone();
+        pt.rotate_over_y(&self.n_vp_rot_y);
+        pt.rotate_over_x(&self.n_vp_rot_x);
+        pt
+    }
 }
 
 pub struct Rect {

@@ -234,7 +234,7 @@ impl HardwareUi {
         let status = self.indi_status.borrow();
         let (conn_en, disconn_en) = match *status {
             indi::ConnState::Disconnected  => (true,  false),
-            indi::ConnState::Connecting    => (false, false),
+            indi::ConnState::Connecting    => (false, true),
             indi::ConnState::Disconnecting => (false, false),
             indi::ConnState::Connected     => (false, true),
             indi::ConnState::Error(_)      => (true,  false),
@@ -698,10 +698,11 @@ impl HardwareUi {
             ("guid.",  &options.indi.guid_cam),
             ("focus.", &options.indi.focuser),
         ].iter()
-            .filter_map(|(str, v)| v.as_deref().map(
-                |v| format!("{}: {}", str, v)
-            ))
+            .filter_map(|(str, v)| v.as_deref().map(|v| (str, v))) // skip None at v
+            .filter(|(_, v)| !v.is_empty()) // skip empty driver name
+            .map(|(str, v)| format!("{}: {}", str, v))
             .join(", ");
+
         drop(options);
         self.main_ui.set_dev_list_and_conn_status(
             dev_list,
