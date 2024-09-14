@@ -293,10 +293,11 @@ impl FocuserUi {
         let device_enabled = self.indi.is_device_enabled(&device).unwrap_or(false);
 
         ui.enable_widgets(false, &[
+            ("grd_foc",       device_enabled),
             ("spb_foc_temp",  ui.prop_bool("chb_foc_temp.active")),
             ("cb_foc_fwhm",   ui.prop_bool("chb_foc_fwhm.active")),
             ("cb_foc_period", ui.prop_bool("chb_foc_period.active")),
-            ("spb_foc_val",   device_enabled && !focusing),
+            ("spb_foc_val",   !focusing),
             ("cb_foc_list",   !focusing),
         ]);
 
