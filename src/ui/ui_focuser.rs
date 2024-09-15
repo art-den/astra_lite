@@ -38,7 +38,7 @@ pub fn init_ui(
         indi:            Arc::clone(indi),
         ui_options:      RefCell::new(ui_options),
         closed:          Cell::new(false),
-        manual_change:   Cell::new(false),
+        excl:            ExclusiveCaller::new(),
         indi_evt_conn:   RefCell::new(None),
         delayed_actions: DelayedActions::new(500),
         focusing_data:   RefCell::new(None),
@@ -79,7 +79,7 @@ struct FocuserUi {
     indi:            Arc<indi::Connection>,
     ui_options:      RefCell<UiOptions>,
     closed:          Cell<bool>,
-    manual_change:   Cell<bool>,
+    excl:            ExclusiveCaller,
     indi_evt_conn:   RefCell<Option<indi::Subscription>>,
     delayed_actions: DelayedActions<DelayedActionTypes>,
     focusing_data:   RefCell<Option<FocusingResultData>>,
@@ -275,6 +275,61 @@ impl FocuserUi {
         spb_foc_gain.set_increments(100.0, 1000.0);
     }
 
+    fn connect_widgets_events(self: &Rc<Self>) {
+        gtk_utils::connect_action(&self.window, self, "manual_focus",      Self::handler_action_manual_focus);
+        gtk_utils::connect_action(&self.window, self, "stop_manual_focus", Self::handler_action_stop_manual_focus);
+
+        let bldr = &self.builder;
+        let spb_foc_val = bldr.object::<gtk::SpinButton>("spb_foc_val").unwrap();
+        spb_foc_val.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            self_.excl.exec(|| {
+                let options = self_.options.read().unwrap();
+                if options.focuser.device.is_empty() { return; }
+
+                gtk_utils::exec_and_show_error(&self_.window, || {
+                    self_.indi.focuser_set_abs_value(&options.focuser.device, sb.value(), true, None)?;
+                    Ok(())
+                });
+            });
+        }));
+
+        let cb = self.builder.object::<gtk::ComboBoxText>("cb_foc_list").unwrap();
+        cb.connect_active_notify(clone!(@weak self as self_ => move |cb| {
+            let Some(cur_id) = cb.active_id() else { return; };
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            if options.focuser.device == cur_id.as_str() { return; }
+            options.focuser.device = cur_id.to_string();
+            drop(options);
+            self_.delayed_actions.schedule(DelayedActionTypes::UpdateFocPosNew);
+            self_.delayed_actions.schedule(DelayedActionTypes::ShowCurFocuserValue);
+            self_.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetProps);
+        }));
+
+        let chb_foc_temp = bldr.object::<gtk::CheckButton>("chb_foc_temp").unwrap();
+        chb_foc_temp.connect_active_notify(clone!(@weak self as self_ => move |_| {
+            self_.correct_widgets_props();
+        }));
+
+        let chb_foc_fwhm = bldr.object::<gtk::CheckButton>("chb_foc_fwhm").unwrap();
+        chb_foc_fwhm.connect_active_notify(clone!(@weak self as self_ => move |_| {
+            self_.correct_widgets_props();
+        }));
+
+        let chb_foc_period = bldr.object::<gtk::CheckButton>("chb_foc_period").unwrap();
+        chb_foc_period.connect_active_notify(clone!(@weak self as self_ => move |_| {
+            self_.correct_widgets_props();
+        }));
+
+        let da_focusing = self.builder.object::<gtk::DrawingArea>("da_focusing").unwrap();
+        da_focusing.connect_draw(
+            clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
+            move |da, ctx| {
+                _ = self_.draw_focusing_samples(da, ctx);
+                glib::Propagation::Proceed
+            })
+        );
+    }
+
     fn correct_widgets_props(&self) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let mode_data = self.core.mode_data();
@@ -365,15 +420,17 @@ impl FocuserUi {
             let Ok(value) = self.indi.focuser_get_abs_value(&foc_device) else {
                 return;
             };
-            self.manual_change.set(true);
-            spb_foc_val.set_value(value);
-            self.manual_change.set(false);
+            self.excl.exec(|| {
+                spb_foc_val.set_value(value);
+            });
         }
     }
 
     fn update_focuser_position_after_focusing(&self, pos: f64) {
-        let spb_foc_val = self.builder.object::<gtk::SpinButton>("spb_foc_val").unwrap();
-        spb_foc_val.set_value(pos);
+        self.excl.exec(|| {
+            let spb_foc_val = self.builder.object::<gtk::SpinButton>("spb_foc_val").unwrap();
+            spb_foc_val.set_value(pos);
+        });
     }
 
     fn handler_delayed_action(&self, action: &DelayedActionTypes) {
@@ -404,60 +461,6 @@ impl FocuserUi {
         } else {
             l_foc_value.set_label("---");
         }
-    }
-
-    fn connect_widgets_events(self: &Rc<Self>) {
-        gtk_utils::connect_action(&self.window, self, "manual_focus",      Self::handler_action_manual_focus);
-        gtk_utils::connect_action(&self.window, self, "stop_manual_focus", Self::handler_action_stop_manual_focus);
-
-        let bldr = &self.builder;
-        let spb_foc_val = bldr.object::<gtk::SpinButton>("spb_foc_val").unwrap();
-        spb_foc_val.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            if self_.manual_change.get() { return; }
-            let options = self_.options.read().unwrap();
-            if options.focuser.device.is_empty() { return; }
-
-            gtk_utils::exec_and_show_error(&self_.window, || {
-                self_.indi.focuser_set_abs_value(&options.focuser.device, sb.value(), true, None)?;
-                Ok(())
-            });
-        }));
-
-        let cb = self.builder.object::<gtk::ComboBoxText>("cb_foc_list").unwrap();
-        cb.connect_active_notify(clone!(@weak self as self_ => move |cb| {
-            let Some(cur_id) = cb.active_id() else { return; };
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            if options.focuser.device == cur_id.as_str() { return; }
-            options.focuser.device = cur_id.to_string();
-            drop(options);
-            self_.delayed_actions.schedule(DelayedActionTypes::UpdateFocPosNew);
-            self_.delayed_actions.schedule(DelayedActionTypes::ShowCurFocuserValue);
-            self_.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetProps);
-        }));
-
-        let chb_foc_temp = bldr.object::<gtk::CheckButton>("chb_foc_temp").unwrap();
-        chb_foc_temp.connect_active_notify(clone!(@weak self as self_ => move |_| {
-            self_.correct_widgets_props();
-        }));
-
-        let chb_foc_fwhm = bldr.object::<gtk::CheckButton>("chb_foc_fwhm").unwrap();
-        chb_foc_fwhm.connect_active_notify(clone!(@weak self as self_ => move |_| {
-            self_.correct_widgets_props();
-        }));
-
-        let chb_foc_period = bldr.object::<gtk::CheckButton>("chb_foc_period").unwrap();
-        chb_foc_period.connect_active_notify(clone!(@weak self as self_ => move |_| {
-            self_.correct_widgets_props();
-        }));
-
-        let da_focusing = self.builder.object::<gtk::DrawingArea>("da_focusing").unwrap();
-        da_focusing.connect_draw(
-            clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
-            move |da, ctx| {
-                _ = self_.draw_focusing_samples(da, ctx);
-                glib::Propagation::Proceed
-            })
-        );
     }
 
     fn draw_focusing_samples(

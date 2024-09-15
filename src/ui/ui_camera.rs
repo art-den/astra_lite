@@ -953,7 +953,9 @@ impl CameraUi {
                 self.correct_widgets_props();
             }
             DelayedActionTypes::StartLiveView => {
-                if self.options.read().unwrap().cam.live_view {
+                let live_view_flag = self.options.read().unwrap().cam.live_view;
+                let mode = self.core.mode_data().mode.get_type();
+                if live_view_flag && mode == ModeType::Waiting {
                     self.start_live_view();
                 }
             }

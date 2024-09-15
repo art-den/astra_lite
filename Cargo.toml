@@ -1,6 +1,6 @@
 [package]
 name = "astra_lite"
-version = "0.0.164"
+version = "0.0.166"
 edition = "2021"
 description = "Software for deepsky astrophotography and live stacking"
 repository = "https://github.com/art-den/astra_lite"

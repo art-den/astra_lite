@@ -33,6 +33,7 @@ pub fn init_ui(
         main_ui:         Rc::clone(main_ui),
         builder:         builder.clone(),
         window,
+        excl:            ExclusiveCaller::new(),
         options:         Arc::clone(options),
         core:            Arc::clone(core),
         indi:            Arc::clone(indi),
@@ -75,6 +76,7 @@ struct MountUi {
     main_ui:         Rc<MainUi>,
     builder:         gtk::Builder,
     window:          gtk::ApplicationWindow,
+    excl:            ExclusiveCaller,
     options:         Arc<RwLock<Options>>,
     core:            Arc<Core>,
     indi:            Arc<indi::Connection>,
@@ -138,7 +140,6 @@ impl MountUi {
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         for &btn_name in Self::MOUNT_NAV_BUTTON_NAMES {
             let btn = self.builder.object::<gtk::Button>(btn_name).unwrap();
             btn.connect_button_press_event(clone!(
@@ -173,31 +174,26 @@ impl MountUi {
 
         let chb_tracking = self.builder.object::<gtk::CheckButton>("chb_tracking").unwrap();
         chb_tracking.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            let options = self_.options.read().unwrap();
-            if options.mount.device.is_empty() { return; }
-            gtk_utils::exec_and_show_error(&self_.window, || {
-                self_.indi.mount_set_tracking(&options.mount.device, chb.is_active(), true, None)?;
-                Ok(())
+            self_.excl.exec(|| {
+                let options = self_.options.read().unwrap();
+                if options.mount.device.is_empty() { return; }
+                gtk_utils::exec_and_show_error(&self_.window, || {
+                    self_.indi.mount_set_tracking(&options.mount.device, chb.is_active(), true, None)?;
+                    Ok(())
+                });
             });
         }));
 
         let chb_parked = self.builder.object::<gtk::CheckButton>("chb_parked").unwrap();
         chb_parked.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            let options = self_.options.read().unwrap();
-            if options.mount.device.is_empty() { return; }
-            let parked = chb.is_active();
-            ui.enable_widgets(true, &[
-                ("chb_tracking", !parked),
-                ("cb_mnt_speed", !parked),
-                ("chb_inv_ns", !parked),
-                ("chb_inv_we", !parked),
-            ]);
-            for &btn_name in Self::MOUNT_NAV_BUTTON_NAMES {
-                ui.set_prop_bool_ex(btn_name, "sensitive", !parked);
-            }
-            gtk_utils::exec_and_show_error(&self_.window, || {
-                self_.indi.mount_set_parked(&options.mount.device, parked, true, None)?;
-                Ok(())
+            self_.excl.exec(|| {
+                let options = self_.options.read().unwrap();
+                if options.mount.device.is_empty() { return; }
+                gtk_utils::exec_and_show_error(&self_.window, || {
+                    self_.indi.mount_set_parked(&options.mount.device, chb.is_active(), true, None)?;
+                    Ok(())
+                });
+                self_.correct_widgets_props();
             });
         }));
     }
@@ -215,6 +211,7 @@ impl MountUi {
         let mode_type = mode_data.mode.get_type();
         let waiting = mode_type == ModeType::Waiting;
 
+
         let mount_ctrl_sensitive =
             indi_connected &&
             mnt_active &&
@@ -223,10 +220,21 @@ impl MountUi {
             (ui.prop_string("cb_dith_perod.active-id").as_deref() == Some("0") &&
             !ui.prop_bool("chb_guid_enabled.active")));
 
+        let move_enabled = !ui.prop_bool("chb_parked.active") && mount_ctrl_sensitive;
 
         ui.enable_widgets(false, &[
             ("bx_simple_mount", mount_ctrl_sensitive),
         ]);
+
+        ui.enable_widgets(true, &[
+            ("chb_tracking", move_enabled),
+            ("cb_mnt_speed", move_enabled),
+            ("chb_inv_ns",   move_enabled),
+            ("chb_inv_we",   move_enabled),
+        ]);
+        for &btn_name in Self::MOUNT_NAV_BUTTON_NAMES {
+            ui.set_prop_bool_ex(btn_name, "sensitive", move_enabled);
+        }
     }
 
     fn handler_closing(&self) {
@@ -434,23 +442,29 @@ impl MountUi {
     }
 
     fn show_mount_tracking_state(&self, tracking: bool) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        ui.set_prop_bool("chb_tracking.active", tracking);
+        self.excl.exec(|| {
+            let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+            ui.set_prop_bool("chb_tracking.active", tracking);
+        });
     }
 
     fn show_mount_parked_state(&self, parked: bool) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        ui.set_prop_bool("chb_parked.active", parked);
+        self.excl.exec(|| {
+            let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+            ui.set_prop_bool("chb_parked.active", parked);
+        });
     }
 
     fn show_cur_mount_state(&self) {
-        let device = self.options.read().unwrap().mount.device.clone();
+        self.excl.exec(|| {
+            let device = self.options.read().unwrap().mount.device.clone();
 
-        let parked = self.indi.mount_get_parked(&device).unwrap_or(false);
-        self.show_mount_parked_state(parked);
+            let parked = self.indi.mount_get_parked(&device).unwrap_or(false);
+            self.show_mount_parked_state(parked);
 
-        let tracking = self.indi.mount_get_tracking(&device).unwrap_or(false);
-        self.show_mount_tracking_state(tracking);
+            let tracking = self.indi.mount_get_tracking(&device).unwrap_or(false);
+            self.show_mount_tracking_state(tracking);
+        });
     }
 
     fn handler_delayed_action(&self, action: &DelayedActionTypes) {
