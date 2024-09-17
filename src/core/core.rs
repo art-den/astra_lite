@@ -9,6 +9,8 @@ use std::{
     },
     any::Any
 };
+use gtk::glib::PropertySet;
+
 use crate::{
     core::consts::INDI_SET_PROP_TIMEOUT, guiding::{external_guider::*, phd2_conn, phd2_guider::*}, image::stars_offset::*, indi, options::*, utils::timer::*
 };
@@ -64,7 +66,7 @@ pub trait Mode {
     fn notify_indi_prop_change(&mut self, _prop_change: &indi::PropChangeEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_blob_start_event(&mut self, _event: &indi::BlobStartEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_before_frame_processing_start(&mut self, _should_be_processed: &mut bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult, _subscribers: &Arc<RwLock<Subscribers>>) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult, _subscribers: &RwLock<Subscribers>) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
 }
 
@@ -153,14 +155,14 @@ pub struct Core {
     phd2:               Arc<phd2_conn::Connection>,
     options:            Arc<RwLock<Options>>,
     mode_data:          RwLock<ModeData>,
-    subscribers:        Arc<RwLock<Subscribers>>,
+    subscribers:        RwLock<Subscribers>,
     cur_frame:          Arc<ResultImage>,
     ref_stars:          Arc<Mutex<Option<Vec<Point>>>>,
     calibr_images:      Arc<Mutex<CalibrImages>>,
     live_stacking:      Arc<LiveStackingData>,
     timer:              Arc<Timer>,
     exp_stuck_wd:       AtomicU16,
-    img_proc_stop_flag: Arc<Mutex<Arc<AtomicBool>>>, // stop flag for last command
+    img_proc_stop_flag: Mutex<Arc<AtomicBool>>, // stop flag for last command
 
     /// commands for passing into frame processing thread
     img_cmds_sender:    mpsc::Sender<FrameProcessCommand>, // TODO: make API
@@ -178,14 +180,14 @@ impl Core {
             phd2:               Arc::new(phd2_conn::Connection::new()),
             options:            Arc::clone(options),
             mode_data:          RwLock::new(ModeData::new()),
-            subscribers:        Arc::new(RwLock::new(Subscribers::new())),
+            subscribers:        RwLock::new(Subscribers::new()),
             cur_frame:          Arc::new(ResultImage::new()),
             ref_stars:          Arc::new(Mutex::new(None)),
             calibr_images:      Arc::new(Mutex::new(CalibrImages::default())),
             live_stacking:      Arc::new(LiveStackingData::new()),
             timer:              Arc::new(Timer::new()),
             exp_stuck_wd:       AtomicU16::new(0),
-            img_proc_stop_flag: Arc::new(Mutex::new(Arc::new(AtomicBool::new(false)))),
+            img_proc_stop_flag: Mutex::new(Arc::new(AtomicBool::new(false))),
             ext_guider:         Arc::new(Mutex::new(None)),
             img_cmds_sender,
         });
@@ -419,13 +421,17 @@ impl Core {
                 name: device_name.to_string(),
                 prop: device_prop.to_string(),
             };
+
+            let new_stop_flag = Arc::new(AtomicBool::new(false));
+            *self.img_proc_stop_flag.lock().unwrap() = Arc::clone(&new_stop_flag);
+
             FrameProcessCommandData {
                 mode_type:       mode.mode.get_type(),
                 camera:          device,
                 flags:           ProcessImageFlags::empty(),
                 blob:            Arc::clone(blob),
                 frame:           Arc::clone(&self.cur_frame),
-                stop_flag:       Arc::clone(&self.img_proc_stop_flag.lock().unwrap()),
+                stop_flag:       new_stop_flag,
                 ref_stars:       Arc::clone(&self.ref_stars),
                 calibr_params:   options.calibr.into_params(),
                 calibr_images:   Arc::clone(&self.calibr_images),
@@ -440,7 +446,6 @@ impl Core {
         };
 
         mode.mode.complete_img_process_params(&mut command_data);
-        command_data.stop_flag.store(false, Ordering::Relaxed);
 
         let result_fun = {
             let self_ = Arc::clone(self);
@@ -480,7 +485,7 @@ impl Core {
         let mode_data = self.mode_data.read().unwrap();
         let Some(cam_device) = mode_data.mode.cam_device() else { return Ok(()); };
         let Some(cur_exposure) = mode_data.mode.get_cur_exposure() else { return Ok(()); };
-        abort_camera_exposure(&self.indi, &cam_device, &self.img_proc_stop_flag)?;
+        abort_camera_exposure(&self.indi, &cam_device)?;
         if self.indi.camera_is_fast_toggle_supported(&cam_device.name)?
         && self.indi.camera_is_fast_toggle_enabled(&cam_device.name)? {
             let prop_info = self.indi.camera_get_fast_frames_count_prop_info(
@@ -493,12 +498,7 @@ impl Core {
                 INDI_SET_PROP_TIMEOUT,
             )?;
         }
-        start_camera_exposure(
-            &self.indi,
-            cam_device,
-            cur_exposure,
-            &self.img_proc_stop_flag,
-        )?;
+        start_camera_exposure(&self.indi, cam_device, cur_exposure)?;
         log::error!("Camera exposure restarted!");
         Ok(())
     }
@@ -523,7 +523,6 @@ impl Core {
             None,
             CameraMode::SingleShot,
             &self.options,
-            &self.img_proc_stop_flag,
         )?;
         mode.start()?;
         let mut mode_data = self.mode_data.write().unwrap();
@@ -544,7 +543,6 @@ impl Core {
             Some(&self.timer),
             CameraMode::LiveView,
             &self.options,
-            &self.img_proc_stop_flag,
         )?;
         mode.start()?;
         let mut mode_data = self.mode_data.write().unwrap();
@@ -565,7 +563,6 @@ impl Core {
             Some(&self.timer),
             CameraMode::SavingRawFrames,
             &self.options,
-            &self.img_proc_stop_flag,
         )?;
         mode.set_guider(&self.ext_guider);
         mode.set_ref_stars(&self.ref_stars);
@@ -589,7 +586,6 @@ impl Core {
             Some(&self.timer),
             CameraMode::LiveStacking,
             &self.options,
-            &self.img_proc_stop_flag,
         )?;
         mode.set_guider(&self.ext_guider);
         mode.set_ref_stars(&self.ref_stars);
@@ -611,12 +607,7 @@ impl Core {
         self.init_cam_before_start()?;
         let mut mode_data = self.mode_data.write().unwrap();
         mode_data.mode.abort()?;
-        let mut mode = FocusingMode::new(
-            &self.indi,
-            &self.options,
-            &self.img_proc_stop_flag,
-            None
-        )?;
+        let mut mode = FocusingMode::new(&self.indi, &self.options, None)?;
         mode.start()?;
         mode_data.mode = Box::new(mode);
         let progress = mode_data.mode.progress();
@@ -631,12 +622,7 @@ impl Core {
         self.init_cam_before_start()?;
         let mut mode_data = self.mode_data.write().unwrap();
         mode_data.mode.abort()?;
-        let mut mode = MountCalibrMode::new(
-            &self.indi,
-            &self.options,
-            &self.img_proc_stop_flag,
-            None
-        )?;
+        let mut mode = MountCalibrMode::new(&self.indi, &self.options, None)?;
         mode.start()?;
         mode_data.mode = Box::new(mode);
         let progress = mode_data.mode.progress();
@@ -681,6 +667,9 @@ impl Core {
             return;
         }
         _ = mode_data.mode.abort();
+
+        self.img_proc_stop_flag.lock().unwrap().set(true);
+
         let mut prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
         loop {
             if prev_mode.can_be_continued_after_stop() {
@@ -747,12 +736,7 @@ impl Core {
             NotifyResult::StartFocusing => {
                 mode_data.mode.abort()?;
                 let prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
-                let mut mode = FocusingMode::new(
-                    &self.indi,
-                    &self.options,
-                    &self.img_proc_stop_flag,
-                    Some(prev_mode)
-                )?;
+                let mut mode = FocusingMode::new(&self.indi, &self.options, Some(prev_mode))?;
                 mode.start()?;
                 mode_data.mode = Box::new(mode);
                 mode_changed = true;
@@ -761,12 +745,7 @@ impl Core {
             NotifyResult::StartMountCalibr => {
                 mode_data.mode.abort()?;
                 let prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
-                let mut mode = MountCalibrMode::new(
-                    &self.indi,
-                    &self.options,
-                    &self.img_proc_stop_flag,
-                    Some(prev_mode)
-                )?;
+                let mut mode = MountCalibrMode::new(&self.indi, &self.options, Some(prev_mode))?;
                 mode.start()?;
                 mode_data.mode = Box::new(mode);
                 mode_changed = true;
@@ -828,10 +807,9 @@ pub fn init_cam_continuous_mode(
 }
 
 pub fn apply_camera_options_and_take_shot(
-    indi:               &indi::Connection,
-    device:             &DeviceAndProp,
-    frame:              &FrameOptions,
-    img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
+    indi:   &indi::Connection,
+    device: &DeviceAndProp,
+    frame:  &FrameOptions,
 ) -> anyhow::Result<()> {
     let cam_ccd = indi::CamCcd::from_ccd_prop_name(&device.prop);
 
@@ -949,23 +927,16 @@ pub fn apply_camera_options_and_take_shot(
 
     // Start exposure
 
-    start_camera_exposure(
-        indi,
-        device,
-        frame.exposure(),
-        &img_proc_stop_flag
-    )?;
+    start_camera_exposure(indi, device, frame.exposure())?;
 
     Ok(())
 }
 
 pub fn start_camera_exposure(
-    indi:               &indi::Connection,
-    device:             &DeviceAndProp,
-    exposure:           f64,
-    img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
+    indi:     &indi::Connection,
+    device:   &DeviceAndProp,
+    exposure: f64,
 ) -> anyhow::Result<()> {
-    *img_proc_stop_flag.lock().unwrap() = Arc::new(AtomicBool::new(false));
     indi.camera_start_exposure(
         &device.name,
         indi::CamCcd::from_ccd_prop_name(&device.prop),
@@ -975,15 +946,13 @@ pub fn start_camera_exposure(
 }
 
 pub fn abort_camera_exposure(
-    indi:               &indi::Connection,
-    device:             &DeviceAndProp,
-    img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
+    indi:   &indi::Connection,
+    device: &DeviceAndProp,
 ) -> anyhow::Result<()> {
     indi.camera_abort_exposure(
         &device.name,
         indi::CamCcd::from_ccd_prop_name(&device.prop)
     )?;
-    img_proc_stop_flag.lock().unwrap().store(true, Ordering::Relaxed);
     Ok(())
 }
 

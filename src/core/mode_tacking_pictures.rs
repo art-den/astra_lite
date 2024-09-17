@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, Mutex, RwLock, atomic::AtomicBool},
+    sync::{Arc, Mutex, RwLock},
     path::PathBuf,
     any::Any
 };
@@ -70,29 +70,28 @@ struct RefocusData {
 }
 
 pub struct TackingPicturesMode {
-    cam_mode:           CameraMode,
-    state:              FramesModeState,
-    device:             DeviceAndProp,
-    mount_device:       String,
-    fn_gen:             Arc<Mutex<SeqFileNameGen>>,
-    indi:               Arc<indi::Connection>,
-    timer:              Option<Arc<Timer>>,
-    raw_adder:          Arc<Mutex<RawAdder>>,
-    options:            Arc<RwLock<Options>>,
-    frame_options:      FrameOptions,
-    focus_options:      Option<FocuserOptions>,
-    guider_options:     Option<GuidingOptions>,
-    ref_stars:          Option<Arc<Mutex<Option<Vec<Point>>>>>,
-    progress:           Option<Progress>,
-    cur_exposure:       f64,
-    simple_guider:      Option<SimpleGuider>,
-    guider:             Option<ExtGuiderData>,
-    live_stacking:      Option<Arc<LiveStackingData>>,
-    save_dir:           PathBuf,
-    master_file:        PathBuf,
-    refocus:            RefocusData,
-    skip_frame_done:    bool, // first frame was taken and skipped
-    img_proc_stop_flag: Arc<Mutex<Arc<AtomicBool>>>,
+    cam_mode:        CameraMode,
+    state:           FramesModeState,
+    device:          DeviceAndProp,
+    mount_device:    String,
+    fn_gen:          Arc<Mutex<SeqFileNameGen>>,
+    indi:            Arc<indi::Connection>,
+    timer:           Option<Arc<Timer>>,
+    raw_adder:       Arc<Mutex<RawAdder>>,
+    options:         Arc<RwLock<Options>>,
+    frame_options:   FrameOptions,
+    focus_options:   Option<FocuserOptions>,
+    guider_options:  Option<GuidingOptions>,
+    ref_stars:       Option<Arc<Mutex<Option<Vec<Point>>>>>,
+    progress:        Option<Progress>,
+    cur_exposure:    f64,
+    simple_guider:   Option<SimpleGuider>,
+    guider:          Option<ExtGuiderData>,
+    live_stacking:   Option<Arc<LiveStackingData>>,
+    save_dir:        PathBuf,
+    master_file:     PathBuf,
+    refocus:         RefocusData,
+    skip_frame_done: bool, // first frame was taken and skipped
 }
 
 impl TackingPicturesMode {
@@ -101,7 +100,6 @@ impl TackingPicturesMode {
         timer:    Option<&Arc<Timer>>,
         cam_mode: CameraMode,
         options:  &Arc<RwLock<Options>>,
-        img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(cam_device) = &opts.cam.device else {
@@ -146,7 +144,6 @@ impl TackingPicturesMode {
             save_dir:        PathBuf::new(),
             master_file:     PathBuf::new(),
             skip_frame_done: false,
-            img_proc_stop_flag: Arc::clone(img_proc_stop_flag),
             refocus,
             progress,
         })
@@ -206,7 +203,7 @@ impl TackingPicturesMode {
             }
 
             init_cam_continuous_mode(&self.indi, &self.device, &frame_opts, false)?;
-            apply_camera_options_and_take_shot(&self.indi, &self.device, &frame_opts, &self.img_proc_stop_flag)?;
+            apply_camera_options_and_take_shot(&self.indi, &self.device, &frame_opts)?;
 
             self.state = FramesModeState::FrameToSkip;
             self.cur_exposure = frame_opts.exposure();
@@ -215,7 +212,7 @@ impl TackingPicturesMode {
 
         let continuously = self.is_continuous_mode();
         init_cam_continuous_mode(&self.indi, &self.device, &self.frame_options, continuously)?;
-        apply_camera_options_and_take_shot(&self.indi, &self.device, &self.frame_options, &self.img_proc_stop_flag)?;
+        apply_camera_options_and_take_shot(&self.indi, &self.device, &self.frame_options)?;
 
         self.state = FramesModeState::Common;
         self.cur_exposure = self.frame_options.exposure();
@@ -574,11 +571,7 @@ impl TackingPicturesMode {
                 result = NotifyResult::ProgressChanges;
             }
             if progress.cur == progress.total {
-                abort_camera_exposure(
-                    &self.indi,
-                    &self.device,
-                    &self.img_proc_stop_flag
-                )?;
+                abort_camera_exposure(&self.indi, &self.device)?;
                 result = NotifyResult::Finished { next_mode: None };
             } else {
                 let have_shart_new_shot = match (&self.cam_mode, &self.frame_options.frame_type) {
@@ -587,12 +580,7 @@ impl TackingPicturesMode {
                     _ => false
                 };
                 if have_shart_new_shot {
-                    apply_camera_options_and_take_shot(
-                        &self.indi,
-                        &self.device,
-                        &self.frame_options,
-                        &self.img_proc_stop_flag,
-                    )?;
+                    apply_camera_options_and_take_shot(&self.indi, &self.device, &self.frame_options)?;
                 }
             }
         }
@@ -601,8 +589,7 @@ impl TackingPicturesMode {
 
     fn process_light_frame_info(
         &mut self,
-        info:         &LightFrameInfo,
-        _subscribers: &Arc<RwLock<Subscribers>>
+        info: &LightFrameInfo,
     ) -> anyhow::Result<NotifyResult> {
         if !info.stars.is_ok() {
             return Ok(NotifyResult::Empty);
@@ -743,7 +730,7 @@ impl Mode for TackingPicturesMode {
     }
 
     fn abort(&mut self) -> anyhow::Result<()> {
-        abort_camera_exposure(&self.indi, &self.device, &self.img_proc_stop_flag)?;
+        abort_camera_exposure(&self.indi, &self.device)?;
         self.skip_frame_done = false; // will skip first frame when continue
         Ok(())
     }
@@ -797,26 +784,15 @@ impl Mode for TackingPicturesMode {
         if !fast_mode_enabled {
             self.cur_exposure = self.frame_options.exposure();
             if !self.frame_options.have_to_use_delay() {
-                apply_camera_options_and_take_shot(
-                    &self.indi,
-                    &self.device,
-                    &self.frame_options,
-                    &self.img_proc_stop_flag,
-                )?;
+                apply_camera_options_and_take_shot(&self.indi, &self.device, &self.frame_options)?;
             } else {
                 let indi = Arc::clone(&self.indi);
                 let camera = self.device.clone();
                 let frame = self.frame_options.clone();
-                let img_proc_stop_flag = Arc::clone(&self.img_proc_stop_flag);
 
                 if let Some(thread_timer) = &self.timer {
                     thread_timer.exec((frame.delay * 1000.0) as u32, false, move || {
-                        let res = apply_camera_options_and_take_shot(
-                            &indi,
-                            &camera,
-                            &frame,
-                            &img_proc_stop_flag,
-                        );
+                        let res = apply_camera_options_and_take_shot(&indi, &camera, &frame);
                         if let Err(err) = res {
                             log::error!("{} during trying start next shot", err.to_string());
                             // TODO: show error!!!
@@ -844,8 +820,8 @@ impl Mode for TackingPicturesMode {
 
     fn notify_about_frame_processing_result(
         &mut self,
-        fp_result:   &FrameProcessResult,
-        subscribers: &Arc<RwLock<Subscribers>>
+        fp_result:    &FrameProcessResult,
+        _subscribers: &RwLock<Subscribers>
     ) -> anyhow::Result<NotifyResult>  {
         match &fp_result.data {
             FrameProcessResultData::ShotProcessingFinished {
@@ -854,7 +830,7 @@ impl Mode for TackingPicturesMode {
                 self.process_frame_processing_finished_event(*frame_is_ok),
 
             FrameProcessResultData::LightFrameInfo(info) =>
-                self.process_light_frame_info(info, subscribers),
+                self.process_light_frame_info(info),
 
             FrameProcessResultData::ShotProcessingStarted =>
                 self.process_frame_processing_started_event(),
@@ -923,7 +899,7 @@ impl Mode for TackingPicturesMode {
                 && guid_data.cur_timed_guide_e == 0.0 {
                     let continuously = self.is_continuous_mode();
                     init_cam_continuous_mode(&self.indi, &self.device, &self.frame_options, continuously)?;
-                    apply_camera_options_and_take_shot(&self.indi, &self.device, &self.frame_options, &self.img_proc_stop_flag)?;
+                    apply_camera_options_and_take_shot(&self.indi, &self.device, &self.frame_options)?;
                     self.state = FramesModeState::Common;
                     result = NotifyResult::ModeChanged;
                 }

@@ -1,5 +1,5 @@
 use std::{
-    sync::{atomic::AtomicBool, Mutex, Arc, RwLock},
+    sync::{Arc, RwLock},
     collections::VecDeque
 };
 use crate::{
@@ -35,19 +35,18 @@ enum FocusingStage {
 }
 
 pub struct FocusingMode {
-    indi:               Arc<indi::Connection>,
-    state:              FocusingState,
-    camera:             DeviceAndProp,
-    options:            FocuserOptions,
-    frame:              FrameOptions,
-    before_pos:         f64,
-    to_go:              VecDeque<f64>,
-    samples:            Vec<FocuserSample>,
-    result_pos:         Option<f64>,
-    try_cnt:            usize,
-    stage:              FocusingStage,
-    next_mode:          Option<Box<dyn Mode + Sync + Send>>,
-    img_proc_stop_flag: Arc<Mutex<Arc<AtomicBool>>>,
+    indi:       Arc<indi::Connection>,
+    state:      FocusingState,
+    camera:     DeviceAndProp,
+    options:    FocuserOptions,
+    frame:      FrameOptions,
+    before_pos: f64,
+    to_go:      VecDeque<f64>,
+    samples:    Vec<FocuserSample>,
+    result_pos: Option<f64>,
+    try_cnt:    usize,
+    stage:      FocusingStage,
+    next_mode:  Option<Box<dyn Mode + Sync + Send>>,
 }
 
 #[derive(PartialEq)]
@@ -76,10 +75,9 @@ pub struct FocuserSample {
 
 impl FocusingMode {
     pub fn new(
-        indi:               &Arc<indi::Connection>,
-        options:            &Arc<RwLock<Options>>,
-        img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
-        next_mode:          Option<Box<dyn Mode + Sync + Send>>,
+        indi:      &Arc<indi::Connection>,
+        options:   &Arc<RwLock<Options>>,
+        next_mode: Option<Box<dyn Mode + Sync + Send>>,
     ) -> anyhow::Result<Self> {
         let options = options.read().unwrap();
         let Some(cam_device) = &options.cam.device else {
@@ -89,19 +87,18 @@ impl FocusingMode {
         frame.exp_main = options.focuser.exposure;
         frame.gain = options.focuser.gain;
         Ok(FocusingMode {
-            indi:               Arc::clone(indi),
-            state:              FocusingState::Undefined,
-            options:            options.focuser.clone(),
+            indi:       Arc::clone(indi),
+            state:      FocusingState::Undefined,
+            options:    options.focuser.clone(),
             frame,
-            before_pos:         0.0,
-            to_go:              VecDeque::new(),
-            samples:            Vec::new(),
-            result_pos:         None,
-            stage:              FocusingStage::Undef,
-            try_cnt:            0,
+            before_pos: 0.0,
+            to_go:      VecDeque::new(),
+            samples:    Vec::new(),
+            result_pos: None,
+            stage:      FocusingStage::Undef,
+            try_cnt:    0,
             next_mode,
-            camera:             cam_device.clone(),
-            img_proc_stop_flag: Arc::clone(img_proc_stop_flag),
+            camera:     cam_device.clone(),
         })
     }
 
@@ -154,7 +151,7 @@ impl FocusingMode {
     fn process_light_frame_info(
         &mut self,
         info:        &LightFrameInfo,
-        subscribers: &Arc<RwLock<Subscribers>>,
+        subscribers: &RwLock<Subscribers>,
     ) -> anyhow::Result<NotifyResult> {
         let subscribers = subscribers.read().unwrap();
         let mut result = NotifyResult::Empty;
@@ -297,7 +294,7 @@ impl FocusingMode {
             } else {
                 log::debug!("Received image is not Ok. Taking another one...");
                 init_cam_continuous_mode(&self.indi, &self.camera, &self.frame, false)?;
-                apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame, &self.img_proc_stop_flag)?;
+                apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame)?;
             }
         }
         if self.state == FocusingState::WaitingResultImg {
@@ -353,7 +350,7 @@ impl Mode for FocusingMode {
     }
 
     fn abort(&mut self) -> anyhow::Result<()> {
-        abort_camera_exposure(&self.indi, &self.camera, &self.img_proc_stop_flag)?;
+        abort_camera_exposure(&self.indi, &self.camera)?;
         self.indi.focuser_set_abs_value(&self.options.device, self.before_pos, true, None)?;
         Ok(())
     }
@@ -390,7 +387,7 @@ impl Mode for FocusingMode {
                     if f64::abs(cur_focus-desired_focus) < 1.01 {
                         log::debug!("Taking shot for focuser value: {}", desired_focus);
                         init_cam_continuous_mode(&self.indi, &self.camera, &self.frame, false)?;
-                        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame, &self.img_proc_stop_flag)?;
+                        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame)?;
                         self.state = FocusingState::WaitingFrame(desired_focus);
                     }
                 }
@@ -406,7 +403,7 @@ impl Mode for FocusingMode {
                     if f64::abs(cur_focus-desired_focus) < 1.01 {
                         log::debug!("Taking RESULT shot for focuser value: {}", desired_focus);
                         init_cam_continuous_mode(&self.indi, &self.camera, &self.frame, false)?;
-                        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame, &self.img_proc_stop_flag)?;
+                        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame)?;
                         self.state = FocusingState::WaitingResultImg;
                     }
                 }
@@ -418,8 +415,8 @@ impl Mode for FocusingMode {
 
     fn notify_about_frame_processing_result(
         &mut self,
-        fp_result: &FrameProcessResult,
-        subscribers: &Arc<RwLock<Subscribers>>
+        fp_result:   &FrameProcessResult,
+        subscribers: &RwLock<Subscribers>
     ) -> anyhow::Result<NotifyResult> {
         match &fp_result.data {
             FrameProcessResultData::LightFrameInfo(info) =>

@@ -1,4 +1,4 @@
-use std::{sync::{atomic::AtomicBool, Mutex, Arc, RwLock}, f64::consts::PI};
+use std::{sync::{Arc, RwLock}, f64::consts::PI};
 use itertools::Itertools;
 use crate::{
     indi,
@@ -69,7 +69,6 @@ pub struct MountCalibrMode {
     next_mode:          Option<Box<dyn Mode + Sync + Send>>,
     can_change_g_rate:  bool,
     calibr_speed:       f64,
-    img_proc_stop_flag: Arc<Mutex<Arc<AtomicBool>>>,
 }
 
 #[derive(PartialEq)]
@@ -93,10 +92,9 @@ struct DitherCalibrAtempt {
 
 impl MountCalibrMode {
     pub fn new(
-        indi:               &Arc<indi::Connection>,
-        options:            &Arc<RwLock<Options>>,
-        img_proc_stop_flag: &Arc<Mutex<Arc<AtomicBool>>>,
-        next_mode:          Option<Box<dyn Mode + Sync + Send>>,
+        indi:      &Arc<indi::Connection>,
+        options:   &Arc<RwLock<Options>>,
+        next_mode: Option<Box<dyn Mode + Sync + Send>>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(cam_device) = &opts.cam.device else {
@@ -106,37 +104,36 @@ impl MountCalibrMode {
         frame.exp_main = opts.guiding.calibr_exposure;
         frame.gain = opts.guiding.calibr_gain;
         Ok(Self {
-            indi:               Arc::clone(indi),
-            state:              DitherCalibrState::Undefined,
-            axis:               DitherCalibrAxis::Undefined,
+            indi:              Arc::clone(indi),
+            state:             DitherCalibrState::Undefined,
+            axis:              DitherCalibrAxis::Undefined,
             frame,
-            telescope:          opts.telescope.clone(),
-            start_dec:          0.0,
-            start_ra:           0.0,
-            mount_device:       opts.mount.device.clone(),
-            camera:             cam_device.clone(),
-            attempt_num:        0,
-            attempts:           Vec::new(),
-            cur_timed_guide_n:  0.0,
-            cur_timed_guide_s:  0.0,
-            cur_timed_guide_w:  0.0,
-            cur_timed_guide_e:  0.0,
-            cur_ra:             0.0,
-            cur_dec:            0.0,
-            image_width:        0,
-            image_height:       0,
-            move_period:        0.0,
-            result:             MountMoveCalibrRes::default(),
+            telescope:         opts.telescope.clone(),
+            start_dec:         0.0,
+            start_ra:          0.0,
+            mount_device:      opts.mount.device.clone(),
+            camera:            cam_device.clone(),
+            attempt_num:       0,
+            attempts:          Vec::new(),
+            cur_timed_guide_n: 0.0,
+            cur_timed_guide_s: 0.0,
+            cur_timed_guide_w: 0.0,
+            cur_timed_guide_e: 0.0,
+            cur_ra:            0.0,
+            cur_dec:           0.0,
+            image_width:       0,
+            image_height:      0,
+            move_period:       0.0,
+            result:            MountMoveCalibrRes::default(),
             next_mode,
-            can_change_g_rate:  false,
-            calibr_speed:       0.0,
-            img_proc_stop_flag: Arc::clone(img_proc_stop_flag),
+            can_change_g_rate: false,
+            calibr_speed:      0.0,
         })
     }
 
     fn start_for_axis(&mut self, axis: DitherCalibrAxis) -> anyhow::Result<()> {
         init_cam_continuous_mode(&self.indi, &self.camera, &self.frame, false)?;
-        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame, &self.img_proc_stop_flag)?;
+        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame)?;
 
         let guid_rate_supported = self.indi.mount_is_guide_rate_supported(&self.mount_device)?;
         self.can_change_g_rate =
@@ -243,8 +240,7 @@ impl MountCalibrMode {
 
     fn process_light_frame_info(
         &mut self,
-        info:         &LightFrameInfo,
-        _subscribers: &Arc<RwLock<Subscribers>>,
+        info: &LightFrameInfo,
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         if info.stars.fwhm_is_ok && info.stars.ovality_is_ok {
@@ -298,7 +294,7 @@ impl MountCalibrMode {
             }
         } else {
             init_cam_continuous_mode(&self.indi, &self.camera, &self.frame, false)?;
-            apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame, &self.img_proc_stop_flag)?;
+            apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame)?;
         }
         Ok(result)
     }
@@ -353,12 +349,12 @@ impl Mode for MountCalibrMode {
 
     fn notify_about_frame_processing_result(
         &mut self,
-        fp_result: &FrameProcessResult,
-        subscribers: &Arc<RwLock<Subscribers>>
+        fp_result:    &FrameProcessResult,
+        _subscribers: &RwLock<Subscribers>
     ) -> anyhow::Result<NotifyResult> {
         match &fp_result.data {
             FrameProcessResultData::LightFrameInfo(info) =>
-                self.process_light_frame_info(info, subscribers),
+                self.process_light_frame_info(info),
 
             _ =>
                 Ok(NotifyResult::Empty),
@@ -389,7 +385,7 @@ impl Mode for MountCalibrMode {
                     if self.cur_timed_guide_n == 0.0 && self.cur_timed_guide_s == 0.0
                     && self.cur_timed_guide_w == 0.0 && self.cur_timed_guide_e == 0.0 {
                         init_cam_continuous_mode(&self.indi, &self.camera, &self.frame, false)?;
-                        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame, &self.img_proc_stop_flag)?;
+                        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame)?;
                         self.state = DitherCalibrState::WaitForImage;
                     }
                 }
