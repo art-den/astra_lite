@@ -457,6 +457,9 @@ impl Core {
                 if Some(&res.camera) != mode.mode.cam_device() {
                     return;
                 }
+                if mode.mode.get_type() != res.mode_type {
+                    return;
+                }
                 if let Some(evt) = &self_.subscribers.read().unwrap().frame_evt {
                     evt(res.clone());
                 }

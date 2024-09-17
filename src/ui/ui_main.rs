@@ -351,6 +351,13 @@ impl MainUi {
         glib::spawn_future_local(clone! (@weak self as self_ => async move {
             while let Ok(event) = receiver.recv().await {
                 match event {
+                    CoreEvent::Error(err) => {
+                        gtk_utils::show_error_message(
+                            &self_.window,
+                            "Core error",
+                            &err
+                        );
+                    }
                     CoreEvent::ModeChanged => {
                         self_.correct_widgets_props();
                         self_.show_mode_caption();
