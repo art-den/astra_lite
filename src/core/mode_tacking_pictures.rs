@@ -405,8 +405,8 @@ impl TackingPicturesMode {
     }
 
     fn process_light_frame_info_and_dither_by_main_camera(
-        &mut          self,
-        info:         &LightFrameInfo
+        &mut self,
+        info: &LightFrameInfo
     ) -> anyhow::Result<NotifyResult> {
         if self.state != FramesModeState::Common {
             return Ok(NotifyResult::Empty);

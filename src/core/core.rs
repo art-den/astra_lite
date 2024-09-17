@@ -468,6 +468,7 @@ impl Core {
                     self_.apply_change_result(res, &mut mode)?;
                     Ok(())
                 } ();
+                drop(mode);
                 self_.process_error(result, "Core::process_indi_blob_event");
             }
         };
