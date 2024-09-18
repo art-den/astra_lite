@@ -113,6 +113,16 @@ pub struct RawImage {
     cfa_arr: &'static CfaArray,
 }
 
+impl Clone for RawImage {
+    fn clone(&self) -> Self {
+        Self {
+            info: self.info.clone(),
+            data: self.data.clone(),
+            cfa_arr: self.cfa_arr
+        }
+    }
+}
+
 impl RawImage {
     pub fn new_from_fits_stream(
         mut stream: impl SeekNRead

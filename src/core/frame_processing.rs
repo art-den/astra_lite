@@ -13,8 +13,7 @@ use crate::{
     image::stars_offset::*,
     options::*,
     core::core::ModeType,
-    utils::math::linear_interpolate,
-    utils::io_utils::SeqFileNameGen,
+    utils::math::linear_interpolate
 };
 
 pub enum ResultImageInfo {
@@ -97,11 +96,6 @@ pub struct CalibrImages {
     dark_hot_pixels: Vec<BadPixel>,
 }
 
-pub struct RawAdderParams {
-    pub adder:   Arc<Mutex<RawAdder>>,
-    pub save_fn: Option<PathBuf>,
-}
-
 pub struct LiveStackingData {
     pub adder:    RwLock<ImageAdder>,
     pub image:    RwLock<Image>,
@@ -130,8 +124,7 @@ pub struct LiveStackingParams {
 bitflags! {
     pub struct ProcessImageFlags: u32 {
         const CALC_STARS_OFFSET = 1;
-        const SAVE_RAW = 2;
-    }
+}
 }
 
 pub struct FrameProcessCommandData {
@@ -144,12 +137,9 @@ pub struct FrameProcessCommandData {
     pub ref_stars:       Arc<Mutex<Option<Vec<Point>>>>,
     pub calibr_params:   CalibrParams,
     pub calibr_images:   Arc<Mutex<CalibrImages>>,
-    pub fn_gen:          Option<Arc<Mutex<SeqFileNameGen>>>,
     pub view_options:    PreviewParams,
     pub frame_options:   FrameOptions,
     pub quality_options: Option<QualityOptions>,
-    pub save_path:       Option<PathBuf>,
-    pub raw_adder:       Option<RawAdderParams>,
     pub live_stacking:   Option<LiveStackingParams>,
 }
 
@@ -164,10 +154,11 @@ pub struct Preview8BitImgData {
 pub enum FrameProcessResultData {
     Error(String),
     ShotProcessingStarted,
+    RawFrame(Arc<RawImage>),
     ShotProcessingFinished {
-        frame_is_ok:  bool,
-        process_time: f64, // in seconds
-        blob_dl_time: f64, // in seconds
+        frame_is_ok:    bool,
+        blob:           Arc<indi::BlobPropValue>,
+        raw_image_info: Arc<RawImageInfo>,
     },
     PreviewFrame(Arc<Preview8BitImgData>),
     PreviewLiveRes(Arc<Preview8BitImgData>),
@@ -179,7 +170,11 @@ pub enum FrameProcessResultData {
     MasterSaved {
         frame_type: FrameType,
         file_name: PathBuf
-    }
+    },
+    ResultProcessingTime {
+        processing: f64,
+        blob_dl:    f64,
+    },
 }
 
 #[derive(Clone)]
@@ -475,24 +470,6 @@ fn make_preview_image(
     }
 }
 
-fn add_calibr_image(
-    raw_image: &mut RawImage,
-    raw_adder: &Option<RawAdderParams>,
-    frame_type: FrameType
-) -> anyhow::Result<()> {
-    let Some(adder) = raw_adder else { return Ok(()); };
-    let mut adder = adder.adder.lock().unwrap();
-    if frame_type == FrameType::Flats {
-        let tmr = TimeLogger::start();
-        raw_image.normalize_flat();
-        tmr.log("Normalizing flat");
-    }
-    let tmr = TimeLogger::start();
-    adder.add(raw_image)?;
-    tmr.log("Adding raw calibration frame");
-    Ok(())
-}
-
 fn make_preview_image_impl(
     command:    &FrameProcessCommandData,
     result_fun: &ResultFun
@@ -535,6 +512,22 @@ fn make_preview_image_impl(
 
     let exposure = raw_info.exposure;
     let frame_type = raw_info.frame_type;
+
+    // Applying calibration data
+    if frame_type == FrameType::Lights {
+        let mut calibr = command.calibr_images.lock().unwrap();
+        apply_calibr_data_and_remove_hot_pixels(&command.calibr_params, &mut raw_image, &mut calibr)?;
+    }
+
+    let raw_image = Arc::new(raw_image);
+
+    send_result(
+        FrameProcessResultData::RawFrame(Arc::clone(&raw_image)),
+        &command.camera,
+        command.mode_type,
+        &command.stop_flag,
+        result_fun
+    );
 
     let is_monochrome_img =
         matches!(frame_type, FrameType::Biases) ||
@@ -582,12 +575,6 @@ fn make_preview_image_impl(
     if command.stop_flag.load(Ordering::Relaxed) {
         log::debug!("Command stopped");
         return Ok(());
-    }
-
-    // Applying calibration data
-    if frame_type == FrameType::Lights {
-        let mut calibr = command.calibr_images.lock().unwrap();
-        apply_calibr_data_and_remove_hot_pixels(&command.calibr_params, &mut raw_image, &mut calibr)?;
     }
 
     if command.stop_flag.load(Ordering::Relaxed) {
@@ -673,16 +660,7 @@ fn make_preview_image_impl(
         return Ok(());
     }
 
-    // Add RAW calibration frame to adder
-
-    let frame_for_raw_adder = matches!(
-        frame_type,
-        FrameType::Flats| FrameType::Darks | FrameType::Biases
-    );
-
-    if frame_for_raw_adder {
-        add_calibr_image(&mut raw_image, &command.raw_adder, frame_type)?;
-    }
+    let raw_image_info = Arc::new(raw_image.info().clone());
 
     drop(raw_image);
 
@@ -956,75 +934,33 @@ fn make_preview_image_impl(
         false
     };
 
-    // Save original raw image
-    if !is_bad_frame && command.flags.contains(ProcessImageFlags::SAVE_RAW) {
-        if let (Some(save_path), Some(fn_gen)) = (&command.save_path, &command.fn_gen) {
-            let prefix = match frame_type {
-                FrameType::Lights => "light",
-                FrameType::Flats => "flat",
-                FrameType::Darks => "dark",
-                FrameType::Biases => "bias",
-                FrameType::Undef => unreachable!(),
-            };
-            if !save_path.is_dir() {
-                std::fs::create_dir_all(save_path)
-                    .map_err(|e|anyhow::anyhow!(
-                        "Error '{}'\nwhen trying to create directory '{}' for saving RAW frame",
-                        e.to_string(),
-                        save_path.to_str().unwrap_or_default()
-                    ))?;
-            }
-            let mut fs_gen = fn_gen.lock().unwrap();
-            let mut file_ext = command.blob.format.as_str().trim();
-            while file_ext.starts_with('.') { file_ext = &file_ext[1..]; }
-            let fn_mask = format!("{}_${{num}}.{}", prefix, file_ext);
-            let file_name = fs_gen.generate(save_path, &fn_mask);
-            let tmr = TimeLogger::start();
-            std::fs::write(&file_name, command.blob.data.as_slice())
-                .map_err(|e| anyhow::anyhow!(
-                    "Error '{}'\nwhen saving file '{}'",
-                    e.to_string(),
-                    file_name.to_str().unwrap_or_default()
-                ))?;
-            tmr.log("Saving raw image");
-        }
+    if command.stop_flag.load(Ordering::Relaxed) {
+        log::debug!("Command stopped");
+        return Ok(());
     }
+
+
+    let result = FrameProcessResultData::ShotProcessingFinished{
+        raw_image_info,
+        frame_is_ok: !is_bad_frame,
+        blob:        Arc::clone(&command.blob),
+    };
+    send_result(
+        result,
+        &command.camera,
+        command.mode_type,
+        &command.stop_flag,
+        result_fun
+    );
+
 
     let process_time = total_tmr.log("TOTAL PREVIEW");
 
-    // Save master file
-
-    if let Some(RawAdderParams {
-        adder,
-        save_fn: Some(file_name)
-    }) = &command.raw_adder {
-        if frame_for_raw_adder {
-            log::debug!("Saving master frame...");
-            let mut adder = adder.lock().unwrap();
-            let raw_image = adder.get()?;
-            adder.clear();
-            drop(adder);
-            raw_image.save_to_fits_file(&file_name)?;
-            let result = FrameProcessResultData::MasterSaved {
-                frame_type,
-                file_name: file_name.clone()
-            };
-            send_result(
-                result,
-                &command.camera,
-                command.mode_type,
-                &command.stop_flag,
-                result_fun
-            );
-        }
-        log::debug!("Master frame saved!");
-    }
-
-    let result = FrameProcessResultData::ShotProcessingFinished{
-        frame_is_ok:  !is_bad_frame,
-        blob_dl_time: command.blob.dl_time,
-        process_time
+    let result = FrameProcessResultData::ResultProcessingTime{
+        processing: process_time,
+        blob_dl:    command.blob.dl_time
     };
+
     send_result(
         result,
         &command.camera,

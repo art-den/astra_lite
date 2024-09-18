@@ -148,6 +148,11 @@ impl Subscribers {
             s(CoreEvent::Focusing(data.clone()));
         }
     }
+
+    pub fn inform_frame_process_result(&self, data: FrameProcessResult) {
+        let Some(frame_evt) = &self.frame_evt else { return; };
+        frame_evt(data);
+    }
 }
 
 pub struct Core {
@@ -438,9 +443,6 @@ impl Core {
                 view_options:    options.preview.preview_params(),
                 frame_options:   options.cam.frame.clone(),
                 quality_options: Some(options.quality.clone()),
-                fn_gen:          None,
-                save_path:       None,
-                raw_adder:       None,
                 live_stacking:   None,
             }
         };

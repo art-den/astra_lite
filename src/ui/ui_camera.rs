@@ -687,13 +687,13 @@ impl CameraUi {
             },
 
             MainThreadEvent::FrameProcessing(result) => {
-                match result.data {
-                    FrameProcessResultData::ShotProcessingFinished {
-                        process_time, blob_dl_time, ..
+                match &result.data {
+                    FrameProcessResultData::ResultProcessingTime {
+                        processing, blob_dl
                     } => {
                         let perf_str = format!(
                             "Download time = {:.2}s, img. process time = {:.2}s",
-                            blob_dl_time, process_time
+                            *blob_dl, *processing
                         );
                         self.main_ui.set_perf_string(perf_str);
                     },

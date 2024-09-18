@@ -1,13 +1,11 @@
 use std::{
-    sync::{Arc, Mutex, RwLock},
-    path::PathBuf,
-    any::Any
+    any::Any, path::PathBuf, sync::{atomic::AtomicBool, Arc, Mutex, RwLock}
 };
 
 use chrono::Utc;
 
 use crate::{
-    core::consts::INDI_SET_PROP_TIMEOUT, guiding::external_guider::*, image::{info::LightFrameInfo, raw::{FrameType, RawAdder}, stars_offset::*}, indi, options::*, utils::{io_utils::*, timer::Timer}
+    core::consts::INDI_SET_PROP_TIMEOUT, guiding::external_guider::*, image::{info::LightFrameInfo, raw::{FrameType, RawAdder, RawImage, RawImageInfo}, stars_offset::*}, indi, options::*, utils::{io_utils::*, timer::Timer}, TimeLogger
 };
 use super::{core::*, frame_processing::*, mode_mount_calibration::*};
 
@@ -52,6 +50,7 @@ pub enum CameraMode {
 enum FramesModeState {
     FrameToSkip,
     Common,
+    WaitingForMountCalibration,
     InternalMountCorrection,
     ExternalDithering,
 }
@@ -63,7 +62,7 @@ struct ExtGuiderData {
 }
 
 struct RefocusData {
-    exp_sum: f64,
+    exp_sum:  f64,
     min_temp: Option<f64>,
     max_temp: Option<f64>,
     fwhm:     Vec<f32>,
@@ -408,10 +407,6 @@ impl TackingPicturesMode {
         &mut self,
         info: &LightFrameInfo
     ) -> anyhow::Result<NotifyResult> {
-        if self.state != FramesModeState::Common {
-            return Ok(NotifyResult::Empty);
-        }
-
         let mount_device_active = self.indi.is_device_enabled(&self.mount_device).unwrap_or(false);
         if !mount_device_active {
             return Ok(NotifyResult::Empty);
@@ -422,7 +417,9 @@ impl TackingPicturesMode {
         let guider_data = self.simple_guider.get_or_insert_with(|| SimpleGuider::new());
         if guider_options.is_used() && mount_device_active {
             if guider_data.mnt_calibr.is_none() { // mount moving calibration
-                return Ok(NotifyResult::StartMountCalibr);
+                self.abort()?;
+                self.state = FramesModeState::WaitingForMountCalibration;
+                return Ok(NotifyResult::Empty);
             }
         }
 
@@ -515,10 +512,6 @@ impl TackingPicturesMode {
         &mut self,
         info: &LightFrameInfo
     ) -> anyhow::Result<NotifyResult> {
-        if self.state != FramesModeState::Common {
-            return Ok(NotifyResult::Empty);
-        }
-
         // take self.guider
         let Some(mut guider_data) = self.guider.take() else {
             return Ok(NotifyResult::Empty);
@@ -559,12 +552,26 @@ impl TackingPicturesMode {
 
     fn process_frame_processing_finished_event(
         &mut self,
-        frame_is_ok: bool
+        frame_is_ok:    bool,
+        blob:           &indi::BlobPropValue,
+        raw_image_info: &RawImageInfo,
+        subscribers:    &RwLock<Subscribers>,
+        cmd_stop_flag:  &Arc<AtomicBool>,
     ) -> anyhow::Result<NotifyResult> {
         if self.cam_mode == CameraMode::SingleShot {
             return Ok(NotifyResult::Finished { next_mode: None });
         }
+
+        if self.state != FramesModeState::Common
+        && self.state != FramesModeState::WaitingForMountCalibration
+        && self.state != FramesModeState::InternalMountCorrection {
+            println!("exit process_frame_processing_finished_event");
+            return Ok(NotifyResult::Empty);
+        }
+
+        let frame_type = raw_image_info.frame_type;
         let mut result = NotifyResult::Empty;
+        let mut is_last_frame = false;
         if let Some(progress) = &mut self.progress {
             if frame_is_ok && progress.cur != progress.total {
                 progress.cur += 1;
@@ -573,8 +580,9 @@ impl TackingPicturesMode {
             if progress.cur == progress.total {
                 abort_camera_exposure(&self.indi, &self.device)?;
                 result = NotifyResult::Finished { next_mode: None };
+                is_last_frame = true;
             } else {
-                let have_shart_new_shot = match (&self.cam_mode, &self.frame_options.frame_type) {
+                let have_shart_new_shot = match (&self.cam_mode, frame_type) {
                     (CameraMode::SavingRawFrames, FrameType::Biases) => true,
                     (CameraMode::SavingRawFrames, FrameType::Flats) => true,
                     _ => false
@@ -584,7 +592,145 @@ impl TackingPicturesMode {
                 }
             }
         }
+
+        // Save raw image
+        if frame_is_ok {
+            let have_to_save_raw = match self.cam_mode {
+                CameraMode::SavingRawFrames =>
+                    true,
+                CameraMode::LiveStacking =>
+                    self.options.read().unwrap().live.save_orig,
+                _ =>
+                    false,
+            };
+
+            if have_to_save_raw {
+                self.save_raw_image(blob, raw_image_info)?;
+            }
+        }
+
+        // Save master file
+        if is_last_frame
+        && Self::is_frame_type_for_raw_adder(frame_type)
+        && self.options.read().unwrap().raw_frames.create_master {
+            self.save_master_file()?;
+
+            let result = FrameProcessResultData::MasterSaved {
+                frame_type: raw_image_info.frame_type,
+                file_name: self.master_file.clone()
+            };
+
+            let event = FrameProcessResult {
+                camera:        self.device.clone(),
+                cmd_stop_flag: Arc::clone(cmd_stop_flag),
+                mode_type:     self.get_type(),
+                data:          result,
+            };
+
+            let subscribers = subscribers.read().unwrap();
+            subscribers.inform_frame_process_result(event);
+        }
+
+        if self.state == FramesModeState::WaitingForMountCalibration {
+            self.state = FramesModeState::Common;
+            return Ok(NotifyResult::StartMountCalibr);
+        }
+
         Ok(result)
+    }
+
+    fn add_raw_image(&mut self, raw_image: &RawImage) -> anyhow::Result<()> {
+        let mut adder = self.raw_adder.lock().unwrap();
+        if raw_image.info().frame_type == FrameType::Flats {
+            let mut normalized_flat = raw_image.clone();
+            let tmr = TimeLogger::start();
+            normalized_flat.normalize_flat();
+            tmr.log("Normalizing flat");
+            let tmr = TimeLogger::start();
+            adder.add(&normalized_flat)?;
+            tmr.log("Adding raw calibration frame");
+        } else {
+            let tmr = TimeLogger::start();
+            adder.add(raw_image)?;
+            tmr.log("Adding raw calibration frame");
+        }
+        Ok(())
+    }
+
+    fn save_raw_image(
+        &mut self,
+        blob:           &indi::BlobPropValue,
+        raw_image_info: &RawImageInfo,
+    ) -> anyhow::Result<()> {
+        let prefix = match raw_image_info.frame_type {
+            FrameType::Lights => "light",
+            FrameType::Flats => "flat",
+            FrameType::Darks => "dark",
+            FrameType::Biases => "bias",
+            FrameType::Undef => unreachable!(),
+        };
+        if !self.save_dir.is_dir() {
+            std::fs::create_dir_all(&self.save_dir)
+                .map_err(|e|anyhow::anyhow!(
+                    "Error '{}'\nwhen trying to create directory '{}' for saving RAW frame",
+                    e.to_string(),
+                    self.save_dir.to_str().unwrap_or_default()
+                ))?;
+        }
+        let mut file_ext = blob.format.as_str().trim();
+        while file_ext.starts_with('.') { file_ext = &file_ext[1..]; }
+        let fn_mask = format!("{}_${{num}}.{}", prefix, file_ext);
+        let mut fn_gen = self.fn_gen.lock().unwrap();
+        let file_name = fn_gen.generate(&self.save_dir, &fn_mask);
+        drop(fn_gen);
+
+        let tmr = TimeLogger::start();
+        std::fs::write(&file_name, blob.data.as_slice())
+            .map_err(|e| anyhow::anyhow!(
+                "Error '{}'\nwhen saving file '{}'",
+                e.to_string(),
+                file_name.to_str().unwrap_or_default()
+            ))?;
+        tmr.log("Saving raw image");
+
+        Ok(())
+    }
+
+    fn save_master_file(&mut self) -> anyhow::Result<()> {
+        log::debug!("Saving master frame...");
+        let mut adder = self.raw_adder.lock().unwrap();
+
+        let raw_image = adder.get()?;
+        adder.clear();
+        drop(adder);
+        raw_image.save_to_fits_file(&self.master_file)?;
+
+        log::debug!("Master frame saved!");
+        Ok(())
+    }
+
+    fn is_frame_type_for_raw_adder(frame_type: FrameType) -> bool {
+        matches!(
+            frame_type,
+            FrameType::Flats| FrameType::Darks | FrameType::Biases
+        )
+    }
+
+    fn process_raw_image(
+        &mut self,
+        raw_image: &RawImage,
+    ) -> anyhow::Result<NotifyResult> {
+        if self.state != FramesModeState::Common {
+            return Ok(NotifyResult::Empty);
+        }
+
+        let frame_for_raw_adder =
+            Self::is_frame_type_for_raw_adder(raw_image.info().frame_type);
+
+        if frame_for_raw_adder {
+            self.add_raw_image(raw_image)?;
+        }
+        Ok(NotifyResult::Empty)
     }
 
     fn process_light_frame_info(
@@ -592,6 +738,10 @@ impl TackingPicturesMode {
         info: &LightFrameInfo,
     ) -> anyhow::Result<NotifyResult> {
         if !info.stars.is_ok() {
+            return Ok(NotifyResult::Empty);
+        }
+
+        if self.state != FramesModeState::Common {
             return Ok(NotifyResult::Empty);
         }
 
@@ -611,13 +761,6 @@ impl TackingPicturesMode {
             if matches!(&res, NotifyResult::Empty) == false { return Ok(res); }
         }
 
-        Ok(NotifyResult::Empty)
-    }
-
-    fn process_frame_processing_started_event(&mut self) -> anyhow::Result<NotifyResult> {
-        if self.state == FramesModeState::FrameToSkip {
-            return Ok(NotifyResult::Empty);
-        }
         Ok(NotifyResult::Empty)
     }
 }
@@ -820,20 +963,26 @@ impl Mode for TackingPicturesMode {
 
     fn notify_about_frame_processing_result(
         &mut self,
-        fp_result:    &FrameProcessResult,
-        _subscribers: &RwLock<Subscribers>
+        fp_result:   &FrameProcessResult,
+        subscribers: &RwLock<Subscribers>
     ) -> anyhow::Result<NotifyResult>  {
         match &fp_result.data {
-            FrameProcessResultData::ShotProcessingFinished {
-                frame_is_ok, ..
-            } =>
-                self.process_frame_processing_finished_event(*frame_is_ok),
+            FrameProcessResultData::RawFrame(raw_image) =>
+                self.process_raw_image(raw_image),
 
             FrameProcessResultData::LightFrameInfo(info) =>
                 self.process_light_frame_info(info),
 
-            FrameProcessResultData::ShotProcessingStarted =>
-                self.process_frame_processing_started_event(),
+            FrameProcessResultData::ShotProcessingFinished {
+                frame_is_ok, blob, raw_image_info, ..
+            } =>
+                self.process_frame_processing_finished_event(
+                    *frame_is_ok,
+                    blob,
+                    raw_image_info,
+                    subscribers,
+                    &fp_result.cmd_stop_flag,
+                ),
 
             _ =>
                 Ok(NotifyResult::Empty)
@@ -842,37 +991,19 @@ impl Mode for TackingPicturesMode {
 
     fn complete_img_process_params(&self, cmd: &mut FrameProcessCommandData) {
         let options = self.options.read().unwrap();
-        cmd.fn_gen = Some(Arc::clone(&self.fn_gen));
-        let last_in_seq = if let Some(progress) = &self.progress {
-            progress.cur + 1 == progress.total
-        } else {
-            false
-        };
         match self.cam_mode {
             CameraMode::SavingRawFrames => {
-                cmd.save_path = Some(self.save_dir.clone());
-                if options.raw_frames.create_master {
-                    cmd.raw_adder = Some(RawAdderParams {
-                        adder: Arc::clone(&self.raw_adder),
-                        save_fn: if last_in_seq { Some(get_free_file_name(&self.master_file)) } else { None },
-                    });
-                }
                 if options.cam.frame.frame_type == FrameType::Lights
                 && !options.mount.device.is_empty() && options.guiding.simp_guid_enabled {
                     cmd.flags |= ProcessImageFlags::CALC_STARS_OFFSET;
                 }
-                cmd.flags |= ProcessImageFlags::SAVE_RAW;
             },
             CameraMode::LiveStacking => {
-                cmd.save_path = Some(self.save_dir.clone());
                 cmd.live_stacking = Some(LiveStackingParams {
                     data:    Arc::clone(self.live_stacking.as_ref().unwrap()),
                     options: options.live.clone(),
                 });
                 cmd.flags |= ProcessImageFlags::CALC_STARS_OFFSET;
-                if options.live.save_orig {
-                    cmd.flags |= ProcessImageFlags::SAVE_RAW;
-                }
             },
             _ => {},
         }
