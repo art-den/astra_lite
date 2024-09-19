@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
+use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
 
 use crate::{
-    image::raw::FrameType,
-    core::frame_processing::{CalibrParams, PreviewParams, PreviewImgSize}
+    core::{consts::DIRECTORY, frame_processing::{PreviewImgSize, PreviewParams}}, image::raw::FrameType
 };
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -128,8 +128,8 @@ impl FrameOptions {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct CalibrOptions {
+    pub dark_library:  PathBuf,
     pub dark_frame_en: bool,
-    pub dark_frame:    Option<PathBuf>,
     pub flat_frame_en: bool,
     pub flat_frame:    Option<PathBuf>,
     pub hot_pixels:    bool,
@@ -138,8 +138,8 @@ pub struct CalibrOptions {
 impl Default for CalibrOptions {
     fn default() -> Self {
         Self {
+            dark_library:  PathBuf::new(),
             dark_frame_en: true,
-            dark_frame:    None,
             flat_frame_en: true,
             flat_frame:    None,
             hot_pixels:    true,
@@ -148,25 +148,20 @@ impl Default for CalibrOptions {
 }
 
 impl CalibrOptions {
-    pub fn into_params(&self) -> CalibrParams {
-        let dark = if self.dark_frame_en {
-            self.dark_frame.clone()
-        } else {
-            None
-        };
-        let flat = if self.flat_frame_en {
-            self.flat_frame.clone()
-        } else {
-            None
-        };
-        CalibrParams {
-            dark,
-            flat,
-            hot_pixels: self.hot_pixels
+    pub fn check(&mut self) -> anyhow::Result<()> {
+        if self.dark_library.as_os_str().is_empty() {
+            let mut dark_lib_path = dirs::home_dir().unwrap();
+            dark_lib_path.push(DIRECTORY);
+            dark_lib_path.push("DarkLibrary");
+            if !dark_lib_path.is_dir() {
+                std::fs::create_dir_all(&dark_lib_path)?;
+            }
+            self.dark_library = dark_lib_path;
         }
+        Ok(())
     }
-}
 
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
@@ -192,7 +187,7 @@ impl RawFrameOptions {
     pub fn check(&mut self) -> anyhow::Result<()> {
         if self.out_path.as_os_str().is_empty() {
             let mut out_path = dirs::home_dir().unwrap();
-            out_path.push("Astro");
+            out_path.push(DIRECTORY);
             out_path.push("RawFrames");
             if !out_path.is_dir() {
                 std::fs::create_dir_all(&out_path)?;
@@ -228,7 +223,7 @@ impl LiveStackingOptions {
     pub fn check(&mut self) -> anyhow::Result<()> {
         if self.out_dir.as_os_str().is_empty() {
             let mut save_path = dirs::home_dir().unwrap();
-            save_path.push("Astro");
+            save_path.push(DIRECTORY);
             save_path.push("LiveStacking");
             if !save_path.is_dir() {
                 std::fs::create_dir_all(&save_path)?;
@@ -440,9 +435,18 @@ impl DeviceAndProp {
         }
         result
     }
+
+    pub fn to_file_name_part(&self) -> String {
+        let mut result = self.name.clone();
+        if !result.is_empty() && !self.prop.is_empty() && self.prop != "CCD1" {
+            result += "_";
+            result += &self.prop;
+        }
+        result
+    }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct CamOptions {
     pub device:    Option<DeviceAndProp>,
@@ -478,6 +482,106 @@ impl CamOptions {
         let width_mm = cropped_width * pixel_width_mm;
         let height_mm = cropped_height * pixel_height_mm;
         (width_mm, height_mm)
+    }
+
+    fn type_part_of_file_name(&self) -> &'static str {
+        match self.frame.frame_type {
+            FrameType::Undef => unreachable!(),
+            FrameType::Lights => "light",
+            FrameType::Flats => "flat",
+            FrameType::Darks => "dark",
+            FrameType::Biases => "bias",
+        }
+    }
+
+    fn commont_part_of_file_name(&self, sensor_width: usize, sensor_height: usize) -> String {
+        let bin = self.frame.binning.get_ratio();
+        let cropped_width = self.frame.crop.translate(sensor_width/bin);
+        let cropped_height = self.frame.crop.translate(sensor_height/bin);
+        let exp_to_str = |exp: f64| {
+            if exp > 1.0 {
+                format!("{:.0}", exp)
+            } else if exp >= 0.1 {
+                format!("{:.1}", exp)
+            } else {
+                format!("{:.3}", exp)
+            }
+        };
+        let mut common_part = format!(
+            "{}s_g{}_offs{}_{}x{}",
+            exp_to_str(self.frame.exposure()),
+            self.frame.gain,
+            self.frame.offset,
+            cropped_width,
+            cropped_height,
+        );
+        if bin != 1 {
+            common_part.push_str(&format!("_bin{}x{}", bin, bin));
+        }
+        common_part
+    }
+
+    fn temperature_part_of_file_name(&self, cooler_supported: bool) -> Option<String> {
+        if cooler_supported && self.ctrl.enable_cooler {
+            Some(format!("{:+.0}C", self.ctrl.temperature))
+        } else {
+            None
+        }
+    }
+
+    pub fn raw_master_file_name(
+        &self,
+        time:             DateTime<Utc>,
+        sensor_width:     usize,
+        sensor_height:    usize,
+        cooler_supported: bool
+    ) -> String {
+        let mut master_file = String::new();
+        let type_part = self.type_part_of_file_name();
+        let common_part = self.commont_part_of_file_name(sensor_width, sensor_height);
+        master_file.push_str(type_part);
+        master_file.push_str("_");
+        master_file.push_str(&common_part);
+        if self.frame.frame_type != FrameType::Flats {
+            let temp_path = self.temperature_part_of_file_name(cooler_supported);
+            if let Some(temp) = &temp_path {
+                master_file.push_str("_");
+                master_file.push_str(&temp);
+            }
+        }
+        if self.frame.frame_type == FrameType::Flats {
+            let now_date_str = time.format("%Y-%m-%d").to_string();
+            master_file.push_str("_");
+            master_file.push_str(&now_date_str);
+        }
+        master_file.push_str(".fit");
+        master_file
+    }
+
+    pub fn raw_file_dest_dir(
+        &self,
+        time:             DateTime<Utc>,
+        sensor_width:     usize,
+        sensor_height:    usize,
+        cooler_supported: bool
+    ) -> String {
+        let mut save_dir = String::new();
+        let type_part = self.type_part_of_file_name();
+        let common_part = self.commont_part_of_file_name(sensor_width, sensor_height);
+        save_dir.push_str(type_part);
+        save_dir.push_str("_");
+        let now_date_str = time.format("%Y-%m-%d").to_string();
+        save_dir.push_str(&now_date_str);
+        save_dir.push_str("__");
+        save_dir.push_str(&common_part);
+        if self.frame.frame_type != FrameType::Flats {
+            let temp_path = self.temperature_part_of_file_name(cooler_supported);
+            if let Some(temp) = &temp_path {
+                save_dir.push_str("_");
+                save_dir.push_str(&temp);
+            }
+        }
+        save_dir
     }
 }
 

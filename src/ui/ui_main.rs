@@ -44,6 +44,7 @@ pub fn init_ui(
     gtk_utils::exec_and_show_error(&window, || {
         let mut opts = options.write().unwrap();
         load_json_from_config_file::<Options>(&mut opts, MainUi::OPTIONS_FN)?;
+        opts.calibr.check()?;
         opts.raw_frames.check()?;
         opts.live.check()?;
         Ok(())
@@ -575,4 +576,3 @@ impl MainUi {
         TabPage::from_tab_index(page_index)
     }
 }
-

@@ -1991,10 +1991,6 @@ time</property>
               <object class="GtkBox" id="bx_cam_left">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
-                <property name="margin-start">5</property>
-                <property name="margin-end">5</property>
-                <property name="margin-top">5</property>
-                <property name="margin-bottom">5</property>
                 <property name="orientation">vertical</property>
                 <property name="spacing">5</property>
                 <child>
@@ -2012,6 +2008,10 @@ time</property>
                           <object class="GtkBox">
                             <property name="visible">True</property>
                             <property name="can-focus">False</property>
+                            <property name="margin-start">5</property>
+                            <property name="margin-end">5</property>
+                            <property name="margin-top">5</property>
+                            <property name="margin-bottom">5</property>
                             <property name="orientation">vertical</property>
                             <property name="spacing">7</property>
                             <child>
@@ -2538,10 +2538,11 @@ time</property>
                                     <property name="row-spacing">5</property>
                                     <property name="column-spacing">5</property>
                                     <child>
-                                      <object class="GtkFileChooserButton" id="fch_master_dark">
+                                      <object class="GtkFileChooserButton" id="fch_dark_library">
                                         <property name="visible">True</property>
                                         <property name="can-focus">False</property>
                                         <property name="hexpand">True</property>
+                                        <property name="action">select-folder</property>
                                         <property name="create-folders">False</property>
                                         <property name="title" translatable="yes"/>
                                       </object>
@@ -2552,7 +2553,7 @@ time</property>
                                     </child>
                                     <child>
                                       <object class="GtkCheckButton" id="chb_master_dark">
-                                        <property name="label" translatable="yes">Subtract master DARK frame:</property>
+                                        <property name="label" translatable="yes">Subtract DARK frame from library:</property>
                                         <property name="visible">True</property>
                                         <property name="can-focus">True</property>
                                         <property name="receives-default">False</property>
@@ -4468,6 +4469,8 @@ Useful when the object is not lagre and is in the center of the image.</property
                           <object class="GtkBox">
                             <property name="visible">True</property>
                             <property name="can-focus">False</property>
+                            <property name="margin-start">5</property>
+                            <property name="margin-end">5</property>
                             <property name="margin-top">5</property>
                             <property name="orientation">vertical</property>
                             <property name="spacing">7</property>

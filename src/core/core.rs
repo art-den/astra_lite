@@ -437,7 +437,7 @@ impl Core {
                 frame:           Arc::clone(&self.cur_frame),
                 stop_flag:       new_stop_flag,
                 ref_stars:       Arc::clone(&self.ref_stars),
-                calibr_params:   options.calibr.into_params(),
+                calibr_params:   None,
                 calibr_images:   Arc::clone(&self.calibr_images),
                 view_options:    options.preview.preview_params(),
                 frame_options:   options.cam.frame.clone(),

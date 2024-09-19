@@ -628,12 +628,6 @@ impl CameraUi {
             options.calibr.dark_frame_en = chb.is_active();
         }));
 
-        let fch_master_dark = bldr.object::<gtk::FileChooserButton>("fch_master_dark").unwrap();
-        fch_master_dark.connect_file_set(clone!(@weak self as self_ => move |fch| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            options.calibr.dark_frame = fch.filename();
-        }));
-
         let chb_master_flat = bldr.object::<gtk::CheckButton>("chb_master_flat").unwrap();
         chb_master_flat.connect_active_notify(clone!(@weak self as self_ => move |chb| {
             let Ok(mut options) = self_.options.try_write() else { return; };
@@ -687,18 +681,6 @@ impl CameraUi {
             },
 
             MainThreadEvent::FrameProcessing(result) => {
-                match &result.data {
-                    FrameProcessResultData::ResultProcessingTime {
-                        processing, blob_dl
-                    } => {
-                        let perf_str = format!(
-                            "Download time = {:.2}s, img. process time = {:.2}s",
-                            *blob_dl, *processing
-                        );
-                        self.main_ui.set_perf_string(perf_str);
-                    },
-                    _ => {},
-                }
                 self.show_frame_processing_result(result);
             },
 
@@ -1135,7 +1117,7 @@ impl CameraUi {
             ("cb_bin",             bin_supported && can_change_frame_opts),
             ("chb_master_frame",   can_change_cal_ops && (frame_mode_is_flat || frame_mode_is_dark) && !saving_frames),
             ("chb_master_dark",    can_change_cal_ops),
-            ("fch_master_dark",    can_change_cal_ops),
+            ("fch_dark_library",    can_change_cal_ops),
             ("chb_master_flat",    can_change_cal_ops),
             ("fch_master_flat",    can_change_cal_ops),
             ("chb_raw_frames_cnt", !saving_frames && can_change_mode),
@@ -1603,6 +1585,15 @@ impl CameraUi {
         };
 
         match result.data {
+            FrameProcessResultData::ShotProcessingFinished {
+                processing_time, blob_dl_time, ..
+            } => {
+                let perf_str = format!(
+                    "Download time = {:.2}s, img. process time = {:.2}s",
+                    blob_dl_time, processing_time
+                );
+                self.main_ui.set_perf_string(perf_str);
+            }
             FrameProcessResultData::Error(error_text) => {
                 _ = self.core.abort_active_mode();
                 self.correct_widgets_props();
@@ -1657,9 +1648,6 @@ impl CameraUi {
             }
             FrameProcessResultData::MasterSaved { frame_type: FrameType::Flats, file_name } => {
                 ui.set_fch_path("fch_master_flat", Some(&file_name));
-            }
-            FrameProcessResultData::MasterSaved { frame_type: FrameType::Darks, file_name } => {
-                ui.set_fch_path("fch_master_dark", Some(&file_name));
             }
             _ => {}
         }

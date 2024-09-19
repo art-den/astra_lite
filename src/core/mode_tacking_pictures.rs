@@ -5,7 +5,13 @@ use std::{
 use chrono::Utc;
 
 use crate::{
-    core::consts::INDI_SET_PROP_TIMEOUT, guiding::external_guider::*, image::{info::LightFrameInfo, raw::{FrameType, RawAdder, RawImage, RawImageInfo}, stars_offset::*}, indi, options::*, utils::{io_utils::*, timer::Timer}, TimeLogger
+    core::consts::INDI_SET_PROP_TIMEOUT,
+    guiding::external_guider::*,
+    image::{info::LightFrameInfo, raw::{FrameType, RawAdder, RawImage, RawImageInfo}, stars_offset::*},
+    indi,
+    options::*,
+    utils::{io_utils::*, timer::Timer},
+    TimeLogger
 };
 use super::{core::*, frame_processing::*, mode_mount_calibration::*};
 
@@ -89,6 +95,7 @@ pub struct TackingPicturesMode {
     live_stacking:   Option<Arc<LiveStackingData>>,
     save_dir:        PathBuf,
     master_file:     PathBuf,
+    dark_file:       PathBuf, // to extract from light
     refocus:         RefocusData,
     skip_frame_done: bool, // first frame was taken and skipped
 }
@@ -142,6 +149,7 @@ impl TackingPicturesMode {
             live_stacking:   None,
             save_dir:        PathBuf::new(),
             master_file:     PathBuf::new(),
+            dark_file:       PathBuf::new(),
             skip_frame_done: false,
             refocus,
             progress,
@@ -230,86 +238,66 @@ impl TackingPicturesMode {
     }
 
     fn create_file_names_for_raw_saving(&mut self) {
-        let now_date_str = Utc::now().format("%Y-%m-%d").to_string();
         let options = self.options.read().unwrap();
-        let bin = options.cam.frame.binning.get_ratio();
+
         let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.device.prop);
-        let (width, height) =
+        let (sensor_width, sensor_height) =
             self.indi
                 .camera_get_max_frame_size(&self.device.name, cam_ccd)
                 .unwrap_or((0, 0));
-        let cropped_width = options.cam.frame.crop.translate(width/bin);
-        let cropped_height = options.cam.frame.crop.translate(height/bin);
-        let exp_to_str = |exp: f64| {
-            if exp > 1.0 {
-                format!("{:.0}", exp)
-            } else if exp >= 0.1 {
-                format!("{:.1}", exp)
-            } else {
-                format!("{:.3}", exp)
-            }
-        };
-        let mut common_part = format!(
-            "{}s_g{}_offs{}_{}x{}",
-            exp_to_str(options.cam.frame.exposure()),
-            options.cam.frame.gain,
-            options.cam.frame.offset,
-            cropped_width,
-            cropped_height,
-        );
-        if bin != 1 {
-            common_part.push_str(&format!("_bin{}x{}", bin, bin));
-        }
-        let type_part = match options.cam.frame.frame_type {
-            FrameType::Undef => unreachable!(),
-            FrameType::Lights => "light",
-            FrameType::Flats => "flat",
-            FrameType::Darks => "dark",
-            FrameType::Biases => "bias",
-        };
-        let cam_cooler_supported = self.indi
+        let cooler_supported = self.indi
             .camera_is_cooler_supported(&self.device.name)
             .unwrap_or(false);
-        let temp_path = if cam_cooler_supported && options.cam.ctrl.enable_cooler {
-            Some(format!("{:+.0}C", options.cam.ctrl.temperature))
-        } else {
-            None
-        };
-        if options.cam.frame.frame_type != FrameType::Lights {
-            let mut master_file = String::new();
-            master_file.push_str(type_part);
-            master_file.push_str("_");
-            master_file.push_str(&common_part);
-            if options.cam.frame.frame_type != FrameType::Flats {
-                if let Some(temp) = &temp_path {
-                    master_file.push_str("_");
-                    master_file.push_str(&temp);
-                }
-            }
-            if options.cam.frame.frame_type == FrameType::Flats {
-                master_file.push_str("_");
-                master_file.push_str(&now_date_str);
-            }
-            master_file.push_str(".fit");
+        let time = Utc::now();
 
-            let mut path = options.raw_frames.out_path.clone();
-            path.push(&master_file);
+        if options.cam.frame.frame_type != FrameType::Lights {
+            // Full name of calibration master file
+            let master_file_name = options.cam.raw_master_file_name(
+                time,
+                sensor_width,
+                sensor_height,
+                cooler_supported
+            );
+            let mut path = PathBuf::new();
+            if options.cam.frame.frame_type != FrameType::Darks {
+                path.push(&options.raw_frames.out_path);
+            } else {
+                path.push(&options.calibr.dark_library);
+                path.push(&self.device.to_file_name_part());
+            }
+            path.push(&master_file_name);
             self.master_file = path;
         }
-        let mut save_dir = String::new();
-        save_dir.push_str(type_part);
-        save_dir.push_str("_");
-        save_dir.push_str(&now_date_str);
-        save_dir.push_str("__");
-        save_dir.push_str(&common_part);
-        if options.cam.frame.frame_type != FrameType::Flats {
-            if let Some(temp) = &temp_path {
-                save_dir.push_str("_");
-                save_dir.push_str(&temp);
-            }
+
+        if options.cam.frame.frame_type == FrameType::Lights
+        || self.cam_mode == CameraMode::LiveStacking {
+            // Master dark for extracting from light frames
+            let mut cam_dark = options.cam.clone();
+            cam_dark.frame.frame_type = FrameType::Darks;
+            let master_dark_name = cam_dark.raw_master_file_name(
+                time,
+                sensor_width,
+                sensor_height,
+                cooler_supported
+            );
+            let mut path = PathBuf::new();
+            path.push(&options.calibr.dark_library);
+            path.push(&self.device.to_file_name_part());
+            path.push(&master_dark_name);
+            self.dark_file = path;
         }
-        let mut path = options.raw_frames.out_path.clone();
+
+        // Full path for raw images
+        let save_dir = options.cam.raw_file_dest_dir(
+            time,
+            sensor_width,
+            sensor_height,
+            cooler_supported
+        );
+        let mut path = PathBuf::new();
+        path.push(&options.raw_frames.out_path);
         path.push(&save_dir);
+        drop(options);
         self.save_dir = get_free_folder_name(&path);
     }
 
@@ -704,6 +692,14 @@ impl TackingPicturesMode {
         let raw_image = adder.get()?;
         adder.clear();
         drop(adder);
+
+        if let Some(parent) = self.master_file.parent() {
+            if !parent.is_dir() {
+                log::debug!("Creating directory {} ...", parent.to_str().unwrap_or_default());
+                std::fs::create_dir_all(&parent)?;
+            }
+        }
+
         raw_image.save_to_fits_file(&self.master_file)?;
 
         log::debug!("Master frame saved!");
@@ -865,9 +861,7 @@ impl Mode for TackingPicturesMode {
             adder.clear();
         }
 
-        if let CameraMode::SavingRawFrames|CameraMode::LiveStacking = self.cam_mode {
-            self.create_file_names_for_raw_saving();
-        }
+        self.create_file_names_for_raw_saving();
 
         self.start_or_continue()?;
         Ok(())
@@ -992,6 +986,7 @@ impl Mode for TackingPicturesMode {
 
     fn complete_img_process_params(&self, cmd: &mut FrameProcessCommandData) {
         let options = self.options.read().unwrap();
+
         match self.cam_mode {
             CameraMode::SavingRawFrames => {
                 if options.cam.frame.frame_type == FrameType::Lights
@@ -1006,8 +1001,31 @@ impl Mode for TackingPicturesMode {
                     options: options.live.clone(),
                 });
                 cmd.flags |= ProcessImageFlags::CALC_STARS_OFFSET;
-            },
+             },
             _ => {},
+        }
+
+        let light_frames =
+            self.cam_mode == CameraMode::LiveStacking ||
+            self.frame_options.frame_type == FrameType::Lights;
+
+        if light_frames {
+            let master_dark = if options.calibr.dark_frame_en {
+                Some(self.dark_file.clone())
+            } else {
+                None
+            };
+            let master_flat = if options.calibr.flat_frame_en {
+                options.calibr.flat_frame.clone()
+            } else {
+                None
+            };
+            let calibr_params = CalibrParams {
+                dark:       master_dark,
+                flat:       master_flat,
+                hot_pixels: options.calibr.hot_pixels,
+            };
+            cmd.calibr_params = Some(calibr_params);
         }
     }
 

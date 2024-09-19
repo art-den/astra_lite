@@ -91,7 +91,7 @@ impl Options {
     pub fn read_calibration(&mut self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
         self.calibr.dark_frame_en = ui.prop_bool("chb_master_dark.active");
-        self.calibr.dark_frame    = ui.fch_pathbuf("fch_master_dark");
+        self.calibr.dark_library  = ui.fch_pathbuf ("fch_dark_library").unwrap_or_default();
         self.calibr.flat_frame_en = ui.prop_bool("chb_master_flat.active");
         self.calibr.flat_frame    = ui.fch_pathbuf("fch_master_flat");
         self.calibr.hot_pixels    = ui.prop_bool("chb_hot_pixels.active");
@@ -247,7 +247,7 @@ impl Options {
     pub fn show_calibr(&self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
         ui.set_prop_bool("chb_master_dark.active", self.calibr.dark_frame_en);
-        ui.set_fch_path ("fch_master_dark",        self.calibr.dark_frame.as_deref());
+        ui.set_fch_path ("fch_dark_library",       Some(&self.calibr.dark_library));
         ui.set_prop_bool("chb_master_flat.active", self.calibr.flat_frame_en);
         ui.set_fch_path ("fch_master_flat",        self.calibr.flat_frame.as_deref());
         ui.set_prop_bool("chb_hot_pixels.active",  self.calibr.hot_pixels);

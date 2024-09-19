@@ -135,7 +135,7 @@ pub struct FrameProcessCommandData {
     pub frame:           Arc<ResultImage>,
     pub stop_flag:       Arc<AtomicBool>,
     pub ref_stars:       Arc<Mutex<Option<Vec<Point>>>>,
-    pub calibr_params:   CalibrParams,
+    pub calibr_params:   Option<CalibrParams>,
     pub calibr_images:   Arc<Mutex<CalibrImages>>,
     pub view_options:    PreviewParams,
     pub frame_options:   FrameOptions,
@@ -156,9 +156,12 @@ pub enum FrameProcessResultData {
     ShotProcessingStarted,
     RawFrame(Arc<RawImage>),
     ShotProcessingFinished {
-        frame_is_ok:    bool,
-        blob:           Arc<indi::BlobPropValue>,
-        raw_image_info: Arc<RawImageInfo>,
+        frame_is_ok:     bool,
+        blob:            Arc<indi::BlobPropValue>,
+        raw_image_info:  Arc<RawImageInfo>,
+        processing_time: f64,
+        blob_dl_time:    f64,
+
     },
     PreviewFrame(Arc<Preview8BitImgData>),
     PreviewLiveRes(Arc<Preview8BitImgData>),
@@ -170,10 +173,6 @@ pub enum FrameProcessResultData {
     MasterSaved {
         frame_type: FrameType,
         file_name: PathBuf
-    },
-    ResultProcessingTime {
-        processing: f64,
-        blob_dl:    f64,
     },
 }
 
@@ -355,10 +354,11 @@ pub fn get_rgb_data_from_preview_image(
 }
 
 fn apply_calibr_data_and_remove_hot_pixels(
-    params:    &CalibrParams,
+    params:    &Option<CalibrParams>,
     raw_image: &mut RawImage,
     calibr:    &mut CalibrImages,
 ) -> anyhow::Result<()> {
+    let Some(params) = params else { return Ok(()); };
     if let Some(file_name) = &params.dark {
         if calibr.master_dark.is_none()
         || params.dark != calibr.master_dark_fn {
@@ -513,27 +513,11 @@ fn make_preview_image_impl(
     let exposure = raw_info.exposure;
     let frame_type = raw_info.frame_type;
 
-    // Applying calibration data
-    if frame_type == FrameType::Lights {
-        let mut calibr = command.calibr_images.lock().unwrap();
-        apply_calibr_data_and_remove_hot_pixels(&command.calibr_params, &mut raw_image, &mut calibr)?;
-    }
-
-    let raw_image = Arc::new(raw_image);
-
-    send_result(
-        FrameProcessResultData::RawFrame(Arc::clone(&raw_image)),
-        &command.camera,
-        command.mode_type,
-        &command.stop_flag,
-        result_fun
-    );
-
     let is_monochrome_img =
         matches!(frame_type, FrameType::Biases) ||
         matches!(frame_type, FrameType::Darks);
 
-    // Raw histogram
+    // Raw histogram (before applying calibration data)
 
     let mut raw_hist = command.frame.raw_hist.write().unwrap();
     let tmr = TimeLogger::start();
@@ -554,6 +538,22 @@ fn make_preview_image_impl(
     debug_log_hist_chan("B", &raw_hist.b);
 
     drop(raw_hist);
+
+    // Applying calibration data
+    if frame_type == FrameType::Lights {
+        let mut calibr = command.calibr_images.lock().unwrap();
+        apply_calibr_data_and_remove_hot_pixels(&command.calibr_params, &mut raw_image, &mut calibr)?;
+    }
+
+    let raw_image = Arc::new(raw_image);
+
+    send_result(
+        FrameProcessResultData::RawFrame(Arc::clone(&raw_image)),
+        &command.camera,
+        command.mode_type,
+        &command.stop_flag,
+        result_fun
+    );
 
     if command.stop_flag.load(Ordering::Relaxed) {
         log::debug!("Command stopped");
@@ -939,28 +939,15 @@ fn make_preview_image_impl(
         return Ok(());
     }
 
+    let process_time = total_tmr.log("TOTAL PREVIEW");
 
     let result = FrameProcessResultData::ShotProcessingFinished{
         raw_image_info,
-        frame_is_ok: !is_bad_frame,
-        blob:        Arc::clone(&command.blob),
+        frame_is_ok:     !is_bad_frame,
+        blob:            Arc::clone(&command.blob),
+        processing_time: process_time,
+        blob_dl_time:    command.blob.dl_time,
     };
-    send_result(
-        result,
-        &command.camera,
-        command.mode_type,
-        &command.stop_flag,
-        result_fun
-    );
-
-
-    let process_time = total_tmr.log("TOTAL PREVIEW");
-
-    let result = FrameProcessResultData::ResultProcessingTime{
-        processing: process_time,
-        blob_dl:    command.blob.dl_time
-    };
-
     send_result(
         result,
         &command.camera,
