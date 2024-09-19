@@ -101,8 +101,8 @@ impl MountCalibrMode {
             anyhow::bail!("Camera is not selected");
         };
         let mut frame = opts.cam.frame.clone();
-        frame.exp_main = opts.guiding.calibr_exposure;
-        frame.gain = opts.guiding.calibr_gain;
+        frame.exp_main = opts.guiding.main_cam.calibr_exposure;
+        frame.gain = opts.guiding.main_cam.calibr_gain;
         Ok(Self {
             indi:              Arc::clone(indi),
             state:             DitherCalibrState::Undefined,

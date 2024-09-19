@@ -739,8 +739,8 @@ impl CameraUi {
         store_dest.calibr = options.calibr.clone();
         store_dest.focuser_exp = options.focuser.exposure;
         store_dest.focuser_gain = options.focuser.gain;
-        store_dest.guidecal_exp = options.guiding.calibr_exposure;
-        store_dest.guidecal_gain = options.guiding.calibr_gain;
+        store_dest.guidecal_exp = options.guiding.main_cam.calibr_exposure;
+        store_dest.guidecal_gain = options.guiding.main_cam.calibr_gain;
     }
 
     fn select_options_for_camera(
@@ -756,8 +756,8 @@ impl CameraUi {
             options.calibr = stored.calibr.clone();
             options.focuser.exposure = stored.focuser_exp;
             options.focuser.gain = stored.focuser_gain;
-            options.guiding.calibr_exposure = stored.guidecal_exp;
-            options.guiding.calibr_gain = stored.guidecal_gain;
+            options.guiding.main_cam.calibr_exposure = stored.guidecal_exp;
+            options.guiding.main_cam.calibr_gain = stored.guidecal_gain;
         }
         drop(ui_options);
     }
@@ -1152,8 +1152,6 @@ impl CameraUi {
             ("grd_live_stack",     cam_sensitive),
             ("grd_cam_calibr",     cam_sensitive),
             ("bx_light_qual",      cam_sensitive),
-
-            ("spb_guid_max_err",   ui.prop_bool("chb_guid_enabled.active")),
 
             ("l_delay",            liveview_active),
             ("spb_delay",          liveview_active),

@@ -41,18 +41,26 @@ impl Options {
 
     pub fn read_guiding(&mut self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
-        self.guiding.mode                = GuidingMode::from_active_id(ui.prop_string("ch_guide_mode.active-id").as_deref());
-        self.guiding.foc_len             = ui.prop_f64("spb_guid_foc_len.value");
-        self.guiding.dith_period         = ui.prop_string("cb_dith_perod.active-id").and_then(|v| v.parse().ok()).unwrap_or(0);
-        self.guiding.dith_dist           = ui.prop_f64("sb_dith_dist.value") as i32;
-        self.guiding.simp_guid_enabled   = ui.prop_bool("chb_guid_enabled.active");
-        self.guiding.simp_guid_max_error = ui.prop_f64("spb_guid_max_err.value");
+        self.guiding.mode =
+            if ui.prop_bool("rbtn_guide_main_cam.active") {
+                GuidingMode::MainCamera
+            } else if ui.prop_bool("rbtn_guide_ext.active") {
+                GuidingMode::External
+            } else {
+                GuidingMode::Disabled
+            };
+
+        self.guiding.dith_period          = ui.prop_string("cb_dith_perod.active-id").and_then(|v| v.parse().ok()).unwrap_or(0);
+        self.guiding.ext_guider.foc_len   = ui.prop_f64("spb_guid_foc_len.value");
+        self.guiding.ext_guider.dith_dist = ui.prop_f64("sb_ext_dith_dist.value") as i32;
     }
 
     pub fn read_guiding_cam(&mut self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
-        self.guiding.calibr_exposure = ui.prop_f64("spb_mnt_cal_exp.value");
-        self.guiding.calibr_gain     = ui.prop_f64 ("spb_mnt_cal_gain.value");
+        self.guiding.main_cam.dith_dist       = ui.prop_f64("sb_dith_dist.value") as i32;
+        self.guiding.main_cam.calibr_exposure = ui.prop_f64("spb_mnt_cal_exp.value");
+        self.guiding.main_cam.calibr_gain     = ui.prop_f64 ("spb_mnt_cal_gain.value");
+        self.guiding.main_cam.max_error       = ui.prop_f64("spb_guid_max_err.value");
     }
 
     pub fn read_cam(&mut self, builder: &gtk::Builder) {
@@ -185,18 +193,25 @@ impl Options {
 
     pub fn show_guiding(&self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
-        ui.set_prop_str("ch_guide_mode.active-id",  self.guiding.mode.to_active_id());
-        ui.set_prop_f64("spb_guid_foc_len.value",   self.guiding.foc_len);
-        ui.set_prop_str ("cb_dith_perod.active-id", Some(self.guiding.dith_period.to_string().as_str()));
-        ui.set_prop_f64 ("sb_dith_dist.value",      self.guiding.dith_dist as f64);
-        ui.set_prop_bool("chb_guid_enabled.active", self.guiding.simp_guid_enabled);
-        ui.set_prop_f64 ("spb_guid_max_err.value",  self.guiding.simp_guid_max_error);
+        match self.guiding.mode {
+            GuidingMode::Disabled =>
+                ui.set_prop_bool("rbtn_no_guiding.active", true),
+            GuidingMode::MainCamera =>
+                ui.set_prop_bool("rbtn_guide_main_cam.active", true),
+            GuidingMode::External =>
+                ui.set_prop_bool("rbtn_guide_ext.active", true),
+        }
+        ui.set_prop_str("cb_dith_perod.active-id", Some(self.guiding.dith_period.to_string().as_str()));
+        ui.set_prop_f64("spb_guid_foc_len.value",  self.guiding.ext_guider.foc_len);
+        ui.set_prop_f64("sb_ext_dith_dist.value",  self.guiding.ext_guider.dith_dist as f64);
     }
 
     pub fn show_guiding_cam(&self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
-        ui.set_prop_f64 ("spb_mnt_cal_exp.value",  self.guiding.calibr_exposure);
-        ui.set_prop_f64 ("spb_mnt_cal_gain.value", self.guiding.calibr_gain);
+        ui.set_prop_f64("sb_dith_dist.value",     self.guiding.main_cam.dith_dist as f64);
+        ui.set_prop_f64("spb_mnt_cal_exp.value",  self.guiding.main_cam.calibr_exposure);
+        ui.set_prop_f64("spb_mnt_cal_gain.value", self.guiding.main_cam.calibr_gain);
+        ui.set_prop_f64("spb_guid_max_err.value", self.guiding.main_cam.max_error);
     }
 
     pub fn show_cam(&self, builder: &gtk::Builder) {

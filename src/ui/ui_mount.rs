@@ -211,14 +211,10 @@ impl MountUi {
         let mode_type = mode_data.mode.get_type();
         let waiting = mode_type == ModeType::Waiting;
 
-
         let mount_ctrl_sensitive =
             indi_connected &&
             mnt_active &&
-            !mount.is_empty() &&
-            (waiting ||
-            (ui.prop_string("cb_dith_perod.active-id").as_deref() == Some("0") &&
-            !ui.prop_bool("chb_guid_enabled.active")));
+            waiting;
 
         let move_enabled = !ui.prop_bool("chb_parked.active") && mount_ctrl_sensitive;
 

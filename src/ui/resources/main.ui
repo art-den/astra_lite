@@ -504,7 +504,7 @@
                   <object class="GtkLabel">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
-                    <property name="label" translatable="yes">[ Guiding and dithering ]</property>
+                    <property name="label" translatable="yes">[ External software ]</property>
                     <attributes>
                       <attribute name="weight" value="bold"/>
                     </attributes>
@@ -520,27 +520,12 @@
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
                     <property name="halign">start</property>
-                    <property name="label" translatable="yes">Guiding mode:</property>
+                    <property name="label" translatable="yes">Guiding and dihering:</property>
                   </object>
                   <packing>
                     <property name="expand">False</property>
                     <property name="fill">True</property>
                     <property name="position">16</property>
-                  </packing>
-                </child>
-                <child>
-                  <object class="GtkComboBoxText" id="ch_guide_mode">
-                    <property name="visible">True</property>
-                    <property name="can-focus">False</property>
-                    <items>
-                      <item id="main_cam" translatable="yes">By main camera</item>
-                      <item id="phd2" translatable="yes">External program (PHD2)</item>
-                    </items>
-                  </object>
-                  <packing>
-                    <property name="expand">False</property>
-                    <property name="fill">True</property>
-                    <property name="position">17</property>
                   </packing>
                 </child>
                 <child>
@@ -551,11 +536,11 @@
                     <property name="homogeneous">True</property>
                     <child>
                       <object class="GtkButton">
-                        <property name="label" translatable="yes">Work with PHD2</property>
+                        <property name="label" translatable="yes">Connect PHD2</property>
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
                         <property name="receives-default">True</property>
-                        <property name="action-name">win.conn_guid</property>
+                        <property name="action-name">win.conn_phd2</property>
                         <style>
                           <class name="greenbutton"/>
                         </style>
@@ -572,7 +557,7 @@
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
                         <property name="receives-default">True</property>
-                        <property name="action-name">win.disconn_guid</property>
+                        <property name="action-name">win.disconn_phd2</property>
                         <style>
                           <class name="redbutton"/>
                         </style>
@@ -5124,7 +5109,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                 <property name="visible">True</property>
                                 <property name="can-focus">True</property>
                                 <child>
-                                  <!-- n-columns=2 n-rows=10 -->
+                                  <!-- n-columns=2 n-rows=14 -->
                                   <object class="GtkGrid" id="grd_dither">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
@@ -5141,7 +5126,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
-                                        <property name="top-attach">2</property>
+                                        <property name="top-attach">0</property>
                                       </packing>
                                     </child>
                                     <child>
@@ -5160,7 +5145,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       </object>
                                       <packing>
                                         <property name="left-attach">1</property>
-                                        <property name="top-attach">2</property>
+                                        <property name="top-attach">0</property>
                                       </packing>
                                     </child>
                                     <child>
@@ -5172,7 +5157,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
-                                        <property name="top-attach">3</property>
+                                        <property name="top-attach">5</property>
                                       </packing>
                                     </child>
                                     <child>
@@ -5218,21 +5203,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
-                                        <property name="top-attach">9</property>
-                                        <property name="width">2</property>
-                                      </packing>
-                                    </child>
-                                    <child>
-                                      <object class="GtkLabel">
-                                        <property name="visible">True</property>
-                                        <property name="can-focus">False</property>
-                                        <property name="opacity">0.5</property>
-                                        <property name="halign">start</property>
-                                        <property name="label" translatable="yes">For light frames saving and live stacking</property>
-                                      </object>
-                                      <packing>
-                                        <property name="left-attach">0</property>
-                                        <property name="top-attach">0</property>
+                                        <property name="top-attach">10</property>
                                         <property name="width">2</property>
                                       </packing>
                                     </child>
@@ -5245,7 +5216,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       </object>
                                       <packing>
                                         <property name="left-attach">1</property>
-                                        <property name="top-attach">5</property>
+                                        <property name="top-attach">6</property>
                                       </packing>
                                     </child>
                                     <child>
@@ -5257,7 +5228,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
-                                        <property name="top-attach">7</property>
+                                        <property name="top-attach">8</property>
                                       </packing>
                                     </child>
                                     <child>
@@ -5268,20 +5239,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       </object>
                                       <packing>
                                         <property name="left-attach">1</property>
-                                        <property name="top-attach">7</property>
-                                      </packing>
-                                    </child>
-                                    <child>
-                                      <object class="GtkLabel" id="l_guide_mode">
-                                        <property name="visible">True</property>
-                                        <property name="can-focus">False</property>
-                                        <property name="halign">start</property>
-                                        <property name="label" translatable="yes">label</property>
-                                      </object>
-                                      <packing>
-                                        <property name="left-attach">0</property>
-                                        <property name="top-attach">1</property>
-                                        <property name="width">2</property>
+                                        <property name="top-attach">8</property>
                                       </packing>
                                     </child>
                                     <child>
@@ -5291,7 +5249,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       </object>
                                       <packing>
                                         <property name="left-attach">1</property>
-                                        <property name="top-attach">3</property>
+                                        <property name="top-attach">5</property>
                                       </packing>
                                     </child>
                                     <child>
@@ -5330,49 +5288,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
-                                        <property name="top-attach">6</property>
-                                        <property name="width">2</property>
-                                      </packing>
-                                    </child>
-                                    <child>
-                                      <object class="GtkBox">
-                                        <property name="visible">True</property>
-                                        <property name="can-focus">False</property>
-                                        <property name="spacing">5</property>
-                                        <child>
-                                          <object class="GtkCheckButton" id="chb_guid_enabled">
-                                            <property name="label" translatable="yes">Guiding by main camera</property>
-                                            <property name="visible">True</property>
-                                            <property name="can-focus">True</property>
-                                            <property name="receives-default">False</property>
-                                            <property name="draw-indicator">True</property>
-                                            <style>
-                                              <class name="bold"/>
-                                            </style>
-                                          </object>
-                                          <packing>
-                                            <property name="expand">False</property>
-                                            <property name="fill">True</property>
-                                            <property name="position">0</property>
-                                          </packing>
-                                        </child>
-                                        <child>
-                                          <object class="GtkSeparator">
-                                            <property name="visible">True</property>
-                                            <property name="can-focus">False</property>
-                                            <property name="valign">center</property>
-                                            <property name="hexpand">True</property>
-                                          </object>
-                                          <packing>
-                                            <property name="expand">False</property>
-                                            <property name="fill">True</property>
-                                            <property name="position">1</property>
-                                          </packing>
-                                        </child>
-                                      </object>
-                                      <packing>
-                                        <property name="left-attach">0</property>
-                                        <property name="top-attach">4</property>
+                                        <property name="top-attach">7</property>
                                         <property name="width">2</property>
                                       </packing>
                                     </child>
@@ -5385,7 +5301,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
-                                        <property name="top-attach">8</property>
+                                        <property name="top-attach">9</property>
                                       </packing>
                                     </child>
                                     <child>
@@ -5395,7 +5311,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       </object>
                                       <packing>
                                         <property name="left-attach">1</property>
-                                        <property name="top-attach">8</property>
+                                        <property name="top-attach">9</property>
                                       </packing>
                                     </child>
                                     <child>
@@ -5407,7 +5323,112 @@ Useful when the object is not lagre and is in the center of the image.</property
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
-                                        <property name="top-attach">5</property>
+                                        <property name="top-attach">6</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkRadioButton" id="rbtn_no_guiding">
+                                        <property name="label" translatable="yes">Disabled</property>
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">True</property>
+                                        <property name="receives-default">False</property>
+                                        <property name="halign">start</property>
+                                        <property name="active">True</property>
+                                        <property name="draw-indicator">True</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">0</property>
+                                        <property name="top-attach">2</property>
+                                        <property name="width">2</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkRadioButton" id="rbtn_guide_main_cam">
+                                        <property name="label" translatable="yes">By main camera</property>
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">True</property>
+                                        <property name="receives-default">False</property>
+                                        <property name="halign">start</property>
+                                        <property name="active">True</property>
+                                        <property name="draw-indicator">True</property>
+                                        <property name="group">rbtn_no_guiding</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">0</property>
+                                        <property name="top-attach">4</property>
+                                        <property name="width">2</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkRadioButton" id="rbtn_guide_ext">
+                                        <property name="label" translatable="yes">By external guider</property>
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">True</property>
+                                        <property name="receives-default">False</property>
+                                        <property name="halign">start</property>
+                                        <property name="active">True</property>
+                                        <property name="draw-indicator">True</property>
+                                        <property name="group">rbtn_no_guiding</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">0</property>
+                                        <property name="top-attach">12</property>
+                                        <property name="width">2</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkLabel">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="halign">start</property>
+                                        <property name="label" translatable="yes">Dithering distance (px):</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">0</property>
+                                        <property name="top-attach">13</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkSpinButton" id="sb_ext_dith_dist">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">True</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">1</property>
+                                        <property name="top-attach">13</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkSeparator">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">0</property>
+                                        <property name="top-attach">3</property>
+                                        <property name="width">2</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkSeparator">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">0</property>
+                                        <property name="top-attach">11</property>
+                                        <property name="width">2</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkSeparator">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">0</property>
+                                        <property name="top-attach">1</property>
+                                        <property name="width">2</property>
                                       </packing>
                                     </child>
                                   </object>

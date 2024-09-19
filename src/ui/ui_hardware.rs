@@ -11,10 +11,7 @@ use gtk::{prelude::*, glib, glib::clone};
 use itertools::Itertools;
 use chrono::prelude::*;
 use crate::{
-    indi,
-    core::core::Core,
-    options::*,
-    guiding::phd2_conn,
+    core::core::Core, guiding::{external_guider::ExtGuiderType, phd2_conn}, indi, options::*
 };
 use super::{ui_main::*, gtk_utils, indi_widget::*};
 
@@ -105,23 +102,6 @@ impl indi::ConnState {
     }
 }
 
-impl GuidingMode {
-    pub fn from_active_id(id: Option<&str>) -> Self {
-        match id {
-            Some("main_cam")  => Self::MainCamera,
-            Some("phd2")      => Self::Phd2,
-            _                 => Self::MainCamera,
-        }
-    }
-
-    pub fn to_active_id(&self) -> Option<&'static str> {
-        match self {
-            Self::MainCamera => Some("main_cam"),
-            Self::Phd2       => Some("phd2"),
-        }
-    }
-}
-
 enum HardwareEvent {
     Indi(indi::Event),
     Phd2(phd2_conn::Event),
@@ -153,8 +133,8 @@ impl HardwareUi {
         gtk_utils::connect_action(&self.window, self, "help_save_indi",      HardwareUi::handler_action_help_save_indi);
         gtk_utils::connect_action(&self.window, self, "conn_indi",           HardwareUi::handler_action_conn_indi);
         gtk_utils::connect_action(&self.window, self, "disconn_indi",        HardwareUi::handler_action_disconn_indi);
-        gtk_utils::connect_action(&self.window, self, "conn_guid",           HardwareUi::handler_action_conn_guider);
-        gtk_utils::connect_action(&self.window, self, "disconn_guid",        HardwareUi::handler_action_disconn_guider);
+        gtk_utils::connect_action(&self.window, self, "conn_phd2",           HardwareUi::handler_action_conn_phd2);
+        gtk_utils::connect_action(&self.window, self, "disconn_phd2",        HardwareUi::handler_action_disconn_phd2);
         gtk_utils::connect_action(&self.window, self, "clear_hw_log",        HardwareUi::handler_action_clear_hw_log);
         gtk_utils::connect_action(&self.window, self, "enable_all_devs",     HardwareUi::handler_action_enable_all_devices);
         gtk_utils::connect_action(&self.window, self, "disable_all_devs",    HardwareUi::handler_action_disable_all_devices);
@@ -163,11 +143,6 @@ impl HardwareUi {
 
         let chb_remote = self.builder.object::<gtk::CheckButton>("chb_remote").unwrap();
         chb_remote.connect_active_notify(clone!(@weak self as self_ => move |_| {
-            self_.correct_widgets_by_cur_state();
-        }));
-
-        let ch_guide_mode = self.builder.object::<gtk::ComboBoxText>("ch_guide_mode").unwrap();
-        ch_guide_mode.connect_active_id_notify(clone!(@weak self as self_ => move |_| {
             self_.correct_widgets_by_cur_state();
         }));
 
@@ -246,16 +221,11 @@ impl HardwareUi {
             indi::ConnState::Error(_)
         );
         let phd2_working = self.core.phd2().is_working();
-        let phd2_acessible = {
-            let guiding_mode_str = ui.prop_string("ch_guide_mode.active-id");
-            let guiding_mode = GuidingMode::from_active_id(guiding_mode_str.as_deref());
-            guiding_mode == GuidingMode::Phd2
-        };
         gtk_utils::enable_actions(&self.window, &[
             ("conn_indi",    conn_en),
             ("disconn_indi", disconn_en),
-            ("conn_guid",    !phd2_working && phd2_acessible),
-            ("disconn_guid", phd2_working && phd2_acessible),
+            ("conn_phd2",    !phd2_working),
+            ("disconn_phd2", phd2_working),
         ]);
         ui.set_prop_str("lbl_indi_conn_status.label", Some(&status.to_str(false)));
 
@@ -284,7 +254,6 @@ impl HardwareUi {
             ("cb_focuser_drivers",  foc_sensitive),
             ("chb_remote",          !self.indi_drivers.groups.is_empty() && disconnected),
             ("e_remote_addr",       remote && disconnected),
-            ("ch_guide_mode",       !phd2_working),
         ]);
 
         gtk_utils::enable_actions(&self.window, &[
@@ -504,16 +473,16 @@ impl HardwareUi {
         });
     }
 
-    fn handler_action_conn_guider(&self) {
+    fn handler_action_conn_phd2(&self) {
         gtk_utils::exec_and_show_error(&self.window, || {
             self.read_options_from_widgets();
-            self.core.create_ext_guider()?;
+            self.core.create_ext_guider(ExtGuiderType::Phd2)?;
             self.correct_widgets_by_cur_state();
             Ok(())
         });
     }
 
-    fn handler_action_disconn_guider(&self) {
+    fn handler_action_disconn_phd2(&self) {
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.disconnect_ext_guider()?;
             self.correct_widgets_by_cur_state();

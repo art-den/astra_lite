@@ -132,18 +132,6 @@ impl DitheringUi {
         *self.self_.borrow_mut() = None;
     }
 
-    fn apply_ui_options(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let options = self.ui_options.borrow();
-        ui.set_prop_bool("exp_dith.expanded", options.expanded);
-    }
-
-    fn get_ui_options_from_widgets(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let mut options = self.ui_options.borrow_mut();
-        options.expanded = ui.prop_bool("exp_dith.expanded");
-    }
-
     fn init_widgets(&self) {
         let spb_guid_max_err = self.builder.object::<gtk::SpinButton>("spb_guid_max_err").unwrap();
         spb_guid_max_err.set_range(3.0, 50.0);
@@ -156,7 +144,7 @@ impl DitheringUi {
         spb_mnt_cal_exp.set_increments(0.5, 5.0);
 
         let sb_dith_dist = self.builder.object::<gtk::SpinButton>("sb_dith_dist").unwrap();
-        sb_dith_dist.set_range(1.0, 200.0);
+        sb_dith_dist.set_range(1.0, 300.0);
         sb_dith_dist.set_digits(0);
         sb_dith_dist.set_increments(1.0, 10.0);
 
@@ -164,18 +152,76 @@ impl DitheringUi {
         spb_mnt_cal_gain.set_range(0.0, 100_000.0);
         spb_mnt_cal_gain.set_digits(0);
         spb_mnt_cal_gain.set_increments(100.0, 1000.0);
+
+        let sb_ext_dith_dist = self.builder.object::<gtk::SpinButton>("sb_ext_dith_dist").unwrap();
+        sb_ext_dith_dist.set_range(1.0, 300.0);
+        sb_ext_dith_dist.set_digits(0);
+        sb_ext_dith_dist.set_increments(1.0, 10.0);
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
-        let chb_guid_enabled = self.builder.object::<gtk::CheckButton>("chb_guid_enabled").unwrap();
-        chb_guid_enabled.connect_active_notify(
-            clone!(@weak self as self_ => move |_| {
-                self_.correct_widgets_props();
-            })
-        );
-
         gtk_utils::connect_action(&self.window, self, "start_dither_calibr", Self::handler_action_start_dither_calibr);
         gtk_utils::connect_action(&self.window, self, "stop_dither_calibr",  Self::handler_action_stop_dither_calibr);
+
+        let connect_rbtn = |name: &str| {
+            let rbtn = self.builder.object::<gtk::RadioButton>(name).unwrap();
+            let self_ = Rc::clone(self);
+            rbtn.connect_active_notify(move |_| {
+                self_.correct_widgets_props();
+            });
+        };
+
+        connect_rbtn("rbtn_no_guiding");
+        connect_rbtn("rbtn_guide_main_cam");
+        connect_rbtn("rbtn_guide_ext");
+    }
+
+    fn correct_widgets_props(&self) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+
+        let mode_data = self.core.mode_data();
+        let mode_type = mode_data.mode.get_type();
+        drop(mode_data);
+        let can_change_mode =
+            mode_type == ModeType::Waiting ||
+            mode_type == ModeType::SingleShot ||
+            mode_type == ModeType::LiveView;
+        let dither_calibr = mode_type == ModeType::DitherCalibr;
+        let indi_connected = self.indi.state() == indi::ConnState::Connected;
+
+        let disabled = ui.prop_bool("rbtn_no_guiding.active");
+        let by_main_cam = ui.prop_bool("rbtn_guide_main_cam.active");
+        let by_ext = ui.prop_bool("rbtn_guide_ext.active");
+
+        ui.enable_widgets(false, &[
+            ("grd_dither",          indi_connected),
+            ("rbtn_no_guiding",     can_change_mode),
+            ("rbtn_guide_main_cam", can_change_mode),
+            ("rbtn_guide_ext",      can_change_mode),
+            ("cb_dith_perod",       !disabled && can_change_mode),
+            ("sb_dith_dist",        by_main_cam && can_change_mode),
+            ("spb_guid_max_err",    by_main_cam && can_change_mode),
+            ("spb_mnt_cal_exp",     by_main_cam && can_change_mode),
+            ("spb_mnt_cal_gain",    by_main_cam && can_change_mode),
+            ("sb_ext_dith_dist",    by_ext && can_change_mode),
+        ]);
+
+        gtk_utils::enable_actions(&self.window, &[
+            ("start_dither_calibr", !dither_calibr && by_main_cam && can_change_mode),
+            ("stop_dither_calibr", dither_calibr),
+        ]);
+    }
+
+    fn apply_ui_options(&self) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let options = self.ui_options.borrow();
+        ui.set_prop_bool("exp_dith.expanded", options.expanded);
+    }
+
+    fn get_ui_options_from_widgets(&self) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let mut options = self.ui_options.borrow_mut();
+        options.expanded = ui.prop_bool("exp_dith.expanded");
     }
 
     fn handler_action_start_dither_calibr(&self) {
@@ -204,54 +250,4 @@ impl DitheringUi {
     fn handler_action_stop_dither_calibr(&self) {
         self.core.abort_active_mode();
     }
-
-    fn correct_widgets_props(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let mode_data = self.core.mode_data();
-        let mode_type = mode_data.mode.get_type();
-        drop(mode_data);
-
-        let options = self.options.read().unwrap();
-        let mount = options.mount.device.clone();
-        let guiding_mode = options.guiding.mode.clone();
-        drop(options);
-
-        let indi_connected = self.indi.state() == indi::ConnState::Connected;
-
-        let waiting = mode_type == ModeType::Waiting;
-        let single_shot = mode_type == ModeType::SingleShot;
-        let dither_calibr = mode_type == ModeType::DitherCalibr;
-
-        let can_change_mode = waiting || single_shot;
-
-        let dithering_sensitive =
-            indi_connected &&
-            !mount.is_empty() &&
-            (waiting || dither_calibr || single_shot);
-
-        let guiding_info_cap = match guiding_mode {
-            GuidingMode::MainCamera => "By main camera",
-            GuidingMode::Phd2 => "By PHD2 program",
-        };
-        ui.set_prop_str("l_guide_mode.label", Some(guiding_info_cap));
-        let can_guide_by_main_cam = guiding_mode == GuidingMode::MainCamera;
-
-        let guiding_enabled = ui.prop_bool("chb_guid_enabled.active");
-
-        gtk_utils::enable_actions(&self.window, &[
-            ("start_dither_calibr", !dither_calibr && can_change_mode && can_guide_by_main_cam),
-            ("stop_dither_calibr",  dither_calibr),
-        ]);
-
-        ui.enable_widgets(false, &[
-            ("grd_dither",       dithering_sensitive),
-            ("chb_guid_enabled", can_guide_by_main_cam),
-            ("spb_guid_max_err", can_guide_by_main_cam && guiding_enabled),
-            ("l_mnt_cal_exp",    can_guide_by_main_cam && !dither_calibr),
-            ("spb_mnt_cal_exp",  can_guide_by_main_cam && !dither_calibr),
-            ("l_mnt_cal_gain",   can_guide_by_main_cam && !dither_calibr),
-            ("spb_mnt_cal_gain", can_guide_by_main_cam && !dither_calibr),
-        ]);
-    }
-
 }

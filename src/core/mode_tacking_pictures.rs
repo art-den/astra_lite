@@ -437,27 +437,27 @@ impl TackingPicturesMode {
                 let mut rng = rand::thread_rng();
                 prev_dither_x = guider_data.dither_x;
                 prev_dither_y = guider_data.dither_y;
-                guider_data.dither_x = guider_options.dith_dist as f64 * (rng.gen::<f64>() - 0.5);
-                guider_data.dither_y = guider_options.dith_dist as f64 * (rng.gen::<f64>() - 0.5);
+                guider_data.dither_x = guider_options.main_cam.dith_dist as f64 * (rng.gen::<f64>() - 0.5);
+                guider_data.dither_y = guider_options.main_cam.dith_dist as f64 * (rng.gen::<f64>() - 0.5);
                 log::debug!("dithering position = {}px,{}px", guider_data.dither_x, guider_data.dither_y);
                 dithering_flag = true;
             }
         }
 
         // guiding
-        if let (Some(offset), true) = (&info.stars_offset, guider_options.simp_guid_enabled) {
+        if let Some(offset) = &info.stars_offset {
             let mut offset_x = offset.x;
             let mut offset_y = offset.y;
             offset_x -= guider_data.dither_x;
             offset_y -= guider_data.dither_y;
             let diff_dist = f64::sqrt(offset_x * offset_x + offset_y * offset_y);
             log::debug!("diff_dist = {}px", diff_dist);
-            if diff_dist > guider_options.simp_guid_max_error || dithering_flag {
+            if diff_dist > guider_options.main_cam.max_error || dithering_flag {
                 move_offset = Some((-offset_x, -offset_y));
                 log::debug!(
                     "diff_dist > guid_options.max_error ({} > {}), start mount correction",
                     diff_dist,
-                    guider_options.simp_guid_max_error
+                    guider_options.main_cam.max_error
                 );
             }
         } else if dithering_flag {
@@ -533,8 +533,9 @@ impl TackingPicturesMode {
                 guider_data.dither_exp_sum += info.exposure;
                 if guider_data.dither_exp_sum > (guider_options.dith_period * 60) as f64 {
                     guider_data.dither_exp_sum = 0.0;
-                    log::info!("Starting dithering by external guider with {} pixels...", guider_options.dith_dist);
-                    guider.start_dithering(guider_options.dith_dist)?;
+                    let dist = guider_options.ext_guider.dith_dist;
+                    log::info!("Starting dithering by external guider with {} pixels...", dist);
+                    guider.start_dithering(dist)?;
                     self.abort()?;
                     self.state = FramesModeState::ExternalDithering;
                     return Ok(NotifyResult::ModeChanged);
@@ -753,9 +754,11 @@ impl TackingPicturesMode {
         // Guiding and dithering
         if let Some(guid_options) = &self.guider_options {
             let res = match guid_options.mode {
+                GuidingMode::Disabled =>
+                    NotifyResult::Empty,
                 GuidingMode::MainCamera =>
                     self.process_light_frame_info_and_dither_by_main_camera(info)?,
-                GuidingMode::Phd2 =>
+                GuidingMode::External =>
                     self.process_light_frame_info_and_dither_by_ext_guider(info)?,
             };
             if matches!(&res, NotifyResult::Empty) == false { return Ok(res); }
@@ -804,9 +807,7 @@ impl Mode for TackingPicturesMode {
                 }
             }
             if let Some(guid_options) = &self.guider_options {
-                if guid_options.simp_guid_enabled {
-                    extra_modes.push("G");
-                }
+                extra_modes.push("G");
                 if guid_options.dith_period != 0 {
                     extra_modes.push("D");
                 }
@@ -994,7 +995,8 @@ impl Mode for TackingPicturesMode {
         match self.cam_mode {
             CameraMode::SavingRawFrames => {
                 if options.cam.frame.frame_type == FrameType::Lights
-                && !options.mount.device.is_empty() && options.guiding.simp_guid_enabled {
+                && !options.mount.device.is_empty()
+                && options.guiding.mode == GuidingMode::MainCamera {
                     cmd.flags |= ProcessImageFlags::CALC_STARS_OFFSET;
                 }
             },
@@ -1044,7 +1046,7 @@ impl Mode for TackingPicturesMode {
         event: ExtGuiderEvent
     ) -> anyhow::Result<NotifyResult> {
         if let Some(guid_options) = &self.guider_options {
-            if guid_options.mode == GuidingMode::Phd2
+            if guid_options.mode == GuidingMode::External
             && self.state == FramesModeState::ExternalDithering {
                 match event {
                     ExtGuiderEvent::DitheringFinished => {

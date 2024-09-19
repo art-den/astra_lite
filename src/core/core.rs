@@ -205,16 +205,15 @@ impl Core {
         &self.phd2
     }
 
-    pub fn create_ext_guider(self: &Arc<Self>) -> anyhow::Result<()> {
-        let options = self.options.read().unwrap();
+    pub fn create_ext_guider(self: &Arc<Self>, guider: ExtGuiderType) -> anyhow::Result<()> {
         let mut ext_guider = self.ext_guider.lock().unwrap();
-        if ext_guider.is_some() {
-            return Err(anyhow::anyhow!("Already connected"));
+
+        if let Some(ext_guider) = &mut *ext_guider {
+            ext_guider.disconnect()?;
         }
-        match options.guiding.mode {
-            GuidingMode::MainCamera =>
-                return Err(anyhow::anyhow!("External guider in not selected")),
-            GuidingMode::Phd2 => {
+
+        match guider {
+            ExtGuiderType::Phd2 => {
                 let guider = Box::new(ExternalGuiderPhd2::new(&self.phd2));
                 guider.connect()?;
                 *ext_guider = Some(guider);
