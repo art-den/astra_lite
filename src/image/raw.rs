@@ -206,6 +206,10 @@ impl RawImage {
         &self.info
     }
 
+    pub fn set_offset(&mut self, offset: i32) {
+        self.info.zero = offset;
+    }
+
     pub fn row(&self, y: usize) -> &[u16] {
         let pos = y * self.info.width;
         &self.data[pos..pos+self.info.width]

@@ -495,7 +495,12 @@ fn make_preview_image_impl(
     let mut raw_image = create_raw_image_from_blob(&command.blob)?;
     tmr.log("create_raw_image_from_blob");
 
-    let raw_info = raw_image.info();
+    let mut raw_info = raw_image.info().clone();
+    if raw_info.zero == 0 {
+        raw_info.zero = command.frame_options.offset;
+        raw_image.set_offset(raw_info.zero);
+    }
+
     log::debug!("Raw type      = {:?}", raw_info.frame_type);
     log::debug!("Raw width     = {}",   raw_info.width);
     log::debug!("Raw height    = {}",   raw_info.height);
@@ -510,12 +515,9 @@ fn make_preview_image_impl(
         return Ok(());
     }
 
-    let exposure = raw_info.exposure;
-    let frame_type = raw_info.frame_type;
-
     let is_monochrome_img =
-        matches!(frame_type, FrameType::Biases) ||
-        matches!(frame_type, FrameType::Darks);
+        matches!(raw_info.frame_type, FrameType::Biases) ||
+        matches!(raw_info.frame_type, FrameType::Darks);
 
     // Raw histogram (before applying calibration data)
 
@@ -540,7 +542,7 @@ fn make_preview_image_impl(
     drop(raw_hist);
 
     // Applying calibration data
-    if frame_type == FrameType::Lights {
+    if raw_info.frame_type == FrameType::Lights {
         let mut calibr = command.calibr_images.lock().unwrap();
         apply_calibr_data_and_remove_hot_pixels(&command.calibr_params, &mut raw_image, &mut calibr)?;
     }
@@ -561,7 +563,7 @@ fn make_preview_image_impl(
     }
 
     // Raw noise
-    let raw_noise = if frame_type == FrameType::Lights {
+    let raw_noise = if raw_info.frame_type == FrameType::Lights {
         let tmr = TimeLogger::start();
         let noise = raw_image.calc_noise();
         tmr.log("light frame raw noise calculation");
@@ -590,7 +592,7 @@ fn make_preview_image_impl(
         result_fun
     );
 
-    match frame_type {
+    match raw_info.frame_type {
         FrameType::Flats => {
             let hist = command.frame.raw_hist.read().unwrap();
             *command.frame.info.write().unwrap() = ResultImageInfo::FlatInfo(
@@ -645,7 +647,7 @@ fn make_preview_image_impl(
 
     // Remove gradient from light frame
 
-    if frame_type == FrameType::Lights
+    if raw_info.frame_type == FrameType::Lights
     && (command.view_options.remove_gradient
     || command.mode_type == ModeType::LiveStacking) {
         let tmr = TimeLogger::start();
@@ -721,7 +723,7 @@ fn make_preview_image_impl(
         .as_ref()
         .and_then(|qo| if qo.use_max_ovality { Some(qo.max_ovality) } else { None });
 
-    let is_bad_frame = if frame_type == FrameType::Lights {
+    let is_bad_frame = if raw_info.frame_type == FrameType::Lights {
         let mut ref_stars_lock = command.ref_stars.lock().unwrap();
 
         let ref_stars = if command.flags.contains(ProcessImageFlags::CALC_STARS_OFFSET) {
@@ -740,7 +742,7 @@ fn make_preview_image_impl(
             ref_stars,
             true,
         );
-        info.exposure = exposure;
+        info.exposure = raw_info.exposure;
         info.raw_noise = raw_noise;
         tmr.log("TOTAL LightImageInfo::from_image");
 
@@ -791,7 +793,7 @@ fn make_preview_image_impl(
             if let Some(offset) = &info.stars_offset {
                 let mut image_adder = live_stacking.data.adder.write().unwrap();
                 let tmr = TimeLogger::start();
-                image_adder.add(&image, &hist, -offset.x, -offset.y, -offset.angle, exposure);
+                image_adder.add(&image, &hist, -offset.x, -offset.y, -offset.angle, raw_info.exposure);
                 tmr.log("ImageAdder::add");
                 drop(image_adder);
 
@@ -904,7 +906,7 @@ fn make_preview_image_impl(
                 if live_stacking.options.save_enabled {
                     let save_res_interv = live_stacking.options.save_minutes as f64 * 60.0;
                     let mut save_cnt = live_stacking.data.time_cnt.lock().unwrap();
-                    *save_cnt += exposure;
+                    *save_cnt += raw_info.exposure;
                     if *save_cnt >= save_res_interv {
                         *save_cnt = 0.0;
                         drop(save_cnt);
