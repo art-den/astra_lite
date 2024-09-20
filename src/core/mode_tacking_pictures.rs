@@ -237,7 +237,7 @@ impl TackingPicturesMode {
         }
     }
 
-    fn create_file_names_for_raw_saving(&mut self) {
+    fn create_file_names_for_raw_saving(&mut self) -> anyhow::Result<()> {
         let options = self.options.read().unwrap();
 
         let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.device.prop);
@@ -284,6 +284,14 @@ impl TackingPicturesMode {
             path.push(&options.calibr.dark_library);
             path.push(&self.device.to_file_name_part());
             path.push(&master_dark_name);
+
+            if options.calibr.dark_frame_en && !path.is_file() {
+                anyhow::bail!(
+                    "Dark file not exists in dark library!\n\
+                    Disable 'Subtract DARK frame' or write new dark for this mode"
+                );
+            }
+
             self.dark_file = path;
         }
 
@@ -299,6 +307,8 @@ impl TackingPicturesMode {
         path.push(&save_dir);
         drop(options);
         self.save_dir = get_free_folder_name(&path);
+
+        Ok(())
     }
 
     fn process_light_frame_info_and_refocus(
@@ -861,7 +871,7 @@ impl Mode for TackingPicturesMode {
             adder.clear();
         }
 
-        self.create_file_names_for_raw_saving();
+        self.create_file_names_for_raw_saving()?;
 
         self.start_or_continue()?;
         Ok(())
@@ -1005,11 +1015,8 @@ impl Mode for TackingPicturesMode {
             _ => {},
         }
 
-        let light_frames =
-            self.cam_mode == CameraMode::LiveStacking ||
-            self.frame_options.frame_type == FrameType::Lights;
-
-        if light_frames {
+        if self.frame_options.frame_type == FrameType::Lights
+        || self.cam_mode == CameraMode::LiveStacking {
             let master_dark = if options.calibr.dark_frame_en {
                 Some(self.dark_file.clone())
             } else {
