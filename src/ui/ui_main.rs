@@ -363,7 +363,7 @@ impl MainUi {
                         self_.correct_widgets_props();
                         self_.show_mode_caption();
                     },
-                    CoreEvent::Propress(progress) => {
+                    CoreEvent::Propress(progress, _) => {
                         *self_.progress.borrow_mut() = progress;
                         let da_progress = self_.builder.object::<gtk::DrawingArea>("da_progress").unwrap();
                         da_progress.queue_draw();

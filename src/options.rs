@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
 
 use crate::{
-    core::{consts::DIRECTORY, frame_processing::{PreviewImgSize, PreviewParams}}, image::raw::FrameType
+    core::{consts::*, frame_processing::*}, image::raw::FrameType
 };
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -34,7 +34,18 @@ impl Default for IndiOptions {
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
 pub enum Binning {#[default]Orig, Bin2, Bin3, Bin4}
 
-#[derive(Serialize, Deserialize, Debug, Default, Copy, Clone)]
+impl Binning {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Orig => "1x1",
+            Self::Bin2 => "2x2",
+            Self::Bin3 => "3x3",
+            Self::Bin4 => "4x4",
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
 pub enum Crop {#[default]None, P75, P50, P33, P25}
 
 impl Crop {
@@ -45,6 +56,16 @@ impl Crop {
             Crop::P50  => value / 2,
             Crop::P33  => value / 3,
             Crop::P25  => value / 4,
+        }
+    }
+
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::P75 => "75%",
+            Self::P50 => "50%",
+            Self::P33 => "33.3%",
+            Self::P25 => "25%",
         }
     }
 }
@@ -122,45 +143,43 @@ impl FrameOptions {
             _                 => self.exp_main = value,
         }
     }
-
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct CalibrOptions {
-    pub dark_library:  PathBuf,
-    pub dark_frame_en: bool,
-    pub flat_frame_en: bool,
-    pub flat_frame:    Option<PathBuf>,
-    pub hot_pixels:    bool,
+    pub dark_library_path: PathBuf,
+    pub dark_frame_en:     bool,
+    pub flat_frame_en:     bool,
+    pub flat_frame_fname:  Option<PathBuf>,
+    pub hot_pixels:        bool,
 }
 
 impl Default for CalibrOptions {
     fn default() -> Self {
         Self {
-            dark_library:  PathBuf::new(),
-            dark_frame_en: true,
-            flat_frame_en: true,
-            flat_frame:    None,
-            hot_pixels:    true,
+            dark_library_path: PathBuf::new(),
+            dark_frame_en:     true,
+            flat_frame_en:     false,
+            flat_frame_fname:  None,
+            hot_pixels:        true,
         }
     }
 }
 
 impl CalibrOptions {
     pub fn check(&mut self) -> anyhow::Result<()> {
-        if self.dark_library.as_os_str().is_empty() {
+        if self.dark_library_path.as_os_str().is_empty() {
             let mut dark_lib_path = dirs::home_dir().unwrap();
             dark_lib_path.push(DIRECTORY);
-            dark_lib_path.push("DarkLibrary");
+            dark_lib_path.push("DarksLibrary");
             if !dark_lib_path.is_dir() {
                 std::fs::create_dir_all(&dark_lib_path)?;
             }
-            self.dark_library = dark_lib_path;
+            self.dark_library_path = dark_lib_path;
         }
         Ok(())
     }
-
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -188,7 +207,7 @@ impl RawFrameOptions {
         if self.out_path.as_os_str().is_empty() {
             let mut out_path = dirs::home_dir().unwrap();
             out_path.push(DIRECTORY);
-            out_path.push("RawFrames");
+            out_path.push(RAW_FRAMES_DIR);
             if !out_path.is_dir() {
                 std::fs::create_dir_all(&out_path)?;
             }
@@ -224,7 +243,7 @@ impl LiveStackingOptions {
         if self.out_dir.as_os_str().is_empty() {
             let mut save_path = dirs::home_dir().unwrap();
             save_path.push(DIRECTORY);
-            save_path.push("LiveStacking");
+            save_path.push(LIVE_STACKING_DIR);
             if !save_path.is_dir() {
                 std::fs::create_dir_all(&save_path)?;
             }
@@ -531,31 +550,51 @@ impl CamOptions {
 
     pub fn raw_master_file_name(
         &self,
-        time:             DateTime<Utc>,
+        time:             Option<DateTime<Utc>>,
         sensor_width:     usize,
         sensor_height:    usize,
         cooler_supported: bool
     ) -> String {
-        let mut master_file = String::new();
+        let mut result = String::new();
         let type_part = self.type_part_of_file_name();
         let common_part = self.commont_part_of_file_name(sensor_width, sensor_height);
-        master_file.push_str(type_part);
-        master_file.push_str("_");
-        master_file.push_str(&common_part);
+        result.push_str(type_part);
+        result.push_str("_");
+        result.push_str(&common_part);
         if self.frame.frame_type != FrameType::Flats {
             let temp_path = self.temperature_part_of_file_name(cooler_supported);
             if let Some(temp) = &temp_path {
-                master_file.push_str("_");
-                master_file.push_str(&temp);
+                result.push_str("_");
+                result.push_str(&temp);
             }
         }
         if self.frame.frame_type == FrameType::Flats {
+            let time = time.expect("You must define time for master flat file!");
             let now_date_str = time.format("%Y-%m-%d").to_string();
-            master_file.push_str("_");
-            master_file.push_str(&now_date_str);
+            result.push_str("_");
+            result.push_str(&now_date_str);
         }
-        master_file.push_str(".fit");
-        master_file
+        result.push_str(".fit");
+        result
+    }
+
+    pub fn defect_pixels_file_name(
+        &self,
+        sensor_width:  usize,
+        sensor_height: usize,
+    ) -> String {
+        let bin = self.frame.binning.get_ratio();
+        let cropped_width = self.frame.crop.translate(sensor_width/bin);
+        let cropped_height = self.frame.crop.translate(sensor_height/bin);
+
+        let mut result = String::new();
+        result.push_str("defect_pixels");
+        result.push_str(&format!("_{}x{}", cropped_width, cropped_height));
+        if bin != 1 {
+            result.push_str(&format!("_bin{}x{}", bin, bin));
+        }
+        result.push_str(".txt");
+        result
     }
 
     pub fn raw_file_dest_dir(

@@ -1,4 +1,4 @@
-use std::{path::Path, collections::HashSet, fs::File};
+use std::{collections::HashSet, fs::File, io::*, path::Path};
 use chrono::prelude::*;
 use rayon::prelude::*;
 use itertools::{izip, Itertools};
@@ -9,6 +9,33 @@ use super::{image::*, simple_fits::*};
 pub struct BadPixel {
     pub x: isize,
     pub y: isize,
+}
+
+#[derive(Default)]
+pub struct BadPixels{
+    pub items: Vec<BadPixel>,
+}
+
+impl BadPixels {
+    pub fn save_to_file(&self, file_name: &Path) -> anyhow::Result<()> {
+        let mut file = BufWriter::new(File::create(file_name)?);
+        for pixel in &self.items {
+            writeln!(file, "{} {}", pixel.x, pixel.y)?;
+        }
+        Ok(())
+    }
+
+    pub fn load_from_file(&mut self, file_name: &Path) -> anyhow::Result<()> {
+        let file = BufReader::new(File::open(file_name)?);
+        self.items.clear();
+        for line in file.lines().filter_map(|line| line.ok()) {
+            let mut splitted = line.splitn(2, " ");
+            let (Some(x_str), Some(y_str)) = (splitted.next(), splitted.next()) else { continue; };
+            let (Ok(x), Ok(y)) = (x_str.parse(), y_str.parse()) else { continue; };
+            self.items.push(BadPixel{x, y});
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,7 +307,7 @@ impl RawImage {
         }
     }
 
-    pub fn find_hot_pixels_in_master_dark(&self) -> Vec<BadPixel> {
+    pub fn find_hot_pixels_in_master_dark(&self) -> BadPixels {
         #[inline(always)]
         fn find_hot_pixels_step(
             raw:     &RawImage,
@@ -334,10 +361,12 @@ impl RawImage {
             }
         );
 
-        tmp_result
+        let pixels = tmp_result
             .iter()
             .map(|(x, y)| BadPixel{ x: *x as isize, y: *y as isize })
-            .collect()
+            .collect();
+
+        BadPixels{ items: pixels }
     }
 
     pub fn find_hot_pixels_in_light(&self) -> Vec<BadPixel> {

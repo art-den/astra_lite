@@ -10,9 +10,10 @@ pub struct SkymapOptionsDialog {
 }
 
 impl SkymapOptionsDialog {
-    pub fn new(indi: &Arc<indi::Connection>) -> Rc<Self> {
+    pub fn new(indi: &Arc<indi::Connection>, transient_for: &gtk::Window) -> Rc<Self> {
         let builder = gtk::Builder::from_string(include_str!("resources/skymap_options.ui"));
         let dialog = builder.object::<gtk::Dialog>("dialog").unwrap();
+        dialog.set_transient_for(Some(transient_for));
 
         gtk_utils::add_ok_cancel_and_apply_buttons(
             &dialog,

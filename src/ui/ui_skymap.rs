@@ -426,7 +426,10 @@ impl MapUi {
     }
 
     fn handler_action_options(self: &Rc<Self>) {
-        let dialog = SkymapOptionsDialog::new(&self.indi);
+        let dialog = SkymapOptionsDialog::new(
+            &self.indi,
+            self.window.upcast_ref(),
+        );
 
         let options = self.options.read().unwrap();
         let ui_options = self.ui_options.borrow();

@@ -1,6 +1,6 @@
 use std::{rc::Rc, sync::*, cell::{RefCell, Cell}, path::PathBuf};
 use chrono::{DateTime, Local, Utc};
-use gtk::{prelude::*, glib, glib::clone, cairo};
+use gtk::{cairo, glib::{self, clone}, prelude::*};
 use serde::{Serialize, Deserialize};
 use crate::{
     core::{consts::*, core::*, frame_processing::*},
@@ -10,7 +10,7 @@ use crate::{
     ui::gtk_utils::*,
     utils::{io_utils::*, log_utils::*}
 };
-use super::{ui_main::*, gtk_utils, utils::*};
+use super::{gtk_utils, ui_darks_library::DarksLibraryDialog, ui_main::*, utils::*};
 
 pub fn init_ui(
     _app:     &gtk::Application,
@@ -335,6 +335,7 @@ impl CameraUi {
         gtk_utils::connect_action_rc(&self.window, self, "load_image",             Self::handler_action_open_image);
         gtk_utils::connect_action   (&self.window, self, "save_image_preview",     Self::handler_action_save_image_preview);
         gtk_utils::connect_action   (&self.window, self, "save_image_linear",      Self::handler_action_save_image_linear);
+        gtk_utils::connect_action   (&self.window, self, "dark_library",           Self::handler_action_darks_library);
 
         let cb_camera_list = bldr.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
         cb_camera_list.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
@@ -637,7 +638,7 @@ impl CameraUi {
         let fch_master_flat = bldr.object::<gtk::FileChooserButton>("fch_master_flat").unwrap();
         fch_master_flat.connect_file_set(clone!(@weak self as self_ => move |fch| {
             let Ok(mut options) = self_.options.try_write() else { return; };
-            options.calibr.flat_frame = fch.filename();
+            options.calibr.flat_frame_fname = fch.filename();
         }));
 
         let chb_hot_pixels = bldr.object::<gtk::CheckButton>("chb_hot_pixels").unwrap();
@@ -2130,7 +2131,7 @@ impl CameraUi {
     fn show_total_raw_time_impl(&self, options: &Options) {
         let total_time = options.cam.frame.exposure() * options.raw_frames.frame_cnt as f64;
         let text = format!(
-            "{:.1}s x {} = {}",
+            "{:.1}s x {} ~ {}",
             options.cam.frame.exposure(),
             options.raw_frames.frame_cnt,
             seconds_to_total_time_str(total_time, false)
@@ -2187,6 +2188,15 @@ impl CameraUi {
             file_chooser.close();
         }));
         fc.show();
+    }
+
+    fn handler_action_darks_library(&self) {
+        let dialog = DarksLibraryDialog::new(
+            &self.core,
+            &self.options,
+            self.window.upcast_ref(),
+        );
+        dialog.exec();
     }
 
 }

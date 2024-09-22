@@ -7,18 +7,19 @@ pub struct Timer {
 }
 
 struct TimerCommand {
-    fun: Option<Box<dyn Fn() + Sync + Send + 'static>>,
-    time: std::time::Instant,
-    to_ms: u32,
-    periodic: bool,
+    fun:       Option<Box<dyn Fn() + Sync + Send + 'static>>,
+    time:      std::time::Instant,
+    period_ms: u32,
+    periodic:  bool,
 }
 
 impl Drop for Timer {
     fn drop(&mut self) {
         log::info!("Stopping ThreadTimer thread...");
         self.exit_flag.store(true, Ordering::Relaxed);
-        let thread = self.thread.take().unwrap();
-        _ = thread.join();
+        if let Some(thread) = self.thread.take() {
+            _ = thread.join();
+        }
         log::info!("Done!");
     }
 }
@@ -42,15 +43,25 @@ impl Timer {
         }
     }
 
-    pub fn exec(&self, to_ms: u32, periodic: bool, fun: impl Fn() + Sync + Send + 'static) {
+    pub fn exec(
+        &self,
+        period_ms: u32,
+        periodic:  bool,
+        fun:       impl Fn() + Sync + Send + 'static
+    ) {
         let mut commands = self.commands.lock().unwrap();
         let command = TimerCommand {
             fun: Some(Box::new(fun)),
             time: std::time::Instant::now(),
-            to_ms,
+            period_ms,
             periodic,
         };
         commands.push(command);
+    }
+
+    pub fn clear(&self) {
+        let mut commands = self.commands.lock().unwrap();
+        commands.clear();
     }
 
     fn thread_fun(
@@ -60,7 +71,7 @@ impl Timer {
         while !exit_flag.load(Ordering::Relaxed) {
             let mut commands = commands.lock().unwrap();
             for cmd in &mut *commands {
-                if cmd.time.elapsed().as_millis() as u32 >= cmd.to_ms {
+                if cmd.time.elapsed().as_millis() as u32 >= cmd.period_ms {
                     if let Some(fun) = &mut cmd.fun {
                         fun();
                     }

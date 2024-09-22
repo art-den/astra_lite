@@ -1,13 +1,7 @@
 use std::{
-    sync::{
-        Arc,
-        Mutex,
-        atomic::{AtomicBool, Ordering, AtomicU16 },
-        RwLock,
-        RwLockReadGuard,
-        mpsc
-    },
-    any::Any
+    any::Any, collections::HashMap, sync::{
+        atomic::{AtomicBool, AtomicU16, Ordering }, mpsc, Arc, Mutex, RwLock, RwLockReadGuard
+    }
 };
 use gtk::glib::PropertySet;
 
@@ -15,11 +9,7 @@ use crate::{
     core::consts::INDI_SET_PROP_TIMEOUT, guiding::{external_guider::*, phd2_conn, phd2_guider::*}, image::stars_offset::*, indi, options::*, utils::timer::*
 };
 use super::{
-    frame_processing::*,
-    mode_waiting::*,
-    mode_tacking_pictures::*,
-    mode_focusing::*,
-    mode_mount_calibration::*,
+    frame_processing::*, mode_darks_library::*, mode_focusing::*, mode_mount_calibration::*, mode_tacking_pictures::*, mode_waiting::*
 };
 
 #[derive(Clone)]
@@ -32,7 +22,7 @@ pub enum CoreEvent {
     Error(String),
     ModeChanged,
     ModeContinued,
-    Propress(Option<Progress>),
+    Propress(Option<Progress>, ModeType),
     Focusing(FocusingStateEvent),
 }
 
@@ -42,9 +32,13 @@ pub enum ModeType {
     SingleShot,
     LiveView,
     SavingRawFrames,
+    SavingMasterDark,
+    SavingDefectPixels,
     LiveStacking,
     Focusing,
-    DitherCalibr
+    DitherCalibr,
+    CreatingDarks,
+    CreatingDefectPixels,
 }
 
 pub type ModeBox = Box<dyn Mode + Send + Sync>;
@@ -68,15 +62,18 @@ pub trait Mode {
     fn notify_before_frame_processing_start(&mut self, _should_be_processed: &mut bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult, _subscribers: &RwLock<Subscribers>) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
 }
 
 pub enum NotifyResult {
     Empty,
     ProgressChanges,
-    ModeChanged,
+    ModeStrChanged,
     Finished { next_mode: Option<ModeBox> },
     StartFocusing,
     StartMountCalibr,
+    StartCreatingDark(DarkCreationProgramItem),
+    StartCreatingDefectPixelsFiles(DarkCreationProgramItem),
 }
 
 pub struct ModeData {
@@ -98,21 +95,36 @@ impl ModeData {
 type SubscribersFun = dyn Fn(CoreEvent) + Send + Sync + 'static;
 type FrameProcessResultFun = dyn Fn(FrameProcessResult) + Send + Sync + 'static;
 
+pub struct Subscription(usize);
+
 pub struct Subscribers {
-    items:     Vec<Box<SubscribersFun>>,
+    items:     HashMap<usize, Box<SubscribersFun>>,
     frame_evt: Option<Box<FrameProcessResultFun>>,
+    next_id:   usize,
 }
 
 impl Subscribers {
     fn new() -> Self {
         Self {
-            items:     Vec::new(),
+            items:     HashMap::new(),
             frame_evt: None,
+            next_id:   1,
         }
     }
 
-    fn add(&mut self, fun: impl Fn(CoreEvent) + Send + Sync + 'static) {
-        self.items.push(Box::new(fun));
+    fn subscribe(
+        &mut self,
+        fun: impl Fn(CoreEvent) + Send + Sync + 'static
+    ) -> Subscription {
+        let id = self.next_id;
+        self.items.insert(id, Box::new(fun));
+        self.next_id += 1;
+        Subscription(id)
+    }
+
+    fn unsubscribe(&mut self, subscription: Subscription) {
+        let Subscription(id) = subscription;
+        self.items.remove(&id);
     }
 
     fn clear(&mut self) {
@@ -120,31 +132,31 @@ impl Subscribers {
     }
 
     fn inform_error(&self, error_text: &str) {
-        for s in &self.items {
+        for s in self.items.values() {
             s(CoreEvent::Error(error_text.to_string()));
         }
     }
 
     fn inform_mode_changed(&self) {
-        for s in &self.items {
+        for s in self.items.values() {
             s(CoreEvent::ModeChanged);
         }
     }
 
-    fn inform_progress(&self, progress: Option<Progress>) {
-        for s in &self.items {
-            s(CoreEvent::Propress(progress.clone()));
+    fn inform_progress(&self, progress: Option<Progress>, mode_type: ModeType) {
+        for s in self.items.values() {
+            s(CoreEvent::Propress(progress.clone(), mode_type));
         }
     }
 
     fn inform_mode_continued(&self) {
-        for s in &self.items {
+        for s in self.items.values() {
             s(CoreEvent::ModeContinued);
         }
     }
 
     pub fn inform_focusing(&self, data: FocusingStateEvent) {
-        for s in &self.items {
+        for s in self.items.values() {
             s(CoreEvent::Focusing(data.clone()));
         }
     }
@@ -197,8 +209,14 @@ impl Core {
             img_cmds_sender,
         });
         result.connect_indi_events();
+        result.connect_1s_timer_event();
         result.start_taking_frames_restart_timer();
         result
+    }
+
+    pub fn stop(self: &Arc<Self>) {
+        self.abort_active_mode();
+        self.timer.clear();
     }
 
     pub fn phd2(&self) -> &Arc<phd2_conn::Connection> {
@@ -295,6 +313,19 @@ impl Core {
         let mut subscribers = self.subscribers.write().unwrap();
         assert!(subscribers.frame_evt.is_none());
         subscribers.frame_evt = Some(Box::new(fun));
+    }
+
+    fn connect_1s_timer_event(self: &Arc<Self>) {
+        let self_ = Arc::clone(self);
+        self.timer.exec(1000, true, move || {
+            let result = || -> anyhow::Result<()> {
+                let mut mode_data = self_.mode_data.write().unwrap();
+                let result = mode_data.mode.notify_timer_1s()?;
+                self_.apply_change_result(result, &mut mode_data)?;
+                Ok(())
+            }();
+            self_.process_error(result, "Core::connect_events (timer closure)");
+        });
     }
 
     fn connect_indi_events(self: &Arc<Self>) {
@@ -511,9 +542,14 @@ impl Core {
     pub fn subscribe_events(
         &self,
         fun: impl Fn(CoreEvent) + Send + Sync + 'static
-    ) {
+    ) -> Subscription {
         let mut subscribers = self.subscribers.write().unwrap();
-        subscribers.add(fun);
+        subscribers.subscribe(fun)
+    }
+
+    pub fn unsubscribe_events(&self, subscription: Subscription) {
+        let mut subscribers = self.subscribers.write().unwrap();
+        subscribers.unsubscribe(subscription);
     }
 
     pub fn unsubscribe_all(&self) {
@@ -534,9 +570,10 @@ impl Core {
         mode_data.mode = Box::new(mode);
         mode_data.finished_mode = None;
         let progress = mode_data.mode.progress();
+        let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_progress(progress);
+        subscribers.inform_progress(progress, mode_type);
         subscribers.inform_mode_changed();
         Ok(())
     }
@@ -554,9 +591,10 @@ impl Core {
         mode_data.mode = Box::new(mode);
         mode_data.finished_mode = None;
         let progress = mode_data.mode.progress();
+        let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_progress(progress);
+        subscribers.inform_progress(progress, mode_type);
         subscribers.inform_mode_changed();
         Ok(())
     }
@@ -577,9 +615,10 @@ impl Core {
         mode_data.aborted_mode = None;
         mode_data.finished_mode = None;
         let progress = mode_data.mode.progress();
+        let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_progress(progress);
+        subscribers.inform_progress(progress, mode_type);
         subscribers.inform_mode_changed();
         Ok(())
     }
@@ -601,9 +640,10 @@ impl Core {
         mode_data.aborted_mode = None;
         mode_data.finished_mode = None;
         let progress = mode_data.mode.progress();
+        let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_progress(progress);
+        subscribers.inform_progress(progress, mode_type);
         subscribers.inform_mode_changed();
         Ok(())
     }
@@ -616,9 +656,10 @@ impl Core {
         mode.start()?;
         mode_data.mode = Box::new(mode);
         let progress = mode_data.mode.progress();
+        let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_progress(progress);
+        subscribers.inform_progress(progress, mode_type);
         subscribers.inform_mode_changed();
         Ok(())
     }
@@ -631,9 +672,35 @@ impl Core {
         mode.start()?;
         mode_data.mode = Box::new(mode);
         let progress = mode_data.mode.progress();
+        let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_progress(progress);
+        subscribers.inform_progress(progress, mode_type);
+        subscribers.inform_mode_changed();
+        Ok(())
+    }
+
+    pub fn start_creating_dark_library(
+        &self,
+        mode:    DarkLibMode,
+        program: &[DarkCreationProgramItem]
+    ) -> anyhow::Result<()> {
+        self.init_cam_before_start()?;
+        let mut mode_data = self.mode_data.write().unwrap();
+        mode_data.mode.abort()?;
+        let mut mode = DarkCreationMode::new(
+            mode,
+            &self.options,
+            &self.indi,
+            program
+        )?;
+        mode.start()?;
+        mode_data.mode = Box::new(mode);
+        let progress = mode_data.mode.progress();
+        let mode_type = mode_data.mode.get_type();
+        drop(mode_data);
+        let subscribers = self.subscribers.read().unwrap();
+        subscribers.inform_progress(progress, mode_type);
         subscribers.inform_mode_changed();
         Ok(())
     }
@@ -702,10 +769,11 @@ impl Core {
         mode_data.mode = perv_mode;
         mode_data.mode.continue_work()?;
         let progress = mode_data.mode.progress();
+        let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
         subscribers.inform_mode_continued();
-        subscribers.inform_progress(progress);
+        subscribers.inform_progress(progress, mode_type);
         subscribers.inform_mode_changed();
         Ok(())
     }
@@ -721,7 +789,7 @@ impl Core {
             NotifyResult::ProgressChanges => {
                 progress_changed = true;
             }
-            NotifyResult::ModeChanged => {
+            NotifyResult::ModeStrChanged => {
                 mode_changed = true;
                 progress_changed = true;
             }
@@ -756,6 +824,25 @@ impl Core {
                 mode_changed = true;
                 progress_changed = true;
             }
+            NotifyResult::StartCreatingDark(item) => {
+                self.start_dark_libarary_mode(
+                    mode_data,
+                    CameraMode::SavingMasterDark,
+                    &item
+                )?;
+                mode_changed = true;
+                progress_changed = true;
+            }
+            NotifyResult::StartCreatingDefectPixelsFiles(item) => {
+                self.start_dark_libarary_mode(
+                    mode_data,
+                    CameraMode::SavingDefectPixels,
+                    &item
+                )?;
+                mode_changed = true;
+                progress_changed = true;
+            }
+
             _ => {}
         }
 
@@ -765,10 +852,29 @@ impl Core {
                 subscribers.inform_mode_changed();
             }
             if progress_changed {
-                subscribers.inform_progress(mode_data.mode.progress());
+                subscribers.inform_progress(
+                    mode_data.mode.progress(),
+                    mode_data.mode.get_type()
+                );
             }
         }
 
+        Ok(())
+    }
+
+    fn start_dark_libarary_mode(
+        self: &Arc<Self>,
+        mode_data: &mut ModeData,
+        mode: CameraMode,
+        program_item: &DarkCreationProgramItem
+    ) -> anyhow::Result<()> {
+        mode_data.mode.abort()?;
+        let prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
+        let mut mode = TackingPicturesMode::new(&self.indi, None, mode, &self.options,)?;
+        mode.set_dark_creation_program_item(program_item);
+        mode.set_next_mode(Some(prev_mode));
+        mode.start()?;
+        mode_data.mode = Box::new(mode);
         Ok(())
     }
 }

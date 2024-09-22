@@ -263,7 +263,7 @@ impl FocusingMode {
 
                     if self.stage == FocusingStage::Preliminary {
                         self.start_stage(result_pos, FocusingStage::Final)?;
-                        result = NotifyResult::ModeChanged;
+                        result = NotifyResult::ModeStrChanged;
                         return Ok(result)
                     }
 

@@ -272,7 +272,7 @@ impl MountCalibrMode {
             self.attempt_num += 1;
             result = NotifyResult::ProgressChanges;
             if self.attempt_num >= DITHER_CALIBR_ATTEMPTS_CNT {
-                result = NotifyResult::ModeChanged;
+                result = NotifyResult::ModeStrChanged;
                 self.process_axis_results()?;
             } else {
                 let (ns, we) = match self.axis {

@@ -13,7 +13,7 @@ use crate::{
     utils::{io_utils::*, timer::Timer},
     TimeLogger
 };
-use super::{core::*, frame_processing::*, mode_mount_calibration::*};
+use super::{core::*, frame_processing::*, mode_darks_library::DarkCreationProgramItem, mode_mount_calibration::*};
 
 const MAX_TIMED_GUIDE: f64 = 20.0; // in seconds
 
@@ -49,6 +49,8 @@ pub enum CameraMode {
     SingleShot,
     LiveView,
     SavingRawFrames,
+    SavingMasterDark,
+    SavingDefectPixels,
     LiveStacking,
 }
 
@@ -74,6 +76,31 @@ struct RefocusData {
     fwhm:     Vec<f32>,
 }
 
+#[derive(Default)]
+struct Flags {
+    skip_frame_done:    bool,
+    save_raw_files:     bool,
+    use_raw_adder:      bool,
+    use_calibr_files:   bool, // use masterd dark or defect pixels files
+    save_master_file:   bool,
+    save_defect_pixels: bool,
+}
+
+#[derive(Default, Debug)]
+struct OutFileNames {
+    raw_files_dir:       PathBuf,
+    master_fname:        PathBuf,
+    defect_pixels_fname: PathBuf,
+    dark_fname:          PathBuf, // to extract from light
+}
+
+#[derive(Default)]
+struct CamInfo {
+    sensor_width: usize,
+    sensor_height: usize,
+    cooler_supported: bool,
+}
+
 pub struct TackingPicturesMode {
     cam_mode:        CameraMode,
     state:           FramesModeState,
@@ -84,7 +111,7 @@ pub struct TackingPicturesMode {
     timer:           Option<Arc<Timer>>,
     raw_adder:       Arc<Mutex<RawAdder>>,
     options:         Arc<RwLock<Options>>,
-    frame_options:   FrameOptions,
+    cam_options:     CamOptions,
     focus_options:   Option<FocuserOptions>,
     guider_options:  Option<GuidingOptions>,
     ref_stars:       Option<Arc<Mutex<Option<Vec<Point>>>>>,
@@ -93,11 +120,11 @@ pub struct TackingPicturesMode {
     simple_guider:   Option<SimpleGuider>,
     guider:          Option<ExtGuiderData>,
     live_stacking:   Option<Arc<LiveStackingData>>,
-    save_dir:        PathBuf,
-    master_file:     PathBuf,
-    dark_file:       PathBuf, // to extract from light
     refocus:         RefocusData,
-    skip_frame_done: bool, // first frame was taken and skipped
+    flags:           Flags,
+    cam_info:        CamInfo,
+    out_file_names:  OutFileNames,
+    next_mode:       Option<ModeBox>,
 }
 
 impl TackingPicturesMode {
@@ -139,7 +166,7 @@ impl TackingPicturesMode {
             timer:           timer.cloned(),
             raw_adder:       Arc::new(Mutex::new(RawAdder::new())),
             options:         Arc::clone(options),
-            frame_options:   opts.cam.frame.clone(),
+            cam_options:     opts.cam.clone(),
             focus_options:   None,
             guider_options:  None,
             ref_stars:       None,
@@ -147,10 +174,10 @@ impl TackingPicturesMode {
             simple_guider:   None,
             guider:          None,
             live_stacking:   None,
-            save_dir:        PathBuf::new(),
-            master_file:     PathBuf::new(),
-            dark_file:       PathBuf::new(),
-            skip_frame_done: false,
+            out_file_names:  OutFileNames::default(),
+            next_mode:       None,
+            flags:           Flags::default(),
+            cam_info:        CamInfo::default(),
             refocus,
             progress,
         })
@@ -174,6 +201,23 @@ impl TackingPicturesMode {
         self.live_stacking = Some(Arc::clone(live_stacking));
     }
 
+    pub fn set_dark_creation_program_item(&mut self, item: &DarkCreationProgramItem) {
+        self.progress = Some(Progress {cur: 0, total: item.count});
+        if let Some(temperature) = item.temperature {
+            self.cam_options.ctrl.temperature = temperature;
+            self.cam_options.ctrl.enable_cooler = true;
+        }
+        self.cam_options.frame.exp_main = item.exposure;
+        self.cam_options.frame.gain = item.gain;
+        self.cam_options.frame.offset = item.offset;
+        self.cam_options.frame.binning = item.binning;
+        self.cam_options.frame.crop = item.crop;
+    }
+
+    pub fn set_next_mode(&mut self, next_mode: Option<ModeBox>) {
+        self.next_mode = next_mode;
+    }
+
     fn update_options_copies(&mut self) {
         let opts = self.options.read().unwrap();
         let work_mode =
@@ -191,19 +235,30 @@ impl TackingPicturesMode {
         };
     }
 
-    fn correct_options_before_start(&self) {
-        if self.cam_mode == CameraMode::LiveStacking {
-            let mut options = self.options.write().unwrap();
-            options.cam.frame.frame_type = FrameType::Lights;
+    fn correct_options_before_start(&mut self) {
+        match self.cam_mode {
+            CameraMode::LiveStacking => {
+                let mut options = self.options.write().unwrap();
+                options.cam.frame.frame_type = FrameType::Lights;
+                self.cam_options.frame.frame_type = FrameType::Lights;
+            }
+            CameraMode::SavingMasterDark|
+            CameraMode::SavingDefectPixels => {
+                self.cam_options.frame.frame_type = FrameType::Darks;
+            }
+            _ => {}
         }
     }
 
     fn start_or_continue(&mut self) -> anyhow::Result<()> {
         // First frame must be skiped
         // for saving frames and live stacking mode
-        if !self.skip_frame_done
-        && matches!(self.cam_mode, CameraMode::SavingRawFrames|CameraMode::LiveStacking) {
-            let mut frame_opts = self.frame_options.clone();
+        let need_skip_first_frame =
+            self.cam_mode == CameraMode::SavingRawFrames ||
+            self.cam_mode == CameraMode::LiveStacking ||
+            self.cam_mode == CameraMode::SavingMasterDark;
+        if !self.flags.skip_frame_done && need_skip_first_frame {
+            let mut frame_opts = self.cam_options.frame.clone();
             const MAX_EXP: f64 = 1.0;
             if frame_opts.exposure() > MAX_EXP {
                 frame_opts.set_exposure(MAX_EXP);
@@ -218,97 +273,106 @@ impl TackingPicturesMode {
         }
 
         let continuously = self.is_continuous_mode();
-        init_cam_continuous_mode(&self.indi, &self.device, &self.frame_options, continuously)?;
-        apply_camera_options_and_take_shot(&self.indi, &self.device, &self.frame_options)?;
+        init_cam_continuous_mode(&self.indi, &self.device, &self.cam_options.frame, continuously)?;
+        apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
 
         self.state = FramesModeState::Common;
-        self.cur_exposure = self.frame_options.exposure();
+        self.cur_exposure = self.cam_options.frame.exposure();
         Ok(())
     }
 
     fn is_continuous_mode(&self) -> bool {
-        match (&self.cam_mode, &self.frame_options.frame_type) {
-            (CameraMode::SingleShot,      _                ) => false,
-            (CameraMode::LiveView,        _                ) => false,
-            (CameraMode::SavingRawFrames, FrameType::Flats ) => false,
-            (CameraMode::SavingRawFrames, FrameType::Biases) => false,
-            (CameraMode::SavingRawFrames, _                ) => true,
-            (CameraMode::LiveStacking,    _                ) => true,
+        match (&self.cam_mode, &self.cam_options.frame.frame_type) {
+            (CameraMode::SingleShot,         _                ) => false,
+            (CameraMode::LiveView,           _                ) => false,
+            (CameraMode::SavingRawFrames,    FrameType::Flats ) => false,
+            (CameraMode::SavingRawFrames,    FrameType::Biases) => false,
+            (CameraMode::SavingRawFrames,    _                ) => true,
+            (CameraMode::LiveStacking,       _                ) => true,
+            (CameraMode::SavingMasterDark,   _                ) => true,
+            (CameraMode::SavingDefectPixels, _                ) => true,
         }
     }
 
-    fn create_file_names_for_raw_saving(&mut self) -> anyhow::Result<()> {
+    fn generate_output_file_names(&mut self) -> anyhow::Result<()> {
         let options = self.options.read().unwrap();
 
-        let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.device.prop);
-        let (sensor_width, sensor_height) =
-            self.indi
-                .camera_get_max_frame_size(&self.device.name, cam_ccd)
-                .unwrap_or((0, 0));
-        let cooler_supported = self.indi
-            .camera_is_cooler_supported(&self.device.name)
-            .unwrap_or(false);
         let time = Utc::now();
 
-        if options.cam.frame.frame_type != FrameType::Lights {
-            // Full name of calibration master file
-            let master_file_name = options.cam.raw_master_file_name(
-                time,
-                sensor_width,
-                sensor_height,
-                cooler_supported
+        // Calibration master file for saving
+
+        if self.flags.save_master_file {
+            let master_file_name = self.cam_options.raw_master_file_name(
+                Some(time),
+                self.cam_info.sensor_width,
+                self.cam_info.sensor_height,
+                self.cam_info.cooler_supported
             );
             let mut path = PathBuf::new();
-            if options.cam.frame.frame_type != FrameType::Darks {
-                path.push(&options.raw_frames.out_path);
-            } else {
-                path.push(&options.calibr.dark_library);
+            if self.cam_mode == CameraMode::SavingMasterDark {
+                path.push(&options.calibr.dark_library_path);
                 path.push(&self.device.to_file_name_part());
+            } else {
+                path.push(&options.raw_frames.out_path);
             }
             path.push(&master_file_name);
-            self.master_file = path;
+            self.out_file_names.master_fname = path;
         }
 
-        if options.cam.frame.frame_type == FrameType::Lights
-        || self.cam_mode == CameraMode::LiveStacking {
-            // Master dark for extracting from light frames
-            let mut cam_dark = options.cam.clone();
-            cam_dark.frame.frame_type = FrameType::Darks;
-            let master_dark_name = cam_dark.raw_master_file_name(
-                time,
-                sensor_width,
-                sensor_height,
-                cooler_supported
-            );
-            let mut path = PathBuf::new();
-            path.push(&options.calibr.dark_library);
-            path.push(&self.device.to_file_name_part());
-            path.push(&master_dark_name);
+        // Defect pixels file for saving
 
-            if options.calibr.dark_frame_en && !path.is_file() {
-                anyhow::bail!(
-                    "Dark file not exists in dark library!\n\
-                    Disable 'Subtract DARK frame' or write new dark for this mode"
-                );
-            }
-
-            self.dark_file = path;
+        if self.flags.save_defect_pixels {
+            self.out_file_names.defect_pixels_fname = self.get_defect_pixels_file_name(&options);
         }
 
         // Full path for raw images
-        let save_dir = options.cam.raw_file_dest_dir(
-            time,
-            sensor_width,
-            sensor_height,
-            cooler_supported
-        );
-        let mut path = PathBuf::new();
-        path.push(&options.raw_frames.out_path);
-        path.push(&save_dir);
-        drop(options);
-        self.save_dir = get_free_folder_name(&path);
+
+        if self.flags.save_raw_files {
+            let save_dir = self.cam_options.raw_file_dest_dir(
+                time,
+                self.cam_info.sensor_width,
+                self.cam_info.sensor_height,
+                self.cam_info.cooler_supported
+            );
+            let mut path = PathBuf::new();
+            path.push(&options.raw_frames.out_path);
+            path.push(&save_dir);
+            drop(options);
+            self.out_file_names.raw_files_dir = get_free_folder_name(&path);
+        }
+
+        dbg!(&self.out_file_names);
 
         Ok(())
+    }
+
+    fn get_master_dark_file_name(&self, options: &Options) -> PathBuf {
+        let mut cam_dark = self.cam_options.clone();
+        cam_dark.frame.frame_type = FrameType::Darks;
+        let master_dark_name = cam_dark.raw_master_file_name(
+            None,
+            self.cam_info.sensor_width,
+            self.cam_info.sensor_height,
+            self.cam_info.cooler_supported
+        );
+        let mut path = PathBuf::new();
+        path.push(&options.calibr.dark_library_path);
+        path.push(&self.device.to_file_name_part());
+        path.push(&master_dark_name);
+        path
+    }
+
+    fn get_defect_pixels_file_name(&self, options: &Options) -> PathBuf {
+        let defect_pixels_file_name = self.cam_options.defect_pixels_file_name(
+            self.cam_info.sensor_width,
+            self.cam_info.sensor_height,
+        );
+
+        let mut path = PathBuf::new();
+        path.push(&options.calibr.dark_library_path);
+        path.push(&self.device.to_file_name_part());
+        path.push(&defect_pixels_file_name);
+        path
     }
 
     fn process_light_frame_info_and_refocus(
@@ -328,7 +392,7 @@ impl TackingPicturesMode {
         }
 
         // Update exposure sum
-        self.refocus.exp_sum += self.frame_options.exposure();
+        self.refocus.exp_sum += self.cam_options.frame.exposure();
 
         let Some(focuser_options) = &self.focus_options else {
             return Ok(NotifyResult::Empty);
@@ -498,7 +562,7 @@ impl TackingPicturesMode {
                     log::debug!("Timed guide, NS = {:.2}s, WE = {:.2}s", dec, ra);
                     self.indi.mount_timed_guide(&self.mount_device, dec, ra)?;
                     self.state = FramesModeState::InternalMountCorrection;
-                    return Ok(NotifyResult::ModeChanged);
+                    return Ok(NotifyResult::ModeStrChanged);
                 }
             }
         }
@@ -536,7 +600,7 @@ impl TackingPicturesMode {
                     guider.start_dithering(dist)?;
                     self.abort()?;
                     self.state = FramesModeState::ExternalDithering;
-                    return Ok(NotifyResult::ModeChanged);
+                    return Ok(NotifyResult::ModeStrChanged);
                 }
             }
             Ok(NotifyResult::Empty)
@@ -558,7 +622,9 @@ impl TackingPicturesMode {
         cmd_stop_flag:  &Arc<AtomicBool>,
     ) -> anyhow::Result<NotifyResult> {
         if self.cam_mode == CameraMode::SingleShot {
-            return Ok(NotifyResult::Finished { next_mode: None });
+            return Ok(NotifyResult::Finished {
+                next_mode: self.next_mode.take()
+            });
         }
 
         if self.state != FramesModeState::Common
@@ -578,7 +644,9 @@ impl TackingPicturesMode {
             }
             if progress.cur == progress.total {
                 abort_camera_exposure(&self.indi, &self.device)?;
-                result = NotifyResult::Finished { next_mode: None };
+                result = NotifyResult::Finished {
+                    next_mode: self.next_mode.take()
+                };
                 is_last_frame = true;
             } else {
                 let have_shart_new_shot = match (&self.cam_mode, frame_type) {
@@ -587,36 +655,27 @@ impl TackingPicturesMode {
                     _ => false
                 };
                 if have_shart_new_shot {
-                    apply_camera_options_and_take_shot(&self.indi, &self.device, &self.frame_options)?;
+                    apply_camera_options_and_take_shot(
+                        &self.indi,
+                        &self.device,
+                        &self.cam_options.frame
+                    )?;
                 }
             }
         }
 
         // Save raw image
-        if frame_is_ok {
-            let have_to_save_raw = match self.cam_mode {
-                CameraMode::SavingRawFrames =>
-                    true,
-                CameraMode::LiveStacking =>
-                    self.options.read().unwrap().live.save_orig,
-                _ =>
-                    false,
-            };
-
-            if have_to_save_raw {
-                self.save_raw_image(blob, raw_image_info)?;
-            }
+        if frame_is_ok && self.flags.save_raw_files {
+            self.save_raw_image(blob, raw_image_info)?;
         }
 
         // Save master file
-        if is_last_frame
-        && Self::is_frame_type_for_raw_adder(frame_type)
-        && self.options.read().unwrap().raw_frames.create_master {
+        if is_last_frame && self.flags.save_master_file {
             self.save_master_file()?;
 
             let result = FrameProcessResultData::MasterSaved {
                 frame_type: raw_image_info.frame_type,
-                file_name: self.master_file.clone()
+                file_name: self.out_file_names.master_fname.clone()
             };
 
             let event = FrameProcessResult {
@@ -628,6 +687,10 @@ impl TackingPicturesMode {
 
             let subscribers = subscribers.read().unwrap();
             subscribers.inform_frame_process_result(event);
+        }
+
+        if is_last_frame && self.flags.save_defect_pixels {
+            self.save_defect_pixels_file()?;
         }
 
         if self.state == FramesModeState::WaitingForMountCalibration {
@@ -668,19 +731,19 @@ impl TackingPicturesMode {
             FrameType::Biases => "bias",
             FrameType::Undef => unreachable!(),
         };
-        if !self.save_dir.is_dir() {
-            std::fs::create_dir_all(&self.save_dir)
+        if !self.out_file_names.raw_files_dir.is_dir() {
+            std::fs::create_dir_all(&self.out_file_names.raw_files_dir)
                 .map_err(|e|anyhow::anyhow!(
                     "Error '{}'\nwhen trying to create directory '{}' for saving RAW frame",
                     e.to_string(),
-                    self.save_dir.to_str().unwrap_or_default()
+                    self.out_file_names.raw_files_dir.to_str().unwrap_or_default()
                 ))?;
         }
         let mut file_ext = blob.format.as_str().trim();
         while file_ext.starts_with('.') { file_ext = &file_ext[1..]; }
         let fn_mask = format!("{}_${{num}}.{}", prefix, file_ext);
         let mut fn_gen = self.fn_gen.lock().unwrap();
-        let file_name = fn_gen.generate(&self.save_dir, &fn_mask);
+        let file_name = fn_gen.generate(&self.out_file_names.raw_files_dir, &fn_mask);
         drop(fn_gen);
 
         let tmr = TimeLogger::start();
@@ -703,16 +766,41 @@ impl TackingPicturesMode {
         adder.clear();
         drop(adder);
 
-        if let Some(parent) = self.master_file.parent() {
+        if let Some(parent) = self.out_file_names.master_fname.parent() {
             if !parent.is_dir() {
                 log::debug!("Creating directory {} ...", parent.to_str().unwrap_or_default());
                 std::fs::create_dir_all(&parent)?;
             }
         }
 
-        raw_image.save_to_fits_file(&self.master_file)?;
+        raw_image.save_to_fits_file(&self.out_file_names.master_fname)?;
 
         log::debug!("Master frame saved!");
+        Ok(())
+    }
+
+    fn save_defect_pixels_file(&mut self) -> anyhow::Result<()> {
+        log::debug!("Saving defect pixels file...");
+        let mut adder = self.raw_adder.lock().unwrap();
+
+        let raw_image = adder.get()?;
+        adder.clear();
+        drop(adder);
+
+        if let Some(parent) = self.out_file_names.defect_pixels_fname.parent() {
+            if !parent.is_dir() {
+                log::debug!("Creating directory {} ...", parent.to_str().unwrap_or_default());
+                std::fs::create_dir_all(&parent)?;
+            }
+        }
+
+        let defect_pixels = raw_image.find_hot_pixels_in_master_dark();
+        defect_pixels.save_to_file(&self.out_file_names.defect_pixels_fname)?;
+
+        dbg!(defect_pixels.items.len());
+
+        log::debug!("Defect pixels file saved!");
+
         Ok(())
     }
 
@@ -734,7 +822,7 @@ impl TackingPicturesMode {
         let frame_for_raw_adder =
             Self::is_frame_type_for_raw_adder(raw_image.info().frame_type);
 
-        if frame_for_raw_adder {
+        if frame_for_raw_adder && self.flags.use_raw_adder {
             self.add_raw_image(raw_image)?;
         }
         Ok(NotifyResult::Empty)
@@ -772,16 +860,51 @@ impl TackingPicturesMode {
 
         Ok(NotifyResult::Empty)
     }
+
+    fn get_dark_creation_short_info(&self) -> String {
+        let mut result = String::new();
+        if self.cam_options.ctrl.enable_cooler {
+            result += &format!("{:.1}°С ", self.cam_options.ctrl.temperature);
+        }
+        result += &format!(
+            "{:.1}s g:{:.0} offs:{}",
+            self.cam_options.frame.exposure(),
+            self.cam_options.frame.gain,
+            self.cam_options.frame.offset,
+        );
+        if self.cam_options.frame.binning != Binning::Orig {
+            result += &format!(" bin:{}", self.cam_options.frame.binning.to_str());
+        }
+        if self.cam_options.frame.crop != Crop::None {
+            result += &format!(" crop:{}", self.cam_options.frame.crop.to_str());
+        }
+        result
+    }
+
+    fn get_defect_pixels_creation_short_info(&self) -> String {
+        format!(
+            "bin:{} crop:{}",
+            self.cam_options.frame.binning.to_str(),
+            self.cam_options.frame.crop.to_str(),
+        )
+    }
+
 }
 
 impl Mode for TackingPicturesMode {
     fn get_type(&self) -> ModeType {
         match self.cam_mode {
-            CameraMode::SingleShot => ModeType::SingleShot,
-            CameraMode::LiveView => ModeType::LiveView,
-            CameraMode::SavingRawFrames => ModeType::SavingRawFrames,
-            CameraMode::LiveStacking => ModeType::LiveStacking,
+            CameraMode::SingleShot         => ModeType::SingleShot,
+            CameraMode::LiveView           => ModeType::LiveView,
+            CameraMode::SavingRawFrames    => ModeType::SavingRawFrames,
+            CameraMode::LiveStacking       => ModeType::LiveStacking,
+            CameraMode::SavingMasterDark   => ModeType::SavingMasterDark,
+            CameraMode::SavingDefectPixels => ModeType::SavingDefectPixels,
         }
+    }
+
+    fn cam_device(&self) -> Option<&DeviceAndProp> {
+        Some(&self.device)
     }
 
     fn progress_string(&self) -> String {
@@ -797,13 +920,17 @@ impl Mode for TackingPicturesMode {
             (_, CameraMode::LiveView) =>
                 "Live view from camera".to_string(),
             (_, CameraMode::SavingRawFrames) =>
-                self.frame_options.frame_type.to_readable_str().to_string(),
+                self.cam_options.frame.frame_type.to_readable_str().to_string(),
+            (_, CameraMode::SavingMasterDark) =>
+                format!("Creating master dark ({})", self.get_dark_creation_short_info()),
+            (_, CameraMode::SavingDefectPixels) =>
+                format!("Creating devective pixels files ({})", self.get_defect_pixels_creation_short_info()),
             (_, CameraMode::LiveStacking) =>
                 "Live stacking".to_string(),
         };
         let mut extra_modes = Vec::new();
         if matches!(self.cam_mode, CameraMode::SavingRawFrames|CameraMode::LiveStacking)
-        && self.frame_options.frame_type == FrameType::Lights
+        && self.cam_options.frame.frame_type == FrameType::Lights
         && self.state == FramesModeState::Common {
             if let Some(focus_options) = &self.focus_options {
                 if focus_options.on_fwhm_change
@@ -826,12 +953,12 @@ impl Mode for TackingPicturesMode {
         mode_str
     }
 
-    fn cam_device(&self) -> Option<&DeviceAndProp> {
-        Some(&self.device)
-    }
-
     fn progress(&self) -> Option<Progress> {
         self.progress.clone()
+    }
+
+    fn take_next_mode(&mut self) -> Option<ModeBox> {
+        self.next_mode.take()
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
@@ -847,6 +974,8 @@ impl Mode for TackingPicturesMode {
             &self.cam_mode,
             CameraMode::SingleShot |
             CameraMode::SavingRawFrames|
+            CameraMode::SavingMasterDark|
+            CameraMode::SavingDefectPixels|
             CameraMode::LiveStacking
         )
     }
@@ -862,6 +991,43 @@ impl Mode for TackingPicturesMode {
     fn start(&mut self) -> anyhow::Result<()> {
         self.correct_options_before_start();
         self.update_options_copies();
+
+        let options = self.options.read().unwrap();
+        self.flags.save_raw_files = match self.cam_mode {
+            CameraMode::SavingRawFrames => true,
+            CameraMode::LiveStacking => options.live.save_orig,
+            _ => false,
+        };
+        self.flags.save_master_file = match self.cam_mode {
+            CameraMode::SavingRawFrames =>
+                self.cam_options.frame.frame_type != FrameType::Lights &&
+                options.raw_frames.create_master,
+            CameraMode::SavingMasterDark => true,
+            _ => false,
+        };
+        self.flags.save_defect_pixels = match self.cam_mode {
+            CameraMode::SavingDefectPixels => true,
+            _ => false,
+        };
+        self.flags.use_raw_adder =
+            self.flags.save_master_file ||
+            self.flags.save_defect_pixels;
+        self.flags.use_calibr_files =
+            self.cam_options.frame.frame_type == FrameType::Lights ||
+            self.cam_mode == CameraMode::LiveStacking;
+
+        let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.device.prop);
+        let (sensor_width, sensor_height) =
+            self.indi
+                .camera_get_max_frame_size(&self.device.name, cam_ccd)
+                .unwrap_or((0, 0));
+        self.cam_info.cooler_supported = self.indi
+            .camera_is_cooler_supported(&self.device.name)
+            .unwrap_or(false);
+        self.cam_info.sensor_width = sensor_width;
+        self.cam_info.sensor_height = sensor_height;
+        drop(options);
+
         if let Some(ref_stars) = &mut self.ref_stars {
             let mut ref_stars = ref_stars.lock().unwrap();
             *ref_stars = None;
@@ -871,7 +1037,7 @@ impl Mode for TackingPicturesMode {
             adder.clear();
         }
 
-        self.create_file_names_for_raw_saving()?;
+        self.generate_output_file_names()?;
 
         self.start_or_continue()?;
         Ok(())
@@ -879,7 +1045,7 @@ impl Mode for TackingPicturesMode {
 
     fn abort(&mut self) -> anyhow::Result<()> {
         abort_camera_exposure(&self.indi, &self.device)?;
-        self.skip_frame_done = false; // will skip first frame when continue
+        self.flags.skip_frame_done = false; // will skip first frame when continue
         Ok(())
     }
 
@@ -893,7 +1059,7 @@ impl Mode for TackingPicturesMode {
         if self.cam_mode == CameraMode::SavingRawFrames
         || self.cam_mode == CameraMode::LiveStacking {
             let mut options = self.options.write().unwrap();
-            options.cam.frame = self.frame_options.clone();
+            options.cam.frame = self.cam_options.frame.clone();
         }
         self.start_or_continue()?;
         Ok(())
@@ -915,7 +1081,7 @@ impl Mode for TackingPicturesMode {
         || *event.prop_name != self.device.prop {
             return Ok(NotifyResult::Empty);
         }
-        match (&self.cam_mode, &self.frame_options.frame_type) {
+        match (&self.cam_mode, &self.cam_options.frame.frame_type) {
             (CameraMode::SingleShot,      _                ) => return Ok(NotifyResult::Empty),
             (CameraMode::SavingRawFrames, FrameType::Flats ) => return Ok(NotifyResult::Empty),
             (CameraMode::SavingRawFrames, FrameType::Biases) => return Ok(NotifyResult::Empty),
@@ -924,19 +1090,19 @@ impl Mode for TackingPicturesMode {
         if self.cam_mode == CameraMode::LiveView {
             // We need fresh frame options in live view mode
             let options = self.options.read().unwrap();
-            self.frame_options = options.cam.frame.clone();
+            self.cam_options = options.cam.clone();
         }
         let fast_mode_enabled =
             self.indi.camera_is_fast_toggle_supported(&self.device.name).unwrap_or(false) &&
             self.indi.camera_is_fast_toggle_enabled(&self.device.name).unwrap_or(false);
         if !fast_mode_enabled {
-            self.cur_exposure = self.frame_options.exposure();
-            if !self.frame_options.have_to_use_delay() {
-                apply_camera_options_and_take_shot(&self.indi, &self.device, &self.frame_options)?;
+            self.cur_exposure = self.cam_options.frame.exposure();
+            if !self.cam_options.frame.have_to_use_delay() {
+                apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
             } else {
                 let indi = Arc::clone(&self.indi);
                 let camera = self.device.clone();
-                let frame = self.frame_options.clone();
+                let frame = self.cam_options.frame.clone();
 
                 if let Some(thread_timer) = &self.timer {
                     thread_timer.exec((frame.delay * 1000.0) as u32, false, move || {
@@ -959,9 +1125,9 @@ impl Mode for TackingPicturesMode {
         if self.state == FramesModeState::FrameToSkip {
             *should_be_processed = false;
             self.state = FramesModeState::Common;
-            self.skip_frame_done = true;
+            self.flags.skip_frame_done = true;
             self.start_or_continue()?;
-            return Ok(NotifyResult::ModeChanged)
+            return Ok(NotifyResult::ModeStrChanged)
         }
         Ok(NotifyResult::Empty)
     }
@@ -1015,25 +1181,28 @@ impl Mode for TackingPicturesMode {
             _ => {},
         }
 
-        if self.frame_options.frame_type == FrameType::Lights
-        || self.cam_mode == CameraMode::LiveStacking {
-            let master_dark = if options.calibr.dark_frame_en {
-                Some(self.dark_file.clone())
+        if self.flags.use_calibr_files {
+            let (master_dark, def_pixels) = if options.calibr.dark_frame_en {
+                (Some(self.get_master_dark_file_name(&options)),
+                 Some(self.get_defect_pixels_file_name(&options)))
             } else {
-                None
+                (None, None)
             };
             let master_flat = if options.calibr.flat_frame_en {
-                options.calibr.flat_frame.clone()
+                options.calibr.flat_frame_fname.clone()
             } else {
                 None
             };
             let calibr_params = CalibrParams {
-                dark:       master_dark,
-                flat:       master_flat,
-                hot_pixels: options.calibr.hot_pixels,
+                dark_fname:       master_dark,
+                flat_fname:       master_flat,
+                def_pixels_fname: def_pixels,
+                hot_pixels:       options.calibr.hot_pixels,
             };
             cmd.calibr_params = Some(calibr_params);
         }
+
+        dbg!(&cmd.calibr_params);
     }
 
     fn notify_indi_prop_change(
@@ -1056,10 +1225,19 @@ impl Mode for TackingPicturesMode {
                 && guid_data.cur_timed_guide_w == 0.0
                 && guid_data.cur_timed_guide_e == 0.0 {
                     let continuously = self.is_continuous_mode();
-                    init_cam_continuous_mode(&self.indi, &self.device, &self.frame_options, continuously)?;
-                    apply_camera_options_and_take_shot(&self.indi, &self.device, &self.frame_options)?;
+                    init_cam_continuous_mode(
+                        &self.indi,
+                        &self.device,
+                        &self.cam_options.frame,
+                        continuously
+                    )?;
+                    apply_camera_options_and_take_shot(
+                        &self.indi,
+                        &self.device,
+                        &self.cam_options.frame
+                    )?;
                     self.state = FramesModeState::Common;
-                    result = NotifyResult::ModeChanged;
+                    result = NotifyResult::ModeStrChanged;
                 }
             }
         }
@@ -1075,9 +1253,9 @@ impl Mode for TackingPicturesMode {
             && self.state == FramesModeState::ExternalDithering {
                 match event {
                     ExtGuiderEvent::DitheringFinished => {
-                        self.skip_frame_done = false;
+                        self.flags.skip_frame_done = false;
                         self.start_or_continue()?;
-                        return Ok(NotifyResult::ModeChanged);
+                        return Ok(NotifyResult::ModeStrChanged);
                     }
                     ExtGuiderEvent::Error(error) =>
                         return Err(anyhow::anyhow!("External guider error: {}", error)),

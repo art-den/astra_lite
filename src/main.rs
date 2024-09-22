@@ -127,7 +127,7 @@ fn main() -> anyhow::Result<()> {
         Default::default(),
     );
 
-    application.connect_activate(clone!(@weak options => move |app|
+    application.connect_activate(clone!(@weak options, @weak core => move |app|
         ui::ui_main::init_ui(app, &indi, &options, &core, &logs_dir)
     ));
 
@@ -144,6 +144,9 @@ fn main() -> anyhow::Result<()> {
 
     _ = frame_process_thread.join();
     log::info!("Process thread joined");
+
+    core.stop();
+    log::info!("Core stopped");
 
     Ok(())
 }
