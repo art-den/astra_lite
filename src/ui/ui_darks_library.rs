@@ -697,18 +697,22 @@ impl DarksLibraryDialog {
             }
         };
 
-        if let CoreEvent::Propress(Some(progress), mode_type) = event {
-            match mode_type {
-                ModeType::CreatingDarks => {
-                    show_progress("prb_dark", progress.cur, progress.total);
-                    self.correct_widgets_enable_state();
-                }
-                ModeType::CreatingDefectPixels => {
-                    show_progress("prb_def", progress.cur, progress.total);
-                    self.correct_widgets_enable_state();
-                }
-                _ => {},
+        match event {
+            CoreEvent::Propress(Some(progress), ModeType::CreatingDarks) => {
+                show_progress("prb_dark", progress.cur, progress.total);
+                self.correct_widgets_enable_state();
             }
+
+            CoreEvent::Propress(Some(progress), ModeType::CreatingDefectPixels) => {
+                show_progress("prb_def", progress.cur, progress.total);
+                self.correct_widgets_enable_state();
+            }
+
+            CoreEvent::ModeChanged => {
+                self.correct_widgets_enable_state();
+            }
+
+            _ => {},
         }
     }
 }
