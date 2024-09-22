@@ -482,8 +482,6 @@ impl DarksLibraryDialog {
         let multiple_of_3 = |v| { ((v + 2) / 3) * 3 };
         ui_options.dark_lib.frames_count = multiple_of_3(ui_options.dark_lib.frames_count);
         ui_options.defect_pixels.frames_count = multiple_of_3(ui_options.defect_pixels.frames_count);
-        ui.set_prop_f64("spb_dark_cnt.value", ui_options.dark_lib.frames_count as f64);
-        ui.set_prop_f64("spb_def_cnt.value", ui_options.defect_pixels.frames_count as f64);
     }
 
     fn connect_events(self: &Rc<Self>) {
