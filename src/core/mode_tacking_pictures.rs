@@ -341,8 +341,6 @@ impl TackingPicturesMode {
             self.out_file_names.raw_files_dir = get_free_folder_name(&path);
         }
 
-        dbg!(&self.out_file_names);
-
         Ok(())
     }
 
@@ -709,11 +707,11 @@ impl TackingPicturesMode {
             normalized_flat.normalize_flat();
             tmr.log("Normalizing flat");
             let tmr = TimeLogger::start();
-            adder.add(&normalized_flat)?;
+            adder.add(&normalized_flat, false)?;
             tmr.log("Adding raw calibration frame");
         } else {
             let tmr = TimeLogger::start();
-            adder.add(raw_image)?;
+            adder.add(raw_image, true)?;
             tmr.log("Adding raw calibration frame");
         }
         Ok(())
@@ -1201,8 +1199,6 @@ impl Mode for TackingPicturesMode {
             };
             cmd.calibr_params = Some(calibr_params);
         }
-
-        dbg!(&cmd.calibr_params);
     }
 
     fn notify_indi_prop_change(

@@ -8,6 +8,26 @@ pub fn cmp_f64(v1: &f64, v2: &f64) -> core::cmp::Ordering {
 }
 
 #[inline(always)]
+pub fn median3<T: PartialOrd>(a: T, b: T, c: T) -> T {
+    if (a > b) ^ (a > c) {
+        a
+    } else if (a > b) ^ (b > c) {
+        c
+    } else {
+        b
+    }
+}
+
+#[test]
+fn test_median3() {
+    assert_eq!(median3(1, 2, 3), 2);
+    assert_eq!(median3(2, 3, 1), 2);
+    assert_eq!(median3(3, 1, 2), 2);
+    assert_eq!(median3(1, 3, 2), 2);
+    assert_eq!(median3(3, 2, 1), 2);
+}
+
+#[inline(always)]
 pub fn linear_interpolate(x: f64, x1: f64, x2: f64, y1: f64, y2: f64) -> f64 {
     (x - x1) * (y2 - y1) / (x2 - x1) + y1
 }

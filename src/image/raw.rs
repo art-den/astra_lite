@@ -3,6 +3,8 @@ use chrono::prelude::*;
 use rayon::prelude::*;
 use itertools::{izip, Itertools};
 use serde::{Serialize, Deserialize};
+
+use crate::utils::math::median3;
 use super::{image::*, simple_fits::*};
 
 #[derive(Clone)]
@@ -909,6 +911,7 @@ impl RawImage {
 
 pub struct RawAdder {
     data:     Vec<u32>,
+    images:   Vec<RawImage>,
     info:     Option<RawImageInfo>,
     counter:  u32,
     zero_sum: i32,
@@ -917,9 +920,10 @@ pub struct RawAdder {
 impl RawAdder {
     pub fn new() -> Self {
         Self {
-            data: Vec::new(),
-            info: None,
-            counter: 0,
+            data:     Vec::new(),
+            images:   Vec::new(),
+            info:     None,
+            counter:  0,
             zero_sum: 0,
         }
     }
@@ -927,12 +931,18 @@ impl RawAdder {
     pub fn clear(&mut self) {
         self.data.clear();
         self.data.shrink_to_fit();
+        self.images.clear();
+        self.images.shrink_to_fit();
         self.info = None;
         self.counter = 0;
         self.zero_sum = 0;
     }
 
-    pub fn add(&mut self, raw: &RawImage) -> anyhow::Result<()> {
+    pub fn add(
+        &mut self,
+        raw:        &RawImage,
+        use_median: bool
+    ) -> anyhow::Result<()> {
         if let Some(info) = &self.info {
             if info.width != raw.info.width
             || info.height != raw.info.height {
@@ -954,29 +964,76 @@ impl RawAdder {
             self.zero_sum = 0;
             self.data.resize(raw.data.len(), 0);
         }
-        debug_assert!(self.data.len() == raw.data.len());
-        for (s, d) in raw.data.iter().zip(&mut self.data) {
-            *d += *s as u32;
+        if use_median {
+            if self.images.len() == 2 {
+                let raw1 = &self.images[0];
+                let raw2 = &self.images[1];
+                for (s1, s2, s3, d)
+                in izip!(&raw1.data, &raw2.data, &raw.data, &mut self.data) {
+                    *d += median3(*s1, *s2, *s3) as u32;
+                }
+                self.counter += 1;
+                self.zero_sum += raw.info.zero;
+                self.images.clear();
+                self.images.shrink_to_fit();
+            } else  {
+                self.images.push(raw.clone());
+            }
+        } else {
+            for (s, d) in raw.data.iter().zip(&mut self.data) {
+                *d += *s as u32;
+                self.counter += 1;
+                self.zero_sum += raw.info.zero;
+            }
         }
-        self.counter += 1;
-        self.zero_sum += raw.info.zero;
-
         Ok(())
     }
 
-    pub fn get(&self) -> anyhow::Result<RawImage> {
+    pub fn get(&mut self) -> anyhow::Result<RawImage> {
         let Some(info) = &self.info else {
             anyhow::bail!("Raw added is empty");
         };
-        let counter2 = self.counter/2;
-        let data: Vec<_> = self.data
-            .iter()
-            .map(|v| ((*v + counter2) / self.counter) as u16)
-            .collect();
+
         let cfa_arr = info.cfa.get_array();
         let mut info = info.clone();
-        info.zero = (self.zero_sum + counter2 as i32) / self.counter as i32;
-        Ok(RawImage { info, data, cfa_arr })
+
+        if self.counter == 0 && !self.images.is_empty() {
+            // Median is used but less then 3 images are added.
+            // Just use mean
+            let mut iterators: Vec<_> = self.images
+                .iter()
+                .map(|image| image.data.iter())
+                .collect();
+            let mut data = Vec::new();
+            let count = self.images.len() as u32;
+            let count2 = count / 2;
+            loop {
+                let mut sum = 0u32;
+                let mut ok = false;
+                for iter in &mut iterators {
+                    if let Some(v) = iter.next() {
+                        sum += *v as u32;
+                        ok = true;
+                    } else {
+                        break;
+                    }
+                }
+                if ok {
+                    data.push(((sum + count2) / count) as u16);
+                } else {
+                    break;
+                }
+            }
+            Ok(RawImage { info, data, cfa_arr })
+        } else {
+            let counter2 = self.counter/2;
+            let data: Vec<_> = self.data
+                .iter()
+                .map(|v| ((*v + counter2) / self.counter) as u16)
+                .collect();
+            info.zero = (self.zero_sum + counter2 as i32) / self.counter as i32;
+            Ok(RawImage { info, data, cfa_arr })
+        }
     }
 }
 

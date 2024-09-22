@@ -114,7 +114,7 @@ struct DarkLibOptions {
 impl Default for DarkLibOptions {
     fn default() -> Self {
         Self {
-            frames_count: 20,
+            frames_count: 30,
             temperature:  DarkLibOptionsItem::default(),
             exposure:     DarkLibOptionsItem::default(),
             gain:         DarkLibOptionsItem::default(),
@@ -204,7 +204,7 @@ struct DefectPixelsOptions {
 impl Default for DefectPixelsOptions {
     fn default() -> Self {
         Self {
-            frames_count:     20,
+            frames_count:     18,
             temperature_used: false,
             temperature:      5.0,
             exposure_used:    false,
@@ -339,8 +339,8 @@ impl DarksLibraryDialog {
             spb.set_increments(inc, inc_page);
         };
 
-        init_spinbutton("spb_dark_cnt", 10.0, 1000.0, 0, 1.0, 10.0);
-        init_spinbutton("spb_def_cnt", 10.0, 1000.0, 0, 1.0, 10.0);
+        init_spinbutton("spb_dark_cnt", 3.0, 1000.0, 0, 3.0, 30.0);
+        init_spinbutton("spb_def_cnt", 3.0, 1000.0, 0, 3.0, 30.0);
         init_spinbutton("spb_def_temp", -50.0, 50.0, 0, 1.0, 10.0);
         init_spinbutton("spb_def_exp", 1.0, 1000.0, 0, 1.0, 10.0);
         init_spinbutton("spb_def_gain", 0.0, 100_000.0, 0, 10.0, 100.0);
@@ -476,6 +476,14 @@ impl DarksLibraryDialog {
         ui_options.defect_pixels.crop.crop50 = ui.prop_bool("chb_def_crop50.active");
         ui_options.defect_pixels.crop.crop33 = ui.prop_bool("chb_def_crop33.active");
         ui_options.defect_pixels.crop.crop25 = ui.prop_bool("chb_def_crop25.active");
+
+        // make frames count is multiple of 3
+
+        let multiple_of_3 = |v| { ((v + 2) / 3) * 3 };
+        ui_options.dark_lib.frames_count = multiple_of_3(ui_options.dark_lib.frames_count);
+        ui_options.defect_pixels.frames_count = multiple_of_3(ui_options.defect_pixels.frames_count);
+        ui.set_prop_f64("spb_dark_cnt.value", ui_options.dark_lib.frames_count as f64);
+        ui.set_prop_f64("spb_def_cnt.value", ui_options.defect_pixels.frames_count as f64);
     }
 
     fn connect_events(self: &Rc<Self>) {
