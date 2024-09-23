@@ -8,7 +8,7 @@ use crate::{
     utils::math::*,
     image::info::*,
 };
-use super::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*};
+use super::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*, utils::*};
 
 pub const DITHER_CALIBR_ATTEMPTS_CNT: usize = 11;
 pub const DITHER_CALIBR_SPEED: f64 = 1.0;
@@ -46,9 +46,10 @@ impl MountMoveCalibrRes {
 
 pub struct MountCalibrMode {
     indi:               Arc<indi::Connection>,
+    options:            Arc<RwLock<Options>>,
     state:              DitherCalibrState,
     axis:               DitherCalibrAxis,
-    frame:              FrameOptions,
+    cam_opts:           CamOptions,
     telescope:          TelescopeOptions,
     start_dec:          f64,
     start_ra:           f64,
@@ -69,6 +70,7 @@ pub struct MountCalibrMode {
     next_mode:          Option<Box<dyn Mode + Sync + Send>>,
     can_change_g_rate:  bool,
     calibr_speed:       f64,
+    fname_utils:        FileNameUtils,
 }
 
 #[derive(PartialEq)]
@@ -100,14 +102,15 @@ impl MountCalibrMode {
         let Some(cam_device) = &opts.cam.device else {
             anyhow::bail!("Camera is not selected");
         };
-        let mut frame = opts.cam.frame.clone();
-        frame.exp_main = opts.guiding.main_cam.calibr_exposure;
-        frame.gain = opts.guiding.main_cam.calibr_gain;
+        let mut cam_opts = opts.cam.clone();
+        cam_opts.frame.exp_main = opts.guiding.main_cam.calibr_exposure;
+        cam_opts.frame.gain = opts.guiding.main_cam.calibr_gain;
         Ok(Self {
             indi:              Arc::clone(indi),
+            options:           Arc::clone(options),
             state:             DitherCalibrState::Undefined,
             axis:              DitherCalibrAxis::Undefined,
-            frame,
+            cam_opts,
             telescope:         opts.telescope.clone(),
             start_dec:         0.0,
             start_ra:          0.0,
@@ -128,12 +131,13 @@ impl MountCalibrMode {
             next_mode,
             can_change_g_rate: false,
             calibr_speed:      0.0,
+            fname_utils:       FileNameUtils::default(),
         })
     }
 
     fn start_for_axis(&mut self, axis: DitherCalibrAxis) -> anyhow::Result<()> {
-        init_cam_continuous_mode(&self.indi, &self.camera, &self.frame, false)?;
-        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame)?;
+        init_cam_continuous_mode(&self.indi, &self.camera, &self.cam_opts.frame, false)?;
+        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
 
         let guid_rate_supported = self.indi.mount_is_guide_rate_supported(&self.mount_device)?;
         self.can_change_g_rate =
@@ -293,8 +297,8 @@ impl MountCalibrMode {
                 self.state = DitherCalibrState::WaitForSlew;
             }
         } else {
-            init_cam_continuous_mode(&self.indi, &self.camera, &self.frame, false)?;
-            apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame)?;
+            init_cam_continuous_mode(&self.indi, &self.camera, &self.cam_opts.frame, false)?;
+            apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
         }
         Ok(result)
     }
@@ -330,7 +334,7 @@ impl Mode for MountCalibrMode {
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
-        Some(self.frame.exposure())
+        Some(self.cam_opts.frame.exposure())
     }
 
     fn progress(&self) -> Option<Progress> {
@@ -341,6 +345,8 @@ impl Mode for MountCalibrMode {
     }
 
     fn start(&mut self) -> anyhow::Result<()> {
+        self.fname_utils.init(&self.indi, &self.camera);
+
         self.start_dec = self.indi.mount_get_eq_dec(&self.mount_device)?;
         self.start_ra = self.indi.mount_get_eq_ra(&self.mount_device)?;
         self.start_for_axis(DitherCalibrAxis::Ra)?;
@@ -384,8 +390,8 @@ impl Mode for MountCalibrMode {
                     }
                     if self.cur_timed_guide_n == 0.0 && self.cur_timed_guide_s == 0.0
                     && self.cur_timed_guide_w == 0.0 && self.cur_timed_guide_e == 0.0 {
-                        init_cam_continuous_mode(&self.indi, &self.camera, &self.frame, false)?;
-                        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.frame)?;
+                        init_cam_continuous_mode(&self.indi, &self.camera, &self.cam_opts.frame, false)?;
+                        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
                         self.state = DitherCalibrState::WaitForImage;
                     }
                 }
@@ -417,4 +423,25 @@ impl Mode for MountCalibrMode {
         Ok(result)
     }
 
+    fn complete_img_process_params(&self, cmd: &mut FrameProcessCommandData) {
+        let options = self.options.read().unwrap();
+        let (master_dark, def_pixels) = if options.calibr.dark_frame_en {
+            (Some(self.fname_utils.master_dark_file_name(&self.cam_opts, &options)),
+             Some(self.fname_utils.defect_pixels_file_name(&self.cam_opts, &options)))
+        } else {
+            (None, None)
+        };
+        let master_flat = if options.calibr.flat_frame_en {
+            options.calibr.flat_frame_fname.clone()
+        } else {
+            None
+        };
+        let calibr_params = CalibrParams {
+            dark_fname:       master_dark,
+            flat_fname:       master_flat,
+            def_pixels_fname: def_pixels,
+            hot_pixels:       options.calibr.hot_pixels,
+        };
+        cmd.calibr_params = Some(calibr_params);
+    }
 }

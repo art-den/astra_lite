@@ -360,6 +360,8 @@ fn apply_calibr_data_and_remove_hot_pixels(
     raw_image: &mut RawImage,
     calibr:    &mut CalibrImages,
 ) -> anyhow::Result<()> {
+    dbg!(params);
+
     let Some(params) = params else { return Ok(()); };
 
     // Load defect pixels file

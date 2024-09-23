@@ -13,7 +13,7 @@ use crate::{
     utils::{io_utils::*, timer::Timer},
     TimeLogger
 };
-use super::{core::*, frame_processing::*, mode_darks_library::DarkCreationProgramItem, mode_mount_calibration::*};
+use super::{core::*, frame_processing::*, mode_darks_library::DarkCreationProgramItem, mode_mount_calibration::*, utils::FileNameUtils};
 
 const MAX_TIMED_GUIDE: f64 = 20.0; // in seconds
 
@@ -91,14 +91,6 @@ struct OutFileNames {
     raw_files_dir:       PathBuf,
     master_fname:        PathBuf,
     defect_pixels_fname: PathBuf,
-    dark_fname:          PathBuf, // to extract from light
-}
-
-#[derive(Default)]
-struct CamInfo {
-    sensor_width: usize,
-    sensor_height: usize,
-    cooler_supported: bool,
 }
 
 pub struct TackingPicturesMode {
@@ -122,7 +114,7 @@ pub struct TackingPicturesMode {
     live_stacking:   Option<Arc<LiveStackingData>>,
     refocus:         RefocusData,
     flags:           Flags,
-    cam_info:        CamInfo,
+    fname_utils:     FileNameUtils,
     out_file_names:  OutFileNames,
     next_mode:       Option<ModeBox>,
 }
@@ -177,7 +169,7 @@ impl TackingPicturesMode {
             out_file_names:  OutFileNames::default(),
             next_mode:       None,
             flags:           Flags::default(),
-            cam_info:        CamInfo::default(),
+            fname_utils:     FileNameUtils::default(),
             refocus,
             progress,
         })
@@ -302,12 +294,6 @@ impl TackingPicturesMode {
         // Calibration master file for saving
 
         if self.flags.save_master_file {
-            let master_file_name = self.cam_options.raw_master_file_name(
-                Some(time),
-                self.cam_info.sensor_width,
-                self.cam_info.sensor_height,
-                self.cam_info.cooler_supported
-            );
             let mut path = PathBuf::new();
             if self.cam_mode == CameraMode::SavingMasterDark {
                 path.push(&options.calibr.dark_library_path);
@@ -315,62 +301,36 @@ impl TackingPicturesMode {
             } else {
                 path.push(&options.raw_frames.out_path);
             }
-            path.push(&master_file_name);
+            let file_name = self.fname_utils.master_file_name(
+                Some(time),
+                &self.cam_options,
+            );
+            path.push(&file_name);
             self.out_file_names.master_fname = path;
         }
 
         // Defect pixels file for saving
 
         if self.flags.save_defect_pixels {
-            self.out_file_names.defect_pixels_fname = self.get_defect_pixels_file_name(&options);
+            self.out_file_names.defect_pixels_fname = self.fname_utils.defect_pixels_file_name(
+                &self.cam_options,
+                &options
+            );
         }
 
         // Full path for raw images
 
         if self.flags.save_raw_files {
-            let save_dir = self.cam_options.raw_file_dest_dir(
-                time,
-                self.cam_info.sensor_width,
-                self.cam_info.sensor_height,
-                self.cam_info.cooler_supported
-            );
+            let save_dir = self.fname_utils.raw_file_dest_dir(time, &self.cam_options);
             let mut path = PathBuf::new();
             path.push(&options.raw_frames.out_path);
             path.push(&save_dir);
-            drop(options);
             self.out_file_names.raw_files_dir = get_free_folder_name(&path);
         }
 
+        dbg!(&self.out_file_names);
+
         Ok(())
-    }
-
-    fn get_master_dark_file_name(&self, options: &Options) -> PathBuf {
-        let mut cam_dark = self.cam_options.clone();
-        cam_dark.frame.frame_type = FrameType::Darks;
-        let master_dark_name = cam_dark.raw_master_file_name(
-            None,
-            self.cam_info.sensor_width,
-            self.cam_info.sensor_height,
-            self.cam_info.cooler_supported
-        );
-        let mut path = PathBuf::new();
-        path.push(&options.calibr.dark_library_path);
-        path.push(&self.device.to_file_name_part());
-        path.push(&master_dark_name);
-        path
-    }
-
-    fn get_defect_pixels_file_name(&self, options: &Options) -> PathBuf {
-        let defect_pixels_file_name = self.cam_options.defect_pixels_file_name(
-            self.cam_info.sensor_width,
-            self.cam_info.sensor_height,
-        );
-
-        let mut path = PathBuf::new();
-        path.push(&options.calibr.dark_library_path);
-        path.push(&self.device.to_file_name_part());
-        path.push(&defect_pixels_file_name);
-        path
     }
 
     fn process_light_frame_info_and_refocus(
@@ -1014,16 +974,6 @@ impl Mode for TackingPicturesMode {
             self.cam_options.frame.frame_type == FrameType::Lights ||
             self.cam_mode == CameraMode::LiveStacking;
 
-        let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.device.prop);
-        let (sensor_width, sensor_height) =
-            self.indi
-                .camera_get_max_frame_size(&self.device.name, cam_ccd)
-                .unwrap_or((0, 0));
-        self.cam_info.cooler_supported = self.indi
-            .camera_is_cooler_supported(&self.device.name)
-            .unwrap_or(false);
-        self.cam_info.sensor_width = sensor_width;
-        self.cam_info.sensor_height = sensor_height;
         drop(options);
 
         if let Some(ref_stars) = &mut self.ref_stars {
@@ -1035,6 +985,7 @@ impl Mode for TackingPicturesMode {
             adder.clear();
         }
 
+        self.fname_utils.init(&self.indi, &self.device);
         self.generate_output_file_names()?;
 
         self.start_or_continue()?;
@@ -1181,8 +1132,8 @@ impl Mode for TackingPicturesMode {
 
         if self.flags.use_calibr_files {
             let (master_dark, def_pixels) = if options.calibr.dark_frame_en {
-                (Some(self.get_master_dark_file_name(&options)),
-                 Some(self.get_defect_pixels_file_name(&options)))
+                (Some(self.fname_utils.master_dark_file_name(&self.cam_options, &options)),
+                 Some(self.fname_utils.defect_pixels_file_name(&self.cam_options, &options)))
             } else {
                 (None, None)
             };
