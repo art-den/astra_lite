@@ -922,7 +922,7 @@ impl Mode for TackingPicturesMode {
             (_, CameraMode::SavingMasterDark) =>
                 format!("Creating master dark ({})", self.get_dark_creation_short_info()),
             (_, CameraMode::SavingDefectPixels) =>
-                format!("Creating devective pixels files ({})", self.get_defect_pixels_creation_short_info()),
+                format!("Creating defective pixels files ({})", self.get_defect_pixels_creation_short_info()),
             (_, CameraMode::LiveStacking) =>
                 "Live stacking".to_string(),
         };
