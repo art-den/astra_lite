@@ -89,13 +89,24 @@ pub struct CalibrParams {
 }
 
 #[derive(Default)]
-pub struct CalibrImages {
+pub struct CalibrData {
     master_dark:         Option<RawImage>,
     master_dark_fname:   Option<PathBuf>,
     master_flat:         Option<RawImage>,
     master_flat_fname:   Option<PathBuf>,
     defect_pixels:       Option<BadPixels>,
     defect_pixels_fname: Option<PathBuf>,
+}
+
+impl CalibrData {
+    pub fn clear(&mut self) {
+        self.master_dark = None;
+        self.master_dark_fname = None;
+        self.master_flat = None;
+        self.master_flat_fname = None;
+        self.defect_pixels = None;
+        self.defect_pixels_fname = None;
+    }
 }
 
 pub struct LiveStackingData {
@@ -138,7 +149,7 @@ pub struct FrameProcessCommandData {
     pub stop_flag:       Arc<AtomicBool>,
     pub ref_stars:       Arc<Mutex<Option<Vec<Point>>>>,
     pub calibr_params:   Option<CalibrParams>,
-    pub calibr_images:   Arc<Mutex<CalibrImages>>,
+    pub calibr_data:     Arc<Mutex<CalibrData>>,
     pub view_options:    PreviewParams,
     pub frame_options:   FrameOptions,
     pub quality_options: Option<QualityOptions>,
@@ -358,7 +369,7 @@ pub fn get_rgb_data_from_preview_image(
 fn apply_calibr_data_and_remove_hot_pixels(
     params:    &Option<CalibrParams>,
     raw_image: &mut RawImage,
-    calibr:    &mut CalibrImages,
+    calibr:    &mut CalibrData,
 ) -> anyhow::Result<()> {
     log::debug!("apply_calibr_data_and_remove_hot_pixels params={:?}", params);
 
@@ -605,7 +616,7 @@ fn make_preview_image_impl(
 
     // Applying calibration data
     if raw_info.frame_type == FrameType::Lights {
-        let mut calibr = command.calibr_images.lock().unwrap();
+        let mut calibr = command.calibr_data.lock().unwrap();
         apply_calibr_data_and_remove_hot_pixels(&command.calibr_params, &mut raw_image, &mut calibr)?;
     }
 

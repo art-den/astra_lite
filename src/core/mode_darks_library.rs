@@ -1,6 +1,6 @@
-use std::{collections::VecDeque, sync::{Arc, RwLock}};
+use std::{collections::VecDeque, sync::{Arc, Mutex, RwLock}};
 
-use crate::{indi, options::*, DeviceAndProp, Options};
+use crate::{indi, options::*, core::frame_processing::*};
 
 use super::core::*;
 
@@ -28,6 +28,7 @@ pub struct DarkCreationProgramItem {
 
 pub struct DarkCreationMode {
     mode:        DarkLibMode,
+    calibr_data: Arc<Mutex<CalibrData>>,
     options:     Arc<RwLock<Options>>,
     indi:        Arc<indi::Connection>,
     program:     Vec<DarkCreationProgramItem>,
@@ -39,10 +40,11 @@ pub struct DarkCreationMode {
 
 impl DarkCreationMode {
     pub fn new(
-        mode:    DarkLibMode,
-        options: &Arc<RwLock<Options>>,
-        indi:    &Arc<indi::Connection>,
-        program: &[DarkCreationProgramItem]
+        mode:        DarkLibMode,
+        calibr_data: &Arc<Mutex<CalibrData>>,
+        options:     &Arc<RwLock<Options>>,
+        indi:        &Arc<indi::Connection>,
+        program:     &[DarkCreationProgramItem]
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(cam_device) = &opts.cam.device else {
@@ -51,6 +53,7 @@ impl DarkCreationMode {
 
         Ok(Self {
             mode,
+            calibr_data: Arc::clone(calibr_data),
             options:     Arc::clone(options),
             indi:        Arc::clone(indi),
             program:     program.to_vec(),
@@ -59,6 +62,11 @@ impl DarkCreationMode {
             state:       State::Undefined,
             temperature: VecDeque::new(),
         })
+    }
+
+    fn clear_calibr_data(&self) {
+        let mut calibr_data = self.calibr_data.lock().unwrap();
+        calibr_data.clear();
     }
 }
 
@@ -95,6 +103,8 @@ impl Mode for DarkCreationMode {
     }
 
     fn start(&mut self) -> anyhow::Result<()> {
+        self.state = State::Undefined;
+        self.clear_calibr_data();
         Ok(())
     }
 

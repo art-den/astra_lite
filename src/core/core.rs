@@ -175,7 +175,7 @@ pub struct Core {
     subscribers:        RwLock<Subscribers>,
     cur_frame:          Arc<ResultImage>,
     ref_stars:          Arc<Mutex<Option<Vec<Point>>>>,
-    calibr_images:      Arc<Mutex<CalibrImages>>,
+    calibr_data:        Arc<Mutex<CalibrData>>,
     live_stacking:      Arc<LiveStackingData>,
     timer:              Arc<Timer>,
     exp_stuck_wd:       AtomicU16,
@@ -200,7 +200,7 @@ impl Core {
             subscribers:        RwLock::new(Subscribers::new()),
             cur_frame:          Arc::new(ResultImage::new()),
             ref_stars:          Arc::new(Mutex::new(None)),
-            calibr_images:      Arc::new(Mutex::new(CalibrImages::default())),
+            calibr_data:        Arc::new(Mutex::new(CalibrData::default())),
             live_stacking:      Arc::new(LiveStackingData::new()),
             timer:              Arc::new(Timer::new()),
             exp_stuck_wd:       AtomicU16::new(0),
@@ -469,7 +469,7 @@ impl Core {
                 stop_flag:       new_stop_flag,
                 ref_stars:       Arc::clone(&self.ref_stars),
                 calibr_params:   None,
-                calibr_images:   Arc::clone(&self.calibr_images),
+                calibr_data:     Arc::clone(&self.calibr_data),
                 view_options:    options.preview.preview_params(),
                 frame_options:   options.cam.frame.clone(),
                 quality_options: Some(options.quality.clone()),
@@ -690,6 +690,7 @@ impl Core {
         mode_data.mode.abort()?;
         let mut mode = DarkCreationMode::new(
             mode,
+            &self.calibr_data,
             &self.options,
             &self.indi,
             program
