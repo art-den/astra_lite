@@ -301,7 +301,7 @@ impl TackingPicturesMode {
             } else {
                 path.push(&options.raw_frames.out_path);
             }
-            let file_name = self.fname_utils.master_file_name(
+            let file_name = self.fname_utils.master_only_file_name(
                 Some(time),
                 &self.cam_options,
             );

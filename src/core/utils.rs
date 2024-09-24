@@ -28,21 +28,17 @@ impl FileNameUtils {
         self.sensor_height = sensor_height;
     }
 
-    pub fn master_file_name(
+    pub fn master_only_file_name(
         &self,
         time:        Option<DateTime<Utc>>, // used for flat frames
         cam_options: &CamOptions,
     ) -> PathBuf {
-        let master_dark_name = cam_options.raw_master_file_name(
+        cam_options.raw_master_file_name(
             time,
             self.sensor_width,
             self.sensor_height,
             self.cooler_supported
-        );
-        let mut path = PathBuf::new();
-        path.push(&self.device.to_file_name_part());
-        path.push(&master_dark_name);
-        path
+        ).into()
     }
 
     pub fn master_dark_file_name(
@@ -53,7 +49,7 @@ impl FileNameUtils {
         let mut cam_dark = cam_options.clone();
         cam_dark.frame.frame_type = FrameType::Darks;
         let master_dark_name =
-            self.master_file_name(None, &cam_dark);
+            self.master_only_file_name(None, &cam_dark);
         let mut path = PathBuf::new();
         path.push(&options.calibr.dark_library_path);
         path.push(&self.device.to_file_name_part());
