@@ -15,6 +15,7 @@ pub struct FileNameUtils {
 
 impl FileNameUtils {
     pub fn init(&mut self, indi: &Arc<indi::Connection>, device: &DeviceAndProp) {
+        self.device = device.clone();
         let cam_ccd = indi::CamCcd::from_ccd_prop_name(&device.prop);
         let (sensor_width, sensor_height) =
             indi
