@@ -346,9 +346,9 @@ impl RawImage {
             }
         );
 
-        let pos = 95 * diffs.len() / 100;
+        let pos = 99 * diffs.len() / 100;
         diffs.select_nth_unstable(pos);
-        let border = diffs[pos] * 100;
+        let border = diffs[pos] * 10;
 
         let mut tmp_result = HashSet::new();
         find_hot_pixels_step(
