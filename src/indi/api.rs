@@ -3923,6 +3923,7 @@ const PROP_CAM_TEMPERATURE: PropsNamePairs = &[
 const PROP_CAM_COOLING_PWR: PropsNamePairs = &[
     ("COOLER_POWER",     "COOLER_POWER"),
     ("CCD_COOLER_POWER", "COOLER_POWER"),
+    ("CCD_COOLER_POWER", "CCD_COOLER_VALUE")
 ];
 const PROP_CAM_GAIN: PropsNamePairs = &[
     ("CCD_GAIN",     "GAIN"),
