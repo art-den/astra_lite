@@ -360,9 +360,13 @@ fn apply_calibr_data_and_remove_hot_pixels(
     raw_image: &mut RawImage,
     calibr:    &mut CalibrImages,
 ) -> anyhow::Result<()> {
-    dbg!(params);
+    log::debug!("apply_calibr_data_and_remove_hot_pixels params={:?}", params);
 
     let Some(params) = params else { return Ok(()); };
+
+    log::debug!("calibr.defect_pixels_fname={:?}", calibr.defect_pixels_fname);
+    log::debug!("calibr.master_dark_fname={:?}", calibr.master_dark_fname);
+    log::debug!("calibr.master_flat_fname{:?}", calibr.master_flat_fname);
 
     // Load defect pixels file
 
@@ -370,11 +374,11 @@ fn apply_calibr_data_and_remove_hot_pixels(
         let mut loaded = false;
         if let Some(file_name) = &params.def_pixels_fname { if file_name.is_file() {
             let mut defect_pixels = BadPixels::default();
-            defect_pixels.load_from_file(&file_name)?;
             log::debug!(
-                "Loaded defect pixels file {}",
+                "Loading defect pixels file {} ...",
                 file_name.to_str().unwrap_or_default()
             );
+            defect_pixels.load_from_file(&file_name)?;
             loaded = true;
             calibr.defect_pixels = Some(defect_pixels);
         }}
@@ -386,9 +390,13 @@ fn apply_calibr_data_and_remove_hot_pixels(
 
     // Load master dark file
 
-    if params.dark_fname != calibr.master_dark_fname {
+    if calibr.master_dark_fname != params.dark_fname {
         let mut loaded = false;
         if let Some(file_name) = &params.dark_fname { if file_name.is_file() {
+            log::debug!(
+                "Loading master dark file {} ...",
+                file_name.to_str().unwrap_or_default()
+            );
             let tmr = TimeLogger::start();
             let master_dark = RawImage::new_from_fits_file(file_name)
                 .map_err(|e| anyhow::anyhow!(
@@ -397,10 +405,6 @@ fn apply_calibr_data_and_remove_hot_pixels(
                     file_name.to_str().unwrap_or_default()
                 ))?;
             tmr.log("loading master dark from file");
-            log::debug!(
-                "Loaded master dark file {}",
-                file_name.to_str().unwrap_or_default()
-            );
             if calibr.defect_pixels.is_none() {
                 let tmr = TimeLogger::start();
                 let defect_pixels = master_dark.find_hot_pixels_in_master_dark();
@@ -419,7 +423,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
 
     // Load master flat file
 
-    if params.flat_fname != calibr.master_flat_fname {
+    if calibr.master_flat_fname != params.flat_fname {
         if let Some(file_name) = &params.flat_fname {
             let tmr = TimeLogger::start();
             let mut master_flat = RawImage::new_from_fits_file(file_name)
