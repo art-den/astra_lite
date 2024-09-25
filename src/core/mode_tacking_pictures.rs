@@ -328,7 +328,7 @@ impl TackingPicturesMode {
             self.out_file_names.raw_files_dir = get_free_folder_name(&path);
         }
 
-        dbg!(&self.out_file_names);
+        log::debug!("output_file_names: {:?}", self.out_file_names);
 
         Ok(())
     }
@@ -753,10 +753,9 @@ impl TackingPicturesMode {
         }
 
         let defect_pixels = raw_image.find_hot_pixels_in_master_dark();
+        log::debug!("Defect pixels count = {}", defect_pixels.items.len());
+
         defect_pixels.save_to_file(&self.out_file_names.defect_pixels_fname)?;
-
-        dbg!(defect_pixels.items.len());
-
         log::debug!("Defect pixels file saved!");
 
         Ok(())

@@ -60,10 +60,6 @@ fn test_eq_coord_to_sphere() {
     test(EqCoord { dec: PI / 2.0, ra: PI / 2.0 });
     test(EqCoord { dec: PI / 4.0, ra: PI / 4.0 });
     test(EqCoord { dec: PI / 8.0, ra: PI / 8.0 });
-
-    let eq = EqCoord { dec: PI/2.0, ra: 0.0 };
-    let pt = eq.to_sphere_pt();
-    dbg!(pt);
 }
 
 #[derive(Debug, Clone, Copy)]
