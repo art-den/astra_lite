@@ -48,7 +48,7 @@ pub fn init_ui(
     let bx_devices_ctrl = builder.object::<gtk::Box>("bx_devices_ctrl").unwrap();
     bx_devices_ctrl.add(widget.widget());
 
-    let data = Rc::new(HardwareUi {
+    let obj = Rc::new(HardwareUi {
         core:          Arc::clone(core),
         indi:          Arc::clone(indi),
         options:       Arc::clone(options),
@@ -63,20 +63,17 @@ pub fn init_ui(
         self_:         RefCell::new(None),
     });
 
-    *data.self_.borrow_mut() = Some(Rc::clone(&data));
+    *obj.self_.borrow_mut() = Some(Rc::clone(&obj));
 
-    data.init_widgets();
-    data.fill_devices_name();
-    data.connect_widgets_events();
-    data.connect_indi_events();
-    data.correct_widgets_by_cur_state();
-
-    handlers.subscribe(clone!(@weak data => move |event| {
-        data.handler_main_ui_event(event);
-    }));
+    obj.init_widgets();
+    obj.fill_devices_name();
+    obj.connect_widgets_events();
+    obj.connect_indi_and_guider_events();
+    obj.correct_widgets_by_cur_state();
+    obj.connect_main_ui_event(handlers);
 
     if let Some(load_drivers_err) = load_drivers_err {
-        data.add_log_record(
+        obj.add_log_record(
             &Some(Utc::now()),
             "",
             &format!("Load devices info error: {}", load_drivers_err)
@@ -129,6 +126,23 @@ impl Drop for HardwareUi {
 }
 
 impl HardwareUi {
+    fn init_widgets(&self) {
+        let spb_foc_len = self.builder.object::<gtk::SpinButton>("spb_foc_len").unwrap();
+        spb_foc_len.set_range(10.0, 10_000.0);
+        spb_foc_len.set_digits(0);
+        spb_foc_len.set_increments(1.0, 10.0);
+
+        let spb_barlow = self.builder.object::<gtk::SpinButton>("spb_barlow").unwrap();
+        spb_barlow.set_range(0.1, 10.0);
+        spb_barlow.set_digits(2);
+        spb_barlow.set_increments(0.01, 0.1);
+
+        let spb_guid_foc_len = self.builder.object::<gtk::SpinButton>("spb_guid_foc_len").unwrap();
+        spb_guid_foc_len.set_range(0.0, 1000.0);
+        spb_guid_foc_len.set_digits(0);
+        spb_guid_foc_len.set_increments(1.0, 10.0);
+    }
+
     fn connect_widgets_events(self: &Rc<Self>) {
         gtk_utils::connect_action(&self.window, self, "help_save_indi",      HardwareUi::handler_action_help_save_indi);
         gtk_utils::connect_action(&self.window, self, "conn_indi",           HardwareUi::handler_action_conn_indi);
@@ -151,120 +165,25 @@ impl HardwareUi {
             let text_lc = se.text().to_lowercase();
             self_.widget.set_filter_text(&text_lc);
         }));
-    }
 
-    fn handler_main_ui_event(&self, event: MainUiEvent) {
-        match event {
-            MainUiEvent::ProgramClosing =>
-                self.handler_closing(),
-
-            MainUiEvent::TabPageChanged(tab_page) =>
-                self.widget.set_enabled(tab_page == TabPage::Hardware),
-
-            _ => {},
-        }
-    }
-
-    fn handler_closing(&self) {
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
-        }
-
-        if !self.is_remote.get() {
-            _ = self.indi.command_enable_all_devices(false, true, Some(2000));
-        }
-
-        log::info!("Disconnecting from INDI...");
-        _ = self.indi.disconnect_and_wait();
-        log::info!("Done!");
-
-        log::info!("Stop connection to PHD2...");
-        _ = self.core.phd2().stop();
-        log::info!("Done!");
-
-        self.core.phd2().discnnect_all();
-
-        *self.self_.borrow_mut() = None;
-    }
-
-    fn init_widgets(&self) {
         let spb_foc_len = self.builder.object::<gtk::SpinButton>("spb_foc_len").unwrap();
-        spb_foc_len.set_range(10.0, 10_000.0);
-        spb_foc_len.set_digits(0);
-        spb_foc_len.set_increments(1.0, 10.0);
+        spb_foc_len.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.telescope.focal_len = sb.value();
+            drop(options);
+            _ = self_.core.init_cam_telescope_data();
+        }));
 
         let spb_barlow = self.builder.object::<gtk::SpinButton>("spb_barlow").unwrap();
-        spb_barlow.set_range(0.1, 10.0);
-        spb_barlow.set_digits(2);
-        spb_barlow.set_increments(0.01, 0.1);
-
-        let spb_guid_foc_len = self.builder.object::<gtk::SpinButton>("spb_guid_foc_len").unwrap();
-        spb_guid_foc_len.set_range(0.0, 1000.0);
-        spb_guid_foc_len.set_digits(0);
-        spb_guid_foc_len.set_increments(1.0, 10.0);
+        spb_barlow.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.telescope.barlow = sb.value();
+            drop(options);
+            _ = self_.core.init_cam_telescope_data();
+        }));
     }
 
-    fn correct_widgets_by_cur_state(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let status = self.indi_status.borrow();
-        let (conn_en, disconn_en) = match *status {
-            indi::ConnState::Disconnected  => (true,  false),
-            indi::ConnState::Connecting    => (false, true),
-            indi::ConnState::Disconnecting => (false, false),
-            indi::ConnState::Connected     => (false, true),
-            indi::ConnState::Error(_)      => (true,  false),
-        };
-        let connected = *status == indi::ConnState::Connected;
-        let disconnected = matches!(
-            *status,
-            indi::ConnState::Disconnected|
-            indi::ConnState::Error(_)
-        );
-        let phd2_working = self.core.phd2().is_working();
-        gtk_utils::enable_actions(&self.window, &[
-            ("conn_indi",    conn_en),
-            ("disconn_indi", disconn_en),
-            ("conn_phd2",    !phd2_working),
-            ("disconn_phd2", phd2_working),
-        ]);
-        ui.set_prop_str("lbl_indi_conn_status.label", Some(&status.to_str(false)));
-
-        let remote = ui.prop_bool("chb_remote.active");
-
-        let (conn_cap, disconn_cap) = if remote {
-            ("Connect INDI", "Disconnect INDI")
-        } else {
-            ("Start INDI", "Stop INDI")
-        };
-        ui.set_prop_str("btn_conn_indi.label", Some(conn_cap));
-        ui.set_prop_str("btn_diconn_indi.label", Some(disconn_cap));
-
-        let mnt_sensitive = !remote && disconnected && !ui.is_combobox_empty("cb_mount_drivers");
-        let cam_sensitive = !remote && disconnected && !ui.is_combobox_empty("cb_camera_drivers");
-        let guid_cam_sensitive = !remote && disconnected && !ui.is_combobox_empty("cb_guid_cam_drivers");
-        let foc_sensitive = !remote && disconnected && !ui.is_combobox_empty("cb_focuser_drivers");
-        ui.enable_widgets(false, &[
-            ("l_mount_drivers",     mnt_sensitive),
-            ("cb_mount_drivers",    mnt_sensitive),
-            ("l_camera_drivers",    cam_sensitive),
-            ("cb_camera_drivers",   cam_sensitive),
-            ("l_guid_cam_drivers",  guid_cam_sensitive),
-            ("cb_guid_cam_drivers", guid_cam_sensitive),
-            ("l_focuser_drivers",   foc_sensitive),
-            ("cb_focuser_drivers",  foc_sensitive),
-            ("chb_remote",          !self.indi_drivers.groups.is_empty() && disconnected),
-            ("e_remote_addr",       remote && disconnected),
-        ]);
-
-        gtk_utils::enable_actions(&self.window, &[
-            ("enable_all_devs",   connected),
-            ("disable_all_devs",  connected),
-            ("save_devs_options", connected),
-            ("load_devs_options", connected),
-        ]);
-    }
-
-    fn connect_indi_events(self: &Rc<Self>) {
+    fn connect_indi_and_guider_events(self: &Rc<Self>) {
         let (sender, receiver) = async_channel::unbounded();
 
         // Connect INDI events
@@ -398,6 +317,102 @@ impl HardwareUi {
         };
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         ui.set_prop_str("lbl_phd2_status.label", Some(status_text));
+    }
+
+    fn connect_main_ui_event(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
+        handlers.subscribe(clone!(@weak self as self_ => move |event| {
+            match event {
+                MainUiEvent::ProgramClosing =>
+                    self_.handler_closing(),
+
+                MainUiEvent::TabPageChanged(tab_page) =>
+                    self_.widget.set_enabled(tab_page == TabPage::Hardware),
+
+                _ => {},
+            }
+        }));
+    }
+
+    fn handler_closing(&self) {
+        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
+            self.indi.unsubscribe(indi_conn);
+        }
+
+        if !self.is_remote.get() {
+            _ = self.indi.command_enable_all_devices(false, true, Some(2000));
+        }
+
+        log::info!("Disconnecting from INDI...");
+        _ = self.indi.disconnect_and_wait();
+        log::info!("Done!");
+
+        log::info!("Stop connection to PHD2...");
+        _ = self.core.phd2().stop();
+        log::info!("Done!");
+
+        self.core.phd2().discnnect_all();
+
+        *self.self_.borrow_mut() = None;
+    }
+
+    fn correct_widgets_by_cur_state(&self) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let status = self.indi_status.borrow();
+        let (conn_en, disconn_en) = match *status {
+            indi::ConnState::Disconnected  => (true,  false),
+            indi::ConnState::Connecting    => (false, true),
+            indi::ConnState::Disconnecting => (false, false),
+            indi::ConnState::Connected     => (false, true),
+            indi::ConnState::Error(_)      => (true,  false),
+        };
+        let connected = *status == indi::ConnState::Connected;
+        let disconnected = matches!(
+            *status,
+            indi::ConnState::Disconnected|
+            indi::ConnState::Error(_)
+        );
+        let phd2_working = self.core.phd2().is_working();
+        gtk_utils::enable_actions(&self.window, &[
+            ("conn_indi",    conn_en),
+            ("disconn_indi", disconn_en),
+            ("conn_phd2",    !phd2_working),
+            ("disconn_phd2", phd2_working),
+        ]);
+        ui.set_prop_str("lbl_indi_conn_status.label", Some(&status.to_str(false)));
+
+        let remote = ui.prop_bool("chb_remote.active");
+
+        let (conn_cap, disconn_cap) = if remote {
+            ("Connect INDI", "Disconnect INDI")
+        } else {
+            ("Start INDI", "Stop INDI")
+        };
+        ui.set_prop_str("btn_conn_indi.label", Some(conn_cap));
+        ui.set_prop_str("btn_diconn_indi.label", Some(disconn_cap));
+
+        let mnt_sensitive = !remote && disconnected && !ui.is_combobox_empty("cb_mount_drivers");
+        let cam_sensitive = !remote && disconnected && !ui.is_combobox_empty("cb_camera_drivers");
+        let guid_cam_sensitive = !remote && disconnected && !ui.is_combobox_empty("cb_guid_cam_drivers");
+        let foc_sensitive = !remote && disconnected && !ui.is_combobox_empty("cb_focuser_drivers");
+        ui.enable_widgets(false, &[
+            ("l_mount_drivers",     mnt_sensitive),
+            ("cb_mount_drivers",    mnt_sensitive),
+            ("l_camera_drivers",    cam_sensitive),
+            ("cb_camera_drivers",   cam_sensitive),
+            ("l_guid_cam_drivers",  guid_cam_sensitive),
+            ("cb_guid_cam_drivers", guid_cam_sensitive),
+            ("l_focuser_drivers",   foc_sensitive),
+            ("cb_focuser_drivers",  foc_sensitive),
+            ("chb_remote",          !self.indi_drivers.groups.is_empty() && disconnected),
+            ("e_remote_addr",       remote && disconnected),
+        ]);
+
+        gtk_utils::enable_actions(&self.window, &[
+            ("enable_all_devs",   connected),
+            ("disable_all_devs",  connected),
+            ("save_devs_options", connected),
+            ("load_devs_options", connected),
+        ]);
     }
 
     fn handler_action_conn_indi(&self) {

@@ -559,6 +559,7 @@ impl Core {
 
     pub fn start_single_shot(&self) -> anyhow::Result<()> {
         self.init_cam_before_start()?;
+        self.init_cam_telescope_data()?;
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             None,
@@ -580,6 +581,7 @@ impl Core {
 
     pub fn start_live_view(&self) -> anyhow::Result<()> {
         self.init_cam_before_start()?;
+        self.init_cam_telescope_data()?;
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             Some(&self.timer),
@@ -601,6 +603,7 @@ impl Core {
 
     pub fn start_saving_raw_frames(&self) -> anyhow::Result<()> {
         self.init_cam_before_start()?;
+        self.init_cam_telescope_data()?;
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             Some(&self.timer),
@@ -625,6 +628,7 @@ impl Core {
 
     pub fn start_live_stacking(&self) -> anyhow::Result<()> {
         self.init_cam_before_start()?;
+        self.init_cam_telescope_data()?;
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             Some(&self.timer),
@@ -650,6 +654,7 @@ impl Core {
 
     pub fn start_focusing(&self) -> anyhow::Result<()> {
         self.init_cam_before_start()?;
+        self.init_cam_telescope_data()?;
         let mut mode_data = self.mode_data.write().unwrap();
         mode_data.mode.abort()?;
         let mut mode = FocusingMode::new(&self.indi, &self.options, None)?;
@@ -666,6 +671,7 @@ impl Core {
 
     pub fn start_mount_calibr(&self) -> anyhow::Result<()> {
         self.init_cam_before_start()?;
+        self.init_cam_telescope_data()?;
         let mut mode_data = self.mode_data.write().unwrap();
         mode_data.mode.abort()?;
         let mut mode = MountCalibrMode::new(&self.indi, &self.options, None)?;
@@ -686,6 +692,7 @@ impl Core {
         program: &[DarkCreationProgramItem]
     ) -> anyhow::Result<()> {
         self.init_cam_before_start()?;
+        self.init_cam_telescope_data()?;
         let mut mode_data = self.mode_data.write().unwrap();
         mode_data.mode.abort()?;
         let mut mode = DarkCreationMode::new(
@@ -711,7 +718,19 @@ impl Core {
         let Some(cam_device) = &options.cam.device else {
             return Ok(());
         };
+        self.indi.command_enable_blob(
+            &cam_device.name,
+            None,
+            indi::BlobEnable::Also
+        )?;
+        Ok(())
+    }
 
+    pub fn init_cam_telescope_data(&self) -> anyhow::Result<()> {
+        let options = self.options.read().unwrap();
+        let Some(cam_device) = &options.cam.device else {
+            return Ok(());
+        };
         if self.indi.camera_is_telescope_info_supported(&cam_device.name)? {
             let focal_len = options.telescope.real_focal_length();
             // Aperture info for simulator only
@@ -724,13 +743,6 @@ impl Core {
                 INDI_SET_PROP_TIMEOUT
             )?;
         }
-
-        self.indi.command_enable_blob(
-            &cam_device.name,
-            None,
-            indi::BlobEnable::Also
-        )?;
-
         Ok(())
     }
 
