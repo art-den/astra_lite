@@ -134,6 +134,7 @@ pub struct RawImageInfo {
     pub bin:        u8,
     pub frame_type: FrameType,
     pub exposure:   f64,
+    pub camera:     String,
 }
 
 pub struct RawImage {
@@ -173,6 +174,7 @@ impl RawImage {
         let frame_str = image_hdu.get_str("FRAME"   );
         let data      = image_hdu.read_data(&mut stream)?;
         let time_str  = image_hdu.get_str("DATE-OBS").unwrap_or_default();
+        let camera    = image_hdu.get_str("INSTRUME").unwrap_or_default().to_string();
 
         if bitdepth > 16 {
             anyhow::bail!("BITDEPTH > 16 ({}) is not supported", bitdepth);
@@ -201,6 +203,7 @@ impl RawImage {
             max_value,
             frame_type,
             exposure,
+            camera,
         };
         Ok(Self {info, data, cfa_arr})
     }
@@ -220,6 +223,7 @@ impl RawImage {
         hdu.set_value("XBINNING", &self.info.bin.to_string());
         hdu.set_value("YBINNING", &self.info.bin.to_string());
         hdu.set_value("OFFSET",   &self.info.zero.to_string());
+        hdu.set_value("INSTRUME", &self.info.camera);
         if let Some(bayer) = self.info.cfa.to_str() {
             hdu.set_value("BAYERPAT", &format!("'{}'", bayer));
         }
