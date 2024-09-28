@@ -53,7 +53,7 @@
                 <property name="orientation">vertical</property>
                 <property name="spacing">5</property>
                 <child>
-                  <!-- n-columns=2 n-rows=7 -->
+                  <!-- n-columns=2 n-rows=9 -->
                   <object class="GtkGrid" id="grd_dark">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
@@ -69,7 +69,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">0</property>
-                        <property name="top-attach">1</property>
+                        <property name="top-attach">3</property>
                       </packing>
                     </child>
                     <child>
@@ -82,7 +82,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">0</property>
-                        <property name="top-attach">2</property>
+                        <property name="top-attach">4</property>
                       </packing>
                     </child>
                     <child>
@@ -95,7 +95,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">0</property>
-                        <property name="top-attach">3</property>
+                        <property name="top-attach">5</property>
                       </packing>
                     </child>
                     <child>
@@ -106,7 +106,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">1</property>
-                        <property name="top-attach">1</property>
+                        <property name="top-attach">3</property>
                       </packing>
                     </child>
                     <child>
@@ -117,7 +117,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">1</property>
-                        <property name="top-attach">2</property>
+                        <property name="top-attach">4</property>
                       </packing>
                     </child>
                     <child>
@@ -128,7 +128,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">1</property>
-                        <property name="top-attach">3</property>
+                        <property name="top-attach">5</property>
                       </packing>
                     </child>
                     <child>
@@ -181,7 +181,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">1</property>
-                        <property name="top-attach">5</property>
+                        <property name="top-attach">7</property>
                       </packing>
                     </child>
                     <child>
@@ -262,7 +262,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">1</property>
-                        <property name="top-attach">6</property>
+                        <property name="top-attach">8</property>
                       </packing>
                     </child>
                     <child>
@@ -275,7 +275,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">0</property>
-                        <property name="top-attach">5</property>
+                        <property name="top-attach">7</property>
                       </packing>
                     </child>
                     <child>
@@ -288,19 +288,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">0</property>
-                        <property name="top-attach">6</property>
-                      </packing>
-                    </child>
-                    <child>
-                      <object class="GtkLabel">
-                        <property name="visible">True</property>
-                        <property name="can-focus">False</property>
-                        <property name="halign">start</property>
-                        <property name="label" translatable="yes">Frames count</property>
-                      </object>
-                      <packing>
-                        <property name="left-attach">0</property>
-                        <property name="top-attach">0</property>
+                        <property name="top-attach">8</property>
                       </packing>
                     </child>
                     <child>
@@ -313,7 +301,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">0</property>
-                        <property name="top-attach">4</property>
+                        <property name="top-attach">6</property>
                       </packing>
                     </child>
                     <child>
@@ -324,7 +312,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">1</property>
-                        <property name="top-attach">4</property>
+                        <property name="top-attach">6</property>
                       </packing>
                     </child>
                     <child>
@@ -361,6 +349,81 @@
                       <packing>
                         <property name="left-attach">1</property>
                         <property name="top-attach">0</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkRadioButton" id="rbtn_dark_integr_time">
+                        <property name="label" translatable="yes">Integration time</property>
+                        <property name="visible">True</property>
+                        <property name="can-focus">True</property>
+                        <property name="receives-default">False</property>
+                        <property name="active">True</property>
+                        <property name="draw-indicator">True</property>
+                        <property name="group">rbtn_dark_frames_cnt</property>
+                      </object>
+                      <packing>
+                        <property name="left-attach">0</property>
+                        <property name="top-attach">1</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkRadioButton" id="rbtn_dark_frames_cnt">
+                        <property name="label" translatable="yes">Frames count</property>
+                        <property name="visible">True</property>
+                        <property name="can-focus">True</property>
+                        <property name="receives-default">False</property>
+                        <property name="active">True</property>
+                        <property name="draw-indicator">True</property>
+                      </object>
+                      <packing>
+                        <property name="left-attach">0</property>
+                        <property name="top-attach">0</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkBox">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="spacing">5</property>
+                        <child>
+                          <object class="GtkSpinButton" id="spb_dark_integr">
+                            <property name="visible">True</property>
+                            <property name="can-focus">True</property>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">0</property>
+                          </packing>
+                        </child>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="visible">True</property>
+                            <property name="can-focus">False</property>
+                            <property name="opacity">0.5</property>
+                            <property name="label" translatable="yes">minutes</property>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">1</property>
+                          </packing>
+                        </child>
+                      </object>
+                      <packing>
+                        <property name="left-attach">1</property>
+                        <property name="top-attach">1</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkSeparator">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                      </object>
+                      <packing>
+                        <property name="left-attach">0</property>
+                        <property name="top-attach">2</property>
+                        <property name="width">2</property>
                       </packing>
                     </child>
                   </object>
@@ -489,7 +552,7 @@
                     <property name="expand">False</property>
                     <property name="fill">True</property>
                     <property name="pack-type">end</property>
-                    <property name="position">4</property>
+                    <property name="position">5</property>
                   </packing>
                 </child>
               </object>
@@ -515,48 +578,14 @@
                 <property name="orientation">vertical</property>
                 <property name="spacing">5</property>
                 <child>
-                  <!-- n-columns=2 n-rows=7 -->
+                  <!-- n-columns=2 n-rows=9 -->
                   <object class="GtkGrid" id="grd_def">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
                     <property name="row-spacing">5</property>
                     <property name="column-spacing">5</property>
                     <child>
-                      <object class="GtkLabel">
-                        <property name="visible">True</property>
-                        <property name="can-focus">False</property>
-                        <property name="halign">start</property>
-                        <property name="label" translatable="yes">Frames count</property>
-                      </object>
-                      <packing>
-                        <property name="left-attach">0</property>
-                        <property name="top-attach">0</property>
-                      </packing>
-                    </child>
-                    <child>
                       <object class="GtkSpinButton" id="spb_def_temp">
-                        <property name="visible">True</property>
-                        <property name="can-focus">True</property>
-                        <property name="halign">start</property>
-                      </object>
-                      <packing>
-                        <property name="left-attach">1</property>
-                        <property name="top-attach">1</property>
-                      </packing>
-                    </child>
-                    <child>
-                      <object class="GtkSpinButton" id="spb_def_exp">
-                        <property name="visible">True</property>
-                        <property name="can-focus">True</property>
-                        <property name="halign">start</property>
-                      </object>
-                      <packing>
-                        <property name="left-attach">1</property>
-                        <property name="top-attach">2</property>
-                      </packing>
-                    </child>
-                    <child>
-                      <object class="GtkSpinButton" id="spb_def_gain">
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
                         <property name="halign">start</property>
@@ -567,7 +596,7 @@
                       </packing>
                     </child>
                     <child>
-                      <object class="GtkSpinButton" id="spb_def_offs">
+                      <object class="GtkSpinButton" id="spb_def_exp">
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
                         <property name="halign">start</property>
@@ -575,6 +604,28 @@
                       <packing>
                         <property name="left-attach">1</property>
                         <property name="top-attach">4</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkSpinButton" id="spb_def_gain">
+                        <property name="visible">True</property>
+                        <property name="can-focus">True</property>
+                        <property name="halign">start</property>
+                      </object>
+                      <packing>
+                        <property name="left-attach">1</property>
+                        <property name="top-attach">5</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkSpinButton" id="spb_def_offs">
+                        <property name="visible">True</property>
+                        <property name="can-focus">True</property>
+                        <property name="halign">start</property>
+                      </object>
+                      <packing>
+                        <property name="left-attach">1</property>
+                        <property name="top-attach">6</property>
                       </packing>
                     </child>
                     <child>
@@ -627,7 +678,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">1</property>
-                        <property name="top-attach">5</property>
+                        <property name="top-attach">7</property>
                       </packing>
                     </child>
                     <child>
@@ -708,7 +759,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">1</property>
-                        <property name="top-attach">6</property>
+                        <property name="top-attach">8</property>
                       </packing>
                     </child>
                     <child>
@@ -721,7 +772,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">0</property>
-                        <property name="top-attach">1</property>
+                        <property name="top-attach">3</property>
                       </packing>
                     </child>
                     <child>
@@ -734,7 +785,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">0</property>
-                        <property name="top-attach">2</property>
+                        <property name="top-attach">4</property>
                       </packing>
                     </child>
                     <child>
@@ -747,7 +798,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">0</property>
-                        <property name="top-attach">3</property>
+                        <property name="top-attach">5</property>
                       </packing>
                     </child>
                     <child>
@@ -760,7 +811,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">0</property>
-                        <property name="top-attach">4</property>
+                        <property name="top-attach">6</property>
                       </packing>
                     </child>
                     <child>
@@ -773,7 +824,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">0</property>
-                        <property name="top-attach">5</property>
+                        <property name="top-attach">7</property>
                       </packing>
                     </child>
                     <child>
@@ -786,7 +837,7 @@
                       </object>
                       <packing>
                         <property name="left-attach">0</property>
-                        <property name="top-attach">6</property>
+                        <property name="top-attach">8</property>
                       </packing>
                     </child>
                     <child>
@@ -823,6 +874,81 @@
                       <packing>
                         <property name="left-attach">1</property>
                         <property name="top-attach">0</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkRadioButton" id="rbtn_def_integr_time">
+                        <property name="label" translatable="yes">Integration time</property>
+                        <property name="visible">True</property>
+                        <property name="can-focus">True</property>
+                        <property name="receives-default">False</property>
+                        <property name="active">True</property>
+                        <property name="draw-indicator">True</property>
+                        <property name="group">rbtn_def_frames_cnt</property>
+                      </object>
+                      <packing>
+                        <property name="left-attach">0</property>
+                        <property name="top-attach">1</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkRadioButton" id="rbtn_def_frames_cnt">
+                        <property name="label" translatable="yes">Frames count</property>
+                        <property name="visible">True</property>
+                        <property name="can-focus">True</property>
+                        <property name="receives-default">False</property>
+                        <property name="active">True</property>
+                        <property name="draw-indicator">True</property>
+                      </object>
+                      <packing>
+                        <property name="left-attach">0</property>
+                        <property name="top-attach">0</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkBox">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="spacing">5</property>
+                        <child>
+                          <object class="GtkSpinButton" id="spb_def_integr">
+                            <property name="visible">True</property>
+                            <property name="can-focus">True</property>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">0</property>
+                          </packing>
+                        </child>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="visible">True</property>
+                            <property name="can-focus">False</property>
+                            <property name="opacity">0.5</property>
+                            <property name="label" translatable="yes">minutes</property>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">1</property>
+                          </packing>
+                        </child>
+                      </object>
+                      <packing>
+                        <property name="left-attach">1</property>
+                        <property name="top-attach">1</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkSeparator">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                      </object>
+                      <packing>
+                        <property name="left-attach">0</property>
+                        <property name="top-attach">2</property>
+                        <property name="width">2</property>
                       </packing>
                     </child>
                   </object>

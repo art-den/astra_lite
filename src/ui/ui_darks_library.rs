@@ -13,6 +13,13 @@ use crate::{
 
 use super::gtk_utils;
 
+#[derive(Serialize, Default, Deserialize, Debug, PartialEq, Eq)]
+enum FramesCountMode {
+    Count,
+    #[default]
+    Time,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 struct BinningOptions {
@@ -102,7 +109,9 @@ impl Default for DarkLibOptionsItem {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 struct DarkLibOptions {
+    frm_cnt_mode: FramesCountMode,
     frames_count: usize,
+    integr_time:  f64, // minutes
     temperature:  DarkLibOptionsItem,
     exposure:     DarkLibOptionsItem,
     gain:         DarkLibOptionsItem,
@@ -114,7 +123,9 @@ struct DarkLibOptions {
 impl Default for DarkLibOptions {
     fn default() -> Self {
         Self {
+            frm_cnt_mode: FramesCountMode::default(),
             frames_count: 30,
+            integr_time:  60.0,
             temperature:  DarkLibOptionsItem::default(),
             exposure:     DarkLibOptionsItem::default(),
             gain:         DarkLibOptionsItem::default(),
@@ -151,6 +162,7 @@ impl DarkLibOptions {
         };
 
         let exposures = get(&self.exposure, cam_opts.frame.exp_main);
+
         let gains = get(&self.gain, cam_opts.frame.gain);
         let offsets = get(&self.offset, cam_opts.frame.offset as f64);
         let mut binnings = self.binning.get_binnings();
@@ -164,8 +176,16 @@ impl DarkLibOptions {
                     for offset in &offsets {
                         for bin in &binnings {
                             for crop in &crops {
+                                let frame_count = match self.frm_cnt_mode {
+                                    FramesCountMode::Count => self.frames_count,
+                                    FramesCountMode::Time => {
+                                        let cnt = (60.0 * self.integr_time / *exp) as usize;
+                                        ((cnt + 2) / 3) * 3
+                                    }
+                                };
+                                if frame_count == 0 { continue; }
                                 let item = DarkCreationProgramItem {
-                                    count:       self.frames_count,
+                                    count:       frame_count,
                                     temperature: *t,
                                     exposure:    *exp,
                                     gain:        *gain,
@@ -188,7 +208,9 @@ impl DarkLibOptions {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 struct DefectPixelsOptions {
+    frm_cnt_mode:     FramesCountMode,
     frames_count:     usize,
+    integr_time:      f64, // minutes
     temperature_used: bool,
     temperature:      f64,
     exposure_used:    bool,
@@ -204,7 +226,9 @@ struct DefectPixelsOptions {
 impl Default for DefectPixelsOptions {
     fn default() -> Self {
         Self {
+            frm_cnt_mode:     FramesCountMode::default(),
             frames_count:     18,
+            integr_time:      15.0,
             temperature_used: false,
             temperature:      5.0,
             exposure_used:    false,
@@ -241,8 +265,16 @@ impl DefectPixelsOptions {
 
         for bin in &binnings {
             for crop in &crops {
+                let frame_count = match self.frm_cnt_mode {
+                    FramesCountMode::Count => self.frames_count,
+                    FramesCountMode::Time => {
+                        let cnt = (60.0 * self.integr_time / exposure) as usize;
+                        ((cnt + 2) / 3) * 3
+                    }
+                };
+                if frame_count == 0 { continue; }
                 let item = DarkCreationProgramItem {
-                    count:   self.frames_count,
+                    count:   frame_count,
                     binning: *bin,
                     crop:    *crop,
                     temperature,
@@ -317,7 +349,8 @@ impl DarksLibraryDialog {
         result.load_options();
         result.show_options();
         result.correct_widgets_enable_state();
-        result.connect_events();
+        result.connect_widgets_events();
+        result.connect_core_events();
         result.show_info();
 
         result
@@ -339,6 +372,8 @@ impl DarksLibraryDialog {
             spb.set_increments(inc, inc_page);
         };
 
+        init_spinbutton("spb_dark_integr", 5.0, 240.0, 0, 5.0, 15.0);
+        init_spinbutton("spb_def_integr", 5.0, 240.0, 0, 5.0, 15.0);
         init_spinbutton("spb_dark_cnt", 3.0, 1000.0, 0, 3.0, 30.0);
         init_spinbutton("spb_def_cnt", 3.0, 1000.0, 0, 3.0, 30.0);
         init_spinbutton("spb_def_temp", -50.0, 50.0, 0, 1.0, 10.0);
@@ -380,7 +415,11 @@ impl DarksLibraryDialog {
                 .join(" ");
             entry.set_text(&text);
         };
+
+        ui.set_prop_bool("rbtn_dark_frames_cnt.active", ui_options.dark_lib.frm_cnt_mode == FramesCountMode::Count);
+        ui.set_prop_bool("rbtn_dark_integr_time.active", ui_options.dark_lib.frm_cnt_mode == FramesCountMode::Time);
         ui.set_prop_f64("spb_dark_cnt.value", ui_options.dark_lib.frames_count as f64);
+        ui.set_prop_f64("spb_dark_integr.value", ui_options.dark_lib.integr_time);
         show_item("chb_dark_temp", "e_dark_temp", &ui_options.dark_lib.temperature);
         show_item("chb_dark_exp", "e_dark_exp", &ui_options.dark_lib.exposure);
         show_item("chb_dark_gain", "e_dark_gain", &ui_options.dark_lib.gain);
@@ -398,7 +437,10 @@ impl DarksLibraryDialog {
 
         // Defect pixels
 
+        ui.set_prop_bool("rbtn_def_frames_cnt.active", ui_options.dark_lib.frm_cnt_mode == FramesCountMode::Count);
+        ui.set_prop_bool("rbtn_def_integr_time.active", ui_options.dark_lib.frm_cnt_mode == FramesCountMode::Time);
         ui.set_prop_f64("spb_def_cnt.value", ui_options.defect_pixels.frames_count as f64);
+        ui.set_prop_f64("spb_def_integr.value", ui_options.defect_pixels.integr_time);
         ui.set_prop_bool("chb_def_temp.active", ui_options.defect_pixels.temperature_used);
         ui.set_prop_f64("spb_def_temp.value", ui_options.defect_pixels.temperature);
         ui.set_prop_bool("chb_def_exp.active", ui_options.defect_pixels.exposure_used);
@@ -438,12 +480,22 @@ impl DarksLibraryDialog {
                 values
             }
         };
+
+        ui_options.dark_lib.frm_cnt_mode =
+            if ui.prop_bool("rbtn_dark_frames_cnt.active") {
+                FramesCountMode::Count
+            } else if ui.prop_bool("rbtn_dark_integr_time.active") {
+                FramesCountMode::Time
+            } else {
+                unreachable!();
+            };
+
         ui_options.dark_lib.frames_count = ui.prop_f64("spb_dark_cnt.value") as usize;
+        ui_options.dark_lib.integr_time = ui.prop_f64("spb_dark_integr.value");
         ui_options.dark_lib.temperature = get_item("chb_dark_temp", "e_dark_temp");
         ui_options.dark_lib.exposure = get_item("chb_dark_exp", "e_dark_exp");
         ui_options.dark_lib.gain = get_item("chb_dark_gain", "e_dark_gain");
         ui_options.dark_lib.offset = get_item("chb_dark_offset", "e_dark_offset");
-
         ui_options.dark_lib.binning.used = ui.prop_bool("chb_dark_bin.active");
         ui_options.dark_lib.binning.bin1x1 = ui.prop_bool("chb_dark_bin1x1.active");
         ui_options.dark_lib.binning.bin2x2 = ui.prop_bool("chb_dark_bin2x2.active");
@@ -457,7 +509,17 @@ impl DarksLibraryDialog {
 
         // Defect pixels
 
+        ui_options.defect_pixels.frm_cnt_mode =
+            if ui.prop_bool("rbtn_def_frames_cnt.active") {
+                FramesCountMode::Count
+            } else if ui.prop_bool("rbtn_def_integr_time.active") {
+                FramesCountMode::Time
+            } else {
+                unreachable!();
+            };
+
         ui_options.defect_pixels.frames_count = ui.prop_f64("spb_def_cnt.value") as usize;
+        ui_options.defect_pixels.integr_time = ui.prop_f64("spb_def_integr.value");
         ui_options.defect_pixels.temperature_used = ui.prop_bool("chb_def_temp.active");
         ui_options.defect_pixels.temperature = ui.prop_f64("spb_def_temp.value");
         ui_options.defect_pixels.exposure_used = ui.prop_bool("chb_def_exp.active");
@@ -484,13 +546,13 @@ impl DarksLibraryDialog {
         ui_options.defect_pixels.frames_count = multiple_of_3(ui_options.defect_pixels.frames_count);
     }
 
-    fn connect_events(self: &Rc<Self>) {
+    fn connect_widgets_events(self: &Rc<Self>) {
         let connect_checkbtn = |name| {
             let checkbox = self.builder.object::<gtk::CheckButton>(name).unwrap();
             checkbox.connect_active_notify(clone!(@strong self as self_ => move |_| {
-                self_.correct_widgets_enable_state();
                 self_.get_options();
                 self_.show_info();
+                self_.correct_widgets_enable_state();
             }));
         };
 
@@ -502,6 +564,15 @@ impl DarksLibraryDialog {
             }));
         };
 
+        let connect_radiobtn = |name| {
+            let spb = self.builder.object::<gtk::RadioButton>(name).unwrap();
+            spb.connect_active_notify(clone!(@strong self as self_ => move |_| {
+                self_.get_options();
+                self_.show_info();
+                self_.correct_widgets_enable_state();
+            }));
+        };
+
         let connect_entry = |name| {
             let spb = self.builder.object::<gtk::Entry>(name).unwrap();
             spb.connect_text_notify(clone!(@strong self as self_ => move |_| {
@@ -510,7 +581,10 @@ impl DarksLibraryDialog {
             }));
         };
 
+        connect_radiobtn("rbtn_dark_frames_cnt");
+        connect_radiobtn("rbtn_dark_integr_time");
         connect_spinbtn ("spb_dark_cnt");
+        connect_spinbtn ("spb_dark_integr");
         connect_checkbtn("chb_dark_temp");
         connect_entry   ("e_dark_temp");
         connect_checkbtn("chb_dark_exp");
@@ -530,7 +604,10 @@ impl DarksLibraryDialog {
         connect_checkbtn("chb_dark_crop33");
         connect_checkbtn("chb_dark_crop25");
 
+        connect_radiobtn("rbtn_def_frames_cnt");
+        connect_radiobtn("rbtn_def_integr_time");
         connect_spinbtn ("spb_def_cnt");
+        connect_spinbtn ("spb_def_integr");
         connect_checkbtn("chb_def_temp");
         connect_spinbtn ("spb_def_temp");
         connect_checkbtn("chb_def_exp");
@@ -571,9 +648,9 @@ impl DarksLibraryDialog {
         btn_stop_defect_pixels_files.connect_clicked(clone!(@strong self as self_ => move |_| {
             self_.handler_btn_stop();
         }));
+    }
 
-        // core events
-
+    fn connect_core_events(self: &Rc<Self>) {
         let (sender, receiver) = async_channel::unbounded();
         let subscription = self.core.subscribe_events(move |evt| {
             sender.send_blocking(evt).unwrap();
@@ -601,6 +678,10 @@ impl DarksLibraryDialog {
             mode == ModeType::CreatingDefectPixels;
 
         ui.enable_widgets(false, &[
+            ("spb_dark_cnt", ui.prop_bool("rbtn_dark_frames_cnt.active")),
+            ("spb_dark_integr", ui.prop_bool("rbtn_dark_integr_time.active")),
+            ("spb_def_cnt", ui.prop_bool("rbtn_def_frames_cnt.active")),
+            ("spb_def_integr", ui.prop_bool("rbtn_def_integr_time.active")),
             ("e_dark_temp", ui.prop_bool("chb_dark_temp.active")),
             ("e_dark_exp", ui.prop_bool("chb_dark_exp.active")),
             ("e_dark_gain", ui.prop_bool("chb_dark_gain.active")),
