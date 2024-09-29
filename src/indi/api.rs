@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{prelude::*, BufWriter, Cursor};
@@ -110,6 +112,9 @@ pub struct BlobStartEvent {
     pub device_name: Arc<String>,
     pub prop_name:   Arc<String>,
     pub elem_name:   Arc<String>,
+    pub format:      Arc<String>,
+    pub len:         Option<usize>,
+
 }
 
 #[derive(Clone)]
@@ -3557,7 +3562,9 @@ impl XmlReceiver {
         loop {
             let xml_res = self.reader.receive_xml(&mut self.stream);
             match xml_res {
-                Ok(XmlStreamReaderResult::BlobBegin { device_name, prop_name, elem_name, .. }) => {
+                Ok(XmlStreamReaderResult::BlobBegin {
+                    device_name, prop_name, elem_name, format, len
+                }) => {
                     let device_name = Arc::new(device_name);
                     let prop_name = Arc::new(prop_name);
                     let elem_name = Arc::new(elem_name);
@@ -3565,7 +3572,9 @@ impl XmlReceiver {
                         &device_name,
                         &prop_name,
                         &elem_name,
-                        &events_sender
+                        &format,
+                        len,
+                        &events_sender,
                     );
                 }
                 Ok(XmlStreamReaderResult::Xml{ xml, blobs }) => {
@@ -3742,12 +3751,16 @@ impl XmlReceiver {
         device_name:   &Arc<String>,
         prop_name:     &Arc<String>,
         elem_name:     &Arc<String>,
+        format:        &str,
+        len:           Option<usize>,
         events_sender: &mpsc::Sender<Event>
     ) {
         events_sender.send(Event::BlobStart(Arc::new(BlobStartEvent {
             device_name: Arc::clone(device_name),
             prop_name:   Arc::clone(prop_name),
             elem_name:   Arc::clone(elem_name),
+            format:      Arc::new(format.to_string()),
+            len
         }))).unwrap();
     }
 

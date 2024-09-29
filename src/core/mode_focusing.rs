@@ -72,7 +72,6 @@ enum FocusingState {
 pub struct FocuserSample {
     pub focus_pos:     f64,
     pub stars_fwhm:    f32,
-    pub stars_ovality: f32,
 }
 
 impl FocusingMode {
@@ -172,8 +171,7 @@ impl FocusingMode {
                 if stars_ovality < MAX_FOCUS_STAR_OVALITY {
                     let sample = FocuserSample {
                         focus_pos,
-                        stars_fwhm,
-                        stars_ovality
+                        stars_fwhm
                     };
                     self.samples.push(sample);
                     self.samples.sort_by(|s1, s2| cmp_f64(&s1.focus_pos, &s2.focus_pos));

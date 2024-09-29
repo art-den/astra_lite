@@ -15,7 +15,6 @@ pub struct Star {
     pub max_value:     u16,
     pub brightness:    u32,
     pub overexposured: bool,
-    pub points:        HashSet<(isize, isize)>,
     pub width:         usize,
     pub height:        usize,
 }
@@ -24,7 +23,6 @@ pub type Stars = Vec<Star>;
 
 pub struct StarsInfo {
     pub items:         Stars,
-    pub star_img:      ImageLayer<u16>,
     pub fwhm:          Option<f32>,
     pub fwhm_is_ok:    bool,
     pub ovality:       Option<f32>,
@@ -73,7 +71,6 @@ impl StarsInfo {
 
         Self {
             items,
-            star_img,
             fwhm,
             fwhm_is_ok,
             ovality,
@@ -230,7 +227,6 @@ impl StarsInfo {
                     max_value: max_v as u16,
                     brightness: brightness as u32,
                     overexposured,
-                    points: star_points,
                     width: width as usize,
                     height: height as usize,
                 });

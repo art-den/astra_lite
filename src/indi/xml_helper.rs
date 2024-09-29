@@ -6,7 +6,6 @@ use super::error::*;
 
 pub trait XmlElementHelper {
     fn into_elements(self, tag: Option<&'static str>) -> Box<dyn Iterator<Item = xmltree::Element>>;
-    fn elements_mut<'a>(&'a mut self, tag: Option<&'static str>) -> Box<dyn Iterator<Item = &'a mut xmltree::Element> + 'a>;
     fn elements<'a>(&'a self, tag: Option<&'static str>) -> Box<dyn Iterator<Item = &'a xmltree::Element> + 'a>;
     fn attr_string_or_err(&mut self, attr_name: &str) -> Result<String>;
     fn attr_str_or_err<'a>(&'a self, attr_name: &str) -> Result<&'a str>;
@@ -21,23 +20,6 @@ impl XmlElementHelper for xmltree::Element {
         tag: Option<&'static str>
     ) -> Box<dyn Iterator<Item = xmltree::Element>> {
         Box::new(self.children.into_iter()
-            .filter_map(move |e| {
-                match e {
-                    xmltree::XMLNode::Element(e)
-                    if tag.is_none() || tag == Some(e.name.as_str()) =>
-                        Some(e),
-                    _ =>
-                        None,
-                }
-            })
-        )
-    }
-
-    fn elements_mut<'a>(
-        &'a mut self,
-        tag: Option<&'static str>
-    ) -> Box<dyn Iterator<Item = &'a mut xmltree::Element> + 'a> {
-        Box::new(self.children.iter_mut()
             .filter_map(move |e| {
                 match e {
                     xmltree::XMLNode::Element(e)

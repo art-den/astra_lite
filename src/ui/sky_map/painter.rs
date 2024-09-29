@@ -918,10 +918,6 @@ struct StarPainter<'a> {
 type RgbTuple = (f64, f64, f64);
 
 impl<'a> StarPainter<'a> {
-    fn use_now_epoch(&self) -> bool {
-        true
-    }
-
     fn calc_light(&self, star_mag: f32) -> (f32, f32) {
         let light = f32::powf(2.0, 0.4 * (self.options.max_mag_value - star_mag)) - 1.0;
         let light_with_gamma = light.powf(0.7);

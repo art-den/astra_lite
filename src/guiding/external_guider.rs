@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub enum ExtGuiderType {
     Phd2,
 }

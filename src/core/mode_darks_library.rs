@@ -29,7 +29,6 @@ pub struct DarkCreationProgramItem {
 pub struct DarkCreationMode {
     mode:        DarkLibMode,
     calibr_data: Arc<Mutex<CalibrData>>,
-    options:     Arc<RwLock<Options>>,
     indi:        Arc<indi::Connection>,
     program:     Vec<DarkCreationProgramItem>,
     device:      DeviceAndProp,
@@ -54,7 +53,6 @@ impl DarkCreationMode {
         Ok(Self {
             mode,
             calibr_data: Arc::clone(calibr_data),
-            options:     Arc::clone(options),
             indi:        Arc::clone(indi),
             program:     program.to_vec(),
             device:      cam_device.clone(),

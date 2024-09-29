@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::f64::consts::PI;
 use super::math::*;
 

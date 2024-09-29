@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use core::panic;
 use std::{rc::Rc, path::{Path, PathBuf}};
 use gtk::{prelude::*, gio, glib, glib::clone, gdk};

@@ -44,6 +44,7 @@ pub fn init_ui(
         light_history:      RefCell::new(Vec::new()),
         closed:             Cell::new(false),
         full_screen_mode:   Cell::new(false),
+        flat_info:          RefCell::new(FlatImageInfo::default()),
         self_:              RefCell::new(None),
     });
 
@@ -57,17 +58,14 @@ pub fn init_ui(
     data.init_frame_quality_widgets();
 
     data.show_ui_options();
-    data.connect_indi_and_core_events();
+    data.connect_common_events();
     data.connect_widgets_events();
+    data.connect_main_ui_events(handlers);
 
     data.show_total_raw_time();
     data.update_light_history_table();
 
     data.connect_img_mouse_scroll_events();
-
-    handlers.subscribe(clone!(@weak data => move |event| {
-        data.handler_main_ui_event(event);
-    }));
 
     data.delayed_actions.set_event_handler(
         clone!(@weak data => move |action| {
@@ -134,6 +132,7 @@ struct UiOptions {
     all_cam_opts:   Vec<StoredCamOptions>,
     hist_log_y:     bool,
     hist_percents:  bool,
+    flat_percents:  bool,
 }
 
 impl Default for UiOptions {
@@ -152,6 +151,7 @@ impl Default for UiOptions {
             all_cam_opts:   Vec::new(),
             hist_log_y:     false,
             hist_percents:  true,
+            flat_percents:  true,
         }
     }
 }
@@ -191,6 +191,7 @@ struct CameraUi {
     light_history:      RefCell<Vec<LightHistoryItem>>,
     closed:             Cell<bool>,
     full_screen_mode:   Cell<bool>,
+    flat_info:          RefCell<FlatImageInfo>,
     self_:              RefCell<Option<Rc<CameraUi>>>,
 }
 
@@ -202,25 +203,6 @@ impl Drop for CameraUi {
 
 impl CameraUi {
     const CONF_FN: &'static str = "ui_camera";
-
-    fn handler_main_ui_event(&self, event: MainUiEvent) {
-        match event {
-            MainUiEvent::Timer => {}
-            MainUiEvent::FullScreen(full_screen) =>
-                self.set_full_screen_mode(full_screen),
-            MainUiEvent::BeforeModeContinued =>
-                self.get_options_from_widgets(),
-            MainUiEvent::TabPageChanged(TabPage::Camera) =>
-                self.correct_widgets_props(),
-            MainUiEvent::ProgramClosing =>
-                self.handler_closing(),
-            MainUiEvent::BeforeDisconnect => {
-                self.get_options_from_widgets();
-                self.store_cur_cam_options();
-            },
-            _ => {},
-        }
-    }
 
     fn init_cam_ctrl_widgets(&self) {
         let spb_temp = self.builder.object::<gtk::SpinButton>("spb_temp").unwrap();
@@ -248,7 +230,6 @@ impl CameraUi {
         spb_delay.set_digits(1);
         spb_delay.set_increments(0.5, 5.0);
     }
-
 
     fn init_raw_widgets(&self) {
         let spb_raw_frames_cnt = self.builder.object::<gtk::SpinButton>("spb_raw_frames_cnt").unwrap();
@@ -294,18 +275,24 @@ impl CameraUi {
         spb_max_oval.set_increments(0.1, 1.0);
     }
 
-    fn connect_indi_and_core_events(self: &Rc<Self>) {
+    fn connect_common_events(self: &Rc<Self>) {
         let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
+
+        // INDI
 
         let sender = main_thread_sender.clone();
         *self.indi_evt_conn.borrow_mut() = Some(self.indi.subscribe_events(move |event| {
             sender.send_blocking(MainThreadEvent::Indi(event)).unwrap();
         }));
 
+        // Core
+
         let sender = main_thread_sender.clone();
         self.core.subscribe_events(move |event| {
             sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
         });
+
+        // Image processing thread
 
         let sender = main_thread_sender.clone();
         self.core.connect_main_cam_proc_result_event(move |res| {
@@ -315,7 +302,7 @@ impl CameraUi {
         glib::spawn_future_local(clone!(@weak self as self_ => async move {
             while let Ok(event) = main_thread_receiver.recv().await {
                 if self_.closed.get() { return; }
-                self_.process_event_in_main_thread(event);
+                self_.process_indi_or_core_event(event);
             }
         }));
     }
@@ -649,9 +636,42 @@ impl CameraUi {
             options.calibr.hot_pixels = chb.is_active();
             drop(options);
         }));
+
+        let chb_flat_percents = bldr.object::<gtk::CheckButton>("chb_flat_percents").unwrap();
+        chb_flat_percents.connect_active_notify(clone!(@weak self as self_ => move |chb| {
+            let Ok(mut ui_options) = self_.ui_options.try_borrow_mut() else { return; };
+            ui_options.flat_percents = chb.is_active();
+            drop(ui_options);
+            self_.show_flat_info();
+        }));
     }
 
-    fn process_event_in_main_thread(&self, event: MainThreadEvent) {
+    fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
+        handlers.subscribe(clone!(@weak self as self_ => move |event| {
+            self_.handler_main_ui_event(event);
+        }));
+    }
+
+    fn handler_main_ui_event(&self, event: MainUiEvent) {
+        match event {
+            MainUiEvent::Timer => {}
+            MainUiEvent::FullScreen(full_screen) =>
+                self.set_full_screen_mode(full_screen),
+            MainUiEvent::BeforeModeContinued =>
+                self.get_options_from_widgets(),
+            MainUiEvent::TabPageChanged(TabPage::Camera) =>
+                self.correct_widgets_props(),
+            MainUiEvent::ProgramClosing =>
+                self.handler_closing(),
+            MainUiEvent::BeforeDisconnect => {
+                self.get_options_from_widgets();
+                self.store_cur_cam_options();
+            },
+            _ => {},
+        }
+    }
+
+    fn process_indi_or_core_event(&self, event: MainThreadEvent) {
         match event {
             MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) =>
                 self.process_indi_conn_state_event(conn_state),
@@ -887,6 +907,7 @@ impl CameraUi {
         ui.set_prop_bool("exp_quality.expanded",    options.quality_exp);
         ui.set_prop_bool("ch_hist_logy.active",     options.hist_log_y);
         ui.set_prop_bool("ch_stat_percents.active", options.hist_percents);
+        ui.set_prop_bool("chb_flat_percents.active", options.flat_percents);
     }
 
     fn get_options_from_widgets(&self) {
@@ -916,6 +937,7 @@ impl CameraUi {
         options.quality_exp    = ui.prop_bool("exp_quality.expanded");
         options.hist_log_y     = ui.prop_bool("ch_hist_logy.active");
         options.hist_percents  = ui.prop_bool("ch_stat_percents.active");
+        options.flat_percents = ui.prop_bool("chb_flat_percents.active");
     }
 
     fn correct_preview_source(&self) {
@@ -1425,25 +1447,9 @@ impl CameraUi {
                 update_info_panel_vis(true, false, false);
             },
             ResultImageInfo::FlatInfo(info) => {
-                let show_chan = |label_id, entry_id, item: Option<&FlatInfoChan>| {
-                    if let Some(item) = item {
-                        let text = format!(
-                            "{} ({:.0}%)",
-                            item.max as f64,
-                            100.0 * item.max as f64 / info.max_value as f64,
-                        );
-                        ui.set_prop_str_ex(entry_id, "text", Some(&text));
-                    }
-                    ui.show_widgets(&[
-                        (label_id, item.is_some()),
-                        (entry_id, item.is_some()),
-                    ]);
-                };
-                show_chan("l_flat_r", "e_flat_r", info.r.as_ref());
-                show_chan("l_flat_g", "e_flat_g", info.g.as_ref());
-                show_chan("l_flat_b", "e_flat_b", info.b.as_ref());
-                show_chan("l_flat_l", "e_flat_l", info.l.as_ref());
+                *self.flat_info.borrow_mut() = info.clone();
                 update_info_panel_vis(false, true, false);
+                self.show_flat_info();
             },
             ResultImageInfo::RawInfo(info) => {
                 let aver_text = format!(
@@ -1470,6 +1476,34 @@ impl CameraUi {
                 update_info_panel_vis(false, false, false);
             },
         }
+    }
+
+    fn show_flat_info(&self) {
+        let info = self.flat_info.borrow();
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let ui_options = self.ui_options.borrow();
+        let show_chan = |label_id, entry_id, item: Option<&FlatInfoChan>| {
+            if let Some(item) = item {
+                let text =
+                    if ui_options.flat_percents {
+                        let percent_aver = 100.0 * item.aver / info.max_value as f64;
+                        let percent_max = 100.0 * item.max as f64 / info.max_value as f64;
+                        format!("{:.1}% / {:.1}%", percent_aver, percent_max)
+                    } else {
+                        format!("{:.1} / {}", item.aver, item.max)
+                    };
+                ui.set_prop_str_ex(entry_id, "text", Some(&text));
+            }
+            ui.show_widgets(&[
+                (label_id, item.is_some()),
+                (entry_id, item.is_some()),
+            ]);
+        };
+
+        show_chan("l_flat_r", "e_flat_r", info.r.as_ref());
+        show_chan("l_flat_g", "e_flat_g", info.g.as_ref());
+        show_chan("l_flat_b", "e_flat_b", info.b.as_ref());
+        show_chan("l_flat_l", "e_flat_l", info.l.as_ref());
     }
 
     fn handler_action_save_image_preview(&self) {

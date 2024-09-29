@@ -11,7 +11,6 @@ use super::{gtk_utils, ui_main::*};
 pub fn init_ui(
     _app:     &gtk::Application,
     builder:  &gtk::Builder,
-    main_ui:  &Rc<MainUi>,
     options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
     indi:     &Arc<indi::Connection>,
@@ -26,7 +25,6 @@ pub fn init_ui(
     });
 
     let data = Rc::new(DitheringUi {
-        main_ui:       Rc::clone(main_ui),
         builder:       builder.clone(),
         window,
         options:       Arc::clone(options),
@@ -42,17 +40,10 @@ pub fn init_ui(
 
     data.init_widgets();
     data.apply_ui_options();
+    data.connect_main_ui_events(handlers);
     data.connect_widgets_events();
     data.connect_indi_and_core_events();
     data.correct_widgets_props();
-
-    handlers.subscribe(clone!(@weak data => move |event| {
-        match event {
-            MainUiEvent::ProgramClosing =>
-                data.handler_closing(),
-            _ => {},
-        }
-    }));
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -70,7 +61,6 @@ impl Default for UiOptions {
 }
 
 struct DitheringUi {
-    main_ui:       Rc<MainUi>,
     builder:       gtk::Builder,
     window:        gtk::ApplicationWindow,
     options:       Arc<RwLock<Options>>,
@@ -95,42 +85,6 @@ enum MainThreadEvent {
 
 impl DitheringUi {
     const CONF_FN: &'static str = "ui_dithering";
-
-    fn connect_indi_and_core_events(self: &Rc<Self>) {
-        let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
-
-        let sender = main_thread_sender.clone();
-        self.core.subscribe_events(move |event| {
-            sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
-        });
-
-        let sender = main_thread_sender.clone();
-        *self.indi_evt_conn.borrow_mut() = Some(self.indi.subscribe_events(move |event| {
-            sender.send_blocking(MainThreadEvent::Indi(event)).unwrap();
-        }));
-
-        glib::spawn_future_local(clone!(@weak self as self_ => async move {
-            while let Ok(event) = main_thread_receiver.recv().await {
-                if self_.closed.get() { return; }
-                self_.process_event_in_main_thread(event);
-            }
-        }));
-    }
-
-    fn handler_closing(&self) {
-        self.closed.set(true);
-
-        self.get_ui_options_from_widgets();
-        let ui_options = self.ui_options.borrow();
-        _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
-        drop(ui_options);
-
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
-        }
-
-        *self.self_.borrow_mut() = None;
-    }
 
     fn init_widgets(&self) {
         let spb_guid_max_err = self.builder.object::<gtk::SpinButton>("spb_guid_max_err").unwrap();
@@ -159,6 +113,39 @@ impl DitheringUi {
         sb_ext_dith_dist.set_increments(1.0, 10.0);
     }
 
+    fn connect_indi_and_core_events(self: &Rc<Self>) {
+        let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
+
+        let sender = main_thread_sender.clone();
+        self.core.subscribe_events(move |event| {
+            sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
+        });
+
+        let sender = main_thread_sender.clone();
+        *self.indi_evt_conn.borrow_mut() = Some(self.indi.subscribe_events(move |event| {
+            sender.send_blocking(MainThreadEvent::Indi(event)).unwrap();
+        }));
+
+        glib::spawn_future_local(clone!(@weak self as self_ => async move {
+            while let Ok(event) = main_thread_receiver.recv().await {
+                if self_.closed.get() { return; }
+                self_.process_event_in_main_thread(event);
+            }
+        }));
+    }
+
+    fn process_event_in_main_thread(&self, event: MainThreadEvent) {
+        match event {
+            MainThreadEvent::Core(CoreEvent::ModeChanged) => {
+                self.correct_widgets_props();
+            }
+            MainThreadEvent::Indi(indi::Event::ConnChange(_)) => {
+                self.correct_widgets_props();
+            }
+            _ => {}
+        }
+    }
+
     fn connect_widgets_events(self: &Rc<Self>) {
         gtk_utils::connect_action(&self.window, self, "start_dither_calibr", Self::handler_action_start_dither_calibr);
         gtk_utils::connect_action(&self.window, self, "stop_dither_calibr",  Self::handler_action_stop_dither_calibr);
@@ -174,6 +161,32 @@ impl DitheringUi {
         connect_rbtn("rbtn_no_guiding");
         connect_rbtn("rbtn_guide_main_cam");
         connect_rbtn("rbtn_guide_ext");
+    }
+
+    fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
+        handlers.subscribe(clone!(@weak self as self_ => move |event| {
+            match event {
+                MainUiEvent::ProgramClosing =>
+                    self_.handler_closing(),
+                _ => {},
+            }
+        }));
+
+    }
+
+    fn handler_closing(&self) {
+        self.closed.set(true);
+
+        self.get_ui_options_from_widgets();
+        let ui_options = self.ui_options.borrow();
+        _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
+        drop(ui_options);
+
+        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
+            self.indi.unsubscribe(indi_conn);
+        }
+
+        *self.self_.borrow_mut() = None;
     }
 
     fn correct_widgets_props(&self) {
@@ -233,18 +246,6 @@ impl DitheringUi {
             self.core.start_mount_calibr()?;
             Ok(())
         });
-    }
-
-    fn process_event_in_main_thread(&self, event: MainThreadEvent) {
-        match event {
-            MainThreadEvent::Core(CoreEvent::ModeChanged) => {
-                self.correct_widgets_props();
-            }
-            MainThreadEvent::Indi(indi::Event::ConnChange(_)) => {
-                self.correct_widgets_props();
-            }
-            _ => {}
-        }
     }
 
     fn handler_action_stop_dither_calibr(&self) {

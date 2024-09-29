@@ -15,7 +15,6 @@ use super::{gtk_utils, utils::*, ui_main::*};
 pub fn init_ui(
     _app:     &gtk::Application,
     builder:  &gtk::Builder,
-    main_ui:  &Rc<MainUi>,
     options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
     indi:     &Arc<indi::Connection>,
@@ -30,7 +29,6 @@ pub fn init_ui(
     });
 
     let data = Rc::new(FocuserUi {
-        main_ui:         Rc::clone(main_ui),
         builder:         builder.clone(),
         window,
         options:         Arc::clone(options),
@@ -71,7 +69,6 @@ pub fn init_ui(
 }
 
 struct FocuserUi {
-    main_ui:         Rc<MainUi>,
     builder:         gtk::Builder,
     window:          gtk::ApplicationWindow,
     options:         Arc<RwLock<Options>>,

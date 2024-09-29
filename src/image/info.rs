@@ -121,11 +121,13 @@ impl LightFrameInfo {
     }
 }
 
+#[derive(Clone)]
 pub struct FlatInfoChan {
     pub aver: f64,
     pub max: u16,
 }
 
+#[derive(Default, Clone)]
 pub struct FlatImageInfo {
     pub max_value: u16,
     pub r: Option<FlatInfoChan>,

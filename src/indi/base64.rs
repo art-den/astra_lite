@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 
 pub struct Base64Decoder {
     table:  [u8; 256],

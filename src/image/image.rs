@@ -60,11 +60,6 @@ impl<T: Copy + Default> ImageLayer<T> {
         &self.data[pos..pos+self.width]
     }
 
-    pub fn row_mut(&mut self, y: usize) -> &mut [T] {
-        let pos = y * self.width;
-        &mut self.data[pos..pos+self.width]
-    }
-
     #[inline(always)]
     pub fn set(&mut self, x: isize, y: isize, value: T) {
         if x < 0
@@ -370,21 +365,6 @@ impl Image {
         self.height = height;
         self.zero = zero;
         self.max_value = max_value;
-    }
-
-    pub fn clear(&mut self) {
-        self.l.clear();
-        self.r.clear();
-        self.g.clear();
-        self.b.clear();
-        self.width = 0;
-        self.height = 0;
-        self.zero = 0;
-        self.max_value = 0;
-    }
-
-    pub fn zero(&self) -> i32 {
-        self.zero
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1170,14 +1150,6 @@ impl ImageAdder {
             tiff.finish()?;
         }
         Ok(())
-    }
-
-    pub fn width(&self) -> usize {
-        self.width
-    }
-
-    pub fn height(&self) -> usize {
-        self.height
     }
 
     pub fn total_exposure(&self) -> f64 {

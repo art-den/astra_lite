@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::{collections::*, f64::consts::PI, fmt::Debug, io::{BufRead, Read}, path::Path};
 use bitflags::bitflags;
 use bitstream_io::{BigEndian, BitReader};

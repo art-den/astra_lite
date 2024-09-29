@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*, glib::clone};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    core::{consts::INDI_SET_PROP_TIMEOUT, core::{Core, ModeType}, mode_focusing::*},
+    core::{consts::INDI_SET_PROP_TIMEOUT, core::{Core, ModeType}},
     indi,
     options::*,
     utils::io_utils::*,
@@ -15,7 +15,6 @@ use super::{gtk_utils, utils::*, ui_main::*};
 pub fn init_ui(
     _app:     &gtk::Application,
     builder:  &gtk::Builder,
-    main_ui:  &Rc<MainUi>,
     options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
     indi:     &Arc<indi::Connection>,
@@ -30,7 +29,6 @@ pub fn init_ui(
     });
 
     let data = Rc::new(MountUi {
-        main_ui:         Rc::clone(main_ui),
         builder:         builder.clone(),
         window,
         excl:            ExclusiveCaller::new(),
@@ -41,7 +39,6 @@ pub fn init_ui(
         ui_options:      RefCell::new(ui_options),
         closed:          Cell::new(false),
         indi_evt_conn:   RefCell::new(None),
-        focusing_data:   RefCell::new(None),
         self_:           RefCell::new(None),
     });
 
@@ -73,7 +70,6 @@ pub enum MainThreadEvent {
 }
 
 struct MountUi {
-    main_ui:         Rc<MainUi>,
     builder:         gtk::Builder,
     window:          gtk::ApplicationWindow,
     excl:            ExclusiveCaller,
@@ -84,7 +80,6 @@ struct MountUi {
     ui_options:      RefCell<UiOptions>,
     closed:          Cell<bool>,
     indi_evt_conn:   RefCell<Option<indi::Subscription>>,
-    focusing_data:   RefCell<Option<FocusingResultData>>,
     self_:           RefCell<Option<Rc<MountUi>>>,
 }
 

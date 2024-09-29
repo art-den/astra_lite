@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 // See description here: https://raw.githubusercontent.com/wiki/OpenPHDGuiding/phd2/EventMonitoring.md
 
 use std::{

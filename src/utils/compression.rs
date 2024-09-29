@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use bitstream_io::*;
 use itertools::*;
 

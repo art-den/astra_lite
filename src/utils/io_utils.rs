@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::path::{PathBuf, Path};
 
 pub fn save_json_to_config<T: serde::Serialize>(
