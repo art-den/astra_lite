@@ -125,16 +125,17 @@ impl FrameType {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RawImageInfo {
-    pub time:       Option<DateTime<Utc>>,
-    pub width:      usize,
-    pub height:     usize,
-    pub zero:       i32,
-    pub max_value:  u16,
-    pub cfa:        CfaType,
-    pub bin:        u8,
-    pub frame_type: FrameType,
-    pub exposure:   f64,
-    pub camera:     String,
+    pub time:        Option<DateTime<Utc>>,
+    pub width:       usize,
+    pub height:      usize,
+    pub zero:        i32,
+    pub max_value:   u16,
+    pub cfa:         CfaType,
+    pub bin:         u8,
+    pub frame_type:  FrameType,
+    pub exposure:    f64,
+    pub integr_time: Option<f64>, // for master files
+    pub camera:      String,
 }
 
 pub struct RawImage {
@@ -164,21 +165,21 @@ impl RawImage {
             anyhow::bail!("No RAW image found in fits data");
         };
 
-        let width     = image_hdu.dims()[0];
-        let height    = image_hdu.dims()[1];
-        let exposure  = image_hdu.get_f64("EXPTIME" ).unwrap_or(0.0);
-        let bayer     = image_hdu.get_str("BAYERPAT").unwrap_or_default();
-        let bitdepth  = image_hdu.get_i64("BITDEPTH").unwrap_or(image_hdu.bitpix() as i64) as i32;
-        let bin       = image_hdu.get_i64("XBINNING").unwrap_or(1) as u8;
-        let offset    = image_hdu.get_i64("OFFSET"  ).unwrap_or(0) as i32;
-        let frame_str = image_hdu.get_str("FRAME"   );
-        let data      = image_hdu.read_data(&mut stream)?;
-        let time_str  = image_hdu.get_str("DATE-OBS").unwrap_or_default();
-        let camera    = image_hdu.get_str("INSTRUME").unwrap_or_default().to_string();
-
+        let bitdepth = image_hdu.get_i64("BITDEPTH").unwrap_or(image_hdu.bitpix() as i64) as i32;
         if bitdepth > 16 {
             anyhow::bail!("BITDEPTH > 16 ({}) is not supported", bitdepth);
         }
+
+        let width       = image_hdu.dims()[0];
+        let height      = image_hdu.dims()[1];
+        let exposure    = image_hdu.get_f64("EXPTIME").unwrap_or_default();
+        let integr_time = image_hdu.get_f64("TOTALEXP");
+        let bayer       = image_hdu.get_str("BAYERPAT").unwrap_or_default();
+        let bin         = image_hdu.get_i64("XBINNING").unwrap_or(1) as u8;
+        let offset      = image_hdu.get_i64("OFFSET").unwrap_or(0) as i32;
+        let frame_str   = image_hdu.get_str("FRAME");
+        let time_str    = image_hdu.get_str("DATE-OBS").unwrap_or_default();
+        let camera      = image_hdu.get_str("INSTRUME").unwrap_or_default().to_string();
 
         let max_value = ((1 << bitdepth) - 1) as u16;
         let cfa = CfaType::from_str(&bayer);
@@ -203,8 +204,12 @@ impl RawImage {
             max_value,
             frame_type,
             exposure,
+            integr_time,
             camera,
         };
+
+        let data = image_hdu.read_data(&mut stream)?;
+
         Ok(Self {info, data, cfa_arr})
     }
 
@@ -218,6 +223,9 @@ impl RawImage {
         let writer = FitsWriter::new();
         let mut hdu = Header::new_2d(self.info.width, self.info.height);
         hdu.set_value("EXPTIME",  &self.info.exposure.to_string());
+        if let Some(integr_exp) = self.info.integr_time {
+            hdu.set_value("TOTALEXP", &format!("{:.1}", integr_exp));
+        }
         hdu.set_value("ROWORDER", "'TOP-DOWN'");
         hdu.set_value("FRAME",    &format!("'{}'", self.info.frame_type.to_str()));
         hdu.set_value("XBINNING", &self.info.bin.to_string());
@@ -914,21 +922,23 @@ impl RawImage {
 }
 
 pub struct RawAdder {
-    data:     Vec<u32>,
-    images:   Vec<RawImage>,
-    info:     Option<RawImageInfo>,
-    counter:  u32,
-    zero_sum: i32,
+    data:       Vec<u32>,
+    images:     Vec<RawImage>,
+    info:       Option<RawImageInfo>,
+    counter:    u32,
+    zero_sum:   i32,
+    integr_exp: f64,
 }
 
 impl RawAdder {
     pub fn new() -> Self {
         Self {
-            data:     Vec::new(),
-            images:   Vec::new(),
-            info:     None,
-            counter:  0,
-            zero_sum: 0,
+            data:       Vec::new(),
+            images:     Vec::new(),
+            info:       None,
+            counter:    0,
+            zero_sum:   0,
+            integr_exp: 0.0,
         }
     }
 
@@ -940,6 +950,7 @@ impl RawAdder {
         self.info = None;
         self.counter = 0;
         self.zero_sum = 0;
+        self.integr_exp = 0.0;
     }
 
     pub fn add(
@@ -990,6 +1001,7 @@ impl RawAdder {
                 self.zero_sum += raw.info.zero;
             }
         }
+        self.integr_exp += raw.info.exposure;
         Ok(())
     }
 
@@ -1000,6 +1012,9 @@ impl RawAdder {
 
         let cfa_arr = info.cfa.get_array();
         let mut info = info.clone();
+        let counter2 = self.counter/2;
+        info.zero = (self.zero_sum + counter2 as i32) / self.counter as i32;
+        info.integr_time = Some(self.integr_exp);
 
         if self.counter == 0 && !self.images.is_empty() {
             // Median is used but less then 3 images are added.
@@ -1030,12 +1045,10 @@ impl RawAdder {
             }
             Ok(RawImage { info, data, cfa_arr })
         } else {
-            let counter2 = self.counter/2;
             let data: Vec<_> = self.data
                 .iter()
                 .map(|v| ((*v + counter2) / self.counter) as u16)
                 .collect();
-            info.zero = (self.zero_sum + counter2 as i32) / self.counter as i32;
             Ok(RawImage { info, data, cfa_arr })
         }
     }
