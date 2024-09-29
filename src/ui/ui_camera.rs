@@ -163,17 +163,18 @@ pub enum MainThreadEvent {
 }
 
 struct LightHistoryItem {
-    mode_type:     ModeType,
-    time:          Option<DateTime<Utc>>,
-    stars_fwhm:    Option<f32>,
-    bad_fwhm:      bool,
-    stars_ovality: Option<f32>,
-    bad_ovality:   bool,
-    stars_count:   usize,
-    noise:         Option<f32>, // %
-    background:    f32, // %
-    offset:        Option<Offset>,
-    bad_offset:    bool,
+    mode_type:      ModeType,
+    time:           Option<DateTime<Utc>>,
+    stars_fwhm:     Option<f32>,
+    bad_fwhm:       bool,
+    stars_ovality:  Option<f32>,
+    bad_ovality:    bool,
+    stars_count:    usize,
+    noise:          Option<f32>, // %
+    background:     f32, // %
+    offset:         Option<Offset>,
+    bad_offset:     bool,
+    calibr_methods: CalibrMethods,
 }
 
 struct CameraUi {
@@ -1658,17 +1659,18 @@ impl CameraUi {
             }
             FrameProcessResultData::LightFrameInfo(info) => {
                 let history_item = LightHistoryItem {
-                    mode_type:     result.mode_type,
-                    time:          info.time.clone(),
-                    stars_fwhm:    info.stars.fwhm,
-                    bad_fwhm:      !info.stars.fwhm_is_ok,
-                    stars_ovality: info.stars.ovality,
-                    bad_ovality:   !info.stars.ovality_is_ok,
-                    background:    info.bg_percent,
-                    noise:         info.raw_noise.map(|n| 100.0 * n / info.max_value as f32),
-                    stars_count:   info.stars.items.len(),
-                    offset:        info.stars_offset.clone(),
-                    bad_offset:    !info.offset_is_ok,
+                    mode_type:      result.mode_type,
+                    time:           info.time.clone(),
+                    stars_fwhm:     info.stars.fwhm,
+                    bad_fwhm:       !info.stars.fwhm_is_ok,
+                    stars_ovality:  info.stars.ovality,
+                    bad_ovality:    !info.stars.ovality_is_ok,
+                    background:     info.bg_percent,
+                    noise:          info.raw_noise.map(|n| 100.0 * n / info.max_value as f32),
+                    stars_count:    info.stars.items.len(),
+                    offset:         info.stars_offset.clone(),
+                    bad_offset:     !info.offset_is_ok,
+                    calibr_methods: info.calibr_methods.clone(),
                 };
                 self.light_history.borrow_mut().push(history_item);
                 self.update_light_history_table();
@@ -2018,6 +2020,7 @@ impl CameraUi {
                     u32   ::static_type(), String::static_type(),
                     String::static_type(), String::static_type(),
                     String::static_type(), String::static_type(),
+                    String::static_type(),
                 ]);
                 let columns = [
                     /* 0 */ "Type",
@@ -2027,9 +2030,11 @@ impl CameraUi {
                     /* 4 */ "Stars",
                     /* 5 */ "Noise",
                     /* 6 */ "Background",
-                    /* 7 */ "Offs.X",
-                    /* 8 */ "Offs.Y",
-                    /* 9 */ "Rot."
+                    /* 7 */ "Calibr.",
+                    /* 8 */ "Offs.X",
+                    /* 9 */ "Offs.Y",
+                    /* 10 */ "Rot.",
+
                 ];
                 for (idx, col_name) in columns.into_iter().enumerate() {
                     let cell_text = gtk::CellRendererText::new();
@@ -2111,6 +2116,19 @@ impl CameraUi {
             } else {
                 (String::new(), String::new(), String::new())
             };
+            let mut calibr_str = String::new();
+            if item.calibr_methods.contains(CalibrMethods::BY_DARK) {
+                calibr_str += "D";
+            }
+            if item.calibr_methods.contains(CalibrMethods::DEFECTIVE_PIXELS) {
+                calibr_str += "P";
+            }
+            if item.calibr_methods.contains(CalibrMethods::BY_FLAT) {
+                calibr_str += "F";
+            }
+            if item.calibr_methods.contains(CalibrMethods::HOT_PIXELS_SEARCH) {
+                calibr_str += "S";
+            }
             let last_is_selected =
                 gtk_utils::get_list_view_selected_row(&tree).map(|v| v+1) ==
                 Some(models_row_cnt as i32);
@@ -2122,9 +2140,10 @@ impl CameraUi {
                 (4, &stars_cnt),
                 (5, &noise_str),
                 (6, &bg_str),
-                (7, &x_str),
-                (8, &y_str),
-                (9, &angle_str),
+                (7, &calibr_str),
+                (8, &x_str),
+                (9, &y_str),
+                (10, &angle_str),
             ]);
             if last_is_selected || models_row_cnt == 0 {
                 // Select and scroll to last row

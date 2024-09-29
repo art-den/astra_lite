@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use crate::utils::log_utils::TimeLogger;
+use crate::{utils::log_utils::TimeLogger, core::frame_processing::*};
 use super::{stars_offset::*, histogram::*, image::*, stars::*};
 
 pub fn seconds_to_total_time_str(seconds: f64, short: bool) -> String {
@@ -28,18 +28,19 @@ pub fn seconds_to_total_time_str(seconds: f64, short: bool) -> String {
 }
 
 pub struct LightFrameInfo {
-    pub time:         Option<DateTime<Utc>>,
-    pub width:        usize,
-    pub height:       usize,
-    pub exposure:     f64,
-    pub raw_noise:    Option<f32>,
-    pub noise:        f32,
-    pub background:   i32,
-    pub bg_percent:   f32,
-    pub max_value:    u16,
-    pub stars:        StarsInfo,
-    pub stars_offset: Option<Offset>,
-    pub offset_is_ok: bool,
+    pub time:           Option<DateTime<Utc>>,
+    pub width:          usize,
+    pub height:         usize,
+    pub exposure:       f64,
+    pub raw_noise:      Option<f32>,
+    pub noise:          f32,
+    pub background:     i32,
+    pub bg_percent:     f32,
+    pub max_value:      u16,
+    pub stars:          StarsInfo,
+    pub stars_offset:   Option<Offset>,
+    pub offset_is_ok:   bool,
+    pub calibr_methods: CalibrMethods,
 }
 
 impl LightFrameInfo {
@@ -117,6 +118,7 @@ impl LightFrameInfo {
             stars: stars_info,
             stars_offset,
             offset_is_ok,
+            calibr_methods: CalibrMethods::empty(),
         }
     }
 }

@@ -134,11 +134,9 @@ pub struct LiveStackingParams {
     pub options: LiveStackingOptions,
 }
 
-bitflags! {
-    pub struct ProcessImageFlags: u32 {
-        const CALC_STARS_OFFSET = 1;
-}
-}
+bitflags! { pub struct ProcessImageFlags: u32 {
+    const CALC_STARS_OFFSET = 1;
+}}
 
 pub struct FrameProcessCommandData {
     pub mode_type:       ModeType,
@@ -366,14 +364,27 @@ pub fn get_rgb_data_from_preview_image(
     )
 }
 
+
+bitflags! {
+    #[derive(Clone)]
+    pub struct CalibrMethods: u32 {
+        const BY_DARK           = 1;
+        const BY_FLAT           = 2;
+        const DEFECTIVE_PIXELS  = 4;
+        const HOT_PIXELS_SEARCH = 8;
+    }
+}
+
 fn apply_calibr_data_and_remove_hot_pixels(
     params:    &Option<CalibrParams>,
     raw_image: &mut RawImage,
     calibr:    &mut CalibrData,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<CalibrMethods> {
+    let mut result = CalibrMethods::empty();
+
     log::debug!("apply_calibr_data_and_remove_hot_pixels params={:?}", params);
 
-    let Some(params) = params else { return Ok(()); };
+    let Some(params) = params else { return Ok(result); };
 
     log::debug!("calibr.defect_pixels_fname={:?}", calibr.defect_pixels_fname);
     log::debug!("calibr.master_dark_fname={:?}", calibr.master_dark_fname);
@@ -474,6 +485,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
                 file_name.to_str().unwrap_or_default()
             ))?;
         tmr.log("subtracting master dark");
+        result.set(CalibrMethods::BY_DARK, true);
     }
 
     // Apply master flat image
@@ -488,6 +500,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
             ))?;
 
         tmr.log("applying master flat");
+        result.set(CalibrMethods::BY_FLAT, true);
     }
 
     // remove defect pixels
@@ -496,6 +509,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
         let tmr = TimeLogger::start();
         raw_image.remove_bad_pixels(&defect_pixels.items);
         tmr.log("removing hot pixels from light frame");
+        result.set(CalibrMethods::DEFECTIVE_PIXELS, true);
     }
 
     // Find and remove hot pixels if there is no calibration data
@@ -506,9 +520,10 @@ fn apply_calibr_data_and_remove_hot_pixels(
         tmr.log("searching hot pixels in light image");
         log::debug!("hot pixels count = {}", hot_pixels.len());
         raw_image.remove_bad_pixels(&hot_pixels);
+        result.set(CalibrMethods::HOT_PIXELS_SEARCH, true);
     }
 
-    Ok(())
+    Ok(result)
 }
 
 fn send_result(
@@ -615,9 +630,14 @@ fn make_preview_image_impl(
     drop(raw_hist);
 
     // Applying calibration data
+    let mut calibr_methods = CalibrMethods::empty();
     if raw_info.frame_type == FrameType::Lights {
         let mut calibr = command.calibr_data.lock().unwrap();
-        apply_calibr_data_and_remove_hot_pixels(&command.calibr_params, &mut raw_image, &mut calibr)?;
+        calibr_methods = apply_calibr_data_and_remove_hot_pixels(
+            &command.calibr_params,
+            &mut raw_image,
+            &mut calibr
+        )?;
     }
 
     let raw_image = Arc::new(raw_image);
@@ -817,6 +837,7 @@ fn make_preview_image_impl(
         );
         info.exposure = raw_info.exposure;
         info.raw_noise = raw_noise;
+        info.calibr_methods = calibr_methods;
         tmr.log("TOTAL LightImageInfo::from_image");
 
         if command.stop_flag.load(Ordering::Relaxed) {

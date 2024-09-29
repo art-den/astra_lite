@@ -4471,6 +4471,19 @@ Useful when the object is not lagre and is in the center of the image.</property
                                   <object class="GtkTreeView" id="tv_light_history">
                                     <property name="visible">True</property>
                                     <property name="can-focus">True</property>
+                                    <property name="tooltip-text" translatable="yes">"Type" column:
+S - single shot
+LV - live view
+RAW - saving raw files
+LS - live stacking
+F - autofocus
+MC - mount calibration
+
+"Calibr." column:
+D - by dark calibrated
+P - defective pixels corrected
+F - by flat calibrated
+S - search and remove hot pixels in light frame</property>
                                     <property name="enable-search">False</property>
                                     <property name="show-expanders">False</property>
                                     <property name="enable-grid-lines">both</property>
