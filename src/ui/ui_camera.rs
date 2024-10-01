@@ -1344,7 +1344,7 @@ impl CameraUi {
         let preview_params = options.preview.preview_params();
         let (image, hist) = match options.preview.source {
             PreviewSource::OrigFrame =>
-                (&self.core.cur_frame().image, &self.core.cur_frame().hist),
+                (&self.core.cur_frame().image, &self.core.cur_frame().img_hist),
             PreviewSource::LiveStacking =>
                 (&self.core.live_stacking().image, &self.core.live_stacking().hist),
         };
@@ -1512,7 +1512,7 @@ impl CameraUi {
             let options = self.options.read().unwrap();
             let (image, hist, fn_prefix) = match options.preview.source {
                 PreviewSource::OrigFrame =>
-                    (&self.core.cur_frame().image, &self.core.cur_frame().hist, "preview"),
+                    (&self.core.cur_frame().image, &self.core.cur_frame().img_hist, "preview"),
                 PreviewSource::LiveStacking =>
                     (&self.core.live_stacking().image, &self.core.live_stacking().hist, "live"),
             };
@@ -1647,7 +1647,7 @@ impl CameraUi {
                 self.show_preview_image(rgb_data, Some(&img.params));
                 show_resolution_info(img.image_width, img.image_height);
             }
-            FrameProcessResultData::Histogram
+            FrameProcessResultData::RawHistogram(_)
             if is_mode_current(false) => {
                 self.repaint_histogram();
                 self.show_histogram_stat();
@@ -2224,7 +2224,7 @@ impl CameraUi {
                     drop(image);
 
                     let image = self_.core.cur_frame().image.read().unwrap();
-                    let mut hist = self_.core.cur_frame().hist.write().unwrap();
+                    let mut hist = self_.core.cur_frame().img_hist.write().unwrap();
                     hist.from_image(&image);
                     drop(hist);
                     let mut hist = self_.core.cur_frame().raw_hist.write().unwrap();

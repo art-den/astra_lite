@@ -25,8 +25,8 @@ pub enum ResultImageInfo {
 
 pub struct ResultImage {
     pub image:    RwLock<Image>,
-    pub raw_hist: RwLock<Histogram>,
-    pub hist:     RwLock<Histogram>,
+    pub raw_hist: Arc<RwLock<Histogram>>,
+    pub img_hist: RwLock<Histogram>,
     pub info:     RwLock<ResultImageInfo>,
 }
 
@@ -34,8 +34,8 @@ impl ResultImage {
     pub fn new() -> Self {
         Self {
             image:    RwLock::new(Image::new_empty()),
-            raw_hist: RwLock::new(Histogram::new()),
-            hist:     RwLock::new(Histogram::new()),
+            raw_hist: Arc::new(RwLock::new(Histogram::new())),
+            img_hist: RwLock::new(Histogram::new()),
             info:     RwLock::new(ResultImageInfo::None),
         }
     }
@@ -165,6 +165,7 @@ pub struct Preview8BitImgData {
 pub enum FrameProcessResultData {
     Error(String),
     ShotProcessingStarted,
+    RawHistogram(Arc<RwLock<Histogram>>),
     RawFrame(Arc<RawImage>),
     ShotProcessingFinished {
         frame_is_ok:     bool,
@@ -172,14 +173,12 @@ pub enum FrameProcessResultData {
         raw_image_info:  Arc<RawImageInfo>,
         processing_time: f64,
         blob_dl_time:    f64,
-
     },
     PreviewFrame(Arc<Preview8BitImgData>),
     PreviewLiveRes(Arc<Preview8BitImgData>),
     LightFrameInfo(Arc<LightFrameInfo>),
     FrameInfo,
     FrameInfoLiveRes,
-    Histogram,
     HistogramLiveRes,
     MasterSaved {
         frame_type: FrameType,
@@ -629,6 +628,14 @@ fn make_preview_image_impl(
 
     drop(raw_hist);
 
+    send_result(
+        FrameProcessResultData::RawHistogram(Arc::clone(&command.frame.raw_hist)),
+        &command.camera,
+        command.mode_type,
+        &command.stop_flag,
+        result_fun
+    );
+
     // Applying calibration data
     let mut calibr_methods = CalibrMethods::empty();
     if raw_info.frame_type == FrameType::Lights {
@@ -671,19 +678,6 @@ fn make_preview_image_impl(
         log::debug!("Command stopped");
         return Ok(());
     }
-
-    if command.stop_flag.load(Ordering::Relaxed) {
-        log::debug!("Command stopped");
-        return Ok(());
-    }
-
-    send_result(
-        FrameProcessResultData::Histogram,
-        &command.camera,
-        command.mode_type,
-        &command.stop_flag,
-        result_fun
-    );
 
     match raw_info.frame_type {
         FrameType::Flats => {
@@ -767,7 +761,7 @@ fn make_preview_image_impl(
     // Result image histogram
 
     let image = command.frame.image.read().unwrap();
-    let mut hist = command.frame.hist.write().unwrap();
+    let mut hist = command.frame.img_hist.write().unwrap();
     let tmr = TimeLogger::start();
     hist.from_image(&image);
     tmr.log("histogram for result image");
@@ -780,7 +774,7 @@ fn make_preview_image_impl(
 
     // Preview image RGB bytes
 
-    let hist = command.frame.hist.read().unwrap();
+    let hist = command.frame.img_hist.read().unwrap();
     let tmr = TimeLogger::start();
     let rgb_data = get_rgb_data_from_preview_image(
         &image,

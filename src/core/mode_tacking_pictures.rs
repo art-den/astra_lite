@@ -1,3 +1,4 @@
+use core::f64;
 use std::{
     any::Any, path::PathBuf, sync::{atomic::AtomicBool, Arc, Mutex, RwLock}
 };
@@ -7,7 +8,7 @@ use chrono::Utc;
 use crate::{
     core::consts::INDI_SET_PROP_TIMEOUT,
     guiding::external_guider::*,
-    image::{info::LightFrameInfo, raw::{FrameType, RawAdder, RawImage, RawImageInfo}, stars_offset::*},
+    image::{histogram::*, info::LightFrameInfo, raw::{FrameType, RawAdder, RawImage, RawImageInfo}, stars_offset::*},
     indi,
     options::*,
     utils::{io_utils::*, timer::Timer},
@@ -55,9 +56,10 @@ pub enum CameraMode {
 }
 
 #[derive(PartialEq)]
-enum FramesModeState {
+enum State {
     FrameToSkip,
     Common,
+    CameraOffsetCalculation,
     WaitingForMountCalibration,
     InternalMountCorrection,
     ExternalDithering,
@@ -93,9 +95,15 @@ struct OutFileNames {
     defect_pixels_fname: PathBuf,
 }
 
+struct CamOffsetCalc {
+    step: usize,
+    low_values: Vec<(u16, f64)>,
+    high_values: Vec<(u16, f64)>,
+}
+
 pub struct TackingPicturesMode {
     cam_mode:        CameraMode,
-    state:           FramesModeState,
+    state:           State,
     device:          DeviceAndProp,
     mount_device:    String,
     fn_gen:          Arc<Mutex<SeqFileNameGen>>,
@@ -116,6 +124,8 @@ pub struct TackingPicturesMode {
     flags:           Flags,
     fname_utils:     FileNameUtils,
     out_file_names:  OutFileNames,
+    camera_offset:   Option<u16>,
+    cam_offset_calc: Option<CamOffsetCalc>,
     next_mode:       Option<ModeBox>,
 }
 
@@ -150,7 +160,7 @@ impl TackingPicturesMode {
 
         Ok(Self {
             cam_mode,
-            state:           FramesModeState::Common,
+            state:           State::Common,
             device:          cam_device.clone(),
             mount_device:    opts.mount.device.to_string(),
             fn_gen:          Arc::new(Mutex::new(SeqFileNameGen::new())),
@@ -167,6 +177,8 @@ impl TackingPicturesMode {
             guider:          None,
             live_stacking:   None,
             out_file_names:  OutFileNames::default(),
+            camera_offset:   None,
+            cam_offset_calc: None,
             next_mode:       None,
             flags:           Flags::default(),
             fname_utils:     FileNameUtils::default(),
@@ -250,17 +262,24 @@ impl TackingPicturesMode {
             self.cam_mode == CameraMode::LiveStacking ||
             self.cam_mode == CameraMode::SavingMasterDark;
         if !self.flags.skip_frame_done && need_skip_first_frame {
-            let mut frame_opts = self.cam_options.frame.clone();
-            const MAX_EXP: f64 = 1.0;
-            if frame_opts.exposure() > MAX_EXP {
-                frame_opts.set_exposure(MAX_EXP);
-            }
+            self.start_shot_that_will_be_skipped()?;
+            self.state = State::FrameToSkip;
+            return Ok(());
+        }
 
-            init_cam_continuous_mode(&self.indi, &self.device, &frame_opts, false)?;
-            apply_camera_options_and_take_shot(&self.indi, &self.device, &frame_opts)?;
-
-            self.state = FramesModeState::FrameToSkip;
-            self.cur_exposure = frame_opts.exposure();
+        if self.cam_mode == CameraMode::SavingRawFrames
+        && self.cam_options.frame.frame_type == FrameType::Flats
+        && self.cam_options.frame.offset != 0
+        && self.camera_offset.is_none()
+        && self.flags.save_master_file {
+            // we need to calculate real camera offset before creating master flat file
+            self.cam_offset_calc = Some(CamOffsetCalc {
+                step: 0,
+                low_values: Vec::new(),
+                high_values: Vec::new(),
+            });
+            self.start_offset_calculation_shot()?;
+            self.state = State::CameraOffsetCalculation;
             return Ok(());
         }
 
@@ -268,8 +287,32 @@ impl TackingPicturesMode {
         init_cam_continuous_mode(&self.indi, &self.device, &self.cam_options.frame, continuously)?;
         apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
 
-        self.state = FramesModeState::Common;
+        self.state = State::Common;
         self.cur_exposure = self.cam_options.frame.exposure();
+        Ok(())
+    }
+
+    fn start_shot_that_will_be_skipped(&mut self) -> anyhow::Result<()> {
+        let mut frame_opts = self.cam_options.frame.clone();
+        const MAX_EXP: f64 = 1.0;
+        if frame_opts.exposure() > MAX_EXP {
+            frame_opts.set_exposure(MAX_EXP);
+        }
+        init_cam_continuous_mode(&self.indi, &self.device, &frame_opts, false)?;
+        apply_camera_options_and_take_shot(&self.indi, &self.device, &frame_opts)?;
+        self.cur_exposure = frame_opts.exposure();
+        Ok(())
+    }
+
+    fn start_offset_calculation_shot(&mut self) -> anyhow::Result<()> {
+        if let Some(offset_calc) = &self.cam_offset_calc {
+            let mut frame_opts = self.cam_options.frame.clone();
+            if offset_calc.step % 2 == 0 { frame_opts.offset = 0; }
+            //frame_opts.exp_flat /= offset_calc.step as f64;
+            init_cam_continuous_mode(&self.indi, &self.device, &frame_opts, false)?;
+            apply_camera_options_and_take_shot(&self.indi, &self.device, &frame_opts)?;
+            self.cur_exposure = frame_opts.exposure();
+        }
         Ok(())
     }
 
@@ -438,7 +481,7 @@ impl TackingPicturesMode {
         if guider_options.is_used() && mount_device_active {
             if guider_data.mnt_calibr.is_none() { // mount moving calibration
                 self.abort()?;
-                self.state = FramesModeState::WaitingForMountCalibration;
+                self.state = State::WaitingForMountCalibration;
                 return Ok(NotifyResult::Empty);
             }
         }
@@ -519,7 +562,7 @@ impl TackingPicturesMode {
                     if dec < -max_dec { dec = -max_dec; }
                     log::debug!("Timed guide, NS = {:.2}s, WE = {:.2}s", dec, ra);
                     self.indi.mount_timed_guide(&self.mount_device, dec, ra)?;
-                    self.state = FramesModeState::InternalMountCorrection;
+                    self.state = State::InternalMountCorrection;
                     return Ok(NotifyResult::ModeStrChanged);
                 }
             }
@@ -557,7 +600,7 @@ impl TackingPicturesMode {
                     log::info!("Starting dithering by external guider with {} pixels...", dist);
                     guider.start_dithering(dist)?;
                     self.abort()?;
-                    self.state = FramesModeState::ExternalDithering;
+                    self.state = State::ExternalDithering;
                     return Ok(NotifyResult::ModeStrChanged);
                 }
             }
@@ -585,10 +628,17 @@ impl TackingPicturesMode {
             });
         }
 
-        if self.state != FramesModeState::Common
-        && self.state != FramesModeState::WaitingForMountCalibration
-        && self.state != FramesModeState::InternalMountCorrection {
-            println!("exit process_frame_processing_finished_event");
+        if let (State::CameraOffsetCalculation, Some(offset_calc))
+        = (&self.state, &mut self.cam_offset_calc) {
+            if offset_calc.step == Self::MAX_OFFSET_CALC_STEPS {
+                self.start_or_continue()?;
+                return Ok(NotifyResult::ModeStrChanged);
+            }
+        }
+
+        if self.state != State::Common
+        && self.state != State::WaitingForMountCalibration
+        && self.state != State::InternalMountCorrection {
             return Ok(NotifyResult::Empty);
         }
 
@@ -651,9 +701,59 @@ impl TackingPicturesMode {
             self.save_defect_pixels_file()?;
         }
 
-        if self.state == FramesModeState::WaitingForMountCalibration {
-            self.state = FramesModeState::Common;
+        if self.state == State::WaitingForMountCalibration {
+            self.state = State::Common;
             return Ok(NotifyResult::StartMountCalibr);
+        }
+
+        Ok(result)
+    }
+
+    const MAX_OFFSET_CALC_STEPS: usize = 8;
+
+    fn process_raw_histogram(
+        &mut self,
+        hist: &Arc<RwLock<Histogram>>
+    ) -> anyhow::Result<NotifyResult> {
+        let mut result = NotifyResult::Empty;
+
+        if let (State::CameraOffsetCalculation, Some(offset_calc))
+        = (&self.state, &mut self.cam_offset_calc) {
+            let hist = hist.read().unwrap();
+            let chan = if hist.g.is_some() { &hist.g } else { &hist.l };
+            if let Some(chan) = chan {
+                if offset_calc.step % 2 == 0 {
+                    offset_calc.low_values.push((chan.median(), chan.std_dev));
+                } else {
+                    offset_calc.high_values.push((chan.median(), chan.std_dev));
+                }
+            }
+
+            offset_calc.step += 1;
+            if offset_calc.step != Self::MAX_OFFSET_CALC_STEPS {
+                self.start_offset_calculation_shot()?;
+            } else {
+                log::debug!(
+                    "Calculating camera offset from low = {:?} and high = {:?} values ...",
+                    offset_calc.low_values, offset_calc.high_values
+                );
+                let mut min_deviation_diff = f64::MAX;
+                let mut result_value = 0i32;
+                for (m1, d1) in &offset_calc.low_values {
+                    for (m2, d2) in &offset_calc.high_values {
+                        let dev_diff = f64::abs(d1 - d2);
+                        if dev_diff < min_deviation_diff {
+                            min_deviation_diff = dev_diff;
+                            result_value = *m2 as i32 - *m1 as i32;
+                        }
+                    }
+                }
+                log::debug!("Camera offset result = {}", result_value);
+                result_value = result_value.min(u16::MAX as i32);
+                result_value = result_value.max(u16::MIN as i32);
+                self.camera_offset = Some(result_value as u16);
+                result = NotifyResult::ModeStrChanged;
+            }
         }
 
         Ok(result)
@@ -664,6 +764,8 @@ impl TackingPicturesMode {
         if raw_image.info().frame_type == FrameType::Flats {
             let mut normalized_flat = raw_image.clone();
             let tmr = TimeLogger::start();
+            let flat_offset = self.camera_offset.unwrap_or_default();
+            normalized_flat.set_offset(flat_offset as i32);
             normalized_flat.normalize_flat();
             tmr.log("Normalizing flat");
             let tmr = TimeLogger::start();
@@ -772,7 +874,7 @@ impl TackingPicturesMode {
         &mut self,
         raw_image: &RawImage,
     ) -> anyhow::Result<NotifyResult> {
-        if self.state != FramesModeState::Common {
+        if self.state != State::Common {
             return Ok(NotifyResult::Empty);
         }
 
@@ -793,7 +895,7 @@ impl TackingPicturesMode {
             return Ok(NotifyResult::Empty);
         }
 
-        if self.state != FramesModeState::Common {
+        if self.state != State::Common {
             return Ok(NotifyResult::Empty);
         }
 
@@ -866,12 +968,14 @@ impl Mode for TackingPicturesMode {
 
     fn progress_string(&self) -> String {
         let mut mode_str = match (&self.state, &self.cam_mode) {
-            (FramesModeState::FrameToSkip, _) =>
+            (State::FrameToSkip, _) =>
                 "First frame (will be skipped)".to_string(),
-            (FramesModeState::InternalMountCorrection, _) =>
+            (State::InternalMountCorrection, _) =>
                 "Mount position correction".to_string(),
-            (FramesModeState::ExternalDithering, _) =>
+            (State::ExternalDithering, _) =>
                 "Dithering".to_string(),
+            (State::CameraOffsetCalculation, _) =>
+                "Camera calibration...".to_string(),
             (_, CameraMode::SingleShot) =>
                 "Taking shot".to_string(),
             (_, CameraMode::LiveView) =>
@@ -888,7 +992,7 @@ impl Mode for TackingPicturesMode {
         let mut extra_modes = Vec::new();
         if matches!(self.cam_mode, CameraMode::SavingRawFrames|CameraMode::LiveStacking)
         && self.cam_options.frame.frame_type == FrameType::Lights
-        && self.state == FramesModeState::Common {
+        && self.state == State::Common {
             if let Some(focus_options) = &self.focus_options {
                 if focus_options.on_fwhm_change
                 || focus_options.on_temp_change
@@ -919,7 +1023,7 @@ impl Mode for TackingPicturesMode {
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
-        if self.state != FramesModeState::FrameToSkip {
+        if self.state != State::FrameToSkip {
             Some(self.cur_exposure)
         } else {
             Some(self.cur_exposure)
@@ -1000,7 +1104,7 @@ impl Mode for TackingPicturesMode {
     fn continue_work(&mut self) -> anyhow::Result<()> {
         self.correct_options_before_start();
         self.update_options_copies();
-        self.state = FramesModeState::Common;
+        self.state = State::Common;
 
         // Restore original frame options
         // in saving raw or live stacking mode
@@ -1070,9 +1174,9 @@ impl Mode for TackingPicturesMode {
         &mut self,
         should_be_processed: &mut bool
     ) -> anyhow::Result<NotifyResult> {
-        if self.state == FramesModeState::FrameToSkip {
+        if self.state == State::FrameToSkip {
             *should_be_processed = false;
-            self.state = FramesModeState::Common;
+            self.state = State::Common;
             self.flags.skip_frame_done = true;
             self.start_or_continue()?;
             return Ok(NotifyResult::ModeStrChanged)
@@ -1102,6 +1206,9 @@ impl Mode for TackingPicturesMode {
                     subscribers,
                     &fp_result.cmd_stop_flag,
                 ),
+
+            FrameProcessResultData::RawHistogram(hist) =>
+                self.process_raw_histogram(hist),
 
             _ =>
                 Ok(NotifyResult::Empty)
@@ -1156,7 +1263,7 @@ impl Mode for TackingPicturesMode {
         prop_change: &indi::PropChangeEvent
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
-        if self.state == FramesModeState::InternalMountCorrection {
+        if self.state == State::InternalMountCorrection {
             if let ("TELESCOPE_TIMED_GUIDE_NS"|"TELESCOPE_TIMED_GUIDE_WE", indi::PropChange::Change { value, .. }, Some(guid_data))
             = (prop_change.prop_name.as_str(), &prop_change.change, &mut self.simple_guider) {
                 match value.elem_name.as_str() {
@@ -1182,7 +1289,7 @@ impl Mode for TackingPicturesMode {
                         &self.device,
                         &self.cam_options.frame
                     )?;
-                    self.state = FramesModeState::Common;
+                    self.state = State::Common;
                     result = NotifyResult::ModeStrChanged;
                 }
             }
@@ -1196,7 +1303,7 @@ impl Mode for TackingPicturesMode {
     ) -> anyhow::Result<NotifyResult> {
         if let Some(guid_options) = &self.guider_options {
             if guid_options.mode == GuidingMode::External
-            && self.state == FramesModeState::ExternalDithering {
+            && self.state == State::ExternalDithering {
                 match event {
                     ExtGuiderEvent::DitheringFinished => {
                         self.flags.skip_frame_done = false;

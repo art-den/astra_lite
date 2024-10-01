@@ -997,9 +997,9 @@ impl RawAdder {
         } else {
             for (s, d) in raw.data.iter().zip(&mut self.data) {
                 *d += *s as u32;
-                self.counter += 1;
-                self.zero_sum += raw.info.zero;
             }
+            self.counter += 1;
+            self.zero_sum += raw.info.zero;
         }
         self.integr_exp += raw.info.exposure;
         Ok(())
