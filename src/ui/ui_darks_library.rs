@@ -1,14 +1,11 @@
 use std::{cell::RefCell, rc::Rc, sync::{Arc, RwLock}};
-use gtk::{glib::clone, prelude::*, glib};
+use gtk::{gdk::ffi::GDK_CURRENT_TIME, glib::{self, clone}, prelude::*};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use crate::{
     core::{
         core::*, mode_darks_library::*
-    },
-    utils::io_utils::*,
-    image::info::seconds_to_total_time_str,
-    options::*,
+    }, image::info::seconds_to_total_time_str, options::*, utils::io_utils::*
 };
 
 use super::gtk_utils;
@@ -648,6 +645,11 @@ impl DarksLibraryDialog {
         btn_stop_defect_pixels_files.connect_clicked(clone!(@strong self as self_ => move |_| {
             self_.handler_btn_stop();
         }));
+
+        let btn_open_folder = self.builder.object::<gtk::Button>("btn_open_folder").unwrap();
+        btn_open_folder.connect_clicked(clone!(@strong self as self_ => move |_| {
+            self_.handler_btn_open_folder();
+        }));
     }
 
     fn connect_core_events(self: &Rc<Self>) {
@@ -795,5 +797,17 @@ impl DarksLibraryDialog {
 
             _ => {},
         }
+    }
+
+    fn handler_btn_open_folder(&self) {
+        let options = self.options.read().unwrap();
+        let lib_path = &options.calibr.dark_library_path.to_str().unwrap_or_default();
+        let uri = "file:///".to_string() + lib_path;
+        drop(options);
+        _ = gtk::show_uri_on_window(
+            Option::<&gtk::Window>::None,
+            uri.as_str(),
+            GDK_CURRENT_TIME as u32
+        );
     }
 }
