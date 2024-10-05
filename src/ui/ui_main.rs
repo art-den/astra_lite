@@ -98,7 +98,7 @@ pub fn init_ui(
     super::ui_hardware::init_ui(app, &builder, &data, options, core, indi, &mut handlers);
     super::ui_camera::init_ui(app, &builder, &data, options, core, indi, &mut handlers);
     super::ui_focuser::init_ui(app, &builder, options, core, indi, &mut handlers);
-    super::ui_skymap::init_ui(app, &builder, &data, &options, indi, &mut handlers);
+    super::ui_skymap::init_ui(app, &builder, &data, core, options, indi, &mut handlers);
     super::ui_dithering::init_ui(app, &builder, options, core, indi, &mut handlers);
     super::ui_mount::init_ui(app, &builder, options, core, indi, &mut handlers);
 

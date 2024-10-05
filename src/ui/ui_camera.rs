@@ -91,27 +91,19 @@ enum DelayedActionTypes {
 #[derive(Serialize, Deserialize, Debug,)]
 #[serde(default)]
 struct StoredCamOptions {
-    cam:            DeviceAndProp,
-    frame:          FrameOptions,
-    ctrl:           CamCtrlOptions,
-    calibr:         CalibrOptions,
-    focuser_exp:    f64,
-    focuser_gain:   f64,
-    guidecal_exp:   f64,
-    guidecal_gain:  f64,
+    cam:    DeviceAndProp,
+    frame:  FrameOptions,
+    ctrl:   CamCtrlOptions,
+    calibr: CalibrOptions,
 }
 
 impl Default for StoredCamOptions {
     fn default() -> Self {
         Self {
-            cam:           DeviceAndProp::default(),
-            frame:         FrameOptions::default(),
-            ctrl:          CamCtrlOptions::default(),
-            calibr:        CalibrOptions::default(),
-            focuser_exp:   2.0,
-            focuser_gain:  1000.0,
-            guidecal_exp:  2.0,
-            guidecal_gain: 1000.0,
+            cam:    DeviceAndProp::default(),
+            frame:  FrameOptions::default(),
+            ctrl:   CamCtrlOptions::default(),
+            calibr: CalibrOptions::default(),
         }
     }
 }
@@ -360,8 +352,6 @@ impl CameraUi {
             options.show_cam_frame(&self_.builder);
             options.show_calibr(&self_.builder);
             options.show_cam_ctrl(&self_.builder);
-            options.show_focuser_cam(&self_.builder);
-            options.show_guiding_cam(&self_.builder);
         }));
 
         let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
@@ -741,10 +731,6 @@ impl CameraUi {
         store_dest.frame = options.cam.frame.clone();
         store_dest.ctrl = options.cam.ctrl.clone();
         store_dest.calibr = options.calibr.clone();
-        store_dest.focuser_exp = options.focuser.exposure;
-        store_dest.focuser_gain = options.focuser.gain;
-        store_dest.guidecal_exp = options.guiding.main_cam.calibr_exposure;
-        store_dest.guidecal_gain = options.guiding.main_cam.calibr_gain;
     }
 
     fn select_options_for_camera(
@@ -758,10 +744,6 @@ impl CameraUi {
             options.cam.frame = stored.frame.clone();
             options.cam.ctrl = stored.ctrl.clone();
             options.calibr = stored.calibr.clone();
-            options.focuser.exposure = stored.focuser_exp;
-            options.focuser.gain = stored.focuser_gain;
-            options.guiding.main_cam.calibr_exposure = stored.guidecal_exp;
-            options.guiding.main_cam.calibr_gain = stored.guidecal_gain;
         }
         drop(ui_options);
     }
@@ -1025,14 +1007,12 @@ impl CameraUi {
             let result = correct_num_adjustment_by_prop("spb_exp", &exp_value, 3, Some(1.0));
             correct_num_adjustment_by_prop("spb_foc_exp", &exp_value, 1, Some(1.0));
             correct_num_adjustment_by_prop("spb_mnt_cal_exp", &exp_value, 1, Some(1.0));
+            correct_num_adjustment_by_prop("spb_ps_exp", &exp_value, 1, Some(1.0));
             result
         }).unwrap_or(false);
         let gain_supported = camera.as_ref().map(|camera| {
             let gain_value = self.indi.camera_get_gain_prop_value(&camera.name);
-            let result = correct_num_adjustment_by_prop("spb_gain", &gain_value, 0, None);
-            correct_num_adjustment_by_prop("spb_foc_gain", &gain_value, 0, None);
-            correct_num_adjustment_by_prop("spb_mnt_cal_gain", &gain_value, 0, None);
-            result
+            correct_num_adjustment_by_prop("spb_gain", &gain_value, 0, None)
         }).unwrap_or(false);
         let offset_supported = camera.as_ref().map(|camera| {
             let offset_value = self.indi.camera_get_offset_prop_value(&camera.name);
@@ -1344,7 +1324,7 @@ impl CameraUi {
         let preview_params = options.preview.preview_params();
         let (image, hist) = match options.preview.source {
             PreviewSource::OrigFrame =>
-                (&self.core.cur_frame().image, &self.core.cur_frame().img_hist),
+                (&*self.core.cur_frame().image, &self.core.cur_frame().img_hist),
             PreviewSource::LiveStacking =>
                 (&self.core.live_stacking().image, &self.core.live_stacking().hist),
         };
@@ -1356,7 +1336,11 @@ impl CameraUi {
             &hist,
             &preview_params
         );
-        self.show_preview_image(rgb_bytes, None);
+        if let Some(rgb_bytes) = rgb_bytes {
+            self.show_preview_image(rgb_bytes, None);
+        } else {
+            self.show_preview_image(RgbU8Data::default(), None);
+        }
     }
 
     fn show_preview_image(
@@ -1512,7 +1496,7 @@ impl CameraUi {
             let options = self.options.read().unwrap();
             let (image, hist, fn_prefix) = match options.preview.source {
                 PreviewSource::OrigFrame =>
-                    (&self.core.cur_frame().image, &self.core.cur_frame().img_hist, "preview"),
+                    (&*self.core.cur_frame().image, &self.core.cur_frame().img_hist, "preview"),
                 PreviewSource::LiveStacking =>
                     (&self.core.live_stacking().image, &self.core.live_stacking().hist, "live"),
             };
@@ -1538,6 +1522,7 @@ impl CameraUi {
             let hist = hist.read().unwrap();
             let preview_params = preview_options.preview_params();
             let rgb_data = get_rgb_data_from_preview_image(&image, &hist, &preview_params);
+            let Some(rgb_data) = rgb_data else { anyhow::bail!("wrong RGB fata"); };
             let bytes = glib::Bytes::from_owned(rgb_data.bytes);
             let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
                 &bytes,
@@ -2063,13 +2048,14 @@ impl CameraUi {
         };
         for item in &items[models_row_cnt..to_index] {
             let mode_type_str = match item.mode_type {
-                ModeType::SingleShot      => "S",
-                ModeType::LiveView        => "LV",
-                ModeType::SavingRawFrames => "RAW",
-                ModeType::LiveStacking    => "LS",
-                ModeType::Focusing        => "F",
-                ModeType::DitherCalibr    => "MC",
-                _                         => "???",
+                ModeType::SingleShot         => "S",
+                ModeType::LiveView           => "LV",
+                ModeType::SavingRawFrames    => "RAW",
+                ModeType::LiveStacking       => "LS",
+                ModeType::Focusing           => "F",
+                ModeType::DitherCalibr       => "MC",
+                ModeType::Goto               => "PS",
+                _                            => "???",
             };
             let local_time_str =
                 if let Some(time) = item.time.clone() {

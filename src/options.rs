@@ -32,6 +32,16 @@ impl Default for IndiOptions {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
+pub enum Gain {
+    #[default]Same,
+    Min,
+    P25,
+    P50,
+    P75,
+    Max
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
 pub enum Binning {#[default]Orig, Bin2, Bin3, Bin4}
 
 impl Binning {
@@ -351,7 +361,7 @@ pub struct FocuserOptions {
     pub measures:        u32,
     pub step:            f64,
     pub exposure:        f64,
-    pub gain:            f64,
+    pub gain:            Gain,
 }
 
 impl Default for FocuserOptions {
@@ -367,7 +377,7 @@ impl Default for FocuserOptions {
             measures:        11,
             step:            2000.0,
             exposure:        2.0,
-            gain:            1000.0,
+            gain:            Gain::default(),
         }
     }
 }
@@ -381,6 +391,25 @@ impl FocuserOptions {
         )
     }
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
+pub struct PlateSolveOptions {
+    pub exposure: f64,
+    pub gain: Gain,
+    pub bin: Binning,
+}
+
+impl Default for PlateSolveOptions {
+    fn default() -> Self {
+        Self {
+            exposure: 3.0,
+            gain: Gain::Same,
+            bin: Binning::Bin2,
+        }
+    }
+}
+
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
@@ -637,7 +666,7 @@ pub enum GuidingMode {
 pub struct MainCamGuidingOptions {
     pub max_error:       f64,
     pub calibr_exposure: f64,
-    pub calibr_gain:     f64,
+    pub calibr_gain:     Gain,
     pub dith_dist:       i32,
 }
 
@@ -646,7 +675,7 @@ impl Default for MainCamGuidingOptions {
         Self {
             max_error:       3.0,
             calibr_exposure: 2.0,
-            calibr_gain:     1000.0,
+            calibr_gain:     Gain::default(),
             dith_dist:       100,
         }
     }
@@ -703,16 +732,17 @@ pub struct SkyMapOptions {
 #[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(default)]
 pub struct Options {
-    pub indi:       IndiOptions,
-    pub cam:        CamOptions,
-    pub calibr:     CalibrOptions,
-    pub raw_frames: RawFrameOptions,
-    pub live:       LiveStackingOptions,
-    pub quality:    QualityOptions,
-    pub preview:    PreviewOptions,
-    pub focuser:    FocuserOptions,
-    pub mount:      MountOptions,
-    pub telescope:  TelescopeOptions,
-    pub guiding:    GuidingOptions,
-    pub sky_map:    SkyMapOptions,
+    pub indi:        IndiOptions,
+    pub cam:         CamOptions,
+    pub calibr:      CalibrOptions,
+    pub raw_frames:  RawFrameOptions,
+    pub live:        LiveStackingOptions,
+    pub quality:     QualityOptions,
+    pub preview:     PreviewOptions,
+    pub focuser:     FocuserOptions,
+    pub plate_solve: PlateSolveOptions,
+    pub mount:       MountOptions,
+    pub telescope:   TelescopeOptions,
+    pub guiding:     GuidingOptions,
+    pub sky_map:     SkyMapOptions,
 }

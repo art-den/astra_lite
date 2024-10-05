@@ -222,7 +222,7 @@ impl NumFormat {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PropState { Idle, Ok, Busy, Alert }
 
 impl PropState {
@@ -2984,6 +2984,12 @@ impl Connection {
             "TELESCOPE_ABORT_MOTION",
             &[("ABORT", true)]
         )
+    }
+
+    pub fn mount_get_eq_coord_prop_state(&self, device_name: &str) -> Result<PropState> {
+        let devices = self.devices.lock().unwrap();
+        let state = devices.get_property(device_name, "EQUATORIAL_EOD_COORD")?.state;
+        Ok(state)
     }
 
     pub fn mount_get_eq_dec(&self, device_name: &str) -> Result<f64> {

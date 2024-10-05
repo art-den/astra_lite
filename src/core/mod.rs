@@ -8,3 +8,4 @@ mod mode_waiting;
 mod mode_tacking_pictures;
 mod mode_mount_calibration;
 mod utils;
+mod mode_goto;

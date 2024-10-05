@@ -8,7 +8,7 @@ use crate::{
     utils::math::*,
     image::info::LightFrameInfo,
 };
-use super::{core::*, frame_processing::*, utils::FileNameUtils};
+use super::{core::*, frame_processing::*, utils::*};
 
 const MAX_FOCUS_TOTAL_TRY_CNT: usize = 8;
 const MAX_FOCUS_SAMPLE_TRY_CNT: usize = 4;
@@ -36,7 +36,6 @@ enum FocusingStage {
 
 pub struct FocusingMode {
     indi:        Arc<indi::Connection>,
-    options:     Arc<RwLock<Options>>,
     state:       FocusingState,
     camera:      DeviceAndProp,
     f_options:   FocuserOptions,
@@ -48,7 +47,6 @@ pub struct FocusingMode {
     try_cnt:     usize,
     stage:       FocusingStage,
     next_mode:   Option<Box<dyn Mode + Sync + Send>>,
-    fname_utils: FileNameUtils,
 }
 
 #[derive(PartialEq)]
@@ -85,11 +83,17 @@ impl FocusingMode {
             anyhow::bail!("Camera is not selected");
         };
         let mut cam_opts = opts.cam.clone();
+        cam_opts.frame.frame_type = crate::image::raw::FrameType::Lights;
         cam_opts.frame.exp_main = opts.focuser.exposure;
-        cam_opts.frame.gain = opts.focuser.gain;
+        cam_opts.frame.gain = gain_to_value(
+            opts.focuser.gain,
+            opts.cam.frame.gain,
+            &cam_device,
+            indi
+        )?;
+
         Ok(FocusingMode {
             indi:        Arc::clone(indi),
-            options:     Arc::clone(options),
             state:       FocusingState::Undefined,
             f_options:   opts.focuser.clone(),
             cam_opts,
@@ -101,7 +105,6 @@ impl FocusingMode {
             try_cnt:     0,
             next_mode,
             camera:      cam_device.clone(),
-            fname_utils: FileNameUtils::default(),
         })
     }
 
@@ -329,6 +332,10 @@ impl Mode for FocusingMode {
         Some(&self.camera)
     }
 
+    fn cam_opts(&self) -> Option<&CamOptions> {
+        Some(&self.cam_opts)
+    }
+
     fn progress(&self) -> Option<Progress> {
         Some(Progress {
             cur: self.samples.len(),
@@ -348,7 +355,6 @@ impl Mode for FocusingMode {
         let cur_pos = self.indi.focuser_get_abs_value(&self.f_options.device)?.round();
         self.before_pos = cur_pos;
         self.start_stage(cur_pos, FocusingStage::Preliminary)?;
-        self.fname_utils.init(&self.indi, &self.camera);
         Ok(())
     }
 
@@ -366,26 +372,6 @@ impl Mode for FocusingMode {
         if let Some(quality_options) = &mut cmd.quality_options {
             quality_options.use_max_fwhm = false;
         }
-
-        let options = self.options.read().unwrap();
-        let (master_dark, def_pixels) = if options.calibr.dark_frame_en {
-            (Some(self.fname_utils.master_dark_file_name(&self.cam_opts, &options)),
-             Some(self.fname_utils.defect_pixels_file_name(&self.cam_opts, &options)))
-        } else {
-            (None, None)
-        };
-        let master_flat = if options.calibr.flat_frame_en {
-            options.calibr.flat_frame_fname.clone()
-        } else {
-            None
-        };
-        let calibr_params = CalibrParams {
-            dark_fname:       master_dark,
-            flat_fname:       master_flat,
-            def_pixels_fname: def_pixels,
-            hot_pixels:       options.calibr.hot_pixels,
-        };
-        cmd.calibr_params = Some(calibr_params);
     }
 
     fn notify_indi_prop_change(

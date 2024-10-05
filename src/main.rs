@@ -11,6 +11,7 @@ mod utils;
 mod image;
 mod indi;
 mod guiding;
+mod plate_solve;
 mod core;
 mod options;
 
@@ -37,6 +38,9 @@ fn panic_handler(
         } else {
             None
         };
+
+    eprintln!("{}", payload_str.unwrap_or_default());
+    eprintln!("{}", panic_info.location().map(|loc| loc.to_string()).unwrap_or_default());
 
     log::error!("(╯°□°）╯︵ ┻━┻ PANIC OCCURRED");
 

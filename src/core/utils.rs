@@ -4,7 +4,6 @@ use chrono::{DateTime, Utc};
 
 use crate::{image::raw::*, indi, options::*};
 
-
 #[derive(Default)]
 pub struct FileNameUtils {
     device: DeviceAndProp,
@@ -88,3 +87,23 @@ impl FileNameUtils {
     }
 }
 
+pub fn gain_to_value(
+    gain:     Gain,
+    cur_gain: f64,
+    camera:   &DeviceAndProp,
+    indi:     &indi::Connection
+) -> anyhow::Result<f64> {
+    let calc_gain = |part| -> anyhow::Result<f64> {
+        let prop = indi.camera_get_gain_prop_value(&camera.name)?;
+        Ok(part * (prop.max - prop.min) + prop.min)
+    };
+
+    match gain {
+        Gain::Same => Ok(cur_gain),
+        Gain::Min => calc_gain(0.0),
+        Gain::P25 => calc_gain(0.25),
+        Gain::P50 => calc_gain(0.50),
+        Gain::P75 => calc_gain(0.75),
+        Gain::Max => calc_gain(1.0),
+    }
+}

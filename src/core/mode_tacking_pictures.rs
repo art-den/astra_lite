@@ -83,7 +83,6 @@ struct Flags {
     skip_frame_done:    bool,
     save_raw_files:     bool,
     use_raw_adder:      bool,
-    use_calibr_files:   bool, // use masterd dark or defect pixels files
     save_master_file:   bool,
     save_defect_pixels: bool,
 }
@@ -158,6 +157,11 @@ impl TackingPicturesMode {
             fwhm:     Vec::new(),
         };
 
+        let mut cam_options = opts.cam.clone();
+        if cam_mode == CameraMode::LiveStacking {
+            cam_options.frame.frame_type = crate::image::raw::FrameType::Lights;
+        }
+
         Ok(Self {
             cam_mode,
             state:           State::Common,
@@ -168,7 +172,7 @@ impl TackingPicturesMode {
             timer:           timer.cloned(),
             raw_adder:       Arc::new(Mutex::new(RawAdder::new())),
             options:         Arc::clone(options),
-            cam_options:     opts.cam.clone(),
+            cam_options,
             focus_options:   None,
             guider_options:  None,
             ref_stars:       None,
@@ -966,6 +970,10 @@ impl Mode for TackingPicturesMode {
         Some(&self.device)
     }
 
+    fn cam_opts(&self) -> Option<&CamOptions> {
+        Some(&self.cam_options)
+    }
+
     fn progress_string(&self) -> String {
         let mut mode_str = match (&self.state, &self.cam_mode) {
             (State::FrameToSkip, _) =>
@@ -1073,9 +1081,6 @@ impl Mode for TackingPicturesMode {
         self.flags.use_raw_adder =
             self.flags.save_master_file ||
             self.flags.save_defect_pixels;
-        self.flags.use_calibr_files =
-            self.cam_options.frame.frame_type == FrameType::Lights ||
-            self.cam_mode == CameraMode::LiveStacking;
 
         drop(options);
 
@@ -1234,27 +1239,6 @@ impl Mode for TackingPicturesMode {
                 cmd.flags |= ProcessImageFlags::CALC_STARS_OFFSET;
              },
             _ => {},
-        }
-
-        if self.flags.use_calibr_files {
-            let (master_dark, def_pixels) = if options.calibr.dark_frame_en {
-                (Some(self.fname_utils.master_dark_file_name(&self.cam_options, &options)),
-                 Some(self.fname_utils.defect_pixels_file_name(&self.cam_options, &options)))
-            } else {
-                (None, None)
-            };
-            let master_flat = if options.calibr.flat_frame_en {
-                options.calibr.flat_frame_fname.clone()
-            } else {
-                None
-            };
-            let calibr_params = CalibrParams {
-                dark_fname:       master_dark,
-                flat_fname:       master_flat,
-                def_pixels_fname: def_pixels,
-                hot_pixels:       options.calibr.hot_pixels,
-            };
-            cmd.calibr_params = Some(calibr_params);
         }
     }
 

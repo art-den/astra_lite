@@ -24,7 +24,7 @@ pub enum ResultImageInfo {
 }
 
 pub struct ResultImage {
-    pub image:    RwLock<Image>,
+    pub image:    Arc<RwLock<Image>>,
     pub raw_hist: Arc<RwLock<Histogram>>,
     pub img_hist: RwLock<Histogram>,
     pub info:     RwLock<ResultImageInfo>,
@@ -33,7 +33,7 @@ pub struct ResultImage {
 impl ResultImage {
     pub fn new() -> Self {
         Self {
-            image:    RwLock::new(Image::new_empty()),
+            image:    Arc::new(RwLock::new(Image::new_empty())),
             raw_hist: Arc::new(RwLock::new(Histogram::new())),
             img_hist: RwLock::new(Histogram::new()),
             info:     RwLock::new(ResultImageInfo::None),
@@ -167,13 +167,7 @@ pub enum FrameProcessResultData {
     ShotProcessingStarted,
     RawHistogram(Arc<RwLock<Histogram>>),
     RawFrame(Arc<RawImage>),
-    ShotProcessingFinished {
-        frame_is_ok:     bool,
-        blob:            Arc<indi::BlobPropValue>,
-        raw_image_info:  Arc<RawImageInfo>,
-        processing_time: f64,
-        blob_dl_time:    f64,
-    },
+    Image(Arc<RwLock<Image>>),
     PreviewFrame(Arc<Preview8BitImgData>),
     PreviewLiveRes(Arc<Preview8BitImgData>),
     LightFrameInfo(Arc<LightFrameInfo>),
@@ -183,6 +177,13 @@ pub enum FrameProcessResultData {
     MasterSaved {
         frame_type: FrameType,
         file_name: PathBuf
+    },
+    ShotProcessingFinished {
+        frame_is_ok:     bool,
+        blob:            Arc<indi::BlobPropValue>,
+        raw_image_info:  Arc<RawImageInfo>,
+        processing_time: f64,
+        blob_dl_time:    f64,
     },
 }
 
@@ -286,7 +287,11 @@ pub fn get_rgb_data_from_preview_image(
     image:  &Image,
     hist:   &Histogram,
     params: &PreviewParams,
-) -> RgbU8Data {
+) -> Option<RgbU8Data> {
+    if hist.l.is_none() && hist.b.is_none() {
+        return None;
+    }
+
     let reduct_ratio = calc_reduct_ratio(
         params,
         image.width(),
@@ -352,7 +357,7 @@ pub fn get_rgb_data_from_preview_image(
         PreviewColor::Blue  => ToBytesColorMode::Blue,
     };
 
-    image.to_grb_bytes(
+    Some(image.to_grb_bytes(
         &l_levels,
         &r_levels,
         &g_levels,
@@ -360,7 +365,7 @@ pub fn get_rgb_data_from_preview_image(
         params.gamma,
         reduct_ratio,
         color_mode,
-    )
+    ))
 }
 
 
@@ -749,6 +754,14 @@ fn make_preview_image_impl(
         return Ok(());
     }
 
+    send_result(
+        FrameProcessResultData::Image(Arc::clone(&command.frame.image)),
+        &command.camera,
+        command.mode_type,
+        &command.stop_flag,
+        result_fun
+    );
+
     let raw_image_info = Arc::new(raw_image.info().clone());
 
     drop(raw_image);
@@ -788,19 +801,21 @@ fn make_preview_image_impl(
         return Ok(());
     }
 
-    let preview_data = Arc::new(Preview8BitImgData {
-        rgb_data: Mutex::new(rgb_data),
-        image_width: image.width(),
-        image_height: image.height(),
-        params: command.view_options.clone(),
-    });
-    send_result(
-        FrameProcessResultData::PreviewFrame(preview_data),
-        &command.camera,
-        command.mode_type,
-        &command.stop_flag,
-        result_fun
-    );
+    if let Some(rgb_data) = rgb_data {
+        let preview_data = Arc::new(Preview8BitImgData {
+            rgb_data: Mutex::new(rgb_data),
+            image_width: image.width(),
+            image_height: image.height(),
+            params: command.view_options.clone(),
+        });
+        send_result(
+            FrameProcessResultData::PreviewFrame(preview_data),
+            &command.camera,
+            command.mode_type,
+            &command.stop_flag,
+            result_fun
+        );
+    }
 
     let max_stars_fwhm = command.quality_options
         .as_ref()
@@ -968,25 +983,28 @@ fn make_preview_image_impl(
                         &command.view_options
                     );
                     tmr.log("get_rgb_bytes_from_preview_image");
-                    let preview_data = Arc::new(Preview8BitImgData {
-                        rgb_data: Mutex::new(rgb_data),
-                        image_width: image.width(),
-                        image_height: image.height(),
-                        params: command.view_options.clone(),
-                    });
 
                     if command.stop_flag.load(Ordering::Relaxed) {
                         log::debug!("Command stopped");
                         return Ok(());
                     }
 
-                    send_result(
-                        FrameProcessResultData::PreviewLiveRes(preview_data),
-                        &command.camera,
-                        command.mode_type,
-                        &command.stop_flag,
-                        result_fun
-                    );
+                    if let Some(rgb_data) = rgb_data {
+                        let preview_data = Arc::new(Preview8BitImgData {
+                            rgb_data: Mutex::new(rgb_data),
+                            image_width: image.width(),
+                            image_height: image.height(),
+                            params: command.view_options.clone(),
+                        });
+
+                        send_result(
+                            FrameProcessResultData::PreviewLiveRes(preview_data),
+                            &command.camera,
+                            command.mode_type,
+                            &command.stop_flag,
+                            result_fun
+                        );
+                    }
                 }
 
                 // save result image

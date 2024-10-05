@@ -6,10 +6,10 @@ use std::{
 use gtk::glib::PropertySet;
 
 use crate::{
-    core::consts::INDI_SET_PROP_TIMEOUT, guiding::{external_guider::*, phd2_conn, phd2_guider::*}, image::stars_offset::*, indi, options::*, utils::timer::*
+    core::{consts::INDI_SET_PROP_TIMEOUT, utils::FileNameUtils}, guiding::{external_guider::*, phd2_conn, phd2_guider::*}, image::{raw::FrameType, stars_offset::*}, indi, options::*, ui::sky_map::math::EqCoord, utils::timer::*
 };
 use super::{
-    frame_processing::*, mode_darks_library::*, mode_focusing::*, mode_mount_calibration::*, mode_tacking_pictures::*, mode_waiting::*
+    frame_processing::*, mode_darks_library::*, mode_focusing::*, mode_goto::GotoMode, mode_mount_calibration::*, mode_tacking_pictures::*, mode_waiting::*
 };
 
 #[derive(Clone)]
@@ -39,6 +39,7 @@ pub enum ModeType {
     DitherCalibr,
     CreatingDarks,
     CreatingDefectPixels,
+    Goto,
 }
 
 pub type ModeBox = Box<dyn Mode + Send + Sync>;
@@ -47,6 +48,7 @@ pub trait Mode {
     fn get_type(&self) -> ModeType;
     fn progress_string(&self) -> String;
     fn cam_device(&self) -> Option<&DeviceAndProp> { None }
+    fn cam_opts(&self) -> Option<&CamOptions> { None }
     fn progress(&self) -> Option<Progress> { None }
     fn get_cur_exposure(&self) -> Option<f64> { None }
     fn can_be_stopped(&self) -> bool { true }
@@ -477,6 +479,33 @@ impl Core {
             }
         };
 
+        if let (Some(cam_opts), Some(camera)) = (mode.mode.cam_opts(), mode.mode.cam_device()) {
+            if cam_opts.frame.frame_type == FrameType::Lights {
+                let mut fname_utils = FileNameUtils::default();
+                fname_utils.init(&self.indi, camera);
+
+                let options = self.options.read().unwrap();
+                let (master_dark, def_pixels) = if options.calibr.dark_frame_en {
+                    (Some(fname_utils.master_dark_file_name(cam_opts, &options)),
+                    Some(fname_utils.defect_pixels_file_name(cam_opts, &options)))
+                } else {
+                    (None, None)
+                };
+                let master_flat = if options.calibr.flat_frame_en {
+                    options.calibr.flat_frame_fname.clone()
+                } else {
+                    None
+                };
+                let calibr_params = CalibrParams {
+                    dark_fname:       master_dark,
+                    flat_fname:       master_flat,
+                    def_pixels_fname: def_pixels,
+                    hot_pixels:       options.calibr.hot_pixels,
+                };
+                command_data.calibr_params = Some(calibr_params);
+            }
+        }
+
         mode.mode.complete_img_process_params(&mut command_data);
 
         let result_fun = {
@@ -702,6 +731,23 @@ impl Core {
             &self.indi,
             program
         )?;
+        mode.start()?;
+        mode_data.mode = Box::new(mode);
+        let progress = mode_data.mode.progress();
+        let mode_type = mode_data.mode.get_type();
+        drop(mode_data);
+        let subscribers = self.subscribers.read().unwrap();
+        subscribers.inform_progress(progress, mode_type);
+        subscribers.inform_mode_changed();
+        Ok(())
+    }
+
+    pub fn start_goto_coord(&self, eq_coord: &EqCoord) -> anyhow::Result<()> {
+        self.init_cam_before_start()?;
+        self.init_cam_telescope_data()?;
+        let mut mode_data = self.mode_data.write().unwrap();
+        mode_data.mode.abort()?;
+        let mut mode = GotoMode::new(eq_coord, &self.options, &self.indi)?;
         mode.start()?;
         mode_data.mode = Box::new(mode);
         let progress = mode_data.mode.progress();

@@ -242,6 +242,26 @@ impl ImageLayer<u16> {
                 }
             });
     }
+
+    pub fn save_to_tiff(&self, file_name: &Path) -> anyhow::Result<()> {
+        use tiff::encoder::*;
+        let mut file = BufWriter::new(File::create(file_name)?);
+        let mut decoder = TiffEncoder::new(&mut file)?;
+        let mut tiff = decoder.new_image::<colortype::Gray16>(
+            self.width as u32,
+            self.height as u32
+        )?;
+        tiff.rows_per_strip(256)?;
+        let mut pos = 0_usize;
+        loop {
+            let samples_count = tiff.next_strip_sample_count() as usize;
+            if samples_count == 0 { break; }
+            tiff.write_strip(&self.data[pos..pos+samples_count])?;
+            pos += samples_count;
+        }
+        tiff.finish()?;
+        Ok(())
+    }
 }
 
 impl GradientCalcSource for ImageLayer<u16> {
@@ -783,18 +803,14 @@ impl Image {
     }
 
     pub fn save_to_tiff(&self, file_name: &Path) -> anyhow::Result<()> {
-        use tiff::encoder::*;
-
-        let mut file = BufWriter::new(File::create(file_name)?);
-        let mut decoder = TiffEncoder::new(&mut file)?;
         if self.is_monochrome() {
-            let tiff = decoder.new_image::<colortype::Gray16>(
-                self.width as u32,
-                self.height as u32
-            )?;
-            tiff.write_data(self.l.as_slice())?;
+            self.l.save_to_tiff(file_name)?;
         }
         else if self.is_color() {
+            use tiff::encoder::*;
+            let mut file = BufWriter::new(File::create(file_name)?);
+            let mut decoder = TiffEncoder::new(&mut file)?;
+
             let mut tiff = decoder.new_image::<colortype::RGB16>(
                 self.width as u32,
                 self.height as u32

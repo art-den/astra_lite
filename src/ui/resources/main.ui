@@ -4478,6 +4478,7 @@ RAW - saving raw files
 LS - live stacking
 F - autofocus
 MC - mount calibration
+PS - plate solving
 
 "Calibr." column:
 D - by dark calibrated
@@ -5120,9 +5121,18 @@ S - search and remove hot pixels in light frame</property>
                                           </packing>
                                         </child>
                                         <child>
-                                          <object class="GtkSpinButton" id="spb_foc_gain">
+                                          <object class="GtkComboBoxText" id="cbx_foc_gain">
                                             <property name="visible">True</property>
-                                            <property name="can-focus">True</property>
+                                            <property name="can-focus">False</property>
+                                            <property name="active-id">same</property>
+                                            <items>
+                                              <item id="same" translatable="yes">Same</item>
+                                              <item id="min" translatable="yes">Minimum</item>
+                                              <item id="25%" translatable="yes">25%</item>
+                                              <item id="50%" translatable="yes">50%</item>
+                                              <item id="75%" translatable="yes">75%</item>
+                                              <item id="max" translatable="yes">Maximum</item>
+                                            </items>
                                           </object>
                                           <packing>
                                             <property name="left-attach">1</property>
@@ -5371,16 +5381,6 @@ S - search and remove hot pixels in light frame</property>
                                       </packing>
                                     </child>
                                     <child>
-                                      <object class="GtkSpinButton" id="spb_mnt_cal_gain">
-                                        <property name="visible">True</property>
-                                        <property name="can-focus">True</property>
-                                      </object>
-                                      <packing>
-                                        <property name="left-attach">1</property>
-                                        <property name="top-attach">9</property>
-                                      </packing>
-                                    </child>
-                                    <child>
                                       <object class="GtkLabel">
                                         <property name="visible">True</property>
                                         <property name="can-focus">False</property>
@@ -5495,6 +5495,25 @@ S - search and remove hot pixels in light frame</property>
                                         <property name="left-attach">0</property>
                                         <property name="top-attach">1</property>
                                         <property name="width">2</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkComboBoxText" id="cbx_mnt_cal_gain">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="active-id">same</property>
+                                        <items>
+                                          <item id="same" translatable="yes">Same</item>
+                                          <item id="min" translatable="yes">Minimum</item>
+                                          <item id="25%" translatable="yes">25%</item>
+                                          <item id="50%" translatable="yes">50%</item>
+                                          <item id="75%" translatable="yes">75%</item>
+                                          <item id="max" translatable="yes">Maximum</item>
+                                        </items>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">1</property>
+                                        <property name="top-attach">9</property>
                                       </packing>
                                     </child>
                                   </object>
@@ -5918,6 +5937,127 @@ S - search and remove hot pixels in light frame</property>
                                         <property name="position">2</property>
                                       </packing>
                                     </child>
+                                    <child>
+                                      <object class="GtkSeparator">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                      </object>
+                                      <packing>
+                                        <property name="expand">False</property>
+                                        <property name="fill">True</property>
+                                        <property name="position">3</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkLabel">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="halign">start</property>
+                                        <property name="label" translatable="yes">Camera settings for plate solving</property>
+                                        <attributes>
+                                          <attribute name="weight" value="bold"/>
+                                        </attributes>
+                                      </object>
+                                      <packing>
+                                        <property name="expand">False</property>
+                                        <property name="fill">True</property>
+                                        <property name="position">4</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <!-- n-columns=2 n-rows=3 -->
+                                      <object class="GtkGrid">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="row-spacing">5</property>
+                                        <property name="column-spacing">5</property>
+                                        <child>
+                                          <object class="GtkLabel">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">False</property>
+                                            <property name="halign">start</property>
+                                            <property name="label" translatable="yes">Exposure</property>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">0</property>
+                                            <property name="top-attach">0</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkLabel">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">False</property>
+                                            <property name="halign">start</property>
+                                            <property name="label" translatable="yes">Gain</property>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">0</property>
+                                            <property name="top-attach">1</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkLabel">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">False</property>
+                                            <property name="halign">start</property>
+                                            <property name="label" translatable="yes">Binning</property>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">0</property>
+                                            <property name="top-attach">2</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkSpinButton" id="spb_ps_exp">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">True</property>
+                                            <property name="hexpand">True</property>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">1</property>
+                                            <property name="top-attach">0</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkComboBoxText" id="cbx_ps_bin">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">False</property>
+                                            <items>
+                                              <item id="1" translatable="yes">1x1</item>
+                                              <item id="2" translatable="yes">2x2</item>
+                                            </items>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">1</property>
+                                            <property name="top-attach">2</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkComboBoxText" id="cbx_ps_gain">
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">False</property>
+                                            <property name="active-id">same</property>
+                                            <items>
+                                              <item id="same" translatable="yes">Same</item>
+                                              <item id="min" translatable="yes">Minimum</item>
+                                              <item id="25%" translatable="yes">25%</item>
+                                              <item id="50%" translatable="yes">50%</item>
+                                              <item id="75%" translatable="yes">75%</item>
+                                              <item id="max" translatable="yes">Maximum</item>
+                                            </items>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">1</property>
+                                            <property name="top-attach">1</property>
+                                          </packing>
+                                        </child>
+                                      </object>
+                                      <packing>
+                                        <property name="expand">False</property>
+                                        <property name="fill">True</property>
+                                        <property name="position">5</property>
+                                      </packing>
+                                    </child>
                                   </object>
                                 </child>
                                 <child type="label">
@@ -6211,6 +6351,15 @@ S - search and remove hot pixels in light frame</property>
         <property name="can-focus">False</property>
         <property name="action-name">win.sm_goto_selected</property>
         <property name="label" translatable="yes">Goto selected object</property>
+        <property name="use-underline">True</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem" id="m_sm_goto_sel_solve">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="action-name">win.sm_goto_sel_solve</property>
+        <property name="label" translatable="yes">Goto selected and solve</property>
         <property name="use-underline">True</property>
       </object>
     </child>

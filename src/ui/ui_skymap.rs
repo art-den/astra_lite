@@ -2,7 +2,7 @@ use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
 use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
-use crate::{core::consts::INDI_SET_PROP_TIMEOUT, indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
+use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::Core}, indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
 use super::{gtk_utils::{self, DEFAULT_DPMM}, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, math::*}, ui_main::*, ui_skymap_options::SkymapOptionsDialog, utils::*};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
@@ -10,6 +10,7 @@ pub fn init_ui(
     _app:     &gtk::Application,
     builder:  &gtk::Builder,
     main_ui:  &Rc<MainUi>,
+    core:     &Arc<Core>,
     options:  &Arc<RwLock<Options>>,
     indi:     &Arc<indi::Connection>,
     handlers: &mut MainUiEventHandlers,
@@ -28,6 +29,7 @@ pub fn init_ui(
 
     let data = Rc::new(MapUi {
         ui_options:    RefCell::new(ui_options),
+        core:          Arc::clone(core),
         indi:          Arc::clone(indi),
         options:       Arc::clone(options),
         builder:       builder.clone(),
@@ -200,6 +202,7 @@ struct PrevWidgetsDT {
 
 struct MapUi {
     ui_options:    RefCell<UiOptions>,
+    core:          Arc<Core>,
     indi:          Arc<indi::Connection>,
     options:       Arc<RwLock<Options>>,
     builder:       gtk::Builder,
@@ -290,11 +293,12 @@ impl MapUi {
     }
 
     fn connect_events(self: &Rc<Self>) {
-        gtk_utils::connect_action   (&self.window, self, "map_play",         Self::handler_btn_play_pressed);
-        gtk_utils::connect_action   (&self.window, self, "map_now",          Self::handler_btn_now_pressed);
-        gtk_utils::connect_action_rc(&self.window, self, "skymap_options",   Self::handler_action_options);
-        gtk_utils::connect_action_rc(&self.window, self, "sm_goto_selected", Self::handler_goto_selected);
-        gtk_utils::connect_action_rc(&self.window, self, "sm_goto_point",    Self::handler_goto_point);
+        gtk_utils::connect_action   (&self.window, self, "map_play",          Self::handler_btn_play_pressed);
+        gtk_utils::connect_action   (&self.window, self, "map_now",           Self::handler_btn_now_pressed);
+        gtk_utils::connect_action_rc(&self.window, self, "skymap_options",    Self::handler_action_options);
+        gtk_utils::connect_action_rc(&self.window, self, "sm_goto_selected",  Self::handler_goto_selected);
+        gtk_utils::connect_action_rc(&self.window, self, "sm_goto_sel_solve", Self::handler_goto_sel_and_solve);
+        gtk_utils::connect_action_rc(&self.window, self, "sm_goto_point",     Self::handler_goto_point);
 
         let connect_spin_btn_evt = |widget_name: &str| {
             let spin_btn = self.builder.object::<gtk::SpinButton>(widget_name).unwrap();
@@ -967,11 +971,9 @@ impl MapUi {
             *self.clicked_crd.borrow_mut() = eq_coord;
             let indi_is_active = self.indi.state() == indi::ConnState::Connected;
             let selected_item = self.selected_item.borrow();
-            gtk_utils::enable_action(
-                &self.window,
-                "sm_goto_selected",
-                indi_is_active && selected_item.is_some() && !self.goto_started.get(),
-            );
+            let enable_goto = indi_is_active && selected_item.is_some() && !self.goto_started.get();
+            gtk_utils::enable_action(&self.window, "sm_goto_selected", enable_goto);
+            gtk_utils::enable_action(&self.window, "sm_goto_sel_solve", enable_goto);
             gtk_utils::enable_action(
                 &self.window,
                 "sm_goto_point",
@@ -1043,15 +1045,31 @@ impl MapUi {
         });
     }
 
-    fn handler_goto_selected(self: &Rc<Self>) {
+    fn coord_of_selected_object_at_spec_time(&self) -> Option<EqCoord> {
         let selected_item = self.selected_item.borrow();
-        let Some(selected_item) = &*selected_item else { return; };
+        let Some(selected_item) = &*selected_item else { return None; };
         let j2000 = j2000_time();
         let time = self.map_widget.time();
         let epoch_cvt = EpochCvt::new(&j2000, &time);
         let crd = selected_item.crd();
-        let now_crd = epoch_cvt.convert_eq(&crd);
-        self.goto_eq_coord(&now_crd);
+        Some(epoch_cvt.convert_eq(&crd))
+    }
+
+    fn handler_goto_selected(self: &Rc<Self>) {
+        let Some(crd) = self.coord_of_selected_object_at_spec_time() else {
+            return;
+        };
+        self.goto_eq_coord(&crd);
+    }
+
+    fn handler_goto_sel_and_solve(self: &Rc<Self>) {
+        let Some(crd) = self.coord_of_selected_object_at_spec_time() else {
+            return;
+        };
+        gtk_utils::exec_and_show_error(&self.window, || {
+            self.core.start_goto_coord(&crd)?;
+            Ok(())
+        });
     }
 
     fn handler_goto_point(self: &Rc<Self>) {

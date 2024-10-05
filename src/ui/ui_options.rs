@@ -20,6 +20,7 @@ impl Options {
         self.read_preview(builder);
         self.read_focuser(builder);
         self.read_focuser_cam(builder);
+        self.read_plate_solve(builder);
         self.read_mount(builder);
     }
 
@@ -59,7 +60,7 @@ impl Options {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
         self.guiding.main_cam.dith_dist       = ui.prop_f64("sb_dith_dist.value") as i32;
         self.guiding.main_cam.calibr_exposure = ui.prop_f64("spb_mnt_cal_exp.value");
-        self.guiding.main_cam.calibr_gain     = ui.prop_f64 ("spb_mnt_cal_gain.value");
+        self.guiding.main_cam.calibr_gain     = Gain::from_active_id(ui.prop_string("cbx_mnt_cal_gain.active-id").as_deref());
         self.guiding.main_cam.max_error       = ui.prop_f64("spb_guid_max_err.value");
     }
 
@@ -149,7 +150,14 @@ impl Options {
     pub fn read_focuser_cam(&mut self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
         self.focuser.exposure = ui.prop_f64("spb_foc_exp.value");
-        self.focuser.gain     = ui.prop_f64("spb_foc_gain.value");
+        self.focuser.gain     = Gain::from_active_id(ui.prop_string("cbx_foc_gain.active-id").as_deref());
+    }
+
+    pub fn read_plate_solve(&mut self, builder: &gtk::Builder) {
+        let ui = gtk_utils::UiHelper::new_from_builder(builder);
+        self.plate_solve.exposure = ui.prop_f64("spb_ps_exp.value");
+        self.plate_solve.gain = Gain::from_active_id(ui.prop_string("cbx_ps_gain.active-id").as_deref());
+        self.plate_solve.bin = Binning::from_active_id(ui.prop_string("cbx_ps_bin.active-id").as_deref());
     }
 
     pub fn read_mount(&mut self, builder: &gtk::Builder) {
@@ -165,7 +173,6 @@ impl Options {
         self.show_indi(builder);
         self.show_telescope(builder);
         self.show_guiding(builder);
-        self.show_guiding_cam(builder);
         self.show_cam(builder);
         self.show_cam_frame(builder);
         self.show_calibr(builder);
@@ -174,8 +181,8 @@ impl Options {
         self.show_live_stacking(builder);
         self.show_frame_quality(builder);
         self.show_preview(builder);
+        self.show_plate_solve(builder);
         self.show_focuser(builder);
-        self.show_focuser_cam(builder);
         self.show_mount(builder);
     }
 
@@ -201,17 +208,13 @@ impl Options {
             GuidingMode::External =>
                 ui.set_prop_bool("rbtn_guide_ext.active", true),
         }
-        ui.set_prop_str("cb_dith_perod.active-id", Some(self.guiding.dith_period.to_string().as_str()));
-        ui.set_prop_f64("spb_guid_foc_len.value",  self.guiding.ext_guider.foc_len);
-        ui.set_prop_f64("sb_ext_dith_dist.value",  self.guiding.ext_guider.dith_dist as f64);
-    }
-
-    pub fn show_guiding_cam(&self, builder: &gtk::Builder) {
-        let ui = gtk_utils::UiHelper::new_from_builder(builder);
-        ui.set_prop_f64("sb_dith_dist.value",     self.guiding.main_cam.dith_dist as f64);
-        ui.set_prop_f64("spb_mnt_cal_exp.value",  self.guiding.main_cam.calibr_exposure);
-        ui.set_prop_f64("spb_mnt_cal_gain.value", self.guiding.main_cam.calibr_gain);
-        ui.set_prop_f64("spb_guid_max_err.value", self.guiding.main_cam.max_error);
+        ui.set_prop_str("cb_dith_perod.active-id",    Some(self.guiding.dith_period.to_string().as_str()));
+        ui.set_prop_f64("spb_guid_foc_len.value",     self.guiding.ext_guider.foc_len);
+        ui.set_prop_f64("sb_ext_dith_dist.value",     self.guiding.ext_guider.dith_dist as f64);
+        ui.set_prop_f64("spb_guid_max_err.value",     self.guiding.main_cam.max_error);
+        ui.set_prop_f64("sb_dith_dist.value",         self.guiding.main_cam.dith_dist as f64);
+        ui.set_prop_f64("spb_mnt_cal_exp.value",      self.guiding.main_cam.calibr_exposure);
+        ui.set_prop_str("cbx_mnt_cal_gain.active-id", Some(self.guiding.main_cam.calibr_gain.to_active_id()));
     }
 
     pub fn show_cam(&self, builder: &gtk::Builder) {
@@ -297,6 +300,13 @@ impl Options {
         ui.set_prop_bool  ("chb_rem_grad.active",        self.preview.remove_grad);
     }
 
+    pub fn show_plate_solve(&self, builder: &gtk::Builder) {
+        let ui = gtk_utils::UiHelper::new_from_builder(builder);
+        ui.set_prop_f64("spb_ps_exp.value",      self.plate_solve.exposure);
+        ui.set_prop_str("cbx_ps_gain.active-id", Some(self.plate_solve.gain.to_active_id()));
+        ui.set_prop_str("cbx_ps_bin.active-id",  self.plate_solve.bin.to_active_id());
+    }
+
     pub fn show_focuser(&self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
         ui.set_prop_bool("chb_foc_temp.active",     self.focuser.on_temp_change);
@@ -307,12 +317,8 @@ impl Options {
         ui.set_prop_str ("cb_foc_period.active-id", Some(self.focuser.period_minutes.to_string()).as_deref());
         ui.set_prop_f64 ("spb_foc_measures.value",  self.focuser.measures as f64);
         ui.set_prop_f64 ("spb_foc_auto_step.value", self.focuser.step);
-    }
-
-    pub fn show_focuser_cam(&self, builder: &gtk::Builder) {
-        let ui = gtk_utils::UiHelper::new_from_builder(builder);
-        ui.set_prop_f64 ("spb_foc_exp.value",  self.focuser.exposure);
-        ui.set_prop_f64 ("spb_foc_gain.value", self.focuser.gain);
+        ui.set_prop_f64 ("spb_foc_exp.value",       self.focuser.exposure);
+        ui.set_prop_str ("cbx_foc_gain.active-id",  Some(self.focuser.gain.to_active_id()));
     }
 
     pub fn show_mount(&self, builder: &gtk::Builder) {
@@ -365,6 +371,31 @@ impl FrameType {
             FrameType::Biases => Some("bias"),
             FrameType::Undef  => Some("light"),
 
+        }
+    }
+}
+
+impl Gain {
+    pub fn from_active_id(active_id: Option<&str>) -> Self {
+        match active_id {
+            Some("same") => Self::Same,
+            Some("min")  => Self::Min,
+            Some("25%")  => Self::P25,
+            Some("50%")  => Self::P50,
+            Some("75%")  => Self::P75,
+            Some("max")  => Self::Max,
+            _            => Self::Same,
+        }
+    }
+
+    pub fn to_active_id(&self) -> &'static str {
+        match self {
+            Self::Same => "same",
+            Self::Min  => "min",
+            Self::P25  => "25%",
+            Self::P50  => "50%",
+            Self::P75  => "75%",
+            Self::Max  => "max",
         }
     }
 }

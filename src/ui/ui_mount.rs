@@ -44,6 +44,7 @@ pub fn init_ui(
 
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
+    data.init_widgets();
     data.connect_indi();
     data.connect_widgets_events();
     data.apply_ui_options();
@@ -118,6 +119,13 @@ impl MountUi {
         "btn_left",        "btn_stop_mount", "btn_right",
         "btn_left_bottom", "btn_bottom",     "btn_right_bottom",
     ];
+
+    fn init_widgets(&self) {
+        let spb_ps_exp = self.builder.object::<gtk::SpinButton>("spb_ps_exp").unwrap();
+        spb_ps_exp.set_range(0.5, 30.0);
+        spb_ps_exp.set_digits(1);
+        spb_ps_exp.set_increments(0.5, 5.0);
+    }
 
     fn connect_indi(self: &Rc<Self>) {
         let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
