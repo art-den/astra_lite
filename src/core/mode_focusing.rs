@@ -36,6 +36,7 @@ enum FocusingStage {
 
 pub struct FocusingMode {
     indi:        Arc<indi::Connection>,
+    subscribers: Arc<RwLock<Subscribers>>,
     state:       FocusingState,
     camera:      DeviceAndProp,
     f_options:   FocuserOptions,
@@ -74,9 +75,10 @@ pub struct FocuserSample {
 
 impl FocusingMode {
     pub fn new(
-        indi:      &Arc<indi::Connection>,
-        options:   &Arc<RwLock<Options>>,
-        next_mode: Option<Box<dyn Mode + Sync + Send>>,
+        indi:        &Arc<indi::Connection>,
+        options:     &Arc<RwLock<Options>>,
+        subscribers: &Arc<RwLock<Subscribers>>,
+        next_mode:   Option<Box<dyn Mode + Sync + Send>>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(cam_device) = &opts.cam.device else {
@@ -94,6 +96,7 @@ impl FocusingMode {
 
         Ok(FocusingMode {
             indi:        Arc::clone(indi),
+            subscribers: Arc::clone(subscribers),
             state:       FocusingState::Undefined,
             f_options:   opts.focuser.clone(),
             cam_opts,
@@ -156,10 +159,8 @@ impl FocusingMode {
 
     fn process_light_frame_info(
         &mut self,
-        info:        &LightFrameInfo,
-        subscribers: &RwLock<Subscribers>,
+        info: &LightFrameInfo,
     ) -> anyhow::Result<NotifyResult> {
-        let subscribers = subscribers.read().unwrap();
         let mut result = NotifyResult::Empty;
         if let FocusingState::WaitingFrame(focus_pos) = self.state {
             log::debug!(
@@ -182,11 +183,14 @@ impl FocusingMode {
                     self.try_cnt = 0;
                     log::debug!("Ovality is Ok. Samples count = {}", self.samples.len());
                 }
-                subscribers.inform_focusing(FocusingStateEvent::Data( FocusingResultData {
+                let event_data = FocusingResultData {
                     samples: self.samples.clone(),
                     coeffs: None,
                     result: None,
-                }));
+                };
+                self.subscribers.read().unwrap().inform_event(CoreEvent::Focusing(
+                    FocusingStateEvent::Data(event_data)
+                ));
             } else {
                 self.try_cnt += 1;
             }
@@ -214,11 +218,14 @@ impl FocusingMode {
 
                     log::debug!("Calculated coefficients = {:?}", coeffs);
                     if coeffs.a2 <= 0.0 {
-                        subscribers.inform_focusing(FocusingStateEvent::Data( FocusingResultData {
+                        let event_data = FocusingResultData {
                             samples: self.samples.clone(),
                             coeffs: Some(coeffs.clone()),
                             result: None,
-                        }));
+                        };
+                        self.subscribers.read().unwrap().inform_event(CoreEvent::Focusing(
+                            FocusingStateEvent::Data(event_data)
+                        ));
                         anyhow::bail!("Wrong focuser curve result");
                     }
                     let extr = parabola_extremum(&coeffs)
@@ -226,11 +233,14 @@ impl FocusingMode {
 
                     log::debug!("Calculated extremum = {}", extr);
 
-                    subscribers.inform_focusing(FocusingStateEvent::Data( FocusingResultData {
+                    let event_data = FocusingResultData {
                         samples: self.samples.clone(),
                         coeffs: Some(coeffs.clone()),
                         result: Some(extr),
-                    }));
+                    };
+                    self.subscribers.read().unwrap().inform_event(CoreEvent::Focusing(
+                        FocusingStateEvent::Data(event_data)
+                    ));
                     let focuser_info = self.indi.focuser_get_abs_value_prop_info(&self.f_options.device)?;
                     if extr < focuser_info.min || extr > focuser_info.max {
                         anyhow::bail!(
@@ -290,9 +300,8 @@ impl FocusingMode {
                         anti_backlash_pos,
                         target_pos: result_pos
                     };
-                    subscribers.inform_focusing(FocusingStateEvent::Result {
-                        value: result_pos
-                    });
+                    let result_event = FocusingStateEvent::Result { value: result_pos };
+                    self.subscribers.read().unwrap().inform_event(CoreEvent::Focusing(result_event));
                 } else {
                     self.start_sample(false)?;
                 }
@@ -424,12 +433,11 @@ impl Mode for FocusingMode {
 
     fn notify_about_frame_processing_result(
         &mut self,
-        fp_result:   &FrameProcessResult,
-        subscribers: &RwLock<Subscribers>
+        fp_result: &FrameProcessResult
     ) -> anyhow::Result<NotifyResult> {
         match &fp_result.data {
             FrameProcessResultData::LightFrameInfo(info) =>
-                self.process_light_frame_info(info, subscribers),
+                self.process_light_frame_info(info),
 
             _ =>
                 Ok(NotifyResult::Empty)

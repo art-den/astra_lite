@@ -354,8 +354,7 @@ impl Mode for MountCalibrMode {
 
     fn notify_about_frame_processing_result(
         &mut self,
-        fp_result:    &FrameProcessResult,
-        _subscribers: &RwLock<Subscribers>
+        fp_result: &FrameProcessResult
     ) -> anyhow::Result<NotifyResult> {
         match &fp_result.data {
             FrameProcessResultData::LightFrameInfo(info) =>

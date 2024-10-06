@@ -1,6 +1,8 @@
 use std::{io::Read, path::PathBuf};
 
-use crate::{image::image::Image, ui::sky_map::math::{degree_to_radian, radian_to_degree}};
+use chrono::Utc;
+
+use crate::{image::image::Image, ui::sky_map::math::{degree_to_radian, j2000_time, radian_to_degree, EpochCvt}};
 
 use super::*;
 
@@ -124,13 +126,19 @@ impl PlateSolverIface for AstrometryPlateSolver {
                     )));
                 }
 
-                let eq_coord = EqCoord {
+                let crd_j2000 = EqCoord {
                     ra: result_ra.unwrap_or_default(),
                     dec: result_dec.unwrap_or_default(),
                 };
 
+                // convert plate solving coordinate from j2000 to now
+                let j2000 = j2000_time();
+                let time = Utc::now().naive_utc();
+                let epoch_cvt = EpochCvt::new(&j2000, &time);
+                let crd_now = epoch_cvt.convert_eq(&crd_j2000);
+
                 let result = PlateSolveResult {
-                    eq_coord,
+                    crd_j2000, crd_now,
                     width: result_width.unwrap_or(0.0),
                     height: result_height.unwrap_or(0.0),
                     rotation: result_rot.unwrap_or(0.0),

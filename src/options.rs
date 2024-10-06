@@ -533,9 +533,8 @@ impl CamOptions {
         pixel_width_um:  f64,
         pixel_height_um: f64
     ) -> (f64, f64) {
-        let bin = self.frame.binning.get_ratio();
-        let cropped_width = self.frame.crop.translate(sensor_width / bin) as f64;
-        let cropped_height = self.frame.crop.translate(sensor_height / bin) as f64;
+        let cropped_width = self.frame.crop.translate(sensor_width) as f64;
+        let cropped_height = self.frame.crop.translate(sensor_height) as f64;
         let pixel_width_mm = pixel_width_um / 1000.0;
         let pixel_height_mm = pixel_height_um / 1000.0;
         let width_mm = cropped_width * pixel_width_mm;

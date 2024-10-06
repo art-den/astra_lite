@@ -9,9 +9,10 @@ pub struct PlateSolveConfig {
     pub time_out: u32, // in seconds
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlateSolveResult {
-    pub eq_coord: EqCoord,
+    pub crd_j2000: EqCoord,
+    pub crd_now: EqCoord,
     pub width: f64,
     pub height: f64,
     pub rotation: f64,
@@ -49,4 +50,10 @@ impl PlateSolver {
 trait PlateSolverIface {
     fn start(&mut self, image: &Image, config: &PlateSolveConfig) -> anyhow::Result<()>;
     fn get_result(&mut self) -> Option<anyhow::Result<PlateSolveResult>>;
+}
+
+#[derive(Clone)]
+pub struct PlateSolverEvent {
+    pub cam_name: String,
+    pub result:   PlateSolveResult,
 }

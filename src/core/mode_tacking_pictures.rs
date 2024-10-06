@@ -107,6 +107,7 @@ pub struct TackingPicturesMode {
     mount_device:    String,
     fn_gen:          Arc<Mutex<SeqFileNameGen>>,
     indi:            Arc<indi::Connection>,
+    subscribers:     Arc<RwLock<Subscribers>>,
     timer:           Option<Arc<Timer>>,
     raw_adder:       Arc<Mutex<RawAdder>>,
     options:         Arc<RwLock<Options>>,
@@ -130,10 +131,11 @@ pub struct TackingPicturesMode {
 
 impl TackingPicturesMode {
     pub fn new(
-        indi:     &Arc<indi::Connection>,
-        timer:    Option<&Arc<Timer>>,
-        cam_mode: CameraMode,
-        options:  &Arc<RwLock<Options>>,
+        indi:        &Arc<indi::Connection>,
+        subscribers: &Arc<RwLock<Subscribers>>,
+        timer:       Option<&Arc<Timer>>,
+        cam_mode:    CameraMode,
+        options:     &Arc<RwLock<Options>>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(cam_device) = &opts.cam.device else {
@@ -169,6 +171,7 @@ impl TackingPicturesMode {
             mount_device:    opts.mount.device.to_string(),
             fn_gen:          Arc::new(Mutex::new(SeqFileNameGen::new())),
             indi:            Arc::clone(indi),
+            subscribers:     Arc::clone(subscribers),
             timer:           timer.cloned(),
             raw_adder:       Arc::new(Mutex::new(RawAdder::new())),
             options:         Arc::clone(options),
@@ -623,7 +626,6 @@ impl TackingPicturesMode {
         frame_is_ok:    bool,
         blob:           &indi::BlobPropValue,
         raw_image_info: &RawImageInfo,
-        subscribers:    &RwLock<Subscribers>,
         cmd_stop_flag:  &Arc<AtomicBool>,
     ) -> anyhow::Result<NotifyResult> {
         if self.cam_mode == CameraMode::SingleShot {
@@ -690,15 +692,15 @@ impl TackingPicturesMode {
                 file_name: self.out_file_names.master_fname.clone()
             };
 
-            let event = FrameProcessResult {
+            let event_data = FrameProcessResult {
                 camera:        self.device.clone(),
                 cmd_stop_flag: Arc::clone(cmd_stop_flag),
                 mode_type:     self.get_type(),
                 data:          result,
             };
 
-            let subscribers = subscribers.read().unwrap();
-            subscribers.inform_frame_process_result(event);
+            let subscribers = self.subscribers.read().unwrap();
+            subscribers.inform_event(CoreEvent::FrameProcessing(event_data));
         }
 
         if is_last_frame && self.flags.save_defect_pixels {
@@ -1191,8 +1193,7 @@ impl Mode for TackingPicturesMode {
 
     fn notify_about_frame_processing_result(
         &mut self,
-        fp_result:   &FrameProcessResult,
-        subscribers: &RwLock<Subscribers>
+        fp_result: &FrameProcessResult
     ) -> anyhow::Result<NotifyResult>  {
         match &fp_result.data {
             FrameProcessResultData::RawFrame(raw_image) =>
@@ -1208,7 +1209,6 @@ impl Mode for TackingPicturesMode {
                     *frame_is_ok,
                     blob,
                     raw_image_info,
-                    subscribers,
                     &fp_result.cmd_stop_flag,
                 ),
 

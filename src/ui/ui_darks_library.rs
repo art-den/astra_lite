@@ -781,12 +781,12 @@ impl DarksLibraryDialog {
         };
 
         match event {
-            CoreEvent::Propress(Some(progress), ModeType::CreatingDarks) => {
+            CoreEvent::Progress(Some(progress), ModeType::CreatingDarks) => {
                 show_progress("prb_dark", progress.cur, progress.total);
                 self.correct_widgets_enable_state();
             }
 
-            CoreEvent::Propress(Some(progress), ModeType::CreatingDefectPixels) => {
+            CoreEvent::Progress(Some(progress), ModeType::CreatingDefectPixels) => {
                 show_progress("prb_def", progress.cur, progress.total);
                 self.correct_widgets_enable_state();
             }

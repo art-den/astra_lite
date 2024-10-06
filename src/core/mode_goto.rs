@@ -1,6 +1,4 @@
 use std::sync::{Arc, RwLock};
-use chrono::Utc;
-
 use crate::{core::{consts::*, frame_processing::*}, image::image::Image, indi::{self, value_to_sexagesimal}, options::*, plate_solve::*, ui::sky_map::math::*};
 use super::{core::*, utils::*};
 
@@ -25,9 +23,10 @@ pub struct GotoMode {
     eq_coord:        EqCoord,
     camera:          DeviceAndProp,
     cam_opts:        CamOptions,
-    ps_opts:      PlateSolveOptions,
+    ps_opts:         PlateSolveOptions,
     mount:           String,
     indi:            Arc<indi::Connection>,
+    subscribers:     Arc<RwLock<Subscribers>>,
     plate_solver:    Option<PlateSolver>,
     unpark_seconds:  usize,
     goto_seconds:    usize,
@@ -36,9 +35,10 @@ pub struct GotoMode {
 
 impl GotoMode {
     pub fn new(
-        eq_coord: &EqCoord,
-        options:  &Arc<RwLock<Options>>,
-        indi:     &Arc<indi::Connection>,
+        eq_coord:    &EqCoord,
+        options:     &Arc<RwLock<Options>>,
+        indi:        &Arc<indi::Connection>,
+        subscribers: &Arc<RwLock<Subscribers>>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(camera) = opts.cam.device.clone() else {
@@ -62,6 +62,7 @@ impl GotoMode {
             ps_opts: opts.plate_solve.clone(),
             mount:   opts.mount.device.clone(),
             indi:    Arc::clone(indi),
+            subscribers: Arc::clone(subscribers),
             plate_solver: None,
             unpark_seconds: 0,
             goto_seconds: 0,
@@ -135,18 +136,22 @@ impl GotoMode {
             None => return Ok(false),
         };
 
-        // convert plate solving coordinate from j2000 to now
-        let j2000 = j2000_time();
-        let time = Utc::now().naive_utc();
-        let epoch_cvt = EpochCvt::new(&j2000, &time);
-        let now_coord = epoch_cvt.convert_eq(&result.eq_coord);
-
         log::debug!(
-            "plate solver now_coord = (ra: {}, dec: {}), image size = {:.6} x {:.6}",
-            value_to_sexagesimal(radian_to_hour(now_coord.ra), true, 9),
-            value_to_sexagesimal(radian_to_degree(now_coord.dec), true, 8),
+            "plate solver j2000 = (ra: {}, dec: {}), now = (ra: {}, dec: {}), image size = {:.6} x {:.6}",
+            value_to_sexagesimal(radian_to_hour(result.crd_j2000.ra), true, 9),
+            value_to_sexagesimal(radian_to_degree(result.crd_j2000.dec), true, 8),
+            value_to_sexagesimal(radian_to_hour(result.crd_now.ra), true, 9),
+            value_to_sexagesimal(radian_to_degree(result.crd_now.dec), true, 8),
             radian_to_hour(result.width),
             radian_to_degree(result.height),
+        );
+
+        let event = PlateSolverEvent {
+            cam_name: self.camera.name.clone(),
+            result: result.clone(),
+        };
+        self.subscribers.read().unwrap().inform_event(
+            CoreEvent::PlateSolve(event)
         );
 
         self.indi.set_after_coord_set_action(
@@ -158,8 +163,8 @@ impl GotoMode {
 
         self.indi.mount_set_eq_coord(
             &self.mount,
-            radian_to_hour(now_coord.ra),
-            radian_to_degree(now_coord.dec),
+            radian_to_hour(result.crd_now.ra),
+            radian_to_degree(result.crd_now.dec),
             true,
             INDI_SET_PROP_TIMEOUT
         )?;
@@ -277,8 +282,7 @@ impl Mode for GotoMode {
 
     fn notify_about_frame_processing_result(
         &mut self,
-        fp_result:    &FrameProcessResult,
-        _subscribers: &RwLock<Subscribers>
+        fp_result:  &FrameProcessResult
     ) -> anyhow::Result<NotifyResult> {
 
         if let FrameProcessResultData::Image(image) = &fp_result.data {

@@ -6,7 +6,7 @@ use std::{
 use gtk::glib::PropertySet;
 
 use crate::{
-    core::{consts::INDI_SET_PROP_TIMEOUT, utils::FileNameUtils}, guiding::{external_guider::*, phd2_conn, phd2_guider::*}, image::{raw::FrameType, stars_offset::*}, indi, options::*, ui::sky_map::math::EqCoord, utils::timer::*
+    core::{consts::INDI_SET_PROP_TIMEOUT, utils::FileNameUtils}, guiding::{external_guider::*, phd2_conn, phd2_guider::*}, image::{raw::FrameType, stars_offset::*}, indi, options::*, plate_solve::PlateSolverEvent, ui::sky_map::math::EqCoord, utils::timer::*
 };
 use super::{
     frame_processing::*, mode_darks_library::*, mode_focusing::*, mode_goto::GotoMode, mode_mount_calibration::*, mode_tacking_pictures::*, mode_waiting::*
@@ -18,12 +18,15 @@ pub struct Progress {
     pub total: usize,
 }
 
+#[derive(Clone)]
 pub enum CoreEvent {
     Error(String),
     ModeChanged,
     ModeContinued,
-    Propress(Option<Progress>, ModeType),
+    Progress(Option<Progress>, ModeType),
+    FrameProcessing(FrameProcessResult),
     Focusing(FocusingStateEvent),
+    PlateSolve(PlateSolverEvent),
 }
 
 #[derive(PartialEq, Copy, Clone, Debug)]
@@ -62,7 +65,7 @@ pub trait Mode {
     fn notify_indi_prop_change(&mut self, _prop_change: &indi::PropChangeEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_blob_start_event(&mut self, _event: &indi::BlobStartEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_before_frame_processing_start(&mut self, _should_be_processed: &mut bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult, _subscribers: &RwLock<Subscribers>) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
 }
@@ -95,21 +98,18 @@ impl ModeData {
 }
 
 type SubscribersFun = dyn Fn(CoreEvent) + Send + Sync + 'static;
-type FrameProcessResultFun = dyn Fn(FrameProcessResult) + Send + Sync + 'static;
 
 pub struct Subscription(usize);
 
 pub struct Subscribers {
-    items:     HashMap<usize, Box<SubscribersFun>>,
-    frame_evt: Option<Box<FrameProcessResultFun>>,
-    next_id:   usize,
+    items:   HashMap<usize, Box<SubscribersFun>>,
+    next_id: usize,
 }
 
 impl Subscribers {
     fn new() -> Self {
         Self {
             items:     HashMap::new(),
-            frame_evt: None,
             next_id:   1,
         }
     }
@@ -133,39 +133,16 @@ impl Subscribers {
         self.items.clear();
     }
 
+    pub fn inform_event(&self, event: CoreEvent) {
+        for s in self.items.values() {
+            s(event.clone());
+        }
+    }
+
     fn inform_error(&self, error_text: &str) {
         for s in self.items.values() {
             s(CoreEvent::Error(error_text.to_string()));
         }
-    }
-
-    fn inform_mode_changed(&self) {
-        for s in self.items.values() {
-            s(CoreEvent::ModeChanged);
-        }
-    }
-
-    fn inform_progress(&self, progress: Option<Progress>, mode_type: ModeType) {
-        for s in self.items.values() {
-            s(CoreEvent::Propress(progress.clone(), mode_type));
-        }
-    }
-
-    fn inform_mode_continued(&self) {
-        for s in self.items.values() {
-            s(CoreEvent::ModeContinued);
-        }
-    }
-
-    pub fn inform_focusing(&self, data: FocusingStateEvent) {
-        for s in self.items.values() {
-            s(CoreEvent::Focusing(data.clone()));
-        }
-    }
-
-    pub fn inform_frame_process_result(&self, data: FrameProcessResult) {
-        let Some(frame_evt) = &self.frame_evt else { return; };
-        frame_evt(data);
     }
 }
 
@@ -174,7 +151,7 @@ pub struct Core {
     phd2:               Arc<phd2_conn::Connection>,
     options:            Arc<RwLock<Options>>,
     mode_data:          RwLock<ModeData>,
-    subscribers:        RwLock<Subscribers>,
+    subscribers:        Arc<RwLock<Subscribers>>,
     cur_frame:          Arc<ResultImage>,
     ref_stars:          Arc<Mutex<Option<Vec<Point>>>>,
     calibr_data:        Arc<Mutex<CalibrData>>,
@@ -199,7 +176,7 @@ impl Core {
             phd2:               Arc::new(phd2_conn::Connection::new()),
             options:            Arc::clone(options),
             mode_data:          RwLock::new(ModeData::new()),
-            subscribers:        RwLock::new(Subscribers::new()),
+            subscribers:        Arc::new(RwLock::new(Subscribers::new())),
             cur_frame:          Arc::new(ResultImage::new()),
             ref_stars:          Arc::new(Mutex::new(None)),
             calibr_data:        Arc::new(Mutex::new(CalibrData::default())),
@@ -306,15 +283,6 @@ impl Core {
         let subscribers = self.subscribers.read().unwrap();
         subscribers.inform_error(&err.to_string());
         log::info!("Error has informed!");
-    }
-
-    pub fn connect_main_cam_proc_result_event(
-        &self,
-        fun: impl Fn(FrameProcessResult) + Send + Sync + 'static
-    ) {
-        let mut subscribers = self.subscribers.write().unwrap();
-        assert!(subscribers.frame_evt.is_none());
-        subscribers.frame_evt = Some(Box::new(fun));
     }
 
     fn connect_1s_timer_event(self: &Arc<Self>) {
@@ -521,13 +489,14 @@ impl Core {
                 if mode.mode.get_type() != res.mode_type {
                     return;
                 }
-                if let Some(evt) = &self_.subscribers.read().unwrap().frame_evt {
-                    evt(res.clone());
-                }
+
+                self_.subscribers.read().unwrap().inform_event(
+                    CoreEvent::FrameProcessing(res.clone())
+                );
+
                 let result = || -> anyhow::Result<()> {
                     let res = mode.mode.notify_about_frame_processing_result(
-                        &res,
-                        &self_.subscribers
+                        &res
                     )?;
                     self_.apply_change_result(res, &mut mode)?;
                     Ok(())
@@ -591,6 +560,7 @@ impl Core {
         self.init_cam_telescope_data()?;
         let mut mode = TackingPicturesMode::new(
             &self.indi,
+            &self.subscribers,
             None,
             CameraMode::SingleShot,
             &self.options,
@@ -603,8 +573,8 @@ impl Core {
         let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_progress(progress, mode_type);
-        subscribers.inform_mode_changed();
+        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
+        subscribers.inform_event(CoreEvent::ModeChanged);
         Ok(())
     }
 
@@ -613,6 +583,7 @@ impl Core {
         self.init_cam_telescope_data()?;
         let mut mode = TackingPicturesMode::new(
             &self.indi,
+            &self.subscribers,
             Some(&self.timer),
             CameraMode::LiveView,
             &self.options,
@@ -625,8 +596,8 @@ impl Core {
         let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_progress(progress, mode_type);
-        subscribers.inform_mode_changed();
+        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
+        subscribers.inform_event(CoreEvent::ModeChanged);
         Ok(())
     }
 
@@ -635,6 +606,7 @@ impl Core {
         self.init_cam_telescope_data()?;
         let mut mode = TackingPicturesMode::new(
             &self.indi,
+            &self.subscribers,
             Some(&self.timer),
             CameraMode::SavingRawFrames,
             &self.options,
@@ -650,8 +622,8 @@ impl Core {
         let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_progress(progress, mode_type);
-        subscribers.inform_mode_changed();
+        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
+        subscribers.inform_event(CoreEvent::ModeChanged);
         Ok(())
     }
 
@@ -660,6 +632,7 @@ impl Core {
         self.init_cam_telescope_data()?;
         let mut mode = TackingPicturesMode::new(
             &self.indi,
+            &self.subscribers,
             Some(&self.timer),
             CameraMode::LiveStacking,
             &self.options,
@@ -676,8 +649,8 @@ impl Core {
         let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_progress(progress, mode_type);
-        subscribers.inform_mode_changed();
+        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
+        subscribers.inform_event(CoreEvent::ModeChanged);
         Ok(())
     }
 
@@ -686,15 +659,15 @@ impl Core {
         self.init_cam_telescope_data()?;
         let mut mode_data = self.mode_data.write().unwrap();
         mode_data.mode.abort()?;
-        let mut mode = FocusingMode::new(&self.indi, &self.options, None)?;
+        let mut mode = FocusingMode::new(&self.indi, &self.options, &self.subscribers, None)?;
         mode.start()?;
         mode_data.mode = Box::new(mode);
         let progress = mode_data.mode.progress();
         let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_progress(progress, mode_type);
-        subscribers.inform_mode_changed();
+        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
+        subscribers.inform_event(CoreEvent::ModeChanged);
         Ok(())
     }
 
@@ -710,8 +683,8 @@ impl Core {
         let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_progress(progress, mode_type);
-        subscribers.inform_mode_changed();
+        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
+        subscribers.inform_event(CoreEvent::ModeChanged);
         Ok(())
     }
 
@@ -737,8 +710,8 @@ impl Core {
         let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_progress(progress, mode_type);
-        subscribers.inform_mode_changed();
+        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
+        subscribers.inform_event(CoreEvent::ModeChanged);
         Ok(())
     }
 
@@ -747,15 +720,15 @@ impl Core {
         self.init_cam_telescope_data()?;
         let mut mode_data = self.mode_data.write().unwrap();
         mode_data.mode.abort()?;
-        let mut mode = GotoMode::new(eq_coord, &self.options, &self.indi)?;
+        let mut mode = GotoMode::new(eq_coord, &self.options, &self.indi, &self.subscribers)?;
         mode.start()?;
         mode_data.mode = Box::new(mode);
         let progress = mode_data.mode.progress();
         let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_progress(progress, mode_type);
-        subscribers.inform_mode_changed();
+        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
+        subscribers.inform_event(CoreEvent::ModeChanged);
         Ok(())
     }
 
@@ -816,7 +789,7 @@ impl Core {
         mode_data.finished_mode = None;
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_mode_changed();
+        subscribers.inform_event(CoreEvent::ModeChanged);
         self.exp_stuck_wd.store(0, Ordering::Relaxed);
     }
 
@@ -831,9 +804,9 @@ impl Core {
         let mode_type = mode_data.mode.get_type();
         drop(mode_data);
         let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_mode_continued();
-        subscribers.inform_progress(progress, mode_type);
-        subscribers.inform_mode_changed();
+        subscribers.inform_event(CoreEvent::ModeContinued);
+        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
+        subscribers.inform_event(CoreEvent::ModeChanged);
         Ok(())
     }
 
@@ -868,7 +841,7 @@ impl Core {
             NotifyResult::StartFocusing => {
                 mode_data.mode.abort()?;
                 let prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
-                let mut mode = FocusingMode::new(&self.indi, &self.options, Some(prev_mode))?;
+                let mut mode = FocusingMode::new(&self.indi, &self.options, &self.subscribers, Some(prev_mode))?;
                 mode.start()?;
                 mode_data.mode = Box::new(mode);
                 mode_changed = true;
@@ -884,7 +857,7 @@ impl Core {
                 progress_changed = true;
             }
             NotifyResult::StartCreatingDark(item) => {
-                self.start_dark_libarary_mode(
+                self.start_dark_libarary_mode_stage(
                     mode_data,
                     CameraMode::SavingMasterDark,
                     &item
@@ -893,7 +866,7 @@ impl Core {
                 progress_changed = true;
             }
             NotifyResult::StartCreatingDefectPixelsFiles(item) => {
-                self.start_dark_libarary_mode(
+                self.start_dark_libarary_mode_stage(
                     mode_data,
                     CameraMode::SavingDefectPixels,
                     &item
@@ -908,20 +881,20 @@ impl Core {
         if mode_changed || progress_changed {
             let subscribers = self.subscribers.read().unwrap();
             if mode_changed {
-                subscribers.inform_mode_changed();
+                subscribers.inform_event(CoreEvent::ModeChanged);
             }
             if progress_changed {
-                subscribers.inform_progress(
+                subscribers.inform_event(CoreEvent::Progress(
                     mode_data.mode.progress(),
-                    mode_data.mode.get_type()
-                );
+                    mode_data.mode.get_type(),
+                ));
             }
         }
 
         Ok(())
     }
 
-    fn start_dark_libarary_mode(
+    fn start_dark_libarary_mode_stage(
         self: &Arc<Self>,
         mode_data: &mut ModeData,
         mode: CameraMode,
@@ -929,7 +902,7 @@ impl Core {
     ) -> anyhow::Result<()> {
         mode_data.mode.abort()?;
         let prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
-        let mut mode = TackingPicturesMode::new(&self.indi, None, mode, &self.options,)?;
+        let mut mode = TackingPicturesMode::new(&self.indi, &self.subscribers, None, mode, &self.options,)?;
         mode.set_dark_creation_program_item(program_item);
         mode.set_next_mode(Some(prev_mode));
         mode.start()?;

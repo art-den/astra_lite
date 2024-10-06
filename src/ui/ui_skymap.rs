@@ -1,8 +1,8 @@
-use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
+use std::{cell::{Cell, RefCell}, collections::HashMap, rc::Rc, sync::{Arc, RwLock}};
 use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
-use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::Core}, indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
+use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::*}, indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
 use super::{gtk_utils::{self, DEFAULT_DPMM}, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, math::*}, ui_main::*, ui_skymap_options::SkymapOptionsDialog, utils::*};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
@@ -46,6 +46,8 @@ pub fn init_ui(
         clicked_crd:   RefCell::new(None),
         full_screen:   Cell::new(false),
         goto_started:  Cell::new(false),
+        closed:        Cell::new(false),
+        cam_rotation:  RefCell::new(HashMap::new()),
         self_:         RefCell::new(None),
         map_widget,
     });
@@ -58,9 +60,14 @@ pub fn init_ui(
     data.update_widgets_enable_state();
 
     data.connect_main_ui_events(handlers);
-    data.connect_events();
+    data.connect_widgets_events();
+    data.connect_core_events();
 
     data.set_observer_data_for_widget();
+}
+
+pub enum MainThreadEvent {
+    Core(CoreEvent),
 }
 
 impl SkyItemType {
@@ -220,6 +227,8 @@ struct MapUi {
     clicked_crd:   RefCell<Option<EqCoord>>,
     full_screen:   Cell<bool>,
     goto_started:  Cell<bool>,
+    closed:        Cell<bool>,
+    cam_rotation:  RefCell<HashMap<String, f64>>,
     self_:         RefCell<Option<Rc<MapUi>>>
 }
 
@@ -251,6 +260,8 @@ impl MapUi {
     }
 
     fn handler_closing(&self) {
+        self.closed.set(true);
+
         self.read_ui_options_from_widgets();
 
         let ui_options = self.ui_options.borrow();
@@ -292,7 +303,7 @@ impl MapUi {
         }));
     }
 
-    fn connect_events(self: &Rc<Self>) {
+    fn connect_widgets_events(self: &Rc<Self>) {
         gtk_utils::connect_action   (&self.window, self, "map_play",          Self::handler_btn_play_pressed);
         gtk_utils::connect_action   (&self.window, self, "map_now",           Self::handler_btn_now_pressed);
         gtk_utils::connect_action_rc(&self.window, self, "skymap_options",    Self::handler_action_options);
@@ -379,6 +390,37 @@ impl MapUi {
                     self_.handler_widget_mouse_button_press(evt)
                 })
         );
+    }
+
+    fn connect_core_events(self: &Rc<Self>) {
+        let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
+
+        let sender = main_thread_sender.clone();
+        self.core.subscribe_events(move |event| {
+            sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
+        });
+
+        glib::spawn_future_local(clone!(@weak self as self_ => async move {
+            while let Ok(event) = main_thread_receiver.recv().await {
+                if self_.closed.get() { return; }
+                match event {
+                    MainThreadEvent::Core(event) =>
+                        self_.process_core_event(event),
+                }
+            }
+        }));
+    }
+
+    fn process_core_event(&self, event: CoreEvent) {
+        match event {
+            CoreEvent::PlateSolve(ps_event) => {
+                let mut cam_rotation = self.cam_rotation.borrow_mut();
+                cam_rotation.insert(ps_event.cam_name, ps_event.result.rotation);
+                drop(cam_rotation);
+                self.update_skymap_widget(true);
+            }
+            _ => {},
+        }
     }
 
     fn show_options(&self) {
@@ -527,11 +569,15 @@ impl MapUi {
                         full_cam_name += ", ";
                         full_cam_name += cam_ccd_prop;
                     }
+                    let cam_rotation = self.cam_rotation.borrow();
+                    let rot_angle = *cam_rotation.get(&device.name).unwrap_or(&0.0);
+                    drop(cam_rotation);
+
                     Ok(CameraFrame{
                         name: full_cam_name,
                         horiz_angle: f64::atan2(width_mm, options.telescope.focal_len),
                         vert_angle: f64::atan2(height_mm, options.telescope.focal_len),
-                        rot_angle: 0.0,
+                        rot_angle,
                     })
                 } ().ok()
             } else {

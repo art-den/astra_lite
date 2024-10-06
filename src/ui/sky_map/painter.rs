@@ -592,24 +592,21 @@ impl SkyMapPainter {
             let center_crd = ctx.view_point.crd.to_sphere_pt();
             let center_crd = ctx.eq_sphere_cvt.sphere_to_eq(&center_crd);
 
-            let dec_rot = RotMatrix::new(-center_crd.dec);
-            let ra_rot = RotMatrix::new(-center_crd.ra);
+            let dec_rot = RotMatrix::new(0.5 * PI - center_crd.dec);
+            let ra_rot = RotMatrix::new(PI / 2.0 - center_crd.ra);
 
-            let parts = [ (0.5, 0.5), (0.5, -0.5), (-0.5, -0.5), (-0.5, 0.5) ];
+            let h = 0.5 * cam_frame.horiz_angle;
+            let v = 0.5 * cam_frame.vert_angle;
+            let len = f64::sqrt(h * h + v * v);
+
+            let angle = f64::atan2(cam_frame.vert_angle, cam_frame.horiz_angle);
+            let angles = [ 2.0*PI - angle, angle, PI-angle, PI + angle ];
             let mut coords = [EqCoord {dec: 0.0, ra: 0.0}; 4];
-
-            let cam_rotate_matrix = RotMatrix::new(cam_frame.rot_angle);
-            for ((h, v), crd) in izip!(parts, &mut coords) {
-                let mut pt = Point2D { x: h, y: v };
-                pt.rotate(&cam_rotate_matrix);
-                let h_crd = EqCoord {
-                    dec: pt.x * cam_frame.vert_angle,
-                    ra: pt.y * cam_frame.horiz_angle,
-                };
-                let mut pt = h_crd.to_sphere_pt();
-                pt.rotate_over_y(&dec_rot);
+            for (a, crd) in izip!(angles, &mut coords) {
+                let eq_crd = EqCoord { dec: 0.5 * PI - len, ra: a - cam_frame.rot_angle };
+                let mut pt = eq_crd.to_sphere_pt();
+                pt.rotate_over_x(&dec_rot);
                 pt.rotate_over_z(&ra_rot);
-
                 *crd = EqCoord::from_sphere_pt(&pt);
             }
 
@@ -1439,8 +1436,8 @@ struct CameraFramePainter<'a> {
         ctx.cairo.set_line_width(1.0);
         ctx.cairo.stroke()?;
 
-        let pt1 = &points[0];
-        let pt2 = &points[1];
+        let pt1 = &points[1];
+        let pt2 = &points[2];
         let dx = pt2.x - pt1.x;
         let dy = pt2.y - pt1.y;
         let len = f64::sqrt(dx * dx + dy * dy);

@@ -149,7 +149,6 @@ impl Default for UiOptions {
 }
 
 pub enum MainThreadEvent {
-    FrameProcessing(FrameProcessResult),
     Core(CoreEvent),
     Indi(indi::Event),
 }
@@ -283,13 +282,6 @@ impl CameraUi {
         let sender = main_thread_sender.clone();
         self.core.subscribe_events(move |event| {
             sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
-        });
-
-        // Image processing thread
-
-        let sender = main_thread_sender.clone();
-        self.core.connect_main_cam_proc_result_event(move |res| {
-            _ = sender.send_blocking(MainThreadEvent::FrameProcessing(res));
         });
 
         glib::spawn_future_local(clone!(@weak self as self_ => async move {
@@ -692,7 +684,7 @@ impl CameraUi {
                 };
             },
 
-            MainThreadEvent::FrameProcessing(result) => {
+            MainThreadEvent::Core(CoreEvent::FrameProcessing(result)) => {
                 self.show_frame_processing_result(result);
             },
 
