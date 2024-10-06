@@ -155,9 +155,9 @@ impl Options {
 
     pub fn read_plate_solve(&mut self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
-        self.plate_solve.exposure = ui.prop_f64("spb_ps_exp.value");
-        self.plate_solve.gain = Gain::from_active_id(ui.prop_string("cbx_ps_gain.active-id").as_deref());
-        self.plate_solve.bin = Binning::from_active_id(ui.prop_string("cbx_ps_bin.active-id").as_deref());
+        self.plate_solver.exposure = ui.prop_f64("spb_ps_exp.value");
+        self.plate_solver.gain = Gain::from_active_id(ui.prop_string("cbx_ps_gain.active-id").as_deref());
+        self.plate_solver.bin = Binning::from_active_id(ui.prop_string("cbx_ps_bin.active-id").as_deref());
     }
 
     pub fn read_mount(&mut self, builder: &gtk::Builder) {
@@ -302,9 +302,9 @@ impl Options {
 
     pub fn show_plate_solve(&self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
-        ui.set_prop_f64("spb_ps_exp.value",      self.plate_solve.exposure);
-        ui.set_prop_str("cbx_ps_gain.active-id", Some(self.plate_solve.gain.to_active_id()));
-        ui.set_prop_str("cbx_ps_bin.active-id",  self.plate_solve.bin.to_active_id());
+        ui.set_prop_f64("spb_ps_exp.value",      self.plate_solver.exposure);
+        ui.set_prop_str("cbx_ps_gain.active-id", Some(self.plate_solver.gain.to_active_id()));
+        ui.set_prop_str("cbx_ps_bin.active-id",  self.plate_solver.bin.to_active_id());
     }
 
     pub fn show_focuser(&self, builder: &gtk::Builder) {

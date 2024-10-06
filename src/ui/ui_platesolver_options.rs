@@ -45,14 +45,14 @@ impl PlatesolverOptionsDialog {
         spb_blind_timeout.set_increments(5.0, 20.0);
     }
 
-    pub fn show_options(self: &Rc<Self>, options: &PlateSolveOptions) {
+    pub fn show_options(self: &Rc<Self>, options: &PlateSolverOptions) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         ui.set_prop_str("cbx_solver.active-id", options.solver.to_active_id());
         ui.set_prop_f64("spb_timeout.value", options.timeout as f64);
         ui.set_prop_f64("spb_blind_timeout.value", options.blind_timeout as f64);
     }
 
-    pub fn get_options(self: &Rc<Self>, options: &mut PlateSolveOptions) {
+    pub fn get_options(self: &Rc<Self>, options: &mut PlateSolverOptions) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         options.solver = PlateSolverType::from_active_id(ui.prop_string("cbx_solver.active-id").as_deref());
         options.timeout = ui.prop_f64("spb_timeout.value") as _;

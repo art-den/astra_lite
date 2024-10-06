@@ -400,7 +400,7 @@ pub enum PlateSolverType {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
-pub struct PlateSolveOptions {
+pub struct PlateSolverOptions {
     pub solver: PlateSolverType,
     pub exposure: f64,
     pub gain: Gain,
@@ -409,7 +409,7 @@ pub struct PlateSolveOptions {
     pub blind_timeout: u32,
 }
 
-impl Default for PlateSolveOptions {
+impl Default for PlateSolverOptions {
     fn default() -> Self {
         Self {
             solver: PlateSolverType::default(),
@@ -742,17 +742,17 @@ pub struct SkyMapOptions {
 #[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(default)]
 pub struct Options {
-    pub indi:        IndiOptions,
-    pub cam:         CamOptions,
-    pub calibr:      CalibrOptions,
-    pub raw_frames:  RawFrameOptions,
-    pub live:        LiveStackingOptions,
-    pub quality:     QualityOptions,
-    pub preview:     PreviewOptions,
-    pub focuser:     FocuserOptions,
-    pub plate_solve: PlateSolveOptions,
-    pub mount:       MountOptions,
-    pub telescope:   TelescopeOptions,
-    pub guiding:     GuidingOptions,
-    pub sky_map:     SkyMapOptions,
+    pub indi:         IndiOptions,
+    pub cam:          CamOptions,
+    pub calibr:       CalibrOptions,
+    pub raw_frames:   RawFrameOptions,
+    pub live:         LiveStackingOptions,
+    pub quality:      QualityOptions,
+    pub preview:      PreviewOptions,
+    pub focuser:      FocuserOptions,
+    pub plate_solver: PlateSolverOptions,
+    pub mount:        MountOptions,
+    pub telescope:    TelescopeOptions,
+    pub guiding:      GuidingOptions,
+    pub sky_map:      SkyMapOptions,
 }

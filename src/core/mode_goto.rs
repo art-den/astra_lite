@@ -23,7 +23,7 @@ pub struct GotoMode {
     eq_coord:        EqCoord,
     camera:          DeviceAndProp,
     cam_opts:        CamOptions,
-    ps_opts:         PlateSolveOptions,
+    ps_opts:         PlateSolverOptions,
     mount:           String,
     indi:            Arc<indi::Connection>,
     subscribers:     Arc<RwLock<Subscribers>>,
@@ -46,9 +46,9 @@ impl GotoMode {
         };
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = crate::image::raw::FrameType::Lights;
-        cam_opts.frame.exp_main = opts.plate_solve.exposure;
+        cam_opts.frame.exp_main = opts.plate_solver.exposure;
         cam_opts.frame.gain = gain_to_value(
-            opts.plate_solve.gain,
+            opts.plate_solver.gain,
             opts.cam.frame.gain,
             &camera,
             indi
@@ -59,7 +59,7 @@ impl GotoMode {
             eq_coord: eq_coord.clone(),
             camera,
             cam_opts,
-            ps_opts: opts.plate_solve.clone(),
+            ps_opts: opts.plate_solver.clone(),
             mount:   opts.mount.device.clone(),
             indi:    Arc::clone(indi),
             subscribers: Arc::clone(subscribers),

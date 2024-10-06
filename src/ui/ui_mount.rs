@@ -526,10 +526,10 @@ impl MountUi {
     fn handler_action_platesolver_options(self: &Rc<Self>) {
         let dialog = PlatesolverOptionsDialog::new(self.window.upcast_ref());
         let options = self.options.read().unwrap();
-        dialog.show_options(&options.plate_solve);
+        dialog.show_options(&options.plate_solver);
         dialog.exec(clone!(@strong self as self_, @strong dialog => move || {
             let mut options = self_.options.write().unwrap();
-            dialog.get_options(&mut options.plate_solve);
+            dialog.get_options(&mut options.plate_solver);
             drop(options);
             Ok(())
         }));
