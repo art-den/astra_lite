@@ -588,15 +588,15 @@ fn make_preview_image_impl(
     tmr.log("create_raw_image_from_blob");
 
     let mut raw_info = raw_image.info().clone();
-    if raw_info.zero == 0 {
-        raw_info.zero = command.frame_options.offset;
-        raw_image.set_offset(raw_info.zero);
+    if raw_info.offset == 0 {
+        raw_info.offset = command.frame_options.offset;
+        raw_image.set_offset(raw_info.offset);
     }
 
     log::debug!("Raw type      = {:?}", raw_info.frame_type);
     log::debug!("Raw width     = {}",   raw_info.width);
     log::debug!("Raw height    = {}",   raw_info.height);
-    log::debug!("Raw zero      = {}",   raw_info.zero);
+    log::debug!("Raw zero      = {}",   raw_info.offset);
     log::debug!("Raw max_value = {}",   raw_info.max_value);
     log::debug!("Raw CFA       = {:?}", raw_info.cfa);
     log::debug!("Raw bin       = {}",   raw_info.bin);

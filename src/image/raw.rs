@@ -128,7 +128,8 @@ pub struct RawImageInfo {
     pub time:        Option<DateTime<Utc>>,
     pub width:       usize,
     pub height:      usize,
-    pub zero:        i32,
+    pub gain:        i32,
+    pub offset:      i32,
     pub max_value:   u16,
     pub cfa:         CfaType,
     pub bin:         u8,
@@ -175,8 +176,9 @@ impl RawImage {
         let exposure    = image_hdu.get_f64("EXPTIME").unwrap_or_default();
         let integr_time = image_hdu.get_f64("TOTALEXP");
         let bayer       = image_hdu.get_str("BAYERPAT").unwrap_or_default();
-        let bin         = image_hdu.get_i64("XBINNING").unwrap_or(1) as u8;
-        let offset      = image_hdu.get_i64("OFFSET").unwrap_or(0) as i32;
+        let bin         = image_hdu.get_f64("XBINNING").unwrap_or(1.0) as u8;
+        let gain        = image_hdu.get_f64("GAIN").unwrap_or(0.0) as i32;
+        let offset      = image_hdu.get_f64("OFFSET").unwrap_or(0.0) as i32;
         let frame_str   = image_hdu.get_str("FRAME");
         let time_str    = image_hdu.get_str("DATE-OBS").unwrap_or_default();
         let camera      = image_hdu.get_str("INSTRUME").unwrap_or_default().to_string();
@@ -198,7 +200,8 @@ impl RawImage {
             time,
             width,
             height,
-            zero: offset,
+            gain,
+            offset,
             cfa,
             bin,
             max_value,
@@ -230,7 +233,8 @@ impl RawImage {
         hdu.set_value("FRAME",    &format!("'{}'", self.info.frame_type.to_str()));
         hdu.set_value("XBINNING", &self.info.bin.to_string());
         hdu.set_value("YBINNING", &self.info.bin.to_string());
-        hdu.set_value("OFFSET",   &self.info.zero.to_string());
+        hdu.set_value("GAIN",     &self.info.gain.to_string());
+        hdu.set_value("OFFSET",   &self.info.offset.to_string());
         hdu.set_value("INSTRUME", &self.info.camera);
         if let Some(bayer) = self.info.cfa.to_str() {
             hdu.set_value("BAYERPAT", &format!("'{}'", bayer));
@@ -248,7 +252,7 @@ impl RawImage {
     }
 
     pub fn set_offset(&mut self, offset: i32) {
-        self.info.zero = offset;
+        self.info.offset = offset;
     }
 
     pub fn row(&self, y: usize) -> &[u16] {
@@ -588,15 +592,15 @@ impl RawImage {
             if value > u16::MAX as i32 { value = u16::MAX as i32; }
             *s = value as u16;
         }
-        self.info.zero += diff;
+        self.info.offset += diff;
         Ok(())
     }
 
     pub fn apply_flat(&mut self, flat: &RawImage) -> anyhow::Result<()> {
         self.check_master_frame_is_compatible(flat, FrameType::Flats)?;
         debug_assert!(self.data.len() == flat.data.len());
-        let zero = self.info.zero as i64;
-        let flat_zero = flat.info.zero as i64;
+        let zero = self.info.offset as i64;
+        let flat_zero = flat.info.offset as i64;
         self.data.par_iter_mut().zip(flat.data.par_iter()).for_each(|(s, f)| {
             let flat_value = *f as i64 - flat_zero;
             let mut value = *s as i64;
@@ -639,7 +643,7 @@ impl RawImage {
                 result as i64
             }
         };
-        let zero = self.info.zero as i64;
+        let zero = self.info.offset as i64;
         let l_max = get_99(&mut l_values) - zero;
         let r_max = get_99(&mut r_values) - zero;
         let g_max = get_99(&mut g_values) - zero;
@@ -660,7 +664,7 @@ impl RawImage {
                 *v = normalized as u16;
             }
         }
-        self.info.zero = 0;
+        self.info.offset = 0;
     }
 
     pub fn filter_flat(&mut self) {
@@ -767,7 +771,7 @@ impl RawImage {
         dst_img.make_monochrome(
             self.info.width,
             self.info.height,
-            self.info.zero,
+            self.info.offset,
             self.info.max_value
         );
         dst_img.l
@@ -779,7 +783,7 @@ impl RawImage {
         result.make_color(
             self.info.width,
             self.info.height,
-            self.info.zero,
+            self.info.offset,
             self.info.max_value
         );
 
@@ -988,7 +992,7 @@ impl RawAdder {
                     *d += median3(*s1, *s2, *s3) as u32;
                 }
                 self.counter += 1;
-                self.zero_sum += raw.info.zero;
+                self.zero_sum += raw.info.offset;
                 self.images.clear();
                 self.images.shrink_to_fit();
             } else  {
@@ -999,7 +1003,7 @@ impl RawAdder {
                 *d += *s as u32;
             }
             self.counter += 1;
-            self.zero_sum += raw.info.zero;
+            self.zero_sum += raw.info.offset;
         }
         self.integr_exp += raw.info.exposure;
         Ok(())
@@ -1013,7 +1017,7 @@ impl RawAdder {
         let cfa_arr = info.cfa.get_array();
         let mut info = info.clone();
         let counter2 = self.counter/2;
-        info.zero = (self.zero_sum + counter2 as i32) / self.counter as i32;
+        info.offset = (self.zero_sum + counter2 as i32) / self.counter as i32;
         info.integr_time = Some(self.integr_exp);
 
         if self.counter == 0 && !self.images.is_empty() {
