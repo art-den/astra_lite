@@ -342,7 +342,7 @@ impl SkyMapPainter {
         let maj_axis = maj_axis.max(min_axis_value);
         let min_axis = min_axis.max(min_axis_value);
 
-        let angle = dso_object.angle.unwrap_or_default();
+        let angle = dso_object.angle.unwrap_or_default() as f64 + PI * 0.5;
         let obj_dec = dso_object.crd.dec();
         let obj_ra = dso_object.crd.ra();
         let dec_rot = RotMatrix::new(0.5 * PI - obj_dec);
@@ -356,7 +356,7 @@ impl SkyMapPainter {
             let sin_az = f64::sin(az);
             let cos_az = f64::cos(az);
             let alt = a * b / f64::sqrt(a * a * sin_az * sin_az + b * b * cos_az * cos_az);
-            let crd = EqCoord { dec: 0.5 * PI - alt, ra: az - angle as f64 };
+            let crd = EqCoord { dec: 0.5 * PI - alt, ra: az - angle };
             let mut pt = crd.to_sphere_pt();
             pt.rotate_over_x(&dec_rot);
             pt.rotate_over_z(&ra_rot);
