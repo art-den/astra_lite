@@ -209,10 +209,6 @@ impl Point2D {
         let diff_y = pt1.y - pt2.y;
         f64::sqrt(diff_x * diff_x + diff_y * diff_y)
     }
-
-    pub fn rotate(&mut self, mat: &RotMatrix) {
-        mat.rotate(&mut self.x, &mut self.y);
-    }
 }
 
 pub struct Line2D {
