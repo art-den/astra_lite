@@ -109,7 +109,7 @@ pub struct TackingPicturesMode {
     indi:            Arc<indi::Connection>,
     subscribers:     Arc<RwLock<Subscribers>>,
     timer:           Option<Arc<Timer>>,
-    raw_adder:       Arc<Mutex<RawAdder>>,
+    raw_adder:       RawAdder,
     options:         Arc<RwLock<Options>>,
     cam_options:     CamOptions,
     focus_options:   Option<FocuserOptions>,
@@ -173,7 +173,7 @@ impl TackingPicturesMode {
             indi:            Arc::clone(indi),
             subscribers:     Arc::clone(subscribers),
             timer:           timer.cloned(),
-            raw_adder:       Arc::new(Mutex::new(RawAdder::new())),
+            raw_adder:       RawAdder::new(),
             options:         Arc::clone(options),
             cam_options,
             focus_options:   None,
@@ -766,7 +766,6 @@ impl TackingPicturesMode {
     }
 
     fn add_raw_image(&mut self, raw_image: &RawImage) -> anyhow::Result<()> {
-        let mut adder = self.raw_adder.lock().unwrap();
         if raw_image.info().frame_type == FrameType::Flats {
             let mut normalized_flat = raw_image.clone();
             let tmr = TimeLogger::start();
@@ -775,11 +774,11 @@ impl TackingPicturesMode {
             normalized_flat.normalize_flat();
             tmr.log("Normalizing flat");
             let tmr = TimeLogger::start();
-            adder.add(&normalized_flat, false)?;
+            self.raw_adder.add(&normalized_flat, false)?;
             tmr.log("Adding raw calibration frame");
         } else {
             let tmr = TimeLogger::start();
-            adder.add(raw_image, true)?;
+            self.raw_adder.add(raw_image, true)?;
             tmr.log("Adding raw calibration frame");
         }
         Ok(())
@@ -826,11 +825,8 @@ impl TackingPicturesMode {
 
     fn save_master_file(&mut self) -> anyhow::Result<()> {
         log::debug!("Saving master frame...");
-        let mut adder = self.raw_adder.lock().unwrap();
-
-        let raw_image = adder.get()?;
-        adder.clear();
-        drop(adder);
+        let raw_image = self.raw_adder.get()?;
+        self.raw_adder.clear();
 
         if let Some(parent) = self.out_file_names.master_fname.parent() {
             if !parent.is_dir() {
@@ -847,11 +843,8 @@ impl TackingPicturesMode {
 
     fn save_defect_pixels_file(&mut self) -> anyhow::Result<()> {
         log::debug!("Saving defect pixels file...");
-        let mut adder = self.raw_adder.lock().unwrap();
-
-        let raw_image = adder.get()?;
-        adder.clear();
-        drop(adder);
+        let raw_image = self.raw_adder.get()?;
+        self.raw_adder.clear();
 
         if let Some(parent) = self.out_file_names.defect_pixels_fname.parent() {
             if !parent.is_dir() {
@@ -1097,6 +1090,10 @@ impl Mode for TackingPicturesMode {
 
         self.fname_utils.init(&self.indi, &self.device);
         self.generate_output_file_names()?;
+
+        if self.flags.use_raw_adder {
+            self.raw_adder.clear();
+        }
 
         self.start_or_continue()?;
         Ok(())

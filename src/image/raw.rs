@@ -977,6 +977,9 @@ impl RawAdder {
             if info.frame_type != raw.info.frame_type {
                 anyhow::bail!("Frame type of images differ");
             }
+            if self.data.len() != raw.data.len() {
+                anyhow::bail!("Internal error: self.data.len() != raw.data.len()");
+            }
         } else {
             self.info = Some(raw.info.clone());
             self.counter = 0;
@@ -999,7 +1002,7 @@ impl RawAdder {
                 self.images.push(raw.clone());
             }
         } else {
-            for (s, d) in raw.data.iter().zip(&mut self.data) {
+            for (s, d) in izip!(&raw.data, &mut self.data) {
                 *d += *s as u32;
             }
             self.counter += 1;
