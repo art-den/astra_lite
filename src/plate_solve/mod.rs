@@ -1,17 +1,12 @@
 use astrometry::*;
-use crate::{image::image::Image, ui::sky_map::math::EqCoord};
+use crate::{image::image::Image, ui::sky_map::math::EqCoord, options::PlateSolverType};
 
 mod astrometry;
-
-#[derive(Debug, Clone, Copy)]
-pub enum PlateSolverType {
-    Astrometry,
-}
 
 #[derive(Debug, Default)]
 pub struct PlateSolveConfig {
     pub eq_coord: Option<EqCoord>,
-    pub _time_out: Option<u32>, // in seconds
+    pub time_out: u32, // in seconds
 }
 
 #[derive(Debug)]
@@ -19,6 +14,7 @@ pub struct PlateSolveResult {
     pub eq_coord: EqCoord,
     pub width: f64,
     pub height: f64,
+    pub rotation: f64,
 }
 
 pub struct PlateSolver {

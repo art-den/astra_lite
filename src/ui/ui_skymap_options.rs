@@ -107,15 +107,20 @@ impl SkymapOptionsDialog {
 
     pub fn exec(self: &Rc<Self>, on_apply: impl Fn() -> anyhow::Result<()> + 'static) {
         self.dialog.connect_response(clone!(@strong self as self_ => move |dlg, resp| {
-            if resp == gtk::ResponseType::Cancel {
-                dlg.close();
-            }
-            let ok = gtk_utils::exec_and_show_error(dlg, || {
-                on_apply()?;
-                Ok(())
-            });
-            if ok && resp == gtk::ResponseType::Ok {
-                dlg.close();
+            match resp {
+                gtk::ResponseType::Ok | gtk::ResponseType::Apply => {
+                    let ok = gtk_utils::exec_and_show_error(dlg, || {
+                        on_apply()?;
+                        Ok(())
+                    });
+                    if ok && resp == gtk::ResponseType::Ok{
+                        dlg.close();
+                    }
+                }
+                gtk::ResponseType::Cancel => {
+                    dlg.close();
+                }
+                _ => {},
             }
         }));
         self.dialog.show();

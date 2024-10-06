@@ -41,42 +41,35 @@ impl PlateSolverIface for AstrometryPlateSolver {
         if self.child.is_some() {
             anyhow::bail!("AstrometryPlateSolver already started");
         }
-
         self.clear_prev_resources();
-
         let layer = if !image.l.is_empty() { &image.l } else { &image.g };
         let file_name = format!("astralite_platesolve_{}.tif", rand::random::<u64>());
         let temp_file = std::env::temp_dir().join(&file_name);
-
         log::debug!("Saving image into {:?} for plate solving...", temp_file);
         layer.save_to_tiff(&temp_file)?;
-
         self.file_name = Some(temp_file.clone());
-
         use std::process::*;
         let mut cmd = Command::new("solve-field");
         cmd.stdout(std::process::Stdio::piped());
         cmd
+            .arg("--resort")
             .arg("--no-plots")
-            .arg("--no-verify")
-            .arg("--corr") .arg("none")
+            .arg("--corr").arg("none")
             .arg("--solved").arg("none")
             .arg("--match").arg("none")
             .arg("--rdls").arg("none")
             .arg("--index-xyls").arg("none")
             .arg("--new-fits").arg("none")
-            .arg("--temp-axy")
-            .arg(temp_file);
-
+            .arg("--temp-axy");
         if let Some(crd) = &config.eq_coord {
             cmd.arg("--ra").arg(format!("{:.6}", radian_to_degree(crd.ra)));
             cmd.arg("--dec").arg(format!("{:.6}", radian_to_degree(crd.dec)));
-            cmd.arg("--radius").arg("20");
+            cmd.arg("--radius").arg("10");
         }
-
+        cmd.arg("--cpulimit").arg(config.time_out.to_string());
+        cmd.arg(temp_file);
         log::debug!("Running solve-field args={:?}", cmd.get_args());
         self.child = Some(cmd.spawn()?);
-
         Ok(())
     }
 
@@ -94,13 +87,15 @@ impl PlateSolverIface for AstrometryPlateSolver {
 
                 self.child = None;
 
-                let re_ra_dec = regex::Regex::new(r"Field center: \(RA,Dec\) = \(([0-9.]*), ([0-9.]*)\)*.").unwrap();
-                let re_fld_size = regex::Regex::new(r"Field size: ([0-9.]*) x ([0-9.]*) degrees*.").unwrap();
+                let re_ra_dec = regex::Regex::new(r"Field center: \(RA,Dec\) = \(([0-9.+-]+), ([0-9.+-]+)\)*.").unwrap();
+                let re_fld_size = regex::Regex::new(r"Field size: ([0-9.]+) x ([0-9.]+) degrees*.").unwrap();
+                let re_rot = regex::Regex::new(r"Field rotation angle: up is ([0-9.+-]+) degrees.*").unwrap();
 
                 let mut result_ra = None;
                 let mut result_dec = None;
                 let mut result_width = None;
                 let mut result_height = None;
+                let mut result_rot = None;
                 for line in str_output.lines() {
                     let line = line.trim();
                     if let Some(cap) = re_ra_dec.captures(line) {
@@ -115,12 +110,17 @@ impl PlateSolverIface for AstrometryPlateSolver {
                         let height_str = cap.get(2).unwrap().as_str();
                         result_height = height_str.parse::<f64>().ok().map(degree_to_radian);
                     }
+                    if let Some(cap) = re_rot.captures(line) {
+                        let rot_str = cap.get(1).unwrap().as_str();
+                        result_rot = rot_str.parse::<f64>().ok().map(degree_to_radian);
+                    }
                 }
 
                 if result_ra.is_none() || result_dec.is_none()
                 || result_width.is_none() || result_height.is_none() {
+                    log::error!("Can't extract data from solve-field stdout:\n{}", str_output);
                     return Some(Err(anyhow::format_err!(
-                        "Can't extract data from solve-field output"
+                        "Can't extract data from solve-field stdout"
                     )));
                 }
 
@@ -131,8 +131,9 @@ impl PlateSolverIface for AstrometryPlateSolver {
 
                 let result = PlateSolveResult {
                     eq_coord,
-                    width: result_width.unwrap_or_default(),
-                    height: result_height.unwrap_or_default(),
+                    width: result_width.unwrap_or(0.0),
+                    height: result_height.unwrap_or(0.0),
+                    rotation: result_rot.unwrap_or(0.0),
                 };
                 return Some(Ok(result));
             } else {

@@ -486,3 +486,18 @@ impl PreviewColor {
         }
     }
 }
+
+impl PlateSolverType {
+    pub fn from_active_id(active_id: Option<&str>) -> Self {
+        match active_id {
+            Some("astrometry.net") => Self::Astrometry,
+            _                  => Self::Astrometry,
+        }
+    }
+
+    pub fn to_active_id(&self) -> Option<&'static str> {
+        match self {
+            Self::Astrometry => Some("astrometry.net"),
+        }
+    }
+}

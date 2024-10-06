@@ -9,7 +9,7 @@ use crate::{
     utils::io_utils::*,
 };
 
-use super::{gtk_utils, utils::*, ui_main::*};
+use super::{gtk_utils, ui_platesolver_options::PlatesolverOptionsDialog, ui_main::*, utils::*};
 
 
 pub fn init_ui(
@@ -199,6 +199,8 @@ impl MountUi {
                 self_.correct_widgets_props();
             });
         }));
+
+        gtk_utils::connect_action_rc(&self.window, self, "platesolver_options", Self::handler_action_platesolver_options);
     }
 
     fn correct_widgets_props(&self) {
@@ -519,5 +521,17 @@ impl MountUi {
 
             _ => {}
         }
+    }
+
+    fn handler_action_platesolver_options(self: &Rc<Self>) {
+        let dialog = PlatesolverOptionsDialog::new(self.window.upcast_ref());
+        let options = self.options.read().unwrap();
+        dialog.show_options(&options.plate_solve);
+        dialog.exec(clone!(@strong self as self_, @strong dialog => move || {
+            let mut options = self_.options.write().unwrap();
+            dialog.get_options(&mut options.plate_solve);
+            drop(options);
+            Ok(())
+        }));
     }
 }

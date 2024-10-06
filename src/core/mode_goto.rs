@@ -25,6 +25,7 @@ pub struct GotoMode {
     eq_coord:        EqCoord,
     camera:          DeviceAndProp,
     cam_opts:        CamOptions,
+    ps_opts:      PlateSolveOptions,
     mount:           String,
     indi:            Arc<indi::Connection>,
     plate_solver:    Option<PlateSolver>,
@@ -58,6 +59,7 @@ impl GotoMode {
             eq_coord: eq_coord.clone(),
             camera,
             cam_opts,
+            ps_opts: opts.plate_solve.clone(),
             mount:   opts.mount.device.clone(),
             indi:    Arc::clone(indi),
             plate_solver: None,
@@ -114,9 +116,10 @@ impl GotoMode {
 
     fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> anyhow::Result<()> {
         let image = image.read().unwrap();
-        let mut plate_solver = PlateSolver::new(PlateSolverType::Astrometry);
+        let mut plate_solver = PlateSolver::new(self.ps_opts.solver);
         let mut config = PlateSolveConfig::default();
         config.eq_coord = Some(self.eq_coord.clone());
+        config.time_out = self.ps_opts.timeout;
         plate_solver.start(&image, &config)?;
         drop(image);
         self.plate_solver = Some(plate_solver);
