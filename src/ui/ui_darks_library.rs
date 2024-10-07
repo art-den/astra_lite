@@ -10,6 +10,10 @@ use crate::{
 
 use super::gtk_utils;
 
+fn multiple_of_5(v: usize) -> usize {
+    ((v + 4) / 5) * 5
+}
+
 #[derive(Serialize, Default, Deserialize, Debug, PartialEq, Eq)]
 enum FramesCountMode {
     Count,
@@ -177,7 +181,7 @@ impl DarkLibOptions {
                                     FramesCountMode::Count => self.frames_count,
                                     FramesCountMode::Time => {
                                         let cnt = (60.0 * self.integr_time / *exp) as usize;
-                                        ((cnt + 4) / 5) * 5
+                                        multiple_of_5(cnt)
                                     }
                                 };
                                 if frame_count == 0 { continue; }
@@ -266,7 +270,7 @@ impl DefectPixelsOptions {
                     FramesCountMode::Count => self.frames_count,
                     FramesCountMode::Time => {
                         let cnt = (60.0 * self.integr_time / exposure) as usize;
-                        ((cnt + 4) / 5) * 5
+                        multiple_of_5(cnt)
                     }
                 };
                 if frame_count == 0 { continue; }
@@ -371,8 +375,8 @@ impl DarksLibraryDialog {
 
         init_spinbutton("spb_dark_integr", 5.0, 240.0, 0, 5.0, 15.0);
         init_spinbutton("spb_def_integr", 5.0, 240.0, 0, 5.0, 15.0);
-        init_spinbutton("spb_dark_cnt", 3.0, 1000.0, 0, 3.0, 30.0);
-        init_spinbutton("spb_def_cnt", 3.0, 1000.0, 0, 3.0, 30.0);
+        init_spinbutton("spb_dark_cnt", 5.0, 1000.0, 0, 5.0, 30.0);
+        init_spinbutton("spb_def_cnt", 5.0, 1000.0, 0, 5.0, 30.0);
         init_spinbutton("spb_def_temp", -50.0, 50.0, 0, 1.0, 10.0);
         init_spinbutton("spb_def_exp", 1.0, 1000.0, 0, 1.0, 10.0);
         init_spinbutton("spb_def_gain", 0.0, 100_000.0, 0, 10.0, 100.0);
@@ -538,9 +542,8 @@ impl DarksLibraryDialog {
 
         // make frames count is multiple of 3
 
-        let multiple_of_3 = |v| { ((v + 2) / 3) * 3 };
-        ui_options.dark_lib.frames_count = multiple_of_3(ui_options.dark_lib.frames_count);
-        ui_options.defect_pixels.frames_count = multiple_of_3(ui_options.defect_pixels.frames_count);
+        ui_options.dark_lib.frames_count = multiple_of_5(ui_options.dark_lib.frames_count);
+        ui_options.defect_pixels.frames_count = multiple_of_5(ui_options.defect_pixels.frames_count);
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
