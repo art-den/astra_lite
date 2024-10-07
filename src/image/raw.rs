@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use itertools::{izip, Itertools};
 use serde::{Serialize, Deserialize};
 
-use crate::utils::math::median3;
+use crate::utils::math::median5;
 use super::{image::*, simple_fits::*};
 
 #[derive(Clone)]
@@ -987,12 +987,15 @@ impl RawAdder {
             self.data.resize(raw.data.len(), 0);
         }
         if use_median {
-            if self.images.len() == 2 {
+            if self.images.len() == 4 {
                 let raw1 = &self.images[0];
                 let raw2 = &self.images[1];
-                for (s1, s2, s3, d)
-                in izip!(&raw1.data, &raw2.data, &raw.data, &mut self.data) {
-                    *d += median3(*s1, *s2, *s3) as u32;
+                let raw3 = &self.images[2];
+                let raw4 = &self.images[3];
+
+                for (s1, s2, s3, s4, s5, d)
+                in izip!(&raw1.data, &raw2.data, &raw3.data, &raw4.data, &raw.data, &mut self.data) {
+                    *d += median5(*s1, *s2, *s3, *s4, *s5) as u32;
                 }
                 self.counter += 1;
                 self.zero_sum += raw.info.offset;

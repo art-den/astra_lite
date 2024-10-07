@@ -8,14 +8,8 @@ pub fn cmp_f64(v1: &f64, v2: &f64) -> core::cmp::Ordering {
 }
 
 #[inline(always)]
-pub fn median3<T: PartialOrd>(a: T, b: T, c: T) -> T {
-    if (a > b) ^ (a > c) {
-        a
-    } else if (a > b) ^ (b > c) {
-        c
-    } else {
-        b
-    }
+pub fn median3<T: core::cmp::Ord + Copy>(a: T, b: T, c: T) -> T {
+    T::max(T::min(a, b), T::min(c, T::max(a, b)))
 }
 
 #[test]
@@ -25,6 +19,20 @@ fn test_median3() {
     assert_eq!(median3(3, 1, 2), 2);
     assert_eq!(median3(1, 3, 2), 2);
     assert_eq!(median3(3, 2, 1), 2);
+}
+
+pub fn median5<T: core::cmp::Ord + Copy>(a: T, b: T, c: T, d: T, e: T) -> T {
+    let f = T::max(T::min(a, b), T::min(c, d));
+    let g = T::min(T::max(a, b), T::max(c, d));
+    median3(e, f, g)
+}
+
+#[test]
+fn test_median5() {
+    for p in [1, 2, 3, 4, 5].iter().permutations(5) {
+        let m = median5(*p[0], *p[1], *p[2], *p[3], *p[4]);
+        assert_eq!(m, 3);
+    }
 }
 
 #[inline(always)]
