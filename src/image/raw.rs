@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt::format, fs::File, io::*, path::Path};
+use std::{collections::HashSet, fs::File, io::*, path::Path};
 use chrono::prelude::*;
 use rayon::prelude::*;
 use itertools::{izip, Itertools};
