@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fs::File, io::*, path::Path};
+use std::{collections::HashSet, fmt::format, fs::File, io::*, path::Path};
 use chrono::prelude::*;
 use rayon::prelude::*;
 use itertools::{izip, Itertools};
@@ -225,19 +225,19 @@ impl RawImage {
         let mut file = File::create(file_name)?;
         let writer = FitsWriter::new();
         let mut hdu = Header::new_2d(self.info.width, self.info.height);
-        hdu.set_value("EXPTIME",  &self.info.exposure.to_string());
+        hdu.set_value("EXPTIME",  &self.info.exposure.to_string(), false);
         if let Some(integr_exp) = self.info.integr_time {
-            hdu.set_value("TOTALEXP", &format!("{:.1}", integr_exp));
+            hdu.set_value("TOTALEXP", &format!("{:.1}", integr_exp), false);
         }
-        hdu.set_value("ROWORDER", "'TOP-DOWN'");
-        hdu.set_value("FRAME",    &format!("'{}'", self.info.frame_type.to_str()));
-        hdu.set_value("XBINNING", &self.info.bin.to_string());
-        hdu.set_value("YBINNING", &self.info.bin.to_string());
-        hdu.set_value("GAIN",     &self.info.gain.to_string());
-        hdu.set_value("OFFSET",   &self.info.offset.to_string());
-        hdu.set_value("INSTRUME", &self.info.camera);
+        hdu.set_value("ROWORDER", "TOP-DOWN", true);
+        hdu.set_value("FRAME",    self.info.frame_type.to_str(), true);
+        hdu.set_value("XBINNING", &self.info.bin.to_string(), false);
+        hdu.set_value("YBINNING", &self.info.bin.to_string(), false);
+        hdu.set_value("GAIN",     &self.info.gain.to_string(), false);
+        hdu.set_value("OFFSET",   &self.info.offset.to_string(), false);
+        hdu.set_value("INSTRUME", &self.info.camera, true);
         if let Some(bayer) = self.info.cfa.to_str() {
-            hdu.set_value("BAYERPAT", &format!("'{}'", bayer));
+            hdu.set_value("BAYERPAT", bayer, true);
         }
         writer.write_header_and_data(&mut file, &hdu, &self.data)?;
         Ok(())

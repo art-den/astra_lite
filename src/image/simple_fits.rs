@@ -58,13 +58,19 @@ impl Header {
             .ok()
     }
 
-    pub fn set_value(&mut self, key: &str, value: &str) {
+    pub fn set_value(&mut self, key: &str, value: &str, mask_str: bool) {
+        let value_str = if mask_str {
+            format!("'{}'", value.replace("'", "_"))
+        } else {
+            value.to_string()
+        };
+
         if let Some(item) = self.values.iter_mut().find(|item| item.name.eq_ignore_ascii_case(key)) {
-            item.value = value.to_string();
+            item.value = value_str;
         } else {
             let value = Value {
-                name:   key.to_string(),
-                value:   value.to_string(),
+                name: key.to_string(),
+                value: value_str,
                 comment: None,
             };
             self.values.push(value);
@@ -292,17 +298,17 @@ impl FitsWriter {
             0_u16
         };
 
-        full_hdr.set_value("SIMPLE", "T");
-        full_hdr.set_value("BITPIX", &full_hdr.bitpix.to_string());
-        full_hdr.set_value("NAXIS",  &hdu.dims.len().to_string());
+        full_hdr.set_value("SIMPLE", "T", false);
+        full_hdr.set_value("BITPIX", &full_hdr.bitpix.to_string(), false);
+        full_hdr.set_value("NAXIS",  &hdu.dims.len().to_string(), false);
         for (idx, dim) in hdu.dims.iter().enumerate() {
             let name = format!("NAXIS{}", idx+1);
-            full_hdr.set_value(&name, &dim.to_string());
+            full_hdr.set_value(&name, &dim.to_string(), false);
         }
-        full_hdr.set_value("EXTEND", "T");
+        full_hdr.set_value("EXTEND", "T", false);
 
         if bzero != 0 {
-            full_hdr.set_value("BZERO", &bzero.to_string());
+            full_hdr.set_value("BZERO", &bzero.to_string(), false);
         }
 
         full_hdr.dims = hdu.dims.clone();
