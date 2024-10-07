@@ -177,7 +177,7 @@ impl DarkLibOptions {
                                     FramesCountMode::Count => self.frames_count,
                                     FramesCountMode::Time => {
                                         let cnt = (60.0 * self.integr_time / *exp) as usize;
-                                        ((cnt + 2) / 3) * 3
+                                        ((cnt + 4) / 5) * 5
                                     }
                                 };
                                 if frame_count == 0 { continue; }
@@ -266,7 +266,7 @@ impl DefectPixelsOptions {
                     FramesCountMode::Count => self.frames_count,
                     FramesCountMode::Time => {
                         let cnt = (60.0 * self.integr_time / exposure) as usize;
-                        ((cnt + 2) / 3) * 3
+                        ((cnt + 4) / 5) * 5
                     }
                 };
                 if frame_count == 0 { continue; }
