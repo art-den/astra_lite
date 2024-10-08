@@ -523,3 +523,25 @@ pub fn font_size_to_pixels(size: FontSize, dpmm_y: f64) -> f64 {
         FontSize::Pt(pt) => 25.4 * dpmm_y * pt / 72.272
     }
 }
+
+pub fn init_list_store_model_for_treeview(
+    tv:      &gtk::TreeView,
+    columns: &[(&str, glib::types::Type, &str)]
+) -> gtk::ListStore {
+    let types = columns.iter().map(|(_, tp, _)| *tp).collect::<Vec<_>>();
+    let model = gtk::ListStore::new(&types);
+    for (idx, (col_name, _, attr)) in columns.into_iter().enumerate() {
+        let cell_text = gtk::CellRendererText::new();
+        let col = gtk::TreeViewColumn::builder()
+            .title(*col_name)
+            .resizable(true)
+            .clickable(true)
+            .visible(true)
+            .build();
+        TreeViewColumnExt::pack_start(&col, &cell_text, true);
+        TreeViewColumnExt::add_attribute(&col, &cell_text, *attr, idx as i32);
+        tv.append_column(&col);
+    }
+    tv.set_model(Some(&model));
+    model
+}

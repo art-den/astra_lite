@@ -327,15 +327,15 @@ pub enum ToBytesColorMode {
 }
 
 pub struct Image {
-    pub r: ImageLayer<u16>,
-    pub g: ImageLayer<u16>,
-    pub b: ImageLayer<u16>,
-    pub l: ImageLayer<u16>,
-    width: usize,
-    height: usize,
-    zero: i32,
+    pub r:     ImageLayer<u16>,
+    pub g:     ImageLayer<u16>,
+    pub b:     ImageLayer<u16>,
+    pub l:     ImageLayer<u16>,
+    pub time:  Option<DateTime<Utc>>,
+    width:     usize,
+    height:    usize,
+    zero:      i32,
     max_value: u16,
-    pub time: Option<DateTime<Utc>>,
 }
 
 impl Image {

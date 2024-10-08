@@ -42,6 +42,7 @@ pub fn init_ui(
         indi_evt_conn:      RefCell::new(None),
         preview_scroll_pos: RefCell::new(None),
         light_history:      RefCell::new(Vec::new()),
+        calibr_history:     RefCell::new(Vec::new()),
         closed:             Cell::new(false),
         full_screen_mode:   Cell::new(false),
         flat_info:          RefCell::new(FlatImageInfo::default()),
@@ -64,6 +65,7 @@ pub fn init_ui(
 
     data.show_total_raw_time();
     data.update_light_history_table();
+    data.update_calibr_history_table();
 
     data.connect_img_mouse_scroll_events();
 
@@ -168,6 +170,16 @@ struct LightHistoryItem {
     calibr_methods: CalibrMethods,
 }
 
+struct CalibrHistoryItem {
+    time:       Option<DateTime<Utc>>,
+    mode_type:  ModeType,
+    frame_type: FrameType,
+    mean:       f32,
+    median:     u16,
+    std_dev:    f32,
+}
+
+
 struct CameraUi {
     main_ui:            Rc<MainUi>,
     builder:            gtk::Builder,
@@ -181,6 +193,7 @@ struct CameraUi {
     indi_evt_conn:      RefCell<Option<indi::Subscription>>,
     preview_scroll_pos: RefCell<Option<((f64, f64), (f64, f64))>>,
     light_history:      RefCell<Vec<LightHistoryItem>>,
+    calibr_history:     RefCell<Vec<CalibrHistoryItem>>,
     closed:             Cell<bool>,
     full_screen_mode:   Cell<bool>,
     flat_info:          RefCell<FlatImageInfo>,
@@ -1624,10 +1637,29 @@ impl CameraUi {
                 self.show_preview_image(rgb_data, Some(&img.params));
                 show_resolution_info(img.image_width, img.image_height);
             }
-            FrameProcessResultData::RawHistogram(_)
+            FrameProcessResultData::RawHistogram(hist)
             if is_mode_current(false) => {
                 self.repaint_histogram();
                 self.show_histogram_stat();
+
+                if hist.frame_type != FrameType::Lights {
+                    let histogram = hist.histogram.read().unwrap();
+                    let chan =
+                        if      let Some(chan) = &histogram.l { chan }
+                        else if let Some(chan) = &histogram.g { chan }
+                        else                                  { return; };
+                    let history_item = CalibrHistoryItem {
+                        time:       hist.time.clone(),
+                        mode_type:  result.mode_type,
+                        frame_type: hist.frame_type,
+                        mean:       chan.mean as f32,
+                        median:     chan.median() as _,
+                        std_dev:    chan.std_dev as _,
+                    };
+                    self.calibr_history.borrow_mut().push(history_item);
+                    self.update_calibr_history_table();
+                    self.set_hist_tab_active(Self::HIST_TAB_CALIBR);
+                }
             }
             FrameProcessResultData::HistogramLiveRes
             if is_mode_current(true) => {
@@ -1651,6 +1683,7 @@ impl CameraUi {
                 };
                 self.light_history.borrow_mut().push(history_item);
                 self.update_light_history_table();
+                self.set_hist_tab_active(Self::HIST_TAB_LIGHT);
             }
             FrameProcessResultData::FrameInfo
             if is_mode_current(false) => {
@@ -1984,6 +2017,33 @@ impl CameraUi {
         });
     }
 
+    const HIST_TAB_LIGHT: u32 = 0;
+    const HIST_TAB_CALIBR: u32 = 1;
+    const HIST_TAB_PLOTS: u32 = 2;
+
+    fn set_hist_tab_active(&self, tab_index: u32) {
+        let nb_hist = self.builder.object::<gtk::Notebook>("nb_hist").unwrap();
+        if nb_hist.current_page() == Some(Self::HIST_TAB_PLOTS) {
+            return;
+        }
+        nb_hist.set_current_page(Some(tab_index));
+    }
+
+    fn mode_type_to_history_str(mode_type: ModeType) -> &'static str {
+        match mode_type {
+            ModeType::SingleShot         => "S",
+            ModeType::LiveView           => "LV",
+            ModeType::SavingRawFrames    => "RAW",
+            ModeType::LiveStacking       => "LS",
+            ModeType::Focusing           => "F",
+            ModeType::DitherCalibr       => "MC",
+            ModeType::Goto               => "PS",
+            ModeType::SavingMasterDark   => "Dark",
+            ModeType::SavingDefectPixels => "Pix",
+            _                            => "???",
+        }
+    }
+
     fn update_light_history_table(&self) {
         let tree: gtk::TreeView = self.builder.object("tv_light_history").unwrap();
         let model = match tree.model() {
@@ -1991,42 +2051,19 @@ impl CameraUi {
                 model.downcast::<gtk::ListStore>().unwrap()
             },
             None => {
-                let model = gtk::ListStore::new(&[
-                    String::static_type(), String::static_type(),
-                    String::static_type(), String::static_type(),
-                    u32   ::static_type(), String::static_type(),
-                    String::static_type(), String::static_type(),
-                    String::static_type(), String::static_type(),
-                    String::static_type(),
-                ]);
-                let columns = [
-                    /* 0 */ "Type",
-                    /* 1 */ "Time",
-                    /* 2 */ "FWHM",
-                    /* 3 */ "Ovality",
-                    /* 4 */ "Stars",
-                    /* 5 */ "Noise",
-                    /* 6 */ "Background",
-                    /* 7 */ "Calibr.",
-                    /* 8 */ "Offs.X",
-                    /* 9 */ "Offs.Y",
-                    /* 10 */ "Rot.",
-
-                ];
-                for (idx, col_name) in columns.into_iter().enumerate() {
-                    let cell_text = gtk::CellRendererText::new();
-                    let col = gtk::TreeViewColumn::builder()
-                        .title(col_name)
-                        .resizable(true)
-                        .clickable(true)
-                        .visible(true)
-                        .build();
-                    TreeViewColumnExt::pack_start(&col, &cell_text, true);
-                    TreeViewColumnExt::add_attribute(&col, &cell_text, "markup", idx as i32);
-                    tree.append_column(&col);
-                }
-                tree.set_model(Some(&model));
-                model
+                gtk_utils::init_list_store_model_for_treeview(&tree, &[
+                    /* 0 */  ("Mode",       String::static_type(), "text"),
+                    /* 1 */  ("Time",       String::static_type(), "text"),
+                    /* 2 */  ("FWHM",       String::static_type(), "markup"),
+                    /* 3 */  ("Ovality",    String::static_type(), "markup"),
+                    /* 4 */  ("Stars",      u32::static_type(),    "text"),
+                    /* 5 */  ("Noise",      String::static_type(), "text"),
+                    /* 6 */  ("Background", String::static_type(), "text"),
+                    /* 7 */  ("Calibr.",    String::static_type(), "text"),
+                    /* 8 */  ("Offs.X",     String::static_type(), "markup"),
+                    /* 9 */  ("Offs.Y",     String::static_type(), "markup"),
+                    /* 10 */ ("Rot.",       String::static_type(), "markup"),
+                ])
             },
         };
         let items = self.light_history.borrow();
@@ -2039,16 +2076,7 @@ impl CameraUi {
             format!(r##"<span color="#FF4040"><b>{}</b></span>"##, s)
         };
         for item in &items[models_row_cnt..to_index] {
-            let mode_type_str = match item.mode_type {
-                ModeType::SingleShot         => "S",
-                ModeType::LiveView           => "LV",
-                ModeType::SavingRawFrames    => "RAW",
-                ModeType::LiveStacking       => "LS",
-                ModeType::Focusing           => "F",
-                ModeType::DitherCalibr       => "MC",
-                ModeType::Goto               => "PS",
-                _                            => "???",
-            };
+            let mode_type_str = Self::mode_type_to_history_str(item.mode_type);
             let local_time_str =
                 if let Some(time) = item.time.clone() {
                     let local_time: DateTime<Local> = DateTime::from(time);
@@ -2110,7 +2138,7 @@ impl CameraUi {
             let last_is_selected =
                 gtk_utils::get_list_view_selected_row(&tree).map(|v| v+1) ==
                 Some(models_row_cnt as i32);
-            let last = model.insert_with_values(None, &[
+            let last_iter = model.insert_with_values(None, &[
                 (0, &mode_type_str),
                 (1, &local_time_str),
                 (2, &fwhm_str),
@@ -2125,7 +2153,68 @@ impl CameraUi {
             ]);
             if last_is_selected || models_row_cnt == 0 {
                 // Select and scroll to last row
-                tree.selection().select_iter(&last);
+                tree.selection().select_iter(&last_iter);
+                if let [path] = tree.selection().selected_rows().0.as_slice() {
+                    tree.set_cursor(path, Option::<&gtk::TreeViewColumn>::None, false);
+                }
+            }
+        }
+    }
+
+    fn update_calibr_history_table(&self) {
+        let tree: gtk::TreeView = self.builder.object("tv_calbr_history").unwrap();
+        let model = match tree.model() {
+            Some(model) => {
+                model.downcast::<gtk::ListStore>().unwrap()
+            },
+            None => {
+                gtk_utils::init_list_store_model_for_treeview(&tree, &[
+                    /* 0 */  ("Time",     String::static_type(), "text"),
+                    /* 1 */  ("Mode",     String::static_type(), "text"),
+                    /* 2 */  ("Type",     String::static_type(), "text"),
+                    /* 3 */  ("Mean",     String::static_type(), "text"),
+                    /* 4 */  ("Median",   String::static_type(), "text"),
+                    /* 5 */  ("Std.dev.", String::static_type(), "text"),
+                ])
+            },
+        };
+        let items = self.calibr_history.borrow();
+        if gtk_utils::get_model_row_count(model.upcast_ref()) > items.len() {
+            model.clear();
+        }
+        let models_row_cnt = gtk_utils::get_model_row_count(model.upcast_ref());
+        let to_index = items.len();
+        for item in &items[models_row_cnt..to_index] {
+
+            let local_time_str =
+                if let Some(time) = &item.time {
+                    let local_time: DateTime<Local> = DateTime::from(*time);
+                    local_time.format("%H:%M:%S").to_string()
+                } else {
+                    String::new()
+                };
+
+            let mode_type_str = Self::mode_type_to_history_str(item.mode_type);
+            let type_str = item.frame_type.to_str();
+            let mean_str = format!("{:.1}", item.mean);
+            let median_str = format!("{}", item.median);
+            let dev_str = format!("{:.1}", item.std_dev);
+
+            let last_is_selected =
+                gtk_utils::get_list_view_selected_row(&tree).map(|v| v+1) ==
+                Some(models_row_cnt as i32);
+
+            let last_iter = model.insert_with_values(None, &[
+                (0, &local_time_str),
+                (1, &mode_type_str),
+                (2, &type_str),
+                (3, &mean_str),
+                (4, &median_str),
+                (5, &dev_str),
+            ]);
+            if last_is_selected || models_row_cnt == 0 {
+                // Select and scroll to last row
+                tree.selection().select_iter(&last_iter);
                 if let [path] = tree.selection().selected_rows().0.as_slice() {
                     tree.set_cursor(path, Option::<&gtk::TreeViewColumn>::None, false);
                 }
@@ -2155,8 +2244,22 @@ impl CameraUi {
     }
 
     fn handler_action_clear_light_history(&self) {
-        self.light_history.borrow_mut().clear();
-        self.update_light_history_table();
+        let nb_hist = self.builder.object::<gtk::Notebook>("nb_hist").unwrap();
+
+        let cur_page = nb_hist.current_page();
+        match cur_page {
+            Some(Self::HIST_TAB_LIGHT) => {
+                self.light_history.borrow_mut().clear();
+                self.update_light_history_table();
+            }
+
+            Some(Self::HIST_TAB_CALIBR) => {
+                self.calibr_history.borrow_mut().clear();
+                self.update_calibr_history_table();
+            }
+
+            _ => {},
+        }
     }
 
     fn show_total_raw_time_impl(&self, options: &Options) {

@@ -4409,69 +4409,22 @@ Useful when the object is not lagre and is in the center of the image.</property
                           </packing>
                         </child>
                         <child>
-                          <object class="GtkBox">
+                          <object class="GtkNotebook" id="nb_hist">
                             <property name="visible">True</property>
-                            <property name="can-focus">False</property>
-                            <property name="margin-start">5</property>
-                            <property name="margin-end">5</property>
-                            <property name="margin-top">5</property>
-                            <property name="margin-bottom">5</property>
-                            <property name="orientation">vertical</property>
-                            <property name="spacing">5</property>
-                            <child>
-                              <object class="GtkBox">
-                                <property name="visible">True</property>
-                                <property name="can-focus">False</property>
-                                <property name="spacing">7</property>
-                                <child>
-                                  <object class="GtkLabel">
-                                    <property name="visible">True</property>
-                                    <property name="can-focus">False</property>
-                                    <property name="label" translatable="yes">[ Light frames history ]</property>
-                                    <attributes>
-                                      <attribute name="weight" value="bold"/>
-                                    </attributes>
-                                  </object>
-                                  <packing>
-                                    <property name="expand">False</property>
-                                    <property name="fill">True</property>
-                                    <property name="position">0</property>
-                                  </packing>
-                                </child>
-                                <child>
-                                  <object class="GtkButton">
-                                    <property name="label" translatable="yes">Clear</property>
-                                    <property name="visible">True</property>
-                                    <property name="can-focus">True</property>
-                                    <property name="receives-default">True</property>
-                                    <property name="hexpand">False</property>
-                                    <property name="action-name">win.clear_light_history</property>
-                                  </object>
-                                  <packing>
-                                    <property name="expand">False</property>
-                                    <property name="fill">True</property>
-                                    <property name="position">1</property>
-                                  </packing>
-                                </child>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">0</property>
-                              </packing>
-                            </child>
+                            <property name="can-focus">True</property>
+                            <property name="margin-top">3</property>
+                            <property name="show-border">False</property>
                             <child>
                               <object class="GtkScrolledWindow">
                                 <property name="visible">True</property>
                                 <property name="can-focus">True</property>
-                                <property name="shadow-type">in</property>
                                 <property name="kinetic-scrolling">False</property>
                                 <property name="overlay-scrolling">False</property>
                                 <child>
                                   <object class="GtkTreeView" id="tv_light_history">
                                     <property name="visible">True</property>
                                     <property name="can-focus">True</property>
-                                    <property name="tooltip-text" translatable="yes">"Type" column:
+                                    <property name="tooltip-text" translatable="yes">"Mode" column:
 S - single shot
 LV - live view
 RAW - saving raw files
@@ -4494,10 +4447,91 @@ S - search and remove hot pixels in light frame</property>
                                   </object>
                                 </child>
                               </object>
+                            </child>
+                            <child type="tab">
+                              <object class="GtkLabel">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                                <property name="label" translatable="yes">Light frames</property>
+                              </object>
                               <packing>
-                                <property name="expand">True</property>
-                                <property name="fill">True</property>
+                                <property name="tab-fill">False</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkScrolledWindow">
+                                <property name="visible">True</property>
+                                <property name="can-focus">True</property>
+                                <property name="kinetic-scrolling">False</property>
+                                <property name="overlay-scrolling">False</property>
+                                <child>
+                                  <object class="GtkTreeView" id="tv_calbr_history">
+                                    <property name="visible">True</property>
+                                    <property name="can-focus">True</property>
+                                    <property name="tooltip-text" translatable="yes">"Mode" column:
+S - single shot
+RAW - saving caliration files
+Dark - creating master dark file
+Pix - creating defect pixels file</property>
+                                    <property name="enable-search">False</property>
+                                    <property name="show-expanders">False</property>
+                                    <property name="enable-grid-lines">both</property>
+                                    <child internal-child="selection">
+                                      <object class="GtkTreeSelection"/>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                              <packing>
                                 <property name="position">1</property>
+                              </packing>
+                            </child>
+                            <child type="tab">
+                              <object class="GtkLabel">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                                <property name="label" translatable="yes">Calibration frames</property>
+                              </object>
+                              <packing>
+                                <property name="position">1</property>
+                                <property name="tab-fill">False</property>
+                              </packing>
+                            </child>
+                            <child type="action-start">
+                              <object class="GtkLabel">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                                <property name="label" translatable="yes">[ History ]</property>
+                                <attributes>
+                                  <attribute name="weight" value="bold"/>
+                                </attributes>
+                              </object>
+                              <packing>
+                                <property name="tab-fill">False</property>
+                              </packing>
+                            </child>
+                            <child type="action-end">
+                              <object class="GtkBox">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                                <property name="margin-end">5</property>
+                                <child>
+                                  <object class="GtkButton">
+                                    <property name="label" translatable="yes">Clear</property>
+                                    <property name="visible">True</property>
+                                    <property name="can-focus">True</property>
+                                    <property name="receives-default">True</property>
+                                    <property name="action-name">win.clear_light_history</property>
+                                  </object>
+                                  <packing>
+                                    <property name="expand">False</property>
+                                    <property name="fill">True</property>
+                                    <property name="position">0</property>
+                                  </packing>
+                                </child>
+                              </object>
+                              <packing>
+                                <property name="tab-fill">False</property>
                               </packing>
                             </child>
                           </object>

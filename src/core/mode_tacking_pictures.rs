@@ -1210,7 +1210,7 @@ impl Mode for TackingPicturesMode {
                 ),
 
             FrameProcessResultData::RawHistogram(hist) =>
-                self.process_raw_histogram(hist),
+                self.process_raw_histogram(&hist.histogram),
 
             _ =>
                 Ok(NotifyResult::Empty)

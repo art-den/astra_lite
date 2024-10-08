@@ -1,7 +1,7 @@
 use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, sync::{mpsc, RwLock, Mutex}, thread::JoinHandle, path::*, io::Cursor};
 
 use bitflags::bitflags;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, Utc};
 
 use crate::{
     indi,
@@ -162,10 +162,17 @@ pub struct Preview8BitImgData {
 }
 
 #[derive(Clone)]
+pub struct HistogramResult {
+    pub frame_type: FrameType,
+    pub time:       Option<DateTime<Utc>>,
+    pub histogram:  Arc<RwLock<Histogram>>,
+}
+
+#[derive(Clone)]
 pub enum FrameProcessResultData {
     Error(String),
     ShotProcessingStarted,
-    RawHistogram(Arc<RwLock<Histogram>>),
+    RawHistogram(HistogramResult),
     RawFrame(Arc<RawImage>),
     Image(Arc<RwLock<Image>>),
     PreviewFrame(Arc<Preview8BitImgData>),
@@ -633,8 +640,14 @@ fn make_preview_image_impl(
 
     drop(raw_hist);
 
+    let histogram_result = HistogramResult {
+        frame_type: command.frame_options.frame_type,
+        time:       raw_image.info().time.clone(),
+        histogram:  Arc::clone(&command.frame.raw_hist),
+    };
+
     send_result(
-        FrameProcessResultData::RawHistogram(Arc::clone(&command.frame.raw_hist)),
+        FrameProcessResultData::RawHistogram(histogram_result),
         &command.camera,
         command.mode_type,
         &command.stop_flag,
