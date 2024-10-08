@@ -172,11 +172,11 @@ impl DarkLibOptions {
         if crops.is_empty() { crops.push(cam_opts.frame.crop); }
 
         for t in &temperatures {
-            for exp in &exposures {
-                for gain in &gains {
-                    for offset in &offsets {
-                        for bin in &binnings {
-                            for crop in &crops {
+            for bin in &binnings {
+                for crop in &crops {
+                    for exp in &exposures {
+                        for gain in &gains {
+                            for offset in &offsets {
                                 let frame_count = match self.frm_cnt_mode {
                                     FramesCountMode::Count => self.frames_count,
                                     FramesCountMode::Time => {
