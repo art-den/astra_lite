@@ -3,7 +3,6 @@ use chrono::{DateTime, Utc};
 use itertools::*;
 use rayon::prelude::*;
 use crate::utils::math::*;
-use super::histogram::Histogram;
 
 pub struct ImageLayer<T> {
     data: Vec<T>,
@@ -1025,7 +1024,10 @@ impl ImageAdder {
     pub fn add(
             &mut self,
             image:    &Image,
-            hist:     &Histogram,
+            median_r: Option<u16>,
+            median_g: Option<u16>,
+            median_b: Option<u16>,
+            median_l: Option<u16>,
             transl_x: f64,
             transl_y: f64,
             angle:    f64,
@@ -1050,14 +1052,14 @@ impl ImageAdder {
             self.frames_cnt = 0;
         }
         if image.is_color() {
-            let median_r = hist.r.as_ref().map(|h| h.get_percentile(50)).unwrap_or_default() as i32;
-            let median_g = hist.g.as_ref().map(|h| h.get_percentile(50)).unwrap_or_default() as i32;
-            let median_b = hist.b.as_ref().map(|h| h.get_percentile(50)).unwrap_or_default() as i32;
+            let median_r = median_r.unwrap_or_default() as i32;
+            let median_g = median_g.unwrap_or_default() as i32;
+            let median_b = median_b.unwrap_or_default() as i32;
             Self::add_layer(&mut self.r, &mut self.cnt, &image.r, median_r, transl_x, transl_y, angle, false);
             Self::add_layer(&mut self.g, &mut self.cnt, &image.g, median_g, transl_x, transl_y, angle, false);
             Self::add_layer(&mut self.b, &mut self.cnt, &image.b, median_b, transl_x, transl_y, angle, true);
         } else {
-            let median_l = hist.l.as_ref().map(|h| h.get_percentile(50)).unwrap_or_default() as i32;
+            let median_l = median_l.unwrap_or_default() as i32;
             Self::add_layer(&mut self.l, &mut self.cnt, &image.l, median_l, transl_x, transl_y, angle, true);
         }
         self.total_exp += exposure;

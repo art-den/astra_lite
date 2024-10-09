@@ -909,7 +909,17 @@ fn make_preview_image_impl(
             if let Some(offset) = &info.stars_offset {
                 let mut image_adder = live_stacking.data.adder.write().unwrap();
                 let tmr = TimeLogger::start();
-                image_adder.add(&image, &hist, -offset.x, -offset.y, -offset.angle, raw_info.exposure);
+                image_adder.add(
+                    &image,
+                    hist.r.as_ref().map(|chan| chan.median()),
+                    hist.g.as_ref().map(|chan| chan.median()),
+                    hist.b.as_ref().map(|chan| chan.median()),
+                    hist.l.as_ref().map(|chan| chan.median()),
+                    -offset.x,
+                    -offset.y,
+                    -offset.angle,
+                    raw_info.exposure
+                );
                 tmr.log("ImageAdder::add");
                 drop(image_adder);
 
