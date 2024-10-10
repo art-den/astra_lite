@@ -2037,7 +2037,8 @@ impl CameraUi {
             ModeType::LiveStacking       => "LS",
             ModeType::Focusing           => "F",
             ModeType::DitherCalibr       => "MC",
-            ModeType::Goto               => "PS",
+            ModeType::Goto|
+            ModeType::CapturePlatesolve  => "PS",
             ModeType::SavingMasterDark   => "Dark",
             ModeType::SavingDefectPixels => "Pix",
             _                            => "???",

@@ -551,6 +551,10 @@ impl MountUi {
     }
 
     fn handler_action_capture_platesolve(self: &Rc<Self>) {
+        let mut options = self.options.write().unwrap();
+        options.read_all(&self.builder);
+        drop(options);
+
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_capture_and_platesolve()?;
             Ok(())

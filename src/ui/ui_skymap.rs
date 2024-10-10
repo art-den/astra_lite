@@ -1112,6 +1112,11 @@ impl MapUi {
         let Some(crd) = self.coord_of_selected_object_at_spec_time() else {
             return;
         };
+
+        let mut options = self.options.write().unwrap();
+        options.read_all(&self.builder);
+        drop(options);
+
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_goto_coord(&crd)?;
             Ok(())

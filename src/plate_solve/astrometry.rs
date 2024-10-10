@@ -6,6 +6,8 @@ use crate::{image::image::Image, ui::sky_map::math::{degree_to_radian, j2000_tim
 
 use super::*;
 
+const EXECUTABLE_FNAME: &str = "solve-field";
+
 pub struct AstrometryPlateSolver {
     child:     Option<std::process::Child>,
     file_name: Option<PathBuf>,
@@ -51,7 +53,7 @@ impl PlateSolverIface for AstrometryPlateSolver {
         layer.save_to_tiff(&temp_file)?;
         self.file_name = Some(temp_file.clone());
         use std::process::*;
-        let mut cmd = Command::new("solve-field");
+        let mut cmd = Command::new(EXECUTABLE_FNAME);
         cmd.stdout(std::process::Stdio::piped());
         cmd
             .arg("--resort")
@@ -71,7 +73,11 @@ impl PlateSolverIface for AstrometryPlateSolver {
         cmd.arg("--cpulimit").arg(config.time_out.to_string());
         cmd.arg(temp_file);
         log::debug!("Running solve-field args={:?}", cmd.get_args());
-        self.child = Some(cmd.spawn()?);
+        let child = cmd.spawn().map_err(|e|
+            anyhow::format_err!("{} when trying to execute {}", e.to_string(), EXECUTABLE_FNAME)
+        )?;
+
+        self.child = Some(child);
         Ok(())
     }
 

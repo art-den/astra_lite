@@ -106,7 +106,6 @@ impl CapturePlatesolveMode {
 
         Ok(true)
     }
-
 }
 
 impl Mode for CapturePlatesolveMode {
