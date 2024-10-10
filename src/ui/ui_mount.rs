@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*, glib::clone};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    core::{consts::INDI_SET_PROP_TIMEOUT, core::{Core, ModeType}},
+    core::{consts::INDI_SET_PROP_TIMEOUT, core::{Core, CoreEvent, ModeType}},
     indi,
     options::*,
     utils::io_utils::*,
@@ -45,7 +45,7 @@ pub fn init_ui(
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
     data.init_widgets();
-    data.connect_indi();
+    data.connect_core_and_indi_events();
     data.connect_widgets_events();
     data.apply_ui_options();
     data.fill_devices_list();
@@ -68,6 +68,7 @@ pub fn init_ui(
 
 pub enum MainThreadEvent {
     Indi(indi::Event),
+    Core(CoreEvent),
 }
 
 struct MountUi {
@@ -127,12 +128,17 @@ impl MountUi {
         spb_ps_exp.set_increments(0.5, 5.0);
     }
 
-    fn connect_indi(self: &Rc<Self>) {
+    fn connect_core_and_indi_events(self: &Rc<Self>) {
         let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
         let sender = main_thread_sender.clone();
         *self.indi_evt_conn.borrow_mut() = Some(self.indi.subscribe_events(move |event| {
             sender.send_blocking(MainThreadEvent::Indi(event)).unwrap();
         }));
+
+        let sender = main_thread_sender.clone();
+        self.core.subscribe_events(move |event| {
+            sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
+        });
 
         glib::spawn_future_local(clone!(@weak self as self_ => async move {
             while let Ok(event) = main_thread_receiver.recv().await {
@@ -201,6 +207,7 @@ impl MountUi {
         }));
 
         gtk_utils::connect_action_rc(&self.window, self, "platesolver_options", Self::handler_action_platesolver_options);
+        gtk_utils::connect_action_rc(&self.window, self, "capture_platesolve", Self::handler_action_capture_platesolve);
     }
 
     fn correct_widgets_props(&self) {
@@ -215,11 +222,13 @@ impl MountUi {
         let mode_data = self.core.mode_data();
         let mode_type = mode_data.mode.get_type();
         let waiting = mode_type == ModeType::Waiting;
+        let live_view = mode_type == ModeType::LiveView;
+        let single_shot = mode_type == ModeType::SingleShot;
 
         let mount_ctrl_sensitive =
             indi_connected &&
             mnt_active &&
-            waiting;
+            (waiting || single_shot || live_view);
 
         let move_enabled = !ui.prop_bool("chb_parked.active") && mount_ctrl_sensitive;
 
@@ -236,6 +245,8 @@ impl MountUi {
         for &btn_name in Self::MOUNT_NAV_BUTTON_NAMES {
             ui.set_prop_bool_ex(btn_name, "sensitive", move_enabled);
         }
+
+        gtk_utils::enable_action(&self.window, "capture_platesolve", mount_ctrl_sensitive);
     }
 
     fn handler_closing(&self) {
@@ -314,6 +325,10 @@ impl MountUi {
                         ),
                     indi::PropChange::Delete => {}
                 };
+            }
+
+            MainThreadEvent::Core(CoreEvent::ModeChanged) => {
+                self.correct_widgets_props();
             }
             _ => {}
         }
@@ -533,5 +548,12 @@ impl MountUi {
             drop(options);
             Ok(())
         }));
+    }
+
+    fn handler_action_capture_platesolve(self: &Rc<Self>) {
+        gtk_utils::exec_and_show_error(&self.window, || {
+            self.core.start_capture_and_platesolve()?;
+            Ok(())
+        });
     }
 }

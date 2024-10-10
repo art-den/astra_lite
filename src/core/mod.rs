@@ -9,3 +9,4 @@ mod mode_tacking_pictures;
 mod mode_mount_calibration;
 mod utils;
 mod mode_goto;
+mod mode_capture_platesolve;

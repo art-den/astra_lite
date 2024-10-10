@@ -214,6 +214,8 @@ impl Mode for GotoMode {
     }
 
     fn abort(&mut self) -> anyhow::Result<()> {
+        abort_camera_exposure(&self.indi, &self.camera)?;
+        self.state = State::None;
         Ok(())
     }
 

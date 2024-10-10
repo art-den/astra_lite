@@ -9,7 +9,7 @@ use crate::{
     core::{consts::INDI_SET_PROP_TIMEOUT, utils::FileNameUtils}, guiding::{external_guider::*, phd2_conn, phd2_guider::*}, image::{raw::FrameType, stars_offset::*}, indi, options::*, plate_solve::PlateSolverEvent, ui::sky_map::math::EqCoord, utils::timer::*
 };
 use super::{
-    frame_processing::*, mode_darks_library::*, mode_focusing::*, mode_goto::GotoMode, mode_mount_calibration::*, mode_tacking_pictures::*, mode_waiting::*
+    frame_processing::*, mode_capture_platesolve::CapturePlatesolveMode, mode_darks_library::*, mode_focusing::*, mode_goto::GotoMode, mode_mount_calibration::*, mode_tacking_pictures::*, mode_waiting::*
 };
 
 #[derive(Clone)]
@@ -43,6 +43,7 @@ pub enum ModeType {
     CreatingDarks,
     CreatingDefectPixels,
     Goto,
+    CapturePlatesolve,
 }
 
 pub type ModeBox = Box<dyn Mode + Send + Sync>;
@@ -555,6 +556,28 @@ impl Core {
         subscribers.clear();
     }
 
+    fn after_new_mode_stuff(
+        &self,
+        mode:                ModeBox,
+        reset_aborted_mode:  bool,
+        reset_finished_mode: bool,
+    ) {
+        let mut mode_data = self.mode_data.write().unwrap();
+        mode_data.mode = mode;
+        if reset_aborted_mode {
+            mode_data.aborted_mode = None;
+        }
+        if reset_finished_mode {
+            mode_data.finished_mode = None;
+        }
+        let progress = mode_data.mode.progress();
+        let mode_type = mode_data.mode.get_type();
+        drop(mode_data);
+        let subscribers = self.subscribers.read().unwrap();
+        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
+        subscribers.inform_event(CoreEvent::ModeChanged);
+    }
+
     pub fn start_single_shot(&self) -> anyhow::Result<()> {
         self.init_cam_before_start()?;
         self.init_cam_telescope_data()?;
@@ -566,15 +589,7 @@ impl Core {
             &self.options,
         )?;
         mode.start()?;
-        let mut mode_data = self.mode_data.write().unwrap();
-        mode_data.mode = Box::new(mode);
-        mode_data.finished_mode = None;
-        let progress = mode_data.mode.progress();
-        let mode_type = mode_data.mode.get_type();
-        drop(mode_data);
-        let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
-        subscribers.inform_event(CoreEvent::ModeChanged);
+        self.after_new_mode_stuff(Box::new(mode), false, true);
         Ok(())
     }
 
@@ -589,15 +604,7 @@ impl Core {
             &self.options,
         )?;
         mode.start()?;
-        let mut mode_data = self.mode_data.write().unwrap();
-        mode_data.mode = Box::new(mode);
-        mode_data.finished_mode = None;
-        let progress = mode_data.mode.progress();
-        let mode_type = mode_data.mode.get_type();
-        drop(mode_data);
-        let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
-        subscribers.inform_event(CoreEvent::ModeChanged);
+        self.after_new_mode_stuff(Box::new(mode), false, true);
         Ok(())
     }
 
@@ -614,16 +621,7 @@ impl Core {
         mode.set_guider(&self.ext_guider);
         mode.set_ref_stars(&self.ref_stars);
         mode.start()?;
-        let mut mode_data = self.mode_data.write().unwrap();
-        mode_data.mode = Box::new(mode);
-        mode_data.aborted_mode = None;
-        mode_data.finished_mode = None;
-        let progress = mode_data.mode.progress();
-        let mode_type = mode_data.mode.get_type();
-        drop(mode_data);
-        let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
-        subscribers.inform_event(CoreEvent::ModeChanged);
+        self.after_new_mode_stuff(Box::new(mode), true, true);
         Ok(())
     }
 
@@ -641,50 +639,32 @@ impl Core {
         mode.set_ref_stars(&self.ref_stars);
         mode.set_live_stacking(&self.live_stacking);
         mode.start()?;
-        let mut mode_data = self.mode_data.write().unwrap();
-        mode_data.mode = Box::new(mode);
-        mode_data.aborted_mode = None;
-        mode_data.finished_mode = None;
-        let progress = mode_data.mode.progress();
-        let mode_type = mode_data.mode.get_type();
-        drop(mode_data);
-        let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
-        subscribers.inform_event(CoreEvent::ModeChanged);
+        self.after_new_mode_stuff(Box::new(mode), true, true);
         Ok(())
     }
 
     pub fn start_focusing(&self) -> anyhow::Result<()> {
         self.init_cam_before_start()?;
         self.init_cam_telescope_data()?;
-        let mut mode_data = self.mode_data.write().unwrap();
-        mode_data.mode.abort()?;
-        let mut mode = FocusingMode::new(&self.indi, &self.options, &self.subscribers, None)?;
+        self.mode_data.write().unwrap().mode.abort()?;
+        let mut mode = FocusingMode::new(
+            &self.indi,
+            &self.options,
+            &self.subscribers,
+            None
+        )?;
         mode.start()?;
-        mode_data.mode = Box::new(mode);
-        let progress = mode_data.mode.progress();
-        let mode_type = mode_data.mode.get_type();
-        drop(mode_data);
-        let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
-        subscribers.inform_event(CoreEvent::ModeChanged);
+        self.after_new_mode_stuff(Box::new(mode), false, false);
         Ok(())
     }
 
     pub fn start_mount_calibr(&self) -> anyhow::Result<()> {
         self.init_cam_before_start()?;
         self.init_cam_telescope_data()?;
-        let mut mode_data = self.mode_data.write().unwrap();
-        mode_data.mode.abort()?;
+        self.mode_data.write().unwrap().mode.abort()?;
         let mut mode = MountCalibrMode::new(&self.indi, &self.options, None)?;
         mode.start()?;
-        mode_data.mode = Box::new(mode);
-        let progress = mode_data.mode.progress();
-        let mode_type = mode_data.mode.get_type();
-        drop(mode_data);
-        let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
-        subscribers.inform_event(CoreEvent::ModeChanged);
+        self.after_new_mode_stuff(Box::new(mode), false, false);
         Ok(())
     }
 
@@ -695,8 +675,7 @@ impl Core {
     ) -> anyhow::Result<()> {
         self.init_cam_before_start()?;
         self.init_cam_telescope_data()?;
-        let mut mode_data = self.mode_data.write().unwrap();
-        mode_data.mode.abort()?;
+        self.mode_data.write().unwrap().mode.abort()?;
         let mut mode = DarkCreationMode::new(
             mode,
             &self.calibr_data,
@@ -705,30 +684,36 @@ impl Core {
             program
         )?;
         mode.start()?;
-        mode_data.mode = Box::new(mode);
-        let progress = mode_data.mode.progress();
-        let mode_type = mode_data.mode.get_type();
-        drop(mode_data);
-        let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
-        subscribers.inform_event(CoreEvent::ModeChanged);
+        self.after_new_mode_stuff(Box::new(mode), false, false);
         Ok(())
     }
 
     pub fn start_goto_coord(&self, eq_coord: &EqCoord) -> anyhow::Result<()> {
         self.init_cam_before_start()?;
         self.init_cam_telescope_data()?;
-        let mut mode_data = self.mode_data.write().unwrap();
-        mode_data.mode.abort()?;
-        let mut mode = GotoMode::new(eq_coord, &self.options, &self.indi, &self.subscribers)?;
+        self.mode_data.write().unwrap().mode.abort()?;
+        let mut mode = GotoMode::new(
+            eq_coord,
+            &self.options,
+            &self.indi,
+            &self.subscribers,
+        )?;
         mode.start()?;
-        mode_data.mode = Box::new(mode);
-        let progress = mode_data.mode.progress();
-        let mode_type = mode_data.mode.get_type();
-        drop(mode_data);
-        let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
-        subscribers.inform_event(CoreEvent::ModeChanged);
+        self.after_new_mode_stuff(Box::new(mode), false, false);
+        Ok(())
+    }
+
+    pub fn start_capture_and_platesolve(&self) -> anyhow::Result<()> {
+        self.init_cam_before_start()?;
+        self.init_cam_telescope_data()?;
+        self.mode_data.write().unwrap().mode.abort()?;
+        let mut mode = CapturePlatesolveMode::new(
+            &self.options,
+            &self.indi,
+            &self.subscribers,
+        )?;
+        mode.start()?;
+        self.after_new_mode_stuff(Box::new(mode), false, false);
         Ok(())
     }
 
@@ -740,7 +725,7 @@ impl Core {
         self.indi.command_enable_blob(
             &cam_device.name,
             None,
-            indi::BlobEnable::Also
+            indi::BlobEnable::Also,
         )?;
         Ok(())
     }
