@@ -47,6 +47,7 @@ impl GotoMode {
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = crate::image::raw::FrameType::Lights;
         cam_opts.frame.exp_main = opts.plate_solver.exposure;
+        cam_opts.frame.binning = opts.plate_solver.bin;
         cam_opts.frame.gain = gain_to_value(
             opts.plate_solver.gain,
             opts.cam.frame.gain,
