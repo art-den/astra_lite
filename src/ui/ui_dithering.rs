@@ -166,7 +166,6 @@ impl DitheringUi {
                 _ => {},
             }
         }));
-
     }
 
     fn handler_closing(&self) {
