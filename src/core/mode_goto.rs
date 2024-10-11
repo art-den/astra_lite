@@ -122,7 +122,7 @@ impl GotoMode {
         let mut config = PlateSolveConfig::default();
         config.eq_coord = Some(self.eq_coord.clone());
         config.time_out = self.ps_opts.timeout;
-        plate_solver.start(&image, &config)?;
+        plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
         drop(image);
         self.plate_solver = Some(plate_solver);
         Ok(())

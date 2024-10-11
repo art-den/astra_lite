@@ -58,7 +58,7 @@ impl CapturePlatesolveMode {
         let mut plate_solver = PlateSolver::new(self.ps_opts.solver);
         let mut config = PlateSolveConfig::default();
         config.time_out = self.ps_opts.blind_timeout;
-        plate_solver.start(&image, &config)?;
+        plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
         drop(image);
         self.plate_solver = Some(plate_solver);
         Ok(())

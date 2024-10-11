@@ -211,7 +211,7 @@ impl RawImage {
             camera,
         };
 
-        let data = image_hdu.read_data(&mut stream)?;
+        let data = FitsReader::read_data(&image_hdu, &mut stream)?;
 
         Ok(Self {info, data, cfa_arr})
     }

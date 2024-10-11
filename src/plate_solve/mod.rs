@@ -22,6 +22,10 @@ pub struct PlateSolver {
     solver: Box<dyn PlateSolverIface + Sync + Send + 'static>,
 }
 
+pub enum PlateSolverInData<'a> {
+    Image(&'a Image),
+}
+
 impl PlateSolver {
     pub fn new(tp: PlateSolverType) -> Self {
         let solver = match tp {
@@ -35,10 +39,10 @@ impl PlateSolver {
 
     pub fn start(
         &mut self,
-        image:  &Image,
+        data:   &PlateSolverInData,
         config: &PlateSolveConfig
     ) -> anyhow::Result<()> {
-        self.solver.start(image, config)?;
+        self.solver.start(data, config)?;
         Ok(())
     }
 
@@ -48,7 +52,7 @@ impl PlateSolver {
 }
 
 trait PlateSolverIface {
-    fn start(&mut self, image: &Image, config: &PlateSolveConfig) -> anyhow::Result<()>;
+    fn start(&mut self, data: &PlateSolverInData, config: &PlateSolveConfig) -> anyhow::Result<()>;
     fn get_result(&mut self) -> Option<anyhow::Result<PlateSolveResult>>;
 }
 
