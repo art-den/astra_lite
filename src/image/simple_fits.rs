@@ -102,83 +102,6 @@ impl Header {
     pub fn dims(&self) -> &Vec<usize> {
         &self.dims
     }
-
-    fn write_data(
-        &self,
-        stream: &mut dyn SeekNWrite,
-        data:   &[u16],
-        bzero:  u16
-    ) -> Result<()> {
-        if !matches!(self.bitpix, 8|16) {
-            return Err(Error::new(
-                ErrorKind::Unsupported,
-                format!("BITPIX = {} is not supported", self.bitpix)
-            ));
-        }
-        let item_len = self.bitpix as usize / 8;
-        const BUF_DATA_LEN: usize = 512;
-        let mut stream_buf = Vec::<u8>::new();
-        stream_buf.resize(BUF_DATA_LEN * item_len, 0);
-        for chunk in data.chunks(BUF_DATA_LEN) {
-            let len_to_write = chunk.len();
-            let buf = &mut stream_buf[.. item_len * len_to_write];
-            match self.bitpix {
-                8 => {
-                    for (b, v) in izip!(buf.iter_mut(), chunk) {
-                        *b = (*v as u8).wrapping_sub(bzero as u8);
-                    }
-                }
-                16 => {
-                    for ((b1, b2), v) in izip!(buf.iter_mut().tuples(), chunk) {
-                        let be_bytes = v.wrapping_sub(bzero).to_be_bytes();
-                        [*b1, *b2] = be_bytes;
-                    }
-                },
-                _ => unreachable!(),
-            }
-            stream.write_all(buf)?;
-        }
-        Ok(())
-    }
-
-    pub fn read_data(&self, stream: &mut dyn SeekNRead) -> Result<Vec<u16>> {
-        if !matches!(self.bitpix, 8|16) {
-            return Err(Error::new(
-                ErrorKind::Unsupported,
-                format!("BITPIX = {} is not supported", self.bitpix)
-            ));
-        }
-        let bzero = self.get_i64("BZERO").unwrap_or(0) as u16;
-        let elem_len = self.bitpix as usize / 8;
-        const BUF_DATA_LEN: usize = 512;
-        let mut stream_buf = Vec::<u8>::new();
-        stream_buf.resize(BUF_DATA_LEN * elem_len, 0);
-        let mut result = Vec::new();
-        result.resize(self.data_len, 0);
-        stream.seek(SeekFrom::Start(self.data_pos as u64))?;
-        for chunk in result.chunks_mut(BUF_DATA_LEN) {
-            let len_to_read = chunk.len();
-            let buf = &mut stream_buf[.. elem_len * len_to_read];
-            stream.read_exact(buf)?;
-            match self.bitpix {
-                8 => {
-                    let add = bzero as u8;
-                    for (b, dst) in izip!(buf, chunk) {
-                        *dst = b.wrapping_add(add) as u16;
-                    }
-                }
-                16 => {
-                    for ((b1, b2), dst) in izip!(buf.iter().tuples(), chunk) {
-                        let value = u16::from_be_bytes([*b1, *b2]);
-                        *dst = value.wrapping_add(bzero);
-                    }
-                },
-                _ => unreachable!(),
-            }
-        }
-        return Ok(result)
-    }
-
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -269,6 +192,44 @@ impl FitsReader {
 
         Ok(Header{values, bitpix, dims, data_pos, data_len, bytes_len})
     }
+
+    pub fn read_data(header: &Header, stream: &mut dyn SeekNRead) -> Result<Vec<u16>> {
+        if !matches!(header.bitpix, 8|16) {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                format!("BITPIX = {} is not supported", header.bitpix)
+            ));
+        }
+        let bzero = header.get_i64("BZERO").unwrap_or(0) as u16;
+        let elem_len = header.bitpix as usize / 8;
+        const BUF_DATA_LEN: usize = 512;
+        let mut stream_buf = Vec::<u8>::new();
+        stream_buf.resize(BUF_DATA_LEN * elem_len, 0);
+        let mut result = Vec::new();
+        result.resize(header.data_len, 0);
+        stream.seek(SeekFrom::Start(header.data_pos as u64))?;
+        for chunk in result.chunks_mut(BUF_DATA_LEN) {
+            let len_to_read = chunk.len();
+            let buf = &mut stream_buf[.. elem_len * len_to_read];
+            stream.read_exact(buf)?;
+            match header.bitpix {
+                8 => {
+                    let add = bzero as u8;
+                    for (b, dst) in izip!(buf, chunk) {
+                        *dst = b.wrapping_add(add) as u16;
+                    }
+                }
+                16 => {
+                    for ((b1, b2), dst) in izip!(buf.iter().tuples(), chunk) {
+                        let value = u16::from_be_bytes([*b1, *b2]);
+                        *dst = value.wrapping_add(bzero);
+                    }
+                },
+                _ => unreachable!(),
+            }
+        }
+        return Ok(result)
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -320,7 +281,7 @@ impl FitsWriter {
         }
 
         Self::write_header(stream, &full_hdr)?;
-        full_hdr.write_data(stream, data, bzero)?;
+        Self::write_data(full_hdr.bitpix, bzero, stream, data)?;
         Ok(())
     }
 
@@ -346,4 +307,43 @@ impl FitsWriter {
         }
         Ok(())
     }
+
+    fn write_data(
+        bitpix: i8,
+        bzero:  u16,
+        stream: &mut dyn SeekNWrite,
+        data:   &[u16],
+    ) -> Result<()> {
+        if !matches!(bitpix, 8|16) {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                format!("BITPIX = {} is not supported", bitpix)
+            ));
+        }
+        let item_len = bitpix as usize / 8;
+        const BUF_DATA_LEN: usize = 512;
+        let mut stream_buf = Vec::<u8>::new();
+        stream_buf.resize(BUF_DATA_LEN * item_len, 0);
+        for chunk in data.chunks(BUF_DATA_LEN) {
+            let len_to_write = chunk.len();
+            let buf = &mut stream_buf[.. item_len * len_to_write];
+            match bitpix {
+                8 => {
+                    for (b, v) in izip!(buf.iter_mut(), chunk) {
+                        *b = (*v as u8).wrapping_sub(bzero as u8);
+                    }
+                }
+                16 => {
+                    for ((b1, b2), v) in izip!(buf.iter_mut().tuples(), chunk) {
+                        let be_bytes = v.wrapping_sub(bzero).to_be_bytes();
+                        [*b1, *b2] = be_bytes;
+                    }
+                },
+                _ => unreachable!(),
+            }
+            stream.write_all(buf)?;
+        }
+        Ok(())
+    }
+
 }

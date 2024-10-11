@@ -1,9 +1,6 @@
 use std::{io::Read, path::PathBuf};
-
 use chrono::Utc;
-
 use crate::{image::image::Image, ui::sky_map::math::{degree_to_radian, j2000_time, radian_to_degree, EpochCvt}};
-
 use super::*;
 
 const EXECUTABLE_FNAME: &str = "solve-field";
@@ -40,11 +37,12 @@ impl Drop for AstrometryPlateSolver {
     }
 }
 
-impl PlateSolverIface for AstrometryPlateSolver {
-    fn start(&mut self, image: &Image, config: &PlateSolveConfig) -> anyhow::Result<()> {
-        if self.child.is_some() {
-            anyhow::bail!("AstrometryPlateSolver already started");
-        }
+impl AstrometryPlateSolver {
+    fn start_platesolve_image(
+        &mut self,
+        image:  &Image,
+        config: &PlateSolveConfig
+    ) -> anyhow::Result<()> {
         self.clear_prev_resources();
         let layer = if !image.l.is_empty() { &image.l } else { &image.g };
         let file_name = format!("astralite_platesolve_{}.tif", rand::random::<u64>());
@@ -76,9 +74,24 @@ impl PlateSolverIface for AstrometryPlateSolver {
         let child = cmd.spawn().map_err(|e|
             anyhow::format_err!("{} when trying to execute {}", e.to_string(), EXECUTABLE_FNAME)
         )?;
-
         self.child = Some(child);
         Ok(())
+    }
+}
+
+impl PlateSolverIface for AstrometryPlateSolver {
+    fn start(
+        &mut self,
+        data:   &PlateSolverInData,
+        config: &PlateSolveConfig
+    ) -> anyhow::Result<()> {
+        if self.child.is_some() {
+            anyhow::bail!("AstrometryPlateSolver already started");
+        }
+        match data {
+            PlateSolverInData::Image(image) =>
+                self.start_platesolve_image(image, config),
+        }
     }
 
     fn get_result(&mut self) -> Option<anyhow::Result<PlateSolveResult>> {
