@@ -58,23 +58,34 @@ impl Header {
             .ok()
     }
 
-    pub fn set_value(&mut self, key: &str, value: &str, mask_str: bool) {
-        let value_str = if mask_str {
-            format!("'{}'", value.replace("'", "_"))
-        } else {
-            value.to_string()
-        };
-
+    fn set_value_impl(&mut self, key: &str, value: String) {
         if let Some(item) = self.values.iter_mut().find(|item| item.name.eq_ignore_ascii_case(key)) {
-            item.value = value_str;
+            item.value = value;
         } else {
             let value = Value {
                 name: key.to_string(),
-                value: value_str,
+                value: value,
                 comment: None,
             };
             self.values.push(value);
         }
+    }
+
+    pub fn set_i64(&mut self, key: &str, value: i64) {
+        self.set_value_impl(key, value.to_string());
+    }
+
+    pub fn set_f64(&mut self, key: &str, value: f64) {
+        self.set_value_impl(key, value.to_string());
+    }
+
+    pub fn set_bool(&mut self, key: &str, value: bool) {
+        let values_str = if value { "T" } else { "F" };
+        self.set_value_impl(key, values_str.to_string());
+    }
+
+    pub fn set_str(&mut self, key: &str, value: &str) {
+        self.set_value_impl(key, format!("'{:<8}'", value));
     }
 
     pub fn bitpix(&self) -> i8 {
@@ -234,6 +245,12 @@ impl FitsReader {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+pub struct FitsTableCol {
+    pub name: &'static str,
+    pub type_: &'static str,
+    pub unit: &'static str,
+}
+
 pub struct FitsWriter {}
 
 impl FitsWriter {
@@ -241,7 +258,7 @@ impl FitsWriter {
         Self {}
     }
 
-    pub fn write_header_and_data(
+    pub fn write_header_and_data_u16(
         &self,
         stream: &mut dyn SeekNWrite,
         hdu: &Header,
@@ -259,33 +276,29 @@ impl FitsWriter {
             0_u16
         };
 
-        full_hdr.set_value("SIMPLE", "T", false);
-        full_hdr.set_value("BITPIX", &full_hdr.bitpix.to_string(), false);
-        full_hdr.set_value("NAXIS",  &hdu.dims.len().to_string(), false);
+        full_hdr.set_bool("SIMPLE", true);
+        full_hdr.set_i64("BITPIX", full_hdr.bitpix as i64);
+        full_hdr.set_i64("NAXIS",  hdu.dims.len() as i64);
         for (idx, dim) in hdu.dims.iter().enumerate() {
             let name = format!("NAXIS{}", idx+1);
-            full_hdr.set_value(&name, &dim.to_string(), false);
+            full_hdr.set_i64(&name, *dim as i64);
         }
-        full_hdr.set_value("EXTEND", "T", false);
+        full_hdr.set_bool("EXTEND", true);
 
         if bzero != 0 {
-            full_hdr.set_value("BZERO", &bzero.to_string(), false);
+            full_hdr.set_i64("BZERO", bzero as i64);
         }
 
-        full_hdr.dims = hdu.dims.clone();
-        full_hdr.data_pos = hdu.data_pos;
-        full_hdr.data_len = hdu.data_len;
-        full_hdr.bytes_len = hdu.bytes_len;
         for value in &hdu.values {
             full_hdr.values.push(value.clone());
         }
 
-        Self::write_header(stream, &full_hdr)?;
-        Self::write_data(full_hdr.bitpix, bzero, stream, data)?;
+        self.write_header(stream, &full_hdr)?;
+        self.write_data(full_hdr.bitpix, bzero, stream, data)?;
         Ok(())
     }
 
-    fn write_header(stream: &mut dyn SeekNWrite, hdu: &Header) -> Result<()> {
+    pub fn write_header(&self, stream: &mut dyn SeekNWrite, hdu: &Header) -> Result<()> {
         for item in &hdu.values {
             let mut line = format!("{:8}= ", item.name);
             if item.value.starts_with("'") {
@@ -309,6 +322,7 @@ impl FitsWriter {
     }
 
     fn write_data(
+        &self,
         bitpix: i8,
         bzero:  u16,
         stream: &mut dyn SeekNWrite,
@@ -343,6 +357,78 @@ impl FitsWriter {
             }
             stream.write_all(buf)?;
         }
+        Ok(())
+    }
+
+
+    pub fn write_header_and_bintable_f64(
+        &self,
+        stream: &mut dyn SeekNWrite,
+        hdu: &Header,
+        cols: &[FitsTableCol],
+        data: &[f64],
+    ) -> Result<()> {
+        assert!(!data.is_empty());
+        let len = data.len() / cols.len();
+        let mut full_hdr = Header::new();
+        full_hdr.set_str("XTENSION", "BINTABLE");
+        full_hdr.set_i64("BITPIX", 8);
+        full_hdr.set_i64("NAXIS", 2);
+        full_hdr.set_i64("NAXIS1", (8 * cols.len()) as i64);
+        full_hdr.set_i64("NAXIS2", len as i64);
+        full_hdr.set_i64("PCOUNT", 0);
+        full_hdr.set_i64("GCOUNT", 1);
+        full_hdr.set_i64("TFIELDS", cols.len() as i64);
+
+        for (idx, col) in cols.iter().enumerate() {
+            let name_fld = format!("TTYPE{}", idx + 1);
+            full_hdr.set_str(&name_fld, &col.name);
+            let type_fld = format!("TFORM{}", idx + 1);
+            full_hdr.set_str(&type_fld, &col.type_);
+        }
+        for (idx, col) in cols.iter().enumerate() {
+            let unit_fld = format!("TUNIT{}", idx + 1);
+            full_hdr.set_str(&unit_fld, &col.unit);
+        }
+
+        for value in &hdu.values {
+            full_hdr.values.push(value.clone());
+        }
+
+        self.write_header(stream, &full_hdr)?;
+        self.write_data_f64(stream, data)?;
+        Ok(())
+    }
+
+
+    fn write_data_f64(
+        &self,
+        stream: &mut dyn SeekNWrite,
+        data:   &[f64],
+    ) -> Result<()> {
+        let item_len = std::mem::size_of::<f64>();
+        const BUF_DATA_LEN: usize = 512;
+        let mut stream_buf = Vec::<u8>::new();
+        stream_buf.resize(BUF_DATA_LEN * item_len, 0);
+        let mut written = 0_usize;
+        for chunk in data.chunks(BUF_DATA_LEN) {
+            let len_to_write = chunk.len();
+            let buf = &mut stream_buf[.. item_len * len_to_write];
+            for ((b1, b2, b3, b4, b5, b6, b7, b8), v) in izip!(buf.iter_mut().tuples(), chunk) {
+                [*b1, *b2, *b3, *b4, *b5, *b6, *b7, *b8] = v.to_be_bytes();
+            }
+            stream.write_all(buf)?;
+            written += buf.len();
+        }
+
+        written %= 2880;
+
+        if written != 0 {
+            let mut zeros = Vec::new();
+            zeros.resize(2880 - written, 0u8);
+            stream.write_all(&zeros)?;
+        }
+
         Ok(())
     }
 

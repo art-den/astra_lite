@@ -1,5 +1,5 @@
 use astrometry::*;
-use crate::{image::image::Image, ui::sky_map::math::EqCoord, options::PlateSolverType};
+use crate::{image::{image::Image, stars::Stars}, options::PlateSolverType, ui::sky_map::math::EqCoord};
 
 mod astrometry;
 
@@ -24,6 +24,11 @@ pub struct PlateSolver {
 
 pub enum PlateSolverInData<'a> {
     Image(&'a Image),
+    Stars{
+        stars:      &'a Stars,
+        img_width:  usize,
+        img_height: usize,
+    },
 }
 
 impl PlateSolver {
@@ -35,6 +40,10 @@ impl PlateSolver {
         Self {
             solver
         }
+    }
+
+    pub fn support_stars_as_input(&self) -> bool {
+        self.solver.support_stars_as_input()
     }
 
     pub fn start(
@@ -52,6 +61,7 @@ impl PlateSolver {
 }
 
 trait PlateSolverIface {
+    fn support_stars_as_input(&self) -> bool;
     fn start(&mut self, data: &PlateSolverInData, config: &PlateSolveConfig) -> anyhow::Result<()>;
     fn get_result(&mut self) -> Option<anyhow::Result<PlateSolveResult>>;
 }

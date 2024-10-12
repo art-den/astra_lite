@@ -7,7 +7,7 @@ const MAX_STAR_DIAM: usize = 32;
 const MAX_STARS_CNT: usize = 500;
 const MAX_STARS_FOR_STAR_IMAGE: usize = 200;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Star {
     pub x:             f64,
     pub y:             f64,

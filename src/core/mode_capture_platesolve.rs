@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 
-use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*}, image::image::*, indi::{self, value_to_sexagesimal}, options::*, plate_solve::*, ui::sky_map::math::*};
+use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*}, image::{image::*, stars::Stars}, indi::{self, value_to_sexagesimal}, options::*, plate_solve::*, ui::sky_map::math::*};
 
 use super::utils::gain_to_value;
 
@@ -18,7 +18,7 @@ pub struct CapturePlatesolveMode {
     mount:        String,
     cam_opts:     CamOptions,
     ps_opts:      PlateSolverOptions,
-    plate_solver: Option<PlateSolver>,
+    plate_solver: PlateSolver,
 }
 
 impl CapturePlatesolveMode {
@@ -41,13 +41,14 @@ impl CapturePlatesolveMode {
             &camera,
             indi
         )?;
+        let plate_solver = PlateSolver::new(opts.plate_solver.solver);
         Ok(Self {
             state:        State::None,
             indi:         Arc::clone(indi),
             subscribers:  Arc::clone(subscribers),
             mount:        opts.mount.device.clone(),
             ps_opts:      opts.plate_solver.clone(),
-            plate_solver: None,
+            plate_solver,
             camera,
             cam_opts,
         })
@@ -55,20 +56,32 @@ impl CapturePlatesolveMode {
 
     fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> anyhow::Result<()> {
         let image = image.read().unwrap();
-        let mut plate_solver = PlateSolver::new(self.ps_opts.solver);
         let mut config = PlateSolveConfig::default();
         config.time_out = self.ps_opts.blind_timeout;
-        plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
+        self.plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
         drop(image);
-        self.plate_solver = Some(plate_solver);
+        Ok(())
+    }
+
+    fn plate_solve_stars(
+        &mut self,
+        stars:      &Stars,
+        img_width:  usize,
+        img_height: usize
+    ) -> anyhow::Result<()> {
+        let mut config = PlateSolveConfig::default();
+        config.time_out = self.ps_opts.blind_timeout;
+        let stars_arg = PlateSolverInData::Stars{
+            stars,
+            img_width,
+            img_height,
+        };
+        self.plate_solver.start(&stars_arg, &config)?;
         Ok(())
     }
 
     fn try_process_plate_solving_result(&mut self) -> anyhow::Result<bool> {
-        let Some(plate_solver) = &mut self.plate_solver else {
-            return Ok(false);
-        };
-        let result = match plate_solver.get_result() {
+        let result = match self.plate_solver.get_result() {
             Some(result) => result?,
             None => return Ok(false),
         };
@@ -152,15 +165,19 @@ impl Mode for CapturePlatesolveMode {
         &mut self,
         fp_result: &FrameProcessResult
     ) -> anyhow::Result<NotifyResult> {
-        if let FrameProcessResultData::Image(image) = &fp_result.data {
-            match self.state {
-                State::Capturing => {
-                    self.plate_solve_image(image)?;
-                    self.state = State::PlateSolve;
-                    return Ok(NotifyResult::ModeStrChanged);
-                }
-                _ => {},
+        let xy_supported = self.plate_solver.support_stars_as_input();
+        match (&self.state, &fp_result.data, xy_supported) {
+            (State::Capturing, FrameProcessResultData::Image(image), false) => {
+                self.plate_solve_image(image)?;
+                self.state = State::PlateSolve;
+                return Ok(NotifyResult::ModeStrChanged);
             }
+            (State::Capturing, FrameProcessResultData::LightFrameInfo(info), true) => {
+                self.plate_solve_stars(&info.stars.items, info.width, info.height)?;
+                self.state = State::PlateSolve;
+                return Ok(NotifyResult::ModeStrChanged);
+            }
+            _ => {},
         }
 
         Ok(NotifyResult::Empty)

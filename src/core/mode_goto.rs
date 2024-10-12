@@ -1,5 +1,5 @@
 use std::sync::{Arc, RwLock};
-use crate::{core::{consts::*, frame_processing::*}, image::image::Image, indi::{self, value_to_sexagesimal}, options::*, plate_solve::*, ui::sky_map::math::*};
+use crate::{core::{consts::*, frame_processing::*}, image::{image::Image, stars::Stars}, indi::{self, value_to_sexagesimal}, options::*, plate_solve::*, ui::sky_map::math::*};
 use super::{core::*, utils::*};
 
 const MAX_MOUNT_UNPARK_TIME: usize = 20; // seconds
@@ -27,7 +27,7 @@ pub struct GotoMode {
     mount:           String,
     indi:            Arc<indi::Connection>,
     subscribers:     Arc<RwLock<Subscribers>>,
-    plate_solver:    Option<PlateSolver>,
+    plate_solver:    PlateSolver,
     unpark_seconds:  usize,
     goto_seconds:    usize,
     goto_ok_seconds: usize,
@@ -54,7 +54,7 @@ impl GotoMode {
             &camera,
             indi
         )?;
-
+        let plate_solver = PlateSolver::new(opts.plate_solver.solver);
         Ok(Self {
             state: State::None,
             eq_coord: eq_coord.clone(),
@@ -64,7 +64,7 @@ impl GotoMode {
             mount:   opts.mount.device.clone(),
             indi:    Arc::clone(indi),
             subscribers: Arc::clone(subscribers),
-            plate_solver: None,
+            plate_solver,
             unpark_seconds: 0,
             goto_seconds: 0,
             goto_ok_seconds: 0,
@@ -118,21 +118,34 @@ impl GotoMode {
 
     fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> anyhow::Result<()> {
         let image = image.read().unwrap();
-        let mut plate_solver = PlateSolver::new(self.ps_opts.solver);
         let mut config = PlateSolveConfig::default();
         config.eq_coord = Some(self.eq_coord.clone());
         config.time_out = self.ps_opts.timeout;
-        plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
+        self.plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
         drop(image);
-        self.plate_solver = Some(plate_solver);
+        Ok(())
+    }
+
+    fn plate_solve_stars(
+        &mut self,
+        stars:      &Stars,
+        img_width:  usize,
+        img_height: usize
+    ) -> anyhow::Result<()> {
+        let mut config = PlateSolveConfig::default();
+        config.eq_coord = Some(self.eq_coord.clone());
+        config.time_out = self.ps_opts.timeout;
+        let stars_arg = PlateSolverInData::Stars{
+            stars,
+            img_width,
+            img_height,
+        };
+        self.plate_solver.start(&stars_arg, &config)?;
         Ok(())
     }
 
     fn try_process_plate_solving_result(&mut self) -> anyhow::Result<bool> {
-        let Some(plate_solver) = &mut self.plate_solver else {
-            return Ok(false);
-        };
-        let result = match plate_solver.get_result() {
+        let result = match self.plate_solver.get_result() {
             Some(result) => result?,
             None => return Ok(false),
         };
@@ -287,23 +300,29 @@ impl Mode for GotoMode {
         &mut self,
         fp_result:  &FrameProcessResult
     ) -> anyhow::Result<NotifyResult> {
-
-        if let FrameProcessResultData::Image(image) = &fp_result.data {
-            match self.state {
-                State::WaitingPicture => {
-                    self.plate_solve_image(image)?;
-                    self.state = State::PlateSolving;
-                    return Ok(NotifyResult::ModeStrChanged);
-                }
-
-                State::WaitingFinalPicture => {
-                    self.plate_solve_image(image)?;
-                    self.state = State::FinalPlateSolving;
-                    return Ok(NotifyResult::ModeStrChanged);
-                }
-
-                _ => {},
+        let xy_supported = self.plate_solver.support_stars_as_input();
+        match (&self.state, &fp_result.data, xy_supported) {
+            (State::WaitingPicture, FrameProcessResultData::Image(image), false) => {
+                self.plate_solve_image(image)?;
+                self.state = State::PlateSolving;
+                return Ok(NotifyResult::ModeStrChanged);
             }
+            (State::WaitingPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
+                self.plate_solve_stars(&info.stars.items, info.width, info.height)?;
+                self.state = State::PlateSolving;
+                return Ok(NotifyResult::ModeStrChanged);
+            }
+            (State::WaitingFinalPicture, FrameProcessResultData::Image(image), false) => {
+                self.plate_solve_image(image)?;
+                self.state = State::FinalPlateSolving;
+                return Ok(NotifyResult::ModeStrChanged);
+            }
+            (State::WaitingFinalPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
+                self.plate_solve_stars(&info.stars.items, info.width, info.height)?;
+                self.state = State::FinalPlateSolving;
+                return Ok(NotifyResult::ModeStrChanged);
+            }
+            _ => {},
         }
 
         Ok(NotifyResult::Empty)

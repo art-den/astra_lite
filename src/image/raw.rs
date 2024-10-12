@@ -225,21 +225,21 @@ impl RawImage {
         let mut file = File::create(file_name)?;
         let writer = FitsWriter::new();
         let mut hdu = Header::new_2d(self.info.width, self.info.height);
-        hdu.set_value("EXPTIME",  &self.info.exposure.to_string(), false);
+        hdu.set_f64("EXPTIME",  self.info.exposure);
         if let Some(integr_exp) = self.info.integr_time {
-            hdu.set_value("TOTALEXP", &format!("{:.1}", integr_exp), false);
+            hdu.set_f64("TOTALEXP", integr_exp);
         }
-        hdu.set_value("ROWORDER", "TOP-DOWN", true);
-        hdu.set_value("FRAME",    self.info.frame_type.to_str(), true);
-        hdu.set_value("XBINNING", &self.info.bin.to_string(), false);
-        hdu.set_value("YBINNING", &self.info.bin.to_string(), false);
-        hdu.set_value("GAIN",     &self.info.gain.to_string(), false);
-        hdu.set_value("OFFSET",   &self.info.offset.to_string(), false);
-        hdu.set_value("INSTRUME", &self.info.camera, true);
+        hdu.set_str("ROWORDER", "TOP-DOWN");
+        hdu.set_str("FRAME",      self.info.frame_type.to_str());
+        hdu.set_i64("XBINNING",   self.info.bin as i64);
+        hdu.set_i64("YBINNING",   self.info.bin as i64);
+        hdu.set_i64("GAIN",       self.info.gain as i64);
+        hdu.set_i64("OFFSET",     self.info.offset as i64);
+        hdu.set_str("INSTRUME",   &self.info.camera);
         if let Some(bayer) = self.info.cfa.to_str() {
-            hdu.set_value("BAYERPAT", bayer, true);
+            hdu.set_str("BAYERPAT", bayer);
         }
-        writer.write_header_and_data(&mut file, &hdu, &self.data)?;
+        writer.write_header_and_data_u16(&mut file, &hdu, &self.data)?;
         Ok(())
     }
 
