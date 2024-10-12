@@ -38,7 +38,6 @@ impl Drop for AstrometryPlateSolver {
 }
 
 impl AstrometryPlateSolver {
-
     fn exec_solve_field(
         &mut self,
         file_with_data: &Path,
@@ -48,6 +47,7 @@ impl AstrometryPlateSolver {
         use std::process::*;
         let mut cmd = Command::new(EXECUTABLE_FNAME);
         cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
         cmd
             .arg("--no-plots")
             .arg("--corr").arg("none")
@@ -238,9 +238,14 @@ impl PlateSolverIface for AstrometryPlateSolver {
                 };
                 return Some(Ok(result));
             } else {
+                let mut output = child.stderr.take().unwrap();
+                let mut str_output = String::new();
+                _ = output.read_to_string(&mut str_output);
+
                 return Some(Err(anyhow::format_err!(
-                    "solve-field exit with code {}",
-                    exit_status.code().unwrap_or_default()
+                    "solve-field exited with code {}\n\n{}",
+                    exit_status.code().unwrap_or_default(),
+                    str_output
                 )));
             }
         }
