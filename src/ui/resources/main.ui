@@ -30,15 +30,6 @@
       </object>
     </child>
     <child>
-      <object class="GtkMenuItem" id="mi_load_image">
-        <property name="visible">True</property>
-        <property name="can-focus">False</property>
-        <property name="action-name">win.load_image</property>
-        <property name="label" translatable="yes">Load image...</property>
-        <property name="use-underline">True</property>
-      </object>
-    </child>
-    <child>
       <object class="GtkSeparatorMenuItem">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
@@ -72,6 +63,30 @@
         <property name="can-focus">False</property>
         <property name="action-name">win.save_image_linear</property>
         <property name="label" translatable="yes">Save linear...</property>
+        <property name="use-underline">True</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkSeparatorMenuItem">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="action-name">win.load_image</property>
+        <property name="label" translatable="yes">Load from file...</property>
+        <property name="use-underline">True</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="action-name">win.plate_solve_and_goto</property>
+        <property name="label" translatable="yes">Platesolve and goto</property>
         <property name="use-underline">True</property>
       </object>
     </child>
@@ -4432,6 +4447,7 @@ LS - live stacking
 F - autofocus
 MC - mount calibration
 PS - plate solving
+File - image from file
 
 "Calibr." column:
 D - by dark calibrated

@@ -170,6 +170,9 @@ impl RawImage {
         if bitdepth > 16 {
             anyhow::bail!("BITDEPTH > 16 ({}) is not supported", bitdepth);
         }
+        if bitdepth < 0 {
+            anyhow::bail!("FITS files with float values is not supported");
+        }
 
         let width       = image_hdu.dims()[0];
         let height      = image_hdu.dims()[1];

@@ -51,6 +51,20 @@ impl PlateSolver {
         data:   &PlateSolverInData,
         config: &PlateSolveConfig
     ) -> anyhow::Result<()> {
+
+        match data {
+            PlateSolverInData::Image(image) => {
+                if image.is_empty() {
+                    anyhow::bail!("Image is empty!");
+                }
+            }
+            PlateSolverInData::Stars { stars, .. } => {
+                if stars.is_empty() {
+                    anyhow::bail!("No stars for platesolving!");
+                }
+            }
+        }
+
         self.solver.start(data, config)?;
         Ok(())
     }

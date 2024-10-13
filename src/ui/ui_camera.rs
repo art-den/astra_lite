@@ -321,6 +321,7 @@ impl CameraUi {
         gtk_utils::connect_action   (&self.window, self, "save_image_preview",     Self::handler_action_save_image_preview);
         gtk_utils::connect_action   (&self.window, self, "save_image_linear",      Self::handler_action_save_image_linear);
         gtk_utils::connect_action   (&self.window, self, "dark_library",           Self::handler_action_darks_library);
+        gtk_utils::connect_action   (&self.window, self, "plate_solve_and_goto",   Self::handler_action_plate_solve_and_goto);
 
         let cb_camera_list = bldr.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
         cb_camera_list.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
@@ -1594,7 +1595,10 @@ impl CameraUi {
         result: FrameProcessResult
     ) {
         let options = self.options.read().unwrap();
-        if options.cam.device != Some(result.camera) { return; }
+        if !result.camera.name.is_empty()
+        && options.cam.device != Some(result.camera) {
+            return;
+        }
         let live_stacking_preview = options.preview.source == PreviewSource::LiveStacking;
         drop(options);
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
@@ -2031,6 +2035,7 @@ impl CameraUi {
 
     fn mode_type_to_history_str(mode_type: ModeType) -> &'static str {
         match mode_type {
+            ModeType::OpeningImgFile     => "File",
             ModeType::SingleShot         => "S",
             ModeType::LiveView           => "LV",
             ModeType::SavingRawFrames    => "RAW",
@@ -2296,27 +2301,9 @@ impl CameraUi {
             if response == gtk::ResponseType::Accept {
                 gtk_utils::exec_and_show_error(&self_.window, || {
                     let Some(file_name) = file_chooser.file() else { return Ok(()); };
+                    let Some(file_name) = file_name.path() else { return Ok(()); };
                     self_.get_options_from_widgets();
-                    let mut image = self_.core.cur_frame().image.write().unwrap();
-                    image.load_from_file(&file_name.path().unwrap_or_default())?;
-                    let options = self_.options.read().unwrap();
-                    if options.preview.remove_grad {
-                        image.remove_gradient();
-                    }
-                    drop(image);
-
-                    let image = self_.core.cur_frame().image.read().unwrap();
-                    let mut hist = self_.core.cur_frame().img_hist.write().unwrap();
-                    hist.from_image(&image);
-                    drop(hist);
-                    let mut hist = self_.core.cur_frame().raw_hist.write().unwrap();
-                    hist.from_image(&image);
-                    drop(hist);
-                    drop(image);
-
-                    self_.create_and_show_preview_image();
-                    self_.show_histogram_stat();
-                    self_.repaint_histogram();
+                    self_.core.open_image_from_file(&file_name)?;
                     Ok(())
                 });
             }
@@ -2332,6 +2319,13 @@ impl CameraUi {
             self.window.upcast_ref(),
         );
         dialog.exec();
+    }
+
+    fn handler_action_plate_solve_and_goto(&self) {
+        gtk_utils::exec_and_show_error(&self.window, || {
+            self.core.start_goto_image()?;
+            Ok(())
+        });
     }
 
 }

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::{path::Path, io::{BufWriter, BufReader}, fs::File};
 use chrono::{DateTime, Utc};
 use itertools::*;

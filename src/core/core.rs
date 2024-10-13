@@ -1,5 +1,5 @@
 use std::{
-    any::Any, collections::HashMap, sync::{
+    any::Any, collections::HashMap, path::Path, sync::{
         atomic::{AtomicBool, AtomicU16, Ordering }, mpsc, Arc, Mutex, RwLock, RwLockReadGuard
     }
 };
@@ -9,7 +9,7 @@ use crate::{
     core::{consts::INDI_SET_PROP_TIMEOUT, utils::FileNameUtils}, guiding::{external_guider::*, phd2_conn, phd2_guider::*}, image::{raw::FrameType, stars_offset::*}, indi, options::*, plate_solve::PlateSolverEvent, ui::sky_map::math::EqCoord, utils::timer::*
 };
 use super::{
-    frame_processing::*, mode_capture_platesolve::CapturePlatesolveMode, mode_darks_library::*, mode_focusing::*, mode_goto::GotoMode, mode_mount_calibration::*, mode_tacking_pictures::*, mode_waiting::*
+    frame_processing::*, mode_capture_platesolve::*, mode_darks_library::*, mode_focusing::*, mode_goto::*, mode_mount_calibration::*, mode_tacking_pictures::*, mode_waiting::*
 };
 
 #[derive(Clone)]
@@ -32,6 +32,7 @@ pub enum CoreEvent {
 #[derive(PartialEq, Copy, Clone, Debug)]
 pub enum ModeType {
     Waiting,
+    OpeningImgFile,
     SingleShot,
     LiveView,
     SavingRawFrames,
@@ -435,7 +436,7 @@ impl Core {
                 mode_type:       mode.mode.get_type(),
                 camera:          device,
                 flags:           ProcessImageFlags::empty(),
-                blob:            Arc::clone(blob),
+                img_source:      ImageSource::Blob(Arc::clone(blob)),
                 frame:           Arc::clone(&self.cur_frame),
                 stop_flag:       new_stop_flag,
                 ref_stars:       Arc::clone(&self.ref_stars),
@@ -479,32 +480,7 @@ impl Core {
 
         let result_fun = {
             let self_ = Arc::clone(self);
-            move |res: FrameProcessResult| {
-                if res.cmd_stop_flag.load(Ordering::Relaxed) {
-                    return;
-                }
-                let mut mode = self_.mode_data.write().unwrap();
-                if Some(&res.camera) != mode.mode.cam_device() {
-                    return;
-                }
-                if mode.mode.get_type() != res.mode_type {
-                    return;
-                }
-
-                self_.subscribers.read().unwrap().inform_event(
-                    CoreEvent::FrameProcessing(res.clone())
-                );
-
-                let result = || -> anyhow::Result<()> {
-                    let res = mode.mode.notify_about_frame_processing_result(
-                        &res
-                    )?;
-                    self_.apply_change_result(res, &mut mode)?;
-                    Ok(())
-                } ();
-                drop(mode);
-                self_.process_error(result, "Core::process_indi_blob_event");
-            }
+            move |res: FrameProcessResult| self_.frame_process_result_handler(res)
         };
 
         frame_proc_sender.send(FrameProcessCommand::ProcessImage {
@@ -513,6 +489,35 @@ impl Core {
         }).unwrap();
 
         Ok(())
+    }
+
+    fn frame_process_result_handler(self: &Arc<Self>, res: FrameProcessResult) {
+        if res.cmd_stop_flag.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let is_opening_file = res.mode_type == ModeType::OpeningImgFile;
+
+        let mut mode = self.mode_data.write().unwrap();
+        if Some(&res.camera) != mode.mode.cam_device() && !is_opening_file {
+            return;
+        }
+
+        if mode.mode.get_type() != res.mode_type && !is_opening_file {
+            return;
+        }
+
+        self.subscribers.read().unwrap().inform_event(
+            CoreEvent::FrameProcessing(res.clone())
+        );
+
+        let result = || -> anyhow::Result<()> {
+            let res = mode.mode.notify_about_frame_processing_result(&res)?;
+            self.apply_change_result(res, &mut mode)?;
+            Ok(())
+        } ();
+        drop(mode);
+        self.process_error(result, "Core::process_indi_blob_event");
     }
 
     fn restart_camera_exposure(self: &Arc<Self>) -> anyhow::Result<()> {
@@ -576,6 +581,41 @@ impl Core {
         let subscribers = self.subscribers.read().unwrap();
         subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
         subscribers.inform_event(CoreEvent::ModeChanged);
+    }
+
+    pub fn open_image_from_file(self: &Arc<Self>, file_name: &Path) -> anyhow::Result<()> {
+        let new_stop_flag = Arc::new(AtomicBool::new(false));
+        *self.img_proc_stop_flag.lock().unwrap() = Arc::clone(&new_stop_flag);
+
+        let options = self.options.read().unwrap();
+
+        let command = FrameProcessCommandData {
+            mode_type:       ModeType::OpeningImgFile,
+            camera:          DeviceAndProp::default(),
+            flags:           ProcessImageFlags::empty(),
+            img_source:      ImageSource::FileName(file_name.to_path_buf()),
+            frame:           Arc::clone(&self.cur_frame),
+            stop_flag:       new_stop_flag,
+            ref_stars:       Arc::clone(&self.ref_stars),
+            calibr_params:   None,
+            calibr_data:     Arc::clone(&self.calibr_data),
+            view_options:    options.preview.preview_params(),
+            frame_options:   options.cam.frame.clone(),
+            quality_options: None,
+            live_stacking:   None,
+        };
+
+        let result_fun = {
+            let self_ = Arc::clone(self);
+            move |res: FrameProcessResult| self_.frame_process_result_handler(res)
+        };
+
+        self.img_cmds_sender.send(FrameProcessCommand::ProcessImage {
+            command,
+            result_fun: Box::new(result_fun),
+        }).unwrap();
+
+        Ok(())
     }
 
     pub fn start_single_shot(&self) -> anyhow::Result<()> {
@@ -688,12 +728,15 @@ impl Core {
         Ok(())
     }
 
-    pub fn start_goto_coord(&self, eq_coord: &EqCoord) -> anyhow::Result<()> {
+    pub fn start_goto_coord(
+        &self,
+        eq_coord: &EqCoord
+    ) -> anyhow::Result<()> {
         self.init_cam_before_start()?;
         self.init_cam_telescope_data()?;
         self.mode_data.write().unwrap().mode.abort()?;
         let mut mode = GotoMode::new(
-            eq_coord,
+            GotoDestination::Coord(eq_coord.clone()),
             &self.options,
             &self.indi,
             &self.subscribers,
@@ -702,6 +745,29 @@ impl Core {
         self.after_new_mode_stuff(Box::new(mode), false, false);
         Ok(())
     }
+
+    pub fn start_goto_image(&self) -> anyhow::Result<()> {
+        let image_info = self.cur_frame.info.read().unwrap();
+        let ResultImageInfo::LightInfo(light_frame_info) = &*image_info else {
+            anyhow::bail!("Image is not light frame");
+        };
+        self.init_cam_before_start()?;
+        self.init_cam_telescope_data()?;
+        self.mode_data.write().unwrap().mode.abort()?;
+        let mut mode = GotoMode::new(
+            GotoDestination::Image{
+                image: Arc::clone(&self.cur_frame.image),
+                info: Arc::clone(light_frame_info),
+            },
+            &self.options,
+            &self.indi,
+            &self.subscribers,
+        )?;
+        mode.start()?;
+        self.after_new_mode_stuff(Box::new(mode), false, false);
+        Ok(())
+    }
+
 
     pub fn start_capture_and_platesolve(&self) -> anyhow::Result<()> {
         self.init_cam_before_start()?;

@@ -1,5 +1,5 @@
 use std::sync::{Arc, RwLock};
-use crate::{core::{consts::*, frame_processing::*}, image::{image::Image, stars::Stars}, indi::{self, value_to_sexagesimal}, options::*, plate_solve::*, ui::sky_map::math::*};
+use crate::{core::{consts::*, frame_processing::*}, image::{image::Image, info::LightFrameInfo, stars::Stars}, indi::{self, value_to_sexagesimal}, options::*, plate_solve::*, ui::sky_map::math::*};
 use super::{core::*, utils::*};
 
 const MAX_MOUNT_UNPARK_TIME: usize = 20; // seconds
@@ -9,17 +9,27 @@ const AFTER_GOTO_WAIT_TIME: usize = 3; // seconds
 #[derive(PartialEq)]
 enum State {
     None,
-    WaitingUnparking,
-    WaitingGoto,
-    WaitingPicture,
+    ImagePlateSolving,
+    Unparking,
+    Goto,
+    TackingPicture,
     PlateSolving,
     CorrectMount,
-    WaitingFinalPicture,
+    TackingFinalPicture,
     FinalPlateSolving,
+}
+
+pub enum GotoDestination {
+    Image{
+        image: Arc<RwLock<Image>>,
+        info:  Arc<LightFrameInfo>,
+       },
+    Coord(EqCoord)
 }
 
 pub struct GotoMode {
     state:           State,
+    destination:     GotoDestination,
     eq_coord:        EqCoord,
     camera:          DeviceAndProp,
     cam_opts:        CamOptions,
@@ -35,7 +45,7 @@ pub struct GotoMode {
 
 impl GotoMode {
     pub fn new(
-        eq_coord:    &EqCoord,
+        destination: GotoDestination,
         options:     &Arc<RwLock<Options>>,
         indi:        &Arc<indi::Connection>,
         subscribers: &Arc<RwLock<Subscribers>>,
@@ -56,19 +66,30 @@ impl GotoMode {
         )?;
         let plate_solver = PlateSolver::new(opts.plate_solver.solver);
         Ok(Self {
-            state: State::None,
-            eq_coord: eq_coord.clone(),
+            state:           State::None,
+            eq_coord:        EqCoord::default(),
+            ps_opts:         opts.plate_solver.clone(),
+            mount:           opts.mount.device.clone(),
+            indi:            Arc::clone(indi),
+            subscribers:     Arc::clone(subscribers),
+            unpark_seconds:  0,
+            goto_seconds:    0,
+            goto_ok_seconds: 0,
+            plate_solver,
+            destination,
             camera,
             cam_opts,
-            ps_opts: opts.plate_solver.clone(),
-            mount:   opts.mount.device.clone(),
-            indi:    Arc::clone(indi),
-            subscribers: Arc::clone(subscribers),
-            plate_solver,
-            unpark_seconds: 0,
-            goto_seconds: 0,
-            goto_ok_seconds: 0,
         })
+    }
+
+    fn start_goto(&mut self) -> anyhow::Result<()> {
+        if self.indi.mount_get_parked(&self.mount)? {
+            self.start_unpark_telescope()?;
+        } else {
+            self.start_goto_coord()?;
+            self.state = State::Goto;
+        }
+        Ok(())
     }
 
     fn start_unpark_telescope(&mut self) -> anyhow::Result<()> {
@@ -80,7 +101,7 @@ impl GotoMode {
             None
         )?;
         self.unpark_seconds = 0;
-        self.state = State::WaitingUnparking;
+        self.state = State::Unparking;
         Ok(())
     }
 
@@ -144,7 +165,10 @@ impl GotoMode {
         Ok(())
     }
 
-    fn try_process_plate_solving_result(&mut self) -> anyhow::Result<bool> {
+    fn try_process_plate_solving_result(
+        &mut self,
+        action: ProcessPlateSolverResultAction,
+    ) -> anyhow::Result<bool> {
         let result = match self.plate_solver.get_result() {
             Some(result) => result?,
             None => return Ok(false),
@@ -168,22 +192,29 @@ impl GotoMode {
             CoreEvent::PlateSolve(event)
         );
 
-        self.indi.set_after_coord_set_action(
-            &self.mount,
-            indi::AfterCoordSetAction::Sync,
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
+        match action {
+            ProcessPlateSolverResultAction::Sync => {
+                self.indi.set_after_coord_set_action(
+                    &self.mount,
+                    indi::AfterCoordSetAction::Sync,
+                    true,
+                    INDI_SET_PROP_TIMEOUT
+                )?;
 
-        self.indi.mount_set_eq_coord(
-            &self.mount,
-            radian_to_hour(result.crd_now.ra),
-            radian_to_degree(result.crd_now.dec),
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
-
+                self.indi.mount_set_eq_coord(
+                    &self.mount,
+                    radian_to_hour(result.crd_now.ra),
+                    radian_to_degree(result.crd_now.dec),
+                    true,
+                    INDI_SET_PROP_TIMEOUT
+                )?;
+            }
+            ProcessPlateSolverResultAction::SetEqCoord => {
+                self.eq_coord = result.crd_now.clone();
+            }
+        }
         Ok(true)
+
     }
 }
 
@@ -195,12 +226,13 @@ impl Mode for GotoMode {
     fn progress_string(&self) -> String {
         match self.state {
             State::None => "Goto...".to_string(),
-            State::WaitingUnparking => "Unpark mount".to_string(),
-            State::WaitingGoto => "Goto coordinate".to_string(),
-            State::WaitingPicture => "Tacking picture".to_string(),
+            State::ImagePlateSolving => "Custom image plate solving".to_string(),
+            State::Unparking => "Unpark mount".to_string(),
+            State::Goto => "Goto coordinate".to_string(),
+            State::TackingPicture => "Tacking picture".to_string(),
             State::PlateSolving => "Plate solving".to_string(),
             State::CorrectMount => "Mount correction".to_string(),
-            State::WaitingFinalPicture => "Tacking final picture".to_string(),
+            State::TackingFinalPicture => "Tacking final picture".to_string(),
             State::FinalPlateSolving => "Final plate solving".to_string(),
         }
     }
@@ -218,12 +250,34 @@ impl Mode for GotoMode {
     }
 
     fn start(&mut self) -> anyhow::Result<()> {
-        if self.indi.mount_get_parked(&self.mount)? {
-            self.start_unpark_telescope()?;
-        } else {
-            self.start_goto_coord()?;
-            self.state = State::WaitingGoto;
+        match &self.destination {
+            GotoDestination::Coord(coord) => {
+                self.eq_coord = coord.clone();
+                self.start_goto()?;
+            }
+            GotoDestination::Image{image, info} => {
+                let mut config = PlateSolveConfig::default();
+                config.time_out = self.ps_opts.blind_timeout;
+                if self.plate_solver.support_stars_as_input() {
+                    self.plate_solver.start(
+                        &PlateSolverInData::Stars{
+                            stars: &info.stars.items,
+                            img_width: info.width,
+                            img_height: info.height,
+                        },
+                        &config
+                    )?;
+                } else {
+                    let image = image.read().unwrap();
+                    self.plate_solver.start(
+                        &PlateSolverInData::Image(&image),
+                        &config
+                    )?;
+                };
+                self.state = State::ImagePlateSolving;
+            }
         }
+
         Ok(())
     }
 
@@ -235,10 +289,10 @@ impl Mode for GotoMode {
 
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
         match self.state {
-            State::WaitingUnparking => {
+            State::Unparking => {
                 if !self.indi.mount_get_parked(&self.mount)? {
                     self.start_goto_coord()?;
-                    self.state = State::WaitingGoto;
+                    self.state = State::Goto;
                     return Ok(NotifyResult::ModeStrChanged);
                 }
                 self.unpark_seconds += 1;
@@ -250,16 +304,16 @@ impl Mode for GotoMode {
                 }
             }
 
-            State::WaitingGoto | State::CorrectMount => {
+            State::Goto | State::CorrectMount => {
                 let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.mount)?;
                 if crd_prop_state == indi::PropState::Ok {
                     self.goto_ok_seconds += 1;
                     if self.goto_ok_seconds >= AFTER_GOTO_WAIT_TIME {
                         self.start_take_picture()?;
-                        if self.state == State::WaitingGoto {
-                            self.state = State::WaitingPicture;
+                        if self.state == State::Goto {
+                            self.state = State::TackingPicture;
                         } else {
-                            self.state = State::WaitingFinalPicture;
+                            self.state = State::TackingFinalPicture;
                         }
                         return Ok(NotifyResult::ModeStrChanged);
                     }
@@ -274,8 +328,20 @@ impl Mode for GotoMode {
                 }
             }
 
+            State::ImagePlateSolving => {
+                let ok = self.try_process_plate_solving_result(
+                    ProcessPlateSolverResultAction::SetEqCoord
+                )?;
+                if ok {
+                    self.start_goto()?;
+                    return Ok(NotifyResult::ModeStrChanged)
+                }
+            }
+
             State::PlateSolving => {
-                let ok = self.try_process_plate_solving_result()?;
+                let ok = self.try_process_plate_solving_result(
+                    ProcessPlateSolverResultAction::Sync
+                )?;
                 if ok {
                     self.start_goto_coord()?;
                     self.state = State::CorrectMount;
@@ -284,7 +350,9 @@ impl Mode for GotoMode {
             }
 
             State::FinalPlateSolving => {
-                let ok = self.try_process_plate_solving_result()?;
+                let ok = self.try_process_plate_solving_result(
+                    ProcessPlateSolverResultAction::Sync
+                )?;
                 if ok {
                     self.start_take_picture()?;
                     return Ok(NotifyResult::Finished { next_mode: None })
@@ -302,22 +370,22 @@ impl Mode for GotoMode {
     ) -> anyhow::Result<NotifyResult> {
         let xy_supported = self.plate_solver.support_stars_as_input();
         match (&self.state, &fp_result.data, xy_supported) {
-            (State::WaitingPicture, FrameProcessResultData::Image(image), false) => {
+            (State::TackingPicture, FrameProcessResultData::Image(image), false) => {
                 self.plate_solve_image(image)?;
                 self.state = State::PlateSolving;
                 return Ok(NotifyResult::ModeStrChanged);
             }
-            (State::WaitingPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
+            (State::TackingPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
                 self.plate_solve_stars(&info.stars.items, info.width, info.height)?;
                 self.state = State::PlateSolving;
                 return Ok(NotifyResult::ModeStrChanged);
             }
-            (State::WaitingFinalPicture, FrameProcessResultData::Image(image), false) => {
+            (State::TackingFinalPicture, FrameProcessResultData::Image(image), false) => {
                 self.plate_solve_image(image)?;
                 self.state = State::FinalPlateSolving;
                 return Ok(NotifyResult::ModeStrChanged);
             }
-            (State::WaitingFinalPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
+            (State::TackingFinalPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
                 self.plate_solve_stars(&info.stars.items, info.width, info.height)?;
                 self.state = State::FinalPlateSolving;
                 return Ok(NotifyResult::ModeStrChanged);
@@ -328,4 +396,9 @@ impl Mode for GotoMode {
         Ok(NotifyResult::Empty)
     }
 
+}
+
+enum ProcessPlateSolverResultAction {
+    Sync,
+    SetEqCoord,
 }

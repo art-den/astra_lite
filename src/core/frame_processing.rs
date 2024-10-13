@@ -138,11 +138,16 @@ bitflags! { pub struct ProcessImageFlags: u32 {
     const CALC_STARS_OFFSET = 1;
 }}
 
+pub enum ImageSource {
+    Blob(Arc<indi::BlobPropValue>),
+    FileName(PathBuf),
+}
+
 pub struct FrameProcessCommandData {
     pub mode_type:       ModeType,
     pub camera:          DeviceAndProp,
     pub flags:           ProcessImageFlags,
-    pub blob:            Arc<indi::BlobPropValue>,
+    pub img_source:      ImageSource,
     pub frame:           Arc<ResultImage>,
     pub stop_flag:       Arc<AtomicBool>,
     pub ref_stars:       Arc<Mutex<Option<Vec<Point>>>>,
@@ -266,6 +271,16 @@ fn create_raw_image_from_blob(
     }
 
     anyhow::bail!("Unsupported blob format: {}", blob_prop_value.format);
+}
+
+fn create_raw_image_from_file(file_name: &Path) -> anyhow::Result<RawImage> {
+    let ext = file_name.extension().unwrap_or_default();
+    if ext.eq_ignore_ascii_case("fit") || ext.eq_ignore_ascii_case("fits") {
+        let image = RawImage::new_from_fits_file(file_name)?;
+        Ok(image)
+    } else {
+        anyhow::bail!("Unsupported file extension: {:?}", ext);
+    }
 }
 
 fn calc_reduct_ratio(options: &PreviewParams, img_width: usize, img_height: usize) -> usize {
@@ -588,11 +603,22 @@ fn make_preview_image_impl(
         result_fun
     );
 
-    log::debug!("Starting BLOB processing... Blob len = {}", command.blob.data.len());
-
-    let tmr = TimeLogger::start();
-    let mut raw_image = create_raw_image_from_blob(&command.blob)?;
-    tmr.log("create_raw_image_from_blob");
+    let mut raw_image = match &command.img_source {
+        ImageSource::Blob(blob) => {
+            log::debug!("Starting BLOB processing... Blob len = {}", blob.data.len());
+            let tmr = TimeLogger::start();
+            let raw_image = create_raw_image_from_blob(&blob)?;
+            tmr.log("create_raw_image_from_blob");
+            raw_image
+        }
+        ImageSource::FileName(file_name) => {
+            log::debug!("Loading image from from file {:?}", file_name);
+            let tmr = TimeLogger::start();
+            let raw_image = create_raw_image_from_file(file_name)?;
+            tmr.log("create_raw_image_from_file");
+            raw_image
+        }
+    };
 
     let mut raw_info = raw_image.info().clone();
     if raw_info.offset == 0 {
@@ -1072,20 +1098,22 @@ fn make_preview_image_impl(
 
     let process_time = total_tmr.log("TOTAL PREVIEW");
 
-    let result = FrameProcessResultData::ShotProcessingFinished{
-        raw_image_info,
-        frame_is_ok:     !is_bad_frame,
-        blob:            Arc::clone(&command.blob),
-        processing_time: process_time,
-        blob_dl_time:    command.blob.dl_time,
-    };
-    send_result(
-        result,
-        &command.camera,
-        command.mode_type,
-        &command.stop_flag,
-        result_fun
-    );
+    if let ImageSource::Blob(blob) = &command.img_source {
+        let result = FrameProcessResultData::ShotProcessingFinished{
+            raw_image_info,
+            frame_is_ok:     !is_bad_frame,
+            blob:            Arc::clone(&blob),
+            processing_time: process_time,
+            blob_dl_time:    blob.dl_time,
+        };
+        send_result(
+            result,
+            &command.camera,
+            command.mode_type,
+            &command.stop_flag,
+            result_fun
+        );
+    }
 
     Ok(())
 }
