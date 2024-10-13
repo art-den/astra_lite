@@ -19,7 +19,8 @@ pub fn paint_altitude_by_time(
         .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
     let sc = area.style_context();
     let fg_color = sc.color(gtk::StateFlags::NORMAL);
-    let bg_color = area.style_context()
+    let (fg_r, fg_g, fg_b) = (1.0, 1.0, 1.0);
+    let bg_color = sc
         .lookup_color("theme_base_color")
         .unwrap_or(gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
 
@@ -166,13 +167,13 @@ pub fn paint_altitude_by_time(
             cr.line_to(x as f64, height);
             cr.set_line_width(1.0);
             cr.set_dash(&[2.0, 2.0], 1.0);
-            cr.set_source_rgba(fg_color.red(), fg_color.green(), fg_color.blue(), 0.5);
+            cr.set_source_rgba(fg_r, fg_g, fg_b, 0.5);
             cr.stroke()?;
 
             let text = format!("{}h", hour);
             let te = cr.text_extents(&text)?;
             cr.move_to(x as f64, height - 0.33 * te.height());
-            cr.set_source_rgba(fg_color.red(), fg_color.green(), fg_color.blue(), 1.0);
+            cr.set_source_rgba(fg_r, fg_g, fg_b, 1.0);
             cr.show_text(&text)?;
         }
         prev_hour = hour;
@@ -194,12 +195,12 @@ pub fn paint_altitude_by_time(
     if !text.is_empty() {
         let te = cr.text_extents(&text)?;
         cr.move_to(3.0, legend_height + te.height() + 0.25 * te.height());
-        cr.set_source_rgba(fg_color.red(), fg_color.green(), fg_color.blue(), 1.0);
+        cr.set_source_rgba(fg_r, fg_g, fg_b, 1.0);
         cr.show_text(&text)?;
     }
 
     cr.rectangle(0.0, 0.0, width, height);
-    cr.set_source_rgba(fg_color.red(), fg_color.green(), fg_color.blue(), 0.33);
+    cr.set_source_rgba(fg_r, fg_g, fg_b, 0.33);
     cr.set_line_width(f64::max(0.3 * dpmm_y, 1.0));
     cr.set_dash(&[], 0.0);
     cr.stroke()?;
