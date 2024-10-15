@@ -6,7 +6,7 @@ use std::{
 use gtk::glib::PropertySet;
 
 use crate::{
-    core::{consts::INDI_SET_PROP_TIMEOUT, utils::FileNameUtils}, guiding::{external_guider::*, phd2_conn, phd2_guider::*}, image::{raw::FrameType, stars_offset::*}, indi, options::*, plate_solve::PlateSolverEvent, ui::sky_map::math::EqCoord, utils::timer::*
+    core::consts::*, guiding::{external_guider::*, phd2_conn, phd2_guider::*}, image::stars_offset::*, indi, options::*, plate_solve::PlateSolverEvent, ui::sky_map::math::EqCoord, utils::timer::*
 };
 use super::{
     frame_processing::*, mode_capture_platesolve::*, mode_darks_library::*, mode_focusing::*, mode_goto::*, mode_mount_calibration::*, mode_tacking_pictures::*, mode_waiting::*
@@ -53,7 +53,6 @@ pub trait Mode {
     fn get_type(&self) -> ModeType;
     fn progress_string(&self) -> String;
     fn cam_device(&self) -> Option<&DeviceAndProp> { None }
-    fn cam_opts(&self) -> Option<&CamOptions> { None }
     fn progress(&self) -> Option<Progress> { None }
     fn get_cur_exposure(&self) -> Option<f64> { None }
     fn can_be_stopped(&self) -> bool { true }

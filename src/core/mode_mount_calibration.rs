@@ -330,10 +330,6 @@ impl Mode for MountCalibrMode {
         Some(&self.camera)
     }
 
-    fn cam_opts(&self) -> Option<&CamOptions> {
-        Some(&self.cam_opts)
-    }
-
     fn get_cur_exposure(&self) -> Option<f64> {
         Some(self.cam_opts.frame.exposure())
     }

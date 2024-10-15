@@ -341,10 +341,6 @@ impl Mode for FocusingMode {
         Some(&self.camera)
     }
 
-    fn cam_opts(&self) -> Option<&CamOptions> {
-        Some(&self.cam_opts)
-    }
-
     fn progress(&self) -> Option<Progress> {
         Some(Progress {
             cur: self.samples.len(),
