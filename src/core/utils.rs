@@ -1,8 +1,13 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{path::{Path, PathBuf}, sync::Arc};
 
 use chrono::{DateTime, Utc};
 
 use crate::{image::raw::*, indi, options::*};
+
+pub enum FileNameArg<'a> {
+    Options(&'a CamOptions),
+    RawInfo(&'a RawImageInfo),
+}
 
 #[derive(Default)]
 pub struct FileNameUtils {
@@ -29,62 +34,260 @@ impl FileNameUtils {
 
     pub fn master_only_file_name(
         &self,
-        time:        Option<DateTime<Utc>>, // used for flat frames
-        cam_options: &CamOptions,
-    ) -> PathBuf {
-        cam_options.raw_master_file_name(
-            time,
-            self.sensor_width,
-            self.sensor_height,
-            self.cooler_supported
-        ).into()
+        date: Option<DateTime<Utc>>, // used for flat frames
+        args: &FileNameArg,
+    ) -> String {
+        match args {
+            FileNameArg::Options(opts) => {
+                let (img_width, img_height) = opts.frame.active_sensor_size(
+                    self.sensor_width,
+                    self.sensor_height,
+                );
+                let temperature = if self.cooler_supported && opts.ctrl.enable_cooler {
+                    Some(opts.ctrl.temperature)
+                } else {
+                    None
+                };
+                Self::master_file_name_impl(
+                    date,
+                    opts.frame.frame_type,
+                    opts.frame.exposure(),
+                    opts.frame.gain as i32,
+                    opts.frame.offset,
+                    img_width,
+                    img_height,
+                    opts.frame.binning.get_ratio() as i32,
+                    temperature
+                )
+            }
+            FileNameArg::RawInfo(info) => {
+                Self::master_file_name_impl(
+                    info.time,
+                    info.frame_type,
+                    info.exposure,
+                    info.gain,
+                    info.offset,
+                    info.width,
+                    info.height,
+                    info.bin as i32,
+                    info.ccd_temp
+                )
+            },
+        }
     }
 
     pub fn master_dark_file_name(
         &self,
-        cam_options: &CamOptions,
-        options:     &Options
+        args:              &FileNameArg,
+        dark_library_path: &Path
     ) -> PathBuf {
-        let mut cam_dark = cam_options.clone();
-        cam_dark.frame.frame_type = FrameType::Darks;
-        let master_dark_name =
-            self.master_only_file_name(None, &cam_dark);
         let mut path = PathBuf::new();
-        path.push(&options.calibr.dark_library_path);
-        path.push(&self.device.to_file_name_part());
-        path.push(&master_dark_name);
+        match args {
+            FileNameArg::Options(opts) => {
+                let mut cam_dark = (*opts).clone();
+                cam_dark.frame.frame_type = FrameType::Darks;
+                let master_dark_name = self.master_only_file_name(
+                    None,
+                    &FileNameArg::Options(&cam_dark)
+                );
+                path.push(dark_library_path);
+                path.push(&self.device.to_file_name_part());
+                path.push(&master_dark_name);
+            }
+            FileNameArg::RawInfo(info) => {
+                let mut info = (*info).clone();
+                info.frame_type = FrameType::Darks;
+                let master_dark_name = self.master_only_file_name(
+                    None,
+                    &FileNameArg::RawInfo(&info)
+                );
+                path.push(dark_library_path);
+                path.push(&info.camera);
+                path.push(&master_dark_name);
+            }
+        }
         path
     }
 
     pub fn defect_pixels_file_name(
         &self,
-        cam_options: &CamOptions,
-        options:     &Options
+        args:              &FileNameArg,
+        dark_library_path: &Path
     ) -> PathBuf {
-        let defect_pixels_file_name = cam_options.defect_pixels_file_name(
-            self.sensor_width,
-            self.sensor_height,
-        );
+        let (defect_pixels_file_name, camera) = match args {
+            FileNameArg::Options(opts) => {
+                let (img_width, img_height) = opts.frame.active_sensor_size(
+                    self.sensor_width,
+                    self.sensor_height,
+                );
+                let file_name = Self::defect_pixels_file_name_impl(
+                    img_width, img_height,
+                    opts.frame.binning.get_ratio() as i32,
+                );
+
+                (file_name, self.device.to_file_name_part())
+            }
+            FileNameArg::RawInfo(info) => {
+                let file_name = Self::defect_pixels_file_name_impl(
+                    info.width, info.height,
+                    info.bin as i32,
+                );
+                (file_name, info.camera.clone())
+            }
+        };
+
         let mut path = PathBuf::new();
-        path.push(&options.calibr.dark_library_path);
-        path.push(&self.device.to_file_name_part());
+        path.push(dark_library_path);
+        path.push(&camera);
         path.push(&defect_pixels_file_name);
         path
     }
 
     pub fn raw_file_dest_dir(
         &self,
-        time:        DateTime<Utc>, // used for flat frames
+        date:        DateTime<Utc>, // used for flat frames
         cam_options: &CamOptions,
-    ) -> PathBuf {
-        let save_dir = cam_options.raw_file_dest_dir(
-            time,
+    ) -> String {
+        let (img_width, img_height) = cam_options.frame.active_sensor_size(
             self.sensor_width,
             self.sensor_height,
-            self.cooler_supported
         );
-        PathBuf::from(&save_dir)
+        let temperature = if self.cooler_supported && cam_options.ctrl.enable_cooler {
+            Some(cam_options.ctrl.temperature)
+        } else {
+            None
+        };
+        Self::raw_directory_name_impl(
+            date,
+            cam_options.frame.frame_type,
+            cam_options.frame.exposure(),
+            cam_options.frame.gain as i32,
+            cam_options.frame.offset,
+            img_width,
+            img_height,
+            cam_options.frame.binning.get_ratio() as i32,
+            temperature,
+        )
     }
+
+    fn master_file_name_impl(
+        date:        Option<DateTime<Utc>>,
+        frame_type:  FrameType,
+        exposure:    f64,
+        gain:        i32,
+        offset:      i32,
+        img_width:   usize,
+        img_height:  usize,
+        bin:         i32,
+        temperature: Option<f64>,
+    ) -> String {
+        let mut result = format!(
+            "{}_{}_g{}_offs{}_{}x{}",
+            Self::type_part_of_file_name(frame_type),
+            Self::exp_to_str(exposure),
+            gain,
+            offset,
+            img_width,
+            img_height,
+        );
+        if bin != 1 {
+            result += "_";
+            result += &Self::bin_to_str(bin);
+        }
+        if let Some(temperature) = temperature {
+            result += "_";
+            result += &Self::temperature_to_str(temperature);
+        }
+        if frame_type == FrameType::Flats {
+            let date = date.expect("Date must be defined for master flat file");
+            result += "_";
+            result += &Self::date_to_str(date);
+        }
+        result += ".fit";
+        result
+    }
+
+    fn defect_pixels_file_name_impl(
+        img_width:  usize,
+        img_height: usize,
+        bin:        i32,
+    ) -> String {
+        let mut result = format!(
+            "defect_pixels_{}x{}",
+            img_width, img_height
+        );
+        if bin != 1 {
+            result += "_";
+            result += &Self::bin_to_str(bin);
+        }
+        result += ".txt";
+        result
+    }
+
+    fn raw_directory_name_impl(
+        date:        DateTime<Utc>,
+        frame_type:  FrameType,
+        exposure:    f64,
+        gain:        i32,
+        offset:      i32,
+        img_width:   usize,
+        img_height:  usize,
+        bin:         i32,
+        temperature: Option<f64>,
+    ) -> String {
+        let mut result = format!(
+            "{}_{}__{}_g{}_offs{}_{}x{}",
+            Self::type_part_of_file_name(frame_type),
+            Self::date_to_str(date),
+            Self::exp_to_str(exposure),
+            gain,
+            offset,
+            img_width,
+            img_height,
+        );
+        if bin != 1 {
+            result += "_";
+            result += &Self::bin_to_str(bin);
+        }
+        if let Some(temperature) = temperature {
+            result += "_";
+            result += &Self::temperature_to_str(temperature);
+        }
+        result
+    }
+
+    fn date_to_str(date: DateTime<Utc>) -> String {
+        date.format("%Y-%m-%d").to_string()
+    }
+
+    fn type_part_of_file_name(frame_type:  FrameType) -> &'static str {
+        match frame_type {
+            FrameType::Undef => unreachable!(),
+            FrameType::Lights => "light",
+            FrameType::Flats => "flat",
+            FrameType::Darks => "dark",
+            FrameType::Biases => "bias",
+        }
+    }
+
+    fn exp_to_str(exp: f64) -> String {
+        if exp >= 1.0 {
+            format!("{:.0}s", exp)
+        } else if exp >= 0.001 {
+            format!("{:.0}ms", 1_000.8 * exp)
+        } else {
+            format!("{:.0}us", 1_000_000.8 * exp)
+        }
+    }
+
+    fn temperature_to_str(temperature: f64) -> String {
+        format!("{:+.0}C", temperature)
+    }
+
+    fn bin_to_str(bin: i32) -> String {
+        format!("bin{0}x{0}", bin)
+    }
+
 }
 
 pub fn gain_to_value(

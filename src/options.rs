@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
 
 use crate::{
@@ -152,6 +151,13 @@ impl FrameOptions {
             FrameType::Biases => self.exp_bias = value,
             _                 => self.exp_main = value,
         }
+    }
+
+    pub fn active_sensor_size(&self, sensor_width: usize, sensor_height: usize) -> (usize, usize) {
+        let cropped_width = self.crop.translate(sensor_width);
+        let cropped_height = self.crop.translate(sensor_height);
+        let bin = self.binning.get_ratio();
+        (cropped_width/bin, cropped_height/bin)
     }
 }
 
@@ -540,126 +546,6 @@ impl CamOptions {
         let width_mm = cropped_width * pixel_width_mm;
         let height_mm = cropped_height * pixel_height_mm;
         (width_mm, height_mm)
-    }
-
-    fn type_part_of_file_name(&self) -> &'static str {
-        match self.frame.frame_type {
-            FrameType::Undef => unreachable!(),
-            FrameType::Lights => "light",
-            FrameType::Flats => "flat",
-            FrameType::Darks => "dark",
-            FrameType::Biases => "bias",
-        }
-    }
-
-    fn commont_part_of_file_name(&self, sensor_width: usize, sensor_height: usize) -> String {
-        let bin = self.frame.binning.get_ratio();
-        let cropped_width = self.frame.crop.translate(sensor_width/bin);
-        let cropped_height = self.frame.crop.translate(sensor_height/bin);
-        let exp_to_str = |exp: f64| {
-            if exp > 1.0 {
-                format!("{:.0}", exp)
-            } else if exp >= 0.1 {
-                format!("{:.1}", exp)
-            } else {
-                format!("{:.3}", exp)
-            }
-        };
-        let mut common_part = format!(
-            "{}s_g{}_offs{}_{}x{}",
-            exp_to_str(self.frame.exposure()),
-            self.frame.gain,
-            self.frame.offset,
-            cropped_width,
-            cropped_height,
-        );
-        if bin != 1 {
-            common_part.push_str(&format!("_bin{}x{}", bin, bin));
-        }
-        common_part
-    }
-
-    fn temperature_part_of_file_name(&self, cooler_supported: bool) -> Option<String> {
-        if cooler_supported && self.ctrl.enable_cooler {
-            Some(format!("{:+.0}C", self.ctrl.temperature))
-        } else {
-            None
-        }
-    }
-
-    pub fn raw_master_file_name(
-        &self,
-        time:             Option<DateTime<Utc>>,
-        sensor_width:     usize,
-        sensor_height:    usize,
-        cooler_supported: bool
-    ) -> String {
-        let mut result = String::new();
-        let type_part = self.type_part_of_file_name();
-        let common_part = self.commont_part_of_file_name(sensor_width, sensor_height);
-        result.push_str(type_part);
-        result.push_str("_");
-        result.push_str(&common_part);
-        if self.frame.frame_type != FrameType::Flats {
-            let temp_path = self.temperature_part_of_file_name(cooler_supported);
-            if let Some(temp) = &temp_path {
-                result.push_str("_");
-                result.push_str(&temp);
-            }
-        }
-        if self.frame.frame_type == FrameType::Flats {
-            let time = time.expect("You must define time for master flat file!");
-            let now_date_str = time.format("%Y-%m-%d").to_string();
-            result.push_str("_");
-            result.push_str(&now_date_str);
-        }
-        result.push_str(".fit");
-        result
-    }
-
-    pub fn defect_pixels_file_name(
-        &self,
-        sensor_width:  usize,
-        sensor_height: usize,
-    ) -> String {
-        let bin = self.frame.binning.get_ratio();
-        let cropped_width = self.frame.crop.translate(sensor_width/bin);
-        let cropped_height = self.frame.crop.translate(sensor_height/bin);
-
-        let mut result = String::new();
-        result.push_str("defect_pixels");
-        result.push_str(&format!("_{}x{}", cropped_width, cropped_height));
-        if bin != 1 {
-            result.push_str(&format!("_bin{}x{}", bin, bin));
-        }
-        result.push_str(".txt");
-        result
-    }
-
-    pub fn raw_file_dest_dir(
-        &self,
-        time:             DateTime<Utc>,
-        sensor_width:     usize,
-        sensor_height:    usize,
-        cooler_supported: bool
-    ) -> String {
-        let mut save_dir = String::new();
-        let type_part = self.type_part_of_file_name();
-        let common_part = self.commont_part_of_file_name(sensor_width, sensor_height);
-        save_dir.push_str(type_part);
-        save_dir.push_str("_");
-        let now_date_str = time.format("%Y-%m-%d").to_string();
-        save_dir.push_str(&now_date_str);
-        save_dir.push_str("__");
-        save_dir.push_str(&common_part);
-        if self.frame.frame_type != FrameType::Flats {
-            let temp_path = self.temperature_part_of_file_name(cooler_supported);
-            if let Some(temp) = &temp_path {
-                save_dir.push_str("_");
-                save_dir.push_str(&temp);
-            }
-        }
-        save_dir
     }
 }
 

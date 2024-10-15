@@ -2191,7 +2191,6 @@ impl CameraUi {
         let models_row_cnt = gtk_utils::get_model_row_count(model.upcast_ref());
         let to_index = items.len();
         for item in &items[models_row_cnt..to_index] {
-
             let local_time_str =
                 if let Some(time) = &item.time {
                     let local_time: DateTime<Local> = DateTime::from(*time);

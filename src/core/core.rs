@@ -429,6 +429,18 @@ impl Core {
                 prop: device_prop.to_string(),
             };
 
+            let master_flat = if options.calibr.flat_frame_en {
+                options.calibr.flat_frame_fname.clone()
+            } else {
+                None
+            };
+            let calibr_params = Some(CalibrParams {
+                extract_dark:  options.calibr.dark_frame_en,
+                dark_lib_path: options.calibr.dark_library_path.clone(),
+                flat_fname:    master_flat,
+                search_and_remove_hot_pixs: options.calibr.hot_pixels,
+            });
+
             let new_stop_flag = Arc::new(AtomicBool::new(false));
             *self.img_proc_stop_flag.lock().unwrap() = Arc::clone(&new_stop_flag);
 
@@ -440,41 +452,14 @@ impl Core {
                 frame:           Arc::clone(&self.cur_frame),
                 stop_flag:       new_stop_flag,
                 ref_stars:       Arc::clone(&self.ref_stars),
-                calibr_params:   None,
                 calibr_data:     Arc::clone(&self.calibr_data),
                 view_options:    options.preview.preview_params(),
                 frame_options:   options.cam.frame.clone(),
                 quality_options: Some(options.quality.clone()),
                 live_stacking:   None,
+                calibr_params,
             }
         };
-
-        if let (Some(cam_opts), Some(camera)) = (mode.mode.cam_opts(), mode.mode.cam_device()) {
-            if cam_opts.frame.frame_type == FrameType::Lights {
-                let mut fname_utils = FileNameUtils::default();
-                fname_utils.init(&self.indi, camera);
-
-                let options = self.options.read().unwrap();
-                let (master_dark, def_pixels) = if options.calibr.dark_frame_en {
-                    (Some(fname_utils.master_dark_file_name(cam_opts, &options)),
-                    Some(fname_utils.defect_pixels_file_name(cam_opts, &options)))
-                } else {
-                    (None, None)
-                };
-                let master_flat = if options.calibr.flat_frame_en {
-                    options.calibr.flat_frame_fname.clone()
-                } else {
-                    None
-                };
-                let calibr_params = CalibrParams {
-                    dark_fname:       master_dark,
-                    flat_fname:       master_flat,
-                    def_pixels_fname: def_pixels,
-                    hot_pixels:       options.calibr.hot_pixels,
-                };
-                command_data.calibr_params = Some(calibr_params);
-            }
-        }
 
         mode.mode.complete_img_process_params(&mut command_data);
 
@@ -589,6 +574,13 @@ impl Core {
 
         let options = self.options.read().unwrap();
 
+        let calibr_params = Some(CalibrParams {
+            extract_dark:  options.calibr.dark_frame_en,
+            dark_lib_path: options.calibr.dark_library_path.clone(),
+            flat_fname:    None,
+            search_and_remove_hot_pixs: options.calibr.hot_pixels,
+        });
+
         let command = FrameProcessCommandData {
             mode_type:       ModeType::OpeningImgFile,
             camera:          DeviceAndProp::default(),
@@ -597,12 +589,12 @@ impl Core {
             frame:           Arc::clone(&self.cur_frame),
             stop_flag:       new_stop_flag,
             ref_stars:       Arc::clone(&self.ref_stars),
-            calibr_params:   None,
             calibr_data:     Arc::clone(&self.calibr_data),
             view_options:    options.preview.preview_params(),
             frame_options:   options.cam.frame.clone(),
             quality_options: None,
             live_stacking:   None,
+            calibr_params,
         };
 
         let result_fun = {
@@ -953,7 +945,7 @@ impl Core {
     ) -> anyhow::Result<()> {
         mode_data.mode.abort()?;
         let prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
-        let mut mode = TackingPicturesMode::new(&self.indi, &self.subscribers, None, mode, &self.options,)?;
+        let mut mode = TackingPicturesMode::new(&self.indi, &self.subscribers, None, mode, &self.options)?;
         mode.set_dark_creation_program_item(program_item);
         mode.set_next_mode(Some(prev_mode));
         mode.start()?;

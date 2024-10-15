@@ -6,7 +6,7 @@ use std::{
 use chrono::Utc;
 
 use crate::{
-    core::consts::INDI_SET_PROP_TIMEOUT,
+    core::{consts::INDI_SET_PROP_TIMEOUT, utils::FileNameArg},
     guiding::external_guider::*,
     image::{histogram::*, info::LightFrameInfo, raw::{FrameType, RawAdder, RawImage, RawImageInfo}, stars_offset::*},
     indi,
@@ -160,8 +160,14 @@ impl TackingPicturesMode {
         };
 
         let mut cam_options = opts.cam.clone();
-        if cam_mode == CameraMode::LiveStacking {
-            cam_options.frame.frame_type = crate::image::raw::FrameType::Lights;
+
+        match cam_mode {
+            CameraMode::LiveStacking =>
+                cam_options.frame.frame_type = crate::image::raw::FrameType::Lights,
+            CameraMode::SavingMasterDark|
+            CameraMode::SavingDefectPixels =>
+                cam_options.frame.frame_type = crate::image::raw::FrameType::Darks,
+            _ => {}
         }
 
         Ok(Self {
@@ -252,10 +258,6 @@ impl TackingPicturesMode {
                 let mut options = self.options.write().unwrap();
                 options.cam.frame.frame_type = FrameType::Lights;
                 self.cam_options.frame.frame_type = FrameType::Lights;
-            }
-            CameraMode::SavingMasterDark|
-            CameraMode::SavingDefectPixels => {
-                self.cam_options.frame.frame_type = FrameType::Darks;
             }
             _ => {}
         }
@@ -353,7 +355,7 @@ impl TackingPicturesMode {
             }
             let file_name = self.fname_utils.master_only_file_name(
                 Some(time),
-                &self.cam_options,
+                &FileNameArg::Options(&self.cam_options),
             );
             path.push(&file_name);
             self.out_file_names.master_fname = path;
@@ -363,8 +365,8 @@ impl TackingPicturesMode {
 
         if self.flags.save_defect_pixels {
             self.out_file_names.defect_pixels_fname = self.fname_utils.defect_pixels_file_name(
-                &self.cam_options,
-                &options
+                &FileNameArg::Options(&self.cam_options),
+                &options.calibr.dark_library_path
             );
         }
 

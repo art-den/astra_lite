@@ -137,6 +137,7 @@ pub struct RawImageInfo {
     pub exposure:    f64,
     pub integr_time: Option<f64>, // for master files
     pub camera:      String,
+    pub ccd_temp:    Option<f64>,
 }
 
 pub struct RawImage {
@@ -185,6 +186,7 @@ impl RawImage {
         let frame_str   = image_hdu.get_str("FRAME");
         let time_str    = image_hdu.get_str("DATE-OBS").unwrap_or_default();
         let camera      = image_hdu.get_str("INSTRUME").unwrap_or_default().to_string();
+        let ccd_temp    = image_hdu.get_f64("CCD-TEMP");
 
         let max_value = ((1 << bitdepth) - 1) as u16;
         let cfa = CfaType::from_str(&bayer);
@@ -200,18 +202,9 @@ impl RawImage {
                 .ok();
 
         let info = RawImageInfo {
-            time,
-            width,
-            height,
-            gain,
-            offset,
-            cfa,
-            bin,
-            max_value,
-            frame_type,
-            exposure,
-            integr_time,
-            camera,
+            time, width, height, gain, offset, cfa, bin,
+            max_value, frame_type, exposure, integr_time,
+            camera, ccd_temp,
         };
 
         let data = FitsReader::read_data(&image_hdu, &mut stream)?;
@@ -241,6 +234,9 @@ impl RawImage {
         hdu.set_str("INSTRUME",   &self.info.camera);
         if let Some(bayer) = self.info.cfa.to_str() {
             hdu.set_str("BAYERPAT", bayer);
+        }
+        if let Some(ccd_temp) = self.info.ccd_temp {
+            hdu.set_f64("CCD-TEMP", ccd_temp);
         }
         writer.write_header_and_data_u16(&mut file, &hdu, &self.data)?;
         Ok(())
