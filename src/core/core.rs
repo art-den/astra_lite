@@ -739,6 +739,11 @@ impl Core {
     }
 
     pub fn start_goto_image(&self) -> anyhow::Result<()> {
+        let image = self.cur_frame.image.read().unwrap();
+        if image.is_empty() {
+            anyhow::bail!("Image is empty");
+        }
+        drop(image);
         let image_info = self.cur_frame.info.read().unwrap();
         let ResultImageInfo::LightInfo(light_frame_info) = &*image_info else {
             anyhow::bail!("Image is not light frame");

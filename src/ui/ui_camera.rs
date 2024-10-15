@@ -1103,6 +1103,8 @@ impl CameraUi {
             ("start_live_stacking",    exposure_supported && !live_active && can_change_mode && frame_mode_is_lights),
             ("stop_live_stacking",     live_active),
             ("continue_live_stacking", livestacking_paused && can_change_mode),
+            ("load_image",             waiting),
+            ("plate_solve_and_goto",   waiting || liveview_active),
         ]);
 
         ui.show_widgets(&[
