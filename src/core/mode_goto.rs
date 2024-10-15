@@ -169,9 +169,10 @@ impl GotoMode {
         &mut self,
         action: ProcessPlateSolverResultAction,
     ) -> anyhow::Result<bool> {
-        let result = match self.plate_solver.get_result() {
-            Some(result) => result?,
-            None => return Ok(false),
+        let result = match self.plate_solver.get_result()? {
+            PlateSolveResult::Waiting => return Ok(false),
+            PlateSolveResult::Done(result) => result,
+            PlateSolveResult::Failed => anyhow::bail!("Can't platesolve image")
         };
 
         log::debug!(

@@ -10,12 +10,18 @@ pub struct PlateSolveConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct PlateSolveResult {
+pub struct PlateSolveOkResult {
     pub crd_j2000: EqCoord,
     pub crd_now: EqCoord,
     pub width: f64,
     pub height: f64,
     pub rotation: f64,
+}
+
+pub enum PlateSolveResult {
+    Waiting,
+    Done(PlateSolveOkResult),
+    Failed,
 }
 
 pub struct PlateSolver {
@@ -69,7 +75,7 @@ impl PlateSolver {
         Ok(())
     }
 
-    pub fn get_result(&mut self) -> Option<anyhow::Result<PlateSolveResult>> {
+    pub fn get_result(&mut self) -> anyhow::Result<PlateSolveResult> {
         self.solver.get_result()
     }
 }
@@ -77,11 +83,11 @@ impl PlateSolver {
 trait PlateSolverIface {
     fn support_stars_as_input(&self) -> bool;
     fn start(&mut self, data: &PlateSolverInData, config: &PlateSolveConfig) -> anyhow::Result<()>;
-    fn get_result(&mut self) -> Option<anyhow::Result<PlateSolveResult>>;
+    fn get_result(&mut self) -> anyhow::Result<PlateSolveResult>;
 }
 
 #[derive(Clone)]
 pub struct PlateSolverEvent {
     pub cam_name: String,
-    pub result:   PlateSolveResult,
+    pub result:   PlateSolveOkResult,
 }

@@ -168,12 +168,12 @@ impl PlateSolverIface for AstrometryPlateSolver {
         }
     }
 
-    fn get_result(&mut self) -> Option<anyhow::Result<PlateSolveResult>> {
+    fn get_result(&mut self) -> anyhow::Result<PlateSolveResult> {
         if let Some(child) = &mut self.child {
             let exit_status = match child.try_wait() {
                 Ok(Some(status)) => status,
-                Err(e) => return Some(Err(e.into())),
-                _ => return None,
+                Err(e)           => return Err(e.into()),
+                _                => return Ok(PlateSolveResult::Waiting),
             };
             if exit_status.success() {
                 let mut output = child.stdout.take().unwrap();
@@ -214,9 +214,7 @@ impl PlateSolverIface for AstrometryPlateSolver {
                 if result_ra.is_none() || result_dec.is_none()
                 || result_width.is_none() || result_height.is_none() {
                     log::error!("Can't extract data from solve-field stdout:\n{}", str_output);
-                    return Some(Err(anyhow::format_err!(
-                        "Can't extract data from solve-field stdout"
-                    )));
+                    return Ok(PlateSolveResult::Failed);
                 }
 
                 let crd_j2000 = EqCoord {
@@ -230,26 +228,26 @@ impl PlateSolverIface for AstrometryPlateSolver {
                 let epoch_cvt = EpochCvt::new(&j2000, &time);
                 let crd_now = epoch_cvt.convert_eq(&crd_j2000);
 
-                let result = PlateSolveResult {
+                let result = PlateSolveOkResult {
                     crd_j2000, crd_now,
                     width: result_width.unwrap_or(0.0),
                     height: result_height.unwrap_or(0.0),
                     rotation: result_rot.unwrap_or(0.0),
                 };
-                return Some(Ok(result));
+                return Ok(PlateSolveResult::Done(result));
             } else {
                 let mut output = child.stderr.take().unwrap();
                 let mut str_output = String::new();
                 _ = output.read_to_string(&mut str_output);
 
-                return Some(Err(anyhow::format_err!(
+                return Err(anyhow::format_err!(
                     "solve-field exited with code {}\n\n{}",
                     exit_status.code().unwrap_or_default(),
                     str_output
-                )));
+                ));
             }
         }
 
-        return None;
+        anyhow::bail!("Not started!");
     }
 }
