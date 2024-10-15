@@ -57,7 +57,8 @@ impl CapturePlatesolveMode {
     fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> anyhow::Result<()> {
         let image = image.read().unwrap();
         let mut config = PlateSolveConfig::default();
-        config.time_out = self.ps_opts.blind_timeout;
+        config.time_out = self.ps_opts.timeout;
+        config.blind_time_out = self.ps_opts.blind_timeout;
         self.plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
         drop(image);
         Ok(())
@@ -70,7 +71,8 @@ impl CapturePlatesolveMode {
         img_height: usize
     ) -> anyhow::Result<()> {
         let mut config = PlateSolveConfig::default();
-        config.time_out = self.ps_opts.blind_timeout;
+        config.time_out = self.ps_opts.timeout;
+        config.blind_time_out = self.ps_opts.blind_timeout;
         let stars_arg = PlateSolverInData::Stars{
             stars,
             img_width,

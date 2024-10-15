@@ -3,10 +3,11 @@ use crate::{image::{image::Image, stars::Stars}, options::PlateSolverType, ui::s
 
 mod astrometry;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct PlateSolveConfig {
     pub eq_coord: Option<EqCoord>,
     pub time_out: u32, // in seconds
+    pub blind_time_out: u32, // in seconds
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +27,7 @@ pub enum PlateSolveResult {
 
 pub struct PlateSolver {
     solver: Box<dyn PlateSolverIface + Sync + Send + 'static>,
+    config: PlateSolveConfig,
 }
 
 pub enum PlateSolverInData<'a> {
@@ -44,7 +46,8 @@ impl PlateSolver {
                 Box::new(AstrometryPlateSolver::new()),
         };
         Self {
-            solver
+            solver,
+            config: PlateSolveConfig::default(),
         }
     }
 
@@ -57,7 +60,6 @@ impl PlateSolver {
         data:   &PlateSolverInData,
         config: &PlateSolveConfig
     ) -> anyhow::Result<()> {
-
         match data {
             PlateSolverInData::Image(image) => {
                 if image.is_empty() {
@@ -70,19 +72,31 @@ impl PlateSolver {
                 }
             }
         }
-
+        self.config = config.clone();
         self.solver.start(data, config)?;
         Ok(())
     }
 
     pub fn get_result(&mut self) -> anyhow::Result<PlateSolveResult> {
-        self.solver.get_result()
+        let result = self.solver.get_result();
+
+        if matches!(result, Ok(PlateSolveResult::Failed))
+        && self.config.eq_coord.is_some()
+        && self.solver.support_coordinates() {
+            log::debug!("Restarting platesolver in blind mode...");
+            self.config.eq_coord = None;
+            self.solver.restart(&self.config)?;
+            return Ok(PlateSolveResult::Waiting);
+        }
+        result
     }
 }
 
 trait PlateSolverIface {
     fn support_stars_as_input(&self) -> bool;
+    fn support_coordinates(&self) -> bool;
     fn start(&mut self, data: &PlateSolverInData, config: &PlateSolveConfig) -> anyhow::Result<()>;
+    fn restart(&mut self, config: &PlateSolveConfig) -> anyhow::Result<()>;
     fn get_result(&mut self) -> anyhow::Result<PlateSolveResult>;
 }
 

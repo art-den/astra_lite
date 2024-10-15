@@ -142,6 +142,7 @@ impl GotoMode {
         let mut config = PlateSolveConfig::default();
         config.eq_coord = Some(self.eq_coord.clone());
         config.time_out = self.ps_opts.timeout;
+        config.blind_time_out = self.ps_opts.blind_timeout;
         self.plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
         drop(image);
         Ok(())
@@ -156,6 +157,7 @@ impl GotoMode {
         let mut config = PlateSolveConfig::default();
         config.eq_coord = Some(self.eq_coord.clone());
         config.time_out = self.ps_opts.timeout;
+        config.blind_time_out = self.ps_opts.blind_timeout;
         let stars_arg = PlateSolverInData::Stars{
             stars,
             img_width,
@@ -254,7 +256,8 @@ impl Mode for GotoMode {
             }
             GotoDestination::Image{image, info} => {
                 let mut config = PlateSolveConfig::default();
-                config.time_out = self.ps_opts.blind_timeout;
+                config.time_out = self.ps_opts.timeout;
+                config.blind_time_out = self.ps_opts.blind_timeout;
                 if self.plate_solver.support_stars_as_input() {
                     self.plate_solver.start(
                         &PlateSolverInData::Stars{

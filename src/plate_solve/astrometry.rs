@@ -5,9 +5,16 @@ use super::*;
 
 const EXECUTABLE_FNAME: &str = "solve-field";
 
+enum Mode {
+    None,
+    Image,
+    Stars { img_width: usize, img_height: usize },
+}
+
 pub struct AstrometryPlateSolver {
     child:     Option<std::process::Child>,
     file_name: Option<PathBuf>,
+    mode:      Mode,
 }
 
 impl AstrometryPlateSolver {
@@ -15,6 +22,7 @@ impl AstrometryPlateSolver {
         Self {
             child: None,
             file_name: None,
+            mode: Mode::None,
         }
     }
 
@@ -44,6 +52,11 @@ impl AstrometryPlateSolver {
         config: &PlateSolveConfig,
         extra_args: impl Fn(&mut std::process::Command)
     ) -> anyhow::Result<()> {
+        let time_out = if config.eq_coord.is_some() {
+            config.time_out
+        } else {
+            config.blind_time_out
+        };
         use std::process::*;
         let mut cmd = Command::new(EXECUTABLE_FNAME);
         cmd.stdout(std::process::Stdio::piped());
@@ -60,9 +73,9 @@ impl AstrometryPlateSolver {
         if let Some(crd) = &config.eq_coord {
             cmd.arg("--ra").arg(format!("{:.6}", radian_to_degree(crd.ra)));
             cmd.arg("--dec").arg(format!("{:.6}", radian_to_degree(crd.dec)));
-            cmd.arg("--radius").arg("20");
+            cmd.arg("--radius").arg("10");
         }
-        cmd.arg("--cpulimit").arg(config.time_out.to_string());
+        cmd.arg("--cpulimit").arg(time_out.to_string());
         extra_args(&mut cmd);
         cmd.arg(file_with_data);
         log::debug!("Running solve-field args={:?}", cmd.get_args());
@@ -85,8 +98,8 @@ impl AstrometryPlateSolver {
         log::debug!("Saving image into {:?} for plate solving...", temp_file);
         layer.save_to_tiff(&temp_file)?;
         self.file_name = Some(temp_file.clone());
-
         self.exec_solve_field(&temp_file, config, |_| {})?;
+        self.mode = Mode::Image;
 
         Ok(())
     }
@@ -142,6 +155,7 @@ impl AstrometryPlateSolver {
                 cmd.arg("--height").arg(img_height.to_string());
             }
         )?;
+        self.mode = Mode::Stars {img_width, img_height};
 
         Ok(())
     }
@@ -149,6 +163,10 @@ impl AstrometryPlateSolver {
 
 impl PlateSolverIface for AstrometryPlateSolver {
     fn support_stars_as_input(&self) -> bool {
+        true
+    }
+
+    fn support_coordinates(&self) -> bool {
         true
     }
 
@@ -166,6 +184,30 @@ impl PlateSolverIface for AstrometryPlateSolver {
             PlateSolverInData::Stars{ stars, img_width, img_height } =>
                 self.start_platesolve_stars(*stars, *img_width, *img_height, config),
         }
+    }
+
+    fn restart(&mut self, config: &PlateSolveConfig) -> anyhow::Result<()> {
+        if let Some(temp_file) = &self.file_name.clone() {
+            // TODO: refactoring!
+            match self.mode {
+                Mode::Image =>
+                    self.exec_solve_field(&temp_file, config, |_| {})?,
+                Mode::Stars {img_width, img_height} =>
+                    self.exec_solve_field(
+                        &temp_file,
+                        config,
+                        |cmd| {
+                            cmd.arg("--width").arg(img_width.to_string());
+                            cmd.arg("--height").arg(img_height.to_string());
+                        }
+                    )?,
+                Mode::None =>
+                    anyhow::bail!("Can't restart because was not started!"),
+            }
+        } else {
+            anyhow::bail!("File for solvr already deleted!");
+        }
+        Ok(())
     }
 
     fn get_result(&mut self) -> anyhow::Result<PlateSolveResult> {
