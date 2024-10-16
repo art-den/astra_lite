@@ -96,7 +96,7 @@ impl CapturePlatesolveMode {
             value_to_sexagesimal(radian_to_degree(result.crd_j2000.dec), true, 8),
             value_to_sexagesimal(radian_to_hour(result.crd_now.ra), true, 9),
             value_to_sexagesimal(radian_to_degree(result.crd_now.dec), true, 8),
-            radian_to_hour(result.width),
+            radian_to_degree(result.width),
             radian_to_degree(result.height),
         );
 

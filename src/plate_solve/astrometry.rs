@@ -226,6 +226,8 @@ impl PlateSolverIface for AstrometryPlateSolver {
                 let mut str_output = String::new();
                 _ = output.read_to_string(&mut str_output);
 
+                log::debug!("Platesolver stdout:\n{}", str_output);
+
                 self.child = None;
 
                 let re_ra_dec = regex::Regex::new(r"Field center: \(RA,Dec\) = \(([0-9.+-]+), ([0-9.+-]+)\)*.").unwrap();
