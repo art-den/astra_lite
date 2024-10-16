@@ -17,6 +17,7 @@ enum State {
     CorrectMount,
     TackingFinalPicture,
     FinalPlateSolving,
+    Finished,
 }
 
 pub enum GotoDestination {
@@ -41,6 +42,7 @@ pub struct GotoMode {
     unpark_seconds:  usize,
     goto_seconds:    usize,
     goto_ok_seconds: usize,
+    extra_stages:    usize,
 }
 
 impl GotoMode {
@@ -75,6 +77,7 @@ impl GotoMode {
             unpark_seconds:  0,
             goto_seconds:    0,
             goto_ok_seconds: 0,
+            extra_stages:    0,
             plate_solver,
             destination,
             camera,
@@ -228,15 +231,49 @@ impl Mode for GotoMode {
 
     fn progress_string(&self) -> String {
         match self.state {
-            State::None => "Goto...".to_string(),
-            State::ImagePlateSolving => "Custom image plate solving".to_string(),
-            State::Unparking => "Unpark mount".to_string(),
-            State::Goto => "Goto coordinate".to_string(),
-            State::TackingPicture => "Tacking picture".to_string(),
-            State::PlateSolving => "Plate solving".to_string(),
-            State::CorrectMount => "Mount correction".to_string(),
-            State::TackingFinalPicture => "Tacking final picture".to_string(),
-            State::FinalPlateSolving => "Final plate solving".to_string(),
+            State::ImagePlateSolving =>
+                "Custom image plate solving".to_string(),
+            State::Unparking =>
+                "Unpark mount".to_string(),
+            State::Goto =>
+                "Goto coordinate".to_string(),
+            State::TackingPicture =>
+                "Tacking picture".to_string(),
+            State::PlateSolving =>
+                "Plate solving".to_string(),
+            State::CorrectMount =>
+                "Mount correction".to_string(),
+            State::TackingFinalPicture =>
+                "Tacking final picture".to_string(),
+            State::FinalPlateSolving =>
+                "Final plate solving".to_string(),
+            State::None|State::Finished =>
+                "Goto and platesolve".to_string(),
+        }
+    }
+
+    fn progress(&self) -> Option<Progress> {
+        let mut stage = match self.state {
+            State::None => return None,
+            State::ImagePlateSolving => -1,
+            State::Unparking => 0,
+            State::Goto => 0,
+            State::TackingPicture => 1,
+            State::PlateSolving => 2,
+            State::CorrectMount => 3,
+            State::TackingFinalPicture => 4,
+            State::FinalPlateSolving => 5,
+            State::Finished => 6,
+        };
+
+        stage += self.extra_stages as i32;
+        if stage >= 0 {
+            Some(Progress {
+                cur: stage as usize,
+                total: self.extra_stages + 6
+            })
+        } else {
+            None
         }
     }
 
@@ -251,10 +288,12 @@ impl Mode for GotoMode {
     fn start(&mut self) -> anyhow::Result<()> {
         match &self.destination {
             GotoDestination::Coord(coord) => {
+                self.extra_stages = 0;
                 self.eq_coord = coord.clone();
                 self.start_goto()?;
             }
             GotoDestination::Image{image, info} => {
+                self.extra_stages = 1;
                 let mut config = PlateSolveConfig::default();
                 config.time_out = self.ps_opts.timeout;
                 config.blind_time_out = self.ps_opts.blind_timeout;
@@ -282,7 +321,8 @@ impl Mode for GotoMode {
     }
 
     fn abort(&mut self) -> anyhow::Result<()> {
-        abort_camera_exposure(&self.indi, &self.camera)?;
+        _ = abort_camera_exposure(&self.indi, &self.camera);
+        _ = self.indi.mount_abort_motion(&self.mount);
         self.state = State::None;
         Ok(())
     }
@@ -354,7 +394,7 @@ impl Mode for GotoMode {
                     ProcessPlateSolverResultAction::Sync
                 )?;
                 if ok {
-                    self.start_take_picture()?;
+                    self.state = State::Finished;
                     return Ok(NotifyResult::Finished { next_mode: None })
                 }
             }

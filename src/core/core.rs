@@ -864,6 +864,7 @@ impl Core {
     ) -> anyhow::Result<()> {
         let mut mode_changed = false;
         let mut progress_changed = false;
+        let mut finished_progress_and_type = None;
         match result {
             NotifyResult::ProgressChanges => {
                 progress_changed = true;
@@ -874,6 +875,12 @@ impl Core {
             }
             NotifyResult::Finished { next_mode } => {
                 let next_is_none = next_mode.is_none();
+                if next_is_none {
+                    finished_progress_and_type = Some((
+                        mode_data.mode.progress(),
+                        mode_data.mode.get_type()
+                    ));
+                }
                 let prev_mode = std::mem::replace(
                     &mut mode_data.mode,
                     next_mode.unwrap_or_else(|| Box::new(WaitingMode))
@@ -931,10 +938,17 @@ impl Core {
                 subscribers.inform_event(CoreEvent::ModeChanged);
             }
             if progress_changed {
-                subscribers.inform_event(CoreEvent::Progress(
-                    mode_data.mode.progress(),
-                    mode_data.mode.get_type(),
-                ));
+                if let Some((finished_progress, finished_mode_type)) = finished_progress_and_type {
+                    subscribers.inform_event(CoreEvent::Progress(
+                        finished_progress,
+                        finished_mode_type,
+                    ));
+                } else {
+                    subscribers.inform_event(CoreEvent::Progress(
+                        mode_data.mode.progress(),
+                        mode_data.mode.get_type(),
+                    ));
+                }
             }
         }
 
@@ -942,9 +956,9 @@ impl Core {
     }
 
     fn start_dark_libarary_mode_stage(
-        self: &Arc<Self>,
-        mode_data: &mut ModeData,
-        mode: CameraMode,
+        self:         &Arc<Self>,
+        mode_data:    &mut ModeData,
+        mode:         CameraMode,
         program_item: &DarkCreationProgramItem
     ) -> anyhow::Result<()> {
         mode_data.mode.abort()?;

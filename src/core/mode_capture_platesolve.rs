@@ -8,6 +8,7 @@ enum State {
     None,
     Capturing,
     PlateSolve,
+    Finished,
 }
 
 pub struct CapturePlatesolveMode {
@@ -132,10 +133,23 @@ impl Mode for CapturePlatesolveMode {
 
     fn progress_string(&self) -> String {
         match self.state {
-            State::None       => "???".to_string(),
-            State::Capturing  => "Capturing image".to_string(),
-            State::PlateSolve => "Platesolving...".to_string(),
+            State::Capturing =>
+                "Capturing image".to_string(),
+            State::PlateSolve =>
+                "Platesolving...".to_string(),
+            State::None|State::Finished =>
+                "Capture, platesolve & sync".to_string(),
         }
+    }
+
+    fn progress(&self) -> Option<Progress> {
+        let stage = match self.state {
+            State::None       => 0,
+            State::Capturing  => 0,
+            State::PlateSolve => 1,
+            State::Finished   => 2,
+        };
+        Some(Progress { cur: stage, total: 2 })
     }
 
     fn cam_device(&self) -> Option<&DeviceAndProp> {
@@ -155,7 +169,8 @@ impl Mode for CapturePlatesolveMode {
     }
 
     fn abort(&mut self) -> anyhow::Result<()> {
-        abort_camera_exposure(&self.indi, &self.camera)?;
+        _ = abort_camera_exposure(&self.indi, &self.camera);
+        _ = self.indi.mount_abort_motion(&self.mount);
         self.state = State::None;
         Ok(())
     }
@@ -187,6 +202,7 @@ impl Mode for CapturePlatesolveMode {
             State::PlateSolve => {
                 let ok = self.try_process_plate_solving_result()?;
                 if ok {
+                    self.state = State::Finished;
                     return Ok(NotifyResult::Finished { next_mode: None });
                 }
             }
