@@ -165,6 +165,15 @@ impl AstrometryPlateSolver {
         Ok(())
     }
 
+    fn angle_to_radian(angle: Option<f64>, unit: &str) -> Option<f64> {
+        match unit {
+            "degrees"|"degree"|"deg" =>
+                angle.map(degree_to_radian),
+            "arcminutes"|"arcminute" =>
+                angle.map(arcmin_to_radian),
+            _ => None
+        }
+    }
 }
 
 impl PlateSolverIface for AstrometryPlateSolver {
@@ -241,37 +250,15 @@ impl PlateSolverIface for AstrometryPlateSolver {
                         result_width = width_str.parse::<f64>().ok();
                         let height_str = cap.get(2).unwrap().as_str();
                         result_height = height_str.parse::<f64>().ok();
-                        let units = cap.get(3).unwrap().as_str();
-                        match units {
-                            "degrees"|"degree"|"deg" => {
-                                result_width = result_width.map(degree_to_radian);
-                                result_height = result_height.map(degree_to_radian);
-                            }
-                            "arcminutes"|"arcminute" => {
-                                result_width = result_width.map(arcmin_to_radian);
-                                result_height = result_height.map(arcmin_to_radian);
-                            }
-                            _ => {
-                                result_width = None;
-                                result_height = None;
-                            }
-                        }
+                        let unit = cap.get(3).unwrap().as_str();
+                        result_width = Self::angle_to_radian(result_width, unit);
+                        result_height = Self::angle_to_radian(result_height, unit);
                     }
                     if let Some(cap) = re_rot.captures(line) {
                         let rot_str = cap.get(1).unwrap().as_str();
                         result_rot = rot_str.parse::<f64>().ok();
-                        let units = cap.get(2).unwrap().as_str();
-                        match units {
-                            "degrees"|"degree"|"deg" => {
-                                result_rot = result_rot.map(degree_to_radian);
-                            }
-                            "arcminutes"|"arcminute" => {
-                                result_rot = result_rot.map(arcmin_to_radian);
-                            }
-                            _ => {
-                                result_rot = None;
-                            }
-                        }
+                        let unit = cap.get(2).unwrap().as_str();
+                        result_rot = Self::angle_to_radian(result_rot, unit);
                     }
                 }
 
