@@ -1,6 +1,6 @@
 use std::{io::Read, path::{Path, PathBuf}};
 use chrono::Utc;
-use crate::{image::{image::Image, simple_fits::*}, ui::sky_map::math::{degree_to_radian, j2000_time, radian_to_degree, EpochCvt}};
+use crate::{image::{image::Image, simple_fits::*}, ui::sky_map::math::{arcmin_to_radian, degree_to_radian, j2000_time, radian_to_degree, EpochCvt}};
 use super::*;
 
 const EXECUTABLE_FNAME: &str = "solve-field";
@@ -63,6 +63,7 @@ impl AstrometryPlateSolver {
         cmd.stderr(std::process::Stdio::piped());
         cmd
             .arg("--no-plots")
+            .arg("--overwrite")
             .arg("--corr").arg("none")
             .arg("--solved").arg("none")
             .arg("--match").arg("none")
@@ -219,8 +220,8 @@ impl PlateSolverIface for AstrometryPlateSolver {
                 self.child = None;
 
                 let re_ra_dec = regex::Regex::new(r"Field center: \(RA,Dec\) = \(([0-9.+-]+), ([0-9.+-]+)\)*.").unwrap();
-                let re_fld_size = regex::Regex::new(r"Field size: ([0-9.]+) x ([0-9.]+) degrees*.").unwrap();
-                let re_rot = regex::Regex::new(r"Field rotation angle: up is ([0-9.+-]+) degrees.*").unwrap();
+                let re_fld_size = regex::Regex::new(r"Field size: ([0-9.]+) x ([0-9.]+) (\w+)*.").unwrap();
+                let re_rot = regex::Regex::new(r"Field rotation angle: up is ([0-9.+-]+) (\w+).*").unwrap();
 
                 let mut result_ra = None;
                 let mut result_dec = None;
@@ -237,19 +238,50 @@ impl PlateSolverIface for AstrometryPlateSolver {
                     }
                     if let Some(cap) = re_fld_size.captures(line) {
                         let width_str = cap.get(1).unwrap().as_str();
-                        result_width = width_str.parse::<f64>().ok().map(degree_to_radian);
+                        result_width = width_str.parse::<f64>().ok();
                         let height_str = cap.get(2).unwrap().as_str();
-                        result_height = height_str.parse::<f64>().ok().map(degree_to_radian);
+                        result_height = height_str.parse::<f64>().ok();
+                        let units = cap.get(3).unwrap().as_str();
+                        match units {
+                            "degrees"|"degree"|"deg" => {
+                                result_width = result_width.map(degree_to_radian);
+                                result_height = result_height.map(degree_to_radian);
+                            }
+                            "arcminutes"|"arcminute" => {
+                                result_width = result_width.map(arcmin_to_radian);
+                                result_height = result_height.map(arcmin_to_radian);
+                            }
+                            _ => {
+                                result_width = None;
+                                result_height = None;
+                            }
+                        }
                     }
                     if let Some(cap) = re_rot.captures(line) {
                         let rot_str = cap.get(1).unwrap().as_str();
-                        result_rot = rot_str.parse::<f64>().ok().map(degree_to_radian);
+                        result_rot = rot_str.parse::<f64>().ok();
+                        let units = cap.get(2).unwrap().as_str();
+                        match units {
+                            "degrees"|"degree"|"deg" => {
+                                result_rot = result_rot.map(degree_to_radian);
+                            }
+                            "arcminutes"|"arcminute" => {
+                                result_rot = result_rot.map(arcmin_to_radian);
+                            }
+                            _ => {
+                                result_rot = None;
+                            }
+                        }
                     }
                 }
 
                 if result_ra.is_none() || result_dec.is_none()
                 || result_width.is_none() || result_height.is_none() {
                     log::error!("Can't extract data from solve-field stdout:\n{}", str_output);
+                    log::error!(
+                        "result_ra={:?}, result_dec={:?}, result_width={:?}, result_height={:?}",
+                        result_ra, result_dec, result_width, result_height
+                    );
                     return Ok(PlateSolveResult::Failed);
                 }
 
