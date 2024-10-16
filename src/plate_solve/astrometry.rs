@@ -86,10 +86,9 @@ impl AstrometryPlateSolver {
         Ok(())
     }
 
-    fn start_platesolve_image(
+    fn save_image_file(
         &mut self,
-        image:  &Image,
-        config: &PlateSolveConfig
+        image: &Image,
     ) -> anyhow::Result<()> {
         self.clear_prev_resources();
         let layer = if !image.l.is_empty() { &image.l } else { &image.g };
@@ -98,18 +97,15 @@ impl AstrometryPlateSolver {
         log::debug!("Saving image into {:?} for plate solving...", temp_file);
         layer.save_to_tiff(&temp_file)?;
         self.file_name = Some(temp_file.clone());
-        self.exec_solve_field(&temp_file, config, |_| {})?;
         self.mode = Mode::Image;
-
         Ok(())
     }
 
-    fn start_platesolve_stars(
+    fn save_stars_file(
         &mut self,
         stars:      &Stars,
         img_width:  usize,
         img_height: usize,
-        config:     &PlateSolveConfig
     ) -> anyhow::Result<()> {
         self.clear_prev_resources();
 
@@ -144,21 +140,30 @@ impl AstrometryPlateSolver {
         fits_writer.write_header_and_bintable_f64(&mut file, &bintable_header, &cols, &data)?;
         drop(file);
         self.file_name = Some(temp_file.clone());
-
-        // execute 'solve-field'
-
-        self.exec_solve_field(
-            &temp_file,
-            config,
-            |cmd| {
-                cmd.arg("--width").arg(img_width.to_string());
-                cmd.arg("--height").arg(img_height.to_string());
-            }
-        )?;
         self.mode = Mode::Stars {img_width, img_height};
-
         Ok(())
     }
+
+    fn start_solver(&mut self, config: &PlateSolveConfig) -> anyhow::Result<()> {
+        let temp_file = self.file_name.clone().unwrap();
+        match self.mode {
+            Mode::Image =>
+                self.exec_solve_field(&temp_file, config, |_| {})?,
+            Mode::Stars {img_width, img_height} =>
+                self.exec_solve_field(
+                    &temp_file,
+                    config,
+                    |cmd| {
+                        cmd.arg("--width").arg(img_width.to_string());
+                        cmd.arg("--height").arg(img_height.to_string());
+                    }
+                )?,
+            Mode::None =>
+                unreachable!(),
+        }
+        Ok(())
+    }
+
 }
 
 impl PlateSolverIface for AstrometryPlateSolver {
@@ -179,34 +184,23 @@ impl PlateSolverIface for AstrometryPlateSolver {
             anyhow::bail!("AstrometryPlateSolver already started");
         }
         match data {
-            PlateSolverInData::Image(image) =>
-                self.start_platesolve_image(image, config),
-            PlateSolverInData::Stars{ stars, img_width, img_height } =>
-                self.start_platesolve_stars(*stars, *img_width, *img_height, config),
+            PlateSolverInData::Image(image) => {
+                self.save_image_file(image)?;
+                self.start_solver(config)?;
+            }
+            PlateSolverInData::Stars{ stars, img_width, img_height } => {
+                self.save_stars_file(*stars, *img_width, *img_height)?;
+                self.start_solver(config)?;
+            }
         }
+        Ok(())
     }
 
     fn restart(&mut self, config: &PlateSolveConfig) -> anyhow::Result<()> {
-        if let Some(temp_file) = &self.file_name.clone() {
-            // TODO: refactoring!
-            match self.mode {
-                Mode::Image =>
-                    self.exec_solve_field(&temp_file, config, |_| {})?,
-                Mode::Stars {img_width, img_height} =>
-                    self.exec_solve_field(
-                        &temp_file,
-                        config,
-                        |cmd| {
-                            cmd.arg("--width").arg(img_width.to_string());
-                            cmd.arg("--height").arg(img_height.to_string());
-                        }
-                    )?,
-                Mode::None =>
-                    anyhow::bail!("Can't restart because was not started!"),
-            }
-        } else {
-            anyhow::bail!("File for solvr already deleted!");
+        if self.child.is_some() {
+            anyhow::bail!("AstrometryPlateSolver already started");
         }
+        self.start_solver(config)?;
         Ok(())
     }
 
