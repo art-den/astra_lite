@@ -135,7 +135,6 @@ impl GotoMode {
 
     fn start_take_picture(&mut self) -> anyhow::Result<()> {
         log::debug!("Tacking picture for plate solve with {:?}", &self.cam_opts.frame);
-        init_cam_continuous_mode(&self.indi, &self.camera, &self.cam_opts.frame, false)?;
         apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
         Ok(())
     }

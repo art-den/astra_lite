@@ -111,7 +111,6 @@ pub struct FrameOptions {
     pub binning:    Binning,
     pub crop:       Crop,
     pub low_noise:  bool,
-    pub delay:      f64,
 }
 
 impl Default for FrameOptions {
@@ -126,17 +125,11 @@ impl Default for FrameOptions {
             binning:    Binning::default(),
             crop:       Crop::default(),
             low_noise:  false,
-            delay:      1.0,
         }
     }
 }
 
 impl FrameOptions {
-    pub fn have_to_use_delay(&self) -> bool {
-        self.exposure() < 2.0 &&
-        self.delay > 0.0
-    }
-
     pub fn exposure(&self) -> f64 {
         match self.frame_type {
             FrameType::Flats  => self.exp_flat,

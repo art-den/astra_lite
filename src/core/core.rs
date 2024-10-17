@@ -615,7 +615,6 @@ impl Core {
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             &self.subscribers,
-            None,
             CameraMode::SingleShot,
             &self.options,
         )?;
@@ -630,7 +629,6 @@ impl Core {
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             &self.subscribers,
-            Some(&self.timer),
             CameraMode::LiveView,
             &self.options,
         )?;
@@ -645,7 +643,6 @@ impl Core {
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             &self.subscribers,
-            Some(&self.timer),
             CameraMode::SavingRawFrames,
             &self.options,
         )?;
@@ -662,7 +659,6 @@ impl Core {
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             &self.subscribers,
-            Some(&self.timer),
             CameraMode::LiveStacking,
             &self.options,
         )?;
@@ -784,6 +780,12 @@ impl Core {
         let Some(cam_device) = &options.cam.device else {
             return Ok(());
         };
+        self.indi.camera_enable_fast_toggle(
+            &cam_device.name,
+            false, // <- do not use fast toggle
+            true,
+            INDI_SET_PROP_TIMEOUT,
+        )?;
         self.indi.command_enable_blob(
             &cam_device.name,
             None,
@@ -963,7 +965,7 @@ impl Core {
     ) -> anyhow::Result<()> {
         mode_data.mode.abort()?;
         let prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
-        let mut mode = TackingPicturesMode::new(&self.indi, &self.subscribers, None, mode, &self.options)?;
+        let mut mode = TackingPicturesMode::new(&self.indi, &self.subscribers, mode, &self.options)?;
         mode.set_dark_creation_program_item(program_item);
         mode.set_next_mode(Some(prev_mode));
         mode.start()?;
@@ -979,36 +981,6 @@ impl Drop for Core {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-
-pub fn init_cam_continuous_mode(
-    indi:         &indi::Connection,
-    device:       &DeviceAndProp,
-    frame:        &FrameOptions,
-    continuously: bool,
-) -> anyhow::Result<()> {
-    if indi.camera_is_fast_toggle_supported(&device.name)? {
-        let use_fast_toggle =
-            continuously && !frame.have_to_use_delay();
-        indi.camera_enable_fast_toggle(
-            &device.name,
-            use_fast_toggle,
-            true,
-            INDI_SET_PROP_TIMEOUT,
-        )?;
-        if use_fast_toggle {
-            let prop_info = indi.camera_get_fast_frames_count_prop_info(
-                &device.name,
-            )?;
-            indi.camera_set_fast_frames_count(
-                &device.name,
-                prop_info.max as usize,
-                true,
-                INDI_SET_PROP_TIMEOUT,
-            )?;
-        }
-    }
-    Ok(())
-}
 
 pub fn apply_camera_options_and_take_shot(
     indi:   &indi::Connection,

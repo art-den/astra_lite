@@ -229,11 +229,6 @@ impl CameraUi {
 
         let spb_offset = self.builder.object::<gtk::SpinButton>("spb_offset").unwrap();
         spb_offset.set_range(0.0, 1_000_000.0);
-
-        let spb_delay = self.builder.object::<gtk::SpinButton>("spb_delay").unwrap();
-        spb_delay.set_range(0.0, 100_000.0);
-        spb_delay.set_digits(1);
-        spb_delay.set_increments(0.5, 5.0);
     }
 
     fn init_raw_widgets(&self) {
@@ -453,12 +448,6 @@ impl CameraUi {
             let Ok(mut options) = self_.options.try_write() else { return; };
             let crop = Crop::from_active_id(cb.active_id().as_deref());
             options.cam.frame.crop = crop;
-        }));
-
-        let spb_delay = bldr.object::<gtk::SpinButton>("spb_delay").unwrap();
-        spb_delay.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            options.cam.frame.delay = sb.value();
         }));
 
         let chb_low_noise = bldr.object::<gtk::CheckButton>("chb_low_noise").unwrap();
@@ -1146,9 +1135,6 @@ impl CameraUi {
             ("grd_live_stack",     cam_sensitive),
             ("grd_cam_calibr",     cam_sensitive),
             ("bx_light_qual",      cam_sensitive),
-
-            ("l_delay",            liveview_active),
-            ("spb_delay",          liveview_active),
         ]);
     }
 

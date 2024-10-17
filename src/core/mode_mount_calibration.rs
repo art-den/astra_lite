@@ -133,7 +133,6 @@ impl MountCalibrMode {
     }
 
     fn start_for_axis(&mut self, axis: DitherCalibrAxis) -> anyhow::Result<()> {
-        init_cam_continuous_mode(&self.indi, &self.camera, &self.cam_opts.frame, false)?;
         apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
 
         let guid_rate_supported = self.indi.mount_is_guide_rate_supported(&self.mount_device)?;
@@ -294,7 +293,6 @@ impl MountCalibrMode {
                 self.state = DitherCalibrState::WaitForSlew;
             }
         } else {
-            init_cam_continuous_mode(&self.indi, &self.camera, &self.cam_opts.frame, false)?;
             apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
         }
         Ok(result)
@@ -384,7 +382,6 @@ impl Mode for MountCalibrMode {
                     }
                     if self.cur_timed_guide_n == 0.0 && self.cur_timed_guide_s == 0.0
                     && self.cur_timed_guide_w == 0.0 && self.cur_timed_guide_e == 0.0 {
-                        init_cam_continuous_mode(&self.indi, &self.camera, &self.cam_opts.frame, false)?;
                         apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
                         self.state = DitherCalibrState::WaitForImage;
                     }

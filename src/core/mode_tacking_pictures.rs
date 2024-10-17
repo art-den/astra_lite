@@ -11,7 +11,7 @@ use crate::{
     image::{histogram::*, info::LightFrameInfo, raw::{FrameType, RawAdder, RawImage, RawImageInfo}, stars_offset::*},
     indi,
     options::*,
-    utils::{io_utils::*, timer::Timer},
+    utils::io_utils::*,
     TimeLogger
 };
 use super::{core::*, frame_processing::*, mode_darks_library::DarkCreationProgramItem, mode_mount_calibration::*, utils::FileNameUtils};
@@ -108,7 +108,6 @@ pub struct TackingPicturesMode {
     fn_gen:          Arc<Mutex<SeqFileNameGen>>,
     indi:            Arc<indi::Connection>,
     subscribers:     Arc<RwLock<Subscribers>>,
-    timer:           Option<Arc<Timer>>,
     raw_adder:       RawAdder,
     options:         Arc<RwLock<Options>>,
     cam_options:     CamOptions,
@@ -133,7 +132,6 @@ impl TackingPicturesMode {
     pub fn new(
         indi:        &Arc<indi::Connection>,
         subscribers: &Arc<RwLock<Subscribers>>,
-        timer:       Option<&Arc<Timer>>,
         cam_mode:    CameraMode,
         options:     &Arc<RwLock<Options>>,
     ) -> anyhow::Result<Self> {
@@ -178,7 +176,6 @@ impl TackingPicturesMode {
             fn_gen:          Arc::new(Mutex::new(SeqFileNameGen::new())),
             indi:            Arc::clone(indi),
             subscribers:     Arc::clone(subscribers),
-            timer:           timer.cloned(),
             raw_adder:       RawAdder::new(),
             options:         Arc::clone(options),
             cam_options,
@@ -271,7 +268,7 @@ impl TackingPicturesMode {
             self.cam_mode == CameraMode::LiveStacking ||
             self.cam_mode == CameraMode::SavingMasterDark;
         if !self.flags.skip_frame_done && need_skip_first_frame {
-            self.start_shot_that_will_be_skipped()?;
+            self.start_first_shot_that_will_be_skipped()?;
             self.state = State::FrameToSkip;
             return Ok(());
         }
@@ -291,23 +288,18 @@ impl TackingPicturesMode {
             self.state = State::CameraOffsetCalculation;
             return Ok(());
         }
-
-        let continuously = self.is_continuous_mode();
-        init_cam_continuous_mode(&self.indi, &self.device, &self.cam_options.frame, continuously)?;
         apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
-
-        self.state = State::Common;
         self.cur_exposure = self.cam_options.frame.exposure();
+        self.state = State::Common;
         Ok(())
     }
 
-    fn start_shot_that_will_be_skipped(&mut self) -> anyhow::Result<()> {
+    fn start_first_shot_that_will_be_skipped(&mut self) -> anyhow::Result<()> {
         let mut frame_opts = self.cam_options.frame.clone();
         const MAX_EXP: f64 = 1.0;
         if frame_opts.exposure() > MAX_EXP {
             frame_opts.set_exposure(MAX_EXP);
         }
-        init_cam_continuous_mode(&self.indi, &self.device, &frame_opts, false)?;
         apply_camera_options_and_take_shot(&self.indi, &self.device, &frame_opts)?;
         self.cur_exposure = frame_opts.exposure();
         Ok(())
@@ -315,27 +307,25 @@ impl TackingPicturesMode {
 
     fn start_offset_calculation_shot(&mut self) -> anyhow::Result<()> {
         if let Some(offset_calc) = &self.cam_offset_calc {
-            let mut frame_opts = self.cam_options.frame.clone();
-            if offset_calc.step % 2 == 0 { frame_opts.offset = 0; }
+
+            if offset_calc.step % 2 == 0 { self.cam_options.frame.offset = 0; }
             //frame_opts.exp_flat /= offset_calc.step as f64;
-            init_cam_continuous_mode(&self.indi, &self.device, &frame_opts, false)?;
-            apply_camera_options_and_take_shot(&self.indi, &self.device, &frame_opts)?;
-            self.cur_exposure = frame_opts.exposure();
+            apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
+            self.cur_exposure = self.cam_options.frame.exposure();
         }
         Ok(())
     }
 
-    fn is_continuous_mode(&self) -> bool {
-        match (&self.cam_mode, &self.cam_options.frame.frame_type) {
-            (CameraMode::SingleShot,         _                ) => false,
-            (CameraMode::LiveView,           _                ) => false,
-            (CameraMode::SavingRawFrames,    FrameType::Flats ) => false,
-            (CameraMode::SavingRawFrames,    FrameType::Biases) => false,
-            (CameraMode::SavingRawFrames,    _                ) => true,
-            (CameraMode::LiveStacking,       _                ) => true,
-            (CameraMode::SavingMasterDark,   _                ) => true,
-            (CameraMode::SavingDefectPixels, _                ) => true,
-        }
+    const MIN_EXPOSURE_FOR_DELAYED_CAPTURE_START: f64 = 3.0;
+
+    fn have_to_start_new_exposure_at_blob_start(&mut self) -> bool {
+        self.cam_mode != CameraMode::SingleShot &&
+        self.cam_options.frame.exposure() >= Self::MIN_EXPOSURE_FOR_DELAYED_CAPTURE_START
+    }
+
+    fn have_to_start_new_exposure_at_processing_end(&mut self) -> bool {
+        self.cam_mode != CameraMode::SingleShot &&
+        self.cam_options.frame.exposure() < Self::MIN_EXPOSURE_FOR_DELAYED_CAPTURE_START
     }
 
     fn generate_output_file_names(&mut self) -> anyhow::Result<()> {
@@ -650,7 +640,11 @@ impl TackingPicturesMode {
             return Ok(NotifyResult::Empty);
         }
 
-        let frame_type = raw_image_info.frame_type;
+        // Save raw image
+        if frame_is_ok && self.flags.save_raw_files {
+            self.save_raw_image(blob, raw_image_info)?;
+        }
+
         let mut result = NotifyResult::Empty;
         let mut is_last_frame = false;
         if let Some(progress) = &mut self.progress {
@@ -664,25 +658,7 @@ impl TackingPicturesMode {
                     next_mode: self.next_mode.take()
                 };
                 is_last_frame = true;
-            } else {
-                let have_shart_new_shot = match (&self.cam_mode, frame_type) {
-                    (CameraMode::SavingRawFrames, FrameType::Biases) => true,
-                    (CameraMode::SavingRawFrames, FrameType::Flats) => true,
-                    _ => false
-                };
-                if have_shart_new_shot {
-                    apply_camera_options_and_take_shot(
-                        &self.indi,
-                        &self.device,
-                        &self.cam_options.frame
-                    )?;
-                }
             }
-        }
-
-        // Save raw image
-        if frame_is_ok && self.flags.save_raw_files {
-            self.save_raw_image(blob, raw_image_info)?;
         }
 
         // Save master file
@@ -712,6 +688,12 @@ impl TackingPicturesMode {
         if self.state == State::WaitingForMountCalibration {
             self.state = State::Common;
             return Ok(NotifyResult::StartMountCalibr);
+        }
+
+        let finished = matches!(result, NotifyResult::Finished {..});
+        if !finished && self.have_to_start_new_exposure_at_processing_end() {
+            apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
+            self.cur_exposure = self.cam_options.frame.exposure();
         }
 
         Ok(result)
@@ -1132,43 +1114,22 @@ impl Mode for TackingPicturesMode {
         event: &indi::BlobStartEvent
     ) -> anyhow::Result<NotifyResult> {
         if *event.device_name != self.device.name
-        || *event.prop_name != self.device.prop {
+        || *event.prop_name != self.device.prop
+        || self.state == State::FrameToSkip {
             return Ok(NotifyResult::Empty);
         }
-        match (&self.cam_mode, &self.cam_options.frame.frame_type) {
-            (CameraMode::SingleShot,      _                ) => return Ok(NotifyResult::Empty),
-            (CameraMode::SavingRawFrames, FrameType::Flats ) => return Ok(NotifyResult::Empty),
-            (CameraMode::SavingRawFrames, FrameType::Biases) => return Ok(NotifyResult::Empty),
-            _ => {},
-        }
+
         if self.cam_mode == CameraMode::LiveView {
             // We need fresh frame options in live view mode
             let options = self.options.read().unwrap();
             self.cam_options = options.cam.clone();
         }
-        let fast_mode_enabled =
-            self.indi.camera_is_fast_toggle_supported(&self.device.name).unwrap_or(false) &&
-            self.indi.camera_is_fast_toggle_enabled(&self.device.name).unwrap_or(false);
-        if !fast_mode_enabled {
-            self.cur_exposure = self.cam_options.frame.exposure();
-            if !self.cam_options.frame.have_to_use_delay() {
-                apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
-            } else {
-                let indi = Arc::clone(&self.indi);
-                let camera = self.device.clone();
-                let frame = self.cam_options.frame.clone();
 
-                if let Some(thread_timer) = &self.timer {
-                    thread_timer.exec((frame.delay * 1000.0) as u32, false, move || {
-                        let res = apply_camera_options_and_take_shot(&indi, &camera, &frame);
-                        if let Err(err) = res {
-                            log::error!("{} during trying start next shot", err.to_string());
-                            // TODO: show error!!!
-                        }
-                    });
-                }
-            }
+        if self.have_to_start_new_exposure_at_blob_start() {
+            apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
+            self.cur_exposure = self.cam_options.frame.exposure();
         }
+
         Ok(NotifyResult::Empty)
     }
 
@@ -1197,6 +1158,9 @@ impl Mode for TackingPicturesMode {
             FrameProcessResultData::LightFrameInfo(info) =>
                 self.process_light_frame_info(info),
 
+            FrameProcessResultData::RawHistogram(hist) =>
+                self.process_raw_histogram(&hist.histogram),
+
             FrameProcessResultData::ShotProcessingFinished {
                 frame_is_ok, blob, raw_image_info, ..
             } =>
@@ -1207,11 +1171,8 @@ impl Mode for TackingPicturesMode {
                     &fp_result.cmd_stop_flag,
                 ),
 
-            FrameProcessResultData::RawHistogram(hist) =>
-                self.process_raw_histogram(&hist.histogram),
-
             _ =>
-                Ok(NotifyResult::Empty)
+                Ok(NotifyResult::Empty),
         }
     }
 
@@ -1256,18 +1217,8 @@ impl Mode for TackingPicturesMode {
                 && guid_data.cur_timed_guide_s == 0.0
                 && guid_data.cur_timed_guide_w == 0.0
                 && guid_data.cur_timed_guide_e == 0.0 {
-                    let continuously = self.is_continuous_mode();
-                    init_cam_continuous_mode(
-                        &self.indi,
-                        &self.device,
-                        &self.cam_options.frame,
-                        continuously
-                    )?;
-                    apply_camera_options_and_take_shot(
-                        &self.indi,
-                        &self.device,
-                        &self.cam_options.frame
-                    )?;
+                    apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
+                    self.cur_exposure = self.cam_options.frame.exposure();
                     self.state = State::Common;
                     result = NotifyResult::ModeStrChanged;
                 }

@@ -81,7 +81,6 @@ impl Options {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
         self.cam.frame.frame_type   = FrameType::from_active_id(ui.prop_string("cb_frame_mode.active-id").as_deref());
         self.cam.frame.set_exposure  (ui.prop_f64("spb_exp.value"));
-        self.cam.frame.delay        = ui.prop_f64("spb_delay.value");
         self.cam.frame.gain         = ui.prop_f64("spb_gain.value");
         self.cam.frame.offset       = ui.prop_f64("spb_offset.value") as i32;
         self.cam.frame.low_noise    = ui.prop_bool("chb_low_noise.active");
@@ -239,7 +238,6 @@ impl Options {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
         ui.set_prop_str ("cb_frame_mode.active-id", self.cam.frame.frame_type.to_active_id());
         ui.set_prop_f64 ("spb_exp.value",           self.cam.frame.exposure());
-        ui.set_prop_f64 ("spb_delay.value",         self.cam.frame.delay);
         ui.set_prop_f64 ("spb_gain.value",          self.cam.frame.gain);
         ui.set_prop_f64 ("spb_offset.value",        self.cam.frame.offset as f64);
         ui.set_prop_str ("cb_bin.active-id",        self.cam.frame.binning.to_active_id());

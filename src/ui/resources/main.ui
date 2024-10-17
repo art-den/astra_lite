@@ -2302,7 +2302,7 @@ time</property>
                                 <property name="visible">True</property>
                                 <property name="can-focus">True</property>
                                 <child>
-                                  <!-- n-columns=2 n-rows=7 -->
+                                  <!-- n-columns=2 n-rows=6 -->
                                   <object class="GtkGrid" id="grd_shot_settings">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
@@ -2474,34 +2474,6 @@ time</property>
                                       <packing>
                                         <property name="left-attach">1</property>
                                         <property name="top-attach">4</property>
-                                      </packing>
-                                    </child>
-                                    <child>
-                                      <object class="GtkLabel" id="l_delay">
-                                        <property name="visible">True</property>
-                                        <property name="can-focus">False</property>
-                                        <property name="halign">start</property>
-                                        <property name="label" translatable="yes">Delay (s)
-&lt;span alpha="50%" size="small"&gt;if exposure&amp;lt;2s&lt;/span&gt;</property>
-                                        <property name="use-markup">True</property>
-                                      </object>
-                                      <packing>
-                                        <property name="left-attach">0</property>
-                                        <property name="top-attach">6</property>
-                                      </packing>
-                                    </child>
-                                    <child>
-                                      <object class="GtkSpinButton" id="spb_delay">
-                                        <property name="visible">True</property>
-                                        <property name="can-focus">True</property>
-                                        <property name="valign">center</property>
-                                        <property name="hexpand">True</property>
-                                        <property name="text" translatable="yes">0</property>
-                                        <property name="input-purpose">digits</property>
-                                      </object>
-                                      <packing>
-                                        <property name="left-attach">1</property>
-                                        <property name="top-attach">6</property>
                                       </packing>
                                     </child>
                                   </object>
