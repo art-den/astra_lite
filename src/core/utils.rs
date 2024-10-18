@@ -83,28 +83,19 @@ impl FileNameUtils {
         dark_library_path: &Path
     ) -> PathBuf {
         let mut path = PathBuf::new();
-        match file_to_calibrate {
-            FileNameArg::Options(opts) => {
-                let master_dark_name = self.master_only_file_name(
-                    None,
-                    &FileNameArg::Options(*opts),
-                    FrameType::Darks
-                );
-                path.push(dark_library_path);
-                path.push(&self.device.to_file_name_part());
-                path.push(&master_dark_name);
-            }
-            FileNameArg::RawInfo(info) => {
-                let master_dark_name = self.master_only_file_name(
-                    None,
-                    &FileNameArg::RawInfo(&info),
-                    FrameType::Darks
-                );
-                path.push(dark_library_path);
-                path.push(&info.camera);
-                path.push(&master_dark_name);
-            }
-        }
+        let cam_name = if let FileNameArg::RawInfo(info) = file_to_calibrate {
+            info.camera.clone()
+        } else {
+            self.device.to_file_name_part()
+        };
+        let master_dark_name = self.master_only_file_name(
+            None,
+            file_to_calibrate,
+            FrameType::Darks
+        );
+        path.push(dark_library_path);
+        path.push(&cam_name);
+        path.push(&master_dark_name);
         path
     }
 
