@@ -278,15 +278,25 @@ impl TackingPicturesMode {
         && self.cam_options.frame.offset != 0
         && self.camera_offset.is_none()
         && self.flags.save_master_file {
+            let options = self.options.read().unwrap();
+            let master_dark_file_name = self.fname_utils.master_dark_file_name(
+                &FileNameArg::Options(&self.cam_options),
+                &options.calibr.dark_library_path
+            );
+            drop(options);
+
             // we need to calculate real camera offset before creating master flat file
-            self.cam_offset_calc = Some(CamOffsetCalc {
-                step: 0,
-                low_values: Vec::new(),
-                high_values: Vec::new(),
-            });
-            self.start_offset_calculation_shot()?;
-            self.state = State::CameraOffsetCalculation;
-            return Ok(());
+            // if no calibration file exists
+            if !master_dark_file_name.is_file() {
+                self.cam_offset_calc = Some(CamOffsetCalc {
+                    step: 0,
+                    low_values: Vec::new(),
+                    high_values: Vec::new(),
+                });
+                self.start_offset_calculation_shot()?;
+                self.state = State::CameraOffsetCalculation;
+                return Ok(());
+            }
         }
         apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
         self.cur_exposure = self.cam_options.frame.exposure();
@@ -346,6 +356,7 @@ impl TackingPicturesMode {
             let file_name = self.fname_utils.master_only_file_name(
                 Some(time),
                 &FileNameArg::Options(&self.cam_options),
+                self.cam_options.frame.frame_type
             );
             path.push(&file_name);
             self.out_file_names.master_fname = path;
@@ -754,7 +765,9 @@ impl TackingPicturesMode {
             let mut normalized_flat = raw_image.clone();
             let tmr = TimeLogger::start();
             let flat_offset = self.camera_offset.unwrap_or_default();
-            normalized_flat.set_offset(flat_offset as i32);
+            if flat_offset != 0 {
+                normalized_flat.set_offset(flat_offset as i32);
+            }
             normalized_flat.normalize_flat();
             tmr.log("Normalizing flat");
             let tmr = TimeLogger::start();
@@ -1158,8 +1171,8 @@ impl Mode for TackingPicturesMode {
             FrameProcessResultData::LightFrameInfo(info) =>
                 self.process_light_frame_info(info),
 
-            FrameProcessResultData::RawHistogram(hist) =>
-                self.process_raw_histogram(&hist.histogram),
+            FrameProcessResultData::RawFrameInfo(raw_frame_info) =>
+                self.process_raw_histogram(&raw_frame_info.histogram),
 
             FrameProcessResultData::ShotProcessingFinished {
                 frame_is_ok, blob, raw_image_info, ..

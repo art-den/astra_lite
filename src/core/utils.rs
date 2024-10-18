@@ -34,8 +34,9 @@ impl FileNameUtils {
 
     pub fn master_only_file_name(
         &self,
-        date: Option<DateTime<Utc>>, // used for flat frames
-        args: &FileNameArg,
+        date:       Option<DateTime<Utc>>, // used for flat frames
+        args:       &FileNameArg,
+        frame_type: FrameType,
     ) -> String {
         match args {
             FileNameArg::Options(opts) => {
@@ -50,7 +51,7 @@ impl FileNameUtils {
                 };
                 Self::master_file_name_impl(
                     date,
-                    opts.frame.frame_type,
+                    frame_type,
                     opts.frame.exposure(),
                     opts.frame.gain as i32,
                     opts.frame.offset,
@@ -63,7 +64,7 @@ impl FileNameUtils {
             FileNameArg::RawInfo(info) => {
                 Self::master_file_name_impl(
                     info.time,
-                    info.frame_type,
+                    frame_type,
                     info.exposure,
                     info.gain,
                     info.offset,
@@ -78,28 +79,26 @@ impl FileNameUtils {
 
     pub fn master_dark_file_name(
         &self,
-        args:              &FileNameArg,
+        file_to_calibrate: &FileNameArg,
         dark_library_path: &Path
     ) -> PathBuf {
         let mut path = PathBuf::new();
-        match args {
+        match file_to_calibrate {
             FileNameArg::Options(opts) => {
-                let mut cam_dark = (*opts).clone();
-                cam_dark.frame.frame_type = FrameType::Darks;
                 let master_dark_name = self.master_only_file_name(
                     None,
-                    &FileNameArg::Options(&cam_dark)
+                    &FileNameArg::Options(*opts),
+                    FrameType::Darks
                 );
                 path.push(dark_library_path);
                 path.push(&self.device.to_file_name_part());
                 path.push(&master_dark_name);
             }
             FileNameArg::RawInfo(info) => {
-                let mut info = (*info).clone();
-                info.frame_type = FrameType::Darks;
                 let master_dark_name = self.master_only_file_name(
                     None,
-                    &FileNameArg::RawInfo(&info)
+                    &FileNameArg::RawInfo(&info),
+                    FrameType::Darks
                 );
                 path.push(dark_library_path);
                 path.push(&info.camera);

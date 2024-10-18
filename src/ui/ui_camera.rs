@@ -4,7 +4,7 @@ use gtk::{cairo, glib::{self, clone}, prelude::*};
 use serde::{Serialize, Deserialize};
 use crate::{
     core::{consts::*, core::*, frame_processing::*},
-    image::{histogram::*, image::RgbU8Data, info::*, raw::FrameType, stars_offset::Offset},
+    image::{histogram::*, image::RgbU8Data, info::*, raw::{CalibrMethods, FrameType}, stars_offset::Offset},
     indi,
     options::*,
     ui::gtk_utils::*,
@@ -171,14 +171,14 @@ struct LightHistoryItem {
 }
 
 struct CalibrHistoryItem {
-    time:       Option<DateTime<Utc>>,
-    mode_type:  ModeType,
-    frame_type: FrameType,
-    mean:       f32,
-    median:     u16,
-    std_dev:    f32,
+    time:           Option<DateTime<Utc>>,
+    mode_type:      ModeType,
+    frame_type:     FrameType,
+    mean:           f32,
+    median:         u16,
+    std_dev:        f32,
+    calibr_methods: CalibrMethods, // for flat files
 }
-
 
 struct CameraUi {
     main_ui:            Rc<MainUi>,
@@ -1629,24 +1629,25 @@ impl CameraUi {
                 self.show_preview_image(rgb_data, Some(&img.params));
                 show_resolution_info(img.image_width, img.image_height);
             }
-            FrameProcessResultData::RawHistogram(hist)
+            FrameProcessResultData::RawFrameInfo(raw_frame_info)
             if is_mode_current(false) => {
                 self.repaint_histogram();
                 self.show_histogram_stat();
 
-                if hist.frame_type != FrameType::Lights {
-                    let histogram = hist.histogram.read().unwrap();
+                if raw_frame_info.frame_type != FrameType::Lights {
+                    let histogram = raw_frame_info.histogram.read().unwrap();
                     let chan =
                         if      let Some(chan) = &histogram.l { chan }
                         else if let Some(chan) = &histogram.g { chan }
                         else                                  { return; };
                     let history_item = CalibrHistoryItem {
-                        time:       hist.time.clone(),
-                        mode_type:  result.mode_type,
-                        frame_type: hist.frame_type,
-                        mean:       chan.mean as f32,
-                        median:     chan.median() as _,
-                        std_dev:    chan.std_dev as _,
+                        time:           raw_frame_info.time.clone(),
+                        mode_type:      result.mode_type,
+                        frame_type:     raw_frame_info.frame_type,
+                        mean:           chan.mean as f32,
+                        median:         chan.median() as _,
+                        std_dev:        chan.std_dev as _,
+                        calibr_methods: raw_frame_info.calubr_methods,
                     };
                     self.calibr_history.borrow_mut().push(history_item);
                     self.update_calibr_history_table();
@@ -2116,19 +2117,7 @@ impl CameraUi {
             } else {
                 (String::new(), String::new(), String::new())
             };
-            let mut calibr_str = String::new();
-            if item.calibr_methods.contains(CalibrMethods::BY_DARK) {
-                calibr_str += "D";
-            }
-            if item.calibr_methods.contains(CalibrMethods::DEFECTIVE_PIXELS) {
-                calibr_str += "P";
-            }
-            if item.calibr_methods.contains(CalibrMethods::BY_FLAT) {
-                calibr_str += "F";
-            }
-            if item.calibr_methods.contains(CalibrMethods::HOT_PIXELS_SEARCH) {
-                calibr_str += "S";
-            }
+            let calibr_str = Self::calibr_method_to_str(item.calibr_methods);
             let last_is_selected =
                 gtk_utils::get_list_view_selected_row(&tree).map(|v| v+1) ==
                 Some(models_row_cnt as i32);
@@ -2155,6 +2144,23 @@ impl CameraUi {
         }
     }
 
+    fn calibr_method_to_str(cm: CalibrMethods) -> String {
+        let mut result = String::new();
+        if cm.contains(CalibrMethods::BY_DARK) {
+            result += "D";
+        }
+        if cm.contains(CalibrMethods::DEFECTIVE_PIXELS) {
+            result += "P";
+        }
+        if cm.contains(CalibrMethods::BY_FLAT) {
+            result += "F";
+        }
+        if cm.contains(CalibrMethods::HOT_PIXELS_SEARCH) {
+            result += "S";
+        }
+        result
+    }
+
     fn update_calibr_history_table(&self) {
         let tree: gtk::TreeView = self.builder.object("tv_calbr_history").unwrap();
         let model = match tree.model() {
@@ -2169,6 +2175,7 @@ impl CameraUi {
                     /* 3 */  ("Mean",     String::static_type(), "text"),
                     /* 4 */  ("Median",   String::static_type(), "text"),
                     /* 5 */  ("Std.dev.", String::static_type(), "text"),
+                    /* 6 */  ("Calibr.",  String::static_type(), "text"),
                 ])
             },
         };
@@ -2192,6 +2199,7 @@ impl CameraUi {
             let mean_str = format!("{:.1}", item.mean);
             let median_str = format!("{}", item.median);
             let dev_str = format!("{:.1}", item.std_dev);
+            let calibr_str = Self::calibr_method_to_str(item.calibr_methods);
 
             let last_is_selected =
                 gtk_utils::get_list_view_selected_row(&tree).map(|v| v+1) ==
@@ -2204,6 +2212,7 @@ impl CameraUi {
                 (3, &mean_str),
                 (4, &median_str),
                 (5, &dev_str),
+                (6, &calibr_str),
             ]);
             if last_is_selected || models_row_cnt == 0 {
                 // Select and scroll to last row

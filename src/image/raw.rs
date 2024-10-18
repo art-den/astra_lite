@@ -1,4 +1,5 @@
 use std::{collections::HashSet, fs::File, io::*, path::Path};
+use bitflags::bitflags;
 use chrono::prelude::*;
 use rayon::prelude::*;
 use itertools::{izip, Itertools};
@@ -123,21 +124,32 @@ impl FrameType {
     }
 }
 
+bitflags! {
+    #[derive(Serialize, Deserialize, Clone, Copy)]
+    pub struct CalibrMethods: u32 {
+        const BY_DARK           = 1;
+        const BY_FLAT           = 2;
+        const DEFECTIVE_PIXELS  = 4;
+        const HOT_PIXELS_SEARCH = 8;
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RawImageInfo {
-    pub time:        Option<DateTime<Utc>>,
-    pub width:       usize,
-    pub height:      usize,
-    pub gain:        i32,
-    pub offset:      i32,
-    pub max_value:   u16,
-    pub cfa:         CfaType,
-    pub bin:         u8,
-    pub frame_type:  FrameType,
-    pub exposure:    f64,
-    pub integr_time: Option<f64>, // for master files
-    pub camera:      String,
-    pub ccd_temp:    Option<f64>,
+    pub time:           Option<DateTime<Utc>>,
+    pub width:          usize,
+    pub height:         usize,
+    pub gain:           i32,
+    pub offset:         i32,
+    pub max_value:      u16,
+    pub cfa:            CfaType,
+    pub bin:            u8,
+    pub frame_type:     FrameType,
+    pub exposure:       f64,
+    pub integr_time:    Option<f64>, // for master files
+    pub camera:         String,
+    pub ccd_temp:       Option<f64>,
+    pub calibr_methods: CalibrMethods,
 }
 
 pub struct RawImage {
@@ -205,6 +217,7 @@ impl RawImage {
             time, width, height, gain, offset, cfa, bin,
             max_value, frame_type, exposure, integr_time,
             camera, ccd_temp,
+            calibr_methods: CalibrMethods::empty(),
         };
 
         let data = FitsReader::read_data(&image_hdu, &mut stream)?;
@@ -921,6 +934,10 @@ impl RawImage {
             demosaic_pixel_at_border(self.info.width as isize - 1, y as isize, CfaColor::G);
             demosaic_pixel_at_border(self.info.width as isize - 1, y as isize, CfaColor::B);
         }
+    }
+
+    pub fn set_calibr_methods(&mut self, calibr_methods: CalibrMethods) {
+        self.info.calibr_methods = calibr_methods;
     }
 }
 

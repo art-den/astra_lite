@@ -437,7 +437,7 @@ impl Core {
                 extract_dark:  options.calibr.dark_frame_en,
                 dark_lib_path: options.calibr.dark_library_path.clone(),
                 flat_fname:    master_flat,
-                search_and_remove_hot_pixs: options.calibr.hot_pixels,
+                sar_hot_pixs: options.calibr.hot_pixels,
             });
 
             let new_stop_flag = Arc::new(AtomicBool::new(false));
@@ -577,7 +577,7 @@ impl Core {
             extract_dark:  options.calibr.dark_frame_en,
             dark_lib_path: options.calibr.dark_library_path.clone(),
             flat_fname:    None,
-            search_and_remove_hot_pixs: options.calibr.hot_pixels,
+            sar_hot_pixs: options.calibr.hot_pixels,
         });
 
         let command = FrameProcessCommandData {
