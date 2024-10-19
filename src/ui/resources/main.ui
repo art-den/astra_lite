@@ -4460,7 +4460,11 @@ S - search and remove hot pixels in light frame</property>
 S - single shot
 RAW - saving caliration files
 Master - creating master dark or bias file
-Pix - creating defect pixels file</property>
+Pix - creating defect pixels file
+
+"Calibr." column:
+D - by dark calibrated
+B - by bias calibrated</property>
                                     <property name="enable-search">False</property>
                                     <property name="show-expanders">False</property>
                                     <property name="enable-grid-lines">both</property>

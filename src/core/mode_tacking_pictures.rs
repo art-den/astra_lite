@@ -289,7 +289,7 @@ impl TackingPicturesMode {
         && self.camera_offset.is_none()
         && self.flags.save_master_file {
             let options = self.options.read().unwrap();
-            let master_dark_file_name = self.fname_utils.master_dark_file_name(
+            let (subtract_file_name, _) = self.fname_utils.get_subtrack_master_fname(
                 &FileNameArg::Options(&self.cam_options),
                 &options.calibr.dark_library_path
             );
@@ -297,7 +297,7 @@ impl TackingPicturesMode {
 
             // we need to calculate real camera offset before creating master flat file
             // if no calibration file exists
-            if !master_dark_file_name.is_file() {
+            if !subtract_file_name.is_file() {
                 self.cam_offset_calc = Some(CamOffsetCalc {
                     step: 0,
                     low_values: Vec::new(),

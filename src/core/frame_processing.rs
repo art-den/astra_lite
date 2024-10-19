@@ -76,13 +76,15 @@ pub struct CalibrParams {
     pub extract_dark:  bool,
     pub dark_lib_path: PathBuf,
     pub flat_fname:    Option<PathBuf>,
-    pub sar_hot_pixs:  bool, // search and remove hot pixles
+
+    /// search and remove hot pixles
+    pub sar_hot_pixs:  bool,
 }
 
 #[derive(Default)]
 pub struct CalibrData {
-    master_dark:         Option<RawImage>,
-    master_dark_fname:   Option<PathBuf>,
+    subtract_image:      Option<RawImage>,
+    subtract_fname:      Option<PathBuf>,
     master_flat:         Option<RawImage>,
     master_flat_fname:   Option<PathBuf>,
     defect_pixels:       Option<BadPixels>,
@@ -91,8 +93,8 @@ pub struct CalibrData {
 
 impl CalibrData {
     pub fn clear(&mut self) {
-        self.master_dark = None;
-        self.master_dark_fname = None;
+        self.subtract_image = None;
+        self.subtract_fname = None;
         self.master_flat = None;
         self.master_flat_fname = None;
         self.defect_pixels = None;
@@ -383,35 +385,33 @@ pub fn get_rgb_data_from_preview_image(
 }
 
 fn apply_calibr_data_and_remove_hot_pixels(
-    frame_type: FrameType,
-    params:     &Option<CalibrParams>,
-    raw_image:  &mut RawImage,
-    calibr:     &mut CalibrData,
+    params:    &Option<CalibrParams>,
+    raw_image: &mut RawImage,
+    calibr:    &mut CalibrData,
 ) -> anyhow::Result<()> {
     let Some(params) = params else { return Ok(()); };
 
-    let is_flat_file = frame_type == FrameType::Flats;
+    let image_info = raw_image.info();
+    let is_flat_file = image_info.frame_type == FrameType::Flats;
     let mut calibr_methods = CalibrMethods::empty();
 
     let fn_utils = FileNameUtils::default();
-    let defect_pixel_file =
+    let (defect_pixel_file, subtrack_fname, subtrack_method) =
         if params.extract_dark {
-            let args = FileNameArg::RawInfo(raw_image.info());
-            Some(fn_utils.defect_pixels_file_name(&args, &params.dark_lib_path))
+            let to_calibrate = FileNameArg::RawInfo(image_info);
+            let defect_pixel_file = fn_utils.defect_pixels_file_name(&to_calibrate, &params.dark_lib_path);
+            let (subtrack_fname, subtrack_method) = fn_utils.get_subtrack_master_fname(
+                &to_calibrate,
+                &params.dark_lib_path
+            );
+            (Some(defect_pixel_file), Some(subtrack_fname), subtrack_method)
         } else {
-            None
-        };
-    let master_dark_fname =
-        if params.extract_dark {
-            let args = FileNameArg::RawInfo(raw_image.info());
-            Some(fn_utils.master_dark_file_name(&args, &params.dark_lib_path))
-        } else {
-            None
+            (None, None, CalibrMethods::empty())
         };
 
     log::debug!("apply_calibr_data_and_remove_hot_pixels params={:?}", params);
     log::debug!("calibr.defect_pixels_fname={:?}", calibr.defect_pixels_fname);
-    log::debug!("calibr.master_dark_fname={:?}", calibr.master_dark_fname);
+    log::debug!("calibr.subtract_fname={:?}", calibr.subtract_fname);
     log::debug!("calibr.master_flat_fname{:?}", calibr.master_flat_fname);
 
     let mut reload_flat = false;
@@ -437,38 +437,39 @@ fn apply_calibr_data_and_remove_hot_pixels(
         calibr.defect_pixels_fname = defect_pixel_file.clone();
     }
 
-    // Load master dark file
+    // Load master dark or bias file
 
-    if calibr.master_dark_fname != master_dark_fname {
+    if calibr.subtract_fname != subtrack_fname {
         let mut loaded = false;
-        if let Some(file_name) = &master_dark_fname { if file_name.is_file() {
+        if let Some(file_name) = &subtrack_fname { if file_name.is_file() {
             log::debug!(
                 "Loading master dark file {} ...",
                 file_name.to_str().unwrap_or_default()
             );
             let tmr = TimeLogger::start();
-            let master_dark = RawImage::new_from_fits_file(file_name)
+            let subtract_image = RawImage::new_from_fits_file(file_name)
                 .map_err(|e| anyhow::anyhow!(
                     "Error '{}'\nwhen reading master dark '{}'",
                     e.to_string(),
                     file_name.to_str().unwrap_or_default()
                 ))?;
             tmr.log("loading master dark from file");
-            if calibr.defect_pixels.is_none() {
+            if calibr.defect_pixels.is_none()
+            && subtrack_method.contains(CalibrMethods::BY_DARK) {
                 let tmr = TimeLogger::start();
-                let defect_pixels = master_dark.find_hot_pixels_in_master_dark();
+                let defect_pixels = subtract_image.find_hot_pixels_in_master_dark();
                 tmr.log("searching hot pixels in dark image");
                 log::debug!("hot pixels count = {}", defect_pixels.items.len());
                 calibr.defect_pixels = Some(defect_pixels);
                 reload_flat = true;
             }
             loaded = true;
-            calibr.master_dark = Some(master_dark);
+            calibr.subtract_image = Some(subtract_image);
         }}
         if !loaded {
-            calibr.master_dark = None;
+            calibr.subtract_image = None;
         }
-        calibr.master_dark_fname = master_dark_fname.clone();
+        calibr.subtract_fname = subtrack_fname.clone();
     }
 
     // Load master flat file
@@ -502,18 +503,18 @@ fn apply_calibr_data_and_remove_hot_pixels(
         calibr.master_flat_fname = params.flat_fname.clone();
     }
 
-    // Apply master dark image
+    // Apply master dark or bias image
 
-    if let (Some(file_name), Some(dark_image)) = (&master_dark_fname, &calibr.master_dark) {
+    if let (Some(file_name), Some(dark_image)) = (&subtrack_fname, &calibr.subtract_image) {
         let tmr = TimeLogger::start();
-        raw_image.subtract_dark(dark_image)
+        raw_image.subtract_dark_or_bias(dark_image)
             .map_err(|err| anyhow::anyhow!(
-                "Error {}\nwhen trying to subtract dark image {}",
+                "Error {}\nwhen trying to subtract image {}",
                 err.to_string(),
                 file_name.to_str().unwrap_or_default()
             ))?;
         tmr.log("subtracting master dark");
-        calibr_methods.set(CalibrMethods::BY_DARK, true);
+        calibr_methods.set(subtrack_method, true);
     }
 
     // Apply master flat image
@@ -540,7 +541,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
         calibr_methods.set(CalibrMethods::DEFECTIVE_PIXELS, true);
     }
 
-    // Find and remove hot pixels if there is no calibration data
+    // Search and remove hot pixels if there is no calibration data
 
     if !is_flat_file
     && params.sar_hot_pixs
@@ -677,7 +678,6 @@ fn make_preview_image_impl(
     || raw_info.frame_type == FrameType::Flats {
         let mut calibr = command.calibr_data.lock().unwrap();
         apply_calibr_data_and_remove_hot_pixels(
-            raw_info.frame_type,
             &command.calibr_params,
             &mut raw_image,
             &mut calibr

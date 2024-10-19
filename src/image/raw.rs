@@ -128,9 +128,10 @@ bitflags! {
     #[derive(Serialize, Deserialize, Clone, Copy)]
     pub struct CalibrMethods: u32 {
         const BY_DARK           = 1;
-        const BY_FLAT           = 2;
-        const DEFECTIVE_PIXELS  = 4;
-        const HOT_PIXELS_SEARCH = 8;
+        const BY_BIAS           = 2;
+        const BY_FLAT           = 4;
+        const DEFECTIVE_PIXELS  = 8;
+        const HOT_PIXELS_SEARCH = 16;
     }
 }
 
@@ -555,12 +556,12 @@ impl RawImage {
     fn check_master_frame_is_compatible(
         &self,
         master_frame: &RawImage,
-        frame_type:   FrameType,
+        frame_types:  &[FrameType],
     ) -> anyhow::Result<()> {
-        if frame_type != master_frame.info.frame_type {
+        if !frame_types.contains(&master_frame.info.frame_type) {
             anyhow::bail!(
                 "Wrong frame type. Expected {:?}, found {:?}",
-                frame_type,
+                frame_types,
                 master_frame.info.frame_type,
             );
         }
@@ -585,8 +586,8 @@ impl RawImage {
         Ok(())
     }
 
-    pub fn subtract_dark(&mut self, dark: &RawImage) -> anyhow::Result<()> {
-        self.check_master_frame_is_compatible(dark, FrameType::Darks)?;
+    pub fn subtract_dark_or_bias(&mut self, dark: &RawImage) -> anyhow::Result<()> {
+        self.check_master_frame_is_compatible(dark, &[FrameType::Darks, FrameType::Biases])?;
         debug_assert!(self.data.len() == dark.data.len());
         let dark_sum: i64 = dark.as_slice().iter().map(|v| *v as i64).sum();
         let dark_aver = (dark_sum / dark.data.len() as i64) as i32;
@@ -609,7 +610,7 @@ impl RawImage {
     }
 
     pub fn apply_flat(&mut self, flat: &RawImage) -> anyhow::Result<()> {
-        self.check_master_frame_is_compatible(flat, FrameType::Flats)?;
+        self.check_master_frame_is_compatible(flat, &[FrameType::Flats])?;
         debug_assert!(self.data.len() == flat.data.len());
         let zero = self.info.offset as i64;
         let flat_zero = flat.info.offset as i64;

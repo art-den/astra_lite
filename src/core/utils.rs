@@ -9,6 +9,22 @@ pub enum FileNameArg<'a> {
     RawInfo(&'a RawImageInfo),
 }
 
+impl<'a> FileNameArg<'a> {
+    pub fn exposure(&self) -> f64 {
+        match self {
+            Self::Options(opts) => opts.frame.exposure(),
+            Self::RawInfo(info) => info.exposure,
+        }
+    }
+
+    pub fn frame_type(&self) -> FrameType {
+        match self {
+            Self::Options(opts) => opts.frame.frame_type,
+            Self::RawInfo(info) => info.frame_type,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct FileNameUtils {
     device: DeviceAndProp,
@@ -34,11 +50,11 @@ impl FileNameUtils {
 
     pub fn master_only_file_name(
         &self,
-        date:       Option<DateTime<Utc>>, // used for flat frames
-        args:       &FileNameArg,
-        frame_type: FrameType,
+        date:              Option<DateTime<Utc>>, // used for flat frames
+        to_calibrate:      &FileNameArg,
+        master_frame_type: FrameType,
     ) -> String {
-        match args {
+        match to_calibrate {
             FileNameArg::Options(opts) => {
                 let (img_width, img_height) = opts.frame.active_sensor_size(
                     self.sensor_width,
@@ -51,7 +67,7 @@ impl FileNameUtils {
                 };
                 Self::master_file_name_impl(
                     date,
-                    frame_type,
+                    master_frame_type,
                     opts.frame.exposure(),
                     opts.frame.gain as i32,
                     opts.frame.offset,
@@ -64,7 +80,7 @@ impl FileNameUtils {
             FileNameArg::RawInfo(info) => {
                 Self::master_file_name_impl(
                     info.time,
-                    frame_type,
+                    master_frame_type,
                     info.exposure,
                     info.gain,
                     info.offset,
@@ -77,25 +93,21 @@ impl FileNameUtils {
         }
     }
 
-    pub fn master_dark_file_name(
+    pub fn master_file_name(
         &self,
-        file_to_calibrate: &FileNameArg,
-        dark_library_path: &Path
+        to_calibrate:      &FileNameArg,
+        dark_library_path: &Path,
+        master_frame_type: FrameType
     ) -> PathBuf {
         let mut path = PathBuf::new();
-        let cam_name = if let FileNameArg::RawInfo(info) = file_to_calibrate {
+        let cam_name = if let FileNameArg::RawInfo(info) = to_calibrate {
             info.camera.clone()
         } else {
             self.device.to_file_name_part()
         };
-        let master_dark_name = self.master_only_file_name(
-            None,
-            file_to_calibrate,
-            FrameType::Darks
-        );
         path.push(dark_library_path);
         path.push(&cam_name);
-        path.push(&master_dark_name);
+        path.push(&self.master_only_file_name(None, to_calibrate, master_frame_type));
         path
     }
 
@@ -158,6 +170,26 @@ impl FileNameUtils {
             cam_options.frame.binning.get_ratio() as i32,
             temperature,
         )
+    }
+
+    pub fn get_subtrack_master_fname(
+        self:          &FileNameUtils,
+        to_calibrate:  &FileNameArg,
+        dark_lib_path: &Path
+    ) -> (PathBuf, CalibrMethods) {
+        let is_flat_file = to_calibrate.frame_type() == FrameType::Flats;
+        let (frame_type, master_calibr_method)  =
+            if is_flat_file && to_calibrate.exposure() < 1.0 {
+                (FrameType::Biases, CalibrMethods::BY_BIAS)
+            } else {
+                (FrameType::Darks, CalibrMethods::BY_DARK)
+            };
+        let master_fname = self.master_file_name(
+            to_calibrate,
+            dark_lib_path,
+            frame_type
+        );
+        (master_fname, master_calibr_method)
     }
 
     fn master_file_name_impl(

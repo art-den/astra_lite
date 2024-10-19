@@ -2150,6 +2150,9 @@ impl CameraUi {
         if cm.contains(CalibrMethods::BY_DARK) {
             result += "D";
         }
+        if cm.contains(CalibrMethods::BY_BIAS) {
+            result += "B";
+        }
         if cm.contains(CalibrMethods::DEFECTIVE_PIXELS) {
             result += "P";
         }

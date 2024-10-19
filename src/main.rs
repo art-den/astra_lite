@@ -26,9 +26,9 @@ use crate::{
 };
 
 fn panic_handler(
-    panic_info:        &std::panic::PanicInfo,
+    panic_info:        &std::panic::PanicHookInfo,
     logs_dir:          &Path,
-    def_panic_handler: &Box<dyn Fn(&std::panic::PanicInfo<'_>) + 'static + Sync + Send>,
+    def_panic_handler: &Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + 'static + Sync + Send>,
 ) {
     let payload_str =
         if let Some(msg) = panic_info.payload().downcast_ref::<&'static str>() {
