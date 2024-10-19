@@ -204,20 +204,19 @@ impl FileNameUtils {
         temperature: Option<f64>,
     ) -> String {
         let mut result = match frame_type {
-            FrameType::Darks =>
-                format!(
-                    "{}_{}_g{}_offs{}_{}x{}",
-                    Self::type_part_of_file_name(frame_type),
-                    Self::exp_to_str(exposure),
-                    gain, offset, img_width, img_height,
-                ),
             FrameType::Biases =>
                 format!(
                     "{}_g{}_offs{}_{}x{}",
                     Self::type_part_of_file_name(frame_type),
                     gain, offset, img_width, img_height,
                 ),
-            _ => unreachable!(),
+            _ =>
+                format!(
+                    "{}_{}_g{}_offs{}_{}x{}",
+                    Self::type_part_of_file_name(frame_type),
+                    Self::exp_to_str(exposure),
+                    gain, offset, img_width, img_height,
+                ),
         };
 
         if bin != 1 {

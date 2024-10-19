@@ -380,6 +380,7 @@ struct UiOptions {
     defect_pixels: DefectPixelsOptions,
     master_darks:  MasterDarksOptions,
     master_biases: MasterBiasesOptions,
+    cur_tab_page:  i32,
 }
 
 impl Default for UiOptions {
@@ -388,6 +389,7 @@ impl Default for UiOptions {
             defect_pixels: DefectPixelsOptions::default(),
             master_darks:  MasterDarksOptions::default(),
             master_biases: MasterBiasesOptions::default(),
+            cur_tab_page:  0,
         }
     }
 }
@@ -504,6 +506,8 @@ impl DarksLibraryDialog {
             entry.set_text(&text);
         };
 
+        ui.set_prop_i32("nb_modes.page", ui_options.cur_tab_page);
+
         // Defect pixels
 
         ui.set_prop_bool("rbtn_def_frames_cnt.active", ui_options.master_darks.frm_cnt_mode == FramesCountMode::Count);
@@ -587,6 +591,8 @@ impl DarksLibraryDialog {
                 values
             }
         };
+
+        ui_options.cur_tab_page = ui.prop_i32("nb_modes.page");
 
         // Defect pixels
 
