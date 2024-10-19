@@ -171,15 +171,23 @@ impl FileNameUtils {
         bin:         i32,
         temperature: Option<f64>,
     ) -> String {
-        let mut result = format!(
-            "{}_{}_g{}_offs{}_{}x{}",
-            Self::type_part_of_file_name(frame_type),
-            Self::exp_to_str(exposure),
-            gain,
-            offset,
-            img_width,
-            img_height,
-        );
+        let mut result = match frame_type {
+            FrameType::Darks =>
+                format!(
+                    "{}_{}_g{}_offs{}_{}x{}",
+                    Self::type_part_of_file_name(frame_type),
+                    Self::exp_to_str(exposure),
+                    gain, offset, img_width, img_height,
+                ),
+            FrameType::Biases =>
+                format!(
+                    "{}_g{}_offs{}_{}x{}",
+                    Self::type_part_of_file_name(frame_type),
+                    gain, offset, img_width, img_height,
+                ),
+            _ => unreachable!(),
+        };
+
         if bin != 1 {
             result += "_";
             result += &Self::bin_to_str(bin);

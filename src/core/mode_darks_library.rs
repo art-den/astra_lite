@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, sync::{Arc, Mutex, RwLock}};
 
-use crate::{indi, options::*, core::frame_processing::*};
+use crate::{core::frame_processing::*, indi::{self}, options::*};
 
 use super::core::*;
 
@@ -11,12 +11,13 @@ enum State {
 }
 
 pub enum DarkLibMode {
-    DarkFiles,
     DefectPixelsFiles,
+    MasterDarkFiles,
+    MasterBiasFiles,
 }
 
 #[derive(Clone)]
-pub struct DarkCreationProgramItem {
+pub struct MasterFileCreationProgramItem {
     pub count:       usize,
     pub temperature: Option<f64>,
     pub exposure:    f64,
@@ -30,7 +31,7 @@ pub struct DarkCreationMode {
     mode:        DarkLibMode,
     calibr_data: Arc<Mutex<CalibrData>>,
     indi:        Arc<indi::Connection>,
-    program:     Vec<DarkCreationProgramItem>,
+    program:     Vec<MasterFileCreationProgramItem>,
     device:      DeviceAndProp,
     index:       usize,
     state:       State,
@@ -43,7 +44,7 @@ impl DarkCreationMode {
         calibr_data: &Arc<Mutex<CalibrData>>,
         options:     &Arc<RwLock<Options>>,
         indi:        &Arc<indi::Connection>,
-        program:     &[DarkCreationProgramItem]
+        program:     &[MasterFileCreationProgramItem]
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(cam_device) = &opts.cam.device else {
@@ -71,10 +72,12 @@ impl DarkCreationMode {
 impl Mode for DarkCreationMode {
     fn get_type(&self) -> ModeType {
         match self.mode {
-            DarkLibMode::DarkFiles =>
-                ModeType::CreatingDarks,
             DarkLibMode::DefectPixelsFiles =>
                 ModeType::CreatingDefectPixels,
+            DarkLibMode::MasterDarkFiles =>
+                ModeType::CreatingMasterDarks,
+            DarkLibMode::MasterBiasFiles =>
+                ModeType::CreatingMasterBiases,
         }
     }
 
@@ -82,10 +85,12 @@ impl Mode for DarkCreationMode {
         match (&self.state, &self.mode) {
             (State::WaitingForTemperature(value), _) =>
                 format!("Waiting temperature ({:.1}°С) stabilization...", value),
-            (_, DarkLibMode::DarkFiles) =>
-                "Creating dark files...".to_string(),
             (_, DarkLibMode::DefectPixelsFiles) =>
                 "Creating defect pixels files...".to_string(),
+            (_, DarkLibMode::MasterDarkFiles) =>
+                "Creating master dark files...".to_string(),
+            (_, DarkLibMode::MasterBiasFiles) =>
+                "Creating master bias files...".to_string(),
         }
     }
 
@@ -162,10 +167,12 @@ impl Mode for DarkCreationMode {
             let prorgam_item = self.program[self.index].clone();
 
             result = match self.mode {
-                DarkLibMode::DarkFiles =>
-                    NotifyResult::StartCreatingDark(prorgam_item),
                 DarkLibMode::DefectPixelsFiles =>
-                    NotifyResult::StartCreatingDefectPixelsFiles(prorgam_item),
+                    NotifyResult::StartCreatingDefectPixelsFile(prorgam_item),
+                DarkLibMode::MasterDarkFiles =>
+                    NotifyResult::StartCreatingMasterDarkFile(prorgam_item),
+                DarkLibMode::MasterBiasFiles =>
+                    NotifyResult::StartCreatingMasterBiasFile(prorgam_item),
             };
         }
 

@@ -4459,7 +4459,7 @@ S - search and remove hot pixels in light frame</property>
                                     <property name="tooltip-text" translatable="yes">"Mode" column:
 S - single shot
 RAW - saving caliration files
-Dark - creating master dark file
+Master - creating master dark or bias file
 Pix - creating defect pixels file</property>
                                     <property name="enable-search">False</property>
                                     <property name="show-expanders">False</property>

@@ -14,7 +14,7 @@ use crate::{
     utils::io_utils::*,
     TimeLogger
 };
-use super::{core::*, frame_processing::*, mode_darks_library::DarkCreationProgramItem, mode_mount_calibration::*, utils::FileNameUtils};
+use super::{core::*, frame_processing::*, mode_darks_library::MasterFileCreationProgramItem, mode_mount_calibration::*, utils::FileNameUtils};
 
 const MAX_TIMED_GUIDE: f64 = 20.0; // in seconds
 
@@ -50,9 +50,10 @@ pub enum CameraMode {
     SingleShot,
     LiveView,
     SavingRawFrames,
-    SavingMasterDark,
-    SavingDefectPixels,
     LiveStacking,
+    DefectPixels,
+    MasterDark,
+    MasterBias,
 }
 
 #[derive(PartialEq)]
@@ -162,9 +163,14 @@ impl TackingPicturesMode {
         match cam_mode {
             CameraMode::LiveStacking =>
                 cam_options.frame.frame_type = crate::image::raw::FrameType::Lights,
-            CameraMode::SavingMasterDark|
-            CameraMode::SavingDefectPixels =>
+
+            CameraMode::MasterDark|
+            CameraMode::DefectPixels =>
                 cam_options.frame.frame_type = crate::image::raw::FrameType::Darks,
+
+            CameraMode::MasterBias =>
+                cam_options.frame.frame_type = crate::image::raw::FrameType::Biases,
+
             _ => {}
         }
 
@@ -215,7 +221,7 @@ impl TackingPicturesMode {
         self.live_stacking = Some(Arc::clone(live_stacking));
     }
 
-    pub fn set_dark_creation_program_item(&mut self, item: &DarkCreationProgramItem) {
+    pub fn set_dark_creation_program_item(&mut self, item: &MasterFileCreationProgramItem) {
         self.progress = Some(Progress {cur: 0, total: item.count});
         if let Some(temperature) = item.temperature {
             self.cam_options.ctrl.temperature = temperature;
@@ -263,10 +269,14 @@ impl TackingPicturesMode {
     fn start_or_continue(&mut self) -> anyhow::Result<()> {
         // First frame must be skiped
         // for saving frames and live stacking mode
-        let need_skip_first_frame =
-            self.cam_mode == CameraMode::SavingRawFrames ||
-            self.cam_mode == CameraMode::LiveStacking ||
-            self.cam_mode == CameraMode::SavingMasterDark;
+        let need_skip_first_frame = matches!(
+            self.cam_mode,
+            CameraMode::SavingRawFrames|
+            CameraMode::LiveStacking|
+            CameraMode::DefectPixels|
+            CameraMode::MasterDark|
+            CameraMode::MasterBias
+        );
         if !self.flags.skip_frame_done && need_skip_first_frame {
             self.start_first_shot_that_will_be_skipped()?;
             self.state = State::FrameToSkip;
@@ -347,7 +357,7 @@ impl TackingPicturesMode {
 
         if self.flags.save_master_file {
             let mut path = PathBuf::new();
-            if self.cam_mode == CameraMode::SavingMasterDark {
+            if matches!(self.cam_mode, CameraMode::MasterDark|CameraMode::MasterBias) {
                 path.push(&options.calibr.dark_library_path);
                 path.push(&self.device.to_file_name_part());
             } else {
@@ -916,13 +926,13 @@ impl TackingPicturesMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn get_dark_creation_short_info(&self) -> String {
+    fn get_dark_or_bias_creation_short_info(&self) -> String {
         let mut result = String::new();
         if self.cam_options.ctrl.enable_cooler {
             result += &format!("{:.1}°С ", self.cam_options.ctrl.temperature);
         }
         result += &format!(
-            "{:.1}s g:{:.0} offs:{}",
+            "{}s g:{:.0} offs:{}",
             self.cam_options.frame.exposure(),
             self.cam_options.frame.gain,
             self.cam_options.frame.offset,
@@ -949,12 +959,13 @@ impl TackingPicturesMode {
 impl Mode for TackingPicturesMode {
     fn get_type(&self) -> ModeType {
         match self.cam_mode {
-            CameraMode::SingleShot         => ModeType::SingleShot,
-            CameraMode::LiveView           => ModeType::LiveView,
-            CameraMode::SavingRawFrames    => ModeType::SavingRawFrames,
-            CameraMode::LiveStacking       => ModeType::LiveStacking,
-            CameraMode::SavingMasterDark   => ModeType::SavingMasterDark,
-            CameraMode::SavingDefectPixels => ModeType::SavingDefectPixels,
+            CameraMode::SingleShot      => ModeType::SingleShot,
+            CameraMode::LiveView        => ModeType::LiveView,
+            CameraMode::SavingRawFrames => ModeType::SavingRawFrames,
+            CameraMode::LiveStacking    => ModeType::LiveStacking,
+            CameraMode::DefectPixels    => ModeType::DefectPixels,
+            CameraMode::MasterDark      => ModeType::MasterDark,
+            CameraMode::MasterBias      => ModeType::MasterBias,
         }
     }
 
@@ -978,10 +989,21 @@ impl Mode for TackingPicturesMode {
                 "Live view from camera".to_string(),
             (_, CameraMode::SavingRawFrames) =>
                 self.cam_options.frame.frame_type.to_readable_str().to_string(),
-            (_, CameraMode::SavingMasterDark) =>
-                format!("Creating master dark ({})", self.get_dark_creation_short_info()),
-            (_, CameraMode::SavingDefectPixels) =>
-                format!("Creating defective pixels files ({})", self.get_defect_pixels_creation_short_info()),
+            (_, CameraMode::DefectPixels) =>
+                format!(
+                    "Creating defective pixels files ({})",
+                    self.get_defect_pixels_creation_short_info()
+                ),
+            (_, CameraMode::MasterDark) =>
+                format!(
+                    "Creating master dark ({})",
+                    self.get_dark_or_bias_creation_short_info()
+                ),
+            (_, CameraMode::MasterBias) =>
+                format!(
+                    "Creating master bias ({})",
+                    self.get_dark_or_bias_creation_short_info()
+                ),
             (_, CameraMode::LiveStacking) =>
                 "Live stacking".to_string(),
         };
@@ -1031,8 +1053,9 @@ impl Mode for TackingPicturesMode {
             &self.cam_mode,
             CameraMode::SingleShot |
             CameraMode::SavingRawFrames|
-            CameraMode::SavingMasterDark|
-            CameraMode::SavingDefectPixels|
+            CameraMode::DefectPixels|
+            CameraMode::MasterDark|
+            CameraMode::MasterBias|
             CameraMode::LiveStacking
         )
     }
@@ -1059,11 +1082,13 @@ impl Mode for TackingPicturesMode {
             CameraMode::SavingRawFrames =>
                 self.cam_options.frame.frame_type != FrameType::Lights &&
                 options.raw_frames.create_master,
-            CameraMode::SavingMasterDark => true,
-            _ => false,
+            CameraMode::MasterDark|CameraMode::MasterBias =>
+                true,
+            _ =>
+                false,
         };
         self.flags.save_defect_pixels = match self.cam_mode {
-            CameraMode::SavingDefectPixels => true,
+            CameraMode::DefectPixels => true,
             _ => false,
         };
         self.flags.use_raw_adder =

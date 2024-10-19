@@ -2024,18 +2024,19 @@ impl CameraUi {
 
     fn mode_type_to_history_str(mode_type: ModeType) -> &'static str {
         match mode_type {
-            ModeType::OpeningImgFile     => "File",
-            ModeType::SingleShot         => "S",
-            ModeType::LiveView           => "LV",
-            ModeType::SavingRawFrames    => "RAW",
-            ModeType::LiveStacking       => "LS",
-            ModeType::Focusing           => "F",
-            ModeType::DitherCalibr       => "MC",
+            ModeType::OpeningImgFile    => "File",
+            ModeType::SingleShot        => "S",
+            ModeType::LiveView          => "LV",
+            ModeType::SavingRawFrames   => "RAW",
+            ModeType::LiveStacking      => "LS",
+            ModeType::Focusing          => "F",
+            ModeType::DitherCalibr      => "MC",
             ModeType::Goto|
-            ModeType::CapturePlatesolve  => "PS",
-            ModeType::SavingMasterDark   => "Dark",
-            ModeType::SavingDefectPixels => "Pix",
-            _                            => "???",
+            ModeType::CapturePlatesolve => "PS",
+            ModeType::DefectPixels      => "Pix",
+            ModeType::MasterDark|
+            ModeType::MasterBias        => "Master",
+            _                           => "???",
         }
     }
 

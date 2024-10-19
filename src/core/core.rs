@@ -36,13 +36,15 @@ pub enum ModeType {
     SingleShot,
     LiveView,
     SavingRawFrames,
-    SavingMasterDark,
-    SavingDefectPixels,
+    MasterDark,
+    MasterBias,
+    DefectPixels,
     LiveStacking,
     Focusing,
     DitherCalibr,
-    CreatingDarks,
     CreatingDefectPixels,
+    CreatingMasterDarks,
+    CreatingMasterBiases,
     Goto,
     CapturePlatesolve,
 }
@@ -78,8 +80,9 @@ pub enum NotifyResult {
     Finished { next_mode: Option<ModeBox> },
     StartFocusing,
     StartMountCalibr,
-    StartCreatingDark(DarkCreationProgramItem),
-    StartCreatingDefectPixelsFiles(DarkCreationProgramItem),
+    StartCreatingDefectPixelsFile(MasterFileCreationProgramItem),
+    StartCreatingMasterDarkFile(MasterFileCreationProgramItem),
+    StartCreatingMasterBiasFile(MasterFileCreationProgramItem),
 }
 
 pub struct ModeData {
@@ -698,7 +701,7 @@ impl Core {
     pub fn start_creating_dark_library(
         &self,
         mode:    DarkLibMode,
-        program: &[DarkCreationProgramItem]
+        program: &[MasterFileCreationProgramItem]
     ) -> anyhow::Result<()> {
         self.init_cam_before_start()?;
         self.init_cam_telescope_data()?;
@@ -912,25 +915,21 @@ impl Core {
                 mode_changed = true;
                 progress_changed = true;
             }
-            NotifyResult::StartCreatingDark(item) => {
-                self.start_dark_libarary_mode_stage(
-                    mode_data,
-                    CameraMode::SavingMasterDark,
-                    &item
-                )?;
+            NotifyResult::StartCreatingDefectPixelsFile(item) => {
+                self.start_dark_libarary_mode_stage(mode_data, CameraMode::DefectPixels, &item)?;
                 mode_changed = true;
                 progress_changed = true;
             }
-            NotifyResult::StartCreatingDefectPixelsFiles(item) => {
-                self.start_dark_libarary_mode_stage(
-                    mode_data,
-                    CameraMode::SavingDefectPixels,
-                    &item
-                )?;
+            NotifyResult::StartCreatingMasterDarkFile(item) => {
+                self.start_dark_libarary_mode_stage(mode_data, CameraMode::MasterDark, &item)?;
                 mode_changed = true;
                 progress_changed = true;
             }
-
+            NotifyResult::StartCreatingMasterBiasFile(item) => {
+                self.start_dark_libarary_mode_stage(mode_data, CameraMode::MasterBias, &item)?;
+                mode_changed = true;
+                progress_changed = true;
+            }
             _ => {}
         }
 
@@ -961,7 +960,7 @@ impl Core {
         self:         &Arc<Self>,
         mode_data:    &mut ModeData,
         mode:         CameraMode,
-        program_item: &DarkCreationProgramItem
+        program_item: &MasterFileCreationProgramItem
     ) -> anyhow::Result<()> {
         mode_data.mode.abort()?;
         let prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
