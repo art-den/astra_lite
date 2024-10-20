@@ -27,6 +27,7 @@ use crate::{
 
 fn panic_handler(
     panic_info:        &std::panic::PanicHookInfo,
+    stop_indi_servers: bool,
     logs_dir:          &Path,
     def_panic_handler: &Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + 'static + Sync + Send>,
 ) {
@@ -72,7 +73,7 @@ fn panic_handler(
         logs_dir.to_str().unwrap_or_default()
     );
 
-    if cfg!(target_os = "linux") {
+    if stop_indi_servers && cfg!(target_os = "linux") {
         log::info!("Stop INDI server...");
         _ = std::process::Command::new("pkill")
             .args(["indiserver"])
@@ -93,11 +94,20 @@ fn main() -> anyhow::Result<()> {
     start_logger(&logs_dir)?;
     log::set_max_level(log::LevelFilter::Info);
 
+    log::info!("Creating indi::Connection...");
+    let indi = Arc::new(indi::Connection::new());
+
     std::panic::set_hook({
         let logs_dir = logs_dir.clone();
+        let indi = Arc::clone(&indi);
         let default_panic_handler = std::panic::take_hook();
         Box::new(move |panic_info| {
-            panic_handler(panic_info, &logs_dir, &default_panic_handler)
+            panic_handler(
+                panic_info,
+                indi.is_drivers_started(),
+                &logs_dir,
+                &default_panic_handler
+            )
         })
     });
 
@@ -111,9 +121,6 @@ fn main() -> anyhow::Result<()> {
         std::env::consts::ARCH,
         env!("CARGO_PKG_VERSION")
     );
-
-    log::info!("Creating indi::Connection...");
-    let indi = Arc::new(indi::Connection::new());
 
     log::info!("Creating Options...");
     let options = Arc::new(RwLock::new(Options::default()));

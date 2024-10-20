@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::io::{prelude::*, BufWriter, Cursor};
 use std::net::TcpStream;
 use std::process::{Command, Child, Stdio};
+use std::sync::atomic::*;
 use std::sync::{Mutex, Arc, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -1169,10 +1170,11 @@ pub enum AfterCoordSetAction {
 }
 
 pub struct Connection {
-    data:          Arc<Mutex<Option<ActiveConnData>>>,
-    state:         Arc<Mutex<ConnState>>,
-    devices:       Arc<Mutex<Devices>>,
-    subscriptions: Arc<Mutex<Subscriptions>>,
+    data:            Arc<Mutex<Option<ActiveConnData>>>,
+    state:           Arc<Mutex<ConnState>>,
+    devices:         Arc<Mutex<Devices>>,
+    subscriptions:   Arc<Mutex<Subscriptions>>,
+    drivers_started: AtomicBool,
 }
 
 impl Connection {
@@ -1190,6 +1192,7 @@ impl Connection {
             subscriptions: Arc::new(
                 Mutex::new(Subscriptions::new())
             ),
+            drivers_started: AtomicBool::new(false),
         }
     }
 
@@ -1415,6 +1418,8 @@ impl Connection {
                 write_thread,
             });
 
+            self_.drivers_started.store(!settings.remote, Ordering::Relaxed);
+
             // Read from indiserver's stderr and inform subscribers
             if let Some(mut indiserver_stderr) = indiserver_stderr {
                 let mut stderr_data = Vec::new();
@@ -1426,7 +1431,12 @@ impl Connection {
                 }
             }
         });
+
         Ok(())
+    }
+
+    pub fn is_drivers_started(&self) -> bool {
+        self.drivers_started.load(Ordering::Relaxed)
     }
 
     fn set_new_conn_state(

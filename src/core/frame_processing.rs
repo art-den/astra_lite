@@ -535,10 +535,12 @@ fn apply_calibr_data_and_remove_hot_pixels(
     // remove defect pixels
 
     if let Some(defect_pixels) = &calibr.defect_pixels {
-        let tmr = TimeLogger::start();
-        raw_image.remove_bad_pixels(&defect_pixels.items);
-        tmr.log("removing hot pixels from light frame");
-        calibr_methods.set(CalibrMethods::DEFECTIVE_PIXELS, true);
+        if !defect_pixels.items.is_empty() {
+            let tmr = TimeLogger::start();
+            raw_image.remove_bad_pixels(&defect_pixels.items);
+            tmr.log("removing hot pixels from light frame");
+            calibr_methods.set(CalibrMethods::DEFECTIVE_PIXELS, true);
+        }
     }
 
     // Search and remove hot pixels if there is no calibration data
@@ -550,7 +552,11 @@ fn apply_calibr_data_and_remove_hot_pixels(
         let hot_pixels = raw_image.find_hot_pixels_in_light();
         tmr.log("searching hot pixels in light image");
         log::debug!("hot pixels count = {}", hot_pixels.len());
-        raw_image.remove_bad_pixels(&hot_pixels);
+        if !hot_pixels.is_empty() {
+            let tmr = TimeLogger::start();
+            raw_image.remove_bad_pixels(&hot_pixels);
+            tmr.log("removing hot pixels");
+        }
         calibr_methods.set(CalibrMethods::HOT_PIXELS_SEARCH, true);
     }
 
