@@ -402,7 +402,6 @@ impl MapUi {
                 glib::Propagation::Proceed
             }
         ));
-
     }
 
     fn connect_core_events(self: &Rc<Self>) {

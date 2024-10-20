@@ -7,7 +7,7 @@ use std::{
     fs::File,
     sync::{RwLock, Arc},
 };
-use gtk::{prelude::*, glib, glib::clone};
+use gtk::{prelude::*, gdk, glib, glib::clone};
 use itertools::Itertools;
 use chrono::prelude::*;
 use crate::{
@@ -181,6 +181,23 @@ impl HardwareUi {
             drop(options);
             _ = self_.core.init_cam_telescope_data();
         }));
+
+        self.window.add_events(gdk::EventMask::KEY_PRESS_MASK);
+        self.window.connect_key_press_event(
+            clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
+            move |_, event| {
+                let nb_main = self_.builder.object::<gtk::Notebook>("nb_main").unwrap();
+                if nb_main.page() == TAB_HARDWARE as i32 {
+                    if event.state().contains(gdk::ModifierType::CONTROL_MASK)
+                    && matches!(event.keyval(), gdk::keys::constants::F|gdk::keys::constants::f) {
+                        let se = self_.builder.object::<gtk::SearchEntry>("se_hw_prop_name").unwrap();
+                        se.grab_focus();
+                        return glib::Propagation::Stop;
+                    }
+                }
+                glib::Propagation::Proceed
+            }
+        ));
     }
 
     fn connect_indi_and_guider_events(self: &Rc<Self>) {
@@ -408,8 +425,8 @@ impl HardwareUi {
         ]);
 
         gtk_utils::enable_actions(&self.window, &[
-            ("enable_all_devs",   connected),
-            ("disable_all_devs",  connected),
+            ("enable_all_devs",   connected && remote),
+            ("disable_all_devs",  connected && remote),
             ("save_devs_options", connected),
             ("load_devs_options", connected),
         ]);
