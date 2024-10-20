@@ -1,7 +1,7 @@
 use std::{cell::{Cell, RefCell}, collections::HashMap, rc::Rc, sync::{Arc, RwLock}};
 use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
-use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
+use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::*}, indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
 use super::{gtk_utils::{self, DEFAULT_DPMM}, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, math::*}, ui_main::*, ui_skymap_options::SkymapOptionsDialog, utils::*};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
@@ -390,6 +390,19 @@ impl MapUi {
                     self_.handler_widget_mouse_button_press(evt)
                 })
         );
+
+        self.window.add_events(gdk::EventMask::KEY_PRESS_MASK);
+        self.window.connect_key_press_event(
+            clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
+            move |_, event| {
+                let nb_main = self_.builder.object::<gtk::Notebook>("nb_main").unwrap();
+                if nb_main.page() == TAB_MAP as i32 {
+                    return self_.handler_key_press_event(event);
+                }
+                glib::Propagation::Proceed
+            }
+        ));
+
     }
 
     fn connect_core_events(self: &Rc<Self>) {
@@ -965,6 +978,61 @@ impl MapUi {
                 (1, &item.obj_type().to_str()),
             ]);
         }
+
+        if !result.is_empty() {
+            let selection = tv.selection();
+            let mut path = gtk::TreePath::new();
+            path.append_index(0);
+            selection.select_path(&path);
+        }
+    }
+
+    fn handler_key_press_event(&self, event: &gdk::EventKey) -> glib::Propagation {
+        let se_sm_search = self.builder.object::<gtk::SearchEntry>("se_sm_search").unwrap();
+
+        if event.state().contains(gdk::ModifierType::CONTROL_MASK)
+        && matches!(event.keyval(), gdk::keys::constants::F|gdk::keys::constants::f) {
+            se_sm_search.grab_focus();
+            return glib::Propagation::Stop;
+        }
+
+        if matches!(event.keyval(), gdk::keys::constants::Up|gdk::keys::constants::Down)
+        && se_sm_search.has_focus() {
+            let tv = self.builder.object::<gtk::TreeView>("tv_sm_search_result").unwrap();
+            let Some(model) = tv.model() else {
+                return glib::Propagation::Proceed;
+            };
+
+            let result_count = gtk_utils::get_model_row_count(&model);
+            if result_count == 0 {
+                return glib::Propagation::Proceed;
+            }
+            let selection = tv.selection();
+            let path = selection.selected_rows().0;
+            if path.len() != 1 {
+                return glib::Propagation::Proceed;
+            }
+            let indices = path[0].clone().indices();
+            if indices.len() != 1 {
+                return glib::Propagation::Proceed;
+            }
+            let mut cur_index = indices[0] as i32;
+            match event.keyval() {
+                gdk::keys::constants::Up => cur_index -= 1,
+                gdk::keys::constants::Down => cur_index += 1,
+                _ => unreachable!(),
+            }
+            if cur_index < 0 || cur_index >= result_count as i32 {
+                return glib::Propagation::Stop;
+            }
+            let mut path = gtk::TreePath::new();
+            path.append_index(cur_index);
+            selection.select_path(&path);
+
+            return glib::Propagation::Stop;
+        }
+
+        glib::Propagation::Proceed
     }
 
     pub fn handler_search_result_selection_changed(&self, selection: &gtk::TreeSelection) {

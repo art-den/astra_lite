@@ -1907,6 +1907,8 @@ time</property>
                           <object class="GtkSearchEntry" id="se_sm_search">
                             <property name="visible">True</property>
                             <property name="can-focus">True</property>
+                            <property name="tooltip-text" translatable="yes">Ctrl+F - start search
+Up, Down - switch between search results</property>
                             <property name="width-chars">30</property>
                             <property name="primary-icon-name">edit-find-symbolic</property>
                             <property name="primary-icon-activatable">False</property>

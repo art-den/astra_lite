@@ -188,9 +188,9 @@ impl MainUiEventHandlers {
     }
 }
 
-const TAB_HARDWARE: u32 = 0;
-const TAB_MAP:      u32 = 1;
-const TAB_CAMERA:   u32 = 2;
+pub const TAB_HARDWARE: u32 = 0;
+pub const TAB_MAP:      u32 = 1;
+pub const TAB_CAMERA:   u32 = 2;
 
 const CSS: &[u8] = b"
 .greenbutton {

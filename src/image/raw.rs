@@ -240,12 +240,12 @@ impl RawImage {
             hdu.set_f64("TOTALEXP", integr_exp);
         }
         hdu.set_str("ROWORDER", "TOP-DOWN");
-        hdu.set_str("FRAME",      self.info.frame_type.to_str());
-        hdu.set_i64("XBINNING",   self.info.bin as i64);
-        hdu.set_i64("YBINNING",   self.info.bin as i64);
-        hdu.set_i64("GAIN",       self.info.gain as i64);
-        hdu.set_i64("OFFSET",     self.info.offset as i64);
-        hdu.set_str("INSTRUME",   &self.info.camera);
+        hdu.set_str("FRAME",    self.info.frame_type.to_str());
+        hdu.set_i64("XBINNING", self.info.bin as i64);
+        hdu.set_i64("YBINNING", self.info.bin as i64);
+        hdu.set_i64("GAIN",     self.info.gain as i64);
+        hdu.set_i64("OFFSET",   self.info.offset as i64);
+        hdu.set_str("INSTRUME", &self.info.camera);
         if let Some(bayer) = self.info.cfa.to_str() {
             hdu.set_str("BAYERPAT", bayer);
         }
