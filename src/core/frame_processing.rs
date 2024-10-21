@@ -415,7 +415,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
     log::debug!("apply_calibr_data_and_remove_hot_pixels params={:?}", params);
     log::debug!("calibr.defect_pixels_fname={:?}", calibr.defect_pixels_fname);
     log::debug!("calibr.subtract_fname={:?}", calibr.subtract_fname);
-    log::debug!("calibr.master_flat_fname{:?}", calibr.master_flat_fname);
+    log::debug!("calibr.master_flat_fname={:?}", calibr.master_flat_fname);
 
     let mut reload_flat = false;
 

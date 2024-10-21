@@ -1027,6 +1027,9 @@ impl MapUi {
             let mut path = gtk::TreePath::new();
             path.append_index(cur_index);
             selection.select_path(&path);
+            if let [path] = selection.selected_rows().0.as_slice() {
+                tv.set_cursor(path, Option::<&gtk::TreeViewColumn>::None, false);
+            }
 
             return glib::Propagation::Stop;
         }

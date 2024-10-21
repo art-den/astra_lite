@@ -431,16 +431,11 @@ impl Core {
                 prop: device_prop.to_string(),
             };
 
-            let master_flat = if options.calibr.flat_frame_en {
-                options.calibr.flat_frame_fname.clone()
-            } else {
-                None
-            };
             let calibr_params = Some(CalibrParams {
                 extract_dark:  options.calibr.dark_frame_en,
                 dark_lib_path: options.calibr.dark_library_path.clone(),
-                flat_fname:    master_flat,
-                sar_hot_pixs: options.calibr.hot_pixels,
+                flat_fname:    None,
+                sar_hot_pixs:  options.calibr.hot_pixels,
             });
 
             let new_stop_flag = Arc::new(AtomicBool::new(false));
@@ -580,7 +575,7 @@ impl Core {
             extract_dark:  options.calibr.dark_frame_en,
             dark_lib_path: options.calibr.dark_library_path.clone(),
             flat_fname:    None,
-            sar_hot_pixs: options.calibr.hot_pixels,
+            sar_hot_pixs:  options.calibr.hot_pixels,
         });
 
         let command = FrameProcessCommandData {

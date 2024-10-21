@@ -1234,6 +1234,15 @@ impl Mode for TackingPicturesMode {
              },
             _ => {},
         }
+
+        if let Some(calibr_params) = &mut cmd.calibr_params {
+            calibr_params.flat_fname =
+                if options.calibr.flat_frame_en {
+                    options.calibr.flat_frame_fname.clone()
+                } else {
+                    None
+                };
+        }
     }
 
     fn notify_indi_prop_change(
