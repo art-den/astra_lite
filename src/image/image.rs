@@ -978,16 +978,16 @@ struct ImageToU8BytesArgs {
 ///////////////////////////////////////////////////////////////////////////////
 
 #[derive(Default)]
-struct ImageAdderChan {
+struct ImageStackerChan {
     data:   Vec<i32>,
     median: Option<i32>,
 }
 
-pub struct ImageAdder {
-    r: ImageAdderChan,
-    g: ImageAdderChan,
-    b: ImageAdderChan,
-    l: ImageAdderChan,
+pub struct ImageStacker {
+    r: ImageStackerChan,
+    g: ImageStackerChan,
+    b: ImageStackerChan,
+    l: ImageStackerChan,
     cnt: Vec<u16>,
     width: usize,
     height: usize,
@@ -996,13 +996,13 @@ pub struct ImageAdder {
     frames_cnt: u32,
 }
 
-impl ImageAdder {
+impl ImageStacker {
     pub fn new() -> Self {
         Self {
-            r: ImageAdderChan::default(),
-            g: ImageAdderChan::default(),
-            b: ImageAdderChan::default(),
-            l: ImageAdderChan::default(),
+            r: ImageStackerChan::default(),
+            g: ImageStackerChan::default(),
+            b: ImageStackerChan::default(),
+            l: ImageStackerChan::default(),
             cnt: Vec::new(),
             width: 0,
             height: 0,
@@ -1021,10 +1021,10 @@ impl ImageAdder {
     }
 
     pub fn clear(&mut self) {
-        self.l = ImageAdderChan::default();
-        self.r = ImageAdderChan::default();
-        self.g = ImageAdderChan::default();
-        self.b = ImageAdderChan::default();
+        self.l = ImageStackerChan::default();
+        self.r = ImageStackerChan::default();
+        self.g = ImageStackerChan::default();
+        self.b = ImageStackerChan::default();
         self.cnt.clear();
         self.cnt.shrink_to_fit();
         self.width = 0;
@@ -1080,7 +1080,7 @@ impl ImageAdder {
     }
 
     fn add_layer(
-        dst:        &mut ImageAdderChan,
+        dst:        &mut ImageStackerChan,
         cnt:        &mut [u16],
         src:        &ImageLayer<u16>,
         src_median: i32,

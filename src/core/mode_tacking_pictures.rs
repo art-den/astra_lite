@@ -8,7 +8,7 @@ use chrono::Utc;
 use crate::{
     core::{consts::INDI_SET_PROP_TIMEOUT, utils::FileNameArg},
     guiding::external_guider::*,
-    image::{histogram::*, info::LightFrameInfo, raw::{FrameType, RawAdder, RawImage, RawImageInfo}, stars_offset::*},
+    image::{histogram::*, info::LightFrameInfo, raw::{FrameType, RawStacker, RawImage, RawImageInfo}, stars_offset::*},
     indi,
     options::*,
     utils::io_utils::*,
@@ -83,7 +83,7 @@ struct RefocusData {
 struct Flags {
     skip_frame_done:    bool,
     save_raw_files:     bool,
-    use_raw_adder:      bool,
+    use_raw_stacker:    bool,
     save_master_file:   bool,
     save_defect_pixels: bool,
 }
@@ -109,7 +109,7 @@ pub struct TackingPicturesMode {
     fn_gen:          Arc<Mutex<SeqFileNameGen>>,
     indi:            Arc<indi::Connection>,
     subscribers:     Arc<RwLock<Subscribers>>,
-    raw_adder:       RawAdder,
+    raw_stacker:     RawStacker,
     options:         Arc<RwLock<Options>>,
     cam_options:     CamOptions,
     focus_options:   Option<FocuserOptions>,
@@ -182,7 +182,7 @@ impl TackingPicturesMode {
             fn_gen:          Arc::new(Mutex::new(SeqFileNameGen::new())),
             indi:            Arc::clone(indi),
             subscribers:     Arc::clone(subscribers),
-            raw_adder:       RawAdder::new(),
+            raw_stacker:     RawStacker::new(),
             options:         Arc::clone(options),
             cam_options,
             focus_options:   None,
@@ -781,11 +781,11 @@ impl TackingPicturesMode {
             normalized_flat.normalize_flat();
             tmr.log("Normalizing flat");
             let tmr = TimeLogger::start();
-            self.raw_adder.add(&normalized_flat, false)?;
+            self.raw_stacker.add(&normalized_flat, false)?;
             tmr.log("Adding raw calibration frame");
         } else {
             let tmr = TimeLogger::start();
-            self.raw_adder.add(raw_image, true)?;
+            self.raw_stacker.add(raw_image, true)?;
             tmr.log("Adding raw calibration frame");
         }
         Ok(())
@@ -832,8 +832,8 @@ impl TackingPicturesMode {
 
     fn save_master_file(&mut self) -> anyhow::Result<()> {
         log::debug!("Saving master frame...");
-        let raw_image = self.raw_adder.get()?;
-        self.raw_adder.clear();
+        let raw_image = self.raw_stacker.get()?;
+        self.raw_stacker.clear();
 
         if let Some(parent) = self.out_file_names.master_fname.parent() {
             if !parent.is_dir() {
@@ -850,8 +850,8 @@ impl TackingPicturesMode {
 
     fn save_defect_pixels_file(&mut self) -> anyhow::Result<()> {
         log::debug!("Saving defect pixels file...");
-        let raw_image = self.raw_adder.get()?;
-        self.raw_adder.clear();
+        let raw_image = self.raw_stacker.get()?;
+        self.raw_stacker.clear();
 
         if let Some(parent) = self.out_file_names.defect_pixels_fname.parent() {
             if !parent.is_dir() {
@@ -869,7 +869,7 @@ impl TackingPicturesMode {
         Ok(())
     }
 
-    fn is_frame_type_for_raw_adder(frame_type: FrameType) -> bool {
+    fn is_frame_type_for_raw_stacker(frame_type: FrameType) -> bool {
         matches!(
             frame_type,
             FrameType::Flats| FrameType::Darks | FrameType::Biases
@@ -884,10 +884,10 @@ impl TackingPicturesMode {
             return Ok(NotifyResult::Empty);
         }
 
-        let frame_for_raw_adder =
-            Self::is_frame_type_for_raw_adder(raw_image.info().frame_type);
+        let frame_for_raw_stacker =
+            Self::is_frame_type_for_raw_stacker(raw_image.info().frame_type);
 
-        if frame_for_raw_adder && self.flags.use_raw_adder {
+        if frame_for_raw_stacker && self.flags.use_raw_stacker {
             self.add_raw_image(raw_image)?;
         }
         Ok(NotifyResult::Empty)
@@ -1091,7 +1091,7 @@ impl Mode for TackingPicturesMode {
             CameraMode::DefectPixels => true,
             _ => false,
         };
-        self.flags.use_raw_adder =
+        self.flags.use_raw_stacker =
             self.flags.save_master_file ||
             self.flags.save_defect_pixels;
 
@@ -1108,8 +1108,8 @@ impl Mode for TackingPicturesMode {
         self.fname_utils.init(&self.indi, &self.device);
         self.generate_output_file_names()?;
 
-        if self.flags.use_raw_adder {
-            self.raw_adder.clear();
+        if self.flags.use_raw_stacker {
+            self.raw_stacker.clear();
         }
 
         self.start_or_continue()?;

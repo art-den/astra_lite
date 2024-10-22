@@ -1563,14 +1563,14 @@ impl CameraUi {
                     image.read().unwrap().save_to_tiff(&file_name)?;
                 }
                 PreviewSource::LiveStacking => {
-                    let adder = &self.core.live_stacking().adder;
-                    if adder.read().unwrap().is_empty() {
+                    let stacker = &self.core.live_stacking().stacker;
+                    if stacker.read().unwrap().is_empty() {
                         return Ok(());
                     }
                     let Some(file_name) = ask_to_select_name("live") else {
                         return Ok(())
                     };
-                    adder.read().unwrap().save_to_tiff(&file_name)?;
+                    stacker.read().unwrap().save_to_tiff(&file_name)?;
                 }
             }
             Ok(())

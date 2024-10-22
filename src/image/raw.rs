@@ -942,7 +942,7 @@ impl RawImage {
     }
 }
 
-pub struct RawAdder {
+pub struct RawStacker {
     data:       Vec<u32>,
     images:     Vec<RawImage>,
     info:       Option<RawImageInfo>,
@@ -951,7 +951,7 @@ pub struct RawAdder {
     integr_exp: f64,
 }
 
-impl RawAdder {
+impl RawStacker {
     pub fn new() -> Self {
         Self {
             data:       Vec::new(),
@@ -983,7 +983,7 @@ impl RawAdder {
             if info.width != raw.info.width
             || info.height != raw.info.height {
                 anyhow::bail!(
-                    "Size of images differ: adder {}x{}, raw {}x{}",
+                    "Size of images differ: stacker {}x{}, raw {}x{}",
                     info.width, info.height,
                     raw.info.width, raw.info.height,
                 );

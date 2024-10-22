@@ -106,7 +106,7 @@ impl CalibrData {
 }
 
 pub struct LiveStackingData {
-    pub adder:    RwLock<ImageAdder>,
+    pub stacker:  RwLock<ImageStacker>,
     pub image:    RwLock<Image>,
     pub hist:     RwLock<Histogram>,
     pub info:     RwLock<ResultImageInfo>,
@@ -116,7 +116,7 @@ pub struct LiveStackingData {
 impl LiveStackingData {
     pub fn new() -> Self {
         Self {
-            adder:    RwLock::new(ImageAdder::new()),
+            stacker:  RwLock::new(ImageStacker::new()),
             image:    RwLock::new(Image::new_empty()),
             hist:     RwLock::new(Histogram::new()),
             info:     RwLock::new(ResultImageInfo::None),
@@ -125,7 +125,7 @@ impl LiveStackingData {
     }
 
     pub fn clear(&self) {
-        self.adder.write().unwrap().clear();
+        self.stacker.write().unwrap().clear();
         self.image.write().unwrap().clear();
         self.hist.write().unwrap().clear();
         *self.info.write().unwrap() = ResultImageInfo::None;
@@ -956,9 +956,9 @@ fn make_preview_image_impl(
         if let (Some(live_stacking), false) = (command.live_stacking.as_ref(), bad_frame) {
             // Translate/rotate image to reference image and add
             let offset = info.stars_offset.clone().unwrap_or_default();
-            let mut image_adder = live_stacking.data.adder.write().unwrap();
+            let mut stacker = live_stacking.data.stacker.write().unwrap();
             let tmr = TimeLogger::start();
-            image_adder.add(
+            stacker.add(
                 &image,
                 hist.r.as_ref().map(|chan| chan.median()),
                 hist.g.as_ref().map(|chan| chan.median()),
@@ -969,22 +969,22 @@ fn make_preview_image_impl(
                 -offset.angle,
                 raw_info.exposure
             );
-            tmr.log("ImageAdder::add");
-            drop(image_adder);
+            tmr.log("ImageStacker::add");
+            drop(stacker);
 
             if command.stop_flag.load(Ordering::Relaxed) {
                 log::debug!("Command stopped");
                 return Ok(());
             }
 
-            let image_adder = live_stacking.data.adder.read().unwrap();
+            let stacker = live_stacking.data.stacker.read().unwrap();
 
             let mut res_image = live_stacking.data.image.write().unwrap();
             let tmr = TimeLogger::start();
-            image_adder.copy_to_image(&mut res_image, true);
-            tmr.log("ImageAdder::copy_to_image");
+            stacker.copy_to_image(&mut res_image, true);
+            tmr.log("ImageStacker::copy_to_image");
 
-            if command.view_options.remove_gradient { // TODO: do gradient removal in image_adder.copy_to_image!
+            if command.view_options.remove_gradient {
                 let tmr = TimeLogger::start();
                 res_image.remove_gradient();
                 tmr.log("remove gradient from live stacking result");
@@ -1026,7 +1026,7 @@ fn make_preview_image_impl(
                 None,
                 true,
             );
-            live_stacking_info.exposure = image_adder.total_exposure();
+            live_stacking_info.exposure = stacker.total_exposure();
             tmr.log("LightImageInfo::from_image for livestacking");
 
             if command.stop_flag.load(Ordering::Relaxed) {
@@ -1102,7 +1102,7 @@ fn make_preview_image_impl(
                     }
                     let file_path = file_path.join(format!("Live_{}.tif", now_time_str));
                     let tmr = TimeLogger::start();
-                    image_adder.save_to_tiff(&file_path)?;
+                    stacker.save_to_tiff(&file_path)?;
                     tmr.log("save live stacking result image");
                 }
             }
