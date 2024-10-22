@@ -388,6 +388,17 @@ impl Image {
         self.max_value = max_value;
     }
 
+    pub fn clear(&mut self) {
+        self.l.clear();
+        self.r.clear();
+        self.g.clear();
+        self.b.clear();
+        self.width = 0;
+        self.height = 0;
+        self.zero = 0;
+        self.max_value = 0;
+    }
+
     pub fn is_empty(&self) -> bool {
         self.l.is_empty() &&
         self.r.is_empty() &&

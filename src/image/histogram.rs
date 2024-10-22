@@ -201,6 +201,13 @@ impl Histogram {
         self.g = from_image_layer(self.g.take(), &img.g);
         self.b = from_image_layer(self.b.take(), &img.b);
     }
+
+    pub fn clear(&mut self) {
+        self.l = None;
+        self.r = None;
+        self.g = None;
+        self.b = None;
+    }
 }
 
 struct TmpFreqValues(Vec<u32>);

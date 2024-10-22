@@ -123,6 +123,14 @@ impl LiveStackingData {
             time_cnt: Mutex::new(0.0),
         }
     }
+
+    pub fn clear(&self) {
+        self.adder.write().unwrap().clear();
+        self.image.write().unwrap().clear();
+        self.hist.write().unwrap().clear();
+        *self.info.write().unwrap() = ResultImageInfo::None;
+        *self.time_cnt.lock().unwrap() = 0.0;
+    }
 }
 
 pub struct LiveStackingParams {
@@ -947,156 +955,155 @@ fn make_preview_image_impl(
 
         if let (Some(live_stacking), false) = (command.live_stacking.as_ref(), bad_frame) {
             // Translate/rotate image to reference image and add
-            if let Some(offset) = &info.stars_offset {
-                let mut image_adder = live_stacking.data.adder.write().unwrap();
+            let offset = info.stars_offset.clone().unwrap_or_default();
+            let mut image_adder = live_stacking.data.adder.write().unwrap();
+            let tmr = TimeLogger::start();
+            image_adder.add(
+                &image,
+                hist.r.as_ref().map(|chan| chan.median()),
+                hist.g.as_ref().map(|chan| chan.median()),
+                hist.b.as_ref().map(|chan| chan.median()),
+                hist.l.as_ref().map(|chan| chan.median()),
+                -offset.x,
+                -offset.y,
+                -offset.angle,
+                raw_info.exposure
+            );
+            tmr.log("ImageAdder::add");
+            drop(image_adder);
+
+            if command.stop_flag.load(Ordering::Relaxed) {
+                log::debug!("Command stopped");
+                return Ok(());
+            }
+
+            let image_adder = live_stacking.data.adder.read().unwrap();
+
+            let mut res_image = live_stacking.data.image.write().unwrap();
+            let tmr = TimeLogger::start();
+            image_adder.copy_to_image(&mut res_image, true);
+            tmr.log("ImageAdder::copy_to_image");
+
+            if command.view_options.remove_gradient { // TODO: do gradient removal in image_adder.copy_to_image!
                 let tmr = TimeLogger::start();
-                image_adder.add(
-                    &image,
-                    hist.r.as_ref().map(|chan| chan.median()),
-                    hist.g.as_ref().map(|chan| chan.median()),
-                    hist.b.as_ref().map(|chan| chan.median()),
-                    hist.l.as_ref().map(|chan| chan.median()),
-                    -offset.x,
-                    -offset.y,
-                    -offset.angle,
-                    raw_info.exposure
-                );
-                tmr.log("ImageAdder::add");
-                drop(image_adder);
+                res_image.remove_gradient();
+                tmr.log("remove gradient from live stacking result");
+            }
 
-                if command.stop_flag.load(Ordering::Relaxed) {
-                    log::debug!("Command stopped");
-                    return Ok(());
-                }
+            drop(res_image);
 
-                let image_adder = live_stacking.data.adder.read().unwrap();
+            let res_image = live_stacking.data.image.read().unwrap();
 
-                let mut res_image = live_stacking.data.image.write().unwrap();
+            // Histogram for live stacking image
+
+            let mut hist = live_stacking.data.hist.write().unwrap();
+            let tmr = TimeLogger::start();
+            hist.from_image(&res_image);
+            tmr.log("histogram from live view image");
+            drop(hist);
+
+            if command.stop_flag.load(Ordering::Relaxed) {
+                log::debug!("Command stopped");
+                return Ok(());
+            }
+
+            let hist = live_stacking.data.hist.read().unwrap();
+            send_result(
+                FrameProcessResultData::HistogramLiveRes,
+                &command.camera,
+                command.mode_type,
+                &command.stop_flag,
+                result_fun
+            );
+
+            // Live stacking image info
+
+            let tmr = TimeLogger::start();
+            let mut live_stacking_info = LightFrameInfo::from_image(
+                &res_image,
+                max_stars_fwhm,
+                max_stars_ovality,
+                None,
+                true,
+            );
+            live_stacking_info.exposure = image_adder.total_exposure();
+            tmr.log("LightImageInfo::from_image for livestacking");
+
+            if command.stop_flag.load(Ordering::Relaxed) {
+                log::debug!("Command stopped");
+                return Ok(());
+            }
+
+            *live_stacking.data.info.write().unwrap() = ResultImageInfo::LightInfo(
+                Arc::new(live_stacking_info)
+            );
+            send_result(
+                FrameProcessResultData::FrameInfoLiveRes,
+                &command.camera,
+                command.mode_type,
+                &command.stop_flag,
+                result_fun
+            );
+
+            // Convert into preview RGB bytes
+
+            if !command.view_options.orig_frame_in_ls {
                 let tmr = TimeLogger::start();
-                image_adder.copy_to_image(&mut res_image, true);
-                tmr.log("ImageAdder::copy_to_image");
-
-                if command.view_options.remove_gradient { // TODO: do gradient removal in image_adder.copy_to_image!
-                    let tmr = TimeLogger::start();
-                    res_image.remove_gradient();
-                    tmr.log("remove gradient from live stacking result");
-                }
-
-                drop(res_image);
-
-                let res_image = live_stacking.data.image.read().unwrap();
-
-                // Histogram for live stacking image
-
-                let mut hist = live_stacking.data.hist.write().unwrap();
-                let tmr = TimeLogger::start();
-                hist.from_image(&res_image);
-                tmr.log("histogram from live view image");
-                drop(hist);
-
-                if command.stop_flag.load(Ordering::Relaxed) {
-                    log::debug!("Command stopped");
-                    return Ok(());
-                }
-
-                let hist = live_stacking.data.hist.read().unwrap();
-                send_result(
-                    FrameProcessResultData::HistogramLiveRes,
-                    &command.camera,
-                    command.mode_type,
-                    &command.stop_flag,
-                    result_fun
-                );
-
-                // Live stacking image info
-
-                let tmr = TimeLogger::start();
-                let mut live_stacking_info = LightFrameInfo::from_image(
+                let rgb_data = get_rgb_data_from_preview_image(
                     &res_image,
-                    max_stars_fwhm,
-                    max_stars_ovality,
-                    None,
-                    true,
+                    &hist,
+                    &command.view_options
                 );
-                live_stacking_info.exposure = image_adder.total_exposure();
-                tmr.log("LightImageInfo::from_image for livestacking");
+                tmr.log("get_rgb_bytes_from_preview_image");
 
                 if command.stop_flag.load(Ordering::Relaxed) {
                     log::debug!("Command stopped");
                     return Ok(());
                 }
 
-                *live_stacking.data.info.write().unwrap() = ResultImageInfo::LightInfo(
-                    Arc::new(live_stacking_info)
-                );
-                send_result(
-                    FrameProcessResultData::FrameInfoLiveRes,
-                    &command.camera,
-                    command.mode_type,
-                    &command.stop_flag,
-                    result_fun
-                );
+                if let Some(rgb_data) = rgb_data {
+                    let preview_data = Arc::new(Preview8BitImgData {
+                        rgb_data: Mutex::new(rgb_data),
+                        image_width: image.width(),
+                        image_height: image.height(),
+                        params: command.view_options.clone(),
+                    });
 
-                // Convert into preview RGB bytes
-
-                if !command.view_options.orig_frame_in_ls {
-                    let tmr = TimeLogger::start();
-                    let rgb_data = get_rgb_data_from_preview_image(
-                        &res_image,
-                        &hist,
-                        &command.view_options
+                    send_result(
+                        FrameProcessResultData::PreviewLiveRes(preview_data),
+                        &command.camera,
+                        command.mode_type,
+                        &command.stop_flag,
+                        result_fun
                     );
-                    tmr.log("get_rgb_bytes_from_preview_image");
-
-                    if command.stop_flag.load(Ordering::Relaxed) {
-                        log::debug!("Command stopped");
-                        return Ok(());
-                    }
-
-                    if let Some(rgb_data) = rgb_data {
-                        let preview_data = Arc::new(Preview8BitImgData {
-                            rgb_data: Mutex::new(rgb_data),
-                            image_width: image.width(),
-                            image_height: image.height(),
-                            params: command.view_options.clone(),
-                        });
-
-                        send_result(
-                            FrameProcessResultData::PreviewLiveRes(preview_data),
-                            &command.camera,
-                            command.mode_type,
-                            &command.stop_flag,
-                            result_fun
-                        );
-                    }
                 }
+            }
 
-                // save result image
+            // save result image
 
-                if live_stacking.options.save_enabled {
-                    let save_res_interv = live_stacking.options.save_minutes as f64 * 60.0;
-                    let mut save_cnt = live_stacking.data.time_cnt.lock().unwrap();
-                    *save_cnt += raw_info.exposure;
-                    if *save_cnt >= save_res_interv {
-                        *save_cnt = 0.0;
-                        drop(save_cnt);
-                        let now_time: DateTime<Local> = Local::now();
-                        let now_time_str = now_time.format("%Y%m%d-%H%M%S").to_string();
-                        let file_path = live_stacking.options.out_dir
-                            .join("Result");
-                        if !file_path.exists() {
-                            std::fs::create_dir_all(&file_path)
-                                .map_err(|e|anyhow::anyhow!(
-                                    "Error '{}'\nwhen trying to create directory '{}' for saving result live stack image",
-                                    e.to_string(),
-                                    file_path.to_str().unwrap_or_default()
-                                ))?;
-                        }
-                        let file_path = file_path.join(format!("Live_{}.tif", now_time_str));
-                        let tmr = TimeLogger::start();
-                        image_adder.save_to_tiff(&file_path)?;
-                        tmr.log("save live stacking result image");
+            if live_stacking.options.save_enabled {
+                let save_res_interv = live_stacking.options.save_minutes as f64 * 60.0;
+                let mut save_cnt = live_stacking.data.time_cnt.lock().unwrap();
+                *save_cnt += raw_info.exposure;
+                if *save_cnt >= save_res_interv {
+                    *save_cnt = 0.0;
+                    drop(save_cnt);
+                    let now_time: DateTime<Local> = Local::now();
+                    let now_time_str = now_time.format("%Y%m%d-%H%M%S").to_string();
+                    let file_path = live_stacking.options.out_dir
+                        .join("Result");
+                    if !file_path.exists() {
+                        std::fs::create_dir_all(&file_path)
+                            .map_err(|e|anyhow::anyhow!(
+                                "Error '{}'\nwhen trying to create directory '{}' for saving result live stack image",
+                                e.to_string(),
+                                file_path.to_str().unwrap_or_default()
+                            ))?;
                     }
+                    let file_path = file_path.join(format!("Live_{}.tif", now_time_str));
+                    let tmr = TimeLogger::start();
+                    image_adder.save_to_tiff(&file_path)?;
+                    tmr.log("save live stacking result image");
                 }
             }
         }

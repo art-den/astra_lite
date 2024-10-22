@@ -1101,9 +1101,8 @@ impl Mode for TackingPicturesMode {
             let mut ref_stars = ref_stars.lock().unwrap();
             *ref_stars = None;
         }
-        if let Some(live_stacking) = &mut self.live_stacking {
-            let mut adder = live_stacking.adder.write().unwrap();
-            adder.clear();
+        if let Some(live_stacking) = &self.live_stacking {
+            live_stacking.clear();
         }
 
         self.fname_utils.init(&self.indi, &self.device);
