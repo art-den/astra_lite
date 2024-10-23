@@ -616,8 +616,8 @@ impl CameraUi {
 
         let chb_hot_pixels = bldr.object::<gtk::CheckButton>("chb_hot_pixels").unwrap();
         chb_hot_pixels.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            let ui = gtk_utils::UiHelper::new_from_builder(&self_.builder);
-            ui.enable_widgets(false,&[("l_hot_pixels_warn", chb.is_active())]);
+            let l_hot_pixels_warn = self_.builder.object::<gtk::Label>("l_hot_pixels_warn").unwrap();
+            l_hot_pixels_warn.set_visible(chb.is_active());
             let Ok(mut options) = self_.options.try_write() else { return; };
             options.calibr.hot_pixels = chb.is_active();
             drop(options);
@@ -630,6 +630,17 @@ impl CameraUi {
             drop(ui_options);
             self_.show_flat_info();
         }));
+
+        let chb_live_no_tracks = bldr.object::<gtk::CheckButton>("chb_live_no_tracks").unwrap();
+        chb_live_no_tracks.connect_active_notify(clone!(@weak self as self_ => move |chb| {
+            let l_live_no_tracks = self_.builder.object::<gtk::Label>("l_live_no_tracks").unwrap();
+            l_live_no_tracks.set_visible(chb.is_active());
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.live.remove_tracks = chb.is_active();
+            drop(options);
+
+        }));
+
     }
 
     fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
@@ -1576,7 +1587,6 @@ impl CameraUi {
             Ok(())
         });
     }
-
 
     fn show_frame_processing_result(
         &self,

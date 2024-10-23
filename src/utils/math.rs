@@ -21,6 +21,11 @@ fn test_median3() {
     assert_eq!(median3(3, 2, 1), 2);
 }
 
+pub fn median4<T: core::cmp::Ord + Copy>(a: T, b: T, c: T, _d: T) -> T {
+    T::max(T::min(a, b), T::min(c, T::max(a, b)))
+}
+
+
 pub fn median5<T: core::cmp::Ord + Copy>(a: T, b: T, c: T, d: T, e: T) -> T {
     let f = T::max(T::min(a, b), T::min(c, d));
     let g = T::min(T::max(a, b), T::max(c, d));

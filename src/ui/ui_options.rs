@@ -107,10 +107,11 @@ impl Options {
 
     pub fn read_live_stacking(&mut self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
-        self.live.save_orig    = ui.prop_bool("chb_live_save_orig.active");
-        self.live.save_enabled = ui.prop_bool("chb_live_save.active");
-        self.live.save_minutes = ui.prop_f64("spb_live_minutes.value") as usize;
-        self.live.out_dir      = ui.fch_pathbuf("fch_live_folder").unwrap_or_default();
+        self.live.save_orig     = ui.prop_bool("chb_live_save_orig.active");
+        self.live.save_enabled  = ui.prop_bool("chb_live_save.active");
+        self.live.save_minutes  = ui.prop_f64("spb_live_minutes.value") as usize;
+        self.live.out_dir       = ui.fch_pathbuf("fch_live_folder").unwrap_or_default();
+        self.live.remove_tracks = ui.prop_bool("chb_live_no_tracks.active");
     }
 
     pub fn read_frame_quality(&mut self, builder: &gtk::Builder) {
@@ -277,6 +278,7 @@ impl Options {
         ui.set_prop_bool("chb_live_save.active",      self.live.save_enabled);
         ui.set_prop_f64 ("spb_live_minutes.value",    self.live.save_minutes as f64);
         ui.set_fch_path ("fch_live_folder",           Some(&self.live.out_dir));
+        ui.set_prop_bool("chb_live_no_tracks.active", self.live.remove_tracks);
     }
 
     pub fn show_frame_quality(&self, builder: &gtk::Builder) {

@@ -2546,6 +2546,8 @@ Up, Down - switch between search results</property>
                                         <property name="visible">True</property>
                                         <property name="can-focus">True</property>
                                         <property name="receives-default">False</property>
+                                        <property name="tooltip-text" translatable="yes">Applies dark frame from dark library (if found)
+Also fixes hot pixels by defect pixels file (if found)</property>
                                         <property name="halign">start</property>
                                         <property name="draw-indicator">True</property>
                                       </object>
@@ -2613,6 +2615,10 @@ if no master dark defined</property>
                                         <property name="visible">True</property>
                                         <property name="can-focus">True</property>
                                         <property name="receives-default">False</property>
+                                        <property name="tooltip-text" translatable="yes">Search and remove hot pixels from light frame. 
+Is not using darks or defect pixel files.
+Сan consider a very small star as a dead pixel and delete it</property>
+                                        <property name="halign">start</property>
                                         <property name="draw-indicator">True</property>
                                       </object>
                                       <packing>
@@ -2622,13 +2628,13 @@ if no master dark defined</property>
                                     </child>
                                     <child>
                                       <object class="GtkLabel" id="l_hot_pixels_warn">
-                                        <property name="visible">True</property>
                                         <property name="can-focus">False</property>
                                         <property name="opacity">0.5</property>
                                         <property name="halign">start</property>
-                                        <property name="label" translatable="yes">&lt;b&gt;Warning!&lt;/b&gt; Can "eat" your small stars.
-Better use "Subtrack master DARK frame"</property>
+                                        <property name="margin-start">20</property>
+                                        <property name="label" translatable="yes">&lt;b&gt;Warning!&lt;/b&gt; Can "eat" your small stars. Better use "Subtrack master DARK frame"</property>
                                         <property name="use-markup">True</property>
+                                        <property name="wrap">True</property>
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
@@ -2904,7 +2910,7 @@ Better use "Subtrack master DARK frame"</property>
                                 <property name="visible">True</property>
                                 <property name="can-focus">True</property>
                                 <child>
-                                  <!-- n-columns=2 n-rows=5 -->
+                                  <!-- n-columns=2 n-rows=8 -->
                                   <object class="GtkGrid" id="grd_live_stack">
                                     <property name="visible">True</property>
                                     <property name="can-focus">False</property>
@@ -3011,7 +3017,7 @@ stacking</property>
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
-                                        <property name="top-attach">3</property>
+                                        <property name="top-attach">6</property>
                                         <property name="width">2</property>
                                       </packing>
                                     </child>
@@ -3025,7 +3031,7 @@ stacking</property>
                                       </object>
                                       <packing>
                                         <property name="left-attach">0</property>
-                                        <property name="top-attach">4</property>
+                                        <property name="top-attach">7</property>
                                         <property name="width">2</property>
                                       </packing>
                                     </child>
@@ -3041,6 +3047,72 @@ stacking</property>
                                       <packing>
                                         <property name="left-attach">0</property>
                                         <property name="top-attach">2</property>
+                                        <property name="width">2</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkBox">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="orientation">vertical</property>
+                                        <child>
+                                          <object class="GtkCheckButton" id="chb_live_no_tracks">
+                                            <property name="label" translatable="yes">Remove tracks</property>
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">True</property>
+                                            <property name="receives-default">False</property>
+                                            <property name="tooltip-text" translatable="yes">Removes satellite and meteor tracks from image
+Also makes stars little sharper</property>
+                                            <property name="draw-indicator">True</property>
+                                          </object>
+                                          <packing>
+                                            <property name="expand">False</property>
+                                            <property name="fill">True</property>
+                                            <property name="position">0</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkLabel" id="l_live_no_tracks">
+                                            <property name="can-focus">False</property>
+                                            <property name="opacity">0.5</property>
+                                            <property name="halign">start</property>
+                                            <property name="margin-start">20</property>
+                                            <property name="label" translatable="yes">&lt;b&gt;Warining!&lt;/b&gt; This feature require a lot of RAM. Make sure you have 4 Gb of RAM or more</property>
+                                            <property name="use-markup">True</property>
+                                            <property name="wrap">True</property>
+                                          </object>
+                                          <packing>
+                                            <property name="expand">False</property>
+                                            <property name="fill">True</property>
+                                            <property name="position">1</property>
+                                          </packing>
+                                        </child>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">0</property>
+                                        <property name="top-attach">4</property>
+                                        <property name="width">2</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkSeparator">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">0</property>
+                                        <property name="top-attach">3</property>
+                                        <property name="width">2</property>
+                                      </packing>
+                                    </child>
+                                    <child>
+                                      <object class="GtkSeparator">
+                                        <property name="visible">True</property>
+                                        <property name="can-focus">False</property>
+                                      </object>
+                                      <packing>
+                                        <property name="left-attach">0</property>
+                                        <property name="top-attach">5</property>
                                         <property name="width">2</property>
                                       </packing>
                                     </child>

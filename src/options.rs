@@ -230,19 +230,21 @@ impl RawFrameOptions {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct LiveStackingOptions {
-    pub save_orig:    bool,
-    pub save_minutes: usize,
-    pub save_enabled: bool,
-    pub out_dir:      PathBuf,
+    pub save_orig:     bool,
+    pub save_minutes:  usize,
+    pub save_enabled:  bool,
+    pub out_dir:       PathBuf,
+    pub remove_tracks: bool,
 }
 
 impl Default for LiveStackingOptions {
     fn default() -> Self {
         Self {
-            save_orig:    false,
-            save_minutes: 5,
-            save_enabled: true,
-            out_dir:      PathBuf::new(),
+            save_orig:     false,
+            save_minutes:  5,
+            save_enabled:  true,
+            out_dir:       PathBuf::new(),
+            remove_tracks: false,
         }
     }
 }

@@ -953,21 +953,19 @@ fn make_preview_image_impl(
 
         // Live stacking
 
-        if let (Some(live_stacking), false) = (command.live_stacking.as_ref(), bad_frame) {
+        if let (Some(live_stacking), false) = (&command.live_stacking, bad_frame) {
             // Translate/rotate image to reference image and add
             let offset = info.stars_offset.clone().unwrap_or_default();
             let mut stacker = live_stacking.data.stacker.write().unwrap();
             let tmr = TimeLogger::start();
             stacker.add(
                 &image,
-                hist.r.as_ref().map(|chan| chan.median()),
-                hist.g.as_ref().map(|chan| chan.median()),
-                hist.b.as_ref().map(|chan| chan.median()),
-                hist.l.as_ref().map(|chan| chan.median()),
+                &hist,
                 -offset.x,
                 -offset.y,
                 -offset.angle,
-                raw_info.exposure
+                raw_info.exposure,
+                live_stacking.options.remove_tracks
             );
             tmr.log("ImageStacker::add");
             drop(stacker);
