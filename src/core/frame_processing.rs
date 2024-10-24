@@ -4,7 +4,7 @@ use bitflags::bitflags;
 use chrono::{DateTime, Local, Utc};
 
 use crate::{
-    core::{core::ModeType, utils::{FileNameArg, FileNameUtils}}, image::{histogram::*, image::*, info::*, raw::*, stars_offset::*}, indi, options::*, utils::{log_utils::*, math::linear_interpolate}
+    core::{core::ModeType, utils::{FileNameArg, FileNameUtils}}, image::{histogram::*, image::*, image_stacker::ImageStacker, info::*, raw::*, stars_offset::*}, indi, options::*, utils::{log_utils::*, math::linear_interpolate}
 };
 
 pub enum ResultImageInfo {

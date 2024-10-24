@@ -6,7 +6,6 @@ use itertools::*;
 use rayon::prelude::*;
 use crate::utils::math::*;
 
-use super::histogram::Histogram;
 
 pub struct ImageLayer<T> {
     data: Vec<T>,
@@ -335,8 +334,6 @@ pub struct Image {
     pub b:     ImageLayer<u16>,
     pub l:     ImageLayer<u16>,
     pub time:  Option<DateTime<Utc>>,
-    width:     usize,
-    height:    usize,
     zero:      i32,
     max_value: u16,
 }
@@ -348,8 +345,6 @@ impl Image {
             r: ImageLayer::new_empty(),
             g: ImageLayer::new_empty(),
             b: ImageLayer::new_empty(),
-            width: 0,
-            height: 0,
             zero: 0,
             max_value: 0,
             time: None,
@@ -367,8 +362,6 @@ impl Image {
         self.r.resize(width, height);
         self.g.resize(width, height);
         self.b.resize(width, height);
-        self.width = width;
-        self.height = height;
         self.zero = zero;
         self.max_value = max_value;
     }
@@ -384,8 +377,6 @@ impl Image {
         self.r.clear();
         self.g.clear();
         self.b.clear();
-        self.width = width;
-        self.height = height;
         self.zero = zero;
         self.max_value = max_value;
     }
@@ -395,8 +386,6 @@ impl Image {
         self.r.clear();
         self.g.clear();
         self.b.clear();
-        self.width = 0;
-        self.height = 0;
         self.zero = 0;
         self.max_value = 0;
     }
@@ -422,16 +411,28 @@ impl Image {
         self.b.is_empty()
     }
 
-    pub fn height(&self) -> usize {
-        self.height
+    pub fn width(&self) -> usize {
+        if self.l.width != 0 {
+            self.l.width
+        } else {
+            self.r.width
+        }
     }
 
-    pub fn width(&self) -> usize {
-        self.width
+    pub fn height(&self) -> usize {
+        if self.l.height != 0 {
+            self.l.height
+        } else {
+            self.r.height
+        }
     }
 
     pub fn max_value(&self) -> u16 {
         self.max_value
+    }
+
+    pub fn set_max_value(&mut self, max_value: u16) {
+        self.max_value = max_value;
     }
 
     pub fn to_grb_bytes(
@@ -448,8 +449,8 @@ impl Image {
             return RgbU8Data::default();
         }
         let args = ImageToU8BytesArgs {
-            width:          self.width,
-            height:         self.height,
+            width:          self.width(),
+            height:         self.height(),
             is_color_image: self.is_color(),
         };
         let r_table = Self::create_gamma_table(r_levels.dark, r_levels.light, gamma);
@@ -527,8 +528,8 @@ impl Image {
             width: args.width,
             height: args.height,
             bytes: rgb_bytes,
-            orig_width: self.width,
-            orig_height: self.height,
+            orig_width: self.width(),
+            orig_height: self.height(),
             is_color_image: args.is_color_image,
         }
     }
@@ -604,8 +605,8 @@ impl Image {
         }
         RgbU8Data {
             width, height, bytes,
-            orig_width: self.width,
-            orig_height: self.height,
+            orig_width: self.width(),
+            orig_height: self.height(),
             is_color_image: args.is_color_image,
         }
     }
@@ -693,8 +694,8 @@ impl Image {
         }
         RgbU8Data {
             width, height, bytes,
-            orig_width: self.width,
-            orig_height: self.height,
+            orig_width: self.width(),
+            orig_height: self.height(),
             is_color_image: args.is_color_image,
         }
     }
@@ -794,8 +795,8 @@ impl Image {
         }
         RgbU8Data {
             width, height, bytes,
-            orig_width: self.width,
-            orig_height: self.height,
+            orig_width: self.width(),
+            orig_height: self.height(),
             is_color_image: args.is_color_image,
         }
     }
@@ -826,8 +827,8 @@ impl Image {
             let mut decoder = TiffEncoder::new(&mut file)?;
 
             let mut tiff = decoder.new_image::<colortype::RGB16>(
-                self.width as u32,
-                self.height as u32
+                self.width() as u32,
+                self.height() as u32
             )?;
             tiff.rows_per_strip(64)?;
             let mut strip_data = Vec::new();
@@ -866,8 +867,8 @@ impl Image {
             is_rgb: bool,
             cvt:    fn (from: S) -> u16
         ) -> anyhow::Result<()> {
-            let from = y1 * img.width;
-            let to = y2 * img.width;
+            let from = y1 * img.width();
+            let to = y2 * img.width();
             if is_rgb {
                 let r_dst = &mut img.r.as_slice_mut()[from..to];
                 let g_dst = &mut img.g.as_slice_mut()[from..to];
@@ -905,10 +906,11 @@ impl Image {
 
         let chunk_size_y = decoder.chunk_dimensions().1 as usize;
         let chunks_cnt = decoder.strip_count()? as usize;
+        let height = self.height();
         for chunk_index in 0..chunks_cnt {
             let chunk = decoder.read_chunk(chunk_index as u32)?;
             let y1 = (chunk_index * chunk_size_y) as usize;
-            let y2 = (y1 + chunk_size_y).min(self.height);
+            let y2 = (y1 + chunk_size_y).min(height);
             match chunk {
                 DecodingResult::U8(data) =>
                     assign_img_data(
@@ -975,456 +977,6 @@ struct ImageToU8BytesArgs {
     width:          usize,
     height:         usize,
     is_color_image: bool,
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-/// Channel of rotated image
-#[derive(Default)]
-struct ImageAdderTempChan {
-    data: Vec<u16>,
-    background: u16,
-}
-
-#[derive(Default)]
-struct ImageStackerChan {
-    data: Vec<i32>,
-    tmp: Vec<ImageAdderTempChan>,
-}
-
-impl ImageStackerChan {
-    fn clear(&mut self) {
-        self.data.clear();
-        self.data.shrink_to_fit();
-        self.tmp.clear();
-        self.tmp.shrink_to_fit();
-    }
-}
-
-pub struct ImageStacker {
-    r: ImageStackerChan,
-    g: ImageStackerChan,
-    b: ImageStackerChan,
-    l: ImageStackerChan,
-    cnt: Vec<u16>,
-    tmp_idx: usize,
-    width: usize,
-    height: usize,
-    max_value: u16,
-    total_exp: f64,
-    frames_cnt: u32,
-    no_tracks: bool,
-}
-
-impl ImageStacker {
-    pub fn new() -> Self {
-        Self {
-            r: ImageStackerChan::default(),
-            g: ImageStackerChan::default(),
-            b: ImageStackerChan::default(),
-            l: ImageStackerChan::default(),
-            cnt: Vec::new(),
-            tmp_idx: 0,
-            width: 0,
-            height: 0,
-            max_value: 0,
-            total_exp: 0.0,
-            frames_cnt: 0,
-            no_tracks: false,
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.l.data.is_empty() &&
-        self.r.data.is_empty() &&
-        self.g.data.is_empty() &&
-        self.b.data.is_empty() &&
-        self.cnt.is_empty()
-    }
-
-    pub fn clear(&mut self) {
-        self.l.clear();
-        self.r.clear();
-        self.g.clear();
-        self.b.clear();
-        self.cnt.clear();
-        self.cnt.shrink_to_fit();
-        self.tmp_idx = 0;
-        self.width = 0;
-        self.height = 0;
-        self.max_value = 0;
-        self.total_exp = 0.0;
-        self.frames_cnt = 0;
-    }
-
-    pub fn add(
-        &mut self,
-        image:     &Image,
-        hist:      &Histogram,
-        transl_x:  f64,
-        transl_y:  f64,
-        angle:     f64,
-        exposure:  f64,
-        no_tracks: bool,
-    ) {
-        debug_assert!(!image.is_empty());
-        if self.is_empty() {
-            let data_len = image.width * image.height;
-            if image.is_color() {
-                self.r.data.resize(data_len, 0);
-                self.g.data.resize(data_len, 0);
-                self.b.data.resize(data_len, 0);
-            } else {
-                self.l.data.resize(data_len, 0);
-            }
-            self.cnt.resize(data_len, 0);
-            self.width = image.width;
-            self.height = image.height;
-            self.max_value = image.max_value;
-            self.no_tracks = no_tracks;
-        }
-        if !self.no_tracks {
-            self.add_simple(image, transl_x, transl_y, angle);
-        } else {
-            self.add_no_tracks(image, hist, transl_x, transl_y, angle);
-        }
-        self.total_exp += exposure;
-        self.frames_cnt += 1;
-    }
-
-    pub fn add_simple(
-        &mut self,
-        image:    &Image,
-        transl_x: f64,
-        transl_y: f64,
-        angle:    f64,
-    ) {
-        Self::add_layer(&mut self.r, &mut self.cnt, &image.r, transl_x, transl_y, angle, false);
-        Self::add_layer(&mut self.g, &mut self.cnt, &image.g, transl_x, transl_y, angle, false);
-        Self::add_layer(&mut self.b, &mut self.cnt, &image.b, transl_x, transl_y, angle, true);
-        Self::add_layer(&mut self.l, &mut self.cnt, &image.l, transl_x, transl_y, angle, true);
-    }
-
-    fn add_layer(
-        dst:        &mut ImageStackerChan,
-        cnt:        &mut [u16],
-        src:        &ImageLayer<u16>,
-        transl_x:   f64,
-        transl_y:   f64,
-        angle:      f64,
-        update_cnt: bool
-    ) {
-        if src.is_empty() {
-            return;
-        }
-        let center_x = (src.width as f64 - 1.0) / 2.0;
-        let center_y = (src.height as f64 - 1.0) / 2.0;
-        let cos_a = f64::cos(-angle);
-        let sin_a = f64::sin(-angle);
-        dst.data.par_chunks_exact_mut(src.width)
-            .zip(cnt.par_chunks_exact_mut(src.width))
-            .enumerate()
-            .for_each(|(y, (dst_row, cnt_row))| {
-                let y = y as f64 - transl_y;
-                let dy = y - center_y;
-                for (x, (dst_v, cnt_v)) in dst_row.iter_mut().zip(cnt_row).enumerate() {
-                    let x = x as f64 - transl_x;
-                    let dx = x - center_x;
-                    let rot_x = center_x + dx * cos_a - dy * sin_a;
-                    let rot_y = center_y + dy * cos_a + dx * sin_a;
-                    let src_v = src.get_f64_crd(rot_x, rot_y);
-                    if let Some(v) = src_v {
-                        *dst_v += v as i32;
-                        if update_cnt { *cnt_v += 1; }
-                    }
-                }
-            });
-    }
-
-    pub fn add_no_tracks(
-        &mut self,
-        image:    &Image,
-        hist:     &Histogram,
-        transl_x: f64,
-        transl_y: f64,
-        angle:    f64,
-    ) {
-        let background_r = hist.r.as_ref().map(|chan| chan.median()).unwrap_or(0);
-        let background_g = hist.g.as_ref().map(|chan| chan.median()).unwrap_or(0);
-        let background_b = hist.b.as_ref().map(|chan| chan.median()).unwrap_or(0);
-        let background_l = hist.l.as_ref().map(|chan| chan.median()).unwrap_or(0);
-
-        let idx = self.tmp_idx % 5;
-
-        Self::rotate_image(idx, &mut self.r, &image.r, background_r, transl_x, transl_y, angle);
-        Self::rotate_image(idx, &mut self.g, &image.g, background_g, transl_x, transl_y, angle);
-        Self::rotate_image(idx, &mut self.b, &image.b, background_b, transl_x, transl_y, angle);
-        Self::rotate_image(idx, &mut self.l, &image.l, background_l, transl_x, transl_y, angle);
-
-        self.tmp_idx += 1;
-
-        if self.tmp_idx >= 5 {
-            Self::add_median(&mut self.r, &mut self.cnt, false);
-            Self::add_median(&mut self.g, &mut self.cnt, false);
-            Self::add_median(&mut self.b, &mut self.cnt, true);
-            Self::add_median(&mut self.l, &mut self.cnt, true);
-        }
-    }
-
-    fn rotate_image(
-        idx:        usize,
-        dst_chan:   &mut ImageStackerChan,
-        src:        &ImageLayer<u16>,
-        background: u16,
-        transl_x:   f64,
-        transl_y:   f64,
-        angle:      f64,
-    ) {
-        if src.is_empty() { return; }
-        while dst_chan.tmp.len() <= idx {
-            dst_chan.tmp.push(ImageAdderTempChan::default());
-        }
-        let tmp = &mut dst_chan.tmp[idx];
-        tmp.background = background;
-        if tmp.data.is_empty() {
-            tmp.data.resize(src.width() * src.height(), 0);
-        }
-        let center_x = (src.width as f64 - 1.0) / 2.0;
-        let center_y = (src.height as f64 - 1.0) / 2.0;
-        let cos_a = f64::cos(-angle);
-        let sin_a = f64::sin(-angle);
-        tmp.data.par_chunks_exact_mut(src.width)
-            .enumerate()
-            .for_each(|(y, dst_row)| {
-                let y = y as f64 - transl_y;
-                let dy = y - center_y;
-                for (x, dst_v) in dst_row.iter_mut().enumerate() {
-                    let x = x as f64 - transl_x;
-                    let dx = x - center_x;
-                    let rot_x = center_x + dx * cos_a - dy * sin_a;
-                    let rot_y = center_y + dy * cos_a + dx * sin_a;
-                    let src_v = src.get_f64_crd(rot_x, rot_y);
-                    *dst_v = if let Some(mut v) = src_v {
-                        if v == 0 { v = 1; }
-                        v
-                    } else {
-                        0
-                    };
-                }
-            });
-
-    }
-
-    fn add_median(
-        chan: &mut ImageStackerChan,
-        cnt: &mut Vec<u16>,
-        update_cnt: bool,
-    ) {
-        if chan.tmp.is_empty() { return; }
-        let src1 = &chan.tmp[0];
-        let src2 = &chan.tmp[1];
-        let src3 = &chan.tmp[2];
-        let src4 = &chan.tmp[3];
-        let src5 = &chan.tmp[4];
-
-        if chan.data.is_empty() {
-            chan.data.resize(src1.data.len(), 0);
-        }
-
-        let common_background = median5(
-            src1.background,
-            src2.background,
-            src3.background,
-            src4.background,
-            src5.background,
-        ) as i32;
-
-        src1.data.par_iter()
-            .zip(src2.data.par_iter())
-            .zip(src3.data.par_iter())
-            .zip(src4.data.par_iter())
-            .zip(src5.data.par_iter())
-            .zip(chan.data.par_iter_mut())
-            .zip(cnt.par_iter_mut())
-            .for_each(|((((((r1, r2), r3), r4), r5), d), c)| {
-                let mut result =
-                    if *r1 != 0 && *r2 != 0 && *r3 != 0 && *r4 != 0 && *r5 != 0 {
-                        median5(
-                            *r1 as i32 - src1.background as i32,
-                            *r2 as i32 - src2.background as i32,
-                            *r3 as i32 - src3.background as i32,
-                            *r4 as i32 - src4.background as i32,
-                            *r5 as i32 - src5.background as i32,
-                        )
-                    } else {
-                        let mut tmp = [0_i32; 4];
-                        let mut idx = 0;
-                        if *r1 != 0 { tmp[idx] = *r1 as i32 - src1.background as i32; idx += 1; }
-                        if *r2 != 0 { tmp[idx] = *r2 as i32 - src2.background as i32; idx += 1; }
-                        if *r3 != 0 { tmp[idx] = *r3 as i32 - src3.background as i32; idx += 1; }
-                        if *r4 != 0 { tmp[idx] = *r4 as i32 - src4.background as i32; idx += 1; }
-                        if *r5 != 0 { tmp[idx] = *r5 as i32 - src5.background as i32; idx += 1; }
-                        match idx {
-                            0 => 0,
-                            1 => tmp[0],
-                            2 => (tmp[0] + tmp[1]) / 2,
-                            3 => median3(tmp[0], tmp[1], tmp[2]),
-                            4 => median4(tmp[0], tmp[1], tmp[2], tmp[3]),
-                            _ => unreachable!(),
-                        }
-                    };
-                if result != i32::MIN {
-                    result += common_background;
-                    if result < 0 { result = 0; }
-                    *d += result;
-                    if update_cnt { *c += 1; }
-                }
-            });
-
-    }
-
-    pub fn save_to_tiff(&self, file_name: &Path) -> anyhow::Result<()> {
-        use tiff::encoder::*;
-        let mut file = BufWriter::new(File::create(file_name)?);
-        let mut decoder = TiffEncoder::new(&mut file)?;
-        let mult = 1_f64 / 65536_f64;
-        let calc_value = |s, c| {
-            if c == 0 {
-                f32::NAN
-            } else {
-                (mult * s as f64 / c as f64) as f32
-            }
-        };
-        if !self.l.data.is_empty() {
-            let mut tiff = decoder.new_image::<colortype::Gray32Float>(
-                self.width as u32,
-                self.height as u32
-            )?;
-            tiff.rows_per_strip(64)?;
-            let mut strip_data = Vec::new();
-            let mut pos = 0_usize;
-            loop {
-                let samples_count = tiff.next_strip_sample_count() as usize;
-                if samples_count == 0 { break; }
-                strip_data.clear();
-                let l_strip = &self.l.data[pos..pos+samples_count];
-                let cnt_strip = &self.cnt[pos..pos+samples_count];
-                for (s, c) in l_strip.iter().zip(cnt_strip) {
-                    strip_data.push(calc_value(*s, *c));
-                }
-                tiff.write_strip(&strip_data)?;
-                pos += samples_count;
-            }
-            tiff.finish()?;
-        } else {
-            let mut tiff = decoder.new_image::<colortype::RGB32Float>(
-                self.width as u32,
-                self.height as u32
-            )?;
-            tiff.rows_per_strip(64)?;
-            let mut strip_data = Vec::new();
-            let mut pos = 0_usize;
-            loop {
-                let mut samples_count = tiff.next_strip_sample_count() as usize;
-                if samples_count == 0 { break; }
-                samples_count /= 3;
-                strip_data.clear();
-                let r_strip = &self.r.data[pos..pos+samples_count];
-                let g_strip = &self.g.data[pos..pos+samples_count];
-                let b_strip = &self.b.data[pos..pos+samples_count];
-                let cnt_strip = &self.cnt[pos..pos+samples_count];
-                for (r, g, b, c) in izip!(r_strip, g_strip, b_strip, cnt_strip) {
-                    strip_data.push(calc_value(*r, *c));
-                    strip_data.push(calc_value(*g, *c));
-                    strip_data.push(calc_value(*b, *c));
-                }
-                tiff.write_strip(&strip_data)?;
-                pos += samples_count;
-            }
-            tiff.finish()?;
-        }
-        Ok(())
-    }
-
-    pub fn total_exposure(&self) -> f64 {
-        self.total_exp
-    }
-
-    pub fn copy_to_image(&self, image: &mut Image, mt: bool) {
-        let copy_layer = |chan: &ImageStackerChan, dst: &mut ImageLayer<u16>| {
-            if self.no_tracks && chan.tmp.len() == 1 {
-                dst.resize(self.width, self.height);
-                dst.as_slice_mut().copy_from_slice(&chan.tmp[0].data);
-            } else if self.no_tracks && chan.tmp.len() == 2 {
-                dst.resize(self.width, self.height);
-                let src1 = &chan.tmp[0].data;
-                let src2 = &chan.tmp[1].data;
-                for (d, s1, s2) in izip!(dst.as_slice_mut(), src1, src2) {
-                    let mut div = 0;
-                    if *s1 != 0 { div += 1; }
-                    if *s2 != 0 { div += 1; }
-                    if div == 0 { div = 1; }
-                    *d = ((*s1 as u32 + *s2 as u32) / div) as u16;
-                }
-            } else if self.no_tracks && chan.tmp.len() == 3 {
-                dst.resize(self.width, self.height);
-                let src1 = &chan.tmp[0].data;
-                let src2 = &chan.tmp[1].data;
-                let src3 = &chan.tmp[2].data;
-                for (d, s1, s2, s3) in izip!(dst.as_slice_mut(), src1, src2, src3) {
-                    let mut div = 0;
-                    if *s1 != 0 { div += 1; }
-                    if *s2 != 0 { div += 1; }
-                    if *s3 != 0 { div += 1; }
-                    if div == 0 { div = 1; }
-                    *d = ((*s1 as u32 + *s2 as u32 + *s3 as u32) / div) as u16;
-                }
-            } else if self.no_tracks && chan.tmp.len() == 4 {
-                dst.resize(self.width, self.height);
-                let src1 = &chan.tmp[0].data;
-                let src2 = &chan.tmp[1].data;
-                let src3 = &chan.tmp[2].data;
-                let src4 = &chan.tmp[3].data;
-                for (d, s1, s2, s3, s4) in izip!(dst.as_slice_mut(), src1, src2, src3, src4) {
-                    let mut div = 0;
-                    if *s1 != 0 { div += 1; }
-                    if *s2 != 0 { div += 1; }
-                    if *s3 != 0 { div += 1; }
-                    if *s4 != 0 { div += 1; }
-                    if div == 0 { div = 1; }
-                    *d = ((*s1 as u32 + *s2 as u32 + *s3 as u32 + *s4 as u32) / div) as u16;
-                }
-            } else if chan.data.is_empty() {
-                dst.clear();
-            } else {
-                dst.resize(self.width, self.height);
-                for (d, s, c) in izip!(dst.as_slice_mut(), &chan.data, &self.cnt) {
-                    let mut value = if *c != 0 { *s / *c as i32 } else { 0 };
-                    if value < 0 { value = 0; }
-                    if value > u16::MAX as i32 { value = u16::MAX as i32; }
-                    *d = value as u16;
-                }
-            }
-        };
-        if !mt {
-            copy_layer(&self.r, &mut image.r);
-            copy_layer(&self.g, &mut image.g);
-            copy_layer(&self.b, &mut image.b);
-            copy_layer(&self.l, &mut image.l);
-        } else {
-            rayon::scope(|s| {
-                s.spawn(|_| copy_layer(&self.r, &mut image.r));
-                s.spawn(|_| copy_layer(&self.g, &mut image.g));
-                s.spawn(|_| copy_layer(&self.b, &mut image.b));
-                s.spawn(|_| copy_layer(&self.l, &mut image.l));
-            });
-        }
-        image.width = self.width;
-        image.height = self.height;
-        image.max_value = self.max_value;
-        image.zero = 0;
-    }
-
 }
 
 //////////////////////////////////////////////////////////////////////////////
