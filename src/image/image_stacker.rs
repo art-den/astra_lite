@@ -27,6 +27,61 @@ impl ImageStackerChan {
         self.tmp.clear();
         self.tmp.shrink_to_fit();
     }
+
+    fn is_empty(&self) -> bool {
+        self.data.is_empty() && self.tmp.is_empty()
+    }
+
+    fn get(&self, dest: &mut [u16], from: usize, to: usize, cnt: &[u16]) {
+        if self.tmp.len() == 1 {
+            dest.copy_from_slice(&self.tmp[0].data[from..to]);
+        } else if self.tmp.len() == 2 {
+            let src1 = &self.tmp[0].data[from..to];
+            let src2 = &self.tmp[1].data[from..to];
+            for (d, s1, s2) in izip!(dest, src1, src2) {
+                let mut div = 0;
+                if *s1 != 0 { div += 1; }
+                if *s2 != 0 { div += 1; }
+                if div == 0 { div = 1; }
+                *d = ((*s1 as u32 + *s2 as u32) / div) as u16;
+            }
+        } else if self.tmp.len() == 3 {
+            let src1 = &self.tmp[0].data[from..to];
+            let src2 = &self.tmp[1].data[from..to];
+            let src3 = &self.tmp[2].data[from..to];
+            for (d, s1, s2, s3) in izip!(dest, src1, src2, src3) {
+                let mut div = 0;
+                if *s1 != 0 { div += 1; }
+                if *s2 != 0 { div += 1; }
+                if *s3 != 0 { div += 1; }
+                if div == 0 { div = 1; }
+                *d = ((*s1 as u32 + *s2 as u32 + *s3 as u32) / div) as u16;
+            }
+        } else if self.tmp.len() == 4 {
+            let src1 = &self.tmp[0].data[from..to];
+            let src2 = &self.tmp[1].data[from..to];
+            let src3 = &self.tmp[2].data[from..to];
+            let src4 = &self.tmp[3].data[from..to];
+            for (d, s1, s2, s3, s4) in izip!(dest, src1, src2, src3, src4) {
+                let mut div = 0;
+                if *s1 != 0 { div += 1; }
+                if *s2 != 0 { div += 1; }
+                if *s3 != 0 { div += 1; }
+                if *s4 != 0 { div += 1; }
+                if div == 0 { div = 1; }
+                *d = ((*s1 as u32 + *s2 as u32 + *s3 as u32 + *s4 as u32) / div) as u16;
+            }
+        } else {
+            let data = &self.data[from..to];
+            let cnt = &cnt[from..to];
+            for (d, s, c) in izip!(dest, data, cnt) {
+                let mut value = if *c != 0 { *s / *c as i32 } else { 0 };
+                if value < 0 { value = 0; }
+                if value > u16::MAX as i32 { value = u16::MAX as i32; }
+                *d = value as u16;
+            }
+        }
+    }
 }
 
 pub struct ImageStacker {
@@ -315,56 +370,58 @@ impl ImageStacker {
         use tiff::encoder::*;
         let mut file = BufWriter::new(File::create(file_name)?);
         let mut decoder = TiffEncoder::new(&mut file)?;
-        let mult = 1_f64 / 65536_f64;
-        let calc_value = |s, c| {
-            if c == 0 {
-                f32::NAN
-            } else {
-                (mult * s as f64 / c as f64) as f32
-            }
-        };
         if !self.l.data.is_empty() {
-            let mut tiff = decoder.new_image::<colortype::Gray32Float>(
+            let mut tiff = decoder.new_image::<colortype::Gray16>(
                 self.width as u32,
                 self.height as u32
             )?;
             tiff.rows_per_strip(64)?;
-            let mut strip_data = Vec::new();
+            let mut values = Vec::new();
             let mut pos = 0_usize;
+
             loop {
                 let samples_count = tiff.next_strip_sample_count() as usize;
                 if samples_count == 0 { break; }
-                strip_data.clear();
-                let l_strip = &self.l.data[pos..pos+samples_count];
-                let cnt_strip = &self.cnt[pos..pos+samples_count];
-                for (s, c) in l_strip.iter().zip(cnt_strip) {
-                    strip_data.push(calc_value(*s, *c));
-                }
-                tiff.write_strip(&strip_data)?;
+
+                let from = pos;
+                let to = pos + samples_count;
+                values.resize(samples_count, 0);
+                self.l.get(&mut values, from, to, &self.cnt);
+
+                tiff.write_strip(&values)?;
                 pos += samples_count;
             }
             tiff.finish()?;
         } else {
-            let mut tiff = decoder.new_image::<colortype::RGB32Float>(
+            let mut tiff = decoder.new_image::<colortype::RGB16>(
                 self.width as u32,
                 self.height as u32
             )?;
-            tiff.rows_per_strip(64)?;
             let mut strip_data = Vec::new();
+            let mut r_values = Vec::new();
+            let mut g_values = Vec::new();
+            let mut b_values = Vec::new();
+            tiff.rows_per_strip(64)?;
             let mut pos = 0_usize;
             loop {
                 let mut samples_count = tiff.next_strip_sample_count() as usize;
                 if samples_count == 0 { break; }
                 samples_count /= 3;
+
+                let from = pos;
+                let to = pos + samples_count;
+                r_values.resize(samples_count, 0);
+                self.r.get(&mut r_values, from, to, &self.cnt);
+                g_values.resize(samples_count, 0);
+                self.g.get(&mut g_values, from, to, &self.cnt);
+                b_values.resize(samples_count, 0);
+                self.b.get(&mut b_values, from, to, &self.cnt);
+
                 strip_data.clear();
-                let r_strip = &self.r.data[pos..pos+samples_count];
-                let g_strip = &self.g.data[pos..pos+samples_count];
-                let b_strip = &self.b.data[pos..pos+samples_count];
-                let cnt_strip = &self.cnt[pos..pos+samples_count];
-                for (r, g, b, c) in izip!(r_strip, g_strip, b_strip, cnt_strip) {
-                    strip_data.push(calc_value(*r, *c));
-                    strip_data.push(calc_value(*g, *c));
-                    strip_data.push(calc_value(*b, *c));
+                for (r, g, b) in izip!(&r_values, &g_values, &b_values) {
+                    strip_data.push(*r);
+                    strip_data.push(*g);
+                    strip_data.push(*b);
                 }
                 tiff.write_strip(&strip_data)?;
                 pos += samples_count;
@@ -378,75 +435,25 @@ impl ImageStacker {
         self.total_exp
     }
 
-    pub fn copy_to_image(&self, image: &mut Image, mt: bool) {
+    pub fn copy_to_image(&self, image: &mut Image) {
         let copy_layer = |chan: &ImageStackerChan, dst: &mut ImageLayer<u16>| {
-            if self.no_tracks && chan.tmp.len() == 1 {
-                dst.resize(self.width, self.height);
-                dst.as_slice_mut().copy_from_slice(&chan.tmp[0].data);
-            } else if self.no_tracks && chan.tmp.len() == 2 {
-                dst.resize(self.width, self.height);
-                let src1 = &chan.tmp[0].data;
-                let src2 = &chan.tmp[1].data;
-                for (d, s1, s2) in izip!(dst.as_slice_mut(), src1, src2) {
-                    let mut div = 0;
-                    if *s1 != 0 { div += 1; }
-                    if *s2 != 0 { div += 1; }
-                    if div == 0 { div = 1; }
-                    *d = ((*s1 as u32 + *s2 as u32) / div) as u16;
-                }
-            } else if self.no_tracks && chan.tmp.len() == 3 {
-                dst.resize(self.width, self.height);
-                let src1 = &chan.tmp[0].data;
-                let src2 = &chan.tmp[1].data;
-                let src3 = &chan.tmp[2].data;
-                for (d, s1, s2, s3) in izip!(dst.as_slice_mut(), src1, src2, src3) {
-                    let mut div = 0;
-                    if *s1 != 0 { div += 1; }
-                    if *s2 != 0 { div += 1; }
-                    if *s3 != 0 { div += 1; }
-                    if div == 0 { div = 1; }
-                    *d = ((*s1 as u32 + *s2 as u32 + *s3 as u32) / div) as u16;
-                }
-            } else if self.no_tracks && chan.tmp.len() == 4 {
-                dst.resize(self.width, self.height);
-                let src1 = &chan.tmp[0].data;
-                let src2 = &chan.tmp[1].data;
-                let src3 = &chan.tmp[2].data;
-                let src4 = &chan.tmp[3].data;
-                for (d, s1, s2, s3, s4) in izip!(dst.as_slice_mut(), src1, src2, src3, src4) {
-                    let mut div = 0;
-                    if *s1 != 0 { div += 1; }
-                    if *s2 != 0 { div += 1; }
-                    if *s3 != 0 { div += 1; }
-                    if *s4 != 0 { div += 1; }
-                    if div == 0 { div = 1; }
-                    *d = ((*s1 as u32 + *s2 as u32 + *s3 as u32 + *s4 as u32) / div) as u16;
-                }
-            } else if !chan.data.is_empty() {
-                dst.resize(self.width, self.height);
-                for (d, s, c) in izip!(dst.as_slice_mut(), &chan.data, &self.cnt) {
-                    let mut value = if *c != 0 { *s / *c as i32 } else { 0 };
-                    if value < 0 { value = 0; }
-                    if value > u16::MAX as i32 { value = u16::MAX as i32; }
-                    *d = value as u16;
-                }
-            }
+            if chan.is_empty() { return; }
+            dst.resize(self.width, self.height);
+            dst.as_slice_mut()
+                .par_chunks_exact_mut(self.width)
+                .enumerate()
+                .for_each(|(y, row)| {
+                    let from = y * self.width;
+                    let to = (y + 1) * self.width;
+                    chan.get(row, from, to, &self.cnt);
+                });
         };
-        if !mt {
-            copy_layer(&self.r, &mut image.r);
-            copy_layer(&self.g, &mut image.g);
-            copy_layer(&self.b, &mut image.b);
-            copy_layer(&self.l, &mut image.l);
-        } else {
-            rayon::scope(|s| {
-                s.spawn(|_| copy_layer(&self.r, &mut image.r));
-                s.spawn(|_| copy_layer(&self.g, &mut image.g));
-                s.spawn(|_| copy_layer(&self.b, &mut image.b));
-                s.spawn(|_| copy_layer(&self.l, &mut image.l));
-            });
-        }
+
+        copy_layer(&self.r, &mut image.r);
+        copy_layer(&self.g, &mut image.g);
+        copy_layer(&self.b, &mut image.b);
+        copy_layer(&self.l, &mut image.l);
 
         image.set_max_value(self.max_value);
     }
-
 }

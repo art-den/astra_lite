@@ -1,3 +1,5 @@
+use std::ops::{Add, Div};
+
 use itertools::*;
 
 #[inline(always)]
@@ -8,7 +10,7 @@ pub fn cmp_f64(v1: &f64, v2: &f64) -> core::cmp::Ordering {
 }
 
 #[inline(always)]
-pub fn median3<T: core::cmp::Ord + Copy>(a: T, b: T, c: T) -> T {
+pub fn median3<T: Ord + Copy>(a: T, b: T, c: T) -> T {
     T::max(T::min(a, b), T::min(c, T::max(a, b)))
 }
 
@@ -21,8 +23,21 @@ fn test_median3() {
     assert_eq!(median3(3, 2, 1), 2);
 }
 
-pub fn median4<T: core::cmp::Ord + Copy>(a: T, b: T, c: T, _d: T) -> T {
-    T::max(T::min(a, b), T::min(c, T::max(a, b)))
+pub fn median4<T>(a: T, b: T, c: T, d: T) -> T
+where
+    T: Ord + Add<Output = T> + Div<Output = T> + From<i32> + Copy
+{
+    let f = T::max(T::min(a, b), T::min(c, d));
+    let g = T::min(T::max(a, b), T::max(c, d));
+    (f + g) / 2.into()
+}
+
+#[test]
+fn test_median4() {
+    for p in [1, 3, 5, 7].iter().permutations(4) {
+        let m = median4(*p[0], *p[1], *p[2], *p[3]);
+        assert_eq!(m, 4);
+    }
 }
 
 

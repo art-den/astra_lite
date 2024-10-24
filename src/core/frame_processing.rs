@@ -979,7 +979,7 @@ fn make_preview_image_impl(
 
             let mut res_image = live_stacking.data.image.write().unwrap();
             let tmr = TimeLogger::start();
-            stacker.copy_to_image(&mut res_image, true);
+            stacker.copy_to_image(&mut res_image);
             tmr.log("ImageStacker::copy_to_image");
 
             if command.view_options.remove_gradient {
