@@ -774,7 +774,7 @@ impl<'a> Item for DsoNamePainter<'a> {
         ctx.cairo.set_source_rgba(1.0, 1.0, 1.0, 0.7);
         for item in &self.0.names {
             ctx.cairo.move_to(crd.x, y);
-            ctx.cairo.show_text(&item.name)?;
+            ctx.cairo.show_text(item.text())?;
             y += text_height;
         }
         Ok(())

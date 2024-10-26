@@ -7,11 +7,6 @@ use serde::{Deserialize, Serialize};
 use crate::{indi::sexagesimal_to_value, utils::compression::ValuesDecompressor};
 use super::math::*;
 
-const ID_CAT_OTHER:   u16 = 0;
-const ID_CAT_MESSIER: u16 = 1;
-const ID_CAT_NGC:     u16 = 2;
-const ID_CAT_IC:      u16 = 3;
-
 enum SearchMode {
     StartWith,
     Contains,
@@ -420,24 +415,94 @@ pub struct Outline {
     pub polygon: Vec<ObjEqCoord>
 }
 
+#[derive(Debug, Clone, Hash, Eq)]
+struct DsoNamePart {
+    text_lc: String,
+    value: Option<u32>,
+}
+
+impl PartialEq for DsoNamePart {
+    fn eq(&self, other: &Self) -> bool {
+        if self.value.is_some() && other.value.is_some() {
+            self.value == other.value
+        } else {
+            self.text_lc == other.text_lc
+        }
+    }
+}
+
+type NameParts = Vec<DsoNamePart>;
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct DsoName{
+    orig_text: String,
+    parts:  NameParts,
+}
+
+impl DsoName {
+    fn from_str(text: &str) -> Self {
+        let mut part = String::new();
+        let mut parts = Vec::new();
+        let add_part = move |part: &mut String, parts: &mut Vec<DsoNamePart>| {
+            let part_trimmed = part.trim();
+            if part_trimmed.is_empty() { return }
+            let value = part_trimmed.parse::<u32>().ok();
+            parts.push(DsoNamePart { text_lc: part_trimmed.to_lowercase(), value });
+            part.clear();
+        };
+        let mut is_numeric = false;
+        for char in text.chars() {
+            if char.is_whitespace() || char == '-' {
+                add_part(&mut part, &mut parts);
+            } else if is_numeric != char.is_numeric() {
+                is_numeric = char.is_numeric();
+                add_part(&mut part, &mut parts);
+                part.push(char);
+            } else {
+                part.push(char);
+            }
+        }
+        add_part(&mut part, &mut parts);
+        Self {
+            orig_text: text.to_string(),
+            parts,
+        }
+    }
+
+    pub fn text(&self) -> &str {
+        &self.orig_text
+    }
+}
+
+#[test]
+fn test_dso_name() {
+    let name = DsoName::from_str("Test-1aaaa42 2 3");
+    assert_eq!(name.parts[0], DsoNamePart { text_lc: "test".to_string(), value: None     });
+    assert_eq!(name.parts[1], DsoNamePart { text_lc: "1".to_string(),    value: Some(1)  });
+    assert_eq!(name.parts[2], DsoNamePart { text_lc: "aaaa".to_string(), value: None     });
+    assert_eq!(name.parts[3], DsoNamePart { text_lc: "42".to_string(),   value: Some(42) });
+    assert_eq!(name.parts[4], DsoNamePart { text_lc: "2".to_string(),    value: Some(2)  });
+    assert_eq!(name.parts[5], DsoNamePart { text_lc: "3".to_string(),    value: Some(3)  });
+}
+
 #[derive(Debug, Clone)]
-pub struct DsoName {
-    pub catalogue: u16,
-    pub name:      String,
-    pub name_lc:   String,
+pub struct DsoNickName {
+    pub orig: String,
+    lc: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct DsoItem {
-    pub names:    Vec<DsoName>,
-    pub crd:      ObjEqCoord,
-    pub mag_v:    Option<ObjMagnitude>,
-    pub mag_b:    Option<ObjMagnitude>,
-    pub cnst_id:  u8,
-    pub obj_type: SkyItemType,
-    pub maj_axis: Option<f32>,
-    pub min_axis: Option<f32>,
-    pub angle:    Option<f32>,
+    pub names:     Vec<DsoName>,
+    pub nicknames: Vec<DsoNickName>,
+    pub crd:       ObjEqCoord,
+    pub mag_v:     Option<ObjMagnitude>,
+    pub mag_b:     Option<ObjMagnitude>,
+    pub cnst_id:   u8,
+    pub obj_type:  SkyItemType,
+    pub maj_axis:  Option<f32>,
+    pub min_axis:  Option<f32>,
+    pub angle:     Option<f32>,
 }
 
 impl DsoItem {
@@ -460,7 +525,7 @@ impl SkymapObject {
     pub fn names(&self) -> Vec<String> {
         match self {
             Self::Dso(dso) =>
-                dso.names.iter().map(|n| n.name.clone()).collect(),
+                dso.names.iter().map(|n| n.orig_text.clone()).collect(),
             Self::Star(star) => {
                 let mut result = Vec::new();
                 if !star.name.is_empty() {
@@ -471,6 +536,14 @@ impl SkymapObject {
                 }
                 result
             }
+        }
+    }
+
+    pub fn nicknames(&self) -> Vec<String> {
+        match self {
+            Self::Dso(dso) =>
+                dso.nicknames.iter().map(|n| n.orig.clone()).collect(),
+            Self::Star(_) => vec![],
         }
     }
 
@@ -518,7 +591,6 @@ impl SkymapObject {
 }
 
 pub struct SkyMap {
-    catalogue_by_id:  HashMap<u16, String>,
     constellations:   HashMap<u8, &'static str>,
     const_id_by_name: HashMap<&'static str, u8>,
     stars:            Stars,
@@ -555,15 +627,7 @@ impl SkyMap {
         let constellations = HashMap::from(const_data);
         let const_id_by_name = const_data.into_iter().map(|(id, name)| (name, id)).collect();
 
-        let catalogue_by_id = HashMap::from([
-            (ID_CAT_OTHER, String::new()),
-            (ID_CAT_MESSIER, "Messier".to_string()),
-            (ID_CAT_NGC,     "NGC".to_string()),
-            (ID_CAT_IC,      "IC".to_string()),
-        ]);
-
         Self {
-            catalogue_by_id,
             constellations,
             const_id_by_name,
             stars:           Stars::new(),
@@ -608,19 +672,17 @@ impl SkyMap {
                 .position(|c| c.eq_ignore_ascii_case(name))
                 .ok_or_else(|| anyhow::anyhow!("`{}` col not found", name))
         };
-        let type_col     = find_col("type")?;
-        let ra_col       = find_col("ra")?;
-        let dec_col      = find_col("dec")?;
-        let const_col    = find_col("constellation")?;
-        let messier_col  = find_col("messier")?;
-        let ngc_col      = find_col("ngc")?;
-        let ic_col       = find_col("ic")?;
-        let other_col    = find_col("other")?;
-        let mag_v_col    = find_col("mag_v")?;
-        let mag_b_col    = find_col("mag_b")?;
-        let maj_axis_col = find_col("major_axis")?;
-        let min_axis_col = find_col("minor_axis")?;
-        let angle_col    = find_col("angle")?;
+        let type_col      = find_col("type")?;
+        let ra_col        = find_col("ra")?;
+        let dec_col       = find_col("dec")?;
+        let const_col     = find_col("constellation")?;
+        let names_col     = find_col("names")?;
+        let nicknames_col = find_col("nicknames")?;
+        let mag_v_col     = find_col("mag_v")?;
+        let mag_b_col     = find_col("mag_b")?;
+        let maj_axis_col  = find_col("major_axis")?;
+        let min_axis_col  = find_col("minor_axis")?;
+        let angle_col     = find_col("angle")?;
 
         for record in rdr.records().filter_map(|record| record.ok()) {
             if record.is_empty() { continue; }
@@ -628,25 +690,22 @@ impl SkyMap {
             let Some(ra) = sexagesimal_to_value(record[ra_col].trim()) else { continue; };
             let Some(dec) = sexagesimal_to_value(record[dec_col].trim()) else { continue; };
             let cnst_id = *self.const_id_by_name.get(record[const_col].trim()).unwrap_or(&0);
+            let names_str = record[names_col].trim();
+            let nicknames_str = record[nicknames_col].trim();
             let mag_v = record[mag_v_col].trim().parse().ok();
             let mag_b = record[mag_b_col].trim().parse().ok();
             let maj_axis = record[maj_axis_col].trim().parse().ok();
             let min_axis = record[min_axis_col].trim().parse().ok();
             let angle = record[angle_col].trim().parse().ok().map(|v| degree_to_radian(v) as f32);
             let mut names = Vec::new();
-            fn append_names (col_str: &str, names: &mut Vec<DsoName>, catalogue: u16) {
-                for name in col_str.split("|").filter(|name| !name.is_empty()) {
-                    names.push(DsoName {
-                        catalogue,
-                        name:    name.to_string(),
-                        name_lc: name.to_lowercase(),
-                    })
-                }
+            for name in names_str.split("|").filter(|name| !name.is_empty()) {
+                names.push(DsoName::from_str(name))
             }
-            append_names(record[messier_col].trim(), &mut names, ID_CAT_MESSIER);
-            append_names(record[ngc_col].trim(), &mut names, ID_CAT_NGC);
-            append_names(record[ic_col].trim(), &mut names, ID_CAT_IC);
-            append_names(record[other_col].trim(), &mut names, ID_CAT_OTHER);
+            let nicknames = nicknames_str
+                .split("|")
+                .map(str::trim)
+                .map(|s| DsoNickName {orig: s.to_string(), lc: s.to_lowercase()} )
+                .collect::<Vec<_>>();
             let crd = ObjEqCoord::new(
                 hour_to_radian(ra),
                 degree_to_radian(dec)
@@ -654,7 +713,7 @@ impl SkyMap {
             let mag_v = mag_v.map(|v| ObjMagnitude::new(v));
             let mag_b = mag_b.map(|v| ObjMagnitude::new(v));
             let object = DsoItem {
-                names, crd, mag_v, mag_b, cnst_id,
+                names, nicknames, crd, mag_v, mag_b, cnst_id,
                 obj_type, maj_axis, min_axis, angle
             };
             self.objects.push(object);
@@ -859,25 +918,37 @@ impl SkyMap {
                 uniq_names.insert(names);
             }
         };
-        apdate_result(self.find_dso_objects(&text_lc, SearchMode::StartWith));
+        apdate_result(self.find(&text_lc, SearchMode::StartWith));
         apdate_result(self.stars.find(&text_lc, SearchMode::StartWith));
-        apdate_result(self.find_dso_objects(&text_lc, SearchMode::Contains));
+        apdate_result(self.find(&text_lc, SearchMode::Contains));
         apdate_result(self.stars.find(&text_lc, SearchMode::Contains));
         result
     }
 
-    fn find_dso_objects(&self, text: &str, mode: SearchMode) -> Vec<SkymapObject> {
+    fn find(&self, text_lc: &str, mode: SearchMode) -> Vec<SkymapObject> {
+        let name_to_search = DsoName::from_str(text_lc);
         let mut result = Vec::new();
         for item in &self.objects {
             let mut matched = false;
             for name in &item.names {
                 matched |= match mode {
                     SearchMode::StartWith =>
-                        name.name_lc.starts_with(text),
+                        name.orig_text.starts_with(text_lc) ||
+                        name.parts == name_to_search.parts,
                     SearchMode::Contains =>
-                        name.name_lc.contains(text),
+                        name.orig_text.contains(text_lc),
                 };
             }
+
+            for nickname in &item.nicknames {
+                matched |= match mode {
+                    SearchMode::StartWith =>
+                        nickname.lc.starts_with(text_lc),
+                    SearchMode::Contains =>
+                        nickname.lc.contains(text_lc),
+                };
+            }
+
             if matched {
                 result.push(SkymapObject::Dso(item.clone()));
             }

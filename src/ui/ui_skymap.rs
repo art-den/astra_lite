@@ -845,6 +845,7 @@ impl MapUi {
         let obj = self.selected_item.borrow();
 
         let mut names = String::new();
+        let mut nicknames = String::new();
         let mut obj_type_str = "";
         let mut mag_cap_str = "";
         let mut mag_str = String::new();
@@ -858,8 +859,9 @@ impl MapUi {
         let mut azimuth_str = String::new();
 
         if let Some(obj) = &*obj {
-
             names = obj.names().join(", ");
+            nicknames = obj.nicknames().join(", ");
+
             obj_type_str = obj.obj_type().to_str();
 
             if let Some(mag) = obj.mag_v() {
@@ -901,6 +903,7 @@ impl MapUi {
         }
 
         ui.set_prop_str("e_sm_sel_names.text", Some(&names));
+        ui.set_prop_str("e_sm_sel_nicknames.text", Some(&nicknames));
         ui.set_prop_str("l_sm_sel_type.label", Some(&obj_type_str));
         ui.set_prop_str("l_sm_sel_mag_cap.label", Some(&mag_cap_str));
         ui.set_prop_str("l_sm_sel_mag.label", Some(&mag_str));
