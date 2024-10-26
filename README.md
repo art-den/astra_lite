@@ -74,3 +74,12 @@ cargo install cross --git https://github.com/cross-rs/cross
 ```
 ## How to build
 Execute `build_cross.sh`. Once `build_cross.sh` has finished running, you will find the deb packages in the `dist` folder.
+
+# Data sources
+DSO:
+* Messier, NGC and IC catalogue from OpenNGC - https://github.com/mattiaverga/OpenNGC
+* Caldwell catalogue - http://www.hawastsoc.org/deepsky/caldwell.html
+* DSO nicknames list - https://www.astrobin.com/fg7b5l/
+Stars:
+* Tycho-2 catalogue - https://www.cosmos.esa.int/web/hipparcos/tycho-2
+* HYG v3 catalogue - https://github.com/astronexus/HYG-Database/tree/main/hyg/v3

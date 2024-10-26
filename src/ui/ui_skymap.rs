@@ -98,21 +98,19 @@ impl SkyItemType {
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiOptions {
-    paned_pos1:         i32,
-    pub paint:          PaintConfig,
-    show_ccd:           bool,
-    search_above_horiz: bool,
-    exp_dt:             bool,
+    paned_pos1: i32,
+    pub paint:  PaintConfig,
+    show_ccd:   bool,
+    exp_dt:     bool,
 }
 
 impl Default for UiOptions {
     fn default() -> Self {
         Self {
-            paned_pos1:         -1,
-            paint:              PaintConfig::default(),
-            show_ccd:           true,
-            search_above_horiz: true,
-            exp_dt:             true,
+            paned_pos1: -1,
+            paint:      PaintConfig::default(),
+            show_ccd:   true,
+            exp_dt:     true,
         }
     }
 }
@@ -207,6 +205,11 @@ struct PrevWidgetsDT {
     sec: i32,
 }
 
+struct FoundItem {
+    obj: SkymapObject,
+    above_horiz: bool,
+}
+
 struct MapUi {
     ui_options:    RefCell<UiOptions>,
     core:          Arc<Core>,
@@ -223,7 +226,7 @@ struct MapUi {
     paint_ts:      RefCell<std::time::Instant>, // last paint moment timestamp
     prev_wdt:      RefCell<PrevWidgetsDT>,
     selected_item: RefCell<Option<SkymapObject>>,
-    search_result: RefCell<Vec<SkymapObject>>,
+    search_result: RefCell<Vec<FoundItem>>,
     clicked_crd:   RefCell<Option<EqCoord>>,
     full_screen:   Cell<bool>,
     goto_started:  Cell<bool>,
@@ -358,13 +361,6 @@ impl MapUi {
             })
         );
 
-        let chb_sm_above_horizon = self.builder.object::<gtk::CheckButton>("chb_sm_above_horizon").unwrap();
-        chb_sm_above_horizon.connect_active_notify(
-            clone!(@weak self as self_ => move |chb| {
-                self_.handler_above_horizon_changed(chb);
-            })
-        );
-
         let search_tv = self.builder.object::<gtk::TreeView>("tv_sm_search_result").unwrap();
         search_tv.selection().connect_changed(
             clone!( @weak self as self_ => move |selection| {
@@ -448,10 +444,7 @@ impl MapUi {
         ui.set_prop_bool("chb_show_sclusters.active", opts.paint.filter.contains(ItemsToShow::CLUSTERS));
         ui.set_prop_bool("chb_sm_show_ccd.active", opts.show_ccd);
         ui.set_prop_bool("chb_sm_show_eq_grid.active", opts.paint.eq_grid.visible);
-
         ui.set_range_value("scl_max_dso_mag", opts.paint.max_dso_mag as f64);
-        ui.set_prop_bool("chb_sm_above_horizon.active", opts.search_above_horiz);
-
         ui.set_prop_bool("exp_sm_dt.expanded", opts.exp_dt);
 
         drop(opts);
@@ -465,7 +458,6 @@ impl MapUi {
             opts.paned_pos1 = pan_map1.position();
         }
         opts.paint.max_dso_mag = ui.range_value("scl_max_dso_mag") as f32;
-        opts.search_above_horiz = ui.prop_bool("chb_sm_above_horizon.active");
         opts.exp_dt = ui.prop_bool("exp_sm_dt.expanded");
 
         Self::read_visibility_options_from_widgets(&mut opts, &ui);
@@ -933,7 +925,7 @@ impl MapUi {
                 .visible(true)
                 .build();
             TreeViewColumnExt::pack_start(&col, &cell_text, true);
-            TreeViewColumnExt::add_attribute(&col, &cell_text, "text", idx as i32);
+            TreeViewColumnExt::add_attribute(&col, &cell_text, "markup", idx as i32);
             tv.append_column(&col);
         }
         tv.set_model(Some(&model));
@@ -943,27 +935,29 @@ impl MapUi {
         self.search();
     }
 
-    fn handler_above_horizon_changed(&self, chb: &gtk::CheckButton) {
-        self.ui_options.borrow_mut().search_above_horiz = chb.is_active();
-        self.search();
-    }
-
     pub fn search(&self) {
         let Some(skymap) = &*self.skymap_data.borrow() else { return; };
         let se_sm_search = self.builder.object::<gtk::SearchEntry>("se_sm_search").unwrap();
         let text = se_sm_search.text().trim().to_string();
-        let mut found_items = skymap.search(&text);
-        let options = self.ui_options.borrow();
-        if options.search_above_horiz {
-            let observer = self.create_observer();
-            let time = self.map_widget.time();
-            let cvt = EqToSphereCvt::new(observer.longitude, observer.latitude, &time);
-            found_items.retain(|obj| {
-                let hcrd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&obj.crd()));
-                hcrd.alt > 0.0
-            });
+        let found_items = skymap.search(&text);
+        let observer = self.create_observer();
+        let time = self.map_widget.time();
+        let cvt = EqToSphereCvt::new(observer.longitude, observer.latitude, &time);
+        let mut result = Vec::new();
+        for obj in found_items {
+            let hcrd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&obj.crd()));
+            result.push(FoundItem{ obj, above_horiz: hcrd.alt > 0.0 });
         }
-        *self.search_result.borrow_mut() = found_items;
+        result.sort_by(|obj1, obj2| {
+            match (obj1.above_horiz, obj2.above_horiz)
+            {
+                (true, true)|
+                (false, false) => std::cmp::Ordering::Equal,
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+            }
+        });
+        *self.search_result.borrow_mut() = result;
         self.show_search_result();
     }
 
@@ -974,11 +968,16 @@ impl MapUi {
         let result = self.search_result.borrow();
         model.clear();
         for item in &*result {
-            model.insert_with_values(
-                None, &[
-                (0, &item.names().join(", ")),
-                (1, &item.obj_type().to_str()),
-            ]);
+            let mut names_str = item.obj.names().join(", ");
+            let mut type_str = item.obj.obj_type().to_str().to_string();
+            let make_gray = |text: &mut String| {
+                *text = format!(r##"<span color="gray">{}</span>"##, text);
+            };
+            if !item.above_horiz {
+                make_gray(&mut names_str);
+                make_gray(&mut type_str);
+            }
+            model.insert_with_values(None, &[(0, &names_str),(1, &type_str),]);
         }
 
         if !result.is_empty() {
@@ -1051,10 +1050,10 @@ impl MapUi {
         let index = index as usize;
         let found_items = self.search_result.borrow();
         let Some(selected_obj) = found_items.get(index) else { return; };
-        *self.selected_item.borrow_mut() = Some(selected_obj.clone());
+        *self.selected_item.borrow_mut() = Some(selected_obj.obj.clone());
         self.show_selected_objects_info();
         self.update_selected_item_graph();
-        self.map_widget.set_selected_object(Some(&selected_obj));
+        self.map_widget.set_selected_object(Some(&selected_obj.obj));
     }
 
     fn update_selected_item_graph(&self) {
