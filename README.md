@@ -13,26 +13,24 @@ Compiled binaries and discussion here:
 https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-astrophotography.html
 
 # Features
-* UI for INDI devices control
-* Live images preview
 * Saving RAW frames
-* Live stacking
-* Dark and flat files creation
-* Light frame quality filter
-* Simple guiding by main camera
-* Dithering
+* Live stacking with satellite and meteor tracks removal
+* Darks, biases and defective pixels library
+* Light frames quality filter
+* Simple guiding and dithering by main camera
 * Autofocus
 * Sky map
+* Plate solving
 * Manual mount control
 * PHD2 support for dithering
+* UI for INDI devices control
 
 ![](./docs/screenshot1.jpg)
 
 # Future plans
 * INDI driver crash recovery
-* Plate solving
-* Sigma clipping for live staking (not sure this is possible with low memory usage)
 * Live view from camera in video mode
+* Meridian flip support
 
 # How to build AstraLite
 ## Prerequisites for Linux
@@ -80,6 +78,7 @@ DSO:
 * Messier, NGC and IC catalogue from OpenNGC - https://github.com/mattiaverga/OpenNGC
 * Caldwell catalogue - http://www.hawastsoc.org/deepsky/caldwell.html
 * DSO nicknames list - https://www.astrobin.com/fg7b5l/
+
 Stars:
 * Tycho-2 catalogue - https://www.cosmos.esa.int/web/hipparcos/tycho-2
 * HYG v3 catalogue - https://github.com/astronexus/HYG-Database/tree/main/hyg/v3
