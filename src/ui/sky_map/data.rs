@@ -524,8 +524,7 @@ impl SkymapObject {
     pub fn names(&self) -> Vec<&str> {
         match self {
             Self::Dso(dso) => {
-                let nicknames = dso.nicknames.iter().map(|n| n.orig.as_str());
-                dso.names.iter().map(|n| n.orig_text.as_str()).chain(nicknames).collect()
+                dso.names.iter().map(|n| n.orig_text.as_str()).collect()
             }
             Self::Star(star) => {
                 let mut result = Vec::new();
