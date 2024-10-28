@@ -415,20 +415,10 @@ pub struct Outline {
     pub polygon: Vec<ObjEqCoord>
 }
 
-#[derive(Debug, Clone, Hash, Eq)]
-struct DsoNamePart {
-    text_lc: String,
-    value: Option<u32>,
-}
-
-impl PartialEq for DsoNamePart {
-    fn eq(&self, other: &Self) -> bool {
-        if self.value.is_some() && other.value.is_some() {
-            self.value == other.value
-        } else {
-            self.text_lc == other.text_lc
-        }
-    }
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+enum DsoNamePart {
+    Text(String),
+    Value(u32),
 }
 
 type NameParts = Vec<DsoNamePart>;
@@ -446,8 +436,11 @@ impl DsoName {
         let add_part = move |part: &mut String, parts: &mut Vec<DsoNamePart>| {
             let part_trimmed = part.trim();
             if part_trimmed.is_empty() { return }
-            let value = part_trimmed.parse::<u32>().ok();
-            parts.push(DsoNamePart { text_lc: part_trimmed.to_lowercase(), value });
+            if let Ok(value) = part_trimmed.parse::<u32>() {
+                parts.push(DsoNamePart::Value(value));
+            } else {
+                parts.push(DsoNamePart::Text(part_trimmed.to_lowercase()));
+            }
             part.clear();
         };
         let mut is_numeric = false;
@@ -477,18 +470,24 @@ impl DsoName {
 #[test]
 fn test_dso_name() {
     let name = DsoName::from_str("Test-1aaaa42 2 3");
-    assert_eq!(name.parts[0], DsoNamePart { text_lc: "test".to_string(), value: None     });
-    assert_eq!(name.parts[1], DsoNamePart { text_lc: "1".to_string(),    value: Some(1)  });
-    assert_eq!(name.parts[2], DsoNamePart { text_lc: "aaaa".to_string(), value: None     });
-    assert_eq!(name.parts[3], DsoNamePart { text_lc: "42".to_string(),   value: Some(42) });
-    assert_eq!(name.parts[4], DsoNamePart { text_lc: "2".to_string(),    value: Some(2)  });
-    assert_eq!(name.parts[5], DsoNamePart { text_lc: "3".to_string(),    value: Some(3)  });
+    assert_eq!(name.parts[0], DsoNamePart::Text("test".to_string()));
+    assert_eq!(name.parts[1], DsoNamePart::Value(1));
+    assert_eq!(name.parts[2], DsoNamePart::Text("aaaa".to_string()));
+    assert_eq!(name.parts[3], DsoNamePart::Value(42));
+    assert_eq!(name.parts[4], DsoNamePart::Value(2));
+    assert_eq!(name.parts[5], DsoNamePart::Value(3));
 }
 
 #[derive(Debug, Clone)]
 pub struct DsoNickName {
-    pub orig: String,
+    orig: String,
     lc: String,
+}
+
+impl DsoNickName {
+    pub fn text(&self) -> &str {
+        &self.orig
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -522,17 +521,19 @@ pub enum SkymapObject {
 }
 
 impl SkymapObject {
-    pub fn names(&self) -> Vec<String> {
+    pub fn names(&self) -> Vec<&str> {
         match self {
-            Self::Dso(dso) =>
-                dso.names.iter().map(|n| n.orig_text.clone()).collect(),
+            Self::Dso(dso) => {
+                let nicknames = dso.nicknames.iter().map(|n| n.orig.as_str());
+                dso.names.iter().map(|n| n.orig_text.as_str()).chain(nicknames).collect()
+            }
             Self::Star(star) => {
                 let mut result = Vec::new();
                 if !star.name.is_empty() {
-                    result.push(star.name.clone());
+                    result.push(star.name.as_str());
                 }
                 if !star.bayer.is_empty() {
-                    result.push(star.bayer.clone());
+                    result.push(star.bayer.as_str());
                 }
                 result
             }
