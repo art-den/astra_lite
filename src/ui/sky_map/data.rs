@@ -539,10 +539,10 @@ impl SkymapObject {
         }
     }
 
-    pub fn nicknames(&self) -> Vec<String> {
+    pub fn nicknames(&self) -> Vec<&str> {
         match self {
             Self::Dso(dso) =>
-                dso.nicknames.iter().map(|n| n.orig.clone()).collect(),
+                dso.nicknames.iter().map(|n| n.orig.as_str()).collect(),
             Self::Star(_) => vec![],
         }
     }
