@@ -31,6 +31,7 @@ pub struct SkymapWidget {
     center_crd:      RefCell<Option<EqCoord>>,
     telescope_pos:   RefCell<Option<EqCoord>>,
     camera_frame:    RefCell<Option<CameraFrame>>,
+    solved_image:    RefCell<Option<PlateSolvedImage>>,
     ani_goto_data:   RefCell<Option<AnimatedGotoCrdData>>,
     select_handlers: RefCell<Vec<Box<dyn Fn(Option<SkymapObject>)>>>,
 }
@@ -59,6 +60,7 @@ impl SkymapWidget {
             center_crd:      RefCell::new(None),
             telescope_pos:   RefCell::new(None),
             camera_frame:    RefCell::new(None),
+            solved_image:    RefCell::new(None),
             ani_goto_data:   RefCell::new(None),
             select_handlers: RefCell::new(Vec::new()),
         });
@@ -86,6 +88,11 @@ impl SkymapWidget {
 
     pub fn set_observer(&self, observer: &Observer) {
         *self.observer.borrow_mut() = observer.clone();
+        self.draw_area.queue_draw();
+    }
+
+    pub fn set_platesolved_image(&self, image: Option<PlateSolvedImage>) {
+        *self.solved_image.borrow_mut() = image;
         self.draw_area.queue_draw();
     }
 
@@ -294,11 +301,23 @@ impl SkymapWidget {
         let telescope_pos = self.telescope_pos.borrow();
         let camera_frame = self.camera_frame.borrow();
         let timer = std::time::Instant::now();
-        _ = painter.paint(
-            &skymap, &selection, &telescope_pos, &camera_frame,
-            &observer, &time,
-            &config, &vp, &scr, ctx
-        );
+        let platesolved_image = self.solved_image.borrow();
+        let res = painter.paint(PaintArgs {
+            sky_map:     &skymap,
+            selection:   &selection,
+            tele_pos:    &telescope_pos,
+            cam_frame:   &camera_frame,
+            plate_solve: &platesolved_image,
+            observer:    &observer,
+            utc_time:    &time,
+            config:      &config,
+            view_point:  &vp,
+            screen:      &scr,
+            cairo:       ctx,
+        });
+        if let Err(e) = res {
+            log::error!("Error while painting map: {}", e.to_string());
+        }
         let paint_time = timer.elapsed().as_secs_f64();
         let fps = if paint_time != 0.0 { 1.0/paint_time } else { f64::NAN };
         let fps_str = format!("x{:.1}, {:.1} FPS", vp.mag_factor, fps);

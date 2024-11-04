@@ -164,7 +164,7 @@ pub struct FrameProcessCommandData {
 }
 
 pub struct Preview8BitImgData {
-    pub rgb_data:     Mutex<RgbU8Data>,
+    pub rgb_data:     RgbU8Data,
     pub image_width:  usize,
     pub image_height: usize,
     pub params:       PreviewParams,
@@ -384,7 +384,7 @@ pub fn get_rgb_data_from_preview_image(
         PreviewColor::Blue  => ToBytesColorMode::Blue,
     };
 
-    Some(image.to_grb_bytes(
+    image.to_grb_bytes(
         &l_levels,
         &r_levels,
         &g_levels,
@@ -392,7 +392,7 @@ pub fn get_rgb_data_from_preview_image(
         params.gamma,
         reduct_ratio,
         color_mode,
-    ))
+    )
 }
 
 fn apply_calibr_data_and_remove_hot_pixels(
@@ -865,7 +865,7 @@ fn make_preview_image_impl(
 
     if let Some(rgb_data) = rgb_data {
         let preview_data = Arc::new(Preview8BitImgData {
-            rgb_data: Mutex::new(rgb_data),
+            rgb_data,
             image_width: image.width(),
             image_height: image.height(),
             params: command.view_options.clone(),
@@ -1061,7 +1061,7 @@ fn make_preview_image_impl(
 
                 if let Some(rgb_data) = rgb_data {
                     let preview_data = Arc::new(Preview8BitImgData {
-                        rgb_data: Mutex::new(rgb_data),
+                        rgb_data,
                         image_width: image.width(),
                         image_height: image.height(),
                         params: command.view_options.clone(),

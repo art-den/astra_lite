@@ -2,7 +2,7 @@ use std::{cell::{Cell, RefCell}, collections::HashMap, rc::Rc, sync::{Arc, RwLoc
 use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
-use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::*}, indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*};
+use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::*}, indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*, core::frame_processing::*};
 use super::{gtk_utils::{self, DEFAULT_DPMM}, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, math::*}, ui_main::*, ui_skymap_options::SkymapOptionsDialog, utils::*};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
@@ -48,6 +48,7 @@ pub fn init_ui(
         goto_started:  Cell::new(false),
         closed:        Cell::new(false),
         cam_rotation:  RefCell::new(HashMap::new()),
+        solved_img:    RefCell::new(None),
         self_:         RefCell::new(None),
         map_widget,
     });
@@ -232,6 +233,7 @@ struct MapUi {
     goto_started:  Cell<bool>,
     closed:        Cell<bool>,
     cam_rotation:  RefCell<HashMap<String, f64>>,
+    solved_img:    RefCell<Option<gdk::gdk_pixbuf::Pixbuf>>,
     self_:         RefCell<Option<Rc<MapUi>>>
 }
 
@@ -425,7 +427,31 @@ impl MapUi {
                 let mut cam_rotation = self.cam_rotation.borrow_mut();
                 cam_rotation.insert(ps_event.cam_name, ps_event.result.rotation);
                 drop(cam_rotation);
+
+                let solved_img = self.solved_img.borrow();
+                if let Some(solved_img) = &*solved_img{
+                    let ps_image = PlateSolvedImage {
+                        image:       solved_img.clone(),
+                        coord:       ps_event.result.crd_now,
+                        horiz_angle: ps_event.result.width,
+                        vert_angle:  ps_event.result.height,
+                        rot_angle:   ps_event.result.rotation,
+                        time:        Utc::now(),
+                    };
+                    self.map_widget.set_platesolved_image(Some(ps_image));
+                }
+                drop(solved_img);
+
                 self.update_skymap_widget(true);
+            }
+            CoreEvent::FrameProcessing(sp) => {
+                match (&sp.data, sp.mode_type) {
+                    (FrameProcessResultData::PreviewFrame(data),
+                     ModeType::Goto|ModeType::OpeningImgFile|ModeType::CapturePlatesolve) => {
+                        self.create_plate_solve_preview(data);
+                    },
+                    _ => {},
+                }
             }
             _ => {},
         }
@@ -1209,5 +1235,19 @@ impl MapUi {
             bx_skymap_panel.set_visible(true);
         }
         self.full_screen.set(full_screen);
+    }
+
+    fn create_plate_solve_preview(&self, data: &Preview8BitImgData) {
+        let bytes = glib::Bytes::from_owned(data.rgb_data.bytes.clone());
+        let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
+            &bytes,
+            gtk::gdk_pixbuf::Colorspace::Rgb,
+            false,
+            8,
+            data.rgb_data.width as i32,
+            data.rgb_data.height as i32,
+            (data.rgb_data.width * 3) as i32,
+        );
+        *self.solved_img.borrow_mut() = Some(pixbuf);
     }
 }

@@ -28,10 +28,15 @@ impl PerspectivePainter {
         let mut min_x = x0.min(x1).min(x2).min(x3);
         let mut max_x = x0.max(x1).max(x2).max(x3);
         let mut min_y = y0.min(y1).min(y2).min(y3);
-        let mut max_y = x0.max(y1).max(y2).max(y3);
+        let mut max_y = y0.max(y1).max(y2).max(y3);
         if let Some(clip) = cairo.clip_rectangle() {
             let right = clip.x() + clip.width() - 1;
             let bottom = clip.y() + clip.height() - 1;
+            if max_x < clip.x() || min_x > right
+            || max_y < clip.y() || min_y > bottom {
+                return Ok(());
+            }
+
             min_x = min_x.max(clip.x());
             max_x = max_x.min(right);
             min_y = min_y.max(clip.y());
@@ -39,6 +44,10 @@ impl PerspectivePainter {
         }
         let width = (max_x - min_x + 1) as usize;
         let height = (max_y - min_y + 1) as usize;
+        if width <= 1 || height <= 1 {
+            return Ok(());
+        }
+
         self.data.resize(4 * width * height, 0);
         let src_width = image.width();
         let src_height = image.height();
@@ -63,36 +72,49 @@ impl PerspectivePainter {
         let a32 = mat.a32 as f32;
         let a33 = mat.a33 as f32;
 
-        self.data
-            .par_chunks_exact_mut(4 * width)
-            .enumerate()
-            .for_each(|(y, row)| {
-                let y = (y + min_y as usize) as f32;
-                for ((r, g, b, a), x) in row.iter_mut().tuples().zip(min_x..) {
-                    let x = x as f32;
-                    let mut sx = a11 * x + a21 * y + a31;
-                    let mut sy = a12 * x + a22 * y + a32;
-                    let     z  = a13 * x + a23 * y + a33;
-                    let d_div = 1.0 / z;
-                    sx *= d_div;
-                    sy *= d_div;
-                    let sx = sx as i32;
-                    if sx < 0 || sx >= src_width {
-                        continue;
-                    }
-                    let sy = sy as i32;
-                    if sy < 0 || sy >= src_height {
-                        continue;
-                    }
-                    let src_ptr = (sx * src_pix_len + sy * src_rowstride) as usize;
-                    if let [src_r, src_g, src_b] = &src_bytes[src_ptr..src_ptr+3] {
-                        *r = *src_r;
-                        *g = *src_g;
-                        *b = *src_b;
-                        *a = 255;
-                    }
+        let process_row_fun = |(y, row) : (usize, &mut [u8])| {
+            let y = (y + min_y as usize) as f32;
+            for ((r, g, b, a), x) in row.iter_mut().tuples().zip(min_x..) {
+                let x = x as f32;
+                let mut sx = a11 * x + a21 * y + a31;
+                let mut sy = a12 * x + a22 * y + a32;
+                let     z  = a13 * x + a23 * y + a33;
+                let d_div = 1.0 / z;
+                sx *= d_div;
+                sy *= d_div;
+                let sx = sx as i32;
+                if sx < 0 || sx >= src_width {
+                    *a = 0;
+                    continue;
                 }
-            });
+                let sy = sy as i32;
+                if sy < 0 || sy >= src_height {
+                    *a = 0;
+                    continue;
+                }
+                let src_ptr = (sx * src_pix_len + sy * src_rowstride) as usize;
+                if let [src_r, src_g, src_b] = &src_bytes[src_ptr..src_ptr+3] {
+                    *r = *src_r;
+                    *g = *src_g;
+                    *b = *src_b;
+                    *a = 255;
+                }
+            }
+        };
+
+        if width * height > 100_000 {
+            println!("p");
+            self.data
+                .par_chunks_exact_mut(4 * width)
+                .enumerate()
+                .for_each(process_row_fun);
+        } else {
+            println!("-");
+            self.data
+                .chunks_exact_mut(4 * width)
+                .enumerate()
+                .for_each(process_row_fun);
+        }
 
         let pixbuf = gdk_pixbuf::Pixbuf::from_mut_slice(
             &mut self.data,

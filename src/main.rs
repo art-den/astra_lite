@@ -97,19 +97,21 @@ fn main() -> anyhow::Result<()> {
     log::info!("Creating indi::Connection...");
     let indi = Arc::new(indi::Connection::new());
 
-    std::panic::set_hook({
-        let logs_dir = logs_dir.clone();
-        let indi = Arc::clone(&indi);
-        let default_panic_handler = std::panic::take_hook();
-        Box::new(move |panic_info| {
-            panic_handler(
-                panic_info,
-                indi.is_drivers_started(),
-                &logs_dir,
-                &default_panic_handler
-            )
-        })
-    });
+    if cfg!(not(debug_assertions)) {
+        std::panic::set_hook({
+            let logs_dir = logs_dir.clone();
+            let indi = Arc::clone(&indi);
+            let default_panic_handler = std::panic::take_hook();
+            Box::new(move |panic_info| {
+                panic_handler(
+                    panic_info,
+                    indi.is_drivers_started(),
+                    &logs_dir,
+                    &default_panic_handler
+                )
+            })
+        });
+    }
 
     #[cfg(debug_assertions)] {
         std::env::set_var("RUST_BACKTRACE", "1");

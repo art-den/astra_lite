@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::{path::Path, io::{BufWriter, BufReader}, fs::File};
+use std::{path::Path, io::{BufWriter, BufReader}, fs::File, sync::Arc};
 use chrono::{DateTime, Utc};
 use itertools::*;
 use rayon::prelude::*;
@@ -444,9 +444,9 @@ impl Image {
         gamma:        f64,
         reduct_ratio: usize,
         color_mode:   ToBytesColorMode,
-    ) -> RgbU8Data {
+    ) -> Option<RgbU8Data> {
         if self.is_empty() {
-            return RgbU8Data::default();
+            return None;
         }
         let args = ImageToU8BytesArgs {
             width:          self.width(),
@@ -457,13 +457,14 @@ impl Image {
         let g_table = Self::create_gamma_table(g_levels.dark, g_levels.light, gamma);
         let b_table = Self::create_gamma_table(b_levels.dark, b_levels.light, gamma);
         let l_table = Self::create_gamma_table(l_levels.dark, l_levels.light, gamma);
-        match reduct_ratio {
+        let result = match reduct_ratio {
             1 => self.to_grb_bytes_no_reduct(&r_table, &g_table, &b_table, &l_table, args, color_mode),
             2 => self.to_grb_bytes_reduct2  (&r_table, &g_table, &b_table, &l_table, args, color_mode),
             3 => self.to_grb_bytes_reduct3  (&r_table, &g_table, &b_table, &l_table, args, color_mode),
             4 => self.to_grb_bytes_reduct4  (&r_table, &g_table, &b_table, &l_table, args, color_mode),
             _ => panic!("Wrong reduct_ratio ({})", reduct_ratio),
-        }
+        };
+        Some(result)
     }
 
     fn create_gamma_table(min_value: f64, max_value: f64, gamma: f64) -> Vec<u8> {
@@ -527,7 +528,7 @@ impl Image {
         RgbU8Data {
             width: args.width,
             height: args.height,
-            bytes: rgb_bytes,
+            bytes: SharedBytes::new(rgb_bytes),
             orig_width: self.width(),
             orig_height: self.height(),
             is_color_image: args.is_color_image,
@@ -604,7 +605,8 @@ impl Image {
             }
         }
         RgbU8Data {
-            width, height, bytes,
+            width, height,
+            bytes: SharedBytes::new(bytes),
             orig_width: self.width(),
             orig_height: self.height(),
             is_color_image: args.is_color_image,
@@ -693,7 +695,8 @@ impl Image {
             }
         }
         RgbU8Data {
-            width, height, bytes,
+            width, height,
+            bytes: SharedBytes::new(bytes),
             orig_width: self.width(),
             orig_height: self.height(),
             is_color_image: args.is_color_image,
@@ -794,7 +797,8 @@ impl Image {
             }
         }
         RgbU8Data {
-            width, height, bytes,
+            width, height,
+            bytes: SharedBytes::new(bytes),
             orig_width: self.width(),
             orig_height: self.height(),
             is_color_image: args.is_color_image,
@@ -963,13 +967,31 @@ pub struct DarkLightLevels {
     pub light: f64,
 }
 
-#[derive(Default)]
+#[derive(Clone)]
+pub struct SharedBytes {
+    data: Arc<Vec<u8>>,
+}
+
+impl SharedBytes {
+    pub fn new(data: Vec<u8>) -> Self {
+        Self {
+            data: Arc::new(data)
+        }
+    }
+}
+
+impl AsRef<[u8]> for SharedBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.data.as_slice()
+    }
+}
+
 pub struct RgbU8Data {
     pub width:          usize,
     pub height:         usize,
     pub orig_width:     usize,
     pub orig_height:    usize,
-    pub bytes:          Vec<u8>,
+    pub bytes:          SharedBytes,
     pub is_color_image: bool,
 }
 

@@ -1,6 +1,6 @@
-use std::{collections::HashSet, f64::consts::PI, rc::Rc};
-use chrono::NaiveDateTime;
-use gtk::cairo;
+use std::{cell::RefCell, collections::HashSet, f64::consts::PI, rc::Rc};
+use chrono::{DateTime, Local, NaiveDateTime, Utc};
+use gtk::{cairo, gdk_pixbuf};
 use itertools::{izip, Itertools};
 use serde::{Deserialize, Serialize};
 use crate::utils::math::linear_interpolate;
@@ -40,6 +40,15 @@ pub struct CameraFrame {
     pub horiz_angle: f64,
     pub vert_angle: f64,
     pub rot_angle: f64,
+}
+
+pub struct PlateSolvedImage {
+    pub image: gdk_pixbuf::Pixbuf,
+    pub coord: EqCoord,
+    pub horiz_angle: f64,
+    pub vert_angle: f64,
+    pub rot_angle: f64,
+    pub time: DateTime<Utc>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -132,11 +141,25 @@ pub fn calc_max_star_magnitude_for_painting(mag_factor: f64) -> f32 {
     ) as f32
 }
 
+pub struct PaintArgs<'a> {
+    pub sky_map:     &'a Option<Rc<SkyMap>>,
+    pub selection:   &'a Option<SkymapObject>,
+    pub tele_pos:    &'a Option<EqCoord>,
+    pub cam_frame:   &'a Option<CameraFrame>,
+    pub plate_solve: &'a Option<PlateSolvedImage>,
+    pub observer:    &'a Observer,
+    pub utc_time:    &'a NaiveDateTime,
+    pub config:      &'a PaintConfig,
+    pub view_point:  &'a ViewPoint,
+    pub screen:      &'a Screen,
+    pub cairo:       &'a gtk::cairo::Context,
+}
+
 pub struct SkyMapPainter {
     item_painter:  ItemPainter,
     dso_ellipse:   DsoEllipse,
     visible_zones: HashSet<SkyZoneKey>,
-    persp_pnt:     PerspectivePainter,
+    persp_pnt:     RefCell<PerspectivePainter>,
 }
 
 impl SkyMapPainter {
@@ -145,61 +168,56 @@ impl SkyMapPainter {
             item_painter:  ItemPainter::new(),
             dso_ellipse:   DsoEllipse::new(),
             visible_zones: HashSet::new(),
-            persp_pnt:     PerspectivePainter::new(),
+            persp_pnt:     RefCell::new(PerspectivePainter::new()),
         }
     }
 
-    pub fn paint(
-        &mut self,
-        sky_map:    &Option<Rc<SkyMap>>,
-        selection:  &Option<SkymapObject>,
-        tele_pos:   &Option<EqCoord>,
-        cam_frame:  &Option<CameraFrame>,
-        observer:   &Observer,
-        utc_time:   &NaiveDateTime,
-        config:     &PaintConfig,
-        view_point: &ViewPoint,
-        screen:     &Screen,
-        cairo:      &gtk::cairo::Context,
-    ) -> anyhow::Result<()> {
+    pub fn paint(&mut self, args: PaintArgs) -> anyhow::Result<()> {
         let eq_sphere_cvt = EqToSphereCvt::new(
-            observer.longitude,
-            observer.latitude,
-            utc_time,
+            args.observer.longitude,
+            args.observer.latitude,
+            args.utc_time,
         );
 
-        let sphere_scr_cvt = SphereToScreenCvt::new(&view_point.crd);
+        let sphere_scr_cvt = SphereToScreenCvt::new(&args.view_point.crd);
 
-        cairo.set_antialias(gtk::cairo::Antialias::None);
-        cairo.set_source_rgb(0.0, 0.0, 0.0);
-        cairo.paint()?;
+        args.cairo.set_antialias(gtk::cairo::Antialias::None);
+        args.cairo.set_source_rgb(0.0, 0.0, 0.0);
+        args.cairo.paint()?;
 
-        let pxls_per_rad = self.calc_pixels_per_radian(screen, view_point.mag_factor);
+        let pxls_per_rad = self.calc_pixels_per_radian(args.screen, args.view_point.mag_factor);
 
         let j2000 = j2000_time();
-        let epoch_cvt = EpochCvt::new(&j2000, &utc_time);
+        let epoch_cvt = EpochCvt::new(&j2000, &args.utc_time);
 
         let ctx = PaintCtx {
-            cairo, config, screen, view_point, pxls_per_rad,
+            cairo: args.cairo,
+            config: args.config,
+            screen: args.screen,
+            view_point: args.view_point,
+            pxls_per_rad,
             epoch_cvt: &epoch_cvt,
             eq_sphere_cvt: &eq_sphere_cvt,
-            sphere_scr_cvt: &sphere_scr_cvt
+            sphere_scr_cvt: &sphere_scr_cvt,
         };
 
+        // Optionally plate solved image
+        self.paint_platesolved_image(args.plate_solve, &ctx)?;
+
         // Equatorial grid
-        if config.eq_grid.visible {
+        if args.config.eq_grid.visible {
             self.paint_eq_grid(&ctx, false)?;
             self.paint_eq_grid(&ctx, true)?;
         }
 
-        if let Some(sky_map) = sky_map {
+        if let Some(sky_map) = args.sky_map {
             // DSO objects
             self.paint_dso_items(sky_map, &ctx, PainterMode::Objects)?;
 
             let star_painter_params = self.get_star_painter_params(&ctx);
 
             // Stars objects
-            if config.filter.contains(ItemsToShow::STARS) {
+            if args.config.filter.contains(ItemsToShow::STARS) {
                 self.fill_visible_zones(&ctx);
 
                 self.paint_stars(
@@ -214,7 +232,7 @@ impl SkyMapPainter {
             self.paint_dso_items(sky_map, &ctx, PainterMode::Names)?;
 
             // Stars names
-            if config.filter.contains(ItemsToShow::STARS) {
+            if args.config.filter.contains(ItemsToShow::STARS) {
                 self.paint_stars(
                     sky_map,
                     &star_painter_params,
@@ -225,7 +243,7 @@ impl SkyMapPainter {
         }
 
         // Horizon glow
-        if config.horizon_glow.visible {
+        if args.config.horizon_glow.visible {
             self.paint_horizon_glow(&ctx)?;
         }
 
@@ -233,13 +251,13 @@ impl SkyMapPainter {
         self.paint_ground(&ctx)?;
 
         // Selected object
-        self.paint_selection(selection, &ctx)?;
+        self.paint_selection(args.selection, &ctx)?;
 
         // Optionally telescope position
-        self.paint_telescope_position(tele_pos, &ctx)?;
+        self.paint_telescope_position(args.tele_pos, &ctx)?;
 
         // Optionally camera frame
-        self.paint_camera_frame(cam_frame, &ctx)?;
+        self.paint_camera_frame(args.cam_frame, &ctx)?;
 
         Ok(())
     }
@@ -585,6 +603,32 @@ impl SkyMapPainter {
         Ok(())
     }
 
+    fn calc_rect_coords(
+        center_crd: &EqCoord,
+        horiz_angle: f64,
+        vert_angle: f64,
+        rot_angle: f64,
+    ) -> [EqCoord; 4] {
+        let dec_rot = RotMatrix::new(0.5 * PI - center_crd.dec);
+        let ra_rot = RotMatrix::new(PI / 2.0 - center_crd.ra);
+
+        let h = 0.5 * horiz_angle;
+        let v = 0.5 * vert_angle;
+        let len = f64::sqrt(h * h + v * v);
+
+        let angle = f64::atan2(vert_angle, horiz_angle);
+        let angles = [ angle, PI-angle, PI + angle, 2.0*PI - angle ];
+        let mut coords = [EqCoord {dec: 0.0, ra: 0.0}; 4];
+        for (a, crd) in izip!(angles, &mut coords) {
+            let eq_crd = EqCoord { dec: 0.5 * PI - len, ra: a - rot_angle };
+            let mut pt = eq_crd.to_sphere_pt();
+            pt.rotate_over_x(&dec_rot);
+            pt.rotate_over_z(&ra_rot);
+            *crd = EqCoord::from_sphere_pt(&pt);
+        }
+        coords
+    }
+
     fn paint_camera_frame(
         &mut self,
         cam_frame: &Option<CameraFrame>,
@@ -594,28 +638,39 @@ impl SkyMapPainter {
             let center_crd = ctx.view_point.crd.to_sphere_pt();
             let center_crd = ctx.eq_sphere_cvt.sphere_to_eq(&center_crd);
 
-            let dec_rot = RotMatrix::new(0.5 * PI - center_crd.dec);
-            let ra_rot = RotMatrix::new(PI / 2.0 - center_crd.ra);
-
-            let h = 0.5 * cam_frame.horiz_angle;
-            let v = 0.5 * cam_frame.vert_angle;
-            let len = f64::sqrt(h * h + v * v);
-
-            let angle = f64::atan2(cam_frame.vert_angle, cam_frame.horiz_angle);
-            let angles = [ 2.0*PI - angle, angle, PI-angle, PI + angle ];
-            let mut coords = [EqCoord {dec: 0.0, ra: 0.0}; 4];
-            for (a, crd) in izip!(angles, &mut coords) {
-                let eq_crd = EqCoord { dec: 0.5 * PI - len, ra: a - cam_frame.rot_angle };
-                let mut pt = eq_crd.to_sphere_pt();
-                pt.rotate_over_x(&dec_rot);
-                pt.rotate_over_z(&ra_rot);
-                *crd = EqCoord::from_sphere_pt(&pt);
-            }
+            let coords = Self::calc_rect_coords(
+                &center_crd,
+                cam_frame.horiz_angle,
+                cam_frame.vert_angle,
+                cam_frame.rot_angle
+            );
 
             let painter = CameraFramePainter { name: &cam_frame.name, coords };
             self.item_painter.paint(&painter, ctx, false)?;
         }
 
+        Ok(())
+    }
+
+    fn paint_platesolved_image(
+        &mut self,
+        ps_image: &Option<PlateSolvedImage>,
+        ctx:      &PaintCtx,
+    ) -> anyhow::Result<()> {
+        let Some(ps_image) = ps_image else { return Ok(()); };
+        let coords = Self::calc_rect_coords(
+            &ps_image.coord,
+            ps_image.horiz_angle,
+            ps_image.vert_angle,
+            ps_image.rot_angle
+        );
+        let painter = PlateSolvedImagePainter {
+            image: ps_image.image.clone(),
+            time: ps_image.time,
+            coords,
+            persp_pnt: &self.persp_pnt,
+        };
+        self.item_painter.paint(&painter, ctx, false)?;
         Ok(())
     }
 }
@@ -639,7 +694,7 @@ struct PaintCtx<'a> {
     pxls_per_rad:   f64,
     epoch_cvt:      &'a EpochCvt,
     eq_sphere_cvt:  &'a EqToSphereCvt,
-    sphere_scr_cvt: &'a SphereToScreenCvt
+    sphere_scr_cvt: &'a SphereToScreenCvt,
 }
 
 trait Item {
@@ -1435,27 +1490,94 @@ struct CameraFramePainter<'a> {
         ctx.cairo.close_path();
         ctx.cairo.set_source_rgb(1.0, 1.0, 1.0);
         ctx.cairo.set_dash(&[], 0.0);
-        ctx.cairo.set_line_width(1.0);
+        ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.1, 1.0));
         ctx.cairo.stroke()?;
 
-        let pt1 = &points[1];
-        let pt2 = &points[2];
-        let dx = pt2.x - pt1.x;
-        let dy = pt2.y - pt1.y;
-        let len = f64::sqrt(dx * dx + dy * dy);
-
+        let pt1 = &points[0];
+        let pt2 = &points[1];
+        ctx.cairo.set_source_rgb(1.0, 1.0, 1.0);
         ctx.cairo.set_font_size(4.0 * ctx.screen.dpmm_y());
-        let te = ctx.cairo.text_extents(&self.name)?;
-        if te.width() <= len {
-            let angle = f64::atan2(dy, dx);
-            ctx.cairo.move_to(pt1.x, pt1.y);
-            ctx.cairo.save()?;
-            ctx.cairo.rotate(angle);
-            let descent = te.height() + te.y_bearing();
-            ctx.cairo.rel_move_to(0.0, -descent);
-            ctx.cairo.show_text(&self.name)?;
-            ctx.cairo.restore()?;
+        paint_text_under_line(&ctx.cairo, pt1, pt2, self.name)?;
+
+        Ok(())
+    }
+}
+
+fn paint_text_under_line(
+    cairo: &cairo::Context,
+    pt1:   &Point2D,
+    pt2:   &Point2D,
+    text:  &str
+) -> anyhow::Result<()> {
+    let dx = pt2.x - pt1.x;
+    let dy = pt2.y - pt1.y;
+    let len = f64::sqrt(dx * dx + dy * dy);
+    let te = cairo.text_extents(text)?;
+    if te.width() <= len {
+        let angle = f64::atan2(dy, dx);
+
+        cairo.move_to(pt1.x, pt1.y);
+        cairo.save()?;
+        cairo.rotate(angle);
+        let descent = te.height() + te.y_bearing();
+        cairo.rel_move_to(0.0, -descent - 0.2 * te.height());
+        cairo.show_text(text)?;
+        cairo.restore()?;
+    }
+
+    Ok(())
+}
+
+struct PlateSolvedImagePainter<'a> {
+    image:     gdk_pixbuf::Pixbuf,
+    time:      DateTime<Utc>,
+    coords:    [EqCoord; 4],
+    persp_pnt: &'a RefCell<PerspectivePainter>,
+}
+
+impl<'a> Item for PlateSolvedImagePainter<'a> {
+    fn points_count(&self) -> usize {
+        self.coords.len()
+    }
+
+    fn point_crd(&self, index: usize) -> PainterCrd {
+        PainterCrd::Eq(self.coords[index])
+    }
+
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+        let mut persp_pnt = self.persp_pnt.borrow_mut();
+        persp_pnt.paint(
+            &ctx.cairo,
+            &self.image,
+            points[0].x as i32, points[0].y as i32,
+            points[1].x as i32, points[1].y as i32,
+            points[2].x as i32, points[2].y as i32,
+            points[3].x as i32, points[3].y as i32,
+        )?;
+
+        ctx.cairo.move_to(points[0].x, points[0].y);
+        for pt in &points[1..] {
+            ctx.cairo.line_to(pt.x, pt.y);
         }
+
+        ctx.cairo.set_antialias(ctx.config.get_antialias());
+        ctx.cairo.close_path();
+        ctx.cairo.set_source_rgb(0.5, 0.5, 0.5);
+        ctx.cairo.set_dash(&[], 0.0);
+        ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.1, 1.0));
+        ctx.cairo.stroke()?;
+
+        ctx.cairo.set_source_rgb(1.0, 1.0, 1.0);
+        ctx.cairo.set_font_size(4.0 * ctx.screen.dpmm_y());
+        let pt1 = &points[0];
+        let pt2 = &points[1];
+        ctx.cairo.set_font_size(4.0 * ctx.screen.dpmm_y());
+        let local_time: DateTime<Local> = DateTime::from(self.time);
+        let text = format!(
+            "Plate solve {}",
+            local_time.format("%Y-%m-%d %H:%M:%S").to_string()
+        );
+        paint_text_under_line(&ctx.cairo, pt1, pt2, &text)?;
 
         Ok(())
     }

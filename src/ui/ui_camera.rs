@@ -1342,15 +1342,15 @@ impl CameraUi {
             &preview_params
         );
         if let Some(rgb_bytes) = rgb_bytes {
-            self.show_preview_image(rgb_bytes, None);
+            self.show_preview_image(Some(&rgb_bytes), None);
         } else {
-            self.show_preview_image(RgbU8Data::default(), None);
+            self.show_preview_image(None, None);
         }
     }
 
     fn show_preview_image(
         &self,
-        rgb_bytes:  RgbU8Data,
+        rgb_bytes:  Option<&RgbU8Data>,
         src_params: Option<&PreviewParams>,
     ) {
         let preview_options = self.options.read().unwrap().preview.clone();
@@ -1359,43 +1359,49 @@ impl CameraUi {
             self.create_and_show_preview_image();
             return;
         }
-        let img_preview = self.builder.object::<gtk::Image>("img_preview").unwrap();
-        if rgb_bytes.bytes.is_empty() {
-            img_preview.clear();
-            return;
-        }
-        let tmr = TimeLogger::start();
-        let bytes = glib::Bytes::from_owned(rgb_bytes.bytes);
-        let mut pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
-            &bytes,
-            gtk::gdk_pixbuf::Colorspace::Rgb,
-            false,
-            8,
-            rgb_bytes.width as i32,
-            rgb_bytes.height as i32,
-            (rgb_bytes.width * 3) as i32,
-        );
-        tmr.log("Pixbuf::from_bytes");
 
-        let (img_width, img_height) = pp.img_size.get_preview_img_size(
-            rgb_bytes.orig_width,
-            rgb_bytes.orig_height
-        );
-        if (img_width != rgb_bytes.width || img_height != rgb_bytes.height)
-        && img_width > 42 && img_height > 42 {
+        let img_preview = self.builder.object::<gtk::Image>("img_preview").unwrap();
+
+        let mut is_color_image = false;
+        if let Some(rgb_bytes) = rgb_bytes {
             let tmr = TimeLogger::start();
-            pixbuf = pixbuf.scale_simple(
-                img_width as _,
-                img_height as _,
-                gtk::gdk_pixbuf::InterpType::Tiles,
-            ).unwrap();
-            tmr.log("Pixbuf::scale_simple");
+            let bytes = glib::Bytes::from_owned(rgb_bytes.bytes.clone());
+            let mut pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
+                &bytes,
+                gtk::gdk_pixbuf::Colorspace::Rgb,
+                false,
+                8,
+                rgb_bytes.width as i32,
+                rgb_bytes.height as i32,
+                (rgb_bytes.width * 3) as i32,
+            );
+            tmr.log("Pixbuf::from_bytes");
+
+            let (img_width, img_height) = pp.img_size.get_preview_img_size(
+                rgb_bytes.orig_width,
+                rgb_bytes.orig_height
+            );
+            if (img_width != rgb_bytes.width || img_height != rgb_bytes.height)
+            && img_width > 42 && img_height > 42 {
+                let tmr = TimeLogger::start();
+                pixbuf = pixbuf.scale_simple(
+                    img_width as _,
+                    img_height as _,
+                    gtk::gdk_pixbuf::InterpType::Tiles,
+                ).unwrap();
+                tmr.log("Pixbuf::scale_simple");
+            }
+            img_preview.set_pixbuf(Some(&pixbuf));
+            is_color_image = rgb_bytes.is_color_image;
+        } else {
+            img_preview.clear();
+            img_preview.set_pixbuf(None);
         }
-        img_preview.set_pixbuf(Some(&pixbuf));
+
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         ui.enable_widgets(
             false,
-            &[("cb_preview_color", rgb_bytes.is_color_image)]
+            &[("cb_preview_color", is_color_image)]
         );
     }
 
@@ -1629,14 +1635,12 @@ impl CameraUi {
             }
             FrameProcessResultData::PreviewFrame(img)
             if is_mode_current(false) => {
-                let rgb_data = std::mem::take(&mut *img.rgb_data.lock().unwrap());
-                self.show_preview_image(rgb_data, Some(&img.params));
+                self.show_preview_image(Some(&img.rgb_data), Some(&img.params));
                 show_resolution_info(img.image_width, img.image_height);
             }
             FrameProcessResultData::PreviewLiveRes(img)
             if is_mode_current(true) => {
-                let rgb_data = std::mem::take(&mut *img.rgb_data.lock().unwrap());
-                self.show_preview_image(rgb_data, Some(&img.params));
+                self.show_preview_image(Some(&img.rgb_data), Some(&img.params));
                 show_resolution_info(img.image_width, img.image_height);
             }
             FrameProcessResultData::RawFrameInfo(raw_frame_info)
