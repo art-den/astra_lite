@@ -4,7 +4,7 @@ use gtk::cairo;
 use itertools::{izip, Itertools};
 use serde::{Deserialize, Serialize};
 use crate::utils::math::linear_interpolate;
-use super::{consts::*, data::*, math::*, utils::*};
+use super::{consts::*, data::*, math::*, perspective_painter::PerspectivePainter, utils::*};
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -133,9 +133,10 @@ pub fn calc_max_star_magnitude_for_painting(mag_factor: f64) -> f32 {
 }
 
 pub struct SkyMapPainter {
-    item_painter: ItemPainter,
-    dso_ellipse:  DsoEllipse,
+    item_painter:  ItemPainter,
+    dso_ellipse:   DsoEllipse,
     visible_zones: HashSet<SkyZoneKey>,
+    persp_pnt:     PerspectivePainter,
 }
 
 impl SkyMapPainter {
@@ -144,6 +145,7 @@ impl SkyMapPainter {
             item_painter:  ItemPainter::new(),
             dso_ellipse:   DsoEllipse::new(),
             visible_zones: HashSet::new(),
+            persp_pnt:     PerspectivePainter::new(),
         }
     }
 

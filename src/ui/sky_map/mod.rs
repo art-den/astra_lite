@@ -7,3 +7,4 @@ pub mod utils;
 
 mod consts;
 mod solar_system;
+mod perspective_painter;

@@ -21,6 +21,7 @@ pub struct SkymapWidget {
     skymap:          RefCell<Option<Rc<SkyMap>>>,
     evt_box:         gtk::EventBox,
     draw_area:       gtk::DrawingArea,
+    painter:         RefCell<SkyMapPainter>,
     view_point:      RefCell<ViewPoint>,
     config:          RefCell<PaintConfig>,
     mpress:          RefCell<Option<MousePressedData>>,
@@ -48,6 +49,7 @@ impl SkymapWidget {
             skymap:          RefCell::new(None),
             evt_box:         evt_box.clone(),
             draw_area:       da.clone(),
+            painter:         RefCell::new(SkyMapPainter::new()),
             view_point:      RefCell::new(ViewPoint::new()),
             config:          RefCell::new(PaintConfig::default()),
             mpress:          RefCell::new(None),
@@ -286,7 +288,7 @@ impl SkymapWidget {
         let config = self.config.borrow();
         let observer = self.observer.borrow();
         let time = self.time.borrow();
-        let mut painter = SkyMapPainter::new();
+        let mut painter = self.painter.borrow_mut();
         let scr = Screen::new(da);
         let selection = self.selected_obj.borrow();
         let telescope_pos = self.telescope_pos.borrow();

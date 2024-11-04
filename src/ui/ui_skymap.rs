@@ -949,8 +949,7 @@ impl MapUi {
             result.push(FoundItem{ obj, above_horiz: hcrd.alt > 0.0 });
         }
         result.sort_by(|obj1, obj2| {
-            match (obj1.above_horiz, obj2.above_horiz)
-            {
+            match (obj1.above_horiz, obj2.above_horiz) {
                 (true, true)|
                 (false, false) => std::cmp::Ordering::Equal,
                 (true, false) => std::cmp::Ordering::Less,

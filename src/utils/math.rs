@@ -1,4 +1,6 @@
-use std::ops::{Add, Div};
+#![allow(dead_code)]
+
+use std::{fmt::Debug, ops::{Add, Div}};
 
 use itertools::*;
 
@@ -40,7 +42,6 @@ fn test_median4() {
     }
 }
 
-
 pub fn median5<T: core::cmp::Ord + Copy>(a: T, b: T, c: T, d: T, e: T) -> T {
     let f = T::max(T::min(a, b), T::min(c, d));
     let g = T::min(T::max(a, b), T::max(c, d));
@@ -60,45 +61,100 @@ pub fn linear_interpolate(x: f64, x1: f64, x2: f64, y1: f64, y2: f64) -> f64 {
     (x - x1) * (y2 - y1) / (x2 - x1) + y1
 }
 
-fn det2(
-    a11: f64, a12: f64,
-    a21: f64, a22: f64
-) -> f64 {
-    a11 * a22 - a12 * a21
+pub struct Mat2 {
+    pub a11: f64, pub a12: f64,
+    pub a21: f64, pub a22: f64,
 }
 
-fn det3(
-    a11: f64, a12: f64, a13: f64,
-    a21: f64, a22: f64, a23: f64,
-    a31: f64, a32: f64, a33: f64
-) -> f64 {
-    a11 * det2(a22, a23, a32, a33) -
-    a12 * det2(a21, a23, a31, a33) +
-    a13 * det2(a21, a22, a31, a32)
+impl Mat2 {
+    pub fn new(a11: f64, a12: f64, a21: f64, a22: f64) -> Self {
+        Self { a11, a12, a21, a22 }
+    }
+
+    pub fn det(&self) -> f64 {
+        self.a11 * self.a22 - self.a12 * self.a21
+    }
+}
+
+pub struct Mat3 {
+    pub a11: f64, pub a12: f64, pub a13: f64,
+    pub a21: f64, pub a22: f64, pub a23: f64,
+    pub a31: f64, pub a32: f64, pub a33: f64,
+}
+
+impl Debug for Mat3 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("\n{:12.6e} {:12.6e} {:12.6e}", self.a11, self.a12, self.a13))?;
+        f.write_fmt(format_args!("\n{:12.6e} {:12.6e} {:12.6e}", self.a21, self.a22, self.a23))?;
+        f.write_fmt(format_args!("\n{:12.6e} {:12.6e} {:12.6e}\n", self.a31, self.a32, self.a33))?;
+        std::fmt::Result::Ok(())
+    }
+}
+
+impl Mat3 {
+    pub fn new(
+        a11: f64, a12: f64, a13: f64,
+        a21: f64, a22: f64, a23: f64,
+        a31: f64, a32: f64, a33: f64,
+    ) -> Self {
+        Self {
+            a11, a12, a13,
+            a21, a22, a23,
+            a31, a32, a33,
+        }
+    }
+
+    pub fn det(&self) -> f64 {
+        self.a11 * Mat2::new(self.a22, self.a23, self.a32, self.a33).det() -
+        self.a12 * Mat2::new(self.a21, self.a23, self.a31, self.a33).det() +
+        self.a13 * Mat2::new(self.a21, self.a22, self.a31, self.a32).det()
+    }
+
+    pub fn inv(&self) -> Self {
+        let adj11 =  Mat2::new(self.a22, self.a23, self.a32, self.a33).det();
+        let adj21 = -Mat2::new(self.a21, self.a23, self.a31, self.a33).det();
+        let adj31 =  Mat2::new(self.a21, self.a22, self.a31, self.a32).det();
+
+        let adj12 = -Mat2::new(self.a12, self.a13, self.a32, self.a33).det();
+        let adj22 =  Mat2::new(self.a11, self.a13, self.a31, self.a33).det();
+        let adj32 = -Mat2::new(self.a11, self.a12, self.a31, self.a32).det();
+
+        let adj13 =  Mat2::new(self.a12, self.a13, self.a22, self.a23).det();
+        let adj23 = -Mat2::new(self.a11, self.a13, self.a21, self.a23).det();
+        let adj33 =  Mat2::new(self.a11, self.a12, self.a21, self.a22).det();
+
+        let det = self.det();
+
+        Mat3 {
+            a11: adj11/det, a12: adj12/det, a13: adj13/det,
+            a21: adj21/det, a22: adj22/det, a23: adj23/det,
+            a31: adj31/det, a32: adj32/det, a33: adj33/det
+        }
+    }
 }
 
 pub fn linear_solve2(
     a11: f64, a12: f64, b1: f64,
     a21: f64, a22: f64, b2: f64,
 ) -> Option<(f64, f64)> {
-    let det = det2(
+    let det = Mat2{
         a11, a12,
         a21, a22,
-    );
+    }.det();
 
     if det == 0.0 {
         return None;
     }
 
-    let det1 = det2(
+    let det1 = Mat2::new(
         b1, a12,
         b2, a22,
-    );
+    ).det();
 
-    let det2 = det2(
+    let det2 = Mat2::new(
         a11, b1,
         a21, b2,
-    );
+    ).det();
 
     Some((det1/det, det2/det))
 }
@@ -127,33 +183,33 @@ fn linear_solve3(
     a21: f64, a22: f64, a23: f64, b2: f64,
     a31: f64, a32: f64, a33: f64, b3: f64
 ) -> Option<(f64, f64, f64)> {
-    let det = det3(
+    let det = Mat3::new(
         a11, a12, a13,
         a21, a22, a23,
         a31, a32, a33
-    );
+    ).det();
 
     if det == 0.0 {
         return None;
     }
 
-    let det1 = det3(
+    let det1 = Mat3::new(
         b1, a12, a13,
         b2, a22, a23,
         b3, a32, a33
-    );
+    ).det();
 
-    let det2 = det3(
+    let det2 = Mat3::new(
         a11, b1, a13,
         a21, b2, a23,
         a31, b3, a33
-    );
+    ).det();
 
-    let det3 = det3(
+    let det3 = Mat3::new(
         a11, a12, b1,
         a21, a22, b2,
         a31, a32, b3
-    );
+    ).det();
 
     Some((det1/det, det2/det, det3/det))
 }
