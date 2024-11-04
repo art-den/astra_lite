@@ -290,6 +290,7 @@ impl PlateSolverIface for AstrometryPlateSolver {
                     width: result_width.unwrap_or(0.0),
                     height: result_height.unwrap_or(0.0),
                     rotation: result_rot.unwrap_or(0.0),
+                    time: Utc::now(),
                 };
                 return Ok(PlateSolveResult::Done(result));
             } else {

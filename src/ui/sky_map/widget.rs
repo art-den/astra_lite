@@ -91,11 +91,6 @@ impl SkymapWidget {
         self.draw_area.queue_draw();
     }
 
-    pub fn set_platesolved_image(&self, image: Option<PlateSolvedImage>) {
-        *self.solved_image.borrow_mut() = image;
-        self.draw_area.queue_draw();
-    }
-
     pub fn time(&self) -> NaiveDateTime {
         *self.time.borrow()
     }
@@ -106,11 +101,13 @@ impl SkymapWidget {
         config:        &PaintConfig,
         telescope_pos: &Option<EqCoord>,
         camera_frame:  &Option<CameraFrame>,
+        solved_image:  &Option<PlateSolvedImage>,
     ) {
         *self.time.borrow_mut() = time.clone();
         *self.config.borrow_mut() = config.clone();
         *self.telescope_pos.borrow_mut() = telescope_pos.clone();
         *self.camera_frame.borrow_mut() = camera_frame.clone();
+        *self.solved_image.borrow_mut() = solved_image.clone();
 
         if self.ani_goto_data.borrow().is_some() {
             return;

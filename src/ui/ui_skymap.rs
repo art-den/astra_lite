@@ -2,7 +2,7 @@ use std::{cell::{Cell, RefCell}, collections::HashMap, rc::Rc, sync::{Arc, RwLoc
 use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
-use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::*}, indi::{self, value_to_sexagesimal}, options::*, utils::io_utils::*, core::frame_processing::*};
+use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*}, indi::{self, value_to_sexagesimal}, options::*, plate_solve::PlateSolveOkResult, utils::io_utils::*};
 use super::{gtk_utils::{self, DEFAULT_DPMM}, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, math::*}, ui_main::*, ui_skymap_options::SkymapOptionsDialog, utils::*};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
@@ -48,7 +48,8 @@ pub fn init_ui(
         goto_started:  Cell::new(false),
         closed:        Cell::new(false),
         cam_rotation:  RefCell::new(HashMap::new()),
-        solved_img:    RefCell::new(None),
+        ps_img:        RefCell::new(None),
+        ps_result:     RefCell::new(None),
         self_:         RefCell::new(None),
         map_widget,
     });
@@ -102,6 +103,7 @@ pub struct UiOptions {
     paned_pos1: i32,
     pub paint:  PaintConfig,
     show_ccd:   bool,
+    show_ps:    bool,
     exp_dt:     bool,
 }
 
@@ -112,6 +114,7 @@ impl Default for UiOptions {
             paint:      PaintConfig::default(),
             show_ccd:   true,
             exp_dt:     true,
+            show_ps:    true,
         }
     }
 }
@@ -233,7 +236,8 @@ struct MapUi {
     goto_started:  Cell<bool>,
     closed:        Cell<bool>,
     cam_rotation:  RefCell<HashMap<String, f64>>,
-    solved_img:    RefCell<Option<gdk::gdk_pixbuf::Pixbuf>>,
+    ps_img:        RefCell<Option<gdk::gdk_pixbuf::Pixbuf>>,
+    ps_result:     RefCell<Option<PlateSolveOkResult>>,
     self_:         RefCell<Option<Rc<MapUi>>>
 }
 
@@ -347,8 +351,9 @@ impl MapUi {
         connect_obj_visibility_changed("chb_show_galaxies");
         connect_obj_visibility_changed("chb_show_nebulas");
         connect_obj_visibility_changed("chb_show_sclusters");
-        connect_obj_visibility_changed("chb_sm_show_ccd");
         connect_obj_visibility_changed("chb_sm_show_eq_grid");
+        connect_obj_visibility_changed("chb_sm_show_ccd");
+        connect_obj_visibility_changed("chb_sm_show_ps");
 
         self.map_widget.add_obj_sel_handler(
             clone!(@weak self as self_ => move |object| {
@@ -428,19 +433,7 @@ impl MapUi {
                 cam_rotation.insert(ps_event.cam_name, ps_event.result.rotation);
                 drop(cam_rotation);
 
-                let solved_img = self.solved_img.borrow();
-                if let Some(solved_img) = &*solved_img{
-                    let ps_image = PlateSolvedImage {
-                        image:       solved_img.clone(),
-                        coord:       ps_event.result.crd_now,
-                        horiz_angle: ps_event.result.width,
-                        vert_angle:  ps_event.result.height,
-                        rot_angle:   ps_event.result.rotation,
-                        time:        Utc::now(),
-                    };
-                    self.map_widget.set_platesolved_image(Some(ps_image));
-                }
-                drop(solved_img);
+                *self.ps_result.borrow_mut() = Some(ps_event.result.clone());
 
                 self.update_skymap_widget(true);
             }
@@ -468,8 +461,9 @@ impl MapUi {
         ui.set_prop_bool("chb_show_galaxies.active", opts.paint.filter.contains(ItemsToShow::GALAXIES));
         ui.set_prop_bool("chb_show_nebulas.active", opts.paint.filter.contains(ItemsToShow::NEBULAS));
         ui.set_prop_bool("chb_show_sclusters.active", opts.paint.filter.contains(ItemsToShow::CLUSTERS));
-        ui.set_prop_bool("chb_sm_show_ccd.active", opts.show_ccd);
         ui.set_prop_bool("chb_sm_show_eq_grid.active", opts.paint.eq_grid.visible);
+        ui.set_prop_bool("chb_sm_show_ccd.active", opts.show_ccd);
+        ui.set_prop_bool("chb_sm_show_ps.active", opts.show_ps);
         ui.set_range_value("scl_max_dso_mag", opts.paint.max_dso_mag as f64);
         ui.set_prop_bool("exp_sm_dt.expanded", opts.exp_dt);
 
@@ -497,8 +491,10 @@ impl MapUi {
         opts.paint.filter.set(ItemsToShow::GALAXIES, ui.prop_bool("chb_show_galaxies.active"));
         opts.paint.filter.set(ItemsToShow::NEBULAS, ui.prop_bool("chb_show_nebulas.active"));
         opts.paint.filter.set(ItemsToShow::CLUSTERS, ui.prop_bool("chb_show_sclusters.active"));
-        opts.show_ccd = ui.prop_bool("chb_sm_show_ccd.active");
+
         opts.paint.eq_grid.visible = ui.prop_bool("chb_sm_show_eq_grid.active");
+        opts.show_ccd = ui.prop_bool("chb_sm_show_ccd.active");
+        opts.show_ps = ui.prop_bool("chb_sm_show_ps.active");
     }
 
     fn handler_action_options(self: &Rc<Self>) {
@@ -573,6 +569,7 @@ impl MapUi {
 
             let config = self.ui_options.borrow();
             let show_ccd = config.show_ccd;
+            let show_ps_image = config.show_ps;
             let paint_config = config.paint.clone();
             drop(config);
 
@@ -629,11 +626,31 @@ impl MapUi {
                 None
             };
 
+            let ps_img = self.ps_img.borrow();
+            let ps_result = self.ps_result.borrow();
+            let solved_image =
+                if let (Some(solved_img), Some(ps_result), true)
+                = (&*ps_img, &*ps_result, show_ps_image) {
+                    Some(PlateSolvedImage {
+                        image:       solved_img.clone(),
+                        coord:       ps_result.crd_now.clone(),
+                        horiz_angle: ps_result.width,
+                        vert_angle:  ps_result.height,
+                        rot_angle:   ps_result.rotation,
+                        time:        ps_result.time,
+                    })
+                } else {
+                    None
+                };
+            drop(ps_result);
+            drop(ps_img);
+
             self.map_widget.set_paint_config(
                 &user_time,
                 &paint_config,
                 &telescope_pos,
-                &cam_frame
+                &cam_frame,
+                &solved_image
             );
         }
     }
@@ -1248,6 +1265,6 @@ impl MapUi {
             data.rgb_data.height as i32,
             (data.rgb_data.width * 3) as i32,
         );
-        *self.solved_img.borrow_mut() = Some(pixbuf);
+        *self.ps_img.borrow_mut() = Some(pixbuf);
     }
 }

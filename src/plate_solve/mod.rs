@@ -1,22 +1,24 @@
 use astrometry::*;
+use chrono::{DateTime, Utc};
 use crate::{image::{image::Image, stars::Stars}, options::PlateSolverType, ui::sky_map::math::EqCoord};
 
 mod astrometry;
 
 #[derive(Debug, Default, Clone)]
 pub struct PlateSolveConfig {
-    pub eq_coord: Option<EqCoord>,
-    pub time_out: u32, // in seconds
+    pub eq_coord:       Option<EqCoord>,
+    pub time_out:       u32, // in seconds
     pub blind_time_out: u32, // in seconds
 }
 
 #[derive(Debug, Clone)]
 pub struct PlateSolveOkResult {
     pub crd_j2000: EqCoord,
-    pub crd_now: EqCoord,
-    pub width: f64,
-    pub height: f64,
-    pub rotation: f64,
+    pub crd_now:   EqCoord,
+    pub width:     f64,
+    pub height:    f64,
+    pub rotation:  f64,
+    pub time:      DateTime<Utc>,
 }
 
 pub enum PlateSolveResult {

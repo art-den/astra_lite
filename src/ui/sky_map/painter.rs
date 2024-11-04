@@ -42,6 +42,7 @@ pub struct CameraFrame {
     pub rot_angle: f64,
 }
 
+#[derive(Clone)]
 pub struct PlateSolvedImage {
     pub image: gdk_pixbuf::Pixbuf,
     pub coord: EqCoord,
