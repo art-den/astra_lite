@@ -1255,8 +1255,13 @@ impl MapUi {
     }
 
     fn create_plate_solve_preview(&self, data: &Preview8BitImgData) {
+        if data.rgb_data.width == 0
+        || data.rgb_data.height == 0 {
+            *self.ps_img.borrow_mut() = None;
+        }
+
         let bytes = glib::Bytes::from_owned(data.rgb_data.bytes.clone());
-        let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
+        let mut pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
             &bytes,
             gtk::gdk_pixbuf::Colorspace::Rgb,
             false,
@@ -1265,6 +1270,21 @@ impl MapUi {
             data.rgb_data.height as i32,
             (data.rgb_data.width * 3) as i32,
         );
+
+        const MAX_SIZE: usize = 2000;
+
+        if data.rgb_data.width > MAX_SIZE
+        || data.rgb_data.height > MAX_SIZE {
+            let max_size = usize::max(data.rgb_data.width, data.rgb_data.height);
+            let new_width = MAX_SIZE * data.rgb_data.width / max_size;
+            let new_height = MAX_SIZE * data.rgb_data.height / max_size;
+            pixbuf = pixbuf.scale_simple(
+                new_width as _,
+                new_height as _,
+                gtk::gdk_pixbuf::InterpType::Tiles,
+            ).unwrap();
+        }
+
         *self.ps_img.borrow_mut() = Some(pixbuf);
     }
 }
