@@ -1258,6 +1258,7 @@ impl MapUi {
         if data.rgb_data.width == 0
         || data.rgb_data.height == 0 {
             *self.ps_img.borrow_mut() = None;
+            return;
         }
 
         let bytes = glib::Bytes::from_owned(data.rgb_data.bytes.clone());
