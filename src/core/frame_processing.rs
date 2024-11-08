@@ -4,7 +4,7 @@ use bitflags::bitflags;
 use chrono::{DateTime, Local, Utc};
 
 use crate::{
-    core::{core::ModeType, utils::{FileNameArg, FileNameUtils}}, image::{histogram::*, image::*, image_stacker::ImageStacker, info::*, raw::*, stars_offset::*}, indi, options::*, utils::{log_utils::*, math::linear_interpolate}
+    core::{core::ModeType, utils::{FileNameArg, FileNameUtils}}, image::{histogram::*, image::*, stacker::Stacker, info::*, raw::*, stars_offset::*}, indi, options::*, utils::{log_utils::*, math::linear_interpolate}
 };
 
 pub enum ResultImageInfo {
@@ -106,7 +106,7 @@ impl CalibrData {
 }
 
 pub struct LiveStackingData {
-    pub stacker:  RwLock<ImageStacker>,
+    pub stacker:  RwLock<Stacker>,
     pub image:    RwLock<Image>,
     pub hist:     RwLock<Histogram>,
     pub info:     RwLock<ResultImageInfo>,
@@ -116,7 +116,7 @@ pub struct LiveStackingData {
 impl LiveStackingData {
     pub fn new() -> Self {
         Self {
-            stacker:  RwLock::new(ImageStacker::new()),
+            stacker:  RwLock::new(Stacker::new()),
             image:    RwLock::new(Image::new_empty()),
             hist:     RwLock::new(Histogram::new()),
             info:     RwLock::new(ResultImageInfo::None),

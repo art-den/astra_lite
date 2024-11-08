@@ -1276,9 +1276,9 @@ impl MapUi {
 
         if data.rgb_data.width > MAX_SIZE
         || data.rgb_data.height > MAX_SIZE {
-            let max_size = usize::max(data.rgb_data.width, data.rgb_data.height);
-            let new_width = MAX_SIZE * data.rgb_data.width / max_size;
-            let new_height = MAX_SIZE * data.rgb_data.height / max_size;
+            let longest_size = usize::max(data.rgb_data.width, data.rgb_data.height);
+            let new_width = MAX_SIZE * data.rgb_data.width / longest_size;
+            let new_height = MAX_SIZE * data.rgb_data.height / longest_size;
             pixbuf = pixbuf.scale_simple(
                 new_width as _,
                 new_height as _,
