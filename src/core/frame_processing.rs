@@ -4,7 +4,7 @@ use bitflags::bitflags;
 use chrono::{DateTime, Local, Utc};
 
 use crate::{
-    core::{core::ModeType, utils::{FileNameArg, FileNameUtils}}, image::{histogram::*, image::*, stacker::Stacker, info::*, raw::*, stars_offset::*}, indi, options::*, utils::{log_utils::*, math::linear_interpolate}
+    core::{core::ModeType, utils::{FileNameArg, FileNameUtils}}, image::{histogram::*, image::*, info::*, io::{load_raw_image_from_fits_file, load_raw_image_from_fits_stream}, raw::*, stacker::Stacker, stars_offset::*}, indi, options::*, utils::{log_utils::*, math::linear_interpolate}
 };
 
 pub enum ResultImageInfo {
@@ -271,7 +271,7 @@ fn create_raw_image_from_blob(
 ) -> anyhow::Result<RawImage> {
     if blob_prop_value.format == ".fits" {
         let mem_stream = Cursor::new(blob_prop_value.data.as_slice());
-        let raw_image = RawImage::new_from_fits_stream(mem_stream)?;
+        let raw_image = load_raw_image_from_fits_stream(mem_stream)?;
         return Ok(raw_image);
     }
 
@@ -281,7 +281,7 @@ fn create_raw_image_from_blob(
 fn create_raw_image_from_file(file_name: &Path) -> anyhow::Result<RawImage> {
     let ext = file_name.extension().unwrap_or_default();
     if ext.eq_ignore_ascii_case("fit") || ext.eq_ignore_ascii_case("fits") {
-        let image = RawImage::new_from_fits_file(file_name)?;
+        let image = load_raw_image_from_fits_file(file_name)?;
         Ok(image)
     } else {
         anyhow::bail!("Unsupported file extension: {:?}", ext);
@@ -455,7 +455,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
                 file_name.to_str().unwrap_or_default()
             );
             let tmr = TimeLogger::start();
-            let subtract_image = RawImage::new_from_fits_file(file_name)
+            let subtract_image = load_raw_image_from_fits_file(file_name)
                 .map_err(|e| anyhow::anyhow!(
                     "Error '{}'\nwhen reading master dark '{}'",
                     e.to_string(),
@@ -483,7 +483,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
         calibr.master_flat = None;
         if let Some(file_name) = &params.flat_fname {
             let tmr = TimeLogger::start();
-            let mut master_flat = RawImage::new_from_fits_file(file_name)
+            let mut master_flat = load_raw_image_from_fits_file(file_name)
                 .map_err(|e| anyhow::anyhow!(
                     "Error '{}'\nreading master flat '{}'",
                     e.to_string(),

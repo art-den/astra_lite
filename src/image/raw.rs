@@ -50,7 +50,7 @@ pub enum CfaColor { None, R, G, B }
 type CfaArray = [&'static [CfaColor; 2]];
 
 impl CfaType {
-    fn get_array(&self) -> &'static CfaArray {
+    pub fn get_array(&self) -> &'static CfaArray {
         use CfaColor::*;
         match self {
             CfaType::BGGR => &[&[B, G], &[G, R]],
@@ -61,7 +61,7 @@ impl CfaType {
         }
     }
 
-    fn from_str(cfa_str: &str) -> Self {
+    pub fn from_str(cfa_str: &str) -> Self {
         match cfa_str {
             "BGGR" => CfaType::BGGR,
             "RGBG" => CfaType::RGBG,
@@ -93,7 +93,7 @@ pub enum FrameType {
 }
 
 impl FrameType {
-    fn from_str(text: &str, def: FrameType) -> Self {
+    pub fn from_str(text: &str, def: FrameType) -> Self {
         match text {
             "Light" => FrameType::Lights,
             "Flat"  => FrameType::Flats,
@@ -170,65 +170,11 @@ impl Clone for RawImage {
 }
 
 impl RawImage {
-    pub fn new_from_fits_stream(
-        mut stream: impl SeekNRead
-    ) -> anyhow::Result<RawImage> {
-        let reader = FitsReader::new(&mut stream)?;
-        let Some(image_hdu) = reader.headers.iter().find(|hdu| {
-            hdu.dims().len() == 2
-        }) else {
-            anyhow::bail!("No RAW image found in fits data");
-        };
-
-        let bitdepth = image_hdu.get_i64("BITDEPTH").unwrap_or(image_hdu.bitpix() as i64) as i32;
-        if bitdepth > 16 {
-            anyhow::bail!("BITDEPTH > 16 ({}) is not supported", bitdepth);
-        }
-        if bitdepth < 0 {
-            anyhow::bail!("FITS files with float values is not supported");
-        }
-
-        let width       = image_hdu.dims()[0];
-        let height      = image_hdu.dims()[1];
-        let exposure    = image_hdu.get_f64("EXPTIME").unwrap_or_default();
-        let integr_time = image_hdu.get_f64("TOTALEXP");
-        let bayer       = image_hdu.get_str("BAYERPAT").unwrap_or_default();
-        let bin         = image_hdu.get_f64("XBINNING").unwrap_or(1.0) as u8;
-        let gain        = image_hdu.get_f64("GAIN").unwrap_or(0.0) as i32;
-        let offset      = image_hdu.get_f64("OFFSET").unwrap_or(0.0) as i32;
-        let frame_str   = image_hdu.get_str("FRAME");
-        let time_str    = image_hdu.get_str("DATE-OBS").unwrap_or_default();
-        let camera      = image_hdu.get_str("INSTRUME").unwrap_or_default().to_string();
-        let ccd_temp    = image_hdu.get_f64("CCD-TEMP");
-
-        let max_value = ((1 << bitdepth) - 1) as u16;
-        let cfa = CfaType::from_str(&bayer);
-        let cfa_arr = cfa.get_array();
-        let frame_type = FrameType::from_str(
-            frame_str.as_deref().unwrap_or_default(),
-            FrameType::Lights
-        );
-
-        let time =
-            NaiveDateTime::parse_from_str(time_str, "%Y-%m-%dT%H:%M:%S%.3f")
-                .map(|dt| Utc.from_utc_datetime(&dt))
-                .ok();
-
-        let info = RawImageInfo {
-            time, width, height, gain, offset, cfa, bin,
-            max_value, frame_type, exposure, integr_time,
-            camera, ccd_temp,
-            calibr_methods: CalibrMethods::empty(),
-        };
-
-        let data = FitsReader::read_data(&image_hdu, &mut stream)?;
-
-        Ok(Self {info, data, cfa_arr})
-    }
-
-    pub fn new_from_fits_file(file_name: &Path) -> anyhow::Result<RawImage> {
-        let mut file = File::open(file_name)?;
-        Self::new_from_fits_stream(&mut file)
+    pub fn new(
+        info:    RawImageInfo,
+        data:    Vec<u16>,
+        cfa_arr: &'static CfaArray) -> Self {
+        Self { info, data, cfa_arr }
     }
 
     pub fn save_to_fits_file(&self, file_name: &Path) -> anyhow::Result<()> {

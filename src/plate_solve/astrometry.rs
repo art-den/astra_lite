@@ -1,6 +1,6 @@
 use std::{io::Read, path::{Path, PathBuf}};
 use chrono::Utc;
-use crate::{image::{image::Image, simple_fits::*}, ui::sky_map::math::{arcmin_to_radian, degree_to_radian, j2000_time, radian_to_degree, EpochCvt}};
+use crate::{image::{image::Image, io::save_image_layer_to_tif_file, simple_fits::*}, ui::sky_map::math::{arcmin_to_radian, degree_to_radian, j2000_time, radian_to_degree, EpochCvt}};
 use super::*;
 
 const EXECUTABLE_FNAME: &str = "solve-field";
@@ -96,7 +96,7 @@ impl AstrometryPlateSolver {
         let file_name = format!("astralite_platesolve_{}.tif", rand::random::<u64>());
         let temp_file = std::env::temp_dir().join(&file_name);
         log::debug!("Saving image into {:?} for plate solving...", temp_file);
-        layer.save_to_tiff(&temp_file)?;
+        save_image_layer_to_tif_file(layer, &temp_file)?;
         self.file_name = Some(temp_file.clone());
         self.mode = Mode::Image;
         Ok(())

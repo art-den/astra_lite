@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use gtk::{gdk::{cairo, gdk_pixbuf}, prelude::*};
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -103,13 +101,11 @@ impl PerspectivePainter {
         };
 
         if width * height > 100_000 {
-            println!("p");
             self.data
                 .par_chunks_exact_mut(4 * width)
                 .enumerate()
                 .for_each(process_row_fun);
         } else {
-            println!("-");
             self.data
                 .chunks_exact_mut(4 * width)
                 .enumerate()

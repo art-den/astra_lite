@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::{path::Path, io::{BufWriter, BufReader}, fs::File, sync::Arc};
+use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use itertools::*;
 use rayon::prelude::*;
@@ -243,26 +243,6 @@ impl ImageLayer<u16> {
                     }
                 }
             });
-    }
-
-    pub fn save_to_tiff(&self, file_name: &Path) -> anyhow::Result<()> {
-        use tiff::encoder::*;
-        let mut file = BufWriter::new(File::create(file_name)?);
-        let mut decoder = TiffEncoder::new(&mut file)?;
-        let mut tiff = decoder.new_image::<colortype::Gray16>(
-            self.width as u32,
-            self.height as u32
-        )?;
-        tiff.rows_per_strip(256)?;
-        let mut pos = 0_usize;
-        loop {
-            let samples_count = tiff.next_strip_sample_count() as usize;
-            if samples_count == 0 { break; }
-            tiff.write_strip(&self.data[pos..pos+samples_count])?;
-            pos += samples_count;
-        }
-        tiff.finish()?;
-        Ok(())
     }
 }
 
@@ -810,154 +790,6 @@ impl Image {
         self.r.remove_gradient();
         self.g.remove_gradient();
         self.b.remove_gradient();
-    }
-
-    pub fn load_from_file(&mut self, file_name: &Path) -> anyhow::Result<()> {
-        let ext = file_name.extension().unwrap_or_default().to_str().unwrap_or_default();
-        if ext.eq_ignore_ascii_case("tif") || ext.eq_ignore_ascii_case("tiff") {
-            self.load_from_tiff_file(file_name)
-        } else {
-            anyhow::bail!("Format is not supported")
-        }
-    }
-
-    pub fn save_to_tiff(&self, file_name: &Path) -> anyhow::Result<()> {
-        if self.is_monochrome() {
-            self.l.save_to_tiff(file_name)?;
-        }
-        else if self.is_color() {
-            use tiff::encoder::*;
-            let mut file = BufWriter::new(File::create(file_name)?);
-            let mut decoder = TiffEncoder::new(&mut file)?;
-
-            let mut tiff = decoder.new_image::<colortype::RGB16>(
-                self.width() as u32,
-                self.height() as u32
-            )?;
-            tiff.rows_per_strip(64)?;
-            let mut strip_data = Vec::new();
-            let mut pos = 0_usize;
-            loop {
-                let mut samples_count = tiff.next_strip_sample_count() as usize;
-                if samples_count == 0 { break; }
-                samples_count /= 3;
-                strip_data.clear();
-                let r_strip = &self.r.data[pos..pos+samples_count];
-                let g_strip = &self.g.data[pos..pos+samples_count];
-                let b_strip = &self.b.data[pos..pos+samples_count];
-                for (r, g, b) in izip!(r_strip, g_strip, b_strip) {
-                    strip_data.push(*r);
-                    strip_data.push(*g);
-                    strip_data.push(*b);
-                }
-                tiff.write_strip(&strip_data)?;
-                pos += samples_count;
-            }
-            tiff.finish()?;
-        } else {
-            panic!("Internal error");
-        }
-        Ok(())
-    }
-
-    pub fn load_from_tiff_file(&mut self, file_name: &Path) -> anyhow::Result<()> {
-        use tiff::decoder::*;
-
-        fn assign_img_data<S: Copy>(
-            src:    &[S],
-            img:    &mut Image,
-            y1:     usize,
-            y2:     usize,
-            is_rgb: bool,
-            cvt:    fn (from: S) -> u16
-        ) -> anyhow::Result<()> {
-            let from = y1 * img.width();
-            let to = y2 * img.width();
-            if is_rgb {
-                let r_dst = &mut img.r.as_slice_mut()[from..to];
-                let g_dst = &mut img.g.as_slice_mut()[from..to];
-                let b_dst = &mut img.b.as_slice_mut()[from..to];
-                for (dr, dg, db, (sr, sg, sb))
-                in izip!(r_dst, g_dst, b_dst, src.iter().tuples()) {
-                    *dr = cvt(*sr);
-                    *dg = cvt(*sg);
-                    *db = cvt(*sb);
-                }
-            } else {
-                let l_dst = &mut img.l.as_slice_mut()[from..to];
-                for (d, s) in izip!(l_dst, src.iter()) {
-                    *d = cvt(*s);
-                }
-            }
-            Ok(())
-        }
-
-        let file = BufReader::new(File::open(file_name)?);
-        let mut decoder = Decoder::new(file)?;
-        let (width, height) = decoder.dimensions()?;
-        let is_rgb = match decoder.colortype()? {
-            tiff::ColorType::Gray(_) => {
-                self.make_monochrome(width as usize, height as usize, 0, u16::MAX);
-                false
-            }
-            tiff::ColorType::RGB(_) => {
-                self.make_color(width as usize, height as usize, 0, u16::MAX);
-                true
-            }
-            ct =>
-                anyhow::bail!("Color type {:?} unsupported", ct)
-        };
-
-        let chunk_size_y = decoder.chunk_dimensions().1 as usize;
-        let chunks_cnt = decoder.strip_count()? as usize;
-        let height = self.height();
-        for chunk_index in 0..chunks_cnt {
-            let chunk = decoder.read_chunk(chunk_index as u32)?;
-            let y1 = (chunk_index * chunk_size_y) as usize;
-            let y2 = (y1 + chunk_size_y).min(height);
-            match chunk {
-                DecodingResult::U8(data) =>
-                    assign_img_data(
-                        &data,
-                        self,
-                        y1, y2,
-                        is_rgb,
-                        |v| v as u16 * 256
-                    ),
-
-                DecodingResult::U16(data) =>
-                    assign_img_data(
-                        &data,
-                        self,
-                        y1, y2,
-                        is_rgb,
-                        |v| v
-                    ),
-
-                DecodingResult::F32(data) =>
-                    assign_img_data(
-                        &data,
-                        self,
-                        y1, y2,
-                        is_rgb,
-                        |v| (v as f64 * u16::MAX as f64) as u16
-                    ),
-
-                DecodingResult::F64(data) =>
-                    assign_img_data(
-                        &data,
-                        self,
-                        y1, y2,
-                        is_rgb,
-                        |v| (v * u16::MAX as f64) as u16
-                    ),
-
-                _ =>
-                    Err(anyhow::anyhow!("Format unsupported"))
-            }?;
-        }
-
-        Ok(())
     }
 }
 

@@ -4,7 +4,7 @@ use gtk::{cairo, glib::{self, clone}, prelude::*};
 use serde::{Serialize, Deserialize};
 use crate::{
     core::{consts::*, core::*, frame_processing::*},
-    image::{histogram::*, image::RgbU8Data, info::*, raw::{CalibrMethods, FrameType}, stars_offset::Offset},
+    image::{histogram::*, image::RgbU8Data, info::*, io::save_image_to_tif_file, raw::{CalibrMethods, FrameType}, stars_offset::Offset},
     indi,
     options::*,
     ui::gtk_utils::*,
@@ -1577,7 +1577,8 @@ impl CameraUi {
                     let Some(file_name) = ask_to_select_name("preview") else {
                         return Ok(())
                     };
-                    image.read().unwrap().save_to_tiff(&file_name)?;
+                    let image = image.read().unwrap();
+                    save_image_to_tif_file(&image, &file_name)?;
                 }
                 PreviewSource::LiveStacking => {
                     let stacker = &self.core.live_stacking().stacker;
