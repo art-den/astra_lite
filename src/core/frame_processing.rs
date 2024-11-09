@@ -4,7 +4,7 @@ use bitflags::bitflags;
 use chrono::{DateTime, Local, Utc};
 
 use crate::{
-    core::{core::ModeType, utils::{FileNameArg, FileNameUtils}}, image::{histogram::*, image::*, info::*, io::{load_raw_image_from_fits_file, load_raw_image_from_fits_stream}, raw::*, stacker::Stacker, stars_offset::*}, indi, options::*, utils::{log_utils::*, math::linear_interpolate}
+    core::{core::ModeType, utils::{FileNameArg, FileNameUtils}}, image::{histogram::*, image::*, info::*, io::*, raw::*, simple_fits::{FitsReader, SeekNRead}, stacker::Stacker, stars_offset::*}, indi, options::*, utils::{log_utils::*, math::linear_interpolate}
 };
 
 pub enum ResultImageInfo {
@@ -264,28 +264,6 @@ pub fn start_frame_processing_thread() -> (mpsc::Sender<FrameProcessCommand>, Jo
         log::info!("process_blob_thread_fun finished");
     });
     (bg_comands_sender, thread)
-}
-
-fn create_raw_image_from_blob(
-    blob_prop_value: &Arc<indi::BlobPropValue>
-) -> anyhow::Result<RawImage> {
-    if blob_prop_value.format == ".fits" {
-        let mem_stream = Cursor::new(blob_prop_value.data.as_slice());
-        let raw_image = load_raw_image_from_fits_stream(mem_stream)?;
-        return Ok(raw_image);
-    }
-
-    anyhow::bail!("Unsupported blob format: {}", blob_prop_value.format);
-}
-
-fn create_raw_image_from_file(file_name: &Path) -> anyhow::Result<RawImage> {
-    let ext = file_name.extension().unwrap_or_default();
-    if ext.eq_ignore_ascii_case("fit") || ext.eq_ignore_ascii_case("fits") {
-        let image = load_raw_image_from_fits_file(file_name)?;
-        Ok(image)
-    } else {
-        anyhow::bail!("Unsupported file extension: {:?}", ext);
-    }
 }
 
 fn calc_reduct_ratio(options: &PreviewParams, img_width: usize, img_height: usize) -> usize {
@@ -608,6 +586,50 @@ fn make_preview_image(
     }
 }
 
+enum ImageLoader {
+    Fits(FitsReader),
+    Tif,
+}
+
+impl ImageLoader {
+    fn is_raw_image(&self) -> bool {
+        match self {
+            Self::Fits(reader) =>
+                find_mono_image_hdu_in_fits(reader).is_some(),
+            Self::Tif =>
+                false,
+        }
+    }
+
+    fn is_ready_image(&self) -> bool {
+        match self {
+            Self::Fits(reader) =>
+                find_color_image_hdu_in_fits(reader).is_some(),
+            Self::Tif =>
+                true,
+        }
+    }
+
+    fn load_raw_image(&self, stream: &mut impl SeekNRead) -> anyhow::Result<RawImage> {
+        match self {
+            Self::Fits(reader) =>
+                load_raw_image_from_fits_reader(reader, stream),
+            Self::Tif =>
+                anyhow::bail!("Format not support row images"),
+        }
+    }
+
+    fn load_image(&self, image: &mut Image, stream: &mut impl SeekNRead) -> anyhow::Result<()> {
+        match self {
+            Self::Fits(reader) =>
+                load_image_from_fits_reader(image, reader, stream)?,
+            Self::Tif =>
+                load_image_from_tif_sreaam(image, stream)?,
+        }
+        Ok(())
+    }
+}
+
 fn make_preview_image_impl(
     command:    &FrameProcessCommandData,
     result_fun: &ResultFun
@@ -627,183 +649,228 @@ fn make_preview_image_impl(
         result_fun
     );
 
-    let mut raw_image = match &command.img_source {
-        ImageSource::Blob(blob) => {
-            log::debug!("Starting BLOB processing... Blob len = {}", blob.data.len());
-            let tmr = TimeLogger::start();
-            let raw_image = create_raw_image_from_blob(&blob)?;
-            tmr.log("create_raw_image_from_blob");
-            raw_image
-        }
+    let (mut stream, type_hint): (Box<dyn SeekNRead>, &str) = match &command.img_source {
+        ImageSource::Blob(blob) => (
+            Box::new(Cursor::new(blob.data.as_slice())),
+            &blob.format
+        ),
         ImageSource::FileName(file_name) => {
-            log::debug!("Loading image from from file {:?}", file_name);
-            let tmr = TimeLogger::start();
-            let raw_image = create_raw_image_from_file(file_name)?;
-            tmr.log("create_raw_image_from_file");
-            raw_image
+            let file = std::fs::File::open(file_name)?;
+            let ext = file_name.extension().unwrap_or_default().to_str().unwrap_or_default();
+            (Box::new(file), ext)
+        },
+    };
+
+    let is_fits_file =
+        type_hint.eq_ignore_ascii_case("fit") ||
+        type_hint.eq_ignore_ascii_case("fits") ||
+        type_hint.eq_ignore_ascii_case(".fit") ||
+        type_hint.eq_ignore_ascii_case(".fits");
+
+    let is_tif_file =
+        type_hint.eq_ignore_ascii_case("tif");
+
+    let loader = if is_fits_file {
+        let reader = FitsReader::new(&mut stream)?;
+        ImageLoader::Fits(reader)
+    } else if is_tif_file {
+        ImageLoader::Tif
+    } else {
+        anyhow::bail!("Image format {} is not supported", type_hint);
+    };
+
+    let is_raw_image = loader.is_raw_image();
+    let is_ready_mage = loader.is_ready_image();
+
+    if !is_raw_image && !is_ready_mage {
+        anyhow::bail!("No supported image found in {}", type_hint);
+    }
+
+    let mut frame_type = FrameType::Lights;
+    let mut exposure = 0_f64;
+    let mut raw_info = None;
+    let mut raw_noise = None;
+
+    let mut image = if is_raw_image {
+        let mut raw_image = loader.load_raw_image(&mut stream)?;
+
+        drop(loader);
+        drop(stream);
+
+        let mut info = raw_image.info().clone();
+        if info.offset == 0 {
+            info.offset = command.frame_options.offset;
+            raw_image.set_offset(info.offset);
         }
-    };
 
-    let mut raw_info = raw_image.info().clone();
-    if raw_info.offset == 0 {
-        raw_info.offset = command.frame_options.offset;
-        raw_image.set_offset(raw_info.offset);
-    }
+        frame_type = info.frame_type;
+        exposure = info.exposure;
 
-    log::debug!("Raw type      = {:?}", raw_info.frame_type);
-    log::debug!("Raw width     = {}",   raw_info.width);
-    log::debug!("Raw height    = {}",   raw_info.height);
-    log::debug!("Raw zero      = {}",   raw_info.offset);
-    log::debug!("Raw max_value = {}",   raw_info.max_value);
-    log::debug!("Raw CFA       = {:?}", raw_info.cfa);
-    log::debug!("Raw bin       = {}",   raw_info.bin);
-    log::debug!("Raw exposure  = {}s",  raw_info.exposure);
+        log::debug!("Raw type      = {:?}", frame_type);
+        log::debug!("Raw width     = {}",   info.width);
+        log::debug!("Raw height    = {}",   info.height);
+        log::debug!("Raw zero      = {}",   info.offset);
+        log::debug!("Raw max_value = {}",   info.max_value);
+        log::debug!("Raw CFA       = {:?}", info.cfa);
+        log::debug!("Raw bin       = {}",   info.bin);
+        log::debug!("Raw exposure  = {}s",  info.exposure);
 
-    if command.stop_flag.load(Ordering::Relaxed) {
-        log::debug!("Command stopped");
-        return Ok(());
-    }
-
-    let is_monochrome_img =
-        matches!(raw_info.frame_type, FrameType::Biases) ||
-        matches!(raw_info.frame_type, FrameType::Darks);
-
-    // Raw histogram (before applying calibration data)
-
-    let mut raw_hist = command.frame.raw_hist.write().unwrap();
-    let tmr = TimeLogger::start();
-    raw_hist.from_raw_image(
-        &raw_image,
-        is_monochrome_img
-    );
-    tmr.log("histogram from raw image");
-    let debug_log_hist_chan = |name, chan: &Option<HistogramChan>| {
-        if let Some(chan) = chan {
-            log::debug!("Raw {} median = {}", name, chan.median());
-            log::debug!("Raw {} mean   = {}", name, chan.mean);
+        if command.stop_flag.load(Ordering::Relaxed) {
+            log::debug!("Command stopped");
+            return Ok(());
         }
-    };
-    debug_log_hist_chan("L", &raw_hist.l);
-    debug_log_hist_chan("R", &raw_hist.r);
-    debug_log_hist_chan("G", &raw_hist.g);
-    debug_log_hist_chan("B", &raw_hist.b);
 
-    drop(raw_hist);
+        let is_monochrome_img =
+            matches!(frame_type, FrameType::Biases) ||
+            matches!(frame_type, FrameType::Darks);
 
-    // Applying calibration data
-    if raw_info.frame_type == FrameType::Lights
-    || raw_info.frame_type == FrameType::Flats {
-        let mut calibr = command.calibr_data.lock().unwrap();
-        apply_calibr_data_and_remove_hot_pixels(
-            &command.calibr_params,
-            &mut raw_image,
-            &mut calibr
-        )?;
-        raw_info = raw_image.info().clone()
-    }
+        // Raw histogram (before applying calibration data)
 
-    let raw_frame_info = RawFrameInfo {
-        frame_type: raw_info.frame_type,
-        time:       raw_info.time,
-        histogram:  Arc::clone(&command.frame.raw_hist),
-        calubr_methods: raw_info.calibr_methods.clone(),
-    };
-    send_result(
-        FrameProcessResultData::RawFrameInfo(raw_frame_info),
-        &command.camera,
-        command.mode_type,
-        &command.stop_flag,
-        result_fun
-    );
-
-    let raw_image = Arc::new(raw_image);
-
-    send_result(
-        FrameProcessResultData::RawFrame(Arc::clone(&raw_image)),
-        &command.camera,
-        command.mode_type,
-        &command.stop_flag,
-        result_fun
-    );
-
-    if command.stop_flag.load(Ordering::Relaxed) {
-        log::debug!("Command stopped");
-        return Ok(());
-    }
-
-    // Raw noise
-    let raw_noise = if raw_info.frame_type == FrameType::Lights {
+        let mut raw_hist = command.frame.raw_hist.write().unwrap();
         let tmr = TimeLogger::start();
-        let noise = raw_image.calc_noise();
-        tmr.log("light frame raw noise calculation");
-        noise
+        raw_hist.from_raw_image(
+            &raw_image,
+            is_monochrome_img
+        );
+        tmr.log("histogram from raw image");
+        let debug_log_hist_chan = |name, chan: &Option<HistogramChan>| {
+            if let Some(chan) = chan {
+                log::debug!("Raw {} median = {}", name, chan.median());
+                log::debug!("Raw {} mean   = {}", name, chan.mean);
+            }
+        };
+        debug_log_hist_chan("L", &raw_hist.l);
+        debug_log_hist_chan("R", &raw_hist.r);
+        debug_log_hist_chan("G", &raw_hist.g);
+        debug_log_hist_chan("B", &raw_hist.b);
+
+        drop(raw_hist);
+
+        // Applying calibration data
+        if frame_type == FrameType::Lights
+        || frame_type == FrameType::Flats {
+            let mut calibr = command.calibr_data.lock().unwrap();
+            apply_calibr_data_and_remove_hot_pixels(
+                &command.calibr_params,
+                &mut raw_image,
+                &mut calibr
+            )?;
+            info = raw_image.info().clone()
+        }
+
+        let raw_frame_info = RawFrameInfo {
+            frame_type,
+            time:       info.time,
+            histogram:  Arc::clone(&command.frame.raw_hist),
+            calubr_methods: info.calibr_methods.clone(),
+        };
+        send_result(
+            FrameProcessResultData::RawFrameInfo(raw_frame_info),
+            &command.camera,
+            command.mode_type,
+            &command.stop_flag,
+            result_fun
+        );
+
+        let raw_image = Arc::new(raw_image);
+
+        send_result(
+            FrameProcessResultData::RawFrame(Arc::clone(&raw_image)),
+            &command.camera,
+            command.mode_type,
+            &command.stop_flag,
+            result_fun
+        );
+
+        if command.stop_flag.load(Ordering::Relaxed) {
+            log::debug!("Command stopped");
+            return Ok(());
+        }
+
+        // Raw noise
+        raw_noise = if frame_type == FrameType::Lights {
+            let tmr = TimeLogger::start();
+            let noise = raw_image.calc_noise();
+            tmr.log("light frame raw noise calculation");
+            noise
+        } else {
+            None
+        };
+
+        log::debug!("Raw noise = {:?}", raw_noise);
+
+        if command.stop_flag.load(Ordering::Relaxed) {
+            log::debug!("Command stopped");
+            return Ok(());
+        }
+
+        match frame_type {
+            FrameType::Flats => {
+                let hist = command.frame.raw_hist.read().unwrap();
+                *command.frame.info.write().unwrap() = ResultImageInfo::FlatInfo(
+                    FlatImageInfo::from_histogram(&hist)
+                );
+                send_result(
+                    FrameProcessResultData::FrameInfo,
+                    &command.camera,
+                    command.mode_type,
+                    &command.stop_flag,
+                    result_fun
+                );
+            },
+            FrameType::Darks | FrameType::Biases => {
+                let hist = command.frame.raw_hist.read().unwrap();
+                *command.frame.info.write().unwrap() = ResultImageInfo::RawInfo(
+                    RawImageStat::from_histogram(&hist)
+                );
+                send_result(
+                    FrameProcessResultData::FrameInfo,
+                    &command.camera,
+                    command.mode_type,
+                    &command.stop_flag,
+                    result_fun
+                );
+            },
+
+            _ => {},
+        }
+
+        if command.stop_flag.load(Ordering::Relaxed) {
+            log::debug!("Command stopped");
+            return Ok(());
+        }
+
+        // Demosaic
+
+        let mut image = command.frame.image.write().unwrap();
+
+        let tmr = TimeLogger::start();
+        if !is_monochrome_img {
+            raw_image.demosaic_into(&mut image, true);
+        } else {
+            raw_image.copy_into_monochrome(&mut image);
+        }
+        tmr.log("demosaic");
+
+        if command.stop_flag.load(Ordering::Relaxed) {
+            log::debug!("Command stopped");
+            return Ok(());
+        }
+
+        raw_info = Some(info);
+
+        image
+    } else if is_ready_mage {
+        let mut image = command.frame.image.write().unwrap();
+        loader.load_image(&mut image, &mut stream)?;
+        image
     } else {
-        None
+        unreachable!();
     };
-
-    log::debug!("Raw noise = {:?}", raw_noise);
-
-    if command.stop_flag.load(Ordering::Relaxed) {
-        log::debug!("Command stopped");
-        return Ok(());
-    }
-
-    match raw_info.frame_type {
-        FrameType::Flats => {
-            let hist = command.frame.raw_hist.read().unwrap();
-            *command.frame.info.write().unwrap() = ResultImageInfo::FlatInfo(
-                FlatImageInfo::from_histogram(&hist)
-            );
-            send_result(
-                FrameProcessResultData::FrameInfo,
-                &command.camera,
-                command.mode_type,
-                &command.stop_flag,
-                result_fun
-            );
-        },
-        FrameType::Darks | FrameType::Biases => {
-            let hist = command.frame.raw_hist.read().unwrap();
-            *command.frame.info.write().unwrap() = ResultImageInfo::RawInfo(
-                RawImageStat::from_histogram(&hist)
-            );
-            send_result(
-                FrameProcessResultData::FrameInfo,
-                &command.camera,
-                command.mode_type,
-                &command.stop_flag,
-                result_fun
-            );
-        },
-
-        _ => {},
-    }
-
-    if command.stop_flag.load(Ordering::Relaxed) {
-        log::debug!("Command stopped");
-        return Ok(());
-    }
-
-    // Demosaic
-
-    let mut image = command.frame.image.write().unwrap();
-
-    let tmr = TimeLogger::start();
-    if !is_monochrome_img {
-        raw_image.demosaic_into(&mut image, true);
-    } else {
-        raw_image.copy_into_monochrome(&mut image);
-    }
-    tmr.log("demosaic");
-
-    if command.stop_flag.load(Ordering::Relaxed) {
-        log::debug!("Command stopped");
-        return Ok(());
-    }
 
     // Remove gradient from light frame
 
-    if raw_info.frame_type == FrameType::Lights
+    if frame_type == FrameType::Lights
     && (command.view_options.remove_gradient
     || command.mode_type == ModeType::LiveStacking) {
         let tmr = TimeLogger::start();
@@ -825,8 +892,6 @@ fn make_preview_image_impl(
         &command.stop_flag,
         result_fun
     );
-
-    drop(raw_image);
 
     if command.stop_flag.load(Ordering::Relaxed) {
         log::debug!("Command stopped");
@@ -887,7 +952,7 @@ fn make_preview_image_impl(
         .as_ref()
         .and_then(|qo| if qo.use_max_ovality { Some(qo.max_ovality) } else { None });
 
-    let is_bad_frame = if raw_info.frame_type == FrameType::Lights {
+    let is_bad_frame = if frame_type == FrameType::Lights {
         let mut ref_stars_lock = command.ref_stars.lock().unwrap();
 
         let ref_stars = if command.flags.contains(ProcessImageFlags::CALC_STARS_OFFSET) {
@@ -906,9 +971,11 @@ fn make_preview_image_impl(
             ref_stars,
             true,
         );
-        info.exposure = raw_info.exposure;
+        info.exposure = exposure;
         info.raw_noise = raw_noise;
-        info.calibr_methods = raw_info.calibr_methods;
+        info.calibr_methods = raw_info.as_ref()
+            .map(|i| i.calibr_methods)
+            .unwrap_or(CalibrMethods::empty());
         tmr.log("TOTAL LightImageInfo::from_image");
 
         if command.stop_flag.load(Ordering::Relaxed) {
@@ -964,7 +1031,7 @@ fn make_preview_image_impl(
                 -offset.x,
                 -offset.y,
                 -offset.angle,
-                raw_info.exposure,
+                exposure,
                 live_stacking.options.remove_tracks
             );
             tmr.log("ImageStacker::add");
@@ -1082,7 +1149,7 @@ fn make_preview_image_impl(
             if live_stacking.options.save_enabled {
                 let save_res_interv = live_stacking.options.save_minutes as f64 * 60.0;
                 let mut save_cnt = live_stacking.data.time_cnt.lock().unwrap();
-                *save_cnt += raw_info.exposure;
+                *save_cnt += exposure;
                 if *save_cnt >= save_res_interv {
                     *save_cnt = 0.0;
                     drop(save_cnt);
@@ -1118,7 +1185,7 @@ fn make_preview_image_impl(
 
     let process_time = total_tmr.log("TOTAL PREVIEW");
 
-    if let ImageSource::Blob(blob) = &command.img_source {
+    if let (ImageSource::Blob(blob), Some(raw_info)) = (&command.img_source, raw_info) {
         let result = FrameProcessResultData::ShotProcessingFinished{
             raw_image_info:  Arc::new(raw_info),
             frame_is_ok:     !is_bad_frame,

@@ -5,30 +5,27 @@ use std::{fs::File, io::{BufReader, BufWriter}, path::Path};
 use chrono::prelude::*;
 use itertools::{izip, Itertools};
 
-use super::{image::{Image, ImageLayer}, raw::{CalibrMethods, CfaType, FrameType, RawImage, RawImageInfo}, simple_fits::{FitsReader, SeekNRead}};
+use super::{image::{Image, ImageLayer}, raw::*, simple_fits::{FitsReader, Header, SeekNRead}};
 
 ///////////////////////////////////////////////////////////////////////////////
 
 // Raw image
 
-pub fn load_raw_image_from_fits_stream(
-    mut stream: impl SeekNRead
-) -> anyhow::Result<RawImage> {
-    let reader = FitsReader::new(&mut stream)?;
-    let Some(image_hdu) = reader.headers.iter().find(|hdu| {
+pub fn find_mono_image_hdu_in_fits(reader: &FitsReader) -> Option<&Header> {
+    reader.headers.iter().find(|hdu| {
         hdu.dims().len() == 2
-    }) else {
+    })
+}
+
+pub fn load_raw_image_from_fits_reader(
+    reader: &FitsReader,
+    stream: &mut impl SeekNRead
+) -> anyhow::Result<RawImage> {
+    let Some(image_hdu) = find_mono_image_hdu_in_fits(reader) else {
         anyhow::bail!("No RAW image found in fits data");
     };
 
-    let bitdepth = image_hdu.get_i64("BITDEPTH").unwrap_or(image_hdu.bitpix() as i64) as i32;
-    if bitdepth > 16 {
-        anyhow::bail!("BITDEPTH > 16 ({}) is not supported", bitdepth);
-    }
-    if bitdepth < 0 {
-        anyhow::bail!("FITS files with float values is not supported");
-    }
-
+    let bitdepth    = image_hdu.get_i64("BITDEPTH").unwrap_or(image_hdu.bitpix() as i64) as i32;
     let width       = image_hdu.dims()[0];
     let height      = image_hdu.dims()[1];
     let exposure    = image_hdu.get_f64("EXPTIME").unwrap_or_default();
@@ -42,7 +39,11 @@ pub fn load_raw_image_from_fits_stream(
     let camera      = image_hdu.get_str("INSTRUME").unwrap_or_default().to_string();
     let ccd_temp    = image_hdu.get_f64("CCD-TEMP");
 
-    let max_value = ((1 << bitdepth) - 1) as u16;
+    let max_value = if bitdepth > 0 {
+        ((1 << bitdepth) - 1) as u16
+    } else {
+        u16::MAX
+    };
     let cfa = CfaType::from_str(&bayer);
     let cfa_arr = cfa.get_array();
     let frame_type = FrameType::from_str(
@@ -62,16 +63,22 @@ pub fn load_raw_image_from_fits_stream(
         calibr_methods: CalibrMethods::empty(),
     };
 
-    let data = FitsReader::read_data(&image_hdu, &mut stream)?;
+    let mut data = Vec::new();
+    data.resize(image_hdu.data_len(), 0);
+    FitsReader::read_data(&image_hdu, stream, 0, &mut data)?;
 
     Ok(RawImage::new(info, data, cfa_arr))
+}
+
+pub fn load_raw_image_from_fits_stream(stream: &mut impl SeekNRead) -> anyhow::Result<RawImage> {
+    let reader = FitsReader::new(stream)?;
+    load_raw_image_from_fits_reader(&reader, stream)
 }
 
 pub fn load_raw_image_from_fits_file(file_name: &Path) -> anyhow::Result<RawImage> {
     let mut file = File::open(file_name)?;
     load_raw_image_from_fits_stream(&mut file)
 }
-
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -98,16 +105,15 @@ pub fn save_image_layer_to_tif_file(
     }
     tiff.finish()?;
     Ok(())
-
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
 // Simple image
 
-pub fn load_image_from_tif_file(
-    image:     &mut Image,
-    file_name: &Path
+pub fn load_image_from_tif_sreaam(
+    image:  &mut Image,
+    stream: &mut impl SeekNRead
 ) -> anyhow::Result<()> {
     use tiff::decoder::*;
 
@@ -140,8 +146,7 @@ pub fn load_image_from_tif_file(
         Ok(())
     }
 
-    let file = BufReader::new(File::open(file_name)?);
-    let mut decoder = Decoder::new(file)?;
+    let mut decoder = Decoder::new(stream)?;
     let (width, height) = decoder.dimensions()?;
     let is_rgb = match decoder.colortype()? {
         tiff::ColorType::Gray(_) => {
@@ -165,40 +170,16 @@ pub fn load_image_from_tif_file(
         let y2 = (y1 + chunk_size_y).min(height);
         match chunk {
             DecodingResult::U8(data) =>
-                assign_img_data(
-                    &data,
-                    image,
-                    y1, y2,
-                    is_rgb,
-                    |v| v as u16 * 256
-                ),
+                assign_img_data(&data, image, y1, y2, is_rgb, |v| v as u16 * 256),
 
             DecodingResult::U16(data) =>
-                assign_img_data(
-                    &data,
-                    image,
-                    y1, y2,
-                    is_rgb,
-                    |v| v
-                ),
+                assign_img_data(&data, image, y1, y2, is_rgb, |v| v),
 
             DecodingResult::F32(data) =>
-                assign_img_data(
-                    &data,
-                    image,
-                    y1, y2,
-                    is_rgb,
-                    |v| (v as f64 * u16::MAX as f64) as u16
-                ),
+                assign_img_data(&data, image, y1, y2, is_rgb, |v| (v as f64 * u16::MAX as f64) as u16),
 
             DecodingResult::F64(data) =>
-                assign_img_data(
-                    &data,
-                    image,
-                    y1, y2,
-                    is_rgb,
-                    |v| (v * u16::MAX as f64) as u16
-                ),
+                assign_img_data(&data, image, y1, y2, is_rgb, |v| (v * u16::MAX as f64) as u16),
 
             _ =>
                 Err(anyhow::anyhow!("Format unsupported"))
@@ -206,6 +187,14 @@ pub fn load_image_from_tif_file(
     }
 
     Ok(())
+}
+
+pub fn load_image_from_tif_file(
+    image:     &mut Image,
+    file_name: &Path
+) -> anyhow::Result<()> {
+    let mut file = BufReader::new(File::open(file_name)?);
+    load_image_from_tif_sreaam(image, &mut file)
 }
 
 pub fn save_image_to_tif_file(image: &Image, file_name: &Path) -> anyhow::Result<()> {
@@ -242,6 +231,38 @@ pub fn save_image_to_tif_file(image: &Image, file_name: &Path) -> anyhow::Result
         tiff.finish()?;
     } else {
         panic!("Internal error");
+    }
+    Ok(())
+}
+
+pub fn find_color_image_hdu_in_fits(reader: &FitsReader) -> Option<&Header> {
+    reader.headers.iter().find(|hdu| {
+        hdu.dims().len() == 3 && hdu.dims()[2] == 3
+    })
+}
+
+pub fn load_image_from_fits_reader(
+    image:  &mut Image,
+    reader: &FitsReader,
+    stream: &mut impl SeekNRead
+) -> anyhow::Result<()> {
+    let mono_hdu = find_mono_image_hdu_in_fits(reader);
+    let color_hdu = find_color_image_hdu_in_fits(reader);
+    if let Some(hdu) = mono_hdu {
+        let width  = hdu.dims()[0];
+        let height = hdu.dims()[1];
+        image.make_monochrome(width as usize, height as usize, 0, u16::MAX);
+        FitsReader::read_data(&hdu, stream, 0, &mut image.l.as_slice_mut())?;
+    } else if let Some(hdu) = color_hdu {
+        let width  = hdu.dims()[0];
+        let height = hdu.dims()[1];
+        image.make_color(width as usize, height as usize, 0, u16::MAX);
+        let one_color_bytes_len = hdu.bytes_len() / 3;
+        FitsReader::read_data(&hdu, stream,                       0, &mut image.r.as_slice_mut())?;
+        FitsReader::read_data(&hdu, stream,     one_color_bytes_len, &mut image.g.as_slice_mut())?;
+        FitsReader::read_data(&hdu, stream, 2 * one_color_bytes_len, &mut image.b.as_slice_mut())?;
+    } else {
+        anyhow::bail!("No image found in fits");
     }
     Ok(())
 }

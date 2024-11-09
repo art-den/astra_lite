@@ -113,6 +113,14 @@ impl Header {
     pub fn dims(&self) -> &Vec<usize> {
         &self.dims
     }
+
+    pub fn data_len(&self) -> usize {
+        self.data_len
+    }
+
+    pub fn bytes_len(&self) -> usize {
+        self.bytes_len
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -204,21 +212,24 @@ impl FitsReader {
         Ok(Header{values, bitpix, dims, data_pos, data_len, bytes_len})
     }
 
-    pub fn read_data(header: &Header, stream: &mut dyn SeekNRead) -> Result<Vec<u16>> {
-        if !matches!(header.bitpix, 8|16) {
+    pub fn read_data(
+        header: &Header,
+        stream: &mut dyn SeekNRead,
+        offset: usize,
+        result: &mut [u16]
+    ) -> Result<()> {
+        if !matches!(header.bitpix, 8 | 16 | -32) {
             return Err(Error::new(
                 ErrorKind::Unsupported,
                 format!("BITPIX = {} is not supported", header.bitpix)
             ));
         }
         let bzero = header.get_i64("BZERO").unwrap_or(0) as u16;
-        let elem_len = header.bitpix as usize / 8;
+        let elem_len = header.bitpix.abs() as usize / 8;
         const BUF_DATA_LEN: usize = 512;
         let mut stream_buf = Vec::<u8>::new();
         stream_buf.resize(BUF_DATA_LEN * elem_len, 0);
-        let mut result = Vec::new();
-        result.resize(header.data_len, 0);
-        stream.seek(SeekFrom::Start(header.data_pos as u64))?;
+        stream.seek(SeekFrom::Start((header.data_pos + offset) as u64))?;
         for chunk in result.chunks_mut(BUF_DATA_LEN) {
             let len_to_read = chunk.len();
             let buf = &mut stream_buf[.. elem_len * len_to_read];
@@ -236,10 +247,17 @@ impl FitsReader {
                         *dst = value.wrapping_add(bzero);
                     }
                 },
+                -32 => {
+                    for ((b1, b2, b3, b4), dst) in izip!(buf.iter().tuples(), chunk) {
+                        let value = f32::from_be_bytes([*b1, *b2, *b3, *b4]);
+                        let i32_value = (value * u16::MAX as f32 + 0.5) as i32;
+                        *dst = i32_value.max(0).min(u16::MAX as i32) as u16;
+                    }
+                }
                 _ => unreachable!(),
             }
         }
-        return Ok(result)
+        return Ok(())
     }
 }
 
