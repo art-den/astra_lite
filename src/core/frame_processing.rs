@@ -147,6 +147,17 @@ pub enum ImageSource {
     FileName(PathBuf),
 }
 
+impl ImageSource {
+    fn type_hint(&self) -> &str {
+        match self {
+            Self::Blob(blob) =>
+                &blob.format,
+            Self::FileName(fname) =>
+                fname.extension().unwrap_or_default().to_str().unwrap_or_default(),
+        }
+    }
+}
+
 pub struct FrameProcessCommandData {
     pub mode_type:       ModeType,
     pub camera:          DeviceAndProp,
@@ -586,52 +597,52 @@ fn make_preview_image(
     }
 }
 
-enum ImageLoader {
-    Fits(FitsReader),
-    Tif,
+enum ImageLoader<'a> {
+    Fits(FitsReader, Box<dyn SeekNRead + 'a>),
+    Tif(PathBuf),
 }
 
-impl ImageLoader {
+impl<'a> ImageLoader<'a> {
     fn is_raw_image(&self) -> bool {
         match self {
-            Self::Fits(reader) =>
+            Self::Fits(reader, _) =>
                 find_mono_image_hdu_in_fits(reader).is_some(),
-            Self::Tif =>
+            Self::Tif(_) =>
                 false,
         }
     }
 
     fn is_ready_image(&self) -> bool {
         match self {
-            Self::Fits(reader) =>
+            Self::Fits(reader, _) =>
                 find_color_image_hdu_in_fits(reader).is_some(),
-            Self::Tif =>
+            Self::Tif(_) =>
                 true,
         }
     }
 
-    fn load_raw_image(&self, stream: &mut impl SeekNRead) -> anyhow::Result<RawImage> {
+    fn load_raw_image(&mut self) -> anyhow::Result<RawImage> {
         match self {
-            Self::Fits(reader) =>
+            Self::Fits(reader, stream) =>
                 load_raw_image_from_fits_reader(reader, stream),
-            Self::Tif =>
+            Self::Tif(_) =>
                 anyhow::bail!("Format not support row images"),
         }
     }
 
-    fn load_image(&self, image: &mut Image, stream: &mut impl SeekNRead) -> anyhow::Result<()> {
+    fn load_image(&mut self, image: &mut Image) -> anyhow::Result<()> {
         match self {
-            Self::Fits(reader) =>
+            Self::Fits(reader, stream) =>
                 load_image_from_fits_reader(image, reader, stream)?,
-            Self::Tif =>
-                load_image_from_tif_sreaam(image, stream)?,
+            Self::Tif(file_name) =>
+                load_image_from_tif_file(image, file_name)?,
         }
         Ok(())
     }
 }
 
-fn make_preview_image_impl(
-    command:    &FrameProcessCommandData,
+fn make_preview_image_impl<'a>(
+    command:    &'a FrameProcessCommandData,
     result_fun: &ResultFun
 ) -> anyhow::Result<()> {
     if command.stop_flag.load(Ordering::Relaxed) {
@@ -649,17 +660,7 @@ fn make_preview_image_impl(
         result_fun
     );
 
-    let (mut stream, type_hint): (Box<dyn SeekNRead>, &str) = match &command.img_source {
-        ImageSource::Blob(blob) => (
-            Box::new(Cursor::new(blob.data.as_slice())),
-            &blob.format
-        ),
-        ImageSource::FileName(file_name) => {
-            let file = std::fs::File::open(file_name)?;
-            let ext = file_name.extension().unwrap_or_default().to_str().unwrap_or_default();
-            (Box::new(file), ext)
-        },
-    };
+    let type_hint = command.img_source.type_hint();
 
     let is_fits_file =
         type_hint.eq_ignore_ascii_case("fit") ||
@@ -670,11 +671,24 @@ fn make_preview_image_impl(
     let is_tif_file =
         type_hint.eq_ignore_ascii_case("tif");
 
-    let loader = if is_fits_file {
+    let mut loader = if is_fits_file {
+        let mut stream: Box<dyn SeekNRead + 'a> = match &command.img_source {
+            ImageSource::Blob(blob) =>
+                Box::new(Cursor::new(blob.data.as_slice())),
+            ImageSource::FileName(file_name) => {
+                let file = std::fs::File::open(file_name)?;
+                Box::new(file)
+            },
+        };
+
         let reader = FitsReader::new(&mut stream)?;
-        ImageLoader::Fits(reader)
+        ImageLoader::Fits(reader, stream)
     } else if is_tif_file {
-        ImageLoader::Tif
+        if let ImageSource::FileName(file_name) = &command.img_source {
+            ImageLoader::Tif(file_name.clone())
+        } else {
+            unreachable!();
+        }
     } else {
         anyhow::bail!("Image format {} is not supported", type_hint);
     };
@@ -692,10 +706,8 @@ fn make_preview_image_impl(
     let mut raw_noise = None;
 
     let mut image = if is_raw_image {
-        let mut raw_image = loader.load_raw_image(&mut stream)?;
-
+        let mut raw_image = loader.load_raw_image()?;
         drop(loader);
-        drop(stream);
 
         let mut info = raw_image.info().clone();
         if info.offset == 0 {
@@ -862,7 +874,8 @@ fn make_preview_image_impl(
         image
     } else if is_ready_mage {
         let mut image = command.frame.image.write().unwrap();
-        loader.load_image(&mut image, &mut stream)?;
+        loader.load_image(&mut image)?;
+        drop(loader);
         image
     } else {
         unreachable!();

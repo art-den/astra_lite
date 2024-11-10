@@ -111,10 +111,11 @@ pub fn save_image_layer_to_tif_file(
 
 // Simple image
 
-pub fn load_image_from_tif_sreaam(
-    image:  &mut Image,
-    stream: &mut impl SeekNRead
+pub fn load_image_from_tif_file(
+    image:     &mut Image,
+    file_name: &Path
 ) -> anyhow::Result<()> {
+    let stream = BufReader::new(File::open(file_name)?);
     use tiff::decoder::*;
 
     fn assign_img_data<S: Copy>(
@@ -187,14 +188,6 @@ pub fn load_image_from_tif_sreaam(
     }
 
     Ok(())
-}
-
-pub fn load_image_from_tif_file(
-    image:     &mut Image,
-    file_name: &Path
-) -> anyhow::Result<()> {
-    let mut file = BufReader::new(File::open(file_name)?);
-    load_image_from_tif_sreaam(image, &mut file)
 }
 
 pub fn save_image_to_tif_file(image: &Image, file_name: &Path) -> anyhow::Result<()> {
