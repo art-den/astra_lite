@@ -3,7 +3,7 @@ use std::f64::consts::PI;
 use chrono::prelude::*;
 use gtk::{cairo, gdk, prelude::*};
 
-use crate::{ui::gtk_utils::{self, font_size_to_pixels, FontSize, DEFAULT_DPMM}, utils::math::linear_interpolate};
+use crate::{utils::gtk_utils::{self, *}, utils::math::linear_interpolate};
 
 use super::{data::*, math::*, solar_system::*};
 

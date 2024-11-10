@@ -1,9 +1,7 @@
 use std::rc::Rc;
 use gtk::{prelude::*, glib::clone};
 
-use crate::options::*;
-
-use super::gtk_utils;
+use crate::{options::*, utils::gtk_utils};
 
 pub struct PlatesolverOptionsDialog {
     builder: gtk::Builder,

@@ -4,10 +4,9 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use crate::{
     core::{core::*, mode_darks_library::*},
-    image::info::seconds_to_total_time_str, options::*, utils::io_utils::*
+    image::info::seconds_to_total_time_str, options::*, utils::{io_utils::*, gtk_utils},
 };
 
-use super::gtk_utils;
 
 fn multiple_of_5(v: usize) -> usize {
     ((v + 4) / 5) * 5

@@ -1,9 +1,11 @@
 #![allow(dead_code)]
 
-use std::{fs::File, io::{BufReader, BufWriter}, path::Path};
+use std::{fs::File, io::{BufReader, BufWriter}, path::Path, u16};
 
 use chrono::prelude::*;
 use itertools::{izip, Itertools};
+
+use crate::utils::gtk_utils::limit_pixbuf_by_longest_size;
 
 use super::{image::{Image, ImageLayer}, raw::*, simple_fits::{FitsReader, Header, SeekNRead}};
 
@@ -257,5 +259,66 @@ pub fn load_image_from_fits_reader(
     } else {
         anyhow::bail!("No image found in fits");
     }
+    Ok(())
+}
+
+pub fn load_image_by_pixbuf(
+    image:     &mut Image,
+    file_name: &Path,
+    max_size:  usize,
+) -> anyhow::Result<()> {
+    let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_file(file_name)?;
+    let pixbuf = limit_pixbuf_by_longest_size(pixbuf, max_size as i32);
+    let has_alpha = pixbuf.has_alpha();
+    let bytes = pixbuf
+        .pixel_bytes()
+        .ok_or_else(|| anyhow::anyhow!("pixbuf dosn't contain pixel_bytes()"))?;
+
+    let width = pixbuf.width() as usize;
+    let height = pixbuf.height() as usize;
+    let row_size = pixbuf.rowstride() as usize;
+
+    image.make_color(width, height, 0, u16::MAX);
+
+    let u8_to_u16 = |value: u8| -> u16 {
+        let f32_v = value as f32 / 255.0;
+        let linear = f32_v.powf(2.4);
+        (linear * 65535.0) as u16
+    };
+
+    for (r_row, g_row, b_row, row) in
+    izip!(
+        image.r.as_slice_mut().chunks_exact_mut(width),
+        image.g.as_slice_mut().chunks_exact_mut(width),
+        image.b.as_slice_mut().chunks_exact_mut(width),
+        bytes.chunks_exact(row_size)
+    ) {
+        if !has_alpha {
+            for (dst_r, dst_g, dst_b, (src_r, src_g, src_b)) in izip!(
+                r_row, g_row, b_row,
+                row.iter().tuples()
+            ) {
+                *dst_r = u8_to_u16(*src_r);
+                *dst_g = u8_to_u16(*src_g);
+                *dst_b = u8_to_u16(*src_b);
+            }
+        } else {
+            for (dst_r, dst_g, dst_b, (src_r, src_g, src_b, src_a)) in izip!(
+                r_row, g_row, b_row,
+                row.iter().tuples()
+            ) {
+                if *src_a == 255 {
+                    *dst_r = u8_to_u16(*src_r);
+                    *dst_g = u8_to_u16(*src_g);
+                    *dst_b = u8_to_u16(*src_b);
+                } else {
+                    *dst_r = 0;
+                    *dst_g = 0;
+                    *dst_b = 0;
+                }
+            }
+        }
+    }
+
     Ok(())
 }

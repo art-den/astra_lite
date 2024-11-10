@@ -10,11 +10,11 @@ use gtk::{prelude::*, glib, glib::clone, cairo};
 use serde::{Serialize, Deserialize};
 use crate::{
     indi,
-    utils::io_utils::*,
+    utils::{io_utils::*, gtk_utils},
     core::core::*,
     options::*,
 };
-use super::{gtk_utils, utils::*};
+use super::utils::*;
 
 pub fn init_ui(
     app:      &gtk::Application,

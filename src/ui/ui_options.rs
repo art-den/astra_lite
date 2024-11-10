@@ -1,6 +1,5 @@
 use gtk::prelude::*;
-use crate::{options::*, image::raw::FrameType};
-use super::gtk_utils;
+use crate::{options::*, image::raw::FrameType, utils::gtk_utils};
 
 impl Options {
     /* read */

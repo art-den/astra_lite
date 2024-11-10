@@ -545,3 +545,22 @@ pub fn init_list_store_model_for_treeview(
     tv.set_model(Some(&model));
     model
 }
+
+pub fn limit_pixbuf_by_longest_size(
+    pixbuf: gdk::gdk_pixbuf::Pixbuf,
+    max_size: i32,
+) -> gdk::gdk_pixbuf::Pixbuf {
+    if pixbuf.width() > max_size
+    || pixbuf.height() > max_size {
+        let longest_size = i32::max(pixbuf.width(), pixbuf.height());
+        let new_width = max_size * pixbuf.width() / longest_size;
+        let new_height = max_size * pixbuf.height() / longest_size;
+        pixbuf.scale_simple(
+            new_width as _,
+            new_height as _,
+            gtk::gdk_pixbuf::InterpType::Tiles,
+        ).unwrap()
+    } else {
+        pixbuf
+    }
+}

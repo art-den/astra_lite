@@ -7,10 +7,9 @@ use crate::{
     image::{histogram::*, image::RgbU8Data, info::*, io::save_image_to_tif_file, raw::{CalibrMethods, FrameType}, stars_offset::Offset},
     indi,
     options::*,
-    ui::gtk_utils::*,
-    utils::{io_utils::*, log_utils::*}
+    utils::{io_utils::*, log_utils::*, gtk_utils::{self, *}}
 };
-use super::{gtk_utils, ui_darks_library::DarksLibraryDialog, ui_main::*, utils::*};
+use super::{ui_darks_library::DarksLibraryDialog, ui_main::*, utils::*};
 
 pub fn init_ui(
     _app:     &gtk::Application,
@@ -1451,7 +1450,7 @@ impl CameraUi {
                 let aver_text = format!(
                     "{:.1} ({:.1}%)",
                     info.aver,
-                    100.0 * info.aver / info.max_value as f64
+                    100.0 * info.aver / info.max_value as f32
                 );
                 ui.set_prop_str("e_aver.text", Some(&aver_text));
                 let median_text = format!(
@@ -1463,7 +1462,7 @@ impl CameraUi {
                 let dev_text = format!(
                     "{:.1} ({:.3}%)",
                     info.std_dev,
-                    100.0 * info.std_dev / info.max_value as f64
+                    100.0 * info.std_dev / info.max_value as f32
                 );
                 ui.set_prop_str("e_std_dev.text", Some(&dev_text));
                 update_info_panel_vis(false, false, true);
@@ -1482,7 +1481,7 @@ impl CameraUi {
             if let Some(item) = item {
                 let text =
                     if ui_options.flat_percents {
-                        let percent_aver = 100.0 * item.aver / info.max_value as f64;
+                        let percent_aver = 100.0 * item.aver / info.max_value as f32;
                         let percent_max = 100.0 * item.max as f64 / info.max_value as f64;
                         format!("{:.1}% / {:.1}%", percent_aver, percent_max)
                     } else {
@@ -1644,24 +1643,21 @@ impl CameraUi {
                 self.show_preview_image(Some(&img.rgb_data), Some(&img.params));
                 show_resolution_info(img.image_width, img.image_height);
             }
-            FrameProcessResultData::RawFrameInfo(raw_frame_info)
+            FrameProcessResultData::HistorgamRaw(_)
             if is_mode_current(false) => {
                 self.repaint_histogram();
                 self.show_histogram_stat();
-
+            }
+            FrameProcessResultData::RawFrameInfo(raw_frame_info)
+            if is_mode_current(false) => {
                 if raw_frame_info.frame_type != FrameType::Lights {
-                    let histogram = raw_frame_info.histogram.read().unwrap();
-                    let chan =
-                        if      let Some(chan) = &histogram.l { chan }
-                        else if let Some(chan) = &histogram.g { chan }
-                        else                                  { return; };
                     let history_item = CalibrHistoryItem {
                         time:           raw_frame_info.time.clone(),
                         mode_type:      result.mode_type,
                         frame_type:     raw_frame_info.frame_type,
-                        mean:           chan.mean as f32,
-                        median:         chan.median() as _,
-                        std_dev:        chan.std_dev as _,
+                        mean:           raw_frame_info.mean,
+                        median:         raw_frame_info.median,
+                        std_dev:        raw_frame_info.std_dev,
                         calibr_methods: raw_frame_info.calubr_methods,
                     };
                     self.calibr_history.borrow_mut().push(history_item);
@@ -1896,7 +1892,7 @@ impl CameraUi {
         drop(options);
         let ui_options = self.ui_options.borrow();
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let max = hist.max as f64;
+        let max = hist.max as f32;
         let show_chan_data = |chan: &Option<HistogramChan>, l_cap, l_mean, l_median, l_dev| {
             if let Some(chan) = chan.as_ref() {
                 let median = chan.median();
@@ -1907,7 +1903,7 @@ impl CameraUi {
                     );
                     ui.set_prop_str_ex(
                         l_median, "label",
-                        Some(&format!("{:.1}%", 100.0 * median as f64 / max))
+                        Some(&format!("{:.1}%", 100.0 * median as f32 / max))
                     );
                     ui.set_prop_str_ex(
                         l_dev, "label",

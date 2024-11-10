@@ -125,7 +125,7 @@ impl LightFrameInfo {
 
 #[derive(Clone)]
 pub struct FlatInfoChan {
-    pub aver: f64,
+    pub aver: f32,
     pub max: u16,
 }
 
@@ -159,9 +159,9 @@ impl FlatImageInfo {
 
 pub struct RawImageStat {
     pub max_value: u16,
-    pub aver: f64,
+    pub aver: f32,
     pub median: u16,
-    pub std_dev: f64,
+    pub std_dev: f32,
 }
 
 impl RawImageStat {

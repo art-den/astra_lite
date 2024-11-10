@@ -6,10 +6,10 @@ use crate::{
     core::{consts::INDI_SET_PROP_TIMEOUT, core::{Core, CoreEvent, ModeType}},
     indi,
     options::*,
-    utils::io_utils::*,
+    utils::{io_utils::*, gtk_utils},
 };
 
-use super::{gtk_utils, ui_platesolver_options::PlatesolverOptionsDialog, ui_main::*, utils::*};
+use super::{ui_platesolver_options::PlatesolverOptionsDialog, ui_main::*, utils::*};
 
 
 pub fn init_ui(

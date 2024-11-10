@@ -11,9 +11,9 @@ use gtk::{prelude::*, gdk, glib, glib::clone};
 use itertools::Itertools;
 use chrono::prelude::*;
 use crate::{
-    core::core::Core, guiding::{external_guider::ExtGuiderType, phd2_conn}, indi, options::*
+    core::core::Core, guiding::{external_guider::ExtGuiderType, phd2_conn}, indi, options::*, utils::gtk_utils
 };
-use super::{ui_main::*, gtk_utils, indi_widget::*};
+use super::{ui_main::*, indi_widget::*};
 
 pub fn init_ui(
     _app:     &gtk::Application,

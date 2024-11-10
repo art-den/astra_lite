@@ -1,7 +1,6 @@
 pub mod ui_main;
 
 mod utils;
-mod gtk_utils;
 mod plots;
 pub mod sky_map;
 mod ui_hardware;

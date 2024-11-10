@@ -2,9 +2,10 @@ use std::sync::Mutex;
 use itertools::*;
 use super::{raw::*, image::*};
 
+#[derive(Clone)]
 pub struct HistogramChan {
-    pub mean:    f64,
-    pub std_dev: f64,
+    pub mean:    f32,
+    pub std_dev: f32,
     pub count:   usize,
     pub freq:    Vec<u32>,
 }
@@ -25,13 +26,14 @@ impl HistogramChan {
         let total_cnt = self.freq.iter().sum::<u32>() as usize;
         let total_sum = self.freq.iter().enumerate().map(|(i, v)| { i * *v as usize }).sum::<usize>();
         self.count = total_cnt as usize;
-        self.mean = total_sum as f64 / total_cnt as f64;
+        let mean = total_sum as f64 / total_cnt as f64;
+        self.mean = mean as f32;
         let mut sum = 0_f64;
         for (value, cnt) in self.freq.iter().enumerate() {
-            let diff = self.mean - value as f64;
+            let diff = mean - value as f64;
             sum += *cnt as f64 * diff * diff;
         }
-        self.std_dev = f64::sqrt(sum / total_cnt as f64);
+        self.std_dev = f64::sqrt(sum / total_cnt as f64) as f32;
     }
 
     pub fn get_nth_element(&self, mut n: usize) -> u16 {
@@ -53,6 +55,7 @@ impl HistogramChan {
     }
 }
 
+#[derive(Clone)]
 pub struct Histogram {
     pub max: u16,
     pub r:   Option<HistogramChan>,

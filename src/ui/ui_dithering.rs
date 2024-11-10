@@ -3,10 +3,10 @@ use gtk::{glib, prelude::*, glib::clone};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    core::core::*, indi, options::*, utils::io_utils::*
+    core::core::*, indi, options::*, utils::{io_utils::*, gtk_utils}
 };
 
-use super::{gtk_utils, ui_main::*};
+use super::ui_main::*;
 
 pub fn init_ui(
     _app:     &gtk::Application,

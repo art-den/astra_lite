@@ -846,6 +846,10 @@ fn calc_gradient(source: &dyn GradientCalcSource) -> Option<Plane> {
     let height = source.image_height();
     let min_size = usize::min(width, height);
     let cell_size = min_size / 30;
+    if cell_size <= 16 {
+        return None;
+    }
+
     let border = cell_size / 3;
     let cells_cnt = (min_size - 2 * border) / cell_size;
     let corner_cells_cnt = usize::max(cells_cnt / 4, 1);

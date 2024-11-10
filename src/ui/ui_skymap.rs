@@ -2,8 +2,14 @@ use std::{cell::{Cell, RefCell}, collections::HashMap, rc::Rc, sync::{Arc, RwLoc
 use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
-use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*}, indi::{self, value_to_sexagesimal}, options::*, plate_solve::PlateSolveOkResult, utils::io_utils::*};
-use super::{gtk_utils::{self, DEFAULT_DPMM}, sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*, math::*}, ui_main::*, ui_skymap_options::SkymapOptionsDialog, utils::*};
+use crate::{
+    core::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*},
+    indi::{self, value_to_sexagesimal},
+    options::*,
+    plate_solve::PlateSolveOkResult,
+    utils::{io_utils::*, gtk_utils::{self, *}},
+};
+use super::{sky_map::{alt_widget::paint_altitude_by_time, data::*, math::*, painter::*}, ui_main::*, ui_skymap_options::SkymapOptionsDialog, utils::*};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
 pub fn init_ui(
@@ -1262,7 +1268,7 @@ impl MapUi {
         }
 
         let bytes = glib::Bytes::from_owned(data.rgb_data.bytes.clone());
-        let mut pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
+        let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
             &bytes,
             gtk::gdk_pixbuf::Colorspace::Rgb,
             false,
@@ -1272,20 +1278,7 @@ impl MapUi {
             (data.rgb_data.width * 3) as i32,
         );
 
-        const MAX_SIZE: usize = 2000;
-
-        if data.rgb_data.width > MAX_SIZE
-        || data.rgb_data.height > MAX_SIZE {
-            let longest_size = usize::max(data.rgb_data.width, data.rgb_data.height);
-            let new_width = MAX_SIZE * data.rgb_data.width / longest_size;
-            let new_height = MAX_SIZE * data.rgb_data.height / longest_size;
-            pixbuf = pixbuf.scale_simple(
-                new_width as _,
-                new_height as _,
-                gtk::gdk_pixbuf::InterpType::Tiles,
-            ).unwrap();
-        }
-
+        let pixbuf = limit_pixbuf_by_longest_size(pixbuf, 2000);
         *self.ps_img.borrow_mut() = Some(pixbuf);
     }
 }

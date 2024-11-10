@@ -6,11 +6,11 @@ use crate::{
     core::{core::{Core, CoreEvent, ModeType}, mode_focusing::*},
     indi,
     options::*,
-    ui::{gtk_utils::DEFAULT_DPMM, plots::*},
-    utils::{io_utils::*, math::{cmp_f64, linear_interpolate}},
+    ui::plots::*,
+    utils::{io_utils::*, gtk_utils::{self, *}, math::{cmp_f64, linear_interpolate}},
 };
 
-use super::{gtk_utils, utils::*, ui_main::*};
+use super::{ui_main::*, utils::*};
 
 pub fn init_ui(
     _app:     &gtk::Application,

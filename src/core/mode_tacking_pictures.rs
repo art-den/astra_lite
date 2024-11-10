@@ -97,8 +97,8 @@ struct OutFileNames {
 
 struct CamOffsetCalc {
     step: usize,
-    low_values: Vec<(u16, f64)>,
-    high_values: Vec<(u16, f64)>,
+    low_values: Vec<(u16, f32)>,
+    high_values: Vec<(u16, f32)>,
 }
 
 pub struct TackingPicturesMode {
@@ -327,10 +327,9 @@ impl TackingPicturesMode {
 
     fn start_offset_calculation_shot(&mut self) -> anyhow::Result<()> {
         if let Some(offset_calc) = &self.cam_offset_calc {
-
-            if offset_calc.step % 2 == 0 { self.cam_options.frame.offset = 0; }
-            //frame_opts.exp_flat /= offset_calc.step as f64;
-            apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
+            let mut frame_opts = self.cam_options.frame.clone();
+            if offset_calc.step % 2 == 0 { frame_opts.offset = 0; }
+            apply_camera_options_and_take_shot(&self.indi, &self.device, &frame_opts)?;
             self.cur_exposure = self.cam_options.frame.exposure();
         }
         Ok(())
@@ -748,11 +747,11 @@ impl TackingPicturesMode {
                     "Calculating camera offset from low = {:?} and high = {:?} values ...",
                     offset_calc.low_values, offset_calc.high_values
                 );
-                let mut min_deviation_diff = f64::MAX;
+                let mut min_deviation_diff = f32::MAX;
                 let mut result_value = 0i32;
                 for (m1, d1) in &offset_calc.low_values {
                     for (m2, d2) in &offset_calc.high_values {
-                        let dev_diff = f64::abs(d1 - d2);
+                        let dev_diff = f32::abs(d1 - d2);
                         if dev_diff < min_deviation_diff {
                             min_deviation_diff = dev_diff;
                             result_value = *m2 as i32 - *m1 as i32;
@@ -763,6 +762,7 @@ impl TackingPicturesMode {
                 result_value = result_value.min(u16::MAX as i32);
                 result_value = result_value.max(u16::MIN as i32);
                 self.camera_offset = Some(result_value as u16);
+                dbg!(self.camera_offset);
                 result = NotifyResult::ModeStrChanged;
             }
         }
@@ -1195,8 +1195,8 @@ impl Mode for TackingPicturesMode {
             FrameProcessResultData::LightFrameInfo(info) =>
                 self.process_light_frame_info(info),
 
-            FrameProcessResultData::RawFrameInfo(raw_frame_info) =>
-                self.process_raw_histogram(&raw_frame_info.histogram),
+            FrameProcessResultData::HistorgamRaw(histogram) =>
+                self.process_raw_histogram(histogram),
 
             FrameProcessResultData::ShotProcessingFinished {
                 frame_is_ok, blob, raw_image_info, ..

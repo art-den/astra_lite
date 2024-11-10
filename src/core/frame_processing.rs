@@ -185,8 +185,10 @@ pub struct Preview8BitImgData {
 pub struct RawFrameInfo {
     pub frame_type:     FrameType,
     pub time:           Option<DateTime<Utc>>,
-    pub histogram:      Arc<RwLock<Histogram>>,
     pub calubr_methods: CalibrMethods,
+    pub mean:           f32,
+    pub median:         u16,
+    pub std_dev:        f32,
 }
 
 #[derive(Clone)]
@@ -194,6 +196,7 @@ pub enum FrameProcessResultData {
     Error(String),
     ShotProcessingStarted,
     RawFrameInfo(RawFrameInfo),
+    HistorgamRaw(Arc<RwLock<Histogram>>),
     RawFrame(Arc<RawImage>),
     Image(Arc<RwLock<Image>>),
     PreviewFrame(Arc<Preview8BitImgData>),
@@ -600,6 +603,7 @@ fn make_preview_image(
 enum ImageLoader<'a> {
     Fits(FitsReader, Box<dyn SeekNRead + 'a>),
     Tif(PathBuf),
+    ByPixbuf(PathBuf),
 }
 
 impl<'a> ImageLoader<'a> {
@@ -607,7 +611,7 @@ impl<'a> ImageLoader<'a> {
         match self {
             Self::Fits(reader, _) =>
                 find_mono_image_hdu_in_fits(reader).is_some(),
-            Self::Tif(_) =>
+            _ =>
                 false,
         }
     }
@@ -616,7 +620,7 @@ impl<'a> ImageLoader<'a> {
         match self {
             Self::Fits(reader, _) =>
                 find_color_image_hdu_in_fits(reader).is_some(),
-            Self::Tif(_) =>
+            _ =>
                 true,
         }
     }
@@ -625,8 +629,8 @@ impl<'a> ImageLoader<'a> {
         match self {
             Self::Fits(reader, stream) =>
                 load_raw_image_from_fits_reader(reader, stream),
-            Self::Tif(_) =>
-                anyhow::bail!("Format not support row images"),
+            _ =>
+                anyhow::bail!("Format not support raw images"),
         }
     }
 
@@ -636,13 +640,15 @@ impl<'a> ImageLoader<'a> {
                 load_image_from_fits_reader(image, reader, stream)?,
             Self::Tif(file_name) =>
                 load_image_from_tif_file(image, file_name)?,
+            Self::ByPixbuf(file_name) =>
+                load_image_by_pixbuf(image, file_name, 6000)?,
         }
         Ok(())
     }
 }
 
-fn make_preview_image_impl<'a>(
-    command:    &'a FrameProcessCommandData,
+fn make_preview_image_impl(
+    command:    &FrameProcessCommandData,
     result_fun: &ResultFun
 ) -> anyhow::Result<()> {
     if command.stop_flag.load(Ordering::Relaxed) {
@@ -671,8 +677,13 @@ fn make_preview_image_impl<'a>(
     let is_tif_file =
         type_hint.eq_ignore_ascii_case("tif");
 
+    let is_file_for_pixbuf =
+        type_hint.eq_ignore_ascii_case("jpg") ||
+        type_hint.eq_ignore_ascii_case("jpeg") ||
+        type_hint.eq_ignore_ascii_case("png");
+
     let mut loader = if is_fits_file {
-        let mut stream: Box<dyn SeekNRead + 'a> = match &command.img_source {
+        let mut stream: Box<dyn SeekNRead> = match &command.img_source {
             ImageSource::Blob(blob) =>
                 Box::new(Cursor::new(blob.data.as_slice())),
             ImageSource::FileName(file_name) => {
@@ -680,12 +691,17 @@ fn make_preview_image_impl<'a>(
                 Box::new(file)
             },
         };
-
         let reader = FitsReader::new(&mut stream)?;
         ImageLoader::Fits(reader, stream)
     } else if is_tif_file {
         if let ImageSource::FileName(file_name) = &command.img_source {
             ImageLoader::Tif(file_name.clone())
+        } else {
+            unreachable!();
+        }
+    } else if is_file_for_pixbuf {
+        if let ImageSource::FileName(file_name) = &command.img_source {
+            ImageLoader::ByPixbuf(file_name.clone())
         } else {
             unreachable!();
         }
@@ -756,7 +772,27 @@ fn make_preview_image_impl<'a>(
         debug_log_hist_chan("G", &raw_hist.g);
         debug_log_hist_chan("B", &raw_hist.b);
 
+        let chan = if let Some(chan) = &raw_hist.l {
+            chan
+        } else if let Some(chan) = &raw_hist.g {
+            chan
+        } else {
+            unreachable!();
+        };
+
+        let raw_mean = chan.mean;
+        let raw_median = chan.median();
+        let raw_std_dev = chan.std_dev;
+
         drop(raw_hist);
+
+        send_result(
+            FrameProcessResultData::HistorgamRaw(Arc::clone(&command.frame.raw_hist)),
+            &command.camera,
+            command.mode_type,
+            &command.stop_flag,
+            result_fun
+        );
 
         // Applying calibration data
         if frame_type == FrameType::Lights
@@ -772,9 +808,11 @@ fn make_preview_image_impl<'a>(
 
         let raw_frame_info = RawFrameInfo {
             frame_type,
-            time:       info.time,
-            histogram:  Arc::clone(&command.frame.raw_hist),
+            time:           info.time,
             calubr_methods: info.calibr_methods.clone(),
+            mean:           raw_mean as f32,
+            median:         raw_median,
+            std_dev:        raw_std_dev as f32,
         };
         send_result(
             FrameProcessResultData::RawFrameInfo(raw_frame_info),
@@ -918,6 +956,18 @@ fn make_preview_image_impl<'a>(
     let tmr = TimeLogger::start();
     hist.from_image(&image);
     tmr.log("histogram for result image");
+
+    if is_ready_mage {
+        *command.frame.raw_hist.write().unwrap() = hist.clone();
+        send_result(
+            FrameProcessResultData::HistorgamRaw(Arc::clone(&command.frame.raw_hist)),
+            &command.camera,
+            command.mode_type,
+            &command.stop_flag,
+            result_fun
+        );
+    }
+
     drop(hist);
 
     if command.stop_flag.load(Ordering::Relaxed) {

@@ -1,5 +1,5 @@
 use gtk::prelude::*;
-use crate::{ui::gtk_utils::{self, DEFAULT_DPMM}, utils::math::linear_solve2};
+use crate::{utils::gtk_utils::{self, DEFAULT_DPMM}, utils::math::linear_solve2};
 use super::math::*;
 
 pub struct Screen {

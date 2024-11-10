@@ -1,7 +1,7 @@
 use std::{rc::Rc, sync::Arc};
 use gtk::{prelude::*, glib::clone};
-use crate::{indi, Options};
-use super::{gtk_utils, sky_map::painter::Color, ui_skymap::UiOptions};
+use crate::{indi, utils::gtk_utils, options::Options};
+use super::{sky_map::painter::Color, ui_skymap::UiOptions};
 
 pub struct SkymapOptionsDialog {
     builder: gtk::Builder,
