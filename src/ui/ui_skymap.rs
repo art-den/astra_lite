@@ -588,7 +588,8 @@ impl MapUi {
                     let cam_name = &device.name;
                     let cam_ccd_prop = &device.prop;
                     let cam_ccd = indi::CamCcd::from_ccd_prop_name(cam_ccd_prop);
-                    if options.telescope.focal_len <= 0.1 {
+                    let focal_len = options.telescope.real_focal_length();
+                    if focal_len <= 0.1 {
                         anyhow::bail!("Wrong telescope focal lenght");
                     }
                     let (sensor_width, sensor_height) = self.indi.camera_get_max_frame_size(&cam_name, cam_ccd)?;
@@ -608,8 +609,8 @@ impl MapUi {
 
                     Ok(CameraFrame{
                         name: full_cam_name,
-                        horiz_angle: f64::atan2(width_mm, options.telescope.focal_len),
-                        vert_angle: f64::atan2(height_mm, options.telescope.focal_len),
+                        horiz_angle: f64::atan2(width_mm, focal_len),
+                        vert_angle: f64::atan2(height_mm, focal_len),
                         rot_angle,
                     })
                 } ().ok()
