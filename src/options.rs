@@ -567,7 +567,7 @@ impl Default for MainCamGuidingOptions {
             max_error:       3.0,
             calibr_exposure: 2.0,
             calibr_gain:     Gain::default(),
-            dith_dist:       100,
+            dith_dist:       50,
         }
     }
 }
@@ -601,7 +601,7 @@ impl Default for GuidingOptions {
     fn default() -> Self {
         Self {
             mode:        GuidingMode::Disabled,
-            dith_period: 1,
+            dith_period: 2,
             main_cam:    MainCamGuidingOptions::default(),
             ext_guider:  ExtGuiderOptions::default(),
         }
