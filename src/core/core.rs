@@ -644,6 +644,7 @@ impl Core {
             CameraMode::SavingRawFrames,
             &self.options,
         )?;
+        self.live_stacking.clear();
         mode.set_guider(&self.ext_guider);
         mode.set_ref_stars(&self.ref_stars);
         mode.start()?;
@@ -660,6 +661,7 @@ impl Core {
             CameraMode::LiveStacking,
             &self.options,
         )?;
+        self.live_stacking.clear();
         mode.set_guider(&self.ext_guider);
         mode.set_ref_stars(&self.ref_stars);
         mode.set_live_stacking(&self.live_stacking);

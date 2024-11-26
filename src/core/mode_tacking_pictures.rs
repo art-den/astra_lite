@@ -1101,9 +1101,6 @@ impl Mode for TackingPicturesMode {
             let mut ref_stars = ref_stars.lock().unwrap();
             *ref_stars = None;
         }
-        if let Some(live_stacking) = &self.live_stacking {
-            live_stacking.clear();
-        }
 
         self.fname_utils.init(&self.indi, &self.device);
         self.generate_output_file_names()?;
