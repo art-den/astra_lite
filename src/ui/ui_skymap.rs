@@ -3,11 +3,11 @@ use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use crate::{
-    core::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*},
+    core::{core::*, frame_processing::*, mode_goto::GotoConfig},
     indi::{self, value_to_sexagesimal},
     options::*,
     plate_solve::PlateSolveOkResult,
-    utils::{io_utils::*, gtk_utils::{self, *}},
+    utils::{gtk_utils::{self, *}, io_utils::*},
 };
 use super::{sky_map::{alt_widget::paint_altitude_by_time, data::*, math::*, painter::*}, ui_main::*, ui_skymap_options::SkymapOptionsDialog, utils::*};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
@@ -1155,63 +1155,6 @@ impl MapUi {
         }
     }
 
-    fn goto_eq_coord(self: &Rc<Self>, crd: &EqCoord) {
-        self.goto_started.set(true);
-
-        let (main_thread_sender, main_thread_receiver) =
-            async_channel::unbounded::<anyhow::Result<()>>();
-        let indi = Arc::clone(&self.indi);
-        let options = Arc::clone(&self.options);
-        let crd = crd.clone();
-
-        glib::spawn_future_local(clone!(@weak self as self_ => async move {
-            while let Ok(event) = main_thread_receiver.recv().await {
-                self_.goto_started.set(false);
-                if let Err(err) = event {
-                    gtk_utils::show_error_message(
-                        &self_.window,
-                        "Error during executing command for mount",
-                        &err.to_string()
-                    )
-                }
-            }
-        }));
-
-        std::thread::spawn(move || {
-            let exec = || -> anyhow::Result<()> {
-                let options = options.read().unwrap();
-                let mount_device = &options.mount.device;
-                if indi.mount_get_parked(&mount_device)? {
-                    indi.mount_set_parked(
-                        &mount_device,
-                        false,
-                        true,
-                        Some(5000)
-                    )?;
-                }
-                if indi.mount_get_parked(&mount_device)? {
-                    anyhow::bail!("Mount is still parked! Can't goto specified coordinate");
-                }
-                indi.set_after_coord_set_action(
-                    &mount_device,
-                    indi::AfterCoordSetAction::Track,
-                    true,
-                    INDI_SET_PROP_TIMEOUT
-                )?;
-                indi.mount_set_eq_coord(
-                    &mount_device,
-                    radian_to_hour(crd.ra),
-                    radian_to_degree(crd.dec),
-                    true,
-                    None
-                )?;
-                Ok(())
-            };
-            let res = exec();
-            main_thread_sender.send_blocking(res).unwrap();
-        });
-    }
-
     fn coord_of_selected_object_at_spec_time(&self) -> Option<EqCoord> {
         let selected_item = self.selected_item.borrow();
         let Some(selected_item) = &*selected_item else { return None; };
@@ -1226,28 +1169,35 @@ impl MapUi {
         let Some(crd) = self.coord_of_selected_object_at_spec_time() else {
             return;
         };
-        self.goto_eq_coord(&crd);
+        self.goto_coordinate(&crd, true);
     }
 
     fn handler_goto_sel_and_solve(self: &Rc<Self>) {
         let Some(crd) = self.coord_of_selected_object_at_spec_time() else {
             return;
         };
-
-        let mut options = self.options.write().unwrap();
-        options.read_all(&self.builder);
-        drop(options);
-
-        gtk_utils::exec_and_show_error(&self.window, || {
-            self.core.start_goto_coord(&crd)?;
-            Ok(())
-        });
+        self.goto_coordinate(&crd, false);
     }
 
     fn handler_goto_point(self: &Rc<Self>) {
         let clicked_crd = self.clicked_crd.borrow();
         let Some(clicked_crd) = &*clicked_crd else { return; };
-        self.goto_eq_coord(clicked_crd);
+        self.goto_coordinate(clicked_crd, true);
+    }
+
+    fn goto_coordinate(self: &Rc<Self>, coord: &EqCoord, only_goto: bool) {
+        let mut options = self.options.write().unwrap();
+        options.read_all(&self.builder);
+        drop(options);
+        let config = if only_goto {
+            GotoConfig::OnlyGoto
+        } else {
+            GotoConfig::GotoPlateSolveAndCorrect
+        };
+        gtk_utils::exec_and_show_error(&self.window, || {
+            self.core.start_goto_coord(coord, config)?;
+            Ok(())
+        });
     }
 
     fn set_full_screen_mode(&self, full_screen: bool) {

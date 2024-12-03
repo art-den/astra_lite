@@ -28,9 +28,16 @@ pub enum GotoDestination {
     Coord(EqCoord)
 }
 
+#[derive(PartialEq)]
+pub enum GotoConfig {
+    OnlyGoto,
+    GotoPlateSolveAndCorrect,
+}
+
 pub struct GotoMode {
     state:           State,
     destination:     GotoDestination,
+    config:          GotoConfig,
     eq_coord:        EqCoord,
     camera:          DeviceAndProp,
     cam_opts:        CamOptions,
@@ -48,6 +55,7 @@ pub struct GotoMode {
 impl GotoMode {
     pub fn new(
         destination: GotoDestination,
+        config:      GotoConfig,
         options:     &Arc<RwLock<Options>>,
         indi:        &Arc<indi::Connection>,
         subscribers: &Arc<RwLock<Subscribers>>,
@@ -69,6 +77,7 @@ impl GotoMode {
         let plate_solver = PlateSolver::new(opts.plate_solver.solver);
         Ok(Self {
             state:           State::None,
+            config,
             eq_coord:        EqCoord::default(),
             ps_opts:         opts.plate_solver.clone(),
             mount:           opts.mount.device.clone(),
@@ -252,6 +261,10 @@ impl Mode for GotoMode {
     }
 
     fn progress(&self) -> Option<Progress> {
+        if self.config == GotoConfig::OnlyGoto {
+            return None;
+        }
+
         let mut stage = match self.state {
             State::None => return None,
             State::ImagePlateSolving => -1,
@@ -350,6 +363,9 @@ impl Mode for GotoMode {
                     if self.goto_ok_seconds >= AFTER_GOTO_WAIT_TIME {
                         self.start_take_picture()?;
                         if self.state == State::Goto {
+                            if self.config == GotoConfig::OnlyGoto {
+                                return Ok(NotifyResult::Finished { next_mode: None });
+                            }
                             self.state = State::TackingPicture;
                         } else {
                             self.state = State::TackingFinalPicture;
