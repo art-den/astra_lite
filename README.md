@@ -28,6 +28,7 @@ https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-ast
 ![](./docs/screenshot1.jpg)
 
 # Future plans
+* Mount polar alignment
 * INDI driver crash recovery
 * Live view from camera in video mode
 * Meridian flip support
