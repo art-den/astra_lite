@@ -146,7 +146,7 @@ impl ImageLayer<u16> {
         (sum / self.data.len() as u64) as u16
     }
 
-    pub fn get_idiv16_crd(&self, x: i64, y: i64) -> Option<u16> {
+    pub fn get_crd_i64(&self, x: i64, y: i64) -> Option<u16> {
         let x_i = x / CRD_DIV;
         let y_i = y / CRD_DIV;
         let x_p1 = x as usize % CRD_DIV as usize;
@@ -192,7 +192,7 @@ impl ImageLayer<u16> {
     }
 
     pub fn get_f64_crd(&self, x: f64, y: f64) -> Option<u16> {
-        self.get_idiv16_crd(
+        self.get_crd_i64(
             (x * CRD_DIV as f64) as i64,
             (y * CRD_DIV as f64) as i64
         )

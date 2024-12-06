@@ -200,26 +200,42 @@ impl Stacker {
         if src.is_empty() {
             return;
         }
-        let center_x = (src.width() as f64 - 1.0) / 2.0;
-        let center_y = (src.height() as f64 - 1.0) / 2.0;
-        let cos_a = f64::cos(-angle);
-        let sin_a = f64::sin(-angle);
+
+        const K: i64 = 65536;
+
+        fn f64_to_i64(value: f64) -> i64 {
+            f64::round(value * K as f64) as i64
+        }
+
+        let cos_a = f64_to_i64(f64::cos(-angle));
+        let sin_a = f64_to_i64(f64::sin(-angle));
+
+        fn crd_to_i64(value: f64) -> i64 {
+            f64::round(value * CRD_DIV as f64) as i64
+        }
+
+        let center_x = crd_to_i64((src.width() as f64 - 1.0) / 2.0);
+        let center_y = crd_to_i64((src.height() as f64 - 1.0) / 2.0);
+        let transl_x = crd_to_i64(transl_x);
+        let transl_y = crd_to_i64(transl_y);
+
         dst.data.par_chunks_exact_mut(src.width())
             .zip(cnt.par_chunks_exact_mut(src.width()))
             .enumerate()
             .for_each(|(y, (dst_row, cnt_row))| {
-                let y = y as f64 - transl_y;
+                let y = y as i64 * CRD_DIV - transl_y;
                 let dy = y - center_y;
-                for (x, (dst_v, cnt_v)) in dst_row.iter_mut().zip(cnt_row).enumerate() {
-                    let x = x as f64 - transl_x;
+                let mut x = -transl_x;
+                for (dst_v, cnt_v) in dst_row.iter_mut().zip(cnt_row) {
                     let dx = x - center_x;
-                    let rot_x = center_x + dx * cos_a - dy * sin_a;
-                    let rot_y = center_y + dy * cos_a + dx * sin_a;
-                    let src_v = src.get_f64_crd(rot_x, rot_y);
+                    let rot_x = center_x + (dx * cos_a - dy * sin_a) / K;
+                    let rot_y = center_y + (dy * cos_a + dx * sin_a) / K;
+                    let src_v = src.get_crd_i64(rot_x, rot_y);
                     if let Some(v) = src_v {
                         *dst_v += v as i32;
                         if update_cnt { *cnt_v += 1; }
                     }
+                    x += CRD_DIV;
                 }
             });
     }
@@ -272,30 +288,45 @@ impl Stacker {
         if tmp.data.is_empty() {
             tmp.data.resize(src.width() * src.height(), 0);
         }
-        let center_x = (src.width() as f64 - 1.0) / 2.0;
-        let center_y = (src.height() as f64 - 1.0) / 2.0;
-        let cos_a = f64::cos(-angle);
-        let sin_a = f64::sin(-angle);
+
+        const K: i64 = 65536;
+
+        fn f64_to_i64(value: f64) -> i64 {
+            f64::round(value * K as f64) as i64
+        }
+
+        let cos_a = f64_to_i64(f64::cos(-angle));
+        let sin_a = f64_to_i64(f64::sin(-angle));
+
+        fn crd_to_i64(value: f64) -> i64 {
+            f64::round(value * CRD_DIV as f64) as i64
+        }
+
+        let center_x = crd_to_i64((src.width() as f64 - 1.0) / 2.0);
+        let center_y = crd_to_i64((src.height() as f64 - 1.0) / 2.0);
+        let transl_x = crd_to_i64(transl_x);
+        let transl_y = crd_to_i64(transl_y);
+
         tmp.data.par_chunks_exact_mut(src.width())
             .enumerate()
             .for_each(|(y, dst_row)| {
-                let y = y as f64 - transl_y;
+                let y = y as i64 * CRD_DIV - transl_y;
                 let dy = y - center_y;
-                for (x, dst_v) in dst_row.iter_mut().enumerate() {
-                    let x = x as f64 - transl_x;
+                let mut x = -transl_x;
+                for dst_v in dst_row {
                     let dx = x - center_x;
-                    let rot_x = center_x + dx * cos_a - dy * sin_a;
-                    let rot_y = center_y + dy * cos_a + dx * sin_a;
-                    let src_v = src.get_f64_crd(rot_x, rot_y);
+                    let rot_x = center_x + (dx * cos_a - dy * sin_a) / K;
+                    let rot_y = center_y + (dy * cos_a + dx * sin_a) / K;
+                    let src_v = src.get_crd_i64(rot_x, rot_y);
                     *dst_v = if let Some(mut v) = src_v {
                         if v == 0 { v = 1; }
                         v
                     } else {
                         0
                     };
+                    x += CRD_DIV;
                 }
             });
-
     }
 
     fn add_median(
