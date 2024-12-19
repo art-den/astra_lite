@@ -8,7 +8,7 @@ use crate::{
     utils::math::*,
     image::info::LightFrameInfo,
 };
-use super::{core::*, frame_processing::*, utils::*};
+use super::{core::*, events::*, frame_processing::*, utils::*};
 
 const MAX_FOCUS_TOTAL_TRY_CNT: usize = 8;
 const MAX_FOCUS_SAMPLE_TRY_CNT: usize = 4;
@@ -28,7 +28,7 @@ pub enum FocusingStateEvent {
 }
 
 #[derive(PartialEq, Debug)]
-enum FocusingStage {
+enum Stage {
     Undef,
     Preliminary,
     Final
@@ -36,7 +36,7 @@ enum FocusingStage {
 
 pub struct FocusingMode {
     indi:        Arc<indi::Connection>,
-    subscribers: Arc<RwLock<Subscribers>>,
+    subscribers: Arc<EventSubscriptions>,
     state:       FocusingState,
     camera:      DeviceAndProp,
     f_options:   FocuserOptions,
@@ -46,7 +46,7 @@ pub struct FocusingMode {
     samples:     Vec<FocuserSample>,
     result_pos:  Option<f64>,
     try_cnt:     usize,
-    stage:       FocusingStage,
+    stage:       Stage,
     next_mode:   Option<Box<dyn Mode + Sync + Send>>,
 }
 
@@ -77,7 +77,7 @@ impl FocusingMode {
     pub fn new(
         indi:        &Arc<indi::Connection>,
         options:     &Arc<RwLock<Options>>,
-        subscribers: &Arc<RwLock<Subscribers>>,
+        subscribers: &Arc<EventSubscriptions>,
         next_mode:   Option<Box<dyn Mode + Sync + Send>>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
@@ -104,7 +104,7 @@ impl FocusingMode {
             to_go:       VecDeque::new(),
             samples:     Vec::new(),
             result_pos:  None,
-            stage:       FocusingStage::Undef,
+            stage:       Stage::Undef,
             try_cnt:     0,
             next_mode,
             camera:      cam_device.clone(),
@@ -114,7 +114,7 @@ impl FocusingMode {
     fn start_stage(
         &mut self,
         middle_pos: f64,
-        stage:      FocusingStage
+        stage:      Stage
     ) -> anyhow::Result<()> {
         log::debug!("Starting autofocus stage {:?} for midle value {}", stage, middle_pos);
         self.samples.clear();
@@ -188,7 +188,7 @@ impl FocusingMode {
                     coeffs: None,
                     result: None,
                 };
-                self.subscribers.read().unwrap().inform_event(CoreEvent::Focusing(
+                self.subscribers.notify(Event::Focusing(
                     FocusingStateEvent::Data(event_data)
                 ));
             } else {
@@ -223,7 +223,7 @@ impl FocusingMode {
                             coeffs: Some(coeffs.clone()),
                             result: None,
                         };
-                        self.subscribers.read().unwrap().inform_event(CoreEvent::Focusing(
+                        self.subscribers.notify(Event::Focusing(
                             FocusingStateEvent::Data(event_data)
                         ));
                         anyhow::bail!("Wrong focuser curve result");
@@ -238,7 +238,7 @@ impl FocusingMode {
                         coeffs: Some(coeffs.clone()),
                         result: Some(extr),
                     };
-                    self.subscribers.read().unwrap().inform_event(CoreEvent::Focusing(
+                    self.subscribers.notify(Event::Focusing(
                         FocusingStateEvent::Data(event_data)
                     ));
                     let focuser_info = self.indi.focuser_get_abs_value_prop_info(&self.f_options.device)?;
@@ -276,9 +276,9 @@ impl FocusingMode {
 
                     let result_pos = extr.round();
 
-                    if self.stage == FocusingStage::Preliminary {
-                        self.start_stage(result_pos, FocusingStage::Final)?;
-                        result = NotifyResult::ModeStrChanged;
+                    if self.stage == Stage::Preliminary {
+                        self.start_stage(result_pos, Stage::Final)?;
+                        result = NotifyResult::ProgressChanges;
                         return Ok(result)
                     }
 
@@ -301,7 +301,7 @@ impl FocusingMode {
                         target_pos: result_pos
                     };
                     let result_event = FocusingStateEvent::Result { value: result_pos };
-                    self.subscribers.read().unwrap().inform_event(CoreEvent::Focusing(result_event));
+                    self.subscribers.notify(Event::Focusing(result_event));
                 } else {
                     self.start_sample(false)?;
                 }
@@ -328,9 +328,9 @@ impl Mode for FocusingMode {
 
     fn progress_string(&self) -> String {
         match self.stage {
-            FocusingStage::Preliminary =>
+            Stage::Preliminary =>
                 "Focusing (preliminary)".to_string(),
-            FocusingStage::Final =>
+            Stage::Final =>
                 "Focusing (final)".to_string(),
             _ => unreachable!(),
         }
@@ -358,7 +358,7 @@ impl Mode for FocusingMode {
     fn start(&mut self) -> anyhow::Result<()> {
         let cur_pos = self.indi.focuser_get_abs_value(&self.f_options.device)?.round();
         self.before_pos = cur_pos;
-        self.start_stage(cur_pos, FocusingStage::Preliminary)?;
+        self.start_stage(cur_pos, Stage::Preliminary)?;
         Ok(())
     }
 

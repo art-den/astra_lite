@@ -3,13 +3,13 @@ use gtk::{glib, prelude::*, glib::clone};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    core::{consts::INDI_SET_PROP_TIMEOUT, core::{Core, CoreEvent, ModeType}},
+    core::{consts::INDI_SET_PROP_TIMEOUT, core::{Core, ModeType}, events::*},
     indi,
     options::*,
-    utils::{io_utils::*, gtk_utils},
+    utils::{gtk_utils, io_utils::*},
 };
 
-use super::{ui_platesolver_options::PlatesolverOptionsDialog, ui_main::*, utils::*};
+use super::{ui_main::*, utils::*};
 
 
 pub fn init_ui(
@@ -66,9 +66,9 @@ pub fn init_ui(
     );
 }
 
-pub enum MainThreadEvent {
+enum MainThreadEvent {
     Indi(indi::Event),
-    Core(CoreEvent),
+    Core(Event),
 }
 
 struct MountUi {
@@ -78,7 +78,7 @@ struct MountUi {
     options:         Arc<RwLock<Options>>,
     core:            Arc<Core>,
     indi:            Arc<indi::Connection>,
-    delayed_actions: DelayedActions<DelayedActionTypes>,
+    delayed_actions: DelayedActions<DelayedAction>,
     ui_options:      RefCell<UiOptions>,
     closed:          Cell<bool>,
     indi_evt_conn:   RefCell<Option<indi::Subscription>>,
@@ -92,7 +92,7 @@ impl Drop for MountUi {
 }
 
 #[derive(Hash, Eq, PartialEq)]
-enum DelayedActionTypes {
+enum DelayedAction {
     FillDevicesList,
     CorrectWidgetsProps,
     FillMountSpdList,
@@ -122,10 +122,6 @@ impl MountUi {
     ];
 
     fn init_widgets(&self) {
-        let spb_ps_exp = self.builder.object::<gtk::SpinButton>("spb_ps_exp").unwrap();
-        spb_ps_exp.set_range(0.5, 30.0);
-        spb_ps_exp.set_digits(1);
-        spb_ps_exp.set_increments(0.5, 5.0);
     }
 
     fn connect_core_and_indi_events(self: &Rc<Self>) {
@@ -136,7 +132,7 @@ impl MountUi {
         }));
 
         let sender = main_thread_sender.clone();
-        self.core.subscribe_events(move |event| {
+        self.core.event_subscriptions().subscribe(move |event| {
             sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
         });
 
@@ -179,6 +175,7 @@ impl MountUi {
             self_.fill_mount_speed_list_widget();
             self_.show_cur_mount_state();
             self_.correct_widgets_props();
+            self_.core.event_subscriptions().notify(Event::MountDeviceSelected(cur_id.to_string()));
         }));
 
         let chb_tracking = self.builder.object::<gtk::CheckButton>("chb_tracking").unwrap();
@@ -205,9 +202,6 @@ impl MountUi {
                 self_.correct_widgets_props();
             });
         }));
-
-        gtk_utils::connect_action_rc(&self.window, self, "platesolver_options", Self::handler_action_platesolver_options);
-        gtk_utils::connect_action_rc(&self.window, self, "capture_platesolve", Self::handler_action_capture_platesolve);
     }
 
     fn correct_widgets_props(&self) {
@@ -245,8 +239,6 @@ impl MountUi {
         for &btn_name in Self::MOUNT_NAV_BUTTON_NAMES {
             ui.set_prop_bool_ex(btn_name, "sensitive", move_enabled);
         }
-
-        gtk_utils::enable_action(&self.window, "capture_platesolve", mount_ctrl_sensitive);
     }
 
     fn handler_closing(&self) {
@@ -280,24 +272,24 @@ impl MountUi {
         match event {
             MainThreadEvent::Indi(indi::Event::NewDevice(event)) =>
                 if event.interface.contains(indi::DriverInterface::TELESCOPE) {
-                    self.delayed_actions.schedule(DelayedActionTypes::FillDevicesList);
+                    self.delayed_actions.schedule(DelayedAction::FillDevicesList);
                 },
 
             MainThreadEvent::Indi(indi::Event::DeviceConnected(event)) =>
                 if event.interface.contains(indi::DriverInterface::TELESCOPE) {
-                    self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetsProps);
+                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
                 },
 
             MainThreadEvent::Indi(indi::Event::DeviceDelete(event)) => {
                 if event.drv_interface.contains(indi::DriverInterface::TELESCOPE) {
-                    self.delayed_actions.schedule(DelayedActionTypes::FillDevicesList);
-                    self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetsProps);
+                    self.delayed_actions.schedule(DelayedAction::FillDevicesList);
+                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
                 }
             }
             MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) => {
                 if conn_state == indi::ConnState::Disconnected
                 || conn_state == indi::ConnState::Connected {
-                    self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetsProps);
+                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
                 }
             }
 
@@ -327,7 +319,7 @@ impl MountUi {
                 };
             }
 
-            MainThreadEvent::Core(CoreEvent::ModeChanged) => {
+            MainThreadEvent::Core(Event::ModeChanged) => {
                 self.correct_widgets_props();
             }
             _ => {}
@@ -483,15 +475,15 @@ impl MountUi {
         });
     }
 
-    fn handler_delayed_action(&self, action: &DelayedActionTypes) {
+    fn handler_delayed_action(&self, action: &DelayedAction) {
         match action {
-            DelayedActionTypes::CorrectWidgetsProps => {
+            DelayedAction::CorrectWidgetsProps => {
                 self.correct_widgets_props();
             }
-            DelayedActionTypes::FillMountSpdList => {
+            DelayedAction::FillMountSpdList => {
                 self.fill_mount_speed_list_widget();
             }
-            DelayedActionTypes::FillDevicesList => {
+            DelayedAction::FillDevicesList => {
                 self.fill_devices_list();
             }
         }
@@ -511,7 +503,7 @@ impl MountUi {
             ("TELESCOPE_SLEW_RATE", ..) if new_prop => {
                 let selected_device = self.options.read().unwrap().mount.device.clone();
                 if selected_device != device_name { return; }
-                self.delayed_actions.schedule(DelayedActionTypes::FillMountSpdList);
+                self.delayed_actions.schedule(DelayedAction::FillMountSpdList);
             }
 
             ("TELESCOPE_TRACK_STATE", elem, indi::PropValue::Switch(prop_value)) => {
@@ -536,28 +528,5 @@ impl MountUi {
 
             _ => {}
         }
-    }
-
-    fn handler_action_platesolver_options(self: &Rc<Self>) {
-        let dialog = PlatesolverOptionsDialog::new(self.window.upcast_ref());
-        let options = self.options.read().unwrap();
-        dialog.show_options(&options.plate_solver);
-        dialog.exec(clone!(@strong self as self_, @strong dialog => move || {
-            let mut options = self_.options.write().unwrap();
-            dialog.get_options(&mut options.plate_solver);
-            drop(options);
-            Ok(())
-        }));
-    }
-
-    fn handler_action_capture_platesolve(self: &Rc<Self>) {
-        let mut options = self.options.write().unwrap();
-        options.read_all(&self.builder);
-        drop(options);
-
-        gtk_utils::exec_and_show_error(&self.window, || {
-            self.core.start_capture_and_platesolve()?;
-            Ok(())
-        });
     }
 }

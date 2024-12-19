@@ -3,11 +3,11 @@ use chrono::{DateTime, Local, Utc};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{consts::*, core::*, frame_processing::*},
+    core::{consts::*, core::*, events::*, frame_processing::*},
     image::{histogram::*, image::RgbU8Data, info::*, io::save_image_to_tif_file, raw::{CalibrMethods, FrameType}, stars_offset::Offset},
     indi,
     options::*,
-    utils::{io_utils::*, log_utils::*, gtk_utils::{self, *}}
+    utils::{gtk_utils::{self, *}, io_utils::*, log_utils::*}
 };
 use super::{ui_darks_library::DarksLibraryDialog, ui_main::*, utils::*};
 
@@ -28,7 +28,7 @@ pub fn init_ui(
         Ok(())
     });
 
-    let data = Rc::new(CameraUi {
+    let obj = Rc::new(CameraUi {
         main_ui:            Rc::clone(main_ui),
         builder:            builder.clone(),
         window:             window.clone(),
@@ -48,38 +48,38 @@ pub fn init_ui(
         self_:              RefCell::new(None),
     });
 
-    *data.self_.borrow_mut() = Some(Rc::clone(&data));
+    *obj.self_.borrow_mut() = Some(Rc::clone(&obj));
 
-    data.init_cam_ctrl_widgets();
-    data.init_cam_widgets();
-    data.init_raw_widgets();
-    data.init_preview_widgets();
-    data.init_live_stacking_widgets();
-    data.init_frame_quality_widgets();
+    obj.init_cam_ctrl_widgets();
+    obj.init_cam_widgets();
+    obj.init_raw_widgets();
+    obj.init_preview_widgets();
+    obj.init_live_stacking_widgets();
+    obj.init_frame_quality_widgets();
 
-    data.show_ui_options();
-    data.connect_common_events();
-    data.connect_widgets_events();
-    data.connect_main_ui_events(handlers);
+    obj.show_ui_options();
+    obj.connect_common_events();
+    obj.connect_widgets_events();
+    obj.connect_main_ui_events(handlers);
 
-    data.show_total_raw_time();
-    data.update_light_history_table();
-    data.update_calibr_history_table();
+    obj.show_total_raw_time();
+    obj.update_light_history_table();
+    obj.update_calibr_history_table();
 
-    data.connect_img_mouse_scroll_events();
+    obj.connect_img_mouse_scroll_events();
 
-    data.delayed_actions.set_event_handler(
-        clone!(@weak data => move |action| {
-            data.handler_delayed_action(action);
+    obj.delayed_actions.set_event_handler(
+        clone!(@weak obj => move |action| {
+            obj.handler_delayed_action(action);
         })
     );
 
-    data.correct_widgets_props();
-    data.correct_frame_quality_widgets_props();
+    obj.correct_widgets_props();
+    obj.correct_frame_quality_widgets_props();
 }
 
 #[derive(Hash, Eq, PartialEq)]
-enum DelayedActionTypes {
+enum DelayedAction {
     UpdateCamList,
     StartLiveView,
     StartCooling,
@@ -149,8 +149,8 @@ impl Default for UiOptions {
     }
 }
 
-pub enum MainThreadEvent {
-    Core(CoreEvent),
+enum MainThreadEvent {
+    Core(Event),
     Indi(indi::Event),
 }
 
@@ -186,7 +186,7 @@ struct CameraUi {
     options:            Arc<RwLock<Options>>,
     core:               Arc<Core>,
     indi:               Arc<indi::Connection>,
-    delayed_actions:    DelayedActions<DelayedActionTypes>,
+    delayed_actions:    DelayedActions<DelayedAction>,
     ui_options:         RefCell<UiOptions>,
     conn_state:         RefCell<indi::ConnState>,
     indi_evt_conn:      RefCell<Option<indi::Subscription>>,
@@ -242,17 +242,36 @@ impl CameraUi {
         scl_dark.set_range(0.0, 1.0);
         scl_dark.set_increments(0.01, 0.1);
         scl_dark.set_round_digits(2);
+        scl_dark.set_digits(2);
+
+        let (dpimm_x, _) = gtk_utils::get_widget_dpmm(&self.window)
+            .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
+        scl_dark.set_width_request((40.0 * dpimm_x) as i32);
 
         let scl_highlight = self.builder.object::<gtk::Scale>("scl_highlight").unwrap();
         scl_highlight.set_range(0.0, 1.0);
         scl_highlight.set_increments(0.01, 0.1);
         scl_highlight.set_round_digits(2);
+        scl_highlight.set_digits(2);
 
         let scl_gamma = self.builder.object::<gtk::Scale>("scl_gamma").unwrap();
         scl_gamma.set_range(1.0, 5.0);
         scl_gamma.set_digits(1);
         scl_gamma.set_increments(0.1, 1.0);
         scl_gamma.set_round_digits(1);
+        scl_gamma.set_digits(1);
+
+        let configure_wb_scale = |name: &str| {
+            let scale = self.builder.object::<gtk::Scale>(name).unwrap();
+            scale.set_range(0.0, 2.0);
+            scale.set_increments(0.1, 0.5);
+            scale.set_round_digits(1);
+            scale.set_digits(1);
+        };
+
+        configure_wb_scale("scl_wb_red");
+        configure_wb_scale("scl_wb_green");
+        configure_wb_scale("scl_wb_blue");
     }
 
     fn init_live_stacking_widgets(&self) {
@@ -287,7 +306,7 @@ impl CameraUi {
         // Core
 
         let sender = main_thread_sender.clone();
-        self.core.subscribe_events(move |event| {
+        self.core.event_subscriptions().subscribe(move |event| {
             sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
         });
 
@@ -315,7 +334,6 @@ impl CameraUi {
         gtk_utils::connect_action   (&self.window, self, "save_image_preview",     Self::handler_action_save_image_preview);
         gtk_utils::connect_action   (&self.window, self, "save_image_linear",      Self::handler_action_save_image_linear);
         gtk_utils::connect_action   (&self.window, self, "dark_library",           Self::handler_action_darks_library);
-        gtk_utils::connect_action   (&self.window, self, "plate_solve_and_goto",   Self::handler_action_plate_solve_and_goto);
 
         let cb_camera_list = bldr.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
         cb_camera_list.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
@@ -342,7 +360,6 @@ impl CameraUi {
 
             options.cam.device = Some(new_device.clone());
 
-            self_.correct_widgets_props_impl(&options);
             _ = self_.update_resolution_list_impl(&new_device, &options);
             self_.fill_heater_items_list_impl(&options);
             self_.show_total_raw_time_impl(&options);
@@ -352,6 +369,12 @@ impl CameraUi {
             options.show_cam_frame(&self_.builder);
             options.show_calibr(&self_.builder);
             options.show_cam_ctrl(&self_.builder);
+
+            drop(options);
+
+            self_.correct_widgets_props_impl(&Some(new_device.clone()));
+
+            self_.core.event_subscriptions().notify(Event::CameraDeviceChanged(new_device));
         }));
 
         let cb_frame_mode = bldr.object::<gtk::ComboBoxText>("cb_frame_mode").unwrap();
@@ -697,16 +720,25 @@ impl CameraUi {
                 };
             },
 
-            MainThreadEvent::Core(CoreEvent::FrameProcessing(result)) => {
+            MainThreadEvent::Indi(
+                indi::Event::DeviceConnected(_)|
+                indi::Event::DeviceDelete(_)|
+                indi::Event::NewDevice(_)
+            ) => {
+                self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
+            }
+
+
+            MainThreadEvent::Core(Event::FrameProcessing(result)) => {
                 self.show_frame_processing_result(result);
             },
 
-            MainThreadEvent::Core(CoreEvent::ModeChanged) => {
+            MainThreadEvent::Core(Event::ModeChanged) => {
                 self.correct_widgets_props();
                 self.correct_preview_source();
             },
 
-            MainThreadEvent::Core(CoreEvent::ModeContinued) => {
+            MainThreadEvent::Core(Event::ModeContinued) => {
                 let options = self.options.read().unwrap();
                 options.show_cam_frame(&self.builder);
                 drop(options);
@@ -939,89 +971,56 @@ impl CameraUi {
         ui.set_prop_str("cb_preview_src.active-id", Some(cb_preview_src_aid));
     }
 
-    fn handler_delayed_action(&self, action: &DelayedActionTypes) {
+    fn handler_delayed_action(&self, action: &DelayedAction) {
         match action {
-            DelayedActionTypes::UpdateCamList => {
+            DelayedAction::UpdateCamList => {
                 self.update_devices_list();
                 self.correct_widgets_props();
             }
-            DelayedActionTypes::StartLiveView => {
+            DelayedAction::StartLiveView => {
                 let live_view_flag = self.options.read().unwrap().cam.live_view;
                 let mode = self.core.mode_data().mode.get_type();
                 if live_view_flag && mode == ModeType::Waiting {
                     self.start_live_view();
                 }
             }
-            DelayedActionTypes::StartCooling => {
+            DelayedAction::StartCooling => {
                 self.control_camera_by_options(true);
             }
-            DelayedActionTypes::UpdateCtrlWidgets => {
+            DelayedAction::UpdateCtrlWidgets => {
                 self.correct_widgets_props();
             }
-            DelayedActionTypes::UpdateResolutionList => {
+            DelayedAction::UpdateResolutionList => {
                 self.update_resolution_list();
             }
-            DelayedActionTypes::SelectMaxResolution => {
+            DelayedAction::SelectMaxResolution => {
                 self.select_maximum_resolution();
             }
-            DelayedActionTypes::FillHeaterItems => {
+            DelayedAction::FillHeaterItems => {
                 self.fill_heater_items_list();
             }
         }
     }
 
-    fn correct_widgets_props_impl(&self, options: &Options) {
-        let camera = &options.cam.device;
+    fn correct_widgets_props_impl(&self, camera: &Option<DeviceAndProp>) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let correct_num_adjustment_by_prop = |
-            spb_name:  &str,
-            prop_info: &indi::Result<indi::NumPropValue>,
-            digits:    u32,
-            step:      Option<f64>,
-        | -> bool {
-            if let Ok(info) = prop_info {
-                let spb = self.builder.object::<gtk::SpinButton>(spb_name).unwrap();
-                spb.set_range(info.min, info.max);
-                let value = spb.value();
-                if value < info.min {
-                    spb.set_value(info.min);
-                }
-                if value > info.max {
-                    spb.set_value(info.max);
-                }
-                let desired_step =
-                    if      info.max <= 1.0   { 0.1 }
-                    else if info.max <= 10.0  { 1.0 }
-                    else if info.max <= 100.0 { 10.0 }
-                    else                      { 100.0 };
-                let step = step.unwrap_or(desired_step);
-                spb.set_increments(step, 10.0 * step);
-                spb.set_digits(digits);
-                true
-            } else {
-                false
-            }
-        };
+
         let temp_supported = camera.as_ref().map(|camera| {
             let temp_value = self.indi.camera_get_temperature_prop_value(&camera.name);
-            correct_num_adjustment_by_prop("spb_temp", &temp_value, 0, Some(1.0))
+            correct_spinbutton_by_cam_prop(&self.builder, "spb_temp", &temp_value, 0, Some(1.0))
         }).unwrap_or(false);
         let exposure_supported = camera.as_ref().map(|camera| {
             let cam_ccd = indi::CamCcd::from_ccd_prop_name(&camera.prop);
             let exp_value = self.indi.camera_get_exposure_prop_value(&camera.name, cam_ccd);
-            let result = correct_num_adjustment_by_prop("spb_exp", &exp_value, 3, Some(1.0));
-            correct_num_adjustment_by_prop("spb_foc_exp", &exp_value, 1, Some(1.0));
-            correct_num_adjustment_by_prop("spb_mnt_cal_exp", &exp_value, 1, Some(1.0));
-            correct_num_adjustment_by_prop("spb_ps_exp", &exp_value, 1, Some(1.0));
-            result
+            correct_spinbutton_by_cam_prop(&self.builder, "spb_exp", &exp_value, 3, Some(1.0))
         }).unwrap_or(false);
         let gain_supported = camera.as_ref().map(|camera| {
             let gain_value = self.indi.camera_get_gain_prop_value(&camera.name);
-            correct_num_adjustment_by_prop("spb_gain", &gain_value, 0, None)
+            correct_spinbutton_by_cam_prop(&self.builder, "spb_gain", &gain_value, 0, None)
         }).unwrap_or(false);
         let offset_supported = camera.as_ref().map(|camera| {
             let offset_value = self.indi.camera_get_offset_prop_value(&camera.name);
-            correct_num_adjustment_by_prop("spb_offset", &offset_value, 0, None)
+            correct_spinbutton_by_cam_prop(&self.builder, "spb_offset", &offset_value, 0, None)
         }).unwrap_or(false);
         let bin_supported = camera.as_ref().map(|camera| {
             let cam_ccd = indi::CamCcd::from_ccd_prop_name(&camera.prop);
@@ -1103,7 +1102,6 @@ impl CameraUi {
             ("stop_live_stacking",     live_active),
             ("continue_live_stacking", livestacking_paused && can_change_mode),
             ("load_image",             waiting),
-            ("plate_solve_and_goto",   waiting || liveview_active),
         ]);
 
         ui.show_widgets(&[
@@ -1150,7 +1148,9 @@ impl CameraUi {
 
     fn correct_widgets_props(&self) {
         let options = self.options.read().unwrap();
-        self.correct_widgets_props_impl(&options);
+        let camera = options.cam.device.clone();
+        drop(options);
+        self.correct_widgets_props_impl(&camera);
     }
 
     fn correct_frame_quality_widgets_props(&self) {
@@ -1816,8 +1816,8 @@ impl CameraUi {
         value:       &indi::PropValue,
     ) {
         if indi::Connection::camera_is_heater_property(prop_name) && new_prop {
-            self.delayed_actions.schedule(DelayedActionTypes::FillHeaterItems);
-            self.delayed_actions.schedule(DelayedActionTypes::StartCooling);
+            self.delayed_actions.schedule(DelayedAction::FillHeaterItems);
+            self.delayed_actions.schedule(DelayedAction::StartCooling);
         }
         if indi::Connection::camera_is_cooler_pwr_property(prop_name, elem_name) {
             self.show_coolpwr_value(device_name, &value.to_string());
@@ -1828,7 +1828,7 @@ impl CameraUi {
              indi::PropValue::Num(indi::NumPropValue{value, ..})) => {
                 if new_prop {
                     self.delayed_actions.schedule(
-                        DelayedActionTypes::StartCooling
+                        DelayedAction::StartCooling
                     );
                 }
                 self.show_cur_temperature_value(device_name, *value);
@@ -1836,13 +1836,13 @@ impl CameraUi {
 
             ("CCD_COOLER", ..)
             if new_prop => {
-                self.delayed_actions.schedule(DelayedActionTypes::StartCooling);
-                self.delayed_actions.schedule(DelayedActionTypes::UpdateCtrlWidgets);
+                self.delayed_actions.schedule(DelayedAction::StartCooling);
+                self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
             }
 
             ("CCD_OFFSET", ..) | ("CCD_GAIN", ..) | ("CCD_CONTROLS", ..)
             if new_prop => {
-                self.delayed_actions.schedule(DelayedActionTypes::UpdateCtrlWidgets);
+                self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
             }
 
             ("CCD_EXPOSURE"|"GUIDER_EXPOSURE", ..) => {
@@ -1850,7 +1850,7 @@ impl CameraUi {
                 if new_prop {
                     if options.cam.device.as_ref().map(|d| d.name == device_name).unwrap_or(false) {
                         self.delayed_actions.schedule_ex(
-                            DelayedActionTypes::StartLiveView,
+                            DelayedAction::StartLiveView,
                             // 2000 ms pause to start live view from camera
                             // after connecting to INDI server
                             2000
@@ -1863,19 +1863,19 @@ impl CameraUi {
 
             ("CCD_RESOLUTION", ..) if new_prop => {
                 self.delayed_actions.schedule(
-                    DelayedActionTypes::SelectMaxResolution
+                    DelayedAction::SelectMaxResolution
                 );
             }
 
             ("CCD_INFO", "CCD_MAX_X", ..) |
             ("CCD_INFO", "CCD_MAX_Y", ..) => {
                 self.delayed_actions.schedule(
-                    DelayedActionTypes::UpdateResolutionList
+                    DelayedAction::UpdateResolutionList
                 );
             }
 
             ("CCD1"|"CCD2", ..) if new_prop => {
-                self.delayed_actions.schedule(DelayedActionTypes::UpdateCamList);
+                self.delayed_actions.schedule(DelayedAction::UpdateCamList);
             }
             _ => {},
         }
@@ -2331,12 +2331,4 @@ impl CameraUi {
         );
         dialog.exec();
     }
-
-    fn handler_action_plate_solve_and_goto(&self) {
-        gtk_utils::exec_and_show_error(&self.window, || {
-            self.core.start_goto_image()?;
-            Ok(())
-        });
-    }
-
 }

@@ -21,6 +21,22 @@ pub struct PlateSolveOkResult {
     pub time:      DateTime<Utc>,
 }
 
+impl PlateSolveOkResult {
+    pub fn print_to_log(&self) {
+        use crate::indi::value_to_sexagesimal;
+        use crate::ui::sky_map::math::*;
+        log::debug!(
+            "plate solver j2000 = (ra: {}, dec: {}), now = (ra: {}, dec: {}), image size = {:.6} x {:.6}",
+            value_to_sexagesimal(radian_to_hour(self.crd_j2000.ra), true, 9),
+            value_to_sexagesimal(radian_to_degree(self.crd_j2000.dec), true, 8),
+            value_to_sexagesimal(radian_to_hour(self.crd_now.ra), true, 9),
+            value_to_sexagesimal(radian_to_degree(self.crd_now.dec), true, 8),
+            radian_to_degree(self.width),
+            radian_to_degree(self.height),
+        );
+    }
+}
+
 pub enum PlateSolveResult {
     Waiting,
     Done(PlateSolveOkResult),

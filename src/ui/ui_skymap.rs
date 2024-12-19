@@ -3,7 +3,7 @@ use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use crate::{
-    core::{core::*, frame_processing::*, mode_goto::GotoConfig},
+    core::{core::*, events::*, frame_processing::*, mode_goto::GotoConfig},
     indi::{self, value_to_sexagesimal},
     options::*,
     plate_solve::PlateSolveOkResult,
@@ -74,8 +74,8 @@ pub fn init_ui(
     data.set_observer_data_for_widget();
 }
 
-pub enum MainThreadEvent {
-    Core(CoreEvent),
+enum MainThreadEvent {
+    Core(Event),
 }
 
 impl SkyItemType {
@@ -263,7 +263,12 @@ impl MapUi {
             MainUiEvent::Timer =>
                 self.handler_main_timer(),
             MainUiEvent::TabPageChanged(page) if page == TabPage::SkyMap => {
+                let mut options = self.options.write().unwrap();
+                options.read_site(&self.builder);
+                drop(options);
+
                 self.check_data_loaded();
+                self.set_observer_data_for_widget();
                 self.update_date_time_widgets(true);
                 self.update_skymap_widget(true);
                 self.show_selected_objects_info();
@@ -417,7 +422,7 @@ impl MapUi {
         let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
 
         let sender = main_thread_sender.clone();
-        self.core.subscribe_events(move |event| {
+        self.core.event_subscriptions().subscribe(move |event| {
             sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
         });
 
@@ -432,9 +437,9 @@ impl MapUi {
         }));
     }
 
-    fn process_core_event(&self, event: CoreEvent) {
+    fn process_core_event(&self, event: Event) {
         match event {
-            CoreEvent::PlateSolve(ps_event) => {
+            Event::PlateSolve(ps_event) => {
                 let mut cam_rotation = self.cam_rotation.borrow_mut();
                 cam_rotation.insert(ps_event.cam_name, ps_event.result.rotation);
                 drop(cam_rotation);
@@ -443,7 +448,7 @@ impl MapUi {
 
                 self.update_skymap_widget(true);
             }
-            CoreEvent::FrameProcessing(sp) => {
+            Event::FrameProcessing(sp) => {
                 match (&sp.data, sp.mode_type) {
                     (FrameProcessResultData::PreviewFrame(data),
                      ModeType::Goto|ModeType::OpeningImgFile|ModeType::CapturePlatesolve) => {
@@ -505,22 +510,17 @@ impl MapUi {
 
     fn handler_action_options(self: &Rc<Self>) {
         let dialog = SkymapOptionsDialog::new(
-            &self.indi,
             self.window.upcast_ref(),
         );
 
-        let options = self.options.read().unwrap();
         let ui_options = self.ui_options.borrow();
-        dialog.show_options(&ui_options, &options);
+        dialog.show_options(&ui_options);
         drop(ui_options);
-        drop(options);
 
         dialog.exec(clone!(@strong self as self_, @strong dialog => move || {
-            let mut options = self_.options.write().unwrap();
             let mut ui_options = self_.ui_options.borrow_mut();
-            dialog.get_options(&mut ui_options, &mut options)?;
+            dialog.get_options(&mut ui_options)?;
             drop(ui_options);
-            drop(options);
             let observer = self_.create_observer();
             self_.map_widget.set_observer(&observer);
             self_.update_skymap_widget(true);
@@ -529,7 +529,7 @@ impl MapUi {
     }
 
     fn create_observer(&self) -> Observer {
-        let sky_map_options = self.options.read().unwrap().sky_map.clone();
+        let sky_map_options = self.options.read().unwrap().site.clone();
         Observer {
             latitude: degree_to_radian(sky_map_options.latitude),
             longitude: degree_to_radian(sky_map_options.longitude),

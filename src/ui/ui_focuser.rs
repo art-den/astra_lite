@@ -3,11 +3,11 @@ use gtk::{glib, gdk, prelude::*, glib::clone};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    core::{core::{Core, CoreEvent, ModeType}, mode_focusing::*},
+    core::{core::{Core, ModeType}, events::*, mode_focusing::*},
     indi,
     options::*,
     ui::plots::*,
-    utils::{io_utils::*, gtk_utils::{self, *}, math::{cmp_f64, linear_interpolate}},
+    utils::{gtk_utils::{self, *}, io_utils::*, math::{cmp_f64, linear_interpolate}},
 };
 
 use super::{ui_main::*, utils::*};
@@ -46,26 +46,15 @@ pub fn init_ui(
     *data.self_.borrow_mut() = Some(Rc::clone(&data));
 
     data.init_widgets();
-    data.connect_indi_and_core_events();
-    data.connect_widgets_events();
     data.update_devices_list();
     data.apply_ui_options();
+
+    data.connect_indi_and_core_events();
+    data.connect_widgets_events();
+    data.connect_main_ui_events(handlers);
+    data.connect_delayed_actions_events();
+
     data.correct_widgets_props();
-
-    handlers.subscribe(clone!(@weak data => move |event| {
-        match event {
-            MainUiEvent::ProgramClosing =>
-                data.handler_closing(),
-            _ => {},
-        }
-
-    }));
-
-    data.delayed_actions.set_event_handler(
-        clone!(@weak data => move |action| {
-            data.handler_delayed_action(action);
-        })
-    );
 }
 
 struct FocuserUi {
@@ -78,7 +67,7 @@ struct FocuserUi {
     closed:          Cell<bool>,
     excl:            ExclusiveCaller,
     indi_evt_conn:   RefCell<Option<indi::Subscription>>,
-    delayed_actions: DelayedActions<DelayedActionTypes>,
+    delayed_actions: DelayedActions<DelayedAction>,
     focusing_data:   RefCell<Option<FocusingResultData>>,
     self_:           RefCell<Option<Rc<FocuserUi>>>,
 }
@@ -90,12 +79,12 @@ impl Drop for FocuserUi {
 }
 
 enum MainThreadEvent {
-    Core(CoreEvent),
+    Core(Event),
     Indi(indi::Event),
 }
 
 #[derive(Hash, Eq, PartialEq)]
-enum DelayedActionTypes {
+enum DelayedAction {
     ShowCurFocuserValue,
     UpdateFocPosNew,
     UpdateFocPos,
@@ -122,7 +111,7 @@ impl FocuserUi {
     fn connect_indi_and_core_events(self: &Rc<Self>) {
         let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
         let sender = main_thread_sender.clone();
-        self.core.subscribe_events(move |event| {
+        self.core.event_subscriptions().subscribe(move |event| {
             sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
         });
 
@@ -148,7 +137,7 @@ impl FocuserUi {
 
             MainThreadEvent::Indi(indi::Event::DeviceConnected(event)) =>
                 if event.interface.contains(indi::DriverInterface::FOCUSER) {
-                    self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetProps);
+                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
                 },
 
             MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) =>
@@ -183,23 +172,30 @@ impl FocuserUi {
             MainThreadEvent::Indi(indi::Event::DeviceDelete(event)) => {
                 if event.drv_interface.contains(indi::DriverInterface::FOCUSER) {
                     self.update_devices_list();
-                    self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetProps);
-                    self.delayed_actions.schedule(DelayedActionTypes::UpdateFocPosNew);
-                    self.delayed_actions.schedule(DelayedActionTypes::ShowCurFocuserValue);
+                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
+                    self.delayed_actions.schedule(DelayedAction::UpdateFocPosNew);
+                    self.delayed_actions.schedule(DelayedAction::ShowCurFocuserValue);
                 }
             }
 
-            MainThreadEvent::Core(CoreEvent::ModeChanged) => {
+            MainThreadEvent::Core(Event::ModeChanged) => {
                 self.correct_widgets_props();
             }
 
-            MainThreadEvent::Core(CoreEvent::Focusing(FocusingStateEvent::Data(fdata))) => {
+            MainThreadEvent::Core(Event::CameraDeviceChanged(cam_device)) => {
+                let options = self.options.read().unwrap();
+                let focuser_device = options.focuser.device.clone();
+                drop(options);
+                self.correct_widgets_props_impl(&focuser_device, &Some(cam_device));
+            }
+
+            MainThreadEvent::Core(Event::Focusing(FocusingStateEvent::Data(fdata))) => {
                 *self.focusing_data.borrow_mut() = Some(fdata);
                 let da_focusing = self.builder.object::<gtk::DrawingArea>("da_focusing").unwrap();
                 da_focusing.queue_draw();
             }
 
-            MainThreadEvent::Core(CoreEvent::Focusing(FocusingStateEvent::Result { value })) => {
+            MainThreadEvent::Core(Event::Focusing(FocusingStateEvent::Result { value })) => {
                 self.update_focuser_position_after_focusing(value);
             }
 
@@ -220,13 +216,13 @@ impl FocuserUi {
         match (prop_name, elem_name, value) {
             ("ABS_FOCUS_POSITION", ..) => {
                 self.delayed_actions.schedule(
-                    if new_prop { DelayedActionTypes::UpdateFocPosNew }
-                    else        { DelayedActionTypes::UpdateFocPos }
+                    if new_prop { DelayedAction::UpdateFocPosNew }
+                    else        { DelayedAction::UpdateFocPos }
                 );
-                self.delayed_actions.schedule(DelayedActionTypes::ShowCurFocuserValue);
+                self.delayed_actions.schedule(DelayedAction::ShowCurFocuserValue);
             }
             ("FOCUS_MAX", ..) => {
-                self.delayed_actions.schedule(DelayedActionTypes::UpdateFocPosNew);
+                self.delayed_actions.schedule(DelayedAction::UpdateFocPosNew);
             }
             _ => {}
         }
@@ -242,7 +238,7 @@ impl FocuserUi {
         if update_devices_list {
             self.update_devices_list();
         }
-        self.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetProps);
+        self.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
     }
 
     fn init_widgets(&self) {
@@ -262,9 +258,9 @@ impl FocuserUi {
         spb_foc_auto_step.set_increments(100.0, 1000.0);
 
         let spb_foc_exp = self.builder.object::<gtk::SpinButton>("spb_foc_exp").unwrap();
-        spb_foc_exp.set_range(0.5, 60.0);
+        spb_foc_exp.set_range(0.1, 60.0);
         spb_foc_exp.set_digits(1);
-        spb_foc_exp.set_increments(0.5, 5.0);
+        spb_foc_exp.set_increments(0.1, 1.0);
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
@@ -292,9 +288,9 @@ impl FocuserUi {
             if options.focuser.device == cur_id.as_str() { return; }
             options.focuser.device = cur_id.to_string();
             drop(options);
-            self_.delayed_actions.schedule(DelayedActionTypes::UpdateFocPosNew);
-            self_.delayed_actions.schedule(DelayedActionTypes::ShowCurFocuserValue);
-            self_.delayed_actions.schedule(DelayedActionTypes::CorrectWidgetProps);
+            self_.delayed_actions.schedule(DelayedAction::UpdateFocPosNew);
+            self_.delayed_actions.schedule(DelayedAction::ShowCurFocuserValue);
+            self_.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
         }));
 
         let chb_foc_temp = bldr.object::<gtk::CheckButton>("chb_foc_temp").unwrap();
@@ -322,22 +318,42 @@ impl FocuserUi {
         );
     }
 
-    fn correct_widgets_props(&self) {
+    fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
+        handlers.subscribe(clone!(@weak self as self_ => move |event| {
+            match event {
+                MainUiEvent::ProgramClosing =>
+                self_.handler_closing(),
+                _ => {},
+            }
+        }));
+    }
+
+    fn connect_delayed_actions_events(self: &Rc<Self>) {
+        self.delayed_actions.set_event_handler(
+            clone!(@weak self as self_ => move |action| {
+                self_.handler_delayed_action(action);
+            })
+        );
+    }
+
+    fn correct_widgets_props_impl(&self, focuser_device: &str, cam_device: &Option<DeviceAndProp>) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let mode_data = self.core.mode_data();
         let mode_type = mode_data.mode.get_type();
         drop(mode_data);
+
+        if let Some(cam_device) = cam_device {
+            let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_device.prop);
+            let exp_value = self.indi.camera_get_exposure_prop_value(&cam_device.name, cam_ccd);
+            correct_spinbutton_by_cam_prop(&self.builder, "spb_foc_exp", &exp_value, 1, Some(1.0));
+        }
 
         let waiting = mode_type == ModeType::Waiting;
         let single_shot = mode_type == ModeType::SingleShot;
         let focusing = mode_type == ModeType::Focusing;
         let can_change_mode = waiting || single_shot;
 
-        let options = self.options.read().unwrap();
-        let device = options.focuser.device.clone();
-        drop(options);
-
-        let device_enabled = self.indi.is_device_enabled(&device).unwrap_or(false);
+        let device_enabled = self.indi.is_device_enabled(focuser_device).unwrap_or(false);
 
         ui.enable_widgets(false, &[
             ("grd_foc",       device_enabled),
@@ -354,6 +370,14 @@ impl FocuserUi {
         ]);
     }
 
+    fn correct_widgets_props(&self) {
+        let options = self.options.read().unwrap();
+        let focuser_device = options.focuser.device.clone();
+        let cam_device = options.cam.device.clone();
+        drop(options);
+        self.correct_widgets_props_impl(&focuser_device, &cam_device);
+    }
+
     fn handler_closing(&self) {
         self.closed.set(true);
 
@@ -367,6 +391,18 @@ impl FocuserUi {
         }
 
         *self.self_.borrow_mut() = None;
+    }
+
+    fn apply_ui_options(&self) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let options = self.ui_options.borrow();
+        ui.set_prop_bool("exp_foc.expanded", options.expanded);
+    }
+
+    fn get_ui_options_from_widgets(&self) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let mut options = self.ui_options.borrow_mut();
+        options.expanded = ui.prop_bool("exp_foc.expanded");
     }
 
     fn update_devices_list(&self) {
@@ -425,18 +461,18 @@ impl FocuserUi {
         });
     }
 
-    fn handler_delayed_action(&self, action: &DelayedActionTypes) {
+    fn handler_delayed_action(&self, action: &DelayedAction) {
         match action {
-            DelayedActionTypes::ShowCurFocuserValue => {
+            DelayedAction::ShowCurFocuserValue => {
                 self.show_cur_focuser_value();
             }
-            DelayedActionTypes::CorrectWidgetProps => {
+            DelayedAction::CorrectWidgetProps => {
                 self.correct_widgets_props();
             }
-            DelayedActionTypes::UpdateFocPosNew |
-            DelayedActionTypes::UpdateFocPos => {
+            DelayedAction::UpdateFocPosNew |
+            DelayedAction::UpdateFocPos => {
                 self.update_focuser_position_widget(
-                    *action == DelayedActionTypes::UpdateFocPosNew
+                    *action == DelayedAction::UpdateFocPosNew
                 );
             }
         }
@@ -562,18 +598,6 @@ impl FocuserUi {
 
     fn handler_action_stop_manual_focus(&self) {
         self.core.abort_active_mode();
-    }
-
-    fn apply_ui_options(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let options = self.ui_options.borrow();
-        ui.set_prop_bool("exp_foc.expanded", options.expanded);
-    }
-
-    fn get_ui_options_from_widgets(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let mut options = self.ui_options.borrow_mut();
-        options.expanded = ui.prop_bool("exp_foc.expanded");
     }
 }
 

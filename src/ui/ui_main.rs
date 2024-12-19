@@ -9,10 +9,7 @@ use std::{
 use gtk::{prelude::*, glib, glib::clone, cairo};
 use serde::{Serialize, Deserialize};
 use crate::{
-    indi,
-    utils::{io_utils::*, gtk_utils},
-    core::core::*,
-    options::*,
+    core::{core::*, events::*}, indi, options::*, utils::{gtk_utils, io_utils::*}
 };
 use super::utils::*;
 
@@ -98,9 +95,11 @@ pub fn init_ui(
     super::ui_hardware::init_ui(app, &builder, &data, options, core, indi, &mut handlers);
     super::ui_camera::init_ui(app, &builder, &data, options, core, indi, &mut handlers);
     super::ui_focuser::init_ui(app, &builder, options, core, indi, &mut handlers);
-    super::ui_skymap::init_ui(app, &builder, &data, core, options, indi, &mut handlers);
     super::ui_dithering::init_ui(app, &builder, options, core, indi, &mut handlers);
     super::ui_mount::init_ui(app, &builder, options, core, indi, &mut handlers);
+    super::ui_plate_solve::init_ui(app, &builder, options, core, indi, &mut handlers);
+    super::ui_polar_align::init_ui(app, &builder, options, core, indi, &mut handlers);
+    super::ui_skymap::init_ui(app, &builder, &data, core, options, indi, &mut handlers);
 
     // show common options
     let opts = options.read().unwrap();
@@ -345,28 +344,29 @@ impl MainUi {
 
     fn connect_state_events(self: &Rc<Self>) {
         let (sender, receiver) = async_channel::unbounded();
-        self.core.subscribe_events(move |event| {
+        self.core.event_subscriptions().subscribe(move |event| {
             sender.send_blocking(event).unwrap();
         });
 
         glib::spawn_future_local(clone! (@weak self as self_ => async move {
             while let Ok(event) = receiver.recv().await {
                 match event {
-                    CoreEvent::Error(err) => {
+                    Event::Error(err) => {
                         gtk_utils::show_error_message(
                             &self_.window,
                             "Core error",
                             &err
                         );
                     }
-                    CoreEvent::ModeChanged => {
+                    Event::ModeChanged => {
                         self_.correct_widgets_props();
                         self_.show_mode_caption();
                     },
-                    CoreEvent::Progress(progress, _) => {
+                    Event::Progress(progress, _) => {
                         *self_.progress.borrow_mut() = progress;
                         let da_progress = self_.builder.object::<gtk::DrawingArea>("da_progress").unwrap();
                         da_progress.queue_draw();
+                        self_.show_mode_caption();
                     },
                     _ => {},
                 }
@@ -411,7 +411,7 @@ impl MainUi {
 
         self.handlers.borrow_mut().clear();
 
-        self.core.unsubscribe_all();
+        self.core.event_subscriptions().clear();
         self.indi.unsubscribe_all();
 
         *self.self_.borrow_mut() = None;

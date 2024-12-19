@@ -144,16 +144,18 @@ impl HardwareUi {
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
-        gtk_utils::connect_action(&self.window, self, "help_save_indi",      HardwareUi::handler_action_help_save_indi);
-        gtk_utils::connect_action(&self.window, self, "conn_indi",           HardwareUi::handler_action_conn_indi);
-        gtk_utils::connect_action(&self.window, self, "disconn_indi",        HardwareUi::handler_action_disconn_indi);
-        gtk_utils::connect_action(&self.window, self, "conn_phd2",           HardwareUi::handler_action_conn_phd2);
-        gtk_utils::connect_action(&self.window, self, "disconn_phd2",        HardwareUi::handler_action_disconn_phd2);
-        gtk_utils::connect_action(&self.window, self, "clear_hw_log",        HardwareUi::handler_action_clear_hw_log);
-        gtk_utils::connect_action(&self.window, self, "enable_all_devs",     HardwareUi::handler_action_enable_all_devices);
-        gtk_utils::connect_action(&self.window, self, "disable_all_devs",    HardwareUi::handler_action_disable_all_devices);
-        gtk_utils::connect_action(&self.window, self, "save_devs_options",   HardwareUi::handler_action_save_devices_options);
-        gtk_utils::connect_action(&self.window, self, "load_devs_options",   HardwareUi::handler_action_load_devices_options);
+        gtk_utils::connect_action(&self.window, self, "help_save_indi",        HardwareUi::handler_action_help_save_indi);
+        gtk_utils::connect_action(&self.window, self, "conn_indi",             HardwareUi::handler_action_conn_indi);
+        gtk_utils::connect_action(&self.window, self, "disconn_indi",          HardwareUi::handler_action_disconn_indi);
+        gtk_utils::connect_action(&self.window, self, "conn_phd2",             HardwareUi::handler_action_conn_phd2);
+        gtk_utils::connect_action(&self.window, self, "disconn_phd2",          HardwareUi::handler_action_disconn_phd2);
+        gtk_utils::connect_action(&self.window, self, "clear_hw_log",          HardwareUi::handler_action_clear_hw_log);
+        gtk_utils::connect_action(&self.window, self, "enable_all_devs",       HardwareUi::handler_action_enable_all_devices);
+        gtk_utils::connect_action(&self.window, self, "disable_all_devs",      HardwareUi::handler_action_disable_all_devices);
+        gtk_utils::connect_action(&self.window, self, "save_devs_options",     HardwareUi::handler_action_save_devices_options);
+        gtk_utils::connect_action(&self.window, self, "load_devs_options",     HardwareUi::handler_action_load_devices_options);
+        gtk_utils::connect_action(&self.window, self, "get_site_from_devices", HardwareUi::handler_action_get_site_from_devices);
+
 
         let chb_remote = self.builder.object::<gtk::CheckButton>("chb_remote").unwrap();
         chb_remote.connect_active_notify(clone!(@weak self as self_ => move |_| {
@@ -737,6 +739,65 @@ impl HardwareUi {
                     &[(elem_name, true)]
                 )?;
             }
+            Ok(())
+        });
+    }
+
+    fn handler_action_get_site_from_devices(&self) {
+        gtk_utils::exec_and_show_error(&self.window, || {
+            let indi = &self.indi;
+            if indi.state() != indi::ConnState::Connected {
+                anyhow::bail!("INDI is not connected!");
+            }
+            let devices = indi.get_devices_list_by_interface(
+                indi::DriverInterface::GPS |
+                indi::DriverInterface::TELESCOPE
+            );
+
+            let result: Vec<_> = devices
+                .iter()
+                .filter_map(|dev|
+                    indi.get_geo_lat_long_elev(&dev.name)
+                        .ok()
+                        .map(|(lat,long,_)| (dev, lat, long))
+                )
+                .filter(|(_, lat,long)| *lat != 0.0 && *long != 0.0)
+                .collect();
+
+            if result.is_empty() {
+                anyhow::bail!("No GPS or geographic data found!");
+            }
+
+            if result.len() == 1 {
+                let (_, latitude, longitude) = result[0];
+                let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+                ui.set_prop_str("e_site_lat.text", Some(&indi::value_to_sexagesimal(latitude, true, 6)));
+                ui.set_prop_str("e_site_long.text", Some(&indi::value_to_sexagesimal(longitude, true, 6)));
+                return Ok(());
+            }
+
+            let menu = gtk::Menu::new();
+            for (dev, lat, long) in result {
+                let mi_text = format!(
+                    "{} {} ({})",
+                    indi::value_to_sexagesimal(lat, true, 6),
+                    indi::value_to_sexagesimal(long, true, 6),
+                    dev.name
+                );
+                let menu_item = gtk::MenuItem::builder().label(mi_text).build();
+                menu.append(&menu_item);
+                let builder = self.builder.clone();
+                menu_item.connect_activate(move |_| {
+                    let ui = gtk_utils::UiHelper::new_from_builder(&builder);
+                    ui.set_prop_str("e_site_lat.text", Some(&indi::value_to_sexagesimal(lat, true, 6)));
+                    ui.set_prop_str("e_site_lat.text", Some(&indi::value_to_sexagesimal(long, true, 6)));
+                });
+            }
+            let menu_widget = self.builder.object::<gtk::Widget>("btn_get_site_from_devices").unwrap();
+            menu.set_attach_widget(Some(&menu_widget));
+            menu.show_all();
+            menu.popup_easy(gtk::gdk::ffi::GDK_BUTTON_SECONDARY as u32, 0);
+
             Ok(())
         });
     }

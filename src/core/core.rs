@@ -1,33 +1,16 @@
 use std::{
-    any::Any, collections::HashMap, path::Path, sync::{
+    any::Any, path::Path, sync::{
         atomic::{AtomicBool, AtomicU16, Ordering }, mpsc, Arc, Mutex, RwLock, RwLockReadGuard
     }
 };
 use gtk::glib::PropertySet;
 
 use crate::{
-    core::consts::*, guiding::{external_guider::*, phd2_conn, phd2_guider::*}, image::stars_offset::*, indi, options::*, plate_solve::PlateSolverEvent, ui::sky_map::math::EqCoord, utils::timer::*
+    core::consts::*, guiding::{external_guider::*, phd2_conn, phd2_guider::*}, image::stars_offset::*, indi, options::*, ui::sky_map::math::EqCoord, utils::timer::*
 };
 use super::{
-    frame_processing::*, mode_capture_platesolve::*, mode_darks_library::*, mode_focusing::*, mode_goto::*, mode_mount_calibration::*, mode_tacking_pictures::*, mode_waiting::*
+    events::*, frame_processing::*, mode_capture_platesolve::*, mode_darks_library::*, mode_focusing::*, mode_goto::*, mode_mount_calibration::*, mode_polar_align::PolarAlignMode, mode_tacking_pictures::*, mode_waiting::*
 };
-
-#[derive(Clone)]
-pub struct Progress {
-    pub cur: usize,
-    pub total: usize,
-}
-
-#[derive(Clone)]
-pub enum CoreEvent {
-    Error(String),
-    ModeChanged,
-    ModeContinued,
-    Progress(Option<Progress>, ModeType),
-    FrameProcessing(FrameProcessResult),
-    Focusing(FocusingStateEvent),
-    PlateSolve(PlateSolverEvent),
-}
 
 #[derive(PartialEq, Copy, Clone, Debug)]
 pub enum ModeType {
@@ -47,6 +30,7 @@ pub enum ModeType {
     CreatingMasterBiases,
     Goto,
     CapturePlatesolve,
+    PolarAlignment,
 }
 
 pub type ModeBox = Box<dyn Mode + Send + Sync>;
@@ -76,7 +60,6 @@ pub trait Mode {
 pub enum NotifyResult {
     Empty,
     ProgressChanges,
-    ModeStrChanged,
     Finished { next_mode: Option<ModeBox> },
     StartFocusing,
     StartMountCalibr,
@@ -101,61 +84,13 @@ impl ModeData {
     }
 }
 
-type SubscribersFun = dyn Fn(CoreEvent) + Send + Sync + 'static;
-
-pub struct Subscription(usize);
-
-pub struct Subscribers {
-    items:   HashMap<usize, Box<SubscribersFun>>,
-    next_id: usize,
-}
-
-impl Subscribers {
-    fn new() -> Self {
-        Self {
-            items:     HashMap::new(),
-            next_id:   1,
-        }
-    }
-
-    fn subscribe(
-        &mut self,
-        fun: impl Fn(CoreEvent) + Send + Sync + 'static
-    ) -> Subscription {
-        let id = self.next_id;
-        self.items.insert(id, Box::new(fun));
-        self.next_id += 1;
-        Subscription(id)
-    }
-
-    fn unsubscribe(&mut self, subscription: Subscription) {
-        let Subscription(id) = subscription;
-        self.items.remove(&id);
-    }
-
-    fn clear(&mut self) {
-        self.items.clear();
-    }
-
-    pub fn inform_event(&self, event: CoreEvent) {
-        for s in self.items.values() {
-            s(event.clone());
-        }
-    }
-
-    fn inform_error(&self, error_text: &str) {
-        for s in self.items.values() {
-            s(CoreEvent::Error(error_text.to_string()));
-        }
-    }
-}
 
 pub struct Core {
     indi:               Arc<indi::Connection>,
     phd2:               Arc<phd2_conn::Connection>,
     options:            Arc<RwLock<Options>>,
     mode_data:          RwLock<ModeData>,
-    subscribers:        Arc<RwLock<Subscribers>>,
+    subscribers:        Arc<EventSubscriptions>,
     cur_frame:          Arc<ResultImage>,
     ref_stars:          Arc<Mutex<Option<Vec<Point>>>>,
     calibr_data:        Arc<Mutex<CalibrData>>,
@@ -180,7 +115,7 @@ impl Core {
             phd2:               Arc::new(phd2_conn::Connection::new()),
             options:            Arc::clone(options),
             mode_data:          RwLock::new(ModeData::new()),
-            subscribers:        Arc::new(RwLock::new(Subscribers::new())),
+            subscribers:        Arc::new(EventSubscriptions::new()),
             cur_frame:          Arc::new(ResultImage::new()),
             ref_stars:          Arc::new(Mutex::new(None)),
             calibr_data:        Arc::new(Mutex::new(CalibrData::default())),
@@ -284,8 +219,7 @@ impl Core {
         log::info!("Active mode aborted!");
 
         log::info!("Inform about error...");
-        let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_error(&err.to_string());
+        self.subscribers.notify(Event::Error(err.to_string()));
         log::info!("Error has informed!");
     }
 
@@ -489,8 +423,8 @@ impl Core {
             return;
         }
 
-        self.subscribers.read().unwrap().inform_event(
-            CoreEvent::FrameProcessing(res.clone())
+        self.subscribers.notify(
+            Event::FrameProcessing(res.clone())
         );
 
         let result = || -> anyhow::Result<()> {
@@ -525,22 +459,8 @@ impl Core {
         Ok(())
     }
 
-    pub fn subscribe_events(
-        &self,
-        fun: impl Fn(CoreEvent) + Send + Sync + 'static
-    ) -> Subscription {
-        let mut subscribers = self.subscribers.write().unwrap();
-        subscribers.subscribe(fun)
-    }
-
-    pub fn unsubscribe_events(&self, subscription: Subscription) {
-        let mut subscribers = self.subscribers.write().unwrap();
-        subscribers.unsubscribe(subscription);
-    }
-
-    pub fn unsubscribe_all(&self) {
-        let mut subscribers = self.subscribers.write().unwrap();
-        subscribers.clear();
+    pub fn event_subscriptions(&self) -> Arc<EventSubscriptions> {
+        self.subscribers.clone()
     }
 
     fn after_new_mode_stuff(
@@ -560,9 +480,8 @@ impl Core {
         let progress = mode_data.mode.progress();
         let mode_type = mode_data.mode.get_type();
         drop(mode_data);
-        let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
-        subscribers.inform_event(CoreEvent::ModeChanged);
+        self.subscribers.notify(Event::Progress(progress, mode_type));
+        self.subscribers.notify(Event::ModeChanged);
     }
 
     pub fn open_image_from_file(self: &Arc<Self>, file_name: &Path) -> anyhow::Result<()> {
@@ -778,6 +697,20 @@ impl Core {
         Ok(())
     }
 
+    pub fn start_polar_alignment(&self) -> anyhow::Result<()> {
+        self.init_cam_before_start()?;
+        self.init_cam_telescope_data()?;
+        self.mode_data.write().unwrap().mode.abort()?;
+        let mut mode = PolarAlignMode::new(
+            &self.indi,
+            &self.options,
+            &self.subscribers,
+        )?;
+        mode.start()?;
+        self.after_new_mode_stuff(Box::new(mode), false, false);
+        Ok(())
+    }
+
     fn init_cam_before_start(&self) -> anyhow::Result<()> {
         let options = self.options.read().unwrap();
         let Some(cam_device) = &options.cam.device else {
@@ -840,8 +773,7 @@ impl Core {
         }
         mode_data.finished_mode = None;
         drop(mode_data);
-        let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_event(CoreEvent::ModeChanged);
+        self.subscribers.notify(Event::ModeChanged);
         self.exp_stuck_wd.store(0, Ordering::Relaxed);
     }
 
@@ -855,10 +787,9 @@ impl Core {
         let progress = mode_data.mode.progress();
         let mode_type = mode_data.mode.get_type();
         drop(mode_data);
-        let subscribers = self.subscribers.read().unwrap();
-        subscribers.inform_event(CoreEvent::ModeContinued);
-        subscribers.inform_event(CoreEvent::Progress(progress, mode_type));
-        subscribers.inform_event(CoreEvent::ModeChanged);
+        self.subscribers.notify(Event::ModeContinued);
+        self.subscribers.notify(Event::Progress(progress, mode_type));
+        self.subscribers.notify(Event::ModeChanged);
         Ok(())
     }
 
@@ -872,10 +803,6 @@ impl Core {
         let mut finished_progress_and_type = None;
         match result {
             NotifyResult::ProgressChanges => {
-                progress_changed = true;
-            }
-            NotifyResult::ModeStrChanged => {
-                mode_changed = true;
                 progress_changed = true;
             }
             NotifyResult::Finished { next_mode } => {
@@ -934,18 +861,17 @@ impl Core {
         }
 
         if mode_changed || progress_changed {
-            let subscribers = self.subscribers.read().unwrap();
             if mode_changed {
-                subscribers.inform_event(CoreEvent::ModeChanged);
+                self.subscribers.notify(Event::ModeChanged);
             }
             if progress_changed {
                 if let Some((finished_progress, finished_mode_type)) = finished_progress_and_type {
-                    subscribers.inform_event(CoreEvent::Progress(
+                    self.subscribers.notify(Event::Progress(
                         finished_progress,
                         finished_mode_type,
                     ));
                 } else {
-                    subscribers.inform_event(CoreEvent::Progress(
+                    self.subscribers.notify(Event::Progress(
                         mode_data.mode.progress(),
                         mode_data.mode.get_type(),
                     ));

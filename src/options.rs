@@ -302,6 +302,10 @@ pub struct PreviewOptions {
     pub gamma:       f64,
     pub source:      PreviewSource,
     pub remove_grad: bool,
+    pub wb_auto:     bool,
+    pub wb_red:      f64,
+    pub wb_green:    f64,
+    pub wb_blue:     f64,
 
     #[serde(skip_serializing)]
     pub color:       PreviewColor,
@@ -320,9 +324,13 @@ impl Default for PreviewOptions {
             gamma:         2.2,
             source:        PreviewSource::default(),
             remove_grad:   false,
+            wb_auto:       true,
+            wb_red:        1.0,
+            wb_green:      1.0,
+            wb_blue:       1.0,
+            color:         PreviewColor::Rgb,
             widget_width:  0,
             widget_height: 0,
-            color:         PreviewColor::Rgb,
         }
     }
 }
@@ -421,6 +429,13 @@ impl Default for PlateSolverOptions {
             blind_timeout: 30,
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct SiteOptions {
+    pub latitude:  f64,
+    pub longitude: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -614,10 +629,28 @@ impl GuidingOptions {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub struct SkyMapOptions {
-    pub latitude:  f64,
-    pub longitude: f64,
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum PloarAlignDir {
+    East,
+    West,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
+pub struct PloarAlignOptions {
+    pub angle:     f64,
+    pub direction: PloarAlignDir,
+    pub speed:     Option<String>,
+}
+
+impl Default for PloarAlignOptions {
+    fn default() -> Self {
+        Self {
+            angle:     30.0,
+            direction: PloarAlignDir::West,
+            speed:     None,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -634,6 +667,7 @@ pub struct Options {
     pub plate_solver: PlateSolverOptions,
     pub mount:        MountOptions,
     pub telescope:    TelescopeOptions,
+    pub site:         SiteOptions,
     pub guiding:      GuidingOptions,
-    pub sky_map:      SkyMapOptions,
+    pub polar_align:  PloarAlignOptions,
 }

@@ -1,5 +1,5 @@
 use gtk::prelude::*;
-use crate::{options::*, image::raw::FrameType, utils::gtk_utils};
+use crate::{image::raw::FrameType, indi::{sexagesimal_to_value, value_to_sexagesimal}, options::*, utils::gtk_utils};
 
 impl Options {
     /* read */
@@ -7,6 +7,7 @@ impl Options {
     pub fn read_all(&mut self, builder: &gtk::Builder) {
         self.read_indi(builder);
         self.read_telescope(builder);
+        self.read_site(builder);
         self.read_guiding(builder);
         self.read_guiding_cam(builder);
         self.read_cam(builder);
@@ -21,6 +22,7 @@ impl Options {
         self.read_focuser_cam(builder);
         self.read_plate_solve(builder);
         self.read_mount(builder);
+        self.read_polar_align(builder);
     }
 
     pub fn read_indi(&mut self, builder: &gtk::Builder) {
@@ -37,6 +39,18 @@ impl Options {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
         self.telescope.focal_len = ui.prop_f64("spb_foc_len.value");
         self.telescope.barlow    = ui.prop_f64("spb_barlow.value");
+    }
+
+    pub fn read_site(&mut self, builder: &gtk::Builder) {
+        let ui = gtk_utils::UiHelper::new_from_builder(builder);
+        let lat_string = ui.prop_string("e_site_lat.text").unwrap_or_default();
+        if let Some(latitude) = sexagesimal_to_value(&lat_string) {
+            self.site.latitude = latitude;
+        }
+        let long_str = ui.prop_string("e_site_long.text").unwrap_or_default();
+        if let Some(longitude) = sexagesimal_to_value(&long_str) {
+            self.site.longitude = longitude;
+        }
     }
 
     pub fn read_guiding(&mut self, builder: &gtk::Builder) {
@@ -132,6 +146,10 @@ impl Options {
         self.preview.dark_lvl    = ui.range_value("scl_dark");
         self.preview.light_lvl   = ui.range_value("scl_highlight");
         self.preview.remove_grad = ui.prop_bool("chb_rem_grad.active");
+        self.preview.wb_auto     = ui.prop_bool("chb_wb_auto.active");
+        self.preview.wb_red      = ui.range_value("scl_wb_red");
+        self.preview.wb_green    = ui.range_value("scl_wb_green");
+        self.preview.wb_blue     = ui.range_value("scl_wb_blue");
     }
 
     pub fn read_focuser(&mut self, builder: &gtk::Builder) {
@@ -154,9 +172,12 @@ impl Options {
 
     pub fn read_plate_solve(&mut self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
-        self.plate_solver.exposure = ui.prop_f64("spb_ps_exp.value");
-        self.plate_solver.gain = Gain::from_active_id(ui.prop_string("cbx_ps_gain.active-id").as_deref());
-        self.plate_solver.bin = Binning::from_active_id(ui.prop_string("cbx_ps_bin.active-id").as_deref());
+        self.plate_solver.exposure      = ui.prop_f64("spb_ps_exp.value");
+        self.plate_solver.gain          = Gain::from_active_id(ui.prop_string("cbx_ps_gain.active-id").as_deref());
+        self.plate_solver.bin           = Binning::from_active_id(ui.prop_string("cbx_ps_bin.active-id").as_deref());
+        self.plate_solver.solver        = PlateSolverType::from_active_id(ui.prop_string("cbx_ps_solver.active-id").as_deref());
+        self.plate_solver.timeout       = ui.prop_f64("spb_ps_timeout.value") as _;
+        self.plate_solver.blind_timeout = ui.prop_f64("spb_ps_blind_timeout.value") as _;
     }
 
     pub fn read_mount(&mut self, builder: &gtk::Builder) {
@@ -166,11 +187,19 @@ impl Options {
         self.mount.speed  = ui.prop_string("cb_mnt_speed.active-id");
     }
 
+    pub fn read_polar_align(&mut self, builder: &gtk::Builder) {
+        let ui = gtk_utils::UiHelper::new_from_builder(builder);
+        self.polar_align.angle = ui.prop_f64("spb_pa_angle.value");
+        self.polar_align.direction = PloarAlignDir::from_active_id(ui.prop_string("cbx_pa_dir.active-id").as_deref()).unwrap_or(PloarAlignDir::West);
+        self.polar_align.speed = ui.prop_string("cbx_pa_speed.active_id");
+    }
+
     /* show */
 
     pub fn show_all(&self, builder: &gtk::Builder) {
         self.show_indi(builder);
         self.show_telescope(builder);
+        self.show_site(builder);
         self.show_guiding(builder);
         self.show_cam(builder);
         self.show_cam_frame(builder);
@@ -183,6 +212,7 @@ impl Options {
         self.show_plate_solve(builder);
         self.show_focuser(builder);
         self.show_mount(builder);
+        self.show_polar_align(builder);
     }
 
     pub fn show_indi(&self, builder: &gtk::Builder) {
@@ -195,6 +225,12 @@ impl Options {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
         ui.set_prop_f64("spb_foc_len.value", self.telescope.focal_len);
         ui.set_prop_f64("spb_barlow.value",  self.telescope.barlow);
+    }
+
+    pub fn show_site(&self, builder: &gtk::Builder) {
+        let ui = gtk_utils::UiHelper::new_from_builder(builder);
+        ui.set_prop_str("e_site_lat.text", Some(&value_to_sexagesimal(self.site.latitude, true, 6)));
+        ui.set_prop_str("e_site_long.text", Some(&value_to_sexagesimal(self.site.longitude, true, 6)));
     }
 
     pub fn show_guiding(&self, builder: &gtk::Builder) {
@@ -297,13 +333,20 @@ impl Options {
         ui.set_range_value("scl_highlight",              self.preview.light_lvl);
         ui.set_range_value("scl_gamma",                  self.preview.gamma);
         ui.set_prop_bool  ("chb_rem_grad.active",        self.preview.remove_grad);
+        ui.set_prop_bool  ("chb_wb_auto.active",         self.preview.wb_auto);
+        ui.set_range_value("scl_wb_red",                 self.preview.wb_red);
+        ui.set_range_value("scl_wb_green",               self.preview.wb_green);
+        ui.set_range_value("scl_wb_blue",                self.preview.wb_blue);
     }
 
     pub fn show_plate_solve(&self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
-        ui.set_prop_f64("spb_ps_exp.value",      self.plate_solver.exposure);
-        ui.set_prop_str("cbx_ps_gain.active-id", Some(self.plate_solver.gain.to_active_id()));
-        ui.set_prop_str("cbx_ps_bin.active-id",  self.plate_solver.bin.to_active_id());
+        ui.set_prop_f64("spb_ps_exp.value",           self.plate_solver.exposure);
+        ui.set_prop_str("cbx_ps_gain.active-id",      Some(self.plate_solver.gain.to_active_id()));
+        ui.set_prop_str("cbx_ps_bin.active-id",       self.plate_solver.bin.to_active_id());
+        ui.set_prop_str("cbx_ps_solver.active-id",    self.plate_solver.solver.to_active_id());
+        ui.set_prop_f64("spb_ps_timeout.value",       self.plate_solver.timeout as f64);
+        ui.set_prop_f64("spb_ps_blind_timeout.value", self.plate_solver.blind_timeout as f64);
     }
 
     pub fn show_focuser(&self, builder: &gtk::Builder) {
@@ -324,6 +367,13 @@ impl Options {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
         ui.set_prop_bool("chb_inv_ns.active", self.mount.inv_ns);
         ui.set_prop_bool("chb_inv_we.active", self.mount.inv_we);
+    }
+
+    pub fn show_polar_align(&self, builder: &gtk::Builder) {
+        let ui = gtk_utils::UiHelper::new_from_builder(builder);
+        ui.set_prop_f64("spb_pa_angle.value", self.polar_align.angle);
+        ui.set_prop_str("cbx_pa_dir.active-id", self.polar_align.direction.to_active_id());
+        ui.set_prop_str("cbx_pa_speed.active_id", self.polar_align.speed.as_deref());
     }
 }
 
@@ -497,6 +547,23 @@ impl PlateSolverType {
     pub fn to_active_id(&self) -> Option<&'static str> {
         match self {
             Self::Astrometry => Some("astrometry.net"),
+        }
+    }
+}
+
+impl PloarAlignDir {
+    pub fn from_active_id(active_id: Option<&str>) -> Option<Self> {
+        match active_id {
+            Some("east") => Some(Self::East),
+            Some("west") => Some(Self::West),
+            _            => None,
+        }
+    }
+
+    pub fn to_active_id(&self) -> Option<&'static str> {
+        match self {
+            Self::East  => Some("east"),
+            Self::West  => Some("west"),
         }
     }
 }

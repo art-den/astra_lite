@@ -1,8 +1,8 @@
 use std::sync::{Arc, RwLock};
 
-use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*}, image::{image::*, stars::Stars}, indi::{self, value_to_sexagesimal}, options::*, plate_solve::*, ui::sky_map::math::*};
+use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*}, image::{image::*, stars::Stars}, indi, options::*, plate_solve::*, ui::sky_map::math::*};
 
-use super::utils::gain_to_value;
+use super::{events::*, utils::gain_to_value};
 
 enum State {
     None,
@@ -14,7 +14,7 @@ enum State {
 pub struct CapturePlatesolveMode {
     state:        State,
     indi:         Arc<indi::Connection>,
-    subscribers:  Arc<RwLock<Subscribers>>,
+    subscribers:  Arc<EventSubscriptions>,
     camera:       DeviceAndProp,
     mount:        String,
     cam_opts:     CamOptions,
@@ -26,7 +26,7 @@ impl CapturePlatesolveMode {
     pub fn new(
         options:     &Arc<RwLock<Options>>,
         indi:        &Arc<indi::Connection>,
-        subscribers: &Arc<RwLock<Subscribers>>,
+        subscribers: &Arc<EventSubscriptions>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(camera) = opts.cam.device.clone() else {
@@ -90,22 +90,14 @@ impl CapturePlatesolveMode {
             PlateSolveResult::Failed => anyhow::bail!("Can't platesolve image")
         };
 
-        log::debug!(
-            "plate solver j2000 = (ra: {}, dec: {}), now = (ra: {}, dec: {}), image size = {:.6} x {:.6}",
-            value_to_sexagesimal(radian_to_hour(result.crd_j2000.ra), true, 9),
-            value_to_sexagesimal(radian_to_degree(result.crd_j2000.dec), true, 8),
-            value_to_sexagesimal(radian_to_hour(result.crd_now.ra), true, 9),
-            value_to_sexagesimal(radian_to_degree(result.crd_now.dec), true, 8),
-            radian_to_degree(result.width),
-            radian_to_degree(result.height),
-        );
+        result.print_to_log();
 
         let event = PlateSolverEvent {
             cam_name: self.camera.name.clone(),
             result: result.clone(),
         };
-        self.subscribers.read().unwrap().inform_event(
-            CoreEvent::PlateSolve(event)
+        self.subscribers.notify(
+            Event::PlateSolve(event)
         );
         self.indi.set_after_coord_set_action(
             &self.mount,
@@ -183,12 +175,12 @@ impl Mode for CapturePlatesolveMode {
             (State::Capturing, FrameProcessResultData::Image(image), false) => {
                 self.plate_solve_image(image)?;
                 self.state = State::PlateSolve;
-                return Ok(NotifyResult::ModeStrChanged);
+                return Ok(NotifyResult::ProgressChanges);
             }
             (State::Capturing, FrameProcessResultData::LightFrameInfo(info), true) => {
                 self.plate_solve_stars(&info.stars.items, info.width, info.height)?;
                 self.state = State::PlateSolve;
-                return Ok(NotifyResult::ModeStrChanged);
+                return Ok(NotifyResult::ProgressChanges);
             }
             _ => {},
         }

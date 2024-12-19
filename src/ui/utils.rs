@@ -1,6 +1,37 @@
 use std::{rc::Rc, cell::{RefCell, Cell}, time::Duration, collections::HashMap, hash::Hash};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
-use crate::image::histogram::*;
+use crate::{image::histogram::*, indi};
+
+pub fn correct_spinbutton_by_cam_prop(
+    builder:   &gtk::Builder,
+    spb_name:  &str,
+    prop_info: &indi::Result<indi::NumPropValue>,
+    digits:    u32,
+    step:      Option<f64>,
+) -> bool {
+    if let Ok(info) = prop_info {
+        let spb = builder.object::<gtk::SpinButton>(spb_name).unwrap();
+        spb.set_range(info.min, info.max);
+        let value = spb.value();
+        if value < info.min {
+            spb.set_value(info.min);
+        }
+        if value > info.max {
+            spb.set_value(info.max);
+        }
+        let desired_step =
+            if      info.max <= 1.0   { 0.1 }
+            else if info.max <= 10.0  { 1.0 }
+            else if info.max <= 100.0 { 10.0 }
+            else                      { 100.0 };
+        let step = step.unwrap_or(desired_step);
+        spb.set_increments(step, 10.0 * step);
+        spb.set_digits(digits);
+        true
+    } else {
+        false
+    }
+}
 
 pub struct ExclusiveCaller {
     busy: Cell<bool>,

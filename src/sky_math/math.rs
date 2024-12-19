@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::{f64::consts::PI, ops::{Mul, Sub}};
 use chrono::{Datelike, Timelike, NaiveDateTime, NaiveDate};
 

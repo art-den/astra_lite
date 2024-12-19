@@ -14,6 +14,7 @@ mod guiding;
 mod plate_solve;
 mod core;
 mod options;
+mod sky_math;
 
 use std::{path::Path, sync::{Arc, RwLock}};
 use gtk::{prelude::*, glib, glib::clone};

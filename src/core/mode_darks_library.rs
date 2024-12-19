@@ -2,7 +2,7 @@ use std::{collections::VecDeque, sync::{Arc, Mutex, RwLock}};
 
 use crate::{core::frame_processing::*, indi::{self}, options::*};
 
-use super::core::*;
+use super::{core::*, events::Progress};
 
 enum State {
     Undefined,
@@ -124,7 +124,7 @@ impl Mode for DarkCreationMode {
                     self.temperature.clear();
                     self.indi.camera_set_temperature(&self.device.name, temperature)?;
                     self.state = State::WaitingForTemperature(temperature);
-                    result = NotifyResult::ModeStrChanged;
+                    result = NotifyResult::ProgressChanges;
                 } else {
                     have_to_start = true;
                 }
@@ -158,7 +158,7 @@ impl Mode for DarkCreationMode {
             State::WaitingForDarkCreation => {
                 self.index += 1;
                 self.state = State::Undefined;
-                result = NotifyResult::ModeStrChanged;
+                result = NotifyResult::ProgressChanges;
             }
         }
 

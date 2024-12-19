@@ -2,7 +2,7 @@ use std::{path::{Path, PathBuf}, sync::Arc};
 
 use chrono::{DateTime, Utc};
 
-use crate::{image::raw::*, indi, options::*};
+use crate::{image::raw::*, indi, options::*, ui::sky_map::math::{degree_to_radian, hour_to_radian, radian_to_degree, EqCoord}};
 
 pub enum FileNameArg<'a> {
     Options(&'a CamOptions),
@@ -338,4 +338,22 @@ pub fn gain_to_value(
         Gain::P75 => calc_gain(0.75),
         Gain::Max => calc_gain(1.0),
     }
+}
+
+pub fn check_telescope_is_at_desired_position(
+    indi:                &indi::Connection,
+    mount_dev:           &str,
+    desired_pos:         &EqCoord,
+    tolerance_in_degree: f64,
+) -> anyhow::Result<()> {
+    let (cur_ra, cur_dec) = indi.mount_get_eq_ra_and_dec(mount_dev)?;
+    let cur_pos = EqCoord {
+        ra: hour_to_radian(cur_ra),
+        dec: degree_to_radian(cur_dec)
+    };
+    let diff = EqCoord::angle_between(&cur_pos, &desired_pos);
+    if radian_to_degree(diff) > tolerance_in_degree {
+        anyhow::bail!("Tepescope position is too far from desired one");
+    }
+    Ok(())
 }

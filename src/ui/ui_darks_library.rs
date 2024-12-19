@@ -3,8 +3,8 @@ use gtk::{gdk::ffi::GDK_CURRENT_TIME, glib::{self, clone}, prelude::*};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use crate::{
-    core::{core::*, mode_darks_library::*},
-    image::info::seconds_to_total_time_str, options::*, utils::{io_utils::*, gtk_utils},
+    core::{core::*, events::*, mode_darks_library::*},
+    image::info::seconds_to_total_time_str, options::*, utils::{gtk_utils, io_utils::*},
 };
 
 
@@ -407,7 +407,7 @@ impl Drop for DarksLibraryDialog {
         log::info!("DarksLibraryDialog dropped");
 
         if let Some(subscription) = self.core_subscription.borrow_mut().take() {
-            self.core.unsubscribe_events(subscription);
+            self.core.event_subscriptions().unsubscribe(subscription);
         }
     }
 }
@@ -811,7 +811,7 @@ impl DarksLibraryDialog {
 
     fn connect_core_events(self: &Rc<Self>) {
         let (sender, receiver) = async_channel::unbounded();
-        let subscription = self.core.subscribe_events(move |evt| {
+        let subscription = self.core.event_subscriptions().subscribe(move |evt| {
             sender.send_blocking(evt).unwrap();
         });
         glib::spawn_future_local(clone!(@weak self as self_ => async move {
@@ -937,7 +937,7 @@ impl DarksLibraryDialog {
         self.correct_widgets_enable_state();
     }
 
-    fn process_core_event(&self, event: CoreEvent) {
+    fn process_core_event(&self, event: Event) {
         let show_progress = |prb_name, cur, total| {
             let prb = self.builder.object::<gtk::ProgressBar>(prb_name).unwrap();
             if total != 0 {
@@ -947,22 +947,22 @@ impl DarksLibraryDialog {
         };
 
         match event {
-            CoreEvent::Progress(Some(progress), ModeType::CreatingDefectPixels) => {
+            Event::Progress(Some(progress), ModeType::CreatingDefectPixels) => {
                 show_progress("prb_def", progress.cur, progress.total);
                 self.correct_widgets_enable_state();
             }
 
-            CoreEvent::Progress(Some(progress), ModeType::CreatingMasterDarks) => {
+            Event::Progress(Some(progress), ModeType::CreatingMasterDarks) => {
                 show_progress("prb_dark", progress.cur, progress.total);
                 self.correct_widgets_enable_state();
             }
 
-            CoreEvent::Progress(Some(progress), ModeType::CreatingMasterBiases) => {
+            Event::Progress(Some(progress), ModeType::CreatingMasterBiases) => {
                 show_progress("prb_bias", progress.cur, progress.total);
                 self.correct_widgets_enable_state();
             }
 
-            CoreEvent::ModeChanged => {
+            Event::ModeChanged => {
                 self.correct_widgets_enable_state();
             }
 

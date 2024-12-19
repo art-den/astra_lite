@@ -1,9 +1,8 @@
 use std::sync::{Arc, RwLock};
-use crate::{core::{consts::*, frame_processing::*}, image::{image::Image, info::LightFrameInfo, stars::Stars}, indi::{self, value_to_sexagesimal}, options::*, plate_solve::*, ui::sky_map::math::*};
-use super::{core::*, utils::*};
+use crate::{core::{consts::*, events::*, frame_processing::*}, image::{image::Image, info::LightFrameInfo, stars::Stars}, indi::{self, value_to_sexagesimal}, options::*, plate_solve::*, ui::sky_map::math::*};
+use super::{core::*, events::EventSubscriptions, utils::*};
 
 const MAX_MOUNT_UNPARK_TIME: usize = 20; // seconds
-const MAX_GOTO_TIME: usize = 120; // seconds
 const AFTER_GOTO_WAIT_TIME: usize = 3; // seconds
 
 #[derive(PartialEq)]
@@ -44,7 +43,7 @@ pub struct GotoMode {
     ps_opts:         PlateSolverOptions,
     mount:           String,
     indi:            Arc<indi::Connection>,
-    subscribers:     Arc<RwLock<Subscribers>>,
+    subscribers:     Arc<EventSubscriptions>,
     plate_solver:    PlateSolver,
     unpark_seconds:  usize,
     goto_seconds:    usize,
@@ -58,7 +57,7 @@ impl GotoMode {
         config:      GotoConfig,
         options:     &Arc<RwLock<Options>>,
         indi:        &Arc<indi::Connection>,
-        subscribers: &Arc<RwLock<Subscribers>>,
+        subscribers: &Arc<EventSubscriptions>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(camera) = opts.cam.device.clone() else {
@@ -202,8 +201,8 @@ impl GotoMode {
             cam_name: self.camera.name.clone(),
             result: result.clone(),
         };
-        self.subscribers.read().unwrap().inform_event(
-            CoreEvent::PlateSolve(event)
+        self.subscribers.notify(
+            Event::PlateSolve(event)
         );
 
         match action {
@@ -345,7 +344,7 @@ impl Mode for GotoMode {
                 if !self.indi.mount_get_parked(&self.mount)? {
                     self.start_goto_coord()?;
                     self.state = State::Goto;
-                    return Ok(NotifyResult::ModeStrChanged);
+                    return Ok(NotifyResult::ProgressChanges);
                 }
                 self.unpark_seconds += 1;
                 if self.unpark_seconds > MAX_MOUNT_UNPARK_TIME {
@@ -361,24 +360,28 @@ impl Mode for GotoMode {
                 if crd_prop_state == indi::PropState::Ok {
                     self.goto_ok_seconds += 1;
                     if self.goto_ok_seconds >= AFTER_GOTO_WAIT_TIME {
-                        self.start_take_picture()?;
+                        check_telescope_is_at_desired_position(
+                            &self.indi,
+                            &self.mount,
+                            &self.eq_coord,
+                            0.5
+                        )?;
                         if self.state == State::Goto {
                             if self.config == GotoConfig::OnlyGoto {
                                 return Ok(NotifyResult::Finished { next_mode: None });
                             }
+                            self.start_take_picture()?;
                             self.state = State::TackingPicture;
                         } else {
+                            self.start_take_picture()?;
                             self.state = State::TackingFinalPicture;
                         }
-                        return Ok(NotifyResult::ModeStrChanged);
+                        return Ok(NotifyResult::ProgressChanges);
                     }
                 } else {
                     self.goto_seconds += 1;
                     if self.goto_seconds > MAX_GOTO_TIME {
-                        anyhow::bail!(
-                            "Mount goto time out (> {} seconds)!",
-                            MAX_GOTO_TIME
-                        );
+                        anyhow::bail!("Telescope is moving too long time (> {}s)", MAX_GOTO_TIME);
                     }
                 }
             }
@@ -389,7 +392,7 @@ impl Mode for GotoMode {
                 )?;
                 if ok {
                     self.start_goto()?;
-                    return Ok(NotifyResult::ModeStrChanged)
+                    return Ok(NotifyResult::ProgressChanges)
                 }
             }
 
@@ -400,7 +403,7 @@ impl Mode for GotoMode {
                 if ok {
                     self.start_goto_coord()?;
                     self.state = State::CorrectMount;
-                    return Ok(NotifyResult::ModeStrChanged)
+                    return Ok(NotifyResult::ProgressChanges)
                 }
             }
 
@@ -428,22 +431,22 @@ impl Mode for GotoMode {
             (State::TackingPicture, FrameProcessResultData::Image(image), false) => {
                 self.plate_solve_image(image)?;
                 self.state = State::PlateSolving;
-                return Ok(NotifyResult::ModeStrChanged);
+                return Ok(NotifyResult::ProgressChanges);
             }
             (State::TackingPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
                 self.plate_solve_stars(&info.stars.items, info.width, info.height)?;
                 self.state = State::PlateSolving;
-                return Ok(NotifyResult::ModeStrChanged);
+                return Ok(NotifyResult::ProgressChanges);
             }
             (State::TackingFinalPicture, FrameProcessResultData::Image(image), false) => {
                 self.plate_solve_image(image)?;
                 self.state = State::FinalPlateSolving;
-                return Ok(NotifyResult::ModeStrChanged);
+                return Ok(NotifyResult::ProgressChanges);
             }
             (State::TackingFinalPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
                 self.plate_solve_stars(&info.stars.items, info.width, info.height)?;
                 self.state = State::FinalPlateSolving;
-                return Ok(NotifyResult::ModeStrChanged);
+                return Ok(NotifyResult::ProgressChanges);
             }
             _ => {},
         }

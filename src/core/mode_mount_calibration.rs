@@ -3,7 +3,7 @@ use itertools::Itertools;
 use crate::{
     image::{info::*, stars::*, stars_offset::*}, indi, options::*, utils::math::*
 };
-use super::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*, utils::*};
+use super::{consts::INDI_SET_PROP_TIMEOUT, core::*, events::*, frame_processing::*, utils::*};
 
 pub const DITHER_CALIBR_ATTEMPTS_CNT: usize = 11;
 pub const DITHER_CALIBR_SPEED: f64 = 1.0;
@@ -272,7 +272,7 @@ impl MountCalibrMode {
             self.attempt_num += 1;
             result = NotifyResult::ProgressChanges;
             if self.attempt_num >= DITHER_CALIBR_ATTEMPTS_CNT {
-                result = NotifyResult::ModeStrChanged;
+                result = NotifyResult::ProgressChanges;
                 self.process_axis_results()?;
             } else {
                 let (ns, we) = match self.axis {

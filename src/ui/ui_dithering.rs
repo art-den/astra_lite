@@ -3,10 +3,10 @@ use gtk::{glib, prelude::*, glib::clone};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    core::core::*, indi, options::*, utils::{io_utils::*, gtk_utils}
+    core::{core::*, events::*}, indi, options::*, utils::{gtk_utils, io_utils::*}
 };
 
-use super::ui_main::*;
+use super::{ui_main::*, utils::*};
 
 pub fn init_ui(
     _app:     &gtk::Application,
@@ -40,9 +40,11 @@ pub fn init_ui(
 
     data.init_widgets();
     data.apply_ui_options();
+
     data.connect_main_ui_events(handlers);
     data.connect_widgets_events();
     data.connect_indi_and_core_events();
+
     data.correct_widgets_props();
 }
 
@@ -79,7 +81,7 @@ impl Drop for DitheringUi {
 }
 
 enum MainThreadEvent {
-    Core(CoreEvent),
+    Core(Event),
     Indi(indi::Event),
 }
 
@@ -112,7 +114,8 @@ impl DitheringUi {
         let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
 
         let sender = main_thread_sender.clone();
-        self.core.subscribe_events(move |event| {
+
+        self.core.event_subscriptions().subscribe(move |event| {
             sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
         });
 
@@ -131,8 +134,11 @@ impl DitheringUi {
 
     fn process_event_in_main_thread(&self, event: MainThreadEvent) {
         match event {
-            MainThreadEvent::Core(CoreEvent::ModeChanged) => {
+            MainThreadEvent::Core(Event::ModeChanged) => {
                 self.correct_widgets_props();
+            }
+            MainThreadEvent::Core(Event::CameraDeviceChanged(cam_device)) => {
+                self.correct_widgets_props_impl(&Some(cam_device));
             }
             MainThreadEvent::Indi(indi::Event::ConnChange(_)) => {
                 self.correct_widgets_props();
@@ -183,7 +189,7 @@ impl DitheringUi {
         *self.self_.borrow_mut() = None;
     }
 
-    fn correct_widgets_props(&self) {
+    fn correct_widgets_props_impl(&self, cam_device: &Option<DeviceAndProp>) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
 
         let mode_data = self.core.mode_data();
@@ -199,6 +205,12 @@ impl DitheringUi {
         let disabled = ui.prop_bool("rbtn_no_guiding.active");
         let by_main_cam = ui.prop_bool("rbtn_guide_main_cam.active");
         let by_ext = ui.prop_bool("rbtn_guide_ext.active");
+
+        if let Some(cam_device) = cam_device {
+            let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_device.prop);
+            let exp_value = self.indi.camera_get_exposure_prop_value(&cam_device.name, cam_ccd);
+            correct_spinbutton_by_cam_prop(&self.builder, "spb_mnt_cal_exp", &exp_value, 1, Some(1.0));
+        }
 
         ui.enable_widgets(false, &[
             ("grd_dither",          indi_connected),
@@ -216,6 +228,13 @@ impl DitheringUi {
             ("start_dither_calibr", !dither_calibr && by_main_cam && can_change_mode),
             ("stop_dither_calibr", dither_calibr),
         ]);
+    }
+
+    fn correct_widgets_props(&self) {
+        let options = self.options.read().unwrap();
+        let cam_device = options.cam.device.clone();
+        drop(options);
+        self.correct_widgets_props_impl(&cam_device);
     }
 
     fn apply_ui_options(&self) {

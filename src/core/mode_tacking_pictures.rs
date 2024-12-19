@@ -14,7 +14,7 @@ use crate::{
     utils::io_utils::*,
     TimeLogger
 };
-use super::{core::*, frame_processing::*, mode_darks_library::MasterFileCreationProgramItem, mode_mount_calibration::*, utils::FileNameUtils};
+use super::{core::*, events::*, frame_processing::*, mode_darks_library::MasterFileCreationProgramItem, mode_mount_calibration::*, utils::FileNameUtils};
 
 const MAX_TIMED_GUIDE: f64 = 20.0; // in seconds
 
@@ -108,7 +108,7 @@ pub struct TackingPicturesMode {
     mount_device:    String,
     fn_gen:          Arc<Mutex<SeqFileNameGen>>,
     indi:            Arc<indi::Connection>,
-    subscribers:     Arc<RwLock<Subscribers>>,
+    subscribers:     Arc<EventSubscriptions>,
     raw_stacker:     RawStacker,
     options:         Arc<RwLock<Options>>,
     cam_options:     CamOptions,
@@ -132,7 +132,7 @@ pub struct TackingPicturesMode {
 impl TackingPicturesMode {
     pub fn new(
         indi:        &Arc<indi::Connection>,
-        subscribers: &Arc<RwLock<Subscribers>>,
+        subscribers: &Arc<EventSubscriptions>,
         cam_mode:    CameraMode,
         options:     &Arc<RwLock<Options>>,
     ) -> anyhow::Result<Self> {
@@ -582,7 +582,7 @@ impl TackingPicturesMode {
                     log::debug!("Timed guide, NS = {:.2}s, WE = {:.2}s", dec, ra);
                     self.indi.mount_timed_guide(&self.mount_device, dec, ra)?;
                     self.state = State::InternalMountCorrection;
-                    return Ok(NotifyResult::ModeStrChanged);
+                    return Ok(NotifyResult::ProgressChanges);
                 }
             }
         }
@@ -620,7 +620,7 @@ impl TackingPicturesMode {
                     guider.start_dithering(dist)?;
                     self.abort()?;
                     self.state = State::ExternalDithering;
-                    return Ok(NotifyResult::ModeStrChanged);
+                    return Ok(NotifyResult::ProgressChanges);
                 }
             }
             Ok(NotifyResult::Empty)
@@ -650,7 +650,7 @@ impl TackingPicturesMode {
         = (&self.state, &mut self.cam_offset_calc) {
             if offset_calc.step == Self::MAX_OFFSET_CALC_STEPS {
                 self.start_or_continue()?;
-                return Ok(NotifyResult::ModeStrChanged);
+                return Ok(NotifyResult::ProgressChanges);
             }
         }
 
@@ -697,8 +697,7 @@ impl TackingPicturesMode {
                 data:          result,
             };
 
-            let subscribers = self.subscribers.read().unwrap();
-            subscribers.inform_event(CoreEvent::FrameProcessing(event_data));
+            self.subscribers.notify(Event::FrameProcessing(event_data));
         }
 
         if is_last_frame && self.flags.save_defect_pixels {
@@ -763,7 +762,7 @@ impl TackingPicturesMode {
                 result_value = result_value.max(u16::MIN as i32);
                 self.camera_offset = Some(result_value as u16);
                 dbg!(self.camera_offset);
-                result = NotifyResult::ModeStrChanged;
+                result = NotifyResult::ProgressChanges;
             }
         }
 
@@ -1176,7 +1175,7 @@ impl Mode for TackingPicturesMode {
             self.state = State::Common;
             self.flags.skip_frame_done = true;
             self.start_or_continue()?;
-            return Ok(NotifyResult::ModeStrChanged)
+            return Ok(NotifyResult::ProgressChanges)
         }
         Ok(NotifyResult::Empty)
     }
@@ -1263,7 +1262,7 @@ impl Mode for TackingPicturesMode {
                     apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
                     self.cur_exposure = self.cam_options.frame.exposure();
                     self.state = State::Common;
-                    result = NotifyResult::ModeStrChanged;
+                    result = NotifyResult::ProgressChanges;
                 }
             }
         }
@@ -1281,7 +1280,7 @@ impl Mode for TackingPicturesMode {
                     ExtGuiderEvent::DitheringFinished => {
                         self.flags.skip_frame_done = false;
                         self.start_or_continue()?;
-                        return Ok(NotifyResult::ModeStrChanged);
+                        return Ok(NotifyResult::ProgressChanges);
                     }
                     ExtGuiderEvent::Error(error) =>
                         return Err(anyhow::anyhow!("External guider error: {}", error)),

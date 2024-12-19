@@ -13,4 +13,5 @@ mod ui_focuser;
 mod ui_dithering;
 mod ui_mount;
 mod ui_darks_library;
-mod ui_platesolver_options;
+mod ui_plate_solve;
+mod ui_polar_align;
