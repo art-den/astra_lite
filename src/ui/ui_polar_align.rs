@@ -110,6 +110,25 @@ impl PolarAlignUi {
         ui.set_prop_str("l_pa_az_err.label", Some(""));
         ui.set_prop_str("l_pa_alt_err_arr.label", Some(""));
         ui.set_prop_str("l_pa_az_err_arr.label", Some(""));
+
+        if cfg!(debug_assertions) {
+            ui.show_widgets(&[
+                ("l_pa_sim_alt_err",   true),
+                ("spb_pa_sim_alt_err", true),
+                ("l_pa_sim_az_err",    true),
+                ("spb_pa_sim_az_err",  true),
+            ]);
+        }
+
+        let spb_pa_sim_alt_err = self.builder.object::<gtk::SpinButton>("spb_pa_sim_alt_err").unwrap();
+        spb_pa_sim_alt_err.set_range(-5.0, 5.0);
+        spb_pa_sim_alt_err.set_digits(2);
+        spb_pa_sim_alt_err.set_increments(0.01, 0.1);
+
+        let spb_pa_sim_az_err = self.builder.object::<gtk::SpinButton>("spb_pa_sim_az_err").unwrap();
+        spb_pa_sim_az_err.set_range(-5.0, 5.0);
+        spb_pa_sim_az_err.set_digits(2);
+        spb_pa_sim_az_err.set_increments(0.01, 0.1);
     }
 
     fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
@@ -152,6 +171,18 @@ impl PolarAlignUi {
     fn connect_widgets_events(self: &Rc<Self>) {
         gtk_utils::connect_action(&self.window, self, "start_polar_alignment", Self::handler_start_action_polar_align);
         gtk_utils::connect_action(&self.window, self, "stop_polar_alignment", Self::handler_stop_action_polar_align);
+
+        let spb_pa_sim_alt_err = self.builder.object::<gtk::SpinButton>("spb_pa_sim_alt_err").unwrap();
+        spb_pa_sim_alt_err.connect_value_changed(clone!(@weak self as self_ => move |spb| {
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.polar_align.sim_alt_err = spb.value();
+        }));
+
+        let spb_pa_sim_az_err = self.builder.object::<gtk::SpinButton>("spb_pa_sim_az_err").unwrap();
+        spb_pa_sim_az_err.connect_value_changed(clone!(@weak self as self_ => move |spb| {
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.polar_align.sim_az_err = spb.value();
+        }));
     }
 
     fn correct_widgets_props_impl(&self, mount_device: &str, cam_device: &Option<DeviceAndProp>) {

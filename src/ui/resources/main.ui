@@ -3577,7 +3577,7 @@ Also makes stars little sharper</property>
                                         </child>
                                         <child>
                                           <object class="GtkCheckButton" id="chb_max_oval">
-                                            <property name="label" translatable="yes">Max. stars ovality:</property>
+                                            <property name="label" translatable="yes">Max. stars ovality (px):</property>
                                             <property name="visible">True</property>
                                             <property name="can-focus">True</property>
                                             <property name="receives-default">False</property>
@@ -6734,7 +6734,7 @@ B - by bias calibrated</property>
                                       </packing>
                                     </child>
                                     <child>
-                                      <!-- n-columns=2 n-rows=3 -->
+                                      <!-- n-columns=2 n-rows=5 -->
                                       <object class="GtkGrid">
                                         <property name="visible">True</property>
                                         <property name="can-focus">False</property>
@@ -6812,6 +6812,52 @@ B - by bias calibrated</property>
                                             <property name="top-attach">2</property>
                                           </packing>
                                         </child>
+                                        <child>
+                                          <object class="GtkLabel" id="l_pa_sim_alt_err">
+                                            <property name="can-focus">False</property>
+                                            <property name="halign">start</property>
+                                            <property name="label" translatable="yes">Sim. alt. err (°)</property>
+                                            <attributes>
+                                              <attribute name="underline" value="True"/>
+                                            </attributes>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">0</property>
+                                            <property name="top-attach">3</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkLabel" id="l_pa_sim_az_err">
+                                            <property name="can-focus">False</property>
+                                            <property name="halign">start</property>
+                                            <property name="label" translatable="yes">Sim az. err (°)</property>
+                                            <attributes>
+                                              <attribute name="underline" value="True"/>
+                                            </attributes>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">0</property>
+                                            <property name="top-attach">4</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkSpinButton" id="spb_pa_sim_alt_err">
+                                            <property name="can-focus">True</property>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">1</property>
+                                            <property name="top-attach">3</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkSpinButton" id="spb_pa_sim_az_err">
+                                            <property name="can-focus">True</property>
+                                          </object>
+                                          <packing>
+                                            <property name="left-attach">1</property>
+                                            <property name="top-attach">4</property>
+                                          </packing>
+                                        </child>
                                       </object>
                                       <packing>
                                         <property name="expand">False</property>
@@ -6856,6 +6902,9 @@ B - by bias calibrated</property>
                                             <property name="visible">True</property>
                                             <property name="can-focus">False</property>
                                             <property name="label" translatable="yes">Alt:</property>
+                                            <attributes>
+                                              <attribute name="scale" value="2"/>
+                                            </attributes>
                                           </object>
                                           <packing>
                                             <property name="left-attach">0</property>
@@ -6878,6 +6927,9 @@ B - by bias calibrated</property>
                                             <property name="visible">True</property>
                                             <property name="can-focus">False</property>
                                             <property name="label" translatable="yes">Az:</property>
+                                            <attributes>
+                                              <attribute name="scale" value="2"/>
+                                            </attributes>
                                           </object>
                                           <packing>
                                             <property name="left-attach">1</property>

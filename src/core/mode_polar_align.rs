@@ -3,7 +3,7 @@ use std::{f64::consts::PI, sync::{Arc, RwLock}};
 
 use chrono::{NaiveDateTime, Utc};
 
-use crate::{core::{core::*, frame_processing::*}, image::{image::*, stars::Stars}, indi, options::*, plate_solve::*, ui::sky_map::math::*};
+use crate::{core::{core::*, frame_processing::*}, image::{image::*, stars::Stars}, indi, options::{self, *}, plate_solve::*, ui::sky_map::math::*};
 
 use super::{consts::*, events::*, utils::{check_telescope_is_at_desired_position, gain_to_value}};
 
@@ -29,8 +29,32 @@ impl PolarAlignment {
         self.measurements.push(measurement);
     }
 
-    fn calc_mount_pole(&mut self) {
+    fn calc_mount_pole(&mut self, latitude: f64, longitude: f64) {
         assert!(self.measurements.len() == 3);
+
+        let latitude = degree_to_radian(latitude);
+        let longitude = degree_to_radian(longitude);
+
+        let horiz_crd = |m: &PolarAlignmentMeasure| -> HorizCoord {
+            let cvt = EqToSphereCvt::new(longitude, latitude, &m.utc_time);
+            HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&m.coord))
+        };
+
+        let pt1 = horiz_crd(&self.measurements[0]).to_sphere_pt();
+        let pt2 = horiz_crd(&self.measurements[1]).to_sphere_pt();
+        let pt3 = horiz_crd(&self.measurements[2]).to_sphere_pt();
+
+        let vec1 = &pt2 - &pt1;
+        let vec2 = &pt2 - &pt3;
+
+        let mut mount_pole_crd = &vec1 * &vec2;
+        mount_pole_crd.normalize();
+        let mount_pole = HorizCoord::from_sphere_pt(&mount_pole_crd);
+
+        let cvt = EqToSphereCvt::new(longitude, latitude, &Utc::now().naive_utc());
+        let celestial_pole = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&EqCoord { ra: 0.0, dec: 0.5 * PI }));
+
+        dbg!(mount_pole, celestial_pole);
     }
 }
 
@@ -65,6 +89,8 @@ pub struct PolarAlignMode {
     mount:        String,
     cam_opts:     CamOptions,
     pa_opts:      PloarAlignOptions,
+    s_opts:       SiteOptions,
+    options:      Arc<RwLock<Options>>,
     indi:         Arc<indi::Connection>,
     subscribers:  Arc<EventSubscriptions>,
     ps_opts:      PlateSolverOptions,
@@ -105,6 +131,8 @@ impl PolarAlignMode {
             camera:      cam_device.clone(),
             mount:       opts.mount.device.clone(),
             pa_opts:     opts.polar_align.clone(),
+            s_opts:      opts.site.clone(),
+            options:     Arc::clone(options),
             indi:        Arc::clone(indi),
             subscribers: Arc::clone(subscribers),
             ps_opts:     opts.plate_solver.clone(),
@@ -151,11 +179,23 @@ impl PolarAlignMode {
     }
 
     fn try_process_plate_solving_result(&mut self) -> anyhow::Result<NotifyResult> {
-        let result = match self.plate_solver.get_result()? {
+        let mut result = match self.plate_solver.get_result()? {
             PlateSolveResult::Waiting => return Ok(NotifyResult::Empty),
             PlateSolveResult::Done(result) => result,
             PlateSolveResult::Failed => anyhow::bail!("Can't platesolve image")
         };
+
+        if cfg!(debug_assertions) {
+            let cvt = EqToSphereCvt::new(self.s_opts.latitude, self.s_opts.longitude, &Utc::now().naive_utc());
+
+            let mut horiz = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&result.crd_now));
+            let options = self.options.read().unwrap();
+            horiz.alt += degree_to_radian(options.polar_align.sim_alt_err);
+            horiz.az += degree_to_radian(options.polar_align.sim_az_err);
+            drop(options);
+
+            result.crd_now = cvt.sphere_to_eq(&horiz.to_sphere_pt());
+        }
 
         result.print_to_log();
 
@@ -179,7 +219,7 @@ impl PolarAlignMode {
                     coord:    result.crd_now,
                     utc_time: Utc::now().naive_utc(),
                 });
-                self.alignment.calc_mount_pole();
+                self.alignment.calc_mount_pole(self.s_opts.latitude, self.s_opts.longitude);
                 self.calc_error()?;
                 self.start_capture()?;
                 self.step = Step::Corr;
@@ -205,8 +245,15 @@ impl PolarAlignMode {
             PloarAlignDir::East => self.pa_opts.angle,
             PloarAlignDir::West => -self.pa_opts.angle,
         };
-        let new_ra = cur_ra + degree_to_radian(angle);
+        let mut new_ra = cur_ra + degree_to_radian(angle);
+        while new_ra < 0.0 {
+            new_ra += 2.0 * PI;
+        }
+
         self.goto_pos = EqCoord { ra: new_ra, dec: cur_dec };
+
+        dbg!(&self.goto_pos);
+
         self.indi.set_after_coord_set_action(
             &self.mount,
             indi::AfterCoordSetAction::Track,

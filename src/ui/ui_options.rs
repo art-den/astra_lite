@@ -189,9 +189,11 @@ impl Options {
 
     pub fn read_polar_align(&mut self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
-        self.polar_align.angle = ui.prop_f64("spb_pa_angle.value");
-        self.polar_align.direction = PloarAlignDir::from_active_id(ui.prop_string("cbx_pa_dir.active-id").as_deref()).unwrap_or(PloarAlignDir::West);
-        self.polar_align.speed = ui.prop_string("cbx_pa_speed.active_id");
+        self.polar_align.angle       = ui.prop_f64("spb_pa_angle.value");
+        self.polar_align.direction   = PloarAlignDir::from_active_id(ui.prop_string("cbx_pa_dir.active-id").as_deref()).unwrap_or(PloarAlignDir::West);
+        self.polar_align.speed       = ui.prop_string("cbx_pa_speed.active_id");
+        self.polar_align.sim_alt_err = ui.prop_f64("spb_pa_sim_alt_err.value");
+        self.polar_align.sim_az_err  = ui.prop_f64("spb_pa_sim_az_err.value");
     }
 
     /* show */
@@ -371,9 +373,11 @@ impl Options {
 
     pub fn show_polar_align(&self, builder: &gtk::Builder) {
         let ui = gtk_utils::UiHelper::new_from_builder(builder);
-        ui.set_prop_f64("spb_pa_angle.value", self.polar_align.angle);
-        ui.set_prop_str("cbx_pa_dir.active-id", self.polar_align.direction.to_active_id());
-        ui.set_prop_str("cbx_pa_speed.active_id", self.polar_align.speed.as_deref());
+        ui.set_prop_f64("spb_pa_angle.value",       self.polar_align.angle);
+        ui.set_prop_str("cbx_pa_dir.active-id",     self.polar_align.direction.to_active_id());
+        ui.set_prop_str("cbx_pa_speed.active_id",   self.polar_align.speed.as_deref());
+        ui.set_prop_f64("spb_pa_sim_alt_err.value", self.polar_align.sim_alt_err);
+        ui.set_prop_f64("spb_pa_sim_az_err.value",  self.polar_align.sim_az_err);
     }
 }
 

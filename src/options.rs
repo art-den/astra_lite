@@ -641,14 +641,18 @@ pub struct PloarAlignOptions {
     pub angle:     f64,
     pub direction: PloarAlignDir,
     pub speed:     Option<String>,
+    pub sim_alt_err:   f64,
+    pub sim_az_err:    f64,
 }
 
 impl Default for PloarAlignOptions {
     fn default() -> Self {
         Self {
-            angle:     30.0,
-            direction: PloarAlignDir::West,
-            speed:     None,
+            angle:       30.0,
+            direction:   PloarAlignDir::West,
+            speed:       None,
+            sim_alt_err: 1.1,
+            sim_az_err:  1.4,
         }
     }
 }

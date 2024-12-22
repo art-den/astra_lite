@@ -1,4 +1,6 @@
 pub fn value_to_sexagesimal(value: f64, zero: bool, frac: u8) -> String {
+    let sign = if value < 0.0 { "-" } else { "" };
+    let value = value.abs();
     let mut hours = value.trunc() as i32;
     let round = match frac {
         9 => 0.5,
@@ -8,7 +10,7 @@ pub fn value_to_sexagesimal(value: f64, zero: bool, frac: u8) -> String {
         3 => 50.0 * 60.0,
         _ => 0.0,
     };
-    let mut seconds100 = (value.abs().fract() * 3600.0 * 100.0 + round) as u32;
+    let mut seconds100 = (value.fract() * 3600.0 * 100.0 + round) as u32;
     if seconds100 >= 3600 * 100 {
         hours += if hours < 0 { -1 } else { 1 };
         seconds100 -= 3600 * 100;
@@ -16,16 +18,16 @@ pub fn value_to_sexagesimal(value: f64, zero: bool, frac: u8) -> String {
     let minutes100 = seconds100 / 60;
     seconds100 %= 60 * 100;
     match (frac, zero) {
-        (3, false) => format!("{}:{:02}", hours, minutes100 / 100),
-        (3, true)  => format!("{:02}:{:02}", hours, minutes100 / 100),
-        (5, false) => format!("{}:{:02}.{}", hours, minutes100 / 100, (minutes100 % 100)/10),
-        (5, true)  => format!("{:02}:{:02}.{}", hours, minutes100 / 100, (minutes100 % 100)/10),
-        (6, false) => format!("{}:{:02}:{:02}", hours, minutes100 / 100, seconds100 / 100),
-        (6, true)  => format!("{:02}:{:02}:{:02}", hours, minutes100 / 100, seconds100 / 100),
-        (8, false) => format!("{}:{:02}:{:02}.{}", hours, minutes100 / 100, seconds100 / 100, (seconds100 % 100) / 10),
-        (8, true)  => format!("{:02}:{:02}:{:02}.{}", hours, minutes100 / 100, seconds100 / 100, (seconds100 % 100) / 10),
-        (9, false) => format!("{}:{:02}:{:02}.{:02}", hours, minutes100 / 100, seconds100 / 100, seconds100 % 100),
-        (9, true)  => format!("{:02}:{:02}:{:02}.{:02}", hours, minutes100 / 100, seconds100 / 100, seconds100 % 100),
+        (3, false) => format!("{}{}:{:02}", sign, hours, minutes100 / 100),
+        (3, true)  => format!("{}{:02}:{:02}", sign, hours, minutes100 / 100),
+        (5, false) => format!("{}{}:{:02}.{}", sign, hours, minutes100 / 100, (minutes100 % 100)/10),
+        (5, true)  => format!("{}{:02}:{:02}.{}", sign, hours, minutes100 / 100, (minutes100 % 100)/10),
+        (6, false) => format!("{}{}:{:02}:{:02}", sign, hours, minutes100 / 100, seconds100 / 100),
+        (6, true)  => format!("{}{:02}:{:02}:{:02}", sign, hours, minutes100 / 100, seconds100 / 100),
+        (8, false) => format!("{}{}:{:02}:{:02}.{}", sign, hours, minutes100 / 100, seconds100 / 100, (seconds100 % 100) / 10),
+        (8, true)  => format!("{}{:02}:{:02}:{:02}.{}", sign, hours, minutes100 / 100, seconds100 / 100, (seconds100 % 100) / 10),
+        (9, false) => format!("{}{}:{:02}:{:02}.{:02}", sign, hours, minutes100 / 100, seconds100 / 100, seconds100 % 100),
+        (9, true)  => format!("{}{:02}:{:02}:{:02}.{:02}", sign, hours, minutes100 / 100, seconds100 / 100, seconds100 % 100),
         _          => value.to_string(),
     }
 }

@@ -1,12 +1,14 @@
-use std::{f64::consts::PI, ops::{Mul, Sub}};
+use std::{f64::consts::PI, fmt::Debug, ops::{Mul, Sub}};
 use chrono::{Datelike, Timelike, NaiveDateTime, NaiveDate};
+
+use crate::indi::value_to_sexagesimal;
 
 use super::solar_system::pn_matrix;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct EqCoord {
-    pub dec: f64,
-    pub ra:  f64,
+    pub dec: f64, // in radian
+    pub ra:  f64, // in radian
 }
 
 impl EqCoord {
@@ -45,6 +47,15 @@ impl EqCoord {
     }
 }
 
+impl Debug for EqCoord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EqCoord")
+            .field("ra", &value_to_sexagesimal(radian_to_hour(self.ra), true, 8))
+            .field("dec", &value_to_sexagesimal(radian_to_degree(self.dec), true, 6))
+            .finish()
+    }
+}
+
 #[test]
 fn test_eq_coord_to_sphere() {
     let test = |crd: EqCoord| {
@@ -67,7 +78,7 @@ fn test_eq_coord_to_sphere() {
     test(EqCoord { dec: PI / 8.0, ra: PI / 8.0 });
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct HorizCoord {
     pub alt: f64,
     pub az:  f64,
@@ -89,6 +100,16 @@ impl HorizCoord {
         }
     }
 }
+
+impl Debug for HorizCoord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HorizCoord")
+            .field("alt", &value_to_sexagesimal(radian_to_degree(self.alt), true, 8))
+            .field("az", &value_to_sexagesimal(radian_to_degree(self.az), true, 8))
+            .finish()
+    }
+}
+
 
 #[derive(Default)]
 pub struct RotMatrix {
@@ -137,6 +158,17 @@ impl Point3D {
 
     pub fn rotate_over_z(&mut self, mat: &RotMatrix) {
         mat.rotate(&mut self.y, &mut self.x);
+    }
+
+    pub fn normalize(&mut self) {
+        let len = f64::sqrt(self.x * self.x + self.y * self.y + self.z * self.z);
+        if len == 0.0 {
+            return;
+        }
+
+        self.x /= len;
+        self.y /= len;
+        self.z /= len;
     }
 }
 

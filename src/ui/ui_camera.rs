@@ -75,7 +75,6 @@ pub fn init_ui(
     );
 
     obj.correct_widgets_props();
-    obj.correct_frame_quality_widgets_props();
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -373,6 +372,7 @@ impl CameraUi {
             drop(options);
 
             self_.correct_widgets_props_impl(&Some(new_device.clone()));
+            self_.correct_frame_quality_widgets_props();
 
             self_.core.event_subscriptions().notify(Event::CameraDeviceChanged(new_device));
         }));
@@ -1151,6 +1151,7 @@ impl CameraUi {
         let camera = options.cam.device.clone();
         drop(options);
         self.correct_widgets_props_impl(&camera);
+        self.correct_frame_quality_widgets_props();
     }
 
     fn correct_frame_quality_widgets_props(&self) {
