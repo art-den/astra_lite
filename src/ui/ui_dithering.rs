@@ -250,6 +250,8 @@ impl DitheringUi {
     }
 
     fn handler_action_start_dither_calibr(&self) {
+        if !is_expanded(&self.builder, "exp_dith") { return; }
+
         let mut options = self.options.write().unwrap();
         options.read_all(&self.builder);
         drop(options);
@@ -261,6 +263,7 @@ impl DitheringUi {
     }
 
     fn handler_action_stop_dither_calibr(&self) {
+        if !is_expanded(&self.builder, "exp_dith") { return; }
         self.core.abort_active_mode();
     }
 }

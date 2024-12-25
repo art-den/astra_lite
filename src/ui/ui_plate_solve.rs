@@ -275,6 +275,8 @@ impl PlateSolveUi {
     }
 
     fn handler_action_capture_platesolve(self: &Rc<Self>) {
+        if !is_expanded(&self.builder, "exp_plate_solving") { return; }
+
         self.options.write().unwrap().read_all(&self.builder);
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_capture_and_platesolve()?;
@@ -283,6 +285,8 @@ impl PlateSolveUi {
     }
 
     fn handler_action_plate_solve_and_goto(&self) {
+        if !is_expanded(&self.builder, "exp_plate_solving") { return; }
+
         self.options.write().unwrap().read_all(&self.builder);
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_goto_image()?;

@@ -118,6 +118,9 @@ impl PolarAlignUi {
                 ("l_pa_sim_az_err",    true),
                 ("spb_pa_sim_az_err",  true),
             ]);
+        } else {
+            // hide the expander in release mode because not everything is done
+            ui.show_widgets(&[("exp_polar_align", false)]);
         }
 
         let spb_pa_sim_alt_err = self.builder.object::<gtk::SpinButton>("spb_pa_sim_alt_err").unwrap();
@@ -265,9 +268,9 @@ impl PolarAlignUi {
                 drop(options);
                 self.correct_widgets_props_impl(&mount_device, &cam_device);
             }
-            MainThreadEvent::Core(Event::PolarAlignment(event)) => {
+            MainThreadEvent::Core(Event::_PolarAlignment(event)) => {
                 match event {
-                    PolarAlignmentEvent::Error(error) =>
+                    PolarAlignmentEvent::_Error(error) =>
                         self.show_polar_alignment_error(&error),
                 }
             }
@@ -292,6 +295,8 @@ impl PolarAlignUi {
     }
 
     fn handler_start_action_polar_align(&self) {
+        if !is_expanded(&self.builder, "exp_polar_align") { return; }
+
         self.options.write().unwrap().read_all(&self.builder);
         gtk_utils::exec_and_show_error(&self.window, ||{
             self.core.start_polar_alignment()?;
@@ -300,6 +305,7 @@ impl PolarAlignUi {
     }
 
     fn handler_stop_action_polar_align(&self) {
+        if !is_expanded(&self.builder, "exp_polar_align") { return; }
         self.core.abort_active_mode();
     }
 

@@ -19,7 +19,7 @@ pub enum Event {
     FrameProcessing(FrameProcessResult),
     Focusing(FocusingStateEvent),
     PlateSolve(PlateSolverEvent),
-    PolarAlignment(PolarAlignmentEvent),
+    _PolarAlignment(PolarAlignmentEvent),
 }
 
 type SubscriptionFun = dyn Fn(Event) + Send + Sync + 'static;

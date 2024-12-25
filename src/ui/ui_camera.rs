@@ -1126,7 +1126,7 @@ impl CameraUi {
             ("cb_bin",             bin_supported && can_change_frame_opts),
             ("chb_master_frame",   can_change_cal_ops && (frame_mode_is_flat || frame_mode_is_dark) && !saving_frames),
             ("chb_master_dark",    can_change_cal_ops),
-            ("fch_dark_library",    can_change_cal_ops),
+            ("fch_dark_library",   can_change_cal_ops),
             ("chb_master_flat",    can_change_cal_ops),
             ("fch_master_flat",    can_change_cal_ops),
             ("chb_raw_frames_cnt", !saving_frames && can_change_mode),
@@ -1976,6 +1976,7 @@ impl CameraUi {
     }
 
     fn handler_action_start_live_stacking(&self) {
+        if !is_expanded(&self.builder, "exp_live") { return; }
         self.get_options_from_widgets();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_live_stacking()?;
@@ -1985,10 +1986,12 @@ impl CameraUi {
     }
 
     fn handler_action_stop_live_stacking(&self) {
+        if !is_expanded(&self.builder, "exp_live") { return; }
         self.core.abort_active_mode();
     }
 
     fn handler_action_continue_live_stacking(&self) {
+        if !is_expanded(&self.builder, "exp_live") { return; }
         self.get_options_from_widgets();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.continue_prev_mode()?;
@@ -2241,6 +2244,7 @@ impl CameraUi {
     }
 
     fn handler_action_start_save_raw_frames(&self) {
+        if !is_expanded(&self.builder, "exp_raw_frames") { return; }
         self.get_options_from_widgets();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_saving_raw_frames()?;
@@ -2250,6 +2254,7 @@ impl CameraUi {
     }
 
     fn handler_action_continue_save_raw_frames(&self) {
+        if !is_expanded(&self.builder, "exp_raw_frames") { return; }
         self.get_options_from_widgets();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.continue_prev_mode()?;
@@ -2258,6 +2263,7 @@ impl CameraUi {
     }
 
     fn handler_action_stop_save_raw_frames(&self) {
+        if !is_expanded(&self.builder, "exp_raw_frames") { return; }
         self.core.abort_active_mode();
     }
 
@@ -2325,6 +2331,8 @@ impl CameraUi {
     }
 
     fn handler_action_darks_library(&self) {
+        if !is_expanded(&self.builder, "exp_calibr") { return; }
+
         let dialog = DarksLibraryDialog::new(
             &self.core,
             &self.options,

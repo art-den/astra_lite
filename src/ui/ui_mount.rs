@@ -327,6 +327,8 @@ impl MountUi {
     }
 
     fn handler_nav_mount_btn_pressed(&self, button_name: &str) {
+        if !is_expanded(&self.builder, "exp_mount") { return; }
+
         let options = self.options.read().unwrap();
         let mount_device_name = &options.mount.device;
         if mount_device_name.is_empty() { return; }
@@ -392,6 +394,8 @@ impl MountUi {
     }
 
     fn handler_nav_mount_btn_released(&self, button_name: &str) {
+        if !is_expanded(&self.builder, "exp_mount") { return; }
+
         let options = self.options.read().unwrap();
         if options.mount.device.is_empty() { return; }
         gtk_utils::exec_and_show_error(&self.window, || {

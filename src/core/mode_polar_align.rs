@@ -3,7 +3,7 @@ use std::{f64::consts::PI, sync::{Arc, RwLock}};
 
 use chrono::{NaiveDateTime, Utc};
 
-use crate::{core::{core::*, frame_processing::*}, image::{image::*, stars::Stars}, indi, options::{self, *}, plate_solve::*, ui::sky_map::math::*};
+use crate::{core::{core::*, frame_processing::*}, image::{image::*, stars::Stars}, indi, options::*, plate_solve::*, ui::sky_map::math::*};
 
 use super::{consts::*, events::*, utils::{check_telescope_is_at_desired_position, gain_to_value}};
 
@@ -45,7 +45,7 @@ impl PolarAlignment {
         let pt3 = horiz_crd(&self.measurements[2]).to_sphere_pt();
 
         let vec1 = &pt2 - &pt1;
-        let vec2 = &pt2 - &pt3;
+        let vec2 = &pt3 - &pt2;
 
         let mut mount_pole_crd = &vec1 * &vec2;
         mount_pole_crd.normalize();
@@ -53,8 +53,12 @@ impl PolarAlignment {
 
         let cvt = EqToSphereCvt::new(longitude, latitude, &Utc::now().naive_utc());
         let celestial_pole = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&EqCoord { ra: 0.0, dec: 0.5 * PI }));
+        let err = HorizCoord {
+            alt: celestial_pole.alt - mount_pole.alt,
+            az: celestial_pole.az - mount_pole.az
+        };
 
-        dbg!(mount_pole, celestial_pole);
+        dbg!(err);
     }
 }
 
@@ -79,7 +83,7 @@ enum Step {
 
 #[derive(Clone)]
 pub enum PolarAlignmentEvent {
-    Error(HorizCoord),
+    _Error(HorizCoord),
 }
 
 pub struct PolarAlignMode {
@@ -179,13 +183,14 @@ impl PolarAlignMode {
     }
 
     fn try_process_plate_solving_result(&mut self) -> anyhow::Result<NotifyResult> {
-        let mut result = match self.plate_solver.get_result()? {
+        let result = match self.plate_solver.get_result()? {
             PlateSolveResult::Waiting => return Ok(NotifyResult::Empty),
             PlateSolveResult::Done(result) => result,
             PlateSolveResult::Failed => anyhow::bail!("Can't platesolve image")
         };
 
-        if cfg!(debug_assertions) {
+        // Add polar alignment error in debug mode
+        let result = if cfg!(debug_assertions) {
             let cvt = EqToSphereCvt::new(self.s_opts.latitude, self.s_opts.longitude, &Utc::now().naive_utc());
 
             let mut horiz = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&result.crd_now));
@@ -194,8 +199,12 @@ impl PolarAlignMode {
             horiz.az += degree_to_radian(options.polar_align.sim_az_err);
             drop(options);
 
+            let mut result = result;
             result.crd_now = cvt.sphere_to_eq(&horiz.to_sphere_pt());
-        }
+            result
+        } else {
+            result
+        };
 
         result.print_to_log();
 
@@ -251,8 +260,6 @@ impl PolarAlignMode {
         }
 
         self.goto_pos = EqCoord { ra: new_ra, dec: cur_dec };
-
-        dbg!(&self.goto_pos);
 
         self.indi.set_after_coord_set_action(
             &self.mount,

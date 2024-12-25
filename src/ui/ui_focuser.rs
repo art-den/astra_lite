@@ -586,6 +586,8 @@ impl FocuserUi {
     }
 
     fn handler_action_manual_focus(&self) {
+        if !is_expanded(&self.builder, "exp_foc") { return; }
+
         let mut options = self.options.write().unwrap();
         options.read_all(&self.builder);
         drop(options);
@@ -597,6 +599,7 @@ impl FocuserUi {
     }
 
     fn handler_action_stop_manual_focus(&self) {
+        if !is_expanded(&self.builder, "exp_foc") { return; }
         self.core.abort_active_mode();
     }
 }
