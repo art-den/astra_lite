@@ -86,7 +86,7 @@ pub fn init_ui(
                 data.window.close();
                 return glib::ControlFlow::Break;
             }
-            data.handlers.borrow().notify_all(MainUiEvent::Timer);
+            data.handlers.borrow().notify_all(UiEvent::Timer);
             glib::ControlFlow::Continue
         }
     ));
@@ -101,11 +101,14 @@ pub fn init_ui(
     super::ui_plate_solve::init_ui(app, &builder, options, core, indi, &mut handlers);
     super::ui_polar_align::init_ui(app, &builder, options, core, indi, &mut handlers);
     super::ui_skymap::init_ui(app, &builder, &data, core, options, indi, &mut handlers);
+    drop(handlers);
 
     // show common options
     let opts = options.read().unwrap();
     opts.show_all(&builder);
     drop(opts);
+
+    data.handlers.borrow().notify_all(UiEvent::OptionsHasShown);
 
     window.connect_delete_event(
         clone!(@weak data => @default-return glib::Propagation::Proceed,
@@ -151,7 +154,8 @@ impl TabPage {
 }
 
 #[derive(Clone)]
-pub enum MainUiEvent {
+pub enum UiEvent {
+    OptionsHasShown,
     Timer,
     FullScreen(bool),
     BeforeModeContinued,
@@ -160,7 +164,7 @@ pub enum MainUiEvent {
     BeforeDisconnect,
 }
 
-pub type MainUiEventFun = Box<dyn Fn(MainUiEvent) + 'static>;
+pub type MainUiEventFun = Box<dyn Fn(UiEvent) + 'static>;
 
 pub struct MainUiEventHandlers {
     funs: Vec<MainUiEventFun>
@@ -173,11 +177,11 @@ impl MainUiEventHandlers {
         }
     }
 
-    pub fn subscribe(&mut self, fun: impl Fn(MainUiEvent) + 'static) {
+    pub fn subscribe(&mut self, fun: impl Fn(UiEvent) + 'static) {
         self.funs.push(Box::new(fun));
     }
 
-    pub fn notify_all(&self, event: MainUiEvent) {
+    pub fn notify_all(&self, event: UiEvent) {
         for fun in &self.funs {
             fun(event.clone());
         }
@@ -324,7 +328,7 @@ impl MainUi {
         let btn_fullscreen = self.builder.object::<gtk::ToggleButton>("btn_fullscreen").unwrap();
         btn_fullscreen.set_sensitive(false);
         btn_fullscreen.connect_active_notify(clone!(@weak self as self_  => move |btn| {
-            self_.handlers.borrow().notify_all(MainUiEvent::FullScreen(btn.is_active()));
+            self_.handlers.borrow().notify_all(UiEvent::FullScreen(btn.is_active()));
         }));
 
         let nb_main = self.builder.object::<gtk::Notebook>("nb_main").unwrap();
@@ -335,7 +339,7 @@ impl MainUi {
             };
             btn_fullscreen.set_sensitive(enable_fullscreen);
             let tab = TabPage::from_tab_index(page);
-            self_.handlers.borrow().notify_all(MainUiEvent::TabPageChanged(tab.clone()));
+            self_.handlers.borrow().notify_all(UiEvent::TabPageChanged(tab.clone()));
         }));
 
         gtk_utils::connect_action(&self.window, self, "stop",             MainUi::handler_action_stop);
@@ -412,7 +416,7 @@ impl MainUi {
             options.read_all(&self.builder);
         }
 
-        self.handlers.borrow().notify_all(MainUiEvent::ProgramClosing);
+        self.handlers.borrow().notify_all(UiEvent::ProgramClosing);
 
         self.handlers.borrow_mut().clear();
 
@@ -519,7 +523,7 @@ impl MainUi {
 
     fn handler_action_continue(&self) {
         gtk_utils::exec_and_show_error(&self.window, || {
-            self.handlers.borrow().notify_all(MainUiEvent::BeforeModeContinued);
+            self.handlers.borrow().notify_all(UiEvent::BeforeModeContinued);
             self.core.continue_prev_mode()?;
             Ok(())
         });
@@ -572,7 +576,7 @@ impl MainUi {
     }
 
     pub fn exec_before_disconnect_handlers(&self) {
-        self.handlers.borrow().notify_all(MainUiEvent::BeforeDisconnect);
+        self.handlers.borrow().notify_all(UiEvent::BeforeDisconnect);
     }
 
     pub fn current_tab_page(&self) -> TabPage {

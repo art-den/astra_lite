@@ -53,8 +53,6 @@ pub fn init_ui(
     data.connect_widgets_events();
     data.connect_main_ui_events(handlers);
     data.connect_delayed_actions_events();
-
-    data.correct_widgets_props();
 }
 
 struct FocuserUi {
@@ -321,8 +319,11 @@ impl FocuserUi {
     fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
         handlers.subscribe(clone!(@weak self as self_ => move |event| {
             match event {
-                MainUiEvent::ProgramClosing =>
-                self_.handler_closing(),
+                UiEvent::ProgramClosing =>
+                    self_.handler_closing(),
+
+                UiEvent::OptionsHasShown =>
+                    self_.correct_widgets_props(),
                 _ => {},
             }
         }));

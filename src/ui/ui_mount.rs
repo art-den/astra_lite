@@ -49,12 +49,15 @@ pub fn init_ui(
     data.connect_widgets_events();
     data.apply_ui_options();
     data.fill_devices_list();
-    data.correct_widgets_props();
 
     handlers.subscribe(clone!(@weak data => move |event| {
         match event {
-            MainUiEvent::ProgramClosing =>
+            UiEvent::ProgramClosing =>
                 data.handler_closing(),
+
+            UiEvent::OptionsHasShown =>
+                data.correct_widgets_props(),
+
             _ => {},
         }
     }));

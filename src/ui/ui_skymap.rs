@@ -256,13 +256,15 @@ impl Drop for MapUi {
 impl MapUi {
     const CONF_FN: &'static str = "ui_skymap";
 
-    fn handler_main_ui_event(self: &Rc<Self>, event: MainUiEvent) {
+    fn handler_main_ui_event(self: &Rc<Self>, event: UiEvent) {
         match event {
-            MainUiEvent::ProgramClosing =>
+            UiEvent::ProgramClosing =>
                 self.handler_closing(),
-            MainUiEvent::Timer =>
+
+            UiEvent::Timer =>
                 self.handler_main_timer(),
-            MainUiEvent::TabPageChanged(page) if page == TabPage::SkyMap => {
+
+            UiEvent::TabPageChanged(page) if page == TabPage::SkyMap => {
                 let mut options = self.options.write().unwrap();
                 options.read_site(&self.builder);
                 drop(options);
@@ -273,8 +275,10 @@ impl MapUi {
                 self.update_skymap_widget(true);
                 self.show_selected_objects_info();
             }
-            MainUiEvent::FullScreen(full_screen) =>
+
+            UiEvent::FullScreen(full_screen) =>
                 self.set_full_screen_mode(full_screen),
+
             _ => {},
         }
     }

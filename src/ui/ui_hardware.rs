@@ -341,11 +341,14 @@ impl HardwareUi {
     fn connect_main_ui_event(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
         handlers.subscribe(clone!(@weak self as self_ => move |event| {
             match event {
-                MainUiEvent::ProgramClosing =>
+                UiEvent::ProgramClosing =>
                     self_.handler_closing(),
 
-                MainUiEvent::TabPageChanged(tab_page) =>
+                UiEvent::TabPageChanged(tab_page) =>
                     self_.widget.set_enabled(tab_page == TabPage::Hardware),
+
+                UiEvent::OptionsHasShown =>
+                    self_.correct_widgets_by_cur_state(),
 
                 _ => {},
             }

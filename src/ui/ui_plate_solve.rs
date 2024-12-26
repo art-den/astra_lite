@@ -50,8 +50,6 @@ pub fn init_ui(
     obj.connect_widgets_events();
     obj.connect_main_ui_events(handlers);
     obj.connect_delayed_actions_events();
-
-    obj.correct_widgets_props();
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -162,8 +160,12 @@ impl PlateSolveUi {
     fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
         handlers.subscribe(clone!(@weak self as self_ => move |event| {
             match event {
-                MainUiEvent::ProgramClosing =>
+                UiEvent::ProgramClosing =>
                     self_.handler_closing(),
+
+                UiEvent::OptionsHasShown =>
+                    self_.correct_widgets_props(),
+
                 _ => {},
             }
         }));

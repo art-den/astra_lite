@@ -54,15 +54,11 @@ pub fn init_ui(
     obj.connect_widgets_events();
     obj.connect_main_ui_events(handlers);
 
-    obj.show_total_raw_time();
-
     obj.delayed_actions.set_event_handler(
         clone!(@weak obj => move |action| {
             obj.handler_delayed_action(action);
         })
     );
-
-    obj.correct_widgets_props();
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -479,21 +475,25 @@ impl CameraUi {
         }));
     }
 
-    fn handler_main_ui_event(&self, event: MainUiEvent) {
+    fn handler_main_ui_event(&self, event: UiEvent) {
         match event {
-            MainUiEvent::Timer => {}
-            MainUiEvent::FullScreen(full_screen) =>
+            UiEvent::Timer => {}
+            UiEvent::FullScreen(full_screen) =>
                 self.set_full_screen_mode(full_screen),
-            MainUiEvent::BeforeModeContinued =>
+            UiEvent::BeforeModeContinued =>
                 self.get_options_from_widgets(),
-            MainUiEvent::TabPageChanged(TabPage::Camera) =>
+            UiEvent::TabPageChanged(TabPage::Camera) =>
                 self.correct_widgets_props(),
-            MainUiEvent::ProgramClosing =>
+            UiEvent::ProgramClosing =>
                 self.handler_closing(),
-            MainUiEvent::BeforeDisconnect => {
+            UiEvent::BeforeDisconnect => {
                 self.get_options_from_widgets();
                 self.store_cur_cam_options();
             },
+            UiEvent::OptionsHasShown => {
+                self.correct_widgets_props();
+                self.show_total_raw_time();
+            }
             _ => {},
         }
     }

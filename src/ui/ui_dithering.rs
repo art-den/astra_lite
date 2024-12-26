@@ -44,8 +44,6 @@ pub fn init_ui(
     data.connect_main_ui_events(handlers);
     data.connect_widgets_events();
     data.connect_indi_and_core_events();
-
-    data.correct_widgets_props();
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -167,8 +165,12 @@ impl DitheringUi {
     fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
         handlers.subscribe(clone!(@weak self as self_ => move |event| {
             match event {
-                MainUiEvent::ProgramClosing =>
+                UiEvent::ProgramClosing =>
                     self_.handler_closing(),
+
+                UiEvent::OptionsHasShown =>
+                    self_.correct_widgets_props(),
+
                 _ => {},
             }
         }));

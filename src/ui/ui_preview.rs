@@ -54,8 +54,6 @@ pub fn init_ui(
 
     obj.update_light_history_table();
     obj.update_calibr_history_table();
-
-    obj.correct_widgets_props();
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -289,6 +287,15 @@ impl PreviewUi {
                 glib::Propagation::Proceed
             })
         );
+
+        let chb_wb_auto = self.builder.object::<gtk::CheckButton>("chb_wb_auto").unwrap();
+        chb_wb_auto.connect_active_notify(clone!(@weak self as self_ => move |chb| {
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.preview.wb_auto = chb.is_active();
+            drop(options);
+            self_.correct_widgets_props();
+            self_.create_and_show_preview_image();
+        }));
     }
 
     fn connect_core_events(self: &Rc<Self>) {
@@ -310,11 +317,14 @@ impl PreviewUi {
     fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
         handlers.subscribe(clone!(@weak self as self_ => move |event| {
             match event {
-                MainUiEvent::FullScreen(full_screen) =>
+                UiEvent::FullScreen(full_screen) =>
                     self_.set_full_screen_mode(full_screen),
 
-                MainUiEvent::ProgramClosing =>
+                UiEvent::ProgramClosing =>
                     self_.handler_closing(),
+
+                UiEvent::OptionsHasShown =>
+                    self_.correct_widgets_props(),
 
                 _ => {}
             }
@@ -397,7 +407,18 @@ impl PreviewUi {
     }
 
     fn correct_widgets_props(&self) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
 
+        let auto_color_checked = ui.prop_bool("chb_wb_auto.active");
+
+        ui.enable_widgets(false, &[
+            ("l_wb_red",     !auto_color_checked),
+            ("scl_wb_red",   !auto_color_checked),
+            ("l_wb_green",   !auto_color_checked),
+            ("scl_wb_green", !auto_color_checked),
+            ("l_wb_blue",    !auto_color_checked),
+            ("scl_wb_blue",  !auto_color_checked),
+        ]);
     }
 
     fn show_image_info(&self) {
