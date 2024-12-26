@@ -254,13 +254,10 @@ impl PolarAlignMode {
             PloarAlignDir::East => self.pa_opts.angle,
             PloarAlignDir::West => -self.pa_opts.angle,
         };
-        let mut new_ra = cur_ra + degree_to_radian(angle);
-        while new_ra < 0.0 {
-            new_ra += 2.0 * PI;
-        }
-
+        let mut new_ra = cur_ra + degree_to_radian(0.5 * angle);
+        while new_ra < 0.0 { new_ra += 2.0 * PI; }
+        while new_ra >= 2.0 * PI { new_ra -= 2.0 * PI; }
         self.goto_pos = EqCoord { ra: new_ra, dec: cur_dec };
-
         self.indi.set_after_coord_set_action(
             &self.mount,
             indi::AfterCoordSetAction::Track,

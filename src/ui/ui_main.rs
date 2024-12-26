@@ -93,7 +93,8 @@ pub fn init_ui(
 
     let mut handlers = data.handlers.borrow_mut();
     super::ui_hardware::init_ui(app, &builder, &data, options, core, indi, &mut handlers);
-    super::ui_camera::init_ui(app, &builder, &data, options, core, indi, &mut handlers);
+    super::ui_camera::init_ui(app, &builder, options, core, indi, &mut handlers);
+    super::ui_preview::init_ui(app, &builder, &data, options, core, &mut handlers);
     super::ui_focuser::init_ui(app, &builder, options, core, indi, &mut handlers);
     super::ui_dithering::init_ui(app, &builder, options, core, indi, &mut handlers);
     super::ui_mount::init_ui(app, &builder, options, core, indi, &mut handlers);
@@ -406,6 +407,10 @@ impl MainUi {
         let options = self.ui_options.borrow();
         _ = save_json_to_config::<UiOptions>(&options, MainUi::CONF_FN);
         drop(options);
+
+        if let Ok(mut options) = self.options.try_write() {
+            options.read_all(&self.builder);
+        }
 
         self.handlers.borrow().notify_all(MainUiEvent::ProgramClosing);
 

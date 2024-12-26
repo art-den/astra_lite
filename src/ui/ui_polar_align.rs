@@ -1,12 +1,9 @@
 use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
-use gtk::{glib, prelude::*, glib::clone};
+use gtk::{glib::{self, clone}, pango, prelude::*};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    core::{core::{Core, ModeType}, events::*, mode_polar_align::PolarAlignmentEvent},
-    indi,
-    options::*,
-    utils::{gtk_utils, io_utils::*},
+    core::{core::{Core, ModeType}, events::*, mode_polar_align::PolarAlignmentEvent}, indi::{self, value_to_sexagesimal}, options::*, sky_math::math::radian_to_degree, utils::{gtk_utils, io_utils::*}
 };
 
 use super::{sky_map::math::HorizCoord, ui_main::*, utils::*};
@@ -310,7 +307,38 @@ impl PolarAlignUi {
     }
 
     fn show_polar_alignment_error(&self, error: &HorizCoord) {
-        dbg!(error);
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let alt_err_str = value_to_sexagesimal(radian_to_degree(error.alt), true, 6);
+        let az_err_str = value_to_sexagesimal(radian_to_degree(error.az), true, 6);
+        let alt_label = format!("Alt: {}", alt_err_str);
+        let az_label = format!("Az: {}", az_err_str);
+        ui.set_prop_str("l_pa_alt_err.label", Some(&alt_label));
+        ui.set_prop_str("l_pa_az_err.label", Some(&az_label));
 
+        let alt_err_arrow = if error.alt < 0.0 { "↑" } else { "↓" };
+        let az_err_arrow = if error.az < 0.0 { "→" } else { "←" };
+        ui.set_prop_str("l_pa_alt_err_arr.label", Some(&alt_err_arrow));
+        ui.set_prop_str("l_pa_az_err_arr.label", Some(&az_err_arrow));
+
+        let set_all_label_size = |label_name: &str, err: f64| {
+            let err_minutes = radian_to_degree(err) * 60.0;
+            let scale = if err_minutes > 60.0 {
+                5
+            } else if err_minutes > 2.0 {
+                3
+            } else {
+                1
+            };
+
+            let alt_attrs = pango::AttrList::new();
+            let attr_alt_size = pango::AttrSize::new(scale * 10 * pango::SCALE);
+            alt_attrs.insert(attr_alt_size);
+
+            let l_pa_alt_err_arr = self.builder.object::<gtk::Label>(label_name).unwrap();
+            l_pa_alt_err_arr.set_attributes(Some(&alt_attrs));
+        };
+
+        set_all_label_size("l_pa_alt_err_arr", error.alt);
+        set_all_label_size("l_pa_az_err_arr", error.az);
     }
 }

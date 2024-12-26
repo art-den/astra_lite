@@ -6,6 +6,7 @@ pub mod sky_map;
 mod ui_hardware;
 mod indi_widget;
 mod ui_camera;
+mod ui_preview;
 mod ui_skymap;
 mod ui_skymap_options;
 mod ui_options;
