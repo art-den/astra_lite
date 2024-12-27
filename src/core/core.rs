@@ -84,7 +84,6 @@ impl ModeData {
     }
 }
 
-
 pub struct Core {
     indi:               Arc<indi::Connection>,
     phd2:               Arc<phd2_conn::Connection>,
@@ -637,10 +636,12 @@ impl Core {
     pub fn start_goto_coord(
         &self,
         eq_coord: &EqCoord,
-        config: GotoConfig,
+        config:   GotoConfig,
     ) -> anyhow::Result<()> {
-        self.init_cam_before_start()?;
-        self.init_cam_telescope_data()?;
+        if config == GotoConfig::GotoPlateSolveAndCorrect {
+            self.init_cam_before_start()?;
+            self.init_cam_telescope_data()?;
+        }
         self.mode_data.write().unwrap().mode.abort()?;
         let mut mode = GotoMode::new(
             GotoDestination::Coord(eq_coord.clone()),

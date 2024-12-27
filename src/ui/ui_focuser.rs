@@ -604,4 +604,3 @@ impl FocuserUi {
         self.core.abort_active_mode();
     }
 }
-

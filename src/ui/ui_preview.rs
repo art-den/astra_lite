@@ -39,6 +39,7 @@ pub fn init_ui(
         light_history:      RefCell::new(Vec::new()),
         calibr_history:     RefCell::new(Vec::new()),
         flat_info:          RefCell::new(FlatImageInfo::default()),
+        is_color_image:     Cell::new(false),
         self_:              RefCell::new(None),
     });
 
@@ -115,6 +116,7 @@ struct PreviewUi {
     calibr_history:     RefCell<Vec<CalibrHistoryItem>>,
     closed:             Cell<bool>,
     flat_info:          RefCell<FlatImageInfo>,
+    is_color_image:     Cell<bool>,
     self_:              RefCell<Option<Rc<PreviewUi>>>,
 }
 
@@ -293,7 +295,6 @@ impl PreviewUi {
             let Ok(mut options) = self_.options.try_write() else { return; };
             options.preview.wb_auto = chb.is_active();
             drop(options);
-            self_.correct_widgets_props();
             self_.create_and_show_preview_image();
         }));
     }
@@ -410,14 +411,18 @@ impl PreviewUi {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
 
         let auto_color_checked = ui.prop_bool("chb_wb_auto.active");
+        let is_color_image = self.is_color_image.get();
+        let rgb_enabled = !auto_color_checked && is_color_image;
 
         ui.enable_widgets(false, &[
-            ("l_wb_red",     !auto_color_checked),
-            ("scl_wb_red",   !auto_color_checked),
-            ("l_wb_green",   !auto_color_checked),
-            ("scl_wb_green", !auto_color_checked),
-            ("l_wb_blue",    !auto_color_checked),
-            ("scl_wb_blue",  !auto_color_checked),
+            ("cb_preview_color", is_color_image),
+            ("chb_wb_auto",      is_color_image),
+            ("l_wb_red",         rgb_enabled),
+            ("scl_wb_red",       rgb_enabled),
+            ("l_wb_green",       rgb_enabled),
+            ("scl_wb_green",     rgb_enabled),
+            ("l_wb_blue",        rgb_enabled),
+            ("scl_wb_blue",      rgb_enabled),
         ]);
     }
 
@@ -540,6 +545,7 @@ impl PreviewUi {
         } else {
             self.show_preview_image(None, None);
         }
+        self.correct_widgets_props();
     }
 
     fn show_preview_image(
@@ -592,11 +598,8 @@ impl PreviewUi {
             img_preview.set_pixbuf(None);
         }
 
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        ui.enable_widgets(
-            false,
-            &[("cb_preview_color", is_color_image)]
-        );
+        self.is_color_image.set(is_color_image);
+
     }
 
     fn handler_action_save_image_preview(&self) {
@@ -729,11 +732,15 @@ impl PreviewUi {
             FrameProcessResultData::PreviewFrame(img)
             if is_mode_current(false) => {
                 self.show_preview_image(Some(&img.rgb_data), Some(&img.params));
+                self.correct_widgets_props();
+
                 show_resolution_info(img.image_width, img.image_height);
             }
             FrameProcessResultData::PreviewLiveRes(img)
             if is_mode_current(true) => {
                 self.show_preview_image(Some(&img.rgb_data), Some(&img.params));
+                self.correct_widgets_props();
+
                 show_resolution_info(img.image_width, img.image_height);
             }
             FrameProcessResultData::HistorgamRaw(_)

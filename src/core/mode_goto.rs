@@ -38,13 +38,13 @@ pub struct GotoMode {
     destination:     GotoDestination,
     config:          GotoConfig,
     eq_coord:        EqCoord,
-    camera:          DeviceAndProp,
-    cam_opts:        CamOptions,
+    camera:          Option<DeviceAndProp>,
+    cam_opts:        Option<CamOptions>,
     ps_opts:         PlateSolverOptions,
     mount:           String,
     indi:            Arc<indi::Connection>,
     subscribers:     Arc<EventSubscriptions>,
-    plate_solver:    PlateSolver,
+    plate_solver:    Option<PlateSolver>,
     unpark_seconds:  usize,
     goto_seconds:    usize,
     goto_ok_seconds: usize,
@@ -60,20 +60,27 @@ impl GotoMode {
         subscribers: &Arc<EventSubscriptions>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
-        let Some(camera) = opts.cam.device.clone() else {
-            anyhow::bail!("Camera is not selected");
+        let (camera, cam_opts, plate_solver) = if config == GotoConfig::GotoPlateSolveAndCorrect {
+            let Some(camera) = opts.cam.device.clone() else {
+                anyhow::bail!("Camera is not selected!");
+            };
+            let mut cam_opts = opts.cam.clone();
+            cam_opts.frame.frame_type = crate::image::raw::FrameType::Lights;
+            cam_opts.frame.exp_main = opts.plate_solver.exposure;
+            cam_opts.frame.binning = opts.plate_solver.bin;
+            cam_opts.frame.gain = gain_to_value(
+                opts.plate_solver.gain,
+                opts.cam.frame.gain,
+                &camera,
+                indi
+            )?;
+            let plate_solver = PlateSolver::new(opts.plate_solver.solver);
+
+            (Some(camera), Some(cam_opts), Some(plate_solver))
+        } else {
+            (None, None, None)
         };
-        let mut cam_opts = opts.cam.clone();
-        cam_opts.frame.frame_type = crate::image::raw::FrameType::Lights;
-        cam_opts.frame.exp_main = opts.plate_solver.exposure;
-        cam_opts.frame.binning = opts.plate_solver.bin;
-        cam_opts.frame.gain = gain_to_value(
-            opts.plate_solver.gain,
-            opts.cam.frame.gain,
-            &camera,
-            indi
-        )?;
-        let plate_solver = PlateSolver::new(opts.plate_solver.solver);
+
         Ok(Self {
             state:           State::None,
             config,
@@ -142,18 +149,22 @@ impl GotoMode {
     }
 
     fn start_take_picture(&mut self) -> anyhow::Result<()> {
-        log::debug!("Tacking picture for plate solve with {:?}", &self.cam_opts.frame);
-        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
+        let cam_opts = self.cam_opts.as_ref().unwrap();
+        let camera = self.camera.as_ref().unwrap();
+
+        log::debug!("Tacking picture for plate solve with {:?}", &cam_opts.frame);
+        apply_camera_options_and_take_shot(&self.indi, camera, &cam_opts.frame)?;
         Ok(())
     }
 
     fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> anyhow::Result<()> {
+        let plate_solver = self.plate_solver.as_mut().unwrap();
         let image = image.read().unwrap();
         let mut config = PlateSolveConfig::default();
         config.eq_coord = Some(self.eq_coord.clone());
         config.time_out = self.ps_opts.timeout;
         config.blind_time_out = self.ps_opts.blind_timeout;
-        self.plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
+        plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
         drop(image);
         Ok(())
     }
@@ -164,6 +175,7 @@ impl GotoMode {
         img_width:  usize,
         img_height: usize
     ) -> anyhow::Result<()> {
+        let plate_solver = self.plate_solver.as_mut().unwrap();
         let mut config = PlateSolveConfig::default();
         config.eq_coord = Some(self.eq_coord.clone());
         config.time_out = self.ps_opts.timeout;
@@ -173,7 +185,7 @@ impl GotoMode {
             img_width,
             img_height,
         };
-        self.plate_solver.start(&stars_arg, &config)?;
+        plate_solver.start(&stars_arg, &config)?;
         Ok(())
     }
 
@@ -181,7 +193,10 @@ impl GotoMode {
         &mut self,
         action: ProcessPlateSolverResultAction,
     ) -> anyhow::Result<bool> {
-        let result = match self.plate_solver.get_result()? {
+        let plate_solver = self.plate_solver.as_mut().unwrap();
+        let camera = self.camera.as_ref().unwrap();
+
+        let result = match plate_solver.get_result()? {
             PlateSolveResult::Waiting => return Ok(false),
             PlateSolveResult::Done(result) => result,
             PlateSolveResult::Failed => anyhow::bail!("Can't platesolve image")
@@ -198,7 +213,7 @@ impl GotoMode {
         );
 
         let event = PlateSolverEvent {
-            cam_name: self.camera.name.clone(),
+            cam_name: camera.name.clone(),
             result: result.clone(),
         };
         self.subscribers.notify(
@@ -289,11 +304,11 @@ impl Mode for GotoMode {
     }
 
     fn cam_device(&self) -> Option<&DeviceAndProp> {
-        Some(&self.camera)
+        self.camera.as_ref()
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
-        Some(self.cam_opts.frame.exposure())
+        self.cam_opts.as_ref().map(|cam_opts| cam_opts.frame.exposure())
     }
 
     fn start(&mut self) -> anyhow::Result<()> {
@@ -304,12 +319,14 @@ impl Mode for GotoMode {
                 self.start_goto()?;
             }
             GotoDestination::Image{image, info} => {
+                let plate_solver = self.plate_solver.as_mut().unwrap();
+
                 self.extra_stages = 1;
                 let mut config = PlateSolveConfig::default();
                 config.time_out = self.ps_opts.timeout;
                 config.blind_time_out = self.ps_opts.blind_timeout;
-                if self.plate_solver.support_stars_as_input() {
-                    self.plate_solver.start(
+                if plate_solver.support_stars_as_input() {
+                    plate_solver.start(
                         &PlateSolverInData::Stars{
                             stars: &info.stars.items,
                             img_width: info.width,
@@ -319,7 +336,7 @@ impl Mode for GotoMode {
                     )?;
                 } else {
                     let image = image.read().unwrap();
-                    self.plate_solver.start(
+                    plate_solver.start(
                         &PlateSolverInData::Image(&image),
                         &config
                     )?;
@@ -332,7 +349,9 @@ impl Mode for GotoMode {
     }
 
     fn abort(&mut self) -> anyhow::Result<()> {
-        _ = abort_camera_exposure(&self.indi, &self.camera);
+        if let Some(camera) = &self.camera {
+            _ = abort_camera_exposure(&self.indi, camera);
+        }
         _ = self.indi.mount_abort_motion(&self.mount);
         self.state = State::None;
         Ok(())
@@ -426,7 +445,8 @@ impl Mode for GotoMode {
         &mut self,
         fp_result:  &FrameProcessResult
     ) -> anyhow::Result<NotifyResult> {
-        let xy_supported = self.plate_solver.support_stars_as_input();
+        let plate_solver = self.plate_solver.as_mut().unwrap();
+        let xy_supported = plate_solver.support_stars_as_input();
         match (&self.state, &fp_result.data, xy_supported) {
             (State::TackingPicture, FrameProcessResultData::Image(image), false) => {
                 self.plate_solve_image(image)?;

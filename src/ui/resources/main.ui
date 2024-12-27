@@ -321,6 +321,7 @@
         </child>
         <child>
           <object class="GtkLabel">
+            <property name="visible">True</property>
             <property name="can-focus">False</property>
             <property name="label" translatable="yes">Color</property>
             <attributes>
@@ -335,6 +336,7 @@
         </child>
         <child>
           <object class="GtkLabel" id="l_wb_blue">
+            <property name="visible">True</property>
             <property name="can-focus">False</property>
             <property name="halign">end</property>
             <property name="label" translatable="yes">Blue</property>
@@ -346,6 +348,7 @@
         </child>
         <child>
           <object class="GtkLabel" id="l_wb_green">
+            <property name="visible">True</property>
             <property name="can-focus">False</property>
             <property name="halign">end</property>
             <property name="label" translatable="yes">Green</property>
@@ -357,6 +360,7 @@
         </child>
         <child>
           <object class="GtkLabel" id="l_wb_red">
+            <property name="visible">True</property>
             <property name="can-focus">False</property>
             <property name="halign">end</property>
             <property name="label" translatable="yes">Red</property>
@@ -368,6 +372,7 @@
         </child>
         <child>
           <object class="GtkScale" id="scl_wb_blue">
+            <property name="visible">True</property>
             <property name="can-focus">True</property>
             <property name="restrict-to-fill-level">False</property>
             <property name="round-digits">1</property>
@@ -380,6 +385,7 @@
         </child>
         <child>
           <object class="GtkScale" id="scl_wb_green">
+            <property name="visible">True</property>
             <property name="can-focus">True</property>
             <property name="round-digits">1</property>
             <property name="value-pos">right</property>
@@ -391,6 +397,7 @@
         </child>
         <child>
           <object class="GtkScale" id="scl_wb_red">
+            <property name="visible">True</property>
             <property name="can-focus">True</property>
             <property name="round-digits">1</property>
             <property name="value-pos">right</property>
@@ -403,6 +410,7 @@
         <child>
           <object class="GtkCheckButton" id="chb_wb_auto">
             <property name="label" translatable="yes">Auto</property>
+            <property name="visible">True</property>
             <property name="can-focus">True</property>
             <property name="receives-default">False</property>
             <property name="draw-indicator">True</property>
@@ -3867,7 +3875,7 @@ Also makes stars little sharper</property>
                                       <object class="GtkLabel">
                                         <property name="visible">True</property>
                                         <property name="can-focus">False</property>
-                                        <property name="label" translatable="yes">Tone</property>
+                                        <property name="label" translatable="yes">Tone &amp; color</property>
                                       </object>
                                       <packing>
                                         <property name="expand">False</property>
@@ -6887,7 +6895,6 @@ B - by bias calibrated</property>
                                         <property name="can-focus">False</property>
                                         <property name="row-spacing">5</property>
                                         <property name="column-spacing">5</property>
-                                        <property name="row-homogeneous">True</property>
                                         <property name="column-homogeneous">True</property>
                                         <child>
                                           <object class="GtkLabel" id="l_pa_alt_err">

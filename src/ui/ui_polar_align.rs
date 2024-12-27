@@ -267,9 +267,9 @@ impl PolarAlignUi {
                 drop(options);
                 self.correct_widgets_props_impl(&mount_device, &cam_device);
             }
-            MainThreadEvent::Core(Event::_PolarAlignment(event)) => {
+            MainThreadEvent::Core(Event::PolarAlignment(event)) => {
                 match event {
-                    PolarAlignmentEvent::_Error(error) =>
+                    PolarAlignmentEvent::Error(error) =>
                         self.show_polar_alignment_error(&error),
                 }
             }
@@ -323,7 +323,7 @@ impl PolarAlignUi {
         ui.set_prop_str("l_pa_az_err_arr.label", Some(&az_err_arrow));
 
         let set_all_label_size = |label_name: &str, err: f64| {
-            let err_minutes = radian_to_degree(err) * 60.0;
+            let err_minutes = f64::abs(radian_to_degree(err) * 60.0);
             let scale = if err_minutes > 60.0 {
                 5
             } else if err_minutes > 2.0 {

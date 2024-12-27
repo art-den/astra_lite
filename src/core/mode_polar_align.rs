@@ -16,12 +16,16 @@ struct PolarAlignmentMeasure {
 
 struct PolarAlignment {
     measurements: Vec<PolarAlignmentMeasure>,
+    pole:         Option<HorizCoord>,
+    mount_pole:   Option<HorizCoord>,
 }
 
 impl PolarAlignment {
     fn new() -> Self {
         Self {
             measurements: Vec::new(),
+            pole:         None,
+            mount_pole:   None,
         }
     }
 
@@ -53,12 +57,18 @@ impl PolarAlignment {
 
         let cvt = EqToSphereCvt::new(longitude, latitude, &Utc::now().naive_utc());
         let celestial_pole = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&EqCoord { ra: 0.0, dec: 0.5 * PI }));
-        let err = HorizCoord {
-            alt: celestial_pole.alt - mount_pole.alt,
-            az: celestial_pole.az - mount_pole.az
-        };
 
-        dbg!(err);
+        self.pole = Some(celestial_pole);
+        self.mount_pole = Some(mount_pole);
+    }
+
+    fn pole_error(&self) -> Option<HorizCoord> {
+        let (Some(pole), Some(mnt_pole)) = (&self.pole, &self.mount_pole) else { return None; };
+
+        Some(HorizCoord {
+            alt: mnt_pole.alt - pole.alt,
+            az: mnt_pole.az - pole.az,
+        })
     }
 }
 
@@ -83,7 +93,7 @@ enum Step {
 
 #[derive(Clone)]
 pub enum PolarAlignmentEvent {
-    _Error(HorizCoord),
+    Error(HorizCoord),
 }
 
 pub struct PolarAlignMode {
@@ -229,13 +239,12 @@ impl PolarAlignMode {
                     utc_time: Utc::now().naive_utc(),
                 });
                 self.alignment.calc_mount_pole(self.s_opts.latitude, self.s_opts.longitude);
-                self.calc_error()?;
+                self.notify_error()?;
                 self.start_capture()?;
                 self.step = Step::Corr;
                 self.state = State::Capture;
             }
             Step::Corr => {
-                self.calc_error()?;
                 self.start_capture()?;
                 self.state = State::Capture;
             }
@@ -276,10 +285,15 @@ impl PolarAlignMode {
         Ok(())
     }
 
-    fn calc_error(&mut self) -> anyhow::Result<()> {
+    fn notify_error(&mut self) -> anyhow::Result<()> {
+        let Some(error) = self.alignment.pole_error() else {
+            anyhow::bail!("Mount pole is not calculated!");
+        };
+        self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Error(
+            error
+        )));
         Ok(())
     }
-
 }
 
 impl Mode for PolarAlignMode {
