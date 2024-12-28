@@ -4,7 +4,7 @@ use bitflags::bitflags;
 use chrono::{DateTime, Local, Utc};
 
 use crate::{
-    core::{core::ModeType, utils::{FileNameArg, FileNameUtils}}, image::{histogram::*, image::*, info::*, io::*, raw::*, simple_fits::{FitsReader, SeekNRead}, stacker::Stacker, stars_offset::*}, indi, options::*, utils::{log_utils::*, math::linear_interpolate}
+    core::{core::ModeType, utils::{FileNameArg, FileNameUtils}}, image::{histogram::*, image::*, info::*, io::*, preview::{get_rgb_data_from_preview_image, RgbU8Data}, raw::*, simple_fits::{FitsReader, SeekNRead}, stacker::Stacker, stars_offset::*}, indi, options::*, utils::log_utils::*
 };
 
 pub enum ResultImageInfo {
@@ -68,7 +68,7 @@ pub struct PreviewParams {
     pub img_size:         PreviewImgSize,
     pub orig_frame_in_ls: bool,
     pub remove_gradient:  bool,
-    pub color:            PreviewColor,
+    pub color:            PreviewColorMode,
 }
 
 #[derive(Default, Debug)]
@@ -278,113 +278,6 @@ pub fn start_frame_processing_thread() -> (mpsc::Sender<FrameProcessCommand>, Jo
         log::info!("process_blob_thread_fun finished");
     });
     (bg_comands_sender, thread)
-}
-
-fn calc_reduct_ratio(options: &PreviewParams, img_width: usize, img_height: usize) -> usize {
-    match &options.img_size {
-        &PreviewImgSize::Fit{width, height} => {
-            if img_width/4 > width && img_height/4 > height {
-                4
-            } else if img_width/3 > width && img_height/3 > height {
-                3
-            } else if img_width/2 > width && img_height/2 > height {
-                2
-            } else {
-                1
-            }
-        },
-        PreviewImgSize::Scale(PreviewScale::Original) => 1,
-        PreviewImgSize::Scale(PreviewScale::P75) => 1,
-        PreviewImgSize::Scale(PreviewScale::P50) => 2,
-        PreviewImgSize::Scale(PreviewScale::P33) => 3,
-        PreviewImgSize::Scale(PreviewScale::P25) => 4,
-        PreviewImgSize::Scale(PreviewScale::FitWindow) => unreachable!(),
-    }
-}
-
-pub fn get_rgb_data_from_preview_image(
-    image:  &Image,
-    hist:   &Histogram,
-    params: &PreviewParams,
-) -> Option<RgbU8Data> {
-    if hist.l.is_none() && hist.b.is_none() {
-        return None;
-    }
-
-    let reduct_ratio = calc_reduct_ratio(
-        params,
-        image.width(),
-        image.height()
-    );
-    log::debug!("reduct_ratio = {}", reduct_ratio);
-
-    const WB_PERCENTILE:        usize = 45;
-    const DARK_MIN_PERCENTILE:  usize = 1;
-    const DARK_MAX_PERCENTILE:  usize = 60;
-    const LIGHT_MIN_PERCENTILE: usize = 95;
-
-    let light_max = image.max_value() as f64;
-    let light_lvl = params.light_lvl.powf(0.05);
-
-    let l_levels = if let Some(hist) = &hist.l {
-        let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
-        let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
-        let light_min = hist.get_percentile(LIGHT_MIN_PERCENTILE) as f64;
-        let mut dark = linear_interpolate(params.dark_lvl, 1.0, 0.0, dark_min, dark_max);
-        let mut light = linear_interpolate(light_lvl, 1.0, 0.0, light_min, light_max);
-        if (light - dark) < 2.0 { light += 1.0; dark -= 1.0; }
-        DarkLightLevels { dark, light }
-    } else {
-        DarkLightLevels::default()
-    };
-
-    let (g_levels, g_wb) = if let Some(hist) = &hist.g {
-        let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
-        let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
-        let light_min = hist.get_percentile(LIGHT_MIN_PERCENTILE) as f64;
-        let mut dark = linear_interpolate(params.dark_lvl, 1.0, 0.0, dark_min, dark_max);
-        let mut light = linear_interpolate(light_lvl, 1.0, 0.0, light_min, light_max);
-        if (light - dark) < 2.0 { light += 1.0; dark -= 1.0; }
-        let wb = hist.get_percentile(WB_PERCENTILE) as f64;
-        (DarkLightLevels { dark, light }, wb)
-    } else {
-        (DarkLightLevels::default(), 0.0)
-    };
-
-    let g_range = g_levels.light - g_levels.dark;
-
-    let r_levels = if let Some(hist) = &hist.r {
-        let wb = hist.get_percentile(WB_PERCENTILE) as f64;
-        let dark = g_levels.dark + (wb - g_wb);
-        DarkLightLevels { dark, light: dark + g_range }
-    } else {
-        DarkLightLevels::default()
-    };
-
-    let b_levels = if let Some(hist) = &hist.b {
-        let wb = hist.get_percentile(WB_PERCENTILE) as f64;
-        let dark = g_levels.dark + (wb - g_wb);
-        DarkLightLevels { dark, light: dark + g_range }
-    } else {
-        DarkLightLevels::default()
-    };
-
-    let color_mode = match params.color {
-        PreviewColor::Rgb   => ToBytesColorMode::Rgb,
-        PreviewColor::Red   => ToBytesColorMode::Red,
-        PreviewColor::Green => ToBytesColorMode::Green,
-        PreviewColor::Blue  => ToBytesColorMode::Blue,
-    };
-
-    image.to_grb_bytes(
-        &l_levels,
-        &r_levels,
-        &g_levels,
-        &b_levels,
-        params.gamma,
-        reduct_ratio,
-        color_mode,
-    )
 }
 
 fn apply_calibr_data_and_remove_hot_pixels(

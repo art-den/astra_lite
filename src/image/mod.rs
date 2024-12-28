@@ -7,3 +7,5 @@ pub mod stars_offset;
 pub mod simple_fits;
 pub mod histogram;
 pub mod io;
+pub mod cam_db;
+pub mod preview;

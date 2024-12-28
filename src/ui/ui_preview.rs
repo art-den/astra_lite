@@ -4,7 +4,7 @@ use gtk::{cairo, glib::{self, clone}, prelude::*};
 use serde::{Serialize, Deserialize};
 use crate::{
     core::{core::*, events::*, frame_processing::*},
-    image::{histogram::*, image::RgbU8Data, info::*, io::save_image_to_tif_file, raw::{CalibrMethods, FrameType}, stars_offset::Offset},
+    image::{histogram::*, info::*, io::save_image_to_tif_file, preview::{get_rgb_data_from_preview_image, RgbU8Data}, raw::{CalibrMethods, FrameType}, stars_offset::Offset},
     options::*,
     utils::{gtk_utils::{self, *}, io_utils::*, log_utils::*}
 };
@@ -240,7 +240,7 @@ impl PreviewUi {
         let cb_preview_color = self.builder.object::<gtk::ComboBoxText>("cb_preview_color").unwrap();
         cb_preview_color.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
             let Ok(mut options) = self_.options.try_write() else { return; };
-            let color = PreviewColor::from_active_id(cb.active_id().as_deref());
+            let color = PreviewColorMode::from_active_id(cb.active_id().as_deref());
             options.preview.color = color;
             drop(options);
             self_.create_and_show_preview_image();

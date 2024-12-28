@@ -520,7 +520,7 @@ impl PreviewSource {
     }
 }
 
-impl PreviewColor {
+impl PreviewColorMode {
     pub fn from_active_id(active_id: Option<&str>) -> Self {
         match active_id {
             Some("red")   => Self::Red,

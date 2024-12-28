@@ -285,7 +285,7 @@ impl Default for QualityOptions {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone, Copy)]
-pub enum PreviewColor { #[default]Rgb, Red, Green, Blue }
+pub enum PreviewColorMode { #[default]Rgb, Red, Green, Blue }
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
 pub enum PreviewSource {#[default]OrigFrame, LiveStacking}
@@ -308,7 +308,7 @@ pub struct PreviewOptions {
     pub wb_blue:     f64,
 
     #[serde(skip_serializing)]
-    pub color:       PreviewColor,
+    pub color:       PreviewColorMode,
 
     // fields for PreviewOptions::preview_params
     #[serde(skip_serializing)] pub widget_width: usize,
@@ -328,7 +328,7 @@ impl Default for PreviewOptions {
             wb_red:        1.0,
             wb_green:      1.0,
             wb_blue:       1.0,
-            color:         PreviewColor::Rgb,
+            color:         PreviewColorMode::Rgb,
             widget_width:  0,
             widget_height: 0,
         }
