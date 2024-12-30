@@ -958,6 +958,7 @@ impl PreviewUi {
             ModeType::DefectPixels      => "Pix",
             ModeType::MasterDark|
             ModeType::MasterBias        => "Master",
+            ModeType::PolarAlignment    => "PA",
             _                           => "???",
         }
     }

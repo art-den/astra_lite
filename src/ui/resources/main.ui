@@ -4952,6 +4952,7 @@ F - autofocus
 MC - mount calibration
 PS - plate solving
 File - image from file
+PA - polar alignment
 
 "Calibr." column:
 D - by dark calibrated
