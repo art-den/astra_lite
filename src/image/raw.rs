@@ -724,6 +724,7 @@ impl RawImage {
                 self.demosaic_linear(mt, dst_img),
         }
         dst_img.time = self.info.time;
+        dst_img.camera = self.info.camera.clone();
     }
 
     pub fn copy_into_monochrome(&self, dst_img: &mut Image) {

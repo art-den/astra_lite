@@ -300,13 +300,15 @@ impl<'a, T: Copy + Default> Iterator for RectIterator<'a, T> {
 ///////////////////////////////////////////////////////////////////////////////
 
 pub struct Image {
-    pub r:     ImageLayer<u16>,
-    pub g:     ImageLayer<u16>,
-    pub b:     ImageLayer<u16>,
-    pub l:     ImageLayer<u16>,
-    pub time:  Option<DateTime<Utc>>,
-    zero:      i32,
-    max_value: u16,
+    pub r:      ImageLayer<u16>,
+    pub g:      ImageLayer<u16>,
+    pub b:      ImageLayer<u16>,
+    pub l:      ImageLayer<u16>,
+    pub time:   Option<DateTime<Utc>>,
+    pub camera: String,
+    zero:       i32,
+    max_value:  u16,
+
 }
 
 impl Image {
@@ -319,6 +321,7 @@ impl Image {
             zero: 0,
             max_value: 0,
             time: None,
+            camera: String::new(),
         }
     }
 

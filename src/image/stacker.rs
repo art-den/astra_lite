@@ -97,6 +97,7 @@ pub struct Stacker {
     total_exp: f64,
     frames_cnt: u32,
     no_tracks: bool,
+    camera: String,
 }
 
 impl Stacker {
@@ -114,6 +115,7 @@ impl Stacker {
             total_exp: 0.0,
             frames_cnt: 0,
             no_tracks: false,
+            camera: String::new(),
         }
     }
 
@@ -165,6 +167,7 @@ impl Stacker {
             self.height = image.height();
             self.max_value = image.max_value();
             self.no_tracks = no_tracks;
+            self.camera = image.camera.clone();
         }
         if !self.no_tracks {
             self.add_simple(image, transl_x, transl_y, angle);
@@ -175,7 +178,7 @@ impl Stacker {
         self.frames_cnt += 1;
     }
 
-    pub fn add_simple(
+    fn add_simple(
         &mut self,
         image:    &Image,
         transl_x: f64,
@@ -486,5 +489,6 @@ impl Stacker {
         copy_layer(&self.l, &mut image.l);
 
         image.set_max_value(self.max_value);
+        image.camera = self.camera.clone();
     }
 }

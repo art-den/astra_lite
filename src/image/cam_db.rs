@@ -1,7 +1,8 @@
+#[derive(Clone)]
 pub struct CamInfo {
-    names:  &'static [&'static str],
-    sensor: &'static str,
-    wb:     [f32; 3],
+    pub names:  &'static [&'static str],
+    pub sensor: &'static str,
+    pub wb:     [f32; 3],
 }
 
 const CAM_INFO: &[CamInfo] = &[
@@ -36,7 +37,7 @@ const CAM_INFO: &[CamInfo] = &[
     },
 ];
 
-pub fn get_wb_for_camera(cam_name: &str) -> Option<[f32; 3]> {
+pub fn get_cam_info(cam_name: &str) -> Option<CamInfo> {
     let cam_name_lc = cam_name.to_lowercase();
     CAM_INFO.iter()
         .find(|info|
@@ -44,5 +45,5 @@ pub fn get_wb_for_camera(cam_name: &str) -> Option<[f32; 3]> {
                 cam_name_lc.contains(name)
             )
         )
-        .map(|info| info.wb)
+        .cloned()
 }

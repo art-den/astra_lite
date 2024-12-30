@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde::{Serialize, Deserialize};
 
 use crate::{
-    core::{consts::*, frame_processing::*}, image::raw::FrameType
+    core::{consts::*, frame_processing::*}, image::{preview::PreviewParams, raw::FrameType}
 };
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -345,14 +345,22 @@ impl PreviewOptions {
         } else {
             PreviewImgSize::Scale(self.scale.clone())
         };
+
+        let wb = if !self.wb_auto {
+            Some([self.wb_red, self.wb_green, self.wb_blue])
+        } else {
+            None
+        };
+
         PreviewParams {
             dark_lvl:         self.dark_lvl,
             light_lvl:        self.light_lvl,
             gamma:            self.gamma,
             orig_frame_in_ls: self.source == PreviewSource::OrigFrame,
             remove_gradient:  self.remove_grad,
+            color:            self.color,
             img_size,
-            color:            self.color
+            wb,
         }
     }
 }

@@ -50,8 +50,8 @@ impl HistogramChan {
         self.get_nth_element(self.count/2)
     }
 
-    pub fn get_percentile(&self, n: usize) -> u16 {
-        self.get_nth_element((n * self.count + 50) / 100)
+    pub fn get_percentile(&self, n: f64) -> u16 {
+        self.get_nth_element(((n * self.count as f64) as usize + 50) / 100)
     }
 }
 

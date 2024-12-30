@@ -4,7 +4,10 @@ use bitflags::bitflags;
 use chrono::{DateTime, Local, Utc};
 
 use crate::{
-    core::{core::ModeType, utils::{FileNameArg, FileNameUtils}}, image::{histogram::*, image::*, info::*, io::*, preview::{get_rgb_data_from_preview_image, RgbU8Data}, raw::*, simple_fits::{FitsReader, SeekNRead}, stacker::Stacker, stars_offset::*}, indi, options::*, utils::log_utils::*
+    core::{core::ModeType, utils::{FileNameArg, FileNameUtils}},
+    image::{histogram::*, image::*, info::*, io::*, preview::*, raw::*, simple_fits::{FitsReader, SeekNRead}, stacker::Stacker, stars_offset::*},
+    indi,
+    options::*, utils::log_utils::*
 };
 
 pub enum ResultImageInfo {
@@ -58,17 +61,6 @@ impl PreviewImgSize {
             PreviewImgSize::Scale(PreviewScale::FitWindow) => unreachable!(),
         }
     }
-}
-
-#[derive(PartialEq, Clone)]
-pub struct PreviewParams {
-    pub dark_lvl:         f64,
-    pub light_lvl:        f64,
-    pub gamma:            f64,
-    pub img_size:         PreviewImgSize,
-    pub orig_frame_in_ls: bool,
-    pub remove_gradient:  bool,
-    pub color:            PreviewColorMode,
 }
 
 #[derive(Default, Debug)]
@@ -175,10 +167,8 @@ pub struct FrameProcessCommandData {
 }
 
 pub struct Preview8BitImgData {
-    pub rgb_data:     RgbU8Data,
-    pub image_width:  usize,
-    pub image_height: usize,
-    pub params:       PreviewParams,
+    pub rgb_data: RgbU8Data,
+    pub params:   PreviewParams,
 }
 
 #[derive(Clone)]
@@ -887,8 +877,6 @@ fn make_preview_image_impl(
     if let Some(rgb_data) = rgb_data {
         let preview_data = Arc::new(Preview8BitImgData {
             rgb_data,
-            image_width: image.width(),
-            image_height: image.height(),
             params: command.view_options.clone(),
         });
         send_result(
@@ -1085,8 +1073,6 @@ fn make_preview_image_impl(
                 if let Some(rgb_data) = rgb_data {
                     let preview_data = Arc::new(Preview8BitImgData {
                         rgb_data,
-                        image_width: image.width(),
-                        image_height: image.height(),
                         params: command.view_options.clone(),
                     });
 

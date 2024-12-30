@@ -3,12 +3,24 @@ use std::sync::Arc;
 use itertools::izip;
 
 use crate::{
-    core::frame_processing::PreviewParams, utils::math::linear_interpolate, PreviewColorMode, PreviewImgSize, PreviewScale
+    utils::math::linear_interpolate, PreviewColorMode, PreviewImgSize, PreviewScale
 };
 
-use super::{histogram::Histogram, image::{Image, ImageLayer}};
+use super::{cam_db::*, histogram::Histogram, image::{Image, ImageLayer}};
 
-#[derive(Default)]
+#[derive(PartialEq, Clone)]
+pub struct PreviewParams {
+    pub dark_lvl:         f64,
+    pub light_lvl:        f64,
+    pub gamma:            f64,
+    pub img_size:         PreviewImgSize,
+    pub orig_frame_in_ls: bool,
+    pub remove_gradient:  bool,
+    pub color:            PreviewColorMode,
+    pub wb:               Option<[f64; 3]>,
+}
+
+#[derive(Default, Debug)]
 pub struct DarkLightLevels {
     pub dark:  f64,
     pub light: f64,
@@ -39,7 +51,8 @@ pub struct RgbU8Data {
     pub orig_width:     usize,
     pub orig_height:    usize,
     pub bytes:          SharedBytes,
-    pub is_color_image: bool,
+    pub is_color_image: bool,   // originally color
+    pub sensor_name:    String, // censor for auto WB
 }
 
 pub fn get_rgb_data_from_preview_image(
@@ -47,7 +60,7 @@ pub fn get_rgb_data_from_preview_image(
     hist:   &Histogram,
     params: &PreviewParams,
 ) -> Option<RgbU8Data> {
-    if hist.l.is_none() && hist.b.is_none() {
+    if (hist.l.is_none() && hist.b.is_none()) || image.is_empty() {
         return None;
     }
 
@@ -56,14 +69,56 @@ pub fn get_rgb_data_from_preview_image(
         image.width(),
         image.height()
     );
-    log::debug!("reduct_ratio = {}", reduct_ratio);
+    log::debug!("preview reduct_ratio = {}", reduct_ratio);
 
-    const WB_PERCENTILE:        usize = 45;
-    const DARK_MIN_PERCENTILE:  usize = 1;
-    const DARK_MAX_PERCENTILE:  usize = 60;
-    const LIGHT_MIN_PERCENTILE: usize = 95;
+    let levels = calc_levels(
+        hist,
+        params,
+        image.max_value() as f64
+    );
+    log::debug!("preview levels = {:?}", levels);
 
-    let light_max = image.max_value() as f64;
+    let (wb, censor) = get_wb_and_sensor(&params.wb, &image.camera);
+    log::debug!("preview wb and sensor = {:?} {}", wb, censor);
+
+    let bytes = to_grb_bytes(
+        image,
+        &levels,
+        params.gamma,
+        reduct_ratio,
+        params.color,
+        &wb
+    );
+
+    Some(RgbU8Data {
+        width:          image.width() / reduct_ratio,
+        height:         image.height() / reduct_ratio,
+        bytes:          SharedBytes::new(bytes),
+        orig_width:     image.width(),
+        orig_height:    image.height(),
+        is_color_image: image.is_color(),
+        sensor_name:    censor,
+    })
+}
+
+#[derive(Debug)]
+struct PreviewLevels {
+    r: DarkLightLevels,
+    g: DarkLightLevels,
+    b: DarkLightLevels,
+    l: DarkLightLevels,
+}
+
+fn calc_levels(
+    hist:   &Histogram,
+    params: &PreviewParams,
+    light_max: f64,
+) -> PreviewLevels {
+    const WB_PERCENTILE:        f64 = 45.0;
+    const DARK_MIN_PERCENTILE:  f64 = 1.0;
+    const DARK_MAX_PERCENTILE:  f64 = 60.0;
+    const LIGHT_MIN_PERCENTILE: f64 = 95.0;
+
     let light_lvl = params.light_lvl.powf(0.05);
 
     let l_levels = if let Some(hist) = &hist.l {
@@ -109,16 +164,12 @@ pub fn get_rgb_data_from_preview_image(
         DarkLightLevels::default()
     };
 
-    to_grb_bytes(
-        image,
-        &l_levels,
-        &r_levels,
-        &g_levels,
-        &b_levels,
-        params.gamma,
-        reduct_ratio,
-        params.color,
-    )
+    PreviewLevels {
+        r: r_levels,
+        g: g_levels,
+        b: b_levels,
+        l: l_levels,
+    }
 }
 
 fn calc_reduct_ratio(options: &PreviewParams, img_width: usize, img_height: usize) -> usize {
@@ -143,24 +194,37 @@ fn calc_reduct_ratio(options: &PreviewParams, img_width: usize, img_height: usiz
     }
 }
 
-pub fn to_grb_bytes(
+fn get_wb_and_sensor(wb: &Option<[f64; 3]>, camera: &str) -> ([f64; 3], String) {
+    let cam_info = get_cam_info(camera);
+    let auto_wb_coeffs = cam_info.as_ref().map(|cam_info| cam_info.wb).unwrap_or([1.0, 1.0, 1.0]);
+    let mut r_wb = wb.map(|wb| wb[0]).unwrap_or(auto_wb_coeffs[0] as f64);
+    let mut g_wb = wb.map(|wb| wb[1]).unwrap_or(auto_wb_coeffs[1] as f64);
+    let mut b_wb = wb.map(|wb| wb[2]).unwrap_or(auto_wb_coeffs[2] as f64);
+    let mut min_wb = r_wb.min(g_wb).min(b_wb);
+    if min_wb <= 0.0 { min_wb = 1.0; }
+    r_wb /= min_wb;
+    g_wb /= min_wb;
+    b_wb /= min_wb;
+    let sensor = cam_info.as_ref()
+        .map(|cam_info|
+            cam_info.sensor.to_string()
+        ).unwrap_or_default();
+    ([r_wb, g_wb, b_wb], sensor)
+}
+
+fn to_grb_bytes(
     image:        &Image,
-    l_levels:     &DarkLightLevels,
-    r_levels:     &DarkLightLevels,
-    g_levels:     &DarkLightLevels,
-    b_levels:     &DarkLightLevels,
+    levels:       &PreviewLevels,
     gamma:        f64,
     reduct_ratio: usize,
     color_mode:   PreviewColorMode,
-) -> Option<RgbU8Data> {
-    if image.is_empty() {
-        return None;
-    }
+    wb:           &[f64; 3],
+) -> Vec<u8> {
 
-    let r_table = create_gamma_table(r_levels.dark, r_levels.light, gamma);
-    let g_table = create_gamma_table(g_levels.dark, g_levels.light, gamma);
-    let b_table = create_gamma_table(b_levels.dark, b_levels.light, gamma);
-    let l_table = create_gamma_table(l_levels.dark, l_levels.light, gamma);
+    let r_table = create_gamma_table(levels.r.dark, levels.r.light, gamma, wb[0]);
+    let g_table = create_gamma_table(levels.g.dark, levels.g.light, gamma, wb[1]);
+    let b_table = create_gamma_table(levels.b.dark, levels.b.light, gamma, wb[2]);
+    let l_table = create_gamma_table(levels.l.dark, levels.l.light, gamma, 1.0);
 
     let rgb_bytes = if image.is_color() && color_mode == PreviewColorMode::Rgb {
         match reduct_ratio {
@@ -187,23 +251,17 @@ pub fn to_grb_bytes(
         }
     };
 
-    Some(RgbU8Data {
-        width:          image.width() / reduct_ratio,
-        height:         image.height() / reduct_ratio,
-        bytes:          SharedBytes::new(rgb_bytes),
-        orig_width:     image.width(),
-        orig_height:    image.height(),
-        is_color_image: image.is_color(),
-    })
+    rgb_bytes
 }
 
-fn create_gamma_table(min_value: f64, max_value: f64, gamma: f64) -> Vec<u8> {
+fn create_gamma_table(min_value: f64, max_value: f64, gamma: f64, k: f64) -> Vec<u8> {
     let mut table = Vec::new();
     if min_value == 0.0 && max_value == 0.0 {
         return table;
     }
     for i in 0..=u16::MAX {
         let v = linear_interpolate(i as f64, min_value, max_value, 0.0, 1.0);
+        let v = v * k;
         let table_v = if v < 0.0 {
             0.0
         } else if v > 1.0 {

@@ -4,7 +4,7 @@ use gtk::{cairo, glib::{self, clone}, prelude::*};
 use serde::{Serialize, Deserialize};
 use crate::{
     core::{core::*, events::*, frame_processing::*},
-    image::{histogram::*, info::*, io::save_image_to_tif_file, preview::{get_rgb_data_from_preview_image, RgbU8Data}, raw::{CalibrMethods, FrameType}, stars_offset::Offset},
+    image::{histogram::*, info::*, io::save_image_to_tif_file, preview::*, raw::{CalibrMethods, FrameType}, stars_offset::Offset},
     options::*,
     utils::{gtk_utils::{self, *}, io_utils::*, log_utils::*}
 };
@@ -130,11 +130,14 @@ impl PreviewUi {
     const CONF_FN: &'static str = "ui_prevuew";
 
     fn init_widgets(&self) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        ui.set_prop_str("l_wb_censor.label", Some(""));
+
         let scl_dark = self.builder.object::<gtk::Scale>("scl_dark").unwrap();
         scl_dark.set_range(0.0, 1.0);
-        scl_dark.set_increments(0.01, 0.1);
-        scl_dark.set_round_digits(2);
-        scl_dark.set_digits(2);
+        scl_dark.set_increments(0.1, 0.5);
+        scl_dark.set_round_digits(1);
+        scl_dark.set_digits(1);
 
         let (dpimm_x, _) = gtk_utils::get_widget_dpmm(&self.window)
             .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
@@ -142,9 +145,9 @@ impl PreviewUi {
 
         let scl_highlight = self.builder.object::<gtk::Scale>("scl_highlight").unwrap();
         scl_highlight.set_range(0.0, 1.0);
-        scl_highlight.set_increments(0.01, 0.1);
-        scl_highlight.set_round_digits(2);
-        scl_highlight.set_digits(2);
+        scl_highlight.set_increments(0.1, 0.5);
+        scl_highlight.set_round_digits(1);
+        scl_highlight.set_digits(1);
 
         let scl_gamma = self.builder.object::<gtk::Scale>("scl_gamma").unwrap();
         scl_gamma.set_range(1.0, 5.0);
@@ -155,7 +158,7 @@ impl PreviewUi {
 
         let configure_wb_scale = |name: &str| {
             let scale = self.builder.object::<gtk::Scale>(name).unwrap();
-            scale.set_range(0.0, 2.0);
+            scale.set_range(0.5, 2.0);
             scale.set_increments(0.1, 0.5);
             scale.set_round_digits(1);
             scale.set_digits(1);
@@ -297,6 +300,31 @@ impl PreviewUi {
             drop(options);
             self_.create_and_show_preview_image();
         }));
+
+        let scl_wb_red = self.builder.object::<gtk::Scale>("scl_wb_red").unwrap();
+        scl_wb_red.connect_value_changed(clone!(@weak self as self_ => move |scl| {
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.preview.wb_red = scl.value();
+            drop(options);
+            self_.create_and_show_preview_image();
+        }));
+
+        let scl_wb_red = self.builder.object::<gtk::Scale>("scl_wb_green").unwrap();
+        scl_wb_red.connect_value_changed(clone!(@weak self as self_ => move |scl| {
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.preview.wb_green = scl.value();
+            drop(options);
+            self_.create_and_show_preview_image();
+        }));
+
+        let scl_wb_red = self.builder.object::<gtk::Scale>("scl_wb_blue").unwrap();
+        scl_wb_red.connect_value_changed(clone!(@weak self as self_ => move |scl| {
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.preview.wb_blue = scl.value();
+            drop(options);
+            self_.create_and_show_preview_image();
+        }));
+
     }
 
     fn connect_core_events(self: &Rc<Self>) {
@@ -577,6 +605,13 @@ impl PreviewUi {
             );
             tmr.log("Pixbuf::from_bytes");
 
+            let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+            if !rgb_bytes.sensor_name.is_empty() {
+                ui.set_prop_str("l_wb_censor.label", Some(format!("({})", rgb_bytes.sensor_name).as_str()));
+            } else {
+                ui.set_prop_str("l_wb_censor.label", Some(""));
+            }
+
             let (img_width, img_height) = pp.img_size.get_preview_img_size(
                 rgb_bytes.orig_width,
                 rgb_bytes.orig_height
@@ -734,14 +769,14 @@ impl PreviewUi {
                 self.show_preview_image(Some(&img.rgb_data), Some(&img.params));
                 self.correct_widgets_props();
 
-                show_resolution_info(img.image_width, img.image_height);
+                show_resolution_info(img.rgb_data.orig_width, img.rgb_data.orig_height);
             }
             FrameProcessResultData::PreviewLiveRes(img)
             if is_mode_current(true) => {
                 self.show_preview_image(Some(&img.rgb_data), Some(&img.params));
                 self.correct_widgets_props();
 
-                show_resolution_info(img.image_width, img.image_height);
+                show_resolution_info(img.rgb_data.orig_width, img.rgb_data.orig_height);
             }
             FrameProcessResultData::HistorgamRaw(_)
             if is_mode_current(false) => {
