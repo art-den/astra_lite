@@ -3780,13 +3780,14 @@ Also makes stars little sharper</property>
                         <property name="hexpand">True</property>
                         <property name="vexpand">True</property>
                         <property name="orientation">vertical</property>
-                        <property name="spacing">5</property>
+                        <property name="spacing">2</property>
                         <child>
                           <object class="GtkBox">
                             <property name="visible">True</property>
                             <property name="can-focus">False</property>
                             <property name="margin-start">5</property>
                             <property name="margin-end">5</property>
+                            <property name="margin-top">2</property>
                             <property name="spacing">5</property>
                             <child>
                               <object class="GtkLabel">
