@@ -188,6 +188,7 @@ impl PreviewUi {
         gtk_utils::connect_action   (&self.window, self, "save_image_preview",  Self::handler_action_save_image_preview);
         gtk_utils::connect_action   (&self.window, self, "save_image_linear",   Self::handler_action_save_image_linear);
         gtk_utils::connect_action   (&self.window, self, "clear_light_history", Self::handler_action_clear_light_history);
+        gtk_utils::connect_action_rc(&self.window, self, "load_image",          Self::handler_action_open_image);
 
         let ch_hist_logy = self.builder.object::<gtk::CheckButton>("ch_hist_logy").unwrap();
         ch_hist_logy.connect_active_notify(clone!(@weak self as self_ => move |chb| {
@@ -563,7 +564,7 @@ impl PreviewUi {
         drop(options);
         let image = image.read().unwrap();
         let hist = hist.read().unwrap();
-        let rgb_bytes = get_rgb_data_from_preview_image(
+        let rgb_bytes = get_preview_rgb_data(
             &image,
             &hist,
             &preview_params
@@ -578,7 +579,7 @@ impl PreviewUi {
 
     fn show_preview_image(
         &self,
-        rgb_bytes:  Option<&RgbU8Data>,
+        rgb_bytes:  Option<&PreviewRgbData>,
         src_params: Option<&PreviewParams>,
     ) {
         let preview_options = self.options.read().unwrap().preview.clone();
@@ -612,7 +613,7 @@ impl PreviewUi {
                 ui.set_prop_str("l_wb_censor.label", Some(""));
             }
 
-            let (img_width, img_height) = pp.img_size.get_preview_img_size(
+            let (img_width, img_height) = pp.get_preview_img_size(
                 rgb_bytes.orig_width,
                 rgb_bytes.orig_height
             );
@@ -667,7 +668,7 @@ impl PreviewUi {
             let image = image.read().unwrap();
             let hist = hist.read().unwrap();
             let preview_params = preview_options.preview_params();
-            let rgb_data = get_rgb_data_from_preview_image(&image, &hist, &preview_params);
+            let rgb_data = get_preview_rgb_data(&image, &hist, &preview_params);
             let Some(rgb_data) = rgb_data else { anyhow::bail!("wrong RGB fata"); };
             let bytes = glib::Bytes::from_owned(rgb_data.bytes);
             let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
@@ -1179,5 +1180,32 @@ impl PreviewUi {
             gtk::main_iteration_do(true);
             self.create_and_show_preview_image();
         }
+    }
+
+    fn handler_action_open_image(self: &Rc<Self>) {
+        let fc = gtk::FileChooserDialog::builder()
+            .action(gtk::FileChooserAction::Open)
+            .title("Select image file to open")
+            .modal(true)
+            .transient_for(&self.window)
+            .build();
+        gtk_utils::add_ok_and_cancel_buttons(
+            fc.upcast_ref::<gtk::Dialog>(),
+            "_Open",   gtk::ResponseType::Accept,
+            "_Cancel", gtk::ResponseType::Cancel
+        );
+        fc.connect_response(clone!(@weak self as self_ => move |file_chooser, response| {
+            if response == gtk::ResponseType::Accept {
+                gtk_utils::exec_and_show_error(&self_.window, || {
+                    let Some(file_name) = file_chooser.file() else { return Ok(()); };
+                    let Some(file_name) = file_name.path() else { return Ok(()); };
+                    self_.options.write().unwrap().read_all(&self_.builder);
+                    self_.core.open_image_from_file(&file_name)?;
+                    Ok(())
+                });
+            }
+            file_chooser.close();
+        }));
+        fc.show();
     }
 }

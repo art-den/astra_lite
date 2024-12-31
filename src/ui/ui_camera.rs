@@ -239,7 +239,6 @@ impl CameraUi {
         gtk_utils::connect_action   (&self.window, self, "start_live_stacking",    Self::handler_action_start_live_stacking);
         gtk_utils::connect_action   (&self.window, self, "stop_live_stacking",     Self::handler_action_stop_live_stacking);
         gtk_utils::connect_action   (&self.window, self, "continue_live_stacking", Self::handler_action_continue_live_stacking);
-        gtk_utils::connect_action_rc(&self.window, self, "load_image",             Self::handler_action_open_image);
         gtk_utils::connect_action   (&self.window, self, "dark_library",           Self::handler_action_darks_library);
 
         let cb_camera_list = bldr.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
@@ -1334,33 +1333,6 @@ impl CameraUi {
     fn show_total_raw_time(&self) {
         let options = self.options.read().unwrap();
         self.show_total_raw_time_impl(&options);
-    }
-
-    fn handler_action_open_image(self: &Rc<Self>) {
-        let fc = gtk::FileChooserDialog::builder()
-            .action(gtk::FileChooserAction::Open)
-            .title("Select image file to open")
-            .modal(true)
-            .transient_for(&self.window)
-            .build();
-        gtk_utils::add_ok_and_cancel_buttons(
-            fc.upcast_ref::<gtk::Dialog>(),
-            "_Open",   gtk::ResponseType::Accept,
-            "_Cancel", gtk::ResponseType::Cancel
-        );
-        fc.connect_response(clone!(@weak self as self_ => move |file_chooser, response| {
-            if response == gtk::ResponseType::Accept {
-                gtk_utils::exec_and_show_error(&self_.window, || {
-                    let Some(file_name) = file_chooser.file() else { return Ok(()); };
-                    let Some(file_name) = file_name.path() else { return Ok(()); };
-                    self_.get_options_from_widgets();
-                    self_.core.open_image_from_file(&file_name)?;
-                    Ok(())
-                });
-            }
-            file_chooser.close();
-        }));
-        fc.show();
     }
 
     fn handler_action_darks_library(&self) {

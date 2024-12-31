@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde::{Serialize, Deserialize};
 
 use crate::{
-    core::{consts::*, frame_processing::*}, image::{preview::PreviewParams, raw::FrameType}
+    core::consts::*, image::{preview::PreviewParams, raw::FrameType}
 };
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -290,8 +290,8 @@ pub enum PreviewColorMode { #[default]Rgb, Red, Green, Blue }
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
 pub enum PreviewSource {#[default]OrigFrame, LiveStacking}
 
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
-pub enum PreviewScale {#[default]FitWindow, Original, P75, P50, P33, P25}
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone, Copy)]
+pub enum PreviewScale {#[default]FitWindow, Original, P75, P50, P33, P25, CenterAndCorners}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
@@ -337,15 +337,6 @@ impl Default for PreviewOptions {
 
 impl PreviewOptions {
     pub fn preview_params(&self) -> PreviewParams {
-        let img_size = if self.scale == PreviewScale::FitWindow {
-            PreviewImgSize::Fit {
-                width: self.widget_width,
-                height: self.widget_height
-            }
-        } else {
-            PreviewImgSize::Scale(self.scale.clone())
-        };
-
         let wb = if !self.wb_auto {
             Some([self.wb_red, self.wb_green, self.wb_blue])
         } else {
@@ -356,10 +347,12 @@ impl PreviewOptions {
             dark_lvl:         self.dark_lvl,
             light_lvl:        self.light_lvl,
             gamma:            self.gamma,
+            pr_area_width:    self.widget_width,
+            pr_area_height:   self.widget_height,
+            scale:            self.scale,
             orig_frame_in_ls: self.source == PreviewSource::OrigFrame,
             remove_gradient:  self.remove_grad,
             color:            self.color,
-            img_size,
             wb,
         }
     }

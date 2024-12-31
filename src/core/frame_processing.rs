@@ -35,34 +35,6 @@ impl ResultImage {
     }
 }
 
-#[derive(PartialEq, Clone)]
-pub enum PreviewImgSize {
-    Fit{ width: usize, height: usize },
-    Scale(PreviewScale),
-}
-
-impl PreviewImgSize {
-    pub fn get_preview_img_size(&self, orig_width: usize, orig_height: usize) -> (usize, usize) {
-        match self {
-            &PreviewImgSize::Fit { width, height } => {
-                let img_ratio = orig_width as f64 / orig_height as f64;
-                let gui_ratio = width as f64 / height as f64;
-                if img_ratio > gui_ratio {
-                    (width, (width as f64 / img_ratio) as usize)
-                } else {
-                    ((height as f64 * img_ratio) as usize, height)
-                }
-            },
-            PreviewImgSize::Scale(PreviewScale::Original) => (orig_width, orig_height),
-            PreviewImgSize::Scale(PreviewScale::P75) => (3*orig_width/4, 3*orig_height/4),
-            PreviewImgSize::Scale(PreviewScale::P50) => (orig_width/2, orig_height/2),
-            PreviewImgSize::Scale(PreviewScale::P33) => (orig_width/3, orig_height/3),
-            PreviewImgSize::Scale(PreviewScale::P25) => (orig_width/4, orig_height/4),
-            PreviewImgSize::Scale(PreviewScale::FitWindow) => unreachable!(),
-        }
-    }
-}
-
 #[derive(Default, Debug)]
 pub struct CalibrParams {
     pub extract_dark:  bool,
@@ -167,7 +139,7 @@ pub struct FrameProcessCommandData {
 }
 
 pub struct Preview8BitImgData {
-    pub rgb_data: RgbU8Data,
+    pub rgb_data: PreviewRgbData,
     pub params:   PreviewParams,
 }
 
@@ -862,7 +834,7 @@ fn make_preview_image_impl(
 
     let hist = command.frame.img_hist.read().unwrap();
     let tmr = TimeLogger::start();
-    let rgb_data = get_rgb_data_from_preview_image(
+    let rgb_data = get_preview_rgb_data(
         &image,
         &hist,
         &command.view_options
@@ -1058,7 +1030,7 @@ fn make_preview_image_impl(
 
             if !command.view_options.orig_frame_in_ls {
                 let tmr = TimeLogger::start();
-                let rgb_data = get_rgb_data_from_preview_image(
+                let rgb_data = get_preview_rgb_data(
                     &res_image,
                     &hist,
                     &command.view_options

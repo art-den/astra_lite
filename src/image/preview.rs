@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use itertools::izip;
+use itertools::{izip, Itertools};
 
 use crate::{
-    utils::math::linear_interpolate, PreviewColorMode, PreviewImgSize, PreviewScale
+    utils::math::linear_interpolate, PreviewColorMode, PreviewScale
 };
 
 use super::{cam_db::*, histogram::Histogram, image::{Image, ImageLayer}};
@@ -13,11 +13,67 @@ pub struct PreviewParams {
     pub dark_lvl:         f64,
     pub light_lvl:        f64,
     pub gamma:            f64,
-    pub img_size:         PreviewImgSize,
+    pub pr_area_width:    usize,
+    pub pr_area_height:   usize,
+    pub scale:            PreviewScale,
     pub orig_frame_in_ls: bool,
     pub remove_gradient:  bool,
     pub color:            PreviewColorMode,
     pub wb:               Option<[f64; 3]>,
+}
+
+impl PreviewParams {
+    pub fn get_preview_img_size(&self, orig_width: usize, orig_height: usize) -> (usize, usize) {
+        match self.scale {
+            PreviewScale::FitWindow => {
+                let img_ratio = orig_width as f64 / orig_height as f64;
+                let gui_ratio = self.pr_area_width as f64 / self.pr_area_height as f64;
+                if img_ratio > gui_ratio {
+                    (self.pr_area_width, (self.pr_area_width as f64 / img_ratio) as usize)
+                } else {
+                    ((self.pr_area_height as f64 * img_ratio) as usize, self.pr_area_height)
+                }
+            }
+            PreviewScale::Original =>
+                (orig_width, orig_height),
+            PreviewScale::P75 =>
+                (3*orig_width/4, 3*orig_height/4),
+            PreviewScale::P50 =>
+                (orig_width/2, orig_height/2),
+            PreviewScale::P33 =>
+                (orig_width/3, orig_height/3),
+            PreviewScale::P25 =>
+                (orig_width/4, orig_height/4),
+            PreviewScale::CenterAndCorners => {
+                let min_size = self.pr_area_width.min(self.pr_area_height);
+                let min_size_protected = min_size.max(42);
+                (min_size_protected, min_size_protected)
+            }
+        }
+    }
+
+    fn calc_reduct_ratio(&self, img_width: usize, img_height: usize) -> usize {
+        match self.scale {
+            PreviewScale::FitWindow => {
+                if img_width/4 > self.pr_area_width && img_height/4 > self.pr_area_height {
+                    4
+                } else if img_width/3 > self.pr_area_width && img_height/3 > self.pr_area_height {
+                    3
+                } else if img_width/2 > self.pr_area_width && img_height/2 > self.pr_area_height {
+                    2
+                } else {
+                    1
+                }
+            },
+            PreviewScale::Original => 1,
+            PreviewScale::P75 => 1,
+            PreviewScale::P50 => 2,
+            PreviewScale::P33 => 3,
+            PreviewScale::P25 => 4,
+            PreviewScale::CenterAndCorners => 1,
+        }
+    }
+
 }
 
 #[derive(Default, Debug)]
@@ -45,7 +101,7 @@ impl AsRef<[u8]> for SharedBytes {
     }
 }
 
-pub struct RgbU8Data {
+pub struct PreviewRgbData {
     pub width:          usize,
     pub height:         usize,
     pub orig_width:     usize,
@@ -55,20 +111,16 @@ pub struct RgbU8Data {
     pub sensor_name:    String, // censor for auto WB
 }
 
-pub fn get_rgb_data_from_preview_image(
+pub fn get_preview_rgb_data(
     image:  &Image,
     hist:   &Histogram,
     params: &PreviewParams,
-) -> Option<RgbU8Data> {
+) -> Option<PreviewRgbData> {
     if (hist.l.is_none() && hist.b.is_none()) || image.is_empty() {
         return None;
     }
 
-    let reduct_ratio = calc_reduct_ratio(
-        params,
-        image.width(),
-        image.height()
-    );
+    let reduct_ratio = params.calc_reduct_ratio(image.width(), image.height());
     log::debug!("preview reduct_ratio = {}", reduct_ratio);
 
     let levels = calc_levels(
@@ -81,18 +133,17 @@ pub fn get_rgb_data_from_preview_image(
     let (wb, censor) = get_wb_and_sensor(&params.wb, &image.camera);
     log::debug!("preview wb and sensor = {:?} {}", wb, censor);
 
-    let bytes = to_grb_bytes(
+    let (bytes, width, height) = to_grb_bytes(
         image,
+        params,
         &levels,
-        params.gamma,
         reduct_ratio,
-        params.color,
         &wb
     );
 
-    Some(RgbU8Data {
-        width:          image.width() / reduct_ratio,
-        height:         image.height() / reduct_ratio,
+    Some(PreviewRgbData {
+        width,
+        height,
         bytes:          SharedBytes::new(bytes),
         orig_width:     image.width(),
         orig_height:    image.height(),
@@ -110,8 +161,8 @@ struct PreviewLevels {
 }
 
 fn calc_levels(
-    hist:   &Histogram,
-    params: &PreviewParams,
+    hist:      &Histogram,
+    params:    &PreviewParams,
     light_max: f64,
 ) -> PreviewLevels {
     const WB_PERCENTILE:        f64 = 45.0;
@@ -172,28 +223,6 @@ fn calc_levels(
     }
 }
 
-fn calc_reduct_ratio(options: &PreviewParams, img_width: usize, img_height: usize) -> usize {
-    match &options.img_size {
-        &PreviewImgSize::Fit{width, height} => {
-            if img_width/4 > width && img_height/4 > height {
-                4
-            } else if img_width/3 > width && img_height/3 > height {
-                3
-            } else if img_width/2 > width && img_height/2 > height {
-                2
-            } else {
-                1
-            }
-        },
-        PreviewImgSize::Scale(PreviewScale::Original) => 1,
-        PreviewImgSize::Scale(PreviewScale::P75) => 1,
-        PreviewImgSize::Scale(PreviewScale::P50) => 2,
-        PreviewImgSize::Scale(PreviewScale::P33) => 3,
-        PreviewImgSize::Scale(PreviewScale::P25) => 4,
-        PreviewImgSize::Scale(PreviewScale::FitWindow) => unreachable!(),
-    }
-}
-
 fn get_wb_and_sensor(wb: &Option<[f64; 3]>, camera: &str) -> ([f64; 3], String) {
     let cam_info = get_cam_info(camera);
     let auto_wb_coeffs = cam_info.as_ref().map(|cam_info| cam_info.wb).unwrap_or([1.0, 1.0, 1.0]);
@@ -214,44 +243,51 @@ fn get_wb_and_sensor(wb: &Option<[f64; 3]>, camera: &str) -> ([f64; 3], String) 
 
 fn to_grb_bytes(
     image:        &Image,
+    params:       &PreviewParams,
     levels:       &PreviewLevels,
-    gamma:        f64,
     reduct_ratio: usize,
-    color_mode:   PreviewColorMode,
     wb:           &[f64; 3],
-) -> Vec<u8> {
+) -> (Vec<u8>, usize, usize) {
+    let r_table = create_gamma_table(levels.r.dark, levels.r.light, params.gamma, wb[0]);
+    let g_table = create_gamma_table(levels.g.dark, levels.g.light, params.gamma, wb[1]);
+    let b_table = create_gamma_table(levels.b.dark, levels.b.light, params.gamma, wb[2]);
+    let l_table = create_gamma_table(levels.l.dark, levels.l.light, params.gamma, 1.0);
+    let (result_width, result_height) = params.get_preview_img_size(image.width(), image.height());
 
-    let r_table = create_gamma_table(levels.r.dark, levels.r.light, gamma, wb[0]);
-    let g_table = create_gamma_table(levels.g.dark, levels.g.light, gamma, wb[1]);
-    let b_table = create_gamma_table(levels.b.dark, levels.b.light, gamma, wb[2]);
-    let l_table = create_gamma_table(levels.l.dark, levels.l.light, gamma, 1.0);
-
-    let rgb_bytes = if image.is_color() && color_mode == PreviewColorMode::Rgb {
-        match reduct_ratio {
-            1 => to_grb_bytes_no_reduct_rgb(image, &r_table, &g_table, &b_table, image.width(), image.height()),
-            2 => to_grb_bytes_reduct2_rgb  (image, &r_table, &g_table, &b_table, image.width(), image.height()),
-            3 => to_grb_bytes_reduct3_rgb  (image, &r_table, &g_table, &b_table, image.width(), image.height()),
-            4 => to_grb_bytes_reduct4_rgb  (image, &r_table, &g_table, &b_table, image.width(), image.height()),
+    let rgb_bytes = if image.is_color() && params.color == PreviewColorMode::Rgb {
+        match (params.scale, reduct_ratio) {
+            (PreviewScale::CenterAndCorners, _) => to_grb_bytes_corners_rgb(image, &r_table, &g_table, &b_table, result_width, result_height),
+            (_, 1) => to_grb_bytes_no_reduct_rgb(image, &r_table, &g_table, &b_table, image.width(), image.height()),
+            (_, 2) => to_grb_bytes_reduct2_rgb  (image, &r_table, &g_table, &b_table, image.width(), image.height()),
+            (_, 3) => to_grb_bytes_reduct3_rgb  (image, &r_table, &g_table, &b_table, image.width(), image.height()),
+            (_, 4) => to_grb_bytes_reduct4_rgb  (image, &r_table, &g_table, &b_table, image.width(), image.height()),
             _ => panic!("Wrong reduct_ratio ({})", reduct_ratio),
         }
     } else {
-        let (layer, table) = match (image.is_color(), color_mode) {
+        let (layer, table) = match (image.is_color(), params.color) {
             (false, _)                   => (&image.l, l_table),
             (_, PreviewColorMode::Red)   => (&image.r, r_table),
             (_, PreviewColorMode::Green) => (&image.g, g_table),
             (_, PreviewColorMode::Blue)  => (&image.b, b_table),
             _ => unreachable!(),
         };
-        match reduct_ratio {
-            1 => to_grb_bytes_no_reduct_mono(layer, &table, image.width(), image.height()),
-            2 => to_grb_bytes_reduct2_mono  (layer, &table, image.width(), image.height()),
-            3 => to_grb_bytes_reduct3_mono  (layer, &table, image.width(), image.height()),
-            4 => to_grb_bytes_reduct4_mono  (layer, &table, image.width(), image.height()),
+        match (params.scale, reduct_ratio) {
+            (PreviewScale::CenterAndCorners, _) => to_grb_bytes_corners_mono(layer, &table, result_width, result_height),
+            (_, 1) => to_grb_bytes_no_reduct_mono(layer, &table, image.width(), image.height()),
+            (_, 2) => to_grb_bytes_reduct2_mono  (layer, &table, image.width(), image.height()),
+            (_, 3) => to_grb_bytes_reduct3_mono  (layer, &table, image.width(), image.height()),
+            (_, 4) => to_grb_bytes_reduct4_mono  (layer, &table, image.width(), image.height()),
             _ => panic!("Wrong reduct_ratio ({})", reduct_ratio),
         }
     };
 
-    rgb_bytes
+    let (width, heigth) = if params.scale == PreviewScale::CenterAndCorners {
+        (result_width, result_height)
+    } else {
+        (image.width()/reduct_ratio, image.height()/reduct_ratio)
+    };
+
+    (rgb_bytes, width, heigth)
 }
 
 fn create_gamma_table(min_value: f64, max_value: f64, gamma: f64, k: f64) -> Vec<u8> {
@@ -272,6 +308,107 @@ fn create_gamma_table(min_value: f64, max_value: f64, gamma: f64, k: f64) -> Vec
         table.push(table_v as u8);
     }
     table
+}
+
+#[derive(Debug)]
+struct CopyRectParams {
+    src_left: usize,
+    src_top: usize,
+    dst_left: usize,
+    dst_top: usize,
+    width: usize,
+    height: usize,
+}
+
+fn get_rects_for_corners_and_center(
+    src_width: usize,
+    src_height: usize,
+    width:  usize,
+    height: usize
+) -> Vec<CopyRectParams> {
+    const SPACING: usize = 6;
+    fn pos(img_size: usize, rect_size: usize, pos: usize) -> usize {
+        match pos {
+            0 => 0,
+            1 => (img_size - rect_size) / 2,
+            2 => img_size - rect_size,
+            _ => unreachable!(),
+        }
+    }
+    let mut result = Vec::new();
+    let rect_width = (width - 2 * SPACING) / 3;
+    let rect_height = (height - 2 * SPACING) / 3;
+    for i in 0..3 {
+        for j in 0..3 {
+            result.push(CopyRectParams {
+                src_left: pos(src_width, rect_width, i),
+                src_top: pos(src_height, rect_height, j),
+                dst_left: pos(width, rect_width, i),
+                dst_top: pos(height, rect_height, j),
+                width: rect_width,
+                height: rect_height,
+            });
+        }
+    }
+    result
+}
+
+fn to_grb_bytes_corners_rgb(
+    image:   &Image,
+    r_table: &[u8],
+    g_table: &[u8],
+    b_table: &[u8],
+    width:   usize,
+    height:  usize
+) -> Vec<u8> {
+    let mut rgb_bytes = Vec::new();
+    rgb_bytes.resize(3 * width * height, 0);
+    let rects = get_rects_for_corners_and_center(image.width(), image.height(), width, height);
+    for rect in rects {
+        for i in 0..rect.height {
+            let src_y = rect.src_top + i;
+            let dst_y = rect.dst_top + i;
+            let r_row = &image.r.row(src_y)[rect.src_left..rect.src_left + rect.width];
+            let g_row = &image.g.row(src_y)[rect.src_left..rect.src_left + rect.width];
+            let b_row = &image.b.row(src_y)[rect.src_left..rect.src_left + rect.width];
+            let dst_row_pos = 3 * (dst_y * width + rect.dst_left);
+            let dst_row = &mut rgb_bytes[dst_row_pos..dst_row_pos + 3 * rect.width];
+            for (r, g, b, (dst_r, dst_g, dst_b)) in
+            izip!(r_row, g_row, b_row, dst_row.iter_mut().tuples()) {
+                *dst_r = r_table[*r as usize];
+                *dst_g = g_table[*g as usize];
+                *dst_b = b_table[*b as usize];
+            }
+        }
+    }
+    rgb_bytes
+}
+
+fn to_grb_bytes_corners_mono(
+    layer:  &ImageLayer<u16>,
+    table:  &[u8],
+    width:  usize,
+    height: usize
+) -> Vec<u8> {
+    let mut rgb_bytes = Vec::new();
+    rgb_bytes.resize(3 * width * height, 0);
+    let rects = get_rects_for_corners_and_center(layer.width(), layer.height(), width, height);
+    for rect in rects {
+        for i in 0..rect.height {
+            let src_y = rect.src_top + i;
+            let dst_y = rect.dst_top + i;
+            let src_row = &layer.row(src_y)[rect.src_left..rect.src_left + rect.width];
+            let dst_row_pos = 3 * (dst_y * width + rect.dst_left);
+            let dst_row = &mut rgb_bytes[dst_row_pos..dst_row_pos + 3 * rect.width];
+            for (v, (dst_r, dst_g, dst_b)) in
+            izip!(src_row, dst_row.iter_mut().tuples()) {
+                *dst_r = table[*v as usize];
+                *dst_g = table[*v as usize];
+                *dst_b = table[*v as usize];
+            }
+        }
+    }
+    rgb_bytes
 }
 
 fn to_grb_bytes_no_reduct_rgb(

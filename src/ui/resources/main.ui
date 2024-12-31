@@ -3844,6 +3844,7 @@ Also makes stars little sharper</property>
                                   <item id="p50" translatable="yes">50%</item>
                                   <item id="p33" translatable="yes">33%</item>
                                   <item id="p25" translatable="yes">25%</item>
+                                  <item id="c_and_c" translatable="yes">Corners</item>
                                 </items>
                               </object>
                               <packing>

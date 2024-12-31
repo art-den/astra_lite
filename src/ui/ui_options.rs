@@ -384,24 +384,26 @@ impl Options {
 impl PreviewScale {
     pub fn from_active_id(id: Option<&str>) -> PreviewScale {
         match id {
-            Some("fit")  => PreviewScale::FitWindow,
-            Some("orig") => PreviewScale::Original,
-            Some("p75")  => PreviewScale::P75,
-            Some("p50")  => PreviewScale::P50,
-            Some("p33")  => PreviewScale::P33,
-            Some("p25")  => PreviewScale::P25,
-            _            => PreviewScale::FitWindow,
+            Some("fit")     => PreviewScale::FitWindow,
+            Some("orig")    => PreviewScale::Original,
+            Some("p75")     => PreviewScale::P75,
+            Some("p50")     => PreviewScale::P50,
+            Some("p33")     => PreviewScale::P33,
+            Some("p25")     => PreviewScale::P25,
+            Some("c_and_c") => PreviewScale::CenterAndCorners,
+            _               => PreviewScale::FitWindow,
         }
     }
 
     pub fn to_active_id(&self) -> Option<&'static str> {
         match self {
-            PreviewScale::FitWindow => Some("fit"),
-            PreviewScale::Original  => Some("orig"),
-            PreviewScale::P75       => Some("p75"),
-            PreviewScale::P50       => Some("p50"),
-            PreviewScale::P33       => Some("p33"),
-            PreviewScale::P25       => Some("p25"),
+            PreviewScale::FitWindow        => Some("fit"),
+            PreviewScale::Original         => Some("orig"),
+            PreviewScale::P75              => Some("p75"),
+            PreviewScale::P50              => Some("p50"),
+            PreviewScale::P33              => Some("p33"),
+            PreviewScale::P25              => Some("p25"),
+            PreviewScale::CenterAndCorners => Some("c_and_c"),
         }
     }
 }
