@@ -1308,9 +1308,14 @@ impl Connection {
                 None
             };
 
-            // Resolve host into IP addresses
-            let mut addr = settings.host.clone();
+            let mut addr = if settings.remote {
+                settings.host.clone()
+            } else {
+                "localhost".to_string()
+            };
             if !addr.contains(":") { addr += ":7624"; }
+
+            // Resolve host into IP addresses
             let sock_addrs = match addr.to_socket_addrs() {
                 Ok(sock_addrs) => sock_addrs,
                 Err(err) => {
