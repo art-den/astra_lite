@@ -8,7 +8,7 @@ use crate::{
     options::*,
     utils::{gtk_utils, io_utils::*}
 };
-use super::{ui_darks_library::DarksLibraryDialog, ui_main::*, utils::*};
+use super::{ui_main::*, utils::*};
 
 pub fn init_ui(
     _app:     &gtk::Application,
@@ -239,7 +239,6 @@ impl CameraUi {
         gtk_utils::connect_action   (&self.window, self, "start_live_stacking",    Self::handler_action_start_live_stacking);
         gtk_utils::connect_action   (&self.window, self, "stop_live_stacking",     Self::handler_action_stop_live_stacking);
         gtk_utils::connect_action   (&self.window, self, "continue_live_stacking", Self::handler_action_continue_live_stacking);
-        gtk_utils::connect_action   (&self.window, self, "dark_library",           Self::handler_action_darks_library);
 
         let cb_camera_list = bldr.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
         cb_camera_list.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
@@ -1333,17 +1332,6 @@ impl CameraUi {
     fn show_total_raw_time(&self) {
         let options = self.options.read().unwrap();
         self.show_total_raw_time_impl(&options);
-    }
-
-    fn handler_action_darks_library(&self) {
-        if !is_expanded(&self.builder, "exp_calibr") { return; }
-
-        let dialog = DarksLibraryDialog::new(
-            &self.core,
-            &self.options,
-            self.window.upcast_ref(),
-        );
-        dialog.exec();
     }
 
     fn show_frame_processing_result(&self, result: FrameProcessResult) {

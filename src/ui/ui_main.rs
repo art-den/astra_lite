@@ -94,6 +94,7 @@ pub fn init_ui(
     let mut handlers = data.handlers.borrow_mut();
     super::ui_hardware::init_ui(app, &builder, &data, options, core, indi, &mut handlers);
     super::ui_camera::init_ui(app, &builder, options, core, indi, &mut handlers);
+    super::ui_darks_library::init_ui(app, &builder, options, core, &mut handlers);
     super::ui_preview::init_ui(app, &builder, &data, options, core, &mut handlers);
     super::ui_focuser::init_ui(app, &builder, options, core, indi, &mut handlers);
     super::ui_dithering::init_ui(app, &builder, options, core, indi, &mut handlers);

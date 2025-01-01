@@ -1,11 +1,51 @@
-use std::{cell::RefCell, rc::Rc, sync::{Arc, RwLock}};
+use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
 use gtk::{gdk::ffi::GDK_CURRENT_TIME, glib::{self, clone}, prelude::*};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use crate::{
-    core::{core::*, events::*, mode_darks_library::*},
-    image::info::seconds_to_total_time_str, options::*, utils::{gtk_utils, io_utils::*},
+    core::{core::*, events::*, mode_darks_library::*}, image::info::seconds_to_total_time_str, options::*, utils::{gtk_utils, io_utils::*}
 };
+
+use super::{ui_main::{MainUiEventHandlers, UiEvent}, utils::is_expanded};
+
+pub fn init_ui(
+    _app:     &gtk::Application,
+    builder:  &gtk::Builder,
+    options:  &Arc<RwLock<Options>>,
+    core:     &Arc<Core>,
+    handlers: &mut MainUiEventHandlers,
+) {
+    let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
+
+    let mut ui_options = UiOptions::default();
+    gtk_utils::exec_and_show_error(&window, || {
+        load_json_from_config_file(&mut ui_options, DarksLibraryUI::CONF_FN)?;
+        Ok(())
+    });
+
+    let data = Rc::new(DarksLibraryUI {
+        builder:       builder.clone(),
+        window,
+        options:           Arc::clone(options),
+        core:              Arc::clone(core),
+        ui_options:        RefCell::new(ui_options),
+        core_subscription: RefCell::new(None),
+        closed:            Cell::new(false),
+        self_:             RefCell::new(None),
+    });
+
+    *data.self_.borrow_mut() = Some(Rc::clone(&data));
+
+    data.init_widgets();
+    data.load_options();
+    data.show_options();
+    data.connect_main_ui_events(handlers);
+    data.connect_widgets_events();
+    data.connect_core_events();
+    data.show_info();
+
+    data.correct_widgets_enable_state();
+}
 
 
 fn multiple_of_5(v: usize) -> usize {
@@ -380,6 +420,7 @@ struct UiOptions {
     master_darks:  MasterDarksOptions,
     master_biases: MasterBiasesOptions,
     cur_tab_page:  i32,
+    expanded:      bool,
 }
 
 impl Default for UiOptions {
@@ -389,67 +430,30 @@ impl Default for UiOptions {
             master_darks:  MasterDarksOptions::default(),
             master_biases: MasterBiasesOptions::default(),
             cur_tab_page:  0,
+            expanded:      false,
         }
     }
 }
 
-pub struct DarksLibraryDialog {
+pub struct DarksLibraryUI {
+    window:            gtk::ApplicationWindow,
     builder:           gtk::Builder,
-    dialog:            gtk::Dialog,
     core:              Arc<Core>,
     options:           Arc<RwLock<Options>>,
     ui_options:        RefCell<UiOptions>,
     core_subscription: RefCell<Option<Subscription>>,
+    closed:            Cell<bool>,
+    self_:             RefCell<Option<Rc<DarksLibraryUI>>>,
 }
 
-impl Drop for DarksLibraryDialog {
+impl Drop for DarksLibraryUI {
     fn drop(&mut self) {
-        log::info!("DarksLibraryDialog dropped");
-
-        if let Some(subscription) = self.core_subscription.borrow_mut().take() {
-            self.core.event_subscriptions().unsubscribe(subscription);
-        }
+        log::info!("DarksLibraryUI dropped");
     }
 }
 
-impl DarksLibraryDialog {
+impl DarksLibraryUI {
     const CONF_FN: &str = "ui_darks_lib";
-
-    pub fn new(
-        core:          &Arc<Core>,
-        options:       &Arc<RwLock<Options>>,
-        transient_for: &gtk::Window
-    ) -> Rc<Self> {
-        let builder = gtk::Builder::from_string(include_str!("resources/darks_library.ui"));
-        let dialog = builder.object::<gtk::Dialog>("dialog").unwrap();
-        dialog.set_transient_for(Some(transient_for));
-        let result = Rc::new(Self {
-            core:              Arc::clone(core),
-            options:           Arc::clone(options),
-            ui_options:        RefCell::new(UiOptions::default()),
-            core_subscription: RefCell::new(None),
-            builder,
-            dialog,
-        });
-
-        result.init_widgets();
-        result.load_options();
-        result.show_options();
-        result.correct_widgets_enable_state();
-        result.connect_widgets_events();
-        result.connect_core_events();
-        result.show_info();
-
-        result
-    }
-
-    pub fn exec(self: &Rc<Self>) {
-        self.dialog.connect_response(move |dlg, _| {
-            dlg.close();
-        });
-
-        self.dialog.show();
-    }
 
     fn init_widgets(&self) {
         let init_spinbutton = |name, min, max, digits, inc, inc_page| {
@@ -475,7 +479,7 @@ impl DarksLibraryDialog {
 
     fn load_options(&self) {
         let mut ui_options = self.ui_options.borrow_mut();
-        gtk_utils::exec_and_show_error(&self.dialog, || {
+        gtk_utils::exec_and_show_error(&self.window, || {
             load_json_from_config_file(&mut *ui_options, Self::CONF_FN)?;
             Ok(())
         });
@@ -483,7 +487,7 @@ impl DarksLibraryDialog {
 
     fn save_options(&self) {
         let ui_options = self.ui_options.borrow();
-        gtk_utils::exec_and_show_error(&self.dialog, || {
+        gtk_utils::exec_and_show_error(&self.window, || {
             save_json_to_config(&*ui_options, Self::CONF_FN)?;
             Ok(())
         });
@@ -506,6 +510,7 @@ impl DarksLibraryDialog {
         };
 
         ui.set_prop_i32("nb_modes.page", ui_options.cur_tab_page);
+        ui.set_prop_bool("exp_darks_lib.expanded", ui_options.expanded);
 
         // Defect pixels
 
@@ -570,7 +575,6 @@ impl DarksLibraryDialog {
         ui.set_prop_bool("chb_bias_crop50.active", ui_options.master_biases.crop.crop50);
         ui.set_prop_bool("chb_bias_crop33.active", ui_options.master_biases.crop.crop33);
         ui.set_prop_bool("chb_bias_crop25.active", ui_options.master_biases.crop.crop25);
-
     }
 
     fn get_options(&self) {
@@ -592,6 +596,7 @@ impl DarksLibraryDialog {
         };
 
         ui_options.cur_tab_page = ui.prop_i32("nb_modes.page");
+        ui_options.expanded = ui.prop_bool("exp_darks_lib.expanded");
 
         // Defect pixels
 
@@ -773,40 +778,39 @@ impl DarksLibraryDialog {
         connect_checkbtn("chb_bias_crop33");
         connect_checkbtn("chb_bias_crop25");
 
-        let btn_create_def_pixls_files = self.builder.object::<gtk::Button>("btn_create_def_pixls_files").unwrap();
-        btn_create_def_pixls_files.connect_clicked(clone!(@strong self as self_ => move |_| {
-            self_.start(DarkLibMode::DefectPixelsFiles);
-        }));
+        gtk_utils::connect_action(&self.window, self, "open_dark_lib_folder",   Self::handler_action_open_dark_lib_folder);
+        gtk_utils::connect_action(&self.window, self, "create_def_pixls_files", Self::handler_action_create_def_pixls_files);
+        gtk_utils::connect_action(&self.window, self, "stop_def_pxls_files",    Self::handler_action_stop_def_pxls_files);
+        gtk_utils::connect_action(&self.window, self, "create_dark_files",      Self::handler_action_create_dark_files);
+        gtk_utils::connect_action(&self.window, self, "stop_dark_files",        Self::handler_action_stop_dark_files);
+        gtk_utils::connect_action(&self.window, self, "create_bias_files",      Self::handler_action_create_bias_files);
+        gtk_utils::connect_action(&self.window, self, "stop_bias_files",        Self::handler_action_stop_bias_files);
+    }
 
-        let btn_stop_def_pxls_files = self.builder.object::<gtk::Button>("btn_stop_def_pxls_files").unwrap();
-        btn_stop_def_pxls_files.connect_clicked(clone!(@strong self as self_ => move |_| {
-            self_.handler_btn_stop();
-        }));
+    fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
+        handlers.subscribe(clone!(@weak self as self_ => move |event| {
+            match event {
+                UiEvent::ProgramClosing =>
+                    self_.handler_closing(),
 
-        let btn_create_dark_files = self.builder.object::<gtk::Button>("btn_create_dark_files").unwrap();
-        btn_create_dark_files.connect_clicked(clone!(@strong self as self_ => move |_| {
-            self_.start(DarkLibMode::MasterDarkFiles);
+                _ => {},
+            }
         }));
+    }
 
-        let btn_stop_dark_files = self.builder.object::<gtk::Button>("btn_stop_dark_files").unwrap();
-        btn_stop_dark_files.connect_clicked(clone!(@strong self as self_ => move |_| {
-            self_.handler_btn_stop();
-        }));
+    fn handler_closing(&self) {
+        self.closed.set(true);
 
-        let btn_create_bias_files = self.builder.object::<gtk::Button>("btn_create_bias_files").unwrap();
-        btn_create_bias_files.connect_clicked(clone!(@strong self as self_ => move |_| {
-            self_.start(DarkLibMode::MasterBiasFiles);
-        }));
+        self.get_options();
+        let ui_options = self.ui_options.borrow();
+        _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
+        drop(ui_options);
 
-        let btn_stop_bias_files = self.builder.object::<gtk::Button>("btn_stop_bias_files").unwrap();
-        btn_stop_bias_files.connect_clicked(clone!(@strong self as self_ => move |_| {
-            self_.handler_btn_stop();
-        }));
+        if let Some(core_conn) = self.core_subscription.borrow_mut().take() {
+            self.core.event_subscriptions().unsubscribe(core_conn);
+        }
 
-        let btn_open_folder = self.builder.object::<gtk::Button>("btn_open_folder").unwrap();
-        btn_open_folder.connect_clicked(clone!(@strong self as self_ => move |_| {
-            self_.handler_btn_open_folder();
-        }));
+        *self.self_.borrow_mut() = None;
     }
 
     fn connect_core_events(self: &Rc<Self>) {
@@ -824,9 +828,7 @@ impl DarksLibraryDialog {
 
     fn correct_widgets_enable_state(&self) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-
         let mode = self.core.mode_data().mode.get_type();
-
         let is_waiting = mode == ModeType::Waiting;
         let saving_defect_pixels =
             mode == ModeType::DefectPixels ||
@@ -839,41 +841,42 @@ impl DarksLibraryDialog {
             mode == ModeType::CreatingMasterBiases;
 
         ui.enable_widgets(false, &[
-            ("spb_def_temp",               ui.prop_bool("chb_def_temp.active")),
-            ("spb_def_exp",                ui.prop_bool("chb_def_exp.active")),
-            ("spb_def_gain",               ui.prop_bool("chb_def_gain.active")),
-            ("spb_def_offs",               ui.prop_bool("chb_def_offs.active")),
-            ("bx_def_bin",                 ui.prop_bool("chb_def_bin.active")),
-            ("grd_def_crop",               ui.prop_bool("chb_def_crop.active")),
-            ("grd_def",                    is_waiting),
-            ("btn_create_def_pixls_files", is_waiting),
-            ("prb_def",                    saving_defect_pixels),
-            ("btn_stop_def_pxls_files",    saving_defect_pixels),
+            ("spb_def_temp",    ui.prop_bool("chb_def_temp.active")),
+            ("spb_def_exp",     ui.prop_bool("chb_def_exp.active")),
+            ("spb_def_gain",    ui.prop_bool("chb_def_gain.active")),
+            ("spb_def_offs",    ui.prop_bool("chb_def_offs.active")),
+            ("bx_def_bin",      ui.prop_bool("chb_def_bin.active")),
+            ("grd_def_crop",    ui.prop_bool("chb_def_crop.active")),
+            ("grd_def",         is_waiting),
+            ("prb_def",         saving_defect_pixels),
+            ("spb_dark_cnt",    ui.prop_bool("rbtn_dark_frames_cnt.active")),
+            ("spb_dark_integr", ui.prop_bool("rbtn_dark_integr_time.active")),
+            ("spb_def_cnt",     ui.prop_bool("rbtn_def_frames_cnt.active")),
+            ("spb_def_integr",  ui.prop_bool("rbtn_def_integr_time.active")),
+            ("e_dark_temp",     ui.prop_bool("chb_dark_temp.active")),
+            ("e_dark_exp",      ui.prop_bool("chb_dark_exp.active")),
+            ("e_dark_gain",     ui.prop_bool("chb_dark_gain.active")),
+            ("e_dark_offset",   ui.prop_bool("chb_dark_offset.active")),
+            ("bx_dark_bin",     ui.prop_bool("chb_dark_bin.active")),
+            ("grd_dark_crop",   ui.prop_bool("chb_dark_crop.active")),
+            ("grd_dark",        is_waiting),
+            ("prb_dark",        saving_master_darks),
+            ("e_bias_temp",     ui.prop_bool("chb_bias_temp.active")),
+            ("e_bias_gain",     ui.prop_bool("chb_bias_gain.active")),
+            ("e_bias_offset",   ui.prop_bool("chb_bias_offset.active")),
+            ("bx_bias_bin",     ui.prop_bool("chb_bias_bin.active")),
+            ("grd_bias_crop",   ui.prop_bool("chb_bias_crop.active")),
+            ("grd_bias",        is_waiting),
+            ("prb_bias",        saving_master_biases),
+        ]);
 
-            ("spb_dark_cnt",               ui.prop_bool("rbtn_dark_frames_cnt.active")),
-            ("spb_dark_integr",            ui.prop_bool("rbtn_dark_integr_time.active")),
-            ("spb_def_cnt",                ui.prop_bool("rbtn_def_frames_cnt.active")),
-            ("spb_def_integr",             ui.prop_bool("rbtn_def_integr_time.active")),
-            ("e_dark_temp",                ui.prop_bool("chb_dark_temp.active")),
-            ("e_dark_exp",                 ui.prop_bool("chb_dark_exp.active")),
-            ("e_dark_gain",                ui.prop_bool("chb_dark_gain.active")),
-            ("e_dark_offset",              ui.prop_bool("chb_dark_offset.active")),
-            ("bx_dark_bin",                ui.prop_bool("chb_dark_bin.active")),
-            ("grd_dark_crop",              ui.prop_bool("chb_dark_crop.active")),
-            ("grd_dark",                   is_waiting),
-            ("btn_create_dark_files",      is_waiting),
-            ("prb_dark",                   saving_master_darks),
-            ("btn_stop_dark_files",        saving_master_darks),
-
-            ("e_bias_temp",                ui.prop_bool("chb_bias_temp.active")),
-            ("e_bias_gain",                ui.prop_bool("chb_bias_gain.active")),
-            ("e_bias_offset",              ui.prop_bool("chb_bias_offset.active")),
-            ("bx_bias_bin",                ui.prop_bool("chb_bias_bin.active")),
-            ("grd_bias_crop",              ui.prop_bool("chb_bias_crop.active")),
-            ("grd_bias",                   is_waiting),
-            ("btn_create_bias_files",      is_waiting),
-            ("prb_bias",                   saving_master_biases),
-            ("btn_stop_bias_files",        saving_master_biases),
+        gtk_utils::enable_actions(&self.window, &[
+            ("create_def_pixls_files", is_waiting),
+            ("stop_def_pxls_files",    saving_defect_pixels),
+            ("create_dark_files",      is_waiting),
+            ("stop_dark_files",        saving_master_darks),
+            ("create_bias_files",      is_waiting),
+            ("stop_bias_files",        saving_master_biases),
         ]);
     }
 
@@ -911,8 +914,11 @@ impl DarksLibraryDialog {
     }
 
     fn start(&self, mode: DarkLibMode) {
+        self.options.write().unwrap().read_all(&self.builder);
+
         self.get_options();
         self.save_options();
+
         let options = self.options.read().unwrap();
         let ui_options = self.ui_options.borrow();
         let program = match mode {
@@ -925,16 +931,10 @@ impl DarksLibraryDialog {
         };
         drop(ui_options);
         drop(options);
-        gtk_utils::exec_and_show_error(&self.dialog, || {
+        gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_creating_dark_library(mode, &program)?;
             Ok(())
         });
-        self.correct_widgets_enable_state();
-    }
-
-    fn handler_btn_stop(&self) {
-        self.core.abort_active_mode();
-        self.correct_widgets_enable_state();
     }
 
     fn process_core_event(&self, event: Event) {
@@ -970,7 +970,7 @@ impl DarksLibraryDialog {
         }
     }
 
-    fn handler_btn_open_folder(&self) {
+    fn handler_action_open_dark_lib_folder(&self) {
         let options = self.options.read().unwrap();
         let lib_path = &options.calibr.dark_library_path.to_str().unwrap_or_default();
         let uri = "file:///".to_string() + lib_path;
@@ -980,5 +980,35 @@ impl DarksLibraryDialog {
             uri.as_str(),
             GDK_CURRENT_TIME as u32
         );
+    }
+
+    fn handler_action_create_def_pixls_files(&self) {
+        if !is_expanded(&self.builder, "exp_darks_lib") { return; }
+        self.start(DarkLibMode::DefectPixelsFiles);
+    }
+
+    fn handler_action_stop_def_pxls_files(&self) {
+        if !is_expanded(&self.builder, "exp_darks_lib") { return; }
+        self.core.abort_active_mode();
+    }
+
+    fn handler_action_create_dark_files(&self) {
+        if !is_expanded(&self.builder, "exp_darks_lib") { return; }
+        self.start(DarkLibMode::MasterDarkFiles);
+    }
+
+    fn handler_action_stop_dark_files(&self) {
+        if !is_expanded(&self.builder, "exp_darks_lib") { return; }
+        self.core.abort_active_mode();
+    }
+
+    fn handler_action_create_bias_files(&self) {
+        if !is_expanded(&self.builder, "exp_darks_lib") { return; }
+        self.start(DarkLibMode::MasterBiasFiles);
+    }
+
+    fn handler_action_stop_bias_files(&self) {
+        if !is_expanded(&self.builder, "exp_darks_lib") { return; }
+        self.core.abort_active_mode();
     }
 }
