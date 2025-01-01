@@ -382,6 +382,7 @@ impl Mode for MountCalibrMode {
                     }
                     if self.cur_timed_guide_n == 0.0 && self.cur_timed_guide_s == 0.0
                     && self.cur_timed_guide_w == 0.0 && self.cur_timed_guide_e == 0.0 {
+                        self.indi.mount_abort_motion(&self.mount_device)?;
                         apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
                         self.state = DitherCalibrState::WaitForImage;
                     }

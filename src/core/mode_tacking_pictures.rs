@@ -1259,6 +1259,7 @@ impl Mode for TackingPicturesMode {
                 && guid_data.cur_timed_guide_s == 0.0
                 && guid_data.cur_timed_guide_w == 0.0
                 && guid_data.cur_timed_guide_e == 0.0 {
+                    self.indi.mount_abort_motion(&self.mount_device)?;
                     apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
                     self.cur_exposure = self.cam_options.frame.exposure();
                     self.state = State::Common;
