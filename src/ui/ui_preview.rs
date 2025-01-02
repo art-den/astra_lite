@@ -1173,7 +1173,7 @@ impl PreviewUi {
 
     fn set_full_screen_mode(&self, _full_screen: bool) {
         let options = self.options.read().unwrap();
-        if options.preview.scale == PreviewScale::FitWindow {
+        if matches!(options.preview.scale, PreviewScale::FitWindow|PreviewScale::CenterAndCorners) {
             drop(options);
             gtk::main_iteration_do(true);
             gtk::main_iteration_do(true);
