@@ -231,14 +231,14 @@ impl CameraUi {
     fn connect_widgets_events(self: &Rc<Self>) {
         let bldr = &self.builder;
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        gtk_utils::connect_action   (&self.window, self, "take_shot",              Self::handler_action_take_shot);
-        gtk_utils::connect_action   (&self.window, self, "stop_shot",              Self::handler_action_stop_shot);
-        gtk_utils::connect_action   (&self.window, self, "start_save_raw_frames",  Self::handler_action_start_save_raw_frames);
-        gtk_utils::connect_action   (&self.window, self, "stop_save_raw_frames",   Self::handler_action_stop_save_raw_frames);
-        gtk_utils::connect_action   (&self.window, self, "continue_save_raw",      Self::handler_action_continue_save_raw_frames);
-        gtk_utils::connect_action   (&self.window, self, "start_live_stacking",    Self::handler_action_start_live_stacking);
-        gtk_utils::connect_action   (&self.window, self, "stop_live_stacking",     Self::handler_action_stop_live_stacking);
-        gtk_utils::connect_action   (&self.window, self, "continue_live_stacking", Self::handler_action_continue_live_stacking);
+        gtk_utils::connect_action(&self.window, self, "take_shot",              Self::handler_action_take_shot);
+        gtk_utils::connect_action(&self.window, self, "stop_shot",              Self::handler_action_stop_shot);
+        gtk_utils::connect_action(&self.window, self, "start_save_raw_frames",  Self::handler_action_start_save_raw_frames);
+        gtk_utils::connect_action(&self.window, self, "stop_save_raw_frames",   Self::handler_action_stop_save_raw_frames);
+        gtk_utils::connect_action(&self.window, self, "continue_save_raw",      Self::handler_action_continue_save_raw_frames);
+        gtk_utils::connect_action(&self.window, self, "start_live_stacking",    Self::handler_action_start_live_stacking);
+        gtk_utils::connect_action(&self.window, self, "stop_live_stacking",     Self::handler_action_stop_live_stacking);
+        gtk_utils::connect_action(&self.window, self, "continue_live_stacking", Self::handler_action_continue_live_stacking);
 
         let cb_camera_list = bldr.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
         cb_camera_list.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {

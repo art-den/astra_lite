@@ -4,7 +4,7 @@ use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use crate::{
     core::{core::*, events::*, frame_processing::*, mode_goto::GotoConfig},
-    indi::{self, degrees_to_str, hours_to_str},
+    indi::{self, degree_to_str, hour_to_str},
     options::*,
     plate_solve::PlateSolveOkResult,
     utils::{gtk_utils::{self, *}, io_utils::*},
@@ -932,20 +932,20 @@ impl MapUi {
 
             let crd = obj.crd();
 
-            ra_str = hours_to_str(radian_to_hour(crd.ra));
-            dec_str = degrees_to_str(radian_to_degree(crd.dec));
+            ra_str = hour_to_str(radian_to_hour(crd.ra));
+            dec_str = degree_to_str(radian_to_degree(crd.dec));
 
             let now_crd = epoch_cvt.convert_eq(&crd);
-            ra_now_str = hours_to_str(radian_to_hour(now_crd.ra));
-            dec_now_str = degrees_to_str(radian_to_degree(now_crd.dec));
+            ra_now_str = hour_to_str(radian_to_hour(now_crd.ra));
+            dec_now_str = degree_to_str(radian_to_degree(now_crd.dec));
 
             let observer = self.create_observer();
             let cvt = EqToSphereCvt::new(observer.longitude, observer.latitude, &time);
 
             let h_crd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&obj.crd()));
 
-            zenith_str = degrees_to_str(radian_to_degree(h_crd.alt));
-            azimuth_str = degrees_to_str(radian_to_degree(h_crd.az));
+            zenith_str = degree_to_str(radian_to_degree(h_crd.alt));
+            azimuth_str = degree_to_str(radian_to_degree(h_crd.az));
         }
 
         ui.set_prop_str("e_sm_sel_names.text", Some(&names));

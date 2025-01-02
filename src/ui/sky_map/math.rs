@@ -1,7 +1,7 @@
 use std::{f64::consts::PI, fmt::Debug, ops::{Mul, Sub}};
 use chrono::{Datelike, Timelike, NaiveDateTime, NaiveDate};
 
-use crate::indi::value_to_sexagesimal;
+use crate::indi::{degree_to_str, hour_to_str};
 
 use super::solar_system::pn_matrix;
 
@@ -50,8 +50,8 @@ impl EqCoord {
 impl Debug for EqCoord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EqCoord")
-            .field("ra", &value_to_sexagesimal(radian_to_hour(self.ra), true, 8))
-            .field("dec", &value_to_sexagesimal(radian_to_degree(self.dec), true, 6))
+            .field("ra", &hour_to_str(radian_to_hour(self.ra)))
+            .field("dec", &degree_to_str(radian_to_degree(self.dec)))
             .finish()
     }
 }
@@ -104,8 +104,8 @@ impl HorizCoord {
 impl Debug for HorizCoord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HorizCoord")
-            .field("alt", &value_to_sexagesimal(radian_to_degree(self.alt), true, 8))
-            .field("az", &value_to_sexagesimal(radian_to_degree(self.az), true, 8))
+            .field("alt", &degree_to_str(radian_to_degree(self.alt)))
+            .field("az", &degree_to_str(radian_to_degree(self.az)))
             .finish()
     }
 }

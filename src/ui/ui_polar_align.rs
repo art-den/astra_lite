@@ -1,13 +1,14 @@
 use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use serde::{Deserialize, Serialize};
-
 use crate::{
-    core::{core::{Core, ModeType}, events::*, mode_polar_align::PolarAlignmentEvent}, indi::{self, value_to_sexagesimal}, options::*, sky_math::math::radian_to_degree, utils::{gtk_utils, io_utils::*}
+    core::{core::{Core, ModeType}, events::*, mode_polar_align::PolarAlignmentEvent},
+    indi::{self, degree_to_str},
+    options::*,
+    sky_math::math::radian_to_degree,
+    utils::{gtk_utils, io_utils::*}
 };
-
 use super::{sky_map::math::HorizCoord, ui_main::*, utils::*};
-
 
 pub fn init_ui(
     _app:     &gtk::Application,
@@ -310,8 +311,8 @@ impl PolarAlignUi {
 
     fn show_polar_alignment_error(&self, error: &HorizCoord) {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let alt_err_str = value_to_sexagesimal(radian_to_degree(error.alt), true, 6);
-        let az_err_str = value_to_sexagesimal(radian_to_degree(error.az), true, 6);
+        let alt_err_str = degree_to_str(radian_to_degree(error.alt));
+        let az_err_str = degree_to_str(radian_to_degree(error.az));
         let alt_label = format!("Alt: {}", alt_err_str);
         let az_label = format!("Az: {}", az_err_str);
         ui.set_prop_str("l_pa_alt_err.label", Some(&alt_label));
