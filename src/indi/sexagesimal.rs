@@ -1,5 +1,13 @@
-pub fn value_to_sexagesimal(value: f64, zero: bool, frac: u8) -> String {
-    let sign = if value < 0.0 { "-" } else { "" };
+pub fn value_to_sexagesimal_impl(
+    value: f64,
+    zero: bool,
+    plus_sign: bool,
+    frac: u8,
+    unit1: &str,
+    unit2: &str,
+    unit3: &str,
+) -> String {
+    let sign = if value < 0.0 { "-" } else if plus_sign { "+" } else { "" };
     let value = value.abs();
     let mut hours = value.trunc() as i32;
     let round = match frac {
@@ -18,18 +26,30 @@ pub fn value_to_sexagesimal(value: f64, zero: bool, frac: u8) -> String {
     let minutes100 = seconds100 / 60;
     seconds100 %= 60 * 100;
     match (frac, zero) {
-        (3, false) => format!("{}{}:{:02}", sign, hours, minutes100 / 100),
-        (3, true)  => format!("{}{:02}:{:02}", sign, hours, minutes100 / 100),
-        (5, false) => format!("{}{}:{:02}.{}", sign, hours, minutes100 / 100, (minutes100 % 100)/10),
-        (5, true)  => format!("{}{:02}:{:02}.{}", sign, hours, minutes100 / 100, (minutes100 % 100)/10),
-        (6, false) => format!("{}{}:{:02}:{:02}", sign, hours, minutes100 / 100, seconds100 / 100),
-        (6, true)  => format!("{}{:02}:{:02}:{:02}", sign, hours, minutes100 / 100, seconds100 / 100),
-        (8, false) => format!("{}{}:{:02}:{:02}.{}", sign, hours, minutes100 / 100, seconds100 / 100, (seconds100 % 100) / 10),
-        (8, true)  => format!("{}{:02}:{:02}:{:02}.{}", sign, hours, minutes100 / 100, seconds100 / 100, (seconds100 % 100) / 10),
-        (9, false) => format!("{}{}:{:02}:{:02}.{:02}", sign, hours, minutes100 / 100, seconds100 / 100, seconds100 % 100),
-        (9, true)  => format!("{}{:02}:{:02}:{:02}.{:02}", sign, hours, minutes100 / 100, seconds100 / 100, seconds100 % 100),
+        (3, false) => format!("{}{}{}{:02}",                   sign, hours, unit1, minutes100 / 100),
+        (3, true)  => format!("{}{:02}{}{:02}",                sign, hours, unit1, minutes100 / 100),
+        (5, false) => format!("{}{}{}{:02}.{}",                sign, hours, unit1, minutes100 / 100, (minutes100 % 100)/10),
+        (5, true)  => format!("{}{:02}{}{:02}.{}",             sign, hours, unit1, minutes100 / 100, (minutes100 % 100)/10),
+        (6, false) => format!("{}{}{}{:02}{}{:02}{}",          sign, hours, unit1, minutes100 / 100, unit2, seconds100 / 100, unit3),
+        (6, true)  => format!("{}{:02}{}{:02}{}{:02}{}",       sign, hours, unit1, minutes100 / 100, unit2, seconds100 / 100, unit3),
+        (8, false) => format!("{}{}{}{:02}{}{:02}.{}{}",       sign, hours, unit1, minutes100 / 100, unit2, seconds100 / 100, (seconds100 % 100) / 10, unit3),
+        (8, true)  => format!("{}{:02}{}{:02}{}{:02}.{}{}",    sign, hours, unit1, minutes100 / 100, unit2, seconds100 / 100, (seconds100 % 100) / 10, unit3),
+        (9, false) => format!("{}{}{}{:02}{}{:02}.{:02}{}",    sign, hours, unit1, minutes100 / 100, unit2, seconds100 / 100, seconds100 % 100, unit3),
+        (9, true)  => format!("{}{:02}{}{:02}{}{:02}.{:02}{}", sign, hours, unit1, minutes100 / 100, unit2, seconds100 / 100, seconds100 % 100, unit3),
         _          => value.to_string(),
     }
+}
+
+pub fn value_to_sexagesimal(value: f64, zero: bool, frac: u8) -> String {
+    value_to_sexagesimal_impl(value, zero, false, frac, ":", ":", "")
+}
+
+pub fn degrees_to_str(value: f64) -> String {
+    value_to_sexagesimal_impl(value, false, true, 8, "°", "'", "\"")
+}
+
+pub fn hours_to_str(value: f64) -> String {
+    value_to_sexagesimal_impl(value, false, false, 9, "h", "m", "s")
 }
 
 pub fn sexagesimal_to_value(text: &str) -> Option<f64> {

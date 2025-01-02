@@ -4,7 +4,7 @@ use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use crate::{
     core::{core::*, events::*, frame_processing::*, mode_goto::GotoConfig},
-    indi::{self, value_to_sexagesimal},
+    indi::{self, degrees_to_str, hours_to_str},
     options::*,
     plate_solve::PlateSolveOkResult,
     utils::{gtk_utils::{self, *}, io_utils::*},
@@ -917,11 +917,11 @@ impl MapUi {
             }
 
             if obj.mag_v().is_some() {
-                mag_cap_str = "Magnitude (V)";
+                mag_cap_str = "Mag. (V)";
             } else if obj.mag_b().is_some() {
-                mag_cap_str = "Magnitude (B)";
+                mag_cap_str = "Mag. (B)";
             } else {
-                mag_cap_str = "Magnitude";
+                mag_cap_str = "Mag.";
             }
 
             bv_str = obj.bv().map(|bv| format!("{:.2}", bv)).unwrap_or_default();
@@ -932,20 +932,20 @@ impl MapUi {
 
             let crd = obj.crd();
 
-            ra_str = value_to_sexagesimal(radian_to_hour(crd.ra), true, 9);
-            dec_str = value_to_sexagesimal(radian_to_degree(crd.dec), true, 8);
+            ra_str = hours_to_str(radian_to_hour(crd.ra));
+            dec_str = degrees_to_str(radian_to_degree(crd.dec));
 
             let now_crd = epoch_cvt.convert_eq(&crd);
-            ra_now_str = value_to_sexagesimal(radian_to_hour(now_crd.ra), true, 9);
-            dec_now_str = value_to_sexagesimal(radian_to_degree(now_crd.dec), true, 8);
+            ra_now_str = hours_to_str(radian_to_hour(now_crd.ra));
+            dec_now_str = degrees_to_str(radian_to_degree(now_crd.dec));
 
             let observer = self.create_observer();
             let cvt = EqToSphereCvt::new(observer.longitude, observer.latitude, &time);
 
             let h_crd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&obj.crd()));
 
-            zenith_str = value_to_sexagesimal(radian_to_degree(h_crd.alt), true, 8);
-            azimuth_str = value_to_sexagesimal(radian_to_degree(h_crd.az), true, 8);
+            zenith_str = degrees_to_str(radian_to_degree(h_crd.alt));
+            azimuth_str = degrees_to_str(radian_to_degree(h_crd.az));
         }
 
         ui.set_prop_str("e_sm_sel_names.text", Some(&names));
