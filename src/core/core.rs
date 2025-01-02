@@ -72,14 +72,16 @@ pub struct ModeData {
     pub mode:          ModeBox,
     pub finished_mode: Option<ModeBox>,
     pub aborted_mode:  Option<ModeBox>,
+    prev_mode:         Option<ModeBox>,
 }
 
 impl ModeData {
     fn new() -> Self {
         Self {
-            mode:          Box::new(WaitingMode),
-            finished_mode: None,
-            aborted_mode:  None,
+            mode:           Box::new(WaitingMode),
+            finished_mode:  None,
+            aborted_mode:   None,
+            prev_mode:      Some(Box::new(WaitingMode)),
         }
     }
 }
@@ -462,14 +464,26 @@ impl Core {
         self.subscribers.clone()
     }
 
-    fn after_new_mode_stuff(
+    fn start_new_mode(
         &self,
-        mode:                ModeBox,
+        mode:                impl Mode + Send + Sync + 'static,
         reset_aborted_mode:  bool,
         reset_finished_mode: bool,
-    ) {
+    ) -> anyhow::Result<()> {
+        // abort previous mode
         let mut mode_data = self.mode_data.write().unwrap();
-        mode_data.mode = mode;
+        mode_data.prev_mode = Some(std::mem::replace(
+            &mut mode_data.mode,
+            Box::new(WaitingMode)
+        ));
+        mode_data.mode.abort()?;
+        drop(mode_data);
+
+        // init camera for mode
+        self.init_cam_for_mode(&mode)?;
+
+        let mut mode_data = self.mode_data.write().unwrap();
+        mode_data.mode = Box::new(mode);
         if reset_aborted_mode {
             mode_data.aborted_mode = None;
         }
@@ -481,6 +495,11 @@ impl Core {
         drop(mode_data);
         self.subscribers.notify(Event::Progress(progress, mode_type));
         self.subscribers.notify(Event::ModeChanged);
+
+        // Start new mode
+        self.mode_data.write().unwrap().mode.start()?;
+
+        Ok(())
     }
 
     pub fn open_image_from_file(self: &Arc<Self>, file_name: &Path) -> anyhow::Result<()> {
@@ -526,36 +545,28 @@ impl Core {
     }
 
     pub fn start_single_shot(&self) -> anyhow::Result<()> {
-        self.init_cam_before_start()?;
-        self.init_cam_telescope_data()?;
-        let mut mode = TackingPicturesMode::new(
+        let mode = TackingPicturesMode::new(
             &self.indi,
             &self.subscribers,
             CameraMode::SingleShot,
             &self.options,
         )?;
-        mode.start()?;
-        self.after_new_mode_stuff(Box::new(mode), false, true);
+        self.start_new_mode(mode, false, true)?;
         Ok(())
     }
 
     pub fn start_live_view(&self) -> anyhow::Result<()> {
-        self.init_cam_before_start()?;
-        self.init_cam_telescope_data()?;
-        let mut mode = TackingPicturesMode::new(
+        let mode = TackingPicturesMode::new(
             &self.indi,
             &self.subscribers,
             CameraMode::LiveView,
             &self.options,
         )?;
-        mode.start()?;
-        self.after_new_mode_stuff(Box::new(mode), false, true);
+        self.start_new_mode(mode, false, true)?;
         Ok(())
     }
 
     pub fn start_saving_raw_frames(&self) -> anyhow::Result<()> {
-        self.init_cam_before_start()?;
-        self.init_cam_telescope_data()?;
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             &self.subscribers,
@@ -565,14 +576,11 @@ impl Core {
         self.live_stacking.clear();
         mode.set_guider(&self.ext_guider);
         mode.set_ref_stars(&self.ref_stars);
-        mode.start()?;
-        self.after_new_mode_stuff(Box::new(mode), true, true);
+        self.start_new_mode(mode, true, true)?;
         Ok(())
     }
 
     pub fn start_live_stacking(&self) -> anyhow::Result<()> {
-        self.init_cam_before_start()?;
-        self.init_cam_telescope_data()?;
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             &self.subscribers,
@@ -583,53 +591,37 @@ impl Core {
         mode.set_guider(&self.ext_guider);
         mode.set_ref_stars(&self.ref_stars);
         mode.set_live_stacking(&self.live_stacking);
-        mode.start()?;
-        self.after_new_mode_stuff(Box::new(mode), true, true);
+        self.start_new_mode(mode, true, true)?;
         Ok(())
     }
 
     pub fn start_focusing(&self) -> anyhow::Result<()> {
-        self.init_cam_before_start()?;
-        self.init_cam_telescope_data()?;
         self.mode_data.write().unwrap().mode.abort()?;
-        let mut mode = FocusingMode::new(
-            &self.indi,
-            &self.options,
-            &self.subscribers,
-            None
-        )?;
-        mode.start()?;
-        self.after_new_mode_stuff(Box::new(mode), false, false);
+        let mode = FocusingMode::new(&self.indi, &self.options, &self.subscribers, None)?;
+        self.start_new_mode(mode, false, false)?;
         Ok(())
     }
 
     pub fn start_mount_calibr(&self) -> anyhow::Result<()> {
-        self.init_cam_before_start()?;
-        self.init_cam_telescope_data()?;
         self.mode_data.write().unwrap().mode.abort()?;
-        let mut mode = MountCalibrMode::new(&self.indi, &self.options, None)?;
-        mode.start()?;
-        self.after_new_mode_stuff(Box::new(mode), false, false);
+        let mode = MountCalibrMode::new(&self.indi, &self.options, None)?;
+        self.start_new_mode(mode, false, false)?;
         Ok(())
     }
 
     pub fn start_creating_dark_library(
         &self,
-        mode:    DarkLibMode,
+        dark_lib_mode: DarkLibMode,
         program: &[MasterFileCreationProgramItem]
     ) -> anyhow::Result<()> {
-        self.init_cam_before_start()?;
-        self.init_cam_telescope_data()?;
-        self.mode_data.write().unwrap().mode.abort()?;
-        let mut mode = DarkCreationMode::new(
-            mode,
+        let mode = DarkCreationMode::new(
+            dark_lib_mode,
             &self.calibr_data,
             &self.options,
             &self.indi,
             program
         )?;
-        mode.start()?;
-        self.after_new_mode_stuff(Box::new(mode), false, false);
+        self.start_new_mode(mode, false, false)?;
         Ok(())
     }
 
@@ -638,20 +630,15 @@ impl Core {
         eq_coord: &EqCoord,
         config:   GotoConfig,
     ) -> anyhow::Result<()> {
-        if config == GotoConfig::GotoPlateSolveAndCorrect {
-            self.init_cam_before_start()?;
-            self.init_cam_telescope_data()?;
-        }
         self.mode_data.write().unwrap().mode.abort()?;
-        let mut mode = GotoMode::new(
+        let mode = GotoMode::new(
             GotoDestination::Coord(eq_coord.clone()),
             config,
             &self.options,
             &self.indi,
             &self.subscribers,
         )?;
-        mode.start()?;
-        self.after_new_mode_stuff(Box::new(mode), false, false);
+        self.start_new_mode(mode, false, false)?;
         Ok(())
     }
 
@@ -665,10 +652,8 @@ impl Core {
         let ResultImageInfo::LightInfo(light_frame_info) = &*image_info else {
             anyhow::bail!("Image is not light frame");
         };
-        self.init_cam_before_start()?;
-        self.init_cam_telescope_data()?;
         self.mode_data.write().unwrap().mode.abort()?;
-        let mut mode = GotoMode::new(
+        let mode = GotoMode::new(
             GotoDestination::Image{
                 image: Arc::clone(&self.cur_frame.image),
                 info: Arc::clone(light_frame_info),
@@ -678,76 +663,87 @@ impl Core {
             &self.indi,
             &self.subscribers,
         )?;
-        mode.start()?;
-        self.after_new_mode_stuff(Box::new(mode), false, false);
+        self.start_new_mode(mode, false, false)?;
         Ok(())
     }
 
-
     pub fn start_capture_and_platesolve(&self) -> anyhow::Result<()> {
-        self.init_cam_before_start()?;
-        self.init_cam_telescope_data()?;
-        self.mode_data.write().unwrap().mode.abort()?;
-        let mut mode = CapturePlatesolveMode::new(
+        let mode = CapturePlatesolveMode::new(
             &self.options,
             &self.indi,
             &self.subscribers,
         )?;
-        mode.start()?;
-        self.after_new_mode_stuff(Box::new(mode), false, false);
+        self.start_new_mode(mode, false, false)?;
         Ok(())
     }
 
     pub fn start_polar_alignment(&self) -> anyhow::Result<()> {
-        self.init_cam_before_start()?;
-        self.init_cam_telescope_data()?;
-        self.mode_data.write().unwrap().mode.abort()?;
-        let mut mode = PolarAlignMode::new(
+        let mode = PolarAlignMode::new(
             &self.indi,
             &self.options,
             &self.subscribers,
         )?;
-        mode.start()?;
-        self.after_new_mode_stuff(Box::new(mode), false, false);
+        self.start_new_mode(mode, false, false)?;
         Ok(())
     }
 
-    fn init_cam_before_start(&self) -> anyhow::Result<()> {
-        let options = self.options.read().unwrap();
-        let Some(cam_device) = &options.cam.device else {
+    pub fn init_cam_telescope_data(&self) -> anyhow::Result<()> {
+        if self.indi.state() != indi::ConnState::Connected {
+            return Ok(());
+        }
+        let mode_data = self.mode_data.write().unwrap();
+        let Some(cam_device) = &mode_data.mode.cam_device() else {
             return Ok(());
         };
+        let options = self.options.read().unwrap();
+        self.init_cam_telescope_data_impl(&cam_device.name, &options)?;
+        Ok(())
+    }
+
+    fn init_cam_telescope_data_impl(&self, cam_name: &str, options: &Options) -> anyhow::Result<()> {
+        let focal_len = options.telescope.real_focal_length();
+        // Aperture info for simulator only
+        // TODO: real aperture config
+        let aperture = 0.2 * focal_len;
+        self.indi.camera_set_telescope_info(
+            cam_name,
+            focal_len,
+            aperture,
+            false,
+            INDI_SET_PROP_TIMEOUT
+        )?;
+        Ok(())
+    }
+
+    fn init_cam_for_mode(&self, mode: &dyn Mode) -> anyhow::Result<()> {
+        let Some(cam_device) = &mode.cam_device() else {
+            return Ok(());
+        };
+
+        // Disable fast toggle
+
         self.indi.camera_enable_fast_toggle(
             &cam_device.name,
             false, // <- do not use fast toggle
             true,
             INDI_SET_PROP_TIMEOUT,
         )?;
+
+        // Enable blob
+
         self.indi.command_enable_blob(
             &cam_device.name,
             None,
             indi::BlobEnable::Also,
         )?;
-        Ok(())
-    }
 
-    pub fn init_cam_telescope_data(&self) -> anyhow::Result<()> {
-        let options = self.options.read().unwrap();
-        let Some(cam_device) = &options.cam.device else {
-            return Ok(());
-        };
+        // Set telescope info into camera props
+
         if self.indi.camera_is_telescope_info_supported(&cam_device.name)? {
-            let focal_len = options.telescope.real_focal_length();
-            // Aperture info for simulator only
-            let aperture = 0.2 * focal_len;
-            self.indi.camera_set_telescope_info(
-                &cam_device.name,
-                focal_len,
-                aperture,
-                false,
-                INDI_SET_PROP_TIMEOUT
-            )?;
+            let options = self.options.read().unwrap();
+            self.init_cam_telescope_data_impl(&cam_device.name, &options)?;
         }
+
         Ok(())
     }
 
@@ -814,13 +810,23 @@ impl Core {
                         mode_data.mode.get_type()
                     ));
                 }
-                let prev_mode = std::mem::replace(
-                    &mut mode_data.mode,
-                    next_mode.unwrap_or_else(|| Box::new(WaitingMode))
-                );
-                if next_is_none {
-                    mode_data.finished_mode = Some(prev_mode);
+                if let Some(next_mode) = next_mode {
+                    _ = std::mem::replace(
+                        &mut mode_data.mode,
+                        next_mode
+                    );
+                } else if let Some(prev_mode) = mode_data.prev_mode.take() {
+                    mode_data.finished_mode = Some(std::mem::replace(
+                        &mut mode_data.mode,
+                        prev_mode
+                    ));
+                } else {
+                    mode_data.finished_mode = Some(std::mem::replace(
+                        &mut mode_data.mode,
+                        Box::new(WaitingMode)
+                    ));
                 }
+
                 mode_data.mode.continue_work()?;
                 mode_changed = true;
                 progress_changed = true;

@@ -304,7 +304,12 @@ impl Mode for GotoMode {
     }
 
     fn cam_device(&self) -> Option<&DeviceAndProp> {
-        self.camera.as_ref()
+        match self.config {
+            GotoConfig::GotoPlateSolveAndCorrect =>
+                self.camera.as_ref(),
+            GotoConfig::OnlyGoto =>
+                None,
+        }
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
