@@ -150,6 +150,9 @@ pub struct RawImageInfo {
     pub integr_time:    Option<f64>, // for master files
     pub camera:         String,
     pub ccd_temp:       Option<f64>,
+    pub focal_len:      Option<f64>,
+    pub pixel_size_x:   Option<f64>, // um
+    pub pixel_size_y:   Option<f64>, // um
     pub calibr_methods: CalibrMethods,
 }
 
@@ -723,8 +726,7 @@ impl RawImage {
             _ =>
                 self.demosaic_linear(mt, dst_img),
         }
-        dst_img.time = self.info.time;
-        dst_img.camera = self.info.camera.clone();
+        dst_img.raw_info = Some(self.info.clone());
     }
 
     pub fn copy_into_monochrome(&self, dst_img: &mut Image) {

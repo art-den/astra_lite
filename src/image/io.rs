@@ -27,19 +27,22 @@ pub fn load_raw_image_from_fits_reader(
         anyhow::bail!("No RAW image found in fits data");
     };
 
-    let bitdepth    = image_hdu.get_i64("BITDEPTH").unwrap_or(image_hdu.bitpix() as i64) as i32;
-    let width       = image_hdu.dims()[0];
-    let height      = image_hdu.dims()[1];
-    let exposure    = image_hdu.get_f64("EXPTIME").unwrap_or_default();
-    let integr_time = image_hdu.get_f64("TOTALEXP");
-    let bayer       = image_hdu.get_str("BAYERPAT").unwrap_or_default();
-    let bin         = image_hdu.get_f64("XBINNING").unwrap_or(1.0) as u8;
-    let gain        = image_hdu.get_f64("GAIN").unwrap_or(0.0) as i32;
-    let offset      = image_hdu.get_f64("OFFSET").unwrap_or(0.0) as i32;
-    let frame_str   = image_hdu.get_str("FRAME");
-    let time_str    = image_hdu.get_str("DATE-OBS").unwrap_or_default();
-    let camera      = image_hdu.get_str("INSTRUME").unwrap_or_default().to_string();
-    let ccd_temp    = image_hdu.get_f64("CCD-TEMP");
+    let bitdepth     = image_hdu.get_i64("BITDEPTH").unwrap_or(image_hdu.bitpix() as i64) as i32;
+    let width        = image_hdu.dims()[0];
+    let height       = image_hdu.dims()[1];
+    let exposure     = image_hdu.get_f64("EXPTIME").unwrap_or_default();
+    let integr_time  = image_hdu.get_f64("TOTALEXP");
+    let bayer        = image_hdu.get_str("BAYERPAT").unwrap_or_default();
+    let bin          = image_hdu.get_f64("XBINNING").unwrap_or(1.0) as u8;
+    let gain         = image_hdu.get_f64("GAIN").unwrap_or(0.0) as i32;
+    let offset       = image_hdu.get_f64("OFFSET").unwrap_or(0.0) as i32;
+    let frame_str    = image_hdu.get_str("FRAME");
+    let time_str     = image_hdu.get_str("DATE-OBS").unwrap_or_default();
+    let camera       = image_hdu.get_str("INSTRUME").unwrap_or_default().to_string();
+    let ccd_temp     = image_hdu.get_f64("CCD-TEMP");
+    let focal_len    = image_hdu.get_f64("FOCALLEN");
+    let pixel_size_x = image_hdu.get_f64("PIXSIZE1");
+    let pixel_size_y = image_hdu.get_f64("PIXSIZE2");
 
     let max_value = if bitdepth > 0 {
         ((1 << bitdepth) - 1) as u16
@@ -61,7 +64,8 @@ pub fn load_raw_image_from_fits_reader(
     let info = RawImageInfo {
         time, width, height, gain, offset, cfa, bin,
         max_value, frame_type, exposure, integr_time,
-        camera, ccd_temp,
+        camera, ccd_temp, focal_len,
+        pixel_size_x, pixel_size_y,
         calibr_methods: CalibrMethods::empty(),
     };
 

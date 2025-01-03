@@ -130,7 +130,7 @@ pub fn get_preview_rgb_data(
     );
     log::debug!("preview levels = {:?}", levels);
 
-    let (wb, censor) = get_wb_and_sensor(&params.wb, &image.camera);
+    let (wb, censor) = get_wb_and_sensor(&params.wb, &image.raw_info.as_ref().map(|info| info.camera.as_str()).unwrap_or_default());
     log::debug!("preview wb and sensor = {:?} {}", wb, censor);
 
     let (bytes, width, height) = to_grb_bytes(

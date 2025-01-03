@@ -76,6 +76,7 @@ impl LightFrameInfo {
             noise,
             background,
             overexposured_bord,
+            &image.raw_info,
             max_value,
             max_stars_fwhm,
             max_stars_ovality,
@@ -106,7 +107,7 @@ impl LightFrameInfo {
         };
 
         Self {
-            time: image.time.clone(),
+            time: image.raw_info.as_ref().map(|info| info.time.clone()).flatten(),
             width: image.width(),
             height: image.height(),
             exposure: 0.0,

@@ -1,7 +1,7 @@
 use std::{collections::{HashSet, VecDeque}, sync::Mutex, f64::consts::PI};
 use itertools::Itertools;
 use crate::utils::math::*;
-use super::image::ImageLayer;
+use super::{image::ImageLayer, raw::RawImageInfo};
 
 const MAX_STAR_DIAM: usize = 32;
 const MAX_STARS_CNT: usize = 500;
@@ -24,6 +24,7 @@ pub type Stars = Vec<Star>;
 pub struct StarsInfo {
     pub items:         Stars,
     pub fwhm:          Option<f32>,
+    pub fwhm_angular:  Option<f32>,
     pub fwhm_is_ok:    bool,
     pub ovality:       Option<f32>,
     pub ovality_is_ok: bool,
@@ -35,6 +36,7 @@ impl StarsInfo {
         noise:              f32,
         background:         i32,
         overexposured_bord: u16,
+        raw_info:           &Option<RawImageInfo>,
         max_value:          u16,
         max_stars_fwhm:     Option<f32>,
         max_stars_ovality:  Option<f32>,
@@ -69,9 +71,12 @@ impl StarsInfo {
             true
         };
 
+        let fwhm_angular = Self::calc_angular_fwhm(fwhm, raw_info);
+
         Self {
             items,
             fwhm,
+            fwhm_angular,
             fwhm_is_ok,
             ovality,
             ovality_is_ok,
@@ -361,6 +366,22 @@ impl StarsInfo {
         let min_diameter = diamemters[min_diam_pos] as f64;
         let diff = max_diameter - min_diameter;
         Some(diff / K as f64)
+    }
+
+    fn calc_angular_fwhm(fwhm: Option<f32>, raw_info: &Option<RawImageInfo>) -> Option<f32> {
+        let Some(fwhm) = fwhm else { return None; };
+        let Some(raw_info) = raw_info else { return None; };
+        let Some(focal_len) = raw_info.focal_len else { return None; };
+        let Some(pixel_size_x) = raw_info.pixel_size_x else { return None; };
+        let Some(pixel_size_y) = raw_info.pixel_size_y else { return None; };
+
+        let pixel_size = 0.5 * (pixel_size_x + pixel_size_y);
+        let pixel_size_m = pixel_size / 1_000_000.0;
+        let r = f64::sqrt(fwhm as f64 / PI) * pixel_size_m;
+        let focal_len_m = focal_len / 1000.0;
+        let result = 2.0 * f64::atan2(r, focal_len_m);
+
+        Some(result as f32)
     }
 }
 

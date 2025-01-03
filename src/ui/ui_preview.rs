@@ -8,7 +8,7 @@ use crate::{
     options::*,
     utils::{gtk_utils::{self, *}, io_utils::*, log_utils::*}
 };
-use super::{ui_main::*, utils::*};
+use super::{sky_map::math::radian_to_degree, ui_main::*, utils::*};
 
 
 pub fn init_ui(
@@ -82,7 +82,8 @@ enum MainThreadEvent {
 struct LightHistoryItem {
     mode_type:      ModeType,
     time:           Option<DateTime<Utc>>,
-    stars_fwhm:     Option<f32>,
+    fwhm:           Option<f32>,
+    fwhm_angular:   Option<f32>,
     bad_fwhm:       bool,
     stars_ovality:  Option<f32>,
     bad_ovality:    bool,
@@ -475,10 +476,16 @@ impl PreviewUi {
         match &*info {
             ResultImageInfo::LightInfo(info) => {
                 ui.set_prop_str("e_info_exp.text", Some(&seconds_to_total_time_str(info.exposure, true)));
-                match info.stars.fwhm {
-                    Some(value) => ui.set_prop_str("e_fwhm.text", Some(&format!("{:.1}", value))),
-                    None        => ui.set_prop_str("e_fwhm.text", Some("")),
+
+                let mut fwhm_str = String::new();
+                if let Some(value) = info.stars.fwhm {
+                    fwhm_str += &format!("{:.1}px²", value);
                 }
+                if let Some(value) = info.stars.fwhm_angular {
+                    fwhm_str += &format!(" / {:.1}\"", 60.0 * 60.0 * radian_to_degree(value as f64));
+                }
+                ui.set_prop_str("e_fwhm.text", Some(&fwhm_str));
+
                 match info.stars.ovality {
                     Some(value) => ui.set_prop_str("e_ovality.text", Some(&format!("{:.1}", value))),
                     None        => ui.set_prop_str("e_ovality.text", Some("")),
@@ -810,7 +817,8 @@ impl PreviewUi {
                 let history_item = LightHistoryItem {
                     mode_type:      result.mode_type,
                     time:           info.time.clone(),
-                    stars_fwhm:     info.stars.fwhm,
+                    fwhm:           info.stars.fwhm,
+                    fwhm_angular:   info.stars.fwhm_angular,
                     bad_fwhm:       !info.stars.fwhm_is_ok,
                     stars_ovality:  info.stars.ovality,
                     bad_ovality:    !info.stars.ovality_is_ok,
@@ -1004,12 +1012,19 @@ impl PreviewUi {
                 } else {
                     String::new()
                 };
-            let mut fwhm_str = item.stars_fwhm
-                .map(|v| format!("{:.1}", v))
+            let mut fwhm_str = item.fwhm
+                .map(|v| format!("{:.1}px²", v))
                 .unwrap_or_else(String::new);
             if item.bad_fwhm {
                 fwhm_str = make_bad_str(&fwhm_str);
             }
+
+            if let Some(fwhm_angular) = item.fwhm_angular {
+                let fwhm_in_degrees = radian_to_degree(fwhm_angular as f64);
+                let fwhm_in_seconds = fwhm_in_degrees * (60.0 * 60.0);
+                fwhm_str += &format!(" / {:.1}\"", fwhm_in_seconds);
+            }
+
             let mut ovality_str = item.stars_ovality
                 .map(|v| format!("{:.1}", v))
                 .unwrap_or_else(String::new);

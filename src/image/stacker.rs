@@ -5,7 +5,7 @@ use rayon::prelude::*;
 
 use crate::utils::math::*;
 
-use super::{histogram::*, image::*};
+use super::{histogram::*, image::*, raw::RawImageInfo};
 
 /// Channel of rotated image
 #[derive(Default)]
@@ -97,7 +97,7 @@ pub struct Stacker {
     total_exp: f64,
     frames_cnt: u32,
     no_tracks: bool,
-    camera: String,
+    raw_info: Option<RawImageInfo>,
 }
 
 impl Stacker {
@@ -115,7 +115,7 @@ impl Stacker {
             total_exp: 0.0,
             frames_cnt: 0,
             no_tracks: false,
-            camera: String::new(),
+            raw_info: None,
         }
     }
 
@@ -167,7 +167,7 @@ impl Stacker {
             self.height = image.height();
             self.max_value = image.max_value();
             self.no_tracks = no_tracks;
-            self.camera = image.camera.clone();
+            self.raw_info = image.raw_info.clone();
         }
         if !self.no_tracks {
             self.add_simple(image, transl_x, transl_y, angle);
@@ -489,6 +489,6 @@ impl Stacker {
         copy_layer(&self.l, &mut image.l);
 
         image.set_max_value(self.max_value);
-        image.camera = self.camera.clone();
+        image.raw_info = self.raw_info.clone();
     }
 }

@@ -1,9 +1,10 @@
 #![allow(dead_code)]
 
-use chrono::{DateTime, Utc};
 use itertools::*;
 use rayon::prelude::*;
 use crate::utils::math::*;
+
+use super::raw::RawImageInfo;
 
 
 pub struct ImageLayer<T> {
@@ -300,15 +301,13 @@ impl<'a, T: Copy + Default> Iterator for RectIterator<'a, T> {
 ///////////////////////////////////////////////////////////////////////////////
 
 pub struct Image {
-    pub r:      ImageLayer<u16>,
-    pub g:      ImageLayer<u16>,
-    pub b:      ImageLayer<u16>,
-    pub l:      ImageLayer<u16>,
-    pub time:   Option<DateTime<Utc>>,
-    pub camera: String,
-    zero:       i32,
-    max_value:  u16,
-
+    pub r:        ImageLayer<u16>,
+    pub g:        ImageLayer<u16>,
+    pub b:        ImageLayer<u16>,
+    pub l:        ImageLayer<u16>,
+    pub raw_info: Option<RawImageInfo>,
+    zero:         i32,
+    max_value:    u16,
 }
 
 impl Image {
@@ -318,10 +317,9 @@ impl Image {
             r: ImageLayer::new_empty(),
             g: ImageLayer::new_empty(),
             b: ImageLayer::new_empty(),
+            raw_info: None,
             zero: 0,
             max_value: 0,
-            time: None,
-            camera: String::new(),
         }
     }
 

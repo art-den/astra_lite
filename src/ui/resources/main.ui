@@ -5861,7 +5861,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                                         <property name="visible">True</property>
                                         <property name="can-focus">True</property>
                                         <property name="editable">False</property>
-                                        <property name="width-chars">5</property>
+                                        <property name="width-chars">12</property>
                                         <property name="xalign">0.5</property>
                                       </object>
                                       <packing>
