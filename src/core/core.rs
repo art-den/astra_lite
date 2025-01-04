@@ -490,14 +490,19 @@ impl Core {
         if reset_finished_mode {
             mode_data.finished_mode = None;
         }
+
+        // Start new mode
+        mode_data.mode.start()?;
+
         let progress = mode_data.mode.progress();
         let mode_type = mode_data.mode.get_type();
+
         drop(mode_data);
+
+        // Inform about progress and and mode change
         self.subscribers.notify(Event::Progress(progress, mode_type));
         self.subscribers.notify(Event::ModeChanged);
 
-        // Start new mode
-        self.mode_data.write().unwrap().mode.start()?;
 
         Ok(())
     }
@@ -867,23 +872,19 @@ impl Core {
             _ => {}
         }
 
-        if mode_changed || progress_changed {
-            if mode_changed {
-                self.subscribers.notify(Event::ModeChanged);
-            }
-            if progress_changed {
-                if let Some((finished_progress, finished_mode_type)) = finished_progress_and_type {
-                    self.subscribers.notify(Event::Progress(
-                        finished_progress,
-                        finished_mode_type,
-                    ));
-                } else {
-                    self.subscribers.notify(Event::Progress(
-                        mode_data.mode.progress(),
-                        mode_data.mode.get_type(),
-                    ));
-                }
-            }
+        if mode_changed {
+            self.subscribers.notify(Event::ModeChanged);
+        }
+        if let Some((finished_progress, finished_mode_type)) = finished_progress_and_type {
+            self.subscribers.notify(Event::Progress(
+                finished_progress,
+                finished_mode_type,
+            ));
+        } else if progress_changed || mode_changed {
+            self.subscribers.notify(Event::Progress(
+                mode_data.mode.progress(),
+                mode_data.mode.get_type(),
+            ));
         }
 
         Ok(())
