@@ -8,7 +8,7 @@ use crate::{
     options::*,
     utils::{gtk_utils, io_utils::*}
 };
-use super::{ui_main::*, utils::*};
+use super::{ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
 pub fn init_ui(
     _app:     &gtk::Application,
@@ -231,14 +231,14 @@ impl CameraUi {
     fn connect_widgets_events(self: &Rc<Self>) {
         let bldr = &self.builder;
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        gtk_utils::connect_action(&self.window, self, "take_shot",              Self::handler_action_take_shot);
-        gtk_utils::connect_action(&self.window, self, "stop_shot",              Self::handler_action_stop_shot);
-        gtk_utils::connect_action(&self.window, self, "start_save_raw_frames",  Self::handler_action_start_save_raw_frames);
-        gtk_utils::connect_action(&self.window, self, "stop_save_raw_frames",   Self::handler_action_stop_save_raw_frames);
-        gtk_utils::connect_action(&self.window, self, "continue_save_raw",      Self::handler_action_continue_save_raw_frames);
-        gtk_utils::connect_action(&self.window, self, "start_live_stacking",    Self::handler_action_start_live_stacking);
-        gtk_utils::connect_action(&self.window, self, "stop_live_stacking",     Self::handler_action_stop_live_stacking);
-        gtk_utils::connect_action(&self.window, self, "continue_live_stacking", Self::handler_action_continue_live_stacking);
+        gtk_utils::connect_action   (&self.window, self, "take_shot",              Self::handler_action_take_shot);
+        gtk_utils::connect_action   (&self.window, self, "stop_shot",              Self::handler_action_stop_shot);
+        gtk_utils::connect_action_rc(&self.window, self, "start_save_raw_frames",  Self::handler_action_start_save_raw_frames);
+        gtk_utils::connect_action   (&self.window, self, "stop_save_raw_frames",   Self::handler_action_stop_save_raw_frames);
+        gtk_utils::connect_action   (&self.window, self, "continue_save_raw",      Self::handler_action_continue_save_raw_frames);
+        gtk_utils::connect_action_rc(&self.window, self, "start_live_stacking",    Self::handler_action_start_live_stacking);
+        gtk_utils::connect_action   (&self.window, self, "stop_live_stacking",     Self::handler_action_stop_live_stacking);
+        gtk_utils::connect_action   (&self.window, self, "continue_live_stacking", Self::handler_action_continue_live_stacking);
 
         let cb_camera_list = bldr.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
         cb_camera_list.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
@@ -1243,14 +1243,21 @@ impl CameraUi {
         }
     }
 
-    fn handler_action_start_live_stacking(&self) {
+    fn handler_action_start_live_stacking(self: &Rc<Self>) {
         if !is_expanded(&self.builder, "exp_live") { return; }
+
         self.get_options_from_widgets();
-        gtk_utils::exec_and_show_error(&self.window, || {
-            self.core.start_live_stacking()?;
-            self.show_options();
+        let info_pairs = self.get_short_info_pairs(true);
+        let dialog = StartDialog::new(
+            self.window.upcast_ref(),
+            "Start live stacking",
+            &info_pairs
+        );
+        dialog.exec(clone!(@strong self as self_ => move || {
+            self_.core.start_live_stacking()?;
+            self_.show_options();
             Ok(())
-        });
+        }));
     }
 
     fn handler_action_stop_live_stacking(&self) {
@@ -1293,14 +1300,122 @@ impl CameraUi {
         });
     }
 
-    fn handler_action_start_save_raw_frames(&self) {
+    fn get_short_info_pairs(&self, for_live_stacking: bool) -> Vec<(String, String)> {
+        let mut pairs = Vec::new();
+        let options = self.options.read().unwrap();
+        let cam = options.cam.device.as_ref().map(|d| d.to_string()).unwrap_or_default();
+        let total_time = options.cam.frame.exposure() * options.raw_frames.frame_cnt as f64;
+        let light_frames = options.cam.frame.frame_type == FrameType::Lights;
+
+        pairs.push(("Camera".to_string(), cam));
+        pairs.push(("Frames".to_string(), options.cam.frame.frame_type.to_str().to_string()));
+        pairs.push(("Exposure".to_string(), format!("{:.4}", options.cam.frame.exposure())));
+
+        if !for_live_stacking {
+            pairs.push(("Frames count".to_string(), format!("{}", options.raw_frames.frame_cnt)));
+            pairs.push(("Total time".to_string(), format!("~{}", seconds_to_total_time_str(total_time, true))));
+        } else {
+            if options.live.save_enabled {
+                pairs.push(("Save every".to_string(), format!("{} minutes", options.live.save_minutes)));
+            }
+            if options.live.save_orig {
+                pairs.push(("Save originals".to_string(), "Yes".to_string()));
+            }
+            if options.live.remove_tracks {
+                pairs.push(("Remove tracks".to_string(), "Yes".to_string()));
+            }
+        }
+
+        if (for_live_stacking || light_frames)
+        && (options.calibr.dark_frame_en || options.calibr.flat_frame_en) {
+            let mut value = String::new();
+            if options.calibr.dark_frame_en {
+                value += "Darks library";
+            }
+            if options.calibr.flat_frame_en {
+                if !value.is_empty() { value += "\n"; }
+                value += "Master flat frame";
+            }
+            pairs.push(("Calibration".to_string(), value));
+        }
+
+        if (for_live_stacking || light_frames)
+        && options.focuser.is_used() {
+            let mut value = String::new();
+
+            if options.focuser.on_temp_change {
+                value += &format!("Temp. change >{:.1}°", options.focuser.max_temp_change);
+            }
+
+            if options.focuser.on_fwhm_change {
+                if !value.is_empty() { value += "\n"; }
+                value += &format!("FWHM change >{:.1}px", options.focuser.max_fwhm_change);
+            }
+
+            if options.focuser.periodically {
+                if !value.is_empty() { value += "\n"; }
+                value += &format!("Each {} minutes", options.focuser.period_minutes);
+            }
+
+            pairs.push(("Autofocus".to_string(), value));
+        }
+
+        if (for_live_stacking || light_frames) && options.guiding.is_used() {
+            match options.guiding.mode {
+                GuidingMode::MainCamera => {
+                    pairs.push((
+                        "Guiding".to_string(),
+                        "By main camera".to_string(),
+                    ));
+                    if options.guiding.dith_period != 0 {
+                        pairs.push((
+                            "Dithering".to_string(),
+                            format!(
+                                "{} px each {} minutes",
+                                options.guiding.main_cam.dith_dist,
+                                options.guiding.dith_period
+                            )
+                        ));
+                    }
+                }
+                GuidingMode::External => {
+                    pairs.push((
+                        "Guiding".to_string(),
+                        "By external program".to_string(),
+                    ));
+                    if options.guiding.dith_period != 0 {
+                        pairs.push((
+                            "Dithering".to_string(),
+                            format!(
+                                "{} px each {} minutes",
+                                options.guiding.ext_guider.dith_dist,
+                                options.guiding.dith_period
+                            )
+                        ));
+                    }
+                }
+                _ => {},
+            }
+        }
+
+        pairs
+    }
+
+    fn handler_action_start_save_raw_frames(self: &Rc<Self>) {
         if !is_expanded(&self.builder, "exp_raw_frames") { return; }
+
         self.get_options_from_widgets();
-        gtk_utils::exec_and_show_error(&self.window, || {
-            self.core.start_saving_raw_frames()?;
-            self.show_options();
+        let info_pairs = self.get_short_info_pairs(false);
+        let dialog = StartDialog::new(
+            self.window.upcast_ref(),
+            "Start save RAW files",
+            &info_pairs
+        );
+        dialog.exec(clone!(@strong self as self_ => move || {
+            self_.core.start_saving_raw_frames()?;
+            self_.show_options();
             Ok(())
-        });
+        }));
     }
 
     fn handler_action_continue_save_raw_frames(&self) {

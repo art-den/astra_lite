@@ -16,3 +16,4 @@ mod ui_mount;
 mod ui_darks_library;
 mod ui_plate_solve;
 mod ui_polar_align;
+mod ui_start_dialog;
