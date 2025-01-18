@@ -15,8 +15,8 @@ pub enum Error {
     #[error("Property `{1}` of device `{0}` not found")]
     PropertyNotExists(String, String),
 
-    #[error("No one of properties found of device `{0}`")]
-    NoOnePropertyFound(String),
+    #[error("No one of properties {0} found of device `{1}`")]
+    NoOnePropertyFound(String, String),
 
     #[error("Property `{1}` of device `{0}` is read only")]
     PropertyIsReadOnly(String, String),

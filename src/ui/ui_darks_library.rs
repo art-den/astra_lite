@@ -504,7 +504,7 @@ impl DarksLibraryUI {
             let entry = self.builder.object::<gtk::Entry>(entry_name).unwrap();
             let text = item.values
                 .iter()
-                .map(|v| format!("{:.0}", v))
+                .map(|v| format!("{:.1}", v))
                 .join(" ");
             entry.set_text(&text);
         };

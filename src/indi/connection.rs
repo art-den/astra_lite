@@ -11,6 +11,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use bitflags::bitflags;
 use chrono::prelude::*;
+use itertools::Itertools;
 use super::{sexagesimal::*, xml_reader::*, error::*, xml_helper::*};
 
 
@@ -1084,7 +1085,11 @@ impl Devices {
         if let Some(result) = self.existing_prop_name_opt(device, prop_and_elem) {
             Ok(result)
         } else {
-            Err(Error::NoOnePropertyFound(device_name.to_string()))
+            let props_list = prop_and_elem
+                .iter()
+                .map(|(elem, name)| format!("{}.{}", elem, name))
+                .join(", ");
+            Err(Error::NoOnePropertyFound(props_list, device_name.to_string()))
         }
     }
 
