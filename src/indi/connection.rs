@@ -1056,12 +1056,11 @@ impl Devices {
         }
     }
 
-    fn existing_prop_name<'a>(
+    fn existing_prop_name_opt<'a>(
         &self,
-        device_name:   &str,
+        device:        &Device,
         prop_and_elem: &[(&'a str, &'a str)]
-    ) -> Result<(&'a str, &'a str)> {
-        let device = self.find_by_name_res(device_name)?;
+    ) -> Option<(&'a str, &'a str)> {
         for &(prop_name, elem_name) in prop_and_elem {
             let Some(prop) = device.get_property_opt(prop_name) else {
                 continue;
@@ -1070,10 +1069,23 @@ impl Devices {
                 elem_name.is_empty() || *e.name == elem_name
             );
             if elem_exists {
-                return Ok((prop_name, elem_name));
+                return Some((prop_name, elem_name));
             }
         }
-        Err(Error::NoOnePropertyFound(device_name.to_string()))
+        None
+    }
+
+    fn existing_prop_name<'a>(
+        &self,
+        device_name:   &str,
+        prop_and_elem: &[(&'a str, &'a str)]
+    ) -> Result<(&'a str, &'a str)> {
+        let device = self.find_by_name_res(device_name)?;
+        if let Some(result) = self.existing_prop_name_opt(device, prop_and_elem) {
+            Ok(result)
+        } else {
+            Err(Error::NoOnePropertyFound(device_name.to_string()))
+        }
     }
 
     fn get_driver_interface(&self, device_name: &str) -> Result<DriverInterface> {
@@ -1880,17 +1892,12 @@ impl Connection {
         props:       PropsNamePairs
     ) -> Result<bool> {
         let devices = self.devices.lock().unwrap();
-        let result = devices.existing_prop_name(
-            device_name,
+        let device = devices.find_by_name_res(device_name)?;
+        let result = devices.existing_prop_name_opt(
+            device,
             props
         );
-        if let Err(Error::NoOnePropertyFound(_)) = result {
-            Ok(false)
-        } else if let Err(err) = result {
-            Err(err)
-        } else {
-            Ok(true)
-        }
+        Ok(result.is_some())
     }
 
     pub fn device_get_prop_elem(
