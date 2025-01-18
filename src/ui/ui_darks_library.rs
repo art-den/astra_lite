@@ -3,7 +3,7 @@ use gtk::{gdk::ffi::GDK_CURRENT_TIME, glib::{self, clone}, prelude::*};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use crate::{
-    core::{core::*, events::*, mode_darks_library::*}, image::info::seconds_to_total_time_str, options::*, utils::{gtk_utils, io_utils::*}
+    core::{core::*, events::*, mode_darks_library::*}, image::info::seconds_to_total_time_str, indi, options::*, utils::{gtk_utils, io_utils::*}
 };
 
 use super::{ui_main::{MainUiEventHandlers, UiEvent}, utils::is_expanded};
@@ -13,6 +13,7 @@ pub fn init_ui(
     builder:  &gtk::Builder,
     options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
+    indi:     &Arc<indi::Connection>,
     handlers: &mut MainUiEventHandlers,
 ) {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
@@ -28,6 +29,7 @@ pub fn init_ui(
         window,
         options:           Arc::clone(options),
         core:              Arc::clone(core),
+        indi:              Arc::clone(indi),
         ui_options:        RefCell::new(ui_options),
         core_subscription: RefCell::new(None),
         closed:            Cell::new(false),
@@ -168,7 +170,12 @@ impl Default for DefectPixelsOptions {
 }
 
 impl DefectPixelsOptions {
-    fn create_program(&self, cam_opts: &CamOptions) -> Vec<MasterFileCreationProgramItem> {
+    fn create_program(
+        &self,
+        cam_opts:   &CamOptions,
+        indi:       &indi::Connection,
+        cam_device: &DeviceAndProp
+    ) -> anyhow::Result<Vec<MasterFileCreationProgramItem>> {
         let mut result = Vec::new();
 
         let mut binnings = self.binning.get_binnings();
@@ -176,14 +183,20 @@ impl DefectPixelsOptions {
         let mut crops = self.crop.get_crops();
         if crops.is_empty() { crops.push(cam_opts.frame.crop); }
 
-        let temperature = if self.temperature_used {
-            Some(self.temperature)
-        } else if cam_opts.ctrl.enable_cooler {
-            Some(cam_opts.ctrl.temperature)
+        let temperature = if indi.camera_is_temperature_supported(&cam_device.name)? {
+            if self.temperature_used {
+                Some(self.temperature)
+            } else if cam_opts.ctrl.enable_cooler {
+                Some(cam_opts.ctrl.temperature)
+            } else {
+                None
+            }
         } else {
             None
         };
+
         let exposure = if self.exposure_used { self.exposure } else { cam_opts.frame.exp_main };
+
         let gain = if self.gain_used { self.gain } else {  cam_opts.frame.gain };
         let offset = if self.offset_used { self.offset as i32 } else {  cam_opts.frame.offset };
 
@@ -210,7 +223,7 @@ impl DefectPixelsOptions {
             }
         }
 
-        return result
+        return Ok(result)
     }
 }
 
@@ -261,17 +274,25 @@ impl Default for MasterDarksOptions {
 }
 
 impl MasterDarksOptions {
-    fn create_program(&self, cam_opts: &CamOptions) -> Vec<MasterFileCreationProgramItem> {
+    fn create_program(
+        &self,
+        cam_opts:   &CamOptions,
+        indi:       &indi::Connection,
+        cam_device: &DeviceAndProp
+    ) -> anyhow::Result<Vec<MasterFileCreationProgramItem>> {
         let mut result = Vec::new();
 
         let mut temperatures = Vec::new();
-        if self.temperature.used && !self.temperature.values.is_empty() {
-            for t in &self.temperature.values {
-                temperatures.push(Some(*t));
+        if indi.camera_is_temperature_supported(&cam_device.name)? {
+            if self.temperature.used && !self.temperature.values.is_empty() {
+                for t in &self.temperature.values {
+                    temperatures.push(Some(*t));
+                }
+            } else if cam_opts.ctrl.enable_cooler {
+                temperatures.push(Some(cam_opts.ctrl.temperature));
             }
-        } else if cam_opts.ctrl.enable_cooler {
-            temperatures.push(Some(cam_opts.ctrl.temperature));
-        } else {
+        }
+        if temperatures.is_empty() {
             temperatures.push(None);
         }
 
@@ -325,7 +346,7 @@ impl MasterDarksOptions {
             }
         }
 
-        return result;
+        return Ok(result);
     }
 }
 
@@ -356,17 +377,26 @@ impl Default for MasterBiasesOptions {
 }
 
 impl MasterBiasesOptions {
-    fn create_program(&self, cam_opts: &CamOptions) -> Vec<MasterFileCreationProgramItem> {
+    fn create_program(
+        &self,
+        cam_opts:   &CamOptions,
+        indi:       &indi::Connection,
+        cam_device: &DeviceAndProp
+    ) -> anyhow::Result<Vec<MasterFileCreationProgramItem>> {
         let mut result = Vec::new();
 
         let mut temperatures = Vec::new();
-        if self.temperature.used && !self.temperature.values.is_empty() {
-            for t in &self.temperature.values {
-                temperatures.push(Some(*t));
+        if indi.camera_is_temperature_supported(&cam_device.name)? {
+            if self.temperature.used && !self.temperature.values.is_empty() {
+                for t in &self.temperature.values {
+                    temperatures.push(Some(*t));
+                }
+            } else if cam_opts.ctrl.enable_cooler {
+                temperatures.push(Some(cam_opts.ctrl.temperature));
             }
-        } else if cam_opts.ctrl.enable_cooler {
-            temperatures.push(Some(cam_opts.ctrl.temperature));
-        } else {
+        }
+
+        if temperatures.is_empty() {
             temperatures.push(None);
         }
 
@@ -408,7 +438,7 @@ impl MasterBiasesOptions {
             }
         }
 
-        result
+        Ok(result)
     }
 }
 
@@ -439,6 +469,7 @@ pub struct DarksLibraryUI {
     window:            gtk::ApplicationWindow,
     builder:           gtk::Builder,
     core:              Arc<Core>,
+    indi:              Arc<indi::Connection>,
     options:           Arc<RwLock<Options>>,
     ui_options:        RefCell<UiOptions>,
     core_subscription: RefCell<Option<Subscription>>,
@@ -883,15 +914,31 @@ impl DarksLibraryUI {
     fn show_info(&self) {
         let ui_options = self.ui_options.borrow();
         let options = self.options.read().unwrap();
+        let Some(cam_device) = &options.cam.device else { return; };
 
-        let defect_pixels_program = ui_options.defect_pixels.create_program(&options.cam);
-        self.show_program_info(&defect_pixels_program, "l_def_info");
+        if let Ok(defect_pixels_program) = ui_options.defect_pixels.create_program(
+            &options.cam,
+            &self.indi,
+            cam_device
+        ) {
+            self.show_program_info(&defect_pixels_program, "l_def_info");
+        };
 
-        let dark_library_program = ui_options.master_darks.create_program(&options.cam);
-        self.show_program_info(&dark_library_program, "l_dark_info");
+        if let Ok(dark_library_program) = ui_options.master_darks.create_program(
+            &options.cam,
+            &self.indi,
+            cam_device
+        ) {
+            self.show_program_info(&dark_library_program, "l_dark_info");
+        }
 
-        let bias_library_program = ui_options.master_biases.create_program(&options.cam);
-        self.show_program_info(&bias_library_program, "l_bias_info");
+        if let Ok(bias_library_program) = ui_options.master_biases.create_program(
+            &options.cam,
+            &self.indi,
+            cam_device
+        ) {
+            self.show_program_info(&bias_library_program, "l_bias_info");
+        }
     }
 
     fn show_program_info(
@@ -914,24 +961,28 @@ impl DarksLibraryUI {
     }
 
     fn start(&self, mode: DarkLibMode) {
-        self.options.write().unwrap().read_all(&self.builder);
-
-        self.get_options();
-        self.save_options();
-
-        let options = self.options.read().unwrap();
-        let ui_options = self.ui_options.borrow();
-        let program = match mode {
-            DarkLibMode::DefectPixelsFiles =>
-                ui_options.defect_pixels.create_program(&options.cam),
-            DarkLibMode::MasterDarkFiles =>
-                ui_options.master_darks.create_program(&options.cam),
-            DarkLibMode::MasterBiasFiles =>
-                ui_options.master_biases.create_program(&options.cam),
-        };
-        drop(ui_options);
-        drop(options);
         gtk_utils::exec_and_show_error(&self.window, || {
+            self.options.write().unwrap().read_all(&self.builder);
+
+            self.get_options();
+            self.save_options();
+
+            let options = self.options.read().unwrap();
+            let ui_options = self.ui_options.borrow();
+
+            let Some(cam_device) = &options.cam.device else { return Ok(()); };
+
+            let program = match mode {
+                DarkLibMode::DefectPixelsFiles =>
+                    ui_options.defect_pixels.create_program(&options.cam, &self.indi, cam_device)?,
+                DarkLibMode::MasterDarkFiles =>
+                    ui_options.master_darks.create_program(&options.cam, &self.indi, cam_device)?,
+                DarkLibMode::MasterBiasFiles =>
+                    ui_options.master_biases.create_program(&options.cam, &self.indi, cam_device)?,
+            };
+            drop(ui_options);
+            drop(options);
+
             self.core.start_creating_dark_library(mode, &program)?;
             Ok(())
         });
