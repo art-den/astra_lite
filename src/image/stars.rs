@@ -1,6 +1,6 @@
-use std::{collections::{HashSet, VecDeque}, sync::Mutex, f64::consts::PI};
+use std::{collections::{HashMap, HashSet, VecDeque}, f64::consts::PI, isize, sync::Mutex};
 use itertools::Itertools;
-use crate::utils::math::*;
+use crate::{utils::math::*, TimeLogger};
 use super::{image::ImageLayer, raw::RawImageInfo};
 
 const MAX_STAR_DIAM: usize = 32;
@@ -104,7 +104,7 @@ impl StarsInfo {
         } else if border as i32 > range / 2 {
             border = (range / 2) as u32;
         }
-        let possible_stars = Mutex::new(Vec::new());
+        let possible_stars = Mutex::new(HashMap::new());
         let find_possible_stars_in_rows = |y1: usize, y2: usize| {
             let mut filtered = Vec::new();
             filtered.resize(image.width(), 0);
@@ -131,11 +131,14 @@ impl StarsInfo {
                         || star_y > (image.height() - MAX_STAR_DIAM/2) as isize {
                             continue; // skip points near image border
                         }
-                        possible_stars.lock().unwrap().push((star_x, star_y, f2 / 3));
+                        possible_stars.lock().unwrap().insert((star_x, star_y), f2 / 3);
                     }
                 }
             }
         };
+
+        let tm = TimeLogger::start();
+
         if !mt {
             find_possible_stars_in_rows(0, image.height());
         } else {
@@ -150,16 +153,49 @@ impl StarsInfo {
                 }
             });
         }
+        let possible_stars = possible_stars.into_inner().unwrap();
+        tm.log("find_possible_stars_in_rows");
 
-        let mut possible_stars = possible_stars.into_inner().unwrap();
-        possible_stars.sort_by_key(|(_, _, v)| -(*v as i32));
+        // Optimization: find point clusters and leave brightest point from each cluster
+
+        let mut processed_points = HashSet::<(isize, isize)>::new();
+        let mut cluster_filler = FloodFiller::new();
+        let mut cluster = Vec::new();
+        let mut possible_star_centers = Vec::new();
+        for (crd, _) in &possible_stars {
+            if processed_points.contains(crd) { continue; }
+            let (x, y) = crd;
+            cluster.clear();
+            cluster_filler.fill(*x, *y, |x, y| -> FillPtSetResult {
+                if let Some(existing) = possible_stars.get(&(x, y)) {
+                    if processed_points.contains(&(x, y)) {
+                        return FillPtSetResult::Miss
+                    }
+                    cluster.push((x, y, *existing));
+                    processed_points.insert((x, y));
+                    return FillPtSetResult::Hit
+                };
+                FillPtSetResult::Miss
+            });
+
+            cluster.sort_by_key(|(_, _, br)| *br);
+
+            if let Some(last) = cluster.last() {
+                possible_star_centers.push(last.clone());
+            }
+        }
+        possible_star_centers.sort_by_key(|(_, _, v)| -(*v as i32));
+        if possible_star_centers.len() >  MAX_STARS_CNT {
+            possible_star_centers.drain(MAX_STARS_CNT..);
+        }
+
         let mut all_star_coords = HashSet::<(isize, isize)>::new();
         let mut flood_filler = FloodFiller::new();
         let mut stars = Vec::new();
         let mut star_bg_values = Vec::new();
         let max_stars_points = image.width() * image.height() / 100; // 1% of area maximum
         let mut big_cnt = 0_usize;
-        for (x, y, max_v) in possible_stars {
+        for (x, y, max_v) in possible_star_centers {
             if all_star_coords.contains(&(x, y)) { continue; }
             if all_star_coords.len() > max_stars_points
             || big_cnt > 1000 {
@@ -184,21 +220,35 @@ impl StarsInfo {
             let mut crd_cnt = 0_f64;
             let mut brightness = 0_i32;
             let mut overexposured = false;
+            let mut min_x = isize::MAX;
+            let mut max_x = isize::MIN;
+            let mut min_y = isize::MAX;
+            let mut max_y = isize::MIN;
             flood_filler.fill(
                 x,
                 y,
-                |x, y| -> bool {
+                |x, y| -> FillPtSetResult {
                     let v = image.get(x, y).unwrap_or(0);
                     let hit = v > border;
                     if hit {
                         if all_star_coords.contains(&(x, y))
                         || star_points.contains(&(x, y))
                         || star_points.len() > MAX_STARS_POINTS_CNT {
-                            return false;
+                            return FillPtSetResult::Error;
                         }
                         if v > overexposured_bord {
                             overexposured = true;
                         }
+                        if x < min_x { min_x = x; }
+                        if x > max_x { max_x = x; }
+                        if y < min_y { min_y = y; }
+                        if y > max_y { max_y = y; }
+
+                        if max_x - min_x > MAX_STAR_DIAM as isize
+                        || max_x - min_x > MAX_STAR_DIAM as isize {
+                            return FillPtSetResult::Error;
+                        }
+
                         star_points.insert((x, y));
                         all_star_coords.insert((x, y));
                         let v_part = linear_interpolate(v as f64, bg as f64, max_v as f64, 0.0, 1.0);
@@ -207,7 +257,7 @@ impl StarsInfo {
                         crd_cnt += v_part;
                         brightness += v as i32 - bg as i32;
                     }
-                    hit
+                    if hit { FillPtSetResult::Hit } else { FillPtSetResult::Miss }
                 }
             );
 
@@ -389,6 +439,13 @@ struct FloodFiller {
     visited: VecDeque<(isize, isize)>,
 }
 
+#[derive(PartialEq)]
+pub enum FillPtSetResult {
+    Hit,
+    Miss,
+    Error
+}
+
 impl FloodFiller {
     fn new() -> FloodFiller {
         FloodFiller {
@@ -396,26 +453,37 @@ impl FloodFiller {
         }
     }
 
-    fn fill<SetFilled: FnMut(isize, isize) -> bool>(
+    fn fill<SetFilled: FnMut(isize, isize) -> FillPtSetResult>(
         &mut self,
         x: isize,
         y: isize,
         mut try_set_filled: SetFilled
-    ) {
-        if !try_set_filled(x, y) { return; }
+    ) -> bool {
+        match try_set_filled(x, y) {
+            FillPtSetResult::Miss => return true,
+            FillPtSetResult::Error=> return false,
+            _ => {},
+        };
 
         self.visited.clear();
         self.visited.push_back((x, y));
 
+        let mut error_flag = false;
         while let Some((pt_x, pt_y)) = self.visited.pop_front() {
             let mut check_neibour = |x, y| {
-                if !try_set_filled(x, y) { return; }
+                let result = try_set_filled(x, y);
+                if result == FillPtSetResult::Error {
+                    error_flag = true;
+                }
+                if result != FillPtSetResult::Hit { return; }
                 self.visited.push_back((x, y));
             };
             check_neibour(pt_x-1, pt_y);
             check_neibour(pt_x+1, pt_y);
             check_neibour(pt_x, pt_y-1);
             check_neibour(pt_x, pt_y+1);
+            if error_flag { return false; }
         }
+        true
     }
 }
