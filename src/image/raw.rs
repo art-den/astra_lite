@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use itertools::{izip, Itertools};
 use serde::{Serialize, Deserialize};
 
-use crate::utils::math::median5;
+use crate::utils::math::{median5, square_ls};
 use super::{image::*, simple_fits::*};
 
 #[derive(Clone)]
@@ -288,31 +288,79 @@ impl RawImage {
     }
 
     pub fn find_hot_pixels_in_master_dark(&self) -> BadPixels {
+        fn calc_border(diffs: &mut [i32]) -> i32 {
+            if diffs.len() < 100 {
+                return i32::MAX;
+            }
+
+            let p70_pos = 70 * diffs.len() / 100;
+            let p70_value = *diffs.select_nth_unstable(p70_pos).1;
+
+            let p80_pos = 80 * diffs.len() / 100;
+            let p80_value = *diffs.select_nth_unstable(p80_pos).1;
+
+            let p90_pos = 95 * diffs.len() / 100;
+            let p90_value = *diffs.select_nth_unstable(p90_pos).1;
+
+            let x_values = [70.0, 80.0, 90.0];
+            let y_values = [p70_value as f64, p80_value as f64, p90_value as f64];
+
+            let max_pos = diffs.len() - 10;
+            let max_slice = diffs.select_nth_unstable(max_pos).2;
+            let max = max_slice.iter().sum::<i32>() / max_slice.len() as i32;
+
+            let result = if let Some(coeffs) = square_ls(&x_values, &y_values) {
+                let p100_value = coeffs.calc(100.0) as i32;
+
+                if 3 * p100_value >= max {
+                    i32::MAX
+                } else {
+                    (3 * p100_value + max) / 4
+                }
+            } else  {
+                return i32::MAX;
+            };
+
+            return result;
+        }
+
         #[inline(always)]
-        fn find_hot_pixels_step(
+        fn process_col_or_row(
+            data: &[u16],
+            mut fun: impl FnMut(u16, usize/*index*/, u16, u16, u16, u16, u16, u16)
+        ) {
+            fun(data[0], 0, data[1], data[2], data[3], data[4], data[5], data[6]);
+            fun(data[1], 1, data[0], data[2], data[3], data[4], data[5], data[6]);
+            fun(data[2], 2, data[0], data[1], data[3], data[4], data[5], data[6]);
+            for (i, (v1, v2, v3, v4, v5, v6, v7))
+            in data.iter().tuple_windows().enumerate() {
+                fun(*v4, i + 3, *v1, *v2, *v3, *v5, *v6, *v7);
+            }
+            let width = data.len();
+            let row_end = &data[width-7..];
+            fun(row_end[4], width-3, row_end[0], row_end[1], row_end[2], row_end[3], row_end[5], row_end[6]);
+            fun(row_end[5], width-2, row_end[0], row_end[1], row_end[2], row_end[3], row_end[4], row_end[6]);
+            fun(row_end[6], width-1, row_end[0], row_end[1], row_end[2], row_end[3], row_end[4], row_end[5]);
+        }
+
+        #[inline(always)]
+        fn process_rows(
             raw:     &RawImage,
             step:    usize,
             mut fun: impl FnMut(u16, usize/*x*/, usize/*y*/, u16, u16, u16, u16, u16, u16)
         ) {
             for y in (0..raw.info.height).step_by(step) {
                 let row = raw.row(y);
-                fun(row[0], 0, y, row[1], row[2], row[3], row[4], row[5], row[6]);
-                fun(row[1], 1, y, row[0], row[2], row[3], row[4], row[5], row[6]);
-                fun(row[2], 2, y, row[0], row[1], row[3], row[4], row[5], row[6]);
-                for (i, (v1, v2, v3, v4, v5, v6, v7))
-                in row.iter().tuple_windows().enumerate() {
-                    fun(*v4, i + 3, y, *v1, *v2, *v3, *v5, *v6, *v7);
-                }
-                let width = row.len()-7;
-                let row_end = &row[width-7..];
-                fun(row_end[4], width-3, y, row_end[0], row_end[1], row_end[2], row_end[3], row_end[5], row_end[6]);
-                fun(row_end[5], width-2, y, row_end[0], row_end[1], row_end[2], row_end[3], row_end[4], row_end[6]);
-                fun(row_end[6], width-1, y, row_end[0], row_end[1], row_end[2], row_end[3], row_end[4], row_end[5]);
+                process_col_or_row(row, |v, index, v1, v2, v3, v4, v5, v6| {
+                    fun(v, index, y, v1, v2, v3, v4, v5, v6);
+                });
             }
         }
 
+        let mut tmp_result = HashSet::new();
         let mut diffs = Vec::with_capacity(self.data.len() / 3);
-        find_hot_pixels_step(
+
+        process_rows(
             self,
             3,
             |v, _x, _y, v1, v2, v3, v4, v5, v6| {
@@ -324,12 +372,10 @@ impl RawImage {
             }
         );
 
-        let pos = 99 * diffs.len() / 100;
-        diffs.select_nth_unstable(pos);
-        let border = diffs[pos] * 10;
+        let border = calc_border(&mut diffs);
 
-        let mut tmp_result = HashSet::new();
-        find_hot_pixels_step(
+        let mut hits = 0;
+        process_rows(
             self,
             1,
             |v, x, y, v1, v2, v3, v4, v5, v6| {
@@ -337,6 +383,56 @@ impl RawImage {
                 let diff = (v as i32) * 6 - aver;
                 if diff > border {
                     tmp_result.insert((x, y));
+                    hits += 1;
+                }
+            }
+        );
+
+        #[inline(always)]
+        fn process_cols(
+            raw:     &RawImage,
+            step:    usize,
+            mut fun: impl FnMut(u16, usize/*x*/, usize/*y*/, u16, u16, u16, u16, u16, u16)
+        ) {
+            let mut col = Vec::new();
+            for x in (0..raw.info.width).step_by(step) {
+                col.clear();
+                let col_data = &raw.data[x..];
+                for v in col_data.iter().step_by(raw.info.width) {
+                    col.push(*v);
+                }
+                process_col_or_row(&col, |v, index, v1, v2, v3, v4, v5, v6| {
+                    fun(v, x, index, v1, v2, v3, v4, v5, v6);
+                });
+            }
+        }
+
+        diffs.clear();
+
+        process_cols(
+            self,
+            3,
+            |v, _x, _y, v1, v2, v3, v4, v5, v6| {
+                let aver = v1 as i32 + v2 as i32 + v3 as i32 + v4 as i32 + v5 as i32 + v6 as i32;
+                let diff = (v as i32) * 6 - aver;
+                if diff > 0 {
+                    diffs.push(diff)
+                }
+            }
+        );
+
+        let border = calc_border(&mut diffs);
+
+        let mut hits = 0;
+        process_cols(
+            self,
+            1,
+            |v, x, y, v1, v2, v3, v4, v5, v6| {
+                let aver = v1 as i32 + v2 as i32 + v3 as i32 + v4 as i32 + v5 as i32 + v6 as i32;
+                let diff = (v as i32) * 6 - aver;
+                if diff > border {
+                    tmp_result.insert((x, y));
+                    hits += 1;
                 }
             }
         );

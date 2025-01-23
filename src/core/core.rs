@@ -901,6 +901,7 @@ impl Core {
         let mut mode = TackingPicturesMode::new(&self.indi, &self.subscribers, mode, &self.options)?;
         mode.set_dark_creation_program_item(program_item);
         mode.set_next_mode(Some(prev_mode));
+        self.init_cam_for_mode(&mode)?;
         mode.start()?;
         mode_data.mode = Box::new(mode);
         Ok(())
