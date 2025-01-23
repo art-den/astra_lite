@@ -444,13 +444,14 @@ impl FocuserUi {
         if new_prop || spb_foc_val.value() == 0.0 {
             spb_foc_val.set_range(0.0, prop_info.max);
             spb_foc_val.set_digits(0);
-            let step = prop_info.step.unwrap_or(1.0);
+            let mut step = prop_info.step.unwrap_or(1.0);
+            let range = f64::abs(prop_info.max - prop_info.min);
+            if step > range / 10.0 {
+                step = 10.0;
+            }
             spb_foc_val.set_increments(step, step * 10.0);
-            let Ok(value) = self.indi.focuser_get_abs_value(&foc_device) else {
-                return;
-            };
             self.excl.exec(|| {
-                spb_foc_val.set_value(value);
+                spb_foc_val.set_value(prop_info.value);
             });
         }
     }
