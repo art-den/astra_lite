@@ -16,14 +16,13 @@ mod core;
 mod options;
 mod sky_math;
 
-use std::{path::Path, sync::{Arc, RwLock}};
+use std::{path::Path, sync::Arc};
 use gtk::{prelude::*, glib, glib::clone};
 use crate::{
     utils::io_utils::*,
     utils::log_utils::*,
     options::*,
     core::core::Core,
-    core::frame_processing::*
 };
 
 fn panic_handler(
@@ -95,8 +94,22 @@ fn main() -> anyhow::Result<()> {
     start_logger(&logs_dir)?;
     log::set_max_level(log::LevelFilter::Info);
 
-    log::info!("Creating indi::Connection...");
-    let indi = Arc::new(indi::Connection::new());
+    #[cfg(debug_assertions)] {
+        std::env::set_var("RUST_BACKTRACE", "1");
+    }
+
+    log::info!(
+        "{} {} ver. {} is started",
+        env!("CARGO_PKG_NAME"),
+        std::env::consts::ARCH,
+        env!("CARGO_PKG_VERSION")
+    );
+
+    log::info!("Creating Core...");
+    let core = Core::new();
+
+    let indi = Arc::clone(core.indi());
+    let options = core.options();
 
     if cfg!(not(debug_assertions)) {
         std::panic::set_hook({
@@ -113,26 +126,6 @@ fn main() -> anyhow::Result<()> {
             })
         });
     }
-
-    #[cfg(debug_assertions)] {
-        std::env::set_var("RUST_BACKTRACE", "1");
-    }
-
-    log::info!(
-        "{} {} ver. {} is started",
-        env!("CARGO_PKG_NAME"),
-        std::env::consts::ARCH,
-        env!("CARGO_PKG_VERSION")
-    );
-
-    log::info!("Creating Options...");
-    let options = Arc::new(RwLock::new(Options::default()));
-
-    log::info!("Staring frame processing thread");
-    let (img_cmds_sender, frame_process_thread) = start_frame_processing_thread();
-
-    log::info!("Creating Core...");
-    let core = Core::new(&indi, &options, img_cmds_sender);
 
     log::info!("Creating gtk::Application...");
     let application = gtk::Application::new(
@@ -154,9 +147,6 @@ fn main() -> anyhow::Result<()> {
     _ = save_json_to_config::<Options>(&opts, "options");
     drop(opts);
     log::info!("Options saved");
-
-    _ = frame_process_thread.join();
-    log::info!("Process thread joined");
 
     core.stop();
     log::info!("Core stopped");

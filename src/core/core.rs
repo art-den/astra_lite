@@ -1,7 +1,7 @@
 use std::{
     any::Any, path::Path, sync::{
         atomic::{AtomicBool, AtomicU16, Ordering }, mpsc, Arc, Mutex, RwLock, RwLockReadGuard
-    }
+    }, thread::JoinHandle
 };
 use gtk::glib::PropertySet;
 
@@ -102,19 +102,17 @@ pub struct Core {
 
     /// commands for passing into frame processing thread
     img_cmds_sender:    mpsc::Sender<FrameProcessCommand>, // TODO: make API
+    frame_proc_thread:  Option<JoinHandle<()>>,
     ext_guider:         Arc<Mutex<Option<Box<dyn ExternalGuider + Send>>>>,
 }
 
 impl Core {
-    pub fn new(
-        indi:            &Arc<indi::Connection>,
-        options:         &Arc<RwLock<Options>>,
-        img_cmds_sender: mpsc::Sender<FrameProcessCommand>
-    ) -> Arc<Self> {
+    pub fn new() -> Arc<Self> {
+        let (img_cmds_sender, frame_proc_thread) = start_frame_processing_thread();
         let result = Arc::new(Self {
-            indi:               Arc::clone(indi),
+            indi:               Arc::new(indi::Connection::new()),
             phd2:               Arc::new(phd2_conn::Connection::new()),
-            options:            Arc::clone(options),
+            options:            Arc::new(RwLock::new(Options::default())),
             mode_data:          RwLock::new(ModeData::new()),
             subscribers:        Arc::new(EventSubscriptions::new()),
             cur_frame:          Arc::new(ResultImage::new()),
@@ -126,11 +124,34 @@ impl Core {
             img_proc_stop_flag: Mutex::new(Arc::new(AtomicBool::new(false))),
             ext_guider:         Arc::new(Mutex::new(None)),
             img_cmds_sender,
+            frame_proc_thread:  Some(frame_proc_thread),
         });
         result.connect_indi_events();
         result.connect_1s_timer_event();
         result.start_taking_frames_restart_timer();
         result
+    }
+}
+
+impl Drop for Core {
+    fn drop(&mut self) {
+        if let Some(frame_proc_thread) = self.frame_proc_thread.take() {
+            log::info!("Process thread joining...");
+            _ = frame_proc_thread.join();
+            log::info!("Process thread joined");
+        }
+
+        log::info!("Core dropped");
+    }
+}
+
+impl Core {
+    pub fn indi(&self) -> &Arc<indi::Connection> {
+        &self.indi
+    }
+
+    pub fn options(&self) -> &Arc<RwLock<Options>> {
+        &self.options
     }
 
     pub fn stop(self: &Arc<Self>) {
@@ -905,12 +926,6 @@ impl Core {
         mode.start()?;
         mode_data.mode = Box::new(mode);
         Ok(())
-    }
-}
-
-impl Drop for Core {
-    fn drop(&mut self) {
-        log::info!("Core dropped");
     }
 }
 
