@@ -314,7 +314,6 @@ fn apply_calibr_data_and_remove_hot_pixels(
                 let tmr = TimeLogger::start();
                 let defect_pixels = subtract_image.find_hot_pixels_in_master_dark();
                 tmr.log("searching hot pixels in dark image");
-                log::debug!("hot pixels count = {}", defect_pixels.items.len());
                 calibr.dark_defect_pixels = Some(defect_pixels);
                 reload_flat = true;
             }

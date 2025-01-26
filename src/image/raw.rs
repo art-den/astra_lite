@@ -288,10 +288,15 @@ impl RawImage {
     }
 
     pub fn find_hot_pixels_in_master_dark(&self) -> BadPixels {
+        log::debug!("Calculating hot pixels border:");
+
         fn calc_border(diffs: &mut [i32]) -> i32 {
             if diffs.len() < 100 {
                 return i32::MAX;
             }
+
+            let p60_pos = 60 * diffs.len() / 100;
+            let p60_value = *diffs.select_nth_unstable(p60_pos).1;
 
             let p70_pos = 70 * diffs.len() / 100;
             let p70_value = *diffs.select_nth_unstable(p70_pos).1;
@@ -299,11 +304,11 @@ impl RawImage {
             let p80_pos = 80 * diffs.len() / 100;
             let p80_value = *diffs.select_nth_unstable(p80_pos).1;
 
-            let p90_pos = 95 * diffs.len() / 100;
+            let p90_pos = 90 * diffs.len() / 100;
             let p90_value = *diffs.select_nth_unstable(p90_pos).1;
 
-            let x_values = [70.0, 80.0, 90.0];
-            let y_values = [p70_value as f64, p80_value as f64, p90_value as f64];
+            let x_values = [60.0, 70.0, 80.0, 90.0];
+            let y_values = [p60_value as f64, p70_value as f64, p80_value as f64, p90_value as f64];
 
             let max_pos = diffs.len() - 10;
             let max_slice = diffs.select_nth_unstable(max_pos).2;
@@ -311,6 +316,7 @@ impl RawImage {
 
             let result = if let Some(coeffs) = square_ls(&x_values, &y_values) {
                 let p100_value = coeffs.calc(100.0) as i32;
+                log::debug!("p100_value={}", p100_value);
 
                 if 3 * p100_value >= max {
                     i32::MAX
@@ -318,8 +324,13 @@ impl RawImage {
                     (3 * p100_value + max) / 4
                 }
             } else  {
-                return i32::MAX;
+                i32::MAX
             };
+
+            log::debug!(
+                "diffs.len={}, p60_value={}, p70_value={}, p80_value={}, p90_value={}, max={}, result={}",
+                diffs.len(), p60_value, p70_value, p80_value, p90_value, max, result
+            );
 
             return result;
         }
@@ -437,10 +448,12 @@ impl RawImage {
             }
         );
 
-        let pixels = tmp_result
+        let pixels: Vec<_> = tmp_result
             .iter()
             .map(|(x, y)| BadPixel{ x: *x as isize, y: *y as isize })
             .collect();
+
+        log::debug!("Hot pixels count={}", pixels.len());
 
         BadPixels{ items: pixels }
     }

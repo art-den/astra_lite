@@ -860,7 +860,6 @@ impl TackingPicturesMode {
         }
 
         let defect_pixels = raw_image.find_hot_pixels_in_master_dark();
-        log::debug!("Defect pixels count = {}", defect_pixels.items.len());
 
         defect_pixels.save_to_file(&self.out_file_names.defect_pixels_fname)?;
         log::debug!("Defect pixels file saved!");
