@@ -29,6 +29,7 @@ once_cell = "1"
 msgbox = "0.6"
 rand = "0.8"
 csv = "1.2"
+macros = { path = "./macros" }
 
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "1.7"

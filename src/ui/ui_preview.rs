@@ -1,6 +1,7 @@
-use std::{rc::Rc, sync::*, cell::{RefCell, Cell}, path::PathBuf};
+use std::{cell::{Cell, RefCell}, path::PathBuf, rc::{Rc, Weak}, sync::{Arc, RwLock}};
 use chrono::{DateTime, Local, Utc};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
+use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
     core::{core::*, events::*, frame_processing::*},
@@ -12,25 +13,33 @@ use super::{sky_map::math::radian_to_degree, ui_main::*, utils::*};
 
 
 pub fn init_ui(
-    _app:     &gtk::Application,
-    builder:  &gtk::Builder,
-    main_ui:  &Rc<MainUi>,
-    options:  &Arc<RwLock<Options>>,
-    core:     &Arc<Core>,
-    handlers: &mut MainUiEventHandlers,
-) {
-    let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
-
+    window:     &gtk::ApplicationWindow,
+    main_ui:    &Rc<MainUi>,
+    options:    &Arc<RwLock<Options>>,
+    core:       &Arc<Core>,
+    ui_modules: Weak<UiModules>,
+    handlers:   &mut MainUiEventHandlers,
+) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();
-    gtk_utils::exec_and_show_error(&window, || {
+    gtk_utils::exec_and_show_error(window, || {
         load_json_from_config_file(&mut ui_options, PreviewUi::CONF_FN)?;
         Ok(())
     });
 
+    let builder = gtk::Builder::from_string(include_str!(r"resources/preview.ui"));
+
+    let widgets = Widgets {
+        ctrl:    ControlWidgets::from_builder(&builder),
+        image:   ImageWidgets::from_builder(&builder),
+        info:    InfoWidgets::from_builder(&builder),
+        stat:    StatWidgets::from_builder(&builder),
+        history: HistoryWidgets::from_builder(&builder),
+    };
+
     let obj = Rc::new(PreviewUi {
         main_ui:            Rc::clone(main_ui),
-        builder:            builder.clone(),
         window:             window.clone(),
+        widgets,
         core:               Arc::clone(core),
         options:            Arc::clone(options),
         ui_options:         RefCell::new(ui_options),
@@ -55,6 +64,8 @@ pub fn init_ui(
 
     obj.update_light_history_table();
     obj.update_calibr_history_table();
+
+    obj
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -105,10 +116,102 @@ struct CalibrHistoryItem {
     calibr_methods: CalibrMethods, // for flat files
 }
 
+#[derive(FromBuilder)]
+struct ControlWidgets {
+    cb_src:        gtk::ComboBoxText,
+    cb_scale:      gtk::ComboBoxText,
+    cb_color:      gtk::ComboBoxText,
+    chb_rem_grad:  gtk::CheckButton,
+    scl_dark:      gtk::Scale,
+    scl_gamma:     gtk::Scale,
+    scl_highlight: gtk::Scale,
+    chb_wb_auto:   gtk::CheckButton,
+    l_wb_censor:   gtk::Label,
+    l_wb_red:      gtk::Label,
+    scl_wb_red:    gtk::Scale,
+    l_wb_green:    gtk::Label,
+    scl_wb_green:  gtk::Scale,
+    l_wb_blue:     gtk::Label,
+    scl_wb_blue:   gtk::Scale,
+}
+
+#[derive(FromBuilder)]
+struct ImageWidgets {
+    sw_img:      gtk::ScrolledWindow,
+    eb_img:      gtk::EventBox,
+    img_preview: gtk::Image,
+}
+
+#[derive(FromBuilder)]
+struct InfoWidgets {
+    bx_img_info:   gtk::Box,
+    e_res_info:    gtk::Entry,
+    bx_frame_info: gtk::Box,
+    bx_light_info: gtk::Box,
+    e_info_exp:    gtk::Entry,
+    e_fwhm:        gtk::Entry,
+    e_ovality:     gtk::Entry,
+    e_stars:       gtk::Entry,
+    e_background:  gtk::Entry,
+    e_noise:       gtk::Entry,
+    bx_flat_info:  gtk::Box,
+    l_flat_r:      gtk::Label,
+    e_flat_r:      gtk::Entry,
+    l_flat_g:      gtk::Label,
+    e_flat_g:      gtk::Entry,
+    l_flat_b:      gtk::Label,
+    e_flat_b:      gtk::Entry,
+    l_flat_l:      gtk::Label,
+    e_flat_l:      gtk::Entry,
+    bx_raw_info:   gtk::Box,
+    e_aver:        gtk::Entry,
+    e_median:      gtk::Entry,
+    e_std_dev:     gtk::Entry,
+    chb_flat_percents: gtk::CheckButton,
+}
+
+#[derive(FromBuilder)]
+struct StatWidgets {
+    ch_hist_log_y:    gtk::CheckButton,
+    ch_stat_percents: gtk::CheckButton,
+    da_histogram:     gtk::DrawingArea,
+    l_r_cap:          gtk::Label,
+    l_r_mean:         gtk::Label,
+    l_r_median:       gtk::Label,
+    l_r_dev:          gtk::Label,
+    l_g_cap:          gtk::Label,
+    l_g_mean:         gtk::Label,
+    l_g_median:       gtk::Label,
+    l_g_dev:          gtk::Label,
+    l_b_cap:          gtk::Label,
+    l_b_mean:         gtk::Label,
+    l_b_median:       gtk::Label,
+    l_b_dev:          gtk::Label,
+    l_l_cap:          gtk::Label,
+    l_l_mean:         gtk::Label,
+    l_l_median:       gtk::Label,
+    l_l_dev:          gtk::Label,
+}
+
+#[derive(FromBuilder)]
+struct HistoryWidgets {
+    nb_hist: gtk::Notebook,
+    tv_light: gtk::TreeView,
+    tv_calbr: gtk::TreeView,
+}
+
+struct Widgets {
+    ctrl:  ControlWidgets,
+    image: ImageWidgets,
+    info:  InfoWidgets,
+    stat:  StatWidgets,
+    history: HistoryWidgets,
+}
+
 struct PreviewUi {
     main_ui:            Rc<MainUi>,
-    builder:            gtk::Builder,
     window:             gtk::ApplicationWindow,
+    widgets:            Widgets,
     options:            Arc<RwLock<Options>>,
     core:               Arc<Core>,
     ui_options:         RefCell<UiOptions>,
@@ -127,47 +230,53 @@ impl Drop for PreviewUi {
     }
 }
 
+impl UiModule for PreviewUi {
+    fn show_options(&self, options: &Options) {
+    }
+
+    fn get_options(&self, options: &mut Options) {
+    }
+
+    fn connect_ui_events(&self) {
+    }
+}
+
 impl PreviewUi {
     const CONF_FN: &'static str = "ui_prevuew";
 
     fn init_widgets(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        ui.set_prop_str("l_wb_censor.label", Some(""));
+        self.widgets.ctrl.l_wb_censor.set_label("");
 
-        let scl_dark = self.builder.object::<gtk::Scale>("scl_dark").unwrap();
-        scl_dark.set_range(0.0, 1.0);
-        scl_dark.set_increments(0.1, 0.5);
-        scl_dark.set_round_digits(1);
-        scl_dark.set_digits(1);
+        self.widgets.ctrl.scl_dark.set_range(0.0, 1.0);
+        self.widgets.ctrl.scl_dark.set_increments(0.1, 0.5);
+        self.widgets.ctrl.scl_dark.set_round_digits(1);
+        self.widgets.ctrl.scl_dark.set_digits(1);
 
         let (dpimm_x, _) = gtk_utils::get_widget_dpmm(&self.window)
             .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
-        scl_dark.set_width_request((40.0 * dpimm_x) as i32);
+        self.widgets.ctrl.scl_dark.set_width_request((40.0 * dpimm_x) as i32);
 
-        let scl_highlight = self.builder.object::<gtk::Scale>("scl_highlight").unwrap();
-        scl_highlight.set_range(0.0, 1.0);
-        scl_highlight.set_increments(0.1, 0.5);
-        scl_highlight.set_round_digits(1);
-        scl_highlight.set_digits(1);
+        self.widgets.ctrl.scl_highlight.set_range(0.0, 1.0);
+        self.widgets.ctrl.scl_highlight.set_increments(0.1, 0.5);
+        self.widgets.ctrl.scl_highlight.set_round_digits(1);
+        self.widgets.ctrl.scl_highlight.set_digits(1);
 
-        let scl_gamma = self.builder.object::<gtk::Scale>("scl_gamma").unwrap();
-        scl_gamma.set_range(1.0, 5.0);
-        scl_gamma.set_digits(1);
-        scl_gamma.set_increments(0.1, 1.0);
-        scl_gamma.set_round_digits(1);
-        scl_gamma.set_digits(1);
+        self.widgets.ctrl.scl_gamma.set_range(1.0, 5.0);
+        self.widgets.ctrl.scl_gamma.set_digits(1);
+        self.widgets.ctrl.scl_gamma.set_increments(0.1, 1.0);
+        self.widgets.ctrl.scl_gamma.set_round_digits(1);
+        self.widgets.ctrl.scl_gamma.set_digits(1);
 
-        let configure_wb_scale = |name: &str| {
-            let scale = self.builder.object::<gtk::Scale>(name).unwrap();
+        let configure_wb_scale = |scale: &gtk::Scale| {
             scale.set_range(0.5, 2.0);
             scale.set_increments(0.1, 0.5);
             scale.set_round_digits(1);
             scale.set_digits(1);
         };
 
-        configure_wb_scale("scl_wb_red");
-        configure_wb_scale("scl_wb_green");
-        configure_wb_scale("scl_wb_blue");
+        configure_wb_scale(&self.widgets.ctrl.scl_wb_red);
+        configure_wb_scale(&self.widgets.ctrl.scl_wb_green);
+        configure_wb_scale(&self.widgets.ctrl.scl_wb_blue);
     }
 
     fn handler_closing(&self) {
@@ -191,100 +300,110 @@ impl PreviewUi {
         gtk_utils::connect_action   (&self.window, self, "clear_light_history", Self::handler_action_clear_light_history);
         gtk_utils::connect_action_rc(&self.window, self, "load_image",          Self::handler_action_open_image);
 
-        let ch_hist_logy = self.builder.object::<gtk::CheckButton>("ch_hist_logy").unwrap();
-        ch_hist_logy.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            let Ok(mut ui_options) = self_.ui_options.try_borrow_mut() else { return; };
-            ui_options.hist_log_y = chb.is_active();
-            self_.repaint_histogram();
-        }));
+        self.widgets.stat.ch_hist_log_y.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut ui_options) = self_.ui_options.try_borrow_mut() else { return; };
+                ui_options.hist_log_y = chb.is_active();
+                self_.repaint_histogram();
+            })
+        );
 
-        let ch_stat_percents = self.builder.object::<gtk::CheckButton>("ch_stat_percents").unwrap();
-        ch_stat_percents.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            let Ok(mut ui_options) = self_.ui_options.try_borrow_mut() else { return; };
-            ui_options.hist_percents = chb.is_active();
-            drop(ui_options);
-            self_.show_histogram_stat();
-        }));
+        self.widgets.stat.ch_stat_percents.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut ui_options) = self_.ui_options.try_borrow_mut() else { return; };
+                ui_options.hist_percents = chb.is_active();
+                drop(ui_options);
+                self_.show_histogram_stat();
+            })
+        );
 
-        let chb_flat_percents = self.builder.object::<gtk::CheckButton>("chb_flat_percents").unwrap();
-        chb_flat_percents.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            let Ok(mut ui_options) = self_.ui_options.try_borrow_mut() else { return; };
-            ui_options.flat_percents = chb.is_active();
-            drop(ui_options);
-            self_.show_flat_info();
-        }));
+        self.widgets.info.chb_flat_percents.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut ui_options) = self_.ui_options.try_borrow_mut() else { return; };
+                ui_options.flat_percents = chb.is_active();
+                drop(ui_options);
+                self_.show_flat_info();
+            })
+        );
 
-        let cb_preview_src = self.builder.object::<gtk::ComboBoxText>("cb_preview_src").unwrap();
-        cb_preview_src.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            let source = PreviewSource::from_active_id(cb.active_id().as_deref());
-            options.preview.source = source;
-            drop(options);
-            self_.create_and_show_preview_image();
-            self_.repaint_histogram();
-            self_.show_histogram_stat();
-            self_.show_image_info();
-        }));
+        self.widgets.ctrl.cb_src.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                let source = PreviewSource::from_active_id(cb.active_id().as_deref());
+                options.preview.source = source;
+                drop(options);
+                self_.create_and_show_preview_image();
+                self_.repaint_histogram();
+                self_.show_histogram_stat();
+                self_.show_image_info();
+            })
+        );
 
-        let sw_preview_img = self.builder.object::<gtk::Widget>("sw_preview_img").unwrap();
-        sw_preview_img.connect_size_allocate(clone!(@weak self as self_ => move |_, rect| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            options.preview.widget_width = rect.width() as usize;
-            options.preview.widget_height = rect.height() as usize;
-        }));
+        self.widgets.image.sw_img.connect_size_allocate(
+            clone!(@weak self as self_ => move |_, rect| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.preview.widget_width = rect.width() as usize;
+                options.preview.widget_height = rect.height() as usize;
+            })
+        );
 
-        let cb_preview_scale = self.builder.object::<gtk::ComboBoxText>("cb_preview_scale").unwrap();
-        cb_preview_scale.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            let scale = PreviewScale::from_active_id(cb.active_id().as_deref());
-            options.preview.scale = scale;
-            drop(options);
-            self_.create_and_show_preview_image();
-        }));
+        self.widgets.ctrl.cb_scale.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                let scale = PreviewScale::from_active_id(cb.active_id().as_deref());
+                options.preview.scale = scale;
+                drop(options);
+                self_.create_and_show_preview_image();
+            })
+        );
 
-        let cb_preview_color = self.builder.object::<gtk::ComboBoxText>("cb_preview_color").unwrap();
-        cb_preview_color.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            let color = PreviewColorMode::from_active_id(cb.active_id().as_deref());
-            options.preview.color = color;
-            drop(options);
-            self_.create_and_show_preview_image();
-        }));
+        self.widgets.ctrl.cb_color.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                let color = PreviewColorMode::from_active_id(cb.active_id().as_deref());
+                options.preview.color = color;
+                drop(options);
+                self_.create_and_show_preview_image();
+            })
+        );
 
-        let scl_dark = self.builder.object::<gtk::Scale>("scl_dark").unwrap();
-        scl_dark.connect_value_changed(clone!(@weak self as self_ => move |scl| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            options.preview.dark_lvl = scl.value();
-            drop(options);
-            self_.create_and_show_preview_image();
-        }));
+        self.widgets.ctrl.scl_dark.connect_value_changed(
+            clone!(@weak self as self_ => move |scl| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.preview.dark_lvl = scl.value();
+                drop(options);
+                self_.create_and_show_preview_image();
+            })
+        );
 
-        let scl_highlight = self.builder.object::<gtk::Scale>("scl_highlight").unwrap();
-        scl_highlight.connect_value_changed(clone!(@weak self as self_ => move |scl| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            options.preview.light_lvl = scl.value();
-            drop(options);
-            self_.create_and_show_preview_image();
-        }));
+        self.widgets.ctrl.scl_highlight.connect_value_changed(
+            clone!(@weak self as self_ => move |scl| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.preview.light_lvl = scl.value();
+                drop(options);
+                self_.create_and_show_preview_image();
+            })
+        );
 
-        let scl_gamma = self.builder.object::<gtk::Scale>("scl_gamma").unwrap();
-        scl_gamma.connect_value_changed(clone!(@weak self as self_ => move |scl| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            options.preview.gamma = scl.value();
-            drop(options);
-            self_.create_and_show_preview_image();
-        }));
+        self.widgets.ctrl.scl_gamma.connect_value_changed(
+            clone!(@weak self as self_ => move |scl| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.preview.gamma = scl.value();
+                drop(options);
+                self_.create_and_show_preview_image();
+            })
+        );
 
-        let chb_rem_grad = self.builder.object::<gtk::CheckButton>("chb_rem_grad").unwrap();
-        chb_rem_grad.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            options.preview.remove_grad = chb.is_active();
-            drop(options);
-            self_.create_and_show_preview_image();
-        }));
+        self.widgets.ctrl.chb_rem_grad.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.preview.remove_grad = chb.is_active();
+                drop(options);
+                self_.create_and_show_preview_image();
+            })
+        );
 
-        let da_histogram = self.builder.object::<gtk::DrawingArea>("da_histogram").unwrap();
-        da_histogram.connect_draw(
+        self.widgets.stat.da_histogram.connect_draw(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |area, cr| {
                 gtk_utils::exec_and_show_error(&self_.window, || {
@@ -295,37 +414,41 @@ impl PreviewUi {
             })
         );
 
-        let chb_wb_auto = self.builder.object::<gtk::CheckButton>("chb_wb_auto").unwrap();
-        chb_wb_auto.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            options.preview.wb_auto = chb.is_active();
-            drop(options);
-            self_.create_and_show_preview_image();
-        }));
+        self.widgets.ctrl.chb_wb_auto.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.preview.wb_auto = chb.is_active();
+                drop(options);
+                self_.create_and_show_preview_image();
+            })
+        );
 
-        let scl_wb_red = self.builder.object::<gtk::Scale>("scl_wb_red").unwrap();
-        scl_wb_red.connect_value_changed(clone!(@weak self as self_ => move |scl| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            options.preview.wb_red = scl.value();
-            drop(options);
-            self_.create_and_show_preview_image();
-        }));
+        self.widgets.ctrl.scl_wb_red.connect_value_changed(
+            clone!(@weak self as self_ => move |scl| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.preview.wb_red = scl.value();
+                drop(options);
+                self_.create_and_show_preview_image();
+            })
+        );
 
-        let scl_wb_red = self.builder.object::<gtk::Scale>("scl_wb_green").unwrap();
-        scl_wb_red.connect_value_changed(clone!(@weak self as self_ => move |scl| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            options.preview.wb_green = scl.value();
-            drop(options);
-            self_.create_and_show_preview_image();
-        }));
+        self.widgets.ctrl.scl_wb_red.connect_value_changed(
+            clone!(@weak self as self_ => move |scl| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.preview.wb_green = scl.value();
+                drop(options);
+                self_.create_and_show_preview_image();
+            })
+        );
 
-        let scl_wb_red = self.builder.object::<gtk::Scale>("scl_wb_blue").unwrap();
-        scl_wb_red.connect_value_changed(clone!(@weak self as self_ => move |scl| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            options.preview.wb_blue = scl.value();
-            drop(options);
-            self_.create_and_show_preview_image();
-        }));
+        self.widgets.ctrl.scl_wb_red.connect_value_changed(
+            clone!(@weak self as self_ => move |scl| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.preview.wb_blue = scl.value();
+                drop(options);
+                self_.create_and_show_preview_image();
+            })
+        );
 
     }
 
@@ -363,15 +486,12 @@ impl PreviewUi {
     }
 
     fn connect_img_mouse_scroll_events(self: &Rc<Self>) {
-        let eb_preview_img = self.builder.object::<gtk::EventBox>("eb_preview_img").unwrap();
-        let sw_preview_img = self.builder.object::<gtk::ScrolledWindow>("sw_preview_img").unwrap();
-
-        eb_preview_img.connect_button_press_event(
-            clone!(@weak self as self_, @weak sw_preview_img => @default-return glib::Propagation::Proceed,
+        self.widgets.image.eb_img.connect_button_press_event(
+            clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |_, evt| {
                 if evt.button() == gtk::gdk::ffi::GDK_BUTTON_PRIMARY as u32 {
-                    let hadjustment = sw_preview_img.hadjustment();
-                    let vadjustment = sw_preview_img.vadjustment();
+                    let hadjustment = self_.widgets.image.sw_img.hadjustment();
+                    let vadjustment = self_.widgets.image.sw_img.vadjustment();
                     *self_.preview_scroll_pos.borrow_mut() = Some((
                         evt.root(),
                         (hadjustment.value(), vadjustment.value())
@@ -381,7 +501,7 @@ impl PreviewUi {
             })
         );
 
-        eb_preview_img.connect_button_release_event(
+        self.widgets.image.eb_img.connect_button_release_event(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |_, evt| {
                 if evt.button() == gtk::gdk::ffi::GDK_BUTTON_PRIMARY as u32 {
@@ -391,17 +511,17 @@ impl PreviewUi {
             })
         );
 
-        eb_preview_img.connect_motion_notify_event(
-            clone!(@weak self as self_, @weak sw_preview_img => @default-return glib::Propagation::Proceed,
+        self.widgets.image.eb_img.connect_motion_notify_event(
+            clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |_, evt| {
                 const SCROLL_SPEED: f64 = 2.0;
                 if let Some((start_mouse_pos, start_scroll_pos)) = *self_.preview_scroll_pos.borrow() {
                     let new_pos = evt.root();
                     let move_x = new_pos.0 - start_mouse_pos.0;
                     let move_y = new_pos.1 - start_mouse_pos.1;
-                    let hadjustment = sw_preview_img.hadjustment();
+                    let hadjustment = self_.widgets.image.sw_img.hadjustment();
                     hadjustment.set_value(start_scroll_pos.0 - SCROLL_SPEED*move_x);
-                    let vadjustment = sw_preview_img.vadjustment();
+                    let vadjustment = self_.widgets.image.sw_img.vadjustment();
                     vadjustment.set_value(start_scroll_pos.1 - SCROLL_SPEED*move_y);
                 }
                 glib::Propagation::Proceed
@@ -415,45 +535,46 @@ impl PreviewUi {
                 self.show_frame_processing_result(result);
             }
 
+            MainThreadEvent::Core(Event::ModeChanged) => {
+                self.correct_preview_source();
+            }
+
+            MainThreadEvent::Core(Event::ModeContinued) => {
+                self.correct_preview_source();
+            }
+
             _ => {},
         }
     }
 
     fn show_ui_options(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let options = self.ui_options.borrow();
-
-        ui.set_prop_bool("ch_hist_logy.active",      options.hist_log_y);
-        ui.set_prop_bool("ch_stat_percents.active",  options.hist_percents);
-        ui.set_prop_bool("chb_flat_percents.active", options.flat_percents);
+        self.widgets.stat.ch_hist_log_y.set_active(options.hist_log_y);
+        self.widgets.stat.ch_stat_percents.set_active(options.hist_percents);
+        self.widgets.info.chb_flat_percents.set_active(options.flat_percents);
     }
 
     fn get_ui_options_from_widgets(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let mut options = self.ui_options.borrow_mut();
-
-        options.hist_log_y    = ui.prop_bool("ch_hist_logy.active");
-        options.hist_percents = ui.prop_bool("ch_stat_percents.active");
-        options.flat_percents = ui.prop_bool("chb_flat_percents.active");
+        options.hist_log_y = self.widgets.stat.ch_hist_log_y.is_active();
+        options.hist_percents = self.widgets.stat.ch_stat_percents.is_active();
+        options.flat_percents = self.widgets.info.chb_flat_percents.is_active();
     }
 
     fn correct_widgets_props(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-
-        let auto_color_checked = ui.prop_bool("chb_wb_auto.active");
+        let auto_color_checked = self.widgets.ctrl.chb_wb_auto.is_active();
         let is_color_image = self.is_color_image.get();
         let rgb_enabled = !auto_color_checked && is_color_image;
 
-        ui.enable_widgets(false, &[
-            ("cb_preview_color", is_color_image),
-            ("chb_wb_auto",      is_color_image),
-            ("l_wb_red",         rgb_enabled),
-            ("scl_wb_red",       rgb_enabled),
-            ("l_wb_green",       rgb_enabled),
-            ("scl_wb_green",     rgb_enabled),
-            ("l_wb_blue",        rgb_enabled),
-            ("scl_wb_blue",      rgb_enabled),
-        ]);
+        self.widgets.ctrl.cb_color.set_sensitive(is_color_image);
+        self.widgets.ctrl.chb_wb_auto.set_sensitive(is_color_image);
+
+        self.widgets.ctrl.l_wb_red.set_sensitive(rgb_enabled);
+        self.widgets.ctrl.scl_wb_red.set_sensitive(rgb_enabled);
+        self.widgets.ctrl.l_wb_green.set_sensitive(rgb_enabled);
+        self.widgets.ctrl.scl_wb_green.set_sensitive(rgb_enabled);
+        self.widgets.ctrl.l_wb_blue.set_sensitive(rgb_enabled);
+        self.widgets.ctrl.scl_wb_blue.set_sensitive(rgb_enabled);
     }
 
     fn show_image_info(&self) {
@@ -464,18 +585,15 @@ impl PreviewUi {
                 self.core.live_stacking().info.read().unwrap(),
         };
 
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let update_info_panel_vis = |is_light_info: bool, is_flat_info: bool, is_raw_info: bool| {
-            ui.show_widgets(&[
-                ("bx_light_info", is_light_info),
-                ("bx_flat_info",  is_flat_info),
-                ("bx_raw_info",   is_raw_info),
-            ]);
+            self.widgets.info.bx_light_info.set_visible(is_light_info);
+            self.widgets.info.bx_flat_info.set_visible(is_flat_info);
+            self.widgets.info.bx_raw_info.set_visible(is_raw_info);
         };
 
         match &*info {
             ResultImageInfo::LightInfo(info) => {
-                ui.set_prop_str("e_info_exp.text", Some(&seconds_to_total_time_str(info.exposure, true)));
+                self.widgets.info.e_info_exp.set_text(&seconds_to_total_time_str(info.exposure, true));
 
                 let mut fwhm_str = String::new();
                 if let Some(value) = info.stars.fwhm {
@@ -484,19 +602,19 @@ impl PreviewUi {
                 if let Some(value) = info.stars.fwhm_angular {
                     fwhm_str += &format!(" / {:.1}\"", 60.0 * 60.0 * radian_to_degree(value as f64));
                 }
-                ui.set_prop_str("e_fwhm.text", Some(&fwhm_str));
+                self.widgets.info.e_fwhm.set_text(&fwhm_str);
 
                 match info.stars.ovality {
-                    Some(value) => ui.set_prop_str("e_ovality.text", Some(&format!("{:.1}", value))),
-                    None        => ui.set_prop_str("e_ovality.text", Some("")),
+                    Some(value) => self.widgets.info.e_ovality.set_text(&format!("{:.1}", value)),
+                    None        => self.widgets.info.e_ovality.set_text(""),
                 }
                 let stars_cnt = info.stars.items.len();
                 let overexp_stars = info.stars.items.iter().filter(|s| s.overexposured).count();
-                ui.set_prop_str("e_stars.text", Some(&format!("{} ({})", stars_cnt, overexp_stars)));
+                self.widgets.info.e_stars.set_text(&format!("{} ({})", stars_cnt, overexp_stars));
                 let bg = 100_f64 * info.background as f64 / info.max_value as f64;
-                ui.set_prop_str("e_background.text", Some(&format!("{:.2}%", bg)));
+                self.widgets.info.e_background.set_text(&format!("{:.2}%", bg));
                 let noise = 100_f64 * info.noise as f64 / info.max_value as f64;
-                ui.set_prop_str("e_noise.text", Some(&format!("{:.4}%", noise)));
+                self.widgets.info.e_noise.set_text(&format!("{:.4}%", noise));
                 update_info_panel_vis(true, false, false);
             },
             ResultImageInfo::FlatInfo(info) => {
@@ -510,19 +628,19 @@ impl PreviewUi {
                     info.aver,
                     100.0 * info.aver / info.max_value as f32
                 );
-                ui.set_prop_str("e_aver.text", Some(&aver_text));
+                self.widgets.info.e_aver.set_text(&aver_text);
                 let median_text = format!(
                     "{} ({:.1}%)",
                     info.median,
                     100.0 * info.median as f64 / info.max_value as f64
                 );
-                ui.set_prop_str("e_median.text", Some(&median_text));
+                self.widgets.info.e_median.set_text(&median_text);
                 let dev_text = format!(
                     "{:.1} ({:.3}%)",
                     info.std_dev,
                     100.0 * info.std_dev / info.max_value as f32
                 );
-                ui.set_prop_str("e_std_dev.text", Some(&dev_text));
+                self.widgets.info.e_std_dev.set_text(&dev_text);
                 update_info_panel_vis(false, false, true);
             },
             _ => {
@@ -533,9 +651,8 @@ impl PreviewUi {
 
     fn show_flat_info(&self) {
         let info = self.flat_info.borrow();
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let ui_options = self.ui_options.borrow();
-        let show_chan = |label_id, entry_id, item: Option<&FlatInfoChan>| {
+        let show_chan = |label: &gtk::Label, entry: &gtk::Entry, item: Option<&FlatInfoChan>| {
             if let Some(item) = item {
                 let text =
                     if ui_options.flat_percents {
@@ -545,18 +662,16 @@ impl PreviewUi {
                     } else {
                         format!("{:.1} / {}", item.aver, item.max)
                     };
-                ui.set_prop_str_ex(entry_id, "text", Some(&text));
+                entry.set_text(&text);
             }
-            ui.show_widgets(&[
-                (label_id, item.is_some()),
-                (entry_id, item.is_some()),
-            ]);
+            label.set_visible(item.is_some());
+            entry.set_visible(item.is_some());
         };
 
-        show_chan("l_flat_r", "e_flat_r", info.r.as_ref());
-        show_chan("l_flat_g", "e_flat_g", info.g.as_ref());
-        show_chan("l_flat_b", "e_flat_b", info.b.as_ref());
-        show_chan("l_flat_l", "e_flat_l", info.l.as_ref());
+        show_chan(&self.widgets.info.l_flat_r, &self.widgets.info.e_flat_r, info.r.as_ref());
+        show_chan(&self.widgets.info.l_flat_g, &self.widgets.info.e_flat_g, info.g.as_ref());
+        show_chan(&self.widgets.info.l_flat_b, &self.widgets.info.e_flat_b, info.b.as_ref());
+        show_chan(&self.widgets.info.l_flat_l, &self.widgets.info.e_flat_l, info.l.as_ref());
     }
 
     fn create_and_show_preview_image(&self) {
@@ -596,8 +711,6 @@ impl PreviewUi {
             return;
         }
 
-        let img_preview = self.builder.object::<gtk::Image>("img_preview").unwrap();
-
         let mut is_color_image = false;
         if let Some(rgb_bytes) = rgb_bytes {
             let tmr = TimeLogger::start();
@@ -613,11 +726,10 @@ impl PreviewUi {
             );
             tmr.log("Pixbuf::from_bytes");
 
-            let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
             if !rgb_bytes.sensor_name.is_empty() {
-                ui.set_prop_str("l_wb_censor.label", Some(format!("({})", rgb_bytes.sensor_name).as_str()));
+                self.widgets.ctrl.l_wb_censor.set_label(&format!("({})", rgb_bytes.sensor_name).as_str());
             } else {
-                ui.set_prop_str("l_wb_censor.label", Some(""));
+                self.widgets.ctrl.l_wb_censor.set_label("");
             }
 
             let (img_width, img_height) = pp.get_preview_img_size(
@@ -634,11 +746,11 @@ impl PreviewUi {
                 ).unwrap();
                 tmr.log("Pixbuf::scale_simple");
             }
-            img_preview.set_pixbuf(Some(&pixbuf));
+            self.widgets.image.img_preview.set_pixbuf(Some(&pixbuf));
             is_color_image = rgb_bytes.is_color_image;
         } else {
-            img_preview.clear();
-            img_preview.set_pixbuf(None);
+            self.widgets.image.img_preview.clear();
+            self.widgets.image.img_preview.set_pixbuf(None);
         }
 
         self.is_color_image.set(is_color_image);
@@ -749,13 +861,9 @@ impl PreviewUi {
         }
         let live_stacking_preview = options.preview.source == PreviewSource::LiveStacking;
         drop(options);
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
 
         let show_resolution_info = |width, height| {
-            ui.set_prop_str(
-                "e_res_info.text",
-                Some(&format!("{} x {}", width, height))
-            );
+            self.widgets.info.e_res_info.set_text(&format!("{} x {}", width, height));
         };
 
         let is_mode_current = |live_result: bool| {
@@ -842,7 +950,8 @@ impl PreviewUi {
                 self.show_image_info();
             }
             FrameProcessResultData::MasterSaved { frame_type: FrameType::Flats, file_name } => {
-                ui.set_fch_path("fch_master_flat", Some(&file_name));
+                // TODO: set master file name
+                //ui.set_fch_path("fch_master_flat", Some(&file_name));
             }
             _ => {}
         }
@@ -858,55 +967,67 @@ impl PreviewUi {
         };
         drop(options);
         let ui_options = self.ui_options.borrow();
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let max = hist.max as f32;
-        let show_chan_data = |chan: &Option<HistogramChan>, l_cap, l_mean, l_median, l_dev| {
+        let show_chan_data = |
+            chan:     &Option<HistogramChan>,
+            l_cap:    &gtk::Label,
+            l_mean:   &gtk::Label,
+            l_median: &gtk::Label,
+            l_dev:    &gtk::Label
+        | {
             if let Some(chan) = chan.as_ref() {
                 let median = chan.median();
                 if ui_options.hist_percents {
-                    ui.set_prop_str_ex(
-                        l_mean, "label",
-                        Some(&format!("{:.1}%", 100.0 * chan.mean / max))
-                    );
-                    ui.set_prop_str_ex(
-                        l_median, "label",
-                        Some(&format!("{:.1}%", 100.0 * median as f32 / max))
-                    );
-                    ui.set_prop_str_ex(
-                        l_dev, "label",
-                        Some(&format!("{:.1}%", 100.0 * chan.std_dev / max))
-                    );
+                    l_mean.set_label(&format!("{:.1}%", 100.0 * chan.mean / max));
+                    l_median.set_label(&format!("{:.1}%", 100.0 * median as f32 / max));
+                    l_dev.set_label(&format!("{:.1}%", 100.0 * chan.std_dev / max));
                 } else {
-                    ui.set_prop_str_ex(
-                        l_mean, "label",
-                        Some(&format!("{:.1}", chan.mean))
-                    );
-                    ui.set_prop_str_ex(
-                        l_median, "label",
-                        Some(&format!("{:.1}", median))
-                    );
-                    ui.set_prop_str_ex(
-                        l_dev, "label",
-                        Some(&format!("{:.1}", chan.std_dev))
-                    );
+                    l_mean.set_label(&format!("{:.1}", chan.mean));
+                    l_median.set_label(&format!("{:.1}", median));
+                    l_dev.set_label(&format!("{:.1}", chan.std_dev));
                 }
             }
-            ui.show_widgets(&[
-                (l_cap,    chan.is_some()),
-                (l_mean,   chan.is_some()),
-                (l_median, chan.is_some()),
-                (l_dev,    chan.is_some()),
-            ]);
+            l_cap.set_visible(chan.is_some());
+            l_mean.set_visible(chan.is_some());
+            l_median.set_visible(chan.is_some());
+            l_dev.set_visible(chan.is_some());
         };
-        show_chan_data(&hist.r, "l_hist_r_cap", "l_hist_r_mean", "l_hist_r_median", "l_hist_r_dev");
-        show_chan_data(&hist.g, "l_hist_g_cap", "l_hist_g_mean", "l_hist_g_median", "l_hist_g_dev");
-        show_chan_data(&hist.b, "l_hist_b_cap", "l_hist_b_mean", "l_hist_b_median", "l_hist_b_dev");
-        show_chan_data(&hist.l, "l_hist_l_cap", "l_hist_l_mean", "l_hist_l_median", "l_hist_l_dev");
+
+        show_chan_data(
+            &hist.r,
+            &self.widgets.stat.l_r_cap,
+            &self.widgets.stat.l_r_mean,
+            &self.widgets.stat.l_r_median,
+            &self.widgets.stat.l_r_dev
+        );
+
+        show_chan_data(
+            &hist.g,
+            &self.widgets.stat.l_g_cap,
+            &self.widgets.stat.l_g_mean,
+            &self.widgets.stat.l_g_median,
+            &self.widgets.stat.l_g_dev
+        );
+
+        show_chan_data(
+            &hist.b,
+            &self.widgets.stat.l_b_cap,
+            &self.widgets.stat.l_b_mean,
+            &self.widgets.stat.l_b_median,
+            &self.widgets.stat.l_b_dev
+        );
+
+        show_chan_data(
+            &hist.l,
+            &self.widgets.stat.l_l_cap,
+            &self.widgets.stat.l_l_mean,
+            &self.widgets.stat.l_l_median,
+            &self.widgets.stat.l_l_dev
+        );
     }
 
     fn repaint_histogram(&self) {
-        let da_histogram = self.builder.object::<gtk::DrawingArea>("da_histogram").unwrap();
-        da_histogram.queue_draw();
+        self.widgets.stat.da_histogram.queue_draw();
     }
 
     fn handler_draw_histogram(
@@ -946,11 +1067,10 @@ impl PreviewUi {
     const HIST_TAB_PLOTS: u32 = 2;
 
     fn set_hist_tab_active(&self, tab_index: u32) {
-        let nb_hist = self.builder.object::<gtk::Notebook>("nb_hist").unwrap();
-        if nb_hist.current_page() == Some(Self::HIST_TAB_PLOTS) {
+        if self.widgets.history.nb_hist.current_page() == Some(Self::HIST_TAB_PLOTS) {
             return;
         }
-        nb_hist.set_current_page(Some(tab_index));
+        self.widgets.history.nb_hist.set_current_page(Some(tab_index));
     }
 
     fn mode_type_to_history_str(mode_type: ModeType) -> &'static str {
@@ -973,7 +1093,7 @@ impl PreviewUi {
     }
 
     fn update_light_history_table(&self) {
-        let tree: gtk::TreeView = self.builder.object("tv_light_history").unwrap();
+        let tree = &self.widgets.history.tv_light;
         let model = match tree.model() {
             Some(model) => {
                 model.downcast::<gtk::ListStore>().unwrap()
@@ -1105,7 +1225,7 @@ impl PreviewUi {
     }
 
     fn update_calibr_history_table(&self) {
-        let tree: gtk::TreeView = self.builder.object("tv_calbr_history").unwrap();
+        let tree = &self.widgets.history.tv_calbr;
         let model = match tree.model() {
             Some(model) => {
                 model.downcast::<gtk::ListStore>().unwrap()
@@ -1168,9 +1288,7 @@ impl PreviewUi {
     }
 
     fn handler_action_clear_light_history(&self) {
-        let nb_hist = self.builder.object::<gtk::Notebook>("nb_hist").unwrap();
-
-        let cur_page = nb_hist.current_page();
+        let cur_page = self.widgets.history.nb_hist.current_page();
         match cur_page {
             Some(Self::HIST_TAB_LIGHT) => {
                 self.light_history.borrow_mut().clear();
@@ -1214,7 +1332,9 @@ impl PreviewUi {
                 gtk_utils::exec_and_show_error(&self_.window, || {
                     let Some(file_name) = file_chooser.file() else { return Ok(()); };
                     let Some(file_name) = file_name.path() else { return Ok(()); };
-                    self_.options.write().unwrap().read_all(&self_.builder);
+
+                    // TODO: read options
+                    // self_.options.write().unwrap().read_all(&self_.builder);
                     self_.core.open_image_from_file(&file_name)?;
                     Ok(())
                 });
@@ -1222,5 +1342,16 @@ impl PreviewUi {
             file_chooser.close();
         }));
         fc.show();
+    }
+
+    fn correct_preview_source(&self) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let mode_type = self.core.mode_data().mode.get_type();
+        let cb_preview_src_aid = match mode_type {
+            ModeType::LiveStacking => "live",
+            ModeType::Waiting      => return,
+            _                      => "frame",
+        };
+        ui.set_prop_str("cb_preview_src.active-id", Some(cb_preview_src_aid));
     }
 }

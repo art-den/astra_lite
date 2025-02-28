@@ -3,14 +3,12 @@ use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use crate::{image::histogram::*, indi};
 
 pub fn correct_spinbutton_by_cam_prop(
-    builder:   &gtk::Builder,
-    spb_name:  &str,
+    spb:       &gtk::SpinButton,
     prop_info: &indi::Result<indi::NumPropValue>,
     digits:    u32,
     step:      Option<f64>,
 ) -> bool {
     if let Ok(info) = prop_info {
-        let spb = builder.object::<gtk::SpinButton>(spb_name).unwrap();
         spb.set_range(info.min, info.max);
         let value = spb.value();
         if value < info.min {
@@ -312,3 +310,4 @@ pub fn is_expanded(builder: &gtk::Builder, expander_name: &str) -> bool {
     let expander = builder.object::<gtk::Expander>(expander_name).unwrap();
     expander.is_expanded()
 }
+

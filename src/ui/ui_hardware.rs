@@ -17,6 +17,7 @@ use super::{ui_main::*, indi_widget::*};
 
 pub fn init_ui(
     _app:     &gtk::Application,
+    window:   &gtk::ApplicationWindow,
     builder:  &gtk::Builder,
     main_ui:  &Rc<MainUi>,
     options:  &Arc<RwLock<Options>>,
@@ -24,8 +25,6 @@ pub fn init_ui(
     indi:     &Arc<indi::Connection>,
     handlers: &mut MainUiEventHandlers,
 ) {
-    let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
-
     let (drivers, load_drivers_err) =
         if cfg!(target_os = "windows") {
             (indi::Drivers::new_empty(), None)

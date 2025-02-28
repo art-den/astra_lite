@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Generated with glade 3.38.2 -->
+<interface>
+  <requires lib="gtk+" version="3.24"/>
+  <!-- n-columns=2 n-rows=6 -->
+  <object class="GtkGrid" id="grid">
+    <property name="visible">True</property>
+    <property name="can-focus">False</property>
+    <property name="row-spacing">5</property>
+    <property name="column-spacing">5</property>
+    <child>
+      <object class="GtkLabel" id="l_mode">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="halign">start</property>
+        <property name="label" translatable="yes">Mode:</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">0</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkComboBoxText" id="cb_mode">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="hexpand">True</property>
+        <property name="active-id">light</property>
+        <items>
+          <item id="light" translatable="yes">Lights</item>
+          <item id="flat" translatable="yes">Flats</item>
+          <item id="dark" translatable="yes">Darks</item>
+          <item id="bias" translatable="yes">Biases</item>
+        </items>
+      </object>
+      <packing>
+        <property name="left-attach">1</property>
+        <property name="top-attach">0</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkLabel" id="l_exp">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="halign">start</property>
+        <property name="label" translatable="yes">Exposure (s):</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">1</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkSpinButton" id="spb_exp">
+        <property name="visible">True</property>
+        <property name="can-focus">True</property>
+        <property name="hexpand">True</property>
+        <property name="text" translatable="yes">0,000</property>
+        <property name="digits">3</property>
+      </object>
+      <packing>
+        <property name="left-attach">1</property>
+        <property name="top-attach">1</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkLabel" id="l_gain">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="halign">start</property>
+        <property name="label" translatable="yes">Gain:</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">2</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkLabel" id="l_offset">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="halign">start</property>
+        <property name="label" translatable="yes">Offset:</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">3</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkLabel" id="l_crop">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="halign">start</property>
+        <property name="label" translatable="yes">Crop:</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">5</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkLabel" id="l_bin">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="halign">start</property>
+        <property name="label" translatable="yes">Resolution:</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">4</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkSpinButton" id="spb_gain">
+        <property name="visible">True</property>
+        <property name="can-focus">True</property>
+        <property name="hexpand">True</property>
+        <property name="text" translatable="yes">0</property>
+      </object>
+      <packing>
+        <property name="left-attach">1</property>
+        <property name="top-attach">2</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkSpinButton" id="spb_offset">
+        <property name="visible">True</property>
+        <property name="can-focus">True</property>
+        <property name="hexpand">True</property>
+        <property name="text" translatable="yes">100</property>
+      </object>
+      <packing>
+        <property name="left-attach">1</property>
+        <property name="top-attach">3</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkComboBoxText" id="cb_crop">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="hexpand">True</property>
+        <property name="active-id">100</property>
+        <items>
+          <item id="100" translatable="yes">None</item>
+          <item id="75" translatable="yes">75%</item>
+          <item id="50" translatable="yes">50%</item>
+          <item id="33" translatable="yes">33.3%</item>
+          <item id="25" translatable="yes">25%</item>
+        </items>
+      </object>
+      <packing>
+        <property name="left-attach">1</property>
+        <property name="top-attach">5</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkComboBoxText" id="cb_bin">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="hexpand">True</property>
+        <property name="active-id">1</property>
+        <items>
+          <item id="1" translatable="yes">Max</item>
+          <item id="2" translatable="yes">Bin 2x2</item>
+          <item id="3" translatable="yes">Bin 3x3</item>
+          <item id="4" translatable="yes">Bin 4x4</item>
+        </items>
+      </object>
+      <packing>
+        <property name="left-attach">1</property>
+        <property name="top-attach">4</property>
+      </packing>
+    </child>
+  </object>
+</interface>

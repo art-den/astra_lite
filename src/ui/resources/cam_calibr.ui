@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Generated with glade 3.38.2 -->
+<interface>
+  <requires lib="gtk+" version="3.24"/>
+  <!-- n-columns=1 n-rows=8 -->
+  <object class="GtkGrid" id="grid">
+    <property name="visible">True</property>
+    <property name="can-focus">False</property>
+    <property name="hexpand">False</property>
+    <property name="row-spacing">5</property>
+    <property name="column-spacing">5</property>
+    <child>
+      <object class="GtkCheckButton" id="chb_master_dark">
+        <property name="label" translatable="yes">Subtract DARK frame</property>
+        <property name="visible">True</property>
+        <property name="can-focus">True</property>
+        <property name="receives-default">False</property>
+        <property name="tooltip-text" translatable="yes">Applies dark frame from dark library (if found)
+Also fixes hot pixels by defect pixels file (if found)</property>
+        <property name="halign">start</property>
+        <property name="draw-indicator">True</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">1</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkLabel">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="opacity">0.50196078431372548</property>
+        <property name="halign">start</property>
+        <property name="label" translatable="yes">(Used for preview or live stacking only)</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">0</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkCheckButton" id="chb_master_flat">
+        <property name="label" translatable="yes">Apply master FLAT frame:</property>
+        <property name="visible">True</property>
+        <property name="can-focus">True</property>
+        <property name="receives-default">False</property>
+        <property name="halign">start</property>
+        <property name="draw-indicator">True</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">3</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkFileChooserButton" id="fch_master_flat">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="hexpand">True</property>
+        <property name="create-folders">False</property>
+        <property name="title" translatable="yes"/>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">4</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkSeparator">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="margin-top">3</property>
+        <property name="margin-bottom">3</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">5</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkCheckButton" id="chb_hot_pixels">
+        <property name="label" translatable="yes">Remove hot pixels from light frame
+if no master dark defined</property>
+        <property name="visible">True</property>
+        <property name="can-focus">True</property>
+        <property name="receives-default">False</property>
+        <property name="tooltip-text" translatable="yes">Search and remove hot pixels from light frame. 
+Is not using darks or defect pixel files.
+Сan consider a very small star as a dead pixel and delete it</property>
+        <property name="halign">start</property>
+        <property name="draw-indicator">True</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">6</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkLabel" id="l_hot_pixels_warn">
+        <property name="can-focus">False</property>
+        <property name="opacity">0.50196078431372548</property>
+        <property name="halign">start</property>
+        <property name="margin-left">20</property>
+        <property name="margin-start">20</property>
+        <property name="label" translatable="yes">&lt;b&gt;Warning!&lt;/b&gt; Can "eat" your small stars. Better use "Subtrack master DARK frame"</property>
+        <property name="use-markup">True</property>
+        <property name="wrap">True</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">7</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkSeparator">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">2</property>
+      </packing>
+    </child>
+  </object>
+</interface>

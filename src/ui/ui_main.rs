@@ -13,6 +13,72 @@ use crate::{
 };
 use super::utils::*;
 
+pub trait UiModule {
+    fn show_options(&self, options: &Options);
+    fn get_options(&self, options: &mut Options);
+    fn connect_ui_events(&self);
+}
+
+pub struct UiModules {
+    items: RefCell<Vec<Rc<dyn UiModule>>>,
+}
+
+impl UiModules {
+    pub fn new() -> Self {
+        Self {
+            items: RefCell::new(Vec::new()),
+        }
+    }
+
+    fn add_module(&self, module: Rc<dyn UiModule>) {
+        let mut items = self.items.borrow_mut();
+        items.push(module);
+    }
+
+    pub fn show_options(&self, options: &Options) {
+        let items = self.items.borrow();
+        for widget in &*items {
+            widget.show_options(options);
+        }
+    }
+
+    pub fn get_options(&self, options: &mut Options) {
+        let items = self.items.borrow();
+        for widget in &*items {
+            widget.get_options(options);
+        }
+    }
+}
+
+pub enum PanelPosition {
+    Left,
+    Right,
+    Top,
+    Center,
+}
+
+pub struct Panel {
+    pub name:   String,
+    pub widhet: gtk::Widget,
+    pub pos:    PanelPosition,
+}
+
+struct Panels {
+    items: Vec<Panel>,
+}
+
+impl Panels {
+    pub fn new() -> Self {
+        Self {
+            items: Vec::new(),
+        }
+    }
+
+    pub fn add(&mut self, panel: Panel) {
+        self.items.push(panel);
+    }
+}
+
 pub fn init_ui(
     app:      &gtk::Application,
     indi:     &Arc<indi::Connection>,
@@ -52,11 +118,14 @@ pub fn init_ui(
         load_json_from_config_file(&mut ui_options, MainUi::CONF_FN)
     });
 
+    let ui_modules = Rc::new(UiModules::new());
+
     let data = Rc::new(MainUi {
         logs_dir:       logs_dir.clone(),
         core:           Arc::clone(core),
         indi:           Arc::clone(indi),
         options:        Arc::clone(options),
+        ui_modules:     Rc::clone(&ui_modules),
         ui_options:     RefCell::new(ui_options),
         handlers:       RefCell::new(MainUiEventHandlers::new()),
         progress:       RefCell::new(None),
@@ -92,10 +161,10 @@ pub fn init_ui(
     ));
 
     let mut handlers = data.handlers.borrow_mut();
-    super::ui_hardware::init_ui(app, &builder, &data, options, core, indi, &mut handlers);
-    super::ui_camera::init_ui(app, &builder, options, core, indi, &mut handlers);
+    super::ui_hardware::init_ui(app, &window, &builder, &data, options, core, indi, &mut handlers);
+    let camera = super::ui_camera::init_ui(&window, options, core, indi, &mut handlers, Rc::downgrade(&ui_modules));
     super::ui_darks_library::init_ui(app, &builder, options, core, indi, &mut handlers);
-    super::ui_preview::init_ui(app, &builder, &data, options, core, &mut handlers);
+    let preview = super::ui_preview::init_ui(&window, &data, options, core, Rc::downgrade(&ui_modules), &mut handlers);
     super::ui_focuser::init_ui(app, &builder, options, core, indi, &mut handlers);
     super::ui_dithering::init_ui(app, &builder, options, core, indi, &mut handlers);
     super::ui_mount::init_ui(app, &builder, options, core, indi, &mut handlers);
@@ -103,6 +172,9 @@ pub fn init_ui(
     super::ui_polar_align::init_ui(app, &builder, options, core, indi, &mut handlers);
     super::ui_skymap::init_ui(app, &builder, &data, core, options, indi, &mut handlers);
     drop(handlers);
+
+    ui_modules.add_module(camera);
+    ui_modules.add_module(preview);
 
     // show common options
     let opts = options.read().unwrap();
@@ -255,6 +327,7 @@ impl Default for UiOptions {
 pub struct MainUi {
     logs_dir:       PathBuf,
     options:        Arc<RwLock<Options>>,
+    ui_modules:     Rc<UiModules>,
     ui_options:     RefCell<UiOptions>,
     handlers:       RefCell<MainUiEventHandlers>,
     progress:       RefCell<Option<Progress>>,
@@ -586,3 +659,4 @@ impl MainUi {
         TabPage::from_tab_index(page_index)
     }
 }
+
