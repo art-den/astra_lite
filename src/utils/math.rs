@@ -56,6 +56,11 @@ fn test_median5() {
     }
 }
 
+pub fn median<T: core::cmp::Ord + Copy>(values: &mut [T]) -> T {
+    let pos = values.len() / 2;
+    *values.select_nth_unstable(pos).1
+}
+
 #[inline(always)]
 pub fn linear_interpolate(x: f64, x1: f64, x2: f64, y1: f64, y2: f64) -> f64 {
     (x - x1) * (y2 - y1) / (x2 - x1) + y1

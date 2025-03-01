@@ -104,7 +104,7 @@ impl AstrometryPlateSolver {
 
     fn save_stars_file(
         &mut self,
-        stars:      &Stars,
+        stars:      &StarItems,
         img_width:  usize,
         img_height: usize,
     ) -> anyhow::Result<()> {

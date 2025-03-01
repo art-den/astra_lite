@@ -5,8 +5,7 @@ use std::{
 use crate::{
     indi,
     options::*,
-    utils::math::*,
-    image::info::LightFrameInfo,
+    utils::math::*
 };
 use super::{core::*, events::*, frame_processing::*, utils::*};
 
@@ -159,18 +158,18 @@ impl FocusingMode {
 
     fn process_light_frame_info(
         &mut self,
-        info: &LightFrameInfo,
+        info: &LightFrameInfoData,
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         if let FocusingState::WaitingFrame(focus_pos) = self.state {
             log::debug!(
                 "New frame with ovality={:?} and {:?}",
-                info.stars.ovality, info.stars.fwhm
+                info.stars.info.ovality, info.stars.info.fwhm
             );
 
             let mut ok = false;
             if let (Some(stars_ovality), Some(stars_fwhm))
-            = (info.stars.ovality, info.stars.fwhm) {
+            = (info.stars.info.ovality, info.stars.info.fwhm) {
                 self.try_cnt = 0;
                 if stars_ovality < MAX_FOCUS_STAR_OVALITY {
                     let sample = FocuserSample {
@@ -313,7 +312,7 @@ impl FocusingMode {
         if self.state == FocusingState::WaitingResultImg {
             log::debug!(
                 "RESULT shot is finished. Exiting focusing mode. Final FWHM = {:?}",
-                info.stars.fwhm
+                info.stars.info.fwhm
             );
             result = NotifyResult::Finished { next_mode: self.next_mode.take() };
         }

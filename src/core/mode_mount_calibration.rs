@@ -1,7 +1,7 @@
 use std::{sync::{Arc, RwLock}, f64::consts::PI};
 use itertools::Itertools;
 use crate::{
-    image::{info::*, stars::*, stars_offset::*}, indi, options::*, utils::math::*
+    image::{stars::*, stars_offset::*}, indi, options::*, utils::math::*
 };
 use super::{consts::INDI_SET_PROP_TIMEOUT, core::*, events::*, frame_processing::*, utils::*};
 
@@ -82,7 +82,7 @@ enum DitherCalibrState {
 }
 
 struct DitherCalibrAtempt {
-    stars: Stars,
+    stars: StarItems,
 }
 
 impl MountCalibrMode {
@@ -240,17 +240,17 @@ impl MountCalibrMode {
 
     fn process_light_frame_info(
         &mut self,
-        info: &LightFrameInfo,
+        info: &LightFrameInfoData,
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
-        if info.stars.fwhm_is_ok && info.stars.ovality_is_ok {
+        if info.stars.info.fwhm_is_ok && info.stars.info.ovality_is_ok {
             if self.image_width == 0 || self.image_height == 0 {
-                self.image_width = info.width;
-                self.image_height = info.height;
+                self.image_width = info.image.width;
+                self.image_height = info.image.height;
                 let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.camera.prop);
                 if let Ok((pix_size_x, pix_size_y))
                 = self.indi.camera_get_pixel_size_um(&self.camera.name, cam_ccd) {
-                    let min_size = f64::min(info.width as f64, info.height as f64);
+                    let min_size = f64::min(info.image.width as f64, info.image.height as f64);
                     let min_pix_size = f64::min(pix_size_x, pix_size_y);
                     let cam_size_mm = min_size * min_pix_size / 1000.0;
                     let camera_angle = f64::atan2(cam_size_mm, self.telescope.real_focal_length());
@@ -267,7 +267,7 @@ impl MountCalibrMode {
                 }
             }
             self.attempts.push(DitherCalibrAtempt {
-                stars: info.stars.items.clone(),
+                stars: Vec::clone(&info.stars.items),
             });
             self.attempt_num += 1;
             result = NotifyResult::ProgressChanges;

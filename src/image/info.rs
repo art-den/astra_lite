@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use crate::utils::log_utils::TimeLogger;
-use super::{histogram::*, image::*, raw::CalibrMethods, stars::*, stars_offset::*};
+use super::{histogram::*, image::*, raw::CalibrMethods};
 
 pub fn seconds_to_total_time_str(seconds: f64, short: bool) -> String {
     let secs_total = seconds as u64;
@@ -37,22 +37,12 @@ pub struct LightFrameInfo {
     pub background:     i32,
     pub bg_percent:     f32,
     pub max_value:      u16,
-    pub stars:          StarsInfo,
-    pub stars_offset:   Option<Offset>,
-    pub offset_is_ok:   bool,
     pub calibr_methods: CalibrMethods,
 }
 
 impl LightFrameInfo {
-    pub fn from_image(
-        image:                &Image,
-        max_stars_fwhm:       Option<f32>,
-        max_stars_ovality:    Option<f32>,
-        stars_pos_for_offset: Option<&Vec<Point>>,
-        mt:                   bool,
-    ) -> Self {
+    pub fn from_image(image: &Image, mt: bool) -> Self {
         let max_value = image.max_value();
-        let overexposured_bord = (90 * max_value as u32 / 100) as u16;
         let mono_layer = if image.is_color() { &image.g } else { &image.l };
 
         // Noise
@@ -67,45 +57,6 @@ impl LightFrameInfo {
         let background = mono_layer.calc_background(mt) as i32;
         tmr.log("calc image background");
 
-        // Stars
-
-        let tmr = TimeLogger::start();
-
-        let stars_info = StarsInfo::new_from_image(
-            &mono_layer,
-            noise,
-            background,
-            overexposured_bord,
-            &image.raw_info,
-            max_value,
-            max_stars_fwhm,
-            max_stars_ovality,
-            mt
-        );
-
-        tmr.log("searching stars");
-
-        // Offset by reference stars
-
-        let (stars_offset, offset_is_ok) = if let (Some(starts_for_offset), true, true) =
-        (stars_pos_for_offset, stars_info.fwhm_is_ok, stars_info.ovality_is_ok) {
-            let tmr = TimeLogger::start();
-            let cur_stars_points: Vec<_> = stars_info.items.iter()
-                .map(|star| Point {x: star.x, y: star.y })
-                .collect();
-            let image_offset = Offset::calculate(
-                starts_for_offset,
-                &cur_stars_points,
-                image.width() as f64,
-                image.height() as f64
-            );
-            tmr.log("Offset::calculate");
-            let img_offset_is_ok = !image_offset.is_none();
-            (image_offset, img_offset_is_ok)
-        } else {
-            (None, true)
-        };
-
         Self {
             time: image.raw_info.as_ref().map(|info| info.time.clone()).flatten(),
             width: image.width(),
@@ -116,9 +67,6 @@ impl LightFrameInfo {
             background,
             bg_percent: (100.0 * background as f64 / image.max_value() as f64) as f32,
             max_value,
-            stars: stars_info,
-            stars_offset,
-            offset_is_ok,
             calibr_methods: CalibrMethods::empty(),
         }
     }

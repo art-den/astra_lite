@@ -8,7 +8,7 @@ use chrono::Utc;
 use crate::{
     core::{consts::INDI_SET_PROP_TIMEOUT, utils::FileNameArg},
     guiding::external_guider::*,
-    image::{histogram::*, info::LightFrameInfo, raw::{FrameType, RawStacker, RawImage, RawImageInfo}, stars_offset::*},
+    image::{histogram::*, raw::{FrameType, RawStacker, RawImage, RawImageInfo}, stars_offset::*},
     indi,
     options::*,
     utils::io_utils::*,
@@ -397,7 +397,7 @@ impl TackingPicturesMode {
 
     fn process_light_frame_info_and_refocus(
         &mut self,
-        info: &LightFrameInfo
+        info: &LightFrameInfoData
     ) -> anyhow::Result<NotifyResult> {
         let use_focus =
             self.cam_mode == CameraMode::LiveStacking ||
@@ -407,7 +407,7 @@ impl TackingPicturesMode {
         }
 
         // push fwhm
-        if let Some(fwhm) = info.stars.fwhm {
+        if let Some(fwhm) = info.stars.info.fwhm {
             self.refocus.fwhm.push(fwhm);
         }
 
@@ -487,7 +487,7 @@ impl TackingPicturesMode {
 
     fn process_light_frame_info_and_dither_by_main_camera(
         &mut self,
-        info: &LightFrameInfo
+        info: &LightFrameInfoData
     ) -> anyhow::Result<NotifyResult> {
         let mount_device_active = self.indi.is_device_enabled(&self.mount_device).unwrap_or(false);
         if !mount_device_active {
@@ -512,7 +512,7 @@ impl TackingPicturesMode {
 
         // dithering
         if guider_options.dith_period != 0 {
-            guider_data.dither_exp_sum += info.exposure;
+            guider_data.dither_exp_sum += info.image.exposure;
             if guider_data.dither_exp_sum > (guider_options.dith_period * 60) as f64 {
                 guider_data.dither_exp_sum = 0.0;
                 use rand::prelude::*;
@@ -527,7 +527,7 @@ impl TackingPicturesMode {
         }
 
         // guiding
-        if let Some(offset) = &info.stars_offset {
+        if let Some(offset) = &info.stars.offset {
             let mut offset_x = offset.x;
             let mut offset_y = offset.y;
             offset_x -= guider_data.dither_x;
@@ -592,7 +592,7 @@ impl TackingPicturesMode {
 
     fn process_light_frame_info_and_dither_by_ext_guider(
         &mut self,
-        info: &LightFrameInfo
+        info: &LightFrameInfoData
     ) -> anyhow::Result<NotifyResult> {
         // take self.guider
         let Some(mut guider_data) = self.guider.take() else {
@@ -612,7 +612,7 @@ impl TackingPicturesMode {
             let guider_options = self.guider_options.as_ref().unwrap();
 
             if guider_options.dith_period != 0 {
-                guider_data.dither_exp_sum += info.exposure;
+                guider_data.dither_exp_sum += info.image.exposure;
                 if guider_data.dither_exp_sum > (guider_options.dith_period * 60) as f64 {
                     guider_data.dither_exp_sum = 0.0;
                     let dist = guider_options.ext_guider.dith_dist;
@@ -893,9 +893,9 @@ impl TackingPicturesMode {
 
     fn process_light_frame_info(
         &mut self,
-        info: &LightFrameInfo,
+        info: &LightFrameInfoData,
     ) -> anyhow::Result<NotifyResult> {
-        if !info.stars.is_ok() {
+        if !info.stars.info.is_ok() {
             return Ok(NotifyResult::Empty);
         }
 

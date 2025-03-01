@@ -682,7 +682,8 @@ impl Core {
         let mode = GotoMode::new(
             GotoDestination::Image{
                 image: Arc::clone(&self.cur_frame.image),
-                info: Arc::clone(light_frame_info),
+                info: Arc::clone(&light_frame_info.image),
+                stars: Arc::clone(&light_frame_info.stars)
             },
             GotoConfig::GotoPlateSolveAndCorrect,
             &self.options,

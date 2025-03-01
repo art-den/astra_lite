@@ -475,27 +475,27 @@ impl PreviewUi {
 
         match &*info {
             ResultImageInfo::LightInfo(info) => {
-                ui.set_prop_str("e_info_exp.text", Some(&seconds_to_total_time_str(info.exposure, true)));
+                ui.set_prop_str("e_info_exp.text", Some(&seconds_to_total_time_str(info.image.exposure, true)));
 
                 let mut fwhm_str = String::new();
-                if let Some(value) = info.stars.fwhm {
+                if let Some(value) = info.stars.info.fwhm {
                     fwhm_str += &format!("{:.1}px²", value);
                 }
-                if let Some(value) = info.stars.fwhm_angular {
+                if let Some(value) = info.stars.info.fwhm_angular {
                     fwhm_str += &format!(" / {:.1}\"", 60.0 * 60.0 * radian_to_degree(value as f64));
                 }
                 ui.set_prop_str("e_fwhm.text", Some(&fwhm_str));
 
-                match info.stars.ovality {
+                match info.stars.info.ovality {
                     Some(value) => ui.set_prop_str("e_ovality.text", Some(&format!("{:.1}", value))),
                     None        => ui.set_prop_str("e_ovality.text", Some("")),
                 }
                 let stars_cnt = info.stars.items.len();
                 let overexp_stars = info.stars.items.iter().filter(|s| s.overexposured).count();
                 ui.set_prop_str("e_stars.text", Some(&format!("{} ({})", stars_cnt, overexp_stars)));
-                let bg = 100_f64 * info.background as f64 / info.max_value as f64;
+                let bg = 100_f64 * info.image.background as f64 / info.image.max_value as f64;
                 ui.set_prop_str("e_background.text", Some(&format!("{:.2}%", bg)));
-                let noise = 100_f64 * info.noise as f64 / info.max_value as f64;
+                let noise = 100_f64 * info.image.noise as f64 / info.image.max_value as f64;
                 ui.set_prop_str("e_noise.text", Some(&format!("{:.4}%", noise)));
                 update_info_panel_vis(true, false, false);
             },
@@ -562,20 +562,26 @@ impl PreviewUi {
     fn create_and_show_preview_image(&self) {
         let options = self.options.read().unwrap();
         let preview_params = options.preview.preview_params();
-        let (image, hist) = match options.preview.source {
+        let (image, hist, stars) = match options.preview.source {
             PreviewSource::OrigFrame =>
-                (&*self.core.cur_frame().image, &self.core.cur_frame().img_hist),
+                (&*self.core.cur_frame().image, &self.core.cur_frame().img_hist, Some(&self.core.cur_frame().stars)),
             PreviewSource::LiveStacking =>
-                (&self.core.live_stacking().image, &self.core.live_stacking().hist),
+                (&self.core.live_stacking().image, &self.core.live_stacking().hist, None),
         };
         drop(options);
         let image = image.read().unwrap();
         let hist = hist.read().unwrap();
+        let stars = stars.as_ref().map(|s| s.read().unwrap());
         let rgb_bytes = get_preview_rgb_data(
             &image,
             &hist,
-            &preview_params
+            &preview_params,
+            stars.as_ref().and_then(|s| s.as_ref().and_then(|s| Some(&*s.items)))
         );
+        drop(stars);
+        drop(hist);
+        drop(image);
+
         if let Some(rgb_bytes) = rgb_bytes {
             self.show_preview_image(Some(&rgb_bytes), None);
         } else {
@@ -675,7 +681,7 @@ impl PreviewUi {
             let image = image.read().unwrap();
             let hist = hist.read().unwrap();
             let preview_params = preview_options.preview_params();
-            let rgb_data = get_preview_rgb_data(&image, &hist, &preview_params);
+            let rgb_data = get_preview_rgb_data(&image, &hist, &preview_params, None);
             let Some(rgb_data) = rgb_data else { anyhow::bail!("wrong RGB fata"); };
             let bytes = glib::Bytes::from_owned(rgb_data.bytes);
             let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
@@ -816,18 +822,18 @@ impl PreviewUi {
             FrameProcessResultData::LightFrameInfo(info) => {
                 let history_item = LightHistoryItem {
                     mode_type:      result.mode_type,
-                    time:           info.time.clone(),
-                    fwhm:           info.stars.fwhm,
-                    fwhm_angular:   info.stars.fwhm_angular,
-                    bad_fwhm:       !info.stars.fwhm_is_ok,
-                    stars_ovality:  info.stars.ovality,
-                    bad_ovality:    !info.stars.ovality_is_ok,
-                    background:     info.bg_percent,
-                    noise:          info.raw_noise.map(|n| 100.0 * n / info.max_value as f32),
+                    time:           info.image.time.clone(),
+                    fwhm:           info.stars.info.fwhm,
+                    fwhm_angular:   info.stars.info.fwhm_angular,
+                    bad_fwhm:       !info.stars.info.fwhm_is_ok,
+                    stars_ovality:  info.stars.info.ovality,
+                    bad_ovality:    !info.stars.info.ovality_is_ok,
+                    background:     info.image.bg_percent,
+                    noise:          info.image.raw_noise.map(|n| 100.0 * n / info.image.max_value as f32),
                     stars_count:    info.stars.items.len(),
-                    offset:         info.stars_offset.clone(),
-                    bad_offset:     !info.offset_is_ok,
-                    calibr_methods: info.calibr_methods.clone(),
+                    offset:         info.stars.offset.clone(),
+                    bad_offset:     !info.stars.offset_is_ok,
+                    calibr_methods: info.image.calibr_methods.clone(),
                 };
                 self.light_history.borrow_mut().push(history_item);
                 self.update_light_history_table();
