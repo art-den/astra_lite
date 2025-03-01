@@ -5648,6 +5648,20 @@ Useful when the object is not lagre and is in the center of the image.</property
                               </packing>
                             </child>
                             <child>
+                              <object class="GtkCheckButton" id="chb_preview_stars">
+                                <property name="label" translatable="yes">Stars</property>
+                                <property name="visible">True</property>
+                                <property name="can-focus">True</property>
+                                <property name="receives-default">False</property>
+                                <property name="draw-indicator">True</property>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">8</property>
+                              </packing>
+                            </child>
+                            <child>
                               <object class="GtkSeparator">
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
@@ -5656,7 +5670,7 @@ Useful when the object is not lagre and is in the center of the image.</property
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="position">8</property>
+                                <property name="position">9</property>
                               </packing>
                             </child>
                             <child>
@@ -5704,11 +5718,8 @@ Useful when the object is not lagre and is in the center of the image.</property
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="position">9</property>
+                                <property name="position">10</property>
                               </packing>
-                            </child>
-                            <child>
-                              <placeholder/>
                             </child>
                           </object>
                           <packing>

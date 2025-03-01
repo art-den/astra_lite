@@ -327,6 +327,14 @@ impl PreviewUi {
             self_.create_and_show_preview_image();
         }));
 
+        let chb_preview_stars = self.builder.object::<gtk::CheckButton>("chb_preview_stars").unwrap();
+        chb_preview_stars.connect_active_notify(clone!(@weak self as self_ => move |chb| {
+            let Ok(mut options) = self_.options.try_write() else { return; };
+            options.preview.stars = chb.is_active();
+            dbg!(options.preview.stars);
+            drop(options);
+            self_.create_and_show_preview_image();
+        }));
     }
 
     fn connect_core_events(self: &Rc<Self>) {

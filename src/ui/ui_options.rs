@@ -150,6 +150,7 @@ impl Options {
         self.preview.wb_red      = ui.range_value("scl_wb_red");
         self.preview.wb_green    = ui.range_value("scl_wb_green");
         self.preview.wb_blue     = ui.range_value("scl_wb_blue");
+        self.preview.stars       = ui.prop_bool("chb_preview_stars.active");
     }
 
     pub fn read_focuser(&mut self, builder: &gtk::Builder) {
@@ -339,6 +340,7 @@ impl Options {
         ui.set_range_value("scl_wb_red",                 self.preview.wb_red);
         ui.set_range_value("scl_wb_green",               self.preview.wb_green);
         ui.set_range_value("scl_wb_blue",                self.preview.wb_blue);
+        ui.set_prop_bool  ("chb_preview_stars.active",   self.preview.stars);
     }
 
     pub fn show_plate_solve(&self, builder: &gtk::Builder) {

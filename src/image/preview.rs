@@ -20,6 +20,7 @@ pub struct PreviewParams {
     pub remove_gradient:  bool,
     pub color:            PreviewColorMode,
     pub wb:               Option<[f64; 3]>,
+    pub stars:            bool,
 }
 
 impl PreviewParams {
@@ -148,7 +149,7 @@ pub fn get_preview_rgb_data(
         &wb
     );
 
-    if let Some(stars) = stars {
+    if let (Some(stars), true) = (stars, params.stars) {
         show_stars(stars, &mut bytes, image.width(), reduct_ratio);
     }
 
