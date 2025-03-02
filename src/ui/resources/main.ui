@@ -901,7 +901,7 @@
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
                     <property name="halign">start</property>
-                    <property name="label" translatable="yes">Guiding and dihering:</property>
+                    <property name="label" translatable="yes">Guiding and dithering:</property>
                   </object>
                   <packing>
                     <property name="expand">False</property>
@@ -3055,7 +3055,7 @@ if no master dark defined</property>
                                         <property name="visible">True</property>
                                         <property name="can-focus">True</property>
                                         <property name="receives-default">False</property>
-                                        <property name="tooltip-text" translatable="yes">Search and remove hot pixels from light frame. 
+                                        <property name="tooltip-text" translatable="yes">Search and remove hot pixels from light frame.
 Is not using darks or defect pixel files.
 Сan consider a very small star as a dead pixel and delete it</property>
                                         <property name="halign">start</property>
@@ -4071,7 +4071,7 @@ Also makes stars little sharper</property>
                                                     <property name="can-focus">False</property>
                                                     <property name="opacity">0.50196078431372548</property>
                                                     <property name="halign">start</property>
-                                                    <property name="label" translatable="yes">If unchecked 
+                                                    <property name="label" translatable="yes">If unchecked
 use shot settings</property>
                                                   </object>
                                                   <packing>
@@ -4612,7 +4612,7 @@ pixels files</property>
                                                     <property name="can-focus">False</property>
                                                     <property name="opacity">0.50196078431372548</property>
                                                     <property name="halign">start</property>
-                                                    <property name="label" translatable="yes">If unchecked 
+                                                    <property name="label" translatable="yes">If unchecked
 use shot settings</property>
                                                   </object>
                                                   <packing>
@@ -5044,7 +5044,7 @@ dark files</property>
                                                     <property name="can-focus">False</property>
                                                     <property name="opacity">0.50196078431372548</property>
                                                     <property name="halign">start</property>
-                                                    <property name="label" translatable="yes">If unchecked 
+                                                    <property name="label" translatable="yes">If unchecked
 use shot settings</property>
                                                   </object>
                                                   <packing>
@@ -5272,7 +5272,7 @@ use shot settings</property>
                                                 <property name="homogeneous">True</property>
                                                 <child>
                                                   <object class="GtkButton">
-                                                    <property name="label" translatable="yes">Create master 
+                                                    <property name="label" translatable="yes">Create master
 bias files</property>
                                                     <property name="visible">True</property>
                                                     <property name="can-focus">True</property>
@@ -5637,7 +5637,7 @@ bias files</property>
                                 <property name="can-focus">True</property>
                                 <property name="receives-default">False</property>
                                 <property name="tooltip-text" translatable="yes">Remove background gradient.
-Useful when the object is not lagre and is in the center of the image.</property>
+Useful when the object is not large and is in the center of the image.</property>
                                 <property name="valign">center</property>
                                 <property name="draw-indicator">True</property>
                               </object>
