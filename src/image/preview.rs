@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, usize};
 
 use itertools::{izip, Itertools};
 
@@ -6,7 +6,7 @@ use crate::{
     utils::math::linear_interpolate, PreviewColorMode, PreviewScale
 };
 
-use super::{cam_db::*, histogram::Histogram, image::{Image, ImageLayer}};
+use super::{cam_db::*, histogram::Histogram, image::{Image, ImageLayer}, stars::StarItems};
 
 #[derive(PartialEq, Clone)]
 pub struct PreviewParams {
@@ -20,6 +20,7 @@ pub struct PreviewParams {
     pub remove_gradient:  bool,
     pub color:            PreviewColorMode,
     pub wb:               Option<[f64; 3]>,
+    pub stars:            bool,
 }
 
 impl PreviewParams {
@@ -115,6 +116,7 @@ pub fn get_preview_rgb_data(
     image:  &Image,
     hist:   &Histogram,
     params: &PreviewParams,
+    stars:  Option<&StarItems>,
 ) -> Option<PreviewRgbData> {
     if (hist.l.is_none() && hist.b.is_none()) || image.is_empty() {
         return None;
@@ -130,16 +132,26 @@ pub fn get_preview_rgb_data(
     );
     log::debug!("preview levels = {:?}", levels);
 
-    let (wb, censor) = get_wb_and_sensor(&params.wb, &image.raw_info.as_ref().map(|info| info.camera.as_str()).unwrap_or_default());
+    let (wb, censor) = get_wb_and_sensor(
+        &params.wb,
+        &image.raw_info
+            .as_ref()
+            .map(|info| info.camera.as_str())
+            .unwrap_or_default()
+    );
     log::debug!("preview wb and sensor = {:?} {}", wb, censor);
 
-    let (bytes, width, height) = to_grb_bytes(
+    let (mut bytes, width, height) = to_grb_bytes(
         image,
         params,
         &levels,
         reduct_ratio,
         &wb
     );
+
+    if let (Some(stars), true) = (stars, params.stars) {
+        show_stars(stars, &mut bytes, image.width(), reduct_ratio);
+    }
 
     Some(PreviewRgbData {
         width,
@@ -150,6 +162,23 @@ pub fn get_preview_rgb_data(
         is_color_image: image.is_color(),
         sensor_name:    censor,
     })
+}
+
+fn show_stars(stars: &StarItems, bytes: &mut [u8], width: usize, reduct_ratio: usize) {
+    let width = width / reduct_ratio;
+    let good_color = (0, 255, 0);
+    let bad_color = (255, 32, 32);
+    for star in stars {
+        let (r, g, b) = if !star.overexposured { good_color } else { bad_color };
+        for (x, y) in &star.points {
+            let x = *x / reduct_ratio;
+            let y = *y / reduct_ratio;
+            let offset = 3 * (y * width + x);
+            bytes[offset] = r;
+            bytes[offset+1] = g;
+            bytes[offset+2] = b;
+        }
+    }
 }
 
 #[derive(Debug)]

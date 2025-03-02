@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 
-use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*}, image::{image::*, stars::Stars}, indi, options::*, plate_solve::*, ui::sky_map::math::*};
+use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*}, image::{image::*, stars::StarItems}, indi, options::*, plate_solve::*, ui::sky_map::math::*};
 
 use super::{events::*, utils::gain_to_value};
 
@@ -67,7 +67,7 @@ impl CapturePlatesolveMode {
 
     fn plate_solve_stars(
         &mut self,
-        stars:      &Stars,
+        stars:      &StarItems,
         img_width:  usize,
         img_height: usize
     ) -> anyhow::Result<()> {
@@ -178,7 +178,7 @@ impl Mode for CapturePlatesolveMode {
                 return Ok(NotifyResult::ProgressChanges);
             }
             (State::Capturing, FrameProcessResultData::LightFrameInfo(info), true) => {
-                self.plate_solve_stars(&info.stars.items, info.width, info.height)?;
+                self.plate_solve_stars(&info.stars.items, info.image.width, info.image.height)?;
                 self.state = State::PlateSolve;
                 return Ok(NotifyResult::ProgressChanges);
             }

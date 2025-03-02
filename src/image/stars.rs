@@ -17,12 +17,13 @@ pub struct Star {
     pub overexposured: bool,
     pub width:         usize,
     pub height:        usize,
+    pub points:        Vec<(usize, usize)>,
 }
 
-pub type Stars = Vec<Star>;
+pub type StarItems = Vec<Star>;
 
+#[derive(Default)]
 pub struct StarsInfo {
-    pub items:         Stars,
     pub fwhm:          Option<f32>,
     pub fwhm_angular:  Option<f32>,
     pub fwhm_is_ok:    bool,
@@ -31,25 +32,26 @@ pub struct StarsInfo {
 }
 
 impl StarsInfo {
+    pub fn is_ok(&self) -> bool {
+        self.fwhm_is_ok && self.ovality_is_ok
+    }
+}
+
+#[derive(Default)]
+pub struct Stars {
+    pub items: StarItems,
+    pub info:  StarsInfo,
+}
+
+impl Stars {
     pub fn new_from_image(
         image:              &ImageLayer<u16>,
-        noise:              f32,
-        background:         i32,
-        overexposured_bord: u16,
         raw_info:           &Option<RawImageInfo>,
-        max_value:          u16,
         max_stars_fwhm:     Option<f32>,
         max_stars_ovality:  Option<f32>,
         mt:                 bool
     ) -> Self {
-        let items = Self::find_stars_in_image(
-            &image,
-            noise,
-            background,
-            overexposured_bord,
-            max_value,
-            mt
-        );
+        let items = Self::find_stars_in_image(&image, mt);
 
         const COMMON_STAR_MAG: usize = 4;
         const COMMON_STAR_MAG_F: f64 = COMMON_STAR_MAG as f64;
@@ -73,37 +75,50 @@ impl StarsInfo {
 
         let fwhm_angular = Self::calc_angular_fwhm(fwhm, raw_info);
 
-        Self {
-            items,
+        let info = StarsInfo {
             fwhm,
             fwhm_angular,
             fwhm_is_ok,
             ovality,
             ovality_is_ok,
+        };
+
+        Self { items, info }
+    }
+
+    fn find_border_for_stars_detection(image: &ImageLayer<u16>) -> u16 {
+        let mut diffs = Vec::new();
+        for row in image.as_slice().chunks_exact(image.width()) {
+            for area in row.chunks_exact(MAX_STAR_DIAM) {
+                let Some(&[b1, b2, b3, b4, b5]) = area.first_chunk::<5>() else { continue; };
+                let Some(&[e1, e2, e3, e4, e5]) = area.last_chunk::<5>() else { continue; };
+                let area_middle = area.len() / 2;
+                let &[c1, c2, c3] = &area[area_middle-1..=area_middle+1] else { continue; };
+                let begin = median5(b1, b2, b3, b4, b5) as i32;
+                let end = median5(e1, e2, e3, e4, e5) as i32;
+                let center = median3(c1, c2, c3) as i32;
+                let diff = begin + end - 2 * center;
+                if diff > i16::MAX as i32 || diff < -i16::MAX as i32 {
+                    continue;
+                }
+                diffs.push(diff * diff);
+            }
         }
+
+        let m = median(&mut diffs);
+        let diff = 0.5 * f64::sqrt(m as _);
+
+        let result = (20.0 * diff) as i32;
+        let result = i32::max(result, 1);
+        let result = i32::min(result, u16::MAX as _);
+
+        result as _
     }
 
-    pub fn is_ok(&self) -> bool {
-        self.fwhm_is_ok && self.ovality_is_ok
-    }
-
-    fn find_stars_in_image(
-        image:              &ImageLayer<u16>,
-        noise:              f32,
-        background:         i32,
-        overexposured_bord: u16,
-        max_value:          u16,
-        mt:                 bool
-    ) -> Stars {
+    fn find_stars_in_image(image: &ImageLayer<u16>, mt: bool) -> StarItems {
         const MAX_STARS_POINTS_CNT: usize = MAX_STAR_DIAM * MAX_STAR_DIAM;
         let iir_filter_coeffs = IirFilterCoeffs::new(230);
-        let mut border = (noise * 120.0) as u32;
-        let range = max_value as i32 - background;
-        if border <= 1 {
-            border = u32::max(max_value as u32 / 100, 2);
-        } else if border as i32 > range / 2 {
-            border = (range / 2) as u32;
-        }
+        let border = Self::find_border_for_stars_detection(image) as u32;
         let possible_stars = Mutex::new(HashMap::new());
         let find_possible_stars_in_rows = |y1: usize, y2: usize| {
             let mut filtered = Vec::new();
@@ -194,12 +209,12 @@ impl StarsInfo {
         let mut stars = Vec::new();
         let mut star_bg_values = Vec::new();
         let max_stars_points = image.width() * image.height() / 100; // 1% of area maximum
-        let mut big_cnt = 0_usize;
+        let mut wrong_cnt = 0_usize;
         for (x, y, max_v) in possible_star_centers {
             if all_star_coords.contains(&(x, y)) { continue; }
             if all_star_coords.len() > max_stars_points
-            || big_cnt > 1000 {
-                return Stars::new();
+            || wrong_cnt > 1000 {
+                return StarItems::new();
             }
             let x1 = x - MAX_STAR_DIAM as isize / 2;
             let y1 = y - MAX_STAR_DIAM as isize / 2;
@@ -211,33 +226,32 @@ impl StarsInfo {
             }
             let bg_pos = star_bg_values.len() / 4;
             let bg = *star_bg_values.select_nth_unstable(bg_pos).1;
-            let mut star_points = HashSet::new();
-            let border = bg as i32 + (max_v as i32 - bg as i32) / 3;
-            if border <= 0 { continue; }
-            let border = border as u16;
+            let mut star_points = HashMap::new();
+            let half_max = bg as i32 + (max_v as i32 - bg as i32) / 3;
+            if half_max <= 0 { continue; }
+            let half_max = half_max as u16;
             let mut x_summ = 0_f64;
             let mut y_summ = 0_f64;
             let mut crd_cnt = 0_f64;
             let mut brightness = 0_i32;
-            let mut overexposured = false;
             let mut min_x = isize::MAX;
             let mut max_x = isize::MIN;
             let mut min_y = isize::MAX;
             let mut max_y = isize::MIN;
-            flood_filler.fill(
+            let fill_ok = flood_filler.fill(
                 x,
                 y,
                 |x, y| -> FillPtSetResult {
                     let v = image.get(x, y).unwrap_or(0);
-                    let hit = v > border;
-                    if hit {
+                    let more_than_half_max = v >= half_max;
+                    if more_than_half_max {
                         if all_star_coords.contains(&(x, y))
-                        || star_points.contains(&(x, y))
-                        || star_points.len() > MAX_STARS_POINTS_CNT {
-                            return FillPtSetResult::Error;
+                        || star_points.contains_key(&(x, y)) {
+                            return FillPtSetResult::Miss;
                         }
-                        if v > overexposured_bord {
-                            overexposured = true;
+
+                        if star_points.len() > MAX_STARS_POINTS_CNT {
+                            return FillPtSetResult::Error;
                         }
                         if x < min_x { min_x = x; }
                         if x > max_x { max_x = x; }
@@ -245,34 +259,36 @@ impl StarsInfo {
                         if y > max_y { max_y = y; }
 
                         if max_x - min_x > MAX_STAR_DIAM as isize
-                        || max_x - min_x > MAX_STAR_DIAM as isize {
+                        || max_y - min_y > MAX_STAR_DIAM as isize {
                             return FillPtSetResult::Error;
                         }
 
-                        star_points.insert((x, y));
+                        star_points.insert((x, y), v);
                         all_star_coords.insert((x, y));
                         let v_part = linear_interpolate(v as f64, bg as f64, max_v as f64, 0.0, 1.0);
                         x_summ += v_part * x as f64;
                         y_summ += v_part * y as f64;
                         crd_cnt += v_part;
                         brightness += v as i32 - bg as i32;
+                        FillPtSetResult::Hit
+                    } else {
+                        FillPtSetResult::Miss
                     }
-                    if hit { FillPtSetResult::Hit } else { FillPtSetResult::Miss }
                 }
             );
 
-            if star_points.len() > MAX_STARS_POINTS_CNT {
-                big_cnt += 1;
+            if !fill_ok {
+                wrong_cnt += 1;
+                continue;
             }
 
-            if star_points.len() < MAX_STARS_POINTS_CNT
-            && max_v > bg as u32
+            if max_v > bg as u32
             && brightness > 0
             && Self::check_is_star_points_ok(&star_points) {
-                let min_x = star_points.iter().map(|(x, _)| *x).min().unwrap_or(x);
-                let max_x = star_points.iter().map(|(x, _)| *x).max().unwrap_or(x);
-                let min_y = star_points.iter().map(|(_, y)| *y).min().unwrap_or(y);
-                let max_y = star_points.iter().map(|(_, y)| *y).max().unwrap_or(y);
+                let min_x = star_points.keys().map(|(x, _)| *x).min().unwrap_or(x);
+                let max_x = star_points.keys().map(|(x, _)| *x).max().unwrap_or(x);
+                let min_y = star_points.keys().map(|(_, y)| *y).min().unwrap_or(y);
+                let max_y = star_points.keys().map(|(_, y)| *y).max().unwrap_or(y);
                 let width = 3 * isize::max(x-min_x+1, max_x-x+1);
                 let height = 3 * isize::max(y-min_y+1, max_y-y+1);
                 stars.push(Star {
@@ -281,9 +297,10 @@ impl StarsInfo {
                     background: bg,
                     max_value: max_v as u16,
                     brightness: brightness as u32,
-                    overexposured,
+                    overexposured: Self::check_is_star_overexposured(&star_points, bg),
                     width: width as usize,
                     height: height as usize,
+                    points: star_points.keys().map(|(x, y)| (*x as usize, *y as usize)).collect(),
                 });
             }
         }
@@ -297,14 +314,14 @@ impl StarsInfo {
         stars
     }
 
-    fn check_is_star_points_ok(star_points: &HashSet<(isize, isize)>) -> bool {
+    fn check_is_star_points_ok(star_points: &HashMap<(isize, isize), u16>) -> bool {
         let real_perimeter = star_points
-            .iter()
+            .keys()
             .map(|&(x, y)| {
-                if star_points.contains(&(x-1, y))
-                ||star_points.contains(&(x+1, y))
-                ||star_points.contains(&(x, y+1))
-                ||star_points.contains(&(x, y-1)) {
+                if star_points.contains_key(&(x-1, y))
+                ||star_points.contains_key(&(x+1, y))
+                ||star_points.contains_key(&(x, y+1))
+                ||star_points.contains_key(&(x, y-1)) {
                     1
                 } else {
                     0
@@ -315,6 +332,21 @@ impl StarsInfo {
         let possible_r = f64::sqrt(possible_s / PI);
         let possible_perimeter = 2.0 * PI * possible_r;
         real_perimeter < 3.0 * possible_perimeter
+    }
+
+    fn check_is_star_overexposured(
+        star_points: &HashMap<(isize, isize), u16>,
+        bg: u16
+    ) -> bool {
+        let points_count = star_points.len();
+        if points_count < 4 {
+            return false;
+        }
+        let max = star_points.values().max().copied().unwrap_or_default();
+        let range = max - bg;
+        let plateau_border = max - range / 10;
+        let under_plateau_cnt = star_points.values().filter(|v| **v > plateau_border).count();
+        under_plateau_cnt > points_count/4
     }
 
     fn calc_common_star_image(image: &ImageLayer<u16>, stars: &[Star], k: usize) -> ImageLayer<u16> {

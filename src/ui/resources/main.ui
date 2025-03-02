@@ -2741,7 +2741,7 @@ Up, Down - switch between search results</property>
                                                     <property name="can-focus">False</property>
                                                     <property name="opacity">0.50196078431372548</property>
                                                     <property name="halign">start</property>
-                                                    <property name="label" translatable="yes">If unchecked 
+                                                    <property name="label" translatable="yes">If unchecked
 use shot settings</property>
                                                   </object>
                                                   <packing>
@@ -3282,7 +3282,7 @@ pixels files</property>
                                                     <property name="can-focus">False</property>
                                                     <property name="opacity">0.50196078431372548</property>
                                                     <property name="halign">start</property>
-                                                    <property name="label" translatable="yes">If unchecked 
+                                                    <property name="label" translatable="yes">If unchecked
 use shot settings</property>
                                                   </object>
                                                   <packing>
@@ -3714,7 +3714,7 @@ dark files</property>
                                                     <property name="can-focus">False</property>
                                                     <property name="opacity">0.50196078431372548</property>
                                                     <property name="halign">start</property>
-                                                    <property name="label" translatable="yes">If unchecked 
+                                                    <property name="label" translatable="yes">If unchecked
 use shot settings</property>
                                                   </object>
                                                   <packing>
@@ -3942,7 +3942,7 @@ use shot settings</property>
                                                 <property name="homogeneous">True</property>
                                                 <child>
                                                   <object class="GtkButton">
-                                                    <property name="label" translatable="yes">Create master 
+                                                    <property name="label" translatable="yes">Create master
 bias files</property>
                                                     <property name="visible">True</property>
                                                     <property name="can-focus">True</property>

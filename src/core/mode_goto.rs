@@ -1,5 +1,5 @@
 use std::sync::{Arc, RwLock};
-use crate::{core::{consts::*, events::*, frame_processing::*}, image::{image::Image, info::LightFrameInfo, stars::Stars}, indi::{self, value_to_sexagesimal}, options::*, plate_solve::*, ui::sky_map::math::*};
+use crate::{core::{consts::*, events::*, frame_processing::*}, image::{image::Image, info::LightFrameInfo, stars::StarItems}, indi::{self, value_to_sexagesimal}, options::*, plate_solve::*, ui::sky_map::math::*};
 use super::{core::*, events::EventSubscriptions, utils::*};
 
 const MAX_MOUNT_UNPARK_TIME: usize = 20; // seconds
@@ -23,7 +23,8 @@ pub enum GotoDestination {
     Image{
         image: Arc<RwLock<Image>>,
         info:  Arc<LightFrameInfo>,
-       },
+        stars: Arc<StarsInfoData>,
+    },
     Coord(EqCoord)
 }
 
@@ -171,7 +172,7 @@ impl GotoMode {
 
     fn plate_solve_stars(
         &mut self,
-        stars:      &Stars,
+        stars:      &StarItems,
         img_width:  usize,
         img_height: usize
     ) -> anyhow::Result<()> {
@@ -323,7 +324,7 @@ impl Mode for GotoMode {
                 self.eq_coord = coord.clone();
                 self.start_goto()?;
             }
-            GotoDestination::Image{image, info} => {
+            GotoDestination::Image{image, info, stars} => {
                 let plate_solver = self.plate_solver.as_mut().unwrap();
 
                 self.extra_stages = 1;
@@ -333,7 +334,7 @@ impl Mode for GotoMode {
                 if plate_solver.support_stars_as_input() {
                     plate_solver.start(
                         &PlateSolverInData::Stars{
-                            stars: &info.stars.items,
+                            stars: &stars.items,
                             img_width: info.width,
                             img_height: info.height,
                         },
@@ -459,7 +460,7 @@ impl Mode for GotoMode {
                 return Ok(NotifyResult::ProgressChanges);
             }
             (State::TackingPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
-                self.plate_solve_stars(&info.stars.items, info.width, info.height)?;
+                self.plate_solve_stars(&info.stars.items, info.image.width, info.image.height)?;
                 self.state = State::PlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
             }
@@ -469,7 +470,7 @@ impl Mode for GotoMode {
                 return Ok(NotifyResult::ProgressChanges);
             }
             (State::TackingFinalPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
-                self.plate_solve_stars(&info.stars.items, info.width, info.height)?;
+                self.plate_solve_stars(&info.stars.items, info.image.width, info.image.height)?;
                 self.state = State::FinalPlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
             }

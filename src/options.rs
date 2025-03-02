@@ -306,6 +306,7 @@ pub struct PreviewOptions {
     pub wb_red:      f64,
     pub wb_green:    f64,
     pub wb_blue:     f64,
+    pub stars:       bool,
 
     #[serde(skip_serializing)]
     pub color:       PreviewColorMode,
@@ -331,6 +332,7 @@ impl Default for PreviewOptions {
             color:         PreviewColorMode::Rgb,
             widget_width:  0,
             widget_height: 0,
+            stars:         false,
         }
     }
 }
@@ -353,6 +355,7 @@ impl PreviewOptions {
             orig_frame_in_ls: self.source == PreviewSource::OrigFrame,
             remove_gradient:  self.remove_grad,
             color:            self.color,
+            stars:            self.stars,
             wb,
         }
     }

@@ -1,6 +1,6 @@
 use astrometry::*;
 use chrono::{DateTime, Utc};
-use crate::{image::{image::Image, stars::Stars}, options::PlateSolverType, ui::sky_map::math::EqCoord};
+use crate::{image::{image::Image, stars::StarItems}, options::PlateSolverType, ui::sky_map::math::EqCoord};
 
 mod astrometry;
 
@@ -51,7 +51,7 @@ pub struct PlateSolver {
 pub enum PlateSolverInData<'a> {
     Image(&'a Image),
     Stars{
-        stars:      &'a Stars,
+        stars:      &'a StarItems,
         img_width:  usize,
         img_height: usize,
     },

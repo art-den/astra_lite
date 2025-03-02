@@ -3,7 +3,7 @@ use std::{f64::consts::PI, sync::{Arc, RwLock}};
 
 use chrono::{NaiveDateTime, Utc};
 
-use crate::{core::{core::*, frame_processing::*}, image::{image::*, stars::Stars}, indi, options::*, plate_solve::*, ui::sky_map::math::*};
+use crate::{core::{core::*, frame_processing::*}, image::{image::*, stars::StarItems}, indi, options::*, plate_solve::*, ui::sky_map::math::*};
 
 use super::{consts::*, events::*, utils::{check_telescope_is_at_desired_position, gain_to_value}};
 
@@ -176,7 +176,7 @@ impl PolarAlignMode {
 
     fn plate_solve_stars(
         &mut self,
-        stars:      &Stars,
+        stars:      &StarItems,
         img_width:  usize,
         img_height: usize
     ) -> anyhow::Result<()> {
@@ -369,7 +369,7 @@ impl Mode for PolarAlignMode {
                 return Ok(NotifyResult::ProgressChanges);
             }
             (State::Capture, FrameProcessResultData::LightFrameInfo(info), true) => {
-                self.plate_solve_stars(&info.stars.items, info.width, info.height)?;
+                self.plate_solve_stars(&info.stars.items, info.image.width, info.image.height)?;
                 self.state = State::PlateSolve;
                 return Ok(NotifyResult::ProgressChanges);
             }
