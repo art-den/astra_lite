@@ -13,13 +13,12 @@ use crate::{
 use super::{ui_main::*, utils::*};
 
 pub fn init_ui(
-    _app:     &gtk::Application,
-    builder:  &gtk::Builder,
-    options:  &Arc<RwLock<Options>>,
-    core:     &Arc<Core>,
-    indi:     &Arc<indi::Connection>,
-    handlers: &mut MainUiEventHandlers,
-) {
+    builder: &gtk::Builder,
+    main_ui: &Rc<MainUi>,
+    options: &Arc<RwLock<Options>>,
+    core:    &Arc<Core>,
+    indi:    &Arc<indi::Connection>,
+) -> Rc<dyn UiModule> {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
     let mut ui_options = UiOptions::default();
@@ -28,7 +27,8 @@ pub fn init_ui(
         Ok(())
     });
 
-    let data = Rc::new(FocuserUi {
+    let obj = Rc::new(FocuserUi {
+        main_ui:         Rc::clone(main_ui),
         builder:         builder.clone(),
         window,
         options:         Arc::clone(options),
@@ -40,22 +40,21 @@ pub fn init_ui(
         indi_evt_conn:   RefCell::new(None),
         delayed_actions: DelayedActions::new(500),
         focusing_data:   RefCell::new(None),
-        self_:           RefCell::new(None),
     });
 
-    *data.self_.borrow_mut() = Some(Rc::clone(&data));
+    obj.init_widgets();
+    obj.update_devices_list();
+    obj.apply_ui_options();
 
-    data.init_widgets();
-    data.update_devices_list();
-    data.apply_ui_options();
+    obj.connect_indi_and_core_events();
+    obj.connect_widgets_events();
+    obj.connect_delayed_actions_events();
 
-    data.connect_indi_and_core_events();
-    data.connect_widgets_events();
-    data.connect_main_ui_events(handlers);
-    data.connect_delayed_actions_events();
+    obj
 }
 
 struct FocuserUi {
+    main_ui:         Rc<MainUi>,
     builder:         gtk::Builder,
     window:          gtk::ApplicationWindow,
     options:         Arc<RwLock<Options>>,
@@ -67,12 +66,56 @@ struct FocuserUi {
     indi_evt_conn:   RefCell<Option<indi::Subscription>>,
     delayed_actions: DelayedActions<DelayedAction>,
     focusing_data:   RefCell<Option<FocusingResultData>>,
-    self_:           RefCell<Option<Rc<FocuserUi>>>,
 }
 
 impl Drop for FocuserUi {
     fn drop(&mut self) {
         log::info!("FocuserUi dropped");
+    }
+}
+
+impl UiModule for FocuserUi {
+    fn show_options(&self, options: &Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        ui.set_prop_bool("chb_foc_temp.active",     options.focuser.on_temp_change);
+        ui.set_prop_f64 ("spb_foc_temp.value",      options.focuser.max_temp_change);
+        ui.set_prop_bool("chb_foc_fwhm.active",     options.focuser.on_fwhm_change);
+        ui.set_prop_str ("cb_foc_fwhm.active-id",   Some(options.focuser.max_fwhm_change.to_string()).as_deref());
+        ui.set_prop_bool("chb_foc_period.active",   options.focuser.periodically);
+        ui.set_prop_str ("cb_foc_period.active-id", Some(options.focuser.period_minutes.to_string()).as_deref());
+        ui.set_prop_f64 ("spb_foc_measures.value",  options.focuser.measures as f64);
+        ui.set_prop_f64 ("spb_foc_auto_step.value", options.focuser.step);
+        ui.set_prop_f64 ("spb_foc_exp.value",       options.focuser.exposure);
+        ui.set_prop_str ("cbx_foc_gain.active-id",  Some(options.focuser.gain.to_active_id()));
+    }
+
+    fn get_options(&self, options: &mut Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+
+        options.focuser.on_temp_change  = ui.prop_bool("chb_foc_temp.active");
+        options.focuser.max_temp_change = ui.prop_f64("spb_foc_temp.value");
+        options.focuser.on_fwhm_change  = ui.prop_bool("chb_foc_fwhm.active");
+        options.focuser.max_fwhm_change = ui.prop_string("cb_foc_fwhm.active-id").and_then(|v| v.parse().ok()).unwrap_or(20);
+        options.focuser.periodically    = ui.prop_bool("chb_foc_period.active");
+        options.focuser.period_minutes  = ui.prop_string("cb_foc_period.active-id").and_then(|v| v.parse().ok()).unwrap_or(120);
+        options.focuser.measures        = ui.prop_f64("spb_foc_measures.value") as u32;
+        options.focuser.step            = ui.prop_f64("spb_foc_auto_step.value");
+        options.focuser.exposure        = ui.prop_f64("spb_foc_exp.value");
+        options.focuser.gain            = Gain::from_active_id(ui.prop_string("cbx_foc_gain.active-id").as_deref());
+    }
+
+    fn panels(&self) -> Vec<Panel> {
+        vec![]
+    }
+
+    fn process_event(&self, event: &UiModuleEvent) {
+        match event {
+            UiModuleEvent::ProgramClosing => {
+                self.handler_closing();
+            }
+
+            _ => {}
+        }
     }
 }
 
@@ -316,19 +359,6 @@ impl FocuserUi {
         );
     }
 
-    fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
-        handlers.subscribe(clone!(@weak self as self_ => move |event| {
-            match event {
-                UiEvent::ProgramClosing =>
-                    self_.handler_closing(),
-
-                UiEvent::OptionsHasShown =>
-                    self_.correct_widgets_props(),
-                _ => {},
-            }
-        }));
-    }
-
     fn connect_delayed_actions_events(self: &Rc<Self>) {
         self.delayed_actions.set_event_handler(
             clone!(@weak self as self_ => move |action| {
@@ -346,7 +376,8 @@ impl FocuserUi {
         if let Some(cam_device) = cam_device {
             let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_device.prop);
             let exp_value = self.indi.camera_get_exposure_prop_value(&cam_device.name, cam_ccd);
-            correct_spinbutton_by_cam_prop(&self.builder, "spb_foc_exp", &exp_value, 1, Some(1.0));
+            let spb_foc_exp = self.builder.object::<gtk::SpinButton>("spb_foc_exp").unwrap();
+            correct_spinbutton_by_cam_prop(&spb_foc_exp, &exp_value, 1, Some(1.0));
         }
 
         let waiting = mode_type == ModeType::Waiting;
@@ -390,8 +421,6 @@ impl FocuserUi {
         if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
             self.indi.unsubscribe(indi_conn);
         }
-
-        *self.self_.borrow_mut() = None;
     }
 
     fn apply_ui_options(&self) {
@@ -590,9 +619,7 @@ impl FocuserUi {
     fn handler_action_manual_focus(&self) {
         if !is_expanded(&self.builder, "exp_foc") { return; }
 
-        let mut options = self.options.write().unwrap();
-        options.read_all(&self.builder);
-        drop(options);
+        self.main_ui.get_all_options();
 
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_focusing()?;

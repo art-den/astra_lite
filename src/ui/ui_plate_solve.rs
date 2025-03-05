@@ -13,13 +13,12 @@ use super::{ui_main::*, utils::*};
 
 
 pub fn init_ui(
-    _app:     &gtk::Application,
-    builder:  &gtk::Builder,
-    options:  &Arc<RwLock<Options>>,
-    core:     &Arc<Core>,
-    indi:     &Arc<indi::Connection>,
-    handlers: &mut MainUiEventHandlers,
-) {
+    builder: &gtk::Builder,
+    main_ui: &Rc<MainUi>,
+    options: &Arc<RwLock<Options>>,
+    core:    &Arc<Core>,
+    indi:    &Arc<indi::Connection>,
+) -> Rc<dyn UiModule> {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
     let mut ui_options = UiOptions::default();
@@ -29,6 +28,7 @@ pub fn init_ui(
     });
 
     let obj = Rc::new(PlateSolveUi {
+        main_ui:         Rc::clone(main_ui),
         builder:         builder.clone(),
         options:         Arc::clone(options),
         core:            Arc::clone(core),
@@ -37,19 +37,17 @@ pub fn init_ui(
         closed:          Cell::new(false),
         indi_evt_conn:   RefCell::new(None),
         delayed_actions: DelayedActions::new(200),
-        self_:           RefCell::new(None),
         window,
     });
-
-    *obj.self_.borrow_mut() = Some(Rc::clone(&obj));
 
     obj.init_widgets();
     obj.apply_ui_options();
 
     obj.connect_core_and_indi_events();
     obj.connect_widgets_events();
-    obj.connect_main_ui_events(handlers);
     obj.connect_delayed_actions_events();
+
+    obj
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -62,25 +60,6 @@ enum MainThreadEvent {
     Core(Event),
 }
 
-struct PlateSolveUi {
-    builder:         gtk::Builder,
-    window:          gtk::ApplicationWindow,
-    options:         Arc<RwLock<Options>>,
-    core:            Arc<Core>,
-    indi:            Arc<indi::Connection>,
-    ui_options:      RefCell<UiOptions>,
-    closed:          Cell<bool>,
-    indi_evt_conn:   RefCell<Option<indi::Subscription>>,
-    delayed_actions: DelayedActions<DelayedAction>,
-    self_:           RefCell<Option<Rc<PlateSolveUi>>>,
-}
-
-impl Drop for PlateSolveUi {
-    fn drop(&mut self) {
-        log::info!("PlateSolveUi dropped");
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 struct UiOptions {
@@ -91,6 +70,76 @@ impl Default for UiOptions {
     fn default() -> Self {
         Self {
             expanded: false
+        }
+    }
+}
+
+impl PlateSolverType {
+    pub fn from_active_id(active_id: Option<&str>) -> Self {
+        match active_id {
+            Some("astrometry.net") => Self::Astrometry,
+            _                  => Self::Astrometry,
+        }
+    }
+
+    pub fn to_active_id(&self) -> Option<&'static str> {
+        match self {
+            Self::Astrometry => Some("astrometry.net"),
+        }
+    }
+}
+
+struct PlateSolveUi {
+    main_ui:         Rc<MainUi>,
+    builder:         gtk::Builder,
+    window:          gtk::ApplicationWindow,
+    options:         Arc<RwLock<Options>>,
+    core:            Arc<Core>,
+    indi:            Arc<indi::Connection>,
+    ui_options:      RefCell<UiOptions>,
+    closed:          Cell<bool>,
+    indi_evt_conn:   RefCell<Option<indi::Subscription>>,
+    delayed_actions: DelayedActions<DelayedAction>,
+}
+
+impl Drop for PlateSolveUi {
+    fn drop(&mut self) {
+        log::info!("PlateSolveUi dropped");
+    }
+}
+
+impl UiModule for PlateSolveUi {
+    fn show_options(&self, options: &Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        ui.set_prop_f64("spb_ps_exp.value",           options.plate_solver.exposure);
+        ui.set_prop_str("cbx_ps_gain.active-id",      Some(options.plate_solver.gain.to_active_id()));
+        ui.set_prop_str("cbx_ps_bin.active-id",       options.plate_solver.bin.to_active_id());
+        ui.set_prop_str("cbx_ps_solver.active-id",    options.plate_solver.solver.to_active_id());
+        ui.set_prop_f64("spb_ps_timeout.value",       options.plate_solver.timeout as f64);
+        ui.set_prop_f64("spb_ps_blind_timeout.value", options.plate_solver.blind_timeout as f64);
+    }
+
+    fn get_options(&self, options: &mut Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        options.plate_solver.exposure      = ui.prop_f64("spb_ps_exp.value");
+        options.plate_solver.gain          = Gain::from_active_id(ui.prop_string("cbx_ps_gain.active-id").as_deref());
+        options.plate_solver.bin           = Binning::from_active_id(ui.prop_string("cbx_ps_bin.active-id").as_deref());
+        options.plate_solver.solver        = PlateSolverType::from_active_id(ui.prop_string("cbx_ps_solver.active-id").as_deref());
+        options.plate_solver.timeout       = ui.prop_f64("spb_ps_timeout.value") as _;
+        options.plate_solver.blind_timeout = ui.prop_f64("spb_ps_blind_timeout.value") as _;
+    }
+
+    fn panels(&self) -> Vec<Panel> {
+        vec![]
+    }
+
+    fn process_event(&self, event: &UiModuleEvent) {
+        match event {
+            UiModuleEvent::ProgramClosing => {
+                self.handler_closing();
+            }
+
+            _ => {}
         }
     }
 }
@@ -126,8 +175,6 @@ impl PlateSolveUi {
         if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
             self.indi.unsubscribe(indi_conn);
         }
-
-        *self.self_.borrow_mut() = None;
     }
 
     fn connect_core_and_indi_events(self: &Rc<Self>) {
@@ -155,20 +202,6 @@ impl PlateSolveUi {
     fn connect_widgets_events(self: &Rc<Self>) {
         gtk_utils::connect_action_rc(&self.window, self, "capture_platesolve",   Self::handler_action_capture_platesolve);
         gtk_utils::connect_action   (&self.window, self, "plate_solve_and_goto", Self::handler_action_plate_solve_and_goto);
-    }
-
-    fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
-        handlers.subscribe(clone!(@weak self as self_ => move |event| {
-            match event {
-                UiEvent::ProgramClosing =>
-                    self_.handler_closing(),
-
-                UiEvent::OptionsHasShown =>
-                    self_.correct_widgets_props(),
-
-                _ => {},
-            }
-        }));
     }
 
     fn connect_delayed_actions_events(self: &Rc<Self>) {
@@ -241,7 +274,8 @@ impl PlateSolveUi {
         if let Some(cam_device) = cam_device {
             let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_device.prop);
             let exp_value = self.indi.camera_get_exposure_prop_value(&cam_device.name, cam_ccd);
-            correct_spinbutton_by_cam_prop(&self.builder, "spb_ps_exp", &exp_value, 1, Some(1.0));
+            let spb_ps_exp = self.builder.object::<gtk::SpinButton>("spb_ps_exp").unwrap();
+            correct_spinbutton_by_cam_prop(&spb_ps_exp, &exp_value, 1, Some(1.0));
         }
 
         ui.enable_widgets(false, &[
@@ -279,7 +313,8 @@ impl PlateSolveUi {
     fn handler_action_capture_platesolve(self: &Rc<Self>) {
         if !is_expanded(&self.builder, "exp_plate_solving") { return; }
 
-        self.options.write().unwrap().read_all(&self.builder);
+        self.main_ui.get_all_options();
+
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_capture_and_platesolve()?;
             Ok(())
@@ -289,7 +324,8 @@ impl PlateSolveUi {
     fn handler_action_plate_solve_and_goto(&self) {
         if !is_expanded(&self.builder, "exp_plate_solving") { return; }
 
-        self.options.write().unwrap().read_all(&self.builder);
+        self.main_ui.get_all_options();
+
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_goto_image()?;
             Ok(())

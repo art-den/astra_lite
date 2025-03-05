@@ -9,13 +9,12 @@ use crate::{
 use super::{ui_main::*, utils::*};
 
 pub fn init_ui(
-    _app:     &gtk::Application,
-    builder:  &gtk::Builder,
-    options:  &Arc<RwLock<Options>>,
-    core:     &Arc<Core>,
-    indi:     &Arc<indi::Connection>,
-    handlers: &mut MainUiEventHandlers,
-) {
+    builder: &gtk::Builder,
+    main_ui: &Rc<MainUi>,
+    options: &Arc<RwLock<Options>>,
+    core:    &Arc<Core>,
+    indi:    &Arc<indi::Connection>,
+) -> Rc<dyn UiModule> {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
     let mut ui_options = UiOptions::default();
@@ -24,7 +23,8 @@ pub fn init_ui(
         Ok(())
     });
 
-    let data = Rc::new(DitheringUi {
+    let obj = Rc::new(DitheringUi {
+        main_ui:       Rc::clone(main_ui),
         builder:       builder.clone(),
         window,
         options:       Arc::clone(options),
@@ -33,17 +33,15 @@ pub fn init_ui(
         ui_options:    RefCell::new(ui_options),
         closed:        Cell::new(false),
         indi_evt_conn: RefCell::new(None),
-        self_:         RefCell::new(None),
     });
 
-    *data.self_.borrow_mut() = Some(Rc::clone(&data));
+    obj.init_widgets();
+    obj.apply_ui_options();
 
-    data.init_widgets();
-    data.apply_ui_options();
+    obj.connect_widgets_events();
+    obj.connect_indi_and_core_events();
 
-    data.connect_main_ui_events(handlers);
-    data.connect_widgets_events();
-    data.connect_indi_and_core_events();
+    obj
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -61,6 +59,7 @@ impl Default for UiOptions {
 }
 
 struct DitheringUi {
+    main_ui:       Rc<MainUi>,
     builder:       gtk::Builder,
     window:        gtk::ApplicationWindow,
     options:       Arc<RwLock<Options>>,
@@ -69,12 +68,67 @@ struct DitheringUi {
     ui_options:    RefCell<UiOptions>,
     closed:        Cell<bool>,
     indi_evt_conn: RefCell<Option<indi::Subscription>>,
-    self_:         RefCell<Option<Rc<DitheringUi>>>,
 }
 
 impl Drop for DitheringUi {
     fn drop(&mut self) {
         log::info!("DitheringUi dropped");
+    }
+}
+
+impl UiModule for DitheringUi {
+    fn show_options(&self, options: &Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        match options.guiding.mode {
+            GuidingMode::Disabled =>
+                ui.set_prop_bool("rbtn_no_guiding.active", true),
+            GuidingMode::MainCamera =>
+                ui.set_prop_bool("rbtn_guide_main_cam.active", true),
+            GuidingMode::External =>
+                ui.set_prop_bool("rbtn_guide_ext.active", true),
+        }
+        ui.set_prop_str("cb_dith_perod.active-id",    Some(options.guiding.dith_period.to_string().as_str()));
+        ui.set_prop_f64("spb_guid_foc_len.value",     options.guiding.ext_guider.foc_len);
+        ui.set_prop_f64("sb_ext_dith_dist.value",     options.guiding.ext_guider.dith_dist as f64);
+        ui.set_prop_f64("spb_guid_max_err.value",     options.guiding.main_cam.max_error);
+        ui.set_prop_f64("sb_dith_dist.value",         options.guiding.main_cam.dith_dist as f64);
+        ui.set_prop_f64("spb_mnt_cal_exp.value",      options.guiding.main_cam.calibr_exposure);
+        ui.set_prop_str("cbx_mnt_cal_gain.active-id", Some(options.guiding.main_cam.calibr_gain.to_active_id()));
+    }
+
+    fn get_options(&self, options: &mut Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        options.guiding.mode =
+            if ui.prop_bool("rbtn_guide_main_cam.active") {
+                GuidingMode::MainCamera
+            } else if ui.prop_bool("rbtn_guide_ext.active") {
+                GuidingMode::External
+            } else {
+                GuidingMode::Disabled
+            };
+
+        options.guiding.dith_period          = ui.prop_string("cb_dith_perod.active-id").and_then(|v| v.parse().ok()).unwrap_or(0);
+        options.guiding.ext_guider.foc_len   = ui.prop_f64("spb_guid_foc_len.value");
+        options.guiding.ext_guider.dith_dist = ui.prop_f64("sb_ext_dith_dist.value") as i32;
+
+        options.guiding.main_cam.dith_dist       = ui.prop_f64("sb_dith_dist.value") as i32;
+        options.guiding.main_cam.calibr_exposure = ui.prop_f64("spb_mnt_cal_exp.value");
+        options.guiding.main_cam.calibr_gain     = Gain::from_active_id(ui.prop_string("cbx_mnt_cal_gain.active-id").as_deref());
+        options.guiding.main_cam.max_error       = ui.prop_f64("spb_guid_max_err.value");
+    }
+
+    fn panels(&self) -> Vec<Panel> {
+        vec![]
+    }
+
+    fn process_event(&self, event: &UiModuleEvent) {
+        match event {
+            UiModuleEvent::ProgramClosing => {
+                self.handler_closing();
+            }
+
+            _ => {}
+        }
     }
 }
 
@@ -162,20 +216,6 @@ impl DitheringUi {
         connect_rbtn("rbtn_guide_ext");
     }
 
-    fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
-        handlers.subscribe(clone!(@weak self as self_ => move |event| {
-            match event {
-                UiEvent::ProgramClosing =>
-                    self_.handler_closing(),
-
-                UiEvent::OptionsHasShown =>
-                    self_.correct_widgets_props(),
-
-                _ => {},
-            }
-        }));
-    }
-
     fn handler_closing(&self) {
         self.closed.set(true);
 
@@ -187,8 +227,6 @@ impl DitheringUi {
         if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
             self.indi.unsubscribe(indi_conn);
         }
-
-        *self.self_.borrow_mut() = None;
     }
 
     fn correct_widgets_props_impl(&self, cam_device: &Option<DeviceAndProp>) {
@@ -211,7 +249,8 @@ impl DitheringUi {
         if let Some(cam_device) = cam_device {
             let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_device.prop);
             let exp_value = self.indi.camera_get_exposure_prop_value(&cam_device.name, cam_ccd);
-            correct_spinbutton_by_cam_prop(&self.builder, "spb_mnt_cal_exp", &exp_value, 1, Some(1.0));
+            let spb_mnt_cal_exp = self.builder.object::<gtk::SpinButton>("spb_mnt_cal_exp").unwrap();
+            correct_spinbutton_by_cam_prop(&spb_mnt_cal_exp, &exp_value, 1, Some(1.0));
         }
 
         ui.enable_widgets(false, &[
@@ -254,9 +293,7 @@ impl DitheringUi {
     fn handler_action_start_dither_calibr(&self) {
         if !is_expanded(&self.builder, "exp_dith") { return; }
 
-        let mut options = self.options.write().unwrap();
-        options.read_all(&self.builder);
-        drop(options);
+        self.main_ui.get_all_options();
 
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_mount_calibr()?;

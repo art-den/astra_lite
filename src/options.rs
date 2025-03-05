@@ -160,7 +160,7 @@ pub struct CalibrOptions {
     pub dark_library_path: PathBuf,
     pub dark_frame_en:     bool,
     pub flat_frame_en:     bool,
-    pub flat_frame_fname:  Option<PathBuf>,
+    pub flat_frame_fname:  PathBuf,
     pub hot_pixels:        bool,
 }
 
@@ -170,7 +170,7 @@ impl Default for CalibrOptions {
             dark_library_path: PathBuf::new(),
             dark_frame_en:     true,
             flat_frame_en:     false,
-            flat_frame_fname:  None,
+            flat_frame_fname:  PathBuf::new(),
             hot_pixels:        true,
         }
     }

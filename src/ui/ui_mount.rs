@@ -13,13 +13,11 @@ use super::{ui_main::*, utils::*};
 
 
 pub fn init_ui(
-    _app:     &gtk::Application,
-    builder:  &gtk::Builder,
-    options:  &Arc<RwLock<Options>>,
-    core:     &Arc<Core>,
-    indi:     &Arc<indi::Connection>,
-    handlers: &mut MainUiEventHandlers,
-) {
+    builder: &gtk::Builder,
+    options: &Arc<RwLock<Options>>,
+    core:    &Arc<Core>,
+    indi:    &Arc<indi::Connection>,
+) -> Rc<dyn UiModule> {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
     let mut ui_options = UiOptions::default();
@@ -28,7 +26,7 @@ pub fn init_ui(
         Ok(())
     });
 
-    let data = Rc::new(MountUi {
+    let obj = Rc::new(MountUi {
         builder:         builder.clone(),
         window,
         excl:            ExclusiveCaller::new(),
@@ -39,59 +37,26 @@ pub fn init_ui(
         ui_options:      RefCell::new(ui_options),
         closed:          Cell::new(false),
         indi_evt_conn:   RefCell::new(None),
-        self_:           RefCell::new(None),
     });
 
-    *data.self_.borrow_mut() = Some(Rc::clone(&data));
+    obj.init_widgets();
+    obj.connect_core_and_indi_events();
+    obj.connect_widgets_events();
+    obj.apply_ui_options();
+    obj.fill_devices_list();
 
-    data.init_widgets();
-    data.connect_core_and_indi_events();
-    data.connect_widgets_events();
-    data.apply_ui_options();
-    data.fill_devices_list();
-
-    handlers.subscribe(clone!(@weak data => move |event| {
-        match event {
-            UiEvent::ProgramClosing =>
-                data.handler_closing(),
-
-            UiEvent::OptionsHasShown =>
-                data.correct_widgets_props(),
-
-            _ => {},
-        }
-    }));
-
-    data.delayed_actions.set_event_handler(
-        clone!(@weak data => move |action| {
-            data.handler_delayed_action(action);
+    obj.delayed_actions.set_event_handler(
+        clone!(@weak obj => move |action| {
+            obj.handler_delayed_action(action);
         })
     );
+
+    obj
 }
 
 enum MainThreadEvent {
     Indi(indi::Event),
     Core(Event),
-}
-
-struct MountUi {
-    builder:         gtk::Builder,
-    window:          gtk::ApplicationWindow,
-    excl:            ExclusiveCaller,
-    options:         Arc<RwLock<Options>>,
-    core:            Arc<Core>,
-    indi:            Arc<indi::Connection>,
-    delayed_actions: DelayedActions<DelayedAction>,
-    ui_options:      RefCell<UiOptions>,
-    closed:          Cell<bool>,
-    indi_evt_conn:   RefCell<Option<indi::Subscription>>,
-    self_:           RefCell<Option<Rc<MountUi>>>,
-}
-
-impl Drop for MountUi {
-    fn drop(&mut self) {
-        log::info!("MountUi dropped");
-    }
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -111,6 +76,54 @@ impl Default for UiOptions {
     fn default() -> Self {
         Self {
             expanded: false
+        }
+    }
+}
+
+struct MountUi {
+    builder:         gtk::Builder,
+    window:          gtk::ApplicationWindow,
+    excl:            ExclusiveCaller,
+    options:         Arc<RwLock<Options>>,
+    core:            Arc<Core>,
+    indi:            Arc<indi::Connection>,
+    delayed_actions: DelayedActions<DelayedAction>,
+    ui_options:      RefCell<UiOptions>,
+    closed:          Cell<bool>,
+    indi_evt_conn:   RefCell<Option<indi::Subscription>>,
+}
+
+impl Drop for MountUi {
+    fn drop(&mut self) {
+        log::info!("MountUi dropped");
+    }
+}
+
+impl UiModule for MountUi {
+    fn show_options(&self, options: &Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        ui.set_prop_bool("chb_inv_ns.active", options.mount.inv_ns);
+        ui.set_prop_bool("chb_inv_we.active", options.mount.inv_we);
+    }
+
+    fn get_options(&self, options: &mut Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        options.mount.inv_ns = ui.prop_bool("chb_inv_ns.active");
+        options.mount.inv_we = ui.prop_bool("chb_inv_we.active");
+        options.mount.speed  = ui.prop_string("cb_mnt_speed.active-id");
+    }
+
+    fn panels(&self) -> Vec<Panel> {
+        vec![]
+    }
+
+    fn process_event(&self, event: &UiModuleEvent) {
+        match event {
+            UiModuleEvent::ProgramClosing => {
+                self.handler_closing();
+            }
+
+            _ => {}
         }
     }
 }
@@ -255,8 +268,6 @@ impl MountUi {
         if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
             self.indi.unsubscribe(indi_conn);
         }
-
-        *self.self_.borrow_mut() = None;
     }
 
     fn apply_ui_options(&self) {

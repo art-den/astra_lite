@@ -99,7 +99,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkFileChooserButton" id="fcb_raw_frames_path">
+      <object class="GtkFileChooserButton" id="fcb_path">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="hexpand">True</property>
@@ -127,7 +127,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkCheckButton" id="chb_master_frame">
+      <object class="GtkCheckButton" id="chb_save_master">
         <property name="label" translatable="yes">Create master calibration file</property>
         <property name="visible">True</property>
         <property name="can-focus">True</property>

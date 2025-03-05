@@ -88,7 +88,7 @@ stacking</property>
       </packing>
     </child>
     <child>
-      <object class="GtkSpinButton" id="spb_period">
+      <object class="GtkSpinButton" id="spb_save_period">
         <property name="visible">True</property>
         <property name="can-focus">True</property>
         <property name="hexpand">True</property>

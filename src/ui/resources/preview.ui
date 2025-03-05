@@ -2,6 +2,40 @@
 <!-- Generated with glade 3.38.2 -->
 <interface>
   <requires lib="gtk+" version="3.24"/>
+  <object class="GtkMenu" id="m_image">
+    <property name="visible">True</property>
+    <property name="can-focus">False</property>
+    <child>
+      <object class="GtkMenuItem">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="action-name">win.save_image_preview</property>
+        <property name="label" translatable="yes">Save preview...</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="action-name">win.save_image_linear</property>
+        <property name="label" translatable="yes">Save linear image...</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkSeparatorMenuItem">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkMenuItem">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="action-name">win.load_image</property>
+        <property name="label" translatable="yes">Load image...</property>
+      </object>
+    </child>
+  </object>
   <object class="GtkPopover" id="pp_tone_and_color">
     <property name="can-focus">False</property>
     <child>
@@ -261,7 +295,7 @@
       </object>
     </child>
   </object>
-  <object class="GtkPaned" id="pan_cam4">
+  <object class="GtkPaned" id="pan_preview">
     <property name="visible">True</property>
     <property name="can-focus">True</property>
     <property name="orientation">vertical</property>
@@ -444,6 +478,20 @@ Useful when the object is not lagre and is in the center of the image.</property
               </packing>
             </child>
             <child>
+              <object class="GtkCheckButton" id="chb_stars">
+                <property name="label" translatable="yes">Stas</property>
+                <property name="visible">True</property>
+                <property name="can-focus">True</property>
+                <property name="receives-default">False</property>
+                <property name="draw-indicator">True</property>
+              </object>
+              <packing>
+                <property name="expand">False</property>
+                <property name="fill">True</property>
+                <property name="position">8</property>
+              </packing>
+            </child>
+            <child>
               <object class="GtkSeparator">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
@@ -452,7 +500,7 @@ Useful when the object is not lagre and is in the center of the image.</property
               <packing>
                 <property name="expand">False</property>
                 <property name="fill">True</property>
-                <property name="position">8</property>
+                <property name="position">9</property>
               </packing>
             </child>
             <child>
@@ -502,11 +550,8 @@ Useful when the object is not lagre and is in the center of the image.</property
               <packing>
                 <property name="expand">False</property>
                 <property name="fill">True</property>
-                <property name="position">9</property>
+                <property name="position">10</property>
               </packing>
-            </child>
-            <child>
-              <placeholder/>
             </child>
           </object>
           <packing>

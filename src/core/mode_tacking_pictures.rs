@@ -1231,8 +1231,9 @@ impl Mode for TackingPicturesMode {
 
         if let Some(calibr_params) = &mut cmd.calibr_params {
             calibr_params.flat_fname =
-                if options.calibr.flat_frame_en {
-                    options.calibr.flat_frame_fname.clone()
+                if options.calibr.flat_frame_en
+                && !options.calibr.flat_frame_fname.as_os_str().is_empty() {
+                    Some(options.calibr.flat_frame_fname.clone())
                 } else {
                     None
                 };

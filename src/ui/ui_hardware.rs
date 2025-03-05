@@ -11,20 +11,18 @@ use gtk::{prelude::*, gdk, glib, glib::clone};
 use itertools::Itertools;
 use chrono::prelude::*;
 use crate::{
-    core::core::Core, guiding::{external_guider::ExtGuiderType, phd2_conn}, indi, options::*, utils::gtk_utils
+    core::core::Core, guiding::{external_guider::ExtGuiderType, phd2_conn}, indi::{self, sexagesimal_to_value, value_to_sexagesimal}, options::*, utils::gtk_utils
 };
 use super::{ui_main::*, indi_widget::*};
 
 pub fn init_ui(
-    _app:     &gtk::Application,
-    window:   &gtk::ApplicationWindow,
-    builder:  &gtk::Builder,
-    main_ui:  &Rc<MainUi>,
-    options:  &Arc<RwLock<Options>>,
-    core:     &Arc<Core>,
-    indi:     &Arc<indi::Connection>,
-    handlers: &mut MainUiEventHandlers,
-) {
+    window:  &gtk::ApplicationWindow,
+    builder: &gtk::Builder,
+    main_ui: &Rc<MainUi>,
+    options: &Arc<RwLock<Options>>,
+    core:    &Arc<Core>,
+    indi:    &Arc<indi::Connection>,
+) -> Rc<dyn UiModule> {
     let (drivers, load_drivers_err) =
         if cfg!(target_os = "windows") {
             (indi::Drivers::new_empty(), None)
@@ -59,17 +57,14 @@ pub fn init_ui(
         main_ui:       Rc::clone(main_ui),
         widget,
         window:        window.clone(),
-        self_:         RefCell::new(None),
     });
-
-    *obj.self_.borrow_mut() = Some(Rc::clone(&obj));
 
     obj.init_widgets();
     obj.fill_devices_name();
+
     obj.connect_widgets_events();
     obj.connect_indi_and_guider_events();
     obj.correct_widgets_by_cur_state();
-    obj.connect_main_ui_event(handlers);
 
     if let Some(load_drivers_err) = load_drivers_err {
         obj.add_log_record(
@@ -78,6 +73,8 @@ pub fn init_ui(
             &format!("Load devices info error: {}", load_drivers_err)
         );
     }
+
+    obj
 }
 
 impl indi::ConnState {
@@ -115,12 +112,48 @@ struct HardwareUi {
     indi_evt_conn: RefCell<Option<indi::Subscription>>,
     widget:        IndiWidget,
     is_remote:     Cell<bool>,
-    self_:         RefCell<Option<Rc<HardwareUi>>>,
 }
 
 impl Drop for HardwareUi {
     fn drop(&mut self) {
         log::info!("HardwareUi dropped");
+    }
+}
+
+impl UiModule for HardwareUi {
+    fn show_options(&self, options: &Options) {
+        self.show_indi_options(options);
+        self.show_telescope_options(options);
+        self.show_site_options(options);
+
+        self.correct_widgets_by_cur_state();
+    }
+
+    fn get_options(&self, options: &mut Options) {
+        self.get_indi_options(options);
+        self.get_telescope_options(options);
+        self.get_site_options(options);
+    }
+
+    fn panels(&self) -> Vec<Panel> {
+        vec![]
+    }
+
+    fn process_event(&self, event: &UiModuleEvent) {
+        match event {
+            UiModuleEvent::ProgramClosing => {
+                self.handler_closing();
+            }
+            UiModuleEvent::TabChanged { from, to } => {
+                self.widget.set_enabled(*to == TabPage::Hardware);
+                if *from == TabPage::Hardware {
+                    let mut options = self.options.write().unwrap();
+                    self.get_telescope_options(&mut options);
+                    self.get_site_options(&mut options);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -227,6 +260,52 @@ impl HardwareUi {
                 };
             }
         }));
+    }
+
+    fn show_indi_options(&self, options: &Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        ui.set_prop_bool("chb_remote.active", options.indi.remote);
+        ui.set_prop_str("e_remote_addr.text", Some(&options.indi.address));
+    }
+
+    fn show_telescope_options(&self, options: &Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        ui.set_prop_f64("spb_foc_len.value", options.telescope.focal_len);
+        ui.set_prop_f64("spb_barlow.value",  options.telescope.barlow);
+    }
+
+    fn show_site_options(&self, options: &Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        ui.set_prop_str("e_site_lat.text", Some(&value_to_sexagesimal(options.site.latitude, true, 6)));
+        ui.set_prop_str("e_site_long.text", Some(&value_to_sexagesimal(options.site.longitude, true, 6)));
+    }
+
+    fn get_indi_options(&self, options: &mut Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        options.indi.mount    = ui.prop_string("cb_mount_drivers.active-id");
+        options.indi.camera   = ui.prop_string("cb_camera_drivers.active-id");
+        options.indi.guid_cam = ui.prop_string("cb_guid_cam_drivers.active-id");
+        options.indi.focuser  = ui.prop_string("cb_focuser_drivers.active-id");
+        options.indi.remote   = ui.prop_bool  ("chb_remote.active");
+        options.indi.address  = ui.prop_string("e_remote_addr.text").unwrap_or_default();
+    }
+
+    fn get_telescope_options(&self, options: &mut Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        options.telescope.focal_len = ui.prop_f64("spb_foc_len.value");
+        options.telescope.barlow    = ui.prop_f64("spb_barlow.value");
+    }
+
+    fn get_site_options(&self, options: &mut Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        let lat_string = ui.prop_string("e_site_lat.text").unwrap_or_default();
+        if let Some(latitude) = sexagesimal_to_value(&lat_string) {
+            options.site.latitude = latitude;
+        }
+        let long_str = ui.prop_string("e_site_long.text").unwrap_or_default();
+        if let Some(longitude) = sexagesimal_to_value(&long_str) {
+            options.site.longitude = longitude;
+        }
     }
 
     fn process_indi_event(&self, event: indi::Event) {
@@ -337,23 +416,6 @@ impl HardwareUi {
         ui.set_prop_str("lbl_phd2_status.label", Some(status_text));
     }
 
-    fn connect_main_ui_event(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
-        handlers.subscribe(clone!(@weak self as self_ => move |event| {
-            match event {
-                UiEvent::ProgramClosing =>
-                    self_.handler_closing(),
-
-                UiEvent::TabPageChanged(tab_page) =>
-                    self_.widget.set_enabled(tab_page == TabPage::Hardware),
-
-                UiEvent::OptionsHasShown =>
-                    self_.correct_widgets_by_cur_state(),
-
-                _ => {},
-            }
-        }));
-    }
-
     fn handler_closing(&self) {
         if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
             self.indi.unsubscribe(indi_conn);
@@ -372,8 +434,6 @@ impl HardwareUi {
         log::info!("Done!");
 
         self.core.phd2().discnnect_all();
-
-        *self.self_.borrow_mut() = None;
     }
 
     fn correct_widgets_by_cur_state(&self) {
@@ -496,7 +556,6 @@ impl HardwareUi {
 
     fn handler_action_disconn_indi(&self) {
         gtk_utils::exec_and_show_error(&self.window, || {
-            self.main_ui.exec_before_disconnect_handlers();
             if !self.is_remote.get() {
                 log::info!("Disabling all INDI devices before disconnect...");
                 self.indi.command_enable_all_devices(false, true, Some(2000))?;
@@ -574,9 +633,9 @@ impl HardwareUi {
 
     fn read_options_from_widgets(&self) {
         let mut options = self.options.write().unwrap();
-        options.read_indi(&self.builder);
-        options.read_telescope(&self.builder);
-        options.read_guiding(&self.builder);
+        self.get_indi_options(&mut options);
+        self.get_indi_options(&mut options);
+        self.get_telescope_options(&mut options);
     }
 
     fn add_log_record(

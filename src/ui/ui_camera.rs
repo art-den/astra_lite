@@ -1,4 +1,4 @@
-use std::{rc::{Rc, Weak}, sync::{Arc, RwLock}, cell::{RefCell, Cell}};
+use std::{rc::Rc, sync::{Arc, RwLock}, cell::{RefCell, Cell}};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
@@ -12,12 +12,11 @@ use crate::{
 use super::{ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
 pub fn init_ui(
-    window:     &gtk::ApplicationWindow,
-    options:    &Arc<RwLock<Options>>,
-    core:       &Arc<Core>,
-    indi:       &Arc<indi::Connection>,
-    handlers:   &mut MainUiEventHandlers,
-    ui_modules: Weak<UiModules>,
+    window:  &gtk::ApplicationWindow,
+    main_ui: &Rc<MainUi>,
+    options: &Arc<RwLock<Options>>,
+    core:    &Arc<Core>,
+    indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();
     gtk_utils::exec_and_show_error(window, || {
@@ -37,22 +36,18 @@ pub fn init_ui(
     };
 
     let obj = Rc::new(CameraUi {
-        window:             window.clone(),
-        core:               Arc::clone(core),
-        indi:               Arc::clone(indi),
         widgets,
-        ui_modules,
-        options:            Arc::clone(options),
-        delayed_actions:    DelayedActions::new(500),
-        ui_options:         RefCell::new(ui_options),
-        conn_state:         RefCell::new(indi::ConnState::Disconnected),
-        indi_evt_conn:      RefCell::new(None),
-        closed:             Cell::new(false),
-        full_screen_mode:   Cell::new(false),
-        self_:              RefCell::new(None),
+        main_ui:         Rc::clone(main_ui),
+        window:          window.clone(),
+        core:            Arc::clone(core),
+        indi:            Arc::clone(indi),
+        options:         Arc::clone(options),
+        delayed_actions: DelayedActions::new(500),
+        ui_options:      RefCell::new(ui_options),
+        conn_state:      RefCell::new(indi::ConnState::Disconnected),
+        indi_evt_conn:   RefCell::new(None),
+        closed:          Cell::new(false),
     });
-
-    *obj.self_.borrow_mut() = Some(Rc::clone(&obj));
 
     obj.init_cam_ctrl_widgets();
     obj.init_cam_widgets();
@@ -60,10 +55,8 @@ pub fn init_ui(
     obj.init_live_stacking_widgets();
     obj.init_frame_quality_widgets();
 
-    obj.show_ui_options();
     obj.connect_common_events();
     obj.connect_widgets_events();
-    obj.connect_main_ui_events(handlers);
 
     obj.delayed_actions.set_event_handler(
         clone!(@weak obj => move |action| {
@@ -104,36 +97,17 @@ impl Default for StoredCamOptions {
     }
 }
 
+// TODO: move to global options
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 struct UiOptions {
-    paned_pos1:     i32,
-    paned_pos2:     i32,
-    paned_pos3:     i32,
-    paned_pos4:     i32,
-    cam_ctrl_exp:   bool,
-    shot_exp:       bool,
-    calibr_exp:     bool,
-    raw_frames_exp: bool,
-    live_exp:       bool,
-    quality_exp:    bool,
     all_cam_opts:   Vec<StoredCamOptions>,
 }
 
 impl Default for UiOptions {
     fn default() -> Self {
         Self {
-            paned_pos1:     -1,
-            paned_pos2:     -1,
-            paned_pos3:     -1,
-            paned_pos4:     -1,
-            cam_ctrl_exp:   true,
-            shot_exp:       true,
-            calibr_exp:     true,
-            raw_frames_exp: true,
-            live_exp:       false,
-            quality_exp:    true,
-            all_cam_opts:   Vec::new(),
+            all_cam_opts: Vec::new(),
         }
     }
 }
@@ -141,6 +115,104 @@ impl Default for UiOptions {
 enum MainThreadEvent {
     Core(Event),
     Indi(indi::Event),
+}
+
+impl FrameType {
+    pub fn from_active_id(active_id: Option<&str>) -> Self {
+        match active_id {
+            Some("flat") => Self::Flats,
+            Some("dark") => Self::Darks,
+            Some("bias") => Self::Biases,
+            _            => Self::Lights,
+        }
+    }
+
+    pub fn to_active_id(&self) -> Option<&'static str> {
+        match self {
+            FrameType::Lights => Some("light"),
+            FrameType::Flats  => Some("flat"),
+            FrameType::Darks  => Some("dark"),
+            FrameType::Biases => Some("bias"),
+            FrameType::Undef  => Some("light"),
+
+        }
+    }
+}
+
+impl Gain {
+    pub fn from_active_id(active_id: Option<&str>) -> Self {
+        match active_id {
+            Some("same") => Self::Same,
+            Some("min")  => Self::Min,
+            Some("25%")  => Self::P25,
+            Some("50%")  => Self::P50,
+            Some("75%")  => Self::P75,
+            Some("max")  => Self::Max,
+            _            => Self::Same,
+        }
+    }
+
+    pub fn to_active_id(&self) -> &'static str {
+        match self {
+            Self::Same => "same",
+            Self::Min  => "min",
+            Self::P25  => "25%",
+            Self::P50  => "50%",
+            Self::P75  => "75%",
+            Self::Max  => "max",
+        }
+    }
+}
+
+impl Binning {
+    pub fn from_active_id(active_id: Option<&str>) -> Self {
+        match active_id {
+            Some("2") => Self::Bin2,
+            Some("3") => Self::Bin3,
+            Some("4") => Self::Bin4,
+            _         => Self::Orig,
+        }
+    }
+
+    pub fn to_active_id(&self) -> Option<&'static str> {
+        match self {
+            Self::Orig => Some("1"),
+            Self::Bin2 => Some("2"),
+            Self::Bin3 => Some("3"),
+            Self::Bin4 => Some("4"),
+        }
+    }
+
+    pub fn get_ratio(&self) -> usize {
+        match self {
+            Self::Orig => 1,
+            Self::Bin2 => 2,
+            Self::Bin3 => 3,
+            Self::Bin4 => 4,
+        }
+    }
+}
+
+impl Crop {
+    pub fn from_active_id(active_id: Option<&str>) -> Self {
+        match active_id {
+            Some("75") => Self::P75,
+            Some("50") => Self::P50,
+            Some("33") => Self::P33,
+            Some("25") => Self::P25,
+            _          => Self::None,
+        }
+    }
+
+    pub fn to_active_id(&self) -> Option<&'static str> {
+        match self {
+            Self::None => Some("100"),
+            Self::P75  => Some("75"),
+            Self::P50  => Some("50"),
+            Self::P33  => Some("33"),
+            Self::P25  => Some("25"),
+        }
+    }
 }
 
 #[derive(FromBuilder)]
@@ -189,31 +261,31 @@ struct FrameWidgets {
 
 #[derive(FromBuilder)]
 struct CalibrWidgets {
-    grid:              gtk::Grid,
-    chb_master_dark:   gtk::CheckButton,
-    chb_master_flat:   gtk::CheckButton,
-    fch_master_flat:   gtk::FileChooserButton,
-    chb_hot_pixels:    gtk::CheckButton,
-    l_hot_pixels_warn: gtk::Label,
+    grid:           gtk::Grid,
+    chb_dark:       gtk::CheckButton,
+    chb_flat:       gtk::CheckButton,
+    fch_flat:       gtk::FileChooserButton,
+    chb_hot_pixels: gtk::CheckButton,
+    l_hot_px_warn:  gtk::Label,
 }
 
 #[derive(FromBuilder)]
 struct RawWidgets {
-    grid:             gtk::Grid,
-    l_time_info:      gtk::Label,
-    btn_start:        gtk::Button,
-    btn_continue:     gtk::Button,
-    chb_frames_cnt:   gtk::CheckButton,
-    spb_frames_cnt:   gtk::SpinButton,
-    fcb_path:         gtk::FileChooserButton,
-    chb_master_frame: gtk::CheckButton,
+    grid:            gtk::Grid,
+    l_time_info:     gtk::Label,
+    btn_start:       gtk::Button,
+    btn_continue:    gtk::Button,
+    chb_frames_cnt:  gtk::CheckButton,
+    spb_frames_cnt:  gtk::SpinButton,
+    fcb_path:        gtk::FileChooserButton,
+    chb_save_master: gtk::CheckButton,
 }
 
 #[derive(FromBuilder)]
 struct LiveStWidgets {
     grid:            gtk::Grid,
-    chb_period:      gtk::CheckButton,
-    chb_save_period: gtk::SpinButton,
+    chb_save_period: gtk::CheckButton,
+    spb_save_period: gtk::SpinButton,
     chb_save_orig:   gtk::CheckButton,
     chb_no_tracks:   gtk::CheckButton,
     l_no_tracks:     gtk::Label,
@@ -241,29 +313,101 @@ struct Widgets {
 }
 
 struct CameraUi {
-    window:            gtk::ApplicationWindow,
-    options:           Arc<RwLock<Options>>,
-    core:              Arc<Core>,
-    indi:              Arc<indi::Connection>,
-    widgets:           Widgets,
-    ui_modules:        Weak<UiModules>,
-    delayed_actions:   DelayedActions<DelayedAction>,
-    ui_options:        RefCell<UiOptions>,
-    conn_state:        RefCell<indi::ConnState>,
-    indi_evt_conn:     RefCell<Option<indi::Subscription>>,
-    closed:            Cell<bool>,
-    full_screen_mode:  Cell<bool>,
-    self_:             RefCell<Option<Rc<CameraUi>>>,
+    widgets:          Widgets,
+    main_ui:          Rc<MainUi>,
+    window:           gtk::ApplicationWindow,
+    options:          Arc<RwLock<Options>>,
+    core:             Arc<Core>,
+    indi:             Arc<indi::Connection>,
+    delayed_actions:  DelayedActions<DelayedAction>,
+    ui_options:       RefCell<UiOptions>,
+    conn_state:       RefCell<indi::ConnState>,
+    indi_evt_conn:    RefCell<Option<indi::Subscription>>,
+    closed:           Cell<bool>,
 }
 
 impl UiModule for CameraUi {
     fn show_options(&self, options: &Options) {
+        self.show_common_options(options);
+        self.show_frame_options(options);
+        self.show_calibr_options(options);
+        self.show_ctrl_options(options);
+        self.show_raw_options(options);
+        self.show_live_stacking_options(options);
+        self.show_frame_quality_options(options);
     }
 
     fn get_options(&self, options: &mut Options) {
+        self.get_common_options(options);
+        self.get_ctrl_options(options);
+        self.get_frame_options(options);
+        self.get_calibr_options(options);
+        self.get_raw_options(options);
+        self.get_live_stacking_options(options);
+        self.get_frame_quality_options(options);
     }
 
-    fn connect_ui_events(&self) {
+    fn panels(&self) -> Vec<Panel> {
+        vec![
+            Panel {
+                name:   String::new(),
+                widget: self.widgets.common.bx.clone().upcast(),
+                pos:    PanelPosition::Left,
+                tab:    PanelTab::Common,
+            },
+
+            Panel {
+                name:   "Camera control".to_string(),
+                widget: self.widgets.ctrl.grid.clone().upcast(),
+                pos:    PanelPosition::Left,
+                tab:    PanelTab::Common,
+            },
+
+            Panel {
+                name:   "Shot settings".to_string(),
+                widget: self.widgets.frame.grid.clone().upcast(),
+                pos:    PanelPosition::Left,
+                tab:    PanelTab::Common,
+            },
+
+            Panel {
+                name:   "Calibration + hot pixels".to_string(),
+                widget: self.widgets.calibr.grid.clone().upcast(),
+                pos:    PanelPosition::Left,
+                tab:    PanelTab::Common,
+            },
+
+            Panel {
+                name:   "Saving raw frames".to_string(),
+                widget: self.widgets.raw.grid.clone().upcast(),
+                pos:    PanelPosition::Left,
+                tab:    PanelTab::Common,
+            },
+
+            Panel {
+                name:   "Live stacking".to_string(),
+                widget: self.widgets.live_st.grid.clone().upcast(),
+                pos:    PanelPosition::Left,
+                tab:    PanelTab::Common,
+            },
+
+            Panel {
+                name:   "Light frame quality".to_string(),
+                widget: self.widgets.quality.bx.clone().upcast(),
+                pos:    PanelPosition::Left,
+                tab:    PanelTab::Common,
+            },
+        ]
+    }
+
+    fn process_event(&self, event: &UiModuleEvent) {
+        match event {
+            UiModuleEvent::ProgramClosing => {
+                self.handler_closing();
+            }
+
+            _ => {}
+        }
 
     }
 }
@@ -296,9 +440,9 @@ impl CameraUi {
     }
 
     fn init_live_stacking_widgets(&self) {
-        self.widgets.live_st.chb_save_period.set_range(1.0, 60.0);
-        self.widgets.live_st.chb_save_period.set_digits(0);
-        self.widgets.live_st.chb_save_period.set_increments(1.0, 10.0);
+        self.widgets.live_st.spb_save_period.set_range(1.0, 60.0);
+        self.widgets.live_st.spb_save_period.set_digits(0);
+        self.widgets.live_st.spb_save_period.set_increments(1.0, 10.0);
     }
 
     fn init_frame_quality_widgets(&self) {
@@ -366,9 +510,9 @@ impl CameraUi {
                 // Store previous camera options into UiOptions::all_cam_opts
 
                 if let Some(prev_cam) = options.cam.device.clone() {
-                    // TODO !!!
-                    //options.read_focuser_cam(&self_.builder);
-                    //options.read_guiding_cam(&self_.builder);
+                    self_.get_frame_options(&mut options);
+                    self_.get_ctrl_options(&mut options);
+                    self_.get_calibr_options(&mut options);
                     self_.store_cur_cam_options_impl(&prev_cam, &options);
                 }
 
@@ -385,11 +529,9 @@ impl CameraUi {
                 self_.show_total_raw_time_impl(&options);
 
                 // Show some options for specific camera
-
-                // TODO: !!!
-                //options.show_cam_frame(&self_.builder);
-                //options.show_calibr(&self_.builder);
-                //options.show_cam_ctrl(&self_.builder);
+                self_.show_frame_options(&options);
+                self_.show_ctrl_options(&options);
+                self_.show_calibr_options(&options);
 
                 drop(options);
 
@@ -402,8 +544,6 @@ impl CameraUi {
 
         self.widgets.common.chb_live_view.connect_active_notify(
             clone!(@weak self as self_ => move |_| {
-                self_.get_options_from_widgets();
-                self_.correct_widgets_props();
                 self_.handler_live_view_changed();
             })
         );
@@ -545,73 +685,45 @@ impl CameraUi {
             })
         );
 
-        self.widgets.calibr.chb_master_dark.connect_active_notify(
+        self.widgets.calibr.chb_dark.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.calibr.dark_frame_en = chb.is_active();
             })
         );
 
-        self.widgets.calibr.chb_master_flat.connect_active_notify(
+        self.widgets.calibr.chb_flat.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.calibr.flat_frame_en = chb.is_active();
             })
         );
 
-        self.widgets.calibr.fch_master_flat.connect_file_set(
+        self.widgets.calibr.fch_flat.connect_file_set(
             clone!(@weak self as self_ => move |fch| {
                 let Ok(mut options) = self_.options.try_write() else { return; };
-                options.calibr.flat_frame_fname = fch.filename();
+                options.calibr.flat_frame_fname = fch.filename().unwrap_or_default();
             })
         );
 
         self.widgets.calibr.chb_hot_pixels.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                self_.widgets.calibr.l_hot_pixels_warn.set_visible(chb.is_active());
+                self_.widgets.calibr.l_hot_px_warn.set_visible(chb.is_active());
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.calibr.hot_pixels = chb.is_active();
                 drop(options);
             })
         );
 
-        self.widgets.live_st.chb_no_tracks.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            self_.widgets.live_st.l_no_tracks.set_visible(chb.is_active());
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            options.live.remove_tracks = chb.is_active();
-            drop(options);
+        self.widgets.live_st.chb_no_tracks.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                self_.widgets.live_st.l_no_tracks.set_visible(chb.is_active());
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.live.remove_tracks = chb.is_active();
+                drop(options);
+            })
+        );
 
-        }));
-
-    }
-
-    fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
-        handlers.subscribe(clone!(@weak self as self_ => move |event| {
-            self_.handler_main_ui_event(event);
-        }));
-    }
-
-    fn handler_main_ui_event(&self, event: UiEvent) {
-        match event {
-            UiEvent::Timer => {}
-            UiEvent::FullScreen(full_screen) =>
-                self.set_full_screen_mode(full_screen),
-            UiEvent::BeforeModeContinued =>
-                self.get_options_from_widgets(),
-            UiEvent::TabPageChanged(TabPage::Camera) =>
-                self.correct_widgets_props(),
-            UiEvent::ProgramClosing =>
-                self.handler_closing(),
-            UiEvent::BeforeDisconnect => {
-                self.get_options_from_widgets();
-                self.store_cur_cam_options();
-            },
-            UiEvent::OptionsHasShown => {
-                self.correct_widgets_props();
-                self.show_total_raw_time();
-            }
-            _ => {},
-        }
     }
 
     fn process_indi_or_core_event(&self, event: MainThreadEvent) {
@@ -658,9 +770,7 @@ impl CameraUi {
 
             MainThreadEvent::Core(Event::ModeContinued) => {
                 let options = self.options.read().unwrap();
-                // TODO: !!!
-                //options.show_cam_frame(&self.builder);
-                drop(options);
+                self.show_frame_options(&options);
             },
 
             MainThreadEvent::Core(Event::FrameProcessing(result)) => {
@@ -668,6 +778,130 @@ impl CameraUi {
             }
             _ => {},
         }
+    }
+
+    fn show_common_options(&self, options: &Options) {
+        self.widgets.common.chb_live_view.set_active(options.cam.live_view);
+        let cb_cam_list = &self.widgets.common.cb_cam_list;
+        if let Some(device) = &options.cam.device {
+            let id = device.to_string();
+            cb_cam_list.set_active_id(Some(&id));
+            if cb_cam_list.active_id().map(|v| v.as_str() != &id).unwrap_or(true) {
+                cb_cam_list.append(Some(&id), &id);
+                cb_cam_list.set_active_id(Some(&id));
+            }
+        } else {
+            cb_cam_list.set_active_id(None);
+        }
+    }
+
+    fn show_frame_options(&self, options: &Options) {
+        let frame = &self.widgets.frame;
+        frame.cb_mode.set_active_id(options.cam.frame.frame_type.to_active_id());
+        frame.spb_exp.set_value(options.cam.frame.exposure());
+        frame.spb_gain.set_value(options.cam.frame.gain);
+        frame.spb_offset.set_value(options.cam.frame.offset as f64);
+        frame.cb_bin.set_active_id(options.cam.frame.binning.to_active_id());
+        frame.cb_crop.set_active_id(options.cam.frame.crop.to_active_id());
+    }
+
+    fn show_calibr_options(&self, options: &Options) {
+        let calibr = &self.widgets.calibr;
+        calibr.chb_dark.set_active(options.calibr.dark_frame_en);
+        calibr.chb_flat.set_active(options.calibr.flat_frame_en);
+        calibr.fch_flat.set_filename(&options.calibr.flat_frame_fname);
+        calibr.chb_hot_pixels.set_active(options.calibr.hot_pixels);
+
+        calibr.l_hot_px_warn.set_sensitive(options.calibr.hot_pixels);
+    }
+
+    fn show_ctrl_options(&self, options: &Options) {
+        let ctrl = &self.widgets.ctrl;
+        ctrl.chb_low_noise.set_active(options.cam.frame.low_noise);
+        ctrl.chb_cooler.set_active(options.cam.ctrl.enable_cooler);
+        ctrl.spb_temp.set_value(options.cam.ctrl.temperature);
+        ctrl.chb_fan.set_active(options.cam.ctrl.enable_fan);
+    }
+
+    fn show_raw_options(&self, options: &Options) {
+        let raw = &self.widgets.raw;
+        raw.chb_frames_cnt.set_active(options.raw_frames.use_cnt);
+        raw.spb_frames_cnt.set_value(options.raw_frames.frame_cnt as f64);
+        raw.fcb_path.set_filename(&options.raw_frames.out_path);
+        raw.chb_save_master.set_active(options.raw_frames.create_master);
+    }
+
+    fn show_live_stacking_options(&self, options: &Options) {
+        let live = &self.widgets.live_st;
+        live.chb_save_orig.set_active(options.live.save_orig);
+        live.chb_save_period.set_active(options.live.save_enabled);
+        live.spb_save_period.set_value(options.live.save_minutes as f64);
+        live.fch_path.set_filename(&options.live.out_dir);
+        live.chb_no_tracks.set_active(options.live.remove_tracks);
+    }
+
+    fn show_frame_quality_options(&self, options: &Options) {
+        let qual = &self.widgets.quality;
+        qual.chb_max_fwhm.set_active(options.quality.use_max_fwhm);
+        qual.spb_max_fwhm.set_value(options.quality.max_fwhm as f64);
+        qual.chb_max_oval.set_active(options.quality.use_max_ovality);
+        qual.spb_max_oval.set_value(options.quality.max_ovality as f64);
+    }
+
+    pub fn get_common_options(&self, options: &mut Options) {
+        options.cam.live_view = self.widgets.common.chb_live_view.is_active();
+        options.cam.device    = self.widgets.common.cb_cam_list.active_id().map(|str| DeviceAndProp::new(&str));
+    }
+
+    pub fn get_ctrl_options(&self, options: &mut Options) {
+        let ctrl = &self.widgets.ctrl;
+        options.cam.ctrl.enable_cooler = ctrl.chb_cooler.is_active();
+        options.cam.ctrl.temperature   = ctrl.spb_temp.value();
+        options.cam.ctrl.enable_fan    = ctrl.chb_fan.is_active();
+        options.cam.frame.low_noise    = ctrl.chb_low_noise.is_active();
+    }
+
+    pub fn get_frame_options(&self, options: &mut Options) {
+        let frame = &self.widgets.frame;
+        options.cam.frame.frame_type   = FrameType::from_active_id(frame.cb_mode.active_id().as_deref());
+        options.cam.frame.set_exposure   (frame.spb_exp.value());
+        options.cam.frame.gain         = frame.spb_gain.value();
+        options.cam.frame.offset       = frame.spb_offset.value() as i32;
+        options.cam.frame.binning      = Binning::from_active_id(frame.cb_bin.active_id().as_deref());
+        options.cam.frame.crop         = Crop::from_active_id(frame.cb_crop.active_id().as_deref());
+    }
+
+    pub fn get_calibr_options(&self, options: &mut Options) {
+        let calibr = &self.widgets.calibr;
+        options.calibr.dark_frame_en     = calibr.chb_dark.is_active();
+        options.calibr.flat_frame_en     = calibr.chb_flat.is_active();
+        options.calibr.flat_frame_fname  = calibr.fch_flat.filename().unwrap_or_default();
+        options.calibr.hot_pixels        = calibr.chb_hot_pixels.is_active();
+    }
+
+    pub fn get_raw_options(&self, options: &mut Options) {
+        let raw = &self.widgets.raw;
+        options.raw_frames.use_cnt       = raw.chb_frames_cnt.is_active();
+        options.raw_frames.frame_cnt     = raw.spb_frames_cnt.value() as usize;
+        options.raw_frames.out_path      = raw.fcb_path.filename().unwrap_or_default();
+        options.raw_frames.create_master = raw.chb_save_master.is_active();
+    }
+
+    pub fn get_live_stacking_options(&self, options: &mut Options) {
+        let live = &self.widgets.live_st;
+        options.live.save_orig     = live.chb_save_orig.is_active();
+        options.live.save_enabled  = live.chb_save_period.is_active();
+        options.live.save_minutes  = live.spb_save_period.value() as usize;
+        options.live.out_dir       = live.fch_path.filename().unwrap_or_default();
+        options.live.remove_tracks = live.chb_no_tracks.is_active();
+    }
+
+    pub fn get_frame_quality_options(&self, options: &mut Options) {
+        let qual = &self.widgets.quality;
+        options.quality.use_max_fwhm    = qual.chb_max_fwhm.is_active();
+        options.quality.max_fwhm        = qual.spb_max_fwhm.value() as f32;
+        options.quality.use_max_ovality = qual.chb_max_oval.is_active();
+        options.quality.max_ovality     = qual.spb_max_oval.value() as f32;
     }
 
     fn store_cur_cam_options_impl(
@@ -706,29 +940,6 @@ impl CameraUi {
         drop(ui_options);
     }
 
-    fn set_full_screen_mode(&self, full_screen: bool) {
-        // TODO:
-        /*
-        let bx_cam_left = bldr.object::<gtk::Widget>("bx_cam_left").unwrap();
-        let scr_cam_right = bldr.object::<gtk::Widget>("scr_cam_right").unwrap();
-        let pan_cam3 = bldr.object::<gtk::Widget>("pan_cam3").unwrap();
-        let bx_img_info = bldr.object::<gtk::Widget>("bx_img_info").unwrap();
-        if full_screen {
-            self.get_ui_options_from_widgets();
-            bx_cam_left.set_visible(false);
-            scr_cam_right.set_visible(false);
-            pan_cam3.set_visible(false);
-            bx_img_info.set_visible(false);
-        } else {
-            bx_cam_left.set_visible(true);
-            scr_cam_right.set_visible(true);
-            pan_cam3.set_visible(true);
-            bx_img_info.set_visible(true);
-        }
-        */
-        self.full_screen_mode.set(full_screen);
-    }
-
     fn handler_closing(&self) {
         self.closed.set(true);
 
@@ -736,7 +947,6 @@ impl CameraUi {
 
         _ = self.core.abort_active_mode();
 
-        self.get_ui_options_from_widgets();
         self.store_cur_cam_options();
 
         let ui_options = self.ui_options.borrow();
@@ -746,8 +956,6 @@ impl CameraUi {
         if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
             self.indi.unsubscribe(indi_conn);
         }
-
-        *self.self_.borrow_mut() = None;
     }
 
     /// Stores current camera options for current camera
@@ -757,80 +965,6 @@ impl CameraUi {
             self.store_cur_cam_options_impl(&cur_cam_device, &options);
         }
     }
-
-    fn show_options(&self) {
-        // TODO: !!!
-        /*
-        let options = self.options.read().unwrap();
-        options.show_cam(&self.builder);
-        options.show_raw(&self.builder);
-        options.show_live_stacking(&self.builder);
-        options.show_frame_quality(&self.builder);
-        options.show_preview(&self.builder);
-        options.show_guiding(&self.builder);
-        */
-    }
-
-    fn show_ui_options(&self) {
-        // TODO: !!!
-        /*
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let bld = &self.builder;
-        let pan_cam1 = bld.object::<gtk::Paned>("pan_cam1").unwrap();
-        let pan_cam2 = bld.object::<gtk::Paned>("pan_cam2").unwrap();
-        let pan_cam3 = bld.object::<gtk::Paned>("pan_cam3").unwrap();
-        let pan_cam4 = bld.object::<gtk::Paned>("pan_cam4").unwrap();
-
-        let options = self.ui_options.borrow();
-        pan_cam1.set_position(options.paned_pos1);
-        if options.paned_pos2 != -1 {
-            pan_cam2.set_position(pan_cam2.allocation().width()-options.paned_pos2);
-        }
-        pan_cam3.set_position(options.paned_pos3);
-        if options.paned_pos4 != -1 {
-            pan_cam4.set_position(pan_cam4.allocation().height()-options.paned_pos4);
-        }
-        ui.set_prop_bool("exp_cam_ctrl.expanded",   options.cam_ctrl_exp);
-        ui.set_prop_bool("exp_shot_set.expanded",   options.shot_exp);
-        ui.set_prop_bool("exp_calibr.expanded",     options.calibr_exp);
-        ui.set_prop_bool("exp_raw_frames.expanded", options.raw_frames_exp);
-        ui.set_prop_bool("exp_live.expanded",       options.live_exp);
-        ui.set_prop_bool("exp_quality.expanded",    options.quality_exp);
-        */
-    }
-
-    fn get_options_from_widgets(&self) {
-        // TODO: !!!
-
-        //let Ok(mut options) = self.options.try_write() else { return; };
-        //options.read_all(&self.builder);
-    }
-
-    fn get_ui_options_from_widgets(&self) {
-        // TODO: !!!
-        /*
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let bld = &self.builder;
-        let mut options = self.ui_options.borrow_mut();
-        if !self.full_screen_mode.get() {
-            let pan_cam1 = bld.object::<gtk::Paned>("pan_cam1").unwrap();
-            let pan_cam2 = bld.object::<gtk::Paned>("pan_cam2").unwrap();
-            let pan_cam3 = bld.object::<gtk::Paned>("pan_cam3").unwrap();
-            let pan_cam4 = bld.object::<gtk::Paned>("pan_cam4").unwrap();
-            options.paned_pos1 = pan_cam1.position();
-            options.paned_pos2 = pan_cam2.allocation().width()-pan_cam2.position();
-            options.paned_pos3 = pan_cam3.position();
-            options.paned_pos4 = pan_cam4.allocation().height()-pan_cam4.position();
-        }
-        options.cam_ctrl_exp   = ui.prop_bool("exp_cam_ctrl.expanded");
-        options.shot_exp       = ui.prop_bool("exp_shot_set.expanded");
-        options.calibr_exp     = ui.prop_bool("exp_calibr.expanded");
-        options.raw_frames_exp = ui.prop_bool("exp_raw_frames.expanded");
-        options.live_exp       = ui.prop_bool("exp_live.expanded");
-        options.quality_exp    = ui.prop_bool("exp_quality.expanded");
-        */
-    }
-
 
     fn handler_delayed_action(&self, action: &DelayedAction) {
         match action {
@@ -966,45 +1100,45 @@ impl CameraUi {
             ("load_image",             waiting),
         ]);
 
+        widgets.common.bx           .set_sensitive(cam_sensitive);
+        widgets.common.l_cam_list   .set_sensitive(waiting && indi_connected);
+        widgets.common.cb_cam_list  .set_sensitive(waiting && indi_connected);
+        widgets.common.chb_live_view.set_sensitive((exposure_supported && liveview_active) || can_change_mode);
+
+        widgets.ctrl.grid         .set_sensitive(cam_sensitive);
         widgets.ctrl.chb_fan      .set_visible(fan_supported);
         widgets.ctrl.l_heater     .set_visible(heater_supported);
         widgets.ctrl.cb_heater    .set_visible(heater_supported);
         widgets.ctrl.chb_low_noise.set_visible(low_noise_supported);
-
-        widgets.common.l_cam_list .set_sensitive(waiting && indi_connected);
-        widgets.common.cb_cam_list.set_sensitive(waiting && indi_connected);
         widgets.ctrl.chb_fan      .set_sensitive(!cooler_active);
         widgets.ctrl.chb_cooler   .set_sensitive(temp_supported && can_change_cam_opts);
         widgets.ctrl.spb_temp     .set_sensitive(cooler_active && temp_supported && can_change_cam_opts);
 
-        ui.enable_widgets(false, &[
-            ("chb_shots_cont",     (exposure_supported && liveview_active) || can_change_mode),
-            ("cb_frame_mode",      can_change_frame_opts),
-            ("spb_exp",            exposure_supported && can_change_frame_opts),
-            ("cb_crop",            crop_supported && can_change_frame_opts),
-            ("spb_gain",           gain_supported && can_change_frame_opts),
-            ("spb_offset",         offset_supported && can_change_frame_opts),
-            ("cb_bin",             bin_supported && can_change_frame_opts),
-            ("chb_master_frame",   can_change_cal_ops && (frame_mode_is_flat || frame_mode_is_dark) && !saving_frames),
-            ("chb_master_dark",    can_change_cal_ops),
-            ("fch_dark_library",   can_change_cal_ops),
-            ("chb_master_flat",    can_change_cal_ops),
-            ("fch_master_flat",    can_change_cal_ops),
-            ("chb_raw_frames_cnt", !saving_frames && can_change_mode),
-            ("spb_raw_frames_cnt", !saving_frames && can_change_mode),
+        widgets.frame.grid      .set_sensitive(cam_sensitive);
+        widgets.frame.cb_mode   .set_sensitive(can_change_frame_opts);
+        widgets.frame.spb_exp   .set_sensitive(exposure_supported && can_change_frame_opts);
+        widgets.frame.cb_crop   .set_sensitive(crop_supported && can_change_frame_opts);
+        widgets.frame.spb_gain  .set_sensitive(gain_supported && can_change_frame_opts);
+        widgets.frame.spb_offset.set_sensitive(offset_supported && can_change_frame_opts);
+        widgets.frame.cb_bin    .set_sensitive(bin_supported && can_change_frame_opts);
 
-            ("chb_live_save",      can_change_live_stacking_opts),
-            ("spb_live_minutes",   can_change_live_stacking_opts),
-            ("chb_live_save_orig", can_change_live_stacking_opts),
-            ("fch_live_folder",    can_change_live_stacking_opts),
+        widgets.calibr.grid    .set_sensitive(cam_sensitive);
+        widgets.calibr.chb_dark.set_sensitive(can_change_cal_ops);
+        widgets.calibr.chb_flat.set_sensitive(can_change_cal_ops);
+        widgets.calibr.fch_flat.set_sensitive(can_change_cal_ops);
 
-            ("grd_cam_ctrl",       cam_sensitive),
-            ("grd_shot_settings",  cam_sensitive),
-            ("grd_save_raw",       cam_sensitive),
-            ("grd_live_stack",     cam_sensitive),
-            ("grd_cam_calibr",     cam_sensitive),
-            ("bx_light_qual",      cam_sensitive),
-        ]);
+        widgets.raw.grid           .set_sensitive(cam_sensitive);
+        widgets.raw.chb_save_master.set_sensitive(can_change_cal_ops && (frame_mode_is_flat || frame_mode_is_dark) && !saving_frames);
+        widgets.raw.chb_frames_cnt .set_sensitive(!saving_frames && can_change_mode);
+        widgets.raw.spb_frames_cnt .set_sensitive(!saving_frames && can_change_mode);
+
+        widgets.live_st.grid           .set_sensitive(cam_sensitive);
+        widgets.live_st.chb_save_period.set_sensitive(can_change_live_stacking_opts);
+        widgets.live_st.spb_save_period.set_sensitive(can_change_live_stacking_opts);
+        widgets.live_st.chb_save_orig  .set_sensitive(can_change_live_stacking_opts);
+        widgets.live_st.fch_path       .set_sensitive(can_change_live_stacking_opts);
+
+        widgets.quality.bx.set_sensitive(cam_sensitive);
     }
 
     fn correct_widgets_props(&self) {
@@ -1016,11 +1150,9 @@ impl CameraUi {
     }
 
     fn correct_frame_quality_widgets_props(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        ui.enable_widgets(true, &[
-            ("spb_max_fwhm", ui.prop_bool("chb_max_fwhm.active")),
-            ("spb_max_oval", ui.prop_bool("chb_max_oval.active")),
-        ]);
+        let qual = &self.widgets.quality;
+        qual.spb_max_fwhm.set_sensitive(qual.chb_max_fwhm.is_active());
+        qual.spb_max_oval.set_sensitive(qual.chb_max_oval.is_active());
     }
 
     fn update_devices_list(&self) {
@@ -1043,13 +1175,11 @@ impl CameraUi {
             }
         }
 
-        let cb = self.builder.object::<gtk::ComboBoxText>("cb_camera_list").unwrap();
-
         let connected = self.indi.state() == indi::ConnState::Connected;
 
         let camera_selected = fill_devices_list_into_combobox(
             &list,
-            &cb,
+            &self.widgets.common.cb_cam_list,
             cur_cam_device.as_ref().map(|d| d.name.as_str()),
             connected,
             |id| {
@@ -1069,9 +1199,10 @@ impl CameraUi {
                 drop(options);
 
                 let options = self.options.read().unwrap();
-                options.show_cam_frame(&self.builder);
-                options.show_calibr(&self.builder);
-                options.show_cam_ctrl(&self.builder);
+                // TODO: show options!!!
+                //options.show_cam_frame(&self.builder);
+                //options.show_calibr(&self.builder);
+                //options.show_cam_ctrl(&self.builder);
             }
 
             self.correct_widgets_props();
@@ -1083,7 +1214,7 @@ impl CameraUi {
         cam_dev: &DeviceAndProp,
         options: &Options
     ) {
-        let cb_bin = self.builder.object::<gtk::ComboBoxText>("cb_bin").unwrap();
+        let cb_bin = &self.widgets.frame.cb_bin;
         let last_bin = cb_bin.active_id();
         cb_bin.remove_all();
         let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_dev.prop);
@@ -1128,7 +1259,7 @@ impl CameraUi {
 
     fn fill_heater_items_list_impl(&self, options: &Options) {
         gtk_utils::exec_and_show_error(&self.window, ||{
-            let cb_cam_heater = self.builder.object::<gtk::ComboBoxText>("cb_cam_heater").unwrap();
+            let cb_cam_heater = &self.widgets.ctrl.cb_heater;
             let last_heater_value = cb_cam_heater.active_id();
             cb_cam_heater.remove_all();
             let Some(device) = &options.cam.device else { return Ok(()); };
@@ -1166,7 +1297,7 @@ impl CameraUi {
     }
 
     fn start_live_view(&self) {
-        self.get_options_from_widgets();
+        self.main_ui.get_all_options();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_live_view()?;
             Ok(())
@@ -1174,7 +1305,7 @@ impl CameraUi {
     }
 
     fn handler_action_take_shot(&self) {
-        self.get_options_from_widgets();
+        self.main_ui.get_all_options();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.start_single_shot()?;
             Ok(())
@@ -1236,13 +1367,11 @@ impl CameraUi {
         device_name: &str,
         temparature: f64
     ) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let options = self.options.read().unwrap();
         let Some(cur_cam_device) = &options.cam.device else { return; };
         if cur_cam_device.name == device_name {
-            ui.set_prop_str(
-                "l_temp_value.label",
-                Some(&format!("T: {:.1}°C", temparature))
+            self.widgets.info.l_temp_value.set_label(
+                &format!("T: {:.1}°C", temparature)
             );
         }
     }
@@ -1252,13 +1381,11 @@ impl CameraUi {
         device_name: &str,
         pwr_str:     &str
     ) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let options = self.options.read().unwrap();
         let Some(cur_cam_device) = &options.cam.device else { return; };
         if cur_cam_device.name == device_name {
-            ui.set_prop_str(
-                "l_coolpwr_value.label",
-                Some(&format!("Pwr: {}", pwr_str))
+            self.widgets.info.l_coolpwr_value.set_label(
+                &format!("Pwr: {}", pwr_str)
             );
         }
     }
@@ -1268,7 +1395,7 @@ impl CameraUi {
             return;
         }
         if self.options.read().unwrap().cam.live_view {
-            self.get_options_from_widgets();
+            self.main_ui.get_all_options();
             self.start_live_view();
         } else {
             self.core.abort_active_mode();
@@ -1363,9 +1490,7 @@ impl CameraUi {
     }
 
     fn handler_action_start_live_stacking(self: &Rc<Self>) {
-        if !is_expanded(&self.builder, "exp_live") { return; }
-
-        self.get_options_from_widgets();
+        self.main_ui.get_all_options();
         let info_pairs = self.get_short_info_pairs(true);
         let dialog = StartDialog::new(
             self.window.upcast_ref(),
@@ -1374,19 +1499,16 @@ impl CameraUi {
         );
         dialog.exec(clone!(@strong self as self_ => move || {
             self_.core.start_live_stacking()?;
-            self_.show_options();
             Ok(())
         }));
     }
 
     fn handler_action_stop_live_stacking(&self) {
-        if !is_expanded(&self.builder, "exp_live") { return; }
         self.core.abort_active_mode();
     }
 
     fn handler_action_continue_live_stacking(&self) {
-        if !is_expanded(&self.builder, "exp_live") { return; }
-        self.get_options_from_widgets();
+        self.main_ui.get_all_options();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.continue_prev_mode()?;
             Ok(())
@@ -1394,8 +1516,7 @@ impl CameraUi {
     }
 
     fn update_shot_state(&self) {
-        let draw_area = self.builder.object::<gtk::DrawingArea>("da_shot_state").unwrap();
-        draw_area.queue_draw();
+        self.widgets.info.da_shot_state.queue_draw();
     }
 
     fn handler_draw_shot_state(
@@ -1521,9 +1642,7 @@ impl CameraUi {
     }
 
     fn handler_action_start_save_raw_frames(self: &Rc<Self>) {
-        if !is_expanded(&self.builder, "exp_raw_frames") { return; }
-
-        self.get_options_from_widgets();
+        self.main_ui.get_all_options();
         let info_pairs = self.get_short_info_pairs(false);
         let dialog = StartDialog::new(
             self.window.upcast_ref(),
@@ -1532,14 +1651,12 @@ impl CameraUi {
         );
         dialog.exec(clone!(@strong self as self_ => move || {
             self_.core.start_saving_raw_frames()?;
-            self_.show_options();
             Ok(())
         }));
     }
 
     fn handler_action_continue_save_raw_frames(&self) {
-        if !is_expanded(&self.builder, "exp_raw_frames") { return; }
-        self.get_options_from_widgets();
+        self.main_ui.get_all_options();
         gtk_utils::exec_and_show_error(&self.window, || {
             self.core.continue_prev_mode()?;
             Ok(())
@@ -1547,20 +1664,20 @@ impl CameraUi {
     }
 
     fn handler_action_stop_save_raw_frames(&self) {
-        if !is_expanded(&self.builder, "exp_raw_frames") { return; }
         self.core.abort_active_mode();
     }
 
     fn show_total_raw_time_impl(&self, options: &Options) {
-        let total_time = options.cam.frame.exposure() * options.raw_frames.frame_cnt as f64;
+        let total_time =
+            options.cam.frame.exposure() *
+            options.raw_frames.frame_cnt as f64;
         let text = format!(
             "{:.1}s x {} ~ {}",
             options.cam.frame.exposure(),
             options.raw_frames.frame_cnt,
             seconds_to_total_time_str(total_time, false)
         );
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        ui.set_prop_str("l_raw_time_info.label", Some(&text));
+        self.widgets.raw.l_time_info.set_label(&text);
     }
 
     fn show_total_raw_time(&self) {
@@ -1570,12 +1687,15 @@ impl CameraUi {
 
     fn show_frame_processing_result(&self, result: FrameProcessResult) {
         match result.data {
+            // TODO: move to main_ui
             FrameProcessResultData::Error(error_text) => {
                 _ = self.core.abort_active_mode();
                 self.correct_widgets_props();
                 gtk_utils::show_error_message(&self.window, "Fatal Error", &error_text);
             }
-
+            FrameProcessResultData::MasterSaved { frame_type: FrameType::Flats, file_name } => {
+                self.widgets.calibr.fch_flat.set_filename(&file_name);
+            }
             _ => {}
         }
     }

@@ -1,4 +1,4 @@
-use std::{cell::{Cell, RefCell}, collections::HashMap, rc::Rc, sync::{Arc, RwLock}};
+use std::{cell::{Cell, RefCell}, collections::HashMap, rc::{Rc, Weak}, sync::{Arc, RwLock}};
 use chrono::{prelude::*, Days, Duration, Months};
 use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
@@ -13,14 +13,12 @@ use super::{sky_map::{alt_widget::paint_altitude_by_time, data::*, math::*, pain
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
 pub fn init_ui(
-    _app:     &gtk::Application,
-    builder:  &gtk::Builder,
-    main_ui:  &Rc<MainUi>,
-    core:     &Arc<Core>,
-    options:  &Arc<RwLock<Options>>,
-    indi:     &Arc<indi::Connection>,
-    handlers: &mut MainUiEventHandlers,
-) {
+    builder: &gtk::Builder,
+    main_ui: &Rc<MainUi>,
+    core:    &Arc<Core>,
+    options: &Arc<RwLock<Options>>,
+    indi:    &Arc<indi::Connection>,
+) -> Rc<dyn UiModule> {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
     let mut ui_options = UiOptions::default();
@@ -33,7 +31,7 @@ pub fn init_ui(
     let map_widget = SkymapWidget::new();
     pan_map1.add2(map_widget.get_widget());
 
-    let data = Rc::new(MapUi {
+    let obj = Rc::new(MapUi {
         ui_options:    RefCell::new(ui_options),
         core:          Arc::clone(core),
         indi:          Arc::clone(indi),
@@ -56,22 +54,23 @@ pub fn init_ui(
         cam_rotation:  RefCell::new(HashMap::new()),
         ps_img:        RefCell::new(None),
         ps_result:     RefCell::new(None),
-        self_:         RefCell::new(None),
+        weak_self_:    RefCell::new(Weak::default()),
         map_widget,
     });
 
-    *data.self_.borrow_mut() = Some(Rc::clone(&data));
+    *obj.weak_self_.borrow_mut() = Rc::downgrade(&obj);
 
-    data.init_widgets();
-    data.init_search_result_treeview();
-    data.show_options();
-    data.update_widgets_enable_state();
+    obj.init_widgets();
+    obj.init_search_result_treeview();
+    obj.show_options();
+    obj.update_widgets_enable_state();
 
-    data.connect_main_ui_events(handlers);
-    data.connect_widgets_events();
-    data.connect_core_events();
+    obj.connect_widgets_events();
+    obj.connect_core_events();
 
-    data.set_observer_data_for_widget();
+    obj.set_observer_data_for_widget();
+
+    obj
 }
 
 enum MainThreadEvent {
@@ -244,7 +243,7 @@ struct MapUi {
     cam_rotation:  RefCell<HashMap<String, f64>>,
     ps_img:        RefCell<Option<gdk::gdk_pixbuf::Pixbuf>>,
     ps_result:     RefCell<Option<PlateSolveOkResult>>,
-    self_:         RefCell<Option<Rc<MapUi>>>
+    weak_self_:    RefCell<Weak<MapUi>>
 }
 
 impl Drop for MapUi {
@@ -253,35 +252,42 @@ impl Drop for MapUi {
     }
 }
 
-impl MapUi {
-    const CONF_FN: &'static str = "ui_skymap";
+impl UiModule for MapUi {
+    fn show_options(&self, _options: &Options) {
+    }
 
-    fn handler_main_ui_event(self: &Rc<Self>, event: UiEvent) {
+    fn get_options(&self, _options: &mut Options) {
+    }
+
+    fn panels(&self) -> Vec<Panel> {
+        vec![]
+    }
+
+    fn process_event(&self, event: &UiModuleEvent) {
         match event {
-            UiEvent::ProgramClosing =>
-                self.handler_closing(),
-
-            UiEvent::Timer =>
-                self.handler_main_timer(),
-
-            UiEvent::TabPageChanged(page) if page == TabPage::SkyMap => {
-                let mut options = self.options.write().unwrap();
-                options.read_site(&self.builder);
-                drop(options);
-
+            UiModuleEvent::FullScreen(full_screen) => {
+                self.set_full_screen_mode(*full_screen);
+            }
+            UiModuleEvent::ProgramClosing => {
+                self.handler_closing();
+            }
+            UiModuleEvent::TabChanged { to: TabPage::SkyMap, .. } => {
                 self.check_data_loaded();
                 self.set_observer_data_for_widget();
                 self.update_date_time_widgets(true);
                 self.update_skymap_widget(true);
                 self.show_selected_objects_info();
             }
-
-            UiEvent::FullScreen(full_screen) =>
-                self.set_full_screen_mode(full_screen),
-
-            _ => {},
+            UiModuleEvent::Timer => {
+                self.handler_main_timer();
+            }
+            _ => {}
         }
     }
+}
+
+impl MapUi {
+    const CONF_FN: &'static str = "ui_skymap";
 
     fn handler_closing(&self) {
         self.closed.set(true);
@@ -291,8 +297,6 @@ impl MapUi {
         let ui_options = self.ui_options.borrow();
         _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
         drop(ui_options);
-
-        *self.self_.borrow_mut() = None;
     }
 
     fn init_widgets(&self) {
@@ -319,12 +323,6 @@ impl MapUi {
 
         let da_sm_item_graph = self.builder.object::<gtk::DrawingArea>("da_sm_item_graph").unwrap();
         da_sm_item_graph.set_height_request((30.0 * dpimm_y) as i32);
-    }
-
-    fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
-        handlers.subscribe(clone!(@weak self as self_ => move |event| {
-            self_.handler_main_ui_event(event);
-        }));
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
@@ -691,7 +689,7 @@ impl MapUi {
         *self.prev_wdt.borrow_mut() = prev;
     }
 
-    fn check_data_loaded(self: &Rc<Self>) {
+    fn check_data_loaded(&self) {
         gtk_utils::exec_and_show_error(&self.window, || {
             let result = self.check_data_loaded_impl();
             if let Err(_) = result {
@@ -701,7 +699,7 @@ impl MapUi {
         });
     }
 
-    fn check_data_loaded_impl(self: &Rc<Self>) -> anyhow::Result<()> {
+    fn check_data_loaded_impl(&self) -> anyhow::Result<()> {
         let mut skymap = self.skymap_data.borrow_mut();
         if skymap.is_some() {
             return Ok(());
@@ -755,7 +753,11 @@ impl MapUi {
             stars_sender.send_blocking(Ok(stars_map)).unwrap();
         });
 
-        glib::spawn_future_local(clone!(@weak self as self_ => async move {
+        let weak_self = self.weak_self_.borrow();
+        let Some(self_) = weak_self.upgrade() else {
+            return Err(anyhow::anyhow!("self.weak_self_ is empty"));
+        };
+        glib::spawn_future_local(clone!(@weak self_ => async move {
             while let Ok(skymaps_with_stars_res) = stars_receiver.recv().await {
                 match skymaps_with_stars_res {
                     Ok(mut skymaps_with_stars) => {
@@ -1190,9 +1192,8 @@ impl MapUi {
     }
 
     fn goto_coordinate(self: &Rc<Self>, coord: &EqCoord, only_goto: bool) {
-        let mut options = self.options.write().unwrap();
-        options.read_all(&self.builder);
-        drop(options);
+        self.main_ui.get_all_options();
+
         let config = if only_goto {
             GotoConfig::OnlyGoto
         } else {

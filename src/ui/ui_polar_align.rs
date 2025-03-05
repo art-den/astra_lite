@@ -11,13 +11,12 @@ use crate::{
 use super::{sky_map::math::HorizCoord, ui_main::*, utils::*};
 
 pub fn init_ui(
-    _app:     &gtk::Application,
-    builder:  &gtk::Builder,
-    options:  &Arc<RwLock<Options>>,
-    core:     &Arc<Core>,
-    indi:     &Arc<indi::Connection>,
-    handlers: &mut MainUiEventHandlers,
-) {
+    builder: &gtk::Builder,
+    main_ui: &Rc<MainUi>,
+    options: &Arc<RwLock<Options>>,
+    core:    &Arc<Core>,
+    indi:    &Arc<indi::Connection>,
+) -> Rc<dyn UiModule> {
     let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
 
     let mut ui_options = UiOptions::default();
@@ -27,6 +26,7 @@ pub fn init_ui(
     });
 
     let obj = Rc::new(PolarAlignUi {
+        main_ui:         Rc::clone(main_ui),
         builder:         builder.clone(),
         options:         Arc::clone(options),
         core:            Arc::clone(core),
@@ -35,19 +35,17 @@ pub fn init_ui(
         closed:          Cell::new(false),
         indi_evt_conn:   RefCell::new(None),
         delayed_actions: DelayedActions::new(200),
-        self_:           RefCell::new(None),
         window,
     });
-
-    *obj.self_.borrow_mut() = Some(Rc::clone(&obj));
 
     obj.init_widgets();
     obj.apply_ui_options();
 
-    obj.connect_main_ui_events(handlers);
     obj.connect_widgets_events();
     obj.connect_indi_and_core_events();
     obj.connect_delayed_actions_events();
+
+    obj
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -74,7 +72,25 @@ impl Default for UiOptions {
     }
 }
 
+impl PloarAlignDir {
+    pub fn from_active_id(active_id: Option<&str>) -> Option<Self> {
+        match active_id {
+            Some("east") => Some(Self::East),
+            Some("west") => Some(Self::West),
+            _            => None,
+        }
+    }
+
+    pub fn to_active_id(&self) -> Option<&'static str> {
+        match self {
+            Self::East  => Some("east"),
+            Self::West  => Some("west"),
+        }
+    }
+}
+
 struct PolarAlignUi {
+    main_ui:         Rc<MainUi>,
     builder:         gtk::Builder,
     window:          gtk::ApplicationWindow,
     options:         Arc<RwLock<Options>>,
@@ -84,14 +100,50 @@ struct PolarAlignUi {
     closed:          Cell<bool>,
     indi_evt_conn:   RefCell<Option<indi::Subscription>>,
     delayed_actions: DelayedActions<DelayedAction>,
-    self_:           RefCell<Option<Rc<PolarAlignUi>>>,
 }
 
 impl Drop for PolarAlignUi {
     fn drop(&mut self) {
-        log::info!("PlateSolveUi dropped");
+        log::info!("PolarAlignUi dropped");
     }
 }
+
+impl UiModule for PolarAlignUi {
+    fn show_options(&self, options: &Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        ui.set_prop_f64("spb_pa_angle.value",       options.polar_align.angle);
+        ui.set_prop_str("cbx_pa_dir.active-id",     options.polar_align.direction.to_active_id());
+        ui.set_prop_str("cbx_pa_speed.active_id",   options.polar_align.speed.as_deref());
+        ui.set_prop_f64("spb_pa_sim_alt_err.value", options.polar_align.sim_alt_err);
+        ui.set_prop_f64("spb_pa_sim_az_err.value",  options.polar_align.sim_az_err);
+    }
+
+    fn get_options(&self, options: &mut Options) {
+        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
+        options.polar_align.angle       = ui.prop_f64("spb_pa_angle.value");
+        options.polar_align.speed       = ui.prop_string("cbx_pa_speed.active_id");
+        options.polar_align.sim_alt_err = ui.prop_f64("spb_pa_sim_alt_err.value");
+        options.polar_align.sim_az_err  = ui.prop_f64("spb_pa_sim_az_err.value");
+        options.polar_align.direction = PloarAlignDir::from_active_id(
+            ui.prop_string("cbx_pa_dir.active-id").as_deref()
+        ).unwrap_or(PloarAlignDir::West);
+    }
+
+    fn panels(&self) -> Vec<Panel> {
+        vec![]
+    }
+
+    fn process_event(&self, event: &UiModuleEvent) {
+        match event {
+            UiModuleEvent::ProgramClosing => {
+                self.handler_closing();
+            }
+
+            _ => {}
+        }
+    }
+}
+
 impl PolarAlignUi {
     const CONF_FN: &str = "ui_ploar_align";
 
@@ -130,20 +182,6 @@ impl PolarAlignUi {
         spb_pa_sim_az_err.set_increments(0.01, 0.1);
     }
 
-    fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
-        handlers.subscribe(clone!(@weak self as self_ => move |event| {
-            match event {
-                UiEvent::ProgramClosing =>
-                    self_.handler_closing(),
-
-                UiEvent::OptionsHasShown =>
-                    self_.correct_widgets_props(),
-
-                _ => {},
-            }
-        }));
-    }
-
     fn handler_closing(&self) {
         self.closed.set(true);
 
@@ -155,8 +193,6 @@ impl PolarAlignUi {
         if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
             self.indi.unsubscribe(indi_conn);
         }
-
-        *self.self_.borrow_mut() = None;
     }
 
     fn apply_ui_options(&self) {
@@ -297,7 +333,8 @@ impl PolarAlignUi {
     fn handler_start_action_polar_align(&self) {
         if !is_expanded(&self.builder, "exp_polar_align") { return; }
 
-        self.options.write().unwrap().read_all(&self.builder);
+        self.main_ui.get_all_options();
+
         gtk_utils::exec_and_show_error(&self.window, ||{
             self.core.start_polar_alignment()?;
             Ok(())

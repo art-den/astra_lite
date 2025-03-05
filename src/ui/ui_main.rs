@@ -6,47 +6,68 @@ use std::{
     path::PathBuf,
     process::Command
 };
+
 use gtk::{prelude::*, glib, glib::clone, cairo};
+use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
     core::{core::*, events::*}, indi, options::*, utils::{gtk_utils, io_utils::*}
 };
 use super::utils::*;
 
+pub enum UiModuleEvent {
+    FullScreen(bool),
+    ProgramClosing,
+    TabChanged { from: TabPage, to: TabPage },
+    Timer,
+}
+
 pub trait UiModule {
     fn show_options(&self, options: &Options);
     fn get_options(&self, options: &mut Options);
-    fn connect_ui_events(&self);
+    fn panels(&self) -> Vec<Panel>;
+    fn process_event(&self, event: &UiModuleEvent);
 }
 
 pub struct UiModules {
-    items: RefCell<Vec<Rc<dyn UiModule>>>,
+    items: Vec<Rc<dyn UiModule>>,
 }
 
 impl UiModules {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
-            items: RefCell::new(Vec::new()),
+            items: Vec::new(),
         }
     }
 
-    fn add_module(&self, module: Rc<dyn UiModule>) {
-        let mut items = self.items.borrow_mut();
-        items.push(module);
+    fn add(&mut self, module: Rc<dyn UiModule>) {
+        self.items.push(module);
     }
 
-    pub fn show_options(&self, options: &Options) {
-        let items = self.items.borrow();
-        for widget in &*items {
-            widget.show_options(options);
+    fn show_options(&self, options: &Options) {
+        for module in &self.items {
+            module.show_options(options);
         }
     }
 
-    pub fn get_options(&self, options: &mut Options) {
-        let items = self.items.borrow();
-        for widget in &*items {
-            widget.get_options(options);
+    fn get_options(&self, options: &mut Options) {
+        for module in &self.items {
+            module.get_options(options);
         }
+    }
+
+    fn items(&self) -> &Vec<Rc<dyn UiModule>> {
+        &self.items
+    }
+
+    fn process_event(&self, event: &UiModuleEvent) {
+        for module in &self.items {
+            module.process_event(event);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.items.clear();
     }
 }
 
@@ -55,28 +76,20 @@ pub enum PanelPosition {
     Right,
     Top,
     Center,
+    BottomLeft,
+}
+
+pub enum PanelTab {
+    Hardware,
+    Map,
+    Common,
 }
 
 pub struct Panel {
     pub name:   String,
-    pub widhet: gtk::Widget,
+    pub widget: gtk::Widget,
     pub pos:    PanelPosition,
-}
-
-struct Panels {
-    items: Vec<Panel>,
-}
-
-impl Panels {
-    pub fn new() -> Self {
-        Self {
-            items: Vec::new(),
-        }
-    }
-
-    pub fn add(&mut self, panel: Panel) {
-        self.items.push(panel);
-    }
+    pub tab:    PanelTab,
 }
 
 pub fn init_ui(
@@ -118,97 +131,103 @@ pub fn init_ui(
         load_json_from_config_file(&mut ui_options, MainUi::CONF_FN)
     });
 
-    let ui_modules = Rc::new(UiModules::new());
+    let modules = UiModules::new();
+    let widgets = Widgets::from_builder(&builder);
 
-    let data = Rc::new(MainUi {
+    let main_ui = Rc::new(MainUi {
+        widgets,
         logs_dir:       logs_dir.clone(),
         core:           Arc::clone(core),
         indi:           Arc::clone(indi),
         options:        Arc::clone(options),
-        ui_modules:     Rc::clone(&ui_modules),
+        modules:        RefCell::new(modules),
         ui_options:     RefCell::new(ui_options),
-        handlers:       RefCell::new(MainUiEventHandlers::new()),
         progress:       RefCell::new(None),
         window:         window.clone(),
         builder:        builder.clone(),
         close_win_flag: Cell::new(false),
+        prev_tab_page:  Cell::new(TabPage::Hardware),
         conn_string:    RefCell::new(String::new()),
         dev_string:     RefCell::new(String::new()),
         perf_string:    RefCell::new(String::new()),
         self_:          RefCell::new(None), // used to drop MainData in window's delete_event
     });
 
-    *data.self_.borrow_mut() = Some(Rc::clone(&data));
+    *main_ui.self_.borrow_mut() = Some(Rc::clone(&main_ui));
 
     window.set_application(Some(app));
     window.show();
-    data.apply_options();
-    data.apply_theme();
+    main_ui.apply_options();
+    main_ui.apply_theme();
     gtk::main_iteration_do(true);
     gtk::main_iteration_do(true);
     gtk::main_iteration_do(true);
     glib::timeout_add_local(
         Duration::from_millis(TIMER_PERIOD_MS),
-        clone!(@weak data => @default-return glib::ControlFlow::Break,
+        clone!(@weak main_ui => @default-return glib::ControlFlow::Break,
         move || {
-            if data.close_win_flag.get() {
-                data.window.close();
+            if main_ui.close_win_flag.get() {
+                main_ui.window.close();
                 return glib::ControlFlow::Break;
             }
-            data.handlers.borrow().notify_all(UiEvent::Timer);
+            let modules = main_ui.modules.borrow();
+            modules.process_event(&UiModuleEvent::Timer);
             glib::ControlFlow::Continue
         }
     ));
 
-    let mut handlers = data.handlers.borrow_mut();
-    super::ui_hardware::init_ui(app, &window, &builder, &data, options, core, indi, &mut handlers);
-    let camera = super::ui_camera::init_ui(&window, options, core, indi, &mut handlers, Rc::downgrade(&ui_modules));
-    super::ui_darks_library::init_ui(app, &builder, options, core, indi, &mut handlers);
-    let preview = super::ui_preview::init_ui(&window, &data, options, core, Rc::downgrade(&ui_modules), &mut handlers);
-    super::ui_focuser::init_ui(app, &builder, options, core, indi, &mut handlers);
-    super::ui_dithering::init_ui(app, &builder, options, core, indi, &mut handlers);
-    super::ui_mount::init_ui(app, &builder, options, core, indi, &mut handlers);
-    super::ui_plate_solve::init_ui(app, &builder, options, core, indi, &mut handlers);
-    super::ui_polar_align::init_ui(app, &builder, options, core, indi, &mut handlers);
-    super::ui_skymap::init_ui(app, &builder, &data, core, options, indi, &mut handlers);
-    drop(handlers);
+    let hardware      = super::ui_hardware     ::init_ui(&window, &builder, &main_ui, options, core, indi);
+    let camera        = super::ui_camera       ::init_ui(&window, &main_ui, options, core, indi);
+    let darks_library = super::ui_darks_library::init_ui(&window, options, core, indi);
+    let preview       = super::ui_preview      ::init_ui(&window, &main_ui, options, core);
+    let focuser       = super::ui_focuser      ::init_ui(&builder, &main_ui, options, core, indi);
+    let dithering     = super::ui_dithering    ::init_ui(&builder, &main_ui, options, core, indi);
+    let mount         = super::ui_mount        ::init_ui(&builder, options, core, indi);
+    let plate_solve   = super::ui_plate_solve  ::init_ui(&builder, &main_ui, options, core, indi);
+    let polar_align   = super::ui_polar_align  ::init_ui(&builder, &main_ui, options, core, indi);
+    let map           = super::ui_skymap       ::init_ui(&builder, &main_ui, core, options, indi);
 
-    ui_modules.add_module(camera);
-    ui_modules.add_module(preview);
+    let mut modules = main_ui.modules.borrow_mut();
+    modules.add(hardware);
+    modules.add(camera);
+    modules.add(preview);
+    modules.add(darks_library);
+    modules.add(focuser);
+    modules.add(dithering);
+    modules.add(mount);
+    modules.add(plate_solve);
+    modules.add(polar_align);
+    modules.add(map);
+    drop(modules);
 
-    // show common options
-    let opts = options.read().unwrap();
-    opts.show_all(&builder);
-    drop(opts);
+    main_ui.build_modules_panels();
 
-    data.handlers.borrow().notify_all(UiEvent::OptionsHasShown);
+    // show all options
+
+    main_ui.show_all_options();
 
     window.connect_delete_event(
-        clone!(@weak data => @default-return glib::Propagation::Proceed,
+        clone!(@weak main_ui => @default-return glib::Propagation::Proceed,
         move |_, _| {
-            let res = data.handler_close_window();
+            let res = main_ui.handler_close_window();
             if res == glib::Propagation::Proceed {
                 gtk::main_iteration_do(true);
-
-                let mut opts = data.options.write().unwrap();
-                opts.read_all(&builder);
-                drop(opts);
-
-                *data.self_.borrow_mut() = None;
+                main_ui.get_all_options();
+                *main_ui.self_.borrow_mut() = None;
             }
             res
         })
     );
 
-    data.connect_widgets_events();
-    data.correct_widgets_props();
-    data.connect_state_events();
-    data.update_window_title();
+    main_ui.connect_widgets_events();
+    main_ui.correct_widgets_props();
+    main_ui.connect_state_events();
+    main_ui.update_window_title();
 }
 
 pub const TIMER_PERIOD_MS: u64 = 250;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Copy)]
 pub enum TabPage {
     Hardware,
     SkyMap,
@@ -223,45 +242,6 @@ impl TabPage {
             TAB_CAMERA   => TabPage::Camera,
             _ => unreachable!(),
         }
-    }
-}
-
-#[derive(Clone)]
-pub enum UiEvent {
-    OptionsHasShown,
-    Timer,
-    FullScreen(bool),
-    BeforeModeContinued,
-    TabPageChanged(TabPage),
-    ProgramClosing,
-    BeforeDisconnect,
-}
-
-pub type MainUiEventFun = Box<dyn Fn(UiEvent) + 'static>;
-
-pub struct MainUiEventHandlers {
-    funs: Vec<MainUiEventFun>
-}
-
-impl MainUiEventHandlers {
-    fn new() -> Self {
-        Self {
-            funs: Vec::new(),
-        }
-    }
-
-    pub fn subscribe(&mut self, fun: impl Fn(UiEvent) + 'static) {
-        self.funs.push(Box::new(fun));
-    }
-
-    pub fn notify_all(&self, event: UiEvent) {
-        for fun in &self.funs {
-            fun(event.clone());
-        }
-    }
-
-    fn clear(&mut self) {
-        self.funs.clear();
     }
 }
 
@@ -324,18 +304,27 @@ impl Default for UiOptions {
     }
 }
 
+#[derive(FromBuilder)]
+struct Widgets {
+    pan_cam1: gtk::Paned,
+    pan_cam2: gtk::Paned,
+    bx_cam_left: gtk::Box,
+    bx_main_left: gtk::Box,
+}
+
 pub struct MainUi {
+    widgets:        Widgets,
     logs_dir:       PathBuf,
     options:        Arc<RwLock<Options>>,
-    ui_modules:     Rc<UiModules>,
+    modules:        RefCell<UiModules>,
     ui_options:     RefCell<UiOptions>,
-    handlers:       RefCell<MainUiEventHandlers>,
     progress:       RefCell<Option<Progress>>,
     core:           Arc<Core>,
     indi:           Arc<indi::Connection>,
     builder:        gtk::Builder,
     window:         gtk::ApplicationWindow,
     close_win_flag: Cell<bool>,
+    prev_tab_page:  Cell<TabPage>,
     conn_string:    RefCell<String>,
     dev_string:     RefCell<String>,
     perf_string:    RefCell<String>,
@@ -401,8 +390,9 @@ impl MainUi {
 
         let btn_fullscreen = self.builder.object::<gtk::ToggleButton>("btn_fullscreen").unwrap();
         btn_fullscreen.set_sensitive(false);
-        btn_fullscreen.connect_active_notify(clone!(@weak self as self_  => move |btn| {
-            self_.handlers.borrow().notify_all(UiEvent::FullScreen(btn.is_active()));
+        btn_fullscreen.connect_active_notify(clone!(@weak self as self_ => move |btn| {
+            let modules = self_.modules.borrow();
+            modules.process_event(&UiModuleEvent::FullScreen(btn.is_active()));
         }));
 
         let nb_main = self.builder.object::<gtk::Notebook>("nb_main").unwrap();
@@ -413,7 +403,12 @@ impl MainUi {
             };
             btn_fullscreen.set_sensitive(enable_fullscreen);
             let tab = TabPage::from_tab_index(page);
-            self_.handlers.borrow().notify_all(UiEvent::TabPageChanged(tab.clone()));
+            let modules = self_.modules.borrow();
+            modules.process_event(&UiModuleEvent::TabChanged {
+                from: self_.prev_tab_page.get(),
+                to:   tab
+            });
+            self_.prev_tab_page.set(tab);
         }));
 
         gtk_utils::connect_action(&self.window, self, "stop",             MainUi::handler_action_stop);
@@ -487,19 +482,74 @@ impl MainUi {
         drop(options);
 
         if let Ok(mut options) = self.options.try_write() {
-            options.read_all(&self.builder);
+            let modules = self.modules.borrow();
+            modules.get_options(&mut options);
         }
 
-        self.handlers.borrow().notify_all(UiEvent::ProgramClosing);
-
-        self.handlers.borrow_mut().clear();
+        let modules = self.modules.borrow();
+        modules.process_event(&UiModuleEvent::ProgramClosing);
+        drop(modules);
 
         self.core.event_subscriptions().clear();
         self.indi.unsubscribe_all();
 
+        self.modules.borrow_mut().clear();
+
         *self.self_.borrow_mut() = None;
 
         glib::Propagation::Proceed
+    }
+
+    fn build_modules_panels(&self) {
+
+        let bx_main_left = self.builder.object::<gtk::Box>("bx_main_left").unwrap();
+        let bx_cam_left = self.builder.object::<gtk::Box>("bx_cam_left").unwrap();
+        let bx_common_center = self.builder.object::<gtk::Box>("bx_common_center").unwrap();
+
+        let modules = self.modules.borrow();
+        for module in modules.items() {
+            let panels = module.panels();
+            for panel in panels {
+                let widget = if panel.name.is_empty() {
+                    panel.widget.clone()
+                } else {
+                    let expander = gtk::Expander::builder()
+                        .visible(true)
+                        .label("label")
+                        .build();
+
+                    expander.style_context().add_class("expander");
+                    let label = expander.label_widget().unwrap().downcast::<gtk::Label>().unwrap();
+                    label.set_markup(&format!("<b>[{}]</b>", panel.name));
+
+                    expander.add(&panel.widget);
+                    expander.upcast()
+
+                };
+                match (panel.tab, panel.pos) {
+                    (PanelTab::Common, PanelPosition::Left) => {
+                        bx_main_left.add(&widget);
+                        let separator = gtk::Separator::builder()
+                            .visible(true)
+                            .orientation(gtk::Orientation::Horizontal)
+                            .build();
+                        bx_main_left.add(&separator);
+                    }
+
+                    (PanelTab::Common, PanelPosition::BottomLeft) => {
+                        bx_cam_left.add(&widget);
+                    }
+
+                    (PanelTab::Common, PanelPosition::Center) => {
+                        bx_common_center.add(&widget);
+                    }
+
+                    _ => {
+                        unreachable!();
+                    },
+                }
+            }
+        }
     }
 
     fn apply_options(&self) {
@@ -597,7 +647,6 @@ impl MainUi {
 
     fn handler_action_continue(&self) {
         gtk_utils::exec_and_show_error(&self.window, || {
-            self.handlers.borrow().notify_all(UiEvent::BeforeModeContinued);
             self.core.continue_prev_mode()?;
             Ok(())
         });
@@ -649,14 +698,30 @@ impl MainUi {
         self.window.set_title(&title)
     }
 
-    pub fn exec_before_disconnect_handlers(&self) {
-        self.handlers.borrow().notify_all(UiEvent::BeforeDisconnect);
-    }
-
     pub fn current_tab_page(&self) -> TabPage {
         let nb_main = self.builder.object::<gtk::Notebook>("nb_main").unwrap();
         let page_index = nb_main.current_page().unwrap_or_default();
         TabPage::from_tab_index(page_index)
+    }
+
+    pub fn show_all_options_impl(&self, options: &Options) {
+        let modules = self.modules.borrow();
+        modules.show_options(&options);
+    }
+
+    pub fn show_all_options(&self) {
+        let options = self.options.read().unwrap();
+        self.show_all_options_impl(&options);
+    }
+
+    pub fn get_all_options_impl(&self, options: &mut Options) {
+        let modules = self.modules.borrow();
+        modules.get_options(options);
+    }
+
+    pub fn get_all_options(&self) {
+        let mut options = self.options.write().unwrap();
+        self.get_all_options_impl(&mut options);
     }
 }
 

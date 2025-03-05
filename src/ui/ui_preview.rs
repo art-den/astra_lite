@@ -1,4 +1,4 @@
-use std::{cell::{Cell, RefCell}, path::PathBuf, rc::{Rc, Weak}, sync::{Arc, RwLock}};
+use std::{cell::{Cell, RefCell}, path::PathBuf, rc::Rc, sync::{Arc, RwLock}};
 use chrono::{DateTime, Local, Utc};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
@@ -13,12 +13,10 @@ use super::{sky_map::math::radian_to_degree, ui_main::*, utils::*};
 
 
 pub fn init_ui(
-    window:     &gtk::ApplicationWindow,
-    main_ui:    &Rc<MainUi>,
-    options:    &Arc<RwLock<Options>>,
-    core:       &Arc<Core>,
-    ui_modules: Weak<UiModules>,
-    handlers:   &mut MainUiEventHandlers,
+    window:  &gtk::ApplicationWindow,
+    main_ui: &Rc<MainUi>,
+    options: &Arc<RwLock<Options>>,
+    core:    &Arc<Core>,
 ) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();
     gtk_utils::exec_and_show_error(window, || {
@@ -29,6 +27,7 @@ pub fn init_ui(
     let builder = gtk::Builder::from_string(include_str!(r"resources/preview.ui"));
 
     let widgets = Widgets {
+        common:  CommonWidgets::from_builder(&builder),
         ctrl:    ControlWidgets::from_builder(&builder),
         image:   ImageWidgets::from_builder(&builder),
         info:    InfoWidgets::from_builder(&builder),
@@ -49,17 +48,13 @@ pub fn init_ui(
         calibr_history:     RefCell::new(Vec::new()),
         flat_info:          RefCell::new(FlatImageInfo::default()),
         is_color_image:     Cell::new(false),
-        self_:              RefCell::new(None),
     });
-
-    *obj.self_.borrow_mut() = Some(Rc::clone(&obj));
 
     obj.init_widgets();
     obj.show_ui_options();
 
     obj.connect_widgets_events();
     obj.connect_core_events();
-    obj.connect_main_ui_events(handlers);
     obj.connect_img_mouse_scroll_events();
 
     obj.update_light_history_table();
@@ -116,6 +111,74 @@ struct CalibrHistoryItem {
     calibr_methods: CalibrMethods, // for flat files
 }
 
+impl PreviewScale {
+    pub fn from_active_id(id: Option<&str>) -> PreviewScale {
+        match id {
+            Some("fit")     => PreviewScale::FitWindow,
+            Some("orig")    => PreviewScale::Original,
+            Some("p75")     => PreviewScale::P75,
+            Some("p50")     => PreviewScale::P50,
+            Some("p33")     => PreviewScale::P33,
+            Some("p25")     => PreviewScale::P25,
+            Some("c_and_c") => PreviewScale::CenterAndCorners,
+            _               => PreviewScale::FitWindow,
+        }
+    }
+
+    pub fn to_active_id(&self) -> Option<&'static str> {
+        match self {
+            PreviewScale::FitWindow        => Some("fit"),
+            PreviewScale::Original         => Some("orig"),
+            PreviewScale::P75              => Some("p75"),
+            PreviewScale::P50              => Some("p50"),
+            PreviewScale::P33              => Some("p33"),
+            PreviewScale::P25              => Some("p25"),
+            PreviewScale::CenterAndCorners => Some("c_and_c"),
+        }
+    }
+}
+
+impl PreviewSource {
+    pub fn from_active_id(active_id: Option<&str>) -> Self {
+        match active_id {
+            Some("live") => Self::LiveStacking,
+            _            => Self::OrigFrame,
+        }
+    }
+
+    pub fn to_active_id(&self) -> Option<&'static str> {
+        match self {
+            Self::OrigFrame    => Some("frame"),
+            Self::LiveStacking => Some("live"),
+        }
+    }
+}
+
+impl PreviewColorMode {
+    pub fn from_active_id(active_id: Option<&str>) -> Self {
+        match active_id {
+            Some("red")   => Self::Red,
+            Some("green") => Self::Green,
+            Some("blue")  => Self::Blue,
+            _             => Self::Rgb,
+        }
+    }
+
+    pub fn to_active_id(&self) -> Option<&'static str> {
+        match self {
+            Self::Rgb   => Some("rgb"),
+            Self::Red   => Some("red"),
+            Self::Green => Some("green"),
+            Self::Blue  => Some("blue"),
+        }
+    }
+}
+
+#[derive(FromBuilder)]
+struct CommonWidgets {
+    pan_preview: gtk::Paned,
+}
+
 #[derive(FromBuilder)]
 struct ControlWidgets {
     cb_src:        gtk::ComboBoxText,
@@ -133,6 +196,7 @@ struct ControlWidgets {
     scl_wb_green:  gtk::Scale,
     l_wb_blue:     gtk::Label,
     scl_wb_blue:   gtk::Scale,
+    chb_stars:     gtk::CheckButton,
 }
 
 #[derive(FromBuilder)]
@@ -201,10 +265,11 @@ struct HistoryWidgets {
 }
 
 struct Widgets {
-    ctrl:  ControlWidgets,
-    image: ImageWidgets,
-    info:  InfoWidgets,
-    stat:  StatWidgets,
+    common:  CommonWidgets,
+    ctrl:    ControlWidgets,
+    image:   ImageWidgets,
+    info:    InfoWidgets,
+    stat:    StatWidgets,
     history: HistoryWidgets,
 }
 
@@ -221,7 +286,6 @@ struct PreviewUi {
     closed:             Cell<bool>,
     flat_info:          RefCell<FlatImageInfo>,
     is_color_image:     Cell<bool>,
-    self_:              RefCell<Option<Rc<PreviewUi>>>,
 }
 
 impl Drop for PreviewUi {
@@ -232,12 +296,61 @@ impl Drop for PreviewUi {
 
 impl UiModule for PreviewUi {
     fn show_options(&self, options: &Options) {
+        let widgets = &self.widgets;
+        widgets.ctrl.cb_src.set_active_id(options.preview.source.to_active_id());
+        widgets.ctrl.cb_scale.set_active_id(options.preview.scale.to_active_id());
+        widgets.ctrl.cb_color.set_active_id(options.preview.color.to_active_id());
+        widgets.ctrl.scl_dark.set_value(options.preview.dark_lvl);
+        widgets.ctrl.scl_highlight.set_value(options.preview.light_lvl);
+        widgets.ctrl.scl_gamma.set_value(options.preview.gamma);
+        widgets.ctrl.chb_rem_grad.set_active(options.preview.remove_grad);
+        widgets.ctrl.chb_wb_auto.set_active(options.preview.wb_auto);
+        widgets.ctrl.scl_wb_red.set_value(options.preview.wb_red);
+        widgets.ctrl.scl_wb_green.set_value(options.preview.wb_green);
+        widgets.ctrl.scl_wb_blue.set_value(options.preview.wb_blue);
+        widgets.ctrl.chb_stars.set_active(options.preview.stars);
     }
 
     fn get_options(&self, options: &mut Options) {
+        let widgets = &self.widgets;
+        options.preview.scale = PreviewScale::from_active_id(
+            widgets.ctrl.cb_scale.active_id().as_deref()
+        );
+        options.preview.source = PreviewSource::from_active_id(
+            widgets.ctrl.cb_src.active_id().as_deref()
+        );
+        options.preview.gamma       = widgets.ctrl.scl_gamma.value();
+        options.preview.dark_lvl    = widgets.ctrl.scl_dark.value();
+        options.preview.light_lvl   = widgets.ctrl.scl_highlight.value();
+        options.preview.remove_grad = widgets.ctrl.chb_rem_grad.is_active();
+        options.preview.wb_auto     = widgets.ctrl.chb_wb_auto.is_active();
+        options.preview.wb_red      = widgets.ctrl.scl_wb_red.value();
+        options.preview.wb_green    = widgets.ctrl.scl_wb_green.value();
+        options.preview.wb_blue     = widgets.ctrl.scl_wb_blue.value();
+        options.preview.stars       = widgets.ctrl.chb_stars.is_active();
     }
 
-    fn connect_ui_events(&self) {
+    fn panels(&self) -> Vec<Panel> {
+        vec![
+            Panel {
+                name:   String::new(),
+                widget: self.widgets.common.pan_preview.clone().upcast(),
+                pos:    PanelPosition::Center,
+                tab:    PanelTab::Common,
+            },
+        ]
+    }
+
+    fn process_event(&self, event: &UiModuleEvent) {
+        match event {
+            UiModuleEvent::FullScreen(full_screen) => {
+                self.set_full_screen_mode(*full_screen);
+            }
+            UiModuleEvent::ProgramClosing => {
+                self.handler_closing();
+            }
+            _ => {}
+        }
     }
 }
 
@@ -290,8 +403,6 @@ impl PreviewUi {
         let ui_options = self.ui_options.borrow();
         _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
         drop(ui_options);
-
-        *self.self_.borrow_mut() = None;
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
@@ -450,8 +561,7 @@ impl PreviewUi {
             })
         );
 
-        let chb_preview_stars = self.builder.object::<gtk::CheckButton>("chb_preview_stars").unwrap();
-        chb_preview_stars.connect_active_notify(clone!(@weak self as self_ => move |chb| {
+        self.widgets.ctrl.chb_stars.connect_active_notify(clone!(@weak self as self_ => move |chb| {
             let Ok(mut options) = self_.options.try_write() else { return; };
             options.preview.stars = chb.is_active();
             dbg!(options.preview.stars);
@@ -472,23 +582,6 @@ impl PreviewUi {
             while let Ok(event) = main_thread_receiver.recv().await {
                 if self_.closed.get() { return; }
                 self_.process_core_event(event);
-            }
-        }));
-    }
-
-    fn connect_main_ui_events(self: &Rc<Self>, handlers: &mut MainUiEventHandlers) {
-        handlers.subscribe(clone!(@weak self as self_ => move |event| {
-            match event {
-                UiEvent::FullScreen(full_screen) =>
-                    self_.set_full_screen_mode(full_screen),
-
-                UiEvent::ProgramClosing =>
-                    self_.handler_closing(),
-
-                UiEvent::OptionsHasShown =>
-                    self_.correct_widgets_props(),
-
-                _ => {}
             }
         }));
     }
@@ -963,10 +1056,6 @@ impl PreviewUi {
             if is_mode_current(true) => {
                 self.show_image_info();
             }
-            FrameProcessResultData::MasterSaved { frame_type: FrameType::Flats, file_name } => {
-                // TODO: set master file name
-                //ui.set_fch_path("fch_master_flat", Some(&file_name));
-            }
             _ => {}
         }
     }
@@ -1346,9 +1435,7 @@ impl PreviewUi {
                 gtk_utils::exec_and_show_error(&self_.window, || {
                     let Some(file_name) = file_chooser.file() else { return Ok(()); };
                     let Some(file_name) = file_name.path() else { return Ok(()); };
-
-                    // TODO: read options
-                    // self_.options.write().unwrap().read_all(&self_.builder);
+                    self_.main_ui.get_all_options();
                     self_.core.open_image_from_file(&file_name)?;
                     Ok(())
                 });
@@ -1359,13 +1446,12 @@ impl PreviewUi {
     }
 
     fn correct_preview_source(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let mode_type = self.core.mode_data().mode.get_type();
         let cb_preview_src_aid = match mode_type {
             ModeType::LiveStacking => "live",
             ModeType::Waiting      => return,
             _                      => "frame",
         };
-        ui.set_prop_str("cb_preview_src.active-id", Some(cb_preview_src_aid));
+        self.widgets.ctrl.cb_src.set_active_id(Some(cb_preview_src_aid));
     }
 }
