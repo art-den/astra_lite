@@ -335,6 +335,10 @@ impl UiModule for CameraUi {
         self.show_raw_options(options);
         self.show_live_stacking_options(options);
         self.show_frame_quality_options(options);
+
+        let camera = options.cam.device.clone();
+        self.correct_widgets_props_impl(&camera);
+        self.correct_frame_quality_widgets_props();
     }
 
     fn get_options(&self, options: &mut Options) {
@@ -350,6 +354,7 @@ impl UiModule for CameraUi {
     fn panels(&self) -> Vec<Panel> {
         vec![
             Panel {
+                str_id: "common",
                 name:   String::new(),
                 widget: self.widgets.common.bx.clone().upcast(),
                 pos:    PanelPosition::Left,
@@ -357,6 +362,7 @@ impl UiModule for CameraUi {
             },
 
             Panel {
+                str_id: "cam_ctrl",
                 name:   "Camera control".to_string(),
                 widget: self.widgets.ctrl.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
@@ -364,6 +370,7 @@ impl UiModule for CameraUi {
             },
 
             Panel {
+                str_id: "cam_frame",
                 name:   "Shot settings".to_string(),
                 widget: self.widgets.frame.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
@@ -371,6 +378,7 @@ impl UiModule for CameraUi {
             },
 
             Panel {
+                str_id: "cam_calibr",
                 name:   "Calibration + hot pixels".to_string(),
                 widget: self.widgets.calibr.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
@@ -378,6 +386,7 @@ impl UiModule for CameraUi {
             },
 
             Panel {
+                str_id: "cam_raw",
                 name:   "Saving raw frames".to_string(),
                 widget: self.widgets.raw.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
@@ -385,6 +394,7 @@ impl UiModule for CameraUi {
             },
 
             Panel {
+                str_id: "cam_live_st",
                 name:   "Live stacking".to_string(),
                 widget: self.widgets.live_st.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
@@ -392,6 +402,7 @@ impl UiModule for CameraUi {
             },
 
             Panel {
+                str_id: "cam_quality",
                 name:   "Light frame quality".to_string(),
                 widget: self.widgets.quality.bx.clone().upcast(),
                 pos:    PanelPosition::Left,

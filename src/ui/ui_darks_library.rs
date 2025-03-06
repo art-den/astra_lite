@@ -601,6 +601,7 @@ impl UiModule for DarksLibraryUI {
     fn panels(&self) -> Vec<Panel> {
         vec![
             Panel {
+                str_id: "darks_lib",
                 name:   "Darks library".to_string(),
                 widget: self.widgets.common.bx.clone().upcast(),
                 pos:    PanelPosition::Left,

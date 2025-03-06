@@ -86,6 +86,7 @@ pub enum PanelTab {
 }
 
 pub struct Panel {
+    pub str_id: &'static str,
     pub name:   String,
     pub widget: gtk::Widget,
     pub pos:    PanelPosition,
@@ -108,16 +109,16 @@ pub fn init_ui(
     );
 
     let builder = gtk::Builder::from_string(include_str!(r"resources/main.ui"));
-    gtk_utils::disable_scroll_for_most_of_widgets(&builder);
+    let widgets = Widgets::from_builder(&builder);
 
-    let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
+    gtk_utils::disable_scroll_for_most_of_widgets(&builder);
 
     let icon = gtk::gdk_pixbuf::Pixbuf::from_read(include_bytes!(
         r"resources/astra_lite48x48.png"
     ).as_slice()).unwrap();
-    window.set_icon(Some(&icon));
+    widgets.window.set_icon(Some(&icon));
 
-    gtk_utils::exec_and_show_error(&window, || {
+    gtk_utils::exec_and_show_error(&widgets.window, || {
         let mut opts = options.write().unwrap();
         load_json_from_config_file::<Options>(&mut opts, MainUi::OPTIONS_FN)?;
         opts.calibr.check()?;
@@ -127,12 +128,9 @@ pub fn init_ui(
     });
 
     let mut ui_options = UiOptions::default();
-    gtk_utils::exec_and_show_error(&window, || {
+    gtk_utils::exec_and_show_error(&widgets.window, || {
         load_json_from_config_file(&mut ui_options, MainUi::CONF_FN)
     });
-
-    let modules = UiModules::new();
-    let widgets = Widgets::from_builder(&builder);
 
     let main_ui = Rc::new(MainUi {
         widgets,
@@ -140,11 +138,9 @@ pub fn init_ui(
         core:           Arc::clone(core),
         indi:           Arc::clone(indi),
         options:        Arc::clone(options),
-        modules:        RefCell::new(modules),
+        modules:        RefCell::new(UiModules::new()),
         ui_options:     RefCell::new(ui_options),
         progress:       RefCell::new(None),
-        window:         window.clone(),
-        builder:        builder.clone(),
         close_win_flag: Cell::new(false),
         prev_tab_page:  Cell::new(TabPage::Hardware),
         conn_string:    RefCell::new(String::new()),
@@ -155,8 +151,8 @@ pub fn init_ui(
 
     *main_ui.self_.borrow_mut() = Some(Rc::clone(&main_ui));
 
-    window.set_application(Some(app));
-    window.show();
+    main_ui.widgets.window.set_application(Some(app));
+    main_ui.widgets.window.show();
     main_ui.apply_options();
     main_ui.apply_theme();
     gtk::main_iteration_do(true);
@@ -167,7 +163,7 @@ pub fn init_ui(
         clone!(@weak main_ui => @default-return glib::ControlFlow::Break,
         move || {
             if main_ui.close_win_flag.get() {
-                main_ui.window.close();
+                main_ui.widgets.window.close();
                 return glib::ControlFlow::Break;
             }
             let modules = main_ui.modules.borrow();
@@ -176,10 +172,10 @@ pub fn init_ui(
         }
     ));
 
-    let hardware      = super::ui_hardware     ::init_ui(&window, &builder, &main_ui, options, core, indi);
-    let camera        = super::ui_camera       ::init_ui(&window, &main_ui, options, core, indi);
-    let darks_library = super::ui_darks_library::init_ui(&window, options, core, indi);
-    let preview       = super::ui_preview      ::init_ui(&window, &main_ui, options, core);
+    let hardware      = super::ui_hardware     ::init_ui(&main_ui.widgets.window, &builder, &main_ui, options, core, indi);
+    let camera        = super::ui_camera       ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
+    let darks_library = super::ui_darks_library::init_ui(&main_ui.widgets.window, options, core, indi);
+    let preview       = super::ui_preview      ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
     let focuser       = super::ui_focuser      ::init_ui(&builder, &main_ui, options, core, indi);
     let dithering     = super::ui_dithering    ::init_ui(&builder, &main_ui, options, core, indi);
     let mount         = super::ui_mount        ::init_ui(&builder, options, core, indi);
@@ -206,7 +202,7 @@ pub fn init_ui(
 
     main_ui.show_all_options();
 
-    window.connect_delete_event(
+    main_ui.widgets.window.connect_delete_event(
         clone!(@weak main_ui => @default-return glib::Propagation::Proceed,
         move |_, _| {
             let res = main_ui.handler_close_window();
@@ -306,10 +302,23 @@ impl Default for UiOptions {
 
 #[derive(FromBuilder)]
 struct Widgets {
+    window: gtk::ApplicationWindow,
+    nb_main: gtk::Notebook,
+    lbl_cur_action: gtk::Label,
     pan_cam1: gtk::Paned,
     pan_cam2: gtk::Paned,
-    bx_cam_left: gtk::Box,
-    bx_main_left: gtk::Box,
+    bx_comm_left: gtk::Box,
+    bx_comm_left2: gtk::Box,
+    bx_comm_center: gtk::Box,
+    bx_skymap_panel: gtk::Box,
+    scr_comm_right: gtk::ScrolledWindow,
+    btn_fullscreen: gtk::ToggleButton,
+    mi_dark_theme: gtk::RadioMenuItem,
+    mi_light_theme: gtk::RadioMenuItem,
+    da_progress: gtk::DrawingArea,
+    mi_normal_log_mode: gtk::RadioMenuItem,
+    mi_verbose_log_mode: gtk::RadioMenuItem,
+    mi_max_log_mode: gtk::RadioMenuItem,
 }
 
 pub struct MainUi {
@@ -321,8 +330,6 @@ pub struct MainUi {
     progress:       RefCell<Option<Progress>>,
     core:           Arc<Core>,
     indi:           Arc<indi::Connection>,
-    builder:        gtk::Builder,
-    window:         gtk::ApplicationWindow,
     close_win_flag: Cell<bool>,
     prev_tab_page:  Cell<TabPage>,
     conn_string:    RefCell<String>,
@@ -342,78 +349,79 @@ impl MainUi {
     const OPTIONS_FN: &'static str = "options";
 
     fn connect_widgets_events(self: &Rc<Self>) {
-        let mi_dark_theme = self.builder.object::<gtk::RadioMenuItem>("mi_dark_theme").unwrap();
-        mi_dark_theme.connect_activate(clone!(@weak self as self_ => move |mi| {
-            if mi.is_active() {
-                self_.ui_options.borrow_mut().theme = Theme::Dark;
-                self_.apply_theme();
-            }
-        }));
+        self.widgets.mi_dark_theme.connect_activate(
+            clone!(@weak self as self_ => move |mi| {
+                if mi.is_active() {
+                    self_.ui_options.borrow_mut().theme = Theme::Dark;
+                    self_.apply_theme();
+                }
+            })
+        );
 
-        let mi_light_theme = self.builder.object::<gtk::RadioMenuItem>("mi_light_theme").unwrap();
-        mi_light_theme.connect_activate(clone!(@weak self as self_ => move |mi| {
-            if mi.is_active() {
-                self_.ui_options.borrow_mut().theme = Theme::Light;
-                self_.apply_theme();
-            }
-        }));
+        self.widgets.mi_light_theme.connect_activate(
+            clone!(@weak self as self_ => move |mi| {
+                if mi.is_active() {
+                    self_.ui_options.borrow_mut().theme = Theme::Light;
+                    self_.apply_theme();
+                }
+            })
+        );
 
-        let da_progress = self.builder.object::<gtk::DrawingArea>("da_progress").unwrap();
-        da_progress.connect_draw(clone!(@weak self as self_ => @default-panic, move |area, cr| {
-            self_.handler_draw_progress(area, cr);
-            glib::Propagation::Proceed
-        }));
+        self.widgets.da_progress.connect_draw(
+            clone!(@weak self as self_ => @default-panic, move |area, cr| {
+                self_.handler_draw_progress(area, cr);
+                glib::Propagation::Proceed
+            })
+        );
 
-        let mi_normal_log_mode = self.builder.object::<gtk::RadioMenuItem>("mi_normal_log_mode").unwrap();
-        mi_normal_log_mode.connect_activate(clone!(@weak self as self_  => move |mi| {
+        self.widgets.mi_normal_log_mode.connect_activate(move |mi| {
             if mi.is_active() {
                 log::info!("Setting verbose log::LevelFilter::Info level");
                 log::set_max_level(log::LevelFilter::Info);
             }
-        }));
+        });
 
-        let mi_verbose_log_mode = self.builder.object::<gtk::RadioMenuItem>("mi_verbose_log_mode").unwrap();
-        mi_verbose_log_mode.connect_activate(move |mi| {
+        self.widgets.mi_verbose_log_mode.connect_activate(move |mi| {
             if mi.is_active() {
                 log::info!("Setting verbose log::LevelFilter::Debug level");
                 log::set_max_level(log::LevelFilter::Debug);
             }
         });
 
-        let mi_max_log_mode = self.builder.object::<gtk::RadioMenuItem>("mi_max_log_mode").unwrap();
-        mi_max_log_mode.connect_activate(move |mi| {
+        self.widgets.mi_max_log_mode.connect_activate(move |mi| {
             if mi.is_active() {
                 log::info!("Setting verbose log::LevelFilter::Trace level");
                 log::set_max_level(log::LevelFilter::Trace);
             }
         });
 
-        let btn_fullscreen = self.builder.object::<gtk::ToggleButton>("btn_fullscreen").unwrap();
-        btn_fullscreen.set_sensitive(false);
-        btn_fullscreen.connect_active_notify(clone!(@weak self as self_ => move |btn| {
-            let modules = self_.modules.borrow();
-            modules.process_event(&UiModuleEvent::FullScreen(btn.is_active()));
-        }));
+        self.widgets.btn_fullscreen.set_sensitive(false);
+        self.widgets.btn_fullscreen.connect_active_notify(
+            clone!(@weak self as self_ => move |btn| {
+                self_.handler_btn_fullscreen(btn);
+            })
+        );
 
-        let nb_main = self.builder.object::<gtk::Notebook>("nb_main").unwrap();
-        nb_main.connect_switch_page(clone!(@weak self as self_  => move |_, _, page| {
-            let enable_fullscreen = match page {
-                TAB_MAP|TAB_CAMERA => true,
-                _                  => false
-            };
-            btn_fullscreen.set_sensitive(enable_fullscreen);
-            let tab = TabPage::from_tab_index(page);
-            let modules = self_.modules.borrow();
-            modules.process_event(&UiModuleEvent::TabChanged {
-                from: self_.prev_tab_page.get(),
-                to:   tab
-            });
-            self_.prev_tab_page.set(tab);
-        }));
+        self.widgets.nb_main.connect_switch_page(
+            clone!(@weak self as self_  => move |_, _, page| {
+                let enable_fullscreen = match page {
+                    TAB_MAP|TAB_CAMERA => true,
+                    _                  => false
+                };
+                self_.widgets.btn_fullscreen.set_sensitive(enable_fullscreen);
+                let tab = TabPage::from_tab_index(page);
+                let modules = self_.modules.borrow();
+                modules.process_event(&UiModuleEvent::TabChanged {
+                    from: self_.prev_tab_page.get(),
+                    to:   tab
+                });
+                self_.prev_tab_page.set(tab);
+            })
+        );
 
-        gtk_utils::connect_action(&self.window, self, "stop",             MainUi::handler_action_stop);
-        gtk_utils::connect_action(&self.window, self, "continue",         MainUi::handler_action_continue);
-        gtk_utils::connect_action(&self.window, self, "open_logs_folder", MainUi::handler_action_open_logs_folder);
+        gtk_utils::connect_action(&self.widgets.window, self, "stop",             MainUi::handler_action_stop);
+        gtk_utils::connect_action(&self.widgets.window, self, "continue",         MainUi::handler_action_continue);
+        gtk_utils::connect_action(&self.widgets.window, self, "open_logs_folder", MainUi::handler_action_open_logs_folder);
     }
 
     fn connect_state_events(self: &Rc<Self>) {
@@ -427,7 +435,7 @@ impl MainUi {
                 match event {
                     Event::Error(err) => {
                         gtk_utils::show_error_message(
-                            &self_.window,
+                            &self_.widgets.window,
                             "Core error",
                             &err
                         );
@@ -438,8 +446,7 @@ impl MainUi {
                     },
                     Event::Progress(progress, _) => {
                         *self_.progress.borrow_mut() = progress;
-                        let da_progress = self_.builder.object::<gtk::DrawingArea>("da_progress").unwrap();
-                        da_progress.queue_draw();
+                        self_.widgets.da_progress.queue_draw();
                         self_.show_mode_caption();
                     },
                     _ => {},
@@ -451,7 +458,7 @@ impl MainUi {
     fn handler_close_window(self: &Rc<Self>) -> glib::Propagation {
         if self.core.mode_data().mode.get_type() != ModeType::Waiting {
             let dialog = gtk::MessageDialog::builder()
-                .transient_for(&self.window)
+                .transient_for(&self.widgets.window)
                 .title("Operation is in progress")
                 .text("Terminate current operation?")
                 .modal(true)
@@ -501,11 +508,6 @@ impl MainUi {
     }
 
     fn build_modules_panels(&self) {
-
-        let bx_main_left = self.builder.object::<gtk::Box>("bx_main_left").unwrap();
-        let bx_cam_left = self.builder.object::<gtk::Box>("bx_cam_left").unwrap();
-        let bx_common_center = self.builder.object::<gtk::Box>("bx_common_center").unwrap();
-
         let modules = self.modules.borrow();
         for module in modules.items() {
             let panels = module.panels();
@@ -528,20 +530,20 @@ impl MainUi {
                 };
                 match (panel.tab, panel.pos) {
                     (PanelTab::Common, PanelPosition::Left) => {
-                        bx_main_left.add(&widget);
+                        self.widgets.bx_comm_left.add(&widget);
                         let separator = gtk::Separator::builder()
                             .visible(true)
                             .orientation(gtk::Orientation::Horizontal)
                             .build();
-                        bx_main_left.add(&separator);
+                        self.widgets.bx_comm_left.add(&separator);
                     }
 
                     (PanelTab::Common, PanelPosition::BottomLeft) => {
-                        bx_cam_left.add(&widget);
+                        self.widgets.bx_comm_left2.add(&widget);
                     }
 
                     (PanelTab::Common, PanelPosition::Center) => {
-                        bx_common_center.add(&widget);
+                        self.widgets.bx_comm_center.add(&widget);
                     }
 
                     _ => {
@@ -556,18 +558,16 @@ impl MainUi {
         let options = self.ui_options.borrow();
 
         if options.win_width != -1 && options.win_height != -1 {
-            self.window.resize(options.win_width, options.win_height);
+            self.widgets.window.resize(options.win_width, options.win_height);
         }
 
         if options.win_maximized {
-            self.window.maximize();
+            self.widgets.window.maximize();
         }
 
-        let mi_dark_theme = self.builder.object::<gtk::RadioMenuItem>("mi_dark_theme").unwrap();
-        let mi_light_theme = self.builder.object::<gtk::RadioMenuItem>("mi_light_theme").unwrap();
         match options.theme {
-            Theme::Dark => mi_dark_theme.set_active(true),
-            Theme::Light => mi_light_theme.set_active(true),
+            Theme::Dark => self.widgets.mi_dark_theme.set_active(true),
+            Theme::Light => self.widgets.mi_light_theme.set_active(true),
         }
     }
 
@@ -582,10 +582,10 @@ impl MainUi {
 
     fn read_ui_options_from_widgets(&self) {
         let mut options = self.ui_options.borrow_mut();
-        let (width, height) = self.window.size();
+        let (width, height) = self.widgets.window.size();
         options.win_width = width;
         options.win_height = height;
-        options.win_maximized = self.window.is_maximized();
+        options.win_maximized = self.widgets.window.is_maximized();
     }
 
     fn handler_draw_progress(
@@ -600,7 +600,7 @@ impl MainUi {
             }
             let progress_ratio = progress_data.cur as f64 / progress_data.total as f64;
             let progress_text = format!("{} / {}", progress_data.cur, progress_data.total);
-            gtk_utils::exec_and_show_error(&self.window, || {
+            gtk_utils::exec_and_show_error(&self.widgets.window, || {
                 draw_progress_bar(
                     area,
                     cr,
@@ -617,7 +617,7 @@ impl MainUi {
             .as_ref()
             .map(|m| m.can_be_continued_after_stop())
             .unwrap_or(false);
-        gtk_utils::enable_actions(&self.window, &[
+        gtk_utils::enable_actions(&self.widgets.window, &[
             ("stop",     mode_data.mode.can_be_stopped()),
             ("continue", can_be_continued),
         ]);
@@ -637,8 +637,7 @@ impl MainUi {
                 caption += " (aborted)";
             }
         }
-        let lbl_cur_action = self.builder.object::<gtk::Label>("lbl_cur_action").unwrap();
-        lbl_cur_action.set_text(&caption);
+        self.widgets.lbl_cur_action.set_text(&caption);
     }
 
     fn handler_action_stop(&self) {
@@ -646,14 +645,24 @@ impl MainUi {
     }
 
     fn handler_action_continue(&self) {
-        gtk_utils::exec_and_show_error(&self.window, || {
+        gtk_utils::exec_and_show_error(&self.widgets.window, || {
             self.core.continue_prev_mode()?;
             Ok(())
         });
     }
 
+    fn handler_btn_fullscreen(&self, btn: &gtk::ToggleButton) {
+        let full_screen = btn.is_active();
+        self.widgets.bx_comm_left2.set_visible(!full_screen);
+        self.widgets.scr_comm_right.set_visible(!full_screen);
+        self.widgets.bx_skymap_panel.set_visible(!full_screen);
+        let modules = self.modules.borrow();
+        modules.process_event(&UiModuleEvent::FullScreen(full_screen));
+        drop(modules);
+    }
+
     fn handler_action_open_logs_folder(&self) {
-        gtk_utils::exec_and_show_error(&self.window, || {
+        gtk_utils::exec_and_show_error(&self.widgets.window, || {
             if cfg!(target_os = "windows") {
                 Command::new("explorer")
                     .args([self.logs_dir.to_str().unwrap_or_default()])
@@ -695,12 +704,11 @@ impl MainUi {
         append_if_not_empty(&self.conn_string.borrow());
         append_if_not_empty(&self.perf_string.borrow());
 
-        self.window.set_title(&title)
+        self.widgets.window.set_title(&title)
     }
 
     pub fn current_tab_page(&self) -> TabPage {
-        let nb_main = self.builder.object::<gtk::Notebook>("nb_main").unwrap();
-        let page_index = nb_main.current_page().unwrap_or_default();
+        let page_index = self.widgets.nb_main.current_page().unwrap_or_default();
         TabPage::from_tab_index(page_index)
     }
 

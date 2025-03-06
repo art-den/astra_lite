@@ -1108,7 +1108,7 @@ Useful when the object is not lagre and is in the center of the image.</property
       </packing>
     </child>
     <child>
-      <object class="GtkPaned" id="pan_cam3">
+      <object class="GtkPaned" id="pan_preview2">
         <property name="visible">True</property>
         <property name="can-focus">True</property>
         <property name="wide-handle">True</property>

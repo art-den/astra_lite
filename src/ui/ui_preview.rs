@@ -177,6 +177,7 @@ impl PreviewColorMode {
 #[derive(FromBuilder)]
 struct CommonWidgets {
     pan_preview: gtk::Paned,
+    pan_preview2: gtk::Paned,
 }
 
 #[derive(FromBuilder)]
@@ -333,6 +334,7 @@ impl UiModule for PreviewUi {
     fn panels(&self) -> Vec<Panel> {
         vec![
             Panel {
+                str_id: "preview",
                 name:   String::new(),
                 widget: self.widgets.common.pan_preview.clone().upcast(),
                 pos:    PanelPosition::Center,
@@ -1407,10 +1409,15 @@ impl PreviewUi {
         }
     }
 
-    fn set_full_screen_mode(&self, _full_screen: bool) {
+    fn set_full_screen_mode(&self, full_screen: bool) {
         let options = self.options.read().unwrap();
-        if matches!(options.preview.scale, PreviewScale::FitWindow|PreviewScale::CenterAndCorners) {
-            drop(options);
+        let preview_scale = options.preview.scale;
+        drop(options);
+
+        self.widgets.common.pan_preview2.set_visible(!full_screen);
+        self.widgets.info.bx_img_info.set_visible(!full_screen);
+
+        if matches!(preview_scale, PreviewScale::FitWindow|PreviewScale::CenterAndCorners) {
             gtk::main_iteration_do(true);
             gtk::main_iteration_do(true);
             gtk::main_iteration_do(true);
