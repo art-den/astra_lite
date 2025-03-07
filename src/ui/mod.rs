@@ -10,7 +10,7 @@ mod ui_preview;
 mod ui_skymap;
 mod ui_skymap_options;
 mod ui_focuser;
-mod ui_dithering;
+mod ui_guiding;
 mod ui_mount;
 mod ui_darks_library;
 mod ui_plate_solve;

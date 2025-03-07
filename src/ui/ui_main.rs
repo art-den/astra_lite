@@ -178,7 +178,7 @@ pub fn init_ui(
     let darks_library = super::ui_darks_library::init_ui(&main_ui.widgets.window, options, core, indi);
     let preview       = super::ui_preview      ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
     let focuser       = super::ui_focuser      ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
-    let dithering     = super::ui_dithering    ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
+    let guiding       = super::ui_guiding      ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let mount         = super::ui_mount        ::init_ui(&builder, options, core, indi);
     let plate_solve   = super::ui_plate_solve  ::init_ui(&builder, &main_ui, options, core, indi);
     let polar_align   = super::ui_polar_align  ::init_ui(&builder, &main_ui, options, core, indi);
@@ -190,7 +190,7 @@ pub fn init_ui(
     modules.add(preview);
     modules.add(darks_library);
     modules.add(focuser);
-    modules.add(dithering);
+    modules.add(guiding);
     modules.add(mount);
     modules.add(plate_solve);
     modules.add(polar_align);
