@@ -1210,10 +1210,9 @@ impl CameraUi {
                 drop(options);
 
                 let options = self.options.read().unwrap();
-                // TODO: show options!!!
-                //options.show_cam_frame(&self.builder);
-                //options.show_calibr(&self.builder);
-                //options.show_cam_ctrl(&self.builder);
+                self.show_frame_options(&options);
+                self.show_calibr_options(&options);
+                self.show_ctrl_options(&options);
             }
 
             self.correct_widgets_props();

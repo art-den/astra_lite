@@ -176,7 +176,7 @@ pub fn init_ui(
     let camera        = super::ui_camera       ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let darks_library = super::ui_darks_library::init_ui(&main_ui.widgets.window, options, core, indi);
     let preview       = super::ui_preview      ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
-    let focuser       = super::ui_focuser      ::init_ui(&builder, &main_ui, options, core, indi);
+    let focuser       = super::ui_focuser      ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let dithering     = super::ui_dithering    ::init_ui(&builder, &main_ui, options, core, indi);
     let mount         = super::ui_mount        ::init_ui(&builder, options, core, indi);
     let plate_solve   = super::ui_plate_solve  ::init_ui(&builder, &main_ui, options, core, indi);
@@ -310,6 +310,7 @@ struct Widgets {
     bx_comm_left: gtk::Box,
     bx_comm_left2: gtk::Box,
     bx_comm_center: gtk::Box,
+    bx_comm_right: gtk::Box,
     bx_skymap_panel: gtk::Box,
     scr_comm_right: gtk::ScrolledWindow,
     btn_fullscreen: gtk::ToggleButton,
@@ -522,7 +523,7 @@ impl MainUi {
 
                     expander.style_context().add_class("expander");
                     let label = expander.label_widget().unwrap().downcast::<gtk::Label>().unwrap();
-                    label.set_markup(&format!("<b>[{}]</b>", panel.name));
+                    label.set_markup(&format!("<b>[ {} ]</b>", panel.name));
 
                     expander.add(&panel.widget);
                     expander.upcast()
@@ -544,6 +545,15 @@ impl MainUi {
 
                     (PanelTab::Common, PanelPosition::Center) => {
                         self.widgets.bx_comm_center.add(&widget);
+                    }
+
+                    (PanelTab::Common, PanelPosition::Right) => {
+                        self.widgets.bx_comm_right.add(&widget);
+                        let separator = gtk::Separator::builder()
+                            .visible(true)
+                            .orientation(gtk::Orientation::Horizontal)
+                            .build();
+                        self.widgets.bx_comm_right.add(&separator);
                     }
 
                     _ => {
