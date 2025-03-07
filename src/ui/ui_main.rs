@@ -16,6 +16,7 @@ use crate::{
 use super::utils::*;
 
 pub enum UiModuleEvent {
+    AfterShowOptions,
     FullScreen(bool),
     ProgramClosing,
     TabChanged { from: TabPage, to: TabPage },
@@ -177,7 +178,7 @@ pub fn init_ui(
     let darks_library = super::ui_darks_library::init_ui(&main_ui.widgets.window, options, core, indi);
     let preview       = super::ui_preview      ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
     let focuser       = super::ui_focuser      ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
-    let dithering     = super::ui_dithering    ::init_ui(&builder, &main_ui, options, core, indi);
+    let dithering     = super::ui_dithering    ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let mount         = super::ui_mount        ::init_ui(&builder, options, core, indi);
     let plate_solve   = super::ui_plate_solve  ::init_ui(&builder, &main_ui, options, core, indi);
     let polar_align   = super::ui_polar_align  ::init_ui(&builder, &main_ui, options, core, indi);
@@ -201,6 +202,10 @@ pub fn init_ui(
     // show all options
 
     main_ui.show_all_options();
+
+    let modules = main_ui.modules.borrow();
+    modules.process_event(&UiModuleEvent::AfterShowOptions);
+    drop(modules);
 
     main_ui.widgets.window.connect_delete_event(
         clone!(@weak main_ui => @default-return glib::Propagation::Proceed,

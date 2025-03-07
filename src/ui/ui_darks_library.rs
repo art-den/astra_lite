@@ -615,7 +615,6 @@ impl UiModule for DarksLibraryUI {
             UiModuleEvent::ProgramClosing => {
                 self.handler_closing();
             }
-
             _ => {}
         }
     }

@@ -335,10 +335,6 @@ impl UiModule for CameraUi {
         self.show_raw_options(options);
         self.show_live_stacking_options(options);
         self.show_frame_quality_options(options);
-
-        let camera = options.cam.device.clone();
-        self.correct_widgets_props_impl(&camera);
-        self.correct_frame_quality_widgets_props();
     }
 
     fn get_options(&self, options: &mut Options) {
@@ -413,10 +409,12 @@ impl UiModule for CameraUi {
 
     fn process_event(&self, event: &UiModuleEvent) {
         match event {
+            UiModuleEvent::AfterShowOptions => {
+                self.correct_widgets_props();
+            }
             UiModuleEvent::ProgramClosing => {
                 self.handler_closing();
             }
-
             _ => {}
         }
 

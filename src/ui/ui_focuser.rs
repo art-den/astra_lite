@@ -126,10 +126,12 @@ impl UiModule for FocuserUi {
 
     fn process_event(&self, event: &UiModuleEvent) {
         match event {
+            UiModuleEvent::AfterShowOptions => {
+                self.correct_widgets_props();
+            }
             UiModuleEvent::ProgramClosing => {
                 self.handler_closing();
             }
-
             _ => {}
         }
     }

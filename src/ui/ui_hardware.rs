@@ -272,6 +272,8 @@ impl HardwareUi {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         ui.set_prop_f64("spb_foc_len.value", options.telescope.focal_len);
         ui.set_prop_f64("spb_barlow.value",  options.telescope.barlow);
+
+        //self.widgets.spb_guid_foc_len.set_value(options.guiding.ext_guider.foc_len);
     }
 
     fn show_site_options(&self, options: &Options) {
@@ -294,6 +296,7 @@ impl HardwareUi {
         let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         options.telescope.focal_len = ui.prop_f64("spb_foc_len.value");
         options.telescope.barlow    = ui.prop_f64("spb_barlow.value");
+        // options.guiding.ext_guider.foc_len   = self.widgets.spb_guid_foc_len.value();
     }
 
     fn get_site_options(&self, options: &mut Options) {
