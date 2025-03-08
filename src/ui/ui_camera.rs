@@ -9,7 +9,7 @@ use crate::{
     options::*,
     utils::{gtk_utils, io_utils::*}
 };
-use super::{ui_main::*, ui_start_dialog::StartDialog, utils::*};
+use super::{ui_main::*, ui_start_dialog::StartDialog, utils::*, module::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
@@ -355,55 +355,65 @@ impl UiModule for CameraUi {
                 widget: self.widgets.common.bx.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    PanelTab::Common,
+                flags:  PanelFlags::NO_EXPANDER,
             },
-
             Panel {
                 str_id: "cam_ctrl",
                 name:   "Camera control".to_string(),
                 widget: self.widgets.ctrl.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    PanelTab::Common,
+                flags:  PanelFlags::empty(),
             },
-
             Panel {
                 str_id: "cam_frame",
                 name:   "Shot settings".to_string(),
                 widget: self.widgets.frame.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    PanelTab::Common,
+                flags:  PanelFlags::empty(),
             },
-
             Panel {
                 str_id: "cam_calibr",
                 name:   "Calibration + hot pixels".to_string(),
                 widget: self.widgets.calibr.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    PanelTab::Common,
+                flags:  PanelFlags::empty(),
             },
-
             Panel {
                 str_id: "cam_raw",
                 name:   "Saving raw frames".to_string(),
                 widget: self.widgets.raw.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    PanelTab::Common,
+                flags:  PanelFlags::empty(),
             },
-
             Panel {
                 str_id: "cam_live_st",
                 name:   "Live stacking".to_string(),
                 widget: self.widgets.live_st.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    PanelTab::Common,
+                flags:  PanelFlags::empty(),
             },
-
             Panel {
                 str_id: "cam_quality",
                 name:   "Light frame quality".to_string(),
                 widget: self.widgets.quality.bx.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    PanelTab::Common,
+                flags:  PanelFlags::empty(),
             },
+            Panel {
+                str_id: "cam_info",
+                name:   String::new(),
+                widget: self.widgets.info.bx.clone().upcast(),
+                pos:    PanelPosition::BottomLeft,
+                tab:    PanelTab::Common,
+                flags:  PanelFlags::NO_EXPANDER,
+            },
+
         ]
     }
 

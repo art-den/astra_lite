@@ -7,92 +7,14 @@ use std::{
     process::Command
 };
 
-use gtk::{prelude::*, glib, glib::clone, cairo};
+use gtk::{prelude::*, glib, glib::clone, cairo, pango};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
     core::{core::*, events::*}, indi, options::*, utils::{gtk_utils, io_utils::*}
 };
-use super::utils::*;
+use super::{module::*, utils::*};
 
-pub enum UiModuleEvent {
-    AfterShowOptions,
-    FullScreen(bool),
-    ProgramClosing,
-    TabChanged { from: TabPage, to: TabPage },
-    Timer,
-}
-
-pub trait UiModule {
-    fn show_options(&self, options: &Options);
-    fn get_options(&self, options: &mut Options);
-    fn panels(&self) -> Vec<Panel>;
-    fn process_event(&self, event: &UiModuleEvent);
-}
-
-pub struct UiModules {
-    items: Vec<Rc<dyn UiModule>>,
-}
-
-impl UiModules {
-    fn new() -> Self {
-        Self {
-            items: Vec::new(),
-        }
-    }
-
-    fn add(&mut self, module: Rc<dyn UiModule>) {
-        self.items.push(module);
-    }
-
-    fn show_options(&self, options: &Options) {
-        for module in &self.items {
-            module.show_options(options);
-        }
-    }
-
-    fn get_options(&self, options: &mut Options) {
-        for module in &self.items {
-            module.get_options(options);
-        }
-    }
-
-    fn items(&self) -> &Vec<Rc<dyn UiModule>> {
-        &self.items
-    }
-
-    fn process_event(&self, event: &UiModuleEvent) {
-        for module in &self.items {
-            module.process_event(event);
-        }
-    }
-
-    fn clear(&mut self) {
-        self.items.clear();
-    }
-}
-
-pub enum PanelPosition {
-    Left,
-    Right,
-    Top,
-    Center,
-    BottomLeft,
-}
-
-pub enum PanelTab {
-    Hardware,
-    Map,
-    Common,
-}
-
-pub struct Panel {
-    pub str_id: &'static str,
-    pub name:   String,
-    pub widget: gtk::Widget,
-    pub pos:    PanelPosition,
-    pub tab:    PanelTab,
-}
 
 pub fn init_ui(
     app:      &gtk::Application,
@@ -227,28 +149,6 @@ pub fn init_ui(
 }
 
 pub const TIMER_PERIOD_MS: u64 = 250;
-
-#[derive(Clone, PartialEq, Copy)]
-pub enum TabPage {
-    Hardware,
-    SkyMap,
-    Camera,
-}
-
-impl TabPage {
-    fn from_tab_index(index: u32) -> Self {
-        match index {
-            TAB_HARDWARE => TabPage::Hardware,
-            TAB_MAP      => TabPage::SkyMap,
-            TAB_CAMERA   => TabPage::Camera,
-            _ => unreachable!(),
-        }
-    }
-}
-
-pub const TAB_HARDWARE: u32 = 0;
-pub const TAB_MAP:      u32 = 1;
-pub const TAB_CAMERA:   u32 = 2;
 
 const CSS: &[u8] = b"
 .greenbutton {
@@ -518,52 +418,28 @@ impl MainUi {
         for module in modules.items() {
             let panels = module.panels();
             for panel in panels {
-                let widget = if panel.name.is_empty() {
-                    panel.widget.clone()
-                } else {
-                    let expander = gtk::Expander::builder()
-                        .visible(true)
-                        .label("label")
-                        .build();
-
-                    expander.style_context().add_class("expander");
-                    let label = expander.label_widget().unwrap().downcast::<gtk::Label>().unwrap();
-                    label.set_markup(&format!("<b>[ {} ]</b>", panel.name));
-
-                    expander.add(&panel.widget);
-                    expander.upcast()
-
+                let container = match (&panel.tab, &panel.pos) {
+                    (PanelTab::Common, PanelPosition::Left) =>
+                        self.widgets.bx_comm_left.upcast_ref::<gtk::Container>(),
+                    (PanelTab::Common, PanelPosition::BottomLeft) =>
+                        self.widgets.bx_comm_left2.upcast_ref::<gtk::Container>(),
+                    (PanelTab::Common, PanelPosition::Center) =>
+                        self.widgets.bx_comm_center.upcast_ref::<gtk::Container>(),
+                    (PanelTab::Common, PanelPosition::Right) =>
+                        self.widgets.bx_comm_right.upcast_ref::<gtk::Container>(),
+                    _ => unreachable!(),
                 };
-                match (panel.tab, panel.pos) {
-                    (PanelTab::Common, PanelPosition::Left) => {
-                        self.widgets.bx_comm_left.add(&widget);
-                        let separator = gtk::Separator::builder()
-                            .visible(true)
-                            .orientation(gtk::Orientation::Horizontal)
-                            .build();
-                        self.widgets.bx_comm_left.add(&separator);
-                    }
-
-                    (PanelTab::Common, PanelPosition::BottomLeft) => {
-                        self.widgets.bx_comm_left2.add(&widget);
-                    }
-
-                    (PanelTab::Common, PanelPosition::Center) => {
-                        self.widgets.bx_comm_center.add(&widget);
-                    }
-
-                    (PanelTab::Common, PanelPosition::Right) => {
-                        self.widgets.bx_comm_right.add(&widget);
-                        let separator = gtk::Separator::builder()
-                            .visible(true)
-                            .orientation(gtk::Orientation::Horizontal)
-                            .build();
-                        self.widgets.bx_comm_right.add(&separator);
-                    }
-
-                    _ => {
-                        unreachable!();
-                    },
+                if let Some(label) = panel.caption_label() {
+                    container.add(&label);
+                }
+                container.add(&panel.widget());
+                if matches!(panel.pos, PanelPosition::Left|PanelPosition::Right)
+                {
+                    let separator = gtk::Separator::builder()
+                        .visible(true)
+                        .orientation(gtk::Orientation::Horizontal)
+                        .build();
+                    container.add(&separator);
                 }
             }
         }

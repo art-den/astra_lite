@@ -4,10 +4,10 @@ use itertools::Itertools;
 use macros::FromBuilder;
 use serde::{Deserialize, Serialize};
 use crate::{
-    core::{core::*, events::*, mode_darks_library::*}, image::info::seconds_to_total_time_str, indi, options::*, ui::ui_main::{PanelPosition, PanelTab}, utils::{gtk_utils, io_utils::*}
+    core::{core::*, events::*, mode_darks_library::*}, image::info::seconds_to_total_time_str, indi, options::*, utils::{gtk_utils, io_utils::*}
 };
 
-use super::ui_main::{Panel, UiModule, UiModuleEvent};
+use super::module::*;
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
@@ -606,6 +606,7 @@ impl UiModule for DarksLibraryUI {
                 widget: self.widgets.common.bx.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    PanelTab::Common,
+                flags:  PanelFlags::empty(),
             },
         ]
     }

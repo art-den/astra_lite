@@ -13,7 +13,7 @@ use chrono::prelude::*;
 use crate::{
     core::core::Core, guiding::{external_guider::ExtGuiderType, phd2_conn}, indi::{self, sexagesimal_to_value, value_to_sexagesimal}, options::*, utils::gtk_utils
 };
-use super::{ui_main::*, indi_widget::*};
+use super::{ui_main::*, indi_widget::*, module::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,

@@ -9,7 +9,7 @@ use crate::{
     options::*,
     utils::{gtk_utils::{self, *}, io_utils::*, log_utils::*}
 };
-use super::{sky_map::math::radian_to_degree, ui_main::*, utils::*};
+use super::{sky_map::math::radian_to_degree, ui_main::*, utils::*, module::*};
 
 
 pub fn init_ui(
@@ -339,6 +339,7 @@ impl UiModule for PreviewUi {
                 widget: self.widgets.common.pan_preview.clone().upcast(),
                 pos:    PanelPosition::Center,
                 tab:    PanelTab::Common,
+                flags:  PanelFlags::empty(),
             },
         ]
     }

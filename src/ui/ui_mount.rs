@@ -6,10 +6,10 @@ use crate::{
     core::{consts::INDI_SET_PROP_TIMEOUT, core::{Core, ModeType}, events::*},
     indi,
     options::*,
-    utils::{gtk_utils, io_utils::*},
+    utils::gtk_utils,
 };
 
-use super::{ui_main::*, utils::*};
+use super::{ui_main::*, utils::*, module::*};
 
 
 pub fn init_ui(
@@ -116,8 +116,8 @@ impl UiModule for MountUi {
             widget: self.widgets.bx.clone().upcast(),
             pos:    PanelPosition::Right,
             tab:    PanelTab::Common,
+            flags:  PanelFlags::empty(),
         }]
-
     }
 
     fn process_event(&self, event: &UiModuleEvent) {

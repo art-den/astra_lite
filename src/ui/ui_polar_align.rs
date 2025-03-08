@@ -8,7 +8,7 @@ use crate::{
     sky_math::math::radian_to_degree,
     utils::{gtk_utils, io_utils::*}
 };
-use super::{sky_map::math::HorizCoord, ui_main::*, utils::*};
+use super::{sky_map::math::HorizCoord, ui_main::*, utils::*, module::*};
 
 pub fn init_ui(
     builder: &gtk::Builder,

@@ -6,7 +6,7 @@ use crate::{
     core::{core::*, events::*}, indi, options::*, utils::gtk_utils
 };
 
-use super::{ui_main::*, utils::*};
+use super::{ui_main::*, utils::*, module::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
@@ -112,6 +112,7 @@ impl UiModule for GuidingUi {
             widget: self.widgets.grd.clone().upcast(),
             pos:    PanelPosition::Right,
             tab:    PanelTab::Common,
+            flags:  PanelFlags::empty(),
         }]
     }
 

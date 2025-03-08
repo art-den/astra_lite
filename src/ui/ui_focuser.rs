@@ -10,7 +10,7 @@ use crate::{
     utils::{gtk_utils::{self, *}, math::{cmp_f64, linear_interpolate}},
 };
 
-use super::{ui_main::*, utils::*};
+use super::{ui_main::*, utils::*, module::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
@@ -121,6 +121,7 @@ impl UiModule for FocuserUi {
             widget: self.widgets.bx.clone().upcast(),
             pos:    PanelPosition::Right,
             tab:    PanelTab::Common,
+            flags:  PanelFlags::empty(),
         }]
     }
 

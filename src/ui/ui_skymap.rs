@@ -9,7 +9,7 @@ use crate::{
     plate_solve::PlateSolveOkResult,
     utils::{gtk_utils::{self, *}, io_utils::*},
 };
-use super::{sky_map::{alt_widget::paint_altitude_by_time, data::*, math::*, painter::*}, ui_main::*, ui_skymap_options::SkymapOptionsDialog, utils::*};
+use super::{sky_map::{alt_widget::paint_altitude_by_time, data::*, math::*, painter::*}, ui_main::*, ui_skymap_options::SkymapOptionsDialog, utils::*, module::*};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
 pub fn init_ui(
