@@ -12,7 +12,11 @@ use itertools::Itertools;
 use chrono::prelude::*;
 use macros::FromBuilder;
 use crate::{
-    core::core::Core, guiding::{external_guider::ExtGuiderType, phd2_conn}, indi::{self, sexagesimal_to_value, value_to_sexagesimal}, options::*, utils::gtk_utils::{self, is_combobox_empty}
+    core::core::Core,
+    guiding::{external_guider::ExtGuiderType, phd2_conn},
+    indi::{self, sexagesimal_to_value, value_to_sexagesimal},
+    options::*,
+    utils::gtk_utils::{self, is_combobox_empty}
 };
 use super::{ui_main::*, indi_widget::*, module::*};
 
@@ -107,7 +111,6 @@ enum HardwareEvent {
     Indi(indi::Event),
     Phd2(phd2_conn::Event),
 }
-
 
 #[derive(FromBuilder)]
 struct TelescopeWidgets {

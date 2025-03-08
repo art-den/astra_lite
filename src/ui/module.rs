@@ -8,7 +8,6 @@ use crate::options::Options;
 pub enum PanelPosition {
     Left,
     Right,
-    Top,
     Center,
     BottomLeft,
 }

@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Generated with glade 3.38.2 -->
+<interface>
+  <requires lib="gtk+" version="3.24"/>
+  <!-- n-columns=2 n-rows=12 -->
+  <object class="GtkGrid" id="grd">
+    <property name="visible">True</property>
+    <property name="can-focus">False</property>
+    <property name="row-spacing">5</property>
+    <property name="column-spacing">5</property>
+    <child>
+      <object class="GtkButton">
+        <property name="label" translatable="yes">Capture, Platesolve and Sync</property>
+        <property name="visible">True</property>
+        <property name="can-focus">True</property>
+        <property name="receives-default">True</property>
+        <property name="action-name">win.capture_platesolve</property>
+        <style>
+          <class name="greenbutton"/>
+        </style>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">0</property>
+        <property name="width">2</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkSeparator">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">2</property>
+        <property name="width">2</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkLabel" id="l_ps_gain">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="halign">start</property>
+        <property name="label" translatable="yes">Gain</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">5</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkSpinButton" id="spb_exp">
+        <property name="visible">True</property>
+        <property name="can-focus">True</property>
+        <property name="hexpand">True</property>
+      </object>
+      <packing>
+        <property name="left-attach">1</property>
+        <property name="top-attach">4</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkLabel" id="l_ps_exp">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="halign">start</property>
+        <property name="label" translatable="yes">Exposure (s)</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">4</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkComboBoxText" id="cbx_gain">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="active-id">same</property>
+        <items>
+          <item id="same" translatable="yes">Same</item>
+          <item id="min" translatable="yes">Minimum</item>
+          <item id="25%" translatable="yes">25%</item>
+          <item id="50%" translatable="yes">50%</item>
+          <item id="75%" translatable="yes">75%</item>
+          <item id="max" translatable="yes">Maximum</item>
+        </items>
+      </object>
+      <packing>
+        <property name="left-attach">1</property>
+        <property name="top-attach">5</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkLabel" id="l_ps_cam_group">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="halign">start</property>
+        <property name="label" translatable="yes">Camera settings for platesolver</property>
+        <attributes>
+          <attribute name="weight" value="bold"/>
+        </attributes>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">3</property>
+        <property name="width">2</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkLabel" id="l_ps_bin">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="halign">start</property>
+        <property name="label" translatable="yes">Binning</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">6</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkComboBoxText" id="cbx_bin">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <items>
+          <item id="1" translatable="yes">1x1</item>
+          <item id="2" translatable="yes">2x2</item>
+        </items>
+      </object>
+      <packing>
+        <property name="left-attach">1</property>
+        <property name="top-attach">6</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkSeparator">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">7</property>
+        <property name="width">2</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkButton">
+        <property name="label" translatable="yes">Platesole current image and goto</property>
+        <property name="visible">True</property>
+        <property name="can-focus">True</property>
+        <property name="receives-default">True</property>
+        <property name="action-name">win.plate_solve_and_goto</property>
+        <style>
+          <class name="greenbutton"/>
+        </style>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">1</property>
+        <property name="width">2</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkLabel" id="l_ps_solver_group">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="halign">start</property>
+        <property name="label" translatable="yes">Plate solver settings</property>
+        <attributes>
+          <attribute name="weight" value="bold"/>
+        </attributes>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">8</property>
+        <property name="width">2</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkLabel">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="halign">start</property>
+        <property name="label" translatable="yes">Platesolver</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">9</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkLabel">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="halign">start</property>
+        <property name="label" translatable="yes">Timeout (s)</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">10</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkLabel">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="halign">start</property>
+        <property name="label" translatable="yes">Blind timeout (s)</property>
+      </object>
+      <packing>
+        <property name="left-attach">0</property>
+        <property name="top-attach">11</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkComboBoxText" id="cbx_solver">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <items>
+          <item id="astrometry.net" translatable="yes">Astrometry.NET</item>
+        </items>
+      </object>
+      <packing>
+        <property name="left-attach">1</property>
+        <property name="top-attach">9</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkSpinButton" id="spb_timeout">
+        <property name="visible">True</property>
+        <property name="can-focus">True</property>
+      </object>
+      <packing>
+        <property name="left-attach">1</property>
+        <property name="top-attach">10</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkSpinButton" id="spb_blind_timeout">
+        <property name="visible">True</property>
+        <property name="can-focus">True</property>
+      </object>
+      <packing>
+        <property name="left-attach">1</property>
+        <property name="top-attach">11</property>
+      </packing>
+    </child>
+  </object>
+</interface>
