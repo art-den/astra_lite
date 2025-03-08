@@ -10,6 +10,7 @@ pub enum PanelPosition {
     Right,
     Center,
     BottomLeft,
+    Top,
 }
 
 pub enum PanelTab {
@@ -93,7 +94,7 @@ impl TabPage {
 }
 
 pub enum UiModuleEvent {
-    AfterShowOptions,
+    AfterFirstShowOptions,
     FullScreen(bool),
     ProgramClosing,
     TabChanged { from: TabPage, to: TabPage },

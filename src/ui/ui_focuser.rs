@@ -127,7 +127,7 @@ impl UiModule for FocuserUi {
 
     fn process_event(&self, event: &UiModuleEvent) {
         match event {
-            UiModuleEvent::AfterShowOptions => {
+            UiModuleEvent::AfterFirstShowOptions => {
                 self.correct_widgets_props();
             }
             UiModuleEvent::ProgramClosing => {

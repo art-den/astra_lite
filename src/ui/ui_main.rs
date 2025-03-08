@@ -104,7 +104,7 @@ pub fn init_ui(
     let mount         = super::ui_mount        ::init_ui(&main_ui.widgets.window, options, core, indi);
     let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
-    let map           = super::ui_skymap       ::init_ui(&builder, &main_ui, core, options, indi);
+    let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, core, options, indi);
 
     let mut modules = main_ui.modules.borrow_mut();
     modules.add(hardware);
@@ -126,7 +126,7 @@ pub fn init_ui(
     main_ui.show_all_options();
 
     let modules = main_ui.modules.borrow();
-    modules.process_event(&UiModuleEvent::AfterShowOptions);
+    modules.process_event(&UiModuleEvent::AfterFirstShowOptions);
     drop(modules);
 
     main_ui.widgets.window.connect_delete_event(
@@ -212,13 +212,13 @@ struct Widgets {
     lbl_cur_action: gtk::Label,
     bx_hw_left: gtk::Box,
     bx_hw_comm: gtk::Box,
-    pan_cam1: gtk::Paned,
-    pan_cam2: gtk::Paned,
+    bx_map_top: gtk::Box,
+    bx_map_left: gtk::Box,
+    bx_map_center: gtk::Box,
     bx_comm_left: gtk::Box,
     bx_comm_left2: gtk::Box,
     bx_comm_center: gtk::Box,
     bx_comm_right: gtk::Box,
-    bx_skymap_panel: gtk::Box,
     scr_comm_right: gtk::ScrolledWindow,
     btn_fullscreen: gtk::ToggleButton,
     mi_dark_theme: gtk::RadioMenuItem,
@@ -433,8 +433,15 @@ impl MainUi {
                         self.widgets.bx_hw_left.upcast_ref::<gtk::Container>(),
                     (PanelTab::Hardware, PanelPosition::Center) =>
                         self.widgets.bx_hw_comm.upcast_ref::<gtk::Container>(),
+                    (PanelTab::Map, PanelPosition::Top) =>
+                        self.widgets.bx_map_top.upcast_ref::<gtk::Container>(),
+                    (PanelTab::Map, PanelPosition::Left) =>
+                        self.widgets.bx_map_left.upcast_ref::<gtk::Container>(),
+                    (PanelTab::Map, PanelPosition::Center) =>
+                        self.widgets.bx_map_center.upcast_ref::<gtk::Container>(),
                     _ => unreachable!(),
                 };
+
                 if let Some(label) = panel.caption_label() {
                     container.add(&label);
                 }
@@ -552,7 +559,7 @@ impl MainUi {
         let full_screen = btn.is_active();
         self.widgets.bx_comm_left2.set_visible(!full_screen);
         self.widgets.scr_comm_right.set_visible(!full_screen);
-        self.widgets.bx_skymap_panel.set_visible(!full_screen);
+        self.widgets.bx_map_left.set_visible(!full_screen);
         let modules = self.modules.borrow();
         modules.process_event(&UiModuleEvent::FullScreen(full_screen));
         drop(modules);

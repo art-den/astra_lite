@@ -11,7 +11,6 @@ use crate::{
 };
 use super::{sky_map::math::radian_to_degree, ui_main::*, utils::*, module::*};
 
-
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,

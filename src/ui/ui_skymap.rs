@@ -1,5 +1,6 @@
 use std::{cell::{Cell, RefCell}, collections::HashMap, rc::{Rc, Weak}, sync::{Arc, RwLock}};
 use chrono::{prelude::*, Days, Duration, Months};
+use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use crate::{
@@ -9,34 +10,43 @@ use crate::{
     plate_solve::PlateSolveOkResult,
     utils::{gtk_utils::{self, *}, io_utils::*},
 };
-use super::{sky_map::{alt_widget::paint_altitude_by_time, data::*, math::*, painter::*}, ui_main::*, ui_skymap_options::SkymapOptionsDialog, utils::*, module::*};
+use super::{
+    sky_map::{alt_widget::paint_altitude_by_time, data::*, math::*, painter::*},
+    ui_main::*,
+    ui_skymap_options::SkymapOptionsDialog,
+    utils::*,
+    module::*
+};
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
 pub fn init_ui(
-    builder: &gtk::Builder,
+    window:  &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,
     core:    &Arc<Core>,
     options: &Arc<RwLock<Options>>,
     indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
-    let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
-
     let mut ui_options = UiOptions::default();
-    gtk_utils::exec_and_show_error(&window, || {
+    gtk_utils::exec_and_show_error(window, || {
         load_json_from_config_file(&mut ui_options, MapUi::CONF_FN)?;
         Ok(())
     });
 
-    let pan_map1 = builder.object::<gtk::Paned>("pan_map1").unwrap();
     let map_widget = SkymapWidget::new();
-    pan_map1.add2(map_widget.get_widget());
+
+    let widgets = Widgets {
+        top:      TopWidgets     ::from_builder_str(include_str!(r"resources/map_top.ui")),
+        datetime: DatetimeWidgets::from_builder_str(include_str!(r"resources/map_datetime.ui")),
+        obj:      ObjectWidgets  ::from_builder_str(include_str!(r"resources/map_obj.ui")),
+        search:   SearchWidgets  ::from_builder_str(include_str!(r"resources/map_search.ui")),
+    };
 
     let obj = Rc::new(MapUi {
+        widgets,
         ui_options:    RefCell::new(ui_options),
         core:          Arc::clone(core),
         indi:          Arc::clone(indi),
         options:       Arc::clone(options),
-        builder:       builder.clone(),
         window:        window.clone(),
         main_ui:       Rc::clone(main_ui),
         excl:          ExclusiveCaller::new(),
@@ -48,7 +58,6 @@ pub fn init_ui(
         selected_item: RefCell::new(None),
         search_result: RefCell::new(Vec::new()),
         clicked_crd:   RefCell::new(None),
-        full_screen:   Cell::new(false),
         goto_started:  Cell::new(false),
         closed:        Cell::new(false),
         cam_rotation:  RefCell::new(HashMap::new()),
@@ -101,11 +110,9 @@ impl SkyItemType {
     }
 }
 
-
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiOptions {
-    paned_pos1: i32,
     pub paint:  PaintConfig,
     show_ccd:   bool,
     show_ps:    bool,
@@ -115,11 +122,10 @@ pub struct UiOptions {
 impl Default for UiOptions {
     fn default() -> Self {
         Self {
-            paned_pos1: -1,
-            paint:      PaintConfig::default(),
-            show_ccd:   true,
-            exp_dt:     true,
-            show_ps:    true,
+            paint:    PaintConfig::default(),
+            show_ccd: true,
+            exp_dt:   true,
+            show_ps:  true,
         }
     }
 }
@@ -219,12 +225,75 @@ struct FoundItem {
     above_horiz: bool,
 }
 
+#[derive(FromBuilder)]
+struct TopWidgets {
+    bx:                 gtk::Box,
+    btn_map_options:    gtk::Button,
+    scl_max_dso_mag:    gtk::Scale,
+    chb_show_stars:     gtk::CheckButton,
+    chb_show_dso:       gtk::CheckButton,
+    chb_show_galaxies:  gtk::CheckButton,
+    chb_show_nebulas:   gtk::CheckButton,
+    chb_show_sclusters: gtk::CheckButton,
+    chb_show_eq_grid:   gtk::CheckButton,
+    chb_show_ccd:       gtk::CheckButton,
+    chb_show_ps:        gtk::CheckButton,
+}
+
+#[derive(FromBuilder)]
+struct DatetimeWidgets {
+    bx:       gtk::Box,
+    spb_year: gtk::SpinButton,
+    spb_mon:  gtk::SpinButton,
+    spb_day:  gtk::SpinButton,
+    spb_hour: gtk::SpinButton,
+    spb_min:  gtk::SpinButton,
+    spb_sec:  gtk::SpinButton,
+    btn_play: gtk::ToggleButton,
+    btn_now:  gtk::Button,
+}
+
+#[derive(FromBuilder)]
+struct ObjectWidgets {
+    bx:          gtk::Box,
+    e_names:     gtk::Entry,
+    e_nicknames: gtk::Entry,
+    l_type:      gtk::Label,
+    l_mag_cap:   gtk::Label,
+    l_mag:       gtk::Label,
+    l_bv:        gtk::Label,
+    l_ra:        gtk::Label,
+    l_dec:       gtk::Label,
+    l_ra_now:    gtk::Label,
+    l_dec_now:   gtk::Label,
+    l_zenith:    gtk::Label,
+    l_az:        gtk::Label,
+    da_graph:    gtk::DrawingArea,
+    m_widget:    gtk::Menu,
+
+}
+
+#[derive(FromBuilder)]
+struct SearchWidgets {
+    bx: gtk::Box,
+    se_search: gtk::SearchEntry,
+    tv_result: gtk::TreeView,
+}
+
+
+struct Widgets {
+    top:      TopWidgets,
+    datetime: DatetimeWidgets,
+    obj:      ObjectWidgets,
+    search:   SearchWidgets,
+}
+
 struct MapUi {
+    widgets:       Widgets,
     ui_options:    RefCell<UiOptions>,
     core:          Arc<Core>,
     indi:          Arc<indi::Connection>,
     options:       Arc<RwLock<Options>>,
-    builder:       gtk::Builder,
     window:        gtk::ApplicationWindow,
     main_ui:       Rc<MainUi>,
     excl:          ExclusiveCaller,
@@ -237,7 +306,6 @@ struct MapUi {
     selected_item: RefCell<Option<SkymapObject>>,
     search_result: RefCell<Vec<FoundItem>>,
     clicked_crd:   RefCell<Option<EqCoord>>,
-    full_screen:   Cell<bool>,
     goto_started:  Cell<bool>,
     closed:        Cell<bool>,
     cam_rotation:  RefCell<HashMap<String, f64>>,
@@ -260,13 +328,55 @@ impl UiModule for MapUi {
     }
 
     fn panels(&self) -> Vec<Panel> {
-        vec![]
+        vec![
+            Panel {
+                str_id: "map_top",
+                name:   String::new(),
+                widget: self.widgets.top.bx.clone().upcast(),
+                pos:    PanelPosition::Top,
+                tab:    PanelTab::Map,
+                flags:  PanelFlags::empty(),
+            },
+            Panel {
+                str_id: "map_datetime",
+                name:   "Date & time".to_string(),
+                widget: self.widgets.datetime.bx.clone().upcast(),
+                pos:    PanelPosition::Left,
+                tab:    PanelTab::Map,
+                flags:  PanelFlags::empty(),
+            },
+            Panel {
+                str_id: "map_obj",
+                name:   "Selected object".to_string(),
+                widget: self.widgets.obj.bx.clone().upcast(),
+                pos:    PanelPosition::Left,
+                tab:    PanelTab::Map,
+                flags:  PanelFlags::NO_EXPANDER,
+            },
+            Panel {
+                str_id: "map_search",
+                name:   "Search".to_string(),
+                widget: self.widgets.search.bx.clone().upcast(),
+                pos:    PanelPosition::Left,
+                tab:    PanelTab::Map,
+                flags:  PanelFlags::NO_EXPANDER,
+            },
+            Panel {
+                str_id: "map_common",
+                name:   String::new(),
+                widget: self.map_widget.get_widget().clone().upcast(),
+                pos:    PanelPosition::Center,
+                tab:    PanelTab::Map,
+                flags:  PanelFlags::NO_EXPANDER,
+            },
+        ]
     }
 
     fn process_event(&self, event: &UiModuleEvent) {
         match event {
-            UiModuleEvent::FullScreen(full_screen) => {
-                self.set_full_screen_mode(*full_screen);
+            UiModuleEvent::AfterFirstShowOptions => {
+                let widget = self.map_widget.get_widget();
+                widget.set_expand(true);
             }
             UiModuleEvent::ProgramClosing => {
                 self.handler_closing();
@@ -300,29 +410,26 @@ impl MapUi {
     }
 
     fn init_widgets(&self) {
-        let set_range = |widget_name, min, max| {
-            let spb = self.builder.object::<gtk::SpinButton>(widget_name).unwrap();
+        let set_range = |spb: &gtk::SpinButton, min, max| {
             spb.set_range(min - 1.0, max + 1.0);
             spb.set_increments(1.0, 1.0);
         };
 
-        set_range("spb_year", 0.0, 3000.0);
-        set_range("spb_mon", 1.0, 12.0);
-        set_range("spb_day", 1.0, 31.0);
-        set_range("spb_hour", 0.0, 24.0);
-        set_range("spb_min", 0.0, 60.0);
-        set_range("spb_sec", 0.0, 60.0);
+        set_range(&self.widgets.datetime.spb_year, 0.0, 3000.0);
+        set_range(&self.widgets.datetime.spb_mon, 1.0, 12.0);
+        set_range(&self.widgets.datetime.spb_day, 1.0, 31.0);
+        set_range(&self.widgets.datetime.spb_hour, 0.0, 24.0);
+        set_range(&self.widgets.datetime.spb_min, 0.0, 60.0);
+        set_range(&self.widgets.datetime.spb_sec, 0.0, 60.0);
 
-        let scl_max_dso_mag = self.builder.object::<gtk::Scale>("scl_max_dso_mag").unwrap();
-        scl_max_dso_mag.set_range(0.0, 20.0);
-        scl_max_dso_mag.set_increments(0.5, 2.0);
+        self.widgets.top.scl_max_dso_mag.set_range(0.0, 20.0);
+        self.widgets.top.scl_max_dso_mag.set_increments(0.5, 2.0);
 
         let (dpimm_x, dpimm_y) = gtk_utils::get_widget_dpmm(&self.window)
             .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
-        scl_max_dso_mag.set_width_request((40.0 * dpimm_x) as i32);
+        self.widgets.top.scl_max_dso_mag.set_width_request((40.0 * dpimm_x) as i32);
 
-        let da_sm_item_graph = self.builder.object::<gtk::DrawingArea>("da_sm_item_graph").unwrap();
-        da_sm_item_graph.set_height_request((30.0 * dpimm_y) as i32);
+        self.widgets.obj.da_graph.set_height_request((30.0 * dpimm_y) as i32);
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
@@ -333,40 +440,39 @@ impl MapUi {
         gtk_utils::connect_action_rc(&self.window, self, "sm_goto_sel_solve", Self::handler_goto_sel_and_solve);
         gtk_utils::connect_action_rc(&self.window, self, "sm_goto_point",     Self::handler_goto_point);
 
-        let connect_spin_btn_evt = |widget_name: &str| {
-            let spin_btn = self.builder.object::<gtk::SpinButton>(widget_name).unwrap();
+        let connect_spin_btn_evt = |spin_btn: &gtk::SpinButton| {
             spin_btn.connect_value_changed(clone!(@weak self as self_ => move |_| {
                 self_.handler_time_changed();
             }));
         };
 
-        connect_spin_btn_evt("spb_year");
-        connect_spin_btn_evt("spb_mon");
-        connect_spin_btn_evt("spb_day");
-        connect_spin_btn_evt("spb_hour");
-        connect_spin_btn_evt("spb_min");
-        connect_spin_btn_evt("spb_sec");
+        connect_spin_btn_evt(&self.widgets.datetime.spb_year);
+        connect_spin_btn_evt(&self.widgets.datetime.spb_mon);
+        connect_spin_btn_evt(&self.widgets.datetime.spb_day);
+        connect_spin_btn_evt(&self.widgets.datetime.spb_hour);
+        connect_spin_btn_evt(&self.widgets.datetime.spb_min);
+        connect_spin_btn_evt(&self.widgets.datetime.spb_sec);
 
-        let scl_max_dso_mag = self.builder.object::<gtk::Scale>("scl_max_dso_mag").unwrap();
-        scl_max_dso_mag.connect_value_changed(clone!(@weak self as self_ => move |scale| {
-            self_.handler_max_magnitude_changed(scale.value());
-        }));
+        self.widgets.top.scl_max_dso_mag.connect_value_changed(
+            clone!(@weak self as self_ => move |scale| {
+                self_.handler_max_magnitude_changed(scale.value());
+            })
+        );
 
-        let connect_obj_visibility_changed = |widget_name: &str| {
-            let ch = self.builder.object::<gtk::CheckButton>(widget_name).unwrap();
+        let connect_obj_visibility_changed = |ch: &gtk::CheckButton| {
             ch.connect_active_notify(clone!(@weak self as self_ => move |_| {
                 self_.handler_obj_visibility_changed();
             }));
         };
 
-        connect_obj_visibility_changed("chb_show_stars");
-        connect_obj_visibility_changed("chb_show_dso");
-        connect_obj_visibility_changed("chb_show_galaxies");
-        connect_obj_visibility_changed("chb_show_nebulas");
-        connect_obj_visibility_changed("chb_show_sclusters");
-        connect_obj_visibility_changed("chb_sm_show_eq_grid");
-        connect_obj_visibility_changed("chb_sm_show_ccd");
-        connect_obj_visibility_changed("chb_sm_show_ps");
+        connect_obj_visibility_changed(&self.widgets.top.chb_show_stars);
+        connect_obj_visibility_changed(&self.widgets.top.chb_show_dso);
+        connect_obj_visibility_changed(&self.widgets.top.chb_show_galaxies);
+        connect_obj_visibility_changed(&self.widgets.top.chb_show_nebulas);
+        connect_obj_visibility_changed(&self.widgets.top.chb_show_sclusters);
+        connect_obj_visibility_changed(&self.widgets.top.chb_show_eq_grid);
+        connect_obj_visibility_changed(&self.widgets.top.chb_show_ccd);
+        connect_obj_visibility_changed(&self.widgets.top.chb_show_ps);
 
         self.map_widget.add_obj_sel_handler(
             clone!(@weak self as self_ => move |object| {
@@ -374,22 +480,19 @@ impl MapUi {
             })
         );
 
-        let se = self.builder.object::<gtk::SearchEntry>("se_sm_search").unwrap();
-        se.connect_search_changed(
+        self.widgets.search.se_search.connect_search_changed(
             clone!(@weak self as self_ => move |se| {
                 self_.handler_search_text_changed(se);
             })
         );
 
-        let search_tv = self.builder.object::<gtk::TreeView>("tv_sm_search_result").unwrap();
-        search_tv.selection().connect_changed(
+        self.widgets.search.tv_result.selection().connect_changed(
             clone!( @weak self as self_ => move |selection| {
                 self_.handler_search_result_selection_changed(selection);
             })
         );
 
-        let da_sm_item_graph = self.builder.object::<gtk::DrawingArea>("da_sm_item_graph").unwrap();
-        da_sm_item_graph.connect_draw(
+        self.widgets.obj.da_graph.connect_draw(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |area, cr| {
                 gtk_utils::exec_and_show_error(&self_.window, || {
@@ -411,8 +514,7 @@ impl MapUi {
         self.window.connect_key_press_event(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |_, event| {
-                let nb_main = self_.builder.object::<gtk::Notebook>("nb_main").unwrap();
-                if nb_main.page() == TAB_MAP as i32 {
+                if self_.main_ui.current_tab_page() == TabPage::SkyMap {
                     return self_.handler_key_press_event(event);
                 }
                 glib::Propagation::Proceed
@@ -464,50 +566,38 @@ impl MapUi {
     }
 
     fn show_options(&self) {
-        let pan_map1 = self.builder.object::<gtk::Paned>("pan_map1").unwrap();
         let opts = self.ui_options.borrow();
-        pan_map1.set_position(opts.paned_pos1);
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
 
-        ui.set_prop_bool("chb_show_stars.active", opts.paint.filter.contains(ItemsToShow::STARS));
-        ui.set_prop_bool("chb_show_dso.active", opts.paint.filter.contains(ItemsToShow::DSO));
-        ui.set_prop_bool("chb_show_galaxies.active", opts.paint.filter.contains(ItemsToShow::GALAXIES));
-        ui.set_prop_bool("chb_show_nebulas.active", opts.paint.filter.contains(ItemsToShow::NEBULAS));
-        ui.set_prop_bool("chb_show_sclusters.active", opts.paint.filter.contains(ItemsToShow::CLUSTERS));
-        ui.set_prop_bool("chb_sm_show_eq_grid.active", opts.paint.eq_grid.visible);
-        ui.set_prop_bool("chb_sm_show_ccd.active", opts.show_ccd);
-        ui.set_prop_bool("chb_sm_show_ps.active", opts.show_ps);
-        ui.set_range_value("scl_max_dso_mag", opts.paint.max_dso_mag as f64);
-        ui.set_prop_bool("exp_sm_dt.expanded", opts.exp_dt);
+        self.widgets.top.chb_show_stars.set_active(opts.paint.filter.contains(ItemsToShow::STARS));
+        self.widgets.top.chb_show_dso.set_active(opts.paint.filter.contains(ItemsToShow::DSO));
+        self.widgets.top.chb_show_galaxies.set_active(opts.paint.filter.contains(ItemsToShow::GALAXIES));
+        self.widgets.top.chb_show_nebulas.set_active(opts.paint.filter.contains(ItemsToShow::NEBULAS));
+        self.widgets.top.chb_show_sclusters.set_active(opts.paint.filter.contains(ItemsToShow::CLUSTERS));
+        self.widgets.top.chb_show_eq_grid.set_active(opts.paint.eq_grid.visible);
+        self.widgets.top.chb_show_ccd.set_active(opts.show_ccd);
+        self.widgets.top.chb_show_ps.set_active(opts.show_ps);
+        self.widgets.top.scl_max_dso_mag.set_value(opts.paint.max_dso_mag as f64);
 
         drop(opts);
     }
 
     fn read_ui_options_from_widgets(&self) {
-        let pan_map1 = self.builder.object::<gtk::Paned>("pan_map1").unwrap();
         let mut opts = self.ui_options.borrow_mut();
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        if !self.full_screen.get() {
-            opts.paned_pos1 = pan_map1.position();
-        }
-        opts.paint.max_dso_mag = ui.range_value("scl_max_dso_mag") as f32;
-        opts.exp_dt = ui.prop_bool("exp_sm_dt.expanded");
-
-        Self::read_visibility_options_from_widgets(&mut opts, &ui);
-
+        opts.paint.max_dso_mag = self.widgets.top.scl_max_dso_mag.value() as f32;
+        self.read_visibility_options_from_widgets(&mut opts);
         drop(opts);
     }
 
-    fn read_visibility_options_from_widgets(opts: &mut UiOptions, ui: &gtk_utils::UiHelper) {
-        opts.paint.filter.set(ItemsToShow::STARS, ui.prop_bool("chb_show_stars.active"));
-        opts.paint.filter.set(ItemsToShow::DSO, ui.prop_bool("chb_show_dso.active"));
-        opts.paint.filter.set(ItemsToShow::GALAXIES, ui.prop_bool("chb_show_galaxies.active"));
-        opts.paint.filter.set(ItemsToShow::NEBULAS, ui.prop_bool("chb_show_nebulas.active"));
-        opts.paint.filter.set(ItemsToShow::CLUSTERS, ui.prop_bool("chb_show_sclusters.active"));
+    fn read_visibility_options_from_widgets(&self, opts: &mut UiOptions) {
+        opts.paint.filter.set(ItemsToShow::STARS, self.widgets.top.chb_show_stars.is_active());
+        opts.paint.filter.set(ItemsToShow::DSO, self.widgets.top.chb_show_dso.is_active());
+        opts.paint.filter.set(ItemsToShow::GALAXIES, self.widgets.top.chb_show_galaxies.is_active());
+        opts.paint.filter.set(ItemsToShow::NEBULAS, self.widgets.top.chb_show_nebulas.is_active());
+        opts.paint.filter.set(ItemsToShow::CLUSTERS, self.widgets.top.chb_show_sclusters.is_active());
 
-        opts.paint.eq_grid.visible = ui.prop_bool("chb_sm_show_eq_grid.active");
-        opts.show_ccd = ui.prop_bool("chb_sm_show_ccd.active");
-        opts.show_ps = ui.prop_bool("chb_sm_show_ps.active");
+        opts.paint.eq_grid.visible = self.widgets.top.chb_show_eq_grid.is_active();
+        opts.show_ccd = self.widgets.top.chb_show_ccd.is_active();
+        opts.show_ps = self.widgets.top.chb_show_ps.is_active();
     }
 
     fn handler_action_options(self: &Rc<Self>) {
@@ -665,16 +755,15 @@ impl MapUi {
     }
 
     fn set_time_to_widgets_impl(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let user_time = self.user_time.borrow();
         let cur_dt = user_time.time(true);
 
-        ui.set_prop_f64("spb_year.value", cur_dt.year() as f64);
-        ui.set_prop_f64("spb_mon.value",  cur_dt.month() as f64);
-        ui.set_prop_f64("spb_day.value",  cur_dt.day() as f64);
-        ui.set_prop_f64("spb_hour.value", cur_dt.hour() as f64);
-        ui.set_prop_f64("spb_min.value",  cur_dt.minute() as f64);
-        ui.set_prop_f64("spb_sec.value",  cur_dt.second() as f64);
+        self.widgets.datetime.spb_year.set_value(cur_dt.year() as f64);
+        self.widgets.datetime.spb_mon.set_value(cur_dt.month() as f64);
+        self.widgets.datetime.spb_day.set_value(cur_dt.day() as f64);
+        self.widgets.datetime.spb_hour.set_value(cur_dt.hour() as f64);
+        self.widgets.datetime.spb_min.set_value(cur_dt.minute() as f64);
+        self.widgets.datetime.spb_sec.set_value(cur_dt.second() as f64);
 
         gtk_utils::enable_action(&self.window, "map_now", !user_time.now());
 
@@ -784,14 +873,14 @@ impl MapUi {
 
     fn handler_time_changed(&self) {
         self.excl.exec(|| {
-            let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
             let prev_time = self.prev_wdt.borrow();
-            let year_diff = ui.prop_f64("spb_year.value") as i32 - prev_time.year;
-            let mon_diff = ui.prop_f64("spb_mon.value") as i32 - prev_time.mon;
-            let day_diff = ui.prop_f64("spb_day.value") as i32 - prev_time.day;
-            let hour_diff = ui.prop_f64("spb_hour.value") as i32 - prev_time.hour;
-            let min_diff = ui.prop_f64("spb_min.value") as i32 - prev_time.min;
-            let sec_diff = ui.prop_f64("spb_sec.value") as i32 - prev_time.sec;
+            //self.widgets.datetime.
+            let year_diff = self.widgets.datetime.spb_year.value() as i32 - prev_time.year;
+            let mon_diff = self.widgets.datetime.spb_mon.value() as i32 - prev_time.mon;
+            let day_diff = self.widgets.datetime.spb_day.value() as i32 - prev_time.day;
+            let hour_diff = self.widgets.datetime.spb_hour.value() as i32 - prev_time.hour;
+            let min_diff = self.widgets.datetime.spb_min.value() as i32 - prev_time.min;
+            let sec_diff = self.widgets.datetime.spb_sec.value() as i32 - prev_time.sec;
             drop(prev_time);
 
             let mut user_time = self.user_time.borrow_mut();
@@ -829,9 +918,8 @@ impl MapUi {
 
     fn handler_btn_play_pressed(&self) {
         self.excl.exec(|| {
-            let btn_play = self.builder.object::<gtk::ToggleButton>("btn_play").unwrap();
             let mut user_time = self.user_time.borrow_mut();
-            user_time.pause(!btn_play.is_active());
+            user_time.pause(!self.widgets.datetime.btn_play.is_active());
             drop(user_time);
             self.set_time_to_widgets_impl();
         });
@@ -864,8 +952,7 @@ impl MapUi {
 
     fn handler_obj_visibility_changed(&self) {
         let mut opts = self.ui_options.borrow_mut();
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        Self::read_visibility_options_from_widgets(&mut opts, &ui);
+        self.read_visibility_options_from_widgets(&mut opts);
         drop(opts);
 
         self.update_widgets_enable_state();
@@ -873,13 +960,10 @@ impl MapUi {
     }
 
     fn update_widgets_enable_state(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let dso_enabled = ui.prop_bool("chb_show_dso.active");
-        ui.enable_widgets(false, &[
-            ("chb_show_galaxies", dso_enabled),
-            ("chb_show_nebulas", dso_enabled),
-            ("chb_show_sclusters", dso_enabled),
-        ]);
+        let dso_enabled = self.widgets.top.chb_show_dso.is_active();
+        self.widgets.top.chb_show_galaxies.set_sensitive(dso_enabled);
+        self.widgets.top.chb_show_nebulas.set_sensitive(dso_enabled);
+        self.widgets.top.chb_show_sclusters.set_sensitive(dso_enabled);
     }
 
     fn handler_object_selected(&self, obj: Option<SkymapObject>) {
@@ -889,7 +973,6 @@ impl MapUi {
     }
 
     fn show_selected_objects_info(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let obj = self.selected_item.borrow();
 
         let mut names = String::new();
@@ -950,22 +1033,21 @@ impl MapUi {
             azimuth_str = degree_to_str(radian_to_degree(h_crd.az));
         }
 
-        ui.set_prop_str("e_sm_sel_names.text", Some(&names));
-        ui.set_prop_str("e_sm_sel_nicknames.text", Some(&nicknames));
-        ui.set_prop_str("l_sm_sel_type.label", Some(&obj_type_str));
-        ui.set_prop_str("l_sm_sel_mag_cap.label", Some(&mag_cap_str));
-        ui.set_prop_str("l_sm_sel_mag.label", Some(&mag_str));
-        ui.set_prop_str("l_sm_sel_bv.label", Some(&bv_str));
-        ui.set_prop_str("l_sm_sel_ra.label", Some(&ra_str));
-        ui.set_prop_str("l_sm_sel_dec.label", Some(&dec_str));
-        ui.set_prop_str("l_sm_sel_ra_now.label", Some(&ra_now_str));
-        ui.set_prop_str("l_sm_sel_dec_now.label", Some(&dec_now_str));
-        ui.set_prop_str("l_sm_sel_zenith.label", Some(&zenith_str));
-        ui.set_prop_str("l_sm_sel_az.label", Some(&azimuth_str));
+        self.widgets.obj.e_names.set_text(&names);
+        self.widgets.obj.e_nicknames.set_text(&nicknames);
+        self.widgets.obj.l_type.set_label(&obj_type_str);
+        self.widgets.obj.l_mag_cap.set_label(&mag_cap_str);
+        self.widgets.obj.l_mag.set_label(&mag_str);
+        self.widgets.obj.l_bv.set_label(&bv_str);
+        self.widgets.obj.l_ra.set_label(&ra_str);
+        self.widgets.obj.l_dec.set_label(&dec_str);
+        self.widgets.obj.l_ra_now.set_label(&ra_now_str);
+        self.widgets.obj.l_dec_now.set_label(&dec_now_str);
+        self.widgets.obj.l_zenith.set_label(&zenith_str);
+        self.widgets.obj.l_az.set_label(&azimuth_str);
     }
 
     fn init_search_result_treeview(&self) {
-        let tv = self.builder.object::<gtk::TreeView>("tv_sm_search_result").unwrap();
         let columns = [
             /* 0 */ ("Name", String::static_type()),
             /* 1 */ ("Type", String::static_type()),
@@ -982,9 +1064,9 @@ impl MapUi {
                 .build();
             TreeViewColumnExt::pack_start(&col, &cell_text, true);
             TreeViewColumnExt::add_attribute(&col, &cell_text, "markup", idx as i32);
-            tv.append_column(&col);
+            self.widgets.search.tv_result.append_column(&col);
         }
-        tv.set_model(Some(&model));
+        self.widgets.search.tv_result.set_model(Some(&model));
     }
 
     fn handler_search_text_changed(&self, _se: &gtk::SearchEntry) {
@@ -993,8 +1075,7 @@ impl MapUi {
 
     pub fn search(&self) {
         let Some(skymap) = &*self.skymap_data.borrow() else { return; };
-        let se_sm_search = self.builder.object::<gtk::SearchEntry>("se_sm_search").unwrap();
-        let text = se_sm_search.text().trim().to_string();
+        let text = self.widgets.search.se_search.text().trim().to_string();
         let found_items = skymap.search(&text);
         let observer = self.create_observer();
         let time = self.map_widget.time();
@@ -1017,8 +1098,7 @@ impl MapUi {
     }
 
     fn show_search_result(&self) {
-        let tv = self.builder.object::<gtk::TreeView>("tv_sm_search_result").unwrap();
-        let Some(model) = tv.model() else { return; };
+        let Some(model) = self.widgets.search.tv_result.model() else { return; };
         let Ok(model) = model.downcast::<gtk::ListStore>() else { return; };
         let result = self.search_result.borrow();
         model.clear();
@@ -1036,7 +1116,7 @@ impl MapUi {
         }
 
         if !result.is_empty() {
-            let selection = tv.selection();
+            let selection = self.widgets.search.tv_result.selection();
             let mut path = gtk::TreePath::new();
             path.append_index(0);
             selection.select_path(&path);
@@ -1044,18 +1124,15 @@ impl MapUi {
     }
 
     fn handler_key_press_event(&self, event: &gdk::EventKey) -> glib::Propagation {
-        let se_sm_search = self.builder.object::<gtk::SearchEntry>("se_sm_search").unwrap();
-
         if event.state().contains(gdk::ModifierType::CONTROL_MASK)
         && matches!(event.keyval(), gdk::keys::constants::F|gdk::keys::constants::f) {
-            se_sm_search.grab_focus();
+            self.widgets.search.se_search.grab_focus();
             return glib::Propagation::Stop;
         }
 
         if matches!(event.keyval(), gdk::keys::constants::Up|gdk::keys::constants::Down)
-        && se_sm_search.has_focus() {
-            let tv = self.builder.object::<gtk::TreeView>("tv_sm_search_result").unwrap();
-            let Some(model) = tv.model() else {
+        && self.widgets.search.se_search.has_focus() {
+            let Some(model) = self.widgets.search.tv_result.model() else {
                 return glib::Propagation::Proceed;
             };
 
@@ -1063,7 +1140,7 @@ impl MapUi {
             if result_count == 0 {
                 return glib::Propagation::Proceed;
             }
-            let selection = tv.selection();
+            let selection = self.widgets.search.tv_result.selection();
             let path = selection.selected_rows().0;
             if path.len() != 1 {
                 return glib::Propagation::Proceed;
@@ -1085,7 +1162,7 @@ impl MapUi {
             path.append_index(cur_index);
             selection.select_path(&path);
             if let [path] = selection.selected_rows().0.as_slice() {
-                tv.set_cursor(path, Option::<&gtk::TreeViewColumn>::None, false);
+                self.widgets.search.tv_result.set_cursor(path, Option::<&gtk::TreeViewColumn>::None, false);
             }
 
             return glib::Propagation::Stop;
@@ -1112,8 +1189,7 @@ impl MapUi {
     }
 
     fn update_selected_item_graph(&self) {
-        let da_sm_item_graph = self.builder.object::<gtk::DrawingArea>("da_sm_item_graph").unwrap();
-        da_sm_item_graph.queue_draw();
+        self.widgets.obj.da_graph.queue_draw();
     }
 
     fn handler_draw_item_graph(
@@ -1152,9 +1228,8 @@ impl MapUi {
                 "sm_goto_point",
                 indi_is_active && eq_coord.is_some() && !self.goto_started.get(),
             );
-            let m_sm_goto_sel = self.builder.object::<gtk::Menu>("m_sm_widget").unwrap();
-            m_sm_goto_sel.set_attach_widget(Some(self.map_widget.get_widget()));
-            m_sm_goto_sel.popup_at_pointer(None);
+            self.widgets.obj.m_widget.set_attach_widget(Some(self.map_widget.get_widget()));
+            self.widgets.obj.m_widget.popup_at_pointer(None);
             glib::Propagation::Stop
         } else {
             glib::Propagation::Proceed
@@ -1203,17 +1278,6 @@ impl MapUi {
             self.core.start_goto_coord(coord, config)?;
             Ok(())
         });
-    }
-
-    fn set_full_screen_mode(&self, full_screen: bool) {
-        let bx_skymap_panel = self.builder.object::<gtk::Widget>("bx_skymap_panel").unwrap();
-        if full_screen {
-            self.read_ui_options_from_widgets();
-            bx_skymap_panel.set_visible(false);
-        } else {
-            bx_skymap_panel.set_visible(true);
-        }
-        self.full_screen.set(full_screen);
     }
 
     fn create_plate_solve_preview(&self, data: &Preview8BitImgData) {
