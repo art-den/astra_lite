@@ -37,7 +37,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkLabel" id="l_ps_gain">
+      <object class="GtkLabel">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="halign">start</property>
@@ -60,7 +60,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkLabel" id="l_ps_exp">
+      <object class="GtkLabel">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="halign">start</property>
@@ -91,7 +91,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkLabel" id="l_ps_cam_group">
+      <object class="GtkLabel">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="halign">start</property>
@@ -107,7 +107,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkLabel" id="l_ps_bin">
+      <object class="GtkLabel">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="halign">start</property>
@@ -161,7 +161,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkLabel" id="l_ps_solver_group">
+      <object class="GtkLabel">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="halign">start</property>

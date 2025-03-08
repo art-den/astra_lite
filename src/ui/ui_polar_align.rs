@@ -1,46 +1,36 @@
 use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
 use gtk::{glib::{self, clone}, pango, prelude::*};
-use serde::{Deserialize, Serialize};
+use macros::FromBuilder;
 use crate::{
     core::{core::{Core, ModeType}, events::*, mode_polar_align::PolarAlignmentEvent},
     indi::{self, degree_to_str},
     options::*,
     sky_math::math::radian_to_degree,
-    utils::{gtk_utils, io_utils::*}
+    utils::gtk_utils,
 };
 use super::{sky_map::math::HorizCoord, ui_main::*, utils::*, module::*};
 
 pub fn init_ui(
-    builder: &gtk::Builder,
+    window:  &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,
     options: &Arc<RwLock<Options>>,
     core:    &Arc<Core>,
     indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
-    let window = builder.object::<gtk::ApplicationWindow>("window").unwrap();
-
-    let mut ui_options = UiOptions::default();
-    gtk_utils::exec_and_show_error(&window, || {
-        load_json_from_config_file(&mut ui_options, PolarAlignUi::CONF_FN)?;
-        Ok(())
-    });
-
+    let widgets = Widgets::from_builder_str(include_str!(r"resources/polar_align.ui"));
     let obj = Rc::new(PolarAlignUi {
+        widgets,
+        window:          window.clone(),
         main_ui:         Rc::clone(main_ui),
-        builder:         builder.clone(),
         options:         Arc::clone(options),
         core:            Arc::clone(core),
         indi:            Arc::clone(indi),
-        ui_options:      RefCell::new(ui_options),
         closed:          Cell::new(false),
         indi_evt_conn:   RefCell::new(None),
         delayed_actions: DelayedActions::new(200),
-        window,
     });
 
     obj.init_widgets();
-    obj.apply_ui_options();
-
     obj.connect_widgets_events();
     obj.connect_indi_and_core_events();
     obj.connect_delayed_actions_events();
@@ -56,20 +46,6 @@ enum DelayedAction {
 enum MainThreadEvent {
     Indi(indi::Event),
     Core(Event),
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-struct UiOptions {
-    expanded: bool,
-}
-
-impl Default for UiOptions {
-    fn default() -> Self {
-        Self {
-            expanded: false
-        }
-    }
 }
 
 impl PloarAlignDir {
@@ -89,14 +65,29 @@ impl PloarAlignDir {
     }
 }
 
+#[derive(FromBuilder)]
+struct Widgets {
+    bx:              gtk::Box,
+    spb_angle:       gtk::SpinButton,
+    cbx_dir:         gtk::ComboBoxText,
+    cbx_speed:       gtk::ComboBoxText,
+    l_sim_alt_err:   gtk::Label,
+    spb_sim_alt_err: gtk::SpinButton,
+    l_sim_az_err:    gtk::Label,
+    spb_sim_az_err:  gtk::SpinButton,
+    l_alt_err:       gtk::Label,
+    l_az_err:        gtk::Label,
+    l_alt_err_arr:   gtk::Label,
+    l_az_err_arr:    gtk::Label,
+}
+
 struct PolarAlignUi {
+    widgets:         Widgets,
     main_ui:         Rc<MainUi>,
-    builder:         gtk::Builder,
     window:          gtk::ApplicationWindow,
     options:         Arc<RwLock<Options>>,
     core:            Arc<Core>,
     indi:            Arc<indi::Connection>,
-    ui_options:      RefCell<UiOptions>,
     closed:          Cell<bool>,
     indi_evt_conn:   RefCell<Option<indi::Subscription>>,
     delayed_actions: DelayedActions<DelayedAction>,
@@ -110,118 +101,99 @@ impl Drop for PolarAlignUi {
 
 impl UiModule for PolarAlignUi {
     fn show_options(&self, options: &Options) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        ui.set_prop_f64("spb_pa_angle.value",       options.polar_align.angle);
-        ui.set_prop_str("cbx_pa_dir.active-id",     options.polar_align.direction.to_active_id());
-        ui.set_prop_str("cbx_pa_speed.active_id",   options.polar_align.speed.as_deref());
-        ui.set_prop_f64("spb_pa_sim_alt_err.value", options.polar_align.sim_alt_err);
-        ui.set_prop_f64("spb_pa_sim_az_err.value",  options.polar_align.sim_az_err);
+        self.widgets.spb_angle.set_value(options.polar_align.angle);
+        self.widgets.cbx_dir.set_active_id(options.polar_align.direction.to_active_id());
+        self.widgets.cbx_speed.set_active_id(options.polar_align.speed.as_deref());
+        self.widgets.spb_sim_alt_err.set_value(options.polar_align.sim_alt_err);
+        self.widgets.spb_sim_az_err.set_value(options.polar_align.sim_az_err);
     }
 
     fn get_options(&self, options: &mut Options) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        options.polar_align.angle       = ui.prop_f64("spb_pa_angle.value");
-        options.polar_align.speed       = ui.prop_string("cbx_pa_speed.active_id");
-        options.polar_align.sim_alt_err = ui.prop_f64("spb_pa_sim_alt_err.value");
-        options.polar_align.sim_az_err  = ui.prop_f64("spb_pa_sim_az_err.value");
+        options.polar_align.angle       = self.widgets.spb_angle.value();
+        options.polar_align.speed       = self.widgets.cbx_speed.active_id().map(|s| s.to_string());
+        options.polar_align.sim_alt_err = self.widgets.spb_sim_alt_err.value();
+        options.polar_align.sim_az_err  = self.widgets.spb_sim_az_err.value();
         options.polar_align.direction = PloarAlignDir::from_active_id(
-            ui.prop_string("cbx_pa_dir.active-id").as_deref()
+            self.widgets.cbx_dir.active_id().as_deref()
         ).unwrap_or(PloarAlignDir::West);
     }
 
     fn panels(&self) -> Vec<Panel> {
-        vec![]
+        vec![Panel {
+            str_id: "polar_align",
+            name:   "Polar alignment".to_string(),
+            widget: self.widgets.bx.clone().upcast(),
+            pos:    PanelPosition::Right,
+            tab:    PanelTab::Common,
+            flags:  PanelFlags::empty(),
+        }]
     }
 
     fn process_event(&self, event: &UiModuleEvent) {
         match event {
+            UiModuleEvent::AfterShowOptions => {
+                self.correct_widgets_props();
+            }
             UiModuleEvent::ProgramClosing => {
                 self.handler_closing();
             }
-
             _ => {}
         }
     }
 }
 
 impl PolarAlignUi {
-    const CONF_FN: &str = "ui_ploar_align";
-
     fn init_widgets(&self) {
-        let spb_pa_angle = self.builder.object::<gtk::SpinButton>("spb_pa_angle").unwrap();
-        spb_pa_angle.set_range(15.0, 60.0);
-        spb_pa_angle.set_digits(0);
-        spb_pa_angle.set_increments(5.0, 15.0);
+        self.widgets.spb_angle.set_range(15.0, 60.0);
+        self.widgets.spb_angle.set_digits(0);
+        self.widgets.spb_angle.set_increments(5.0, 15.0);
 
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        ui.set_prop_str("l_pa_alt_err.label", Some(""));
-        ui.set_prop_str("l_pa_az_err.label", Some(""));
-        ui.set_prop_str("l_pa_alt_err_arr.label", Some(""));
-        ui.set_prop_str("l_pa_az_err_arr.label", Some(""));
+        self.widgets.l_alt_err.set_label("");
+        self.widgets.l_az_err.set_label("");
+        self.widgets.l_alt_err_arr.set_label("");
+        self.widgets.l_az_err_arr.set_label("");
 
         if cfg!(debug_assertions) {
-            ui.show_widgets(&[
-                ("l_pa_sim_alt_err",   true),
-                ("spb_pa_sim_alt_err", true),
-                ("l_pa_sim_az_err",    true),
-                ("spb_pa_sim_az_err",  true),
-            ]);
-        } else {
-            // hide the expander in release mode because not everything is done
-            ui.show_widgets(&[("exp_polar_align", false)]);
+            self.widgets.l_sim_alt_err.set_visible(true);
+            self.widgets.spb_sim_alt_err.set_visible(true);
+            self.widgets.l_sim_az_err.set_visible(true);
+            self.widgets.spb_sim_az_err.set_visible(true);
         }
 
-        let spb_pa_sim_alt_err = self.builder.object::<gtk::SpinButton>("spb_pa_sim_alt_err").unwrap();
-        spb_pa_sim_alt_err.set_range(-5.0, 5.0);
-        spb_pa_sim_alt_err.set_digits(2);
-        spb_pa_sim_alt_err.set_increments(0.01, 0.1);
+        self.widgets.spb_sim_alt_err.set_range(-5.0, 5.0);
+        self.widgets.spb_sim_alt_err.set_digits(2);
+        self.widgets.spb_sim_alt_err.set_increments(0.01, 0.1);
 
-        let spb_pa_sim_az_err = self.builder.object::<gtk::SpinButton>("spb_pa_sim_az_err").unwrap();
-        spb_pa_sim_az_err.set_range(-5.0, 5.0);
-        spb_pa_sim_az_err.set_digits(2);
-        spb_pa_sim_az_err.set_increments(0.01, 0.1);
+        self.widgets.spb_sim_az_err.set_range(-5.0, 5.0);
+        self.widgets.spb_sim_az_err.set_digits(2);
+        self.widgets.spb_sim_az_err.set_increments(0.01, 0.1);
     }
 
     fn handler_closing(&self) {
         self.closed.set(true);
-
-        self.get_ui_options_from_widgets();
-        let ui_options = self.ui_options.borrow();
-        _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
-        drop(ui_options);
 
         if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
             self.indi.unsubscribe(indi_conn);
         }
     }
 
-    fn apply_ui_options(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let options = self.ui_options.borrow();
-        ui.set_prop_bool("exp_polar_align.expanded", options.expanded);
-    }
-
-    fn get_ui_options_from_widgets(&self) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
-        let mut options = self.ui_options.borrow_mut();
-        options.expanded = ui.prop_bool("exp_polar_align.expanded");
-    }
-
     fn connect_widgets_events(self: &Rc<Self>) {
         gtk_utils::connect_action(&self.window, self, "start_polar_alignment", Self::handler_start_action_polar_align);
         gtk_utils::connect_action(&self.window, self, "stop_polar_alignment", Self::handler_stop_action_polar_align);
 
-        let spb_pa_sim_alt_err = self.builder.object::<gtk::SpinButton>("spb_pa_sim_alt_err").unwrap();
-        spb_pa_sim_alt_err.connect_value_changed(clone!(@weak self as self_ => move |spb| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            options.polar_align.sim_alt_err = spb.value();
-        }));
+        self.widgets.spb_sim_alt_err.connect_value_changed(
+            clone!(@weak self as self_ => move |spb| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.polar_align.sim_alt_err = spb.value();
+            })
+        );
 
-        let spb_pa_sim_az_err = self.builder.object::<gtk::SpinButton>("spb_pa_sim_az_err").unwrap();
-        spb_pa_sim_az_err.connect_value_changed(clone!(@weak self as self_ => move |spb| {
-            let Ok(mut options) = self_.options.try_write() else { return; };
-            options.polar_align.sim_az_err = spb.value();
-        }));
+        self.widgets.spb_sim_az_err.connect_value_changed(
+            clone!(@weak self as self_ => move |spb| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.polar_align.sim_az_err = spb.value();
+            })
+        );
     }
 
     fn correct_widgets_props_impl(&self, mount_device: &str, cam_device: &Option<DeviceAndProp>) {
@@ -331,8 +303,6 @@ impl PolarAlignUi {
     }
 
     fn handler_start_action_polar_align(&self) {
-        if !is_expanded(&self.builder, "exp_polar_align") { return; }
-
         self.main_ui.get_all_options();
 
         gtk_utils::exec_and_show_error(&self.window, ||{
@@ -342,25 +312,23 @@ impl PolarAlignUi {
     }
 
     fn handler_stop_action_polar_align(&self) {
-        if !is_expanded(&self.builder, "exp_polar_align") { return; }
         self.core.abort_active_mode();
     }
 
     fn show_polar_alignment_error(&self, error: &HorizCoord) {
-        let ui = gtk_utils::UiHelper::new_from_builder(&self.builder);
         let alt_err_str = degree_to_str(radian_to_degree(error.alt));
         let az_err_str = degree_to_str(radian_to_degree(error.az));
         let alt_label = format!("Alt: {}", alt_err_str);
         let az_label = format!("Az: {}", az_err_str);
-        ui.set_prop_str("l_pa_alt_err.label", Some(&alt_label));
-        ui.set_prop_str("l_pa_az_err.label", Some(&az_label));
+        self.widgets.l_alt_err.set_label(&alt_label);
+        self.widgets.l_az_err.set_label(&az_label);
 
         let alt_err_arrow = if error.alt < 0.0 { "↑" } else { "↓" };
         let az_err_arrow = if error.az < 0.0 { "→" } else { "←" };
-        ui.set_prop_str("l_pa_alt_err_arr.label", Some(&alt_err_arrow));
-        ui.set_prop_str("l_pa_az_err_arr.label", Some(&az_err_arrow));
+        self.widgets.l_alt_err_arr.set_label(&alt_err_arrow);
+        self.widgets.l_az_err_arr.set_label(&az_err_arrow);
 
-        let set_all_label_size = |label_name: &str, err: f64| {
+        let set_all_label_size = |label: &gtk::Label, err: f64| {
             let err_minutes = f64::abs(radian_to_degree(err) * 60.0);
             let scale = if err_minutes > 60.0 {
                 5
@@ -374,11 +342,10 @@ impl PolarAlignUi {
             let attr_alt_size = pango::AttrSize::new(scale * 10 * pango::SCALE);
             alt_attrs.insert(attr_alt_size);
 
-            let l_pa_alt_err_arr = self.builder.object::<gtk::Label>(label_name).unwrap();
-            l_pa_alt_err_arr.set_attributes(Some(&alt_attrs));
+            label.set_attributes(Some(&alt_attrs));
         };
 
-        set_all_label_size("l_pa_alt_err_arr", error.alt);
-        set_all_label_size("l_pa_az_err_arr", error.az);
+        set_all_label_size(&self.widgets.l_alt_err_arr, error.alt);
+        set_all_label_size(&self.widgets.l_az_err_arr, error.az);
     }
 }
