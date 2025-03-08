@@ -95,7 +95,7 @@ pub fn init_ui(
         }
     ));
 
-    let hardware      = super::ui_hardware     ::init_ui(&main_ui.widgets.window, &builder, &main_ui, options, core, indi);
+    let hardware      = super::ui_hardware     ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let camera        = super::ui_camera       ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let darks_library = super::ui_darks_library::init_ui(&main_ui.widgets.window, options, core, indi);
     let preview       = super::ui_preview      ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
@@ -210,6 +210,8 @@ struct Widgets {
     window: gtk::ApplicationWindow,
     nb_main: gtk::Notebook,
     lbl_cur_action: gtk::Label,
+    bx_hw_left: gtk::Box,
+    bx_hw_comm: gtk::Box,
     pan_cam1: gtk::Paned,
     pan_cam2: gtk::Paned,
     bx_comm_left: gtk::Box,
@@ -427,6 +429,10 @@ impl MainUi {
                         self.widgets.bx_comm_center.upcast_ref::<gtk::Container>(),
                     (PanelTab::Common, PanelPosition::Right) =>
                         self.widgets.bx_comm_right.upcast_ref::<gtk::Container>(),
+                    (PanelTab::Hardware, PanelPosition::Left) =>
+                        self.widgets.bx_hw_left.upcast_ref::<gtk::Container>(),
+                    (PanelTab::Hardware, PanelPosition::Center) =>
+                        self.widgets.bx_hw_comm.upcast_ref::<gtk::Container>(),
                     _ => unreachable!(),
                 };
                 if let Some(label) = panel.caption_label() {

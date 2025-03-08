@@ -9,7 +9,7 @@ use crate::{
     utils::gtk_utils,
 };
 
-use super::{ui_main::*, utils::*, module::*};
+use super::{utils::*, module::*};
 
 
 pub fn init_ui(

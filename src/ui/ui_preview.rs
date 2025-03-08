@@ -339,7 +339,7 @@ impl UiModule for PreviewUi {
                 widget: self.widgets.common.pan_preview.clone().upcast(),
                 pos:    PanelPosition::Center,
                 tab:    PanelTab::Common,
-                flags:  PanelFlags::empty(),
+                flags:  PanelFlags::NO_EXPANDER,
             },
         ]
     }

@@ -43,6 +43,7 @@ impl Panel {
             let caption_label = gtk::Label::builder()
                 .label(&format!("[ {} ]", self.name))
                 .attributes(&attrs)
+                .visible(true)
                 .build();
             Some(caption_label)
         } else {
@@ -134,8 +135,8 @@ impl UiModules {
         }
     }
 
-    pub fn items(&self) -> &Vec<Rc<dyn UiModule>> {
-        &self.items
+    pub fn items(&self) -> impl Iterator<Item=&Rc<dyn UiModule>> {
+        self.items.iter()
     }
 
     pub fn process_event(&self, event: &UiModuleEvent) {
