@@ -114,7 +114,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkLabel" id="l_mnt_cal_exp">
+      <object class="GtkLabel">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="halign">start</property>
@@ -187,7 +187,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkLabel" id="l_mnt_cal_gain">
+      <object class="GtkLabel">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="halign">start</property>

@@ -1,17 +1,12 @@
 use std::{
-    sync::{Arc, RwLock},
-    rc::Rc,
-    cell::{RefCell, Cell},
-    time::Duration,
-    path::PathBuf,
-    process::Command
+    cell::{Cell, RefCell}, collections::HashMap, path::PathBuf, process::Command, rc::Rc, sync::{Arc, RwLock}, time::Duration
 };
 
 use gtk::{prelude::*, glib, glib::clone, cairo};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{core::*, events::*}, indi, options::*, utils::{gtk_utils, io_utils::*}
+    core::{core::*, events::*}, indi, options::*, utils::{gtk_utils::{self, clear_container}, io_utils::*}
 };
 use super::{module::*, utils::*};
 
@@ -69,6 +64,7 @@ pub fn init_ui(
         conn_string:    RefCell::new(String::new()),
         dev_string:     RefCell::new(String::new()),
         perf_string:    RefCell::new(String::new()),
+        expanders:      RefCell::new(Vec::new()),
         self_:          RefCell::new(None), // used to drop MainData in window's delete_event
     });
 
@@ -128,6 +124,8 @@ pub fn init_ui(
     let modules = main_ui.modules.borrow();
     modules.process_event(&UiModuleEvent::AfterFirstShowOptions);
     drop(modules);
+
+    main_ui.apply_panel_options();
 
     main_ui.widgets.window.connect_delete_event(
         clone!(@weak main_ui => @default-return glib::Propagation::Proceed,
@@ -192,6 +190,7 @@ struct UiOptions {
     win_height:    i32,
     win_maximized: bool,
     theme:         Theme,
+    expanders:     HashMap<String, bool>,
 }
 
 impl Default for UiOptions {
@@ -201,6 +200,7 @@ impl Default for UiOptions {
             win_height:    -1,
             win_maximized: false,
             theme:         Theme::default(),
+            expanders:     HashMap::new(),
         }
     }
 }
@@ -216,7 +216,7 @@ struct Widgets {
     bx_map_left: gtk::Box,
     bx_map_center: gtk::Box,
     bx_comm_left: gtk::Box,
-    bx_comm_left2: gtk::Box,
+    bx_comm_bot_left: gtk::Box,
     bx_comm_center: gtk::Box,
     bx_comm_right: gtk::Box,
     scr_comm_right: gtk::ScrolledWindow,
@@ -243,6 +243,7 @@ pub struct MainUi {
     conn_string:    RefCell<String>,
     dev_string:     RefCell<String>,
     perf_string:    RefCell<String>,
+    expanders:      RefCell<Vec<(String, gtk::Expander, bool)>>,
     self_:          RefCell<Option<Rc<MainUi>>>
 }
 
@@ -417,6 +418,19 @@ impl MainUi {
 
     fn build_modules_panels(&self) {
         let modules = self.modules.borrow();
+        let mut expanders = self.expanders.borrow_mut();
+
+        expanders.clear();
+        clear_container(&self.widgets.bx_comm_left);
+        clear_container(&self.widgets.bx_comm_bot_left);
+        clear_container(&self.widgets.bx_comm_center);
+        clear_container(&self.widgets.bx_comm_right);
+        clear_container(&self.widgets.bx_hw_left);
+        clear_container(&self.widgets.bx_hw_comm);
+        clear_container(&self.widgets.bx_map_top);
+        clear_container(&self.widgets.bx_map_left);
+        clear_container(&self.widgets.bx_map_center);
+
         for module in modules.items() {
             let panels = module.panels();
             for panel in panels {
@@ -424,7 +438,7 @@ impl MainUi {
                     (PanelTab::Common, PanelPosition::Left) =>
                         self.widgets.bx_comm_left.upcast_ref::<gtk::Container>(),
                     (PanelTab::Common, PanelPosition::BottomLeft) =>
-                        self.widgets.bx_comm_left2.upcast_ref::<gtk::Container>(),
+                        self.widgets.bx_comm_bot_left.upcast_ref::<gtk::Container>(),
                     (PanelTab::Common, PanelPosition::Center) =>
                         self.widgets.bx_comm_center.upcast_ref::<gtk::Container>(),
                     (PanelTab::Common, PanelPosition::Right) =>
@@ -441,11 +455,19 @@ impl MainUi {
                         self.widgets.bx_map_center.upcast_ref::<gtk::Container>(),
                     _ => unreachable!(),
                 };
-
-                if let Some(label) = panel.caption_label() {
+                let panel_widget = panel.create_widget();
+                if let Some(expander) = panel_widget.downcast_ref::<gtk::Expander>() {
+                    let expanded_by_default = panel.flags.contains(PanelFlags::EXPANDED);
+                    expanders.push((
+                        panel.str_id.to_string(),
+                        expander.clone(),
+                        expanded_by_default
+                    ));
+                }
+                if let Some(label) = panel.create_caption_label() {
                     container.add(&label);
                 }
-                container.add(&panel.widget());
+                container.add(&panel_widget);
                 if matches!(panel.pos, PanelPosition::Left|PanelPosition::Right)
                 {
                     let separator = gtk::Separator::builder()
@@ -475,6 +497,18 @@ impl MainUi {
         }
     }
 
+    fn apply_panel_options(&self) {
+        let options = self.ui_options.borrow();
+        let expanders = self.expanders.borrow();
+        for (id, expander, expanded_by_default) in &*expanders {
+            let is_expanded = options.expanders
+                .get(id)
+                .copied()
+                .unwrap_or(*expanded_by_default);
+            expander.set_expanded(is_expanded);
+        }
+    }
+
     fn apply_theme(&self) {
         let gtk_settings = gtk::Settings::default().unwrap();
         let options = self.ui_options.borrow();
@@ -490,6 +524,12 @@ impl MainUi {
         options.win_width = width;
         options.win_height = height;
         options.win_maximized = self.widgets.window.is_maximized();
+
+        let expanders = self.expanders.borrow();
+        options.expanders.clear();
+        for (id, expander, _) in &*expanders {
+            options.expanders.insert(id.clone(), expander.is_expanded());
+        }
     }
 
     fn handler_draw_progress(
@@ -557,7 +597,7 @@ impl MainUi {
 
     fn handler_btn_fullscreen(&self, btn: &gtk::ToggleButton) {
         let full_screen = btn.is_active();
-        self.widgets.bx_comm_left2.set_visible(!full_screen);
+        self.widgets.bx_comm_bot_left.set_visible(!full_screen);
         self.widgets.scr_comm_right.set_visible(!full_screen);
         self.widgets.bx_map_left.set_visible(!full_screen);
         let modules = self.modules.borrow();
@@ -636,4 +676,3 @@ impl MainUi {
         self.get_all_options_impl(&mut options);
     }
 }
-

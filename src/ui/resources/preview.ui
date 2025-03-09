@@ -641,7 +641,7 @@ Useful when the object is not lagre and is in the center of the image.</property
               </packing>
             </child>
             <child>
-              <object class="GtkBox" id="bx_frame_info">
+              <object class="GtkBox">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
                 <property name="orientation">vertical</property>

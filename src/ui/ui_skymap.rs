@@ -228,7 +228,6 @@ struct FoundItem {
 #[derive(FromBuilder)]
 struct TopWidgets {
     bx:                 gtk::Box,
-    btn_map_options:    gtk::Button,
     scl_max_dso_mag:    gtk::Scale,
     chb_show_stars:     gtk::CheckButton,
     chb_show_dso:       gtk::CheckButton,
@@ -250,7 +249,6 @@ struct DatetimeWidgets {
     spb_min:  gtk::SpinButton,
     spb_sec:  gtk::SpinButton,
     btn_play: gtk::ToggleButton,
-    btn_now:  gtk::Button,
 }
 
 #[derive(FromBuilder)]
@@ -270,7 +268,6 @@ struct ObjectWidgets {
     l_az:        gtk::Label,
     da_graph:    gtk::DrawingArea,
     m_widget:    gtk::Menu,
-
 }
 
 #[derive(FromBuilder)]

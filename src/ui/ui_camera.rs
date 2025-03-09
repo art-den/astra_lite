@@ -245,17 +245,11 @@ struct ControlWidgets {
 #[derive(FromBuilder)]
 struct FrameWidgets {
     grid:       gtk::Grid,
-    l_mode:     gtk::Label,
     cb_mode:    gtk::ComboBoxText,
-    l_exp:      gtk::Label,
     spb_exp:    gtk::SpinButton,
-    l_gain:     gtk::Label,
     spb_gain:   gtk::SpinButton,
-    l_offset:   gtk::Label,
     spb_offset: gtk::SpinButton,
-    l_bin:      gtk::Label,
     cb_bin:     gtk::ComboBoxText,
-    l_crop:     gtk::Label,
     cb_crop:    gtk::ComboBoxText,
 }
 
@@ -274,7 +268,6 @@ struct RawWidgets {
     grid:            gtk::Grid,
     l_time_info:     gtk::Label,
     btn_start:       gtk::Button,
-    btn_continue:    gtk::Button,
     chb_frames_cnt:  gtk::CheckButton,
     spb_frames_cnt:  gtk::SpinButton,
     fcb_path:        gtk::FileChooserButton,
@@ -363,7 +356,7 @@ impl UiModule for CameraUi {
                 widget: self.widgets.ctrl.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    PanelTab::Common,
-                flags:  PanelFlags::empty(),
+                flags:  PanelFlags::EXPANDED,
             },
             Panel {
                 str_id: "cam_frame",
@@ -371,7 +364,7 @@ impl UiModule for CameraUi {
                 widget: self.widgets.frame.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    PanelTab::Common,
-                flags:  PanelFlags::empty(),
+                flags:  PanelFlags::EXPANDED,
             },
             Panel {
                 str_id: "cam_calibr",
@@ -387,7 +380,7 @@ impl UiModule for CameraUi {
                 widget: self.widgets.raw.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    PanelTab::Common,
-                flags:  PanelFlags::empty(),
+                flags:  PanelFlags::EXPANDED,
             },
             Panel {
                 str_id: "cam_live_st",
@@ -395,7 +388,7 @@ impl UiModule for CameraUi {
                 widget: self.widgets.live_st.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    PanelTab::Common,
-                flags:  PanelFlags::empty(),
+                flags:  PanelFlags::EXPANDED,
             },
             Panel {
                 str_id: "cam_quality",
@@ -413,7 +406,6 @@ impl UiModule for CameraUi {
                 tab:    PanelTab::Common,
                 flags:  PanelFlags::NO_EXPANDER,
             },
-
         ]
     }
 

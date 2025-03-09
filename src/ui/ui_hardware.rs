@@ -161,7 +161,6 @@ struct ConnStatusWidgets {
 struct CommonWidgets {
     bx:              gtk::Box,
     se_prop_name:    gtk::SearchEntry,
-    pan_dev_and_log: gtk::Paned,
     bx_devices_ctrl: gtk::Box,
     tv_hw_log:       gtk::TreeView,
 }

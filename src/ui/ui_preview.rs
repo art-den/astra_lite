@@ -65,9 +65,9 @@ pub fn init_ui(
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 struct UiOptions {
-    hist_log_y:     bool,
-    hist_percents:  bool,
-    flat_percents:  bool,
+    hist_log_y:    bool,
+    hist_percents: bool,
+    flat_percents: bool,
 }
 
 impl Default for UiOptions {
@@ -210,7 +210,6 @@ struct ImageWidgets {
 struct InfoWidgets {
     bx_img_info:   gtk::Box,
     e_res_info:    gtk::Entry,
-    bx_frame_info: gtk::Box,
     bx_light_info: gtk::Box,
     e_info_exp:    gtk::Entry,
     e_fwhm:        gtk::Entry,
@@ -259,7 +258,7 @@ struct StatWidgets {
 
 #[derive(FromBuilder)]
 struct HistoryWidgets {
-    nb_hist: gtk::Notebook,
+    nb_hist:  gtk::Notebook,
     tv_light: gtk::TreeView,
     tv_calbr: gtk::TreeView,
 }

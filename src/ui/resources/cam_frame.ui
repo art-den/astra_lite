@@ -9,7 +9,7 @@
     <property name="row-spacing">5</property>
     <property name="column-spacing">5</property>
     <child>
-      <object class="GtkLabel" id="l_mode">
+      <object class="GtkLabel">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="halign">start</property>
@@ -39,7 +39,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkLabel" id="l_exp">
+      <object class="GtkLabel">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="halign">start</property>
@@ -64,7 +64,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkLabel" id="l_gain">
+      <object class="GtkLabel">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="halign">start</property>
@@ -76,7 +76,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkLabel" id="l_offset">
+      <object class="GtkLabel">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="halign">start</property>
@@ -88,7 +88,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkLabel" id="l_crop">
+      <object class="GtkLabel">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="halign">start</property>
@@ -100,7 +100,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkLabel" id="l_bin">
+      <object class="GtkLabel">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="halign">start</property>

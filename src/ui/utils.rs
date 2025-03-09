@@ -305,9 +305,3 @@ pub fn fill_devices_list_into_combobox(
 
     device_selected_in_cb
 }
-
-pub fn is_expanded(builder: &gtk::Builder, expander_name: &str) -> bool {
-    let expander = builder.object::<gtk::Expander>(expander_name).unwrap();
-    expander.is_expanded()
-}
-

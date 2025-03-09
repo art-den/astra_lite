@@ -21,7 +21,8 @@ pub enum PanelTab {
 
 bitflags! {
     pub struct PanelFlags: u32 {
-        const NO_EXPANDER = 0b00000001;
+        const NO_EXPANDER = 1;
+        const EXPANDED    = 2;
     }
 }
 
@@ -35,7 +36,7 @@ pub struct Panel {
 }
 
 impl Panel {
-    pub fn caption_label(&self) -> Option<gtk::Label> {
+    pub fn create_caption_label(&self) -> Option<gtk::Label> {
         if self.flags.contains(PanelFlags::NO_EXPANDER)
         && !self.name.is_empty() {
             let attrs = pango::AttrList::new();
@@ -51,7 +52,7 @@ impl Panel {
         }
     }
 
-    pub fn widget(&self) -> gtk::Widget {
+    pub fn create_widget(&self) -> gtk::Widget {
         if !self.flags.contains(PanelFlags::NO_EXPANDER)
         && !self.name.is_empty() {
             let attrs = pango::AttrList::new();

@@ -564,3 +564,12 @@ pub fn limit_pixbuf_by_longest_size(
         pixbuf
     }
 }
+
+pub fn clear_container(container: &impl IsA<gtk::Container>) {
+    let children = container.children();
+    for child in children.iter().rev() {
+        if let Some(child) = child.downcast_ref::<gtk::Widget>() {
+            container.remove(child);
+        }
+    }
+}
