@@ -23,6 +23,7 @@ bitflags! {
     pub struct PanelFlags: u32 {
         const NO_EXPANDER = 1;
         const EXPANDED    = 2;
+        const DEVELOP     = 4;
     }
 }
 

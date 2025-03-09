@@ -125,7 +125,7 @@ impl UiModule for PolarAlignUi {
             widget: self.widgets.bx.clone().upcast(),
             pos:    PanelPosition::Right,
             tab:    PanelTab::Common,
-            flags:  PanelFlags::empty(),
+            flags:  PanelFlags::DEVELOP,
         }]
     }
 

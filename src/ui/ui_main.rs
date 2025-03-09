@@ -465,6 +465,11 @@ impl MainUi {
                         self.widgets.bx_map_center.upcast_ref::<gtk::Container>(),
                     _ => unreachable!(),
                 };
+
+                let is_visible =
+                    cfg!(debug_assertions) ||
+                    !panel.flags.contains(PanelFlags::DEVELOP);
+
                 let panel_widget = panel.create_widget();
                 if let Some(expander) = panel_widget.downcast_ref::<gtk::Expander>() {
                     let expanded_by_default = panel.flags.contains(PanelFlags::EXPANDED);
@@ -475,13 +480,15 @@ impl MainUi {
                     ));
                 }
                 if let Some(label) = panel.create_caption_label() {
+                    label.set_visible(is_visible);
                     container.add(&label);
                 }
+                panel_widget.set_visible(is_visible);
                 container.add(&panel_widget);
                 if matches!(panel.pos, PanelPosition::Left|PanelPosition::Right)
                 {
                     let separator = gtk::Separator::builder()
-                        .visible(true)
+                        .visible(is_visible)
                         .orientation(gtk::Orientation::Horizontal)
                         .build();
                     container.add(&separator);
