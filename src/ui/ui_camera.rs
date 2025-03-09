@@ -306,17 +306,17 @@ struct Widgets {
 }
 
 struct CameraUi {
-    widgets:          Widgets,
-    main_ui:          Rc<MainUi>,
-    window:           gtk::ApplicationWindow,
-    options:          Arc<RwLock<Options>>,
-    core:             Arc<Core>,
-    indi:             Arc<indi::Connection>,
-    delayed_actions:  DelayedActions<DelayedAction>,
-    ui_options:       RefCell<UiOptions>,
-    conn_state:       RefCell<indi::ConnState>,
-    indi_evt_conn:    RefCell<Option<indi::Subscription>>,
-    closed:           Cell<bool>,
+    widgets:         Widgets,
+    main_ui:         Rc<MainUi>,
+    window:          gtk::ApplicationWindow,
+    options:         Arc<RwLock<Options>>,
+    core:            Arc<Core>,
+    indi:            Arc<indi::Connection>,
+    delayed_actions: DelayedActions<DelayedAction>,
+    ui_options:      RefCell<UiOptions>,
+    conn_state:      RefCell<indi::ConnState>,
+    indi_evt_conn:   RefCell<Option<indi::Subscription>>,
+    closed:          Cell<bool>,
 }
 
 impl UiModule for CameraUi {
@@ -368,7 +368,7 @@ impl UiModule for CameraUi {
             },
             Panel {
                 str_id: "cam_calibr",
-                name:   "Calibration + hot pixels".to_string(),
+                name:   "Calibration & hot pixels".to_string(),
                 widget: self.widgets.calibr.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    PanelTab::Common,
@@ -419,7 +419,6 @@ impl UiModule for CameraUi {
             }
             _ => {}
         }
-
     }
 }
 
@@ -612,7 +611,6 @@ impl CameraUi {
                 options.cam.frame.frame_type = frame_type;
                 self_.widgets.frame.spb_exp.set_value(options.cam.frame.exposure());
                 drop(options);
-
                 self_.correct_widgets_props();
                 self_.show_total_raw_time();
             })
@@ -623,7 +621,6 @@ impl CameraUi {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.cam.frame.set_exposure(sb.value());
                 drop(options);
-
                 self_.show_total_raw_time();
             })
         );

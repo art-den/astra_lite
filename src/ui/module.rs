@@ -46,6 +46,8 @@ impl Panel {
                 .attributes(&attrs)
                 .visible(true)
                 .build();
+            caption_label.set_halign(gtk::Align::Start);
+            caption_label.style_context().add_class("header_label");
             Some(caption_label)
         } else {
             None

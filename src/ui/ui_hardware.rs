@@ -199,8 +199,6 @@ impl UiModule for HardwareUi {
         self.show_indi_options(options);
         self.show_telescope_options(options);
         self.show_site_options(options);
-
-        self.correct_widgets_by_cur_state();
     }
 
     fn get_options(&self, options: &mut Options) {
@@ -253,7 +251,7 @@ impl UiModule for HardwareUi {
             },
             Panel {
                 str_id: "indi_ctrl",
-                name:   String::new(),
+                name:   "INDI devices control".to_string(),
                 widget: self.widgets.common.bx.clone().upcast(),
                 pos:    PanelPosition::Center,
                 tab:    PanelTab::Hardware,
@@ -264,6 +262,9 @@ impl UiModule for HardwareUi {
 
     fn process_event(&self, event: &UiModuleEvent) {
         match event {
+            UiModuleEvent::AfterFirstShowOptions => {
+                self.correct_widgets_by_cur_state();
+            }
             UiModuleEvent::ProgramClosing => {
                 self.handler_closing();
             }

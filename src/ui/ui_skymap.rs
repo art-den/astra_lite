@@ -113,10 +113,10 @@ impl SkyItemType {
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiOptions {
-    pub paint:  PaintConfig,
-    show_ccd:   bool,
-    show_ps:    bool,
-    exp_dt:     bool,
+    pub paint: PaintConfig,
+    show_ccd:  bool,
+    show_ps:   bool,
+    exp_dt:    bool,
 }
 
 impl Default for UiOptions {

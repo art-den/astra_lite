@@ -1138,6 +1138,9 @@ Useful when the object is not lagre and is in the center of the image.</property
                     <attributes>
                       <attribute name="weight" value="bold"/>
                     </attributes>
+                    <style>
+                      <class name="header_label"/>
+                    </style>
                   </object>
                   <packing>
                     <property name="expand">False</property>
@@ -1579,6 +1582,9 @@ B - by bias calibrated</property>
                 <attributes>
                   <attribute name="weight" value="bold"/>
                 </attributes>
+                <style>
+                  <class name="header_label"/>
+                </style>
               </object>
               <packing>
                 <property name="tab-fill">False</property>

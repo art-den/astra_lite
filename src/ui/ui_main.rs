@@ -1,5 +1,11 @@
 use std::{
-    cell::{Cell, RefCell}, collections::HashMap, path::PathBuf, process::Command, rc::Rc, sync::{Arc, RwLock}, time::Duration
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    path::PathBuf,
+    process::Command,
+    rc::Rc,
+    sync::{Arc, RwLock},
+    time::Duration
 };
 
 use gtk::{prelude::*, glib, glib::clone, cairo};
@@ -167,12 +173,16 @@ const CSS: &[u8] = b"
 .yellowbutton:disabled {
     background: rgba(255, 255, 0, .05);
 }
+.header_label {
+    color: mix(@theme_fg_color, rgb(0, 64, 255), 0.4);
+    background: rgba(0, 64, 255, .1);
+}
 .expander > title {
     color: mix(@theme_fg_color, rgb(0, 64, 255), 0.4);
     background: rgba(0, 64, 255, .1);
 }
 .bold {
-  font-weight: bold;
+    font-weight: bold;
 }
 ";
 

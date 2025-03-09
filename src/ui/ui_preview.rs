@@ -35,9 +35,9 @@ pub fn init_ui(
     };
 
     let obj = Rc::new(PreviewUi {
+        widgets,
         main_ui:            Rc::clone(main_ui),
         window:             window.clone(),
-        widgets,
         core:               Arc::clone(core),
         options:            Arc::clone(options),
         ui_options:         RefCell::new(ui_options),
@@ -175,7 +175,7 @@ impl PreviewColorMode {
 
 #[derive(FromBuilder)]
 struct CommonWidgets {
-    pan_preview: gtk::Paned,
+    pan_preview:  gtk::Paned,
     pan_preview2: gtk::Paned,
 }
 
@@ -344,6 +344,9 @@ impl UiModule for PreviewUi {
 
     fn process_event(&self, event: &UiModuleEvent) {
         match event {
+            UiModuleEvent::AfterFirstShowOptions => {
+                self.correct_widgets_props();
+            }
             UiModuleEvent::FullScreen(full_screen) => {
                 self.set_full_screen_mode(*full_screen);
             }
