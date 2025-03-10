@@ -479,7 +479,7 @@ Useful when the object is not lagre and is in the center of the image.</property
             </child>
             <child>
               <object class="GtkCheckButton" id="chb_stars">
-                <property name="label" translatable="yes">Stas</property>
+                <property name="label" translatable="yes">Stars</property>
                 <property name="visible">True</property>
                 <property name="can-focus">True</property>
                 <property name="receives-default">False</property>
