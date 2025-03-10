@@ -68,6 +68,7 @@ struct UiOptions {
     hist_log_y:    bool,
     hist_percents: bool,
     flat_percents: bool,
+    hist_width:    i32,
 }
 
 impl Default for UiOptions {
@@ -76,6 +77,7 @@ impl Default for UiOptions {
             hist_log_y:     false,
             hist_percents:  true,
             flat_percents:  true,
+            hist_width:     -1,
         }
     }
 }
@@ -657,6 +659,9 @@ impl PreviewUi {
         self.widgets.stat.ch_hist_log_y.set_active(options.hist_log_y);
         self.widgets.stat.ch_stat_percents.set_active(options.hist_percents);
         self.widgets.info.chb_flat_percents.set_active(options.flat_percents);
+        if options.hist_width != -1 {
+            self.widgets.common.pan_preview2.set_position(options.hist_width);
+        }
     }
 
     fn get_ui_options_from_widgets(&self) {
@@ -664,6 +669,7 @@ impl PreviewUi {
         options.hist_log_y = self.widgets.stat.ch_hist_log_y.is_active();
         options.hist_percents = self.widgets.stat.ch_stat_percents.is_active();
         options.flat_percents = self.widgets.info.chb_flat_percents.is_active();
+        options.hist_width = self.widgets.common.pan_preview2.position();
     }
 
     fn correct_widgets_props(&self) {
