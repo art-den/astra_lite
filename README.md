@@ -14,15 +14,14 @@ https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-ast
 
 # Features
 * Saving RAW frames
-* Live stacking with satellites and meteors track removal
+* Live stacking with **automatic satellites and meteors track removal**
 * Darks, biases and defective pixels library
 * Light frames quality filter
-* Simple guiding and dithering by main camera
+* Guiding and dithering by PHD2 or **main camera**
 * Autofocus
 * Sky map
 * Plate solving
 * Manual mount control
-* PHD2 support for dithering
 * UI for INDI devices control
 
 ![](./docs/screenshot1.jpg)
