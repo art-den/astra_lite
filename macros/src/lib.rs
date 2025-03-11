@@ -23,7 +23,7 @@ pub fn from_builder_derive(input: TokenStream) -> TokenStream {
         quote! {
             #field_name:
                 builder
-                    .object::<glib::Object>(stringify!(#field_name))
+                    .object::<gtk::glib::Object>(stringify!(#field_name))
                     .expect(&format!("Failed to get object: {}", stringify!(#field_name)))
                     .downcast::<#field_type>()
                     .expect(&format!("Failed to downcast object: {}", stringify!(#field_name)))

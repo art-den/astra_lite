@@ -1,11 +1,18 @@
 use std::rc::Rc;
 
 use gtk::{prelude::*, glib::clone};
+use macros::FromBuilder;
 
 use crate::utils::gtk_utils;
 
+#[derive(FromBuilder)]
+struct Widgets {
+    dialog:   gtk::Dialog,
+    grd_main: gtk::Grid,
+}
+
 pub struct StartDialog {
-    dialog: gtk::Dialog,
+    widgets: Widgets,
 }
 
 impl StartDialog {
@@ -14,26 +21,23 @@ impl StartDialog {
         caption:       &str,
         items:         &[(String, String)],
     ) -> Rc<Self> {
-        let builder = gtk::Builder::from_string(include_str!("resources/start_dialog.ui"));
-        let dialog = builder.object::<gtk::Dialog>("dialog").unwrap();
-        dialog.set_transient_for(Some(transient_for));
+        let widgets = Widgets::from_builder_str(include_str!("resources/start_dialog.ui"));
 
-        dialog.set_title(caption);
+        widgets.dialog.set_transient_for(Some(transient_for));
+        widgets.dialog.set_title(caption);
 
         gtk_utils::add_ok_and_cancel_buttons(
-            &dialog,
+            &widgets.dialog,
             "Start",  gtk::ResponseType::Ok,
             "Cancel", gtk::ResponseType::Cancel,
         );
-        gtk_utils::set_dialog_default_button(&dialog);
-
-        let grid = builder.object::<gtk::Grid>("grd_main").unwrap();
+        gtk_utils::set_dialog_default_button(&widgets.dialog);
 
         const START_ROW: usize = 2;
 
         for (index, (caption, value)) in items.into_iter().enumerate() {
             let row = index + START_ROW;
-            grid.insert_row(row as i32);
+            widgets.grd_main.insert_row(row as i32);
             let lbl_caption = gtk::Label::builder()
                 .label(caption)
                 .halign(gtk::Align::Start)
@@ -47,15 +51,15 @@ impl StartDialog {
                 .visible(true)
                 .build();
 
-            grid.attach(&lbl_caption, 0, row as i32, 1, 1);
-            grid.attach(&lbl_value, 1, row as i32, 1, 1);
+                widgets.grd_main.attach(&lbl_caption, 0, row as i32, 1, 1);
+                widgets.grd_main.attach(&lbl_value, 1, row as i32, 1, 1);
         }
 
-        Rc::new(Self { dialog })
+        Rc::new(Self { widgets })
     }
 
     pub fn exec(self: &Rc<Self>, on_apply: impl Fn() -> anyhow::Result<()> + 'static) {
-        self.dialog.connect_response(clone!(@strong self as self_ => move |dlg, resp| {
+        self.widgets.dialog.connect_response(clone!(@strong self as self_ => move |dlg, resp| {
             match resp {
                 gtk::ResponseType::Ok => {
                     dlg.close();
@@ -70,6 +74,6 @@ impl StartDialog {
                 _ => {},
             }
         }));
-        self.dialog.show();
+        self.widgets.dialog.show();
     }
 }
