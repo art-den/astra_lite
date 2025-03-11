@@ -16,9 +16,8 @@ use crate::{
     guiding::{external_guider::ExtGuiderType, phd2_conn},
     indi::{self, sexagesimal_to_value, value_to_sexagesimal},
     options::*,
-    utils::gtk_utils::{self, is_combobox_empty}
 };
-use super::{ui_main::*, indi_widget::*, module::*};
+use super::{gtk_utils::*, indi_widget::*, module::*, ui_main::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
@@ -297,17 +296,17 @@ impl HardwareUi {
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
-        gtk_utils::connect_action   (&self.window, self, "help_save_indi",        HardwareUi::handler_action_help_save_indi);
-        gtk_utils::connect_action   (&self.window, self, "conn_indi",             HardwareUi::handler_action_conn_indi);
-        gtk_utils::connect_action   (&self.window, self, "disconn_indi",          HardwareUi::handler_action_disconn_indi);
-        gtk_utils::connect_action   (&self.window, self, "conn_phd2",             HardwareUi::handler_action_conn_phd2);
-        gtk_utils::connect_action   (&self.window, self, "disconn_phd2",          HardwareUi::handler_action_disconn_phd2);
-        gtk_utils::connect_action   (&self.window, self, "clear_hw_log",          HardwareUi::handler_action_clear_hw_log);
-        gtk_utils::connect_action   (&self.window, self, "enable_all_devs",       HardwareUi::handler_action_enable_all_devices);
-        gtk_utils::connect_action   (&self.window, self, "disable_all_devs",      HardwareUi::handler_action_disable_all_devices);
-        gtk_utils::connect_action   (&self.window, self, "save_devs_options",     HardwareUi::handler_action_save_devices_options);
-        gtk_utils::connect_action   (&self.window, self, "load_devs_options",     HardwareUi::handler_action_load_devices_options);
-        gtk_utils::connect_action_rc(&self.window, self, "get_site_from_devices", HardwareUi::handler_action_get_site_from_devices);
+        connect_action   (&self.window, self, "help_save_indi",        HardwareUi::handler_action_help_save_indi);
+        connect_action   (&self.window, self, "conn_indi",             HardwareUi::handler_action_conn_indi);
+        connect_action   (&self.window, self, "disconn_indi",          HardwareUi::handler_action_disconn_indi);
+        connect_action   (&self.window, self, "conn_phd2",             HardwareUi::handler_action_conn_phd2);
+        connect_action   (&self.window, self, "disconn_phd2",          HardwareUi::handler_action_disconn_phd2);
+        connect_action   (&self.window, self, "clear_hw_log",          HardwareUi::handler_action_clear_hw_log);
+        connect_action   (&self.window, self, "enable_all_devs",       HardwareUi::handler_action_enable_all_devices);
+        connect_action   (&self.window, self, "disable_all_devs",      HardwareUi::handler_action_disable_all_devices);
+        connect_action   (&self.window, self, "save_devs_options",     HardwareUi::handler_action_save_devices_options);
+        connect_action   (&self.window, self, "load_devs_options",     HardwareUi::handler_action_load_devices_options);
+        connect_action_rc(&self.window, self, "get_site_from_devices", HardwareUi::handler_action_get_site_from_devices);
 
         self.widgets.indi.chb_remote.connect_active_notify(
             clone!(@weak self as self_ => move |_| {
@@ -429,7 +428,7 @@ impl HardwareUi {
     fn process_indi_event(&self, event: indi::Event) {
         match event {
             indi::Event::ConnectionLost => {
-                gtk_utils::show_error_message(&self.window, "INDI server", "Lost connection to INDI server ;-(");
+                show_error_message(&self.window, "INDI server", "Lost connection to INDI server ;-(");
             },
             indi::Event::ConnChange(conn_state) => {
                 if let indi::ConnState::Error(_) = &conn_state {
@@ -570,7 +569,7 @@ impl HardwareUi {
             indi::ConnState::Error(_)
         );
         let phd2_working = self.core.phd2().is_working();
-        gtk_utils::enable_actions(&self.window, &[
+        enable_actions(&self.window, &[
             ("conn_indi",    conn_en),
             ("disconn_indi", disconn_en),
             ("conn_phd2",    !phd2_working),
@@ -606,7 +605,7 @@ impl HardwareUi {
         self.widgets.indi.chb_remote.set_sensitive(!self.indi_drivers.groups.is_empty() && disconnected);
         self.widgets.indi.e_remote_addr.set_sensitive(remote && disconnected);
 
-        gtk_utils::enable_actions(&self.window, &[
+        enable_actions(&self.window, &[
             ("enable_all_devs",   connected && remote),
             ("disable_all_devs",  connected && remote),
             ("save_devs_options", connected),
@@ -616,7 +615,7 @@ impl HardwareUi {
 
     fn handler_action_conn_indi(&self) {
         self.read_options_from_widgets();
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             let options = self.options.read().unwrap();
             let drivers = if !options.indi.remote {
                 let telescopes = self.indi_drivers.get_group_by_name("Telescopes")?;
@@ -673,7 +672,7 @@ impl HardwareUi {
     }
 
     fn handler_action_disconn_indi(&self) {
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             if !self.is_remote.get() {
                 log::info!("Disabling all INDI devices before disconnect...");
                 self.indi.command_enable_all_devices(false, true, Some(2000))?;
@@ -687,7 +686,7 @@ impl HardwareUi {
     }
 
     fn handler_action_conn_phd2(&self) {
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             self.read_options_from_widgets();
             self.core.create_ext_guider(ExtGuiderType::Phd2)?;
             self.correct_widgets_by_cur_state();
@@ -696,7 +695,7 @@ impl HardwareUi {
     }
 
     fn handler_action_disconn_phd2(&self) {
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             self.core.disconnect_ext_guider()?;
             self.correct_widgets_by_cur_state();
             Ok(())
@@ -792,9 +791,9 @@ impl HardwareUi {
                 model
             },
         };
-        let models_row_cnt = gtk_utils::get_model_row_count(model.upcast_ref());
+        let models_row_cnt = get_model_row_count(model.upcast_ref());
         let last_is_selected =
-            gtk_utils::get_list_view_selected_row(&self.widgets.common.tv_hw_log).map(|v| v+1) ==
+            get_list_view_selected_row(&self.widgets.common.tv_hw_log).map(|v| v+1) ==
             Some(models_row_cnt as i32);
 
         let local_time_str = if let Some(timestamp) = timestamp {
@@ -838,7 +837,7 @@ impl HardwareUi {
             .modal(true)
             .transient_for(&self.window)
             .build();
-        gtk_utils::add_ok_and_cancel_buttons(
+        add_ok_and_cancel_buttons(
             fc.upcast_ref::<gtk::Dialog>(),
             "_Cancel", gtk::ResponseType::Cancel,
             "_Save",   gtk::ResponseType::Accept
@@ -846,7 +845,7 @@ impl HardwareUi {
         let resp = fc.run();
         fc.close();
         if resp == gtk::ResponseType::Accept {
-            gtk_utils::exec_and_show_error(&self.window, || {
+            exec_and_show_error(&self.window, || {
                 let all_props = self.indi.get_properties_list(None, None);
                 let file_name = fc.file().expect("File name").path().unwrap().with_extension("txt");
                 let mut file = BufWriter::new(File::create(file_name)?);
@@ -906,7 +905,7 @@ impl HardwareUi {
     }
 
     fn set_switch_property_for_all_device(&self, prop_name: &str, elem_name: &str) {
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             let devices = self.indi.get_devices_list();
             for device in devices {
                 self.indi.command_set_switch_property(
@@ -920,7 +919,7 @@ impl HardwareUi {
     }
 
     fn handler_action_get_site_from_devices(self: &Rc<Self>) {
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             let indi = &self.indi;
             if indi.state() != indi::ConnState::Connected {
                 anyhow::bail!("INDI is not connected!");

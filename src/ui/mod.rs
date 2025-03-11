@@ -3,6 +3,8 @@ pub mod ui_main;
 mod utils;
 mod plots;
 pub mod sky_map;
+pub mod gtk_utils;
+
 mod ui_hardware;
 mod indi_widget;
 mod ui_camera;

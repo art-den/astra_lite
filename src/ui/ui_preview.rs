@@ -7,9 +7,9 @@ use crate::{
     core::{core::*, events::*, frame_processing::*},
     image::{histogram::*, info::*, io::save_image_to_tif_file, preview::*, raw::{CalibrMethods, FrameType}, stars_offset::Offset},
     options::*,
-    utils::{gtk_utils::{self, *}, io_utils::*, log_utils::*}
+    utils::{io_utils::*, log_utils::*}
 };
-use super::{sky_map::math::radian_to_degree, ui_main::*, utils::*, module::*};
+use super::{gtk_utils::*, module::*, sky_map::math::radian_to_degree, ui_main::*, utils::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
@@ -18,7 +18,7 @@ pub fn init_ui(
     core:    &Arc<Core>,
 ) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();
-    gtk_utils::exec_and_show_error(window, || {
+    exec_and_show_error(window, || {
         load_json_from_config_file(&mut ui_options, PreviewUi::CONF_FN)?;
         Ok(())
     });
@@ -371,7 +371,7 @@ impl PreviewUi {
         self.widgets.ctrl.scl_dark.set_round_digits(1);
         self.widgets.ctrl.scl_dark.set_digits(1);
 
-        let (dpimm_x, _) = gtk_utils::get_widget_dpmm(&self.window)
+        let (dpimm_x, _) = get_widget_dpmm(&self.window)
             .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
         self.widgets.ctrl.scl_dark.set_width_request((40.0 * dpimm_x) as i32);
 
@@ -412,10 +412,10 @@ impl PreviewUi {
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
-        gtk_utils::connect_action   (&self.window, self, "save_image_preview",  Self::handler_action_save_image_preview);
-        gtk_utils::connect_action   (&self.window, self, "save_image_linear",   Self::handler_action_save_image_linear);
-        gtk_utils::connect_action   (&self.window, self, "clear_light_history", Self::handler_action_clear_light_history);
-        gtk_utils::connect_action_rc(&self.window, self, "load_image",          Self::handler_action_open_image);
+        connect_action   (&self.window, self, "save_image_preview",  Self::handler_action_save_image_preview);
+        connect_action   (&self.window, self, "save_image_linear",   Self::handler_action_save_image_linear);
+        connect_action   (&self.window, self, "clear_light_history", Self::handler_action_clear_light_history);
+        connect_action_rc(&self.window, self, "load_image",          Self::handler_action_open_image);
 
         self.widgets.stat.ch_hist_log_y.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
@@ -523,7 +523,7 @@ impl PreviewUi {
         self.widgets.stat.da_histogram.connect_draw(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |area, cr| {
-                gtk_utils::exec_and_show_error(&self_.window, || {
+                exec_and_show_error(&self_.window, || {
                     self_.handler_draw_histogram(area, cr)?;
                     Ok(())
                 });
@@ -875,7 +875,7 @@ impl PreviewUi {
     }
 
     fn handler_action_save_image_preview(&self) {
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             let options = self.options.read().unwrap();
             let (image, hist, fn_prefix) = match options.preview.source {
                 PreviewSource::OrigFrame =>
@@ -892,7 +892,7 @@ impl PreviewUi {
                 fn_prefix,
                 Utc::now().format("%Y-%m-%d_%H-%M-%S").to_string()
             );
-            let Some(file_name) = gtk_utils::select_file_name_to_save(
+            let Some(file_name) = select_file_name_to_save(
                 &self.window,
                 "Enter file name to save preview image as jpeg",
                 "Jpeg images", "*.jpg",
@@ -922,7 +922,7 @@ impl PreviewUi {
     }
 
     fn handler_action_save_image_linear(&self) {
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             let options = self.options.read().unwrap();
             let preview_source = options.preview.source.clone();
             drop(options);
@@ -932,7 +932,7 @@ impl PreviewUi {
                     fn_prefix,
                     Utc::now().format("%Y-%m-%d_%H-%M-%S").to_string()
                 );
-                gtk_utils::select_file_name_to_save(
+                select_file_name_to_save(
                     &self.window,
                     "Enter file name to save preview image as tiff",
                     "Tiff images", "*.tif",
@@ -1158,7 +1158,7 @@ impl PreviewUi {
         drop(options);
 
         let font_size_pt = 8.0;
-        let (_, dpmm_y) = gtk_utils::get_widget_dpmm(area)
+        let (_, dpmm_y) = get_widget_dpmm(area)
             .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
         let font_size_px = font_size_to_pixels(FontSize::Pt(font_size_pt), dpmm_y);
         cr.set_font_size(font_size_px);
@@ -1212,7 +1212,7 @@ impl PreviewUi {
                 model.downcast::<gtk::ListStore>().unwrap()
             },
             None => {
-                gtk_utils::init_list_store_model_for_treeview(&tree, &[
+                init_list_store_model_for_treeview(&tree, &[
                     /* 0 */  ("Mode",       String::static_type(), "text"),
                     /* 1 */  ("Time",       String::static_type(), "text"),
                     /* 2 */  ("FWHM",       String::static_type(), "markup"),
@@ -1228,10 +1228,10 @@ impl PreviewUi {
             },
         };
         let items = self.light_history.borrow();
-        if gtk_utils::get_model_row_count(model.upcast_ref()) > items.len() {
+        if get_model_row_count(model.upcast_ref()) > items.len() {
             model.clear();
         }
-        let models_row_cnt = gtk_utils::get_model_row_count(model.upcast_ref());
+        let models_row_cnt = get_model_row_count(model.upcast_ref());
         let to_index = items.len();
         let make_bad_str = |s: &str| -> String {
             format!(r##"<span color="#FF4040"><b>{}</b></span>"##, s)
@@ -1292,7 +1292,7 @@ impl PreviewUi {
             };
             let calibr_str = Self::calibr_method_to_str(item.calibr_methods);
             let last_is_selected =
-                gtk_utils::get_list_view_selected_row(&tree).map(|v| v+1) ==
+                get_list_view_selected_row(&tree).map(|v| v+1) ==
                 Some(models_row_cnt as i32);
             let last_iter = model.insert_with_values(None, &[
                 (0, &mode_type_str),
@@ -1344,7 +1344,7 @@ impl PreviewUi {
                 model.downcast::<gtk::ListStore>().unwrap()
             },
             None => {
-                gtk_utils::init_list_store_model_for_treeview(&tree, &[
+                init_list_store_model_for_treeview(&tree, &[
                     /* 0 */  ("Time",     String::static_type(), "text"),
                     /* 1 */  ("Mode",     String::static_type(), "text"),
                     /* 2 */  ("Type",     String::static_type(), "text"),
@@ -1356,10 +1356,10 @@ impl PreviewUi {
             },
         };
         let items = self.calibr_history.borrow();
-        if gtk_utils::get_model_row_count(model.upcast_ref()) > items.len() {
+        if get_model_row_count(model.upcast_ref()) > items.len() {
             model.clear();
         }
-        let models_row_cnt = gtk_utils::get_model_row_count(model.upcast_ref());
+        let models_row_cnt = get_model_row_count(model.upcast_ref());
         let to_index = items.len();
         for item in &items[models_row_cnt..to_index] {
             let local_time_str =
@@ -1378,7 +1378,7 @@ impl PreviewUi {
             let calibr_str = Self::calibr_method_to_str(item.calibr_methods);
 
             let last_is_selected =
-                gtk_utils::get_list_view_selected_row(&tree).map(|v| v+1) ==
+                get_list_view_selected_row(&tree).map(|v| v+1) ==
                 Some(models_row_cnt as i32);
 
             let last_iter = model.insert_with_values(None, &[
@@ -1440,14 +1440,14 @@ impl PreviewUi {
             .modal(true)
             .transient_for(&self.window)
             .build();
-        gtk_utils::add_ok_and_cancel_buttons(
+        add_ok_and_cancel_buttons(
             fc.upcast_ref::<gtk::Dialog>(),
             "_Open",   gtk::ResponseType::Accept,
             "_Cancel", gtk::ResponseType::Cancel
         );
         fc.connect_response(clone!(@weak self as self_ => move |file_chooser, response| {
             if response == gtk::ResponseType::Accept {
-                gtk_utils::exec_and_show_error(&self_.window, || {
+                exec_and_show_error(&self_.window, || {
                     let Some(file_name) = file_chooser.file() else { return Ok(()); };
                     let Some(file_name) = file_name.path() else { return Ok(()); };
                     self_.main_ui.get_all_options();

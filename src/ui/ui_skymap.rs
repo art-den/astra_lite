@@ -8,14 +8,15 @@ use crate::{
     indi::{self, degree_to_str, hour_to_str},
     options::*,
     plate_solve::PlateSolveOkResult,
-    utils::{gtk_utils::{self, *}, io_utils::*},
+    utils::io_utils::*,
 };
 use super::{
+    gtk_utils::*,
+    module::*,
     sky_map::{alt_widget::paint_altitude_by_time, data::*, math::*, painter::*},
     ui_main::*,
     ui_skymap_options::SkymapOptionsDialog,
-    utils::*,
-    module::*
+    utils::*
 };
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 
@@ -27,7 +28,7 @@ pub fn init_ui(
     indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();
-    gtk_utils::exec_and_show_error(window, || {
+    exec_and_show_error(window, || {
         load_json_from_config_file(&mut ui_options, MapUi::CONF_FN)?;
         Ok(())
     });
@@ -422,7 +423,7 @@ impl MapUi {
         self.widgets.top.scl_max_dso_mag.set_range(0.0, 20.0);
         self.widgets.top.scl_max_dso_mag.set_increments(0.5, 2.0);
 
-        let (dpimm_x, dpimm_y) = gtk_utils::get_widget_dpmm(&self.window)
+        let (dpimm_x, dpimm_y) = get_widget_dpmm(&self.window)
             .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
         self.widgets.top.scl_max_dso_mag.set_width_request((40.0 * dpimm_x) as i32);
 
@@ -430,12 +431,12 @@ impl MapUi {
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
-        gtk_utils::connect_action   (&self.window, self, "map_play",          Self::handler_btn_play_pressed);
-        gtk_utils::connect_action   (&self.window, self, "map_now",           Self::handler_btn_now_pressed);
-        gtk_utils::connect_action_rc(&self.window, self, "skymap_options",    Self::handler_action_options);
-        gtk_utils::connect_action_rc(&self.window, self, "sm_goto_selected",  Self::handler_goto_selected);
-        gtk_utils::connect_action_rc(&self.window, self, "sm_goto_sel_solve", Self::handler_goto_sel_and_solve);
-        gtk_utils::connect_action_rc(&self.window, self, "sm_goto_point",     Self::handler_goto_point);
+        connect_action   (&self.window, self, "map_play",          Self::handler_btn_play_pressed);
+        connect_action   (&self.window, self, "map_now",           Self::handler_btn_now_pressed);
+        connect_action_rc(&self.window, self, "skymap_options",    Self::handler_action_options);
+        connect_action_rc(&self.window, self, "sm_goto_selected",  Self::handler_goto_selected);
+        connect_action_rc(&self.window, self, "sm_goto_sel_solve", Self::handler_goto_sel_and_solve);
+        connect_action_rc(&self.window, self, "sm_goto_point",     Self::handler_goto_point);
 
         let connect_spin_btn_evt = |spin_btn: &gtk::SpinButton| {
             spin_btn.connect_value_changed(clone!(@weak self as self_ => move |_| {
@@ -492,7 +493,7 @@ impl MapUi {
         self.widgets.obj.da_graph.connect_draw(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |area, cr| {
-                gtk_utils::exec_and_show_error(&self_.window, || {
+                exec_and_show_error(&self_.window, || {
                     self_.handler_draw_item_graph(area, cr)?;
                     Ok(())
                 });
@@ -762,7 +763,7 @@ impl MapUi {
         self.widgets.datetime.spb_min.set_value(cur_dt.minute() as f64);
         self.widgets.datetime.spb_sec.set_value(cur_dt.second() as f64);
 
-        gtk_utils::enable_action(&self.window, "map_now", !user_time.now());
+        enable_action(&self.window, "map_now", !user_time.now());
 
         let prev = PrevWidgetsDT {
             year: cur_dt.year(),
@@ -776,7 +777,7 @@ impl MapUi {
     }
 
     fn check_data_loaded(&self) {
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             let result = self.check_data_loaded_impl();
             if let Err(_) = result {
                 *self.skymap_data.borrow_mut() = Some(Rc::new(SkyMap::new()));
@@ -855,7 +856,7 @@ impl MapUi {
                         self_.map_widget.set_skymap(&skymaps_with_stars_rc);
                     }
                     Err(err) => {
-                        gtk_utils::show_error_message(
+                        show_error_message(
                             &self_.window,
                             "Error loading stars data",
                             &err.to_string()
@@ -1133,7 +1134,7 @@ impl MapUi {
                 return glib::Propagation::Proceed;
             };
 
-            let result_count = gtk_utils::get_model_row_count(&model);
+            let result_count = get_model_row_count(&model);
             if result_count == 0 {
                 return glib::Propagation::Proceed;
             }
@@ -1218,9 +1219,9 @@ impl MapUi {
             let indi_is_active = self.indi.state() == indi::ConnState::Connected;
             let selected_item = self.selected_item.borrow();
             let enable_goto = indi_is_active && selected_item.is_some() && !self.goto_started.get();
-            gtk_utils::enable_action(&self.window, "sm_goto_selected", enable_goto);
-            gtk_utils::enable_action(&self.window, "sm_goto_sel_solve", enable_goto);
-            gtk_utils::enable_action(
+            enable_action(&self.window, "sm_goto_selected", enable_goto);
+            enable_action(&self.window, "sm_goto_sel_solve", enable_goto);
+            enable_action(
                 &self.window,
                 "sm_goto_point",
                 indi_is_active && eq_coord.is_some() && !self.goto_started.get(),
@@ -1271,7 +1272,7 @@ impl MapUi {
         } else {
             GotoConfig::GotoPlateSolveAndCorrect
         };
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             self.core.start_goto_coord(coord, config)?;
             Ok(())
         });

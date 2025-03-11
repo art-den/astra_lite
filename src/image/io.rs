@@ -5,7 +5,7 @@ use std::{fs::File, io::{BufReader, BufWriter}, path::Path, u16};
 use chrono::prelude::*;
 use itertools::{izip, Itertools};
 
-use crate::utils::gtk_utils::limit_pixbuf_by_longest_size;
+use crate::ui::gtk_utils::*;
 
 use super::{image::{Image, ImageLayer}, raw::*, simple_fits::{FitsReader, Header, SeekNRead}};
 

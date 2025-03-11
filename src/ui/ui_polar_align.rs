@@ -6,9 +6,8 @@ use crate::{
     indi::{self, degree_to_str},
     options::*,
     sky_math::math::radian_to_degree,
-    utils::gtk_utils,
 };
-use super::{sky_map::math::HorizCoord, ui_main::*, utils::*, module::*};
+use super::{gtk_utils::*, module::*, sky_map::math::HorizCoord, ui_main::*, utils::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
@@ -178,8 +177,8 @@ impl PolarAlignUi {
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
-        gtk_utils::connect_action(&self.window, self, "start_polar_alignment", Self::handler_start_action_polar_align);
-        gtk_utils::connect_action(&self.window, self, "stop_polar_alignment", Self::handler_stop_action_polar_align);
+        connect_action(&self.window, self, "start_polar_alignment", Self::handler_start_action_polar_align);
+        connect_action(&self.window, self, "stop_polar_alignment", Self::handler_stop_action_polar_align);
 
         self.widgets.spb_sim_alt_err.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
@@ -215,7 +214,7 @@ impl PolarAlignUi {
             (waiting || single_shot || live_view);
 
 
-        gtk_utils::enable_actions(&self.window, &[
+        enable_actions(&self.window, &[
             ("start_polar_alignment", polar_alignment_can_be_started),
             ("stop_polar_alignment",  polar_align),
         ]);
@@ -305,7 +304,7 @@ impl PolarAlignUi {
     fn handler_start_action_polar_align(&self) {
         self.main_ui.get_all_options();
 
-        gtk_utils::exec_and_show_error(&self.window, ||{
+        exec_and_show_error(&self.window, ||{
             self.core.start_polar_alignment()?;
             Ok(())
         });

@@ -3,7 +3,7 @@ use std::rc::Rc;
 use gtk::{prelude::*, glib::clone};
 use macros::FromBuilder;
 
-use crate::utils::gtk_utils;
+use super::gtk_utils::*;
 
 #[derive(FromBuilder)]
 struct Widgets {
@@ -26,12 +26,12 @@ impl StartDialog {
         widgets.dialog.set_transient_for(Some(transient_for));
         widgets.dialog.set_title(caption);
 
-        gtk_utils::add_ok_and_cancel_buttons(
+        add_ok_and_cancel_buttons(
             &widgets.dialog,
             "Start",  gtk::ResponseType::Ok,
             "Cancel", gtk::ResponseType::Cancel,
         );
-        gtk_utils::set_dialog_default_button(&widgets.dialog);
+        set_dialog_default_button(&widgets.dialog);
 
         const START_ROW: usize = 2;
 
@@ -63,7 +63,7 @@ impl StartDialog {
             match resp {
                 gtk::ResponseType::Ok => {
                     dlg.close();
-                    gtk_utils::exec_and_show_error(dlg, || {
+                    exec_and_show_error(dlg, || {
                         on_apply()?;
                         Ok(())
                     });

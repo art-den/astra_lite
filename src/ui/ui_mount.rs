@@ -6,10 +6,9 @@ use crate::{
     core::{consts::INDI_SET_PROP_TIMEOUT, core::{Core, ModeType}, events::*},
     indi,
     options::*,
-    utils::gtk_utils,
 };
 
-use super::{utils::*, module::*};
+use super::{gtk_utils::*, module::*, utils::*};
 
 
 pub fn init_ui(
@@ -213,7 +212,7 @@ impl MountUi {
                 self_.excl.exec(|| {
                     let options = self_.options.read().unwrap();
                     if options.mount.device.is_empty() { return; }
-                    gtk_utils::exec_and_show_error(&self_.window, || {
+                    exec_and_show_error(&self_.window, || {
                         self_.indi.mount_set_tracking(
                             &options.mount.device,
                             chb.is_active(),
@@ -231,7 +230,7 @@ impl MountUi {
                 self_.excl.exec(|| {
                     let options = self_.options.read().unwrap();
                     if options.mount.device.is_empty() { return; }
-                    gtk_utils::exec_and_show_error(&self_.window, || {
+                    exec_and_show_error(&self_.window, || {
                         self_.indi.mount_set_parked(&options.mount.device, chb.is_active(), true, None)?;
                         Ok(())
                     });
@@ -343,7 +342,7 @@ impl MountUi {
         let options = self.options.read().unwrap();
         let mount_device_name = &options.mount.device;
         if mount_device_name.is_empty() { return; }
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             if button != &self.widgets.btn_stop {
                 let inv_ns = self.widgets.chb_inv_ns.is_active();
                 let inv_we = self.widgets.chb_inv_we.is_active();
@@ -394,7 +393,7 @@ impl MountUi {
     fn handler_nav_mount_btn_released(&self, button: &gtk::Button) {
         let options = self.options.read().unwrap();
         if options.mount.device.is_empty() { return; }
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             if button != &self.widgets.btn_stop {
                 self.indi.mount_stop_move(&options.mount.device)?;
             }
@@ -428,7 +427,7 @@ impl MountUi {
     fn fill_mount_speed_list_widget(&self) {
         let options = self.options.read().unwrap();
         if options.mount.device.is_empty() { return; }
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             let list = self.indi.mount_get_slew_speed_list(&options.mount.device)?;
             self.widgets.cb_speed.remove_all();
             self.widgets.cb_speed.append(None, "---");

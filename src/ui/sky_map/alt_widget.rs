@@ -3,7 +3,7 @@ use std::f64::consts::PI;
 use chrono::prelude::*;
 use gtk::{cairo, gdk, prelude::*};
 
-use crate::{utils::gtk_utils::{self, *}, utils::math::linear_interpolate};
+use crate::{ui::gtk_utils::*, utils::math::linear_interpolate};
 
 use super::{data::*, math::*, solar_system::*};
 
@@ -15,7 +15,7 @@ pub fn paint_altitude_by_time(
     observer: &Observer,
     crd:      &Option<EqCoord>,
 ) -> anyhow::Result<()> {
-    let (_, dpmm_y) = gtk_utils::get_widget_dpmm(area)
+    let (_, dpmm_y) = get_widget_dpmm(area)
         .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
     let sc = area.style_context();
     let fg_color = sc.color(gtk::StateFlags::NORMAL);

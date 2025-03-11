@@ -3,10 +3,10 @@ use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{core::*, events::*}, indi, options::*, utils::gtk_utils
+    core::{core::*, events::*}, indi, options::*,
 };
 
-use super::{ui_main::*, utils::*, module::*};
+use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
@@ -189,8 +189,8 @@ impl GuidingUi {
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
-        gtk_utils::connect_action(&self.window, self, "start_dither_calibr", Self::handler_action_start_dither_calibr);
-        gtk_utils::connect_action(&self.window, self, "stop_dither_calibr",  Self::handler_action_stop_dither_calibr);
+        connect_action(&self.window, self, "start_dither_calibr", Self::handler_action_start_dither_calibr);
+        connect_action(&self.window, self, "stop_dither_calibr",  Self::handler_action_stop_dither_calibr);
 
         let connect_rbtn = |rbtn: &gtk::RadioButton| {
             let self_ = Rc::clone(self);
@@ -243,7 +243,7 @@ impl GuidingUi {
         self.widgets.spb_mnt_cal_exp.set_sensitive(by_main_cam && can_change_mode);
         self.widgets.spb_ext_dith_dist.set_sensitive(by_ext && can_change_mode);
 
-        gtk_utils::enable_actions(&self.window, &[
+        enable_actions(&self.window, &[
             ("start_dither_calibr", !dither_calibr && by_main_cam && can_change_mode),
             ("stop_dither_calibr", dither_calibr),
         ]);
@@ -259,7 +259,7 @@ impl GuidingUi {
     fn handler_action_start_dither_calibr(&self) {
         self.main_ui.get_all_options();
 
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             self.core.start_mount_calibr()?;
             Ok(())
         });

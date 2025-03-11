@@ -8,10 +8,10 @@ use crate::{
     image::info::seconds_to_total_time_str,
     indi,
     options::*,
-    utils::{gtk_utils, io_utils::*}
+    utils::io_utils::*
 };
 
-use super::module::*;
+use super::{gtk_utils::*, module::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
@@ -20,7 +20,7 @@ pub fn init_ui(
     indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();
-    gtk_utils::exec_and_show_error(window, || {
+    exec_and_show_error(window, || {
         load_json_from_config_file(&mut ui_options, DarksLibraryUI::CONF_FN)?;
         Ok(())
     });
@@ -653,7 +653,7 @@ impl DarksLibraryUI {
 
     fn load_options(&self) {
         let mut ui_options = self.ui_options.borrow_mut();
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             load_json_from_config_file(&mut *ui_options, Self::CONF_FN)?;
             Ok(())
         });
@@ -661,7 +661,7 @@ impl DarksLibraryUI {
 
     fn save_options(&self) {
         let ui_options = self.ui_options.borrow();
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             save_json_to_config(&*ui_options, Self::CONF_FN)?;
             Ok(())
         });
@@ -966,13 +966,13 @@ impl DarksLibraryUI {
         connect_checkbtn(&bias.chb_bias_crop33);
         connect_checkbtn(&bias.chb_bias_crop25);
 
-        gtk_utils::connect_action(&self.window, self, "open_dark_lib_folder",   Self::handler_action_open_dark_lib_folder);
-        gtk_utils::connect_action(&self.window, self, "create_def_pixls_files", Self::handler_action_create_def_pixls_files);
-        gtk_utils::connect_action(&self.window, self, "stop_def_pxls_files",    Self::handler_action_stop_def_pxls_files);
-        gtk_utils::connect_action(&self.window, self, "create_dark_files",      Self::handler_action_create_dark_files);
-        gtk_utils::connect_action(&self.window, self, "stop_dark_files",        Self::handler_action_stop_dark_files);
-        gtk_utils::connect_action(&self.window, self, "create_bias_files",      Self::handler_action_create_bias_files);
-        gtk_utils::connect_action(&self.window, self, "stop_bias_files",        Self::handler_action_stop_bias_files);
+        connect_action(&self.window, self, "open_dark_lib_folder",   Self::handler_action_open_dark_lib_folder);
+        connect_action(&self.window, self, "create_def_pixls_files", Self::handler_action_create_def_pixls_files);
+        connect_action(&self.window, self, "stop_def_pxls_files",    Self::handler_action_stop_def_pxls_files);
+        connect_action(&self.window, self, "create_dark_files",      Self::handler_action_create_dark_files);
+        connect_action(&self.window, self, "stop_dark_files",        Self::handler_action_stop_dark_files);
+        connect_action(&self.window, self, "create_bias_files",      Self::handler_action_create_bias_files);
+        connect_action(&self.window, self, "stop_bias_files",        Self::handler_action_stop_bias_files);
     }
 
     fn handler_closing(&self) {
@@ -1050,7 +1050,7 @@ impl DarksLibraryUI {
         bias.grd_bias.set_sensitive(is_waiting);
         bias.prb_bias.set_sensitive(saving_master_biases);
 
-        gtk_utils::enable_actions(&self.window, &[
+        enable_actions(&self.window, &[
             ("create_def_pixls_files", is_waiting),
             ("stop_def_pxls_files",    saving_defect_pixels),
             ("create_dark_files",      is_waiting),
@@ -1109,7 +1109,7 @@ impl DarksLibraryUI {
     }
 
     fn start(&self, mode: DarkLibMode) {
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             // TODO: read all options
 
             //self.options.write().unwrap().read_all(&self.builder);

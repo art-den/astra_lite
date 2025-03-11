@@ -12,9 +12,9 @@ use gtk::{prelude::*, glib, glib::clone, cairo};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{core::*, events::*}, indi, options::*, utils::{gtk_utils::{self, clear_container}, io_utils::*}
+    core::{core::*, events::*}, indi, options::*, utils::io_utils::*,
 };
-use super::{module::*, utils::*};
+use super::{gtk_utils::*, module::*, utils::*};
 
 
 pub fn init_ui(
@@ -35,14 +35,14 @@ pub fn init_ui(
     let builder = gtk::Builder::from_string(include_str!(r"resources/main.ui"));
     let widgets = Widgets::from_builder(&builder);
 
-    gtk_utils::disable_scroll_for_most_of_widgets(&builder);
+    disable_scroll_for_most_of_widgets(&builder);
 
     let icon = gtk::gdk_pixbuf::Pixbuf::from_read(include_bytes!(
         r"resources/astra_lite48x48.png"
     ).as_slice()).unwrap();
     widgets.window.set_icon(Some(&icon));
 
-    gtk_utils::exec_and_show_error(&widgets.window, || {
+    exec_and_show_error(&widgets.window, || {
         let mut opts = options.write().unwrap();
         load_json_from_config_file::<Options>(&mut opts, MainUi::OPTIONS_FN)?;
         opts.calibr.check()?;
@@ -52,7 +52,7 @@ pub fn init_ui(
     });
 
     let mut ui_options = UiOptions::default();
-    gtk_utils::exec_and_show_error(&widgets.window, || {
+    exec_and_show_error(&widgets.window, || {
         load_json_from_config_file(&mut ui_options, MainUi::CONF_FN)
     });
 
@@ -338,9 +338,9 @@ impl MainUi {
             })
         );
 
-        gtk_utils::connect_action(&self.widgets.window, self, "stop",             MainUi::handler_action_stop);
-        gtk_utils::connect_action(&self.widgets.window, self, "continue",         MainUi::handler_action_continue);
-        gtk_utils::connect_action(&self.widgets.window, self, "open_logs_folder", MainUi::handler_action_open_logs_folder);
+        connect_action(&self.widgets.window, self, "stop",             MainUi::handler_action_stop);
+        connect_action(&self.widgets.window, self, "continue",         MainUi::handler_action_continue);
+        connect_action(&self.widgets.window, self, "open_logs_folder", MainUi::handler_action_open_logs_folder);
     }
 
     fn connect_state_events(self: &Rc<Self>) {
@@ -353,7 +353,7 @@ impl MainUi {
             while let Ok(event) = receiver.recv().await {
                 match event {
                     Event::Error(err) => {
-                        gtk_utils::show_error_message(
+                        show_error_message(
                             &self_.widgets.window,
                             "Core error",
                             &err
@@ -383,7 +383,7 @@ impl MainUi {
                 .modal(true)
                 .message_type(gtk::MessageType::Question)
                 .build();
-            gtk_utils::add_ok_and_cancel_buttons(
+            add_ok_and_cancel_buttons(
                 dialog.upcast_ref::<gtk::Dialog>(),
                 "Yes", gtk::ResponseType::Yes,
                 "No", gtk::ResponseType::No,
@@ -561,7 +561,7 @@ impl MainUi {
             }
             let progress_ratio = progress_data.cur as f64 / progress_data.total as f64;
             let progress_text = format!("{} / {}", progress_data.cur, progress_data.total);
-            gtk_utils::exec_and_show_error(&self.widgets.window, || {
+            exec_and_show_error(&self.widgets.window, || {
                 draw_progress_bar(
                     area,
                     cr,
@@ -578,7 +578,7 @@ impl MainUi {
             .as_ref()
             .map(|m| m.can_be_continued_after_stop())
             .unwrap_or(false);
-        gtk_utils::enable_actions(&self.widgets.window, &[
+        enable_actions(&self.widgets.window, &[
             ("stop",     mode_data.mode.can_be_stopped()),
             ("continue", can_be_continued),
         ]);
@@ -606,7 +606,7 @@ impl MainUi {
     }
 
     fn handler_action_continue(&self) {
-        gtk_utils::exec_and_show_error(&self.widgets.window, || {
+        exec_and_show_error(&self.widgets.window, || {
             self.core.continue_prev_mode()?;
             Ok(())
         });
@@ -623,7 +623,7 @@ impl MainUi {
     }
 
     fn handler_action_open_logs_folder(&self) {
-        gtk_utils::exec_and_show_error(&self.widgets.window, || {
+        exec_and_show_error(&self.widgets.window, || {
             if cfg!(target_os = "windows") {
                 Command::new("explorer")
                     .args([self.logs_dir.to_str().unwrap_or_default()])

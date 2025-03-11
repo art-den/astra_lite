@@ -7,10 +7,10 @@ use crate::{
     indi,
     options::*,
     ui::plots::*,
-    utils::{gtk_utils::{self, *}, math::{cmp_f64, linear_interpolate}},
+    utils::math::{cmp_f64, linear_interpolate},
 };
 
-use super::{ui_main::*, utils::*, module::*};
+use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
@@ -303,15 +303,15 @@ impl FocuserUi {
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
-        gtk_utils::connect_action(&self.window, self, "manual_focus",      Self::handler_action_manual_focus);
-        gtk_utils::connect_action(&self.window, self, "stop_manual_focus", Self::handler_action_stop_manual_focus);
+        connect_action(&self.window, self, "manual_focus",      Self::handler_action_manual_focus);
+        connect_action(&self.window, self, "stop_manual_focus", Self::handler_action_stop_manual_focus);
 
         self.widgets.spb_val.connect_value_changed(clone!(@weak self as self_ => move |sb| {
             self_.excl.exec(|| {
                 let options = self_.options.read().unwrap();
                 if options.focuser.device.is_empty() { return; }
 
-                gtk_utils::exec_and_show_error(&self_.window, || {
+                exec_and_show_error(&self_.window, || {
                     self_.indi.focuser_set_abs_value(&options.focuser.device, sb.value(), true, None)?;
                     Ok(())
                 });
@@ -383,7 +383,7 @@ impl FocuserUi {
         self.widgets.spb_val.set_sensitive(!focusing);
         self.widgets.cb_list.set_sensitive(!focusing);
 
-        gtk_utils::enable_actions(&self.window, &[
+        enable_actions(&self.window, &[
             ("manual_focus",      !focusing && can_change_mode),
             ("stop_manual_focus", focusing),
         ]);
@@ -573,9 +573,9 @@ impl FocuserUi {
         plots.bottom_axis.dec_digits = 0;
 
         let font_size_pt = 8.0;
-        let (_, dpmm_y) = gtk_utils::get_widget_dpmm(da)
+        let (_, dpmm_y) = get_widget_dpmm(da)
             .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
-        let font_size_px = gtk_utils::font_size_to_pixels(gtk_utils::FontSize::Pt(font_size_pt), dpmm_y);
+        let font_size_px = font_size_to_pixels(FontSize::Pt(font_size_pt), dpmm_y);
         ctx.set_font_size(font_size_px);
 
         draw_plots(&plots, da, ctx)?;
@@ -585,7 +585,7 @@ impl FocuserUi {
     fn handler_action_manual_focus(&self) {
         self.main_ui.get_all_options();
 
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             self.core.start_focusing()?;
             Ok(())
         });

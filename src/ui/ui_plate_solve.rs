@@ -6,10 +6,9 @@ use crate::{
     core::{core::{Core, ModeType}, events::*},
     indi,
     options::*,
-    utils::gtk_utils,
 };
 
-use super::{ui_main::*, utils::*, module::*};
+use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 
 
 pub fn init_ui(
@@ -184,8 +183,8 @@ impl PlateSolveUi {
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
-        gtk_utils::connect_action_rc(&self.window, self, "capture_platesolve",   Self::handler_action_capture_platesolve);
-        gtk_utils::connect_action   (&self.window, self, "plate_solve_and_goto", Self::handler_action_plate_solve_and_goto);
+        connect_action_rc(&self.window, self, "capture_platesolve",   Self::handler_action_capture_platesolve);
+        connect_action   (&self.window, self, "plate_solve_and_goto", Self::handler_action_plate_solve_and_goto);
     }
 
     fn connect_delayed_actions_events(self: &Rc<Self>) {
@@ -271,7 +270,7 @@ impl PlateSolveUi {
     fn handler_action_capture_platesolve(self: &Rc<Self>) {
         self.main_ui.get_all_options();
 
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             self.core.start_capture_and_platesolve()?;
             Ok(())
         });
@@ -280,7 +279,7 @@ impl PlateSolveUi {
     fn handler_action_plate_solve_and_goto(&self) {
         self.main_ui.get_all_options();
 
-        gtk_utils::exec_and_show_error(&self.window, || {
+        exec_and_show_error(&self.window, || {
             self.core.start_goto_image()?;
             Ok(())
         });

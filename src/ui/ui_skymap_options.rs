@@ -1,8 +1,7 @@
 use std::rc::Rc;
 use gtk::{prelude::*, glib::clone, gdk};
 use macros::FromBuilder;
-use crate::utils::gtk_utils;
-use super::{sky_map::painter::Color, ui_skymap::UiOptions};
+use super::{gtk_utils::*, sky_map::painter::Color, ui_skymap::UiOptions};
 
 #[derive(FromBuilder)]
 struct Widgets {
@@ -25,13 +24,13 @@ impl SkymapOptionsDialog {
 
         widgets.dialog.set_transient_for(Some(transient_for));
 
-        gtk_utils::add_ok_cancel_and_apply_buttons(
+        add_ok_cancel_and_apply_buttons(
             &widgets.dialog,
             "Ok",     gtk::ResponseType::Ok,
             "Cancel", gtk::ResponseType::Cancel,
             "Apply",  gtk::ResponseType::Apply,
         );
-        gtk_utils::set_dialog_default_button(&widgets.dialog);
+        set_dialog_default_button(&widgets.dialog);
 
         widgets.spb_horiz_glow_angle.set_range(1.0, 45.0);
         widgets.spb_horiz_glow_angle.set_digits(0);
@@ -88,7 +87,7 @@ impl SkymapOptionsDialog {
         self.widgets.dialog.connect_response(clone!(@strong self as self_ => move |dlg, resp| {
             match resp {
                 gtk::ResponseType::Ok | gtk::ResponseType::Apply => {
-                    let ok = gtk_utils::exec_and_show_error(dlg, || {
+                    let ok = exec_and_show_error(dlg, || {
                         on_apply()?;
                         Ok(())
                     });

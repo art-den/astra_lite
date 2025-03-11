@@ -1,5 +1,5 @@
 use gtk::prelude::*;
-use crate::{utils::gtk_utils::{self, DEFAULT_DPMM}, utils::math::linear_solve2};
+use crate::{ui::gtk_utils::*, utils::math::linear_solve2};
 use super::math::*;
 
 pub struct Screen {
@@ -19,7 +19,7 @@ impl Screen {
         let height = da_size.height() as f64;
         let main_size = 0.5 * f64::max(width, height);
 
-        let (dpmm_x, dpmm_y) = gtk_utils::get_widget_dpmm(da)
+        let (dpmm_x, dpmm_y) = get_widget_dpmm(da)
             .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
 
         let tolerance = Rect {
