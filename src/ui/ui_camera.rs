@@ -553,7 +553,10 @@ impl CameraUi {
         );
 
         self.widgets.common.chb_live_view.connect_active_notify(
-            clone!(@weak self as self_ => move |_| {
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.cam.live_view = chb.is_active();
+                drop(options);
                 self_.handler_live_view_changed();
             })
         );
