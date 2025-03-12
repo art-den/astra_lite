@@ -4,11 +4,7 @@ use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use crate::{
-    core::{core::*, events::*, frame_processing::*, mode_goto::GotoConfig},
-    indi::{self, degree_to_str, hour_to_str},
-    options::*,
-    plate_solve::PlateSolveOkResult,
-    utils::io_utils::*,
+    core::{core::*, events::*, frame_processing::*, mode_goto::GotoConfig}, image::preview::PreviewRgbData, indi::{self, degree_to_str, hour_to_str}, options::*, plate_solve::PlateSolveOkResult, utils::io_utils::*
 };
 use super::{
     gtk_utils::*,
@@ -546,18 +542,15 @@ impl MapUi {
                 cam_rotation.insert(ps_event.cam_name, ps_event.result.rotation);
                 drop(cam_rotation);
 
+                *self.ps_img.borrow_mut() =
+                    if let Some(preview) = &ps_event.preview {
+                        Self::create_plate_solve_preview(&preview)
+                    } else {
+                        None
+                    };
                 *self.ps_result.borrow_mut() = Some(ps_event.result.clone());
 
                 self.update_skymap_widget(true);
-            }
-            Event::FrameProcessing(sp) => {
-                match (&sp.data, sp.mode_type) {
-                    (FrameProcessResultData::PreviewFrame(data),
-                     ModeType::Goto|ModeType::OpeningImgFile|ModeType::CapturePlatesolve) => {
-                        self.create_plate_solve_preview(data);
-                    },
-                    _ => {},
-                }
             }
             _ => {},
         }
@@ -1278,25 +1271,24 @@ impl MapUi {
         });
     }
 
-    fn create_plate_solve_preview(&self, data: &Preview8BitImgData) {
-        if data.rgb_data.width == 0
-        || data.rgb_data.height == 0 {
-            *self.ps_img.borrow_mut() = None;
-            return;
+    fn create_plate_solve_preview(data: &PreviewRgbData) -> Option<gdk::gdk_pixbuf::Pixbuf> {
+        if data.width == 0
+        || data.height == 0 {
+            return None;
         }
 
-        let bytes = glib::Bytes::from_owned(data.rgb_data.bytes.clone());
+        let bytes = glib::Bytes::from_owned(data.bytes.clone());
         let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
             &bytes,
             gtk::gdk_pixbuf::Colorspace::Rgb,
             false,
             8,
-            data.rgb_data.width as i32,
-            data.rgb_data.height as i32,
-            (data.rgb_data.width * 3) as i32,
+            data.width as i32,
+            data.height as i32,
+            (data.width * 3) as i32,
         );
 
-        let pixbuf = limit_pixbuf_by_longest_size(pixbuf, 2000);
-        *self.ps_img.borrow_mut() = Some(pixbuf);
+        let pixbuf = limit_pixbuf_by_longest_size(pixbuf, 1500);
+        Some(pixbuf)
     }
 }

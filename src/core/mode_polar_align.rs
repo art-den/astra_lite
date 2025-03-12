@@ -106,6 +106,7 @@ pub struct PolarAlignMode {
     s_opts:       SiteOptions,
     options:      Arc<RwLock<Options>>,
     indi:         Arc<indi::Connection>,
+    cur_frame:    Arc<ResultImage>,
     subscribers:  Arc<EventSubscriptions>,
     ps_opts:      PlateSolverOptions,
     plate_solver: PlateSolver,
@@ -118,6 +119,7 @@ pub struct PolarAlignMode {
 impl PolarAlignMode {
     pub fn new(
         indi:        &Arc<indi::Connection>,
+        cur_frame:   &Arc<ResultImage>,
         options:     &Arc<RwLock<Options>>,
         subscribers: &Arc<EventSubscriptions>,
     ) -> anyhow::Result<Self> {
@@ -148,6 +150,7 @@ impl PolarAlignMode {
             s_opts:      opts.site.clone(),
             options:     Arc::clone(options),
             indi:        Arc::clone(indi),
+            cur_frame:   Arc::clone(cur_frame),
             subscribers: Arc::clone(subscribers),
             ps_opts:     opts.plate_solver.clone(),
             alignment:   PolarAlignment::new(),
@@ -218,9 +221,16 @@ impl PolarAlignMode {
 
         result.print_to_log();
 
+        // Image for preview in map
+
+        let options = self.options.read().unwrap();
+        let preview = self.cur_frame.create_preview_for_platesolve_image(&options.preview);
+        drop(options);
+
         let event = PlateSolverEvent {
             cam_name: self.camera.name.clone(),
             result: result.clone(),
+            preview: preview.map(|p| Arc::new(p)),
         };
         self.subscribers.notify(Event::PlateSolve(event));
 

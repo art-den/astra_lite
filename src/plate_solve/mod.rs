@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use astrometry::*;
 use chrono::{DateTime, Utc};
-use crate::{image::{image::Image, stars::StarItems}, options::PlateSolverType, ui::sky_map::math::EqCoord};
+use crate::{image::{image::Image, preview::PreviewRgbData, stars::StarItems}, options::PlateSolverType, ui::sky_map::math::EqCoord};
 
 mod astrometry;
 
@@ -122,4 +124,5 @@ trait PlateSolverIface {
 pub struct PlateSolverEvent {
     pub cam_name: String,
     pub result:   PlateSolveOkResult,
+    pub preview:  Option<Arc<PreviewRgbData>>,
 }

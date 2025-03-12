@@ -1,6 +1,13 @@
 use std::sync::{Arc, RwLock};
 
-use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*}, image::{image::*, stars::StarItems}, indi, options::*, plate_solve::*, ui::sky_map::math::*};
+use crate::{
+    core::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*},
+    image::{image::*, stars::StarItems},
+    indi,
+    options::*,
+    plate_solve::*,
+    ui::sky_map::math::*
+};
 
 use super::{events::*, utils::gain_to_value};
 
@@ -14,6 +21,8 @@ enum State {
 pub struct CapturePlatesolveMode {
     state:        State,
     indi:         Arc<indi::Connection>,
+    cur_frame:    Arc<ResultImage>,
+    options:      Arc<RwLock<Options>>,
     subscribers:  Arc<EventSubscriptions>,
     camera:       DeviceAndProp,
     mount:        String,
@@ -26,6 +35,7 @@ impl CapturePlatesolveMode {
     pub fn new(
         options:     &Arc<RwLock<Options>>,
         indi:        &Arc<indi::Connection>,
+        cur_frame:   &Arc<ResultImage>,
         subscribers: &Arc<EventSubscriptions>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
@@ -46,6 +56,8 @@ impl CapturePlatesolveMode {
         Ok(Self {
             state:        State::None,
             indi:         Arc::clone(indi),
+            cur_frame:    Arc::clone(cur_frame),
+            options:      Arc::clone(options),
             subscribers:  Arc::clone(subscribers),
             mount:        opts.mount.device.clone(),
             ps_opts:      opts.plate_solver.clone(),
@@ -92,9 +104,16 @@ impl CapturePlatesolveMode {
 
         result.print_to_log();
 
+        // Image for preview in map
+
+        let options = self.options.read().unwrap();
+        let preview = self.cur_frame.create_preview_for_platesolve_image(&options.preview);
+        drop(options);
+
         let event = PlateSolverEvent {
             cam_name: self.camera.name.clone(),
             result: result.clone(),
+            preview: preview.map(|p| Arc::new(p)),
         };
         self.subscribers.notify(
             Event::PlateSolve(event)

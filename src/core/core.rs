@@ -662,6 +662,7 @@ impl Core {
             config,
             &self.options,
             &self.indi,
+            &self.cur_frame,
             &self.subscribers,
         )?;
         self.start_new_mode(mode, false, false)?;
@@ -688,6 +689,7 @@ impl Core {
             GotoConfig::GotoPlateSolveAndCorrect,
             &self.options,
             &self.indi,
+            &self.cur_frame,
             &self.subscribers,
         )?;
         self.start_new_mode(mode, false, false)?;
@@ -698,6 +700,7 @@ impl Core {
         let mode = CapturePlatesolveMode::new(
             &self.options,
             &self.indi,
+            &self.cur_frame,
             &self.subscribers,
         )?;
         self.start_new_mode(mode, false, false)?;
@@ -707,6 +710,7 @@ impl Core {
     pub fn start_polar_alignment(&self) -> anyhow::Result<()> {
         let mode = PolarAlignMode::new(
             &self.indi,
+            &self.cur_frame,
             &self.options,
             &self.subscribers,
         )?;

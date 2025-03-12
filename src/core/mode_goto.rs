@@ -1,5 +1,12 @@
 use std::sync::{Arc, RwLock};
-use crate::{core::{consts::*, events::*, frame_processing::*}, image::{image::Image, info::LightFrameInfo, stars::StarItems}, indi::{self, value_to_sexagesimal}, options::*, plate_solve::*, ui::sky_map::math::*};
+use crate::{
+    core::{consts::*, events::*, frame_processing::*},
+    image::{image::Image, info::LightFrameInfo, stars::StarItems},
+    indi,
+    options::*,
+    plate_solve::*,
+    ui::sky_map::math::*
+};
 use super::{core::*, events::EventSubscriptions, utils::*};
 
 const MAX_MOUNT_UNPARK_TIME: usize = 20; // seconds
@@ -44,6 +51,8 @@ pub struct GotoMode {
     ps_opts:         PlateSolverOptions,
     mount:           String,
     indi:            Arc<indi::Connection>,
+    cur_frame:       Arc<ResultImage>,
+    options:         Arc<RwLock<Options>>,
     subscribers:     Arc<EventSubscriptions>,
     plate_solver:    Option<PlateSolver>,
     unpark_seconds:  usize,
@@ -58,6 +67,7 @@ impl GotoMode {
         config:      GotoConfig,
         options:     &Arc<RwLock<Options>>,
         indi:        &Arc<indi::Connection>,
+        cur_frame:   &Arc<ResultImage>,
         subscribers: &Arc<EventSubscriptions>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
@@ -89,6 +99,8 @@ impl GotoMode {
             ps_opts:         opts.plate_solver.clone(),
             mount:           opts.mount.device.clone(),
             indi:            Arc::clone(indi),
+            cur_frame:       Arc::clone(cur_frame),
+            options:         Arc::clone(options),
             subscribers:     Arc::clone(subscribers),
             unpark_seconds:  0,
             goto_seconds:    0,
@@ -203,19 +215,18 @@ impl GotoMode {
             PlateSolveResult::Failed => anyhow::bail!("Can't platesolve image")
         };
 
-        log::debug!(
-            "plate solver j2000 = (ra: {}, dec: {}), now = (ra: {}, dec: {}), image size = {:.6} x {:.6}",
-            value_to_sexagesimal(radian_to_hour(result.crd_j2000.ra), true, 9),
-            value_to_sexagesimal(radian_to_degree(result.crd_j2000.dec), true, 8),
-            value_to_sexagesimal(radian_to_hour(result.crd_now.ra), true, 9),
-            value_to_sexagesimal(radian_to_degree(result.crd_now.dec), true, 8),
-            radian_to_degree(result.width),
-            radian_to_degree(result.height),
-        );
+        result.print_to_log();
+
+        // Image for preview in map
+
+        let options = self.options.read().unwrap();
+        let preview = self.cur_frame.create_preview_for_platesolve_image(&options.preview);
+        drop(options);
 
         let event = PlateSolverEvent {
             cam_name: camera.name.clone(),
             result: result.clone(),
+            preview: preview.map(|p| Arc::new(p)),
         };
         self.subscribers.notify(
             Event::PlateSolve(event)
