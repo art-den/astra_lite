@@ -204,6 +204,8 @@ impl Stars {
             possible_star_centers.drain(MAX_STARS_CNT..);
         }
 
+        let mut overexp_buffer = Vec::new();
+
         let mut all_star_coords = HashSet::<(isize, isize)>::new();
         let mut flood_filler = FloodFiller::new();
         let mut stars = Vec::new();
@@ -291,16 +293,30 @@ impl Stars {
                 let max_y = star_points.keys().map(|(_, y)| *y).max().unwrap_or(y);
                 let width = 3 * isize::max(x-min_x+1, max_x-x+1);
                 let height = 3 * isize::max(y-min_y+1, max_y-y+1);
+                let center_x = x_summ / crd_cnt;
+                let center_y = y_summ / crd_cnt;
+                let overexposured = Self::check_is_star_overexposured(
+                    &star_points,
+                    center_x.round() as isize,
+                    center_y.round() as isize,
+                    min_x, min_y,
+                    max_x, max_y,
+                    bg,
+                    &mut overexp_buffer
+                );
+                let points = star_points.keys()
+                    .map(|(x, y)| (*x as usize, *y as usize))
+                    .collect();
                 stars.push(Star {
-                    x: x_summ / crd_cnt,
-                    y: y_summ / crd_cnt,
+                    x: center_x,
+                    y: center_y,
                     background: bg,
                     max_value: max_v as u16,
                     brightness: brightness as u32,
-                    overexposured: Self::check_is_star_overexposured(&star_points, bg),
                     width: width as usize,
                     height: height as usize,
-                    points: star_points.keys().map(|(x, y)| (*x as usize, *y as usize)).collect(),
+                    points,
+                    overexposured,
                 });
             }
         }
@@ -336,17 +352,48 @@ impl Stars {
 
     fn check_is_star_overexposured(
         star_points: &HashMap<(isize, isize), u16>,
-        bg: u16
+        center_x:    isize,
+        center_y:    isize,
+        min_x:       isize,
+        min_y:       isize,
+        max_x:       isize,
+        max_y:       isize,
+        bg:          u16,
+        buffer:      &mut Vec<u16>,
     ) -> bool {
-        let points_count = star_points.len();
-        if points_count < 4 {
+        fn is_overexposured_values(values: &[u16], bg: u16) -> bool {
+            let points_count = values.len();
+            if points_count < 4 {
+                return false;
+            }
+            let max = values.iter().max().copied().unwrap_or_default();
+            let range = max - bg;
+            let plateau_border = max - range / 10;
+            let under_plateau_cnt = values.iter().filter(|v| **v > plateau_border).count();
+            under_plateau_cnt > points_count/4
+        }
+
+        // check horizontally
+
+        buffer.clear();
+        for x in min_x..=max_x {
+            if let Some(v) = star_points.get(&(x, center_y)) {
+                buffer.push(*v);
+            }
+        }
+        if !is_overexposured_values(&buffer, bg) {
             return false;
         }
-        let max = star_points.values().max().copied().unwrap_or_default();
-        let range = max - bg;
-        let plateau_border = max - range / 10;
-        let under_plateau_cnt = star_points.values().filter(|v| **v > plateau_border).count();
-        under_plateau_cnt > points_count/4
+
+        // check vertically
+
+        buffer.clear();
+        for y in min_y..=max_y {
+            if let Some(v) = star_points.get(&(center_x, y)) {
+                buffer.push(*v);
+            }
+        }
+        is_overexposured_values(&buffer, bg)
     }
 
     fn calc_common_star_image(image: &ImageLayer<u16>, stars: &[Star], k: usize) -> ImageLayer<u16> {
