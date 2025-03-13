@@ -224,8 +224,10 @@ struct Widgets {
     bx_hw_comm: gtk::Box,
     bx_map_top: gtk::Box,
     bx_map_left: gtk::Box,
+    scr_map_left: gtk::ScrolledWindow,
     bx_map_center: gtk::Box,
     bx_comm_left: gtk::Box,
+    bx_comm_left2: gtk::Box,
     bx_comm_bot_left: gtk::Box,
     bx_comm_center: gtk::Box,
     bx_comm_right: gtk::Box,
@@ -614,9 +616,9 @@ impl MainUi {
 
     fn handler_btn_fullscreen(&self, btn: &gtk::ToggleButton) {
         let full_screen = btn.is_active();
-        self.widgets.bx_comm_bot_left.set_visible(!full_screen);
+        self.widgets.bx_comm_left2.set_visible(!full_screen);
         self.widgets.scr_comm_right.set_visible(!full_screen);
-        self.widgets.bx_map_left.set_visible(!full_screen);
+        self.widgets.scr_map_left.set_visible(!full_screen);
         let modules = self.modules.borrow();
         modules.process_event(&UiModuleEvent::FullScreen(full_screen));
         drop(modules);
