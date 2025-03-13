@@ -472,6 +472,8 @@ impl MainUi {
                     cfg!(debug_assertions) ||
                     !panel.flags.contains(PanelFlags::DEVELOP);
 
+                panel.widget.set_margin_top(5);
+                panel.widget.set_margin_start(5);
                 let panel_widget = panel.create_widget();
                 if let Some(expander) = panel_widget.downcast_ref::<gtk::Expander>() {
                     let expanded_by_default = panel.flags.contains(PanelFlags::EXPANDED);

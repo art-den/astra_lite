@@ -265,12 +265,12 @@
                     <property name="visible">True</property>
                     <property name="can-focus">True</property>
                     <property name="hscrollbar-policy">never</property>
-                    <property name="shadow-type">in</property>
                     <property name="kinetic-scrolling">False</property>
                     <child>
                       <object class="GtkViewport">
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>
+                        <property name="shadow-type">none</property>
                         <child>
                           <object class="GtkBox" id="bx_map_left">
                             <property name="visible">True</property>
@@ -278,7 +278,7 @@
                             <property name="margin-start">5</property>
                             <property name="margin-end">5</property>
                             <property name="orientation">vertical</property>
-                            <property name="spacing">5</property>
+                            <property name="spacing">10</property>
                             <child>
                               <placeholder/>
                             </child>
