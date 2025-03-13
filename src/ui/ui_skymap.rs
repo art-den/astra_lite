@@ -4,7 +4,7 @@ use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use crate::{
-    core::{core::*, events::*, frame_processing::*, mode_goto::GotoConfig}, image::preview::PreviewRgbData, indi::{self, degree_to_str, hour_to_str}, options::*, plate_solve::PlateSolveOkResult, utils::io_utils::*
+    core::{core::*, events::*, mode_goto::GotoConfig}, image::preview::PreviewRgbData, indi::{self, degree_to_str, hour_to_str}, options::*, plate_solve::PlateSolveOkResult, utils::io_utils::*
 };
 use super::{
     gtk_utils::*,
