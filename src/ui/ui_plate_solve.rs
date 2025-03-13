@@ -118,7 +118,7 @@ impl UiModule for PlateSolveUi {
             name:   "Plate solving".to_string(),
             widget: self.widgets.grd.clone().upcast(),
             pos:    PanelPosition::Right,
-            tab:    PanelTab::Common,
+            tab:    TabPage::Main,
             flags:  PanelFlags::empty(),
         }]
     }

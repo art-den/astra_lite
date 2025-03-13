@@ -328,7 +328,7 @@ impl UiModule for MapUi {
                 name:   String::new(),
                 widget: self.widgets.top.bx.clone().upcast(),
                 pos:    PanelPosition::Top,
-                tab:    PanelTab::Map,
+                tab:    TabPage::SkyMap,
                 flags:  PanelFlags::empty(),
             },
             Panel {
@@ -336,7 +336,7 @@ impl UiModule for MapUi {
                 name:   "Date & time".to_string(),
                 widget: self.widgets.datetime.bx.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Map,
+                tab:    TabPage::SkyMap,
                 flags:  PanelFlags::empty(),
             },
             Panel {
@@ -344,7 +344,7 @@ impl UiModule for MapUi {
                 name:   "Selected object".to_string(),
                 widget: self.widgets.obj.bx.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Map,
+                tab:    TabPage::SkyMap,
                 flags:  PanelFlags::NO_EXPANDER,
             },
             Panel {
@@ -352,7 +352,7 @@ impl UiModule for MapUi {
                 name:   "Search".to_string(),
                 widget: self.widgets.search.bx.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Map,
+                tab:    TabPage::SkyMap,
                 flags:  PanelFlags::NO_EXPANDER,
             },
             Panel {
@@ -360,7 +360,7 @@ impl UiModule for MapUi {
                 name:   String::new(),
                 widget: self.map_widget.get_widget().clone().upcast(),
                 pos:    PanelPosition::Center,
-                tab:    PanelTab::Map,
+                tab:    TabPage::SkyMap,
                 flags:  PanelFlags::NO_EXPANDER,
             },
         ]

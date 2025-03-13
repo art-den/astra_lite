@@ -213,7 +213,7 @@ impl UiModule for HardwareUi {
                 name:   "Telescope".to_string(),
                 widget: self.widgets.telescope.grd.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Hardware,
+                tab:    TabPage::Hardware,
                 flags:  PanelFlags::NO_EXPANDER,
             },
             Panel {
@@ -221,7 +221,7 @@ impl UiModule for HardwareUi {
                 name:   "Site".to_string(),
                 widget: self.widgets.site.grd.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Hardware,
+                tab:    TabPage::Hardware,
                 flags:  PanelFlags::NO_EXPANDER,
             },
             Panel {
@@ -229,7 +229,7 @@ impl UiModule for HardwareUi {
                 name:   "INDI Drivers".to_string(),
                 widget: self.widgets.indi.bx.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Hardware,
+                tab:    TabPage::Hardware,
                 flags:  PanelFlags::NO_EXPANDER,
             },
             Panel {
@@ -237,7 +237,7 @@ impl UiModule for HardwareUi {
                 name:   "External software".to_string(),
                 widget: self.widgets.ext_soft.bx.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Hardware,
+                tab:    TabPage::Hardware,
                 flags:  PanelFlags::NO_EXPANDER,
             },
             Panel {
@@ -245,7 +245,7 @@ impl UiModule for HardwareUi {
                 name:   "Connection status".to_string(),
                 widget: self.widgets.conn_stat.grd.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Hardware,
+                tab:    TabPage::Hardware,
                 flags:  PanelFlags::NO_EXPANDER,
             },
             Panel {
@@ -253,7 +253,7 @@ impl UiModule for HardwareUi {
                 name:   "INDI devices control".to_string(),
                 widget: self.widgets.common.bx.clone().upcast(),
                 pos:    PanelPosition::Center,
-                tab:    PanelTab::Hardware,
+                tab:    TabPage::Hardware,
                 flags:  PanelFlags::NO_EXPANDER,
             },
         ]

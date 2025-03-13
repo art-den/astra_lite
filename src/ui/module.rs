@@ -13,12 +13,6 @@ pub enum PanelPosition {
     Top,
 }
 
-pub enum PanelTab {
-    Hardware,
-    Map,
-    Common,
-}
-
 bitflags! {
     pub struct PanelFlags: u32 {
         const NO_EXPANDER = 1;
@@ -32,7 +26,7 @@ pub struct Panel {
     pub name:   String,
     pub widget: gtk::Widget,
     pub pos:    PanelPosition,
-    pub tab:    PanelTab,
+    pub tab:    TabPage,
     pub flags:  PanelFlags,
 }
 
@@ -79,19 +73,19 @@ impl Panel {
 pub enum TabPage {
     Hardware,
     SkyMap,
-    Camera,
+    Main,
 }
 
 pub const TAB_HARDWARE: u32 = 0;
 pub const TAB_MAP:      u32 = 1;
-pub const TAB_CAMERA:   u32 = 2;
+pub const TAB_MAIN:   u32 = 2;
 
 impl TabPage {
     pub fn from_tab_index(index: u32) -> Self {
         match index {
             TAB_HARDWARE => TabPage::Hardware,
             TAB_MAP      => TabPage::SkyMap,
-            TAB_CAMERA   => TabPage::Camera,
+            TAB_MAIN     => TabPage::Main,
             _ => unreachable!(),
         }
     }

@@ -338,7 +338,7 @@ impl UiModule for PreviewUi {
                 name:   String::new(),
                 widget: self.widgets.common.pan_preview.clone().upcast(),
                 pos:    PanelPosition::Center,
-                tab:    PanelTab::Common,
+                tab:    TabPage::Main,
                 flags:  PanelFlags::NO_EXPANDER,
             },
         ]

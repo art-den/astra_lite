@@ -120,7 +120,7 @@ impl UiModule for FocuserUi {
             name:   "Focuser".to_string(),
             widget: self.widgets.bx.clone().upcast(),
             pos:    PanelPosition::Right,
-            tab:    PanelTab::Common,
+            tab:    TabPage::Main,
             flags:  PanelFlags::empty(),
         }]
     }

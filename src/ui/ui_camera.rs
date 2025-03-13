@@ -347,7 +347,7 @@ impl UiModule for CameraUi {
                 name:   String::new(),
                 widget: self.widgets.common.bx.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Common,
+                tab:    TabPage::Main,
                 flags:  PanelFlags::NO_EXPANDER,
             },
             Panel {
@@ -355,7 +355,7 @@ impl UiModule for CameraUi {
                 name:   "Camera control".to_string(),
                 widget: self.widgets.ctrl.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Common,
+                tab:    TabPage::Main,
                 flags:  PanelFlags::EXPANDED,
             },
             Panel {
@@ -363,7 +363,7 @@ impl UiModule for CameraUi {
                 name:   "Shot settings".to_string(),
                 widget: self.widgets.frame.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Common,
+                tab:    TabPage::Main,
                 flags:  PanelFlags::EXPANDED,
             },
             Panel {
@@ -371,7 +371,7 @@ impl UiModule for CameraUi {
                 name:   "Calibration & hot pixels".to_string(),
                 widget: self.widgets.calibr.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Common,
+                tab:    TabPage::Main,
                 flags:  PanelFlags::empty(),
             },
             Panel {
@@ -379,7 +379,7 @@ impl UiModule for CameraUi {
                 name:   "Saving raw frames".to_string(),
                 widget: self.widgets.raw.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Common,
+                tab:    TabPage::Main,
                 flags:  PanelFlags::EXPANDED,
             },
             Panel {
@@ -387,7 +387,7 @@ impl UiModule for CameraUi {
                 name:   "Live stacking".to_string(),
                 widget: self.widgets.live_st.grid.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Common,
+                tab:    TabPage::Main,
                 flags:  PanelFlags::EXPANDED,
             },
             Panel {
@@ -395,7 +395,7 @@ impl UiModule for CameraUi {
                 name:   "Light frame quality".to_string(),
                 widget: self.widgets.quality.bx.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Common,
+                tab:    TabPage::Main,
                 flags:  PanelFlags::empty(),
             },
             Panel {
@@ -403,7 +403,7 @@ impl UiModule for CameraUi {
                 name:   String::new(),
                 widget: self.widgets.info.bx.clone().upcast(),
                 pos:    PanelPosition::BottomLeft,
-                tab:    PanelTab::Common,
+                tab:    TabPage::Main,
                 flags:  PanelFlags::NO_EXPANDER,
             },
         ]

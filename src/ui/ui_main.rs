@@ -326,7 +326,7 @@ impl MainUi {
         self.widgets.nb_main.connect_switch_page(
             clone!(@weak self as self_  => move |_, _, page| {
                 let enable_fullscreen = match page {
-                    TAB_MAP|TAB_CAMERA => true,
+                    TAB_MAP|TAB_MAIN => true,
                     _                  => false
                 };
                 self_.widgets.btn_fullscreen.set_sensitive(enable_fullscreen);
@@ -447,23 +447,23 @@ impl MainUi {
             let panels = module.panels();
             for panel in panels {
                 let container = match (&panel.tab, &panel.pos) {
-                    (PanelTab::Common, PanelPosition::Left) =>
+                    (TabPage::Main, PanelPosition::Left) =>
                         self.widgets.bx_comm_left.upcast_ref::<gtk::Container>(),
-                    (PanelTab::Common, PanelPosition::BottomLeft) =>
+                    (TabPage::Main, PanelPosition::BottomLeft) =>
                         self.widgets.bx_comm_bot_left.upcast_ref::<gtk::Container>(),
-                    (PanelTab::Common, PanelPosition::Center) =>
+                    (TabPage::Main, PanelPosition::Center) =>
                         self.widgets.bx_comm_center.upcast_ref::<gtk::Container>(),
-                    (PanelTab::Common, PanelPosition::Right) =>
+                    (TabPage::Main, PanelPosition::Right) =>
                         self.widgets.bx_comm_right.upcast_ref::<gtk::Container>(),
-                    (PanelTab::Hardware, PanelPosition::Left) =>
+                    (TabPage::Hardware, PanelPosition::Left) =>
                         self.widgets.bx_hw_left.upcast_ref::<gtk::Container>(),
-                    (PanelTab::Hardware, PanelPosition::Center) =>
+                    (TabPage::Hardware, PanelPosition::Center) =>
                         self.widgets.bx_hw_comm.upcast_ref::<gtk::Container>(),
-                    (PanelTab::Map, PanelPosition::Top) =>
+                    (TabPage::SkyMap, PanelPosition::Top) =>
                         self.widgets.bx_map_top.upcast_ref::<gtk::Container>(),
-                    (PanelTab::Map, PanelPosition::Left) =>
+                    (TabPage::SkyMap, PanelPosition::Left) =>
                         self.widgets.bx_map_left.upcast_ref::<gtk::Container>(),
-                    (PanelTab::Map, PanelPosition::Center) =>
+                    (TabPage::SkyMap, PanelPosition::Center) =>
                         self.widgets.bx_map_center.upcast_ref::<gtk::Container>(),
                     _ => unreachable!(),
                 };

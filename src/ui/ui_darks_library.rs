@@ -609,7 +609,7 @@ impl UiModule for DarksLibraryUI {
                 name:   "Darks library".to_string(),
                 widget: self.widgets.common.bx.clone().upcast(),
                 pos:    PanelPosition::Left,
-                tab:    PanelTab::Common,
+                tab:    TabPage::Main,
                 flags:  PanelFlags::empty(),
             },
         ]
