@@ -467,7 +467,7 @@
                 <property name="can-focus">True</property>
                 <property name="receives-default">False</property>
                 <property name="tooltip-text" translatable="yes">Remove background gradient.
-Useful when the object is not lagre and is in the center of the image.</property>
+Useful when the object is not large and is in the center of the image.</property>
                 <property name="valign">center</property>
                 <property name="draw-indicator">True</property>
               </object>
