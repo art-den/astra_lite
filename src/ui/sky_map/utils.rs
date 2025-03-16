@@ -9,7 +9,7 @@ pub struct Screen {
     center_x:  f64,
     center_y:  f64,
     dpmm_x:    f64,
-    dpmm_y:    f64,
+    font_size: f64,
 }
 
 impl Screen {
@@ -41,7 +41,7 @@ impl Screen {
             center_x: 0.5 * width,
             center_y: 0.5 * height,
             dpmm_x,
-            dpmm_y,
+            font_size: da.style_context().font(gtk::StateFlags::NORMAL).size() as _,
         }
     }
 
@@ -57,8 +57,8 @@ impl Screen {
         self.dpmm_x
     }
 
-    pub fn dpmm_y(&self) -> f64 {
-        self.dpmm_y
+    pub fn font_size(&self) -> f64 {
+        self.font_size
     }
 
     pub fn sphere_to_screen(

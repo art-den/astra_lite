@@ -419,11 +419,18 @@ impl MapUi {
         self.widgets.top.scl_max_dso_mag.set_range(0.0, 20.0);
         self.widgets.top.scl_max_dso_mag.set_increments(0.5, 2.0);
 
-        let (dpimm_x, dpimm_y) = get_widget_dpmm(&self.window)
+        let (dpimm_x, _) = get_widget_dpmm(&self.window)
             .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
+
         self.widgets.top.scl_max_dso_mag.set_width_request((40.0 * dpimm_x) as i32);
 
-        self.widgets.obj.da_graph.set_height_request((30.0 * dpimm_y) as i32);
+        self.set_alt_graph_height();
+    }
+
+    fn set_alt_graph_height(&self) {
+        let pl = self.widgets.obj.da_graph.create_pango_layout(Some("#"));
+        let text_height = pl.pixel_size().1;
+        self.widgets.obj.da_graph.set_height_request(7 * text_height);
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
@@ -494,6 +501,15 @@ impl MapUi {
                     Ok(())
                 });
                 glib::Propagation::Proceed
+            })
+        );
+
+        self.widgets.obj.da_graph.connect_screen_changed(
+            clone!(@weak self as self_ =>  move |_, _| {
+                exec_and_show_error(&self_.window, || {
+                    self_.set_alt_graph_height();
+                    Ok(())
+                });
             })
         );
 
@@ -904,6 +920,7 @@ impl MapUi {
             self.set_time_to_widgets_impl();
             self.update_skymap_widget(true);
             self.show_selected_objects_info();
+            self.widgets.obj.da_graph.queue_draw();
         });
     }
 

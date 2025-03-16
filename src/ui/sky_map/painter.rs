@@ -1,10 +1,13 @@
 use std::{cell::RefCell, collections::HashSet, f64::consts::PI, rc::Rc};
 use chrono::{DateTime, Local, NaiveDateTime, Utc};
-use gtk::{cairo, gdk_pixbuf};
+use gtk::{cairo, gdk_pixbuf, pango};
 use itertools::{izip, Itertools};
 use serde::{Deserialize, Serialize};
 use crate::utils::math::linear_interpolate;
 use super::{consts::*, data::*, math::*, perspective_painter::PerspectivePainter, utils::*};
+
+const GRID_TEXT_FONT_SIZE: f64 = 0.8;
+const WORD_SIZE_FONT_SIZE: f64 = 2.0;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -91,27 +94,21 @@ impl Default for EqGridConfig {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PaintConfig {
-    pub high_quality:    bool,
-    pub filter:          ItemsToShow,
-    pub max_dso_mag:     f32,
-    pub horizon_glow:    HorizonGlowConfig,
-    pub names_font_size: f32,
-    pub sides_font_size: f32,
-    pub grid_font_size:  f32,
-    pub eq_grid:         EqGridConfig,
+    pub high_quality: bool,
+    pub filter:       ItemsToShow,
+    pub max_dso_mag:  f32,
+    pub horizon_glow: HorizonGlowConfig,
+    pub eq_grid:      EqGridConfig,
 }
 
 impl Default for PaintConfig {
     fn default() -> Self {
         let mut result = Self {
-            high_quality:    true,
-            filter:          ItemsToShow::all(),
-            max_dso_mag:     10.0,
-            horizon_glow:    HorizonGlowConfig::default(),
-            names_font_size: 3.0,
-            sides_font_size: 5.0,
-            grid_font_size:  2.8,
-            eq_grid:         EqGridConfig::default(),
+            high_quality: true,
+            filter:       ItemsToShow::all(),
+            max_dso_mag:  10.0,
+            horizon_glow: HorizonGlowConfig::default(),
+            eq_grid:      EqGridConfig::default(),
         };
 
         if !cfg!(target_arch = "x86_64") {
@@ -154,6 +151,7 @@ pub struct PaintArgs<'a> {
     pub view_point:  &'a ViewPoint,
     pub screen:      &'a Screen,
     pub cairo:       &'a gtk::cairo::Context,
+    pub layout:      &'a pango::Layout,
 }
 
 pub struct SkyMapPainter {
@@ -193,6 +191,7 @@ impl SkyMapPainter {
 
         let ctx = PaintCtx {
             cairo: args.cairo,
+            layout: args.layout,
             config: args.config,
             screen: args.screen,
             view_point: args.view_point,
@@ -207,6 +206,10 @@ impl SkyMapPainter {
 
         // Equatorial grid
         if args.config.eq_grid.visible {
+            let mut font = ctx.layout.font_description().unwrap();
+            font.set_size((GRID_TEXT_FONT_SIZE * ctx.screen.font_size()) as _);
+            ctx.layout.set_font_description(Some(&font));
+
             self.paint_eq_grid(&ctx, false)?;
             self.paint_eq_grid(&ctx, true)?;
         }
@@ -230,9 +233,18 @@ impl SkyMapPainter {
             }
 
             // DSO names
+            let mut font = ctx.layout.font_description().unwrap();
+            font.set_size(ctx.screen.font_size() as _);
+            ctx.layout.set_font_description(Some(&font));
+
             self.paint_dso_items(sky_map, &ctx, PainterMode::Names)?;
 
             // Stars names
+
+            let mut font = ctx.layout.font_description().unwrap();
+            font.set_size(ctx.screen.font_size() as _);
+            ctx.layout.set_font_description(Some(&font));
+
             if args.config.filter.contains(ItemsToShow::STARS) {
                 self.paint_stars(
                     sky_map,
@@ -249,6 +261,11 @@ impl SkyMapPainter {
         }
 
         // Ground
+
+        let mut font = ctx.layout.font_description().unwrap();
+        font.set_size((WORD_SIZE_FONT_SIZE * ctx.screen.font_size()) as _);
+        ctx.layout.set_font_description(Some(&font));
+
         self.paint_ground(&ctx)?;
 
         // Selected object
@@ -258,6 +275,11 @@ impl SkyMapPainter {
         self.paint_telescope_position(args.tele_pos, &ctx)?;
 
         // Optionally camera frame
+
+        let mut font = ctx.layout.font_description().unwrap();
+        font.set_size(ctx.screen.font_size() as _);
+        ctx.layout.set_font_description(Some(&font));
+
         self.paint_camera_frame(args.cam_frame, &ctx)?;
 
         Ok(())
@@ -306,7 +328,6 @@ impl SkyMapPainter {
         ctx:        &PaintCtx,
         mode:       PainterMode,
     ) -> anyhow::Result<()> {
-        ctx.cairo.set_font_size(ctx.config.names_font_size as f64 * ctx.screen.dpmm_y());
         for dso_object in sky_map.objects() {
             let Some(mag) = dso_object.any_magnitude() else {
                 continue;
@@ -439,7 +460,6 @@ impl SkyMapPainter {
         mode:    PainterMode,
     ) -> anyhow::Result<()> {
         ctx.cairo.set_antialias(ctx.config.get_antialias());
-        ctx.cairo.set_font_size(ctx.config.names_font_size as f64 * ctx.screen.dpmm_y());
 
         let max_mag_value = calc_max_star_magnitude_for_painting(ctx.view_point.mag_factor);
         let max_mag = ObjMagnitude::new(max_mag_value);
@@ -490,7 +510,6 @@ impl SkyMapPainter {
         }
         else
         {
-            ctx.cairo.set_font_size(ctx.config.grid_font_size as f64 * ctx.screen.dpmm_y());
             let c = &ctx.config.eq_grid.text_color;
             ctx.cairo.set_source_rgba(c.r, c.g, c.b, c.a);
         }
@@ -547,7 +566,6 @@ impl SkyMapPainter {
             WorldSide { az: 270.0, text: "W",  alpha: 1.0 },
             WorldSide { az: 315.0, text: "NW", alpha: 0.5 },
         ];
-        ctx.cairo.set_font_size(ctx.config.sides_font_size as f64 * ctx.screen.dpmm_y());
         for world_side in world_sides {
             self.item_painter.paint(&world_side, ctx, false)?;
         }
@@ -689,6 +707,7 @@ enum PainterCrd {
 
 struct PaintCtx<'a> {
     cairo:          &'a gtk::cairo::Context,
+    layout:         &'a pango::Layout,
     config:         &'a PaintConfig,
     screen:         &'a Screen,
     view_point:     &'a ViewPoint,
@@ -828,12 +847,13 @@ impl<'a> Item for DsoNamePainter<'a> {
     fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         let crd = &points[0];
         let mut y = crd.y;
-        let text_height = ctx.cairo.font_extents()?.height();
         ctx.cairo.set_source_rgba(1.0, 1.0, 1.0, 0.7);
         for item in &self.0.names {
+            ctx.layout.set_text(item.text());
             ctx.cairo.move_to(crd.x, y);
-            ctx.cairo.show_text(item.text())?;
-            y += text_height;
+            pangocairo::functions::show_layout(ctx.cairo, ctx.layout);
+            let (_, height) = ctx.layout.pixel_size();
+            y += 0.8 * height as f64;
         }
         Ok(())
     }
@@ -1083,8 +1103,9 @@ impl<'a> StarPainter<'a> {
             light_with_gamma -= 0.5;
             light_with_gamma *= 2.0;
 
-            let te = ctx.cairo.text_extents(text)?;
-            let t_height = te.height();
+            ctx.layout.set_text(text);
+            let (_, height) = ctx.layout.pixel_size();
+            let t_height = height as f64;
 
             ctx.cairo.set_source_rgba(
                 r, g, b,
@@ -1092,10 +1113,10 @@ impl<'a> StarPainter<'a> {
             );
             ctx.cairo.move_to(
                 pt.x + 0.5 * diam - 0.1 * t_height,
-                pt.y + t_height + 0.5 * diam - 0.1 * t_height
+                pt.y + 0.5 * diam - t_height
             );
-            ctx.cairo.show_text(text)?;
-            pt.y += 1.2 * t_height;
+            pangocairo::functions::show_layout(ctx.cairo, ctx.layout);
+            pt.y += 0.8 * t_height;
             Ok(())
         };
 
@@ -1208,22 +1229,26 @@ impl Item for EqGridItem {
                         EqGridItemType::Ra => format!("{:.0}h", radian_to_hour(self.ra1)),
                         EqGridItemType::Dec => format!("{:.0}°", radian_to_degree(self.dec1)),
                     };
-                    let te = ctx.cairo.text_extents(&text)?;
+                    ctx.layout.set_text(&text);
+                    let (width, height) = ctx.layout.pixel_size();
                     if adjust_right {
-                        x -= te.width();
+                        x -= width as f64;
                     }
-                    ctx.cairo.move_to(x, y + 0.5 * te.height());
-                    ctx.cairo.show_text(&text)?;
+                    ctx.cairo.move_to(x, y - 0.5 * height as f64);
+                    pangocairo::functions::show_layout(ctx.cairo, ctx.layout);
                     Ok(())
                 };
+                ctx.layout.set_text("#");
+                let text_offset = 0.5 * ctx.layout.pixel_size().1 as f64;
+
                 if let Some(is) = Line2D::intersection(&line, &screen_top) {
-                    paint_text(is.x, is.y + 2.0 * ctx.screen.dpmm_y(), false)?;
+                    paint_text(is.x, is.y + text_offset, false)?;
                 } else if let Some(is) = Line2D::intersection(&line, &screen_bottom) {
-                    paint_text(is.x, is.y - 2.0 * ctx.screen.dpmm_y(), false)?;
+                    paint_text(is.x, is.y - text_offset, false)?;
                 } else if let Some(is) = Line2D::intersection(&line, &screen_left) {
-                    paint_text(is.x + 1.0 * ctx.screen.dpmm_y(), is.y, false)?;
+                    paint_text(is.x + 0.5 * text_offset, is.y, false)?;
                 } else if let Some(is) = Line2D::intersection(&line, &screen_right) {
-                    paint_text(is.x - 1.0 * ctx.screen.dpmm_y(), is.y, true)?;
+                    paint_text(is.x - 0.5 * text_offset, is.y, true)?;
                 }
             }
         }
@@ -1316,13 +1341,14 @@ impl<'a> Item for WorldSide<'a> {
     }
 
     fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
-        let te = ctx.cairo.text_extents(&self.text)?;
+        ctx.layout.set_text(&self.text);
+        let (width, height) = ctx.layout.pixel_size();
         ctx.cairo.move_to(
-            points[0].x - 0.5 * te.width(),
-            points[0].y + 0.5 * te.height()
+            points[0].x - 0.5 * width as f64,
+            points[0].y - 0.5 * height as f64
         );
         ctx.cairo.set_source_rgba(0.8, 0.0, 0.0, self.alpha);
-        ctx.cairo.show_text(&self.text)?;
+        pangocairo::functions::show_layout(ctx.cairo, ctx.layout);
         Ok(())
     }
 }
@@ -1497,32 +1523,32 @@ struct CameraFramePainter<'a> {
         let pt1 = &points[0];
         let pt2 = &points[1];
         ctx.cairo.set_source_rgb(1.0, 1.0, 1.0);
-        ctx.cairo.set_font_size(4.0 * ctx.screen.dpmm_y());
-        paint_text_under_line(&ctx.cairo, pt1, pt2, self.name)?;
+
+        paint_text_under_line(ctx.cairo, ctx.layout, pt1, pt2, self.name)?;
 
         Ok(())
     }
 }
 
 fn paint_text_under_line(
-    cairo: &cairo::Context,
-    pt1:   &Point2D,
-    pt2:   &Point2D,
-    text:  &str
+    cairo:  &cairo::Context,
+    layout: &pango::Layout,
+    pt1:    &Point2D,
+    pt2:    &Point2D,
+    text:   &str
 ) -> anyhow::Result<()> {
     let dx = pt2.x - pt1.x;
     let dy = pt2.y - pt1.y;
     let len = f64::sqrt(dx * dx + dy * dy);
-    let te = cairo.text_extents(text)?;
-    if te.width() <= len {
+    layout.set_text(text);
+    let (width, height) = layout.pixel_size();
+    if width as f64 <= len {
         let angle = f64::atan2(dy, dx);
-
         cairo.move_to(pt1.x, pt1.y);
         cairo.save()?;
         cairo.rotate(angle);
-        let descent = te.height() + te.y_bearing();
-        cairo.rel_move_to(0.0, -descent - 0.2 * te.height());
-        cairo.show_text(text)?;
+        cairo.rel_move_to(0.0, -height as f64);
+        pangocairo::functions::show_layout(cairo, layout);
         cairo.restore()?;
     }
 
@@ -1569,16 +1595,14 @@ impl<'a> Item for PlateSolvedImagePainter<'a> {
         ctx.cairo.stroke()?;
 
         ctx.cairo.set_source_rgb(1.0, 1.0, 1.0);
-        ctx.cairo.set_font_size(4.0 * ctx.screen.dpmm_y());
         let pt1 = &points[0];
         let pt2 = &points[1];
-        ctx.cairo.set_font_size(4.0 * ctx.screen.dpmm_y());
         let local_time: DateTime<Local> = DateTime::from(self.time);
         let text = format!(
             "Plate solve {}",
             local_time.format("%Y-%m-%d %H:%M:%S").to_string()
         );
-        paint_text_under_line(&ctx.cairo, pt1, pt2, &text)?;
+        paint_text_under_line(ctx.cairo, ctx.layout, pt1, pt2, &text)?;
 
         Ok(())
     }

@@ -24,15 +24,13 @@ pub fn paint_altitude_by_time(
         .lookup_color("theme_base_color")
         .unwrap_or(gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
 
-    let font_desc = sc.font(gtk::StateFlags::ACTIVE);
-    let pl = area.create_pango_layout(None);
-    pl.set_font_description(Some(&font_desc));
-
     let width = area.allocated_width() as f64;
     let height = area.allocated_height() as f64;
 
+    let font_desc = sc.font(gtk::StateFlags::ACTIVE);
+    let pl = area.create_pango_layout(None);
+    pl.set_font_description(Some(&font_desc));
     pl.set_text("#");
-
     let legend_height = 1.5 * pl.pixel_size().1 as f64;
     let legend_rect_size = 1.0 * pl.pixel_size().1 as f64;
 

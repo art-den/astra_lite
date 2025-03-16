@@ -299,6 +299,12 @@ impl SkymapWidget {
         let camera_frame = self.camera_frame.borrow();
         let timer = std::time::Instant::now();
         let platesolved_image = self.solved_image.borrow();
+
+        let sc = da.style_context();
+        let font = sc.font(gtk::StateFlags::NORMAL);
+        let pango_layout = da.create_pango_layout(None);
+        pango_layout.set_font_description(Some(&font));
+
         let res = painter.paint(PaintArgs {
             sky_map:     &skymap,
             selection:   &selection,
@@ -311,18 +317,20 @@ impl SkymapWidget {
             view_point:  &vp,
             screen:      &scr,
             cairo:       ctx,
+            layout:      &pango_layout,
         });
         if let Err(e) = res {
             log::error!("Error while painting map: {}", e.to_string());
         }
+
         let paint_time = timer.elapsed().as_secs_f64();
         let fps = if paint_time != 0.0 { 1.0/paint_time } else { f64::NAN };
         let fps_str = format!("x{:.1}, {:.1} FPS", vp.mag_factor, fps);
-        ctx.set_font_size(scr.dpmm_y() * 3.0);
-        let te = ctx.text_extents(&fps_str).unwrap();
-        ctx.move_to(1.0, 1.0 + te.height());
+        ctx.move_to(1.0, 1.0);
         ctx.set_source_rgba(1.0, 1.0, 1.0, 0.45);
-        ctx.show_text(&fps_str).unwrap();
+        pango_layout.set_text(&fps_str);
+        pangocairo::functions::show_layout(ctx, &pango_layout);
+
         glib::Propagation::Stop
     }
 
