@@ -514,6 +514,9 @@ impl SkyMapPainter {
             ctx.cairo.set_source_rgba(c.r, c.g, c.b, c.a);
         }
 
+        ctx.layout.set_text("#");
+        let text_offset = 0.5 * ctx.layout.pixel_size().1 as f64;
+
         const DEC_STEP: i32 = 10; // degree
         for i in -90/DEC_STEP..90/DEC_STEP {
             let dec1 = degree_to_radian((DEC_STEP * i) as f64);
@@ -526,6 +529,7 @@ impl SkyMapPainter {
                     ra2: ra,
                     dec1, dec2,
                     text,
+                    text_offset,
                 };
                 self.item_painter.paint(&item, ctx, false)?;
             }
@@ -540,7 +544,8 @@ impl SkyMapPainter {
                     dec1: dec,
                     dec2: dec,
                     ra1, ra2,
-                    text
+                    text,
+                    text_offset,
                 };
                 self.item_painter.paint(&item, ctx, false)?;
             }
@@ -1169,6 +1174,7 @@ struct EqGridItem {
     ra1:  f64,
     ra2:  f64,
     text: bool,
+    text_offset: f64,
 }
 
 impl EqGridItem {
@@ -1238,17 +1244,15 @@ impl Item for EqGridItem {
                     pangocairo::functions::show_layout(ctx.cairo, ctx.layout);
                     Ok(())
                 };
-                ctx.layout.set_text("#");
-                let text_offset = 0.5 * ctx.layout.pixel_size().1 as f64;
 
                 if let Some(is) = Line2D::intersection(&line, &screen_top) {
-                    paint_text(is.x, is.y + text_offset, false)?;
+                    paint_text(is.x, is.y + self.text_offset, false)?;
                 } else if let Some(is) = Line2D::intersection(&line, &screen_bottom) {
-                    paint_text(is.x, is.y - text_offset, false)?;
+                    paint_text(is.x, is.y - self.text_offset, false)?;
                 } else if let Some(is) = Line2D::intersection(&line, &screen_left) {
-                    paint_text(is.x + 0.5 * text_offset, is.y, false)?;
+                    paint_text(is.x + 0.5 * self.text_offset, is.y, false)?;
                 } else if let Some(is) = Line2D::intersection(&line, &screen_right) {
-                    paint_text(is.x - 0.5 * text_offset, is.y, true)?;
+                    paint_text(is.x - 0.5 * self.text_offset, is.y, true)?;
                 }
             }
         }
