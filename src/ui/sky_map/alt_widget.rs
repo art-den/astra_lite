@@ -24,16 +24,17 @@ pub fn paint_altitude_by_time(
         .lookup_color("theme_base_color")
         .unwrap_or(gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
 
-    let font_size_pt = 8.0;
-    let font_size_px = font_size_to_pixels(FontSize::Pt(font_size_pt), dpmm_y);
-    cr.set_font_size(font_size_px);
+    let font_desc = sc.font(gtk::StateFlags::ACTIVE);
+    let pl = area.create_pango_layout(None);
+    pl.set_font_description(Some(&font_desc));
 
     let width = area.allocated_width() as f64;
     let height = area.allocated_height() as f64;
 
-    let te = cr.text_extents("#")?;
-    let legend_height = 3.0 * te.height();
-    let legend_rect_size = 1.5 * te.height();
+    pl.set_text("#");
+
+    let legend_height = 1.5 * pl.pixel_size().1 as f64;
+    let legend_rect_size = 1.0 * pl.pixel_size().1 as f64;
 
     let day_color = (0.45, 0.45, 0.0);
     let twilight_color = (0.3, 0.3, 0.0);
@@ -53,13 +54,14 @@ pub fn paint_altitude_by_time(
         cr.stroke_preserve()?;
         cr.set_source_rgb(r, g, b);
         cr.fill()?;
-        x += 1.5 * legend_rect_size;
+        x += legend_rect_size * 1.2;
 
+        pl.set_text(text);
+        let text_height = pl.pixel_size().1 as f64;
+        cr.move_to(x, 0.5 * legend_height - 0.5 * text_height);
         cr.set_source_rgb(fg_color.red(), fg_color.green(), fg_color.blue());
-        let te = cr.text_extents(text)?;
-        cr.move_to(x, 0.5 * legend_height - (0.5 * te.height() + te.y_bearing()));
-        cr.show_text(text)?;
-        x += te.width() + legend_rect_size;
+        pangocairo::functions::show_layout(cr, &pl);
+        x += pl.pixel_size().0 as f64 + 0.5 * legend_rect_size;
 
         Ok(())
     };
@@ -171,10 +173,14 @@ pub fn paint_altitude_by_time(
             cr.stroke()?;
 
             let text = format!("{}h", hour);
-            let te = cr.text_extents(&text)?;
-            cr.move_to(x as f64, height - 0.33 * te.height());
+            pl.set_text(&text);
+            let (text_width, text_height) = pl.pixel_size();
+            cr.move_to(
+                x as f64 - 0.5 * text_width as f64,
+                height - text_height as f64
+            );
             cr.set_source_rgba(fg_r, fg_g, fg_b, 1.0);
-            cr.show_text(&text)?;
+            pangocairo::functions::show_layout(cr, &pl);
         }
         prev_hour = hour;
     }
@@ -193,10 +199,14 @@ pub fn paint_altitude_by_time(
         text += &format!(" Moon phase = {:.0}%", 100.0 * max_moon_phase);
     }
     if !text.is_empty() {
-        let te = cr.text_extents(&text)?;
-        cr.move_to(3.0, legend_height + te.height() + 0.25 * te.height());
+        let mut smaller_font = font_desc.clone();
+        smaller_font.set_size(8 * font_desc.size() / 10);
+        pl.set_font_description(Some(&smaller_font));
+
+        pl.set_text(&text);
+        cr.move_to(3.0, legend_height);
         cr.set_source_rgba(fg_r, fg_g, fg_b, 1.0);
-        cr.show_text(&text)?;
+        pangocairo::functions::show_layout(cr, &pl);
     }
 
     cr.rectangle(0.0, 0.0, width, height);
