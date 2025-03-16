@@ -56,7 +56,7 @@ impl Panel {
             attrs.insert(pango::AttrInt::new_weight(pango::Weight::Bold));
             let expander = gtk::Expander::builder()
                 .visible(true)
-                .label(&format!("[ {} ]", self.name))
+                .label(&self.name)
                 .build();
             expander.style_context().add_class("expander");
             let label = expander.label_widget().unwrap().downcast::<gtk::Label>().unwrap();
