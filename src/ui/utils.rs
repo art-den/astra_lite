@@ -127,11 +127,18 @@ pub fn draw_histogram(
     let p75 = "75%";
     let p100 = "100%";
 
-    let fg = area.style_context().color(gtk::StateFlags::NORMAL);
-    let bg = area.style_context().lookup_color("theme_base_color").unwrap_or(gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
+    let sc = area.style_context();
+    let fg = sc.color(gtk::StateFlags::NORMAL);
+    let bg = sc.lookup_color("theme_base_color")
+        .unwrap_or(gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
+    let font = sc.font(gtk::StateFlags::NORMAL);
+    let layout = area.create_pango_layout(None);
+    layout.set_font_description(Some(&font));
 
-    let max_y_text_te = cr.text_extents(p100)?;
-    let left_margin = max_y_text_te.width() + 5.0;
+    layout.set_text(p100);
+    let (left_margin, _) = layout.pixel_size();
+    let left_margin = 1.1 * left_margin as f64;
+
     let right_margin = 3.0;
     let top_margin = 3.0;
     let bottom_margin = cr.text_extents(p0)?.width() + 3.0;
@@ -201,24 +208,29 @@ pub fn draw_histogram(
 
     cr.set_line_width(1.0);
     cr.set_source_rgb(fg.red(), fg.green(), fg.blue());
-    cr.move_to(0.0, top_margin+max_y_text_te.height());
-    cr.show_text(p100)?;
-    cr.move_to(0.0, height as f64 - bottom_margin);
-    cr.show_text(p0)?;
+    layout.set_text(p100);
+    cr.move_to(0.0, top_margin);
+    pangocairo::show_layout(cr, &layout);
+
+    layout.set_text(p0);
+    cr.move_to(0.0, height as f64 - bottom_margin - layout.pixel_size().1 as f64);
+    pangocairo::show_layout(cr, &layout);
 
     let paint_x_percent = |x, text| -> anyhow::Result<()> {
-        let te = cr.text_extents(text)?;
-        let mut tx = x-te.width()/2.0;
-        if tx + te.width() > width as f64 {
-            tx = width as f64 - te.width();
+        layout.set_text(text);
+        let (text_width, _) = layout.pixel_size();
+
+        let mut tx = x - 0.5 * text_width as f64;
+        if tx + text_width as f64 > width as f64 {
+            tx = width as f64 - text_width as f64;
         }
 
         cr.move_to(x, top_margin+area_height-3.0);
         cr.line_to(x, top_margin+area_height+3.0);
         cr.stroke()?;
 
-        cr.move_to(tx, top_margin+area_height-te.y_bearing()+3.0);
-        cr.show_text(text)?;
+        cr.move_to(tx, top_margin+area_height+3.0);
+        pangocairo::show_layout(cr, &layout);
         Ok(())
     };
 
