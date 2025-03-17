@@ -334,7 +334,7 @@ fn draw_left_axis(
             area_rect.left - width as f64 - margin,
             y_crd - 0.5 * height as f64
         );
-        pangocairo::functions::show_layout(ctx, layout);
+        pangocairo::show_layout(ctx, layout);
         if min_max_eq {
             break;
         }

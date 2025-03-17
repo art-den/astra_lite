@@ -856,7 +856,7 @@ impl<'a> Item for DsoNamePainter<'a> {
         for item in &self.0.names {
             ctx.layout.set_text(item.text());
             ctx.cairo.move_to(crd.x, y);
-            pangocairo::functions::show_layout(ctx.cairo, ctx.layout);
+            pangocairo::show_layout(ctx.cairo, ctx.layout);
             let (_, height) = ctx.layout.pixel_size();
             y += 0.8 * height as f64;
         }
@@ -1120,7 +1120,7 @@ impl<'a> StarPainter<'a> {
                 pt.x + 0.5 * diam - 0.1 * t_height,
                 pt.y + 0.5 * diam - t_height
             );
-            pangocairo::functions::show_layout(ctx.cairo, ctx.layout);
+            pangocairo::show_layout(ctx.cairo, ctx.layout);
             pt.y += 0.8 * t_height;
             Ok(())
         };
@@ -1241,7 +1241,7 @@ impl Item for EqGridItem {
                         x -= width as f64;
                     }
                     ctx.cairo.move_to(x, y - 0.5 * height as f64);
-                    pangocairo::functions::show_layout(ctx.cairo, ctx.layout);
+                    pangocairo::show_layout(ctx.cairo, ctx.layout);
                     Ok(())
                 };
 
@@ -1352,7 +1352,7 @@ impl<'a> Item for WorldSide<'a> {
             points[0].y - 0.5 * height as f64
         );
         ctx.cairo.set_source_rgba(0.8, 0.0, 0.0, self.alpha);
-        pangocairo::functions::show_layout(ctx.cairo, ctx.layout);
+        pangocairo::show_layout(ctx.cairo, ctx.layout);
         Ok(())
     }
 }
@@ -1552,7 +1552,7 @@ fn paint_text_under_line(
         cairo.save()?;
         cairo.rotate(angle);
         cairo.rel_move_to(0.0, -height as f64);
-        pangocairo::functions::show_layout(cairo, layout);
+        pangocairo::show_layout(cairo, layout);
         cairo.restore()?;
     }
 

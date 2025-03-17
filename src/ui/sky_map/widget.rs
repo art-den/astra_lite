@@ -329,7 +329,7 @@ impl SkymapWidget {
         ctx.move_to(1.0, 1.0);
         ctx.set_source_rgba(1.0, 1.0, 1.0, 0.45);
         pango_layout.set_text(&fps_str);
-        pangocairo::functions::show_layout(ctx, &pango_layout);
+        pangocairo::show_layout(ctx, &pango_layout);
 
         glib::Propagation::Stop
     }

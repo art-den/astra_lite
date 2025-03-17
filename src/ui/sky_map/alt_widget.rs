@@ -58,7 +58,7 @@ pub fn paint_altitude_by_time(
         let text_height = pl.pixel_size().1 as f64;
         cr.move_to(x, 0.5 * legend_height - 0.5 * text_height);
         cr.set_source_rgb(fg_color.red(), fg_color.green(), fg_color.blue());
-        pangocairo::functions::show_layout(cr, &pl);
+        pangocairo::show_layout(cr, &pl);
         x += pl.pixel_size().0 as f64 + 0.5 * legend_rect_size;
 
         Ok(())
@@ -178,7 +178,7 @@ pub fn paint_altitude_by_time(
                 height - text_height as f64
             );
             cr.set_source_rgba(fg_r, fg_g, fg_b, 1.0);
-            pangocairo::functions::show_layout(cr, &pl);
+            pangocairo::show_layout(cr, &pl);
         }
         prev_hour = hour;
     }
@@ -204,7 +204,7 @@ pub fn paint_altitude_by_time(
         pl.set_text(&text);
         cr.move_to(3.0, legend_height);
         cr.set_source_rgba(fg_r, fg_g, fg_b, 1.0);
-        pangocairo::functions::show_layout(cr, &pl);
+        pangocairo::show_layout(cr, &pl);
     }
 
     cr.rectangle(0.0, 0.0, width, height);
