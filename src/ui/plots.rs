@@ -2,7 +2,7 @@
 
 use std::f64::consts::PI;
 
-use gtk::{prelude::*, gdk};
+use gtk::{prelude::*, gdk, pango};
 
 #[derive(PartialEq)]
 pub enum PlotPointStyle {
@@ -118,8 +118,13 @@ pub fn draw_plots(
         return Ok(());
     };
 
-    draw_left_axis(plots, margin, &range, &area_rect, ctx, &def_fg)?;
-    draw_bottom_axis(plots, margin, &range, &area_rect, ctx, &def_fg)?;
+    let sc = da.style_context();
+    let font = sc.font(gtk::StateFlags::NORMAL);
+    let layout = da.create_pango_layout(None);
+    layout.set_font_description(Some(&font));
+
+    draw_left_axis(plots, margin, &range, &area_rect, ctx, &layout, &def_fg)?;
+    draw_bottom_axis(plots, margin, &range, &area_rect, ctx, &layout, &def_fg)?;
     for plot_idx in 0..plots.plot_count {
         draw_plot_lines(plot_idx, plots, &range, &area_rect, ctx)?;
     }
@@ -282,6 +287,7 @@ fn draw_left_axis(
     range:     &DataRange,
     area_rect: &AreaRect,
     ctx:       &gtk::cairo::Context,
+    layout:    &pango::Layout,
     def_fg:    &gtk::gdk::RGBA,
 ) -> anyhow::Result<()> {
     let font_height = ctx.text_extents("0")?.height();
@@ -322,12 +328,13 @@ fn draw_left_axis(
         );
         let dec_digits = plots.left_axis.dec_digits;
         let text = format!("{:.dec_digits$}", y);
-        let extents = ctx.text_extents(&text)?;
+        layout.set_text(&text);
+        let (width, height) = layout.pixel_size();
         ctx.move_to(
-            area_rect.left - extents.width() - margin,
-            y_crd + extents.y_advance() + extents.height() / 2.0
+            area_rect.left - width as f64 - margin,
+            y_crd - 0.5 * height as f64
         );
-        ctx.show_text(&text)?;
+        pangocairo::functions::show_layout(ctx, layout);
         if min_max_eq {
             break;
         }
@@ -341,6 +348,7 @@ fn draw_bottom_axis(
     range:     &DataRange,
     area_rect: &AreaRect,
     ctx:       &gtk::cairo::Context,
+    layout:    &pango::Layout,
     def_fg:    &gtk::gdk::RGBA,
 ) -> anyhow::Result<()> {
     let dec_digits = plots.bottom_axis.dec_digits;
@@ -381,12 +389,14 @@ fn draw_bottom_axis(
             text_color.alpha()
         );
         let text = format!("{:.dec_digits$}", x);
-        let extents = ctx.text_extents(&text)?;
+        layout.set_text(&text);
+        let (width, _) = layout.pixel_size();
         ctx.move_to(
-            x_crd - extents.width() * 0.5,
-            area_rect.bottom - extents.y_bearing() + margin
+            x_crd - width as f64 * 0.5,
+            area_rect.bottom + margin
         );
-        ctx.show_text(&text)?;
+        pangocairo::show_layout(ctx, layout);
+
         if min_max_eq {
             break;
         }
