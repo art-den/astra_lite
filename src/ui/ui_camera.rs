@@ -1501,6 +1501,13 @@ impl CameraUi {
 
     fn handler_action_start_live_stacking(self: &Rc<Self>) {
         self.main_ui.get_all_options();
+
+        let ok = exec_and_show_error(&self.window, || {
+            self.core.check_before_saving_raw_or_live_stacking()?;
+            Ok(())
+        });
+        if !ok { return; }
+
         let info_pairs = self.get_short_info_pairs(true);
         let dialog = StartDialog::new(
             self.window.upcast_ref(),
@@ -1519,6 +1526,13 @@ impl CameraUi {
 
     fn handler_action_continue_live_stacking(&self) {
         self.main_ui.get_all_options();
+
+        let ok = exec_and_show_error(&self.window, || {
+            self.core.check_before_saving_raw_or_live_stacking()?;
+            Ok(())
+        });
+        if !ok { return; }
+
         exec_and_show_error(&self.window, || {
             self.core.continue_prev_mode()?;
             Ok(())
@@ -1653,6 +1667,13 @@ impl CameraUi {
 
     fn handler_action_start_save_raw_frames(self: &Rc<Self>) {
         self.main_ui.get_all_options();
+
+        let ok = exec_and_show_error(&self.window, || {
+            self.core.check_before_saving_raw_or_live_stacking()?;
+            Ok(())
+        });
+        if !ok { return; }
+
         let info_pairs = self.get_short_info_pairs(false);
         let dialog = StartDialog::new(
             self.window.upcast_ref(),
@@ -1667,6 +1688,13 @@ impl CameraUi {
 
     fn handler_action_continue_save_raw_frames(&self) {
         self.main_ui.get_all_options();
+
+        let ok = exec_and_show_error(&self.window, || {
+            self.core.check_before_saving_raw_or_live_stacking()?;
+            Ok(())
+        });
+        if !ok { return; }
+
         exec_and_show_error(&self.window, || {
             self.core.continue_prev_mode()?;
             Ok(())

@@ -6,10 +6,25 @@ use std::{
 use gtk::glib::PropertySet;
 
 use crate::{
-    core::consts::*, guiding::{external_guider::*, phd2_conn, phd2_guider::*}, image::stars_offset::*, indi, options::*, ui::sky_map::math::EqCoord, utils::timer::*
+    core::consts::*,
+    guiding::{external_guider::*, phd2_conn, phd2_guider::*},
+    image::stars_offset::*,
+    indi, options::*,
+    ui::sky_map::math::EqCoord,
+    utils::timer::*
 };
+
 use super::{
-    events::*, frame_processing::*, mode_capture_platesolve::*, mode_darks_library::*, mode_focusing::*, mode_goto::*, mode_mount_calibration::*, mode_polar_align::PolarAlignMode, mode_tacking_pictures::*, mode_waiting::*
+    events::*,
+    frame_processing::*,
+    mode_capture_platesolve::*,
+    mode_darks_library::*,
+    mode_focusing::*,
+    mode_goto::*,
+    mode_mount_calibration::*,
+    mode_polar_align::PolarAlignMode,
+    mode_tacking_pictures::*,
+    mode_waiting::*
 };
 
 #[derive(PartialEq, Copy, Clone, Debug)]
@@ -589,6 +604,28 @@ impl Core {
             &self.options,
         )?;
         self.start_new_mode(mode, false, true)?;
+        Ok(())
+    }
+
+    pub fn check_before_saving_raw_or_live_stacking(&self) -> anyhow::Result<()> {
+        let options = self.options.read().unwrap();
+
+        if options.guiding.mode == GuidingMode::External {
+            let external_guider = self.ext_guider.lock().unwrap();
+
+            let mut connected = false;
+            if let Some(external_guider) = external_guider.as_ref() {
+                connected = external_guider.is_active();
+            }
+
+            if !connected {
+                anyhow::bail!(
+                    "Guiding by external software was selected but \
+                    no external software is connected!"
+                );
+            }
+        }
+
         Ok(())
     }
 
