@@ -18,19 +18,26 @@ pub enum ExtGuiderEvent {
 
 pub type ExtGuiderEventFn = Box<dyn Fn(ExtGuiderEvent) + Send + Sync + 'static>;
 
+pub enum ExtGuiderState {
+    Stopped,
+    Guiding,
+    Dithering,
+}
+
 pub trait ExternalGuider {
     fn get_type(&self) -> ExtGuiderType;
+    fn state(&self) -> ExtGuiderState;
     fn connect(&self) -> anyhow::Result<()>;
-    fn is_active(&self) -> bool;
+    fn is_connected(&self) -> bool;
     fn pause_guiding(&self, pause: bool) -> anyhow::Result<()>;
     fn start_dithering(&self, pixels: i32) -> anyhow::Result<()>;
     fn disconnect(&self) -> anyhow::Result<()>;
-    fn connect_event_handler(&self, handler: ExtGuiderEventFn);
+    fn connect_events_handler(&self, handler: ExtGuiderEventFn);
 }
 
 pub struct ExternalGuiderCtrl {
     phd2:          Arc<phd2_conn::Connection>,
-    ext_guider:    Mutex<Option<Box<dyn ExternalGuider + Send>>>,
+    ext_guider:    Mutex<Option<Arc<dyn ExternalGuider + Send + Sync>>>,
     event_handler: Mutex<Option<ExtGuiderEventFn>>,
 }
 
@@ -62,9 +69,9 @@ impl ExternalGuiderCtrl {
 
         // Create new guider
 
-        let guider: Box<dyn ExternalGuider + Send> = match guider {
+        let guider: Arc<dyn ExternalGuider + Send + Sync> = match guider {
             ExtGuiderType::Phd2 =>
-                Box::new(ExternalGuiderPhd2::new(&self.phd2)),
+                ExternalGuiderPhd2::new(&self.phd2),
         };
 
         // Connect to guider
@@ -74,7 +81,7 @@ impl ExternalGuiderCtrl {
         // Connect guider ecents
 
         let self_ = Arc::clone(self);
-        guider.connect_event_handler(Box::new(move |event| {
+        guider.connect_events_handler(Box::new(move |event| {
             log::info!("External guider event = {:?}", event);
             let mut events_handler = self_.event_handler.lock().unwrap();
             if let Some(events_handler) = &mut *events_handler {
@@ -103,7 +110,7 @@ impl ExternalGuiderCtrl {
     pub fn is_active(&self) -> bool {
         let ext_guider = self.ext_guider.lock().unwrap();
         if let Some(ext_guider) = &*ext_guider {
-            ext_guider.is_active()
+            ext_guider.is_connected()
         } else {
             false
         }
