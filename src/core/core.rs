@@ -7,7 +7,7 @@ use gtk::glib::PropertySet;
 
 use crate::{
     core::consts::*,
-    guiding::{external_guider::*, phd2_conn, phd2_guider::*},
+    guiding::external_guider::*,
     image::stars_offset::*,
     indi, options::*,
     ui::sky_map::math::EqCoord,
@@ -103,7 +103,6 @@ impl ModeData {
 
 pub struct Core {
     indi:               Arc<indi::Connection>,
-    phd2:               Arc<phd2_conn::Connection>,
     options:            Arc<RwLock<Options>>,
     mode_data:          RwLock<ModeData>,
     subscribers:        Arc<EventSubscriptions>,
@@ -118,7 +117,7 @@ pub struct Core {
     /// commands for passing into frame processing thread
     img_cmds_sender:    mpsc::Sender<FrameProcessCommand>, // TODO: make API
     frame_proc_thread:  Option<JoinHandle<()>>,
-    ext_guider:         Arc<Mutex<Option<Box<dyn ExternalGuider + Send>>>>,
+    ext_guider:         Arc<ExternalGuiderCtrl>,
 }
 
 impl Core {
@@ -126,7 +125,6 @@ impl Core {
         let (img_cmds_sender, frame_proc_thread) = start_frame_processing_thread();
         let result = Arc::new(Self {
             indi:               Arc::new(indi::Connection::new()),
-            phd2:               Arc::new(phd2_conn::Connection::new()),
             options:            Arc::new(RwLock::new(Options::default())),
             mode_data:          RwLock::new(ModeData::new()),
             subscribers:        Arc::new(EventSubscriptions::new()),
@@ -137,10 +135,12 @@ impl Core {
             timer:              Arc::new(Timer::new()),
             exp_stuck_wd:       AtomicU16::new(0),
             img_proc_stop_flag: Mutex::new(Arc::new(AtomicBool::new(false))),
-            ext_guider:         Arc::new(Mutex::new(None)),
+            ext_guider:         ExternalGuiderCtrl::new(),
             img_cmds_sender,
             frame_proc_thread:  Some(frame_proc_thread),
         });
+
+        result. set_ext_guider_events_handler();
         result.connect_indi_events();
         result.connect_1s_timer_event();
         result.start_taking_frames_restart_timer();
@@ -174,54 +174,22 @@ impl Core {
         self.timer.clear();
     }
 
-    pub fn phd2(&self) -> &Arc<phd2_conn::Connection> {
-        &self.phd2
+    pub fn ext_giuder(&self) -> Arc<ExternalGuiderCtrl> {
+        Arc::clone(&self.ext_guider)
     }
 
-    pub fn create_ext_guider(self: &Arc<Self>, guider: ExtGuiderType) -> anyhow::Result<()> {
-        let mut ext_guider = self.ext_guider.lock().unwrap();
-
-        if let Some(ext_guider) = &mut *ext_guider {
-            ext_guider.disconnect()?;
-        }
-
-        match guider {
-            ExtGuiderType::Phd2 => {
-                let guider = Box::new(ExternalGuiderPhd2::new(&self.phd2));
-                guider.connect()?;
-                *ext_guider = Some(guider);
-                drop(ext_guider);
-                self.connect_ext_guider_events();
-            }
-        }
-        Ok(())
-    }
-
-    pub fn connect_ext_guider_events(self: &Arc<Self>) {
-        let mut ext_guider = self.ext_guider.lock().unwrap();
-        if let Some(ext_guider) = &mut *ext_guider {
-            let self_ = Arc::clone(self);
-            ext_guider.connect_event_handler(Box::new(move |event| {
-                log::info!("External guider event = {:?}", event);
-                let result = || -> anyhow::Result<()> {
-                    let mut mode = self_.mode_data.write().unwrap();
-                    let res = mode.mode.notify_guider_event(event)?;
-                    self_.apply_change_result(res, &mut mode)?;
-                    Ok(())
-                } ();
-                self_.process_error(result, "Core::connect_ext_guider_events");
-            }));
-        }
-    }
-
-    pub fn disconnect_ext_guider(&self) -> anyhow::Result<()> {
-        let mut ext_guider = self.ext_guider.lock().unwrap();
-        if let Some(guider) = ext_guider.take() {
-            guider.disconnect()?;
-        } else {
-            return Err(anyhow::anyhow!("Not connected"));
-        }
-        Ok(())
+    fn set_ext_guider_events_handler(self: &Arc<Self>) {
+        let self_ = Arc::clone(self);
+        self.ext_guider.set_events_handler(Box::new(move |event| {
+            log::info!("External guider event = {:?}", event);
+            let result = || -> anyhow::Result<()> {
+                let mut mode = self_.mode_data.write().unwrap();
+                let res = mode.mode.notify_guider_event(event)?;
+                self_.apply_change_result(res, &mut mode)?;
+                Ok(())
+            } ();
+            self_.process_error(result, "Core::connect_ext_guider_events");
+        }));
     }
 
     pub fn stop_img_process_thread(&self) -> anyhow::Result<()> {
@@ -609,16 +577,11 @@ impl Core {
 
     pub fn check_before_saving_raw_or_live_stacking(&self) -> anyhow::Result<()> {
         let options = self.options.read().unwrap();
+        let guiding_mode = options.guiding.mode.clone();
+        drop(options);
 
-        if options.guiding.mode == GuidingMode::External {
-            let external_guider = self.ext_guider.lock().unwrap();
-
-            let mut connected = false;
-            if let Some(external_guider) = external_guider.as_ref() {
-                connected = external_guider.is_active();
-            }
-
-            if !connected {
+        if guiding_mode == GuidingMode::External {
+            if !self.ext_guider.is_active() {
                 anyhow::bail!(
                     "Guiding by external software was selected but \
                     no external software is connected!"
@@ -637,7 +600,7 @@ impl Core {
             &self.options,
         )?;
         self.live_stacking.clear();
-        mode.set_guider(&self.ext_guider);
+        mode.set_external_guider(&self.ext_guider);
         mode.set_ref_stars(&self.ref_stars);
         self.start_new_mode(mode, true, true)?;
         Ok(())
@@ -651,7 +614,7 @@ impl Core {
             &self.options,
         )?;
         self.live_stacking.clear();
-        mode.set_guider(&self.ext_guider);
+        mode.set_external_guider(&self.ext_guider);
         mode.set_ref_stars(&self.ref_stars);
         mode.set_live_stacking(&self.live_stacking);
         self.start_new_mode(mode, true, true)?;

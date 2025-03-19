@@ -1,5 +1,9 @@
 #![allow(dead_code)]
 
+use std::sync::{Arc, Mutex};
+
+use super::{phd2_conn, phd2_guider::ExternalGuiderPhd2};
+
 pub enum ExtGuiderType {
     Phd2,
 }
@@ -22,4 +26,96 @@ pub trait ExternalGuider {
     fn start_dithering(&self, pixels: i32) -> anyhow::Result<()>;
     fn disconnect(&self) -> anyhow::Result<()>;
     fn connect_event_handler(&self, handler: ExtGuiderEventFn);
+}
+
+pub struct ExternalGuiderCtrl {
+    phd2:          Arc<phd2_conn::Connection>,
+    ext_guider:    Mutex<Option<Box<dyn ExternalGuider + Send>>>,
+    event_handler: Mutex<Option<ExtGuiderEventFn>>,
+}
+
+impl ExternalGuiderCtrl {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            phd2:          Arc::new(phd2_conn::Connection::new()),
+            ext_guider:    Mutex::new(None),
+            event_handler: Mutex::new(None),
+        })
+    }
+
+    pub fn set_events_handler(&self, handler: ExtGuiderEventFn) {
+        *self.event_handler.lock().unwrap() = Some(handler);
+    }
+
+    pub fn phd2(&self) -> &Arc<phd2_conn::Connection> {
+        &self.phd2
+    }
+
+    pub fn create_and_connect(self: &Arc<Self>, guider: ExtGuiderType) -> anyhow::Result<()> {
+        let mut ext_guider = self.ext_guider.lock().unwrap();
+
+        // Disconect previous one
+
+        if let Some(ext_guider) = &mut *ext_guider {
+            ext_guider.disconnect()?;
+        }
+
+        // Create new guider
+
+        let guider: Box<dyn ExternalGuider + Send> = match guider {
+            ExtGuiderType::Phd2 =>
+                Box::new(ExternalGuiderPhd2::new(&self.phd2)),
+        };
+
+        // Connect to guider
+
+        guider.connect()?;
+
+        // Connect guider ecents
+
+        let self_ = Arc::clone(self);
+        guider.connect_event_handler(Box::new(move |event| {
+            log::info!("External guider event = {:?}", event);
+            let mut events_handler = self_.event_handler.lock().unwrap();
+            if let Some(events_handler) = &mut *events_handler {
+                events_handler(event);
+            }
+        }));
+
+        // Assign guider
+
+        *ext_guider = Some(guider);
+        drop(ext_guider);
+
+        Ok(())
+    }
+
+    pub fn disconnect(&self) -> anyhow::Result<()> {
+        let mut ext_guider = self.ext_guider.lock().unwrap();
+        if let Some(guider) = ext_guider.take() {
+            guider.disconnect()?;
+        } else {
+            return Err(anyhow::anyhow!("Not connected"));
+        }
+        Ok(())
+    }
+
+    pub fn is_active(&self) -> bool {
+        let ext_guider = self.ext_guider.lock().unwrap();
+        if let Some(ext_guider) = &*ext_guider {
+            ext_guider.is_active()
+        } else {
+            false
+        }
+    }
+
+    pub fn start_dithering(&self, pixels: i32) -> anyhow::Result<()> {
+        let ext_guider = self.ext_guider.lock().unwrap();
+        let Some(ext_guider) = &*ext_guider else {
+            anyhow::bail!("Extarnal guider is not created");
+        };
+        ext_guider.start_dithering(pixels)?;
+        Ok(())
+    }
+
 }

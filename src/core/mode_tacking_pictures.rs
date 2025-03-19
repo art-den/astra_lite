@@ -69,7 +69,7 @@ enum State {
 // Guider data for guiding by external program
 struct ExtGuiderData {
     dither_exp_sum: f64,
-    ext_guider:     Arc<Mutex<Option<Box<dyn ExternalGuider + Send>>>>,
+    guider:         Arc<ExternalGuiderCtrl>,
 }
 
 struct RefocusData {
@@ -203,12 +203,12 @@ impl TackingPicturesMode {
         })
     }
 
-    pub fn set_guider(
+    pub fn set_external_guider(
         &mut self,
-        ext_guider: &Arc<Mutex<Option<Box<dyn ExternalGuider + Send>>>>
+        ext_guider: &Arc<ExternalGuiderCtrl>
     ) {
         self.guider = Some(ExtGuiderData {
-            ext_guider:     Arc::clone(ext_guider),
+            guider:         Arc::clone(ext_guider),
             dither_exp_sum: 0.0,
         });
     }
@@ -600,12 +600,7 @@ impl TackingPicturesMode {
         };
 
         let mut fun = || -> anyhow::Result<NotifyResult> {
-            let guider = guider_data.ext_guider.lock().unwrap();
-            let Some(guider) = &*guider else {
-                return Ok(NotifyResult::Empty);
-            };
-
-            if !guider.is_active() {
+            if !guider_data.guider.is_active() {
                 return Ok(NotifyResult::Empty);
             }
 
@@ -617,7 +612,7 @@ impl TackingPicturesMode {
                     guider_data.dither_exp_sum = 0.0;
                     let dist = guider_options.ext_guider.dith_dist;
                     log::info!("Starting dithering by external guider with {} pixels...", dist);
-                    guider.start_dithering(dist)?;
+                    guider_data.guider.start_dithering(dist)?;
                     self.abort()?;
                     self.state = State::ExternalDithering;
                     return Ok(NotifyResult::ProgressChanges);

@@ -366,7 +366,7 @@ impl HardwareUi {
 
         // Connect PHD2 events
         let sender_clone = sender.clone();
-        self.core.phd2().connect_event_handler(move |event| {
+        self.core.ext_giuder().phd2().connect_event_handler(move |event| {
             sender_clone.send_blocking(HardwareEvent::Phd2(event)).unwrap();
         });
 
@@ -547,10 +547,10 @@ impl HardwareUi {
         log::info!("Done!");
 
         log::info!("Stop connection to PHD2...");
-        _ = self.core.phd2().stop();
+        _ = self.core.ext_giuder().phd2().stop();
         log::info!("Done!");
 
-        self.core.phd2().discnnect_all();
+        self.core.ext_giuder().phd2().discnnect_all();
     }
 
     fn correct_widgets_by_cur_state(&self) {
@@ -568,7 +568,7 @@ impl HardwareUi {
             indi::ConnState::Disconnected|
             indi::ConnState::Error(_)
         );
-        let phd2_working = self.core.phd2().is_working();
+        let phd2_working = self.core.ext_giuder().phd2().is_working();
         enable_actions(&self.window, &[
             ("conn_indi",    conn_en),
             ("disconn_indi", disconn_en),
@@ -688,7 +688,7 @@ impl HardwareUi {
     fn handler_action_conn_phd2(&self) {
         exec_and_show_error(&self.window, || {
             self.read_options_from_widgets();
-            self.core.create_ext_guider(ExtGuiderType::Phd2)?;
+            self.core.ext_giuder().create_and_connect(ExtGuiderType::Phd2)?;
             self.correct_widgets_by_cur_state();
             Ok(())
         });
@@ -696,7 +696,7 @@ impl HardwareUi {
 
     fn handler_action_disconn_phd2(&self) {
         exec_and_show_error(&self.window, || {
-            self.core.disconnect_ext_guider()?;
+            self.core.ext_giuder().disconnect()?;
             self.correct_widgets_by_cur_state();
             Ok(())
         });
