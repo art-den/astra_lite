@@ -474,6 +474,15 @@ impl PropValue {
         }
     }
 
+    pub fn to_arc_string(&self) -> Result<Arc<String>> {
+        match self {
+            Self::Text(text) =>
+                Ok(Arc::clone(text)),
+            _ =>
+                Err(Error::Internal("Element type is not text".to_string())),
+        }
+    }
+
     pub fn type_str(&self) -> &'static str {
         match self {
             PropValue::Text(_) => "Text",
@@ -816,10 +825,15 @@ impl Device {
         Some(self.props.remove(index))
     }
 
-    fn get_interface(&self) -> Option<DriverInterface> {
-        let elem = self.get_property_element_opt("DRIVER_INFO", "DRIVER_INTERFACE")?;
-        let i32_value = elem.value.to_i32().unwrap_or(0);
-        Some(DriverInterface::from_bits_truncate(i32_value as u32))
+    fn get_driver_info(&self) -> Option<DriverInfo> {
+        let iface_elem = self.get_property_element_opt("DRIVER_INFO", "DRIVER_INTERFACE")?;
+        let i32_value = iface_elem.value.to_i32().unwrap_or(0);
+        let interface = DriverInterface::from_bits_truncate(i32_value as u32);
+
+        let exec_elem = self.get_property_element_opt("DRIVER_INFO", "DRIVER_EXEC")?;
+        let exec = exec_elem.value.to_arc_string().ok()?;
+
+        Some(DriverInfo{ interface, exec })
     }
 }
 
@@ -884,8 +898,8 @@ impl Devices {
     fn get_list_iter(&self) -> Box<dyn Iterator<Item = ExportDevice> + '_> {
         Box::new(self.list
             .iter()
-            .filter_map(|device| device.get_interface().map(|iface| (device, iface)))
-            .map(|(device, interface)| ExportDevice { name: Arc::clone(&device.name), interface })
+            .filter_map(|device| device.get_driver_info().map(|iface| (device, iface)))
+            .map(|(device, di)| ExportDevice { name: Arc::clone(&device.name), interface: di.interface })
         )
     }
 
@@ -1093,13 +1107,11 @@ impl Devices {
         }
     }
 
-    fn get_driver_interface(&self, device_name: &str) -> Result<DriverInterface> {
-        let (_, elem) = self
-            .find_by_name_res(device_name)?
-            .get_property_element("DRIVER_INFO", "DRIVER_INTERFACE")?;
-        let interface_i32 = elem.value.to_i32().unwrap_or(0);
-        let interface = DriverInterface::from_bits_truncate(interface_i32 as u32);
-        Ok(interface)
+    fn get_driver_info(&self, device_name: &str) -> Result<DriverInfo> {
+        let device = self.find_by_name_res(device_name)?;
+        device
+            .get_driver_info()
+            .ok_or_else(|| Error::Internal("device.get_interface() returned None".to_string()))
     }
 
     fn get_property(
@@ -1126,6 +1138,10 @@ impl Devices {
     }
 }
 
+pub struct DriverInfo {
+    pub interface: DriverInterface,
+    pub exec:      Arc<String>,
+}
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
@@ -1530,9 +1546,9 @@ impl Connection {
             .collect()
     }
 
-    pub fn get_driver_interface(&self, device_name: &str) -> Result<DriverInterface> {
+    pub fn get_driver_info(&self, device_name: &str) -> Result<DriverInfo> {
         let devices = self.devices.lock().unwrap();
-        devices.get_driver_interface(device_name)
+        devices.get_driver_info(device_name)
     }
 
     pub fn get_properties_list(
@@ -3719,12 +3735,12 @@ impl XmlReceiver {
             && name.as_str() == "CONNECT" {
                 let connected = prop_value.to_bool().unwrap_or(false);
                 let devices = self.devices.lock().unwrap();
-                let interface = devices.get_driver_interface(&device_name);
+                let di = devices.get_driver_info(&device_name);
                 drop(devices);
 
                 let event_data = DeviceConnectEvent {
                     device_name: Arc::clone(device_name),
-                    interface: interface.unwrap_or(DriverInterface::empty()),
+                    interface: di.map(|di| di.interface).unwrap_or(DriverInterface::empty()),
                     timestamp,
                     connected,
                 };
@@ -3908,7 +3924,7 @@ impl XmlReceiver {
                     events_sender
                 );
             } else {
-                let drv_interface = devices.get_driver_interface(&device_name)?;
+                let drv_info = devices.get_driver_info(&device_name)?;
                 let Some(removed) = devices.remove(&device_name) else {
                     anyhow::bail!(Error::DeviceNotExists(device_name));
                 };
@@ -3916,7 +3932,7 @@ impl XmlReceiver {
                     timestamp,
                     &removed.name,
                     events_sender,
-                    drv_interface
+                    drv_info.interface
                 );
             }
         // message
