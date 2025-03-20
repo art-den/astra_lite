@@ -831,9 +831,9 @@ impl Device {
         let interface = DriverInterface::from_bits_truncate(i32_value as u32);
 
         let exec_elem = self.get_property_element_opt("DRIVER_INFO", "DRIVER_EXEC")?;
-        let exec = exec_elem.value.to_arc_string().ok()?;
+        let driver = exec_elem.value.to_arc_string().ok()?;
 
-        Some(DriverInfo{ interface, exec })
+        Some(DriverInfo{ interface, driver })
     }
 }
 
@@ -898,8 +898,16 @@ impl Devices {
     fn get_list_iter(&self) -> Box<dyn Iterator<Item = ExportDevice> + '_> {
         Box::new(self.list
             .iter()
-            .filter_map(|device| device.get_driver_info().map(|iface| (device, iface)))
-            .map(|(device, di)| ExportDevice { name: Arc::clone(&device.name), interface: di.interface })
+            .filter_map(|device|
+                device.get_driver_info().map(|iface| (device, iface))
+            )
+            .map(|(device, di)|
+                ExportDevice {
+                    name:      Arc::clone(&device.name),
+                    interface: di.interface,
+                    driver:    Arc::clone(&di.driver)
+                }
+            )
         )
     }
 
@@ -1141,7 +1149,7 @@ impl Devices {
 #[derive(Debug)]
 pub struct DriverInfo {
     pub interface: DriverInterface,
-    pub exec:      Arc<String>,
+    pub driver:    Arc<String>,
 }
 
 bitflags! {
@@ -1178,6 +1186,7 @@ pub enum DeviceCap {
 pub struct ExportDevice {
     pub name:      Arc<String>,
     pub interface: DriverInterface,
+    pub driver:    Arc<String>,
 }
 
 pub enum FrameType {

@@ -722,25 +722,29 @@ impl Core {
         if self.indi.state() != indi::ConnState::Connected {
             return Ok(());
         }
-        let mode_data = self.mode_data.write().unwrap();
-        let Some(cam_device) = &mode_data.mode.cam_device() else {
-            return Ok(());
-        };
-        let options = self.options.read().unwrap();
-        self.init_cam_telescope_data_impl(&cam_device.name, &options)?;
+
+        self.init_cam_telescope_data_impl()?;
         Ok(())
     }
 
-    fn init_cam_telescope_data_impl(&self, cam_name: &str, options: &Options) -> anyhow::Result<()> {
-        let driver_info = self.indi.get_driver_info(cam_name)?;
-        if options.indi.camera.as_deref() == Some(cam_name)
-        || *driver_info.exec != "indi_simulator_guide" {
-            let focal_len = options.telescope.real_focal_length();
-            // Aperture info for simulator only
-            // TODO: real aperture config
+    fn init_cam_telescope_data_impl(&self) -> anyhow::Result<()> {
+        let cam_devices = self.indi.get_devices_list_by_interface(indi::DriverInterface::CCD);
+        let options = self.options.read().unwrap();
+        for device in cam_devices {
+            if !self.indi.camera_is_telescope_info_supported(&device.name)? {
+                continue;
+            }
+            let is_sim_guider = *device.driver == "indi_simulator_guide";
+            let is_selected_guider = options.indi.guid_cam.as_deref() == Some(&*device.name);
+            let is_guider_cam = is_sim_guider || is_selected_guider;
+            let focal_len = if !is_guider_cam {
+                options.telescope.real_focal_length()
+            } else {
+                options.guiding.ext_guider.foc_len
+            };
             let aperture = 0.2 * focal_len;
             self.indi.camera_set_telescope_info(
-                cam_name,
+                &device.name,
                 focal_len,
                 aperture,
                 false,
@@ -774,10 +778,7 @@ impl Core {
 
         // Set telescope info into camera props
 
-        if self.indi.camera_is_telescope_info_supported(&cam_device.name)? {
-            let options = self.options.read().unwrap();
-            self.init_cam_telescope_data_impl(&cam_device.name, &options)?;
-        }
+        self.init_cam_telescope_data_impl()?;
 
         Ok(())
     }
