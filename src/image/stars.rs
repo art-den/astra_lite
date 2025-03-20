@@ -86,7 +86,7 @@ impl Stars {
         Self { items, info }
     }
 
-    fn find_border_for_stars_detection(image: &ImageLayer<u16>) -> u16 {
+    fn find_threshold_for_stars_detection(image: &ImageLayer<u16>) -> u16 {
         let mut diffs = Vec::new();
         for row in image.as_slice().chunks_exact(image.width()) {
             for area in row.chunks_exact(MAX_STAR_DIAM) {
@@ -118,58 +118,77 @@ impl Stars {
     fn find_stars_in_image(image: &ImageLayer<u16>, mt: bool) -> StarItems {
         const MAX_STARS_POINTS_CNT: usize = MAX_STAR_DIAM * MAX_STAR_DIAM;
         let iir_filter_coeffs = IirFilterCoeffs::new(230);
-        let border = Self::find_border_for_stars_detection(image) as u32;
-        let possible_stars = Mutex::new(HashMap::new());
-        let find_possible_stars_in_rows = |y1: usize, y2: usize| {
-            let mut filtered = Vec::new();
-            filtered.resize(image.width(), 0);
-            for y in y1..y2 {
-                if y < MAX_STAR_DIAM/2 || y > image.height()-MAX_STAR_DIAM/2 {
-                    continue;
-                }
-                let row = image.row(y);
-                let mut filter = IirFilter::new();
-                filter.filter_direct_and_revert_u16(&iir_filter_coeffs, row, &mut filtered);
-                for (i, ((v1, v2, v3, v4, v5, v6, v7), f))
-                in row.iter().tuple_windows().zip(&filtered[3..]).enumerate() {
-                    let f1 = *v1 as u32 + *v2 as u32 + *v3 as u32;
-                    let f2 = *v3 as u32 + *v4 as u32 + *v5 as u32;
-                    let f3 = *v5 as u32 + *v6 as u32 + *v7 as u32;
-                    if f1 > f2 || f3 > f2 { continue; }
-                    let f = *f as u32 * 3;
-                    if f2 > f && (f2-f) > border {
-                        let star_x = i as isize+3;
-                        let star_y = y as isize;
-                        if star_x < (MAX_STAR_DIAM/2) as isize
-                        || star_y < (MAX_STAR_DIAM/2) as isize
-                        || star_x > (image.width() - MAX_STAR_DIAM/2) as isize
-                        || star_y > (image.height() - MAX_STAR_DIAM/2) as isize {
-                            continue; // skip points near image border
+        let mut threshold = Self::find_threshold_for_stars_detection(image) as u32;
+        let possible_stars_mutex = Mutex::new(HashMap::new());
+        const MAX_POSSIBLE_STARS_CNT: usize = 10 * MAX_STARS_CNT;
+        loop {
+            let find_possible_stars_in_rows = |y1: usize, y2: usize| {
+                let mut filtered = Vec::new();
+                filtered.resize(image.width(), 0);
+                let mut too_much_possible_stars = false;
+                for y in y1..y2 {
+                    if y < MAX_STAR_DIAM/2 || y > image.height()-MAX_STAR_DIAM/2 {
+                        continue;
+                    }
+                    let row = image.row(y);
+                    let mut filter = IirFilter::new();
+                    filter.filter_direct_and_revert_u16(&iir_filter_coeffs, row, &mut filtered);
+                    for (i, ((v1, v2, v3, v4, v5, v6, v7), f))
+                    in row.iter().tuple_windows().zip(&filtered[3..]).enumerate() {
+                        let f1 = *v1 as u32 + *v2 as u32 + *v3 as u32;
+                        let f2 = *v3 as u32 + *v4 as u32 + *v5 as u32;
+                        let f3 = *v5 as u32 + *v6 as u32 + *v7 as u32;
+                        if f1 > f2 || f3 > f2 { continue; }
+                        let f = *f as u32 * 3;
+                        if f2 > f && (f2-f) > threshold {
+                            let star_x = i as isize+3;
+                            let star_y = y as isize;
+                            if star_x < (MAX_STAR_DIAM/2) as isize
+                            || star_y < (MAX_STAR_DIAM/2) as isize
+                            || star_x > (image.width() - MAX_STAR_DIAM/2) as isize
+                            || star_y > (image.height() - MAX_STAR_DIAM/2) as isize {
+                                continue; // skip points near image border
+                            }
+                            let mut possible_stars = possible_stars_mutex.lock().unwrap();
+                            possible_stars.insert((star_x, star_y), f2 / 3);
+                            if possible_stars.len() >= MAX_POSSIBLE_STARS_CNT {
+                                too_much_possible_stars = true;
+                                break;
+                            }
                         }
-                        possible_stars.lock().unwrap().insert((star_x, star_y), f2 / 3);
+                    }
+                    if too_much_possible_stars {
+                        break;
                     }
                 }
+            };
+
+            let tm = TimeLogger::start();
+            if !mt {
+                find_possible_stars_in_rows(0, image.height());
+            } else {
+                let max_threads = rayon::current_num_threads();
+                let tasks_cnt = if max_threads != 1 { 2 * max_threads  } else { 1 };
+                let image_height = image.height();
+                rayon::scope(|s| {
+                    for t in 0..tasks_cnt {
+                        let y1 = t * image_height / tasks_cnt;
+                        let y2 = (t + 1) * image_height / tasks_cnt;
+                        s.spawn(move |_| { find_possible_stars_in_rows(y1, y2); });
+                    }
+                });
             }
-        };
+            tm.log("find_possible_stars_in_rows");
 
-        let tm = TimeLogger::start();
+            let mut possible_stars = possible_stars_mutex.lock().unwrap();
 
-        if !mt {
-            find_possible_stars_in_rows(0, image.height());
-        } else {
-            let max_threads = rayon::current_num_threads();
-            let tasks_cnt = if max_threads != 1 { 2 * max_threads  } else { 1 };
-            let image_height = image.height();
-            rayon::scope(|s| {
-                for t in 0..tasks_cnt {
-                    let y1 = t * image_height / tasks_cnt;
-                    let y2 = (t + 1) * image_height / tasks_cnt;
-                    s.spawn(move |_| { find_possible_stars_in_rows(y1, y2); });
-                }
-            });
+            if possible_stars.len() >= MAX_POSSIBLE_STARS_CNT {
+                possible_stars.clear();
+                threshold = 3 * (threshold + 1) / 2;
+                continue;
+            }
+            break;
         }
-        let possible_stars = possible_stars.into_inner().unwrap();
-        tm.log("find_possible_stars_in_rows");
 
         // Optimization: find point clusters and leave brightest point from each cluster
 
@@ -177,6 +196,7 @@ impl Stars {
         let mut cluster_filler = FloodFiller::new();
         let mut cluster = Vec::new();
         let mut possible_star_centers = Vec::new();
+        let possible_stars = possible_stars_mutex.into_inner().unwrap();
         for (crd, _) in &possible_stars {
             if processed_points.contains(crd) { continue; }
             let (x, y) = crd;
