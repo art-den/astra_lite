@@ -444,7 +444,7 @@ pub struct EventCommonData {
     inst: i32,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
 pub enum AppState {
     Stopped,
     Selected,

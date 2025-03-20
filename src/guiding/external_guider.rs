@@ -18,10 +18,10 @@ pub enum ExtGuiderEvent {
 
 pub type ExtGuiderEventFn = Box<dyn Fn(ExtGuiderEvent) + Send + Sync + 'static>;
 
+#[derive(Copy, Clone)]
 pub enum ExtGuiderState {
-    Stopped,
     Guiding,
-    Dithering,
+    Other,
 }
 
 pub trait ExternalGuider {
@@ -29,7 +29,6 @@ pub trait ExternalGuider {
     fn state(&self) -> ExtGuiderState;
     fn connect(&self) -> anyhow::Result<()>;
     fn is_connected(&self) -> bool;
-    fn is_guiding(&self) -> bool;
     fn start_guiding(&self) -> anyhow::Result<()>;
     fn pause_guiding(&self, pause: bool) -> anyhow::Result<()>;
     fn start_dithering(&self, pixels: i32) -> anyhow::Result<()>;

@@ -6,6 +6,7 @@ struct Data {
     evt_handlers:   Vec<ExtGuiderEventFn>,
     phd2_evt_hndlr: Option<EventHandlerId>,
     app_state:      AppState,
+    state:          ExtGuiderState,
 }
 
 pub struct ExternalGuiderPhd2 {
@@ -16,9 +17,10 @@ pub struct ExternalGuiderPhd2 {
 impl ExternalGuiderPhd2 {
     pub fn new(phd2: &Arc<Connection>) -> Arc<Self> {
         let data = Data {
-            evt_handlers: Vec::new(),
+            evt_handlers:   Vec::new(),
             phd2_evt_hndlr: None,
-            app_state: AppState::Stopped,
+            app_state:      AppState::Stopped,
+            state:          ExtGuiderState::Other,
         };
         let result = Arc::new(Self {
             phd2: Arc::clone(phd2),
@@ -51,9 +53,15 @@ impl ExternalGuiderPhd2 {
                     _ => None,
                 };
                 if let Some(new_app_state) = new_app_state {
+                    dbg!(&new_app_state);
                     let mut data = self_.data.lock().unwrap();
                     data.app_state = new_app_state;
-                    dbg!(&data.app_state);
+                    match new_app_state {
+                        AppState::Guiding =>
+                            data.state = ExtGuiderState::Guiding,
+                        _ =>
+                            data.state = ExtGuiderState::Other,
+                    }
                 }
             }
 
@@ -104,7 +112,8 @@ impl ExternalGuider for ExternalGuiderPhd2 {
     }
 
     fn state(&self) -> ExtGuiderState {
-        ExtGuiderState::Stopped
+        let data = self.data.lock().unwrap();
+        data.state
     }
 
     fn connect(&self) -> anyhow::Result<()> {
@@ -114,11 +123,6 @@ impl ExternalGuider for ExternalGuiderPhd2 {
 
     fn is_connected(&self) -> bool {
         self.phd2.is_connected()
-    }
-
-    fn is_guiding(&self) -> bool {
-        let data = self.data.lock().unwrap();
-        data.app_state == AppState::Guiding
     }
 
     fn start_guiding(&self) -> anyhow::Result<()> {
