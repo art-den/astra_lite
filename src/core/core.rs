@@ -732,17 +732,21 @@ impl Core {
     }
 
     fn init_cam_telescope_data_impl(&self, cam_name: &str, options: &Options) -> anyhow::Result<()> {
-        let focal_len = options.telescope.real_focal_length();
-        // Aperture info for simulator only
-        // TODO: real aperture config
-        let aperture = 0.2 * focal_len;
-        self.indi.camera_set_telescope_info(
-            cam_name,
-            focal_len,
-            aperture,
-            false,
-            INDI_SET_PROP_TIMEOUT
-        )?;
+        let driver_info = self.indi.get_driver_info(cam_name)?;
+        if options.indi.camera.as_deref() == Some(cam_name)
+        || *driver_info.exec != "indi_simulator_guide" {
+            let focal_len = options.telescope.real_focal_length();
+            // Aperture info for simulator only
+            // TODO: real aperture config
+            let aperture = 0.2 * focal_len;
+            self.indi.camera_set_telescope_info(
+                cam_name,
+                focal_len,
+                aperture,
+                false,
+                INDI_SET_PROP_TIMEOUT
+            )?;
+        }
         Ok(())
     }
 

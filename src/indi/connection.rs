@@ -1138,6 +1138,7 @@ impl Devices {
     }
 }
 
+#[derive(Debug)]
 pub struct DriverInfo {
     pub interface: DriverInterface,
     pub exec:      Arc<String>,
