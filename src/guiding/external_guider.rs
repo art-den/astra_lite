@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use super::{phd2_conn, phd2_guider::ExternalGuiderPhd2};
+use super::phd2;
 
 pub enum ExtGuiderType {
     Phd2,
@@ -29,6 +29,8 @@ pub trait ExternalGuider {
     fn state(&self) -> ExtGuiderState;
     fn connect(&self) -> anyhow::Result<()>;
     fn is_connected(&self) -> bool;
+    fn is_guiding(&self) -> bool;
+    fn start_guiding(&self) -> anyhow::Result<()>;
     fn pause_guiding(&self, pause: bool) -> anyhow::Result<()>;
     fn start_dithering(&self, pixels: i32) -> anyhow::Result<()>;
     fn disconnect(&self) -> anyhow::Result<()>;
@@ -36,7 +38,7 @@ pub trait ExternalGuider {
 }
 
 pub struct ExternalGuiderCtrl {
-    phd2:          Arc<phd2_conn::Connection>,
+    phd2:          Arc<phd2::Connection>,
     ext_guider:    Mutex<Option<Arc<dyn ExternalGuider + Send + Sync>>>,
     event_handler: Mutex<Option<ExtGuiderEventFn>>,
 }
@@ -44,7 +46,7 @@ pub struct ExternalGuiderCtrl {
 impl ExternalGuiderCtrl {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            phd2:          Arc::new(phd2_conn::Connection::new()),
+            phd2:          Arc::new(phd2::Connection::new()),
             ext_guider:    Mutex::new(None),
             event_handler: Mutex::new(None),
         })
@@ -54,7 +56,7 @@ impl ExternalGuiderCtrl {
         *self.event_handler.lock().unwrap() = Some(handler);
     }
 
-    pub fn phd2(&self) -> &Arc<phd2_conn::Connection> {
+    pub fn phd2(&self) -> &Arc<phd2::Connection> {
         &self.phd2
     }
 
@@ -71,14 +73,14 @@ impl ExternalGuiderCtrl {
 
         let guider: Arc<dyn ExternalGuider + Send + Sync> = match guider {
             ExtGuiderType::Phd2 =>
-                ExternalGuiderPhd2::new(&self.phd2),
+                phd2::ExternalGuiderPhd2::new(&self.phd2),
         };
 
         // Connect to guider
 
         guider.connect()?;
 
-        // Connect guider ecents
+        // Connect guider events
 
         let self_ = Arc::clone(self);
         guider.connect_events_handler(Box::new(move |event| {
@@ -107,7 +109,7 @@ impl ExternalGuiderCtrl {
         Ok(())
     }
 
-    pub fn is_active(&self) -> bool {
+    pub fn is_connected(&self) -> bool {
         let ext_guider = self.ext_guider.lock().unwrap();
         if let Some(ext_guider) = &*ext_guider {
             ext_guider.is_connected()
@@ -119,10 +121,18 @@ impl ExternalGuiderCtrl {
     pub fn start_dithering(&self, pixels: i32) -> anyhow::Result<()> {
         let ext_guider = self.ext_guider.lock().unwrap();
         let Some(ext_guider) = &*ext_guider else {
-            anyhow::bail!("Extarnal guider is not created");
+            anyhow::bail!("External guider is not created");
         };
         ext_guider.start_dithering(pixels)?;
         Ok(())
     }
 
+    pub fn start_guiding(&self) -> anyhow::Result<()> {
+        let ext_guider = self.ext_guider.lock().unwrap();
+        let Some(ext_guider) = &*ext_guider else {
+            anyhow::bail!("External guider is not created");
+        };
+        ext_guider.start_guiding()?;
+        Ok(())
+    }
 }

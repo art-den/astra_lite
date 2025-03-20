@@ -581,7 +581,7 @@ impl Core {
         drop(options);
 
         if guiding_mode == GuidingMode::External {
-            if !self.ext_guider.is_active() {
+            if !self.ext_guider.is_connected() {
                 anyhow::bail!(
                     "Guiding by external software was selected but \
                     no external software is connected!"

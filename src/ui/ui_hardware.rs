@@ -13,7 +13,7 @@ use chrono::prelude::*;
 use macros::FromBuilder;
 use crate::{
     core::core::Core,
-    guiding::{external_guider::ExtGuiderType, phd2_conn},
+    guiding::{external_guider::ExtGuiderType, phd2},
     indi::{self, sexagesimal_to_value, value_to_sexagesimal},
     options::*,
 };
@@ -108,7 +108,7 @@ impl indi::ConnState {
 
 enum HardwareEvent {
     Indi(indi::Event),
-    Phd2(phd2_conn::Event),
+    Phd2(phd2::Event),
 }
 
 #[derive(FromBuilder)]
@@ -517,14 +517,14 @@ impl HardwareUi {
         }
     }
 
-    fn process_phd2_event(&self, event: phd2_conn::Event) {
+    fn process_phd2_event(&self, event: phd2::Event) {
         let status_text = match event {
-            phd2_conn::Event::Started|
-            phd2_conn::Event::Disconnected =>
+            phd2::Event::Started|
+            phd2::Event::Disconnected =>
                 "Connecting...",
-            phd2_conn::Event::Connected =>
+            phd2::Event::Connected =>
                 "Connected",
-            phd2_conn::Event::Stopped =>
+            phd2::Event::Stopped =>
                 "---",
             _ =>
                 return,

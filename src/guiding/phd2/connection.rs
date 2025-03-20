@@ -444,7 +444,7 @@ pub struct EventCommonData {
     inst: i32,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum AppState {
     Stopped,
     Selected,
@@ -490,6 +490,13 @@ pub enum Event {
     Disconnected,
     Object(Arc<IncomingObject>),
     RpcResult(Arc<RpcResult>),
+}
+
+#[derive(Serialize)]
+struct Method<P> {
+    method: &'static str,
+    params: Option<P>,
+    id: usize,
 }
 
 type EventFun = dyn Fn(Event) + 'static + Send + Sync;
@@ -618,8 +625,6 @@ impl Connection {
                         };
                         let res = Self::process_incoming_json(&event_handlers, js_str);
                         if let Err(err) = res {
-                            println!("{}", js_str);
-                            println!("{}", err.to_string());
                             log::error!("Error during processing PHD2 json: {}, js_str={}", err.to_string(), js_str);
                         }
                         buffer.clear();
@@ -672,55 +677,67 @@ impl Connection {
         self.main_thread.lock().unwrap().is_some()
     }
 
-    pub fn command_pause(&self, pause: bool, full: bool) -> anyhow::Result<()> {
-        log::debug!("Conn::command_pause, pause = {}, full = {}", pause, full);
+    fn get_next_method_id(&self) -> usize {
+        self.cmd_id.fetch_add(1, Ordering::Relaxed)
+    }
 
-        #[derive(Serialize)]
-        struct Method {
-            method: &'static str,
-            params: (bool/*paused*/, &'static str/*`full` flag*/),
-            id: usize,
-        }
+    pub fn method_pause(&self, pause: bool, full: bool) -> anyhow::Result<()> {
         let full_flag = if full { "full" } else { "" };
         let cmd = Method {
             method: "set_paused",
-            params: (pause, full_flag),
-            id: self.cmd_id.fetch_add(1, Ordering::Relaxed),
+            params: Some((pause, full_flag)),
+            id: self.get_next_method_id(),
         };
-        self.send_command(&serde_json::to_string(&cmd)?)?;
+        self.send_command_str(&serde_json::to_string(&cmd)?)?;
         Ok(())
     }
 
-    pub fn command_dither(
+    pub fn method_dither(
         &self,
         pixels:  f64,
         ra_only: bool,
         settle:  &Settle,
     ) -> anyhow::Result<()> {
-        log::debug!("Conn::command_dither, pixels = {}, ra_only = {}", pixels, ra_only);
         #[derive(Serialize)]
-        struct Params<'a> {
+        struct Params {
             amount: f64,
             #[serde(rename = "raOnly")]
             ra_only: bool,
-            settle: &'a Settle,
-        }
-        #[derive(Serialize)]
-        struct Method<'a> {
-            method: &'static str,
-            params: Params<'a>,
-            id:     usize,
+            settle: Settle,
         }
         let cmd = Method {
             method: "dither",
-            params: Params {
+            params: Some(Params {
                 amount: pixels,
+                settle: settle.clone(),
                 ra_only,
-                settle,
-            },
-            id: self.cmd_id.fetch_add(1, Ordering::Relaxed),
+            }),
+            id: self.get_next_method_id(),
         };
-        self.send_command(&serde_json::to_string(&cmd)?)?;
+        self.send_command_str(&serde_json::to_string(&cmd)?)?;
+        Ok(())
+    }
+
+    pub fn method_guide(
+        &self,
+        settle:      &Settle,
+        recalibrate: Option<bool>
+    ) -> anyhow::Result<()> {
+        // TODO: add "ROI" field
+        #[derive(Serialize)]
+        struct Params {
+            settle:      Settle,
+            recalibrate: Option<bool>,
+        }
+        let cmd = Method {
+            method: "guide",
+            params: Some(Params {
+                settle: settle.clone(),
+                recalibrate,
+            }),
+            id: self.get_next_method_id(),
+        };
+        self.send_command_str(&serde_json::to_string(&cmd)?)?;
         Ok(())
     }
 
@@ -732,7 +749,9 @@ impl Connection {
     }
 
     fn process_incoming_json(event_handlers: &EventHandlers, js_str: &str)  -> anyhow::Result<()> {
-        // First try to pasrce as IncomingObject
+        println!("{}", js_str);
+
+        // First try to parce as IncomingObject
         if let Ok(js_obj) = serde_json::from_str::<IncomingObject>(js_str) {
             Self::notify_event(event_handlers, Event::Object(Arc::new(js_obj)));
             return Ok(());
@@ -745,7 +764,7 @@ impl Connection {
         Ok(())
     }
 
-    fn send_command(&self, command: &str) -> anyhow::Result<()> {
+    fn send_command_str(&self, command: &str) -> anyhow::Result<()> {
         log::debug!("Phd2Conn::send_command, command = {}", command);
         let mut self_send_stream = self.write_tcp_stream.lock().unwrap();
         if let Some(send_stream) = &mut *self_send_stream {
@@ -759,7 +778,7 @@ impl Connection {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 /// The `SETTLE` parameter is used by the `guide` and `dither` commands to specify
 /// when PHD2 should consider guiding to be stable enough for imaging.
 pub struct Settle {

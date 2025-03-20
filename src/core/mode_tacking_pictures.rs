@@ -600,7 +600,7 @@ impl TackingPicturesMode {
         };
 
         let mut fun = || -> anyhow::Result<NotifyResult> {
-            if !guider_data.guider.is_active() {
+            if !guider_data.guider.is_connected() {
                 return Ok(NotifyResult::Empty);
             }
 

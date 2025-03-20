@@ -1,22 +1,24 @@
 use std::sync::{Arc, Mutex};
 
-use super::{phd2_conn, external_guider::*};
+use super::{connection::*, super::external_guider::*};
 
 struct Data {
     evt_handlers:   Vec<ExtGuiderEventFn>,
-    phd2_evt_hndlr: Option<phd2_conn::EventHandlerId>,
+    phd2_evt_hndlr: Option<EventHandlerId>,
+    app_state:      AppState,
 }
 
 pub struct ExternalGuiderPhd2 {
-    phd2: Arc<phd2_conn::Connection>,
+    phd2: Arc<Connection>,
     data: Arc<Mutex<Data>>,
 }
 
 impl ExternalGuiderPhd2 {
-    pub fn new(phd2: &Arc<phd2_conn::Connection>) -> Arc<Self> {
+    pub fn new(phd2: &Arc<Connection>) -> Arc<Self> {
         let data = Data {
             evt_handlers: Vec::new(),
             phd2_evt_hndlr: None,
+            app_state: AppState::Stopped,
         };
         let result = Arc::new(Self {
             phd2: Arc::clone(phd2),
@@ -30,29 +32,55 @@ impl ExternalGuiderPhd2 {
         let mut data = self.data.lock().unwrap();
         let self_ = Arc::clone(&self);
         data.phd2_evt_hndlr = Some(self.phd2.connect_event_handler(move |event| {
+            // Check for new phd2 application state
+
+            if let Event::Object(obj) = &event {
+                let new_app_state = match &**obj {
+                    IncomingObject::AppState { state, .. } =>
+                        Some(state.clone()),
+                    IncomingObject::GuideStep {..} =>
+                        Some(AppState::Guiding),
+                    IncomingObject::Paused {..} =>
+                        Some(AppState::Paused),
+                    IncomingObject::StartCalibration {..} =>
+                        Some(AppState::Calibrating),
+                    IncomingObject::LoopingExposures {..} =>
+                        Some(AppState::Looping),
+                    IncomingObject::LoopingExposuresStopped {..} =>
+                        Some(AppState::Stopped),
+                    _ => None,
+                };
+                if let Some(new_app_state) = new_app_state {
+                    let mut data = self_.data.lock().unwrap();
+                    data.app_state = new_app_state;
+                    dbg!(&data.app_state);
+                }
+            }
+
+            // Events
+
             let evt = match event {
-                phd2_conn::Event::Object(obj) => {
+                Event::Object(obj) => {
                     match *obj {
-                        phd2_conn::IncomingObject::Resumed { .. } =>
+                        IncomingObject::Resumed { .. } =>
                             ExtGuiderEvent::GuidingContinued,
-                        phd2_conn::IncomingObject::Paused { .. } =>
+                        IncomingObject::Paused { .. } =>
                             ExtGuiderEvent::GuidingPaused,
-                        phd2_conn::IncomingObject::SettleDone { .. } =>
+                        IncomingObject::SettleDone { .. } =>
                             ExtGuiderEvent::DitheringFinished,
                         _ =>
                             return,
                     }
                 }
-                phd2_conn::Event::RpcResult(result) => {
+                Event::RpcResult(result) => {
                     match &*result {
-                        phd2_conn::RpcResult::Error { error, .. } =>
+                        RpcResult::Error { error, .. } =>
                             ExtGuiderEvent::Error(error.message.clone()),
                         _ => return,
                     }
                 }
                 _ => return,
             };
-
             let data = self_.data.lock().unwrap();
             for hndlr in &data.evt_handlers {
                 hndlr(evt.clone());
@@ -88,14 +116,25 @@ impl ExternalGuider for ExternalGuiderPhd2 {
         self.phd2.is_connected()
     }
 
+    fn is_guiding(&self) -> bool {
+        let data = self.data.lock().unwrap();
+        data.app_state == AppState::Guiding
+    }
+
+    fn start_guiding(&self) -> anyhow::Result<()> {
+        let settle = Settle::default(); // TODO: take settle from options
+        self.phd2.method_guide(&settle, None)?;
+        Ok(())
+    }
+
     fn pause_guiding(&self, _pause: bool) -> anyhow::Result<()> {
-        self.phd2.command_pause(true, true)?;
+        self.phd2.method_pause(true, true)?;
         Ok(())
     }
 
     fn start_dithering(&self, pixels: i32) -> anyhow::Result<()> {
-        let settle = phd2_conn::Settle::default();
-        self.phd2.command_dither(pixels as f64, false, &settle)?; // TODO: take settle from options
+        let settle = Settle::default(); // TODO: take settle from options
+        self.phd2.method_dither(pixels as f64, false, &settle)?;
         Ok(())
     }
 
