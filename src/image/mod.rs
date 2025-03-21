@@ -9,3 +9,4 @@ pub mod histogram;
 pub mod io;
 pub mod cam_db;
 pub mod preview;
+pub mod utils;

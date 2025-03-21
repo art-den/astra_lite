@@ -1,7 +1,7 @@
-use std::{collections::{HashMap, HashSet, VecDeque}, f64::consts::PI, isize, sync::Mutex};
+use std::{collections::{HashMap, HashSet}, f64::consts::PI, isize, sync::Mutex};
 use itertools::{izip, Itertools};
 use crate::{utils::math::*, TimeLogger};
-use super::{image::ImageLayer, raw::RawImageInfo};
+use super::{image::ImageLayer, raw::RawImageInfo, utils::*};
 
 const MAX_STAR_DIAM: usize = 32;
 const MAX_STARS_POINTS_CNT: usize = MAX_STAR_DIAM * MAX_STAR_DIAM;
@@ -116,7 +116,7 @@ impl StarsFinder {
         mt:    bool
     ) -> HashMap<(isize, isize), u32> {
         let iir_filter_coeffs = IirFilterCoeffs::new(160);
-        let mut threshold = Self::find_threshold_for_stars_detection(image) as u32;
+        let mut threshold = Self::calc_threshold_for_stars_detection(image) as u32;
         let extremums_mutex = Mutex::new(HashMap::new());
         const MAX_EXTREMUMS_CNT: usize = 10 * MAX_STARS_CNT;
         loop {
@@ -343,7 +343,7 @@ impl StarsFinder {
 
             if max_v > bg as u32
             && brightness > 0
-            && Self::check_is_star_points_ok(&star_points) {
+            && Self::check_is_star_ok(&star_points) {
                 let min_x = star_points.keys().map(|(x, _)| *x).min().unwrap_or(x);
                 let max_x = star_points.keys().map(|(x, _)| *x).max().unwrap_or(x);
                 let min_y = star_points.keys().map(|(_, y)| *y).min().unwrap_or(y);
@@ -386,7 +386,7 @@ impl StarsFinder {
         stars
     }
 
-    fn find_threshold_for_stars_detection(image: &ImageLayer<u16>) -> u16 {
+    fn calc_threshold_for_stars_detection(image: &ImageLayer<u16>) -> u16 {
         let mut diffs = Vec::new();
         for row in image.as_slice().chunks_exact(image.width()) {
             for area in row.chunks_exact(MAX_STAR_DIAM) {
@@ -415,7 +415,7 @@ impl StarsFinder {
         result as _
     }
 
-    fn check_is_star_points_ok(star_points: &HashMap<(isize, isize), u16>) -> bool {
+    fn check_is_star_ok(star_points: &HashMap<(isize, isize), u16>) -> bool {
         let real_perimeter = star_points
             .keys()
             .map(|&(x, y)| {
@@ -481,7 +481,11 @@ impl StarsFinder {
         is_overexposured_values(&self.overexp_buffer, bg)
     }
 
-    fn calc_common_star_image(image: &ImageLayer<u16>, stars: &[Star], k: usize) -> Option<CommonStarsImage>{
+    fn calc_common_star_image(
+        image: &ImageLayer<u16>,
+        stars: &[Star],
+        k:     usize
+    ) -> Option<CommonStarsImage>{
         let stars_for_image: Vec<_> = stars.iter()
             .filter(|s| !s.overexposured)
             .take(MAX_STARS_FOR_STAR_IMAGE)
@@ -603,60 +607,5 @@ impl CommonStarsImage {
         let result = 2.0 * f64::atan2(r, focal_len_m);
 
         Some(result as f32)
-    }
-}
-
-struct FloodFiller {
-    visited: VecDeque<(isize, isize)>,
-}
-
-#[derive(PartialEq)]
-pub enum FillPtSetResult {
-    Hit,
-    Miss,
-    Error
-}
-
-impl FloodFiller {
-    fn new() -> FloodFiller {
-        FloodFiller {
-            visited: VecDeque::new(),
-        }
-    }
-
-    fn fill<SetFilled: FnMut(isize, isize) -> FillPtSetResult>(
-        &mut self,
-        x: isize,
-        y: isize,
-        mut try_set_filled: SetFilled
-    ) -> bool {
-        match try_set_filled(x, y) {
-            FillPtSetResult::Miss => return true,
-            FillPtSetResult::Error=> return false,
-            _ => {},
-        };
-
-        self.visited.clear();
-        self.visited.push_back((x, y));
-
-        let mut error_flag = false;
-        while let Some((pt_x, pt_y)) = self.visited.pop_front() {
-            let mut check_neibour = |x, y| {
-                let result = try_set_filled(x, y);
-                if result == FillPtSetResult::Error {
-                    error_flag = true;
-                }
-                if result != FillPtSetResult::Hit { return; }
-                self.visited.push_back((x, y));
-            };
-            for dx in -1..=1 {
-                for dy in -1..=1 {
-                    if dx == 0 && dy == 0 { continue; }
-                    check_neibour(pt_x + dx, pt_y + dy);
-                }
-            }
-            if error_flag { return false; }
-        }
-        true
     }
 }
