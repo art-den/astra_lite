@@ -801,7 +801,7 @@ impl PreviewUi {
             &image,
             &hist,
             &preview_params,
-            stars.as_ref().and_then(|s| s.as_ref().and_then(|s| Some(&*s.items)))
+            stars.as_ref().and_then(|s| s.as_ref().and_then(|s| Some(&**s)))
         );
         drop(stars);
         drop(hist);

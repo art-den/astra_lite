@@ -756,7 +756,6 @@ impl TackingPicturesMode {
                 result_value = result_value.min(u16::MAX as i32);
                 result_value = result_value.max(u16::MIN as i32);
                 self.camera_offset = Some(result_value as u16);
-                dbg!(self.camera_offset);
                 result = NotifyResult::ProgressChanges;
             }
         }

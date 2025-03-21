@@ -53,7 +53,6 @@ impl ExternalGuiderPhd2 {
                     _ => None,
                 };
                 if let Some(new_app_state) = new_app_state {
-                    dbg!(&new_app_state);
                     let mut data = self_.data.lock().unwrap();
                     data.app_state = new_app_state;
                     match new_app_state {

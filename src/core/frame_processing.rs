@@ -35,7 +35,7 @@ pub struct ResultImage {
     pub raw_hist: Arc<RwLock<Histogram>>,
     pub img_hist: RwLock<Histogram>,
     pub info:     RwLock<ResultImageInfo>,
-    pub stars:    RwLock<Option<Arc<StarsInfoData>>>,
+    pub stars:    RwLock<Option<Arc<StarItems>>>,
 }
 
 impl ResultImage {
@@ -881,6 +881,11 @@ fn make_preview_image_impl(
         Stars::default()
     };
 
+    let stars_items = Arc::new(frame_stars.items);
+    let stars_info = Arc::new(frame_stars.info);
+
+    *command.frame.stars.write().unwrap() = Some(Arc::clone(&stars_items));
+
     // Preview image RGB bytes
 
     let hist = command.frame.img_hist.read().unwrap();
@@ -889,7 +894,7 @@ fn make_preview_image_impl(
         &image,
         &hist,
         &command.view_options,
-        if is_light_frame { Some(&frame_stars.items)} else { None },
+        if is_light_frame { Some(&*stars_items)} else { None },
     );
     tmr.log("get_rgb_bytes_from_preview_image");
 
@@ -913,8 +918,6 @@ fn make_preview_image_impl(
     }
 
     let is_bad_frame = if frame_type == FrameType::Lights {
-
-
         let mut ref_stars_lock = command.ref_stars.lock().unwrap();
 
         let ref_stars = if command.flags.contains(ProcessImageFlags::CALC_STARS_OFFSET) {
@@ -944,14 +947,14 @@ fn make_preview_image_impl(
 
         // Offset by previous stars
 
-        let (stars_offset, offset_is_ok) = if let (Some(starts_for_offset), true, true) =
-        (ref_stars, frame_stars.info.fwhm_is_ok, frame_stars.info.ovality_is_ok) {
+        let (stars_offset, offset_is_ok) = if let (Some(stars_for_offset), true, true) =
+        (ref_stars, stars_info.fwhm_is_ok, stars_info.ovality_is_ok) {
             let tmr = TimeLogger::start();
-            let cur_stars_points: Vec<_> = frame_stars.items.iter()
+            let cur_stars_points: Vec<_> = stars_items.iter()
                 .map(|star| Point {x: star.x, y: star.y })
                 .collect();
             let image_offset = Offset::calculate(
-                starts_for_offset,
+                stars_for_offset,
                 &cur_stars_points,
                 image.width() as f64,
                 image.height() as f64
@@ -966,9 +969,9 @@ fn make_preview_image_impl(
         // Store reference stars for first good light frame
 
         if command.flags.contains(ProcessImageFlags::CALC_STARS_OFFSET)
-        && frame_stars.info.is_ok()
+        && stars_info.is_ok()
         && ref_stars_lock.is_none() {
-            *ref_stars_lock = Some(frame_stars.items.iter()
+            *ref_stars_lock = Some(stars_items.iter()
                 .map(|star| Point {x: star.x, y: star.y })
                 .collect::<Vec<_>>()
             );
@@ -977,14 +980,12 @@ fn make_preview_image_impl(
         let info = Arc::new(LightFrameInfoData {
             image: Arc::new(info),
             stars: Arc::new(StarsInfoData {
-                items: Arc::new(frame_stars.items),
-                info: Arc::new(frame_stars.info),
+                items: stars_items,
+                info: stars_info,
                 offset: stars_offset,
                 offset_is_ok,
             })
         });
-
-        *command.frame.stars.write().unwrap() = Some(Arc::clone(&info.stars));
 
         // Send message about light frame calculated
 
