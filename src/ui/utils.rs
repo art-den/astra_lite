@@ -317,3 +317,20 @@ pub fn fill_devices_list_into_combobox(
 
     device_selected_in_cb
 }
+
+pub fn set_spb_value(spb: &gtk::SpinButton, value: f64) {
+    let mut range_changed = false;
+    let (mut min, mut max) = spb.range();
+    if value < min {
+        min = value;
+        range_changed = true;
+    }
+    if value > max {
+        max = value;
+        range_changed = true;
+    }
+    if range_changed {
+        spb.set_range(min, max);
+    }
+    spb.set_value(value);
+}

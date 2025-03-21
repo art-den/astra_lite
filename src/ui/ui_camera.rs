@@ -809,9 +809,9 @@ impl CameraUi {
     fn show_frame_options(&self, options: &Options) {
         let frame = &self.widgets.frame;
         frame.cb_mode.set_active_id(options.cam.frame.frame_type.to_active_id());
-        frame.spb_exp.set_value(options.cam.frame.exposure());
-        frame.spb_gain.set_value(options.cam.frame.gain);
-        frame.spb_offset.set_value(options.cam.frame.offset as f64);
+        set_spb_value(&frame.spb_exp, options.cam.frame.exposure());
+        set_spb_value(&frame.spb_gain, options.cam.frame.gain);
+        set_spb_value(&frame.spb_offset, options.cam.frame.offset as f64);
         frame.cb_bin.set_active_id(options.cam.frame.binning.to_active_id());
         frame.cb_crop.set_active_id(options.cam.frame.crop.to_active_id());
     }
