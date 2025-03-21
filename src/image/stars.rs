@@ -105,10 +105,20 @@ impl StarsFinder {
         image: &ImageLayer<u16>,
         mt:    bool
     ) -> StarItems {
+        let extremums = Self::find_extremums(image, mt);
+        let star_centers = Self::find_possible_stars_centers(&extremums);
+        let stars = self.get_stars(&star_centers, image);
+        stars
+    }
+
+    fn find_extremums(
+        image: &ImageLayer<u16>,
+        mt:    bool
+    ) -> HashMap<(isize, isize), u32> {
         let iir_filter_coeffs = IirFilterCoeffs::new(160);
         let mut threshold = Self::find_threshold_for_stars_detection(image) as u32;
-        let possible_stars_mutex = Mutex::new(HashMap::new());
-        const MAX_POSSIBLE_STARS_CNT: usize = 10 * MAX_STARS_CNT;
+        let extremums_mutex = Mutex::new(HashMap::new());
+        const MAX_EXTREMUMS_CNT: usize = 10 * MAX_STARS_CNT;
         loop {
             let find_possible_stars_in_rows = |y1: usize, y2: usize| {
                 let mut filtered = Vec::new();
@@ -139,9 +149,9 @@ impl StarsFinder {
                             || star_y > (image.height() - MAX_STAR_DIAM/2) as isize {
                                 continue; // skip points near image border
                             }
-                            let mut possible_stars = possible_stars_mutex.lock().unwrap();
+                            let mut possible_stars = extremums_mutex.lock().unwrap();
                             possible_stars.insert((star_x, star_y), s / 3);
-                            if possible_stars.len() >= MAX_POSSIBLE_STARS_CNT {
+                            if possible_stars.len() >= MAX_EXTREMUMS_CNT {
                                 too_much_possible_stars = true;
                                 break;
                             }
@@ -170,32 +180,35 @@ impl StarsFinder {
             }
             tm.log("find_possible_stars_in_rows");
 
-            let mut possible_stars = possible_stars_mutex.lock().unwrap();
-
             // if too much stars (noise detected as stars),
             // increase threshold and repeat
 
-            if possible_stars.len() >= MAX_POSSIBLE_STARS_CNT {
-                possible_stars.clear();
+            let mut extremums = extremums_mutex.lock().unwrap();
+            if extremums.len() >= MAX_EXTREMUMS_CNT {
+                extremums.clear();
                 threshold = 3 * (threshold + 1) / 2;
                 continue;
             }
             break;
         }
 
-        // Optimization: find point clusters and leave brightest point from each cluster
+        extremums_mutex.into_inner().unwrap()
+    }
 
+    fn find_possible_stars_centers(
+        extremums: &HashMap<(isize, isize), u32>,
+    ) -> Vec<(isize, isize, u32)> {
         let mut processed_points = HashSet::<(isize, isize)>::new();
         let mut cluster_filler = FloodFiller::new();
         let mut cluster = Vec::new();
         let mut possible_star_centers = Vec::new();
-        let possible_stars = possible_stars_mutex.into_inner().unwrap();
-        for (crd, _) in &possible_stars {
+
+        for (crd, _) in extremums {
             if processed_points.contains(crd) { continue; }
             let (x, y) = crd;
             cluster.clear();
             cluster_filler.fill(*x, *y, |x, y| -> FillPtSetResult {
-                if let Some(existing) = possible_stars.get(&(x, y)) {
+                if let Some(existing) = extremums.get(&(x, y)) {
                     if processed_points.contains(&(x, y)) {
                         return FillPtSetResult::Miss
                     }
@@ -216,16 +229,23 @@ impl StarsFinder {
         if possible_star_centers.len() >  MAX_STARS_CNT {
             possible_star_centers.drain(MAX_STARS_CNT..);
         }
+        possible_star_centers
+    }
 
+    fn get_stars(
+        &mut self,
+        star_centers: &Vec<(isize, isize, u32)>,
+        image:        &ImageLayer<u16>,
+    ) -> Vec<Star> {
         let mut all_star_coords = HashSet::<(isize, isize)>::new();
         let mut flood_filler = FloodFiller::new();
         let mut stars = Vec::new();
         let mut star_bg_values = Vec::new();
-        let max_all_stars_points = image.width() * image.height() / 100; // 1% of area maximum
+        let max_all_stars_points = image.width() * image.height() / 10; // 10% of area maximum
         let mut wrong_cnt = 0_usize;
         let mut star_points = HashMap::new();
         let mut star_extra_points = HashMap::new();
-        for (x, y, max_v) in possible_star_centers {
+        for &(x, y, max_v) in star_centers {
             if all_star_coords.contains(&(x, y)) { continue; }
             if all_star_coords.len() > max_all_stars_points
             || wrong_cnt > 1000 {
