@@ -1,9 +1,10 @@
 use std::{collections::{HashMap, HashSet, VecDeque}, f64::consts::PI, isize, sync::Mutex};
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use crate::{utils::math::*, TimeLogger};
 use super::{image::ImageLayer, raw::RawImageInfo};
 
 const MAX_STAR_DIAM: usize = 32;
+const MAX_STARS_POINTS_CNT: usize = MAX_STAR_DIAM * MAX_STAR_DIAM;
 const MAX_STARS_CNT: usize = 500;
 const MAX_STARS_FOR_STAR_IMAGE: usize = 200;
 
@@ -108,7 +109,7 @@ impl Stars {
         let m = median(&mut diffs);
         let diff = 0.5 * f64::sqrt(m as _);
 
-        let result = (20.0 * diff) as i32;
+        let result = (12.0 * diff) as i32;
         let result = i32::max(result, 1);
         let result = i32::min(result, u16::MAX as _);
 
@@ -116,8 +117,7 @@ impl Stars {
     }
 
     fn find_stars_in_image(image: &ImageLayer<u16>, mt: bool) -> StarItems {
-        const MAX_STARS_POINTS_CNT: usize = MAX_STAR_DIAM * MAX_STAR_DIAM;
-        let iir_filter_coeffs = IirFilterCoeffs::new(230);
+        let iir_filter_coeffs = IirFilterCoeffs::new(160);
         let mut threshold = Self::find_threshold_for_stars_detection(image) as u32;
         let possible_stars_mutex = Mutex::new(HashMap::new());
         const MAX_POSSIBLE_STARS_CNT: usize = 10 * MAX_STARS_CNT;
@@ -133,15 +133,17 @@ impl Stars {
                     let row = image.row(y);
                     let mut filter = IirFilter::new();
                     filter.filter_direct_and_revert_u16(&iir_filter_coeffs, row, &mut filtered);
-                    for (i, ((v1, v2, v3, v4, v5, v6, v7), f))
-                    in row.iter().tuple_windows().zip(&filtered[3..]).enumerate() {
-                        let f1 = *v1 as u32 + *v2 as u32 + *v3 as u32;
-                        let f2 = *v3 as u32 + *v4 as u32 + *v5 as u32;
-                        let f3 = *v5 as u32 + *v6 as u32 + *v7 as u32;
-                        if f1 > f2 || f3 > f2 { continue; }
+                    const FILTERED_OFFSET: usize = 4;
+                    //       0   1   2   3  >4<  5   6   7   8
+                    for (i, (l1, l2, l3, s1, s2, s3, r1, r2, r3), f)
+                    in izip!(FILTERED_OFFSET.., row.iter().tuple_windows(), &filtered[FILTERED_OFFSET..]) {
+                        let l = *l1 as u32 + *l2 as u32 + *l3 as u32;
+                        let s = *s1 as u32 + *s2 as u32 + *s3 as u32;
+                        let r = *r1 as u32 + *r2 as u32 + *r3 as u32;
+                        if l > s || r > s { continue; }
                         let f = *f as u32 * 3;
-                        if f2 > f && (f2-f) > threshold {
-                            let star_x = i as isize+3;
+                        if s > f && (s-f) > threshold {
+                            let star_x = i as isize;
                             let star_y = y as isize;
                             if star_x < (MAX_STAR_DIAM/2) as isize
                             || star_y < (MAX_STAR_DIAM/2) as isize
@@ -150,7 +152,7 @@ impl Stars {
                                 continue; // skip points near image border
                             }
                             let mut possible_stars = possible_stars_mutex.lock().unwrap();
-                            possible_stars.insert((star_x, star_y), f2 / 3);
+                            possible_stars.insert((star_x, star_y), s / 3);
                             if possible_stars.len() >= MAX_POSSIBLE_STARS_CNT {
                                 too_much_possible_stars = true;
                                 break;
@@ -181,6 +183,9 @@ impl Stars {
             tm.log("find_possible_stars_in_rows");
 
             let mut possible_stars = possible_stars_mutex.lock().unwrap();
+
+            // if too much stars (noise detected as stars),
+            // increase threshold and repeat
 
             if possible_stars.len() >= MAX_POSSIBLE_STARS_CNT {
                 possible_stars.clear();
@@ -230,25 +235,26 @@ impl Stars {
         let mut flood_filler = FloodFiller::new();
         let mut stars = Vec::new();
         let mut star_bg_values = Vec::new();
-        let max_stars_points = image.width() * image.height() / 100; // 1% of area maximum
+        let max_all_stars_points = image.width() * image.height() / 100; // 1% of area maximum
         let mut wrong_cnt = 0_usize;
+        let mut star_points = HashMap::new();
+        let mut star_extra_points = HashMap::new();
         for (x, y, max_v) in possible_star_centers {
             if all_star_coords.contains(&(x, y)) { continue; }
-            if all_star_coords.len() > max_stars_points
+            if all_star_coords.len() > max_all_stars_points
             || wrong_cnt > 1000 {
                 return StarItems::new();
             }
-            let x1 = x - MAX_STAR_DIAM as isize / 2;
-            let y1 = y - MAX_STAR_DIAM as isize / 2;
-            let x2 = x + MAX_STAR_DIAM as isize / 2;
-            let y2 = y + MAX_STAR_DIAM as isize / 2;
+            let x1 = x - MAX_STAR_DIAM as isize;
+            let y1 = y - MAX_STAR_DIAM as isize;
+            let x2 = x + MAX_STAR_DIAM as isize;
+            let y2 = y + MAX_STAR_DIAM as isize;
             star_bg_values.clear();
             for v in image.rect_iter(x1, y1, x2, y2) {
                 star_bg_values.push(v);
             }
             let bg_pos = star_bg_values.len() / 4;
             let bg = *star_bg_values.select_nth_unstable(bg_pos).1;
-            let mut star_points = HashMap::new();
             let half_max = bg as i32 + (max_v as i32 - bg as i32) / 3;
             if half_max <= 0 { continue; }
             let half_max = half_max as u16;
@@ -260,6 +266,7 @@ impl Stars {
             let mut max_x = isize::MIN;
             let mut min_y = isize::MAX;
             let mut max_y = isize::MIN;
+            star_points.clear();
             let fill_ok = flood_filler.fill(
                 x,
                 y,
@@ -267,12 +274,14 @@ impl Stars {
                     let v = image.get(x, y).unwrap_or(0);
                     let more_than_half_max = v >= half_max;
                     if more_than_half_max {
-                        if all_star_coords.contains(&(x, y))
-                        || star_points.contains_key(&(x, y)) {
+                        if star_points.contains_key(&(x, y)) {
                             return FillPtSetResult::Miss;
                         }
 
-                        if star_points.len() > MAX_STARS_POINTS_CNT {
+                        // near other star
+                        if all_star_coords.contains(&(x, y))
+                        // too much star points
+                        || star_points.len() > MAX_STARS_POINTS_CNT {
                             return FillPtSetResult::Error;
                         }
                         if x < min_x { min_x = x; }
@@ -286,7 +295,6 @@ impl Stars {
                         }
 
                         star_points.insert((x, y), v);
-                        all_star_coords.insert((x, y));
                         let v_part = linear_interpolate(v as f64, bg as f64, max_v as f64, 0.0, 1.0);
                         x_summ += v_part * x as f64;
                         y_summ += v_part * y as f64;
@@ -299,9 +307,32 @@ impl Stars {
                 }
             );
 
+            for ((x, y), _) in &star_points {
+                all_star_coords.insert((*x, *y));
+            }
+
             if !fill_ok {
                 wrong_cnt += 1;
                 continue;
+            }
+
+            // inflate star points by one pixel
+            star_extra_points.clear();
+            for ((x, y), _) in &star_points {
+                for dx in -1..=1 {
+                    let sx = x + dx;
+                    for dy in -1..=1 {
+                        if dx == 0 && dy == 0 { continue; }
+                        let sy = y + dy;
+                        let key = (sx, sy);
+                        if star_extra_points.contains_key(&key) { continue; }
+                        let v = image.get(sx, sy).unwrap_or(0);
+                        star_extra_points.insert(key, v);
+                    }
+                }
+            }
+            for ((x, y), v) in &star_extra_points {
+                star_points.insert((*x, *y), *v);
             }
 
             if max_v > bg as u32
@@ -354,10 +385,10 @@ impl Stars {
         let real_perimeter = star_points
             .keys()
             .map(|&(x, y)| {
-                if star_points.contains_key(&(x-1, y))
-                ||star_points.contains_key(&(x+1, y))
-                ||star_points.contains_key(&(x, y+1))
-                ||star_points.contains_key(&(x, y-1)) {
+                if !star_points.contains_key(&(x-1, y))
+                || !star_points.contains_key(&(x+1, y))
+                || !star_points.contains_key(&(x, y+1))
+                || !star_points.contains_key(&(x, y-1)) {
                     1
                 } else {
                     0
@@ -577,10 +608,12 @@ impl FloodFiller {
                 if result != FillPtSetResult::Hit { return; }
                 self.visited.push_back((x, y));
             };
-            check_neibour(pt_x-1, pt_y);
-            check_neibour(pt_x+1, pt_y);
-            check_neibour(pt_x, pt_y-1);
-            check_neibour(pt_x, pt_y+1);
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    if dx == 0 && dy == 0 { continue; }
+                    check_neibour(pt_x + dx, pt_y + dy);
+                }
+            }
             if error_flag { return false; }
         }
         true
