@@ -44,22 +44,35 @@ pub struct Stars {
     pub info:  StarsInfo,
 }
 
-impl Stars {
-    pub fn new_from_image(
+pub struct StarsFinder {
+    overexp_buffer: Vec<u16>
+}
+
+impl StarsFinder {
+    pub fn new() -> Self {
+        Self {
+            overexp_buffer: Vec::new(),
+        }
+    }
+
+    pub fn find_stars_and_get_info(
+        &mut self,
         image:              &ImageLayer<u16>,
         raw_info:           &Option<RawImageInfo>,
         max_stars_fwhm:     Option<f32>,
         max_stars_ovality:  Option<f32>,
         mt:                 bool
-    ) -> Self {
-        let items = Self::find_stars_in_image(&image, mt);
+    ) -> Stars {
+        let items = self.find_stars(&image, mt);
 
         const COMMON_STAR_MAG: usize = 4;
         const COMMON_STAR_MAG_F: f64 = COMMON_STAR_MAG as f64;
         let star_img = Self::calc_common_star_image(image, &items, COMMON_STAR_MAG);
-        let fwhm = Self::calc_fwhm(&star_img)
+        let fwhm = star_img.as_ref()
+            .and_then(|img| img.calc_fwhm())
             .map(|v| (v / (COMMON_STAR_MAG_F * COMMON_STAR_MAG_F)) as f32);
-        let ovality = Self::calc_ovality(&star_img)
+        let ovality = star_img.as_ref()
+            .and_then(|img| img.calc_ovality())
             .map(|v| (v / COMMON_STAR_MAG_F) as f32);
 
         let fwhm_is_ok = if let Some(max_stars_fwhm) = max_stars_fwhm {
@@ -74,7 +87,7 @@ impl Stars {
             true
         };
 
-        let fwhm_angular = Self::calc_angular_fwhm(fwhm, raw_info);
+        let fwhm_angular = CommonStarsImage::calc_angular_fwhm(fwhm, raw_info);
 
         let info = StarsInfo {
             fwhm,
@@ -84,39 +97,14 @@ impl Stars {
             ovality_is_ok,
         };
 
-        Self { items, info }
+        Stars { items, info }
     }
 
-    fn find_threshold_for_stars_detection(image: &ImageLayer<u16>) -> u16 {
-        let mut diffs = Vec::new();
-        for row in image.as_slice().chunks_exact(image.width()) {
-            for area in row.chunks_exact(MAX_STAR_DIAM) {
-                let Some(&[b1, b2, b3, b4, b5]) = area.first_chunk::<5>() else { continue; };
-                let Some(&[e1, e2, e3, e4, e5]) = area.last_chunk::<5>() else { continue; };
-                let area_middle = area.len() / 2;
-                let &[c1, c2, c3] = &area[area_middle-1..=area_middle+1] else { continue; };
-                let begin = median5(b1, b2, b3, b4, b5) as i32;
-                let end = median5(e1, e2, e3, e4, e5) as i32;
-                let center = median3(c1, c2, c3) as i32;
-                let diff = begin + end - 2 * center;
-                if diff > i16::MAX as i32 || diff < -i16::MAX as i32 {
-                    continue;
-                }
-                diffs.push(diff * diff);
-            }
-        }
-
-        let m = median(&mut diffs);
-        let diff = 0.5 * f64::sqrt(m as _);
-
-        let result = (12.0 * diff) as i32;
-        let result = i32::max(result, 1);
-        let result = i32::min(result, u16::MAX as _);
-
-        result as _
-    }
-
-    fn find_stars_in_image(image: &ImageLayer<u16>, mt: bool) -> StarItems {
+    fn find_stars(
+        &mut self,
+        image: &ImageLayer<u16>,
+        mt:    bool
+    ) -> StarItems {
         let iir_filter_coeffs = IirFilterCoeffs::new(160);
         let mut threshold = Self::find_threshold_for_stars_detection(image) as u32;
         let possible_stars_mutex = Mutex::new(HashMap::new());
@@ -228,8 +216,6 @@ impl Stars {
         if possible_star_centers.len() >  MAX_STARS_CNT {
             possible_star_centers.drain(MAX_STARS_CNT..);
         }
-
-        let mut overexp_buffer = Vec::new();
 
         let mut all_star_coords = HashSet::<(isize, isize)>::new();
         let mut flood_filler = FloodFiller::new();
@@ -346,14 +332,13 @@ impl Stars {
                 let height = 3 * isize::max(y-min_y+1, max_y-y+1);
                 let center_x = x_summ / crd_cnt;
                 let center_y = y_summ / crd_cnt;
-                let overexposured = Self::check_is_star_overexposured(
+                let overexposured = self.check_is_star_overexposured(
                     &star_points,
                     center_x.round() as isize,
                     center_y.round() as isize,
                     min_x, min_y,
                     max_x, max_y,
                     bg,
-                    &mut overexp_buffer
                 );
                 let points = star_points.keys()
                     .map(|(x, y)| (*x as usize, *y as usize))
@@ -381,6 +366,35 @@ impl Stars {
         stars
     }
 
+    fn find_threshold_for_stars_detection(image: &ImageLayer<u16>) -> u16 {
+        let mut diffs = Vec::new();
+        for row in image.as_slice().chunks_exact(image.width()) {
+            for area in row.chunks_exact(MAX_STAR_DIAM) {
+                let Some(&[b1, b2, b3, b4, b5]) = area.first_chunk::<5>() else { continue; };
+                let Some(&[e1, e2, e3, e4, e5]) = area.last_chunk::<5>() else { continue; };
+                let area_middle = area.len() / 2;
+                let &[c1, c2, c3] = &area[area_middle-1..=area_middle+1] else { continue; };
+                let begin = median5(b1, b2, b3, b4, b5) as i32;
+                let end = median5(e1, e2, e3, e4, e5) as i32;
+                let center = median3(c1, c2, c3) as i32;
+                let diff = begin + end - 2 * center;
+                if diff > i16::MAX as i32 || diff < -i16::MAX as i32 {
+                    continue;
+                }
+                diffs.push(diff * diff);
+            }
+        }
+
+        let m = median(&mut diffs);
+        let diff = 0.5 * f64::sqrt(m as _);
+
+        let result = (12.0 * diff) as i32;
+        let result = i32::max(result, 1);
+        let result = i32::min(result, u16::MAX as _);
+
+        result as _
+    }
+
     fn check_is_star_points_ok(star_points: &HashMap<(isize, isize), u16>) -> bool {
         let real_perimeter = star_points
             .keys()
@@ -402,6 +416,7 @@ impl Stars {
     }
 
     fn check_is_star_overexposured(
+        &mut self,
         star_points: &HashMap<(isize, isize), u16>,
         center_x:    isize,
         center_y:    isize,
@@ -410,7 +425,6 @@ impl Stars {
         max_x:       isize,
         max_y:       isize,
         bg:          u16,
-        buffer:      &mut Vec<u16>,
     ) -> bool {
         fn is_overexposured_values(values: &[u16], bg: u16) -> bool {
             let points_count = values.len();
@@ -426,35 +440,35 @@ impl Stars {
 
         // check horizontally
 
-        buffer.clear();
+        self.overexp_buffer.clear();
         for x in min_x..=max_x {
             if let Some(v) = star_points.get(&(x, center_y)) {
-                buffer.push(*v);
+                self.overexp_buffer.push(*v);
             }
         }
-        if !is_overexposured_values(&buffer, bg) {
+        if !is_overexposured_values(&self.overexp_buffer, bg) {
             return false;
         }
 
         // check vertically
 
-        buffer.clear();
+        self.overexp_buffer.clear();
         for y in min_y..=max_y {
             if let Some(v) = star_points.get(&(center_x, y)) {
-                buffer.push(*v);
+                self.overexp_buffer.push(*v);
             }
         }
-        is_overexposured_values(&buffer, bg)
+        is_overexposured_values(&self.overexp_buffer, bg)
     }
 
-    fn calc_common_star_image(image: &ImageLayer<u16>, stars: &[Star], k: usize) -> ImageLayer<u16> {
+    fn calc_common_star_image(image: &ImageLayer<u16>, stars: &[Star], k: usize) -> Option<CommonStarsImage>{
         let stars_for_image: Vec<_> = stars.iter()
             .filter(|s| !s.overexposured)
             .take(MAX_STARS_FOR_STAR_IMAGE)
             .map(|s| (s, (s.max_value - s.background) as i32))
             .collect();
         if stars_for_image.is_empty() {
-            return ImageLayer::new_empty();
+            return None;
         }
         let aver_width = stars_for_image.iter().map(|(s, _)| s.width).sum::<usize>() / stars_for_image.len();
         let aver_height = stars_for_image.iter().map(|(s, _)| s.height).sum::<usize>() / stars_for_image.len();
@@ -486,14 +500,22 @@ impl Stars {
                 *dst = median as u16;
             }
         }
-        result
+        Some(CommonStarsImage { image: result, k })
     }
 
-    fn calc_fwhm(star_image: &ImageLayer<u16>) -> Option<f64> {
-        if star_image.is_empty() {
+}
+
+struct CommonStarsImage {
+    image: ImageLayer<u16>,
+    k:     usize,
+}
+
+impl CommonStarsImage {
+    fn calc_fwhm(&self) -> Option<f64> {
+        if self.image.is_empty() {
             return None;
         }
-        let above_cnt = star_image
+        let above_cnt = self.image
             .as_slice()
             .iter()
             .filter(|&v| *v > u16::MAX / 2)
@@ -501,15 +523,14 @@ impl Stars {
         Some(above_cnt as f64)
     }
 
-    fn calc_ovality(star_image: &ImageLayer<u16>) -> Option<f64> {
-        if star_image.is_empty() {
+    fn calc_ovality(&self) -> Option<f64> {
+        if self.image.is_empty() {
             return None;
         }
         const ANGLE_CNT: usize = 32;
-        const K: usize = 16;
-        let center_x = (star_image.width() / 2) as f64;
-        let center_y = (star_image.height() / 2) as f64;
-        let size = (usize::max(star_image.width(), star_image.height()) * K) as i32;
+        let center_x = (self.image.width() / 2) as f64;
+        let center_y = (self.image.height() / 2) as f64;
+        let size = (usize::max(self.image.width(), self.image.height()) * self.k) as i32;
         let mut diamemters = Vec::new();
         for i in 0..ANGLE_CNT {
             let angle = PI * (i as f64) / (ANGLE_CNT as f64);
@@ -518,10 +539,10 @@ impl Stars {
             let mut inside_star_count1 = 0_usize;
             let mut inside_star = false;
             for j in -size/2..0 {
-                let k = j as f64 / K as f64;
+                let k = j as f64 / self.k as f64;
                 let x = k * cos_angle + center_x;
                 let y = k * sin_angle + center_y;
-                if let Some(v) = star_image.get_f64_crd(x, y) {
+                if let Some(v) = self.image.get_f64_crd(x, y) {
                     if v >= u16::MAX/2 { inside_star = true; }
                 }
                 if inside_star { inside_star_count1 += 1; }
@@ -529,10 +550,10 @@ impl Stars {
             let mut inside_star = false;
             let mut inside_star_count2 = 0_usize;
             for j in (1..size/2).rev() {
-                let k = j as f64 / K as f64;
+                let k = j as f64 / self.k as f64;
                 let x = k * cos_angle + center_x;
                 let y = k * sin_angle + center_y;
-                if let Some(v) = star_image.get_f64_crd(x, y) {
+                if let Some(v) = self.image.get_f64_crd(x, y) {
                     if v >= u16::MAX/2 { inside_star = true; }
                 }
                 if inside_star { inside_star_count2 += 1; }
@@ -545,7 +566,7 @@ impl Stars {
         let max_diameter = diamemters[max_diam_pos] as f64;
         let min_diameter = diamemters[min_diam_pos] as f64;
         let diff = max_diameter - min_diameter;
-        Some(diff / K as f64)
+        Some(diff / self.k as f64)
     }
 
     fn calc_angular_fwhm(fwhm: Option<f32>, raw_info: &Option<RawImageInfo>) -> Option<f32> {

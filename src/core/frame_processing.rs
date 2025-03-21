@@ -5,7 +5,7 @@ use chrono::{DateTime, Local, Utc};
 
 use crate::{
     core::{core::ModeType, utils::{FileNameArg, FileNameUtils}},
-    image::{histogram::*, image::*, info::*, io::*, preview::*, raw::*, simple_fits::{FitsReader, SeekNRead}, stacker::Stacker, stars::{StarItems, Stars, StarsInfo}, stars_offset::*},
+    image::{histogram::*, image::*, info::*, io::*, preview::*, raw::*, simple_fits::{FitsReader, SeekNRead}, stacker::Stacker, stars::{StarItems, Stars, StarsFinder, StarsInfo}, stars_offset::*},
     indi,
     options::*, utils::log_utils::*
 };
@@ -868,8 +868,9 @@ fn make_preview_image_impl(
 
     let frame_stars = if is_light_frame {
         let mono_layer = if image.is_color() { &image.g } else { &image.l };
+        let mut stars_finder = StarsFinder::new();
 
-        Stars::new_from_image(
+        stars_finder.find_stars_and_get_info(
             &mono_layer,
             &image.raw_info,
             max_stars_fwhm,
@@ -1079,7 +1080,8 @@ fn make_preview_image_impl(
                 &res_image.l
             };
 
-            let ls_stars = Stars::new_from_image(
+            let mut stars_finder = StarsFinder::new();
+            let ls_stars = stars_finder.find_stars_and_get_info(
                 ls_mono_layer,
                 &raw_info,
                 max_stars_fwhm,
