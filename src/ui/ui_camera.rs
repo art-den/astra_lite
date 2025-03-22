@@ -1,13 +1,11 @@
 use std::{rc::Rc, sync::{Arc, RwLock}, cell::{RefCell, Cell}};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
-use serde::{Serialize, Deserialize};
 use crate::{
     core::{consts::*, core::*, events::*, frame_processing::*},
     image::{info::*, raw::FrameType},
     indi,
     options::*,
-    utils::io_utils::*
 };
 use super::{gtk_utils::*, module::*, ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
@@ -18,12 +16,6 @@ pub fn init_ui(
     core:    &Arc<Core>,
     indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
-    let mut ui_options = UiOptions::default();
-    exec_and_show_error(window, || {
-        load_json_from_config_file(&mut ui_options, CameraUi::CONF_FN)?;
-        Ok(())
-    });
-
     let widgets = Widgets {
         info:    InfoWidgets   ::from_builder_str(include_str!(r"resources/cam_info.ui")),
         common:  CommonWidgets ::from_builder_str(include_str!(r"resources/cam_common.ui")),
@@ -43,7 +35,6 @@ pub fn init_ui(
         indi:            Arc::clone(indi),
         options:         Arc::clone(options),
         delayed_actions: DelayedActions::new(500),
-        ui_options:      RefCell::new(ui_options),
         conn_state:      RefCell::new(indi::ConnState::Disconnected),
         indi_evt_conn:   RefCell::new(None),
         closed:          Cell::new(false),
@@ -75,41 +66,6 @@ enum DelayedAction {
     UpdateResolutionList,
     SelectMaxResolution,
     FillHeaterItems,
-}
-
-#[derive(Serialize, Deserialize, Debug,)]
-#[serde(default)]
-struct StoredCamOptions {
-    cam:    DeviceAndProp,
-    frame:  FrameOptions,
-    ctrl:   CamCtrlOptions,
-    calibr: CalibrOptions,
-}
-
-impl Default for StoredCamOptions {
-    fn default() -> Self {
-        Self {
-            cam:    DeviceAndProp::default(),
-            frame:  FrameOptions::default(),
-            ctrl:   CamCtrlOptions::default(),
-            calibr: CalibrOptions::default(),
-        }
-    }
-}
-
-// TODO: move to global options
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-struct UiOptions {
-    all_cam_opts:   Vec<StoredCamOptions>,
-}
-
-impl Default for UiOptions {
-    fn default() -> Self {
-        Self {
-            all_cam_opts: Vec::new(),
-        }
-    }
 }
 
 enum MainThreadEvent {
@@ -313,7 +269,6 @@ struct CameraUi {
     core:            Arc<Core>,
     indi:            Arc<indi::Connection>,
     delayed_actions: DelayedActions<DelayedAction>,
-    ui_options:      RefCell<UiOptions>,
     conn_state:      RefCell<indi::ConnState>,
     indi_evt_conn:   RefCell<Option<indi::Subscription>>,
     closed:          Cell<bool>,
@@ -429,8 +384,6 @@ impl Drop for CameraUi {
 }
 
 impl CameraUi {
-    const CONF_FN: &'static str = "ui_camera";
-
     fn init_cam_ctrl_widgets(&self) {
         self.widgets.ctrl.spb_temp.set_range(-100.0, 100.0);
         self.widgets.info.l_temp_value.set_text("");
@@ -762,7 +715,7 @@ impl CameraUi {
                 self.show_frame_processing_result(result);
             }
             MainThreadEvent::Core(Event::CameraDeviceChanged { from, to }) => {
-                self.camera_changed_evt_handler(&from, &to);
+                self.handler_camera_changed(&from, &to);
             }
             _ => {},
         }
@@ -893,40 +846,29 @@ impl CameraUi {
         options.quality.max_ovality     = qual.spb_max_oval.value() as f32;
     }
 
-    fn store_cur_cam_options_impl(
+    fn store_options_for_camera(
         &self,
         device:  &DeviceAndProp,
-        options: &Options
+        options: &mut Options
     ) {
-        let mut ui_options = self.ui_options.borrow_mut();
-        let store_dest = match ui_options.all_cam_opts.iter_mut().find(|item| item.cam == *device) {
-            Some(existing) => existing,
-            _ => {
-                let mut new_cam_opts = StoredCamOptions::default();
-                new_cam_opts.cam = device.clone();
-                ui_options.all_cam_opts.push(new_cam_opts);
-                ui_options.all_cam_opts.last_mut().unwrap()
-            }
-        };
-
-        store_dest.frame = options.cam.frame.clone();
-        store_dest.ctrl = options.cam.ctrl.clone();
-        store_dest.calibr = options.calibr.clone();
+        let key = device.to_file_name_part();
+        let sep_options = options.sep_cam.entry(key).or_insert(Default::default());
+        sep_options.frame = options.cam.frame.clone();
+        sep_options.ctrl = options.cam.ctrl.clone();
+        sep_options.calibr = options.calibr.clone();
     }
 
-    fn select_options_for_camera(
+    fn restore_options_for_camera(
         &self,
-        camera_device: &DeviceAndProp,
-        options:       &mut Options
+        device:  &DeviceAndProp,
+        options: &mut Options
     ) {
-        // Restore previous options of selected camera
-        let ui_options = self.ui_options.borrow();
-        if let Some(stored) = ui_options.all_cam_opts.iter().find(|item| &item.cam == camera_device) {
-            options.cam.frame = stored.frame.clone();
-            options.cam.ctrl = stored.ctrl.clone();
-            options.calibr = stored.calibr.clone();
+        let key = device.to_file_name_part();
+        if let Some(sep_options) = options.sep_cam.get(&key) {
+            options.cam.frame = sep_options.frame.clone();
+            options.cam.ctrl = sep_options.ctrl.clone();
+            options.calibr = sep_options.calibr.clone();
         }
-        drop(ui_options);
     }
 
     fn handler_closing(&self) {
@@ -936,22 +878,16 @@ impl CameraUi {
 
         _ = self.core.abort_active_mode();
 
-        self.store_cur_cam_options();
+        // Stores current camera options for current camera
 
-        let ui_options = self.ui_options.borrow();
-        _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
-        drop(ui_options);
+        let mut options = self.options.write().unwrap();
+        if let Some(cur_cam_device) = options.cam.device.clone() {
+            self.store_options_for_camera(&cur_cam_device, &mut *options);
+        }
+        drop(options);
 
         if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
             self.indi.unsubscribe(indi_conn);
-        }
-    }
-
-    /// Stores current camera options for current camera
-    fn store_cur_cam_options(&self) {
-        let options = self.options.read().unwrap();
-        if let Some(cur_cam_device) = &options.cam.device {
-            self.store_cur_cam_options_impl(&cur_cam_device, &options);
         }
     }
 
@@ -986,7 +922,7 @@ impl CameraUi {
         }
     }
 
-    fn correct_widgets_props_impl(&self, camera: &Option<DeviceAndProp>) {
+    fn correct_widgets_props_impl(&self, camera: Option<&DeviceAndProp>) {
         let widgets = &self.widgets;
 
         let temp_supported = camera.as_ref().map(|camera| {
@@ -996,7 +932,7 @@ impl CameraUi {
         let exposure_supported = camera.as_ref().map(|camera| {
             let cam_ccd = indi::CamCcd::from_ccd_prop_name(&camera.prop);
             let exp_value = self.indi.camera_get_exposure_prop_value(&camera.name, cam_ccd);
-            correct_spinbutton_by_cam_prop(&widgets.frame.spb_exp, &exp_value, 3, Some(1.0))
+            correct_spinbutton_by_cam_prop(&widgets.frame.spb_exp, &exp_value, 4, Some(1.0))
         }).unwrap_or(false);
         let gain_supported = camera.as_ref().map(|camera| {
             let gain_value = self.indi.camera_get_gain_prop_value(&camera.name);
@@ -1130,29 +1066,29 @@ impl CameraUi {
         widgets.quality.bx.set_sensitive(cam_sensitive);
     }
 
-    fn camera_changed_evt_handler(&self, from: &Option<DeviceAndProp>, to: &DeviceAndProp) {
+    fn handler_camera_changed(&self, from: &Option<DeviceAndProp>, to: &DeviceAndProp) {
         let Ok(mut options) = self.options.try_write() else { return; };
 
-        // Store previous camera options into UiOptions::all_cam_opts
+        // Read options from widgets
 
-        if let Some(prev_cam) = from {
-            self.get_frame_options(&mut options);
-            self.get_ctrl_options(&mut options);
-            self.get_calibr_options(&mut options);
-            self.store_cur_cam_options_impl(&prev_cam, &options);
+        self.get_frame_options(&mut options);
+        self.get_ctrl_options(&mut options);
+        self.get_calibr_options(&mut options);
+
+        // Store previous camera options
+
+        if let Some(from) = from {
+            self.store_options_for_camera(&from, &mut *options);
         }
 
-        // Copy some options for specific camera from UiOptions::all_cam_opts
-
-        self.select_options_for_camera(to, &mut options);
-
-        // Assign new camera name
-
-        options.cam.device = Some(to.clone());
+        // Change some lists for new camera
 
         _ = self.update_resolution_list_impl(to, &options);
         self.fill_heater_items_list_impl(&options);
-        self.show_total_raw_time_impl(&options);
+
+        // Restore some options for specific camera
+
+        self.restore_options_for_camera(to, &mut options);
 
         // Show some options for specific camera
 
@@ -1160,9 +1096,13 @@ impl CameraUi {
         self.show_ctrl_options(&options);
         self.show_calibr_options(&options);
 
+        // Show new total time
+
+        self.show_total_raw_time_impl(&options);
+
         drop(options);
 
-        self.correct_widgets_props_impl(&Some(to.clone()));
+        self.correct_widgets_props_impl(Some(to));
         self.correct_frame_quality_widgets_props();
     }
 
@@ -1170,7 +1110,7 @@ impl CameraUi {
         let options = self.options.read().unwrap();
         let camera = options.cam.device.clone();
         drop(options);
-        self.correct_widgets_props_impl(&camera);
+        self.correct_widgets_props_impl(camera.as_ref());
         self.correct_frame_quality_widgets_props();
     }
 
@@ -1220,7 +1160,7 @@ impl CameraUi {
 
             if let Some(cur_cam_device) = &cur_cam_device {
                 let Ok(mut options) = self.options.try_write() else { return; };
-                self.select_options_for_camera(&cur_cam_device, &mut options);
+                self.restore_options_for_camera(&cur_cam_device, &mut options);
                 drop(options);
 
                 let options = self.options.read().unwrap();

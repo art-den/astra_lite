@@ -740,7 +740,7 @@ impl Core {
             let focal_len = if !is_guider_cam {
                 options.telescope.real_focal_length()
             } else {
-                options.guiding.ext_guider.foc_len
+                options.guiding.foc_len
             };
             let aperture = 0.2 * focal_len;
             self.indi.camera_set_telescope_info(

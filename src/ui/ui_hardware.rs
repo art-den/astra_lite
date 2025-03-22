@@ -391,7 +391,7 @@ impl HardwareUi {
     fn show_telescope_options(&self, options: &Options) {
         self.widgets.telescope.spb_foc_len.set_value(options.telescope.focal_len);
         self.widgets.telescope.spb_barlow.set_value(options.telescope.barlow);
-        self.widgets.telescope.spb_guid_foc_len.set_value(options.guiding.ext_guider.foc_len);
+        self.widgets.telescope.spb_guid_foc_len.set_value(options.guiding.foc_len);
     }
 
     fn show_site_options(&self, options: &Options) {
@@ -409,9 +409,9 @@ impl HardwareUi {
     }
 
     fn get_telescope_options(&self, options: &mut Options) {
-        options.telescope.focal_len        = self.widgets.telescope.spb_foc_len.value();
-        options.telescope.barlow           = self.widgets.telescope.spb_barlow.value();
-        options.guiding.ext_guider.foc_len = self.widgets.telescope.spb_guid_foc_len.value();
+        options.telescope.focal_len = self.widgets.telescope.spb_foc_len.value();
+        options.telescope.barlow    = self.widgets.telescope.spb_barlow.value();
+        options.guiding.foc_len     = self.widgets.telescope.spb_guid_foc_len.value();
     }
 
     fn get_site_options(&self, options: &mut Options) {

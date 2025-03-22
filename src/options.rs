@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use serde::{Serialize, Deserialize};
 
@@ -405,6 +405,14 @@ impl FocuserOptions {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[serde(default)]
+pub struct SeparatedFocuserOptions {
+    pub exposure: f64,
+    pub gain:     Gain,
+}
+
+
 #[derive(Serialize, Deserialize, Default, Debug, Clone, Copy)]
 pub enum PlateSolverType {
     #[default]
@@ -433,6 +441,14 @@ impl Default for PlateSolverOptions {
             blind_timeout: 30,
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct SeparatedPlateSolverOptions {
+    pub exposure: f64,
+    pub gain: Gain,
+    pub bin: Binning,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -563,6 +579,14 @@ impl CamOptions {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[serde(default)]
+pub struct SeparatedCamOptions {
+    pub frame:  FrameOptions,
+    pub ctrl:   CamCtrlOptions,
+    pub calibr: CalibrOptions,
+}
+
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
 pub enum GuidingMode {
     #[default]
@@ -594,14 +618,12 @@ impl Default for MainCamGuidingOptions {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct ExtGuiderOptions {
-    pub foc_len:   f64,
     pub dith_dist: i32,   // in pixels
 }
 
 impl Default for ExtGuiderOptions {
     fn default() -> Self {
         Self {
-            foc_len:   250.0,
             dith_dist: 10,
         }
     }
@@ -611,6 +633,7 @@ impl Default for ExtGuiderOptions {
 #[serde(default)]
 pub struct GuidingOptions {
     pub mode:        GuidingMode,
+    pub foc_len:     f64,  // mm
     pub dith_period: u32,  // in minutes, 0 - do not dither
     pub main_cam:    MainCamGuidingOptions,
     pub ext_guider:  ExtGuiderOptions,
@@ -620,6 +643,7 @@ impl Default for GuidingOptions {
     fn default() -> Self {
         Self {
             mode:        GuidingMode::Disabled,
+            foc_len:     250.0,
             dith_period: 2,
             main_cam:    MainCamGuidingOptions::default(),
             ext_guider:  ExtGuiderOptions::default(),
@@ -632,6 +656,14 @@ impl GuidingOptions {
         self.mode != GuidingMode::Disabled
     }
 }
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[serde(default)]
+pub struct SeparatedGuidingOptions {
+    pub exposure: f64,
+    pub gain:     Gain,
+}
+
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum PloarAlignDir {
@@ -666,16 +698,20 @@ impl Default for PloarAlignOptions {
 pub struct Options {
     pub indi:         IndiOptions,
     pub cam:          CamOptions,
+    pub sep_cam:      HashMap<String, SeparatedCamOptions>,
     pub calibr:       CalibrOptions,
     pub raw_frames:   RawFrameOptions,
     pub live:         LiveStackingOptions,
     pub quality:      QualityOptions,
     pub preview:      PreviewOptions,
     pub focuser:      FocuserOptions,
+    pub sep_focuser:  HashMap<String, SeparatedFocuserOptions>,
     pub plate_solver: PlateSolverOptions,
+    pub sep_ps:       HashMap<String, SeparatedPlateSolverOptions>,
     pub mount:        MountOptions,
     pub telescope:    TelescopeOptions,
     pub site:         SiteOptions,
     pub guiding:      GuidingOptions,
+    pub sep_guiding:  HashMap<String, SeparatedGuidingOptions>,
     pub polar_align:  PloarAlignOptions,
 }

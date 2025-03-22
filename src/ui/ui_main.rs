@@ -35,8 +35,6 @@ pub fn init_ui(
     let builder = gtk::Builder::from_string(include_str!(r"resources/main.ui"));
     let widgets = Widgets::from_builder(&builder);
 
-    disable_scroll_for_most_of_widgets(&builder);
-
     let icon = gtk::gdk_pixbuf::Pixbuf::from_read(include_bytes!(
         r"resources/astra_lite48x48.png"
     ).as_slice()).unwrap();
@@ -150,6 +148,8 @@ pub fn init_ui(
     main_ui.correct_widgets_props();
     main_ui.connect_state_events();
     main_ui.update_window_title();
+
+    disable_scroll_for_common_widgets(main_ui.widgets.window.upcast_ref());
 }
 
 pub const TIMER_PERIOD_MS: u64 = 250;

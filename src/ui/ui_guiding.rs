@@ -60,6 +60,11 @@ struct GuidingUi {
     indi_evt_conn: RefCell<Option<indi::Subscription>>,
 }
 
+enum MainThreadEvent {
+    Core(Event),
+    Indi(indi::Event),
+}
+
 impl Drop for GuidingUi {
     fn drop(&mut self) {
         log::info!("DitheringUi dropped");
@@ -80,8 +85,8 @@ impl UiModule for GuidingUi {
         self.widgets.spb_ext_dith_dist.set_value    (options.guiding.ext_guider.dith_dist as f64);
         self.widgets.spb_guid_max_err .set_value    (options.guiding.main_cam.max_error);
         self.widgets.spb_dith_dist    .set_value    (options.guiding.main_cam.dith_dist as f64);
-        self.widgets.spb_mnt_cal_exp  .set_value    (options.guiding.main_cam.calibr_exposure);
         self.widgets.cbx_mnt_cal_gain .set_active_id(Some(options.guiding.main_cam.calibr_gain.to_active_id()));
+        set_spb_value(&self.widgets.spb_mnt_cal_exp, options.guiding.main_cam.calibr_exposure);
     }
 
     fn get_options(&self, options: &mut Options) {
@@ -125,11 +130,6 @@ impl UiModule for GuidingUi {
             _ => {}
         }
     }
-}
-
-enum MainThreadEvent {
-    Core(Event),
-    Indi(indi::Event),
 }
 
 impl GuidingUi {
@@ -178,8 +178,9 @@ impl GuidingUi {
             MainThreadEvent::Core(Event::ModeChanged) => {
                 self.correct_widgets_props();
             }
-            MainThreadEvent::Core(Event::CameraDeviceChanged{ to, .. }) => {
-                self.correct_widgets_props_impl(&Some(to));
+            MainThreadEvent::Core(Event::CameraDeviceChanged{ from, to }) => {
+                self.handler_camera_changed(&from, &to);
+
             }
             MainThreadEvent::Indi(indi::Event::ConnChange(_)) => {
                 self.correct_widgets_props();
@@ -210,9 +211,15 @@ impl GuidingUi {
         if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
             self.indi.unsubscribe(indi_conn);
         }
+
+        let mut options = self.options.write().unwrap();
+        if let Some(cur_cam_device) = options.cam.device.clone() {
+            self.store_options_for_camera(&cur_cam_device, &mut *options);
+        }
+        drop(options);
     }
 
-    fn correct_widgets_props_impl(&self, cam_device: &Option<DeviceAndProp>) {
+    fn correct_widgets_props_impl(&self, cam_device: Option<&DeviceAndProp>) {
         let mode_data = self.core.mode_data();
         let mode_type = mode_data.mode.get_type();
         drop(mode_data);
@@ -253,7 +260,42 @@ impl GuidingUi {
         let options = self.options.read().unwrap();
         let cam_device = options.cam.device.clone();
         drop(options);
-        self.correct_widgets_props_impl(&cam_device);
+        self.correct_widgets_props_impl(cam_device.as_ref());
+    }
+
+    fn handler_camera_changed(&self, from: &Option<DeviceAndProp>, to: &DeviceAndProp) {
+        let mut options = self.options.write().unwrap();
+        self.get_options(&mut options);
+        if let Some(from) = from {
+            self.store_options_for_camera(from, &mut options);
+        }
+        self.restore_options_for_camera(to, &mut options);
+        self.show_options(&options);
+        drop(options);
+        self.correct_widgets_props_impl(Some(to));
+    }
+
+    fn store_options_for_camera(
+        &self,
+        device:  &DeviceAndProp,
+        options: &mut Options
+    ) {
+        let key = device.to_file_name_part();
+        let sep_options = options.sep_guiding.entry(key).or_insert(Default::default());
+        sep_options.exposure = options.guiding.main_cam.calibr_exposure;
+        sep_options.gain = options.guiding.main_cam.calibr_gain;
+    }
+
+    fn restore_options_for_camera(
+        &self,
+        device:  &DeviceAndProp,
+        options: &mut Options
+    ) {
+        let key = device.to_file_name_part();
+        if let Some(sep_options) = options.sep_guiding.get(&key) {
+            options.guiding.main_cam.calibr_exposure = sep_options.exposure;
+            options.guiding.main_cam.calibr_gain = sep_options.gain;
+        }
     }
 
     fn handler_action_start_dither_calibr(&self) {

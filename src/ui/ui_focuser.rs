@@ -79,6 +79,19 @@ struct FocuserUi {
     focusing_data:   RefCell<Option<FocusingResultData>>,
 }
 
+enum MainThreadEvent {
+    Core(Event),
+    Indi(indi::Event),
+}
+
+#[derive(Hash, Eq, PartialEq)]
+enum DelayedAction {
+    ShowCurFocuserValue,
+    UpdateFocPosNew,
+    UpdateFocPos,
+    CorrectWidgetProps
+}
+
 impl Drop for FocuserUi {
     fn drop(&mut self) {
         log::info!("FocuserUi dropped");
@@ -96,8 +109,8 @@ impl UiModule for FocuserUi {
         widgets.cb_period    .set_active_id(Some(options.focuser.period_minutes.to_string()).as_deref());
         widgets.spb_measures .set_value    (options.focuser.measures as f64);
         widgets.spb_auto_step.set_value    (options.focuser.step);
-        widgets.spb_exp      .set_value    (options.focuser.exposure);
         widgets.cbx_gain     .set_active_id(Some(options.focuser.gain.to_active_id()));
+        set_spb_value(&widgets.spb_exp, options.focuser.exposure);
     }
 
     fn get_options(&self, options: &mut Options) {
@@ -136,19 +149,6 @@ impl UiModule for FocuserUi {
             _ => {}
         }
     }
-}
-
-enum MainThreadEvent {
-    Core(Event),
-    Indi(indi::Event),
-}
-
-#[derive(Hash, Eq, PartialEq)]
-enum DelayedAction {
-    ShowCurFocuserValue,
-    UpdateFocPosNew,
-    UpdateFocPos,
-    CorrectWidgetProps
 }
 
 impl FocuserUi {
@@ -225,19 +225,13 @@ impl FocuserUi {
             MainThreadEvent::Core(Event::ModeChanged) => {
                 self.correct_widgets_props();
             }
-
-            MainThreadEvent::Core(Event::CameraDeviceChanged{to, ..}) => {
-                let options = self.options.read().unwrap();
-                let focuser_device = options.focuser.device.clone();
-                drop(options);
-                self.correct_widgets_props_impl(&focuser_device, &Some(to));
+            MainThreadEvent::Core(Event::CameraDeviceChanged{from, to}) => {
+                self.handler_camera_changed(&from, &to);
             }
-
             MainThreadEvent::Core(Event::Focusing(FocusingStateEvent::Data(fdata))) => {
                 *self.focusing_data.borrow_mut() = Some(fdata);
                 self.widgets.da_auto.queue_draw();
             }
-
             MainThreadEvent::Core(Event::Focusing(FocusingStateEvent::Result { value })) => {
                 self.update_focuser_position_after_focusing(value);
             }
@@ -358,7 +352,7 @@ impl FocuserUi {
         );
     }
 
-    fn correct_widgets_props_impl(&self, focuser_device: &str, cam_device: &Option<DeviceAndProp>) {
+    fn correct_widgets_props_impl(&self, focuser_device: &str, cam_device: Option<&DeviceAndProp>) {
         let mode_data = self.core.mode_data();
         let mode_type = mode_data.mode.get_type();
         drop(mode_data);
@@ -394,7 +388,7 @@ impl FocuserUi {
         let focuser_device = options.focuser.device.clone();
         let cam_device = options.cam.device.clone();
         drop(options);
-        self.correct_widgets_props_impl(&focuser_device, &cam_device);
+        self.correct_widgets_props_impl(&focuser_device, cam_device.as_ref());
     }
 
     fn handler_closing(&self) {
@@ -402,6 +396,48 @@ impl FocuserUi {
 
         if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
             self.indi.unsubscribe(indi_conn);
+        }
+
+        let mut options = self.options.write().unwrap();
+        if let Some(cur_cam_device) = options.cam.device.clone() {
+            self.store_options_for_camera(&cur_cam_device, &mut *options);
+        }
+        drop(options);
+    }
+
+    fn handler_camera_changed(&self, from: &Option<DeviceAndProp>, to: &DeviceAndProp) {
+        let mut options = self.options.write().unwrap();
+        self.get_options(&mut options);
+        if let Some(from) = from {
+            self.store_options_for_camera(from, &mut options);
+        }
+        self.restore_options_for_camera(to, &mut options);
+        self.show_options(&options);
+        let focuser_device = options.focuser.device.clone();
+        drop(options);
+        self.correct_widgets_props_impl(&focuser_device, Some(to));
+    }
+
+    fn store_options_for_camera(
+        &self,
+        device:  &DeviceAndProp,
+        options: &mut Options
+    ) {
+        let key = device.to_file_name_part();
+        let sep_options = options.sep_focuser.entry(key).or_insert(Default::default());
+        sep_options.exposure = options.focuser.exposure;
+        sep_options.gain = options.focuser.gain;
+    }
+
+    fn restore_options_for_camera(
+        &self,
+        device:  &DeviceAndProp,
+        options: &mut Options
+    ) {
+        let key = device.to_file_name_part();
+        if let Some(sep_options) = options.sep_focuser.get(&key) {
+            options.focuser.exposure = sep_options.exposure;
+            options.focuser.gain = sep_options.gain;
         }
     }
 

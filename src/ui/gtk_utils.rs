@@ -54,27 +54,35 @@ pub fn add_ok_cancel_and_apply_buttons(
 }
 
 
-pub fn disable_scroll_for_most_of_widgets(builder: &gtk::Builder) {
-    for object in builder.objects() {
-        if let Some(spin) = object.downcast_ref::<gtk::SpinButton>() {
-            spin.connect_scroll_event(|_, _| {
-                glib::Propagation::Stop
-            });
+pub fn disable_scroll_for_common_widgets(widget: &gtk::Widget) {
+    if let Some(spin) = widget.downcast_ref::<gtk::SpinButton>() {
+        spin.connect_scroll_event(|_, _| {
+            glib::Propagation::Stop
+        });
+    }
+    if let Some(cb) = widget.downcast_ref::<gtk::ComboBox>() {
+        cb.connect_scroll_event(|_, _| {
+            glib::Propagation::Stop
+        });
+    }
+    if let Some(scale) = widget.downcast_ref::<gtk::Scale>() {
+        scale.connect_scroll_event(|_, _| {
+            glib::Propagation::Stop
+        });
+    }
+    if let Some(btn) = widget.downcast_ref::<gtk::FileChooserButton>() {
+        btn.connect_scroll_event(|_, _| {
+            glib::Propagation::Stop
+        });
+    }
+    if let Some(bin) = widget.downcast_ref::<gtk::Bin>() {
+        if let Some(child) = bin.child() {
+            disable_scroll_for_common_widgets(&child);
         }
-        if let Some(cb) = object.downcast_ref::<gtk::ComboBox>() {
-            cb.connect_scroll_event(|_, _| {
-                glib::Propagation::Stop
-            });
-        }
-        if let Some(scale) = object.downcast_ref::<gtk::Scale>() {
-            scale.connect_scroll_event(|_, _| {
-                glib::Propagation::Stop
-            });
-        }
-        if let Some(btn) = object.downcast_ref::<gtk::FileChooserButton>() {
-            btn.connect_scroll_event(|_, _| {
-                glib::Propagation::Stop
-             });
+    } else if let Some(container) = widget.downcast_ref::<gtk::Container>() {
+        let children = container.children();
+        for child in children {
+            disable_scroll_for_common_widgets(&child);
         }
     }
 }
