@@ -1025,7 +1025,6 @@ impl CameraUi {
             ("load_image",             waiting),
         ]);
 
-        widgets.common.bx           .set_sensitive(cam_sensitive);
         widgets.common.l_cam_list   .set_sensitive(waiting && indi_connected);
         widgets.common.cb_cam_list  .set_sensitive(waiting && indi_connected);
         widgets.common.chb_live_view.set_sensitive((exposure_supported && liveview_active) || can_change_mode);

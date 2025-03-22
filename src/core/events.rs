@@ -37,8 +37,8 @@ pub struct EventSubscriptions {
 impl EventSubscriptions {
     pub fn new() -> Self {
         Self {
-            items:     RwLock::new(HashMap::new()),
-            next_id:   AtomicUsize::new(1),
+            items:   RwLock::new(HashMap::new()),
+            next_id: AtomicUsize::new(1),
         }
     }
 

@@ -361,6 +361,11 @@ impl StarsFinder {
                     bg,
                 );
                 let points = star_points.keys()
+                    .filter(|(x, y)|
+                        *x >= 0 && *y >= 0 &&
+                        *x < image.width() as isize &&
+                        *y < image.height() as isize
+                    )
                     .map(|(x, y)| (*x as usize, *y as usize))
                     .collect();
                 stars.push(Star {
