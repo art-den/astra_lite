@@ -513,42 +513,19 @@ impl CameraUi {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 let Some(cur_id) = cb.active_id() else { return; };
                 let new_device = DeviceAndProp::new(&cur_id);
-                if options.cam.device.as_ref() == Some(&new_device) {
+                let old_device = options.cam.device.clone();
+                if old_device.as_ref() == Some(&new_device) {
                     return;
                 }
-
-                // Store previous camera options into UiOptions::all_cam_opts
-
-                if let Some(prev_cam) = options.cam.device.clone() {
-                    self_.get_frame_options(&mut options);
-                    self_.get_ctrl_options(&mut options);
-                    self_.get_calibr_options(&mut options);
-                    self_.store_cur_cam_options_impl(&prev_cam, &options);
-                }
-
-                // Copy some options for specific camera from UiOptions::all_cam_opts
-
-                self_.select_options_for_camera(&new_device, &mut options);
-
-                // Assign new camera name
-
                 options.cam.device = Some(new_device.clone());
-
-                _ = self_.update_resolution_list_impl(&new_device, &options);
-                self_.fill_heater_items_list_impl(&options);
-                self_.show_total_raw_time_impl(&options);
-
-                // Show some options for specific camera
-                self_.show_frame_options(&options);
-                self_.show_ctrl_options(&options);
-                self_.show_calibr_options(&options);
-
                 drop(options);
 
-                self_.correct_widgets_props_impl(&Some(new_device.clone()));
-                self_.correct_frame_quality_widgets_props();
-
-                self_.core.event_subscriptions().notify(Event::CameraDeviceChanged(new_device));
+                self_.core.event_subscriptions().notify(
+                    Event::CameraDeviceChanged {
+                        from: old_device,
+                        to:   new_device,
+                    }
+                );
             })
         );
 
@@ -774,18 +751,18 @@ impl CameraUi {
             ) => {
                 self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
             }
-
             MainThreadEvent::Core(Event::ModeChanged) => {
                 self.correct_widgets_props();
-            },
-
+            }
             MainThreadEvent::Core(Event::ModeContinued) => {
                 let options = self.options.read().unwrap();
                 self.show_frame_options(&options);
-            },
-
+            }
             MainThreadEvent::Core(Event::FrameProcessing(result)) => {
                 self.show_frame_processing_result(result);
+            }
+            MainThreadEvent::Core(Event::CameraDeviceChanged { from, to }) => {
+                self.camera_changed_evt_handler(&from, &to);
             }
             _ => {},
         }
@@ -809,11 +786,12 @@ impl CameraUi {
     fn show_frame_options(&self, options: &Options) {
         let frame = &self.widgets.frame;
         frame.cb_mode.set_active_id(options.cam.frame.frame_type.to_active_id());
+        frame.cb_bin.set_active_id(options.cam.frame.binning.to_active_id());
+        frame.cb_crop.set_active_id(options.cam.frame.crop.to_active_id());
+
         set_spb_value(&frame.spb_exp, options.cam.frame.exposure());
         set_spb_value(&frame.spb_gain, options.cam.frame.gain);
         set_spb_value(&frame.spb_offset, options.cam.frame.offset as f64);
-        frame.cb_bin.set_active_id(options.cam.frame.binning.to_active_id());
-        frame.cb_crop.set_active_id(options.cam.frame.crop.to_active_id());
     }
 
     fn show_calibr_options(&self, options: &Options) {
@@ -1150,6 +1128,42 @@ impl CameraUi {
         widgets.live_st.fch_path       .set_sensitive(can_change_live_stacking_opts);
 
         widgets.quality.bx.set_sensitive(cam_sensitive);
+    }
+
+    fn camera_changed_evt_handler(&self, from: &Option<DeviceAndProp>, to: &DeviceAndProp) {
+        let Ok(mut options) = self.options.try_write() else { return; };
+
+        // Store previous camera options into UiOptions::all_cam_opts
+
+        if let Some(prev_cam) = from {
+            self.get_frame_options(&mut options);
+            self.get_ctrl_options(&mut options);
+            self.get_calibr_options(&mut options);
+            self.store_cur_cam_options_impl(&prev_cam, &options);
+        }
+
+        // Copy some options for specific camera from UiOptions::all_cam_opts
+
+        self.select_options_for_camera(to, &mut options);
+
+        // Assign new camera name
+
+        options.cam.device = Some(to.clone());
+
+        _ = self.update_resolution_list_impl(to, &options);
+        self.fill_heater_items_list_impl(&options);
+        self.show_total_raw_time_impl(&options);
+
+        // Show some options for specific camera
+
+        self.show_frame_options(&options);
+        self.show_ctrl_options(&options);
+        self.show_calibr_options(&options);
+
+        drop(options);
+
+        self.correct_widgets_props_impl(&Some(to.clone()));
+        self.correct_frame_quality_widgets_props();
     }
 
     fn correct_widgets_props(&self) {

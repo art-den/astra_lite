@@ -178,8 +178,8 @@ impl GuidingUi {
             MainThreadEvent::Core(Event::ModeChanged) => {
                 self.correct_widgets_props();
             }
-            MainThreadEvent::Core(Event::CameraDeviceChanged(cam_device)) => {
-                self.correct_widgets_props_impl(&Some(cam_device));
+            MainThreadEvent::Core(Event::CameraDeviceChanged{ to, .. }) => {
+                self.correct_widgets_props_impl(&Some(to));
             }
             MainThreadEvent::Indi(indi::Event::ConnChange(_)) => {
                 self.correct_widgets_props();

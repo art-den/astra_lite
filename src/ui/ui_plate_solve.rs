@@ -200,11 +200,11 @@ impl PlateSolveUi {
             MainThreadEvent::Core(Event::ModeChanged) => {
                 self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
             }
-            MainThreadEvent::Core(Event::CameraDeviceChanged(cam_device)) => {
+            MainThreadEvent::Core(Event::CameraDeviceChanged{ to, .. }) => {
                 let options = self.options.read().unwrap();
                 let mount_device = options.mount.device.clone();
                 drop(options);
-                self.correct_widgets_props_impl(&mount_device, &Some(cam_device));
+                self.correct_widgets_props_impl(&mount_device, &Some(to));
             }
             MainThreadEvent::Core(Event::MountDeviceSelected(mount_device)) => {
                 let options = self.options.read().unwrap();

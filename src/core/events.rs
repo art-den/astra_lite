@@ -12,7 +12,10 @@ pub struct Progress {
 pub enum Event {
     Error(String),
     ModeContinued,
-    CameraDeviceChanged(DeviceAndProp),
+    CameraDeviceChanged{
+        from: Option<DeviceAndProp>,
+        to:   DeviceAndProp
+    },
     MountDeviceSelected(String),
     ModeChanged,
     Progress(Option<Progress>, ModeType),

@@ -226,11 +226,11 @@ impl FocuserUi {
                 self.correct_widgets_props();
             }
 
-            MainThreadEvent::Core(Event::CameraDeviceChanged(cam_device)) => {
+            MainThreadEvent::Core(Event::CameraDeviceChanged{to, ..}) => {
                 let options = self.options.read().unwrap();
                 let focuser_device = options.focuser.device.clone();
                 drop(options);
-                self.correct_widgets_props_impl(&focuser_device, &Some(cam_device));
+                self.correct_widgets_props_impl(&focuser_device, &Some(to));
             }
 
             MainThreadEvent::Core(Event::Focusing(FocusingStateEvent::Data(fdata))) => {
