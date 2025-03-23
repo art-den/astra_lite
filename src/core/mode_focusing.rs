@@ -9,9 +9,9 @@ use crate::{
 };
 use super::{core::*, events::*, frame_processing::*, utils::*};
 
+const ONE_POS_TRY_CNT: usize = 3;
 const MAX_FOCUS_TOTAL_TRY_CNT: usize = 8;
 const MAX_FOCUS_SAMPLE_TRY_CNT: usize = 4;
-const MAX_FOCUS_STAR_OVALITY: f32 = 2.0;
 
 #[derive(Clone)]
 pub struct FocusingResultData {
@@ -34,19 +34,20 @@ enum Stage {
 }
 
 pub struct FocusingMode {
-    indi:        Arc<indi::Connection>,
-    subscribers: Arc<EventSubscriptions>,
-    state:       FocusingState,
-    camera:      DeviceAndProp,
-    f_options:   FocuserOptions,
-    cam_opts:    CamOptions,
-    before_pos:  f64,
-    to_go:       VecDeque<f64>,
-    samples:     Vec<FocuserSample>,
-    result_pos:  Option<f64>,
-    try_cnt:     usize,
-    stage:       Stage,
-    next_mode:   Option<Box<dyn Mode + Sync + Send>>,
+    indi:         Arc<indi::Connection>,
+    subscribers:  Arc<EventSubscriptions>,
+    state:        FocusingState,
+    camera:       DeviceAndProp,
+    f_options:    FocuserOptions,
+    cam_opts:     CamOptions,
+    before_pos:   f64,
+    to_go:        VecDeque<f64>,
+    samples:      Vec<FocuserSample>,
+    one_pos_fwhm: Vec<f32>,
+    result_pos:   Option<f64>,
+    try_cnt:      usize,
+    stage:        Stage,
+    next_mode:    Option<Box<dyn Mode + Sync + Send>>,
 }
 
 #[derive(PartialEq)]
@@ -94,19 +95,20 @@ impl FocusingMode {
         )?;
 
         Ok(FocusingMode {
-            indi:        Arc::clone(indi),
-            subscribers: Arc::clone(subscribers),
-            state:       FocusingState::Undefined,
-            f_options:   opts.focuser.clone(),
+            indi:         Arc::clone(indi),
+            subscribers:  Arc::clone(subscribers),
+            state:        FocusingState::Undefined,
+            f_options:    opts.focuser.clone(),
             cam_opts,
-            before_pos:  0.0,
-            to_go:       VecDeque::new(),
-            samples:     Vec::new(),
-            result_pos:  None,
-            stage:       Stage::Undef,
-            try_cnt:     0,
+            before_pos:   0.0,
+            to_go:        VecDeque::new(),
+            samples:      Vec::new(),
+            one_pos_fwhm: Vec::new(),
+            result_pos:   None,
+            stage:        Stage::Undef,
+            try_cnt:      0,
             next_mode,
-            camera:      cam_device.clone(),
+            camera:       cam_device.clone(),
         })
     }
 
@@ -163,25 +165,32 @@ impl FocusingMode {
         let mut result = NotifyResult::Empty;
         if let FocusingState::WaitingFrame(focus_pos) = self.state {
             log::debug!(
-                "New frame with ovality={:?} and {:?}",
+                "New frame with ovality={:?} and fwhm={:?}",
                 info.stars.info.ovality, info.stars.info.fwhm
             );
 
             let mut ok = false;
-            if let (Some(stars_ovality), Some(stars_fwhm))
-            = (info.stars.info.ovality, info.stars.info.fwhm) {
+            if let Some(stars_fwhm) = info.stars.info.fwhm {
                 self.try_cnt = 0;
-                if stars_ovality < MAX_FOCUS_STAR_OVALITY {
+                self.one_pos_fwhm.push(stars_fwhm);
+                if self.one_pos_fwhm.len() == ONE_POS_TRY_CNT {
+                    let stars_fwhm = self.one_pos_fwhm
+                        .iter()
+                        .copied()
+                        .min_by(f32::total_cmp)
+                        .unwrap_or_default();
                     let sample = FocuserSample {
                         focus_pos,
                         stars_fwhm
                     };
                     self.samples.push(sample);
                     self.samples.sort_by(|s1, s2| cmp_f64(&s1.focus_pos, &s2.focus_pos));
+                    self.one_pos_fwhm.clear();
                     ok = true;
-                    self.try_cnt = 0;
-                    log::debug!("Ovality is Ok. Samples count = {}", self.samples.len());
                 }
+
+                log::debug!("Ovality is Ok. Samples count = {}", self.samples.len());
+
                 let event_data = FocusingResultData {
                     samples: self.samples.clone(),
                     coeffs: None,
@@ -202,7 +211,7 @@ impl FocusingMode {
                 result = NotifyResult::ProgressChanges;
                 if self.to_go.is_empty() || too_much_total_tries {
                     log::debug!(
-                        "Trying to calcilate extremum. Ok={}, self.try_cnt={}, self.samples.len={}",
+                        "Trying to calculate extremum. Ok={}, self.try_cnt={}, self.samples.len={}",
                         ok, self.try_cnt, self.samples.len(),
                     );
 
