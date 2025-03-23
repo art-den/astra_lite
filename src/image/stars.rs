@@ -226,10 +226,10 @@ impl StarsFinder {
             if extremums.len() >= MAX_EXTREMUMS_CNT {
                 extremums.clear();
                 let new_threshold =  3 * (*threshold as u32 + 1) / 2;
-                if new_threshold > u16::MAX as _ {
+                if new_threshold > u16::MAX as u32 {
                     break;
                 }
-                *threshold = new_threshold as _;
+                *threshold = new_threshold as u16;
                 continue;
             }
             break;
