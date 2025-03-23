@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::{fmt::Debug, ops::{Add, Div}};
+use std::fmt::Debug;
 
 use itertools::*;
 
@@ -25,19 +25,24 @@ fn test_median3() {
     assert_eq!(median3(3, 2, 1), 2);
 }
 
-pub fn median4<T>(a: T, b: T, c: T, d: T) -> T
-where
-    T: Ord + Add<Output = T> + Div<Output = T> + From<i32> + Copy
+pub fn median4_u16(a: u16, b: u16, c: u16, d: u16) -> u16
 {
-    let f = T::max(T::min(a, b), T::min(c, d));
-    let g = T::min(T::max(a, b), T::max(c, d));
-    (f + g) / 2.into()
+    let f = u16::max(u16::min(a, b), u16::min(c, d));
+    let g = u16::min(u16::max(a, b), u16::max(c, d));
+    ((f as u32 + g as u32 + 1) / 2) as _
+}
+
+pub fn median4_i32(a: i32, b: i32, c: i32, d: i32) -> i32
+{
+    let f = i32::max(i32::min(a, b), i32::min(c, d));
+    let g = i32::min(i32::max(a, b), i32::max(c, d));
+    ((f as i64 + g as i64) / 2) as _
 }
 
 #[test]
 fn test_median4() {
     for p in [1, 3, 5, 7].iter().permutations(4) {
-        let m = median4(*p[0], *p[1], *p[2], *p[3]);
+        let m = median4_i32(*p[0], *p[1], *p[2], *p[3]);
         assert_eq!(m, 4);
     }
 }
@@ -288,21 +293,21 @@ pub fn parabola_extremum(sc: &SquareCoeffs) -> Option<f64> {
     }
 }
 pub struct IirFilterCoeffs {
-    a0: u32,
-    b0: u32,
+    a0: f32,
+    b0: f32,
 }
 
 impl IirFilterCoeffs {
-    pub fn new(b0: u32) -> IirFilterCoeffs {
+    pub fn new(b0: f32) -> IirFilterCoeffs {
         IirFilterCoeffs {
-            a0: 256 - b0,
+            a0: 1.0 - b0,
             b0,
         }
     }
 }
 
 pub struct IirFilter {
-    y0: Option<u32>,
+    y0: Option<f32>,
 }
 
 impl IirFilter {
@@ -317,9 +322,10 @@ impl IirFilter {
     }
 
     pub fn filter(&mut self, coeffs: &IirFilterCoeffs, x: u32) -> u32 {
-        let result = (coeffs.a0 * x + coeffs.b0 * self.y0.unwrap_or(x) + (1 << 7)) >> 8;
+        let x = x as f32;
+        let result = coeffs.a0 * x + coeffs.b0 * self.y0.unwrap_or(x);
         self.y0 = Some(result);
-        result
+        result as u32
     }
 
     #[inline(never)]

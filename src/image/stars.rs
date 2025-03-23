@@ -105,18 +105,57 @@ impl StarsFinder {
         image: &ImageLayer<u16>,
         mt:    bool
     ) -> StarItems {
-        let extremums = Self::find_extremums(image, mt);
+        let mut threshold = Self::calc_threshold_for_stars_detection(image);
+        log::debug!("Stars detection threshold = {}", threshold);
+
+        let extremums = Self::find_extremums(image, &mut threshold, mt);
+        log::debug!("Stars extremums.len() = {}", extremums.len());
+
         let star_centers = Self::find_possible_stars_centers(&extremums);
-        let stars = self.get_stars(&star_centers, image);
+        log::debug!("Stars star_centers.len() = {}", star_centers.len());
+
+        let stars = self.get_stars(&star_centers, image, threshold);
+        log::debug!("Stars stars.len() = {}", stars.len());
+
         stars
     }
 
+    fn calc_threshold_for_stars_detection(image: &ImageLayer<u16>) -> u16 {
+        let mut diffs = Vec::new();
+        for row in image.as_slice().chunks_exact(image.width()) {
+            for area in row.chunks_exact(MAX_STAR_DIAM) {
+                let Some(&[b1, b2, b3, b4, b5]) = area.first_chunk::<5>() else { continue; };
+                let Some(&[e1, e2, e3, e4, e5]) = area.last_chunk::<5>() else { continue; };
+                let area_middle = area.len() / 2;
+                let &[c1, c2, c3] = &area[area_middle-1..=area_middle+1] else { continue; };
+                let begin = median5(b1, b2, b3, b4, b5) as i32;
+                let end = median5(e1, e2, e3, e4, e5) as i32;
+                let center = median3(c1, c2, c3) as i32;
+                let diff = begin + end - 2 * center;
+                if diff > i16::MAX as i32 || diff < -i16::MAX as i32 {
+                    continue;
+                }
+                diffs.push(diff * diff);
+            }
+        }
+
+        let m = median(&mut diffs);
+        let diff = 0.5 * f64::sqrt(m as _);
+
+        let result = (9.0 * diff) as i32;
+        let result = i32::max(result, 1);
+        let result = i32::min(result, u16::MAX as _);
+
+        result as _
+    }
+
     fn find_extremums(
-        image: &ImageLayer<u16>,
-        mt:    bool
-    ) -> HashMap<(isize, isize), u32> {
-        let iir_filter_coeffs = IirFilterCoeffs::new(160);
-        let mut threshold = Self::calc_threshold_for_stars_detection(image) as u32;
+        image:     &ImageLayer<u16>,
+        threshold: &mut u16,
+        mt:        bool,
+    ) -> HashMap<(isize, isize), u16> {
+        let iir_filter_coeffs = IirFilterCoeffs::new(0.98);
+
         let extremums_mutex = Mutex::new(HashMap::new());
         const MAX_EXTREMUMS_CNT: usize = 10 * MAX_STARS_CNT;
         loop {
@@ -131,16 +170,16 @@ impl StarsFinder {
                     let row = image.row(y);
                     let mut filter = IirFilter::new();
                     filter.filter_direct_and_revert_u16(&iir_filter_coeffs, row, &mut filtered);
-                    const FILTERED_OFFSET: usize = 4;
-                    //       0   1   2   3  >4<  5   6   7   8
-                    for (i, (l1, l2, l3, s1, s2, s3, r1, r2, r3), f)
+                    const FILTERED_OFFSET: usize = 5;
+                    //       0   1   2   3   4  >5<  6   7   8   9   10
+                    for (i, (l1, l2, l3, l4, s1, s2, s3, r1, r2, r3, r4), f)
                     in izip!(FILTERED_OFFSET.., row.iter().tuple_windows(), &filtered[FILTERED_OFFSET..]) {
-                        let l = *l1 as u32 + *l2 as u32 + *l3 as u32;
-                        let s = *s1 as u32 + *s2 as u32 + *s3 as u32;
-                        let r = *r1 as u32 + *r2 as u32 + *r3 as u32;
+                        let l = median4_u16(*l1, *l2, *l3, *l4);
+                        let s = median3(*s1, *s2, *s3);
+                        let r = median4_u16(*r1, *r2, *r3, *r4);
                         if l > s || r > s { continue; }
-                        let f = *f as u32 * 3;
-                        if s > f && (s-f) > threshold {
+                        let f = *f as u16;
+                        if s > f && (s-f) > *threshold {
                             let star_x = i as isize;
                             let star_y = y as isize;
                             if star_x < (MAX_STAR_DIAM/2) as isize
@@ -150,7 +189,7 @@ impl StarsFinder {
                                 continue; // skip points near image border
                             }
                             let mut possible_stars = extremums_mutex.lock().unwrap();
-                            possible_stars.insert((star_x, star_y), s / 3);
+                            possible_stars.insert((star_x, star_y), s);
                             if possible_stars.len() >= MAX_EXTREMUMS_CNT {
                                 too_much_possible_stars = true;
                                 break;
@@ -186,7 +225,11 @@ impl StarsFinder {
             let mut extremums = extremums_mutex.lock().unwrap();
             if extremums.len() >= MAX_EXTREMUMS_CNT {
                 extremums.clear();
-                threshold = 3 * (threshold + 1) / 2;
+                let new_threshold =  3 * (*threshold as u32 + 1) / 2;
+                if new_threshold > u16::MAX as _ {
+                    break;
+                }
+                *threshold = new_threshold as _;
                 continue;
             }
             break;
@@ -196,8 +239,8 @@ impl StarsFinder {
     }
 
     fn find_possible_stars_centers(
-        extremums: &HashMap<(isize, isize), u32>,
-    ) -> Vec<(isize, isize, u32)> {
+        extremums: &HashMap<(isize, isize), u16>,
+    ) -> Vec<(isize, isize, u16)> {
         let mut processed_points = HashSet::<(isize, isize)>::new();
         let mut cluster_filler = FloodFiller::new();
         let mut cluster = Vec::new();
@@ -234,8 +277,9 @@ impl StarsFinder {
 
     fn get_stars(
         &mut self,
-        star_centers: &Vec<(isize, isize, u32)>,
+        star_centers: &Vec<(isize, isize, u16)>,
         image:        &ImageLayer<u16>,
+        threshold:    u16,
     ) -> Vec<Star> {
         let mut all_star_coords = HashSet::<(isize, isize)>::new();
         let mut flood_filler = FloodFiller::new();
@@ -261,25 +305,27 @@ impl StarsFinder {
             }
             let bg_pos = star_bg_values.len() / 4;
             let bg = *star_bg_values.select_nth_unstable(bg_pos).1;
-            let half_max = bg as i32 + (max_v as i32 - bg as i32) / 3;
-            if half_max <= 0 { continue; }
-            let half_max = half_max as u16;
+
+            if max_v < bg { continue; }
+            if max_v > bg && max_v-bg < threshold { continue; }
+            let border = bg + (max_v - bg + 1) / 2;
+            if border <= 0 { continue; }
             let mut x_summ = 0_f64;
             let mut y_summ = 0_f64;
             let mut crd_cnt = 0_f64;
             let mut brightness = 0_i32;
-            let mut min_x = isize::MAX;
-            let mut max_x = isize::MIN;
-            let mut min_y = isize::MAX;
-            let mut max_y = isize::MIN;
+            let mut min_x = x;
+            let mut max_x = x;
+            let mut min_y = y;
+            let mut max_y = y;
             star_points.clear();
+
             let fill_ok = flood_filler.fill(
                 x,
                 y,
                 |x, y| -> FillPtSetResult {
                     let v = image.get(x, y).unwrap_or(0);
-                    let more_than_half_max = v >= half_max;
-                    if more_than_half_max {
+                    if v >= border {
                         if star_points.contains_key(&(x, y)) {
                             return FillPtSetResult::Miss;
                         }
@@ -313,13 +359,15 @@ impl StarsFinder {
                 }
             );
 
-            for ((x, y), _) in &star_points {
-                all_star_coords.insert((*x, *y));
-            }
+            if star_points.is_empty() { continue; }
 
             if !fill_ok {
                 wrong_cnt += 1;
                 continue;
+            }
+
+            for ((x, y), _) in &star_points {
+                all_star_coords.insert((*x, *y));
             }
 
             // inflate star points by one pixel
@@ -341,13 +389,8 @@ impl StarsFinder {
                 star_points.insert((*x, *y), *v);
             }
 
-            if max_v > bg as u32
-            && brightness > 0
+            if brightness > 0
             && Self::check_is_star_ok(&star_points) {
-                let min_x = star_points.keys().map(|(x, _)| *x).min().unwrap_or(x);
-                let max_x = star_points.keys().map(|(x, _)| *x).max().unwrap_or(x);
-                let min_y = star_points.keys().map(|(_, y)| *y).min().unwrap_or(y);
-                let max_y = star_points.keys().map(|(_, y)| *y).max().unwrap_or(y);
                 let width = 3 * isize::max(x-min_x+1, max_x-x+1);
                 let height = 3 * isize::max(y-min_y+1, max_y-y+1);
                 let center_x = x_summ / crd_cnt;
@@ -389,35 +432,6 @@ impl StarsFinder {
         }
 
         stars
-    }
-
-    fn calc_threshold_for_stars_detection(image: &ImageLayer<u16>) -> u16 {
-        let mut diffs = Vec::new();
-        for row in image.as_slice().chunks_exact(image.width()) {
-            for area in row.chunks_exact(MAX_STAR_DIAM) {
-                let Some(&[b1, b2, b3, b4, b5]) = area.first_chunk::<5>() else { continue; };
-                let Some(&[e1, e2, e3, e4, e5]) = area.last_chunk::<5>() else { continue; };
-                let area_middle = area.len() / 2;
-                let &[c1, c2, c3] = &area[area_middle-1..=area_middle+1] else { continue; };
-                let begin = median5(b1, b2, b3, b4, b5) as i32;
-                let end = median5(e1, e2, e3, e4, e5) as i32;
-                let center = median3(c1, c2, c3) as i32;
-                let diff = begin + end - 2 * center;
-                if diff > i16::MAX as i32 || diff < -i16::MAX as i32 {
-                    continue;
-                }
-                diffs.push(diff * diff);
-            }
-        }
-
-        let m = median(&mut diffs);
-        let diff = 0.5 * f64::sqrt(m as _);
-
-        let result = (12.0 * diff) as i32;
-        let result = i32::max(result, 1);
-        let result = i32::min(result, u16::MAX as _);
-
-        result as _
     }
 
     fn check_is_star_ok(star_points: &HashMap<(isize, isize), u16>) -> bool {

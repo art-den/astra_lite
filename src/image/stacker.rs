@@ -386,7 +386,7 @@ impl Stacker {
                             1 => tmp[0],
                             2 => (tmp[0] + tmp[1]) / 2,
                             3 => median3(tmp[0], tmp[1], tmp[2]),
-                            4 => median4(tmp[0], tmp[1], tmp[2], tmp[3]),
+                            4 => median4_i32(tmp[0], tmp[1], tmp[2], tmp[3]),
                             _ => unreachable!(),
                         }
                     };
