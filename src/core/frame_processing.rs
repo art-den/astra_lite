@@ -869,12 +869,17 @@ fn make_preview_image_impl(
     let frame_stars = if is_light_frame {
         let mono_layer = if image.is_color() { &image.g } else { &image.l };
         let mut stars_finder = StarsFinder::new();
+        let ignore_3px_stars = command.quality_options
+            .as_ref()
+            .map(|opts| opts.ignore_3px_stars)
+            .unwrap_or(false);
 
         stars_finder.find_stars_and_get_info(
             &mono_layer,
             &image.raw_info,
             max_stars_fwhm,
             max_stars_ovality,
+            ignore_3px_stars,
             true
         )
     } else {
@@ -1081,12 +1086,18 @@ fn make_preview_image_impl(
                 &res_image.l
             };
 
+            let ignore_3px_stars = command.quality_options
+                .as_ref()
+                .map(|opts| opts.ignore_3px_stars)
+                .unwrap_or(false);
+
             let mut stars_finder = StarsFinder::new();
             let ls_stars = stars_finder.find_stars_and_get_info(
                 ls_mono_layer,
                 &raw_info,
                 max_stars_fwhm,
                 max_stars_ovality,
+                ignore_3px_stars,
                 true
             );
 

@@ -243,11 +243,12 @@ struct LiveStWidgets {
 
 #[derive(FromBuilder)]
 struct QualityWidgets {
-    bx:           gtk::Box,
-    chb_max_fwhm: gtk::CheckButton,
-    spb_max_fwhm: gtk::SpinButton,
-    chb_max_oval: gtk::CheckButton,
-    spb_max_oval: gtk::SpinButton,
+    bx:                   gtk::Box,
+    chb_max_fwhm:         gtk::CheckButton,
+    spb_max_fwhm:         gtk::SpinButton,
+    chb_max_oval:         gtk::CheckButton,
+    spb_max_oval:         gtk::SpinButton,
+    chb_ignore_3px_stars: gtk::CheckButton,
 }
 
 struct Widgets {
@@ -626,6 +627,13 @@ impl CameraUi {
             })
         );
 
+        self.widgets.quality.chb_ignore_3px_stars.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.quality.ignore_3px_stars = chb.is_active();
+            })
+        );
+
         self.widgets.calibr.chb_dark.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let Ok(mut options) = self_.options.try_write() else { return; };
@@ -788,6 +796,7 @@ impl CameraUi {
         qual.spb_max_fwhm.set_value(options.quality.max_fwhm as f64);
         qual.chb_max_oval.set_active(options.quality.use_max_ovality);
         qual.spb_max_oval.set_value(options.quality.max_ovality as f64);
+        qual.chb_ignore_3px_stars.set_active(options.quality.ignore_3px_stars);
     }
 
     pub fn get_common_options(&self, options: &mut Options) {
@@ -840,10 +849,11 @@ impl CameraUi {
 
     pub fn get_frame_quality_options(&self, options: &mut Options) {
         let qual = &self.widgets.quality;
-        options.quality.use_max_fwhm    = qual.chb_max_fwhm.is_active();
-        options.quality.max_fwhm        = qual.spb_max_fwhm.value() as f32;
-        options.quality.use_max_ovality = qual.chb_max_oval.is_active();
-        options.quality.max_ovality     = qual.spb_max_oval.value() as f32;
+        options.quality.use_max_fwhm     = qual.chb_max_fwhm.is_active();
+        options.quality.max_fwhm         = qual.spb_max_fwhm.value() as f32;
+        options.quality.use_max_ovality  = qual.chb_max_oval.is_active();
+        options.quality.max_ovality      = qual.spb_max_oval.value() as f32;
+        options.quality.ignore_3px_stars = qual.chb_ignore_3px_stars.is_active();
     }
 
     fn store_options_for_camera(

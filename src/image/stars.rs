@@ -61,9 +61,10 @@ impl StarsFinder {
         raw_info:           &Option<RawImageInfo>,
         max_stars_fwhm:     Option<f32>,
         max_stars_ovality:  Option<f32>,
-        mt:                 bool
+        ignore_3px_stars:   bool,
+        mt:                 bool,
     ) -> Stars {
-        let items = self.find_stars(&image, mt);
+        let items = self.find_stars(&image, ignore_3px_stars, mt);
 
         const COMMON_STAR_MAG: usize = 4;
         const COMMON_STAR_MAG_F: f64 = COMMON_STAR_MAG as f64;
@@ -102,8 +103,9 @@ impl StarsFinder {
 
     fn find_stars(
         &mut self,
-        image: &ImageLayer<u16>,
-        mt:    bool
+        image:            &ImageLayer<u16>,
+        ignore_3px_stars: bool,
+        mt:               bool
     ) -> StarItems {
         let mut threshold = Self::calc_threshold_for_stars_detection(image);
         log::debug!("Stars detection threshold = {}", threshold);
@@ -114,7 +116,7 @@ impl StarsFinder {
         let star_centers = Self::find_possible_stars_centers(&extremums);
         log::debug!("Stars star_centers.len() = {}", star_centers.len());
 
-        let stars = self.get_stars(&star_centers, image, threshold);
+        let stars = self.get_stars(&star_centers, image, threshold, ignore_3px_stars);
         log::debug!("Stars stars.len() = {}", stars.len());
 
         stars
@@ -277,9 +279,10 @@ impl StarsFinder {
 
     fn get_stars(
         &mut self,
-        star_centers: &Vec<(isize, isize, u16)>,
-        image:        &ImageLayer<u16>,
-        threshold:    u16,
+        star_centers:     &Vec<(isize, isize, u16)>,
+        image:            &ImageLayer<u16>,
+        threshold:        u16,
+        ignore_3px_stars: bool,
     ) -> Vec<Star> {
         let mut all_star_coords = HashSet::<(isize, isize)>::new();
         let mut flood_filler = FloodFiller::new();
@@ -306,8 +309,7 @@ impl StarsFinder {
             let bg_pos = star_bg_values.len() / 4;
             let bg = *star_bg_values.select_nth_unstable(bg_pos).1;
 
-            if max_v < bg { continue; }
-            if max_v > bg && max_v-bg < threshold { continue; }
+            if max_v < bg || max_v-bg < threshold { continue; }
             let border = bg + (max_v - bg + 1) / 2;
             if border <= 0 { continue; }
             let mut x_summ = 0_f64;
@@ -360,6 +362,7 @@ impl StarsFinder {
             );
 
             if star_points.is_empty() { continue; }
+            if ignore_3px_stars && star_points.len() <= 3 { continue; }
 
             if !fill_ok {
                 wrong_cnt += 1;

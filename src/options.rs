@@ -267,19 +267,21 @@ impl LiveStackingOptions {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct QualityOptions {
-    pub use_max_fwhm:    bool,
-    pub max_fwhm:        f32,
-    pub use_max_ovality: bool,
-    pub max_ovality:     f32,
+    pub use_max_fwhm:     bool,
+    pub max_fwhm:         f32,
+    pub use_max_ovality:  bool,
+    pub max_ovality:      f32,
+    pub ignore_3px_stars: bool,
 }
 
 impl Default for QualityOptions {
     fn default() -> Self {
         Self {
-            use_max_fwhm:    false,
-            max_fwhm:        20.0,
-            use_max_ovality: true,
-            max_ovality:     1.0,
+            use_max_fwhm:     false,
+            max_fwhm:         20.0,
+            use_max_ovality:  true,
+            max_ovality:      1.0,
+            ignore_3px_stars: true,
         }
     }
 }
