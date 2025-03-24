@@ -16,7 +16,7 @@ use crate::{
 };
 use super::{core::*, events::*, frame_processing::*, mode_darks_lib::MasterFileCreationProgramItem, mode_mnt_calib::*, utils::FileNameUtils};
 
-const MAX_TIMED_GUIDE: f64 = 20.0; // in seconds
+const MAX_TIMED_GUIDE: f64 = 5.0; // in seconds
 
 // Guider data for guiding by main camera
 struct SimpleGuider {
