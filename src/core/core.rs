@@ -17,13 +17,13 @@ use crate::{
 use super::{
     events::*,
     frame_processing::*,
-    mode_capture_platesolve::*,
-    mode_darks_library::*,
+    mode_platesolve::*,
+    mode_darks_lib::*,
     mode_focusing::*,
     mode_goto::*,
-    mode_mount_calibration::*,
+    mode_mnt_calib::*,
     mode_polar_align::PolarAlignMode,
-    mode_tacking_pictures::*,
+    mode_camera::*,
     mode_waiting::*
 };
 
@@ -697,7 +697,7 @@ impl Core {
     }
 
     pub fn start_capture_and_platesolve(&self) -> anyhow::Result<()> {
-        let mode = CapturePlatesolveMode::new(
+        let mode = PlatesolveMode::new(
             &self.options,
             &self.indi,
             &self.cur_frame,

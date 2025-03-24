@@ -4,7 +4,7 @@ use itertools::Itertools;
 use macros::FromBuilder;
 use serde::{Deserialize, Serialize};
 use crate::{
-    core::{core::*, events::*, mode_darks_library::*},
+    core::{core::*, events::*, mode_darks_lib::*},
     image::info::seconds_to_total_time_str,
     indi,
     options::*,

@@ -18,7 +18,7 @@ enum State {
     Finished,
 }
 
-pub struct CapturePlatesolveMode {
+pub struct PlatesolveMode {
     state:        State,
     indi:         Arc<indi::Connection>,
     cur_frame:    Arc<ResultImage>,
@@ -31,7 +31,7 @@ pub struct CapturePlatesolveMode {
     plate_solver: PlateSolver,
 }
 
-impl CapturePlatesolveMode {
+impl PlatesolveMode {
     pub fn new(
         options:     &Arc<RwLock<Options>>,
         indi:        &Arc<indi::Connection>,
@@ -137,7 +137,7 @@ impl CapturePlatesolveMode {
     }
 }
 
-impl Mode for CapturePlatesolveMode {
+impl Mode for PlatesolveMode {
     fn get_type(&self) -> ModeType {
         ModeType::CapturePlatesolve
     }

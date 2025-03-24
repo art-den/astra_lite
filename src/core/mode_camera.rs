@@ -14,7 +14,7 @@ use crate::{
     utils::io_utils::*,
     TimeLogger
 };
-use super::{core::*, events::*, frame_processing::*, mode_darks_library::MasterFileCreationProgramItem, mode_mount_calibration::*, utils::FileNameUtils};
+use super::{core::*, events::*, frame_processing::*, mode_darks_lib::MasterFileCreationProgramItem, mode_mnt_calib::*, utils::FileNameUtils};
 
 const MAX_TIMED_GUIDE: f64 = 20.0; // in seconds
 
