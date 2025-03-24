@@ -12,6 +12,7 @@ use super::{core::*, events::*, frame_processing::*, utils::*};
 const ONE_POS_TRY_CNT: usize = 3;
 const MAX_FOCUS_TOTAL_TRY_CNT: usize = 8;
 const MAX_FOCUS_SAMPLE_TRY_CNT: usize = 4;
+const BACKLASH_STEPS: f64 = 4.0;
 
 #[derive(Clone)]
 pub struct FocusingResultData {
@@ -143,7 +144,7 @@ impl FocusingMode {
             self.indi.focuser_set_abs_value(&self.f_options.device, pos, true, None)?;
             self.state = FocusingState::WaitingPosition(pos);
         } else {
-            let mut anti_backlash_pos = pos - self.f_options.step;
+            let mut anti_backlash_pos = pos - BACKLASH_STEPS * self.f_options.step;
             let cur_pos = self.indi.focuser_get_abs_value(&self.f_options.device)?;
             if f64::abs(anti_backlash_pos - cur_pos) < 1.0 {
                 anti_backlash_pos -= 1.0;
@@ -300,7 +301,7 @@ impl FocusingMode {
                     self.result_pos = Some(result_pos);
 
                     // for anti-backlash
-                    let anti_backlash_pos = result_pos - self.f_options.step;
+                    let anti_backlash_pos = result_pos - BACKLASH_STEPS * self.f_options.step;
                     log::debug!(
                         "Set RESULT focuser value for anti backlash {}",
                         anti_backlash_pos
