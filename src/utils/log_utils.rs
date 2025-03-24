@@ -23,10 +23,16 @@ pub fn start_logger(log_path: &Path) -> anyhow::Result<()> {
         now:    &mut DeferredNow,
         record: &Record
     | -> Result<(), std::io::Error> {
+        let mut module = record.module_path().unwrap_or_default();
+        if let Some(last_colon_pos) = module.rfind("::") {
+            module = &module[last_colon_pos+2..];
+        }
+
         write!(
-            w, "[{}] {} {}",
+            w, "[{}] {:5} {:20}: {}",
             now.format(TS_DASHES_BLANK_COLONS_DOT_BLANK),
             record.level(),
+            module,
             record.args()
         )
     };

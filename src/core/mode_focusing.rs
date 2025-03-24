@@ -168,17 +168,25 @@ impl FocusingMode {
                 "New frame with ovality={:?} and fwhm={:?}",
                 info.stars.info.ovality, info.stars.info.fwhm
             );
-
             let mut ok = false;
             if let Some(stars_fwhm) = info.stars.info.fwhm {
                 self.try_cnt = 0;
                 self.one_pos_fwhm.push(stars_fwhm);
+
+                log::debug!(
+                    "Added new fwhm into one pos values (len={}/{})",
+                    self.one_pos_fwhm.len(), ONE_POS_TRY_CNT
+                );
+
                 if self.one_pos_fwhm.len() == ONE_POS_TRY_CNT {
                     let stars_fwhm = self.one_pos_fwhm
                         .iter()
                         .copied()
                         .min_by(f32::total_cmp)
                         .unwrap_or_default();
+
+                    log::debug!("Best fwhm={:.1}", stars_fwhm);
+
                     let sample = FocuserSample {
                         focus_pos,
                         stars_fwhm
@@ -187,18 +195,17 @@ impl FocusingMode {
                     self.samples.sort_by(|s1, s2| cmp_f64(&s1.focus_pos, &s2.focus_pos));
                     self.one_pos_fwhm.clear();
                     ok = true;
+
+                    log::debug!("Samples count = {}", self.samples.len());
+                    let event_data = FocusingResultData {
+                        samples: self.samples.clone(),
+                        coeffs: None,
+                        result: None,
+                    };
+                    self.subscribers.notify(Event::Focusing(
+                        FocusingStateEvent::Data(event_data)
+                    ));
                 }
-
-                log::debug!("Ovality is Ok. Samples count = {}", self.samples.len());
-
-                let event_data = FocusingResultData {
-                    samples: self.samples.clone(),
-                    coeffs: None,
-                    result: None,
-                };
-                self.subscribers.notify(Event::Focusing(
-                    FocusingStateEvent::Data(event_data)
-                ));
             } else {
                 self.try_cnt += 1;
             }

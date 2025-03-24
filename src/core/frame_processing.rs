@@ -235,6 +235,7 @@ impl FrameProcessCommand {
 pub fn start_frame_processing_thread() -> (mpsc::Sender<FrameProcessCommand>, JoinHandle<()>) {
     let (bg_comands_sender, bg_comands_receiver) = mpsc::channel();
     let thread = std::thread::spawn(move || {
+        log::info!("process_blob_thread_fun started");
         'outer:
         while let Ok(mut cmd) = bg_comands_receiver.recv() {
             loop {
