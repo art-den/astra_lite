@@ -57,33 +57,42 @@ impl StarsFinder {
 
     pub fn find_stars_and_get_info(
         &mut self,
-        image:              &ImageLayer<u16>,
-        raw_info:           &Option<RawImageInfo>,
-        max_stars_fwhm:     Option<f32>,
-        max_stars_ovality:  Option<f32>,
-        ignore_3px_stars:   bool,
-        mt:                 bool,
+        image:             &ImageLayer<u16>,
+        raw_info:          &Option<RawImageInfo>,
+        max_fwhm:          Option<f32>,
+        max_ovality:       Option<f32>,
+        ignore_3px_stars:  bool,
+        mt:                bool,
     ) -> Stars {
-        let items = self.find_stars(&image, ignore_3px_stars, mt);
+        let mut threshold = Self::calc_threshold_for_stars_detection(image);
+        log::debug!("Stars detection threshold = {}", threshold);
+
+        let extremums = Self::find_extremums(image, &mut threshold, mt);
+        log::debug!("Stars extremums.len() = {}", extremums.len());
+
+        let star_centers = Self::find_possible_stars_centers(&extremums);
+        log::debug!("Stars star_centers.len() = {}", star_centers.len());
+
+        let stars = self.get_stars(&star_centers, image, threshold, ignore_3px_stars);
+        log::debug!("Stars stars.len() = {}", stars.len());
 
         const COMMON_STAR_MAG: usize = 4;
-        const COMMON_STAR_MAG_F: f64 = COMMON_STAR_MAG as f64;
-        let star_img = Self::calc_common_star_image(image, &items, COMMON_STAR_MAG);
-        let fwhm = star_img.as_ref()
-            .and_then(|img| img.calc_fwhm())
-            .map(|v| (v / (COMMON_STAR_MAG_F * COMMON_STAR_MAG_F)) as f32);
-        let ovality = star_img.as_ref()
-            .and_then(|img| img.calc_ovality())
-            .map(|v| (v / COMMON_STAR_MAG_F) as f32);
+        let star_img = Self::calc_common_star_image(image, &stars, COMMON_STAR_MAG);
 
-        let fwhm_is_ok = if let Some(max_stars_fwhm) = max_stars_fwhm {
-            fwhm.unwrap_or(999.0) < max_stars_fwhm
+        let (fwhm, ovality) = if let Some(star_img) = star_img {
+            (star_img.calc_fwhm(), star_img.calc_ovality())
+        } else {
+            (None, None)
+        };
+
+        let fwhm_is_ok = if let (Some(max_stars_fwhm), Some(fwhm)) = (max_fwhm, fwhm) {
+            fwhm < max_stars_fwhm
         } else {
             true
         };
 
-        let ovality_is_ok = if let Some(max_stars_ovality) = max_stars_ovality {
-            ovality.unwrap_or(999.0) < max_stars_ovality
+        let ovality_is_ok = if let (Some(max_stars_ovality), Some(ovality)) = (max_ovality, ovality) {
+            ovality < max_stars_ovality
         } else {
             true
         };
@@ -98,28 +107,7 @@ impl StarsFinder {
             ovality_is_ok,
         };
 
-        Stars { items, info }
-    }
-
-    fn find_stars(
-        &mut self,
-        image:            &ImageLayer<u16>,
-        ignore_3px_stars: bool,
-        mt:               bool
-    ) -> StarItems {
-        let mut threshold = Self::calc_threshold_for_stars_detection(image);
-        log::debug!("Stars detection threshold = {}", threshold);
-
-        let extremums = Self::find_extremums(image, &mut threshold, mt);
-        log::debug!("Stars extremums.len() = {}", extremums.len());
-
-        let star_centers = Self::find_possible_stars_centers(&extremums);
-        log::debug!("Stars star_centers.len() = {}", star_centers.len());
-
-        let stars = self.get_stars(&star_centers, image, threshold, ignore_3px_stars);
-        log::debug!("Stars stars.len() = {}", stars.len());
-
-        stars
+        Stars { items: stars, info }
     }
 
     fn calc_threshold_for_stars_detection(image: &ImageLayer<u16>) -> u16 {
@@ -306,11 +294,11 @@ impl StarsFinder {
             for v in image.rect_iter(x1, y1, x2, y2) {
                 star_bg_values.push(v);
             }
-            let bg_pos = star_bg_values.len() / 4;
+            let bg_pos = star_bg_values.len() / 3;
             let bg = *star_bg_values.select_nth_unstable(bg_pos).1;
 
             if max_v < bg || max_v-bg < threshold { continue; }
-            let border = bg + (max_v - bg + 1) / 2;
+            let border = (bg as u32 + (max_v as u32 - bg as u32 + 1) / 3) as u16;
             if border <= 0 { continue; }
             let mut x_summ = 0_f64;
             let mut y_summ = 0_f64;
@@ -557,62 +545,68 @@ struct CommonStarsImage {
 }
 
 impl CommonStarsImage {
-    fn calc_fwhm(&self) -> Option<f64> {
+    fn calc_fwhm(&self) -> Option<f32> {
+        use std::f32::consts::PI;
         if self.image.is_empty() {
             return None;
         }
-        let above_cnt = self.image
+        let area = self.image
             .as_slice()
             .iter()
-            .filter(|&v| *v > u16::MAX / 2)
-            .count();
-        Some(above_cnt as f64)
+            .filter(|&v| *v >= u16::MAX / 2)
+            .count() as f32;
+        let radius = f32::sqrt(area / PI);
+        Some(2.0 * radius / self.k as f32)
     }
 
-    fn calc_ovality(&self) -> Option<f64> {
+    fn calc_ovality(&self) -> Option<f32> {
         if self.image.is_empty() {
             return None;
         }
         const ANGLE_CNT: usize = 32;
         let center_x = (self.image.width() / 2) as f64;
         let center_y = (self.image.height() / 2) as f64;
-        let size = (usize::max(self.image.width(), self.image.height()) * self.k) as i32;
-        let mut diamemters = Vec::new();
+        let size = (usize::min(self.image.width(), self.image.height()) * self.k) as i32;
+        let mut widths = Vec::new();
         for i in 0..ANGLE_CNT {
             let angle = PI * (i as f64) / (ANGLE_CNT as f64);
             let cos_angle = f64::cos(angle);
             let sin_angle = f64::sin(angle);
-            let mut inside_star_count1 = 0_usize;
-            let mut inside_star = false;
-            for j in -size/2..0 {
-                let k = j as f64 / self.k as f64;
-                let x = k * cos_angle + center_x;
-                let y = k * sin_angle + center_y;
+
+            let mut first_over_index = None;
+            let mut last_over_index = None;
+
+            let mut prev_over = false;
+            for j in -size/2..size/2 {
+                let x = j as f64 * cos_angle + center_x;
+                let y = j as f64 * sin_angle + center_y;
+                let mut over = false;
                 if let Some(v) = self.image.get_f64_crd(x, y) {
-                    if v >= u16::MAX/2 { inside_star = true; }
+                    over = v >= u16::MAX/2;
                 }
-                if inside_star { inside_star_count1 += 1; }
-            }
-            let mut inside_star = false;
-            let mut inside_star_count2 = 0_usize;
-            for j in (1..size/2).rev() {
-                let k = j as f64 / self.k as f64;
-                let x = k * cos_angle + center_x;
-                let y = k * sin_angle + center_y;
-                if let Some(v) = self.image.get_f64_crd(x, y) {
-                    if v >= u16::MAX/2 { inside_star = true; }
+                if first_over_index.is_none() && over {
+                    first_over_index = Some(j);
                 }
-                if inside_star { inside_star_count2 += 1; }
+                if prev_over && !over {
+                    last_over_index = Some(j-1);
+                }
+                prev_over = over;
             }
-            let inside_star_count = 2 * usize::min(inside_star_count1, inside_star_count2);
-            diamemters.push(inside_star_count);
+
+            if let (Some(from), Some(to)) = (first_over_index, last_over_index) {
+                widths.push(to - from + 1);
+            } else {
+                widths.push(0);
+            }
         }
-        let max_diam_pos = diamemters.iter().copied().position_max().unwrap_or_default();
-        let min_diam_pos = (max_diam_pos + ANGLE_CNT/2) % ANGLE_CNT;
-        let max_diameter = diamemters[max_diam_pos] as f64;
-        let min_diameter = diamemters[min_diam_pos] as f64;
-        let diff = max_diameter - min_diameter;
-        Some(diff / self.k as f64)
+        let max_width_pos = widths.iter().copied().position_max().unwrap_or_default();
+        let min_width_pos = (max_width_pos + ANGLE_CNT/2) % ANGLE_CNT;
+        let max_width = widths[max_width_pos] as f64;
+        let min_width = widths[min_width_pos] as f64;
+
+        let ovality = (max_width - min_width) / self.k as f64;
+
+        Some(ovality as f32)
     }
 
     fn calc_angular_fwhm(fwhm: Option<f32>, raw_info: &Option<RawImageInfo>) -> Option<f32> {
@@ -624,7 +618,7 @@ impl CommonStarsImage {
 
         let pixel_size = 0.5 * (pixel_size_x + pixel_size_y);
         let pixel_size_m = pixel_size / 1_000_000.0;
-        let r = f64::sqrt(fwhm as f64 / PI) * pixel_size_m;
+        let r = 0.5 * fwhm as f64 * pixel_size_m;
         let focal_len_m = focal_len / 1000.0;
         let result = 2.0 * f64::atan2(r, focal_len_m);
 

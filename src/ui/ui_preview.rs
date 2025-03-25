@@ -707,7 +707,7 @@ impl PreviewUi {
 
                 let mut fwhm_str = String::new();
                 if let Some(value) = info.stars.info.fwhm {
-                    fwhm_str += &format!("{:.1}px²", value);
+                    fwhm_str += &format!("{:.1}px", value);
                 }
                 if let Some(value) = info.stars.info.fwhm_angular {
                     fwhm_str += &format!(" / {:.1}\"", 60.0 * 60.0 * radian_to_degree(value as f64));
@@ -1245,7 +1245,7 @@ impl PreviewUi {
                     String::new()
                 };
             let mut fwhm_str = item.fwhm
-                .map(|v| format!("{:.1}px²", v))
+                .map(|v| format!("{:.1}px", v))
                 .unwrap_or_else(String::new);
             if item.bad_fwhm {
                 fwhm_str = make_bad_str(&fwhm_str);

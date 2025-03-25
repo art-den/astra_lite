@@ -278,9 +278,9 @@ impl Default for QualityOptions {
     fn default() -> Self {
         Self {
             use_max_fwhm:     false,
-            max_fwhm:         20.0,
-            use_max_ovality:  true,
-            max_ovality:      1.0,
+            max_fwhm:         5.0,
+            use_max_ovality:  false,
+            max_ovality:      2.0,
             ignore_3px_stars: true,
         }
     }
