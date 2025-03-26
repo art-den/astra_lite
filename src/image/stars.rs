@@ -6,7 +6,7 @@ use super::{image::ImageLayer, raw::RawImageInfo, utils::*};
 const MAX_STAR_DIAM: usize = 32;
 const MAX_STARS_POINTS_CNT: usize = MAX_STAR_DIAM * MAX_STAR_DIAM;
 const MAX_STARS_CNT: usize = 500;
-const MAX_STARS_FOR_STAR_IMAGE: usize = 200;
+const MAX_STARS_CNT_FOR_STAR_IMAGE: usize = 100;
 
 #[derive(Clone, Default)]
 pub struct Star {
@@ -112,8 +112,9 @@ impl StarsFinder {
 
     fn calc_threshold_for_stars_detection(image: &ImageLayer<u16>) -> u16 {
         let mut diffs = Vec::new();
-        for row in image.as_slice().chunks_exact(image.width()) {
-            for area in row.chunks_exact(MAX_STAR_DIAM) {
+        for (y, row) in image.as_slice().chunks_exact(image.width()).enumerate() {
+            let start = y & 0xF;
+            for area in row[start..].chunks_exact(MAX_STAR_DIAM) {
                 let Some(&[b1, b2, b3, b4, b5]) = area.first_chunk::<5>() else { continue; };
                 let Some(&[e1, e2, e3, e4, e5]) = area.last_chunk::<5>() else { continue; };
                 let area_middle = area.len() / 2;
@@ -297,7 +298,7 @@ impl StarsFinder {
             let bg_pos = star_bg_values.len() / 3;
             let bg = *star_bg_values.select_nth_unstable(bg_pos).1;
 
-            if max_v < bg || max_v-bg < threshold { continue; }
+            if max_v <= bg || max_v-bg < threshold { continue; }
             let border = (bg as u32 + (max_v as u32 - bg as u32 + 1) / 3) as u16;
             if border <= 0 { continue; }
             let mut x_summ = 0_f64;
@@ -418,6 +419,20 @@ impl StarsFinder {
 
         stars.sort_by_key(|star| -(star.brightness as i32));
 
+        // remove not overexposured stars larger then
+        // 2 * median value of not overexposured stars area
+        let mut not_oberexposured_areas: Vec<_> = stars
+            .iter()
+            .filter(|s| !s.overexposured)
+            .map(|s| s.points.len())
+            .collect();
+
+        if !not_oberexposured_areas.is_empty() {
+            let med = median(&mut not_oberexposured_areas);
+            let border = med * 2;
+            stars.retain(|s| s.overexposured || s.points.len() < border);
+        }
+
         if stars.len() > MAX_STARS_CNT {
             stars.drain(MAX_STARS_CNT..);
         }
@@ -496,22 +511,65 @@ impl StarsFinder {
         stars: &[Star],
         k:     usize
     ) -> Option<CommonStarsImage>{
-        let stars_for_image: Vec<_> = stars.iter()
-            .filter(|s| !s.overexposured)
-            .take(MAX_STARS_FOR_STAR_IMAGE)
-            .map(|s| (s, (s.max_value - s.background) as i32))
-            .collect();
+        let stars_for_image: Vec<_> =
+            stars.iter()
+                .filter(move |s| { !s.overexposured })
+                .map(|s| (s, (s.max_value - s.background) as i32))
+                .filter(|(_, r)| *r > 0)
+                .collect();
         if stars_for_image.is_empty() {
             return None;
         }
-        let aver_width = stars_for_image.iter().map(|(s, _)| s.width).sum::<usize>() / stars_for_image.len();
-        let aver_height = stars_for_image.iter().map(|(s, _)| s.height).sum::<usize>() / stars_for_image.len();
+
+        // Lets prefer stars from center of image
+
+        const MIN_STARS_CNT_FOR_STAR_IMAGE: usize = 50;
+        let img_size = (usize::min(image.width(), image.height()) / 2) as f64;
+        let img_center_x = (image.width()/2) as f64;
+        let img_center_y = (image.height()/2) as f64;
+        let dists_to_center = [0.5 * img_size, 0.66 * img_size, 0.75 * img_size, img_size, 1_000_000.0];
+        let mut filtered_stars = Vec::new();
+        for dists_to_center in dists_to_center {
+            filtered_stars.clear();
+            for (s, v) in &stars_for_image {
+                let dx = s.x - img_center_x;
+                let dy = s.y - img_center_y;
+                let star_dist_to_center = f64::sqrt(dx * dx + dy * dy);
+                if star_dist_to_center < dists_to_center {
+                    filtered_stars.push((*s, *v));
+                }
+                if filtered_stars.len() > MAX_STARS_CNT_FOR_STAR_IMAGE {
+                    break;
+                }
+            }
+            if filtered_stars.len() > MIN_STARS_CNT_FOR_STAR_IMAGE {
+                break;
+            }
+        }
+        let stars_count = filtered_stars.len();
+        if stars_count == 0 {
+            return None;
+        }
+
+        // Size of image
+
+        let aver_width = filtered_stars
+            .iter()
+            .map(|(s, _)| s.width)
+            .sum::<usize>() / stars_count;
+        let aver_height = filtered_stars
+            .iter()
+            .map(|(s, _)| s.height)
+            .sum::<usize>() / stars_count;
         let mut result_width = usize::min(aver_width, MAX_STAR_DIAM) * k;
         if result_width % 2 == 0 { result_width += 1; }
         let result_width2 = (result_width / 2) as isize;
         let mut result_height = usize::min(aver_height, MAX_STAR_DIAM) * k;
         if result_height % 2 == 0 { result_height += 1; }
         let result_height2 = (result_height / 2) as isize;
+
+        // Create image
+
         let mut result = ImageLayer::new_with_size(result_width, result_height);
         let k_f = 1.0 / k as f64;
         let mut values = Vec::new();
@@ -521,7 +579,7 @@ impl StarsFinder {
             let x_f = k_f * (x as isize - result_width2) as f64;
             let y_f = k_f * (y as isize - result_height2) as f64;
             values.clear();
-            for (s, r) in &stars_for_image {
+            for (s, r) in &filtered_stars {
                 if let Some(v) = image.get_f64_crd(s.x + x_f, s.y + y_f) {
                     values.push(u16::MAX as i64 * (v as i64 - s.background as i64) / *r as i64);
                 }
@@ -534,6 +592,7 @@ impl StarsFinder {
                 *dst = median as u16;
             }
         }
+
         Some(CommonStarsImage { image: result, k })
     }
 
@@ -603,7 +662,6 @@ impl CommonStarsImage {
         let min_width_pos = (max_width_pos + ANGLE_CNT/2) % ANGLE_CNT;
         let max_width = widths[max_width_pos] as f64;
         let min_width = widths[min_width_pos] as f64;
-
         let ovality = (max_width - min_width) / self.k as f64;
 
         Some(ovality as f32)
