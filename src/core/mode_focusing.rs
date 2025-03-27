@@ -14,6 +14,9 @@ const MAX_FOCUS_TOTAL_TRY_CNT: usize = 8;
 const MAX_FOCUS_SAMPLE_TRY_CNT: usize = 4;
 const BACKLASH_STEPS: f64 = 4.0;
 
+const MAX_FOCUS_CHANGE_TIME: usize = 15;
+const MAX_FOCUS_CHANGE_CNT: usize = 3;
+
 #[derive(Clone)]
 pub struct FocusingResultData {
     pub samples: Vec<FocuserSample>,
@@ -35,20 +38,23 @@ enum Stage {
 }
 
 pub struct FocusingMode {
-    indi:         Arc<indi::Connection>,
-    subscribers:  Arc<EventSubscriptions>,
-    state:        FocusingState,
-    camera:       DeviceAndProp,
-    f_opts:       FocuserOptions,
-    cam_opts:     CamOptions,
-    before_pos:   f64,
-    to_go:        VecDeque<f64>,
-    samples:      Vec<FocuserSample>,
-    one_pos_fwhm: Vec<f32>,
-    result_pos:   Option<f64>,
-    try_cnt:      usize,
-    stage:        Stage,
-    next_mode:    Option<Box<dyn Mode + Sync + Send>>,
+    indi:          Arc<indi::Connection>,
+    subscribers:   Arc<EventSubscriptions>,
+    state:         FocusingState,
+    camera:        DeviceAndProp,
+    f_opts:        FocuserOptions,
+    cam_opts:      CamOptions,
+    before_pos:    f64,
+    to_go:         VecDeque<f64>,
+    samples:       Vec<FocuserSample>,
+    one_pos_fwhm:  Vec<f32>,
+    result_pos:    Option<f64>,
+    try_cnt:       usize,
+    stage:         Stage,
+    desired_focus: f64,
+    change_time:   Option<usize>,
+    change_cnt:    usize,
+    next_mode:     Option<Box<dyn Mode + Sync + Send>>,
 }
 
 #[derive(PartialEq)]
@@ -96,19 +102,22 @@ impl FocusingMode {
         )?;
 
         Ok(FocusingMode {
-            indi:         Arc::clone(indi),
-            subscribers:  Arc::clone(subscribers),
-            state:        FocusingState::Undefined,
-            f_opts:       opts.focuser.clone(),
-            before_pos:   0.0,
-            to_go:        VecDeque::new(),
-            samples:      Vec::new(),
-            one_pos_fwhm: Vec::new(),
-            result_pos:   None,
-            stage:        Stage::Undef,
-            try_cnt:      0,
+            indi:          Arc::clone(indi),
+            subscribers:   Arc::clone(subscribers),
+            state:         FocusingState::Undefined,
+            f_opts:        opts.focuser.clone(),
+            before_pos:    0.0,
+            to_go:         VecDeque::new(),
+            samples:       Vec::new(),
+            one_pos_fwhm:  Vec::new(),
+            result_pos:    None,
+            stage:         Stage::Undef,
+            change_time:   None,
+            change_cnt:    0,
+            desired_focus: 0.0,
+            try_cnt:       0,
+            camera:        cam_device.clone(),
             next_mode,
-            camera:       cam_device.clone(),
             cam_opts,
         })
     }
@@ -132,6 +141,14 @@ impl FocusingMode {
         Ok(())
     }
 
+    fn set_new_focus_value(&mut self, value: f64) -> anyhow::Result<()> {
+        self.indi.focuser_set_abs_value(&self.f_opts.device, value, true, None)?;
+        self.desired_focus = value;
+        self.change_time = Some(0);
+        self.change_cnt = 0;
+        Ok(())
+    }
+
     fn start_sample(
         &mut self,
         first_time: bool
@@ -139,14 +156,15 @@ impl FocusingMode {
         let Some(pos) = self.to_go.pop_front() else {
             return Ok(());
         };
+
         if !first_time {
             log::debug!("Setting focuser value: {}", pos);
-            self.indi.focuser_set_abs_value(&self.f_opts.device, pos, true, None)?;
+            self.set_new_focus_value(pos)?;
             self.state = FocusingState::WaitingPosition(pos);
         } else {
             let anti_backlash_pos = pos - BACKLASH_STEPS * self.f_opts.step;
             log::debug!("Setting focuser value for avoiding backlash: {}", pos);
-            self.indi.focuser_set_abs_value(&self.f_opts.device, anti_backlash_pos, true, None)?;
+            self.set_new_focus_value(anti_backlash_pos)?;
             self.state = FocusingState::WaitingPositionAntiBacklash{
                 anti_backlash_pos,
                 target_pos: pos
@@ -160,13 +178,14 @@ impl FocusingMode {
             FocusingState::WaitingPositionAntiBacklash { anti_backlash_pos, target_pos } => {
                 if cur_focus as i64 == anti_backlash_pos as i64 {
                     log::debug!("Setting focuser value after backlash: {}", target_pos);
-                    self.indi.focuser_set_abs_value(&self.f_opts.device, target_pos, true, None)?;
+                    self.set_new_focus_value(target_pos)?;
                     self.state = FocusingState::WaitingPosition(target_pos);
                 }
             }
             FocusingState::WaitingPosition(desired_focus) => {
                 if cur_focus as i64 == desired_focus as i64 {
                     log::debug!("Taking shot for focuser value: {}", desired_focus);
+                    self.change_time = None;
                     apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
                     self.state = FocusingState::WaitingFrame(desired_focus);
                 }
@@ -178,13 +197,14 @@ impl FocusingMode {
                 );
                 if cur_focus as i64 == anti_backlash_pos as i64 {
                     log::debug!("Setting RESULT focuser value after backlash: {}", target_pos);
-                    self.indi.focuser_set_abs_value(&self.f_opts.device, target_pos, true, None)?;
+                    self.set_new_focus_value(target_pos)?;
                     self.state = FocusingState::WaitingResultPos(target_pos);
                 }
             }
             FocusingState::WaitingResultPos(desired_focus) => {
                 if cur_focus as i64 == desired_focus as i64 {
                     log::debug!("Taking RESULT shot for focuser value: {}", desired_focus);
+                    self.change_time = None;
                     apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
                     self.state = FocusingState::WaitingResultImg;
                 }
@@ -341,12 +361,7 @@ impl FocusingMode {
                         "Set RESULT focuser value for anti backlash {}",
                         anti_backlash_pos
                     );
-                    self.indi.focuser_set_abs_value(
-                        &self.f_opts.device,
-                        anti_backlash_pos,
-                        true,
-                        None
-                    )?;
+                    self.set_new_focus_value(anti_backlash_pos)?;
                     self.state = FocusingState::WaitingResultPosAntiBacklash {
                         anti_backlash_pos,
                         target_pos: result_pos
@@ -358,6 +373,7 @@ impl FocusingMode {
                 }
             } else {
                 log::debug!("Received image is not Ok. Taking another one...");
+                self.change_time = None;
                 apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
             }
         }
@@ -445,6 +461,19 @@ impl Mode for FocusingMode {
     }
 
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
+        if let Some(change_time) = &mut self.change_time {
+            *change_time += 1;
+            if *change_time > MAX_FOCUS_CHANGE_TIME {
+                self.change_cnt += 1;
+                log::error!("Time out waiting new focus value!");
+                if self.change_cnt > MAX_FOCUS_CHANGE_CNT {
+                    anyhow::bail!("Can't set new focus value for focuser!");
+                }
+                log::error!("Setting new value {:.0} again. Try = {}", self.desired_focus, self.change_cnt);
+                self.indi.focuser_set_abs_value(&self.f_opts.device, self.desired_focus, true, None)?;
+                *change_time = 0;
+            }
+        }
         let cur_focus = self.indi.focuser_get_abs_value(&self.f_opts.device)?;
         self.check_cur_focus_value(cur_focus)
     }
