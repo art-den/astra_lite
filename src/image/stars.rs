@@ -57,27 +57,44 @@ impl StarsFinder {
 
     pub fn find_stars_and_get_info(
         &mut self,
-        image:             &ImageLayer<u16>,
-        raw_info:          &Option<RawImageInfo>,
-        max_fwhm:          Option<f32>,
-        max_ovality:       Option<f32>,
-        ignore_3px_stars:  bool,
-        mt:                bool,
+        image:            &ImageLayer<u16>,
+        raw_info:         &Option<RawImageInfo>,
+        max_fwhm:         Option<f32>,
+        max_ovality:      Option<f32>,
+        ignore_3px_stars: bool,
+        mt:               bool,
     ) -> Stars {
+        log::debug!(
+            "StarsFinder::find_stars_and_get_info ignore_3px_stars={}, mt={}",
+            ignore_3px_stars, mt
+        );
+
+        let tm_total = TimeLogger::start();
+
+        let tm = TimeLogger::start();
         let mut threshold = Self::calc_threshold_for_stars_detection(image);
+        tm.log("StarsFinder::calc_threshold_for_stars_detection");
         log::debug!("Stars detection threshold = {}", threshold);
 
+        let tm = TimeLogger::start();
         let extremums = Self::find_extremums(image, &mut threshold, mt);
+        tm.log("StarsFinder::find_extremums");
         log::debug!("Stars extremums.len() = {}", extremums.len());
 
         let star_centers = Self::find_possible_stars_centers(&extremums);
+        let tm = TimeLogger::start();
+        tm.log("StarsFinder::find_possible_stars_centers");
         log::debug!("Stars star_centers.len() = {}", star_centers.len());
 
+        let tm = TimeLogger::start();
         let stars = self.get_stars(&star_centers, image, threshold, ignore_3px_stars);
+        tm.log("Stars::get_stars");
         log::debug!("Stars stars.len() = {}", stars.len());
 
         const COMMON_STAR_MAG: usize = 4;
+        let tm = TimeLogger::start();
         let star_img = Self::calc_common_star_image(image, &stars, COMMON_STAR_MAG);
+        tm.log("StarsFinder::calc_common_star_image");
 
         let (fwhm, ovality) = if let Some(star_img) = star_img {
             (star_img.calc_fwhm(), star_img.calc_ovality())
@@ -106,6 +123,8 @@ impl StarsFinder {
             ovality,
             ovality_is_ok,
         };
+
+        tm_total.log("StarsFinder TOTAL");
 
         Stars { items: stars, info }
     }
@@ -145,8 +164,6 @@ impl StarsFinder {
         threshold: &mut u16,
         mt:        bool,
     ) -> HashMap<(isize, isize), u16> {
-        let iir_filter_coeffs = IirFilterCoeffs::new(0.98);
-
         let extremums_mutex = Mutex::new(HashMap::new());
         const MAX_EXTREMUMS_CNT: usize = 10 * MAX_STARS_CNT;
         loop {
@@ -159,8 +176,12 @@ impl StarsFinder {
                         continue;
                     }
                     let row = image.row(y);
-                    let mut filter = IirFilter::new();
-                    filter.filter_direct_and_revert_u16(&iir_filter_coeffs, row, &mut filtered);
+                    for (r, f) in izip!(row.chunks(2*MAX_STAR_DIAM+1), filtered.chunks_mut(2*MAX_STAR_DIAM+1)) {
+                        f.copy_from_slice(r);
+                        let m = median(f);
+                        f.fill(m);
+                    }
+
                     const FILTERED_OFFSET: usize = 5;
                     //       0   1   2   3   4  >5<  6   7   8   9   10
                     for (i, (l1, l2, l3, l4, s1, s2, s3, r1, r2, r3, r4), f)
@@ -193,22 +214,19 @@ impl StarsFinder {
                 }
             };
 
-            let tm = TimeLogger::start();
             if !mt {
                 find_possible_stars_in_rows(0, image.height());
             } else {
-                let max_threads = rayon::current_num_threads();
-                let tasks_cnt = if max_threads != 1 { 2 * max_threads  } else { 1 };
+                let max_threads = rayon::current_num_threads().max(1);
                 let image_height = image.height();
                 rayon::scope(|s| {
-                    for t in 0..tasks_cnt {
-                        let y1 = t * image_height / tasks_cnt;
-                        let y2 = (t + 1) * image_height / tasks_cnt;
+                    for t in 0..max_threads {
+                        let y1 = t * image_height / max_threads;
+                        let y2 = (t + 1) * image_height / max_threads;
                         s.spawn(move |_| { find_possible_stars_in_rows(y1, y2); });
                     }
                 });
             }
-            tm.log("find_possible_stars_in_rows");
 
             // if too much stars (noise detected as stars),
             // increase threshold and repeat
