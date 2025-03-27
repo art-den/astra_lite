@@ -254,10 +254,10 @@ impl MountCalibrMode {
                     let min_pix_size = f64::min(pix_size_x, pix_size_y);
                     let cam_size_mm = min_size * min_pix_size / 1000.0;
                     let camera_angle = f64::atan2(cam_size_mm, self.telescope.real_focal_length());
-                    let sky_angle_is_second = 2.0 * PI / (60.0 * 60.0 * 24.0);
+                    let sky_angle_in_seconds = 2.0 * PI / (60.0 * 60.0 * 24.0);
                     // time when point went all camera matrix on sky rotation speed = DITHER_CALIBR_SPEED
-                    let cam_time = camera_angle / (sky_angle_is_second * self.calibr_speed);
-                    let total_time = cam_time * 0.5; // half of matrix
+                    let cam_time = camera_angle / (sky_angle_in_seconds * self.calibr_speed);
+                    let total_time = cam_time * 0.333; // 1/3 of matrix
                     self.move_period = total_time / (DITHER_CALIBR_ATTEMPTS_CNT - 1) as f64;
                     if self.move_period > 3.0 {
                         self.move_period = 3.0;

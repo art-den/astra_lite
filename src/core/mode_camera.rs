@@ -489,6 +489,10 @@ impl TackingPicturesMode {
         &mut self,
         info: &LightFrameInfoData
     ) -> anyhow::Result<NotifyResult> {
+        if self.state == State::InternalMountCorrection {
+            return Ok(NotifyResult::Empty);
+        }
+
         let mount_device_active = self.indi.is_device_enabled(&self.mount_device).unwrap_or(false);
         if !mount_device_active {
             return Ok(NotifyResult::Empty);
