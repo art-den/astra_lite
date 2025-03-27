@@ -163,6 +163,7 @@ impl FocusingMode {
             self.state = FocusingState::WaitingPosition(pos);
         } else {
             let anti_backlash_pos = pos - BACKLASH_STEPS * self.f_opts.step;
+            let anti_backlash_pos = anti_backlash_pos.max(0.0);
             log::debug!("Setting focuser value for avoiding backlash: {}", pos);
             self.set_new_focus_value(anti_backlash_pos)?;
             self.state = FocusingState::WaitingPositionAntiBacklash{
@@ -207,6 +208,7 @@ impl FocusingMode {
                     self.change_time = None;
                     apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
                     self.state = FocusingState::WaitingResultImg;
+                    return Ok(NotifyResult::ProgressChanges);
                 }
             }
             _ => {}
@@ -357,6 +359,7 @@ impl FocusingMode {
 
                     // for anti-backlash
                     let anti_backlash_pos = result_pos - BACKLASH_STEPS * self.f_opts.step;
+                    let anti_backlash_pos = anti_backlash_pos.max(0.0);
                     log::debug!(
                         "Set RESULT focuser value for anti backlash {}",
                         anti_backlash_pos
@@ -408,10 +411,12 @@ impl Mode for FocusingMode {
     }
 
     fn progress(&self) -> Option<Progress> {
-        Some(Progress {
-            cur: self.samples.len(),
-            total: self.samples.len() + self.to_go.len() + 1
-        })
+        let total = self.samples.len() + self.to_go.len() + 1;
+        let mut cur = self.samples.len();
+        if matches!(self.state, FocusingState::WaitingResultImg) {
+            cur = total;
+        }
+        Some(Progress { cur, total })
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
