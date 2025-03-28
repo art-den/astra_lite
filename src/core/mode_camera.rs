@@ -6,17 +6,23 @@ use std::{
 use chrono::Utc;
 
 use crate::{
-    core::{consts::INDI_SET_PROP_TIMEOUT, utils::FileNameArg},
     guiding::external_guider::*,
-    image::{histogram::*, raw::{FrameType, RawStacker, RawImage, RawImageInfo}, stars_offset::*},
+    image::{histogram::*, raw::{FrameType, RawImage, RawImageInfo, RawStacker},  stars_offset::*},
     indi,
     options::*,
     utils::io_utils::*,
     TimeLogger
 };
-use super::{core::*, events::*, frame_processing::*, mode_darks_lib::MasterFileCreationProgramItem, mode_mnt_calib::*, utils::FileNameUtils};
-
-const MAX_TIMED_GUIDE: f64 = 5.0; // in seconds
+use super::{
+    consts::*,
+    core::*,
+    utils::FileNameArg,
+    events::*,
+    frame_processing::*,
+    mode_darks_lib::MasterFileCreationProgramItem,
+    mode_mnt_calib::*,
+    utils::FileNameUtils
+};
 
 // Guider data for guiding by main camera
 struct SimpleGuider {
@@ -63,6 +69,7 @@ enum State {
     CameraOffsetCalculation,
     WaitingForMountCalibration,
     InternalMountCorrection,
+    WaitAfterInternalMountCorrection(usize),
     ExternalDithering,
 }
 
@@ -578,15 +585,15 @@ impl TackingPicturesMode {
                     if can_set_guide_rate {
                         self.indi.mount_set_guide_rate(
                             &self.mount_device,
-                            DITHER_CALIBR_SPEED,
-                            DITHER_CALIBR_SPEED,
+                            MOUNT_CALIBR_SPEED,
+                            MOUNT_CALIBR_SPEED,
                             true,
                             INDI_SET_PROP_TIMEOUT
                         )?;
                     }
                     let (max_dec, max_ra) = self.indi.mount_get_timed_guide_max(&self.mount_device)?;
-                    let max_dec = f64::min(MAX_TIMED_GUIDE * 1000.0, max_dec);
-                    let max_ra = f64::min(MAX_TIMED_GUIDE * 1000.0, max_ra);
+                    let max_dec = f64::min(MAX_TIMED_GUIDE_TIME * 1000.0, max_dec);
+                    let max_ra = f64::min(MAX_TIMED_GUIDE_TIME * 1000.0, max_ra);
                     ra *= 1000.0;
                     dec *= 1000.0;
                     if ra > max_ra { ra = max_ra; }
@@ -966,7 +973,6 @@ impl TackingPicturesMode {
         abort_camera_exposure(&self.indi, &self.device)?;
         if self.cur_shot_id != shot_id {
             self.shot_id_to_ign = self.cur_shot_id;
-            println!("self.shot_id_to_ign = {:?}", self.shot_id_to_ign);
         }
         Ok(())
     }
@@ -1262,7 +1268,6 @@ impl Mode for TackingPicturesMode {
         &mut self,
         prop_change: &indi::PropChangeEvent
     ) -> anyhow::Result<NotifyResult> {
-        let mut result = NotifyResult::Empty;
         if self.state == State::InternalMountCorrection {
             if let ("TELESCOPE_TIMED_GUIDE_NS"|"TELESCOPE_TIMED_GUIDE_WE", indi::PropChange::Change { value, .. }, Some(guid_data))
             = (prop_change.prop_name.as_str(), &prop_change.change, &mut self.simple_guider) {
@@ -1277,12 +1282,26 @@ impl Mode for TackingPicturesMode {
                 && guid_data.cur_timed_guide_s == 0.0
                 && guid_data.cur_timed_guide_w == 0.0
                 && guid_data.cur_timed_guide_e == 0.0 {
+                    self.state = State::WaitAfterInternalMountCorrection(0);
+                }
+            }
+        }
+        Ok(NotifyResult::Empty)
+    }
+
+    fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
+        let mut result = NotifyResult::Empty;
+        match &mut self.state {
+            State::WaitAfterInternalMountCorrection(time) => {
+                *time += 1;
+                if *time == AFTER_MOUNT_MOVE_WAIT_TIME {
                     self.indi.mount_abort_motion(&self.mount_device)?;
                     self.take_shot_with_options(self.cam_options.frame.clone())?;
                     self.state = State::Common;
                     result = NotifyResult::ProgressChanges;
                 }
             }
+            _ => {}
         }
         Ok(result)
     }

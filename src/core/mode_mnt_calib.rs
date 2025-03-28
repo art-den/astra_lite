@@ -3,10 +3,9 @@ use itertools::Itertools;
 use crate::{
     image::{stars::*, stars_offset::*}, indi, options::*, utils::math::*
 };
-use super::{consts::INDI_SET_PROP_TIMEOUT, core::*, events::*, frame_processing::*, utils::*};
+use super::{consts::*, core::*, events::*, frame_processing::*, utils::*};
 
-pub const DITHER_CALIBR_ATTEMPTS_CNT: usize = 11;
-pub const DITHER_CALIBR_SPEED: f64 = 1.0;
+const DITHER_CALIBR_ATTEMPTS_CNT: usize = 11;
 
 #[derive(Debug, Default, Clone)]
 pub struct MountMoveCalibrRes {
@@ -41,8 +40,8 @@ impl MountMoveCalibrRes {
 
 pub struct MountCalibrMode {
     indi:              Arc<indi::Connection>,
-    state:             DitherCalibrState,
-    axis:              DitherCalibrAxis,
+    state:             State,
+    axis:              Axis,
     cam_opts:          CamOptions,
     telescope:         TelescopeOptions,
     start_dec:         f64,
@@ -50,7 +49,7 @@ pub struct MountCalibrMode {
     mount_device:      String,
     camera:            DeviceAndProp,
     attempt_num:       usize,
-    attempts:          Vec<DitherCalibrAtempt>,
+    attempts:          Vec<CalibrAtempt>,
     cur_timed_guide_n: f64,
     cur_timed_guide_s: f64,
     cur_timed_guide_w: f64,
@@ -67,21 +66,22 @@ pub struct MountCalibrMode {
 }
 
 #[derive(PartialEq)]
-enum DitherCalibrAxis {
+enum Axis {
     Undefined,
     Ra,
     Dec,
 }
 
 #[derive(PartialEq)]
-enum DitherCalibrState {
+enum State {
     Undefined,
     WaitForImage,
     WaitForSlew,
+    WaitAfterSlew(usize),
     WaitForOrigCoords,
 }
 
-struct DitherCalibrAtempt {
+struct CalibrAtempt {
     stars: StarItems,
 }
 
@@ -106,8 +106,8 @@ impl MountCalibrMode {
         )?;
         Ok(Self {
             indi:              Arc::clone(indi),
-            state:             DitherCalibrState::Undefined,
-            axis:              DitherCalibrAxis::Undefined,
+            state:             State::Undefined,
+            axis:              Axis::Undefined,
             cam_opts,
             telescope:         opts.telescope.clone(),
             start_dec:         0.0,
@@ -132,7 +132,7 @@ impl MountCalibrMode {
         })
     }
 
-    fn start_for_axis(&mut self, axis: DitherCalibrAxis) -> anyhow::Result<()> {
+    fn start_for_axis(&mut self, axis: Axis) -> anyhow::Result<()> {
         apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
 
         let guid_rate_supported = self.indi.mount_is_guide_rate_supported(&self.mount_device)?;
@@ -141,20 +141,21 @@ impl MountCalibrMode {
             self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.permition == indi::PropPermition::RW;
 
         if self.can_change_g_rate {
-            self.calibr_speed = DITHER_CALIBR_SPEED;
+            self.calibr_speed = MOUNT_CALIBR_SPEED;
         } else if guid_rate_supported {
             self.calibr_speed = self.indi.mount_get_guide_rate(&self.mount_device)?.0;
         } else {
             self.calibr_speed = 1.0;
         }
         self.attempt_num = 0;
-        self.state = DitherCalibrState::WaitForImage;
+        self.state = State::WaitForImage;
         self.axis = axis;
         self.attempts.clear();
         Ok(())
     }
 
     fn process_axis_results(&mut self) -> anyhow::Result<()> {
+        #[derive(Debug)]
         struct AttemptRes {move_x: f64, move_y: f64, dist: f64}
         let mut result = Vec::new();
         for (prev, cur) in self.attempts.iter().tuple_windows() {
@@ -187,7 +188,7 @@ impl MountCalibrMode {
         let min_dist = 0.5 * dist_max;
 
         result.retain(|r| r.dist > min_dist);
-        if self.axis == DitherCalibrAxis::Dec && result.len() >= 2 {
+        if self.axis == Axis::Dec && result.len() >= 2 {
             result.remove(0);
         }
 
@@ -201,19 +202,20 @@ impl MountCalibrMode {
         let move_y = move_y / self.move_period;
 
         match self.axis {
-            DitherCalibrAxis::Ra => {
+            Axis::Ra => {
                 self.result.move_x_ra = move_x;
                 self.result.move_y_ra = move_y;
-                self.start_for_axis(DitherCalibrAxis::Dec)?;
+                self.start_for_axis(Axis::Dec)?;
             }
-            DitherCalibrAxis::Dec => {
+            Axis::Dec => {
                 self.result.move_x_dec = move_x;
                 self.result.move_y_dec = move_y;
+
                 if let Some(next_mode) = &mut self.next_mode {
                     next_mode.set_or_correct_value(&mut self.result);
                 }
                 self.restore_orig_coords()?;
-                self.state = DitherCalibrState::WaitForOrigCoords;
+                self.state = State::WaitForOrigCoords;
             }
             _ => unreachable!()
         }
@@ -259,14 +261,14 @@ impl MountCalibrMode {
                     let cam_time = camera_angle / (sky_angle_in_seconds * self.calibr_speed);
                     let total_time = cam_time * 0.333; // 1/3 of matrix
                     self.move_period = total_time / (DITHER_CALIBR_ATTEMPTS_CNT - 1) as f64;
-                    if self.move_period > 3.0 {
-                        self.move_period = 3.0;
+                    if self.move_period > MAX_TIMED_GUIDE_TIME {
+                        self.move_period = MAX_TIMED_GUIDE_TIME;
                     }
                 } else {
                     self.move_period = 1.0;
                 }
             }
-            self.attempts.push(DitherCalibrAtempt {
+            self.attempts.push(CalibrAtempt {
                 stars: Vec::clone(&info.stars.items),
             });
             self.attempt_num += 1;
@@ -276,21 +278,21 @@ impl MountCalibrMode {
                 self.process_axis_results()?;
             } else {
                 let (ns, we) = match self.axis {
-                    DitherCalibrAxis::Ra => (0.0, 1000.0 * self.move_period),
-                    DitherCalibrAxis::Dec => (1000.0 * self.move_period, 0.0),
+                    Axis::Ra => (0.0, 1000.0 * self.move_period),
+                    Axis::Dec => (1000.0 * self.move_period, 0.0),
                     _ => unreachable!()
                 };
                 if self.can_change_g_rate {
                     self.indi.mount_set_guide_rate(
                         &self.mount_device,
-                        DITHER_CALIBR_SPEED,
-                        DITHER_CALIBR_SPEED,
+                        MOUNT_CALIBR_SPEED,
+                        MOUNT_CALIBR_SPEED,
                         true,
                         INDI_SET_PROP_TIMEOUT
                     )?;
                 }
                 self.indi.mount_timed_guide(&self.mount_device, ns, we)?;
-                self.state = DitherCalibrState::WaitForSlew;
+                self.state = State::WaitForSlew;
             }
         } else {
             apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
@@ -306,11 +308,11 @@ impl Mode for MountCalibrMode {
 
     fn progress_string(&self) -> String {
         match self.axis {
-            DitherCalibrAxis::Undefined =>
+            Axis::Undefined =>
                 "Mount calibration".to_string(),
-            DitherCalibrAxis::Ra =>
+            Axis::Ra =>
                 "Mount calibration (RA)".to_string(),
-            DitherCalibrAxis::Dec =>
+            Axis::Dec =>
                 "Mount calibration (DEC)".to_string(),
         }
     }
@@ -342,7 +344,7 @@ impl Mode for MountCalibrMode {
     fn start(&mut self) -> anyhow::Result<()> {
         self.start_dec = self.indi.mount_get_eq_dec(&self.mount_device)?;
         self.start_ra = self.indi.mount_get_eq_ra(&self.mount_device)?;
-        self.start_for_axis(DitherCalibrAxis::Ra)?;
+        self.start_for_axis(Axis::Ra)?;
         Ok(())
     }
 
@@ -369,7 +371,7 @@ impl Mode for MountCalibrMode {
             return Ok(result);
         }
         match self.state {
-            DitherCalibrState::WaitForSlew => {
+            State::WaitForSlew => {
                 if let ("TELESCOPE_TIMED_GUIDE_NS"|"TELESCOPE_TIMED_GUIDE_WE",
                         indi::PropChange::Change { value, .. })
                 = (prop_change.prop_name.as_str(), &prop_change.change) {
@@ -382,14 +384,12 @@ impl Mode for MountCalibrMode {
                     }
                     if self.cur_timed_guide_n == 0.0 && self.cur_timed_guide_s == 0.0
                     && self.cur_timed_guide_w == 0.0 && self.cur_timed_guide_e == 0.0 {
-                        self.indi.mount_abort_motion(&self.mount_device)?;
-                        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
-                        self.state = DitherCalibrState::WaitForImage;
+                        self.state = State::WaitAfterSlew(0);
                     }
                 }
             }
 
-            DitherCalibrState::WaitForOrigCoords => {
+            State::WaitForOrigCoords => {
                 if let ("EQUATORIAL_EOD_COORD", indi::PropChange::Change { value, new_state, .. })
                 = (prop_change.prop_name.as_str(), &prop_change.change) {
                     match value.elem_name.as_str() {
@@ -411,6 +411,23 @@ impl Mode for MountCalibrMode {
             }
 
             _ => {},
+        }
+        Ok(result)
+    }
+
+    fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
+        let mut result = NotifyResult::Empty;
+        match &mut self.state {
+            State::WaitAfterSlew(time) => {
+                *time += 1;
+                if *time == AFTER_MOUNT_MOVE_WAIT_TIME {
+                    self.indi.mount_abort_motion(&self.mount_device)?;
+                    apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
+                    self.state = State::WaitForImage;
+                    result = NotifyResult::ProgressChanges;
+                }
+            }
+            _ => {}
         }
         Ok(result)
     }

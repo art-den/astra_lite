@@ -851,7 +851,7 @@ impl SkyMap {
                     points.push(ObjEqCoord::new(ra, dec));
                 },
                 _ => {
-                    println!("Strange outline record: {}", line);
+                    eprintln!("Strange outline record: {}", line);
                 },
             }
         }

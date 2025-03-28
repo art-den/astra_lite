@@ -749,8 +749,6 @@ impl Connection {
     }
 
     fn process_incoming_json(event_handlers: &EventHandlers, js_str: &str)  -> anyhow::Result<()> {
-        println!("{}", js_str);
-
         // First try to parce as IncomingObject
         if let Ok(js_obj) = serde_json::from_str::<IncomingObject>(js_str) {
             Self::notify_event(event_handlers, Event::Object(Arc::new(js_obj)));
