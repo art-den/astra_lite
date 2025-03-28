@@ -116,6 +116,7 @@ pub struct BlobStartEvent {
     pub elem_name:   Arc<String>,
     pub format:      Arc<String>,
     pub len:         Option<usize>,
+    pub shot_id:     Option<u64>,
 
 }
 
@@ -270,7 +271,7 @@ impl SwitchRule {
 
 pub enum BlobEnable { Never, Also, Only }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum CamCcd { Primary, Secondary }
 
 impl CamCcd {
@@ -309,6 +310,7 @@ pub struct BlobPropValue {
     pub format:  String,
     pub data:    Vec<u8>,
     pub dl_time: f64,
+    pub shot_id: Option<u64>,
 }
 
 impl PartialEq for BlobPropValue {
@@ -593,6 +595,7 @@ impl Property {
                         format:  String::new(),
                         data:    Vec::new(),
                         dl_time: 0.0,
+                        shot_id: None,
                     };
                     PropValue::Blob(Arc::new(value))
                 },
@@ -623,10 +626,11 @@ impl Property {
 
     fn update_data_from_xml_and_return_changes(
         &mut self,
-        xml:         &mut xmltree::Element,
-        mut blobs:   Vec<XmlStreamReaderBlob>,
-        device_name: &str, // for error message
-        prop_name:   &str, // same
+        xml:             &mut xmltree::Element,
+        mut blobs:       Vec<XmlStreamReaderBlob>,
+        device_name:     &str, // for error message
+        prop_name:       &str, // same
+        shot_ids_by_dev: &ShotIdsByCCD,
     ) -> anyhow::Result<(bool, Vec<(Arc<String>, PropValue)>)> {
         let mut changed = false;
         if let Some(state_str) = xml.attributes.get("state") {
@@ -720,10 +724,17 @@ impl Property {
                                     blob_size, new_blob.data.len()
                                 );
                             }
+
+                            let key = (device_name.to_string(), CamCcd::from_ccd_prop_name(prop_name));
+                            let shot_ids_by_dev = shot_ids_by_dev.lock().unwrap();
+                            let shot_id = shot_ids_by_dev.get(&key).copied();
+                            drop(shot_ids_by_dev);
+
                             *blob = Arc::new(BlobPropValue {
                                 format:  new_blob.format,
                                 data:    new_blob.data,
                                 dl_time: new_blob.dl_time,
+                                shot_id
                             });
                             changed = true;
                             elem_changed = true;
@@ -1212,12 +1223,17 @@ pub enum AfterCoordSetAction {
     Sync,
 }
 
+// TODO: use Cow in key
+type ShotIdsByCCD = Arc<Mutex<HashMap<(String, CamCcd), u64>>>;
+
 pub struct Connection {
     data:            Arc<Mutex<Option<ActiveConnData>>>,
     state:           Arc<Mutex<ConnState>>,
     devices:         Arc<Mutex<Devices>>,
     subscriptions:   Arc<Mutex<Subscriptions>>,
     drivers_started: AtomicBool,
+    shot_ids_by_dev: ShotIdsByCCD,
+    last_shot_id:    AtomicU64,
 }
 
 impl Connection {
@@ -1236,6 +1252,10 @@ impl Connection {
                 Mutex::new(Subscriptions::new())
             ),
             drivers_started: AtomicBool::new(false),
+            shot_ids_by_dev: Arc::new(Mutex::new(
+                HashMap::new())
+            ),
+            last_shot_id: AtomicU64::new(0),
         }
     }
 
@@ -1433,11 +1453,12 @@ impl Connection {
                 let self_ = Arc::clone(&self_);
                 std::thread::spawn(move || {
                     let mut receiver = XmlReceiver::new(
-                        Arc::clone(&self_.state),
-                        Arc::clone(&self_.devices),
+                        &self_.state,
+                        &self_.devices,
                         stream,
                         XmlSender { xml_sender },
                         settings.activate_all_devices,
+                        &self_.shot_ids_by_dev
                     );
                     receiver.main(events_sender);
                 })
@@ -2225,13 +2246,18 @@ impl Connection {
         device_name: &str,
         ccd:         CamCcd,
         exposure:    f64
-    ) -> Result<()> {
+    ) -> Result<u64> {
+        let short_id = self.last_shot_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut shot_ids_by_dev = self.shot_ids_by_dev.lock().unwrap();
+        shot_ids_by_dev.insert((device_name.to_string(), ccd), short_id);
+        drop(shot_ids_by_dev);
         let (prop_name, prop_elem) = Self::exposure_prop_name(ccd);
         self.command_set_num_property(
             device_name,
             prop_name,
             &[(prop_elem, exposure)]
-        )
+        )?;
+        Ok(short_id)
     }
 
     pub fn camera_abort_exposure(
@@ -3583,30 +3609,35 @@ enum XmlReceiverState {
 }
 
 struct XmlReceiver {
-    conn_state:    Arc<Mutex<ConnState>>,
-    devices:       Arc<Mutex<Devices>>,
-    stream:        TcpStream,
-    reader:        XmlStreamReader,
-    xml_sender:    XmlSender,
-    state:         XmlReceiverState,
-    activate_devs: bool,
+    conn_state:      Arc<Mutex<ConnState>>,
+    devices:         Arc<Mutex<Devices>>,
+    stream:          TcpStream,
+    reader:          XmlStreamReader,
+    xml_sender:      XmlSender,
+    state:           XmlReceiverState,
+    activate_devs:   bool,
+    shot_ids_by_dev: ShotIdsByCCD,
+    active_shot_ids: ShotIdsByCCD,
 }
 
 impl XmlReceiver {
     fn new(
-        conn_state:    Arc<Mutex<ConnState>>,
-        devices:       Arc<Mutex<Devices>>,
-        stream:        TcpStream,
-        xml_sender:    XmlSender,
-        activate_devs: bool,
+        conn_state:      &Arc<Mutex<ConnState>>,
+        devices:         &Arc<Mutex<Devices>>,
+        stream:          TcpStream,
+        xml_sender:      XmlSender,
+        activate_devs:   bool,
+        shot_ids_by_dev: &ShotIdsByCCD,
     ) -> Self {
         Self {
-            conn_state,
-            devices,
+            conn_state:      Arc::clone(conn_state),
+            devices:         Arc::clone(devices),
+            reader:          XmlStreamReader::new(),
+            state:           XmlReceiverState::Undef,
+            shot_ids_by_dev: Arc::clone(shot_ids_by_dev),
+            active_shot_ids: Arc::new(Mutex::new(HashMap::new())),
             stream,
-            reader: XmlStreamReader::new(),
             xml_sender,
-            state: XmlReceiverState::Undef,
             activate_devs,
         }
     }
@@ -3814,12 +3845,23 @@ impl XmlReceiver {
         len:           Option<usize>,
         events_sender: &mpsc::Sender<Event>
     ) {
+        let ccd = CamCcd::from_ccd_prop_name(prop_name);
+        let shot_ids_by_dev = self.shot_ids_by_dev.lock().unwrap();
+        let shot_id = shot_ids_by_dev.get(&(device_name.to_string(), ccd)).copied();
+        drop(shot_ids_by_dev);
+
+        if let Some(shot_id) = shot_id {
+            let mut active_shot_ids = self.active_shot_ids.lock().unwrap();
+            active_shot_ids.insert((device_name.to_string(), ccd), shot_id);
+        }
+
         events_sender.send(Event::BlobStart(Arc::new(BlobStartEvent {
             device_name: Arc::clone(device_name),
             prop_name:   Arc::clone(prop_name),
             elem_name:   Arc::clone(elem_name),
             format:      Arc::new(format.to_string()),
-            len
+            len,
+            shot_id
         }))).unwrap();
     }
 
@@ -3896,6 +3938,7 @@ impl XmlReceiver {
                 blobs,
                 &device_name,
                 &prop_name,
+                &self.active_shot_ids,
             )?;
             if prop_changed {
                 let prop_name = Arc::clone(&property.name);

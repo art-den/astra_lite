@@ -150,6 +150,7 @@ impl ImageSource {
 pub struct FrameProcessCommandData {
     pub mode_type:       ModeType,
     pub camera:          DeviceAndProp,
+    pub shot_id:         Option<u64>,
     pub flags:           ProcessImageFlags,
     pub img_source:      ImageSource,
     pub frame:           Arc<ResultImage>,
@@ -210,6 +211,7 @@ pub struct FrameProcessResult {
     pub camera:        DeviceAndProp,
     pub cmd_stop_flag: Arc<AtomicBool>,
     pub mode_type:     ModeType,
+    pub shot_id:       Option<u64>,
     pub data:          FrameProcessResultData,
 }
 
@@ -449,16 +451,15 @@ fn apply_calibr_data_and_remove_hot_pixels(
 }
 
 fn send_result(
-    data:          FrameProcessResultData,
-    camera:        &DeviceAndProp,
-    mode_type:     ModeType,
-    cmd_stop_flag: &Arc<AtomicBool>,
-    result_fun:    &ResultFun
+    data:       FrameProcessResultData,
+    command:    &FrameProcessCommandData,
+    result_fun: &ResultFun
 ) {
     let result = FrameProcessResult {
-        camera:        camera.clone(),
-        mode_type,
-        cmd_stop_flag: Arc::clone(cmd_stop_flag),
+        camera:        command.camera.clone(),
+        cmd_stop_flag: Arc::clone(&command.stop_flag),
+        mode_type:     command.mode_type,
+        shot_id:       command.shot_id,
         data,
     };
     result_fun(result);
@@ -472,9 +473,7 @@ fn make_preview_image(
     if let Err(err) = res {
         send_result(
             FrameProcessResultData::Error(err.to_string()),
-            &command.camera,
-            command.mode_type,
-            &command.stop_flag,
+            &command,
             &result_fun
         );
     }
@@ -540,9 +539,7 @@ fn make_preview_image_impl(
 
     send_result(
         FrameProcessResultData::ShotProcessingStarted,
-        &command.camera,
-        command.mode_type,
-        &command.stop_flag,
+        command,
         result_fun
     );
 
@@ -670,9 +667,7 @@ fn make_preview_image_impl(
 
         send_result(
             FrameProcessResultData::HistorgamRaw(Arc::clone(&command.frame.raw_hist)),
-            &command.camera,
-            command.mode_type,
-            &command.stop_flag,
+            command,
             result_fun
         );
 
@@ -698,9 +693,7 @@ fn make_preview_image_impl(
         };
         send_result(
             FrameProcessResultData::RawFrameInfo(raw_frame_info),
-            &command.camera,
-            command.mode_type,
-            &command.stop_flag,
+            command,
             result_fun
         );
 
@@ -708,9 +701,7 @@ fn make_preview_image_impl(
 
         send_result(
             FrameProcessResultData::RawFrame(Arc::clone(&raw_image)),
-            &command.camera,
-            command.mode_type,
-            &command.stop_flag,
+            command,
             result_fun
         );
 
@@ -744,9 +735,7 @@ fn make_preview_image_impl(
                 );
                 send_result(
                     FrameProcessResultData::FrameInfo,
-                    &command.camera,
-                    command.mode_type,
-                    &command.stop_flag,
+                    command,
                     result_fun
                 );
             },
@@ -757,9 +746,7 @@ fn make_preview_image_impl(
                 );
                 send_result(
                     FrameProcessResultData::FrameInfo,
-                    &command.camera,
-                    command.mode_type,
-                    &command.stop_flag,
+                    command,
                     result_fun
                 );
             },
@@ -820,9 +807,7 @@ fn make_preview_image_impl(
 
     send_result(
         FrameProcessResultData::Image(Arc::clone(&command.frame.image)),
-        &command.camera,
-        command.mode_type,
-        &command.stop_flag,
+        command,
         result_fun
     );
 
@@ -843,9 +828,7 @@ fn make_preview_image_impl(
         *command.frame.raw_hist.write().unwrap() = hist.clone();
         send_result(
             FrameProcessResultData::HistorgamRaw(Arc::clone(&command.frame.raw_hist)),
-            &command.camera,
-            command.mode_type,
-            &command.stop_flag,
+            command,
             result_fun
         );
     }
@@ -916,9 +899,7 @@ fn make_preview_image_impl(
         });
         send_result(
             FrameProcessResultData::PreviewFrame(preview_data),
-            &command.camera,
-            command.mode_type,
-            &command.stop_flag,
+            command,
             result_fun
         );
     }
@@ -997,9 +978,7 @@ fn make_preview_image_impl(
 
         send_result(
             FrameProcessResultData::LightFrameInfo(Arc::clone(&info)),
-            &command.camera,
-            command.mode_type,
-            &command.stop_flag,
+            command,
             result_fun
         );
 
@@ -1008,9 +987,7 @@ fn make_preview_image_impl(
         *command.frame.info.write().unwrap() = ResultImageInfo::LightInfo(Arc::clone(&info));
         send_result(
             FrameProcessResultData::FrameInfo,
-            &command.camera,
-            command.mode_type,
-            &command.stop_flag,
+            command,
             result_fun
         );
 
@@ -1073,9 +1050,7 @@ fn make_preview_image_impl(
             let hist = live_stacking.data.hist.read().unwrap();
             send_result(
                 FrameProcessResultData::HistogramLiveRes,
-                &command.camera,
-                command.mode_type,
-                &command.stop_flag,
+                command,
                 result_fun
             );
 
@@ -1132,9 +1107,7 @@ fn make_preview_image_impl(
             );
             send_result(
                 FrameProcessResultData::FrameInfoLiveRes,
-                &command.camera,
-                command.mode_type,
-                &command.stop_flag,
+                command,
                 result_fun
             );
 
@@ -1163,9 +1136,7 @@ fn make_preview_image_impl(
 
                     send_result(
                         FrameProcessResultData::PreviewLiveRes(preview_data),
-                        &command.camera,
-                        command.mode_type,
-                        &command.stop_flag,
+                        command,
                         result_fun
                     );
                 }
@@ -1221,13 +1192,7 @@ fn make_preview_image_impl(
             processing_time: process_time,
             blob_dl_time:    blob.dl_time,
         };
-        send_result(
-            result,
-            &command.camera,
-            command.mode_type,
-            &command.stop_flag,
-            result_fun
-        );
+        send_result(result, command, result_fun);
     }
 
     Ok(())

@@ -1258,6 +1258,8 @@ impl CameraUi {
         let options = self.options.read().unwrap();
         let Some(device) = &options.cam.device else { return; };
         let cam_name = &device.name;
+        if cam_name.contains(" Simulator") { return; } // don't do it for simulators
+
         if cam_name.is_empty() { return; }
 
         if self.indi.camera_is_resolution_supported(cam_name).unwrap_or(false) {

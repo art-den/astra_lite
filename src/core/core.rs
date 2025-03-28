@@ -1,7 +1,7 @@
 use std::{
     any::Any, path::Path, sync::{
         atomic::{AtomicBool, AtomicU16, Ordering }, mpsc, Arc, Mutex, RwLock, RwLockReadGuard
-    }, thread::JoinHandle
+    }, thread::JoinHandle, u64
 };
 use gtk::glib::PropertySet;
 
@@ -120,6 +120,18 @@ pub struct Core {
     ext_guider:         Arc<ExternalGuiderCtrl>,
 }
 
+impl Drop for Core {
+    fn drop(&mut self) {
+        if let Some(frame_proc_thread) = self.frame_proc_thread.take() {
+            log::info!("Process thread joining...");
+            _ = frame_proc_thread.join();
+            log::info!("Process thread joined");
+        }
+
+        log::info!("Core dropped");
+    }
+}
+
 impl Core {
     pub fn new() -> Arc<Self> {
         let (img_cmds_sender, frame_proc_thread) = start_frame_processing_thread();
@@ -146,21 +158,7 @@ impl Core {
         result.start_taking_frames_restart_timer();
         result
     }
-}
 
-impl Drop for Core {
-    fn drop(&mut self) {
-        if let Some(frame_proc_thread) = self.frame_proc_thread.take() {
-            log::info!("Process thread joining...");
-            _ = frame_proc_thread.join();
-            log::info!("Process thread joined");
-        }
-
-        log::info!("Core dropped");
-    }
-}
-
-impl Core {
     pub fn indi(&self) -> &Arc<indi::Connection> {
         &self.indi
     }
@@ -383,6 +381,7 @@ impl Core {
             FrameProcessCommandData {
                 mode_type:       mode.mode.get_type(),
                 camera:          device,
+                shot_id:         blob.shot_id,
                 flags:           ProcessImageFlags::empty(),
                 img_source:      ImageSource::Blob(Arc::clone(blob)),
                 frame:           Arc::clone(&self.cur_frame),
@@ -438,7 +437,7 @@ impl Core {
             Ok(())
         } ();
         drop(mode);
-        self.process_error(result, "Core::process_indi_blob_event");
+        self.process_error(result, "Core::apply_change_result");
     }
 
     fn restart_camera_exposure(self: &Arc<Self>) -> anyhow::Result<()> {
@@ -527,6 +526,7 @@ impl Core {
         let command = FrameProcessCommandData {
             mode_type:       ModeType::OpeningImgFile,
             camera:          DeviceAndProp::default(),
+            shot_id:         None,
             flags:           ProcessImageFlags::empty(),
             img_source:      ImageSource::FileName(file_name.to_path_buf()),
             frame:           Arc::clone(&self.cur_frame),
@@ -945,7 +945,7 @@ pub fn apply_camera_options_and_take_shot(
     indi:   &indi::Connection,
     device: &DeviceAndProp,
     frame:  &FrameOptions,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<u64> {
     let cam_ccd = indi::CamCcd::from_ccd_prop_name(&device.prop);
 
     // Polling period
@@ -1062,22 +1062,22 @@ pub fn apply_camera_options_and_take_shot(
 
     // Start exposure
 
-    start_camera_exposure(indi, device, frame.exposure())?;
+    let shot_id = start_camera_exposure(indi, device, frame.exposure())?;
 
-    Ok(())
+    Ok(shot_id)
 }
 
 pub fn start_camera_exposure(
     indi:     &indi::Connection,
     device:   &DeviceAndProp,
     exposure: f64,
-) -> anyhow::Result<()> {
-    indi.camera_start_exposure(
+) -> anyhow::Result<u64> {
+    let shot_id = indi.camera_start_exposure(
         &device.name,
         indi::CamCcd::from_ccd_prop_name(&device.prop),
         exposure
     )?;
-    Ok(())
+    Ok(shot_id)
 }
 
 pub fn abort_camera_exposure(

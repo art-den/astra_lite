@@ -117,6 +117,8 @@ pub struct TackingPicturesMode {
     ref_stars:       Option<Arc<Mutex<Option<Vec<Point>>>>>,
     progress:        Option<Progress>,
     cur_exposure:    f64,
+    cur_shot_id:     Option<u64>,
+    shot_id_to_ign:  Option<u64>,
     simple_guider:   Option<SimpleGuider>,
     guider:          Option<ExtGuiderData>,
     live_stacking:   Option<Arc<LiveStackingData>>,
@@ -189,6 +191,8 @@ impl TackingPicturesMode {
             guider_options:  None,
             ref_stars:       None,
             cur_exposure:    0.0,
+            cur_shot_id:     None,
+            shot_id_to_ign:  None,
             simple_guider:   None,
             guider:          None,
             live_stacking:   None,
@@ -266,6 +270,13 @@ impl TackingPicturesMode {
         }
     }
 
+    fn take_shot_with_options(&mut self, frame_options: FrameOptions) -> anyhow::Result<()> {
+        let cur_shot_id = apply_camera_options_and_take_shot(&self.indi, &self.device, &frame_options)?;
+        self.cur_shot_id = Some(cur_shot_id);
+        self.cur_exposure = frame_options.exposure();
+        Ok(())
+    }
+
     fn start_or_continue(&mut self) -> anyhow::Result<()> {
         // First frame must be skiped
         // for saving frames and live stacking mode
@@ -308,8 +319,8 @@ impl TackingPicturesMode {
                 return Ok(());
             }
         }
-        apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
-        self.cur_exposure = self.cam_options.frame.exposure();
+
+        self.take_shot_with_options(self.cam_options.frame.clone())?;
         self.state = State::Common;
         Ok(())
     }
@@ -320,8 +331,7 @@ impl TackingPicturesMode {
         if frame_opts.exposure() > MAX_EXP {
             frame_opts.set_exposure(MAX_EXP);
         }
-        apply_camera_options_and_take_shot(&self.indi, &self.device, &frame_opts)?;
-        self.cur_exposure = frame_opts.exposure();
+        self.take_shot_with_options(frame_opts)?;
         Ok(())
     }
 
@@ -329,8 +339,7 @@ impl TackingPicturesMode {
         if let Some(offset_calc) = &self.cam_offset_calc {
             let mut frame_opts = self.cam_options.frame.clone();
             if offset_calc.step % 2 == 0 { frame_opts.offset = 0; }
-            apply_camera_options_and_take_shot(&self.indi, &self.device, &frame_opts)?;
-            self.cur_exposure = self.cam_options.frame.exposure();
+            self.take_shot_with_options(frame_opts)?;
         }
         Ok(())
     }
@@ -487,7 +496,8 @@ impl TackingPicturesMode {
 
     fn process_light_frame_info_and_dither_by_main_camera(
         &mut self,
-        info: &LightFrameInfoData
+        info: &LightFrameInfoData,
+        shot_id: Option<u64>,
     ) -> anyhow::Result<NotifyResult> {
         if self.state == State::InternalMountCorrection {
             return Ok(NotifyResult::Empty);
@@ -503,7 +513,7 @@ impl TackingPicturesMode {
         let guider_data = self.simple_guider.get_or_insert_with(|| SimpleGuider::new());
         if guider_options.is_used() && mount_device_active {
             if guider_data.mnt_calibr.is_none() { // mount moving calibration
-                self.abort()?;
+                self.abort_current_unfinised_exposure(shot_id)?;
                 self.state = State::WaitingForMountCalibration;
                 return Ok(NotifyResult::Empty);
             }
@@ -561,7 +571,7 @@ impl TackingPicturesMode {
                     guider_data.cur_timed_guide_s = 0.0;
                     guider_data.cur_timed_guide_w = 0.0;
                     guider_data.cur_timed_guide_e = 0.0;
-                    self.abort()?;
+                    self.abort_current_unfinised_exposure(shot_id)?;
                     let can_set_guide_rate =
                         self.indi.mount_is_guide_rate_supported(&self.mount_device)? &&
                         self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.permition == indi::PropPermition::RW;
@@ -596,7 +606,8 @@ impl TackingPicturesMode {
 
     fn process_light_frame_info_and_dither_by_ext_guider(
         &mut self,
-        info: &LightFrameInfoData
+        info: &LightFrameInfoData,
+        shot_id: Option<u64>,
     ) -> anyhow::Result<NotifyResult> {
         // take self.guider
         let Some(mut guider_data) = self.guider.take() else {
@@ -617,7 +628,7 @@ impl TackingPicturesMode {
                     let dist = guider_options.ext_guider.dith_dist;
                     log::info!("Starting dithering by external guider with {} pixels...", dist);
                     guider_data.guider.start_dithering(dist)?;
-                    self.abort()?;
+                    self.abort_current_unfinised_exposure(shot_id)?;
                     self.state = State::ExternalDithering;
                     return Ok(NotifyResult::ProgressChanges);
                 }
@@ -691,6 +702,7 @@ impl TackingPicturesMode {
 
             let event_data = FrameProcessResult {
                 camera:        self.device.clone(),
+                shot_id:       blob.shot_id,
                 cmd_stop_flag: Arc::clone(cmd_stop_flag),
                 mode_type:     self.get_type(),
                 data:          result,
@@ -710,8 +722,7 @@ impl TackingPicturesMode {
 
         let finished = matches!(result, NotifyResult::Finished {..});
         if !finished && self.have_to_start_new_exposure_at_processing_end() {
-            apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
-            self.cur_exposure = self.cam_options.frame.exposure();
+            self.take_shot_with_options(self.cam_options.frame.clone())?;
         }
 
         Ok(result)
@@ -892,6 +903,7 @@ impl TackingPicturesMode {
     fn process_light_frame_info(
         &mut self,
         info: &LightFrameInfoData,
+        shot_id: Option<u64>,
     ) -> anyhow::Result<NotifyResult> {
         if !info.stars.info.is_ok() {
             return Ok(NotifyResult::Empty);
@@ -912,9 +924,9 @@ impl TackingPicturesMode {
                 GuidingMode::Disabled =>
                     NotifyResult::Empty,
                 GuidingMode::MainCamera =>
-                    self.process_light_frame_info_and_dither_by_main_camera(info)?,
+                    self.process_light_frame_info_and_dither_by_main_camera(info, shot_id)?,
                 GuidingMode::External =>
-                    self.process_light_frame_info_and_dither_by_ext_guider(info)?,
+                    self.process_light_frame_info_and_dither_by_ext_guider(info, shot_id)?,
             };
             if matches!(&res, NotifyResult::Empty) == false { return Ok(res); }
         }
@@ -948,6 +960,15 @@ impl TackingPicturesMode {
             self.cam_options.frame.binning.to_str(),
             self.cam_options.frame.crop.to_str(),
         )
+    }
+
+    fn abort_current_unfinised_exposure(&mut self, shot_id: Option<u64>) -> anyhow::Result<()> {
+        abort_camera_exposure(&self.indi, &self.device)?;
+        if self.cur_shot_id != shot_id {
+            self.shot_id_to_ign = self.cur_shot_id;
+            println!("self.shot_id_to_ign = {:?}", self.shot_id_to_ign);
+        }
+        Ok(())
     }
 
 }
@@ -1037,11 +1058,7 @@ impl Mode for TackingPicturesMode {
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
-        if self.state != State::FrameToSkip {
-            Some(self.cur_exposure)
-        } else {
-            Some(self.cur_exposure)
-        }
+        Some(self.cur_exposure)
     }
 
     fn can_be_stopped(&self) -> bool {
@@ -1156,8 +1173,7 @@ impl Mode for TackingPicturesMode {
         }
 
         if self.have_to_start_new_exposure_at_blob_start() {
-            apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
-            self.cur_exposure = self.cam_options.frame.exposure();
+            self.take_shot_with_options(self.cam_options.frame.clone())?;
         }
 
         Ok(NotifyResult::Empty)
@@ -1180,13 +1196,17 @@ impl Mode for TackingPicturesMode {
     fn notify_about_frame_processing_result(
         &mut self,
         fp_result: &FrameProcessResult
-    ) -> anyhow::Result<NotifyResult>  {
+    ) -> anyhow::Result<NotifyResult> {
+        if self.shot_id_to_ign == fp_result.shot_id {
+            return Ok(NotifyResult::Empty);
+        }
+
         match &fp_result.data {
             FrameProcessResultData::RawFrame(raw_image) =>
                 self.process_raw_image(raw_image),
 
             FrameProcessResultData::LightFrameInfo(info) =>
-                self.process_light_frame_info(info),
+                self.process_light_frame_info(info, fp_result.shot_id),
 
             FrameProcessResultData::HistorgamRaw(histogram) =>
                 self.process_raw_histogram(histogram),
@@ -1258,8 +1278,7 @@ impl Mode for TackingPicturesMode {
                 && guid_data.cur_timed_guide_w == 0.0
                 && guid_data.cur_timed_guide_e == 0.0 {
                     self.indi.mount_abort_motion(&self.mount_device)?;
-                    apply_camera_options_and_take_shot(&self.indi, &self.device, &self.cam_options.frame)?;
-                    self.cur_exposure = self.cam_options.frame.exposure();
+                    self.take_shot_with_options(self.cam_options.frame.clone())?;
                     self.state = State::Common;
                     result = NotifyResult::ProgressChanges;
                 }
