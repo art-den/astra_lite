@@ -527,8 +527,6 @@ impl TackingPicturesMode {
         }
 
         let mut move_offset = None;
-        let mut prev_dither_x = 0_f64;
-        let mut prev_dither_y = 0_f64;
         let mut dithering_flag = false;
 
         // dithering
@@ -538,8 +536,6 @@ impl TackingPicturesMode {
                 guider_data.dither_exp_sum = 0.0;
                 use rand::prelude::*;
                 let mut rng = rand::thread_rng();
-                prev_dither_x = guider_data.dither_x;
-                prev_dither_y = guider_data.dither_y;
                 guider_data.dither_x = guider_options.main_cam.dith_dist as f64 * (rng.gen::<f64>() - 0.5);
                 guider_data.dither_y = guider_options.main_cam.dith_dist as f64 * (rng.gen::<f64>() - 0.5);
                 log::debug!("dithering position = {}px,{}px", guider_data.dither_x, guider_data.dither_y);
@@ -554,8 +550,15 @@ impl TackingPicturesMode {
             offset_x -= guider_data.dither_x;
             offset_y -= guider_data.dither_y;
             let diff_dist = f64::sqrt(offset_x * offset_x + offset_y * offset_y);
-            log::debug!("diff_dist = {}px", diff_dist);
+            log::debug!(
+                "offset_x = {:.1}px, offset_y ={:.1}px, diff_dist = {:.1}px",
+                offset_x, offset_y, diff_dist
+            );
             if diff_dist > guider_options.main_cam.max_error || dithering_flag {
+                if diff_dist < 2.0 * guider_options.main_cam.max_error {
+                    offset_x *= 0.5;
+                    offset_y *= 0.5;
+                }
                 move_offset = Some((-offset_x, -offset_y));
                 log::debug!(
                     "diff_dist > guid_options.max_error ({} > {}), start mount correction",
@@ -563,11 +566,6 @@ impl TackingPicturesMode {
                     guider_options.main_cam.max_error
                 );
             }
-        } else if dithering_flag {
-            move_offset = Some((
-                guider_data.dither_x - prev_dither_x,
-                guider_data.dither_y - prev_dither_y
-            ));
         }
 
         // Move mount position
@@ -592,15 +590,15 @@ impl TackingPicturesMode {
                         )?;
                     }
                     let (max_dec, max_ra) = self.indi.mount_get_timed_guide_max(&self.mount_device)?;
-                    let max_dec = f64::min(MAX_TIMED_GUIDE_TIME * 1000.0, max_dec);
-                    let max_ra = f64::min(MAX_TIMED_GUIDE_TIME * 1000.0, max_ra);
-                    ra *= 1000.0;
-                    dec *= 1000.0;
+                    let max_dec = f64::min(MAX_TIMED_GUIDE_TIME * 1000.0, max_dec).round();
+                    let max_ra = f64::min(MAX_TIMED_GUIDE_TIME * 1000.0, max_ra).round();
+                    ra = (ra * 1000.0).round();
+                    dec = (dec * 1000.0).round();
                     if ra > max_ra { ra = max_ra; }
                     if ra < -max_ra { ra = -max_ra; }
                     if dec > max_dec { dec = max_dec; }
                     if dec < -max_dec { dec = -max_dec; }
-                    log::debug!("Timed guide, NS = {:.2}s, WE = {:.2}s", dec, ra);
+                    log::debug!("Timed guide, NS = {:.2}ms, WE = {:.2}ms", dec, ra);
                     self.indi.mount_timed_guide(&self.mount_device, dec, ra)?;
                     self.state = State::InternalMountCorrection;
                     return Ok(NotifyResult::ProgressChanges);
@@ -1166,6 +1164,10 @@ impl Mode for TackingPicturesMode {
         &mut self,
         event: &indi::BlobStartEvent
     ) -> anyhow::Result<NotifyResult> {
+        if self.shot_id_to_ign == event.shot_id {
+            return Ok(NotifyResult::Empty);
+        }
+
         if *event.device_name != self.device.name
         || *event.prop_name != self.device.prop
         || self.state == State::FrameToSkip {
@@ -1187,8 +1189,15 @@ impl Mode for TackingPicturesMode {
 
     fn notify_before_frame_processing_start(
         &mut self,
+        blob: &Arc<indi::BlobPropValue>,
         should_be_processed: &mut bool
     ) -> anyhow::Result<NotifyResult> {
+        if self.shot_id_to_ign == blob.shot_id {
+            println!("notify_before_frame_processing_start: self.shot_id_to_ign == blob.shot_id");
+            *should_be_processed = false;
+            return Ok(NotifyResult::Empty);
+        }
+
         if self.state == State::FrameToSkip {
             *should_be_processed = false;
             self.state = State::Common;
@@ -1233,6 +1242,10 @@ impl Mode for TackingPicturesMode {
     }
 
     fn complete_img_process_params(&self, cmd: &mut FrameProcessCommandData) {
+        if self.shot_id_to_ign == cmd.shot_id {
+            return;
+        }
+
         let options = self.options.read().unwrap();
 
         match self.cam_mode {
@@ -1269,6 +1282,7 @@ impl Mode for TackingPicturesMode {
         prop_change: &indi::PropChangeEvent
     ) -> anyhow::Result<NotifyResult> {
         if self.state == State::InternalMountCorrection {
+            if *prop_change.device_name != self.mount_device { return Ok(NotifyResult::Empty); }
             if let ("TELESCOPE_TIMED_GUIDE_NS"|"TELESCOPE_TIMED_GUIDE_WE", indi::PropChange::Change { value, .. }, Some(guid_data))
             = (prop_change.prop_name.as_str(), &prop_change.change, &mut self.simple_guider) {
                 match value.elem_name.as_str() {

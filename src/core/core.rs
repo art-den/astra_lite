@@ -66,7 +66,7 @@ pub trait Mode {
     fn complete_img_process_params(&self, _cmd: &mut FrameProcessCommandData) {}
     fn notify_indi_prop_change(&mut self, _prop_change: &indi::PropChangeEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_blob_start_event(&mut self, _event: &indi::BlobStartEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_before_frame_processing_start(&mut self, _should_be_processed: &mut bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_before_frame_processing_start(&mut self, _blob: &Arc<indi::BlobPropValue>, _should_be_processed: &mut bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
@@ -355,7 +355,7 @@ impl Core {
         }
 
         let mut should_be_processed = true;
-        let res = mode.mode.notify_before_frame_processing_start(&mut should_be_processed)?;
+        let res = mode.mode.notify_before_frame_processing_start(blob, &mut should_be_processed)?;
         self.apply_change_result(res, &mut mode)?;
         if !should_be_processed {
             return Ok(());
