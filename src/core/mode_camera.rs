@@ -1193,7 +1193,6 @@ impl Mode for TackingPicturesMode {
         should_be_processed: &mut bool
     ) -> anyhow::Result<NotifyResult> {
         if self.shot_id_to_ign == blob.shot_id {
-            println!("notify_before_frame_processing_start: self.shot_id_to_ign == blob.shot_id");
             *should_be_processed = false;
             return Ok(NotifyResult::Empty);
         }
