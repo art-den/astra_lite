@@ -577,16 +577,25 @@ impl Core {
 
     pub fn check_before_saving_raw_or_live_stacking(&self) -> anyhow::Result<()> {
         let options = self.options.read().unwrap();
-        let guiding_mode = options.guiding.mode.clone();
-        drop(options);
 
-        if guiding_mode == GuidingMode::External {
-            if !self.ext_guider.is_connected() {
-                anyhow::bail!(
-                    "Guiding by external software was selected but \
-                    no external software is connected!"
-                );
+        match options.guiding.mode {
+            GuidingMode::MainCamera => {
+                if !self.indi.is_device_enabled(&options.mount.device).unwrap_or(false) {
+                    anyhow::bail!(
+                        "Guiding by main camera is selected but \
+                        mound device is not selected or connected!"
+                    );
+                }
             }
+            GuidingMode::External => {
+                if !self.ext_guider.is_connected() {
+                    anyhow::bail!(
+                        "Guiding by external software is selected but \
+                        no external software is connected!"
+                    );
+                }
+            }
+            _ => {}
         }
 
         Ok(())
