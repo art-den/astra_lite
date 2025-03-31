@@ -207,10 +207,19 @@ pub fn paint_altitude_by_time(
         pangocairo::show_layout(cr, &pl);
     }
 
+    cr.set_dash(&[], 0.0);
     cr.rectangle(0.0, 0.0, width, height);
     cr.set_source_rgba(fg_r, fg_g, fg_b, 0.33);
     cr.set_line_width(f64::max(0.3 * dpmm_y, 1.0));
-    cr.set_dash(&[], 0.0);
+    cr.stroke()?;
+
+    // line at center
+
+    cr.set_dash(&[3.0, 3.0], 1.0);
+    cr.set_line_width(2.0);
+    cr.move_to(0.5 * width, legend_height);
+    cr.line_to(0.5 * width, height);
+    cr.set_source_rgb(fg_r, fg_g, fg_b);
     cr.stroke()?;
 
     Ok(())
