@@ -35,6 +35,8 @@ pub fn init_ui(
     let builder = gtk::Builder::from_string(include_str!(r"resources/main.ui"));
     let widgets = Widgets::from_builder(&builder);
 
+    widgets.window.set_application(Some(app));
+
     let icon = gtk::gdk_pixbuf::Pixbuf::from_read(include_bytes!(
         r"resources/astra_lite48x48.png"
     ).as_slice()).unwrap();
@@ -43,9 +45,7 @@ pub fn init_ui(
     exec_and_show_error(&widgets.window, || {
         let mut opts = options.write().unwrap();
         load_json_from_config_file::<Options>(&mut opts, MainUi::OPTIONS_FN)?;
-        opts.calibr.check()?;
-        opts.raw_frames.check()?;
-        opts.live.check()?;
+        opts.check()?;
         Ok(())
     });
 
@@ -74,26 +74,9 @@ pub fn init_ui(
 
     *main_ui.self_.borrow_mut() = Some(Rc::clone(&main_ui));
 
-    main_ui.widgets.window.set_application(Some(app));
-    main_ui.widgets.window.show();
     main_ui.apply_options();
     main_ui.apply_theme();
-    gtk::main_iteration_do(true);
-    gtk::main_iteration_do(true);
-    gtk::main_iteration_do(true);
-    glib::timeout_add_local(
-        Duration::from_millis(TIMER_PERIOD_MS),
-        clone!(@weak main_ui => @default-return glib::ControlFlow::Break,
-        move || {
-            if main_ui.close_win_flag.get() {
-                main_ui.widgets.window.close();
-                return glib::ControlFlow::Break;
-            }
-            let modules = main_ui.modules.borrow();
-            modules.process_event(&UiModuleEvent::Timer);
-            glib::ControlFlow::Continue
-        }
-    ));
+    main_ui.widgets.window.show();
 
     let hardware      = super::ui_hardware     ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let camera        = super::ui_camera       ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
@@ -121,29 +104,15 @@ pub fn init_ui(
 
     main_ui.build_modules_panels();
 
-    // show all options
-
     main_ui.show_all_options();
-
     let modules = main_ui.modules.borrow();
     modules.process_event(&UiModuleEvent::AfterFirstShowOptions);
     drop(modules);
 
     main_ui.apply_panel_options();
 
-    main_ui.widgets.window.connect_delete_event(
-        clone!(@weak main_ui => @default-return glib::Propagation::Proceed,
-        move |_, _| {
-            let res = main_ui.handler_close_window();
-            if res == glib::Propagation::Proceed {
-                gtk::main_iteration_do(true);
-                main_ui.get_all_options();
-                *main_ui.self_.borrow_mut() = None;
-            }
-            res
-        })
-    );
-
+    main_ui.connect_delete_event();
+    main_ui.connect_close_after_finish_work();
     main_ui.connect_widgets_events();
     main_ui.correct_widgets_props();
     main_ui.connect_state_events();
@@ -374,6 +343,37 @@ impl MainUi {
                 }
             }
         }));
+    }
+
+    fn connect_delete_event(self: &Rc<Self>) {
+        self.widgets.window.connect_delete_event(
+            clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
+            move |_, _| {
+                let res = self_.handler_close_window();
+                if res == glib::Propagation::Proceed {
+                    gtk::main_iteration_do(true);
+                    self_.get_all_options();
+                    *self_.self_.borrow_mut() = None;
+                }
+                res
+            })
+        );
+    }
+
+    fn connect_close_after_finish_work(self: &Rc<Self>) {
+        glib::timeout_add_local(
+            Duration::from_millis(TIMER_PERIOD_MS),
+            clone!(@weak self as self_ => @default-return glib::ControlFlow::Break,
+            move || {
+                if self_.close_win_flag.get() {
+                    self_.widgets.window.close();
+                    return glib::ControlFlow::Break;
+                }
+                let modules = self_.modules.borrow();
+                modules.process_event(&UiModuleEvent::Timer);
+                glib::ControlFlow::Continue
+            }
+        ));
     }
 
     fn handler_close_window(self: &Rc<Self>) -> glib::Propagation {

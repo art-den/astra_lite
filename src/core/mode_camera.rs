@@ -664,70 +664,69 @@ impl TackingPicturesMode {
         if let (State::CameraOffsetCalculation, Some(offset_calc))
         = (&self.state, &mut self.cam_offset_calc) {
             if offset_calc.step == Self::MAX_OFFSET_CALC_STEPS {
+                // continue after camera offset calculation for flats
                 self.start_or_continue()?;
                 return Ok(NotifyResult::ProgressChanges);
             }
         }
 
-        if self.state != State::Common
-        && self.state != State::WaitingForMountCalibration
-        && self.state != State::InternalMountCorrection {
-            return Ok(NotifyResult::Empty);
-        }
-
-        // Save raw image
-        if frame_is_ok && self.flags.save_raw_files {
-            self.save_raw_image(blob, raw_image_info)?;
-        }
-
         let mut result = NotifyResult::Empty;
-        let mut is_last_frame = false;
-        if let Some(progress) = &mut self.progress {
-            if frame_is_ok && progress.cur != progress.total {
-                progress.cur += 1;
-                result = NotifyResult::ProgressChanges;
+
+        if self.state == State::Common {
+            if frame_is_ok && self.flags.save_raw_files {
+                // Save raw image
+                self.save_raw_image(blob, raw_image_info)?;
             }
-            if progress.cur == progress.total {
-                abort_camera_exposure(&self.indi, &self.device)?;
-                result = NotifyResult::Finished {
-                    next_mode: self.next_mode.take()
+
+            let mut is_last_frame = false;
+            if let Some(progress) = &mut self.progress {
+                if frame_is_ok && progress.cur != progress.total {
+                    progress.cur += 1;
+                    result = NotifyResult::ProgressChanges;
+                }
+                if progress.cur == progress.total {
+                    self.abort_current_unfinised_exposure(blob.shot_id)?;
+                    result = NotifyResult::Finished {
+                        next_mode: self.next_mode.take()
+                    };
+                    is_last_frame = true;
+                }
+            }
+
+            if is_last_frame && self.flags.save_master_file {
+                // Save master file
+                self.save_master_file()?;
+
+                let result = FrameProcessResultData::MasterSaved {
+                    frame_type: raw_image_info.frame_type,
+                    file_name: self.out_file_names.master_fname.clone()
                 };
-                is_last_frame = true;
+
+                let event_data = FrameProcessResult {
+                    camera:        self.device.clone(),
+                    shot_id:       blob.shot_id,
+                    cmd_stop_flag: Arc::clone(cmd_stop_flag),
+                    mode_type:     self.get_type(),
+                    data:          result,
+                };
+
+                self.subscribers.notify(Event::FrameProcessing(event_data));
+            }
+
+            if is_last_frame && self.flags.save_defect_pixels {
+                self.save_defect_pixels_file()?;
+            }
+
+            let finished = matches!(result, NotifyResult::Finished {..});
+            if !finished && self.have_to_start_new_exposure_at_processing_end() {
+                self.take_shot_with_options(self.cam_options.frame.clone())?;
             }
         }
 
-        // Save master file
-        if is_last_frame && self.flags.save_master_file {
-            self.save_master_file()?;
-
-            let result = FrameProcessResultData::MasterSaved {
-                frame_type: raw_image_info.frame_type,
-                file_name: self.out_file_names.master_fname.clone()
-            };
-
-            let event_data = FrameProcessResult {
-                camera:        self.device.clone(),
-                shot_id:       blob.shot_id,
-                cmd_stop_flag: Arc::clone(cmd_stop_flag),
-                mode_type:     self.get_type(),
-                data:          result,
-            };
-
-            self.subscribers.notify(Event::FrameProcessing(event_data));
-        }
-
-        if is_last_frame && self.flags.save_defect_pixels {
-            self.save_defect_pixels_file()?;
-        }
-
+        // Start mount calibration
         if self.state == State::WaitingForMountCalibration {
             self.state = State::Common;
             return Ok(NotifyResult::StartMountCalibr);
-        }
-
-        let finished = matches!(result, NotifyResult::Finished {..});
-        if !finished && self.have_to_start_new_exposure_at_processing_end() {
-            self.take_shot_with_options(self.cam_options.frame.clone())?;
         }
 
         Ok(result)

@@ -717,3 +717,12 @@ pub struct Options {
     pub sep_guiding:  HashMap<String, SeparatedGuidingOptions>,
     pub polar_align:  PloarAlignOptions,
 }
+
+impl Options {
+    pub fn check(&mut self) -> anyhow::Result<()> {
+        self.calibr.check()?;
+        self.raw_frames.check()?;
+        self.live.check()?;
+        Ok(())
+    }
+}
