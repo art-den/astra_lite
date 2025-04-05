@@ -41,13 +41,19 @@ enum XmlSenderItem {
     Exit
 }
 
+enum EventSenderEvent {
+    Mess(Event),
+    Exit,
+}
+
 struct ActiveConnData {
-    indiserver:    Option<Child>,
-    tcp_stream:    TcpStream,
-    xml_sender:    XmlSender,
-    events_thread: JoinHandle<()>,
-    read_thread:   JoinHandle<()>,
-    write_thread:  JoinHandle<()>,
+    indiserver:     Option<Child>,
+    tcp_stream:     TcpStream,
+    xml_sender:     XmlSender,
+    events_thread:  JoinHandle<()>,
+    read_thread:    JoinHandle<()>,
+    write_thread:   JoinHandle<()>,
+    events_sender:  std::sync::mpsc::Sender<EventSenderEvent>,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -792,6 +798,12 @@ impl Device {
             .find(|prop| *prop.name == prop_name)
     }
 
+    fn get_property_opt_mut(&mut self, prop_name: &str) -> Option<&mut Property> {
+        self.props
+            .iter_mut()
+            .find(|prop| *prop.name == prop_name)
+    }
+
     fn get_property_element_opt(
         &self,
         prop_name: &str,
@@ -818,12 +830,6 @@ impl Device {
                 elem_name.to_string())
             )?;
         Ok((property, elem))
-    }
-
-    fn get_property_opt_mut(&mut self, prop_name: &str) -> Option<&mut Property> {
-        self.props
-            .iter_mut()
-            .find(|prop| *prop.name == prop_name)
     }
 
     fn remove_property(&mut self, prop_name: &str) -> Option<Property> {
@@ -1005,6 +1011,45 @@ impl Devices {
                     elem_name.to_string(),
                 ));
             }
+        }
+        Ok(())
+    }
+
+    fn mark_property_as_busy(
+        &mut self,
+        device_name:   &str,
+        prop_name:     &str,
+        events_sender: &std::sync::mpsc::Sender<EventSenderEvent>,
+    ) -> Result<()> {
+        let device = self.find_by_name_opt_mut(device_name)
+            .ok_or_else(|| Error::DeviceNotExists(device_name.to_string()))?;
+        let device_name = Arc::clone(&device.name);
+        let property = device
+            .get_property_opt_mut(prop_name)
+            .ok_or_else(|| Error::PropertyNotExists(device_name.to_string(), prop_name.to_string()))?;
+        if property.state == PropState::Busy {
+            return Ok(());
+        }
+        let prev_state = property.state;
+        property.state = PropState::Busy;
+        for elem in &property.elements {
+            let change = PropChange::Change {
+                value: PropChangeValue {
+                    elem_name: Arc::clone(&elem.name),
+                    prop_value: elem.value.clone(),
+                },
+                prev_state: prev_state.clone(),
+                new_state: property.state.clone(),
+            };
+            let event = PropChangeEvent {
+                timestamp:   Some(Utc::now()),
+                device_name: Arc::clone(&device_name),
+                prop_name:   Arc::clone(&property.name),
+                change
+            };
+            events_sender
+                .send(EventSenderEvent::Mess(Event::PropChange(Arc::new(event))))
+                .map_err(|e| Error::Internal(e.to_string()))?;
         }
         Ok(())
     }
@@ -1429,29 +1474,38 @@ impl Connection {
             let events_thread = {
                 let self_ = Arc::clone(&self_);
                 std::thread::spawn(move || {
+                    log::info!("Enter events_thread");
                     while let Ok(event) = events_receiver.recv() {
-                        if let Event::ConnChange(state) = &event {
-                            if *state == ConnState::Disconnected &&
-                            *self_.state.lock().unwrap() == ConnState::Connected {
-                                self_.subscriptions.lock().unwrap().inform_all(Event::ConnectionLost);
-                                std::thread::spawn(move || {
-                                    _ = self_.disconnect_and_wait();
-                                });
-                                break;
+                        match event {
+                            EventSenderEvent::Mess(event) => {
+                                if let Event::ConnChange(state) = &event {
+                                    if *state == ConnState::Disconnected &&
+                                    *self_.state.lock().unwrap() == ConnState::Connected {
+                                        self_.subscriptions.lock().unwrap().inform_all(Event::ConnectionLost);
+                                        std::thread::spawn(move || {
+                                            _ = self_.disconnect_and_wait();
+                                        });
+                                        break;
+                                    }
+                                }
+                                self_.subscriptions.lock().unwrap().inform_all(event);
                             }
+                            EventSenderEvent::Exit => break,
                         }
-                        self_.subscriptions.lock().unwrap().inform_all(event);
                     }
+                    log::info!("Exit events_thread");
                 })
             };
 
             // Start XML receiver thread
             let (xml_sender, xml_to_send) = mpsc::channel();
             let read_thread = {
+                let events_sender_clone = events_sender.clone();
                 let xml_sender = xml_sender.clone();
                 let stream = stream.try_clone().unwrap();
                 let self_ = Arc::clone(&self_);
                 std::thread::spawn(move || {
+                    log::info!("Enter read_thread");
                     let mut receiver = XmlReceiver::new(
                         &self_.state,
                         &self_.devices,
@@ -1460,7 +1514,8 @@ impl Connection {
                         settings.activate_all_devices,
                         &self_.shot_ids_by_dev
                     );
-                    receiver.main(events_sender);
+                    receiver.main(events_sender_clone);
+                    log::info!("Exit read_thread");
                 })
             };
 
@@ -1468,7 +1523,9 @@ impl Connection {
             let write_thread = {
                 let stream = stream.try_clone().unwrap();
                 std::thread::spawn(move || {
+                    log::info!("Enter write_thread");
                     XmlSender::main(xml_to_send, stream);
+                    log::info!("Exit write_thread");
                 })
             };
 
@@ -1485,6 +1542,7 @@ impl Connection {
                 events_thread,
                 read_thread,
                 write_thread,
+                events_sender,
             });
 
             self_.drivers_started.store(!settings.remote, Ordering::Relaxed);
@@ -1537,6 +1595,11 @@ impl Connection {
             // Waiting for xml_sender and xml_reciever threads to terminate
             _ = conn.read_thread.join();
             _ = conn.write_thread.join();
+
+            // Send "exit" message to events_thread
+            conn.events_sender.send(EventSenderEvent::Exit).unwrap();
+
+            // Waiting for events thread to terminate
             _ = conn.events_thread.join();
 
             // Killing indiserver
@@ -1849,7 +1912,8 @@ impl Connection {
             device_name,
             prop_name
         )?;
-        self.devices.lock().unwrap().check_property_ok_for_writing(
+        let mut devices = self.devices.lock().unwrap();
+        devices.check_property_ok_for_writing(
             device_name,
             prop_name,
             elements.len(),
@@ -1862,8 +1926,15 @@ impl Connection {
                 device_name,
                 prop_name,
                 elements
-            )
+            )?;
+            devices.mark_property_as_busy(
+                device_name,
+                prop_name,
+                &data.events_sender
+            )?;
+            Ok(())
         })?;
+
         Ok(())
     }
 
@@ -3642,7 +3713,7 @@ impl XmlReceiver {
         }
     }
 
-    fn main(&mut self, events_sender: mpsc::Sender<Event>) {
+    fn main(&mut self, events_sender: mpsc::Sender<EventSenderEvent>) {
         self.stream.set_read_timeout(Some(Duration::from_millis(1000))).unwrap(); // TODO: check error
 
         self.xml_sender.command_get_properties_impl(None, None).unwrap(); // TODO: check error
@@ -3680,23 +3751,25 @@ impl XmlReceiver {
                         if *state == ConnState::Connecting {
                             *state = ConnState::Connected;
                             drop(state);
-                            events_sender.send(Event::ConnChange(
+                            events_sender.send(EventSenderEvent::Mess(Event::ConnChange(
                                 ConnState::Connected
-                            )).unwrap();
+                            ))).unwrap();
                         }
                     }
                 }
                 Ok(XmlStreamReaderResult::Disconnected) => {
                     log::debug!("indi_api: Disconnected");
-                    events_sender.send(Event::ConnChange(
+                    _ = events_sender.send(EventSenderEvent::Mess(Event::ConnChange(
                         ConnState::Disconnected
-                    )).unwrap();
+                    )));
                     break;
                 }
                 Ok(XmlStreamReaderResult::TimeOut) => {
                     if !timeout_processed {
                         timeout_processed = true;
-                        events_sender.send(Event::ReadTimeOut).unwrap();
+                        events_sender.send(EventSenderEvent::Mess(
+                            Event::ReadTimeOut
+                        )).unwrap();
                         let to_res = self.process_time_out();
                         if let Err(err) = to_res {
                             log::error!("indi_api: {}", err.to_string());
@@ -3717,19 +3790,19 @@ impl XmlReceiver {
         device_name:    &Arc<String>,
         prop_name:      &Arc<String>,
         changed_values: Vec<(Arc<String>, PropValue)>,
-        events_sender:  &mpsc::Sender<Event>
+        events_sender:  &mpsc::Sender<EventSenderEvent>
     ) {
         for (name, value) in changed_values {
             let prop_change_value = PropChangeValue {
                 elem_name:  Arc::clone(&name),
                 prop_value: value.clone(),
             };
-            events_sender.send(Event::PropChange(Arc::new(PropChangeEvent {
+            events_sender.send(EventSenderEvent::Mess(Event::PropChange(Arc::new(PropChangeEvent {
                 timestamp,
                 device_name: Arc::clone(device_name),
                 prop_name:   Arc::clone(prop_name),
                 change:      PropChange::New(prop_change_value),
-            }))).unwrap();
+            })))).unwrap();
 
             if prop_name.as_str() == "DRIVER_INFO"
             && name.as_str() == "DRIVER_INTERFACE" {
@@ -3740,7 +3813,9 @@ impl XmlReceiver {
                     interface,
                     timestamp,
                 };
-                events_sender.send(Event::NewDevice(event_data)).unwrap();
+                events_sender.send(EventSenderEvent::Mess(Event::NewDevice(
+                    event_data
+                ))).unwrap();
             }
         }
     }
@@ -3753,7 +3828,7 @@ impl XmlReceiver {
         prev_state:     PropState,
         new_state:      PropState,
         changed_values: Vec<(Arc<String>, PropValue)>,
-        events_sender:  &mpsc::Sender<Event>
+        events_sender:  &mpsc::Sender<EventSenderEvent>
     ) {
         for (name, prop_value) in changed_values {
             let value = PropChangeValue {
@@ -3765,12 +3840,12 @@ impl XmlReceiver {
                 prev_state: prev_state.clone(),
                 new_state: new_state.clone(),
             };
-            events_sender.send(Event::PropChange(Arc::new(PropChangeEvent {
+            events_sender.send(EventSenderEvent::Mess(Event::PropChange(Arc::new(PropChangeEvent {
                 timestamp,
                 device_name: Arc::clone(device_name),
                 prop_name: Arc::clone(prop_name),
                 change,
-            }))).unwrap();
+            })))).unwrap();
 
             if prop_name.as_str() == "CONNECTION"
             && name.as_str() == "CONNECT" {
@@ -3786,9 +3861,9 @@ impl XmlReceiver {
                     connected,
                 };
 
-                events_sender.send(Event::DeviceConnected(
+                events_sender.send(EventSenderEvent::Mess(Event::DeviceConnected(
                     Arc::new(event_data)
-                )).unwrap();
+                ))).unwrap();
             }
         }
     }
@@ -3798,28 +3873,28 @@ impl XmlReceiver {
         time:          Option<DateTime<Utc>>,
         device_name:   &Arc<String>,
         prop_name:     &Arc<String>,
-        events_sender: &mpsc::Sender<Event>
+        events_sender: &mpsc::Sender<EventSenderEvent>
     ) {
-        events_sender.send(Event::PropChange(Arc::new(PropChangeEvent {
+        events_sender.send(EventSenderEvent::Mess(Event::PropChange(Arc::new(PropChangeEvent {
             timestamp:   time,
             device_name: Arc::clone(device_name),
             prop_name:   Arc::clone(prop_name),
             change:      PropChange::Delete,
-        }))).unwrap();
+        })))).unwrap();
     }
 
     fn notify_subcribers_about_device_delete(
         &self,
         time:          Option<DateTime<Utc>>,
         device_name:   &Arc<String>,
-        events_sender: &mpsc::Sender<Event>,
+        events_sender: &mpsc::Sender<EventSenderEvent>,
         drv_interface: DriverInterface,
     ) {
-        events_sender.send(Event::DeviceDelete(Arc::new(DeviceDeleteEvent {
+        events_sender.send(EventSenderEvent::Mess(Event::DeviceDelete(Arc::new(DeviceDeleteEvent {
             timestamp:   time,
             device_name: Arc::clone(device_name),
             drv_interface
-        }))).unwrap();
+        })))).unwrap();
     }
 
     fn notify_subcribers_about_message(
@@ -3827,13 +3902,13 @@ impl XmlReceiver {
         timestamp:     Option<DateTime<Utc>>,
         device_name:   &Arc<String>,
         message:       &Arc<String>,
-        events_sender: &mpsc::Sender<Event>
+        events_sender: &mpsc::Sender<EventSenderEvent>
     ) {
-        events_sender.send(Event::Message(Arc::new(MessageEvent {
+        events_sender.send(EventSenderEvent::Mess(Event::Message(Arc::new(MessageEvent {
             timestamp,
             device_name: Arc::clone(device_name),
             text:        Arc::clone(message),
-        }))).unwrap();
+        })))).unwrap();
     }
 
     fn notify_subcribers_about_blob_start(
@@ -3843,7 +3918,7 @@ impl XmlReceiver {
         elem_name:     &Arc<String>,
         format:        &str,
         len:           Option<usize>,
-        events_sender: &mpsc::Sender<Event>
+        events_sender: &mpsc::Sender<EventSenderEvent>
     ) {
         let ccd = CamCcd::from_ccd_prop_name(prop_name);
         let shot_ids_by_dev = self.shot_ids_by_dev.lock().unwrap();
@@ -3855,21 +3930,21 @@ impl XmlReceiver {
             active_shot_ids.insert((device_name.to_string(), ccd), shot_id);
         }
 
-        events_sender.send(Event::BlobStart(Arc::new(BlobStartEvent {
+        events_sender.send(EventSenderEvent::Mess(Event::BlobStart(Arc::new(BlobStartEvent {
             device_name: Arc::clone(device_name),
             prop_name:   Arc::clone(prop_name),
             elem_name:   Arc::clone(elem_name),
             format:      Arc::new(format.to_string()),
             len,
             shot_id
-        }))).unwrap();
+        })))).unwrap();
     }
 
     fn process_xml(
         &mut self,
         xml_text:      &str,
         blobs:         Vec<XmlStreamReaderBlob>,
-        events_sender: &mpsc::Sender<Event>
+        events_sender: &mpsc::Sender<EventSenderEvent>
     ) -> anyhow::Result<()> {
         let mut xml_elem = xmltree::Element::parse(xml_text.as_bytes())?;
         if xml_elem.name.starts_with("def") { // defXXXXVector

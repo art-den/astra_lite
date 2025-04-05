@@ -16,3 +16,5 @@ pub const AFTER_MOUNT_MOVE_WAIT_TIME: usize = 2;
 /// Speed for mount calibration and correction if mount support it
 /// (in mount track speed)
 pub const MOUNT_CALIBR_SPEED: f64 = 1.0;
+
+pub const AFTER_GOTO_WAIT_TIME: usize = 3; // seconds

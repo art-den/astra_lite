@@ -10,7 +10,6 @@ use crate::{
 use super::{core::*, events::EventSubscriptions, utils::*};
 
 const MAX_MOUNT_UNPARK_TIME: usize = 20; // seconds
-const AFTER_GOTO_WAIT_TIME: usize = 3; // seconds
 
 #[derive(PartialEq)]
 enum State {

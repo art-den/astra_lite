@@ -54,8 +54,6 @@ pub struct MountCalibrMode {
     cur_timed_guide_s: f64,
     cur_timed_guide_w: f64,
     cur_timed_guide_e: f64,
-    cur_ra:            f64,
-    cur_dec:           f64,
     image_width:       usize,
     image_height:      usize,
     move_period:       f64,
@@ -77,8 +75,8 @@ enum State {
     Undefined,
     WaitForImage,
     WaitForSlew,
-    WaitAfterSlew(usize),
-    WaitForOrigCoords,
+    WaitAfterSlew(usize /* time */),
+    WaitForOrigCoords(usize /* ok time */),
 }
 
 struct CalibrAtempt {
@@ -120,8 +118,6 @@ impl MountCalibrMode {
             cur_timed_guide_s: 0.0,
             cur_timed_guide_w: 0.0,
             cur_timed_guide_e: 0.0,
-            cur_ra:            0.0,
-            cur_dec:           0.0,
             image_width:       0,
             image_height:      0,
             move_period:       0.0,
@@ -215,7 +211,7 @@ impl MountCalibrMode {
                     next_mode.set_or_correct_value(&mut self.result);
                 }
                 self.restore_orig_coords()?;
-                self.state = State::WaitForOrigCoords;
+                self.state = State::WaitForOrigCoords(0);
             }
             _ => unreachable!()
         }
@@ -365,10 +361,8 @@ impl Mode for MountCalibrMode {
         &mut self,
         prop_change: &indi::PropChangeEvent
     ) -> anyhow::Result<NotifyResult> {
-        let mut result = NotifyResult::Empty;
-
         if *prop_change.device_name != self.mount_device {
-            return Ok(result);
+            return Ok(NotifyResult::Empty);
         }
         match self.state {
             State::WaitForSlew => {
@@ -388,31 +382,9 @@ impl Mode for MountCalibrMode {
                     }
                 }
             }
-
-            State::WaitForOrigCoords => {
-                if let ("EQUATORIAL_EOD_COORD", indi::PropChange::Change { value, new_state, .. })
-                = (prop_change.prop_name.as_str(), &prop_change.change) {
-                    match value.elem_name.as_str() {
-                        "RA" => self.cur_ra = value.prop_value.to_f64()?,
-                        "DEC" => self.cur_dec = value.prop_value.to_f64()?,
-                        _ => {},
-                    }
-                    let state_is_ok = *new_state == indi::PropState::Ok;
-                    let coord_is_near =
-                        f64::abs(self.cur_ra-self.start_ra) < 0.001
-                        && f64::abs(self.cur_dec-self.start_dec) < 0.001;
-                    if state_is_ok || coord_is_near {
-                        // TODO: add delay before got next mode
-                        result = NotifyResult::Finished {
-                            next_mode: self.next_mode.take()
-                        };
-                    }
-                }
-            }
-
             _ => {},
         }
-        Ok(result)
+        Ok(NotifyResult::Empty)
     }
 
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
@@ -425,6 +397,17 @@ impl Mode for MountCalibrMode {
                     apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
                     self.state = State::WaitForImage;
                     result = NotifyResult::ProgressChanges;
+                }
+            }
+            State::WaitForOrigCoords(ok_time) => {
+                let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.mount_device)?;
+                if crd_prop_state == indi::PropState::Ok {
+                    *ok_time += 1;
+                    if *ok_time >= AFTER_GOTO_WAIT_TIME {
+                        result = NotifyResult::Finished {
+                            next_mode: self.next_mode.take()
+                        };
+                    }
                 }
             }
             _ => {}
