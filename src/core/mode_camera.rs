@@ -26,14 +26,10 @@ use super::{
 
 // Guider data for guiding by main camera
 struct SimpleGuider {
-    mnt_calibr:        Option<MountMoveCalibrRes>,
-    dither_x:          f64,
-    dither_y:          f64,
-    cur_timed_guide_n: f64,
-    cur_timed_guide_s: f64,
-    cur_timed_guide_w: f64,
-    cur_timed_guide_e: f64,
-    dither_exp_sum:    f64,
+    mnt_calibr:     Option<MountMoveCalibrRes>,
+    dither_x:       f64,
+    dither_y:       f64,
+    dither_exp_sum: f64,
 }
 
 impl SimpleGuider {
@@ -42,11 +38,7 @@ impl SimpleGuider {
             mnt_calibr: None,
             dither_x: 0.0,
             dither_y: 0.0,
-            cur_timed_guide_n: 0.0,
-            cur_timed_guide_s: 0.0,
-            cur_timed_guide_w: 0.0,
-            cur_timed_guide_e: 0.0,
-            dither_exp_sum:    0.0,
+            dither_exp_sum: 0.0,
         }
     }
 }
@@ -68,8 +60,7 @@ enum State {
     Common,
     CameraOffsetCalculation,
     WaitingForMountCalibration,
-    InternalMountCorrection,
-    WaitAfterInternalMountCorrection(usize),
+    InternalMountCorrection(usize /* ok_time */),
     ExternalDithering,
 }
 
@@ -506,7 +497,7 @@ impl TackingPicturesMode {
         info: &LightFrameInfoData,
         shot_id: Option<u64>,
     ) -> anyhow::Result<NotifyResult> {
-        if self.state == State::InternalMountCorrection {
+        if matches!(self.state, State::InternalMountCorrection(_)) {
             return Ok(NotifyResult::Empty);
         }
 
@@ -572,10 +563,6 @@ impl TackingPicturesMode {
         if let (Some((offset_x, offset_y)), Some(mnt_calibr)) = (move_offset, &guider_data.mnt_calibr) {
             if mnt_calibr.is_ok() {
                 if let Some((mut ra, mut dec)) = mnt_calibr.calc(offset_x, offset_y) {
-                    guider_data.cur_timed_guide_n = 0.0;
-                    guider_data.cur_timed_guide_s = 0.0;
-                    guider_data.cur_timed_guide_w = 0.0;
-                    guider_data.cur_timed_guide_e = 0.0;
                     self.abort_current_unfinised_exposure(shot_id)?;
                     let can_set_guide_rate =
                         self.indi.mount_is_guide_rate_supported(&self.mount_device)? &&
@@ -600,7 +587,7 @@ impl TackingPicturesMode {
                     if dec < -max_dec { dec = -max_dec; }
                     log::debug!("Timed guide, NS = {:.2}ms, WE = {:.2}ms", dec, ra);
                     self.indi.mount_timed_guide(&self.mount_device, dec, ra)?;
-                    self.state = State::InternalMountCorrection;
+                    self.state = State::InternalMountCorrection(0);
                     return Ok(NotifyResult::ProgressChanges);
                 }
             }
@@ -997,7 +984,7 @@ impl Mode for TackingPicturesMode {
         let mut mode_str = match (&self.state, &self.cam_mode) {
             (State::FrameToSkip, _) =>
                 "First frame (will be skipped)".to_string(),
-            (State::InternalMountCorrection, _) =>
+            (State::InternalMountCorrection(_), _) =>
                 "Mount position correction".to_string(),
             (State::ExternalDithering, _) =>
                 "Dithering".to_string(),
@@ -1275,42 +1262,19 @@ impl Mode for TackingPicturesMode {
         }
     }
 
-    fn notify_indi_prop_change(
-        &mut self,
-        prop_change: &indi::PropChangeEvent
-    ) -> anyhow::Result<NotifyResult> {
-        if self.state == State::InternalMountCorrection {
-            if *prop_change.device_name != self.mount_device { return Ok(NotifyResult::Empty); }
-            if let ("TELESCOPE_TIMED_GUIDE_NS"|"TELESCOPE_TIMED_GUIDE_WE", indi::PropChange::Change { value, .. }, Some(guid_data))
-            = (prop_change.prop_name.as_str(), &prop_change.change, &mut self.simple_guider) {
-                match value.elem_name.as_str() {
-                    "TIMED_GUIDE_N" => guid_data.cur_timed_guide_n = value.prop_value.to_f64()?,
-                    "TIMED_GUIDE_S" => guid_data.cur_timed_guide_s = value.prop_value.to_f64()?,
-                    "TIMED_GUIDE_W" => guid_data.cur_timed_guide_w = value.prop_value.to_f64()?,
-                    "TIMED_GUIDE_E" => guid_data.cur_timed_guide_e = value.prop_value.to_f64()?,
-                    _ => {},
-                }
-                if guid_data.cur_timed_guide_n == 0.0
-                && guid_data.cur_timed_guide_s == 0.0
-                && guid_data.cur_timed_guide_w == 0.0
-                && guid_data.cur_timed_guide_e == 0.0 {
-                    self.state = State::WaitAfterInternalMountCorrection(0);
-                }
-            }
-        }
-        Ok(NotifyResult::Empty)
-    }
-
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         match &mut self.state {
-            State::WaitAfterInternalMountCorrection(time) => {
-                *time += 1;
-                if *time == AFTER_MOUNT_MOVE_WAIT_TIME {
-                    self.indi.mount_abort_motion(&self.mount_device)?;
-                    self.take_shot_with_options(self.cam_options.frame.clone())?;
-                    self.state = State::Common;
-                    result = NotifyResult::ProgressChanges;
+            State::InternalMountCorrection(ok_time) => {
+                let guide_pulse_finished = self.indi.mount_is_timed_guide_finished(&self.mount_device)?;
+                if guide_pulse_finished {
+                    *ok_time += 1;
+                    if *ok_time == AFTER_MOUNT_MOVE_WAIT_TIME {
+                        self.indi.mount_abort_motion(&self.mount_device)?;
+                        self.take_shot_with_options(self.cam_options.frame.clone())?;
+                        self.state = State::Common;
+                        result = NotifyResult::ProgressChanges;
+                    }
                 }
             }
             _ => {}

@@ -392,7 +392,7 @@ impl Mode for GotoMode {
 
             State::Goto | State::CorrectMount => {
                 let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.mount)?;
-                if crd_prop_state == indi::PropState::Ok {
+                if matches!(crd_prop_state, indi::PropState::Ok | indi::PropState::Idle) {
                     self.goto_ok_seconds += 1;
                     if self.goto_ok_seconds >= AFTER_GOTO_WAIT_TIME {
                         check_telescope_is_at_desired_position(

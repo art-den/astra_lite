@@ -395,7 +395,8 @@ impl Mode for PolarAlignMode {
             }
 
             State::Goto => {
-                if self.indi.mount_get_eq_coord_prop_state(&self.mount)? == indi::PropState::Ok {
+                let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.mount)?;
+                if matches!(crd_prop_state, indi::PropState::Ok|indi::PropState::Idle) {
                     self.goto_ok_cnt += 1;
                     if self.goto_ok_cnt >= AFTER_GOTO_WAIT_TIME {
                         check_telescope_is_at_desired_position(

@@ -50,10 +50,6 @@ pub struct MountCalibrMode {
     camera:            DeviceAndProp,
     attempt_num:       usize,
     attempts:          Vec<CalibrAtempt>,
-    cur_timed_guide_n: f64,
-    cur_timed_guide_s: f64,
-    cur_timed_guide_w: f64,
-    cur_timed_guide_e: f64,
     image_width:       usize,
     image_height:      usize,
     move_period:       f64,
@@ -74,8 +70,7 @@ enum Axis {
 enum State {
     Undefined,
     WaitForImage,
-    WaitForSlew,
-    WaitAfterSlew(usize /* time */),
+    WaitForSlew(usize /* ok_time */),
     WaitForOrigCoords(usize /* ok time */),
 }
 
@@ -114,10 +109,6 @@ impl MountCalibrMode {
             camera:            cam_device.clone(),
             attempt_num:       0,
             attempts:          Vec::new(),
-            cur_timed_guide_n: 0.0,
-            cur_timed_guide_s: 0.0,
-            cur_timed_guide_w: 0.0,
-            cur_timed_guide_e: 0.0,
             image_width:       0,
             image_height:      0,
             move_period:       0.0,
@@ -288,7 +279,7 @@ impl MountCalibrMode {
                     )?;
                 }
                 self.indi.mount_timed_guide(&self.mount_device, ns, we)?;
-                self.state = State::WaitForSlew;
+                self.state = State::WaitForSlew(0);
             }
         } else {
             apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
@@ -357,51 +348,24 @@ impl Mode for MountCalibrMode {
         }
     }
 
-    fn notify_indi_prop_change(
-        &mut self,
-        prop_change: &indi::PropChangeEvent
-    ) -> anyhow::Result<NotifyResult> {
-        if *prop_change.device_name != self.mount_device {
-            return Ok(NotifyResult::Empty);
-        }
-        match self.state {
-            State::WaitForSlew => {
-                if let ("TELESCOPE_TIMED_GUIDE_NS"|"TELESCOPE_TIMED_GUIDE_WE",
-                        indi::PropChange::Change { value, .. })
-                = (prop_change.prop_name.as_str(), &prop_change.change) {
-                    match value.elem_name.as_str() {
-                        "TIMED_GUIDE_N" => self.cur_timed_guide_n = value.prop_value.to_f64()?,
-                        "TIMED_GUIDE_S" => self.cur_timed_guide_s = value.prop_value.to_f64()?,
-                        "TIMED_GUIDE_W" => self.cur_timed_guide_w = value.prop_value.to_f64()?,
-                        "TIMED_GUIDE_E" => self.cur_timed_guide_e = value.prop_value.to_f64()?,
-                        _ => {},
-                    }
-                    if self.cur_timed_guide_n == 0.0 && self.cur_timed_guide_s == 0.0
-                    && self.cur_timed_guide_w == 0.0 && self.cur_timed_guide_e == 0.0 {
-                        self.state = State::WaitAfterSlew(0);
-                    }
-                }
-            }
-            _ => {},
-        }
-        Ok(NotifyResult::Empty)
-    }
-
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         match &mut self.state {
-            State::WaitAfterSlew(time) => {
-                *time += 1;
-                if *time == AFTER_MOUNT_MOVE_WAIT_TIME {
-                    self.indi.mount_abort_motion(&self.mount_device)?;
-                    apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
-                    self.state = State::WaitForImage;
-                    result = NotifyResult::ProgressChanges;
+            State::WaitForSlew(ok_time) => {
+                let guide_pulse_finished = self.indi.mount_is_timed_guide_finished(&self.mount_device)?;
+                if guide_pulse_finished {
+                    *ok_time += 1;
+                    if *ok_time == AFTER_MOUNT_MOVE_WAIT_TIME {
+                        self.indi.mount_abort_motion(&self.mount_device)?;
+                        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
+                        self.state = State::WaitForImage;
+                        result = NotifyResult::ProgressChanges;
+                    }
                 }
             }
             State::WaitForOrigCoords(ok_time) => {
                 let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.mount_device)?;
-                if crd_prop_state == indi::PropState::Ok {
+                if matches!(crd_prop_state, indi::PropState::Ok|indi::PropState::Idle) {
                     *ok_time += 1;
                     if *ok_time >= AFTER_GOTO_WAIT_TIME {
                         result = NotifyResult::Finished {
