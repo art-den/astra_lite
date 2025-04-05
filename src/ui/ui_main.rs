@@ -76,7 +76,6 @@ pub fn init_ui(
 
     main_ui.apply_options();
     main_ui.apply_theme();
-    main_ui.widgets.window.show();
 
     let hardware      = super::ui_hardware     ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let camera        = super::ui_camera       ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
@@ -119,6 +118,8 @@ pub fn init_ui(
     main_ui.update_window_title();
 
     disable_scroll_for_common_widgets(main_ui.widgets.window.upcast_ref());
+
+    main_ui.widgets.window.show();
 }
 
 pub const TIMER_PERIOD_MS: u64 = 250;
