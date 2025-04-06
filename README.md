@@ -24,6 +24,13 @@ https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-ast
 * Manual mount control
 * UI for INDI devices control
 
+# Requirements
+| Condition                        | Requiriment                    |
+|----------------------------------|--------------------------------|
+| Astrophotography only            | >= 2 CPU cores, >= 2 GB of RAM |
+| Live staking                     | >= 4 CPU cores, >= 2 GB of RAM |
+| Live staking with tracks removal | >= 4 CPU cores, >= 4 GB of RAM |
+
 ![](./docs/screenshot1.jpg)
 
 # Future plans
