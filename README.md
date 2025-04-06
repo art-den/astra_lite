@@ -32,7 +32,7 @@ https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-ast
 | Live staking with tracks removal | >= 4 CPU cores, >= 4 GB of RAM |
 
 # Screenshots
-[![Main tab](./docs/screenshot1_small.jpg)](./docs/screenshot1.jpg)
+[![Main tab](./docs/screenshot1_small.jpg)](./docs/screenshot1.jpg?raw=true)
 
 # Future plans
 * Mount polar alignment
