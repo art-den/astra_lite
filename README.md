@@ -34,6 +34,7 @@ https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-ast
 
 # Screenshots
 [![Main tab](./docs/screenshot1_small.jpg)](./docs/screenshot1.jpg?raw=true)
+[![Sky map](./docs/screenshot2_small.jpg)](./docs/screenshot2.jpg?raw=true)
 
 # Future plans
 * Mount polar alignment
