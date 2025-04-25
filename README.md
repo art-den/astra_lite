@@ -14,7 +14,7 @@ https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-ast
 
 # Features
 * Saving RAW frames
-* Live stacking with **automatic satellites and meteors track removal**
+* Live stacking with **automatic satellites and meteor tracks removal**
 * Background gradient automatic removal
 * Darks, biases and defective pixels library
 * Light frames quality filter
@@ -26,11 +26,13 @@ https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-ast
 * UI for INDI devices control
 
 # Requirements
-| Condition                        | Requiriment                    |
-|----------------------------------|--------------------------------|
-| Astrophotography only            | >= 2 CPU cores, >= 2 GB of RAM |
-| Live staking                     | >= 4 CPU cores, >= 2 GB of RAM |
-| Live staking with tracks removal | >= 4 CPU cores, >= 4 GB of RAM |
+| Condition                        | Requiriments for 12 MP sensors | Requiriments for 24 MP sensors |
+|----------------------------------|--------------------------------|--------------------------------|
+| Astrophotography only            | >= 2 CPU cores, >= 1 GB of RAM | >= 2 CPU cores, >= 2 GB of RAM |
+| Live staking                     | >= 2 CPU cores, >= 1 GB of RAM | >= 4 CPU cores, >= 2 GB of RAM |
+| Live staking with tracks removal | >= 2 CPU cores, >= 2 GB of RAM | >= 4 CPU cores, >= 4 GB of RAM |
+
+**>= 4 CPU cores, >= 4 GB of RAM** is enough for most cases
 
 # Screenshots
 [![Main tab](./docs/screenshot1_small.jpg)](./docs/screenshot1.jpg?raw=true)
