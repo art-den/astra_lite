@@ -850,6 +850,10 @@ fn make_preview_image_impl(
         .as_ref()
         .and_then(|qo| if qo.use_max_ovality { Some(qo.max_ovality) } else { None });
 
+    let stars_recgn_send = command.quality_options
+        .as_ref().map(|qo| qo.star_recgn_sens)
+        .unwrap_or_default();
+
     let frame_stars = if is_light_frame {
         let mono_layer = if image.is_color() { &image.g } else { &image.l };
         let mut stars_finder = StarsFinder::new();
@@ -863,6 +867,7 @@ fn make_preview_image_impl(
             &image.raw_info,
             max_stars_fwhm,
             max_stars_ovality,
+            stars_recgn_send,
             ignore_3px_stars,
             true
         )
@@ -1067,12 +1072,17 @@ fn make_preview_image_impl(
                 .map(|opts| opts.ignore_3px_stars)
                 .unwrap_or(false);
 
+            let stars_recgn_send = command.quality_options
+                .as_ref().map(|qo| qo.star_recgn_sens)
+                .unwrap_or_default();
+
             let mut stars_finder = StarsFinder::new();
             let ls_stars = stars_finder.find_stars_and_get_info(
                 ls_mono_layer,
                 &raw_info,
                 max_stars_fwhm,
                 max_stars_ovality,
+                stars_recgn_send,
                 ignore_3px_stars,
                 true
             );

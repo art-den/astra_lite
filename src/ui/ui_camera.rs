@@ -171,6 +171,25 @@ impl Crop {
     }
 }
 
+impl StarRecognSensivity {
+    pub fn from_active_id(active_id: Option<&str>) -> Self {
+        match active_id {
+            Some("low")    => Self::Low,
+            Some("normal") => Self::Normal,
+            Some("High")   => Self::High,
+            _              => Self::Normal,
+        }
+    }
+
+    pub fn to_active_id(&self) -> Option<&'static str> {
+        match self {
+            Self::Low    => Some("low"),
+            Self::Normal => Some("normal"),
+            Self::High   => Some("high"),
+        }
+    }
+}
+
 #[derive(FromBuilder)]
 struct InfoWidgets {
     bx:              gtk::Box,
@@ -249,6 +268,7 @@ struct QualityWidgets {
     chb_max_oval:         gtk::CheckButton,
     spb_max_oval:         gtk::SpinButton,
     chb_ignore_3px_stars: gtk::CheckButton,
+    cbx_stars_sens:       gtk::ComboBox,
 }
 
 struct Widgets {
@@ -634,6 +654,15 @@ impl CameraUi {
             })
         );
 
+        self.widgets.quality.cbx_stars_sens.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.quality.star_recgn_sens = StarRecognSensivity::from_active_id(
+                    cb.active_id().as_deref()
+                )
+            })
+        );
+
         self.widgets.calibr.chb_dark.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let Ok(mut options) = self_.options.try_write() else { return; };
@@ -797,6 +826,7 @@ impl CameraUi {
         qual.chb_max_oval.set_active(options.quality.use_max_ovality);
         qual.spb_max_oval.set_value(options.quality.max_ovality as f64);
         qual.chb_ignore_3px_stars.set_active(options.quality.ignore_3px_stars);
+        qual.cbx_stars_sens.set_active_id(options.quality.star_recgn_sens.to_active_id());
     }
 
     pub fn get_common_options(&self, options: &mut Options) {
@@ -854,6 +884,9 @@ impl CameraUi {
         options.quality.use_max_ovality  = qual.chb_max_oval.is_active();
         options.quality.max_ovality      = qual.spb_max_oval.value() as f32;
         options.quality.ignore_3px_stars = qual.chb_ignore_3px_stars.is_active();
+        options.quality.star_recgn_sens  = StarRecognSensivity::from_active_id(
+            qual.cbx_stars_sens.active_id().as_deref()
+        );
     }
 
     fn store_options_for_camera(

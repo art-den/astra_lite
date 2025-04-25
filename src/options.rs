@@ -264,6 +264,13 @@ impl LiveStackingOptions {
     }
 }
 
+#[derive(Default, Serialize, Deserialize, Debug, Clone, Copy)]
+pub enum StarRecognSensivity {
+    Low,
+    #[default]Normal,
+    High
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct QualityOptions {
@@ -272,6 +279,7 @@ pub struct QualityOptions {
     pub use_max_ovality:  bool,
     pub max_ovality:      f32,
     pub ignore_3px_stars: bool,
+    pub star_recgn_sens:  StarRecognSensivity,
 }
 
 impl Default for QualityOptions {
@@ -282,6 +290,7 @@ impl Default for QualityOptions {
             use_max_ovality:  false,
             max_ovality:      2.0,
             ignore_3px_stars: true,
+            star_recgn_sens:  StarRecognSensivity::default(),
         }
     }
 }

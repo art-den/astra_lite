@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, f64::consts::PI, isize, sync::Mutex};
 use itertools::{izip, Itertools};
-use crate::{utils::math::*, TimeLogger};
+use crate::{options::StarRecognSensivity, utils::math::*, TimeLogger};
 use super::{image::ImageLayer, raw::RawImageInfo, utils::*};
 
 const MAX_STAR_DIAM: usize = 32;
@@ -61,6 +61,7 @@ impl StarsFinder {
         raw_info:         &Option<RawImageInfo>,
         max_fwhm:         Option<f32>,
         max_ovality:      Option<f32>,
+        sensitivity:      StarRecognSensivity,
         ignore_3px_stars: bool,
         mt:               bool,
     ) -> Stars {
@@ -72,7 +73,7 @@ impl StarsFinder {
         let tm_total = TimeLogger::start();
 
         let tm = TimeLogger::start();
-        let mut threshold = Self::calc_threshold_for_stars_detection(image);
+        let mut threshold = Self::calc_threshold_for_stars_detection(image, sensitivity);
         tm.log("StarsFinder::calc_threshold_for_stars_detection");
         log::debug!("Stars detection threshold = {}", threshold);
 
@@ -129,7 +130,10 @@ impl StarsFinder {
         Stars { items: stars, info }
     }
 
-    fn calc_threshold_for_stars_detection(image: &ImageLayer<u16>) -> u16 {
+    fn calc_threshold_for_stars_detection(
+        image:       &ImageLayer<u16>,
+        sensitivity: StarRecognSensivity,
+    ) -> u16 {
         let mut diffs = Vec::new();
         for (y, row) in image.as_slice().chunks_exact(image.width()).enumerate() {
             let start = y & 0xF;
@@ -152,7 +156,13 @@ impl StarsFinder {
         let m = median(&mut diffs);
         let diff = 0.5 * f64::sqrt(m as _);
 
-        let result = (9.0 * diff) as i32;
+        let k = match sensitivity {
+            StarRecognSensivity::Low    => 30.0,
+            StarRecognSensivity::Normal => 15.0,
+            StarRecognSensivity::High   => 9.0,
+        };
+
+        let result = (k * diff) as i32;
         let result = i32::max(result, 1);
         let result = i32::min(result, u16::MAX as _);
 
