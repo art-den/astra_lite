@@ -7,7 +7,7 @@ use chrono::Utc;
 
 use crate::{
     guiding::external_guider::*,
-    image::{histogram::*, raw::{FrameType, RawImage, RawImageInfo, RawStacker},  stars_offset::*},
+    image::{histogram::*, raw::{FrameType, RawImage, RawImageInfo}, raw_stacker::RawStacker, stars_offset::*},
     indi,
     options::*,
     utils::io_utils::*,

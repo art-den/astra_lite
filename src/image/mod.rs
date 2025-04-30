@@ -1,6 +1,7 @@
 pub mod raw;
+pub mod raw_stacker;
 pub mod image;
-pub mod stacker;
+pub mod image_stacker;
 pub mod info;
 pub mod stars;
 pub mod stars_offset;

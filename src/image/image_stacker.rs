@@ -9,18 +9,18 @@ use super::{histogram::*, image::*, raw::RawImageInfo};
 
 /// Channel of rotated image
 #[derive(Default)]
-struct StackerTempChan {
+struct ImageStackerTempChan {
     data: Vec<u16>,
     background: u16,
 }
 
 #[derive(Default)]
-struct StackerChan {
+struct ImageStackerChan {
     data: Vec<i32>,
-    tmp: Vec<StackerTempChan>,
+    tmp: Vec<ImageStackerTempChan>,
 }
 
-impl StackerChan {
+impl ImageStackerChan {
     fn clear(&mut self) {
         self.data.clear();
         self.data.shrink_to_fit();
@@ -84,11 +84,11 @@ impl StackerChan {
     }
 }
 
-pub struct Stacker {
-    r: StackerChan,
-    g: StackerChan,
-    b: StackerChan,
-    l: StackerChan,
+pub struct ImageStacker {
+    r: ImageStackerChan,
+    g: ImageStackerChan,
+    b: ImageStackerChan,
+    l: ImageStackerChan,
     cnt: Vec<u16>,
     tmp_idx: usize,
     width: usize,
@@ -100,13 +100,13 @@ pub struct Stacker {
     raw_info: Option<RawImageInfo>,
 }
 
-impl Stacker {
+impl ImageStacker {
     pub fn new() -> Self {
         Self {
-            r: StackerChan::default(),
-            g: StackerChan::default(),
-            b: StackerChan::default(),
-            l: StackerChan::default(),
+            r: ImageStackerChan::default(),
+            g: ImageStackerChan::default(),
+            b: ImageStackerChan::default(),
+            l: ImageStackerChan::default(),
             cnt: Vec::new(),
             tmp_idx: 0,
             width: 0,
@@ -192,7 +192,7 @@ impl Stacker {
     }
 
     fn add_layer(
-        dst:        &mut StackerChan,
+        dst:        &mut ImageStackerChan,
         cnt:        &mut [u16],
         src:        &ImageLayer<u16>,
         transl_x:   f64,
@@ -275,7 +275,7 @@ impl Stacker {
 
     fn rotate_image(
         idx:        usize,
-        dst_chan:   &mut StackerChan,
+        dst_chan:   &mut ImageStackerChan,
         src:        &ImageLayer<u16>,
         background: u16,
         transl_x:   f64,
@@ -284,7 +284,7 @@ impl Stacker {
     ) {
         if src.is_empty() { return; }
         while dst_chan.tmp.len() <= idx {
-            dst_chan.tmp.push(StackerTempChan::default());
+            dst_chan.tmp.push(ImageStackerTempChan::default());
         }
         let tmp = &mut dst_chan.tmp[idx];
         tmp.background = background;
@@ -333,7 +333,7 @@ impl Stacker {
     }
 
     fn add_median(
-        chan: &mut StackerChan,
+        chan: &mut ImageStackerChan,
         cnt: &mut Vec<u16>,
         update_cnt: bool,
     ) {
@@ -470,7 +470,7 @@ impl Stacker {
     }
 
     pub fn copy_to_image(&self, image: &mut Image) {
-        let copy_layer = |chan: &StackerChan, dst: &mut ImageLayer<u16>| {
+        let copy_layer = |chan: &ImageStackerChan, dst: &mut ImageLayer<u16>| {
             if chan.is_empty() { return; }
             dst.resize(self.width, self.height);
             dst.as_slice_mut()

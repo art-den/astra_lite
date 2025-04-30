@@ -5,7 +5,7 @@ use chrono::{DateTime, Local, Utc};
 
 use crate::{
     core::{core::ModeType, utils::{FileNameArg, FileNameUtils}},
-    image::{histogram::*, image::*, info::*, io::*, preview::*, raw::*, simple_fits::{FitsReader, SeekNRead}, stacker::Stacker, stars::{StarItems, Stars, StarsFinder, StarsInfo}, stars_offset::*},
+    image::{histogram::*, image::*, info::*, io::*, preview::*, raw::*, simple_fits::{FitsReader, SeekNRead}, image_stacker::ImageStacker, stars::{StarItems, Stars, StarsFinder, StarsInfo}, stars_offset::*},
     indi,
     options::*, utils::log_utils::*
 };
@@ -95,7 +95,7 @@ impl CalibrData {
 }
 
 pub struct LiveStackingData {
-    pub stacker:  RwLock<Stacker>,
+    pub stacker:  RwLock<ImageStacker>,
     pub image:    RwLock<Image>,
     pub hist:     RwLock<Histogram>,
     pub info:     RwLock<ResultImageInfo>,
@@ -105,7 +105,7 @@ pub struct LiveStackingData {
 impl LiveStackingData {
     pub fn new() -> Self {
         Self {
-            stacker:  RwLock::new(Stacker::new()),
+            stacker:  RwLock::new(ImageStacker::new()),
             image:    RwLock::new(Image::new_empty()),
             hist:     RwLock::new(Histogram::new()),
             info:     RwLock::new(ResultImageInfo::None),
