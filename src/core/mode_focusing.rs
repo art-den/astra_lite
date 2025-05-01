@@ -9,13 +9,11 @@ use crate::{
 };
 use super::{core::*, events::*, frame_processing::*, utils::*};
 
-const ONE_POS_TRY_CNT: usize = 3;
 const MAX_FOCUS_TOTAL_TRY_CNT: usize = 8;
 const MAX_FOCUS_SAMPLE_TRY_CNT: usize = 4;
 const BACKLASH_STEPS: f64 = 4.0;
-
 const MAX_FOCUS_CHANGE_TIME: usize = 15;
-const MAX_FOCUS_CHANGE_CNT: usize = 3;
+const MAX_FOCUS_TRY_SET_CNT: usize = 2;
 
 #[derive(Clone)]
 pub struct FocusingResultData {
@@ -49,6 +47,7 @@ pub struct FocusingMode {
     samples:       Vec<FocuserSample>,
     one_pos_fwhm:  Vec<f32>,
     result_pos:    Option<f64>,
+    max_try:       usize,
     try_cnt:       usize,
     stage:         Stage,
     desired_focus: f64,
@@ -101,6 +100,13 @@ impl FocusingMode {
             indi
         )?;
 
+        let exposure_u = (cam_opts.frame.exposure() as usize).max(1);
+        let max_try = (10 / exposure_u).max(1).min(3);
+
+        dbg!(max_try);
+
+        log::debug!("Creating autofocus mode. max_try={}", max_try);
+
         Ok(FocusingMode {
             indi:          Arc::clone(indi),
             subscribers:   Arc::clone(subscribers),
@@ -119,6 +125,7 @@ impl FocusingMode {
             camera:        cam_device.clone(),
             next_mode,
             cam_opts,
+            max_try,
         })
     }
 
@@ -233,10 +240,10 @@ impl FocusingMode {
 
                 log::debug!(
                     "Added new fwhm into one pos values (len={}/{})",
-                    self.one_pos_fwhm.len(), ONE_POS_TRY_CNT
+                    self.one_pos_fwhm.len(), self.max_try
                 );
 
-                if self.one_pos_fwhm.len() == ONE_POS_TRY_CNT {
+                if self.one_pos_fwhm.len() == self.max_try {
                     let stars_fwhm = self.one_pos_fwhm
                         .iter()
                         .copied()
@@ -471,7 +478,7 @@ impl Mode for FocusingMode {
             if *change_time > MAX_FOCUS_CHANGE_TIME {
                 self.change_cnt += 1;
                 log::error!("Time out waiting new focus value!");
-                if self.change_cnt > MAX_FOCUS_CHANGE_CNT {
+                if self.change_cnt > MAX_FOCUS_TRY_SET_CNT {
                     anyhow::bail!("Can't set new focus value for focuser!");
                 }
                 log::error!("Setting new value {:.0} again. Try = {}", self.desired_focus, self.change_cnt);

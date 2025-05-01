@@ -13,6 +13,9 @@
         <property name="label" translatable="yes">temp</property>
         <property name="width-chars">5</property>
         <property name="max-width-chars">5</property>
+        <attributes>
+          <attribute name="weight" value="bold"/>
+        </attributes>
       </object>
       <packing>
         <property name="expand">False</property>
@@ -37,6 +40,9 @@
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="label" translatable="yes">pwr</property>
+        <attributes>
+          <attribute name="weight" value="bold"/>
+        </attributes>
       </object>
       <packing>
         <property name="expand">False</property>

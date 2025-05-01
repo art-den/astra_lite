@@ -517,11 +517,21 @@ impl FocuserUi {
         let foc_device = options.focuser.device.clone();
         drop(options);
 
-        if let Ok(value) = self.indi.focuser_get_abs_value(&foc_device) {
-            self.widgets.l_value.set_label(&format!("{:.0}", value));
+        let value_str = if let Ok(value) = self.indi.focuser_get_abs_value(&foc_device) {
+            &format!("{:.0}", value)
         } else {
-            self.widgets.l_value.set_label("---");
-        }
+            "---"
+        };
+
+        let temp_str = if let Ok(value) = self.indi.focuser_get_temperature(&foc_device) {
+            &format!("{:.1}", value)
+        } else {
+            "---"
+        };
+
+        self.widgets.l_value.set_label(
+            &format!("{} / {}", value_str, temp_str)
+        );
     }
 
     fn draw_focusing_samples(

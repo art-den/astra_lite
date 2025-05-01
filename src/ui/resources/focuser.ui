@@ -323,7 +323,7 @@
             <property name="visible">True</property>
             <property name="can-focus">False</property>
             <property name="halign">start</property>
-            <property name="label" translatable="yes">Current position:</property>
+            <property name="label" translatable="yes">Current position and T:</property>
           </object>
           <packing>
             <property name="left-attach">0</property>
@@ -336,6 +336,9 @@
             <property name="can-focus">False</property>
             <property name="halign">start</property>
             <property name="label" translatable="yes">###</property>
+            <attributes>
+              <attribute name="weight" value="bold"/>
+            </attributes>
           </object>
           <packing>
             <property name="left-attach">1</property>
