@@ -242,20 +242,27 @@ impl FocuserUi {
 
     fn process_indi_prop_change(
         &self,
-        _device_name: &str,
-        prop_name:    &str,
-        elem_name:    &str,
-        new_prop:     bool,
-        _prev_state:  Option<&indi::PropState>,
-        _new_state:   Option<&indi::PropState>,
-        value:        &indi::PropValue,
+        device_name: &str,
+        prop_name:   &str,
+        elem_name:   &str,
+        new_prop:    bool,
+        _prev_state: Option<&indi::PropState>,
+        _new_state:  Option<&indi::PropState>,
+        value:       &indi::PropValue,
     ) {
+        let options = self.options.read().unwrap();
+        if device_name != options.focuser.device { return; }
+        drop(options);
+
         match (prop_name, elem_name, value) {
             ("ABS_FOCUS_POSITION", ..) => {
                 self.delayed_actions.schedule(
                     if new_prop { DelayedAction::UpdateFocPosNew }
                     else        { DelayedAction::UpdateFocPos }
                 );
+                self.delayed_actions.schedule(DelayedAction::ShowCurFocuserValue);
+            }
+            ("FOCUS_TEMPERATURE", ..) => {
                 self.delayed_actions.schedule(DelayedAction::ShowCurFocuserValue);
             }
             ("FOCUS_MAX", ..) => {
