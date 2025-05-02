@@ -79,6 +79,7 @@ pub fn paint_altitude_by_time(
 
     let sun_alt_theshold = degree_to_radian(-18.0);
     let sun_bg = gdk::cairo::LinearGradient::new(0.0, 0.0, width, 0.0);
+    let moon_bg = gdk::cairo::LinearGradient::new(0.0, 0.0, width, 0.0);
     let mut max_moon_phase = None;
     for x in 0..=area.allocated_width() {
         let hour_diff = linear_interpolate(x as f64, 0.0, width, PAST_HOUR as f64, FUTU_HOUR as f64);
@@ -91,30 +92,34 @@ pub fn paint_altitude_by_time(
         let sun_crd = mini_sun(julian_centuries);
         let sun_h_crd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&sun_crd));
         let moon_crd = mini_moon(julian_centuries);
-        let moon_h_crd =  HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&moon_crd));
+        let moon_h_crd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&moon_crd));
 
-        let (r, g, b) = if sun_h_crd.alt < sun_alt_theshold {
-            if moon_h_crd.alt > 0.0 {
-                let phase = moon_phase(julian_centuries);
-                max_moon_phase = max_moon_phase
-                    .map(|v| f64::max(v, phase))
-                    .or_else(|| Some(phase));
-                moon_color
-            } else {
-                night_color
-            }
+        let (sun_r, sun_g, sun_b) = if sun_h_crd.alt < sun_alt_theshold {
+            night_color
         } else if sun_h_crd.alt < 0.0 {
             twilight_color
         } else {
             day_color
         };
-
+        let (moon_r, moon_g, moon_b, moon_a) = if moon_h_crd.alt > 0.0 {
+            let moon_phase = moon_phase(julian_centuries);
+            max_moon_phase = max_moon_phase
+                .map(|v| f64::max(v, moon_phase))
+                .or_else(|| Some(moon_phase));
+            (moon_color.0, moon_color.1, moon_color.2, 1.0)
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
         let offset = x as f64 / area.allocated_width() as f64;
-        sun_bg.add_color_stop_rgb(offset, r, g, b);
+        sun_bg.add_color_stop_rgb(offset, sun_r, sun_g, sun_b);
+        moon_bg.add_color_stop_rgba(offset, moon_r, moon_g, moon_b, moon_a);
     }
 
+    cr.set_source(&moon_bg)?;
+    cr.rectangle(0.0, legend_height + (0.75 - 0.125) * data_height, width, 0.125 * data_height);
+    cr.fill()?;
     cr.set_source(&sun_bg)?;
-    cr.rectangle(0.0, legend_height, width, data_height);
+    cr.rectangle(0.0, legend_height + 0.75 * data_height, width, 0.125 * data_height);
     cr.fill()?;
 
     // Altitude plot
