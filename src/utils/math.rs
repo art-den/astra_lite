@@ -238,19 +238,19 @@ fn test_linear_solve3() {
 }
 
 #[derive(Clone, Debug)]
-pub struct SquareCoeffs {
+pub struct QuadraticCoeffs {
     pub a2: f64,
     pub a1: f64,
     pub a0: f64,
 }
 
-impl SquareCoeffs {
+impl QuadraticCoeffs {
     pub fn calc(&self, x: f64) -> f64 {
         self.a2*x*x + self.a1*x + self.a0
     }
 }
 
-pub fn square_ls(x_values: &[f64], y_values: &[f64]) -> Option<SquareCoeffs> {
+pub fn square_ls(x_values: &[f64], y_values: &[f64]) -> Option<QuadraticCoeffs> {
     assert!(x_values.len() == y_values.len());
     if x_values.len() < 3 { return None; }
 
@@ -281,17 +281,37 @@ pub fn square_ls(x_values: &[f64], y_values: &[f64]) -> Option<SquareCoeffs> {
         sum_x,                 sum_x2, sum_x3, sum_xy,
         sum_x2,                sum_x3, sum_x4, sum_x2y,
     ).map(|coeffs| {
-        SquareCoeffs {a0: coeffs.0, a1: coeffs.1, a2: coeffs.2,}
+        QuadraticCoeffs {a0: coeffs.0, a1: coeffs.1, a2: coeffs.2,}
     })
 }
 
-pub fn parabola_extremum(sc: &SquareCoeffs) -> Option<f64> {
+pub fn parabola_extremum(sc: &QuadraticCoeffs) -> Option<f64> {
     if sc.a2 != 0.0 {
         Some(-0.5 * sc.a1 / sc.a2)
     } else {
         None
     }
 }
+
+pub fn linear_regression(x: &[f64], y: &[f64]) -> Option<(f64, f64)> {
+    if x.len() != y.len() || x.is_empty() {
+        return None;
+    }
+    let n = x.len() as f64;
+    let sum_x: f64 = x.iter().sum();
+    let sum_y: f64 = y.iter().sum();
+    let sum_xy: f64 = x.iter().zip(y.iter()).map(|(&xi, &yi)| xi * yi).sum();
+    let sum_x_sq: f64 = x.iter().map(|&xi| xi * xi).sum();
+    let denominator = n * sum_x_sq - sum_x * sum_x;
+    if denominator == 0.0 {
+        return None;
+    }
+    let slope = (n * sum_xy - sum_x * sum_y) / denominator;
+    let intercept = (sum_y - slope * sum_x) / n;
+    Some((slope, intercept))
+}
+
+
 pub struct IirFilterCoeffs {
     a0: f32,
     b0: f32,
