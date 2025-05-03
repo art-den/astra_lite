@@ -8,7 +8,7 @@ use gtk::glib::PropertySet;
 use crate::{
     core::consts::*,
     guiding::external_guider::*,
-    image::stars_offset::*,
+    image::{raw::FrameType, stars_offset::*},
     indi, options::*,
     ui::sky_map::math::EqCoord,
     utils::timer::*
@@ -577,27 +577,27 @@ impl Core {
 
     pub fn check_before_saving_raw_or_live_stacking(&self) -> anyhow::Result<()> {
         let options = self.options.read().unwrap();
-
-        match options.guiding.mode {
-            GuidingMode::MainCamera => {
-                if !self.indi.is_device_enabled(&options.mount.device).unwrap_or(false) {
-                    anyhow::bail!(
-                        "Guiding by main camera is selected but \
-                        mound device is not selected or connected!"
-                    );
+        if options.cam.frame.frame_type == FrameType::Lights {
+            match options.guiding.mode {
+                GuidingMode::MainCamera => {
+                    if !self.indi.is_device_enabled(&options.mount.device).unwrap_or(false) {
+                        anyhow::bail!(
+                            "Guiding by main camera is selected but \
+                            mound device is not selected or connected!"
+                        );
+                    }
                 }
-            }
-            GuidingMode::External => {
-                if !self.ext_guider.is_connected() {
-                    anyhow::bail!(
-                        "Guiding by external software is selected but \
-                        no external software is connected!"
-                    );
+                GuidingMode::External => {
+                    if !self.ext_guider.is_connected() {
+                        anyhow::bail!(
+                            "Guiding by external software is selected but \
+                            no external software is connected!"
+                        );
+                    }
                 }
+                _ => {}
             }
-            _ => {}
         }
-
         Ok(())
     }
 
