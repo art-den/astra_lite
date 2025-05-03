@@ -116,7 +116,7 @@ impl IndiWidget {
     }
 
     pub fn widget(&self) -> &gtk::Widget {
-        self.layout.upcast_ref::<gtk::Widget>()
+        self.layout.upcast_ref()
     }
 
     pub fn set_enabled(&self, enabled: bool) {
