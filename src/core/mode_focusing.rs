@@ -49,6 +49,7 @@ pub struct FocusingMode {
     result_pos:    Option<f64>,
     max_try:       usize,
     try_cnt:       usize,
+    prelim_step:   bool,
     stage:         Stage,
     desired_focus: f64,
     change_time:   Option<usize>,
@@ -94,6 +95,7 @@ impl FocusingMode {
         options:     &Arc<RwLock<Options>>,
         subscribers: &Arc<EventSubscriptions>,
         next_mode:   Option<Box<dyn Mode + Sync + Send>>,
+        prelim_step: bool,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(cam_device) = &opts.cam.device else {
@@ -130,6 +132,7 @@ impl FocusingMode {
             desired_focus: 0.0,
             try_cnt:       0,
             camera:        cam_device.clone(),
+            prelim_step,
             next_mode,
             cam_opts,
             max_try,
@@ -491,7 +494,10 @@ impl Mode for FocusingMode {
     fn start(&mut self) -> anyhow::Result<()> {
         let cur_pos = self.indi.focuser_get_abs_value(&self.f_opts.device)?.round();
         self.before_pos = cur_pos;
-        self.start_stage(cur_pos, Stage::Preliminary)?;
+        self.start_stage(
+            cur_pos,
+            if self.prelim_step { Stage::Preliminary } else { Stage::Final }
+        )?;
         Ok(())
     }
 
