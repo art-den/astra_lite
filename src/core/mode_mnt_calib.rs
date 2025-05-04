@@ -101,7 +101,6 @@ impl MountCalibrMode {
             indi:              Arc::clone(indi),
             state:             State::Undefined,
             axis:              Axis::Undefined,
-            cam_opts,
             telescope:         opts.telescope.clone(),
             start_dec:         0.0,
             start_ra:          0.0,
@@ -113,9 +112,10 @@ impl MountCalibrMode {
             image_height:      0,
             move_period:       0.0,
             result:            MountMoveCalibrRes::default(),
-            next_mode,
             can_change_g_rate: false,
             calibr_speed:      0.0,
+            cam_opts,
+            next_mode,
         })
     }
 
