@@ -203,9 +203,11 @@ struct ControlWidgets {
 
 #[derive(FromBuilder)]
 struct ImageWidgets {
-    sw_img:      gtk::ScrolledWindow,
-    eb_img:      gtk::EventBox,
-    img_preview: gtk::Image,
+    sw_img:           gtk::ScrolledWindow,
+    eb_img:           gtk::EventBox,
+    img_preview:      gtk::Image,
+    l_overlay_top:    gtk::Label,
+    l_overlay_bottom: gtk::Label,
 }
 
 #[derive(FromBuilder)]
@@ -396,6 +398,9 @@ impl PreviewUi {
         configure_wb_scale(&self.widgets.ctrl.scl_wb_red);
         configure_wb_scale(&self.widgets.ctrl.scl_wb_green);
         configure_wb_scale(&self.widgets.ctrl.scl_wb_blue);
+
+        self.widgets.image.l_overlay_top.set_text("");
+        self.widgets.image.l_overlay_bottom.set_text("");
     }
 
     fn handler_closing(&self) {
