@@ -20,7 +20,7 @@ pub fn init_ui(
     indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();
-    exec_and_show_error(window, || {
+    exec_and_show_error(Some(window), || {
         load_json_from_config_file(&mut ui_options, DarksLibraryUI::CONF_FN)?;
         Ok(())
     });
@@ -653,7 +653,7 @@ impl DarksLibraryUI {
 
     fn load_options(&self) {
         let mut ui_options = self.ui_options.borrow_mut();
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             load_json_from_config_file(&mut *ui_options, Self::CONF_FN)?;
             Ok(())
         });
@@ -661,7 +661,7 @@ impl DarksLibraryUI {
 
     fn save_options(&self) {
         let ui_options = self.ui_options.borrow();
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             save_json_to_config(&*ui_options, Self::CONF_FN)?;
             Ok(())
         });
@@ -1109,7 +1109,7 @@ impl DarksLibraryUI {
     }
 
     fn start(&self, mode: DarkLibMode) {
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             // TODO: read all options
 
             //self.options.write().unwrap().read_all(&self.builder);

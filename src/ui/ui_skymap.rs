@@ -24,7 +24,7 @@ pub fn init_ui(
     indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();
-    exec_and_show_error(window, || {
+    exec_and_show_error(Some(window), || {
         load_json_from_config_file(&mut ui_options, MapUi::CONF_FN)?;
         Ok(())
     });
@@ -496,7 +496,7 @@ impl MapUi {
         self.widgets.obj.da_graph.connect_draw(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |area, cr| {
-                exec_and_show_error(&self_.window, || {
+                exec_and_show_error(Some(&self_.window), || {
                     self_.handler_draw_item_graph(area, cr)?;
                     Ok(())
                 });
@@ -506,7 +506,7 @@ impl MapUi {
 
         self.widgets.obj.da_graph.connect_screen_changed(
             clone!(@weak self as self_ =>  move |_, _| {
-                exec_and_show_error(&self_.window, || {
+                exec_and_show_error(Some(&self_.window), || {
                     self_.set_alt_graph_height();
                     Ok(())
                 });
@@ -786,7 +786,7 @@ impl MapUi {
     }
 
     fn check_data_loaded(&self) {
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             let result = self.check_data_loaded_impl();
             if let Err(_) = result {
                 *self.skymap_data.borrow_mut() = Some(Rc::new(SkyMap::new()));
@@ -866,7 +866,7 @@ impl MapUi {
                     }
                     Err(err) => {
                         show_error_message(
-                            &self_.window,
+                            Some(&self_.window),
                             "Error loading stars data",
                             &err.to_string()
                         );
@@ -1282,7 +1282,7 @@ impl MapUi {
         } else {
             GotoConfig::GotoPlateSolveAndCorrect
         };
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             self.core.start_goto_coord(coord, config)?;
             Ok(())
         });

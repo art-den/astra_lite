@@ -312,7 +312,7 @@ impl FocuserUi {
                 let options = self_.options.read().unwrap();
                 if options.focuser.device.is_empty() { return; }
 
-                exec_and_show_error(&self_.window, || {
+                exec_and_show_error(Some(&self_.window), || {
                     self_.indi.focuser_set_abs_value(&options.focuser.device, sb.value(), true, None)?;
                     Ok(())
                 });
@@ -638,7 +638,7 @@ impl FocuserUi {
     fn handler_action_manual_focus(&self) {
         self.main_ui.get_all_options();
 
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             self.core.start_focusing()?;
             Ok(())
         });

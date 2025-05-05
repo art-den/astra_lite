@@ -87,7 +87,7 @@ impl SkymapOptionsDialog {
         self.widgets.dialog.connect_response(clone!(@strong self as self_ => move |dlg, resp| {
             match resp {
                 gtk::ResponseType::Ok | gtk::ResponseType::Apply => {
-                    let ok = exec_and_show_error(dlg, || {
+                    let ok = exec_and_show_error(Some(dlg), || {
                         on_apply()?;
                         Ok(())
                     });

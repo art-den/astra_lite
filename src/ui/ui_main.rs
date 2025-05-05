@@ -19,8 +19,6 @@ use super::{gtk_utils::*, module::*, utils::*};
 
 pub fn init_ui(
     app:      &gtk::Application,
-    indi:     &Arc<indi::Connection>,
-    options:  &Arc<RwLock<Options>>,
     core:     &Arc<Core>,
     logs_dir: &PathBuf
 ) {
@@ -32,6 +30,9 @@ pub fn init_ui(
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 
+    let options = core.options();
+    let indi = core.indi();
+
     let builder = gtk::Builder::from_string(include_str!(r"resources/main.ui"));
     let widgets = Widgets::from_builder(&builder);
 
@@ -42,15 +43,8 @@ pub fn init_ui(
     ).as_slice()).unwrap();
     widgets.window.set_icon(Some(&icon));
 
-    exec_and_show_error(&widgets.window, || {
-        let mut opts = options.write().unwrap();
-        load_json_from_config_file::<Options>(&mut opts, MainUi::OPTIONS_FN)?;
-        opts.check()?;
-        Ok(())
-    });
-
     let mut ui_options = UiOptions::default();
-    exec_and_show_error(&widgets.window, || {
+    exec_and_show_error(Some(&widgets.window), || {
         load_json_from_config_file(&mut ui_options, MainUi::CONF_FN)
     });
 
@@ -237,7 +231,6 @@ impl Drop for MainUi {
 
 impl MainUi {
     const CONF_FN: &'static str = "ui_common";
-    const OPTIONS_FN: &'static str = "options";
 
     fn connect_widgets_events(self: &Rc<Self>) {
         self.widgets.mi_dark_theme.connect_activate(
@@ -326,7 +319,7 @@ impl MainUi {
                 match event {
                     Event::Error(err) => {
                         show_error_message(
-                            &self_.widgets.window,
+                            Some(&self_.widgets.window),
                             "Core error",
                             &err
                         );
@@ -566,7 +559,7 @@ impl MainUi {
             }
             let progress_ratio = progress_data.cur as f64 / progress_data.total as f64;
             let progress_text = format!("{} / {}", progress_data.cur, progress_data.total);
-            exec_and_show_error(&self.widgets.window, || {
+            exec_and_show_error(Some(&self.widgets.window), || {
                 draw_progress_bar(
                     area,
                     cr,
@@ -611,7 +604,7 @@ impl MainUi {
     }
 
     fn handler_action_continue(&self) {
-        exec_and_show_error(&self.widgets.window, || {
+        exec_and_show_error(Some(&self.widgets.window), || {
             self.core.continue_prev_mode()?;
             Ok(())
         });
@@ -628,7 +621,7 @@ impl MainUi {
     }
 
     fn handler_action_open_logs_folder(&self) {
-        exec_and_show_error(&self.widgets.window, || {
+        exec_and_show_error(Some(&self.widgets.window), || {
             if cfg!(target_os = "windows") {
                 Command::new("explorer")
                     .args([self.logs_dir.to_str().unwrap_or_default()])

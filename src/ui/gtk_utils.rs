@@ -146,29 +146,32 @@ pub fn enable_actions(
 }
 
 pub fn show_message(
-    window:   &impl IsA<gtk::Window>,
+    window:   Option<&impl IsA<gtk::Window>>,
     title:    &str,
     text:     &str,
     msg_type: gtk::MessageType,
 ) {
     let dialog = gtk::MessageDialog::builder()
-        .transient_for(window)
         .title(title)
         .text(text)
         .modal(true)
         .message_type(msg_type)
         .buttons(gtk::ButtonsType::Close)
         .build();
-
-    dialog.show();
-
-    dialog.connect_response(move |dlg, _| {
-        dlg.close();
-    });
+    dialog.set_transient_for(window);
+    if window.is_some() {
+        dialog.connect_response(move |dlg, _| {
+            dlg.close();
+        });
+        dialog.show();
+    } else {
+        dialog.run();
+        dialog.close();
+    }
 }
 
 pub fn show_error_message(
-    window:  &impl IsA<gtk::Window>,
+    window:  Option<&impl IsA<gtk::Window>>,
     title:   &str,
     message: &str,
 ) {
@@ -176,7 +179,7 @@ pub fn show_error_message(
 }
 
 pub fn exec_and_show_error(
-    window: &impl IsA<gtk::Window>,
+    window: Option<&impl IsA<gtk::Window>>,
     fun:    impl FnOnce() -> anyhow::Result<()>
 ) -> bool {
     let exec_res = fun();

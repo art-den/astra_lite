@@ -311,7 +311,7 @@ impl PlateSolveUi {
     fn handler_action_capture_platesolve(self: &Rc<Self>) {
         self.main_ui.get_all_options();
 
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             self.core.start_capture_and_platesolve()?;
             Ok(())
         });
@@ -320,7 +320,7 @@ impl PlateSolveUi {
     fn handler_action_plate_solve_and_goto(&self) {
         self.main_ui.get_all_options();
 
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             self.core.start_goto_image()?;
             Ok(())
         });

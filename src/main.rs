@@ -18,6 +18,7 @@ mod sky_math;
 
 use std::{path::Path, sync::Arc};
 use gtk::{prelude::*, glib, glib::clone};
+use ui::gtk_utils::exec_and_show_error;
 use crate::{
     utils::io_utils::*,
     utils::log_utils::*,
@@ -108,13 +109,11 @@ fn main() -> anyhow::Result<()> {
     log::info!("Creating Core...");
     let core = Core::new();
 
-    let indi = Arc::clone(core.indi());
-    let options = core.options();
-
+    let indi_for_panic = Arc::clone(core.indi());
     if cfg!(not(debug_assertions)) {
         std::panic::set_hook({
             let logs_dir = logs_dir.clone();
-            let indi = Arc::clone(&indi);
+            let indi = Arc::clone(&indi_for_panic);
             let default_panic_handler = std::panic::take_hook();
             Box::new(move |panic_info| {
                 panic_handler(
@@ -133,8 +132,19 @@ fn main() -> anyhow::Result<()> {
         Default::default(),
     );
 
-    application.connect_activate(clone!(@weak options, @weak core => move |app|
-        ui::ui_main::init_ui(app, &indi, &options, &core, &logs_dir)
+    application.connect_activate(clone!(@weak core => move |app|
+        exec_and_show_error(None::<&gtk::Window>, || {
+            log::info!("Loading options...");
+            let mut options = core.options().write().unwrap();
+            load_json_from_config_file::<Options>(&mut options, "options")?;
+
+            log::info!("Check options...");
+            options.check()?;
+
+            Ok(())
+        });
+
+        ui::ui_main::init_ui(app, &core, &logs_dir)
     ));
 
     log::info!("Running application.run...");
@@ -143,9 +153,9 @@ fn main() -> anyhow::Result<()> {
     log::info!("Exited from application.run");
 
     log::info!("Saving options...");
-    let opts = options.read().unwrap();
-    _ = save_json_to_config::<Options>(&opts, "options");
-    drop(opts);
+    let options = core.options().read().unwrap();
+    _ = save_json_to_config::<Options>(&options, "options");
+    drop(options);
     log::info!("Options saved");
 
     core.stop();

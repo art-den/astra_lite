@@ -18,7 +18,7 @@ pub fn init_ui(
     core:    &Arc<Core>,
 ) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();
-    exec_and_show_error(window, || {
+    exec_and_show_error(Some(window), || {
         load_json_from_config_file(&mut ui_options, PreviewUi::CONF_FN)?;
         Ok(())
     });
@@ -528,7 +528,7 @@ impl PreviewUi {
         self.widgets.stat.da_histogram.connect_draw(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |area, cr| {
-                exec_and_show_error(&self_.window, || {
+                exec_and_show_error(Some(&self_.window), || {
                     self_.handler_draw_histogram(area, cr)?;
                     Ok(())
                 });
@@ -879,7 +879,7 @@ impl PreviewUi {
     }
 
     fn handler_action_save_image_preview(&self) {
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             let options = self.options.read().unwrap();
             let (image, hist, fn_prefix) = match options.preview.source {
                 PreviewSource::OrigFrame =>
@@ -926,7 +926,7 @@ impl PreviewUi {
     }
 
     fn handler_action_save_image_linear(&self) {
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             let options = self.options.read().unwrap();
             let preview_source = options.preview.source.clone();
             drop(options);
@@ -1451,7 +1451,7 @@ impl PreviewUi {
         );
         fc.connect_response(clone!(@weak self as self_ => move |file_chooser, response| {
             if response == gtk::ResponseType::Accept {
-                exec_and_show_error(&self_.window, || {
+                exec_and_show_error(Some(&self_.window), || {
                     let Some(file_name) = file_chooser.file() else { return Ok(()); };
                     let Some(file_name) = file_name.path() else { return Ok(()); };
                     self_.main_ui.get_all_options();

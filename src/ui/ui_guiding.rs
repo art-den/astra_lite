@@ -301,7 +301,7 @@ impl GuidingUi {
     fn handler_action_start_dither_calibr(&self) {
         self.main_ui.get_all_options();
 
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             self.core.start_mount_calibr()?;
             Ok(())
         });

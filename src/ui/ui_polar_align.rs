@@ -304,7 +304,7 @@ impl PolarAlignUi {
     fn handler_start_action_polar_align(&self) {
         self.main_ui.get_all_options();
 
-        exec_and_show_error(&self.window, ||{
+        exec_and_show_error(Some(&self.window), ||{
             self.core.start_polar_alignment()?;
             Ok(())
         });

@@ -428,7 +428,7 @@ impl HardwareUi {
     fn process_indi_event(&self, event: indi::Event) {
         match event {
             indi::Event::ConnectionLost => {
-                show_error_message(&self.window, "INDI server", "Lost connection to INDI server ;-(");
+                show_error_message(Some(&self.window), "INDI server", "Lost connection to INDI server ;-(");
             },
             indi::Event::ConnChange(conn_state) => {
                 if let indi::ConnState::Error(_) = &conn_state {
@@ -615,7 +615,7 @@ impl HardwareUi {
 
     fn handler_action_conn_indi(&self) {
         self.read_options_from_widgets();
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             let options = self.options.read().unwrap();
             let drivers = if !options.indi.remote {
                 let telescopes = self.indi_drivers.get_group_by_name("Telescopes")?;
@@ -672,7 +672,7 @@ impl HardwareUi {
     }
 
     fn handler_action_disconn_indi(&self) {
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             if !self.is_remote.get() {
                 log::info!("Disabling all INDI devices before disconnect...");
                 self.indi.command_enable_all_devices(false, true, Some(2000))?;
@@ -686,7 +686,7 @@ impl HardwareUi {
     }
 
     fn handler_action_conn_phd2(&self) {
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             self.read_options_from_widgets();
             self.core.ext_giuder().create_and_connect(ExtGuiderType::Phd2)?;
             self.correct_widgets_by_cur_state();
@@ -695,7 +695,7 @@ impl HardwareUi {
     }
 
     fn handler_action_disconn_phd2(&self) {
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             self.core.ext_giuder().disconnect()?;
             self.correct_widgets_by_cur_state();
             Ok(())
@@ -845,7 +845,7 @@ impl HardwareUi {
         let resp = fc.run();
         fc.close();
         if resp == gtk::ResponseType::Accept {
-            exec_and_show_error(&self.window, || {
+            exec_and_show_error(Some(&self.window), || {
                 let all_props = self.indi.get_properties_list(None, None);
                 let file_name = fc.file().expect("File name").path().unwrap().with_extension("txt");
                 let mut file = BufWriter::new(File::create(file_name)?);
@@ -905,7 +905,7 @@ impl HardwareUi {
     }
 
     fn set_switch_property_for_all_device(&self, prop_name: &str, elem_name: &str) {
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             let devices = self.indi.get_devices_list();
             for device in devices {
                 self.indi.command_set_switch_property(
@@ -919,7 +919,7 @@ impl HardwareUi {
     }
 
     fn handler_action_get_site_from_devices(self: &Rc<Self>) {
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             let indi = &self.indi;
             if indi.state() != indi::ConnState::Connected {
                 anyhow::bail!("INDI is not connected!");

@@ -1264,7 +1264,7 @@ impl CameraUi {
     }
 
     fn fill_heater_items_list_impl(&self, options: &Options) {
-        exec_and_show_error(&self.window, ||{
+        exec_and_show_error(Some(&self.window), ||{
             let cb_cam_heater = &self.widgets.ctrl.cb_heater;
             let last_heater_value = cb_cam_heater.active_id();
             cb_cam_heater.remove_all();
@@ -1306,7 +1306,7 @@ impl CameraUi {
 
     fn start_live_view(&self) {
         self.main_ui.get_all_options();
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             self.core.start_live_view()?;
             Ok(())
         });
@@ -1314,7 +1314,7 @@ impl CameraUi {
 
     fn handler_action_take_shot(&self) {
         self.main_ui.get_all_options();
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             self.core.start_single_shot()?;
             Ok(())
         });
@@ -1330,7 +1330,7 @@ impl CameraUi {
         let Some(device) = &options.cam.device else { return; };
         let camera_name = &device.name;
         if camera_name.is_empty() { return; };
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             // Cooler + Temperature
             if self.indi.camera_is_cooler_supported(camera_name)? {
                 self.indi.camera_enable_cooler(
@@ -1500,7 +1500,7 @@ impl CameraUi {
     fn handler_action_start_live_stacking(self: &Rc<Self>) {
         self.main_ui.get_all_options();
 
-        let ok = exec_and_show_error(&self.window, || {
+        let ok = exec_and_show_error(Some(&self.window), || {
             self.core.check_before_saving_raw_or_live_stacking()?;
             Ok(())
         });
@@ -1524,7 +1524,7 @@ impl CameraUi {
 
     fn handler_action_continue_live_stacking(&self) {
         self.main_ui.get_all_options();
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             self.core.check_before_saving_raw_or_live_stacking()?;
             self.core.continue_prev_mode()?;
             Ok(())
@@ -1551,7 +1551,7 @@ impl CameraUi {
         let Ok(exposure) = self.indi.camera_get_exposure(&device.name, cam_ccd) else { return; };
         let progress = ((cur_exposure - exposure) / cur_exposure).max(0.0).min(1.0);
         let text_to_show = format!("{:.0} / {:.0}", cur_exposure - exposure, cur_exposure);
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             draw_progress_bar(area, cr, progress, &text_to_show)
         });
     }
@@ -1660,7 +1660,7 @@ impl CameraUi {
     fn handler_action_start_save_raw_frames(self: &Rc<Self>) {
         self.main_ui.get_all_options();
 
-        let ok = exec_and_show_error(&self.window, || {
+        let ok = exec_and_show_error(Some(&self.window), || {
             self.core.check_before_saving_raw_or_live_stacking()?;
             Ok(())
         });
@@ -1680,7 +1680,7 @@ impl CameraUi {
 
     fn handler_action_continue_save_raw_frames(&self) {
         self.main_ui.get_all_options();
-        exec_and_show_error(&self.window, || {
+        exec_and_show_error(Some(&self.window), || {
             self.core.check_before_saving_raw_or_live_stacking()?;
             self.core.continue_prev_mode()?;
             Ok(())
@@ -1715,7 +1715,7 @@ impl CameraUi {
             FrameProcessResultData::Error(error_text) => {
                 _ = self.core.abort_active_mode();
                 self.correct_widgets_props();
-                show_error_message(&self.window, "Fatal Error", &error_text);
+                show_error_message(Some(&self.window), "Fatal Error", &error_text);
             }
             FrameProcessResultData::MasterSaved { frame_type: FrameType::Flats, file_name } => {
                 self.widgets.calibr.fch_flat.set_filename(&file_name);

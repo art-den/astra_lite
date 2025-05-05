@@ -63,7 +63,7 @@ impl StartDialog {
             match resp {
                 gtk::ResponseType::Ok => {
                     dlg.close();
-                    exec_and_show_error(dlg, || {
+                    exec_and_show_error(Some(dlg), || {
                         on_apply()?;
                         Ok(())
                     });
