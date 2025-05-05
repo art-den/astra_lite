@@ -170,6 +170,23 @@ impl Core {
     pub fn stop(self: &Arc<Self>) {
         self.abort_active_mode();
         self.timer.clear();
+
+        let options = self.options.read().unwrap();
+        let cam_device = options.cam.device.clone();
+        drop(options);
+
+        if let Some(cam_device) = cam_device {
+            if self.indi.camera_is_cooler_supported(&cam_device.name).unwrap_or(false)
+            && self.indi.camera_is_cooler_on(&cam_device.name).unwrap_or(false) {
+                log::info!("Disabling camera cooling...");
+                _ = self.indi.camera_enable_cooler(&cam_device.name, false, true, Some(1000));
+                log::info!("Done!");
+            }
+        }
+
+        log::info!("Disconnecting from INDI...");
+        _ = self.indi.disconnect_and_wait();
+        log::info!("Done!");
     }
 
     pub fn ext_giuder(&self) -> Arc<ExternalGuiderCtrl> {

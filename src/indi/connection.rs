@@ -2363,6 +2363,10 @@ impl Connection {
         self.property_exists(device_name, "CCD_COOLER", None)
     }
 
+    pub fn camera_is_cooler_on(&self, device_name: &str) -> Result<bool> {
+        self.get_switch_property(device_name, "CCD_COOLER", "COOLER_ON")
+    }
+
     pub fn camera_enable_cooler(
         &self,
         device_name: &str,

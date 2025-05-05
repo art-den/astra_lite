@@ -542,10 +542,6 @@ impl HardwareUi {
             _ = self.indi.command_enable_all_devices(false, true, Some(2000));
         }
 
-        log::info!("Disconnecting from INDI...");
-        _ = self.indi.disconnect_and_wait();
-        log::info!("Done!");
-
         log::info!("Stop connection to PHD2...");
         _ = self.core.ext_giuder().phd2().stop();
         log::info!("Done!");
