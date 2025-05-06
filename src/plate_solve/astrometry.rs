@@ -1,9 +1,19 @@
-use std::{io::Read, path::{Path, PathBuf}};
+use std::{io::Read, path::PathBuf, time::Instant};
 use chrono::Utc;
 use crate::{image::{image::Image, io::save_image_layer_to_tif_file, simple_fits::*}, ui::sky_map::math::{arcmin_to_radian, degree_to_radian, j2000_time, radian_to_degree, EpochCvt}};
 use super::*;
 
 const EXECUTABLE_FNAME: &str = "solve-field";
+
+const FIRST_TRY_RADIUS: i32 = 3;
+const SECOND_TRY_RADIUS: i32 = 10;
+
+#[derive(PartialEq)]
+enum RadiusTry {
+    First,
+    Second,
+    Blind,
+}
 
 enum Mode {
     None,
@@ -12,9 +22,12 @@ enum Mode {
 }
 
 pub struct AstrometryPlateSolver {
-    child:     Option<std::process::Child>,
-    file_name: Option<PathBuf>,
-    mode:      Mode,
+    child:      Option<std::process::Child>,
+    file_name:  Option<PathBuf>,
+    mode:       Mode,
+    config:     PlateSolveConfig,
+    radius_try: RadiusTry,
+    start_time: Instant,
 }
 
 impl AstrometryPlateSolver {
@@ -23,6 +36,9 @@ impl AstrometryPlateSolver {
             child: None,
             file_name: None,
             mode: Mode::None,
+            config: PlateSolveConfig::default(),
+            radius_try: RadiusTry::First,
+            start_time: Instant::now(),
         }
     }
 
@@ -46,16 +62,9 @@ impl Drop for AstrometryPlateSolver {
 }
 
 impl AstrometryPlateSolver {
-    fn exec_solve_field(
-        &mut self,
-        file_with_data: &Path,
-        config: &PlateSolveConfig,
-        extra_args: impl Fn(&mut std::process::Command)
-    ) -> anyhow::Result<()> {
-        let time_out = if config.eq_coord.is_some() {
-            config.time_out
-        } else {
-            config.blind_time_out
+    fn exec_solve_field(&mut self) -> anyhow::Result<()> {
+        let Some(file_name) = self.file_name.clone() else {
+            anyhow::bail!("Calling exec_solve_field before saving image!");
         };
         use std::process::*;
         let mut cmd = Command::new(EXECUTABLE_FNAME);
@@ -71,14 +80,46 @@ impl AstrometryPlateSolver {
             .arg("--index-xyls").arg("none")
             .arg("--new-fits").arg("none")
             .arg("--temp-axy");
-        if let Some(crd) = &config.eq_coord {
-            cmd.arg("--ra").arg(format!("{:.6}", radian_to_degree(crd.ra)));
-            cmd.arg("--dec").arg(format!("{:.6}", radian_to_degree(crd.dec)));
-            cmd.arg("--radius").arg("10");
+
+        let mut blind = true;
+        if let Some(crd) = &self.config.eq_coord {
+            let mut add_ra_and_dec = || {
+                let j2000 = j2000_time();
+                let time = Utc::now().naive_utc();
+                let epoch_cvt = EpochCvt::new(&time, &j2000);
+                let crd_j2000 = epoch_cvt.convert_eq(&crd);
+                cmd.arg("--ra").arg(format!("{:.6}", radian_to_degree(crd_j2000.ra)));
+                cmd.arg("--dec").arg(format!("{:.6}", radian_to_degree(crd_j2000.dec)));
+            };
+            match self.radius_try {
+                RadiusTry::First  => {
+                    add_ra_and_dec();
+                    cmd.arg("--radius").arg(FIRST_TRY_RADIUS.to_string());
+                    blind = false;
+                }
+                RadiusTry::Second => {
+                    add_ra_and_dec();
+                    cmd.arg("--radius").arg(SECOND_TRY_RADIUS.to_string());
+                    blind = false;
+                }
+                _ => {},
+            }
         }
+        let time_out = if blind { self.config.blind_time_out } else { self.config.time_out };
+
         cmd.arg("--cpulimit").arg(time_out.to_string());
-        extra_args(&mut cmd);
-        cmd.arg(file_with_data);
+
+        if let Mode::Stars { img_width, img_height } = &self.mode {
+            cmd.arg("--width").arg(img_width.to_string());
+            cmd.arg("--height").arg(img_height.to_string());
+            cmd.arg("--x-column").arg("X");
+            cmd.arg("--y-column").arg("Y");
+            cmd.arg("--sort-column").arg("FLUX");
+        }
+        cmd.arg(&file_name);
+
+        self.start_time = Instant::now();
+
         log::debug!("Running solve-field args={:?}", cmd.get_args());
         let child = cmd.spawn().map_err(|e|
             anyhow::format_err!("{} when trying to execute {}", e.to_string(), EXECUTABLE_FNAME)
@@ -132,6 +173,7 @@ impl AstrometryPlateSolver {
             data.push((star.y + 1.0) as f64);
             data.push(star.brightness as f64);
         }
+        log::debug!("Saved stars count = {}", stars_count);
         let cols = [
             FitsTableCol { name: "X", type_: "1D", unit: "pix" },
             FitsTableCol { name: "Y", type_: "1D", unit: "pix" },
@@ -145,26 +187,6 @@ impl AstrometryPlateSolver {
         Ok(())
     }
 
-    fn start_solver(&mut self, config: &PlateSolveConfig) -> anyhow::Result<()> {
-        let temp_file = self.file_name.clone().unwrap();
-        match self.mode {
-            Mode::Image =>
-                self.exec_solve_field(&temp_file, config, |_| {})?,
-            Mode::Stars {img_width, img_height} =>
-                self.exec_solve_field(
-                    &temp_file,
-                    config,
-                    |cmd| {
-                        cmd.arg("--width").arg(img_width.to_string());
-                        cmd.arg("--height").arg(img_height.to_string());
-                    }
-                )?,
-            Mode::None =>
-                unreachable!(),
-        }
-        Ok(())
-    }
-
     fn angle_to_radian(angle: Option<f64>, unit: &str) -> Option<f64> {
         match unit {
             "degrees"|"degree"|"deg" =>
@@ -174,47 +196,8 @@ impl AstrometryPlateSolver {
             _ => None
         }
     }
-}
 
-impl PlateSolverIface for AstrometryPlateSolver {
-    fn support_stars_as_input(&self) -> bool {
-        true
-    }
-
-    fn support_coordinates(&self) -> bool {
-        true
-    }
-
-    fn start(
-        &mut self,
-        data:   &PlateSolverInData,
-        config: &PlateSolveConfig
-    ) -> anyhow::Result<()> {
-        if self.child.is_some() {
-            anyhow::bail!("AstrometryPlateSolver already started");
-        }
-        match data {
-            PlateSolverInData::Image(image) => {
-                self.save_image_file(image)?;
-                self.start_solver(config)?;
-            }
-            PlateSolverInData::Stars{ stars, img_width, img_height } => {
-                self.save_stars_file(*stars, *img_width, *img_height)?;
-                self.start_solver(config)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn restart(&mut self, config: &PlateSolveConfig) -> anyhow::Result<()> {
-        if self.child.is_some() {
-            anyhow::bail!("AstrometryPlateSolver already started");
-        }
-        self.start_solver(config)?;
-        Ok(())
-    }
-
-    fn get_result(&mut self) -> anyhow::Result<PlateSolveResult> {
+    fn get_result_impl(&mut self) -> anyhow::Result<PlateSolveResult> {
         if let Some(child) = &mut self.child {
             let exit_status = match child.try_wait() {
                 Ok(Some(status)) => status,
@@ -226,6 +209,9 @@ impl PlateSolverIface for AstrometryPlateSolver {
                 let mut str_output = String::new();
                 _ = output.read_to_string(&mut str_output);
 
+                let platesolve_time = self.start_time.elapsed().as_secs_f64();
+
+                log::debug!("Platesolver time = {:.1}s", platesolve_time);
                 log::debug!("Platesolver stdout:\n{}", str_output);
 
                 self.child = None;
@@ -266,7 +252,7 @@ impl PlateSolverIface for AstrometryPlateSolver {
 
                 if result_ra.is_none() || result_dec.is_none()
                 || result_width.is_none() || result_height.is_none() {
-                    log::error!("Can't extract data from solve-field stdout:\n{}", str_output);
+                    log::error!("Can't extract data from solve-field stdout");
                     log::error!(
                         "result_ra={:?}, result_dec={:?}, result_width={:?}, result_height={:?}",
                         result_ra, result_dec, result_width, result_height
@@ -307,5 +293,55 @@ impl PlateSolverIface for AstrometryPlateSolver {
         }
 
         anyhow::bail!("Not started!");
+    }
+}
+
+impl PlateSolverIface for AstrometryPlateSolver {
+    fn support_stars_as_input(&self) -> bool {
+        true
+    }
+
+    fn start(
+        &mut self,
+        data:   &PlateSolverInData,
+        config: &PlateSolveConfig
+    ) -> anyhow::Result<()> {
+        if self.child.is_some() {
+            anyhow::bail!("AstrometryPlateSolver already started");
+        }
+        self.config = config.clone();
+        match data {
+            PlateSolverInData::Image(image) =>
+                self.save_image_file(image)?,
+            PlateSolverInData::Stars{ stars, img_width, img_height } =>
+                self.save_stars_file(*stars, *img_width, *img_height)?,
+        }
+        self.exec_solve_field()?;
+        Ok(())
+    }
+
+    fn get_result(&mut self) -> anyhow::Result<PlateSolveResult> {
+        let result = self.get_result_impl();
+        if matches!(result, Ok(PlateSolveResult::Failed))
+        && self.config.eq_coord.is_some() {
+            match self.radius_try {
+                RadiusTry::First => {
+                    log::debug!("Restarting platesolver");
+                    self.radius_try = RadiusTry::Second;
+                    self.exec_solve_field()?;
+                    return Ok(PlateSolveResult::Waiting);
+                }
+                RadiusTry::Second => {
+                    log::debug!("Restarting platesolver");
+                    self.radius_try = RadiusTry::Blind;
+                    self.exec_solve_field()?;
+                    return Ok(PlateSolveResult::Waiting);
+                }
+                RadiusTry::Blind => {
+                    return result;
+                }
+            }
+        }
+        result
     }
 }

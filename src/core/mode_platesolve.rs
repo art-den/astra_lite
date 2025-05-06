@@ -83,9 +83,14 @@ impl PlatesolveMode {
         img_width:  usize,
         img_height: usize
     ) -> anyhow::Result<()> {
+        let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
         let mut config = PlateSolveConfig::default();
         config.time_out = self.ps_opts.timeout;
         config.blind_time_out = self.ps_opts.blind_timeout;
+        config.eq_coord = Some(EqCoord {
+            dec: degree_to_radian(dec),
+            ra:  hour_to_radian(ra),
+        });
         let stars_arg = PlateSolverInData::Stars{
             stars,
             img_width,

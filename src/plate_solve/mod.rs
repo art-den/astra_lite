@@ -92,31 +92,36 @@ impl PlateSolver {
                 }
             }
         }
+
+        log::debug!("Starting platesolve with config={:?} ...", config);
+        match data {
+            PlateSolverInData::Image(image) => {
+                log::debug!(
+                    "Platesolve source is image (height={}, width={})",
+                    image.width(), image.height()
+                );
+            }
+            PlateSolverInData::Stars { stars, img_width, img_height } => {
+                log::debug!(
+                    "Platesolve source is stars (count={}, img_width={}, img_height={})",
+                    stars.len(), img_width, img_height
+                );
+            }
+        }
+
         self.config = config.clone();
         self.solver.start(data, config)?;
         Ok(())
     }
 
     pub fn get_result(&mut self) -> anyhow::Result<PlateSolveResult> {
-        let result = self.solver.get_result();
-
-        if matches!(result, Ok(PlateSolveResult::Failed))
-        && self.config.eq_coord.is_some()
-        && self.solver.support_coordinates() {
-            log::debug!("Restarting platesolver in blind mode...");
-            self.config.eq_coord = None;
-            self.solver.restart(&self.config)?;
-            return Ok(PlateSolveResult::Waiting);
-        }
-        result
+        self.solver.get_result()
     }
 }
 
 trait PlateSolverIface {
     fn support_stars_as_input(&self) -> bool;
-    fn support_coordinates(&self) -> bool;
     fn start(&mut self, data: &PlateSolverInData, config: &PlateSolveConfig) -> anyhow::Result<()>;
-    fn restart(&mut self, config: &PlateSolveConfig) -> anyhow::Result<()>;
     fn get_result(&mut self) -> anyhow::Result<PlateSolveResult>;
 }
 
