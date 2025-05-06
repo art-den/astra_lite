@@ -67,11 +67,21 @@ impl PlatesolveMode {
         })
     }
 
-    fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> anyhow::Result<()> {
-        let image = image.read().unwrap();
+    fn get_platesolver_config(&self) -> anyhow::Result<PlateSolveConfig> {
+        let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
         let mut config = PlateSolveConfig::default();
         config.time_out = self.ps_opts.timeout;
         config.blind_time_out = self.ps_opts.blind_timeout;
+        config.eq_coord = Some(EqCoord {
+            dec: degree_to_radian(dec),
+            ra:  hour_to_radian(ra),
+        });
+        Ok(config)
+    }
+
+    fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> anyhow::Result<()> {
+        let image = image.read().unwrap();
+        let config = self.get_platesolver_config()?;
         self.plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
         drop(image);
         Ok(())
@@ -83,19 +93,8 @@ impl PlatesolveMode {
         img_width:  usize,
         img_height: usize
     ) -> anyhow::Result<()> {
-        let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
-        let mut config = PlateSolveConfig::default();
-        config.time_out = self.ps_opts.timeout;
-        config.blind_time_out = self.ps_opts.blind_timeout;
-        config.eq_coord = Some(EqCoord {
-            dec: degree_to_radian(dec),
-            ra:  hour_to_radian(ra),
-        });
-        let stars_arg = PlateSolverInData::Stars{
-            stars,
-            img_width,
-            img_height,
-        };
+        let config = self.get_platesolver_config()?;
+        let stars_arg = PlateSolverInData::Stars{ stars, img_width, img_height };
         self.plate_solver.start(&stars_arg, &config)?;
         Ok(())
     }
