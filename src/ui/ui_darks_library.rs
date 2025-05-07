@@ -334,11 +334,10 @@ impl MasterDarksOptions {
                         for gain in &gains {
                             for offset in &offsets {
                                 let mut frame_count = match self.frm_cnt_mode {
-                                    FramesCountMode::Count => self.frames_count,
-                                    FramesCountMode::Time => {
-                                        let cnt = (60.0 * self.integr_time / *exp) as usize;
-                                        multiple_of_5(cnt)
-                                    }
+                                    FramesCountMode::Count =>
+                                        self.frames_count,
+                                    FramesCountMode::Time =>
+                                        (60.0 * self.integr_time / *exp) as usize,
                                 };
                                 if frame_count == 0 { continue; }
 
@@ -349,7 +348,7 @@ impl MasterDarksOptions {
                                 }
 
                                 let item = MasterFileCreationProgramItem {
-                                    count:       frame_count,
+                                    count:       multiple_of_5(frame_count),
                                     temperature: *t,
                                     exposure:    *exp,
                                     gain:        *gain,
@@ -650,19 +649,24 @@ impl DarksLibraryUI {
 
         let widgets = &self.widgets;
 
-        init_spinbutton(&widgets.dp.spb_def_cnt, 5.0, 1000.0, 0, 5.0, 30.0);
+        init_spinbutton(&widgets.dp.spb_def_cnt, 5.0, 1_000_000.0, 0, 5.0, 30.0);
         init_spinbutton(&widgets.dp.spb_def_integr, 5.0, 240.0, 0, 5.0, 15.0);
         init_spinbutton(&widgets.dp.spb_def_temp, -50.0, 50.0, 0, 1.0, 10.0);
         init_spinbutton(&widgets.dp.spb_def_exp, 1.0, 1000.0, 0, 1.0, 10.0);
         init_spinbutton(&widgets.dp.spb_def_gain, 0.0, 100_000.0, 0, 10.0, 100.0);
         init_spinbutton(&widgets.dp.spb_def_offs, 0.0, 10_000.0, 0, 10.0, 100.0);
 
-        init_spinbutton(&widgets.darks.spb_dark_cnt, 5.0, 1000.0, 0, 5.0, 30.0);
+        init_spinbutton(&widgets.darks.spb_dark_cnt, 5.0, 1_000_000.0, 0, 5.0, 30.0);
         init_spinbutton(&widgets.darks.spb_dark_integr, 5.0, 240.0, 0, 5.0, 15.0);
-        init_spinbutton(&widgets.darks.spb_min_count, 1.0, 1_000_000.0, 0, 1.0, 10.0);
+        init_spinbutton(&widgets.darks.spb_min_count, 5.0, 1_000_000.0, 0, 5.0, 20.0);
 
-        init_spinbutton(&widgets.biases.spb_bias_cnt, 5.0, 1000.0, 0, 5.0, 30.0);
+        init_spinbutton(&widgets.biases.spb_bias_cnt, 5.0, 1_000_000.0, 0, 5.0, 30.0);
         init_spinbutton(&widgets.biases.spb_bias_exp, 0.0001, 0.1, 5, 0.001, 0.01);
+
+        widgets.dp.spb_def_cnt.set_snap_to_ticks(true);
+        widgets.darks.spb_dark_cnt.set_snap_to_ticks(true);
+        widgets.darks.spb_min_count.set_snap_to_ticks(true);
+        widgets.biases.spb_bias_cnt.set_snap_to_ticks(true);
     }
 
     fn load_options(&self) {
@@ -887,6 +891,7 @@ impl DarksLibraryUI {
 
         ui_options.defect_pixels.frames_count = multiple_of_5(ui_options.defect_pixels.frames_count);
         ui_options.master_darks.frames_count = multiple_of_5(ui_options.master_darks.frames_count);
+        ui_options.master_darks.min_count = multiple_of_5(ui_options.master_darks.min_count);
         ui_options.master_biases.frames_count = multiple_of_5(ui_options.master_biases.frames_count);
     }
 
