@@ -263,6 +263,8 @@ struct MasterDarksOptions {
     offset:       ValuesItem,
     binning:      BinningOptions,
     crop:         CropOptions,
+    min_count_en: bool,
+    min_count:    usize,
 }
 
 impl Default for MasterDarksOptions {
@@ -277,6 +279,8 @@ impl Default for MasterDarksOptions {
             offset:       ValuesItem::default(),
             binning:      BinningOptions::default(),
             crop:         CropOptions::default(),
+            min_count_en: true,
+            min_count:    60,
         }
     }
 }
@@ -329,7 +333,7 @@ impl MasterDarksOptions {
                     for exp in &exposures {
                         for gain in &gains {
                             for offset in &offsets {
-                                let frame_count = match self.frm_cnt_mode {
+                                let mut frame_count = match self.frm_cnt_mode {
                                     FramesCountMode::Count => self.frames_count,
                                     FramesCountMode::Time => {
                                         let cnt = (60.0 * self.integr_time / *exp) as usize;
@@ -337,6 +341,13 @@ impl MasterDarksOptions {
                                     }
                                 };
                                 if frame_count == 0 { continue; }
+
+                                if self.frm_cnt_mode == FramesCountMode::Time
+                                && self.min_count_en
+                                && frame_count < self.min_count {
+                                    frame_count = self.min_count;
+                                }
+
                                 let item = MasterFileCreationProgramItem {
                                     count:       frame_count,
                                     temperature: *t,
@@ -538,6 +549,8 @@ struct DarksWidgets {
     chb_dark_crop50:       gtk::CheckButton,
     chb_dark_crop33:       gtk::CheckButton,
     chb_dark_crop25:       gtk::CheckButton,
+    chb_min_count:         gtk::CheckButton,
+    spb_min_count:         gtk::SpinButton,
     l_dark_info:           gtk::Label,
     prb_dark:              gtk::ProgressBar,
 }
@@ -646,6 +659,7 @@ impl DarksLibraryUI {
 
         init_spinbutton(&widgets.darks.spb_dark_cnt, 5.0, 1000.0, 0, 5.0, 30.0);
         init_spinbutton(&widgets.darks.spb_dark_integr, 5.0, 240.0, 0, 5.0, 15.0);
+        init_spinbutton(&widgets.darks.spb_min_count, 1.0, 1_000_000.0, 0, 1.0, 10.0);
 
         init_spinbutton(&widgets.biases.spb_bias_cnt, 5.0, 1000.0, 0, 5.0, 30.0);
         init_spinbutton(&widgets.biases.spb_bias_exp, 0.0001, 0.1, 5, 0.001, 0.01);
@@ -735,6 +749,8 @@ impl DarksLibraryUI {
         dark_w.chb_dark_crop50.set_active(dark_o.crop.crop50);
         dark_w.chb_dark_crop33.set_active(dark_o.crop.crop33);
         dark_w.chb_dark_crop25.set_active(dark_o.crop.crop25);
+        dark_w.chb_min_count.set_active(dark_o.min_count_en);
+        dark_w.spb_min_count.set_value(dark_o.min_count as f64);
 
         // Biases libray
 
@@ -842,6 +858,8 @@ impl DarksLibraryUI {
         dark_o.crop.crop50 = dark_w.chb_dark_crop50.is_active();
         dark_o.crop.crop33 = dark_w.chb_dark_crop33.is_active();
         dark_o.crop.crop25 = dark_w.chb_dark_crop25.is_active();
+        dark_o.min_count_en = dark_w.chb_min_count.is_active();
+        dark_o.min_count = dark_w.spb_min_count.value().max(1.0).round() as usize;
 
         // Biases libray
 
@@ -950,6 +968,8 @@ impl DarksLibraryUI {
         connect_checkbtn(&dark.chb_dark_crop50);
         connect_checkbtn(&dark.chb_dark_crop33);
         connect_checkbtn(&dark.chb_dark_crop25);
+        connect_checkbtn(&dark.chb_min_count);
+        connect_spinbtn (&dark.spb_min_count);
 
         let bias = &self.widgets.biases;
         connect_checkbtn(&bias.chb_bias_temp);
@@ -1039,6 +1059,8 @@ impl DarksLibraryUI {
         dark.e_dark_offset.set_sensitive(dark.chb_dark_offset.is_active());
         dark.bx_dark_bin.set_sensitive(dark.chb_dark_bin.is_active());
         dark.grd_dark_crop.set_sensitive(dark.chb_dark_crop.is_active());
+        dark.chb_min_count.set_sensitive(dark.rbtn_dark_integr_time.is_active());
+        dark.spb_min_count.set_sensitive(dark.chb_min_count.is_active() && dark.rbtn_dark_integr_time.is_active());
         dark.grd_dark.set_sensitive(is_waiting);
         dark.prb_dark.set_sensitive(saving_master_darks);
 
