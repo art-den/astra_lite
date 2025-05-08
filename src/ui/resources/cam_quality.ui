@@ -30,7 +30,7 @@
         <property name="column-spacing">5</property>
         <child>
           <object class="GtkCheckButton" id="chb_max_fwhm">
-            <property name="label" translatable="yes">Max. stars FWHM (px²):</property>
+            <property name="label" translatable="yes">Max. stars FWHM</property>
             <property name="visible">True</property>
             <property name="can-focus">True</property>
             <property name="receives-default">False</property>
@@ -57,7 +57,7 @@
         </child>
         <child>
           <object class="GtkCheckButton" id="chb_max_oval">
-            <property name="label" translatable="yes">Max. stars ovality (px):</property>
+            <property name="label" translatable="yes">Max. stars ovality</property>
             <property name="visible">True</property>
             <property name="can-focus">True</property>
             <property name="receives-default">False</property>
