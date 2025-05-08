@@ -230,7 +230,7 @@ impl TackingPicturesMode {
         &mut self,
         ext_guider: &Arc<ExternalGuiderCtrl>
     ) {
-        let guider = self.guider.as_mut().expect("self.guider");
+        let Some(guider) = &mut self.guider else { return; };
         guider.external = Some(Arc::clone(ext_guider));
     }
 

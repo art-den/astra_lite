@@ -1597,7 +1597,7 @@ impl Connection {
             _ = conn.write_thread.join();
 
             // Send "exit" message to events_thread
-            conn.events_sender.send(EventSenderEvent::Exit).unwrap();
+            _ = conn.events_sender.send(EventSenderEvent::Exit);
 
             // Waiting for events thread to terminate
             _ = conn.events_thread.join();
