@@ -532,7 +532,7 @@ impl Mode for FocusingMode {
             Stage::Preliminary =>
                 "Focusing (preliminary)".to_string(),
             Stage::Final =>
-                "Focusing (final)".to_string(),
+                "Focusing".to_string(),
             _ => unreachable!(),
         }
     }

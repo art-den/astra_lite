@@ -51,11 +51,11 @@ enum NextJob {
     Autofocus,
 }
 
-struct RefocusData {
-    exp_sum:  f64,
-    min_temp: Option<f64>,
-    max_temp: Option<f64>,
-    fwhm:     Vec<f32>,
+struct AutoFocuser {
+    options: FocuserOptions,
+    exp_sum: f64,
+    temp:    Vec<f32>,
+    fwhm:    Vec<f32>,
 }
 
 #[derive(Default)]
@@ -116,7 +116,6 @@ pub struct TackingPicturesMode {
     options:         Arc<RwLock<Options>>,
     next_job:        Option<NextJob>,
     cam_options:     CamOptions,
-    focus_options:   Option<FocuserOptions>,
     guider:          Option<Guider>,
     ref_stars:       Option<Arc<Mutex<Option<Vec<Point>>>>>,
     progress:        Option<Progress>,
@@ -124,7 +123,7 @@ pub struct TackingPicturesMode {
     cur_shot_id:     Option<u64>,
     shot_id_to_ign:  Option<u64>,
     live_stacking:   Option<Arc<LiveStackingData>>,
-    refocus:         RefocusData,
+    autofocuser:     Option<AutoFocuser>,
     flags:           Flags,
     fname_utils:     FileNameUtils,
     out_file_names:  OutFileNames,
@@ -155,13 +154,6 @@ impl TackingPicturesMode {
             _ => None,
         };
 
-        let refocus = RefocusData {
-            exp_sum:  0.0,
-            min_temp: None,
-            max_temp: None,
-            fwhm:     Vec::new(),
-        };
-
         let mut cam_options = opts.cam.clone();
 
         match cam_mode {
@@ -185,10 +177,21 @@ impl TackingPicturesMode {
 
         let guider = if working_with_light_frames {
             Some(Guider {
-                options: opts.guiding.clone(),
+                options:        opts.guiding.clone(),
                 dither_exp_sum: 0.0,
-                simple: None,
-                external: None,
+                simple:         None,
+                external:       None,
+            })
+        } else {
+            None
+        };
+
+        let autofocuser = if working_with_light_frames {
+            Some(AutoFocuser {
+                options: opts.focuser.clone(),
+                exp_sum: 0.0,
+                temp:    Vec::new(),
+                fwhm:    Vec::new(),
             })
         } else {
             None
@@ -205,7 +208,6 @@ impl TackingPicturesMode {
             raw_stacker:     RawStacker::new(),
             options:         Arc::clone(options),
             next_job:        None,
-            focus_options:   None,
             ref_stars:       None,
             cur_exposure:    0.0,
             cur_shot_id:     None,
@@ -218,7 +220,7 @@ impl TackingPicturesMode {
             flags:           Flags::default(),
             fname_utils:     FileNameUtils::default(),
             cam_options,
-            refocus,
+            autofocuser,
             progress,
             guider,
         })
@@ -281,10 +283,12 @@ impl TackingPicturesMode {
 
         drop(opts);
 
-        self.focus_options = new_focuser_options;
+        if let Some(autofocuser) = &mut self.autofocuser {
+            autofocuser.options = new_focuser_options.unwrap();
+        }
 
-        if let (Some(new_guider_options), Some(guider)) = (new_guider_options, &mut self.guider) {
-            guider.options = new_guider_options;
+        if let Some(guider) = &mut self.guider {
+            guider.options = new_guider_options.unwrap();
         }
     }
 
@@ -438,86 +442,85 @@ impl TackingPicturesMode {
         info: &LightFrameInfoData,
         shot_id: Option<u64>,
     ) -> anyhow::Result<()> {
-        let use_focus =
-            self.cam_mode == CameraMode::LiveStacking ||
-            self.cam_mode == CameraMode::SavingRawFrames;
-        if !use_focus {
+        let Some(autofocuser) = &mut self.autofocuser else {
+            return Ok(());
+        };
+        if !self.indi.is_device_enabled(&autofocuser.options.device).unwrap_or(false) {
             return Ok(());
         }
 
         // push fwhm
         if let Some(fwhm) = info.stars.info.fwhm {
-            self.refocus.fwhm.push(fwhm);
+            autofocuser.fwhm.push(fwhm);
         }
 
         // Update exposure sum
-        self.refocus.exp_sum += self.cam_options.frame.exposure();
+        autofocuser.exp_sum += self.cam_options.frame.exposure();
 
-        let Some(focuser_options) = &self.focus_options else {
-            return Ok(());
-        };
-
-        // Update min and max temperature
-        let temperature = self.indi.focuser_get_temperature(&focuser_options.device)?;
+        let temperature = self.indi
+            .focuser_get_temperature(&autofocuser.options.device)
+            .unwrap_or(f64::NAN);
         if !temperature.is_nan() && !temperature.is_infinite() {
-            self.refocus.min_temp = self.refocus.min_temp
-                .map(|v| f64::min(v, temperature))
-                .or_else(|| Some(temperature));
-            self.refocus.max_temp = self.refocus.max_temp
-                .map(|v| f64::max(v, temperature))
-                .or_else(|| Some(temperature));
-        }
-
-        if !self.indi.is_device_enabled(&focuser_options.device).unwrap_or(false) {
-            return Ok(());
+            autofocuser.temp.push(temperature as f32);
         }
 
         let mut have_to_refocus = false;
 
         // Periodically
-        if focuser_options.periodically
-        && focuser_options.period_minutes != 0 {
-            let max_exp_sum = (focuser_options.period_minutes * 60) as f64;
-            if self.refocus.exp_sum >= max_exp_sum {
+        if autofocuser.options.periodically
+        && autofocuser.options.period_minutes != 0 {
+            let max_exp_sum = (autofocuser.options.period_minutes * 60) as f64;
+            if autofocuser.exp_sum >= max_exp_sum {
                 have_to_refocus = true;
             }
         }
 
         // When temperature changed
-        if focuser_options.on_temp_change
-        && focuser_options.max_temp_change > 0.0 {
-            if let (Some(min), Some(max)) = (self.refocus.min_temp, self.refocus.max_temp) {
-                if max - min > focuser_options.max_temp_change {
-                    have_to_refocus = true;
-                }
+        if autofocuser.options.on_temp_change
+        && autofocuser.options.max_temp_change > 0.0
+        && autofocuser.temp.len() >= 2 {
+            let min = autofocuser.temp
+                .iter()
+                .min_by(|a, b| a.total_cmp(b))
+                .copied()
+                .unwrap_or_default() as f64;
+            let max = autofocuser.temp
+                .iter()
+                .max_by(|a, b| a.total_cmp(b))
+                .copied()
+                .unwrap_or_default() as f64;
+            if max - min >= autofocuser.options.max_temp_change {
+                have_to_refocus = true;
             }
         }
 
         // On FWHM increase
-        if focuser_options.on_fwhm_change
-        && focuser_options.max_fwhm_change != 0
-        && self.refocus.fwhm.len() >= 6 {
-            let pos = self.refocus.fwhm.len() - 3;
-            let before = &self.refocus.fwhm[..pos];
-            let after = &self.refocus.fwhm[pos..];
-            let before_best = before.iter()
+        if autofocuser.options.on_fwhm_change
+        && autofocuser.options.max_fwhm_change != 0
+        && autofocuser.fwhm.len() >= 2 {
+            let min = autofocuser.fwhm
+                .iter()
+                .min_by(|a, b| a.total_cmp(b))
                 .copied()
-                .min_by(f32::total_cmp)
                 .unwrap_or_default() as f64;
-            let after_aver = after.iter().sum::<f32>() as f64 / after.len() as f64;
-            if before_best != 0.0 {
-                let percent = 100.0 * (after_aver - before_best) / before_best;
-                if percent > focuser_options.max_fwhm_change as f64 {
+
+            let last = autofocuser.fwhm
+                .last()
+                .copied()
+                .unwrap_or_default() as f64;
+
+            if min >= 0.0 && last >  min{
+                let diff_percent = (100.0 * (last - min) / min) as u32;
+                if diff_percent > autofocuser.options.max_fwhm_change {
                     have_to_refocus = true;
                 }
             }
         }
 
         if have_to_refocus && self.next_job.is_none() {
-            self.refocus.exp_sum = 0.0;
-            self.refocus.min_temp = None;
-            self.refocus.max_temp = None;
-            self.refocus.fwhm.clear();
+            autofocuser.exp_sum = 0.0;
+            autofocuser.temp.clear();
+            autofocuser.fwhm.clear();
             self.abort_current_unfinised_exposure(shot_id)?;
             self.next_job = Some(NextJob::Autofocus);
         }
@@ -1073,17 +1076,19 @@ impl Mode for TackingPicturesMode {
         if matches!(self.cam_mode, CameraMode::SavingRawFrames|CameraMode::LiveStacking)
         && self.cam_options.frame.frame_type == FrameType::Lights
         && self.state == State::Common {
-            if let Some(focus_options) = &self.focus_options {
-                if focus_options.on_fwhm_change
-                || focus_options.on_temp_change
-                || focus_options.periodically {
+            if let Some(autofocuser) = &self.autofocuser {
+                if autofocuser.options.on_fwhm_change
+                || autofocuser.options.on_temp_change
+                || autofocuser.options.periodically {
                     extra_modes.push("F");
                 }
             }
             if let Some(guider) = &self.guider {
-                extra_modes.push("G");
-                if guider.options.dith_period != 0 {
-                    extra_modes.push("D");
+                if guider.options.is_used() {
+                    extra_modes.push("G");
+                    if guider.options.dith_period != 0 {
+                        extra_modes.push("D");
+                    }
                 }
             }
         }
