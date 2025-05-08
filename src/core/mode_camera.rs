@@ -24,25 +24,6 @@ use super::{
     utils::FileNameUtils
 };
 
-// Guider data for guiding by main camera
-struct SimpleGuider {
-    mnt_calibr:     Option<MountMoveCalibrRes>,
-    dither_x:       f64,
-    dither_y:       f64,
-    dither_exp_sum: f64,
-}
-
-impl SimpleGuider {
-    fn new() -> Self {
-        Self {
-            mnt_calibr: None,
-            dither_x: 0.0,
-            dither_y: 0.0,
-            dither_exp_sum: 0.0,
-        }
-    }
-}
-
 #[derive(PartialEq)]
 pub enum CameraMode {
     SingleShot,
@@ -68,12 +49,6 @@ enum NextJob {
     ExternalDithering,
     InternalDithering { ra_pulse: f64, dec_pulse: f64 },
     Autofocus,
-}
-
-// Guider data for guiding by external program
-struct ExtGuiderData {
-    dither_exp_sum: f64,
-    guider:         Arc<ExternalGuiderCtrl>,
 }
 
 struct RefocusData {
@@ -105,6 +80,30 @@ struct CamOffsetCalc {
     high_values: Vec<(u16, f32)>,
 }
 
+// Guider data for guiding by main camera
+struct SimpleGuider {
+    mnt_calibr:     Option<MountMoveCalibrRes>,
+    dither_x:       f64,
+    dither_y:       f64,
+}
+
+impl SimpleGuider {
+    fn new() -> Self {
+        Self {
+            mnt_calibr: None,
+            dither_x: 0.0,
+            dither_y: 0.0,
+        }
+    }
+}
+
+struct Guider {
+    options:        GuidingOptions,
+    dither_exp_sum: f64,
+    simple:         Option<SimpleGuider>,
+    external:       Option<Arc<ExternalGuiderCtrl>>,
+}
+
 pub struct TackingPicturesMode {
     cam_mode:        CameraMode,
     state:           State,
@@ -118,14 +117,12 @@ pub struct TackingPicturesMode {
     next_job:        Option<NextJob>,
     cam_options:     CamOptions,
     focus_options:   Option<FocuserOptions>,
-    guider_options:  Option<GuidingOptions>,
+    guider:          Option<Guider>,
     ref_stars:       Option<Arc<Mutex<Option<Vec<Point>>>>>,
     progress:        Option<Progress>,
     cur_exposure:    f64,
     cur_shot_id:     Option<u64>,
     shot_id_to_ign:  Option<u64>,
-    simple_guider:   Option<SimpleGuider>,
-    guider:          Option<ExtGuiderData>,
     live_stacking:   Option<Arc<LiveStackingData>>,
     refocus:         RefocusData,
     flags:           Flags,
@@ -181,6 +178,22 @@ impl TackingPicturesMode {
             _ => {}
         }
 
+        let working_with_light_frames =
+            opts.cam.frame.frame_type == FrameType::Lights &&
+            (cam_mode == CameraMode::SavingRawFrames ||
+            cam_mode == CameraMode::LiveStacking);
+
+        let guider = if working_with_light_frames {
+            Some(Guider {
+                options: opts.guiding.clone(),
+                dither_exp_sum: 0.0,
+                simple: None,
+                external: None,
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             cam_mode,
             state:           State::Common,
@@ -192,15 +205,11 @@ impl TackingPicturesMode {
             raw_stacker:     RawStacker::new(),
             options:         Arc::clone(options),
             next_job:        None,
-            cam_options,
             focus_options:   None,
-            guider_options:  None,
             ref_stars:       None,
             cur_exposure:    0.0,
             cur_shot_id:     None,
             shot_id_to_ign:  None,
-            simple_guider:   None,
-            guider:          None,
             live_stacking:   None,
             out_file_names:  OutFileNames::default(),
             camera_offset:   None,
@@ -208,8 +217,10 @@ impl TackingPicturesMode {
             next_mode:       None,
             flags:           Flags::default(),
             fname_utils:     FileNameUtils::default(),
+            cam_options,
             refocus,
             progress,
+            guider,
         })
     }
 
@@ -217,10 +228,8 @@ impl TackingPicturesMode {
         &mut self,
         ext_guider: &Arc<ExternalGuiderCtrl>
     ) {
-        self.guider = Some(ExtGuiderData {
-            guider:         Arc::clone(ext_guider),
-            dither_exp_sum: 0.0,
-        });
+        let guider = self.guider.as_mut().expect("self.guider");
+        guider.external = Some(Arc::clone(ext_guider));
     }
 
     pub fn set_ref_stars(&mut self, ref_stars: &Arc<Mutex<Option<Vec<Point>>>>) {
@@ -250,19 +259,33 @@ impl TackingPicturesMode {
 
     fn update_options_copies(&mut self) {
         let opts = self.options.read().unwrap();
-        let work_mode =
-            self.cam_mode == CameraMode::SavingRawFrames ||
-            self.cam_mode == CameraMode::LiveStacking;
-        self.focus_options = if opts.focuser.is_used() && work_mode {
-            Some(opts.focuser.clone())
-        } else {
-            None
-        };
-        self.guider_options = if opts.guiding.is_used() && work_mode {
-            Some(opts.guiding.clone())
-        } else {
-            None
-        };
+
+        let working_with_light_frames =
+            opts.cam.frame.frame_type == FrameType::Lights &&
+            (self.cam_mode == CameraMode::SavingRawFrames ||
+            self.cam_mode == CameraMode::LiveStacking);
+
+        let new_focuser_options =
+            if working_with_light_frames && opts.focuser.is_used() {
+                Some(opts.focuser.clone())
+            } else {
+                None
+            };
+
+        let new_guider_options =
+            if self.guider.is_some() {
+                Some(opts.guiding.clone())
+            } else {
+                None
+            };
+
+        drop(opts);
+
+        self.focus_options = new_focuser_options;
+
+        if let (Some(new_guider_options), Some(guider)) = (new_guider_options, &mut self.guider) {
+            guider.options = new_guider_options;
+        }
     }
 
     fn correct_options_before_start(&mut self) {
@@ -504,22 +527,24 @@ impl TackingPicturesMode {
 
     fn process_light_frame_info_and_dither_by_main_camera(
         &mut self,
-        guider_options: &GuidingOptions,
-        info:           &LightFrameInfoData,
-        shot_id:        Option<u64>,
+        info:    &LightFrameInfoData,
+        shot_id: Option<u64>,
     ) -> anyhow::Result<()> {
-        if matches!(self.state, State::InternalMountCorrection(_)) {
-            return Ok(());
-        }
-
         let mount_device_active = self.indi.is_device_enabled(&self.mount_device).unwrap_or(false);
         if !mount_device_active {
             return Ok(());
         }
 
-        let guider_data = self.simple_guider.get_or_insert_with(|| SimpleGuider::new());
-        if guider_options.is_used()
-        && mount_device_active
+        let Some(guider) = &mut self.guider else {
+            return Ok(());
+        };
+
+        if guider.options.mode != GuidingMode::MainCamera {
+            return Ok(());
+        }
+
+        let guider_data = guider.simple.get_or_insert_with(|| SimpleGuider::new());
+        if guider.options.is_used()
         && guider_data.mnt_calibr.is_none()
         && self.next_job.is_none() {
             self.abort_current_unfinised_exposure(shot_id)?;
@@ -531,14 +556,14 @@ impl TackingPicturesMode {
         let mut dithering_flag = false;
 
         // dithering
-        if guider_options.dith_period != 0 {
-            guider_data.dither_exp_sum += info.image.exposure;
-            if guider_data.dither_exp_sum >= (guider_options.dith_period * 60) as f64 {
-                guider_data.dither_exp_sum = 0.0;
+        if guider.options.dith_period != 0 {
+            guider.dither_exp_sum += info.image.exposure;
+            if guider.dither_exp_sum >= (guider.options.dith_period * 60) as f64 {
+                guider.dither_exp_sum = 0.0;
                 use rand::prelude::*;
                 let mut rng = rand::thread_rng();
-                guider_data.dither_x = guider_options.main_cam.dith_dist as f64 * (rng.gen::<f64>() - 0.5);
-                guider_data.dither_y = guider_options.main_cam.dith_dist as f64 * (rng.gen::<f64>() - 0.5);
+                guider_data.dither_x = guider.options.main_cam.dith_dist as f64 * (rng.gen::<f64>() - 0.5);
+                guider_data.dither_y = guider.options.main_cam.dith_dist as f64 * (rng.gen::<f64>() - 0.5);
                 log::debug!("dithering position = {}px,{}px", guider_data.dither_x, guider_data.dither_y);
                 dithering_flag = true;
             }
@@ -555,8 +580,8 @@ impl TackingPicturesMode {
                 "offset_x = {:.1}px, offset_y ={:.1}px, diff_dist = {:.1}px",
                 offset_x, offset_y, diff_dist
             );
-            if diff_dist > guider_options.main_cam.max_error || dithering_flag {
-                if diff_dist < 2.0 * guider_options.main_cam.max_error {
+            if diff_dist > guider.options.main_cam.max_error || dithering_flag {
+                if diff_dist < 2.0 * guider.options.main_cam.max_error {
                     offset_x *= 0.5;
                     offset_y *= 0.5;
                 }
@@ -564,7 +589,7 @@ impl TackingPicturesMode {
                 log::debug!(
                     "diff_dist > guid_options.max_error ({} > {}), start mount correction",
                     diff_dist,
-                    guider_options.main_cam.max_error
+                    guider.options.main_cam.max_error
                 );
             }
         }
@@ -616,47 +641,42 @@ impl TackingPicturesMode {
 
     fn process_light_frame_info_and_dither_by_ext_guider(
         &mut self,
-        guider_options: &GuidingOptions,
-        info: &LightFrameInfoData,
+        info:    &LightFrameInfoData,
         shot_id: Option<u64>,
     ) -> anyhow::Result<()> {
-        if guider_options.dith_period == 0 {
-            return Ok(());
-        }
-
-        // take self.guider
-        let Some(mut guider_data) = self.guider.take() else {
+        let Some(guider) = &mut self.guider else {
             return Ok(());
         };
 
-        let result = || -> anyhow::Result<()> {
-            if !guider_data.guider.is_connected() {
-                return Ok(());
-            }
+        if guider.options.mode != GuidingMode::External
+        || guider.options.dith_period == 0 {
+            return Ok(())
+        }
 
-            guider_data.dither_exp_sum += info.image.exposure;
-            if guider_data.dither_exp_sum >= (guider_options.dith_period * 60) as f64
-            && self.next_job.is_none() {
-                guider_data.dither_exp_sum = 0.0;
-                self.abort_current_unfinised_exposure(shot_id)?;
-                self.next_job = Some(NextJob::ExternalDithering);
-            }
-            Ok(())
-        } ();
+        let Some(ext_guider) = &guider.external else {
+            return Ok(());
+        };
 
-        // return self.guider back
-        self.guider = Some(guider_data);
+        if !ext_guider.is_connected() {
+            return Ok(());
+        }
 
-        result
+        guider.dither_exp_sum += info.image.exposure;
+        if guider.dither_exp_sum >= (guider.options.dith_period * 60) as f64
+        && self.next_job.is_none() {
+            guider.dither_exp_sum = 0.0;
+            self.abort_current_unfinised_exposure(shot_id)?;
+            self.next_job = Some(NextJob::ExternalDithering);
+        }
+        Ok(())
     }
 
     fn start_dithering_in_external_guider_mode(&mut self) -> anyhow::Result<()> {
-        let guider_options = self.guider_options.as_ref().unwrap();
-        if let Some(guider_data) = &self.guider {
-            let dist = guider_options.ext_guider.dith_dist;
-            log::info!("Starting dithering by external guider with {} pixels...", dist);
-            guider_data.guider.start_dithering(dist)?;
-        }
+        let guider = self.guider.as_ref().expect("self.guider");
+        let external_guider = guider.external.as_ref().expect("guider.external");
+        let dist = guider.options.ext_guider.dith_dist;
+        log::info!("Starting dithering by external guider with {} pixels...", dist);
+        external_guider.start_dithering(dist)?;
         self.state = State::ExternalDithering;
         Ok(())
     }
@@ -729,35 +749,39 @@ impl TackingPicturesMode {
             if is_last_frame && self.flags.save_defect_pixels {
                 self.save_defect_pixels_file()?;
             }
+        }
 
-            let finished = matches!(result, NotifyResult::Finished {..});
-            if !finished && self.have_to_start_new_exposure_at_processing_end() {
-                self.take_shot_with_options(self.cam_options.frame.clone())?;
+        let finished = matches!(result, NotifyResult::Finished {..});
+
+        if !finished {
+            // Start next job/mode
+            match self.next_job.take() {
+                Some(NextJob::MountCalibration) =>
+                    return Ok(NotifyResult::StartMountCalibr),
+
+                Some(NextJob::InternalDithering { ra_pulse, dec_pulse }) => {
+                    self.start_dithering_in_main_cam_mode(ra_pulse, dec_pulse)?;
+                    return Ok(NotifyResult::ProgressChanges);
+                }
+
+                Some(NextJob::ExternalDithering) => {
+                    self.start_dithering_in_external_guider_mode()?;
+                    return Ok(NotifyResult::ProgressChanges);
+                }
+
+                Some(NextJob::Autofocus) =>
+                    return Ok(NotifyResult::StartFocusing),
+
+                _ => {},
             }
         }
 
-        // Start next job/mode
-
-        match self.next_job.take() {
-            Some(NextJob::MountCalibration) =>
-                return Ok(NotifyResult::StartMountCalibr),
-
-            Some(NextJob::InternalDithering { ra_pulse, dec_pulse }) => {
-                self.start_dithering_in_main_cam_mode(ra_pulse, dec_pulse)?;
-                return Ok(NotifyResult::ProgressChanges);
-            }
-
-            Some(NextJob::ExternalDithering) => {
-                self.start_dithering_in_external_guider_mode()?;
-                return Ok(NotifyResult::ProgressChanges);
-            }
-
-            Some(NextJob::Autofocus) =>
-                return Ok(NotifyResult::StartFocusing),
-
-            _ => {},
+        // Start next exposure
+        if self.state == State::Common
+        && !finished
+        && self.have_to_start_new_exposure_at_processing_end() {
+            self.take_shot_with_options(self.cam_options.frame.clone())?;
         }
-
 
         Ok(result)
     }
@@ -949,24 +973,9 @@ impl TackingPicturesMode {
 
         self.process_light_frame_info_and_refocus(info, shot_id)?;
 
-        // Guiding and dithering
-        if let Some(guid_options) = self.guider_options.clone() {
-            match guid_options.mode {
-                GuidingMode::MainCamera =>
-                    self.process_light_frame_info_and_dither_by_main_camera(
-                        &guid_options,
-                        info,
-                        shot_id
-                    )?,
-                GuidingMode::External =>
-                    self.process_light_frame_info_and_dither_by_ext_guider(
-                        &guid_options,
-                        info,
-                        shot_id
-                    )?,
-                _ => {}
-            };
-        }
+        self.process_light_frame_info_and_dither_by_main_camera(info, shot_id)?;
+
+        self.process_light_frame_info_and_dither_by_ext_guider(info, shot_id)?;
 
         Ok(NotifyResult::Empty)
     }
@@ -1071,9 +1080,9 @@ impl Mode for TackingPicturesMode {
                     extra_modes.push("F");
                 }
             }
-            if let Some(guid_options) = &self.guider_options {
+            if let Some(guider) = &self.guider {
                 extra_modes.push("G");
-                if guid_options.dith_period != 0 {
+                if guider.options.dith_period != 0 {
                     extra_modes.push("D");
                 }
             }
@@ -1186,7 +1195,8 @@ impl Mode for TackingPicturesMode {
 
     fn set_or_correct_value(&mut self, value: &mut dyn Any) {
         if let Some(value) = value.downcast_mut::<MountMoveCalibrRes>() {
-            let dith_data = self.simple_guider.get_or_insert_with(|| SimpleGuider::new());
+            let Some(guider) = &mut self.guider else { return; };
+            let dith_data = guider.simple.get_or_insert_with(|| SimpleGuider::new());
             dith_data.mnt_calibr = Some(value.clone());
             log::debug!("New mount calibration set: {:?}", dith_data.mnt_calibr);
         }
@@ -1334,8 +1344,8 @@ impl Mode for TackingPicturesMode {
         &mut self,
         event: ExtGuiderEvent
     ) -> anyhow::Result<NotifyResult> {
-        if let Some(guid_options) = &self.guider_options {
-            if guid_options.mode == GuidingMode::External
+        if let Some(guider) = &self.guider {
+            if guider.options.mode == GuidingMode::External
             && self.state == State::ExternalDithering {
                 match event {
                     ExtGuiderEvent::DitheringFinished => {
