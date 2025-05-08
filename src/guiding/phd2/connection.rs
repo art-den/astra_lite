@@ -540,7 +540,7 @@ impl Connection {
         EventHandlerId(next_id)
     }
 
-    pub fn discnnect_all(&self) {
+    pub fn discnnect_all_event_handlers(&self) {
         self.event_handlers.write().unwrap().clear();
     }
 
