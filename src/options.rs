@@ -465,8 +465,8 @@ pub struct SeparatedPlateSolverOptions {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct SiteOptions {
-    pub latitude:  f64,
-    pub longitude: f64,
+    pub latitude:  f64, // in degrees
+    pub longitude: f64, // in degrees
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

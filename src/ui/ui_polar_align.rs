@@ -314,37 +314,44 @@ impl PolarAlignUi {
         self.core.abort_active_mode();
     }
 
-    fn show_polar_alignment_error(&self, error: &HorizCoord) {
-        let alt_err_str = degree_to_str(radian_to_degree(error.alt));
-        let az_err_str = degree_to_str(radian_to_degree(error.az));
-        let alt_label = format!("Alt: {}", alt_err_str);
-        let az_label = format!("Az: {}", az_err_str);
-        self.widgets.l_alt_err.set_label(&alt_label);
-        self.widgets.l_az_err.set_label(&az_label);
+    fn show_polar_alignment_error(&self, error: &Option<HorizCoord>) {
+        if let Some(error) = error {
+            let alt_err_str = degree_to_str(radian_to_degree(error.alt));
+            let az_err_str = degree_to_str(radian_to_degree(error.az));
+            let alt_label = format!("Alt: {}", alt_err_str);
+            let az_label = format!("Az: {}", az_err_str);
+            self.widgets.l_alt_err.set_label(&alt_label);
+            self.widgets.l_az_err.set_label(&az_label);
 
-        let alt_err_arrow = if error.alt < 0.0 { "↑" } else { "↓" };
-        let az_err_arrow = if error.az < 0.0 { "→" } else { "←" };
-        self.widgets.l_alt_err_arr.set_label(&alt_err_arrow);
-        self.widgets.l_az_err_arr.set_label(&az_err_arrow);
+            let alt_err_arrow = if error.alt < 0.0 { "↑" } else { "↓" };
+            let az_err_arrow = if error.az < 0.0 { "→" } else { "←" };
+            self.widgets.l_alt_err_arr.set_label(&alt_err_arrow);
+            self.widgets.l_az_err_arr.set_label(&az_err_arrow);
 
-        let set_all_label_size = |label: &gtk::Label, err: f64| {
-            let err_minutes = f64::abs(radian_to_degree(err) * 60.0);
-            let scale = if err_minutes > 60.0 {
-                5
-            } else if err_minutes > 2.0 {
-                3
-            } else {
-                1
+            let set_all_label_size = |label: &gtk::Label, err: f64| {
+                let err_minutes = f64::abs(radian_to_degree(err) * 60.0);
+                let scale = if err_minutes > 60.0 {
+                    5
+                } else if err_minutes > 2.0 {
+                    3
+                } else {
+                    1
+                };
+
+                let alt_attrs = pango::AttrList::new();
+                let attr_alt_size = pango::AttrSize::new(scale * 10 * pango::SCALE);
+                alt_attrs.insert(attr_alt_size);
+
+                label.set_attributes(Some(&alt_attrs));
             };
 
-            let alt_attrs = pango::AttrList::new();
-            let attr_alt_size = pango::AttrSize::new(scale * 10 * pango::SCALE);
-            alt_attrs.insert(attr_alt_size);
-
-            label.set_attributes(Some(&alt_attrs));
-        };
-
-        set_all_label_size(&self.widgets.l_alt_err_arr, error.alt);
-        set_all_label_size(&self.widgets.l_az_err_arr, error.az);
+            set_all_label_size(&self.widgets.l_alt_err_arr, error.alt);
+            set_all_label_size(&self.widgets.l_az_err_arr, error.az);
+        } else {
+            self.widgets.l_alt_err.set_label("---");
+            self.widgets.l_az_err.set_label("---");
+            self.widgets.l_alt_err_arr.set_text("");
+            self.widgets.l_az_err_arr.set_text("");
+        }
     }
 }

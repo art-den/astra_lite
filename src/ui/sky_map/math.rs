@@ -78,6 +78,15 @@ fn test_eq_coord_to_sphere() {
     test(EqCoord { dec: PI / 8.0, ra: PI / 8.0 });
 }
 
+// XYZ mapping:
+//
+//  ^X(alt=Pi/2)
+//  |
+//  |   Y(az=0,alt=0)
+//  |  /
+//  | /
+//  |/
+//  *----->Z(az=Pi/2,alt=0)
 #[derive(Clone, Copy)]
 pub struct HorizCoord {
     pub alt: f64,
