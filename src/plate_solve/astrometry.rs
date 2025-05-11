@@ -320,6 +320,10 @@ impl PlateSolverIface for AstrometryPlateSolver {
         Ok(())
     }
 
+    fn abort(&mut self) {
+        self.clear_prev_resources();
+    }
+
     fn get_result(&mut self) -> anyhow::Result<PlateSolveResult> {
         let result = self.get_result_impl();
         if matches!(result, Ok(PlateSolveResult::Failed))

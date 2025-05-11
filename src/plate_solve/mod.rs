@@ -114,6 +114,10 @@ impl PlateSolver {
         Ok(())
     }
 
+    pub fn abort(&mut self) {
+        self.solver.abort();
+    }
+
     pub fn get_result(&mut self) -> anyhow::Result<PlateSolveResult> {
         self.solver.get_result()
     }
@@ -122,6 +126,7 @@ impl PlateSolver {
 trait PlateSolverIface {
     fn support_stars_as_input(&self) -> bool;
     fn start(&mut self, data: &PlateSolverInData, config: &PlateSolveConfig) -> anyhow::Result<()>;
+    fn abort(&mut self);
     fn get_result(&mut self) -> anyhow::Result<PlateSolveResult>;
 }
 

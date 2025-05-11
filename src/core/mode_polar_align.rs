@@ -45,6 +45,7 @@ impl PolarAlignment {
         let pt3 = &self.measurements[2].coord;
 
         let mount_pole_crd = Point3D::normal(pt1, pt2, pt3)
+            .normalized()
             .ok_or_else(|| anyhow::anyhow!("Can't calculate mount pole!"))?;
         let mount_pole = HorizCoord::from_sphere_pt(&mount_pole_crd);
 
@@ -68,23 +69,12 @@ impl PolarAlignment {
             return None;
         };
 
-        println!("===");
-
-        let mut time = 0.0; // in seconds
+        let last_point = &self.measurements.last().unwrap();
+        let mut time = (last_point.utc_time - self.measurements[2].utc_time).num_milliseconds() as f64 / 1000.0;
         let mut mount_pole = poles.mount.clone();
         for (m1, m2) in self.measurements[2..].iter().tuple_windows() {
-            let mut m2_crd = m2.coord.clone();
-            m2_crd.rotate_over_x(-mount_pole.az);
-            m2_crd.rotate_over_y(-mount_pole.alt);
-            let earth_rotations = time as f64 / 86164.09054;
-            m2_crd.rotate_over_z(2.0 * PI * earth_rotations);
-            m2_crd.rotate_over_y(mount_pole.alt);
-            m2_crd.rotate_over_x(mount_pole.az);
-
-            let time_diff = (m2.utc_time - m1.utc_time).num_milliseconds() as f64 / 1000.0;
-            time += time_diff;
-
             let mut m1_crd = m1.coord.clone();
+            // rotate m1_crd around mount_pole with Earth speed
             m1_crd.rotate_over_x(-mount_pole.az);
             m1_crd.rotate_over_y(-mount_pole.alt);
             let earth_rotations = time as f64 / 86164.09054;
@@ -92,19 +82,36 @@ impl PolarAlignment {
             m1_crd.rotate_over_y(mount_pole.alt);
             m1_crd.rotate_over_x(mount_pole.az);
 
+            let time_diff = (m2.utc_time - m1.utc_time).num_milliseconds() as f64 / 1000.0;
+            time -= time_diff;
+
+            let mut m2_crd = m2.coord.clone();
+            // rotate m2_crd around mount_pole with Earth speed
+            m2_crd.rotate_over_x(-mount_pole.az);
+            m2_crd.rotate_over_y(-mount_pole.alt);
+            let earth_rotations = time as f64 / 86164.09054;
+            m2_crd.rotate_over_z(2.0 * PI * earth_rotations);
+            m2_crd.rotate_over_y(mount_pole.alt);
+            m2_crd.rotate_over_x(mount_pole.az);
+
+            // How much user rotated the mount?
+            let changes = coordinate_descent(
+                vec![0.0, 0.0],
+                PI / (360.0 * 60.0 * 60.0 * 5.0),
+                1_000_000,
+                |changes| {
+                    let mut crd = m1_crd.clone();
+                    crd.rotate_over_y(changes[0]);
+                    crd.rotate_over_x(changes[1]);
+                    Point3D::angle(&crd, &m2_crd).unwrap_or(0.0)
+                },
+            );
+
             // Calc new mount pole (axis)
-            let Some(rot_angle) = Point3D::angle(&m1_crd, &m2_crd) else {
-                continue;
-            };
-            let Some(rot_axis) = Point3D::normal(&m2_crd, &m1_crd, &Point3D::zero()) else {
-                continue;
-            };
-
-            let pole_3d = mount_pole.to_sphere_pt();
-            let new_pole_3d = pole_3d.rotated_over_axis(&rot_axis, rot_angle);
-            mount_pole = HorizCoord::from_sphere_pt(&new_pole_3d);
-
-            println!("time_diff = {:.1}, rot_angle = {:.7}, mount_pole={:?}", time_diff, radian_to_degree(rot_angle), mount_pole);
+            let mut pole_3d = mount_pole.to_sphere_pt();
+            pole_3d.rotate_over_y(changes[0]);
+            pole_3d.rotate_over_x(changes[1]);
+            mount_pole = HorizCoord::from_sphere_pt(&pole_3d);
         }
 
         Some(HorizCoord {
@@ -112,6 +119,12 @@ impl PolarAlignment {
             az: mount_pole.az - poles.celestial.az,
         })
     }
+
+    fn clear(&mut self) {
+        self.measurements.clear();
+        self.poles = None;
+    }
+
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -127,6 +140,7 @@ enum State {
 
 enum Step {
     Undefined,
+    GotoInitialPos,
     First,
     Second,
     Third,
@@ -157,6 +171,7 @@ pub struct PolarAlignMode {
     goto_pos:     EqCoord,
     alignment:    PolarAlignment,
     image_time:   Option<NaiveDateTime>,
+    initial_crd:  Option<EqCoord>,
 }
 
 impl PolarAlignMode {
@@ -201,6 +216,7 @@ impl PolarAlignMode {
             goto_ok_cnt: 0,
             goto_pos:    Default::default(),
             image_time:  None,
+            initial_crd: None,
             cam_opts,
             plate_solver
         })
@@ -365,16 +381,17 @@ impl Mode for PolarAlignMode {
 
     fn progress(&self) -> Option<Progress> {
         let step = match (&self.step, &self.state) {
-            (Step::First,  State::Capture   ) => 0,
-            (Step::First,  State::PlateSolve) => 1,
-            (Step::First,  State::Goto      ) => 2,
-            (Step::Second, State::Capture   ) => 3,
-            (Step::Second, State::PlateSolve) => 4,
-            (Step::Second, State::Goto      ) => 5,
-            (Step::Third,  State::Capture   ) => 6,
-            (Step::Third,  State::PlateSolve) => 7,
-            (Step::Corr,   _                ) => 8,
-            _                                 => 0,
+            (Step::GotoInitialPos, _                ) => 0,
+            (Step::First,          State::Capture   ) => 0,
+            (Step::First,          State::PlateSolve) => 1,
+            (Step::First,          State::Goto      ) => 2,
+            (Step::Second,         State::Capture   ) => 3,
+            (Step::Second,         State::PlateSolve) => 4,
+            (Step::Second,         State::Goto      ) => 5,
+            (Step::Third,          State::Capture   ) => 6,
+            (Step::Third,          State::PlateSolve) => 7,
+            (Step::Corr,           _                ) => 8,
+            _                                         => 0,
         };
 
         Some(Progress{ cur: step, total: 8 })
@@ -382,6 +399,7 @@ impl Mode for PolarAlignMode {
 
     fn progress_string(&self) -> String {
         match (&self.step, &self.state) {
+            (Step::GotoInitialPos, _        ) => "Goto initial position",
             (Step::First,  State::Capture   ) => "1st capture",
             (Step::First,  State::PlateSolve) => "1st platesolve",
             (Step::First,  State::Goto      ) => "1st goto",
@@ -406,18 +424,59 @@ impl Mode for PolarAlignMode {
     }
 
     fn start(&mut self) -> anyhow::Result<()> {
+        let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
+        self.initial_crd = Some(EqCoord {
+            ra: hour_to_radian(ra),
+            dec: degree_to_radian(dec),
+        });
+
         self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Error(
             None
         )));
+
         self.start_capture()?;
         self.state = State::Capture;
         self.step = Step::First;
         Ok(())
     }
 
+    fn restart(&mut self) -> anyhow::Result<()> {
+        if let Some(initial_crd) = self.initial_crd.clone() {
+            self.abort()?;
+
+            self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Error(
+                None
+            )));
+
+            self.indi.set_after_coord_set_action(
+                &self.mount,
+                indi::AfterCoordSetAction::Track,
+                true,
+                Some(1000)
+            )?;
+            self.indi.mount_set_eq_coord(
+                &self.mount,
+                radian_to_hour(initial_crd.ra),
+                radian_to_degree(initial_crd.dec),
+                true,
+                None
+            )?;
+            self.goto_pos = initial_crd;
+            self.goto_time = 0;
+            self.goto_ok_cnt = 0;
+
+            self.alignment.clear();
+            self.state = State::Goto;
+            self.step = Step::GotoInitialPos;
+        }
+
+        Ok(())
+    }
+
     fn abort(&mut self) -> anyhow::Result<()> {
         _ = abort_camera_exposure(&self.indi, &self.camera);
         _ = self.indi.mount_abort_motion(&self.mount);
+        self.plate_solver.abort();
         self.state = State::Undefined;
         Ok(())
     }
@@ -461,13 +520,24 @@ impl Mode for PolarAlignMode {
                             0.5
                         )?;
 
-                        self.start_capture()?;
-                        self.state = State::Capture;
-
                         match self.step {
-                            Step::First  => self.step = Step::Second,
-                            Step::Second => self.step = Step::Third,
-                            _            => unreachable!(),
+                            Step::GotoInitialPos => {
+                                self.start_capture()?;
+                                self.state = State::Capture;
+                                self.step = Step::First;
+                            }
+                            Step::First => {
+                                self.start_capture()?;
+                                self.state = State::Capture;
+                                self.step = Step::Second;
+                            }
+                            Step::Second => {
+                                self.start_capture()?;
+                                self.state = State::Capture;
+                                self.step = Step::Third;
+                            }
+                            _ =>
+                                unreachable!(),
                         }
 
                         return Ok(NotifyResult::ProgressChanges);

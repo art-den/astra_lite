@@ -124,7 +124,7 @@ impl UiModule for PolarAlignUi {
             widget: self.widgets.bx.clone().upcast(),
             pos:    PanelPosition::Right,
             tab:    TabPage::Main,
-            flags:  PanelFlags::DEVELOP,
+            flags:  PanelFlags::empty(),
         }]
     }
 
@@ -178,6 +178,7 @@ impl PolarAlignUi {
 
     fn connect_widgets_events(self: &Rc<Self>) {
         connect_action(&self.window, self, "start_polar_alignment", Self::handler_start_action_polar_align);
+        connect_action(&self.window, self, "restart_polar_alignment", Self::handler_restart_action_polar_align);
         connect_action(&self.window, self, "stop_polar_alignment", Self::handler_stop_action_polar_align);
 
         self.widgets.spb_sim_alt_err.connect_value_changed(
@@ -215,8 +216,9 @@ impl PolarAlignUi {
 
 
         enable_actions(&self.window, &[
-            ("start_polar_alignment", polar_alignment_can_be_started),
-            ("stop_polar_alignment",  polar_align),
+            ("start_polar_alignment",   polar_alignment_can_be_started),
+            ("restart_polar_alignment", polar_align),
+            ("stop_polar_alignment",    polar_align),
         ]);
     }
 
@@ -306,6 +308,15 @@ impl PolarAlignUi {
 
         exec_and_show_error(Some(&self.window), ||{
             self.core.start_polar_alignment()?;
+            Ok(())
+        });
+    }
+
+    fn handler_restart_action_polar_align(&self) {
+        self.main_ui.get_all_options();
+
+        exec_and_show_error(Some(&self.window), ||{
+            self.core.restart_polar_alignment()?;
             Ok(())
         });
     }

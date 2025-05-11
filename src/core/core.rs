@@ -59,6 +59,7 @@ pub trait Mode {
     fn can_be_stopped(&self) -> bool { true }
     fn can_be_continued_after_stop(&self) -> bool { false }
     fn start(&mut self) -> anyhow::Result<()> { Ok(()) }
+    fn restart(&mut self) -> anyhow::Result<()> { Ok(()) }
     fn abort(&mut self) -> anyhow::Result<()> { Ok(()) }
     fn continue_work(&mut self) -> anyhow::Result<()> { Ok(()) }
     fn take_next_mode(&mut self) -> Option<ModeBox> { None }
@@ -743,6 +744,16 @@ impl Core {
         self.start_new_mode(mode, false, false)?;
         Ok(())
     }
+
+    pub fn restart_polar_alignment(&self) -> anyhow::Result<()> {
+        let mut mode = self.mode_data.write().unwrap();
+        assert!(mode.mode.get_type() == ModeType::PolarAlignment);
+        mode.mode.restart()?;
+        drop(mode);
+        self.subscribers.notify(Event::ModeChanged);
+        Ok(())
+    }
+
 
     pub fn init_cam_telescope_data(&self) -> anyhow::Result<()> {
         if self.indi.state() != indi::ConnState::Connected {

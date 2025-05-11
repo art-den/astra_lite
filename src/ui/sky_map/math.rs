@@ -157,14 +157,6 @@ pub struct Point3D {
 }
 
 impl Point3D {
-    pub fn zero() -> Point3D {
-        Point3D {
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-        }
-    }
-
     pub fn length(&self) -> f64 {
         f64::sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
     }
@@ -206,37 +198,23 @@ impl Point3D {
         }
     }
 
-    pub fn rotated_over_axis(&self, axis: &Self, angle: f64) -> Self {
-        let cos_angle = f64::cos(angle);
-        let sin_angle = f64::sin(angle);
-        let scalar_prod = self.x * axis.x + self.y * axis.y + self.z * axis.z;
-        let x = axis.x * scalar_prod * (1.0 - cos_angle) + self.x * cos_angle + (-axis.z * self.y + axis.y *
-                         self.z) * sin_angle;
-        let y = axis.y * scalar_prod * (1.0 - cos_angle) + self.y * cos_angle + (axis.z * self.x + -axis.x *
-                         self.z) * sin_angle;
-        let z = axis.z * scalar_prod * (1.0 - cos_angle) + self.z * cos_angle + (-axis.y * self.x + axis.x *
-                         self.y) * sin_angle;
-        Self {x, y, z}
-    }
-
-    pub fn normal(pt1: &Self, pt2: &Self, pt3: &Self) -> Option<Self> {
+    pub fn normal(pt1: &Self, pt2: &Self, pt3: &Self) -> Self {
         let vec1 = pt2 - pt1;
         let vec2 = pt3 - pt2;
-        let result = &vec1 * &vec2;
-        result.normalized()
+        &vec1 * &vec2
     }
 
-    pub fn angle(pt1: &Point3D, pt2: &Point3D) -> Option<f64> {
+    pub fn angle(pt1: &Self, pt2: &Self) -> Option<f64> {
         let len1 = pt1.length();
         let len2 = pt2.length();
-        if len1 != 0.0 && len2 != 0.0 {
+        if len1 != 0.0 || len2 != 0.0 {
             let scalar_prod = (pt1.x * pt2.x + pt1.y * pt2.y + pt1.z * pt2.z) / (len1 * len2);
+            let scalar_prod = scalar_prod.max(-1.0).min(1.0);
             Some(f64::acos(scalar_prod))
         } else {
             None
         }
     }
-
 }
 
 impl Mul<&Matrix33> for &Point3D {
@@ -428,4 +406,47 @@ pub fn calc_sidereal_time(dt: &NaiveDateTime) -> f64 {
 
 pub fn j2000_time() -> NaiveDateTime {
     NaiveDate::from_ymd_opt(2000, 1, 1).unwrap().and_hms_opt(12, 0, 0).unwrap()
+}
+
+pub fn coordinate_descent(
+    mut point:  Vec<f64>,
+    step_value: f64,
+    max_iter:   usize,
+    f:          impl Fn(&[f64]) -> f64,
+) -> Vec<f64> {
+    let n = point.len();
+    let mut prev_value = f(&point);
+
+    let mut point_plus = Vec::new();
+    point_plus.resize(n, 0.0);
+    let mut point_minus = Vec::new();
+    point_minus.resize(n, 0.0);
+
+    for _iters in 0..max_iter {
+        let mut new_value = prev_value;
+        for i in 0..n {
+            point_plus.copy_from_slice(&point);
+            point_plus[i] += step_value;
+            let value_plus = f(&point_plus);
+
+            point_minus.copy_from_slice(&point);
+            point_minus[i] -= step_value;
+            let value_minus = f(&point_minus);
+
+            if value_plus < new_value {
+                point[i] += step_value;
+                new_value = value_plus;
+            } else if value_minus < new_value {
+                point[i] -= step_value;
+                new_value = value_minus;
+            }
+        }
+
+        if new_value >= prev_value {
+            break;
+        }
+        prev_value = new_value;
+    }
+
+    point
 }
