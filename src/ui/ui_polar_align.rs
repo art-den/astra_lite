@@ -5,9 +5,9 @@ use crate::{
     core::{core::{Core, ModeType}, events::*, mode_polar_align::PolarAlignmentEvent},
     indi::{self, degree_to_str},
     options::*,
-    sky_math::math::radian_to_degree,
+    sky_math::math::*,
 };
-use super::{gtk_utils::*, module::*, sky_map::math::HorizCoord, ui_main::*, utils::*};
+use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,

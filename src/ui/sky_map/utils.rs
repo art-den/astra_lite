@@ -1,6 +1,5 @@
 use gtk::prelude::*;
-use crate::{ui::gtk_utils::*, utils::math::linear_solve2};
-use super::math::*;
+use crate::{ui::gtk_utils::*, utils::math::linear_solve2, sky_math::math::*};
 
 pub struct Screen {
     rect:      Rect,

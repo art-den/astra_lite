@@ -4,7 +4,14 @@ use std::{f64::consts::PI, sync::{Arc, RwLock}};
 use chrono::{NaiveDateTime, Utc};
 use itertools::Itertools;
 
-use crate::{core::{core::*, frame_processing::*}, image::{image::*, stars::StarItems}, indi, options::*, plate_solve::*, ui::sky_map::math::*};
+use crate::{
+    core::{core::*, frame_processing::*},
+    image::{image::*, stars::StarItems},
+    indi,
+    options::*,
+    plate_solve::*,
+    sky_math::math::*,
+};
 
 use super::{consts::*, events::*, utils::{check_telescope_is_at_desired_position, gain_to_value}};
 

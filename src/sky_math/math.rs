@@ -1,14 +1,14 @@
-#![allow(dead_code)]
-
-use std::{f64::consts::PI, ops::{Mul, Sub}};
+use std::{f64::consts::PI, fmt::Debug, ops::{Mul, Sub}};
 use chrono::{Datelike, Timelike, NaiveDateTime, NaiveDate};
+
+use crate::indi::{degree_to_str, hour_to_str};
 
 use super::solar_system::pn_matrix;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct EqCoord {
-    pub dec: f64,
-    pub ra:  f64,
+    pub dec: f64, // in radian
+    pub ra:  f64, // in radian
 }
 
 impl EqCoord {
@@ -47,6 +47,15 @@ impl EqCoord {
     }
 }
 
+impl Debug for EqCoord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EqCoord")
+            .field("ra", &hour_to_str(radian_to_hour(self.ra)))
+            .field("dec", &degree_to_str(radian_to_degree(self.dec)))
+            .finish()
+    }
+}
+
 #[test]
 fn test_eq_coord_to_sphere() {
     let test = |crd: EqCoord| {
@@ -69,7 +78,16 @@ fn test_eq_coord_to_sphere() {
     test(EqCoord { dec: PI / 8.0, ra: PI / 8.0 });
 }
 
-#[derive(Debug, Clone, Copy)]
+// XYZ mapping:
+//
+//  ^X(alt=Pi/2)
+//  |   North
+//  |   Z(az=0,alt=0)
+//  |  /
+//  | /
+//  |/
+//  *----->Y(az=Pi/2,alt=0) East
+#[derive(Clone, Copy)]
 pub struct HorizCoord {
     pub alt: f64,
     pub az:  f64,
@@ -91,6 +109,16 @@ impl HorizCoord {
         }
     }
 }
+
+impl Debug for HorizCoord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HorizCoord")
+            .field("alt", &degree_to_str(radian_to_degree(self.alt)))
+            .field("az", &degree_to_str(radian_to_degree(self.az)))
+            .finish()
+    }
+}
+
 
 #[derive(Default)]
 pub struct RotMatrix {
@@ -129,16 +157,63 @@ pub struct Point3D {
 }
 
 impl Point3D {
-    pub fn rotate_over_x(&mut self, mat: &RotMatrix) {
+    pub fn length(&self) -> f64 {
+        f64::sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
+    }
+
+    pub fn rotate_over_x_mat(&mut self, mat: &RotMatrix) {
         mat.rotate(&mut self.z, &mut self.y);
     }
 
-    pub fn rotate_over_y(&mut self, mat: &RotMatrix) {
+    pub fn rotate_over_x(&mut self, angle: f64) {
+        self.rotate_over_x_mat(&RotMatrix::new(angle));
+    }
+
+    pub fn rotate_over_y_mat(&mut self, mat: &RotMatrix) {
         mat.rotate(&mut self.z, &mut self.x);
     }
 
-    pub fn rotate_over_z(&mut self, mat: &RotMatrix) {
+    pub fn rotate_over_y(&mut self, angle: f64) {
+        self.rotate_over_y_mat(&RotMatrix::new(angle));
+    }
+
+    pub fn rotate_over_z_mat(&mut self, mat: &RotMatrix) {
         mat.rotate(&mut self.y, &mut self.x);
+    }
+
+    pub fn rotate_over_z(&mut self, angle: f64) {
+        self.rotate_over_z_mat(&RotMatrix::new(angle));
+    }
+
+    pub fn normalized(&self) -> Option<Self> {
+        let len = self.length();
+        if len != 0.0 {
+            Some(Self {
+                x: self.x / len,
+                y: self.y / len,
+                z: self.z / len,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn normal(pt1: &Self, pt2: &Self, pt3: &Self) -> Self {
+        let vec1 = pt2 - pt1;
+        let vec2 = pt3 - pt2;
+        &vec1 * &vec2
+    }
+
+    pub fn angle(pt1: &Self, pt2: &Self) -> Option<f64> {
+        let len1 = pt1.length();
+        let len2 = pt2.length();
+        if len1 != 0.0 || len2 != 0.0 {
+            let scalar_prod = (pt1.x * pt2.x + pt1.y * pt2.y + pt1.z * pt2.z) / (len1 * len2);
+            let scalar_prod = scalar_prod.max(-1.0).min(1.0);
+            Some(f64::acos(scalar_prod))
+        } else {
+            None
+        }
     }
 }
 
@@ -183,7 +258,7 @@ impl Sub<&Point3D> for &Point3D {
 fn test_point3d_rotate() {
     let mut pt = Point3D { x: 0.0, y: 0.0, z: 1.0 };
     let mat = RotMatrix::new(degree_to_radian(90.0));
-    pt.rotate_over_x(&mat);
+    pt.rotate_over_x_mat(&mat);
     assert!(f64::abs(pt.x-0.0) < 1e-10);
     assert!(f64::abs(pt.y-1.0) < 1e-10);
     assert!(f64::abs(pt.z-0.0) < 1e-10);
@@ -245,8 +320,8 @@ impl EqToSphereCvt {
     }
 
     pub fn apply(&self, pt: &mut Point3D) {
-        pt.rotate_over_z(&self.z_rot);
-        pt.rotate_over_y(&self.y_rot);
+        pt.rotate_over_z_mat(&self.z_rot);
+        pt.rotate_over_y_mat(&self.y_rot);
     }
 
     pub fn eq_to_sphere(&self, eq_crd: &EqCoord) -> Point3D {
@@ -257,8 +332,8 @@ impl EqToSphereCvt {
 
     pub fn sphere_to_eq(&self, pt: &Point3D) -> EqCoord {
         let mut pt = pt.clone();
-        pt.rotate_over_y(&self.n_y_rot);
-        pt.rotate_over_z(&self.n_z_rot);
+        pt.rotate_over_y_mat(&self.n_y_rot);
+        pt.rotate_over_z_mat(&self.n_z_rot);
         EqCoord::from_sphere_pt(&pt)
     }
 }
@@ -331,4 +406,47 @@ pub fn calc_sidereal_time(dt: &NaiveDateTime) -> f64 {
 
 pub fn j2000_time() -> NaiveDateTime {
     NaiveDate::from_ymd_opt(2000, 1, 1).unwrap().and_hms_opt(12, 0, 0).unwrap()
+}
+
+pub fn coordinate_descent(
+    mut point:  Vec<f64>,
+    step_value: f64,
+    max_iter:   usize,
+    f:          impl Fn(&[f64]) -> f64,
+) -> Vec<f64> {
+    let n = point.len();
+    let mut prev_value = f(&point);
+
+    let mut point_plus = Vec::new();
+    point_plus.resize(n, 0.0);
+    let mut point_minus = Vec::new();
+    point_minus.resize(n, 0.0);
+
+    for _iters in 0..max_iter {
+        let mut new_value = prev_value;
+        for i in 0..n {
+            point_plus.copy_from_slice(&point);
+            point_plus[i] += step_value;
+            let value_plus = f(&point_plus);
+
+            point_minus.copy_from_slice(&point);
+            point_minus[i] -= step_value;
+            let value_minus = f(&point_minus);
+
+            if value_plus < new_value {
+                point[i] += step_value;
+                new_value = value_plus;
+            } else if value_minus < new_value {
+                point[i] -= step_value;
+                new_value = value_minus;
+            }
+        }
+
+        if new_value >= prev_value {
+            break;
+        }
+        prev_value = new_value;
+    }
+
+    point
 }

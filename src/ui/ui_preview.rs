@@ -7,9 +7,10 @@ use crate::{
     core::{core::*, events::*, frame_processing::*},
     image::{histogram::*, info::*, io::save_image_to_tif_file, preview::*, raw::{CalibrMethods, FrameType}, stars_offset::Offset},
     options::*,
+    sky_math::math::radian_to_degree,
     utils::{io_utils::*, log_utils::*}
 };
-use super::{gtk_utils::*, module::*, sky_map::math::radian_to_degree, ui_main::*, utils::*};
+use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,

@@ -1,9 +1,9 @@
 use std::{cell::RefCell, f64::consts::PI, rc::Rc, time::Duration};
 use chrono::{NaiveDateTime, Utc};
 use gtk::{gdk, cairo, glib::{self, clone}, prelude::*};
-use crate::utils::math::linear_interpolate;
+use crate::{utils::math::linear_interpolate, sky_math::math::*};
 
-use super::{consts::*, data::*, math::*, painter::*, utils::*};
+use super::{consts::*, data::*, painter::*, utils::*};
 
 struct MousePressedData {
     hcrd:  HorizCoord,

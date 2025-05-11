@@ -6,7 +6,7 @@ use crate::{
     indi,
     options::*,
     plate_solve::*,
-    ui::sky_map::math::*
+    sky_math::math::*
 };
 
 use super::{events::*, utils::gain_to_value};

@@ -2,7 +2,12 @@ use std::{path::{Path, PathBuf}, sync::Arc};
 
 use chrono::{DateTime, Utc};
 
-use crate::{image::raw::*, indi, options::*, ui::sky_map::math::{degree_to_radian, hour_to_radian, radian_to_degree, EqCoord}};
+use crate::{
+    image::raw::*,
+    indi,
+    options::*,
+    sky_math::math::*
+};
 
 pub enum FileNameArg<'a> {
     Options(&'a CamOptions),

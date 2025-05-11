@@ -5,7 +5,7 @@ use crate::{
     indi,
     options::*,
     plate_solve::*,
-    ui::sky_map::math::*
+    sky_math::math::*
 };
 use super::{core::*, events::EventSubscriptions, utils::*};
 

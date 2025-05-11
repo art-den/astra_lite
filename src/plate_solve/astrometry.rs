@@ -1,6 +1,9 @@
 use std::{io::Read, path::PathBuf, time::Instant};
 use chrono::Utc;
-use crate::{image::{image::Image, io::save_image_layer_to_tif_file, simple_fits::*}, ui::sky_map::math::{arcmin_to_radian, degree_to_radian, j2000_time, radian_to_degree, EpochCvt}};
+use crate::{
+    image::{image::Image, io::save_image_layer_to_tif_file, simple_fits::*},
+    sky_math::math::*
+};
 use super::*;
 
 const EXECUTABLE_FNAME: &str = "solve-field";

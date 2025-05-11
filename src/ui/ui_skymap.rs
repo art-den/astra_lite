@@ -4,15 +4,21 @@ use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use crate::{
-    core::{core::*, events::*, mode_goto::GotoConfig}, image::preview::PreviewRgbData, indi::{self, degree_to_str, hour_to_str}, options::*, plate_solve::PlateSolveOkResult, utils::io_utils::*
+    core::{core::*, events::*, mode_goto::GotoConfig},
+    image::preview::PreviewRgbData,
+    indi::{self, degree_to_str, hour_to_str},
+    options::*,
+    plate_solve::PlateSolveOkResult,
+    utils::io_utils::*,
+    sky_math::math::*,
 };
 use super::{
     gtk_utils::*,
     module::*,
-    sky_map::{alt_widget::paint_altitude_by_time, data::*, math::*, painter::*},
+    sky_map::{alt_widget::paint_altitude_by_time, data::*, painter::*},
     ui_main::*,
     ui_skymap_options::SkymapOptionsDialog,
-    utils::*
+    utils::*,
 };
 use super::sky_map::{data::Observer, widget::SkymapWidget};
 

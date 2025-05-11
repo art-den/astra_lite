@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use astrometry::*;
 use chrono::{DateTime, Utc};
-use crate::{image::{image::Image, preview::PreviewRgbData, stars::StarItems}, options::PlateSolverType, ui::sky_map::math::EqCoord};
+use crate::{image::{image::Image, preview::PreviewRgbData, stars::StarItems}, options::PlateSolverType, sky_math::math::*};
 
 mod astrometry;
 
@@ -26,7 +26,6 @@ pub struct PlateSolveOkResult {
 impl PlateSolveOkResult {
     pub fn print_to_log(&self) {
         use crate::indi::value_to_sexagesimal;
-        use crate::ui::sky_map::math::*;
         log::debug!(
             "plate solver j2000 = (ra: {}, dec: {}), now = (ra: {}, dec: {}), image size = {:.6} x {:.6}",
             value_to_sexagesimal(radian_to_hour(self.crd_j2000.ra), true, 9),

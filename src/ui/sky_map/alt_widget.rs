@@ -3,9 +3,13 @@ use std::f64::consts::PI;
 use chrono::prelude::*;
 use gtk::{cairo, gdk, prelude::*};
 
-use crate::{ui::gtk_utils::*, utils::math::linear_interpolate};
+use crate::{
+    ui::gtk_utils::*,
+    utils::math::linear_interpolate,
+    sky_math::{math::*, solar_system::*}
+};
 
-use super::{data::*, math::*, solar_system::*};
+use super::data::*;
 
 pub fn paint_altitude_by_time(
     area:     &gtk::DrawingArea,

@@ -3,8 +3,8 @@ use chrono::{DateTime, Local, NaiveDateTime, Utc};
 use gtk::{cairo, gdk_pixbuf, pango};
 use itertools::{izip, Itertools};
 use serde::{Deserialize, Serialize};
-use crate::utils::math::linear_interpolate;
-use super::{consts::*, data::*, math::*, perspective_painter::PerspectivePainter, utils::*};
+use crate::{utils::math::linear_interpolate, sky_math::math::*};
+use super::{consts::*, data::*, perspective_painter::PerspectivePainter, utils::*};
 
 const GRID_TEXT_FONT_SIZE: f64 = 0.8;
 const WORD_SIZE_FONT_SIZE: f64 = 2.0;

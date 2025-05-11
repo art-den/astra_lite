@@ -10,7 +10,7 @@ use crate::{
     guiding::external_guider::*,
     image::{raw::FrameType, stars_offset::*},
     indi, options::*,
-    ui::sky_map::math::EqCoord,
+    sky_math::math::EqCoord,
     utils::timer::*
 };
 
