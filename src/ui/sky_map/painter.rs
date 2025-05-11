@@ -317,7 +317,7 @@ impl SkyMapPainter {
         const ANGLE_DIFF: f64 = 2.0 * PI / (360.0 * 60.0);
         let mut pt = Point3D { x: 0.0, y: 0.0, z: 1.0 };
         let crd1 = screen.sphere_to_screen(&pt, mag_factor);
-        pt.rotate_over_x(&RotMatrix::new(ANGLE_DIFF));
+        pt.rotate_over_x_mat(&RotMatrix::new(ANGLE_DIFF));
         let crd2 = screen.sphere_to_screen(&pt, mag_factor);
         Point2D::distance(&crd1, &crd2) / ANGLE_DIFF
     }
@@ -400,8 +400,8 @@ impl SkyMapPainter {
             let alt = a * b / f64::sqrt(a * a * sin_az * sin_az + b * b * cos_az * cos_az);
             let crd = EqCoord { dec: 0.5 * PI - alt, ra: az - angle };
             let mut pt = crd.to_sphere_pt();
-            pt.rotate_over_x(&dec_rot);
-            pt.rotate_over_z(&ra_rot);
+            pt.rotate_over_x_mat(&dec_rot);
+            pt.rotate_over_z_mat(&ra_rot);
             let crd = EqCoord::from_sphere_pt(&pt);
             self.dso_ellipse.points.push(crd);
         }
@@ -646,8 +646,8 @@ impl SkyMapPainter {
         for (a, crd) in izip!(angles, &mut coords) {
             let eq_crd = EqCoord { dec: 0.5 * PI - len, ra: a - rot_angle };
             let mut pt = eq_crd.to_sphere_pt();
-            pt.rotate_over_x(&dec_rot);
-            pt.rotate_over_z(&ra_rot);
+            pt.rotate_over_x_mat(&dec_rot);
+            pt.rotate_over_z_mat(&ra_rot);
             *crd = EqCoord::from_sphere_pt(&pt);
         }
         coords

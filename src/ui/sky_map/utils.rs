@@ -147,15 +147,15 @@ impl SphereToScreenCvt {
 
     pub fn apply_viewpoint(&self, pt: &Point3D) -> Point3D {
         let mut result = pt.clone();
-        result.rotate_over_x(&self.vp_rot_x);
-        result.rotate_over_y(&self.vp_rot_y);
+        result.rotate_over_x_mat(&self.vp_rot_x);
+        result.rotate_over_y_mat(&self.vp_rot_y);
         result
     }
 
     pub fn remove_viewpoint(&self, pt: &Point3D) -> Point3D {
         let mut pt = pt.clone();
-        pt.rotate_over_y(&self.n_vp_rot_y);
-        pt.rotate_over_x(&self.n_vp_rot_x);
+        pt.rotate_over_y_mat(&self.n_vp_rot_y);
+        pt.rotate_over_x_mat(&self.n_vp_rot_x);
         pt
     }
 }

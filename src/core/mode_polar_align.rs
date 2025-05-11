@@ -2,6 +2,7 @@ use std::{f64::consts::PI, sync::{Arc, RwLock}};
 
 
 use chrono::{NaiveDateTime, Utc};
+use itertools::Itertools;
 
 use crate::{core::{core::*, frame_processing::*}, image::{image::*, stars::StarItems}, indi, options::*, plate_solve::*, ui::sky_map::math::*};
 
@@ -14,18 +15,21 @@ struct PolarAlignmentMeasure {
     utc_time: NaiveDateTime,
 }
 
+struct Poles {
+    celestial: HorizCoord,
+    mount:     HorizCoord,
+}
+
 struct PolarAlignment {
     measurements: Vec<PolarAlignmentMeasure>,
-    pole:         Option<HorizCoord>,
-    mount_pole:   Option<HorizCoord>,
+    poles:        Option<Poles>,
 }
 
 impl PolarAlignment {
     fn new() -> Self {
         Self {
             measurements: Vec::new(),
-            pole:         None,
-            mount_pole:   None,
+            poles:        None,
         }
     }
 
@@ -33,36 +37,79 @@ impl PolarAlignment {
         self.measurements.push(measurement);
     }
 
-    fn calc_mount_pole(&mut self, longitude: f64, latitude: f64) {
-        assert!(self.measurements.len() == 3);
+    fn calc_mount_pole(&mut self, longitude: f64, latitude: f64) -> anyhow::Result<()> {
+        assert!(self.measurements.len() >= 3);
 
         let pt1 = &self.measurements[0].coord;
         let pt2 = &self.measurements[1].coord;
         let pt3 = &self.measurements[2].coord;
 
-        let vec1 = pt2 - pt1;
-        let vec2 = pt3 - pt2;
-
-        let mut mount_pole_crd = &vec1 * &vec2;
-        mount_pole_crd.normalize();
+        let mount_pole_crd = Point3D::normal(pt1, pt2, pt3)
+            .ok_or_else(|| anyhow::anyhow!("Can't calculate mount pole!"))?;
         let mount_pole = HorizCoord::from_sphere_pt(&mount_pole_crd);
 
         let cvt = EqToSphereCvt::new(longitude, latitude, &self.measurements[1].utc_time);
-        let celestial_pole = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&EqCoord { ra: 0.0, dec: 0.5 * PI }));
+        let celestial_pole = HorizCoord::from_sphere_pt(
+            &cvt.eq_to_sphere(&EqCoord { ra: 0.0, dec: 0.5 * PI })
+        );
 
-        dbg!(&mount_pole);
-        dbg!(&celestial_pole);
+        self.poles = Some(Poles {
+            celestial: celestial_pole,
+            mount: mount_pole,
+        });
 
-        self.pole = Some(celestial_pole);
-        self.mount_pole = Some(mount_pole);
+        Ok(())
     }
 
     fn pole_error(&self) -> Option<HorizCoord> {
-        let (Some(pole), Some(mnt_pole)) = (&self.pole, &self.mount_pole) else { return None; };
+        assert!(self.measurements.len() >= 3);
+
+        let Some(poles) = &self.poles else {
+            return None;
+        };
+
+        println!("===");
+
+        let mut time = 0.0; // in seconds
+        let mut mount_pole = poles.mount.clone();
+        for (m1, m2) in self.measurements[2..].iter().tuple_windows() {
+            let mut m2_crd = m2.coord.clone();
+            m2_crd.rotate_over_x(-mount_pole.az);
+            m2_crd.rotate_over_y(-mount_pole.alt);
+            let earth_rotations = time as f64 / 86164.09054;
+            m2_crd.rotate_over_z(2.0 * PI * earth_rotations);
+            m2_crd.rotate_over_y(mount_pole.alt);
+            m2_crd.rotate_over_x(mount_pole.az);
+
+            let time_diff = (m2.utc_time - m1.utc_time).num_milliseconds() as f64 / 1000.0;
+            time += time_diff;
+
+            let mut m1_crd = m1.coord.clone();
+            m1_crd.rotate_over_x(-mount_pole.az);
+            m1_crd.rotate_over_y(-mount_pole.alt);
+            let earth_rotations = time as f64 / 86164.09054;
+            m1_crd.rotate_over_z(2.0 * PI * earth_rotations);
+            m1_crd.rotate_over_y(mount_pole.alt);
+            m1_crd.rotate_over_x(mount_pole.az);
+
+            // Calc new mount pole (axis)
+            let Some(rot_angle) = Point3D::angle(&m1_crd, &m2_crd) else {
+                continue;
+            };
+            let Some(rot_axis) = Point3D::normal(&m2_crd, &m1_crd, &Point3D::zero()) else {
+                continue;
+            };
+
+            let pole_3d = mount_pole.to_sphere_pt();
+            let new_pole_3d = pole_3d.rotated_over_axis(&rot_axis, rot_angle);
+            mount_pole = HorizCoord::from_sphere_pt(&new_pole_3d);
+
+            println!("time_diff = {:.1}, rot_angle = {:.7}, mount_pole={:?}", time_diff, radian_to_degree(rot_angle), mount_pole);
+        }
 
         Some(HorizCoord {
-            alt: mnt_pole.alt - pole.alt,
-            az: mnt_pole.az - pole.az,
+            alt: mount_pole.alt - poles.celestial.alt,
+            az: mount_pole.az - poles.celestial.az,
         })
     }
 }
@@ -219,17 +266,10 @@ impl PolarAlignMode {
         // Add polar alignment error only in debug mode
         if cfg!(debug_assertions) {
             let options = self.options.read().unwrap();
-
             let az_err = degree_to_radian(options.polar_align.sim_az_err);
             let alt_err = degree_to_radian(options.polar_align.sim_alt_err);
-
-            // Add azimuth error
-            coord.rotate_over_x(&RotMatrix::new(az_err));
-
-            // Add altitude error
-            coord.rotate_over_x(&RotMatrix::new(-az_err));
-            coord.rotate_over_y(&RotMatrix::new(alt_err));
-            coord.rotate_over_x(&RotMatrix::new(az_err));
+            coord.rotate_over_y(alt_err);
+            coord.rotate_over_x(az_err);
         }
 
         // Image for preview in map
@@ -245,30 +285,28 @@ impl PolarAlignMode {
         };
         self.subscribers.notify(Event::PlateSolve(event));
 
+        self.alignment.add_measurement(PolarAlignmentMeasure {
+            coord:    coord.clone(),
+            utc_time: image_time,
+        });
+
         match self.step {
             Step::First | Step::Second => {
-                self.alignment.add_measurement(PolarAlignmentMeasure {
-                    coord:    coord,
-                    utc_time: image_time,
-                });
                 self.move_next_pos()?;
                 self.state = State::Goto;
             }
             Step::Third => {
-                self.alignment.add_measurement(PolarAlignmentMeasure {
-                    coord:    coord,
-                    utc_time: image_time,
-                });
                 self.alignment.calc_mount_pole(
                     degree_to_radian(self.s_opts.longitude),
                     degree_to_radian(self.s_opts.latitude),
-                );
+                )?;
                 self.notify_error()?;
                 self.start_capture()?;
                 self.step = Step::Corr;
                 self.state = State::Capture;
             }
             Step::Corr => {
+                self.notify_error()?;
                 self.start_capture()?;
                 self.state = State::Capture;
             }
@@ -309,7 +347,7 @@ impl PolarAlignMode {
         Ok(())
     }
 
-    fn notify_error(&mut self) -> anyhow::Result<()> {
+    fn notify_error(&self) -> anyhow::Result<()> {
         let Some(error) = self.alignment.pole_error() else {
             anyhow::bail!("Mount pole is not calculated!");
         };

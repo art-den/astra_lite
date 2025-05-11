@@ -81,12 +81,12 @@ fn test_eq_coord_to_sphere() {
 // XYZ mapping:
 //
 //  ^X(alt=Pi/2)
-//  |
-//  |   Y(az=0,alt=0)
+//  |   North
+//  |   Z(az=0,alt=0)
 //  |  /
 //  | /
 //  |/
-//  *----->Z(az=Pi/2,alt=0)
+//  *----->Y(az=Pi/2,alt=0) East
 #[derive(Clone, Copy)]
 pub struct HorizCoord {
     pub alt: f64,
@@ -157,28 +157,86 @@ pub struct Point3D {
 }
 
 impl Point3D {
-    pub fn rotate_over_x(&mut self, mat: &RotMatrix) {
+    pub fn zero() -> Point3D {
+        Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        }
+    }
+
+    pub fn length(&self) -> f64 {
+        f64::sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
+    }
+
+    pub fn rotate_over_x_mat(&mut self, mat: &RotMatrix) {
         mat.rotate(&mut self.z, &mut self.y);
     }
 
-    pub fn rotate_over_y(&mut self, mat: &RotMatrix) {
+    pub fn rotate_over_x(&mut self, angle: f64) {
+        self.rotate_over_x_mat(&RotMatrix::new(angle));
+    }
+
+    pub fn rotate_over_y_mat(&mut self, mat: &RotMatrix) {
         mat.rotate(&mut self.z, &mut self.x);
     }
 
-    pub fn rotate_over_z(&mut self, mat: &RotMatrix) {
+    pub fn rotate_over_y(&mut self, angle: f64) {
+        self.rotate_over_y_mat(&RotMatrix::new(angle));
+    }
+
+    pub fn rotate_over_z_mat(&mut self, mat: &RotMatrix) {
         mat.rotate(&mut self.y, &mut self.x);
     }
 
-    pub fn normalize(&mut self) {
-        let len = f64::sqrt(self.x * self.x + self.y * self.y + self.z * self.z);
-        if len == 0.0 {
-            return;
-        }
-
-        self.x /= len;
-        self.y /= len;
-        self.z /= len;
+    pub fn rotate_over_z(&mut self, angle: f64) {
+        self.rotate_over_z_mat(&RotMatrix::new(angle));
     }
+
+    pub fn normalized(&self) -> Option<Self> {
+        let len = self.length();
+        if len != 0.0 {
+            Some(Self {
+                x: self.x / len,
+                y: self.y / len,
+                z: self.z / len,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn rotated_over_axis(&self, axis: &Self, angle: f64) -> Self {
+        let cos_angle = f64::cos(angle);
+        let sin_angle = f64::sin(angle);
+        let scalar_prod = self.x * axis.x + self.y * axis.y + self.z * axis.z;
+        let x = axis.x * scalar_prod * (1.0 - cos_angle) + self.x * cos_angle + (-axis.z * self.y + axis.y *
+                         self.z) * sin_angle;
+        let y = axis.y * scalar_prod * (1.0 - cos_angle) + self.y * cos_angle + (axis.z * self.x + -axis.x *
+                         self.z) * sin_angle;
+        let z = axis.z * scalar_prod * (1.0 - cos_angle) + self.z * cos_angle + (-axis.y * self.x + axis.x *
+                         self.y) * sin_angle;
+        Self {x, y, z}
+    }
+
+    pub fn normal(pt1: &Self, pt2: &Self, pt3: &Self) -> Option<Self> {
+        let vec1 = pt2 - pt1;
+        let vec2 = pt3 - pt2;
+        let result = &vec1 * &vec2;
+        result.normalized()
+    }
+
+    pub fn angle(pt1: &Point3D, pt2: &Point3D) -> Option<f64> {
+        let len1 = pt1.length();
+        let len2 = pt2.length();
+        if len1 != 0.0 && len2 != 0.0 {
+            let scalar_prod = (pt1.x * pt2.x + pt1.y * pt2.y + pt1.z * pt2.z) / (len1 * len2);
+            Some(f64::acos(scalar_prod))
+        } else {
+            None
+        }
+    }
+
 }
 
 impl Mul<&Matrix33> for &Point3D {
@@ -222,7 +280,7 @@ impl Sub<&Point3D> for &Point3D {
 fn test_point3d_rotate() {
     let mut pt = Point3D { x: 0.0, y: 0.0, z: 1.0 };
     let mat = RotMatrix::new(degree_to_radian(90.0));
-    pt.rotate_over_x(&mat);
+    pt.rotate_over_x_mat(&mat);
     assert!(f64::abs(pt.x-0.0) < 1e-10);
     assert!(f64::abs(pt.y-1.0) < 1e-10);
     assert!(f64::abs(pt.z-0.0) < 1e-10);
@@ -284,8 +342,8 @@ impl EqToSphereCvt {
     }
 
     pub fn apply(&self, pt: &mut Point3D) {
-        pt.rotate_over_z(&self.z_rot);
-        pt.rotate_over_y(&self.y_rot);
+        pt.rotate_over_z_mat(&self.z_rot);
+        pt.rotate_over_y_mat(&self.y_rot);
     }
 
     pub fn eq_to_sphere(&self, eq_crd: &EqCoord) -> Point3D {
@@ -296,8 +354,8 @@ impl EqToSphereCvt {
 
     pub fn sphere_to_eq(&self, pt: &Point3D) -> EqCoord {
         let mut pt = pt.clone();
-        pt.rotate_over_y(&self.n_y_rot);
-        pt.rotate_over_z(&self.n_z_rot);
+        pt.rotate_over_y_mat(&self.n_y_rot);
+        pt.rotate_over_z_mat(&self.n_z_rot);
         EqCoord::from_sphere_pt(&pt)
     }
 }
