@@ -297,7 +297,7 @@
         <property name="can-focus">False</property>
         <property name="opacity">0.5</property>
         <property name="halign">start</property>
-        <property name="label" translatable="yes">● &lt;b&gt;Point telescope to about 30° from celestial pole&lt;/b&gt; and press "Start". Do not point to equator! This will lead to large polar axis alignment errors.
+        <property name="label" translatable="yes">● &lt;b&gt;Point telescope to about 30° from celestial pole&lt;/b&gt; and press "Start". Do not point to equator! This will lead to large measurement error.
 ● Then &lt;b&gt;turn the mount's adjustment screws&lt;/b&gt; to correct the altitude and azimuth error.
 ● If the initial error was large, repeat the alignment again by clicking "Restart"</property>
         <property name="use-markup">True</property>

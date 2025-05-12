@@ -1,8 +1,6 @@
 use std::{f64::consts::PI, sync::{Arc, RwLock}};
 
-
 use chrono::{NaiveDateTime, Utc};
-use itertools::Itertools;
 
 use crate::{
     core::{core::*, frame_processing::*},
@@ -22,21 +20,21 @@ struct PolarAlignmentMeasure {
     utc_time: NaiveDateTime,
 }
 
-struct Poles {
-    celestial: HorizCoord,
-    mount:     HorizCoord,
+struct Result {
+    earth_pole:   HorizCoord,
+    target_point: HorizCoord,
 }
 
 struct PolarAlignment {
     measurements: Vec<PolarAlignmentMeasure>,
-    poles:        Option<Poles>,
+    result:  Option<Result>,
 }
 
 impl PolarAlignment {
     fn new() -> Self {
         Self {
             measurements: Vec::new(),
-            poles:        None,
+            result:  None,
         }
     }
 
@@ -47,23 +45,61 @@ impl PolarAlignment {
     fn calc_mount_pole(&mut self, longitude: f64, latitude: f64) -> anyhow::Result<()> {
         assert!(self.measurements.len() >= 3);
 
-        let pt1 = &self.measurements[0].coord;
-        let pt2 = &self.measurements[1].coord;
-        let pt3 = &self.measurements[2].coord;
+        let pt1 = &self.measurements[0];
+        let pt2 = &self.measurements[1];
+        let pt3 = &self.measurements[2];
 
-        let mount_pole_crd = Point3D::normal(pt1, pt2, pt3)
+        // Calc mount pole (axis)
+
+        let mount_pole_crd = Point3D::normal(&pt1.coord, &pt2.coord, &pt3.coord)
             .normalized()
             .ok_or_else(|| anyhow::anyhow!("Can't calculate mount pole!"))?;
+
         let mount_pole = HorizCoord::from_sphere_pt(&mount_pole_crd);
 
+        // Correct points by pole (rotate around pole) and calc pole again.
+        // It is not nessesary but better to do it for slow mounts
+
+        let time_diff1 = (pt2.utc_time - pt1.utc_time).num_milliseconds() as f64 / 1000.0;
+        let time_diff2 = (pt3.utc_time - pt2.utc_time).num_milliseconds() as f64 / 1000.0;
+
+        let pt1_corrected_crd = Self::rotate_point_around_pole_with_earth_speed(
+            &pt1.coord,
+            &mount_pole,
+            time_diff1 + time_diff2
+        );
+
+        let pt2_corrected_crd = Self::rotate_point_around_pole_with_earth_speed(
+            &pt2.coord,
+            &mount_pole,
+            time_diff2
+        );
+
+        let mount_pole_crd = Point3D::normal(&pt1_corrected_crd, &pt2_corrected_crd, &pt3.coord)
+            .normalized()
+            .ok_or_else(|| anyhow::anyhow!("Can't calculate corrected mount pole!"))?;
+
+        let mount_pole = HorizCoord::from_sphere_pt(&mount_pole_crd);
+
+        // Earth pole (axis)
+
         let cvt = EqToSphereCvt::new(longitude, latitude, &self.measurements[1].utc_time);
-        let celestial_pole = HorizCoord::from_sphere_pt(
+        let earth_pole = HorizCoord::from_sphere_pt(
             &cvt.eq_to_sphere(&EqCoord { ra: 0.0, dec: 0.5 * PI })
         );
 
-        self.poles = Some(Poles {
-            celestial: celestial_pole,
-            mount: mount_pole,
+        // Find target point (3rd point with error adjust)
+
+        let alt_error = mount_pole.alt - earth_pole.alt;
+        let az_error = mount_pole.az - earth_pole.az;
+        let mut target_pt = pt3.coord.clone();
+        target_pt.rotate_over_x(-az_error);
+        target_pt.rotate_over_y(-alt_error);
+        let target_point = HorizCoord::from_sphere_pt(&target_pt);
+
+        self.result = Some(Result {
+            earth_pole,
+            target_point
         });
 
         Ok(())
@@ -72,64 +108,56 @@ impl PolarAlignment {
     fn pole_error(&self) -> Option<HorizCoord> {
         assert!(self.measurements.len() >= 3);
 
-        let Some(poles) = &self.poles else {
+        let Some(result) = &self.result else {
             return None;
         };
 
-        let last_point = &self.measurements.last().unwrap();
-        let mut time = (last_point.utc_time - self.measurements[2].utc_time).num_milliseconds() as f64 / 1000.0;
-        let mut mount_pole = poles.mount.clone();
-        for (m1, m2) in self.measurements[2..].iter().tuple_windows() {
-            let mut m1_crd = m1.coord.clone();
-            // rotate m1_crd around mount_pole with Earth speed
-            m1_crd.rotate_over_x(-mount_pole.az);
-            m1_crd.rotate_over_y(-mount_pole.alt);
-            let earth_rotations = time as f64 / 86164.09054;
-            m1_crd.rotate_over_z(2.0 * PI * earth_rotations);
-            m1_crd.rotate_over_y(mount_pole.alt);
-            m1_crd.rotate_over_x(mount_pole.az);
+        let third = &self.measurements[2];
+        let last = self.measurements.last().unwrap();
 
-            let time_diff = (m2.utc_time - m1.utc_time).num_milliseconds() as f64 / 1000.0;
-            time -= time_diff;
+        let target = Self::rotate_point_around_pole_with_earth_speed(
+            &result.target_point.to_sphere_pt(),
+            &result.earth_pole,
+            (last.utc_time - third.utc_time).num_milliseconds() as f64 / 1000.0
+        );
 
-            let mut m2_crd = m2.coord.clone();
-            // rotate m2_crd around mount_pole with Earth speed
-            m2_crd.rotate_over_x(-mount_pole.az);
-            m2_crd.rotate_over_y(-mount_pole.alt);
-            let earth_rotations = time as f64 / 86164.09054;
-            m2_crd.rotate_over_z(2.0 * PI * earth_rotations);
-            m2_crd.rotate_over_y(mount_pole.alt);
-            m2_crd.rotate_over_x(mount_pole.az);
-
-            // How much user rotated the mount?
-            let changes = coordinate_descent(
-                vec![0.0, 0.0],
-                PI / (360.0 * 60.0 * 60.0 * 5.0),
-                1_000_000,
-                |changes| {
-                    let mut crd = m1_crd.clone();
-                    crd.rotate_over_y(changes[0]);
-                    crd.rotate_over_x(changes[1]);
-                    Point3D::angle(&crd, &m2_crd).unwrap_or(0.0)
-                },
-            );
-
-            // Calc new mount pole (axis)
-            let mut pole_3d = mount_pole.to_sphere_pt();
-            pole_3d.rotate_over_y(changes[0]);
-            pole_3d.rotate_over_x(changes[1]);
-            mount_pole = HorizCoord::from_sphere_pt(&pole_3d);
-        }
+        // How we do rotate mount to go from target point to last point
+        let changes = coordinate_descent(
+            vec![0.0, 0.0],
+            PI / (360.0 * 60.0 * 60.0 * 5.0),
+            1_000_000,
+            |changes| {
+                let mut crd = last.coord.clone();
+                crd.rotate_over_y(changes[0]);
+                crd.rotate_over_x(changes[1]);
+                Point3D::angle(&crd, &target).unwrap_or(0.0)
+            },
+        );
 
         Some(HorizCoord {
-            alt: mount_pole.alt - poles.celestial.alt,
-            az: mount_pole.az - poles.celestial.az,
+            alt: -changes[0],
+            az: -changes[1],
         })
     }
 
     fn clear(&mut self) {
         self.measurements.clear();
-        self.poles = None;
+        self.result = None;
+    }
+
+    fn rotate_point_around_pole_with_earth_speed(
+        point:           &Point3D,
+        pole:            &HorizCoord,
+        time_in_seconds: f64
+    ) -> Point3D {
+        let mut target = point.clone();
+        target.rotate_over_x(-pole.az);
+        target.rotate_over_y(-pole.alt);
+        let earth_rotations = time_in_seconds as f64 / 86164.09054;
+        target.rotate_over_z(2.0 * PI * earth_rotations);
+        target.rotate_over_y(pole.alt);
+        target.rotate_over_x(pole.az);
+        target
     }
 
 }
