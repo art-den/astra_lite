@@ -3,7 +3,7 @@ use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
     core::{core::{Core, ModeType}, events::*, mode_polar_align::PolarAlignmentEvent},
-    indi::{self, degree_to_str},
+    indi::{self, degree_to_str_short},
     options::*,
     sky_math::math::*,
 };
@@ -327,12 +327,10 @@ impl PolarAlignUi {
 
     fn show_polar_alignment_error(&self, error: &Option<HorizCoord>) {
         if let Some(error) = error {
-            let alt_err_str = degree_to_str(radian_to_degree(error.alt));
-            let az_err_str = degree_to_str(radian_to_degree(error.az));
-            let alt_label = format!("Alt: {}", alt_err_str);
-            let az_label = format!("Az: {}", az_err_str);
-            self.widgets.l_alt_err.set_label(&alt_label);
-            self.widgets.l_az_err.set_label(&az_label);
+            let alt_err_str = degree_to_str_short(radian_to_degree(error.alt));
+            let az_err_str = degree_to_str_short(radian_to_degree(error.az));
+            self.widgets.l_alt_err.set_label(&alt_err_str);
+            self.widgets.l_az_err.set_label(&az_err_str);
 
             let alt_err_arrow = if error.alt < 0.0 { "↑" } else { "↓" };
             let az_err_arrow = if error.az < 0.0 { "→" } else { "←" };

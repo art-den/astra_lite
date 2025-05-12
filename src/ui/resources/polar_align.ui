@@ -227,27 +227,12 @@
       </packing>
     </child>
     <child>
-      <!-- n-columns=2 n-rows=2 -->
+      <!-- n-columns=5 n-rows=2 -->
       <object class="GtkGrid">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="row-spacing">5</property>
         <property name="column-spacing">5</property>
-        <property name="column-homogeneous">True</property>
-        <child>
-          <object class="GtkLabel" id="l_alt_err">
-            <property name="visible">True</property>
-            <property name="can-focus">False</property>
-            <property name="label" translatable="yes">Alt:</property>
-            <attributes>
-              <attribute name="scale" value="2"/>
-            </attributes>
-          </object>
-          <packing>
-            <property name="left-attach">0</property>
-            <property name="top-attach">0</property>
-          </packing>
-        </child>
         <child>
           <object class="GtkLabel" id="l_alt_err_arr">
             <property name="visible">True</property>
@@ -255,21 +240,37 @@
             <property name="label" translatable="yes">label</property>
           </object>
           <packing>
-            <property name="left-attach">0</property>
-            <property name="top-attach">1</property>
+            <property name="left-attach">1</property>
+            <property name="top-attach">0</property>
           </packing>
         </child>
         <child>
-          <object class="GtkLabel" id="l_az_err">
+          <object class="GtkLabel" id="l_alt_err">
             <property name="visible">True</property>
             <property name="can-focus">False</property>
-            <property name="label" translatable="yes">Az:</property>
+            <property name="hexpand">True</property>
+            <property name="label" translatable="yes">---</property>
             <attributes>
               <attribute name="scale" value="2"/>
             </attributes>
           </object>
           <packing>
-            <property name="left-attach">1</property>
+            <property name="left-attach">0</property>
+            <property name="top-attach">1</property>
+            <property name="width">2</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkLabel">
+            <property name="visible">True</property>
+            <property name="can-focus">False</property>
+            <property name="label" translatable="yes">Alt</property>
+            <attributes>
+              <attribute name="scale" value="2"/>
+            </attributes>
+          </object>
+          <packing>
+            <property name="left-attach">0</property>
             <property name="top-attach">0</property>
           </packing>
         </child>
@@ -280,8 +281,51 @@
             <property name="label" translatable="yes">label</property>
           </object>
           <packing>
-            <property name="left-attach">1</property>
+            <property name="left-attach">4</property>
+            <property name="top-attach">0</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkLabel">
+            <property name="visible">True</property>
+            <property name="can-focus">False</property>
+            <property name="label" translatable="yes">Az</property>
+            <attributes>
+              <attribute name="scale" value="2"/>
+            </attributes>
+          </object>
+          <packing>
+            <property name="left-attach">3</property>
+            <property name="top-attach">0</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkLabel" id="l_az_err">
+            <property name="visible">True</property>
+            <property name="can-focus">False</property>
+            <property name="hexpand">True</property>
+            <property name="label" translatable="yes">---</property>
+            <attributes>
+              <attribute name="scale" value="2"/>
+            </attributes>
+          </object>
+          <packing>
+            <property name="left-attach">3</property>
             <property name="top-attach">1</property>
+            <property name="width">2</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkSeparator">
+            <property name="visible">True</property>
+            <property name="can-focus">False</property>
+            <property name="halign">center</property>
+            <property name="orientation">vertical</property>
+          </object>
+          <packing>
+            <property name="left-attach">2</property>
+            <property name="top-attach">0</property>
+            <property name="height">2</property>
           </packing>
         </child>
       </object>

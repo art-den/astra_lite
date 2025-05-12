@@ -48,6 +48,11 @@ pub fn degree_to_str(value: f64) -> String {
     value_to_sexagesimal_impl(value, false, true, 8, "°", "'", "\"")
 }
 
+pub fn degree_to_str_short(value: f64) -> String {
+    value_to_sexagesimal_impl(value, false, true, 6, "°", "'", "\"")
+}
+
+
 pub fn hour_to_str(value: f64) -> String {
     value_to_sexagesimal_impl(value, false, false, 9, "h", "m", "s")
 }
