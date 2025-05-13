@@ -40,7 +40,7 @@ impl AstrometryPlateSolver {
             file_name: None,
             mode: Mode::None,
             config: PlateSolveConfig::default(),
-            radius_try: RadiusTry::First,
+            radius_try: RadiusTry::Blind,
             start_time: Instant::now(),
         }
     }
@@ -313,6 +313,7 @@ impl PlateSolverIface for AstrometryPlateSolver {
             anyhow::bail!("AstrometryPlateSolver already started");
         }
         self.config = config.clone();
+        self.radius_try = RadiusTry::First;
         match data {
             PlateSolverInData::Image(image) =>
                 self.save_image_file(image)?,
@@ -329,22 +330,24 @@ impl PlateSolverIface for AstrometryPlateSolver {
 
     fn get_result(&mut self) -> anyhow::Result<PlateSolveResult> {
         let result = self.get_result_impl();
+
+        // Try to restart platesolver
         if matches!(result, Ok(PlateSolveResult::Failed))
         && self.config.eq_coord.is_some() {
-            match self.radius_try {
-                RadiusTry::First => {
+            match (&self.radius_try, self.config.allow_blind) {
+                (RadiusTry::First, _) => {
                     log::debug!("Restarting platesolver");
                     self.radius_try = RadiusTry::Second;
                     self.exec_solve_field()?;
                     return Ok(PlateSolveResult::Waiting);
                 }
-                RadiusTry::Second => {
+                (RadiusTry::Second, true) => {
                     log::debug!("Restarting platesolver");
                     self.radius_try = RadiusTry::Blind;
                     self.exec_solve_field()?;
                     return Ok(PlateSolveResult::Waiting);
                 }
-                RadiusTry::Blind => {
+                _ => {
                     return result;
                 }
             }

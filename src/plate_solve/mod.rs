@@ -6,11 +6,23 @@ use crate::{image::{image::Image, preview::PreviewRgbData, stars::StarItems}, op
 
 mod astrometry;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct PlateSolveConfig {
     pub eq_coord:       Option<EqCoord>,
     pub time_out:       u32, // in seconds
     pub blind_time_out: u32, // in seconds
+    pub allow_blind:    bool,
+}
+
+impl Default for PlateSolveConfig {
+    fn default() -> Self {
+        Self {
+            eq_coord:       None,
+            time_out:       10,
+            blind_time_out: 30,
+            allow_blind:    true
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

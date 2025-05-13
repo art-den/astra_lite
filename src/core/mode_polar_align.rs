@@ -166,6 +166,7 @@ impl PolarAlignment {
 
 const AFTER_GOTO_WAIT_TIME: usize = 3; // seconds
 
+#[derive(PartialEq)]
 enum State {
     Undefined,
     Goto,
@@ -173,6 +174,7 @@ enum State {
     PlateSolve,
 }
 
+#[derive(PartialEq)]
 enum Step {
     Undefined,
     GotoInitialPos,
@@ -272,14 +274,22 @@ impl PolarAlignMode {
             dec: degree_to_radian(dec),
             ra:  hour_to_radian(ra),
         });
+        if self.step == Step::Corr {
+            config.allow_blind = false;
+        }
         Ok(config)
     }
 
-    fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> anyhow::Result<()> {
+    // Returns Ok(true) on silent error
+    fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> anyhow::Result<bool> {
         let image = image.read().unwrap();
         let config = self.get_platesolver_config()?;
-        self.plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
-        Ok(())
+        let start_result = self.plate_solver.start(&PlateSolverInData::Image(&image), &config);
+        if let Err(err) = start_result {
+            self.process_platesolver_fail(err.to_string().as_str())?;
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     fn plate_solve_stars(
@@ -287,18 +297,37 @@ impl PolarAlignMode {
         stars:      &StarItems,
         img_width:  usize,
         img_height: usize
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         let config = self.get_platesolver_config()?;
         let stars_arg = PlateSolverInData::Stars{ stars, img_width, img_height };
-        self.plate_solver.start(&stars_arg, &config)?;
-        Ok(())
+        let start_result = self.plate_solver.start(&stars_arg, &config);
+        if let Err(err) = start_result {
+            self.process_platesolver_fail(err.to_string().as_str())?;
+            return Ok(false);
+        }
+        Ok(true)
     }
 
+    fn process_platesolver_fail(&mut self, err_str: &str) -> anyhow::Result<()> {
+        if self.step == Step::Corr {
+            self.start_capture()?;
+            self.state = State::Capture;
+            return Ok(());
+        } else {
+            anyhow::bail!("{}", err_str);
+        }
+}
+
     fn try_process_plate_solving_result(&mut self) -> anyhow::Result<NotifyResult> {
+        assert!(self.state == State::PlateSolve);
+
         let ps_result = match self.plate_solver.get_result()? {
             PlateSolveResult::Waiting => return Ok(NotifyResult::Empty),
             PlateSolveResult::Done(result) => result,
-            PlateSolveResult::Failed => anyhow::bail!("Can't platesolve image")
+            PlateSolveResult::Failed => {
+                self.process_platesolver_fail("Can't platesolve image")?;
+                return Ok(NotifyResult::Empty);
+            }
         };
 
         ps_result.print_to_log();
@@ -523,12 +552,14 @@ impl Mode for PolarAlignMode {
         let stars_supported = self.plate_solver.support_stars_as_input();
         match (&self.state, &fp_result.data, stars_supported) {
             (State::Capture, FrameProcessResultData::Image(image), false) => {
-                self.plate_solve_image(image)?;
+                let ok = self.plate_solve_image(image)?;
+                if !ok { return Ok(NotifyResult::Empty); }
                 self.state = State::PlateSolve;
                 return Ok(NotifyResult::ProgressChanges);
             }
             (State::Capture, FrameProcessResultData::LightFrameInfo(info), true) => {
-                self.plate_solve_stars(&info.stars.items, info.image.width, info.image.height)?;
+                let ok = self.plate_solve_stars(&info.stars.items, info.image.width, info.image.height)?;
+                if !ok { return Ok(NotifyResult::Empty); }
                 self.state = State::PlateSolve;
                 return Ok(NotifyResult::ProgressChanges);
             }
