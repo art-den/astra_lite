@@ -128,8 +128,8 @@ impl PolarAlignment {
             1_000_000,
             |changes| {
                 let mut crd = last.coord.clone();
-                crd.rotate_over_y(changes[0]);
-                crd.rotate_over_x(changes[1]);
+                crd.rotate_over_x(changes[0]);
+                crd.rotate_over_y(changes[1]);
                 Point3D::angle(&crd, &target).unwrap_or(0.0)
             },
         );
