@@ -135,8 +135,8 @@ impl PolarAlignment {
         );
 
         Some(HorizCoord {
-            alt: -changes[0],
-            az: -changes[1],
+            alt: -changes[1],
+            az: -changes[0],
         })
     }
 
