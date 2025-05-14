@@ -5,7 +5,7 @@ use chrono::{NaiveDateTime, Utc};
 use crate::{
     core::{core::*, frame_processing::*},
     image::{image::*, stars::StarItems},
-    indi::{self, degree_to_str_short},
+    indi,
     options::*,
     plate_solve::*,
     sky_math::math::*,
@@ -54,30 +54,6 @@ impl PolarAlignment {
         let mount_pole_crd = Point3D::normal(&pt1.coord, &pt2.coord, &pt3.coord)
             .normalized()
             .ok_or_else(|| anyhow::anyhow!("Can't calculate mount pole!"))?;
-
-        let mount_pole = HorizCoord::from_sphere_pt(&mount_pole_crd);
-
-        // Correct points by pole (rotate around pole) and calc pole again.
-        // It is not nessesary but better to do it for slow mounts
-
-        let time_diff1 = (pt2.utc_time - pt1.utc_time).num_milliseconds() as f64 / 1000.0;
-        let time_diff2 = (pt3.utc_time - pt2.utc_time).num_milliseconds() as f64 / 1000.0;
-
-        let pt1_corrected_crd = Self::rotate_point_around_pole_with_earth_speed(
-            &pt1.coord,
-            &mount_pole,
-            time_diff1 + time_diff2
-        );
-
-        let pt2_corrected_crd = Self::rotate_point_around_pole_with_earth_speed(
-            &pt2.coord,
-            &mount_pole,
-            time_diff2
-        );
-
-        let mount_pole_crd = Point3D::normal(&pt1_corrected_crd, &pt2_corrected_crd, &pt3.coord)
-            .normalized()
-            .ok_or_else(|| anyhow::anyhow!("Can't calculate corrected mount pole!"))?;
 
         let mount_pole = HorizCoord::from_sphere_pt(&mount_pole_crd);
 
