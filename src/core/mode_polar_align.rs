@@ -5,7 +5,7 @@ use chrono::{NaiveDateTime, Utc};
 use crate::{
     core::{core::*, frame_processing::*},
     image::{image::*, stars::StarItems},
-    indi,
+    indi::{self, degree_to_str_short},
     options::*,
     plate_solve::*,
     sky_math::math::*,
@@ -88,10 +88,11 @@ impl PolarAlignment {
             &cvt.eq_to_sphere(&EqCoord { ra: 0.0, dec: 0.5 * PI })
         );
 
-        // Find target point (3rd point with error adjust)
+        // Find target point (3rd point with -error adjust)
 
         let alt_error = mount_pole.alt - earth_pole.alt;
         let az_error = mount_pole.az - earth_pole.az;
+
         let mut target_pt = pt3.coord.clone();
         target_pt.rotate_over_x(-az_error);
         target_pt.rotate_over_y(-alt_error);
@@ -105,7 +106,7 @@ impl PolarAlignment {
         Ok(())
     }
 
-    fn pole_error(&self) -> Option<HorizCoord> {
+    fn pole_error(&self) -> Option<(HorizCoord, f64)> {
         assert!(self.measurements.len() >= 3);
 
         let Some(result) = &self.result else {
@@ -133,11 +134,14 @@ impl PolarAlignment {
                 Point3D::angle(&crd, &target).unwrap_or(0.0)
             },
         );
+        let horiz_error = HorizCoord {alt: -changes[1], az: -changes[0]};
 
-        Some(HorizCoord {
-            alt: -changes[1],
-            az: -changes[0],
-        })
+        // Calculate total error
+        let alt_err_pt = HorizCoord { alt: horiz_error.alt, az: 0.0 }.to_sphere_pt();
+        let az_err_pt = HorizCoord { alt: 0.0, az: horiz_error.az }.to_sphere_pt();
+        let total_error = Point3D::angle(&alt_err_pt, &az_err_pt).unwrap_or_default();
+
+        Some((horiz_error, total_error))
     }
 
     fn clear(&mut self) {
@@ -184,9 +188,15 @@ enum Step {
     Corr
 }
 
+
+
 #[derive(Clone)]
 pub enum PolarAlignmentEvent {
-    Error(Option<HorizCoord>),
+    Empty,
+    Error{
+        horiz: HorizCoord,
+        total: f64,
+    },
 }
 
 pub struct PolarAlignMode {
@@ -428,12 +438,12 @@ impl PolarAlignMode {
     }
 
     fn notify_error(&self) -> anyhow::Result<()> {
-        let Some(error) = self.alignment.pole_error() else {
+        let Some((horiz, total)) = self.alignment.pole_error() else {
             anyhow::bail!("Mount pole is not calculated!");
         };
-        self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Error(
-            Some(error)
-        )));
+        self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Error {
+            horiz, total
+        }));
         Ok(())
     }
 }
@@ -494,9 +504,7 @@ impl Mode for PolarAlignMode {
             dec: degree_to_radian(dec),
         });
 
-        self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Error(
-            None
-        )));
+        self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Empty));
 
         self.start_capture()?;
         self.state = State::Capture;
@@ -508,9 +516,7 @@ impl Mode for PolarAlignMode {
         if let Some(initial_crd) = self.initial_crd.clone() {
             self.abort()?;
 
-            self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Error(
-                None
-            )));
+            self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Empty));
 
             self.indi.set_after_coord_set_action(
                 &self.mount,

@@ -78,6 +78,7 @@ struct Widgets {
     l_az_err:        gtk::Label,
     l_alt_err_arr:   gtk::Label,
     l_az_err_arr:    gtk::Label,
+    l_tot_err:       gtk::Label,
 }
 
 struct PolarAlignUi {
@@ -147,8 +148,9 @@ impl PolarAlignUi {
         self.widgets.spb_angle.set_digits(0);
         self.widgets.spb_angle.set_increments(5.0, 15.0);
 
-        self.widgets.l_alt_err.set_label("");
-        self.widgets.l_az_err.set_label("");
+        self.widgets.l_alt_err.set_label("---");
+        self.widgets.l_az_err.set_label("---");
+        self.widgets.l_tot_err.set_label("---");
         self.widgets.l_alt_err_arr.set_label("");
         self.widgets.l_az_err_arr.set_label("");
 
@@ -159,11 +161,11 @@ impl PolarAlignUi {
             self.widgets.spb_sim_az_err.set_visible(true);
         }
 
-        self.widgets.spb_sim_alt_err.set_range(-5.0, 5.0);
+        self.widgets.spb_sim_alt_err.set_range(-45.0, 45.0);
         self.widgets.spb_sim_alt_err.set_digits(2);
         self.widgets.spb_sim_alt_err.set_increments(0.01, 0.1);
 
-        self.widgets.spb_sim_az_err.set_range(-5.0, 5.0);
+        self.widgets.spb_sim_az_err.set_range(-45.0, 45.0);
         self.widgets.spb_sim_az_err.set_digits(2);
         self.widgets.spb_sim_az_err.set_increments(0.01, 0.1);
     }
@@ -198,7 +200,9 @@ impl PolarAlignUi {
 
     fn correct_widgets_props_impl(&self, mount_device: &str, cam_device: &Option<DeviceAndProp>) {
         let mnt_active = self.indi.is_device_enabled(mount_device).unwrap_or(false);
-        let cam_active = cam_device.as_ref().map(|cam_device| self.indi.is_device_enabled(&cam_device.name).unwrap_or(false)).unwrap_or(false);
+        let cam_active = cam_device.as_ref().map(|cam_device|
+            self.indi.is_device_enabled(&cam_device.name).unwrap_or(false)
+        ).unwrap_or(false);
         let indi_connected = self.indi.state() == indi::ConnState::Connected;
 
         let mode_data = self.core.mode_data();
@@ -278,10 +282,7 @@ impl PolarAlignUi {
                 self.correct_widgets_props_impl(&mount_device, &cam_device);
             }
             MainThreadEvent::Core(Event::PolarAlignment(event)) => {
-                match event {
-                    PolarAlignmentEvent::Error(error) =>
-                        self.show_polar_alignment_error(&error),
-                }
+                self.show_polar_alignment_error(event);
             }
             MainThreadEvent::Indi(
                 indi::Event::ConnChange(_)|
@@ -325,42 +326,51 @@ impl PolarAlignUi {
         self.core.abort_active_mode();
     }
 
-    fn show_polar_alignment_error(&self, error: &Option<HorizCoord>) {
-        if let Some(error) = error {
-            let alt_err_str = degree_to_str_short(radian_to_degree(error.alt));
-            let az_err_str = degree_to_str_short(radian_to_degree(error.az));
-            self.widgets.l_alt_err.set_label(&alt_err_str);
-            self.widgets.l_az_err.set_label(&az_err_str);
+    fn show_polar_alignment_error(&self, event: PolarAlignmentEvent) {
+        match event {
+            PolarAlignmentEvent::Error { horiz, total } => {
+                let alt_err_str = degree_to_str_short(radian_to_degree(horiz.alt));
+                self.widgets.l_alt_err.set_label(&alt_err_str);
 
-            let alt_err_arrow = if error.alt < 0.0 { "↑" } else { "↓" };
-            let az_err_arrow = if error.az < 0.0 { "→" } else { "←" };
-            self.widgets.l_alt_err_arr.set_label(&alt_err_arrow);
-            self.widgets.l_az_err_arr.set_label(&az_err_arrow);
+                let az_err_str = degree_to_str_short(radian_to_degree(horiz.az));
+                self.widgets.l_az_err.set_label(&az_err_str);
 
-            let set_all_label_size = |label: &gtk::Label, err: f64| {
-                let err_minutes = f64::abs(radian_to_degree(err) * 60.0);
-                let scale = if err_minutes > 60.0 {
-                    5
-                } else if err_minutes > 2.0 {
-                    3
-                } else {
-                    1
+                let total_err_str = degree_to_str_short(radian_to_degree(total));
+                self.widgets.l_tot_err.set_label(&total_err_str);
+
+                let alt_err_arrow = if horiz.alt < 0.0 { "↑" } else { "↓" };
+                let az_err_arrow = if horiz.az < 0.0 { "→" } else { "←" };
+                self.widgets.l_alt_err_arr.set_label(&alt_err_arrow);
+                self.widgets.l_az_err_arr.set_label(&az_err_arrow);
+
+                let set_all_label_size = |label: &gtk::Label, err: f64| {
+                    let err_minutes = f64::abs(radian_to_degree(err) * 60.0);
+                    let scale = if err_minutes > 60.0 {
+                        5
+                    } else if err_minutes > 2.0 {
+                        3
+                    } else {
+                        1
+                    };
+
+                    let alt_attrs = pango::AttrList::new();
+                    let attr_alt_size = pango::AttrSize::new(scale * 10 * pango::SCALE);
+                    alt_attrs.insert(attr_alt_size);
+
+                    label.set_attributes(Some(&alt_attrs));
                 };
 
-                let alt_attrs = pango::AttrList::new();
-                let attr_alt_size = pango::AttrSize::new(scale * 10 * pango::SCALE);
-                alt_attrs.insert(attr_alt_size);
+                set_all_label_size(&self.widgets.l_alt_err_arr, horiz.alt);
+                set_all_label_size(&self.widgets.l_az_err_arr, horiz.az);
+            }
+            PolarAlignmentEvent::Empty => {
+                self.widgets.l_alt_err.set_label("---");
+                self.widgets.l_az_err.set_label("---");
+                self.widgets.l_tot_err.set_label("---");
 
-                label.set_attributes(Some(&alt_attrs));
-            };
-
-            set_all_label_size(&self.widgets.l_alt_err_arr, error.alt);
-            set_all_label_size(&self.widgets.l_az_err_arr, error.az);
-        } else {
-            self.widgets.l_alt_err.set_label("---");
-            self.widgets.l_az_err.set_label("---");
-            self.widgets.l_alt_err_arr.set_text("");
-            self.widgets.l_az_err_arr.set_text("");
+                self.widgets.l_alt_err_arr.set_text("");
+                self.widgets.l_az_err_arr.set_text("");
+            }
         }
     }
 }

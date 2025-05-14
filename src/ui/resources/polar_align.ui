@@ -266,6 +266,7 @@
             <property name="can-focus">False</property>
             <property name="label" translatable="yes">Alt</property>
             <attributes>
+              <attribute name="weight" value="bold"/>
               <attribute name="scale" value="2"/>
             </attributes>
           </object>
@@ -291,6 +292,7 @@
             <property name="can-focus">False</property>
             <property name="label" translatable="yes">Az</property>
             <attributes>
+              <attribute name="weight" value="bold"/>
               <attribute name="scale" value="2"/>
             </attributes>
           </object>
@@ -336,6 +338,71 @@
       </packing>
     </child>
     <child>
+      <object class="GtkSeparator">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+      </object>
+      <packing>
+        <property name="expand">False</property>
+        <property name="fill">True</property>
+        <property name="position">5</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkBox">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+        <property name="orientation">vertical</property>
+        <property name="spacing">5</property>
+        <child>
+          <object class="GtkLabel">
+            <property name="visible">True</property>
+            <property name="can-focus">False</property>
+            <property name="label" translatable="yes">Total Error</property>
+            <attributes>
+              <attribute name="weight" value="bold"/>
+            </attributes>
+          </object>
+          <packing>
+            <property name="expand">False</property>
+            <property name="fill">True</property>
+            <property name="position">0</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkLabel" id="l_tot_err">
+            <property name="visible">True</property>
+            <property name="can-focus">False</property>
+            <property name="label" translatable="yes">---</property>
+            <attributes>
+              <attribute name="scale" value="2"/>
+            </attributes>
+          </object>
+          <packing>
+            <property name="expand">False</property>
+            <property name="fill">True</property>
+            <property name="position">1</property>
+          </packing>
+        </child>
+      </object>
+      <packing>
+        <property name="expand">False</property>
+        <property name="fill">True</property>
+        <property name="position">6</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkSeparator">
+        <property name="visible">True</property>
+        <property name="can-focus">False</property>
+      </object>
+      <packing>
+        <property name="expand">False</property>
+        <property name="fill">True</property>
+        <property name="position">7</property>
+      </packing>
+    </child>
+    <child>
       <object class="GtkLabel">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
@@ -350,7 +417,7 @@
       <packing>
         <property name="expand">False</property>
         <property name="fill">True</property>
-        <property name="position">5</property>
+        <property name="position">8</property>
       </packing>
     </child>
   </object>
