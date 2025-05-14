@@ -27,14 +27,14 @@ struct Result {
 
 struct PolarAlignment {
     measurements: Vec<PolarAlignmentMeasure>,
-    result:  Option<Result>,
+    result:       Option<Result>,
 }
 
 impl PolarAlignment {
     fn new() -> Self {
         Self {
             measurements: Vec::new(),
-            result:  None,
+            result:       None,
         }
     }
 
@@ -124,7 +124,7 @@ impl PolarAlignment {
         // How we do rotate mount to go from target point to last point
         let changes = coordinate_descent(
             vec![0.0, 0.0],
-            PI / (360.0 * 60.0 * 60.0 * 5.0),
+            PI / (360.0 * 60.0 * 60.0),
             1_000_000,
             |changes| {
                 let mut crd = last.coord.clone();
