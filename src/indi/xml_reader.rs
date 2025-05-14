@@ -241,6 +241,8 @@ impl XmlStreamReader {
             let read_res = stream.read(&mut self.stream_buffer);
             self.read_len = match read_res {
                 Err(e) => match e.kind() {
+                    ErrorKind::Interrupted =>
+                        0,
                     ErrorKind::NotConnected |
                     ErrorKind::ConnectionAborted |
                     ErrorKind::ConnectionReset =>
