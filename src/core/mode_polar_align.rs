@@ -5,7 +5,7 @@ use chrono::{NaiveDateTime, Utc};
 use crate::{
     core::{core::*, frame_processing::*},
     image::{image::*, stars::StarItems},
-    indi,
+    indi::{self, degree_to_str},
     options::*,
     plate_solve::*,
     sky_math::math::*,
@@ -45,17 +45,29 @@ impl PolarAlignment {
     fn calc_mount_pole(&mut self, longitude: f64, latitude: f64) -> anyhow::Result<()> {
         assert!(self.measurements.len() >= 3);
 
+        log::debug!(
+            "Calculating PA error for latitude={}, longitude={}",
+            degree_to_str(radian_to_degree(latitude)),
+            degree_to_str(radian_to_degree(longitude)),
+        );
+
+        // Calc mount pole (axis)
+
         let pt1 = &self.measurements[0];
         let pt2 = &self.measurements[1];
         let pt3 = &self.measurements[2];
-
-        // Calc mount pole (axis)
 
         let mount_pole_crd = Point3D::normal(&pt1.coord, &pt2.coord, &pt3.coord)
             .normalized()
             .ok_or_else(|| anyhow::anyhow!("Can't calculate mount pole!"))?;
 
         let mount_pole = HorizCoord::from_sphere_pt(&mount_pole_crd);
+
+        log::debug!(
+            "Mount pole alt={}, az={}",
+            degree_to_str(radian_to_degree(mount_pole.alt)),
+            degree_to_str(radian_to_degree(mount_pole.az)),
+        );
 
         // Earth pole (axis)
 
@@ -64,15 +76,35 @@ impl PolarAlignment {
             &cvt.eq_to_sphere(&EqCoord { ra: 0.0, dec: 0.5 * PI })
         );
 
-        // Find target point (3rd point with -error adjust)
+        log::debug!(
+            "Earth pole alt={}, az={}",
+            degree_to_str(radian_to_degree(earth_pole.alt)),
+            degree_to_str(radian_to_degree(earth_pole.az)),
+        );
+
+        // Polar alignment initial error
 
         let alt_error = mount_pole.alt - earth_pole.alt;
         let az_error = mount_pole.az - earth_pole.az;
+
+        log::debug!(
+            "PA error alt={}, az={}",
+            degree_to_str(radian_to_degree(alt_error)),
+            degree_to_str(radian_to_degree(az_error)),
+        );
+
+        // Find target point (3rd point with -error adjust)
 
         let mut target_pt = pt3.coord.clone();
         target_pt.rotate_over_x(-az_error);
         target_pt.rotate_over_y(-alt_error);
         let target_point = HorizCoord::from_sphere_pt(&target_pt);
+
+        log::debug!(
+            "Target point alt={}, az={}",
+            degree_to_str(radian_to_degree(target_point.alt)),
+            degree_to_str(radian_to_degree(target_point.az)),
+        );
 
         self.result = Some(Result {
             earth_pole,
@@ -91,11 +123,12 @@ impl PolarAlignment {
 
         let third = &self.measurements[2];
         let last = self.measurements.last().unwrap();
+        let time_from_third_point = (last.utc_time - third.utc_time).num_milliseconds() as f64 / 1000.0;
 
         let target = Self::rotate_point_around_pole_with_earth_speed(
             &result.target_point.to_sphere_pt(),
             &result.earth_pole,
-            (last.utc_time - third.utc_time).num_milliseconds() as f64 / 1000.0
+            time_from_third_point
         );
 
         // How we do rotate mount to go from target point to last point
@@ -116,6 +149,14 @@ impl PolarAlignment {
         let alt_err_pt = HorizCoord { alt: horiz_error.alt, az: 0.0 }.to_sphere_pt();
         let az_err_pt = HorizCoord { alt: 0.0, az: horiz_error.az }.to_sphere_pt();
         let total_error = Point3D::angle(&alt_err_pt, &az_err_pt).unwrap_or_default();
+
+        log::debug!(
+            "New PA error alt={}, az={}. Total error={}, time from 3rd point={:.0}s",
+            degree_to_str(radian_to_degree(horiz_error.alt)),
+            degree_to_str(radian_to_degree(horiz_error.az)),
+            degree_to_str(radian_to_degree(total_error)),
+            time_from_third_point,
+        );
 
         Some((horiz_error, total_error))
     }
