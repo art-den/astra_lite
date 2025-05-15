@@ -8,7 +8,7 @@ use crate::{
     indi::{self, degree_to_str},
     options::*,
     plate_solve::*,
-    sky_math::math::*,
+    sky_math::{math::*, solar_system::calc_atmospheric_refraction},
 };
 
 use super::{consts::*, events::*, utils::{check_telescope_is_at_desired_position, gain_to_value}};
@@ -373,7 +373,12 @@ impl PolarAlignMode {
             &image_time
         );
 
-        let mut coord = cvt.eq_to_sphere(&ps_result.crd_now);
+        let coord = cvt.eq_to_sphere(&ps_result.crd_now);
+
+        // correct atmospheric refraction
+        let mut horiz = HorizCoord::from_sphere_pt(&coord);
+        horiz.alt += calc_atmospheric_refraction(horiz.alt);
+        let mut coord = horiz.to_sphere_pt();
 
         // Add polar alignment error only in debug mode
         if cfg!(debug_assertions) {

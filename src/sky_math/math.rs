@@ -342,7 +342,7 @@ pub fn radian_to_degree(radian: f64) -> f64 {
     180.0 * radian / PI
 }
 
-pub fn degree_to_radian(degree: f64) -> f64 {
+pub const fn degree_to_radian(degree: f64) -> f64 {
     PI * degree / 180.0
 }
 

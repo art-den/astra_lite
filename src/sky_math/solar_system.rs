@@ -212,54 +212,10 @@ pub fn pn_matrix(t0: f64, t: f64) -> Matrix33 {
     m
 }
 
-pub fn aberrat(t: f64) -> Point3D {
-    const P2: f64 = 2.0 * PI;
-    fn frac(mut x: f64) -> f64 {
-        x = f64::fract(x);
-        if x < 0.0 { x += 1.0; }
-        x
-    }
-    let l = P2 * frac(0.27908 + 100.00214 * t);
-    let cl = f64::cos(l);
-    Point3D {
-        x: -0.994E-4 * f64::sin(l),
-        y: 0.912E-4 * cl,
-        z: 0.395E-4 * cl,
-    }
-}
-
-fn cart(r: f64, dec: f64, ra: f64) -> Point3D {
-    let rcst = r * f64::cos(dec);
-    Point3D {
-        x: rcst * f64::cos(ra),
-        y: rcst * f64::sin(ra),
-        z: r * f64::sin(dec)
-    }
-}
-
-fn polar(x: f64, y: f64, z: f64, r: &mut f64, dec: &mut f64, ra: &mut f64) {
-    let mut rho = x * x + y * y;
-    *r = f64::sqrt(rho + z * z);
-    *ra = f64::atan2(y, x);
-    if *ra < 0.0 { *ra += 2.0 * PI; }
-    rho = f64::sqrt(rho);
-    *dec = f64::atan2(z, rho);
-}
-
-fn apparent(
-    pn_mat:  &Matrix33,
-    aberrat: Option<&Point3D>,
-    coord:   &EqCoord
-) -> EqCoord {
-    let crd3d = cart(1.0, coord.dec, coord.ra);
-    let mut pt = &crd3d * pn_mat;
-    if let Some(aberrat) = aberrat {
-        pt.x += aberrat.x;
-        pt.y += aberrat.y;
-        pt.z += aberrat.z;
-    }
-    let mut result = EqCoord::default();
-    let mut _r = 0.0;
-    polar(pt.x, pt.y, pt.z, &mut _r, &mut result.dec, &mut result.ra);
-    result
+pub fn calc_atmospheric_refraction(alt: f64) -> f64 {
+    const MIN_ALT: f64 = 3.0; // in degrees
+    let c = 0.5 * PI - f64::max(alt, MIN_ALT * PI / 180.0);
+    const A: f64 = degree_to_radian(57.085 / (60.0 * 60.0));
+    const B: f64 = degree_to_radian(0.0666 / (60.0 * 60.0));
+    A * f64::tan(c) - B * f64::tan(c)
 }
