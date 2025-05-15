@@ -51,35 +51,40 @@ impl PolarAlignment {
             degree_to_str(radian_to_degree(longitude)),
         );
 
+        // Earth pole (axis)
+
+        let cvt = EqToSphereCvt::new(longitude, latitude, &self.measurements[1].utc_time);
+        let earth_pole_3d = cvt.eq_to_sphere(&EqCoord { ra: 0.0, dec: 0.5 * PI });
+        let earth_pole = HorizCoord::from_sphere_pt(&earth_pole_3d);
+
+        log::debug!(
+            "Earth pole alt={}, az={}",
+            degree_to_str(radian_to_degree(earth_pole.alt)),
+            degree_to_str(radian_to_degree(earth_pole.az)),
+        );
+
         // Calc mount pole (axis)
 
         let pt1 = &self.measurements[0];
         let pt2 = &self.measurements[1];
         let pt3 = &self.measurements[2];
 
-        let mount_pole_crd = Point3D::normal(&pt1.coord, &pt2.coord, &pt3.coord)
+        let mut mount_pole_3d = Point3D::normal(&pt1.coord, &pt2.coord, &pt3.coord)
             .normalized()
             .ok_or_else(|| anyhow::anyhow!("Can't calculate mount pole!"))?;
 
-        let mount_pole = HorizCoord::from_sphere_pt(&mount_pole_crd);
+        if mount_pole_3d.x.is_sign_positive() != earth_pole_3d.x.is_sign_positive() {
+            mount_pole_3d.x = -mount_pole_3d.x;
+            mount_pole_3d.y = -mount_pole_3d.y;
+            mount_pole_3d.z = -mount_pole_3d.z;
+        }
+
+        let mount_pole = HorizCoord::from_sphere_pt(&mount_pole_3d);
 
         log::debug!(
             "Mount pole alt={}, az={}",
             degree_to_str(radian_to_degree(mount_pole.alt)),
             degree_to_str(radian_to_degree(mount_pole.az)),
-        );
-
-        // Earth pole (axis)
-
-        let cvt = EqToSphereCvt::new(longitude, latitude, &self.measurements[1].utc_time);
-        let earth_pole = HorizCoord::from_sphere_pt(
-            &cvt.eq_to_sphere(&EqCoord { ra: 0.0, dec: 0.5 * PI })
-        );
-
-        log::debug!(
-            "Earth pole alt={}, az={}",
-            degree_to_str(radian_to_degree(earth_pole.alt)),
-            degree_to_str(radian_to_degree(earth_pole.az)),
         );
 
         // Polar alignment initial error
