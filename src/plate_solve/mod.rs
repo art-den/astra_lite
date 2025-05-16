@@ -9,6 +9,7 @@ mod astrometry;
 #[derive(Debug, Clone)]
 pub struct PlateSolveConfig {
     pub eq_coord:       Option<EqCoord>,
+    pub eq_coord_j2000: Option<EqCoord>,
     pub time_out:       u32, // in seconds
     pub blind_time_out: u32, // in seconds
     pub allow_blind:    bool,
@@ -18,6 +19,7 @@ impl Default for PlateSolveConfig {
     fn default() -> Self {
         Self {
             eq_coord:       None,
+            eq_coord_j2000: None,
             time_out:       10,
             blind_time_out: 30,
             allow_blind:    true

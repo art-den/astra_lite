@@ -154,6 +154,8 @@ pub struct RawImageInfo {
     pub pixel_size_x:   Option<f64>, // um
     pub pixel_size_y:   Option<f64>, // um
     pub calibr_methods: CalibrMethods,
+    pub dec:            Option<f64>, // deg
+    pub ra:             Option<f64>, // deg
 }
 
 pub struct RawImage {

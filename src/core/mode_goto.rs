@@ -341,6 +341,15 @@ impl Mode for GotoMode {
                 let mut config = PlateSolveConfig::default();
                 config.time_out = self.ps_opts.timeout;
                 config.blind_time_out = self.ps_opts.blind_timeout;
+                let image = image.read().unwrap();
+                if let Some(raw_info) = &image.raw_info {
+                    if let (Some(dec), Some(ra)) = (raw_info.dec, raw_info.ra) {
+                        config.eq_coord_j2000 = Some(EqCoord {
+                            dec: degree_to_radian(dec),
+                            ra: degree_to_radian(ra),
+                        });
+                    }
+                }
                 if plate_solver.support_stars_as_input() {
                     plate_solver.start(
                         &PlateSolverInData::Stars{
@@ -351,7 +360,7 @@ impl Mode for GotoMode {
                         &config
                     )?;
                 } else {
-                    let image = image.read().unwrap();
+
                     plate_solver.start(
                         &PlateSolverInData::Image(&image),
                         &config

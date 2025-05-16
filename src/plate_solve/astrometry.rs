@@ -85,15 +85,22 @@ impl AstrometryPlateSolver {
             .arg("--temp-axy");
 
         let mut blind = true;
-        if let Some(crd) = &self.config.eq_coord {
+        if self.config.eq_coord.is_some() || self.config.eq_coord_j2000.is_some() {
             let mut add_ra_and_dec = || {
-                let j2000 = j2000_time();
-                let time = Utc::now().naive_utc();
-                let epoch_cvt = EpochCvt::new(&time, &j2000);
-                let crd_j2000 = epoch_cvt.convert_eq(&crd);
+                let crd_j2000 = if let Some(crd) = &self.config.eq_coord {
+                    let j2000 = j2000_time();
+                    let time = Utc::now().naive_utc();
+                    let epoch_cvt = EpochCvt::new(&time, &j2000);
+                    epoch_cvt.convert_eq(&crd)
+                } else if let Some(crd) = &self.config.eq_coord_j2000 {
+                    crd.clone()
+                } else {
+                    unreachable!()
+                };
                 cmd.arg("--ra").arg(format!("{:.6}", radian_to_degree(crd_j2000.ra)));
                 cmd.arg("--dec").arg(format!("{:.6}", radian_to_degree(crd_j2000.dec)));
             };
+
             match self.radius_try {
                 RadiusTry::First  => {
                     add_ra_and_dec();

@@ -43,6 +43,8 @@ pub fn load_raw_image_from_fits_reader(
     let focal_len    = image_hdu.get_f64("FOCALLEN");
     let pixel_size_x = image_hdu.get_f64("PIXSIZE1");
     let pixel_size_y = image_hdu.get_f64("PIXSIZE2");
+    let dec          = image_hdu.get_f64("DEC");
+    let ra           = image_hdu.get_f64("RA");
 
     let max_value = if bitdepth > 0 {
         ((1 << bitdepth) - 1) as u16
@@ -67,6 +69,7 @@ pub fn load_raw_image_from_fits_reader(
         camera, ccd_temp, focal_len,
         pixel_size_x, pixel_size_y,
         calibr_methods: CalibrMethods::empty(),
+        dec, ra
     };
 
     let mut data = Vec::new();
