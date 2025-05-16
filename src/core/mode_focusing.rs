@@ -13,7 +13,6 @@ use super::{core::*, events::*, frame_processing::*, utils::*};
 
 const MAX_FOCUS_TOTAL_TRY_CNT: usize = 8;
 const MAX_FOCUS_SAMPLE_TRY_CNT: usize = 4;
-const ANTI_BACKLASH_STEPS: f64 = 5.0;
 const MAX_FOCUS_CHANGE_TIME: usize = 15;
 const MAX_FOCUS_TRY_SET_CNT: usize = 2;
 
@@ -178,7 +177,7 @@ impl FocusingMode {
         };
         log::debug!("Setting focuser value={:.1}, anti_backlash={}", pos, anti_backlash);
         if anti_backlash {
-            let anti_backlash_pos = pos - ANTI_BACKLASH_STEPS * self.f_opts.step;
+            let anti_backlash_pos = pos - self.f_opts.anti_backlash_steps as f64;
             let anti_backlash_pos = anti_backlash_pos.max(0.0);
 
             self.set_new_focus_value(anti_backlash_pos)?;
@@ -321,7 +320,7 @@ impl FocusingMode {
                             self.result_pos = Some(result_pos);
 
                             // for anti-backlash
-                            let anti_backlash_pos = result_pos - ANTI_BACKLASH_STEPS * self.f_opts.step;
+                            let anti_backlash_pos = result_pos - self.f_opts.anti_backlash_steps as f64;
                             let anti_backlash_pos = anti_backlash_pos.max(0.0).round();
                             log::debug!(
                                 "Set RESULT focuser value for anti backlash {:.1}",

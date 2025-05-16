@@ -47,22 +47,23 @@ pub fn init_ui(
 
 #[derive(FromBuilder)]
 struct Widgets {
-    bx:            gtk::Box,
-    grd:           gtk::Grid,
-    cb_list:       gtk::ComboBoxText,
-    l_value:       gtk::Label,
-    spb_val:       gtk::SpinButton,
-    chb_temp:      gtk::CheckButton,
-    spb_temp:      gtk::SpinButton,
-    chb_fwhm:      gtk::CheckButton,
-    cb_fwhm:       gtk::ComboBoxText,
-    chb_period:    gtk::CheckButton,
-    cb_period:     gtk::ComboBoxText,
-    spb_measures:  gtk::SpinButton,
-    spb_auto_step: gtk::SpinButton,
-    spb_exp:       gtk::SpinButton,
-    cbx_gain:      gtk::ComboBoxText,
-    da_auto:       gtk::DrawingArea,
+    bx:              gtk::Box,
+    grd:             gtk::Grid,
+    cb_list:         gtk::ComboBoxText,
+    l_value:         gtk::Label,
+    spb_val:         gtk::SpinButton,
+    chb_temp:        gtk::CheckButton,
+    spb_temp:        gtk::SpinButton,
+    chb_fwhm:        gtk::CheckButton,
+    cb_fwhm:         gtk::ComboBoxText,
+    chb_period:      gtk::CheckButton,
+    cb_period:       gtk::ComboBoxText,
+    spb_measures:    gtk::SpinButton,
+    spb_auto_step:   gtk::SpinButton,
+    spb_exp:         gtk::SpinButton,
+    spb_extra_steps: gtk::SpinButton,
+    cbx_gain:        gtk::ComboBoxText,
+    da_auto:         gtk::DrawingArea,
 }
 
 struct FocuserUi {
@@ -101,30 +102,33 @@ impl Drop for FocuserUi {
 impl UiModule for FocuserUi {
     fn show_options(&self, options: &Options) {
         let widgets = &self.widgets;
-        widgets.chb_temp     .set_active   (options.focuser.on_temp_change);
-        widgets.spb_temp     .set_value    (options.focuser.max_temp_change);
-        widgets.chb_fwhm     .set_active   (options.focuser.on_fwhm_change);
-        widgets.cb_fwhm      .set_active_id(Some(options.focuser.max_fwhm_change.to_string()).as_deref());
-        widgets.chb_period   .set_active   (options.focuser.periodically);
-        widgets.cb_period    .set_active_id(Some(options.focuser.period_minutes.to_string()).as_deref());
-        widgets.spb_measures .set_value    (options.focuser.measures as f64);
-        widgets.spb_auto_step.set_value    (options.focuser.step);
-        widgets.cbx_gain     .set_active_id(Some(options.focuser.gain.to_active_id()));
+        widgets.chb_temp       .set_active   (options.focuser.on_temp_change);
+        widgets.spb_temp       .set_value    (options.focuser.max_temp_change);
+        widgets.chb_fwhm       .set_active   (options.focuser.on_fwhm_change);
+        widgets.cb_fwhm        .set_active_id(Some(options.focuser.max_fwhm_change.to_string()).as_deref());
+        widgets.chb_period     .set_active   (options.focuser.periodically);
+        widgets.cb_period      .set_active_id(Some(options.focuser.period_minutes.to_string()).as_deref());
+        widgets.spb_measures   .set_value    (options.focuser.measures as f64);
+        widgets.spb_auto_step  .set_value    (options.focuser.step);
+        widgets.cbx_gain       .set_active_id(Some(options.focuser.gain.to_active_id()));
+        widgets.spb_extra_steps.set_value    (options.focuser.anti_backlash_steps as f64);
+
         set_spb_value(&widgets.spb_exp, options.focuser.exposure);
     }
 
     fn get_options(&self, options: &mut Options) {
         let widgets = &self.widgets;
-        options.focuser.on_temp_change  = widgets.chb_temp.is_active();
-        options.focuser.max_temp_change = widgets.spb_temp.value();
-        options.focuser.on_fwhm_change  = widgets.chb_fwhm.is_active();
-        options.focuser.max_fwhm_change = widgets.cb_fwhm.active_id().and_then(|v| v.parse().ok()).unwrap_or(20);
-        options.focuser.periodically    = widgets.chb_period.is_active();
-        options.focuser.period_minutes  = widgets.cb_period.active_id().and_then(|v| v.parse().ok()).unwrap_or(120);
-        options.focuser.measures        = widgets.spb_measures.value() as u32;
-        options.focuser.step            = widgets.spb_auto_step.value();
-        options.focuser.exposure        = widgets.spb_exp.value();
-        options.focuser.gain            = Gain::from_active_id(widgets.cbx_gain.active_id().as_deref());
+        options.focuser.on_temp_change      = widgets.chb_temp.is_active();
+        options.focuser.max_temp_change     = widgets.spb_temp.value();
+        options.focuser.on_fwhm_change      = widgets.chb_fwhm.is_active();
+        options.focuser.max_fwhm_change     = widgets.cb_fwhm.active_id().and_then(|v| v.parse().ok()).unwrap_or(20);
+        options.focuser.periodically        = widgets.chb_period.is_active();
+        options.focuser.period_minutes      = widgets.cb_period.active_id().and_then(|v| v.parse().ok()).unwrap_or(120);
+        options.focuser.measures            = widgets.spb_measures.value() as u32;
+        options.focuser.step                = widgets.spb_auto_step.value();
+        options.focuser.exposure            = widgets.spb_exp.value();
+        options.focuser.gain                = Gain::from_active_id(widgets.cbx_gain.active_id().as_deref());
+        options.focuser.anti_backlash_steps = widgets.spb_extra_steps.value() as usize;
     }
 
     fn panels(&self) -> Vec<Panel> {
@@ -301,6 +305,10 @@ impl FocuserUi {
         self.widgets.spb_exp.set_range(0.1, 60.0);
         self.widgets.spb_exp.set_digits(1);
         self.widgets.spb_exp.set_increments(0.1, 1.0);
+
+        self.widgets.spb_extra_steps.set_range(0.0, 10_000.0);
+        self.widgets.spb_extra_steps.set_digits(0);
+        self.widgets.spb_extra_steps.set_increments(25.0, 100.0);
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
