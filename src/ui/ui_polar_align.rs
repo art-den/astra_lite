@@ -33,6 +33,7 @@ pub fn init_ui(
     obj.connect_widgets_events();
     obj.connect_indi_and_core_events();
     obj.connect_delayed_actions_events();
+    obj.update_mount_speed_list();
 
     obj
 }
@@ -40,6 +41,7 @@ pub fn init_ui(
 #[derive(Hash, Eq, PartialEq)]
 enum DelayedAction {
     CorrectWidgetsProps,
+    UpdateMountSpeedList,
 }
 
 enum MainThreadEvent {
@@ -279,6 +281,7 @@ impl PolarAlignUi {
                 let options = self.options.read().unwrap();
                 let cam_device = options.cam.device.clone();
                 drop(options);
+                self.update_mount_speed_list();
                 self.correct_widgets_props_impl(&mount_device, &cam_device);
             }
             MainThreadEvent::Core(Event::PolarAlignment(event)) => {
@@ -292,6 +295,14 @@ impl PolarAlignUi {
             ) => {
                 self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
             }
+            MainThreadEvent::Indi(
+                indi::Event::PropChange(change)
+            ) => {
+                if change.prop_name.as_str() == "TELESCOPE_SLEW_RATE" {
+                    self.delayed_actions.schedule(DelayedAction::UpdateMountSpeedList);
+                }
+            }
+
             _ => {}
         }
     }
@@ -300,6 +311,36 @@ impl PolarAlignUi {
         match action {
             DelayedAction::CorrectWidgetsProps => {
                 self.correct_widgets_props();
+            }
+            DelayedAction::UpdateMountSpeedList => {
+                self.update_mount_speed_list();
+            }
+        }
+    }
+
+    fn update_mount_speed_list(&self) {
+        let options = self.options.read().unwrap();
+        let mount_device = options.mount.device.clone();
+
+        let list = self.indi.mount_get_slew_speed_list(&mount_device).unwrap_or_default();
+        self.widgets.cbx_speed.remove_all();
+        if !list.is_empty() {
+            self.widgets.cbx_speed.append(None, "---");
+        }
+        for (id, text) in list {
+            self.widgets.cbx_speed.append(
+                Some(&id),
+                text.as_ref().unwrap_or(&id).as_str()
+            );
+        }
+        if options.polar_align.speed.is_some() {
+            self.widgets.cbx_speed.set_active_id(options.polar_align.speed.as_deref());
+            if self.widgets.cbx_speed.active().is_none() {
+                self.widgets.cbx_speed.append(
+                    options.polar_align.speed.as_deref(),
+                    options.polar_align.speed.as_ref().map(|v| v.as_str()).unwrap_or_default()
+                );
+                self.widgets.cbx_speed.set_active_id(options.polar_align.speed.as_deref());
             }
         }
     }

@@ -192,10 +192,13 @@ impl PolarAlignment {
 
 const AFTER_GOTO_WAIT_TIME: usize = 3; // seconds
 
-#[derive(PartialEq)]
 enum State {
     Undefined,
-    Goto,
+    Goto {
+        time:   usize,
+        ok_cnt: usize,
+        target: EqCoord,
+    },
     Capture,
     PlateSolve,
 }
@@ -235,9 +238,6 @@ pub struct PolarAlignMode {
     subscribers:  Arc<EventSubscriptions>,
     ps_opts:      PlateSolverOptions,
     plate_solver: PlateSolver,
-    goto_time:    usize,
-    goto_ok_cnt:  usize,
-    goto_pos:     EqCoord,
     alignment:    PolarAlignment,
     image_time:   Option<NaiveDateTime>,
     initial_crd:  Option<EqCoord>,
@@ -281,9 +281,6 @@ impl PolarAlignMode {
             subscribers: Arc::clone(subscribers),
             ps_opts:     opts.plate_solver.clone(),
             alignment:   PolarAlignment::new(),
-            goto_time:   0,
-            goto_ok_cnt: 0,
-            goto_pos:    Default::default(),
             image_time:  None,
             initial_crd: None,
             cam_opts,
@@ -351,7 +348,7 @@ impl PolarAlignMode {
 }
 
     fn try_process_plate_solving_result(&mut self) -> anyhow::Result<NotifyResult> {
-        assert!(self.state == State::PlateSolve);
+        assert!(matches!(self.state, State::PlateSolve));
 
         let ps_result = match self.plate_solver.get_result()? {
             PlateSolveResult::Waiting => return Ok(NotifyResult::Empty),
@@ -409,8 +406,7 @@ impl PolarAlignMode {
 
         match self.step {
             Step::First | Step::Second => {
-                self.move_next_pos()?;
-                self.state = State::Goto;
+                self.goto_next_pos()?;
             }
             Step::Third => {
                 self.alignment.calc_mount_pole(
@@ -434,7 +430,7 @@ impl PolarAlignMode {
         Ok(NotifyResult::ProgressChanges)
     }
 
-    fn move_next_pos(&mut self) -> anyhow::Result<()> {
+    fn goto_next_pos(&mut self) -> anyhow::Result<()> {
         let (cur_ra, cur_dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
         let cur_ra = hour_to_radian(cur_ra);
         let cur_dec = degree_to_radian(cur_dec);
@@ -445,22 +441,37 @@ impl PolarAlignMode {
         let mut new_ra = cur_ra + degree_to_radian(0.5 * angle);
         while new_ra < 0.0 { new_ra += 2.0 * PI; }
         while new_ra >= 2.0 * PI { new_ra -= 2.0 * PI; }
-        self.goto_pos = EqCoord { ra: new_ra, dec: cur_dec };
+        self.goto_impl(new_ra, cur_dec)?;
+        Ok(())
+    }
+
+    fn goto_impl(&mut self, ra: f64, dec: f64) -> anyhow::Result<()> {
+        if let Some(slew_speed) = &self.pa_opts.speed {
+            self.indi.mount_set_slew_speed(
+                &self.mount,
+                slew_speed,
+                true,
+                INDI_SET_PROP_TIMEOUT
+            )?;
+        }
         self.indi.set_after_coord_set_action(
             &self.mount,
             indi::AfterCoordSetAction::Track,
             true,
-            Some(1000)
+            INDI_SET_PROP_TIMEOUT
         )?;
         self.indi.mount_set_eq_coord(
             &self.mount,
-            radian_to_hour(self.goto_pos.ra),
-            radian_to_degree(self.goto_pos.dec),
+            radian_to_hour(ra),
+            radian_to_degree(dec),
             true,
             None
         )?;
-        self.goto_time = 0;
-        self.goto_ok_cnt = 0;
+        self.state = State::Goto {
+            time: 0,
+            ok_cnt: 0,
+            target: EqCoord { dec, ra },
+        };
         Ok(())
     }
 
@@ -485,10 +496,10 @@ impl Mode for PolarAlignMode {
             (Step::GotoInitialPos, _                ) => 0,
             (Step::First,          State::Capture   ) => 0,
             (Step::First,          State::PlateSolve) => 1,
-            (Step::First,          State::Goto      ) => 2,
+            (Step::First,          State::Goto{..}  ) => 2,
             (Step::Second,         State::Capture   ) => 3,
             (Step::Second,         State::PlateSolve) => 4,
-            (Step::Second,         State::Goto      ) => 5,
+            (Step::Second,         State::Goto{..}  ) => 5,
             (Step::Third,          State::Capture   ) => 6,
             (Step::Third,          State::PlateSolve) => 7,
             (Step::Corr,           _                ) => 8,
@@ -503,10 +514,10 @@ impl Mode for PolarAlignMode {
             (Step::GotoInitialPos, _        ) => "Goto initial position",
             (Step::First,  State::Capture   ) => "1st capture",
             (Step::First,  State::PlateSolve) => "1st platesolve",
-            (Step::First,  State::Goto      ) => "1st goto",
+            (Step::First,  State::Goto{..}  ) => "1st goto",
             (Step::Second, State::Capture   ) => "2nd capture",
             (Step::Second, State::PlateSolve) => "2nd platesolve",
-            (Step::Second, State::Goto      ) => "2nd goto",
+            (Step::Second, State::Goto{..}  ) => "2nd goto",
             (Step::Third,  State::Capture   ) => "3rd capture",
             (Step::Third,  State::PlateSolve) => "3rd platesolve",
             (Step::Corr,   State::Capture   ) => "Capture",
@@ -542,31 +553,11 @@ impl Mode for PolarAlignMode {
     fn restart(&mut self) -> anyhow::Result<()> {
         if let Some(initial_crd) = self.initial_crd.clone() {
             self.abort()?;
-
             self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Empty));
-
-            self.indi.set_after_coord_set_action(
-                &self.mount,
-                indi::AfterCoordSetAction::Track,
-                true,
-                Some(1000)
-            )?;
-            self.indi.mount_set_eq_coord(
-                &self.mount,
-                radian_to_hour(initial_crd.ra),
-                radian_to_degree(initial_crd.dec),
-                true,
-                None
-            )?;
-            self.goto_pos = initial_crd;
-            self.goto_time = 0;
-            self.goto_ok_cnt = 0;
-
+            self.goto_impl(initial_crd.ra, initial_crd.dec)?;
             self.alignment.clear();
-            self.state = State::Goto;
             self.step = Step::GotoInitialPos;
         }
-
         Ok(())
     }
 
@@ -602,20 +593,20 @@ impl Mode for PolarAlignMode {
     }
 
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
-        match self.state {
+        match &mut self.state {
             State::PlateSolve => {
                 return self.try_process_plate_solving_result();
             }
 
-            State::Goto => {
+            State::Goto {ok_cnt: goto_ok_cnt, time: goto_time, target: goto_pos} => {
                 let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.mount)?;
                 if matches!(crd_prop_state, indi::PropState::Ok|indi::PropState::Idle) {
-                    self.goto_ok_cnt += 1;
-                    if self.goto_ok_cnt >= AFTER_GOTO_WAIT_TIME {
+                    *goto_ok_cnt += 1;
+                    if *goto_ok_cnt >= AFTER_GOTO_WAIT_TIME {
                         check_telescope_is_at_desired_position(
                             &self.indi,
                             &self.mount,
-                            &self.goto_pos,
+                            goto_pos,
                             0.5
                         )?;
 
@@ -643,8 +634,8 @@ impl Mode for PolarAlignMode {
                     }
                 }
 
-                self.goto_time += 1;
-                if self.goto_time > MAX_GOTO_TIME {
+                *goto_time += 1;
+                if *goto_time > MAX_GOTO_TIME {
                     anyhow::bail!("Telescope is moving too long time (> {}s)", MAX_GOTO_TIME);
                 }
             }
