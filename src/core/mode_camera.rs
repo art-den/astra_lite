@@ -451,18 +451,26 @@ impl TackingPicturesMode {
 
         // push fwhm
         if let Some(fwhm) = info.stars.info.fwhm {
-            autofocuser.fwhm.push(fwhm);
+            if info.stars.info.ovality_is_ok {
+                autofocuser.fwhm.push(fwhm);
+            }
         }
 
         // Update exposure sum
         autofocuser.exp_sum += self.cam_options.frame.exposure();
 
+        // push temperature measurement
         let temperature = self.indi
             .focuser_get_temperature(&autofocuser.options.device)
             .unwrap_or(f64::NAN);
         if !temperature.is_nan() && !temperature.is_infinite() {
             autofocuser.temp.push(temperature as f32);
         }
+
+        if self.next_job.is_some() {
+            // Next job already assigned
+            return Ok(());
+        };
 
         let mut have_to_refocus = false;
 
@@ -471,6 +479,10 @@ impl TackingPicturesMode {
         && autofocuser.options.period_minutes != 0 {
             let max_exp_sum = (autofocuser.options.period_minutes * 60) as f64;
             if autofocuser.exp_sum >= max_exp_sum {
+                log::info!(
+                    "Start autofocus after period {} minutes",
+                    autofocuser.options.period_minutes
+                );
                 have_to_refocus = true;
             }
         }
@@ -489,7 +501,13 @@ impl TackingPicturesMode {
                 .max_by(|a, b| a.total_cmp(b))
                 .copied()
                 .unwrap_or_default() as f64;
-            if max - min >= autofocuser.options.max_temp_change {
+            let delta = max - min;
+            if delta >= autofocuser.options.max_temp_change {
+                log::info!(
+                    "Start autofocus after temperature change. \
+                    Min={:.1}, max={:.1}, delta={:.1}",
+                    min, max, delta
+                );
                 have_to_refocus = true;
             }
         }
@@ -512,12 +530,17 @@ impl TackingPicturesMode {
             if min >= 0.0 && last >  min{
                 let diff_percent = (100.0 * (last - min) / min) as u32;
                 if diff_percent > autofocuser.options.max_fwhm_change {
+                    log::info!(
+                        "Start autofocus after FWHM increase. \
+                        Min={:.1}, last={:.1}, percent={:.0}",
+                        min, last, diff_percent
+                    );
                     have_to_refocus = true;
                 }
             }
         }
 
-        if have_to_refocus && self.next_job.is_none() {
+        if have_to_refocus {
             autofocuser.exp_sum = 0.0;
             autofocuser.temp.clear();
             autofocuser.fwhm.clear();

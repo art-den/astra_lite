@@ -61,6 +61,7 @@ pub struct FocusingMode {
 #[derive(PartialEq)]
 enum FocusingState {
     Undefined,
+    WaitingFirstImage,
     WaitingPositionAntiBacklash{
         anti_backlash_pos: f64,
         target_pos: f64
@@ -72,7 +73,7 @@ enum FocusingState {
         target_pos: f64
     },
     WaitingResultPos(f64),
-    WaitingResultImg,
+    WaitingResultImg(f64),
 }
 
 #[derive(Clone)]
@@ -146,7 +147,7 @@ impl FocusingMode {
         middle_pos: f64,
         stage:      Stage
     ) -> anyhow::Result<()> {
-        log::debug!("Starting autofocus stage {:?} for midle value {}", stage, middle_pos);
+        log::info!("Start autofocus stage {:?} for central focuser value {}", stage, middle_pos);
         self.samples.clear();
         self.to_go.clear();
         for step in 0..self.f_opts.measures {
@@ -203,19 +204,15 @@ impl FocusingMode {
             }
             FocusingState::WaitingPosition(desired_focus) => {
                 if cur_focus as i64 == desired_focus as i64 {
-                    log::debug!("Taking shot for focuser value: {}", desired_focus);
+                    log::debug!("Taking picture for focuser value: {}", desired_focus);
                     self.change_time = None;
                     apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
                     self.state = FocusingState::WaitingFrame(desired_focus);
                 }
             }
             FocusingState::WaitingResultPosAntiBacklash { anti_backlash_pos, target_pos } => {
-                log::info!(
-                    "cur_focus = {}, anti_backlash_pos = {}, target_pos = {}",
-                    cur_focus, anti_backlash_pos, target_pos
-                );
                 if cur_focus as i64 == anti_backlash_pos as i64 {
-                    log::debug!("Setting RESULT focuser value after backlash: {}", target_pos);
+                    log::debug!("Setting RESULT focuser value {} after backlash correction", target_pos);
                     self.set_new_focus_value(target_pos)?;
                     self.state = FocusingState::WaitingResultPos(target_pos);
                 }
@@ -225,7 +222,7 @@ impl FocusingMode {
                     log::debug!("Taking RESULT shot for focuser value: {}", desired_focus);
                     self.change_time = None;
                     apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
-                    self.state = FocusingState::WaitingResultImg;
+                    self.state = FocusingState::WaitingResultImg(desired_focus);
                     return Ok(NotifyResult::ProgressChanges);
                 }
             }
@@ -234,164 +231,192 @@ impl FocusingMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn process_light_frame_info(
+    fn process_img_info_when_waiting_first_img(
         &mut self,
-        info: &LightFrameInfoData,
+        info: &LightFrameInfoData
+    ) -> anyhow::Result<NotifyResult> {
+        log::info!(
+            "First image before autofocus. FWHM={:.2?}, ovality={:.2?}, initial focus={:.0}",
+            info.stars.info.fwhm, info.stars.info.ovality, self.before_pos
+        );
+        self.start_stage(
+            self.before_pos,
+            if self.prelim_step { Stage::Preliminary } else { Stage::Final }
+        )?;
+        Ok(NotifyResult::ProgressChanges)
+    }
+
+    fn process_img_info_when_waiting_frame(
+        &mut self,
+        info:      &LightFrameInfoData,
+        focus_pos: f64,
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
-        if let FocusingState::WaitingFrame(focus_pos) = self.state {
-            log::debug!(
-                "New frame with ovality={:?} and FWHM={:?}",
-                info.stars.info.ovality, info.stars.info.fwhm
-            );
-            let mut ok = false;
-            if let Some(stars_fwhm) = info.stars.info.fwhm {
-                self.try_cnt = 0;
-                self.one_pos_fwhm.push(stars_fwhm);
 
+        log::debug!(
+            "New frame with ovality={:?} and FWHM={:?}",
+            info.stars.info.ovality, info.stars.info.fwhm
+        );
+        let mut sample_added = false;
+        let mut info_is_ok = false;
+        if let Some(stars_fwhm) = info.stars.info.fwhm {
+
+            info_is_ok = true;
+            self.try_cnt = 0;
+            self.one_pos_fwhm.push(stars_fwhm);
+
+            log::debug!(
+                "Added new FWHM into one pos values (len={}/{})",
+                self.one_pos_fwhm.len(), self.max_try
+            );
+
+            if self.one_pos_fwhm.len() == self.max_try {
+                let stars_fwhm = self.one_pos_fwhm
+                    .iter()
+                    .copied()
+                    .min_by(f32::total_cmp)
+                    .unwrap_or_default();
+                log::info!(
+                    "Best FWHM={:.2} of {:.2?} at {:.0} pos",
+                    stars_fwhm, self.one_pos_fwhm, focus_pos
+                );
+                let sample = FocuserSample {
+                    focus_pos,
+                    stars_fwhm
+                };
+                self.samples.push(sample);
+                self.samples.sort_by(|s1, s2| cmp_f64(&s1.focus_pos, &s2.focus_pos));
+                self.one_pos_fwhm.clear();
+
+                sample_added = true;
+
+                log::debug!("Samples count = {}", self.samples.len());
+                let event_data = FocusingResultData {
+                    samples: self.samples.clone(),
+                    coeffs: None,
+                    result: None,
+                };
+                self.subscribers.notify(Event::Focusing(
+                    FocusingStateEvent::Data(event_data)
+                ));
+            } else {
+                apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
+                return Ok(NotifyResult::ProgressChanges);
+            }
+        } else {
+            self.try_cnt += 1;
+        }
+        let too_much_total_tries =
+            self.try_cnt >= MAX_FOCUS_TOTAL_TRY_CNT &&
+            !self.samples.is_empty();
+        if sample_added
+        || self.try_cnt >= MAX_FOCUS_SAMPLE_TRY_CNT
+        || too_much_total_tries {
+            result = NotifyResult::ProgressChanges;
+            if self.to_go.is_empty() || too_much_total_tries {
+                self.to_go.clear();
                 log::debug!(
-                    "Added new FWHM into one pos values (len={}/{})",
-                    self.one_pos_fwhm.len(), self.max_try
+                    "Trying to calculate extremum. result_added={}, self.try_cnt={}, self.samples.len={}",
+                    sample_added, self.try_cnt, self.samples.len(),
                 );
 
-                if self.one_pos_fwhm.len() == self.max_try {
-                    let stars_fwhm = self.one_pos_fwhm
-                        .iter()
-                        .copied()
-                        .min_by(f32::total_cmp)
-                        .unwrap_or_default();
+                let calc_result = self.calc_result(self.stage == Stage::Preliminary)?;
+                log::debug!("Autofocus result = {:?}", calc_result);
 
-                    log::debug!("Best FWHM={:.3} all FWHMs={:?}", stars_fwhm, self.one_pos_fwhm);
+                match calc_result {
+                    CalcResult::Value { value: result_pos, coeffs } => {
+                        let event_data = FocusingResultData {
+                            samples: self.samples.clone(),
+                            coeffs: Some(coeffs.clone()),
+                            result: Some(result_pos),
+                        };
+                        self.subscribers.notify(Event::Focusing(
+                            FocusingStateEvent::Data(event_data)
+                        ));
+                        if self.stage == Stage::Preliminary {
+                            self.start_stage(result_pos, Stage::Final)?;
+                            return Ok(NotifyResult::ProgressChanges)
+                        }
 
-                    let sample = FocuserSample {
-                        focus_pos,
-                        stars_fwhm
-                    };
-                    self.samples.push(sample);
-                    self.samples.sort_by(|s1, s2| cmp_f64(&s1.focus_pos, &s2.focus_pos));
-                    self.one_pos_fwhm.clear();
-                    ok = true;
+                        self.result_pos = Some(result_pos);
 
-                    log::debug!("Samples count = {}", self.samples.len());
-                    let event_data = FocusingResultData {
-                        samples: self.samples.clone(),
-                        coeffs: None,
-                        result: None,
-                    };
-                    self.subscribers.notify(Event::Focusing(
-                        FocusingStateEvent::Data(event_data)
-                    ));
+                        // for anti-backlash
+                        let anti_backlash_pos = result_pos - self.f_opts.anti_backlash_steps as f64;
+                        let anti_backlash_pos = anti_backlash_pos.max(0.0).round();
+                        log::debug!(
+                            "Set RESULT focuser value for anti backlash {:.1}",
+                            anti_backlash_pos
+                        );
+                        self.set_new_focus_value(anti_backlash_pos)?;
+                        self.state = FocusingState::WaitingResultPosAntiBacklash {
+                            anti_backlash_pos,
+                            target_pos: result_pos
+                        };
+                        let result_event = FocusingStateEvent::Result { value: result_pos };
+                        self.subscribers.notify(Event::Focusing(result_event));
+                    },
+                    CalcResult::Rising(coeffs) => {
+                        log::info!("Results too far from center. Do more measures from left");
+                        let event_data = FocusingResultData {
+                            samples: self.samples.clone(),
+                            coeffs: Some(coeffs.clone()),
+                            result: None,
+                        };
+                        self.subscribers.notify(Event::Focusing(
+                            FocusingStateEvent::Data(event_data)
+                        ));
+                        let min_sample_pos = self.samples
+                            .iter()
+                            .map(|v|v.focus_pos)
+                            .min_by(cmp_f64)
+                            .unwrap_or_default();
+                        for i in (1..(self.f_opts.measures+1)/2).rev() {
+                            self.to_go.push_back(min_sample_pos - i as f64 * self.f_opts.step);
+                        }
+                        self.start_sample(true)?;
+                    },
+                    CalcResult::Falling(coeffs) => {
+                        let event_data = FocusingResultData {
+                            samples: self.samples.clone(),
+                            coeffs: Some(coeffs.clone()),
+                            result: None,
+                        };
+                        self.subscribers.notify(Event::Focusing(
+                            FocusingStateEvent::Data(event_data)
+                        ));
+                        log::info!("Results too far from center. Do more measures from right");
+                        let max_sample_pos = self.samples
+                            .iter()
+                            .map(|v|v.focus_pos)
+                            .max_by(cmp_f64)
+                            .unwrap_or_default();
+                        for i in 1..(self.f_opts.measures+1)/2 {
+                            self.to_go.push_back(max_sample_pos + i as f64 * self.f_opts.step);
+                        }
+                        self.start_sample(true)?;
+                    },
                 }
             } else {
-                self.try_cnt += 1;
+                self.start_sample(false)?;
             }
-            let too_much_total_tries =
-                self.try_cnt >= MAX_FOCUS_TOTAL_TRY_CNT &&
-                !self.samples.is_empty();
-            if ok
-            || self.try_cnt >= MAX_FOCUS_SAMPLE_TRY_CNT
-            || too_much_total_tries {
-                result = NotifyResult::ProgressChanges;
-                if self.to_go.is_empty() || too_much_total_tries {
-                    self.to_go.clear();
-                    log::debug!(
-                        "Trying to calculate extremum. Ok={}, self.try_cnt={}, self.samples.len={}",
-                        ok, self.try_cnt, self.samples.len(),
-                    );
-
-                    let calc_result = self.calc_result(self.stage == Stage::Preliminary)?;
-                    log::debug!("Autofocus result = {:?}", calc_result);
-
-                    match calc_result {
-                        CalcResult::Value { value: result_pos, coeffs } => {
-                            let event_data = FocusingResultData {
-                                samples: self.samples.clone(),
-                                coeffs: Some(coeffs.clone()),
-                                result: Some(result_pos),
-                            };
-                            self.subscribers.notify(Event::Focusing(
-                                FocusingStateEvent::Data(event_data)
-                            ));
-                            if self.stage == Stage::Preliminary {
-                                self.start_stage(result_pos, Stage::Final)?;
-                                return Ok(NotifyResult::ProgressChanges)
-                            }
-
-                            self.result_pos = Some(result_pos);
-
-                            // for anti-backlash
-                            let anti_backlash_pos = result_pos - self.f_opts.anti_backlash_steps as f64;
-                            let anti_backlash_pos = anti_backlash_pos.max(0.0).round();
-                            log::debug!(
-                                "Set RESULT focuser value for anti backlash {:.1}",
-                                anti_backlash_pos
-                            );
-                            self.set_new_focus_value(anti_backlash_pos)?;
-                            self.state = FocusingState::WaitingResultPosAntiBacklash {
-                                anti_backlash_pos,
-                                target_pos: result_pos
-                            };
-                            let result_event = FocusingStateEvent::Result { value: result_pos };
-                            self.subscribers.notify(Event::Focusing(result_event));
-                        },
-                        CalcResult::Rising(coeffs) => {
-                            log::debug!("Results too far from center. Do more measures from right");
-                            let event_data = FocusingResultData {
-                                samples: self.samples.clone(),
-                                coeffs: Some(coeffs.clone()),
-                                result: None,
-                            };
-                            self.subscribers.notify(Event::Focusing(
-                                FocusingStateEvent::Data(event_data)
-                            ));
-                            let min_sample_pos = self.samples
-                                .iter()
-                                .map(|v|v.focus_pos)
-                                .min_by(cmp_f64)
-                                .unwrap_or_default();
-                            for i in (1..(self.f_opts.measures+1)/2).rev() {
-                                self.to_go.push_back(min_sample_pos - i as f64 * self.f_opts.step);
-                            }
-                            self.start_sample(true)?;
-                        },
-                        CalcResult::Falling(coeffs) => {
-                            let event_data = FocusingResultData {
-                                samples: self.samples.clone(),
-                                coeffs: Some(coeffs.clone()),
-                                result: None,
-                            };
-                            self.subscribers.notify(Event::Focusing(
-                                FocusingStateEvent::Data(event_data)
-                            ));
-                            log::debug!("Results too far from center. Do more measures from left");
-                            let max_sample_pos = self.samples
-                                .iter()
-                                .map(|v|v.focus_pos)
-                                .max_by(cmp_f64)
-                                .unwrap_or_default();
-                            for i in 1..(self.f_opts.measures+1)/2 {
-                                self.to_go.push_back(max_sample_pos + i as f64 * self.f_opts.step);
-                            }
-                            self.start_sample(true)?;
-                        },
-                    }
-                } else {
-                    self.start_sample(false)?;
-                }
-            } else {
-                log::debug!("Received image is not Ok. Taking another one...");
-                self.change_time = None;
-                apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
-            }
-        }
-        if self.state == FocusingState::WaitingResultImg {
-            log::debug!(
-                "RESULT shot is finished. Exiting focusing mode. Final FWHM = {:?}",
-                info.stars.info.fwhm
-            );
-            result = NotifyResult::Finished { next_mode: self.next_mode.take() };
+        } else if !info_is_ok {
+            log::info!("Stars on received image are not Ok. Taking another image...");
+            self.change_time = None;
+            apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
         }
         Ok(result)
+    }
+
+    fn process_img_info_when_waiting_result_img(
+        &mut self,
+        info:      &LightFrameInfoData,
+        focus_pos: f64
+    ) -> anyhow::Result<NotifyResult> {
+        log::info!(
+            "RESULT focuser shot is finished. Final FWHM = {:.2?}, ovality={:.2?}, focuser change={:.0} -> {:.0}",
+            info.stars.info.fwhm, info.stars.info.ovality, self.before_pos, focus_pos
+        );
+        Ok(NotifyResult::Finished { next_mode: self.next_mode.take() })
     }
 
     fn calc_result(&self, allow_more_measures: bool) -> anyhow::Result<CalcResult> {
@@ -528,11 +553,12 @@ impl Mode for FocusingMode {
 
     fn progress_string(&self) -> String {
         match self.stage {
+            Stage::Undef =>
+                "Preparing for autofocus".to_string(),
             Stage::Preliminary =>
                 "Focusing (preliminary)".to_string(),
             Stage::Final =>
                 "Focusing".to_string(),
-            _ => unreachable!(),
         }
     }
 
@@ -543,7 +569,7 @@ impl Mode for FocusingMode {
     fn progress(&self) -> Option<Progress> {
         let total = self.samples.len() + self.to_go.len() + 1;
         let mut cur = self.samples.len();
-        if matches!(self.state, FocusingState::WaitingResultImg) {
+        if matches!(self.state, FocusingState::WaitingResultImg(_)) {
             cur = total;
         }
         Some(Progress { cur, total })
@@ -560,10 +586,11 @@ impl Mode for FocusingMode {
     fn start(&mut self) -> anyhow::Result<()> {
         let cur_pos = self.indi.focuser_get_abs_value(&self.f_opts.device)?.round();
         self.before_pos = cur_pos;
-        self.start_stage(
-            cur_pos,
-            if self.prelim_step { Stage::Preliminary } else { Stage::Final }
-        )?;
+
+        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
+        self.stage = Stage::Undef;
+        self.state = FocusingState::WaitingFirstImage;
+
         Ok(())
     }
 
@@ -622,10 +649,18 @@ impl Mode for FocusingMode {
     ) -> anyhow::Result<NotifyResult> {
         match &fp_result.data {
             FrameProcessResultData::LightFrameInfo(info) =>
-                self.process_light_frame_info(info),
-
-            _ =>
-                Ok(NotifyResult::Empty)
-        }
+                match self.state {
+                    FocusingState::WaitingFirstImage =>
+                        return self.process_img_info_when_waiting_first_img(info),
+                    FocusingState::WaitingFrame(focuser_pos) =>
+                        return self.process_img_info_when_waiting_frame(info, focuser_pos),
+                    FocusingState::WaitingResultImg(focuser_pos) =>
+                        return self.process_img_info_when_waiting_result_img(info, focuser_pos),
+                    _ =>
+                        unreachable!("Wrong FocusingMode::state in notify_about_frame_processing_result"),
+                }
+            _ => {}
+        };
+        return Ok(NotifyResult::Empty)
     }
 }
