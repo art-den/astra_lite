@@ -620,6 +620,7 @@ impl Core {
     }
 
     pub fn start_saving_raw_frames(&self) -> anyhow::Result<()> {
+        self.abort_active_mode();
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             &self.subscribers,
@@ -634,6 +635,7 @@ impl Core {
     }
 
     pub fn start_live_stacking(&self) -> anyhow::Result<()> {
+        self.abort_active_mode();
         let mut mode = TackingPicturesMode::new(
             &self.indi,
             &self.subscribers,
@@ -649,14 +651,14 @@ impl Core {
     }
 
     pub fn start_focusing(&self) -> anyhow::Result<()> {
-        self.mode_data.write().unwrap().mode.abort()?;
+        self.abort_active_mode();
         let mode = FocusingMode::new(&self.indi, &self.options, &self.subscribers, None, true)?;
         self.start_new_mode(mode, false, false)?;
         Ok(())
     }
 
     pub fn start_mount_calibr(&self) -> anyhow::Result<()> {
-        self.mode_data.write().unwrap().mode.abort()?;
+        self.abort_active_mode();
         let mode = MountCalibrMode::new(&self.indi, &self.options, None)?;
         self.start_new_mode(mode, false, false)?;
         Ok(())
@@ -667,6 +669,7 @@ impl Core {
         dark_lib_mode: DarkLibMode,
         program: &[MasterFileCreationProgramItem]
     ) -> anyhow::Result<()> {
+        self.abort_active_mode();
         let mode = DarkCreationMode::new(
             dark_lib_mode,
             &self.calibr_data,
@@ -683,7 +686,7 @@ impl Core {
         eq_coord: &EqCoord,
         config:   GotoConfig,
     ) -> anyhow::Result<()> {
-        self.mode_data.write().unwrap().mode.abort()?;
+        self.abort_active_mode();
         let mode = GotoMode::new(
             GotoDestination::Coord(eq_coord.clone()),
             config,
@@ -697,6 +700,7 @@ impl Core {
     }
 
     pub fn start_goto_image(&self) -> anyhow::Result<()> {
+        self.abort_active_mode();
         let image = self.cur_frame.image.read().unwrap();
         if image.is_empty() {
             anyhow::bail!("Image is empty");
@@ -724,6 +728,7 @@ impl Core {
     }
 
     pub fn start_capture_and_platesolve(&self) -> anyhow::Result<()> {
+        self.abort_active_mode();
         let mode = PlatesolveMode::new(
             &self.options,
             &self.indi,
@@ -735,6 +740,7 @@ impl Core {
     }
 
     pub fn start_polar_alignment(&self) -> anyhow::Result<()> {
+        self.abort_active_mode();
         let mode = PolarAlignMode::new(
             &self.indi,
             &self.cur_frame,
@@ -820,7 +826,7 @@ impl Core {
         Ok(())
     }
 
-    pub fn abort_active_mode(self: &Arc<Self>) {
+    pub fn abort_active_mode(self: &Self) {
         let mut mode_data = self.mode_data.write().unwrap();
         if mode_data.mode.get_type() == ModeType::Waiting {
             return;
