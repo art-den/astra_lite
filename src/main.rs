@@ -13,8 +13,8 @@ mod indi;
 mod guiding;
 mod plate_solve;
 mod core;
-mod options;
 mod sky_math;
+mod options;
 
 use std::{path::Path, sync::Arc};
 use gtk::{prelude::*, glib, glib::clone};
