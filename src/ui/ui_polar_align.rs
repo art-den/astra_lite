@@ -2,7 +2,7 @@ use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{core::{Core, ModeType}, events::*, mode_polar_align::PolarAlignmentEvent},
+    core::{core::{Core, ModeType}, events::*, mode_polar_align::{CustomCommand, PolarAlignmentEvent}},
     indi::{self, degree_to_str_short},
     options::*,
     sky_math::math::*,
@@ -76,7 +76,7 @@ struct Widgets {
     spb_sim_alt_err: gtk::SpinButton,
     l_sim_az_err:    gtk::Label,
     spb_sim_az_err:  gtk::SpinButton,
-    l_step:         gtk::Label,
+    l_step:          gtk::Label,
     l_alt_err:       gtk::Label,
     l_az_err:        gtk::Label,
     l_alt_err_arr:   gtk::Label,
@@ -357,9 +357,8 @@ impl PolarAlignUi {
 
     fn handler_restart_action_polar_align(&self) {
         self.main_ui.get_all_options();
-
-        exec_and_show_error(Some(&self.window), ||{
-            self.core.restart_polar_alignment()?;
+        exec_and_show_error(Some(&self.window), || {
+            self.core.exec_mode_custom_command(&CustomCommand::Restart)?;
             Ok(())
         });
     }

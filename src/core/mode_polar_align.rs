@@ -192,6 +192,10 @@ impl PolarAlignment {
 
 const AFTER_GOTO_WAIT_TIME: usize = 3; // seconds
 
+pub enum CustomCommand {
+    Restart,
+}
+
 enum State {
     Undefined,
     Goto {
@@ -489,6 +493,17 @@ impl PolarAlignMode {
         }));
         Ok(())
     }
+
+    fn do_restart(&mut self) -> anyhow::Result<()> {
+        if let Some(initial_crd) = self.initial_crd.clone() {
+            self.abort()?;
+            self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Empty));
+            self.goto_impl(initial_crd.ra, initial_crd.dec)?;
+            self.alignment.clear();
+            self.step = Step::GotoInitialPos;
+        }
+        Ok(())
+    }
 }
 
 impl Mode for PolarAlignMode {
@@ -558,15 +573,17 @@ impl Mode for PolarAlignMode {
         Ok(())
     }
 
-    fn restart(&mut self) -> anyhow::Result<()> {
-        if let Some(initial_crd) = self.initial_crd.clone() {
-            self.abort()?;
-            self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Empty));
-            self.goto_impl(initial_crd.ra, initial_crd.dec)?;
-            self.alignment.clear();
-            self.step = Step::GotoInitialPos;
+    fn custom_command(&mut self, args: &dyn std::any::Any) -> anyhow::Result<NotifyResult> {
+        let Some(command) = args.downcast_ref::<CustomCommand>() else {
+            return Ok(NotifyResult::Empty);
+        };
+
+        match command {
+            CustomCommand::Restart => {
+                self.do_restart()?;
+                return Ok(NotifyResult::ProgressChanges);
+            }
         }
-        Ok(())
     }
 
     fn abort(&mut self) -> anyhow::Result<()> {

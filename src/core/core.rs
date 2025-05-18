@@ -1,7 +1,8 @@
 use std::{
     any::Any, path::Path, sync::{
         atomic::{AtomicBool, AtomicU16, Ordering }, mpsc, Arc, Mutex, RwLock, RwLockReadGuard
-    }, thread::JoinHandle, u64
+    },
+    thread::JoinHandle, u64
 };
 use gtk::glib::PropertySet;
 
@@ -59,7 +60,6 @@ pub trait Mode {
     fn can_be_stopped(&self) -> bool { true }
     fn can_be_continued_after_stop(&self) -> bool { false }
     fn start(&mut self) -> anyhow::Result<()> { Ok(()) }
-    fn restart(&mut self) -> anyhow::Result<()> { Ok(()) }
     fn abort(&mut self) -> anyhow::Result<()> { Ok(()) }
     fn continue_work(&mut self) -> anyhow::Result<()> { Ok(()) }
     fn take_next_mode(&mut self) -> Option<ModeBox> { None }
@@ -71,6 +71,7 @@ pub trait Mode {
     fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn custom_command(&mut self, _args: &dyn std::any::Any) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
 }
 
 pub enum NotifyResult {
@@ -485,6 +486,14 @@ impl Core {
         self.subscribers.clone()
     }
 
+    pub fn exec_mode_custom_command(self: &Arc<Self>, args: &dyn std::any::Any) -> anyhow::Result<()> {
+        let mut mode_data = self.mode_data.write().unwrap();
+        let result = mode_data.mode.custom_command(args)?;
+        self.apply_change_result(result, &mut mode_data)?;
+        drop(mode_data);
+        Ok(())
+    }
+
     fn start_new_mode(
         &self,
         mode:                impl Mode + Send + Sync + 'static,
@@ -750,16 +759,6 @@ impl Core {
         self.start_new_mode(mode, false, false)?;
         Ok(())
     }
-
-    pub fn restart_polar_alignment(&self) -> anyhow::Result<()> {
-        let mut mode = self.mode_data.write().unwrap();
-        assert!(mode.mode.get_type() == ModeType::PolarAlignment);
-        mode.mode.restart()?;
-        drop(mode);
-        self.subscribers.notify(Event::ModeChanged);
-        Ok(())
-    }
-
 
     pub fn init_cam_telescope_data(&self) -> anyhow::Result<()> {
         if self.indi.state() != indi::ConnState::Connected {
