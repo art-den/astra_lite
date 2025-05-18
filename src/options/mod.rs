@@ -7,8 +7,8 @@ pub use camera::*;
 pub mod calibration;
 pub use calibration::*;
 
-pub mod raw;
-pub use raw::*;
+pub mod raw_frames;
+pub use raw_frames::*;
 
 pub mod live_stacking;
 pub use live_stacking::*;
