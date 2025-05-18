@@ -76,6 +76,7 @@ struct Widgets {
     spb_sim_alt_err: gtk::SpinButton,
     l_sim_az_err:    gtk::Label,
     spb_sim_az_err:  gtk::SpinButton,
+    l_step:         gtk::Label,
     l_alt_err:       gtk::Label,
     l_az_err:        gtk::Label,
     l_alt_err_arr:   gtk::Label,
@@ -369,7 +370,9 @@ impl PolarAlignUi {
 
     fn show_polar_alignment_error(&self, event: PolarAlignmentEvent) {
         match event {
-            PolarAlignmentEvent::Error { horiz, total } => {
+            PolarAlignmentEvent::Error { horiz, total, step } => {
+                self.widgets.l_step.set_label(&format!("({})", step));
+
                 let alt_err_str = degree_to_str_short(radian_to_degree(horiz.alt));
                 self.widgets.l_alt_err.set_label(&alt_err_str);
 
@@ -405,6 +408,7 @@ impl PolarAlignUi {
                 set_all_label_size(&self.widgets.l_az_err_arr, horiz.az);
             }
             PolarAlignmentEvent::Empty => {
+                self.widgets.l_step.set_label("");
                 self.widgets.l_alt_err.set_label("---");
                 self.widgets.l_az_err.set_label("---");
                 self.widgets.l_tot_err.set_label("---");

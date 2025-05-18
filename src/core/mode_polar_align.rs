@@ -221,6 +221,7 @@ pub enum PolarAlignmentEvent {
     Error{
         horiz: HorizCoord,
         total: f64,
+        step:  usize,
     },
 }
 
@@ -241,6 +242,7 @@ pub struct PolarAlignMode {
     alignment:    PolarAlignment,
     image_time:   Option<NaiveDateTime>,
     initial_crd:  Option<EqCoord>,
+    step_cnt:     usize,
 }
 
 impl PolarAlignMode {
@@ -283,6 +285,7 @@ impl PolarAlignMode {
             alignment:   PolarAlignment::new(),
             image_time:  None,
             initial_crd: None,
+            step_cnt:    0,
             cam_opts,
             plate_solver
         })
@@ -413,12 +416,14 @@ impl PolarAlignMode {
                     degree_to_radian(self.s_opts.longitude),
                     degree_to_radian(self.s_opts.latitude),
                 )?;
+                self.step_cnt += 1;
                 self.notify_error()?;
                 self.start_capture()?;
                 self.step = Step::Corr;
                 self.state = State::Capture;
             }
             Step::Corr => {
+                self.step_cnt += 1;
                 self.notify_error()?;
                 self.start_capture()?;
                 self.state = State::Capture;
@@ -480,7 +485,7 @@ impl PolarAlignMode {
             anyhow::bail!("Mount pole is not calculated!");
         };
         self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Error {
-            horiz, total
+            horiz, total, step: self.step_cnt
         }));
         Ok(())
     }
@@ -537,6 +542,9 @@ impl Mode for PolarAlignMode {
 
     fn start(&mut self) -> anyhow::Result<()> {
         let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
+
+        self.step_cnt = 0;
+
         self.initial_crd = Some(EqCoord {
             ra: hour_to_radian(ra),
             dec: degree_to_radian(dec),
