@@ -1,4 +1,4 @@
-use std::{f64::consts::PI, sync::{Arc, RwLock}};
+use std::{any::Any, f64::consts::PI, sync::{Arc, RwLock}};
 
 use chrono::{NaiveDateTime, Utc};
 
@@ -194,9 +194,12 @@ const AFTER_GOTO_WAIT_TIME: usize = 3; // seconds
 
 pub enum CustomCommand {
     Restart,
+    ManualRefresh,
+    GetState,
 }
 
-enum State {
+#[derive(Clone)]
+pub enum State {
     Undefined,
     Goto {
         time:   usize,
@@ -205,6 +208,7 @@ enum State {
     },
     Capture,
     PlateSolve,
+    WaitForManualRefresh,
 }
 
 #[derive(PartialEq)]
@@ -214,7 +218,7 @@ enum Step {
     First,
     Second,
     Third,
-    Corr
+    Corr,
 }
 
 
@@ -414,6 +418,7 @@ impl PolarAlignMode {
         match self.step {
             Step::First | Step::Second => {
                 self.goto_next_pos()?;
+                return Ok(NotifyResult::ProgressChanges);
             }
             Step::Third => {
                 self.alignment.calc_mount_pole(
@@ -422,21 +427,30 @@ impl PolarAlignMode {
                 )?;
                 self.step_cnt += 1;
                 self.notify_error()?;
-                self.start_capture()?;
+
                 self.step = Step::Corr;
-                self.state = State::Capture;
+                if self.pa_opts.auto_refresh {
+                    self.start_capture()?;
+                    self.state = State::Capture;
+                } else {
+                    self.state = State::WaitForManualRefresh;
+                }
+                return Ok(NotifyResult::ProgressChanges);
             }
             Step::Corr => {
                 self.step_cnt += 1;
                 self.notify_error()?;
-                self.start_capture()?;
-                self.state = State::Capture;
+                if self.pa_opts.auto_refresh {
+                    self.start_capture()?;
+                    self.state = State::Capture;
+                } else {
+                    self.state = State::WaitForManualRefresh;
+                }
+                return Ok(NotifyResult::ProgressChanges);
             }
 
             _ => unreachable!(),
         }
-
-        Ok(NotifyResult::ProgressChanges)
     }
 
     fn goto_next_pos(&mut self) -> anyhow::Result<()> {
@@ -494,7 +508,7 @@ impl PolarAlignMode {
         Ok(())
     }
 
-    fn do_restart(&mut self) -> anyhow::Result<()> {
+    fn restart(&mut self) -> anyhow::Result<()> {
         if let Some(initial_crd) = self.initial_crd.clone() {
             self.abort()?;
             self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Empty));
@@ -502,6 +516,15 @@ impl PolarAlignMode {
             self.alignment.clear();
             self.step = Step::GotoInitialPos;
         }
+        Ok(())
+    }
+
+    fn manual_refresh(&mut self) -> anyhow::Result<()> {
+        if !matches!(self.state, State::WaitForManualRefresh) {
+            return Ok(());
+        }
+        self.start_capture()?;
+        self.state = State::Capture;
         Ok(())
     }
 }
@@ -523,6 +546,7 @@ impl Mode for PolarAlignMode {
             (Step::Third,          State::Capture   ) => 6,
             (Step::Third,          State::PlateSolve) => 7,
             (Step::Corr,           _                ) => 8,
+            (_, State::WaitForManualRefresh         ) => 8,
             _                                         => 0,
         };
 
@@ -542,6 +566,7 @@ impl Mode for PolarAlignMode {
             (Step::Third,  State::PlateSolve) => "3rd platesolve",
             (Step::Corr,   State::Capture   ) => "Capture",
             (Step::Corr,   State::PlateSolve) => "Platesolve",
+            (_, State::WaitForManualRefresh ) => "Wait for manual refresh",
 
             _ => "",
         }.to_string()
@@ -573,15 +598,26 @@ impl Mode for PolarAlignMode {
         Ok(())
     }
 
-    fn custom_command(&mut self, args: &dyn std::any::Any) -> anyhow::Result<NotifyResult> {
+    fn custom_command(&mut self, args: &dyn Any) -> anyhow::Result<Option<Box<dyn Any>>> {
         let Some(command) = args.downcast_ref::<CustomCommand>() else {
-            return Ok(NotifyResult::Empty);
+            return Ok(None);
         };
 
         match command {
             CustomCommand::Restart => {
-                self.do_restart()?;
-                return Ok(NotifyResult::ProgressChanges);
+                self.restart()?;
+                self.subscribers.notify(Event::Progress(self.progress(), self.get_type()));
+                return Ok(None);
+            }
+
+            CustomCommand::ManualRefresh => {
+                self.manual_refresh()?;
+                self.subscribers.notify(Event::Progress(self.progress(), self.get_type()));
+                return Ok(None);
+            }
+
+            CustomCommand::GetState => {
+                return Ok(Some(Box::new(self.state.clone())));
             }
         }
     }

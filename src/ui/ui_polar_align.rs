@@ -2,12 +2,12 @@ use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{core::{Core, ModeType}, events::*, mode_polar_align::{CustomCommand, PolarAlignmentEvent}},
+    core::{core::{Core, ModeType}, events::*, mode_polar_align::{CustomCommand, PolarAlignmentEvent, State}},
     indi::{self, degree_to_str_short},
     options::*,
     sky_math::math::*,
 };
-use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
+use super::{gtk_utils::{self, *}, module::*, ui_main::*, utils::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
@@ -68,20 +68,21 @@ impl PloarAlignDir {
 
 #[derive(FromBuilder)]
 struct Widgets {
-    bx:              gtk::Box,
-    spb_angle:       gtk::SpinButton,
-    cbx_dir:         gtk::ComboBoxText,
-    cbx_speed:       gtk::ComboBoxText,
-    l_sim_alt_err:   gtk::Label,
-    spb_sim_alt_err: gtk::SpinButton,
-    l_sim_az_err:    gtk::Label,
-    spb_sim_az_err:  gtk::SpinButton,
-    l_step:          gtk::Label,
-    l_alt_err:       gtk::Label,
-    l_az_err:        gtk::Label,
-    l_alt_err_arr:   gtk::Label,
-    l_az_err_arr:    gtk::Label,
-    l_tot_err:       gtk::Label,
+    bx:               gtk::Box,
+    spb_angle:        gtk::SpinButton,
+    cbx_dir:          gtk::ComboBoxText,
+    cbx_speed:        gtk::ComboBoxText,
+    chb_auto_refresh: gtk::CheckButton,
+    l_sim_alt_err:    gtk::Label,
+    spb_sim_alt_err:  gtk::SpinButton,
+    l_sim_az_err:     gtk::Label,
+    spb_sim_az_err:   gtk::SpinButton,
+    l_step:           gtk::Label,
+    l_alt_err:        gtk::Label,
+    l_az_err:         gtk::Label,
+    l_alt_err_arr:    gtk::Label,
+    l_az_err_arr:     gtk::Label,
+    l_tot_err:        gtk::Label,
 }
 
 struct PolarAlignUi {
@@ -107,15 +108,18 @@ impl UiModule for PolarAlignUi {
         self.widgets.spb_angle.set_value(options.polar_align.angle);
         self.widgets.cbx_dir.set_active_id(options.polar_align.direction.to_active_id());
         self.widgets.cbx_speed.set_active_id(options.polar_align.speed.as_deref());
+        self.widgets.chb_auto_refresh.set_active(options.polar_align.auto_refresh);
         self.widgets.spb_sim_alt_err.set_value(options.polar_align.sim_alt_err);
         self.widgets.spb_sim_az_err.set_value(options.polar_align.sim_az_err);
     }
 
     fn get_options(&self, options: &mut Options) {
-        options.polar_align.angle       = self.widgets.spb_angle.value();
-        options.polar_align.speed       = self.widgets.cbx_speed.active_id().map(|s| s.to_string());
-        options.polar_align.sim_alt_err = self.widgets.spb_sim_alt_err.value();
-        options.polar_align.sim_az_err  = self.widgets.spb_sim_az_err.value();
+        options.polar_align.angle        = self.widgets.spb_angle.value();
+        options.polar_align.speed        = self.widgets.cbx_speed.active_id().map(|s| s.to_string());
+        options.polar_align.auto_refresh = self.widgets.chb_auto_refresh.is_active();
+        options.polar_align.sim_alt_err  = self.widgets.spb_sim_alt_err.value();
+        options.polar_align.sim_az_err   = self.widgets.spb_sim_az_err.value();
+
         options.polar_align.direction = PloarAlignDir::from_active_id(
             self.widgets.cbx_dir.active_id().as_deref()
         ).unwrap_or(PloarAlignDir::West);
@@ -182,9 +186,11 @@ impl PolarAlignUi {
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
-        connect_action(&self.window, self, "start_polar_alignment", Self::handler_start_action_polar_align);
-        connect_action(&self.window, self, "restart_polar_alignment", Self::handler_restart_action_polar_align);
-        connect_action(&self.window, self, "stop_polar_alignment", Self::handler_stop_action_polar_align);
+        connect_action(&self.window, self, "start_polar_alignment", Self::handler_action_start_polar_align);
+        connect_action(&self.window, self, "restart_polar_alignment", Self::handler_action_restart_polar_align);
+        connect_action(&self.window, self, "stop_polar_alignment", Self::handler_action_stop_polar_align);
+        connect_action(&self.window, self, "pa_manual_refresh", Self::handler_action_manual_refresh);
+
 
         self.widgets.spb_sim_alt_err.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
@@ -199,6 +205,12 @@ impl PolarAlignUi {
                 options.polar_align.sim_az_err = spb.value();
             })
         );
+
+        self.widgets.chb_auto_refresh.connect_active_notify(
+            clone!(@weak self as self_ => move |_| {
+                self_.correct_widgets_props();
+            })
+        );
     }
 
     fn correct_widgets_props_impl(&self, mount_device: &str, cam_device: &Option<DeviceAndProp>) {
@@ -210,6 +222,7 @@ impl PolarAlignUi {
 
         let mode_data = self.core.mode_data();
         let mode_type = mode_data.mode.get_type();
+        drop(mode_data);
         let waiting = mode_type == ModeType::Waiting;
         let live_view = mode_type == ModeType::LiveView;
         let single_shot = mode_type == ModeType::SingleShot;
@@ -221,11 +234,20 @@ impl PolarAlignUi {
             mnt_active && cam_active &&
             (waiting || single_shot || live_view);
 
+        self.widgets.chb_auto_refresh.set_sensitive(!polar_align);
+
+        let mut allow_refresh = false;
+        if let Ok(Some(result)) = self.core.exec_mode_custom_command(&CustomCommand::GetState) {
+            if let Some(state) = result.downcast_ref::<State>() {
+                allow_refresh = matches!(&state, State::WaitForManualRefresh);
+            }
+        }
 
         enable_actions(&self.window, &[
             ("start_polar_alignment",   polar_alignment_can_be_started),
             ("restart_polar_alignment", polar_align),
             ("stop_polar_alignment",    polar_align),
+            ("pa_manual_refresh",       allow_refresh && !self.widgets.chb_auto_refresh.is_active()),
         ]);
     }
 
@@ -272,6 +294,12 @@ impl PolarAlignUi {
             MainThreadEvent::Core(Event::ModeChanged) => {
                 self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
             }
+            MainThreadEvent::Core(Event::Progress(_, mode)) => {
+                if mode == ModeType::PolarAlignment {
+                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
+                }
+            }
+
             MainThreadEvent::Core(Event::CameraDeviceChanged{ to, ..}) => {
                 let options = self.options.read().unwrap();
                 let mount_device = options.mount.device.clone();
@@ -346,7 +374,7 @@ impl PolarAlignUi {
         }
     }
 
-    fn handler_start_action_polar_align(&self) {
+    fn handler_action_start_polar_align(&self) {
         self.main_ui.get_all_options();
 
         exec_and_show_error(Some(&self.window), ||{
@@ -355,7 +383,7 @@ impl PolarAlignUi {
         });
     }
 
-    fn handler_restart_action_polar_align(&self) {
+    fn handler_action_restart_polar_align(&self) {
         self.main_ui.get_all_options();
         exec_and_show_error(Some(&self.window), || {
             self.core.exec_mode_custom_command(&CustomCommand::Restart)?;
@@ -363,8 +391,15 @@ impl PolarAlignUi {
         });
     }
 
-    fn handler_stop_action_polar_align(&self) {
+    fn handler_action_stop_polar_align(&self) {
         self.core.abort_active_mode();
+    }
+
+    fn handler_action_manual_refresh(&self) {
+        gtk_utils::exec_and_show_error(Some(&self.window), || {
+            self.core.exec_mode_custom_command(&CustomCommand::ManualRefresh)?;
+            Ok(())
+        });
     }
 
     fn show_polar_alignment_error(&self, event: PolarAlignmentEvent) {

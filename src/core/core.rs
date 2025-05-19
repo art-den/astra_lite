@@ -71,7 +71,7 @@ pub trait Mode {
     fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn custom_command(&mut self, _args: &dyn std::any::Any) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn custom_command(&mut self, _args: &dyn Any) -> anyhow::Result<Option<Box<dyn Any>>> { Ok(None) }
 }
 
 pub enum NotifyResult {
@@ -486,12 +486,12 @@ impl Core {
         self.subscribers.clone()
     }
 
-    pub fn exec_mode_custom_command(self: &Arc<Self>, args: &dyn std::any::Any) -> anyhow::Result<()> {
+    pub fn exec_mode_custom_command(
+        self: &Arc<Self>,
+        args: &dyn std::any::Any
+    ) -> anyhow::Result<Option<Box<dyn Any>>> {
         let mut mode_data = self.mode_data.write().unwrap();
-        let result = mode_data.mode.custom_command(args)?;
-        self.apply_change_result(result, &mut mode_data)?;
-        drop(mode_data);
-        Ok(())
+        mode_data.mode.custom_command(args)
     }
 
     fn start_new_mode(
