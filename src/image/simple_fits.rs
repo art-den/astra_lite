@@ -243,7 +243,7 @@ impl FitsReader {
                 }
                 16 => {
                     for ((b1, b2), dst) in izip!(buf.iter().tuples(), chunk) {
-                        let value = u16::from_be_bytes([*b1, *b2]);
+                        let value = ((*b1 as u16) << 8) + *b2 as u16;
                         *dst = value.wrapping_add(bzero);
                     }
                 },

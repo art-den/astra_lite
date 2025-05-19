@@ -85,8 +85,9 @@ pub fn load_raw_image_from_fits_stream(stream: &mut impl SeekNRead) -> anyhow::R
 }
 
 pub fn load_raw_image_from_fits_file(file_name: &Path) -> anyhow::Result<RawImage> {
-    let mut file = File::open(file_name)?;
-    load_raw_image_from_fits_stream(&mut file)
+    let file = File::open(file_name)?;
+    let mut reader = BufReader::with_capacity(1024*1024, file);
+    load_raw_image_from_fits_stream(&mut reader)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
