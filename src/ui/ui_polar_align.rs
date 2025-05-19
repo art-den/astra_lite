@@ -2,7 +2,7 @@ use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{core::{Core, ModeType}, events::*, mode_polar_align::{CustomCommand, PolarAlignmentEvent, State}},
+    core::{core::{Core, ModeType}, events::*, mode_polar_align::{CustomCommand, PolarAlignMode, PolarAlignmentEvent, State}},
     indi::{self, degree_to_str_short},
     options::*,
     sky_math::math::*,
@@ -377,7 +377,25 @@ impl PolarAlignUi {
     fn handler_action_start_polar_align(&self) {
         self.main_ui.get_all_options();
 
-        exec_and_show_error(Some(&self.window), ||{
+        // Check before start mode
+        let ok = exec_and_show_error(Some(&self.window), || {
+            let warning = PolarAlignMode::check_before_start(&self.indi, &self.options)?;
+            if !warning.is_empty() {
+                gtk_utils::show_message(
+                    Some(&self.window),
+                    "Warning",
+                    &warning,
+                    gtk::MessageType::Warning
+                );
+            }
+            Ok(())
+        });
+
+        // Exit if error
+        if !ok { return; }
+
+        // Stars mode
+        exec_and_show_error(Some(&self.window), || {
             self.core.start_polar_alignment()?;
             Ok(())
         });

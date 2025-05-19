@@ -221,8 +221,6 @@ enum Step {
     Corr,
 }
 
-
-
 #[derive(Clone)]
 pub enum PolarAlignmentEvent {
     Empty,
@@ -254,6 +252,115 @@ pub struct PolarAlignMode {
 }
 
 impl PolarAlignMode {
+    pub fn check_before_start(
+        indi:    &Arc<indi::Connection>,
+        options: &Arc<RwLock<Options>>,
+    ) -> anyhow::Result<String> {
+        const MIN_ALT: f64 = 10.0 ; // in degrees
+
+        let opts = options.read().unwrap();
+        let pa_opts = opts.polar_align.clone();
+        let mount_device = opts.mount.device.clone();
+        let site_opts = opts.site.clone();
+        drop(opts);
+
+        let mut warnings = Vec::<String>::new();
+
+        let now = Utc::now().naive_utc();
+        let eq_to_sphere_cvt = EqToSphereCvt::new(
+            degree_to_radian(site_opts.longitude),
+            degree_to_radian(site_opts.latitude),
+            &now
+        );
+
+        let (init_ra, init_dec) = indi.mount_get_eq_ra_and_dec(&mount_device)?;
+
+        let angle = match pa_opts.direction {
+            PloarAlignDir::East => pa_opts.angle,
+            PloarAlignDir::West => -pa_opts.angle,
+        };
+
+        // 1st point
+
+        let init_eq_crd = EqCoord {
+            dec: degree_to_radian(init_dec),
+            ra: hour_to_radian(init_ra),
+        };
+
+        let init_horiz_crd = HorizCoord::from_sphere_pt(
+            &eq_to_sphere_cvt.eq_to_sphere(&init_eq_crd)
+        );
+
+        let init_alt_degree = radian_to_degree(init_horiz_crd.alt);
+
+        if init_alt_degree < 0.0 {
+            anyhow::bail!(
+                "Telescope is pointed under the horizon (altitude = {:.1})°",
+                init_alt_degree
+            );
+        }
+
+        if init_alt_degree < MIN_ALT {
+            warnings.push(format!(
+                "Altitude is less then {}°. \
+                Atmospheric refraction can increase the error",
+                MIN_ALT
+            ));
+        }
+
+        // 2nd point
+
+        let mut mid_ra = init_eq_crd.ra + degree_to_radian(0.5 * angle);
+        while mid_ra < 0.0 { mid_ra += 2.0 * PI; }
+        while mid_ra >= 2.0 * PI { mid_ra -= 2.0 * PI; }
+
+        let mid_eq_crd = EqCoord {
+            dec: init_eq_crd.dec,
+            ra: mid_ra,
+        };
+
+        let mid_horiz_crd = HorizCoord::from_sphere_pt(
+            &eq_to_sphere_cvt.eq_to_sphere(&mid_eq_crd)
+        );
+
+        let mid_alt_degree = radian_to_degree(mid_horiz_crd.alt);
+
+        // 3rd point
+
+        let mut final_ra = init_eq_crd.ra + degree_to_radian(angle);
+        while final_ra < 0.0 { final_ra += 2.0 * PI; }
+        while final_ra >= 2.0 * PI { final_ra -= 2.0 * PI; }
+
+        let final_eq_crd = EqCoord {
+            dec: init_eq_crd.dec,
+            ra: final_ra,
+        };
+
+        let final_horiz_crd = HorizCoord::from_sphere_pt(
+            &eq_to_sphere_cvt.eq_to_sphere(&final_eq_crd)
+        );
+
+        let final_alt_degree = radian_to_degree(final_horiz_crd.alt);
+
+        if final_alt_degree < 0.0 || mid_alt_degree < 0.0 {
+            anyhow::bail!("Telescope will cross the horizon!");
+        }
+
+        if final_alt_degree < MIN_ALT {
+            warnings.push(format!(
+                "Final altitude is less then {}°. \
+                Atmospheric refraction can increase the error",
+                MIN_ALT
+            ));
+        }
+
+        if init_horiz_crd.az.is_sign_positive() != final_horiz_crd.az.is_sign_positive() {
+            anyhow::bail!("Telescope will cross meridian!");
+        }
+
+        Ok(warnings.join("\n"))
+    }
+
     pub fn new(
         indi:        &Arc<indi::Connection>,
         cur_frame:   &Arc<ResultImage>,
