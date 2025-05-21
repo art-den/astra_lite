@@ -265,10 +265,8 @@
             <property name="visible">True</property>
             <property name="can-focus">False</property>
             <property name="tooltip-text" translatable="yes">Step counter</property>
+            <property name="opacity">0.5</property>
             <property name="label" translatable="yes">l_step</property>
-            <attributes>
-              <attribute name="weight" value="bold"/>
-            </attributes>
           </object>
           <packing>
             <property name="expand">False</property>

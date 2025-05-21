@@ -378,23 +378,44 @@ impl PolarAlignUi {
         self.main_ui.get_all_options();
 
         // Check before start mode
-        let ok = exec_and_show_error(Some(&self.window), || {
-            let warning = PolarAlignMode::check_before_start(&self.indi, &self.options)?;
-            if !warning.is_empty() {
+
+        let check_result = PolarAlignMode::check_before_start(
+            &self.indi,
+            &self.options
+        );
+
+        match check_result {
+            Err(err) => {
                 gtk_utils::show_message(
                     Some(&self.window),
-                    "Warning",
-                    &warning,
-                    gtk::MessageType::Warning
+                    "Error",
+                    &err.to_string(),
+                    gtk::MessageType::Error
                 );
+                return;
             }
-            Ok(())
-        });
+            Ok(mut warn_text) => {
+                if !warn_text.is_empty() {
+                    warn_text += "\n\nContinue?";
+                    let dialog = gtk::MessageDialog::builder()
+                        .title("Warning")
+                        .text(&warn_text)
+                        .modal(true)
+                        .message_type(gtk::MessageType::Warning)
+                        .buttons(gtk::ButtonsType::YesNo)
+                        .transient_for(&self.window)
+                        .build();
+                    let dialog_result = dialog.run();
+                    dialog.close();
+                    if dialog_result != gtk::ResponseType::Yes {
+                        return;
+                    }
+                }
+            }
+        }
 
-        // Exit if error
-        if !ok { return; }
+        // Start mode
 
-        // Stars mode
         exec_and_show_error(Some(&self.window), || {
             self.core.start_polar_alignment()?;
             Ok(())
