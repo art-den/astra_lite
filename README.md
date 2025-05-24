@@ -24,6 +24,7 @@ https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-ast
 * Plate solving
 * Manual mount control
 * UI for INDI devices control
+* Mount polar alignment
 
 # Requirements
 | Condition                        | Requiriments for 12 MP sensors | Requiriments for 24 MP sensors |
@@ -39,7 +40,6 @@ https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-ast
 [![Sky map](./docs/screenshot2_small.jpg)](./docs/screenshot2.png?raw=true)
 
 # Future plans
-* Mount polar alignment
 * INDI driver crash recovery
 * Live view from camera in video mode
 * Meridian flip support
