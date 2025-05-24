@@ -117,7 +117,7 @@ pub struct TackingPicturesMode {
     next_job:        Option<NextJob>,
     cam_options:     CamOptions,
     guider:          Option<Guider>,
-    ref_stars:       Option<Arc<Mutex<Option<Vec<Point>>>>>,
+    ref_stars:       Option<Vec<Point>>,
     progress:        Option<Progress>,
     cur_exposure:    f64,
     cur_shot_id:     Option<u64>,
@@ -232,10 +232,6 @@ impl TackingPicturesMode {
     ) {
         let Some(guider) = &mut self.guider else { return; };
         guider.external = Some(Arc::clone(ext_guider));
-    }
-
-    pub fn set_ref_stars(&mut self, ref_stars: &Arc<Mutex<Option<Vec<Point>>>>) {
-        self.ref_stars = Some(Arc::clone(ref_stars));
     }
 
     pub fn set_live_stacking(&mut self, live_stacking: &Arc<LiveStackingData>) {
@@ -991,7 +987,7 @@ impl TackingPicturesMode {
 
     fn process_light_frame_info(
         &mut self,
-        info: &LightFrameInfoData,
+        info:    &LightFrameInfoData,
         shot_id: Option<u64>,
     ) -> anyhow::Result<NotifyResult> {
         if !info.stars.info.is_ok() {
@@ -1000,6 +996,11 @@ impl TackingPicturesMode {
 
         if self.state != State::Common {
             return Ok(NotifyResult::Empty);
+        }
+
+        if self.ref_stars.is_none() {
+            let ref_stars = info.stars.items.iter().map(|s| Point {x: s.x, y: s.y}).collect();
+            self.ref_stars = Some(ref_stars);
         }
 
         self.process_light_frame_info_and_refocus(info, shot_id)?;
@@ -1188,11 +1189,6 @@ impl Mode for TackingPicturesMode {
 
         drop(options);
 
-        if let Some(ref_stars) = &mut self.ref_stars {
-            let mut ref_stars = ref_stars.lock().unwrap();
-            *ref_stars = None;
-        }
-
         self.fname_utils.init(&self.indi, &self.device);
         self.generate_output_file_names()?;
 
@@ -1329,7 +1325,7 @@ impl Mode for TackingPicturesMode {
                 if options.cam.frame.frame_type == FrameType::Lights
                 && !options.mount.device.is_empty()
                 && options.guiding.mode == GuidingMode::MainCamera {
-                    cmd.flags |= ProcessImageFlags::CALC_STARS_OFFSET;
+                    cmd.ref_stars = self.ref_stars.clone();
                 }
             },
             CameraMode::LiveStacking => {
@@ -1337,7 +1333,7 @@ impl Mode for TackingPicturesMode {
                     data:    Arc::clone(self.live_stacking.as_ref().unwrap()),
                     options: options.live.clone(),
                 });
-                cmd.flags |= ProcessImageFlags::CALC_STARS_OFFSET;
+                cmd.ref_stars = self.ref_stars.clone();
              },
             _ => {},
         }

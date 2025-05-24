@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::{atomic::AtomicUsize, RwLock}};
+use std::{collections::HashMap, sync::{atomic::AtomicUsize, Arc, RwLock}};
 use crate::{plate_solve::PlateSolverEvent, DeviceAndProp};
 use super::{core::ModeType, frame_processing::*, mode_focusing::*, mode_polar_align::PolarAlignmentEvent};
 
@@ -7,6 +7,12 @@ pub struct Progress {
     pub cur: usize,
     pub total: usize,
 }
+
+#[derive(Clone)]
+pub enum OverlayMessgagePos {
+    Top,
+}
+
 
 #[derive(Clone)]
 pub enum Event {
@@ -23,6 +29,10 @@ pub enum Event {
     Focusing(FocusingStateEvent),
     PlateSolve(PlateSolverEvent),
     PolarAlignment(PolarAlignmentEvent),
+    OverlayMessage {
+        pos:  OverlayMessgagePos,
+        text: Arc<String>,
+    },
 }
 
 type SubscriptionFun = dyn Fn(Event) + Send + Sync + 'static;

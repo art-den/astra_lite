@@ -1,6 +1,7 @@
 use std::{f64::consts::PI, collections::HashMap};
 use itertools::Itertools;
 
+#[derive(Clone)]
 pub struct Point {
     pub x: f64,
     pub y: f64,

@@ -1,6 +1,5 @@
 use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, sync::{mpsc, RwLock, Mutex}, thread::JoinHandle, path::*, io::Cursor};
 
-use bitflags::bitflags;
 use chrono::{DateTime, Local, Utc};
 
 use crate::{
@@ -124,10 +123,6 @@ pub struct LiveStackingParams {
     pub options: LiveStackingOptions,
 }
 
-bitflags! { pub struct ProcessImageFlags: u32 {
-    const CALC_STARS_OFFSET = 1;
-}}
-
 pub enum ImageSource {
     Blob(Arc<indi::BlobPropValue>),
     FileName(PathBuf),
@@ -148,11 +143,10 @@ pub struct FrameProcessCommandData {
     pub mode_type:       ModeType,
     pub camera:          DeviceAndProp,
     pub shot_id:         Option<u64>,
-    pub flags:           ProcessImageFlags,
     pub img_source:      ImageSource,
     pub frame:           Arc<ResultImage>,
     pub stop_flag:       Arc<AtomicBool>,
-    pub ref_stars:       Arc<Mutex<Option<Vec<Point>>>>,
+    pub ref_stars:       Option<Vec<Point>>,
     pub calibr_params:   Option<CalibrParams>,
     pub calibr_data:     Arc<Mutex<CalibrData>>,
     pub view_options:    PreviewParams,
@@ -900,14 +894,6 @@ fn make_preview_image_impl(
     }
 
     let is_bad_frame = if frame_type == FrameType::Lights {
-        let mut ref_stars_lock = command.ref_stars.lock().unwrap();
-
-        let ref_stars = if command.flags.contains(ProcessImageFlags::CALC_STARS_OFFSET) {
-            ref_stars_lock.as_ref()
-        } else {
-            None
-        };
-
         // Light frame information
 
         let tmr = TimeLogger::start();
@@ -930,7 +916,7 @@ fn make_preview_image_impl(
         // Offset by previous stars
 
         let (stars_offset, offset_is_ok) = if let (Some(stars_for_offset), true, true) =
-        (ref_stars, stars_info.fwhm_is_ok, stars_info.ovality_is_ok) {
+        (&command.ref_stars, stars_info.fwhm_is_ok, stars_info.ovality_is_ok) {
             let tmr = TimeLogger::start();
             let cur_stars_points: Vec<_> = stars_items.iter()
                 .map(|star| Point {x: star.x, y: star.y })
@@ -947,17 +933,6 @@ fn make_preview_image_impl(
         } else {
             (None, true)
         };
-
-        // Store reference stars for first good light frame
-
-        if command.flags.contains(ProcessImageFlags::CALC_STARS_OFFSET)
-        && stars_info.is_ok()
-        && ref_stars_lock.is_none() {
-            *ref_stars_lock = Some(stars_items.iter()
-                .map(|star| Point {x: star.x, y: star.y })
-                .collect::<Vec<_>>()
-            );
-        }
 
         let info = Arc::new(LightFrameInfoData {
             image: Arc::new(info),

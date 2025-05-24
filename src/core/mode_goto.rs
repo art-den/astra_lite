@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 use crate::{
     core::{consts::*, events::*, frame_processing::*},
-    image::{image::Image, info::LightFrameInfo, stars::StarItems},
+    image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point},
     indi,
     options::*,
     plate_solve::*,
@@ -23,6 +23,7 @@ enum State {
     TackingFinalPicture,
     FinalPlateSolving,
     Finished,
+    Checking,
 }
 
 pub enum GotoDestination {
@@ -258,7 +259,24 @@ impl GotoMode {
             }
         }
         Ok(true)
+    }
 
+    fn show_overlay_message(&self, info: &LightFrameInfoData) {
+        let message = if let Some(offset) = &info.stars.offset {
+            format!(
+                "Offset x={:.1}, y={:.1}\nRotation = {:.2}°",
+                offset.x,
+                offset.y,
+                radian_to_degree(offset.angle),
+            )
+        } else {
+            "???".to_string()
+        };
+
+        self.subscribers.notify(Event::OverlayMessage {
+            pos: OverlayMessgagePos::Top,
+            text: Arc::new(message)
+        });
     }
 }
 
@@ -287,6 +305,8 @@ impl Mode for GotoMode {
                 "Final plate solving".to_string(),
             State::None|State::Finished =>
                 "Goto and platesolve".to_string(),
+            State::Checking =>
+                "Checking position".to_string(),
         }
     }
 
@@ -305,7 +325,7 @@ impl Mode for GotoMode {
             State::CorrectMount => 3,
             State::TackingFinalPicture => 4,
             State::FinalPlateSolving => 5,
-            State::Finished => 6,
+            State::Finished|State::Checking => 6,
         };
 
         stage += self.extra_stages as i32;
@@ -384,6 +404,12 @@ impl Mode for GotoMode {
         }
         _ = self.indi.mount_abort_motion(&self.mount);
         self.state = State::None;
+
+        self.subscribers.notify(Event::OverlayMessage {
+            pos: OverlayMessgagePos::Top,
+            text: Arc::new(String::new())
+        });
+
         Ok(())
     }
 
@@ -461,8 +487,13 @@ impl Mode for GotoMode {
                     ProcessPlateSolverResultAction::Sync
                 )?;
                 if ok {
-                    self.state = State::Finished;
-                    return Ok(NotifyResult::Finished { next_mode: None })
+                    if matches!(&self.destination, GotoDestination::Image {.. }) {
+                        self.start_take_picture()?;
+                        self.state = State::Checking;
+                    } else {
+                        self.state = State::Finished;
+                        return Ok(NotifyResult::Finished { next_mode: None })
+                    }
                 }
             }
 
@@ -498,10 +529,23 @@ impl Mode for GotoMode {
                 self.state = State::FinalPlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
             }
+            (State::Checking, FrameProcessResultData::LightFrameInfo(info), true) => {
+                self.show_overlay_message(&info);
+                self.start_take_picture()?;
+                return Ok(NotifyResult::ProgressChanges);
+            }
+
             _ => {},
         }
 
         Ok(NotifyResult::Empty)
+    }
+
+    fn complete_img_process_params(&self, cmd: &mut FrameProcessCommandData) {
+        if let GotoDestination::Image { stars, .. } = &self.destination {
+            let ref_stars = stars.items.iter().map(|s| Point { x: s.x, y: s.y }).collect();
+            cmd.ref_stars = Some(ref_stars);
+        }
     }
 
 }

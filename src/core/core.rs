@@ -9,7 +9,7 @@ use gtk::glib::PropertySet;
 use crate::{
     core::consts::*,
     guiding::external_guider::*,
-    image::{raw::FrameType, stars_offset::*},
+    image::raw::FrameType,
     indi, options::*,
     sky_math::math::EqCoord,
     utils::timer::*
@@ -109,7 +109,6 @@ pub struct Core {
     mode_data:          RwLock<ModeData>,
     subscribers:        Arc<EventSubscriptions>,
     cur_frame:          Arc<ResultImage>,
-    ref_stars:          Arc<Mutex<Option<Vec<Point>>>>,
     calibr_data:        Arc<Mutex<CalibrData>>,
     live_stacking:      Arc<LiveStackingData>,
     timer:              Arc<Timer>,
@@ -143,7 +142,6 @@ impl Core {
             mode_data:          RwLock::new(ModeData::new()),
             subscribers:        Arc::new(EventSubscriptions::new()),
             cur_frame:          Arc::new(ResultImage::new()),
-            ref_stars:          Arc::new(Mutex::new(None)),
             calibr_data:        Arc::new(Mutex::new(CalibrData::default())),
             live_stacking:      Arc::new(LiveStackingData::new()),
             timer:              Arc::new(Timer::new()),
@@ -401,11 +399,10 @@ impl Core {
                 mode_type:       mode.mode.get_type(),
                 camera:          device,
                 shot_id:         blob.shot_id,
-                flags:           ProcessImageFlags::empty(),
                 img_source:      ImageSource::Blob(Arc::clone(blob)),
                 frame:           Arc::clone(&self.cur_frame),
                 stop_flag:       new_stop_flag,
-                ref_stars:       Arc::clone(&self.ref_stars),
+                ref_stars:       None,
                 calibr_data:     Arc::clone(&self.calibr_data),
                 view_options:    options.preview.preview_params(),
                 frame_options:   options.cam.frame.clone(),
@@ -554,11 +551,10 @@ impl Core {
             mode_type:       ModeType::OpeningImgFile,
             camera:          DeviceAndProp::default(),
             shot_id:         None,
-            flags:           ProcessImageFlags::empty(),
             img_source:      ImageSource::FileName(file_name.to_path_buf()),
             frame:           Arc::clone(&self.cur_frame),
             stop_flag:       new_stop_flag,
-            ref_stars:       Arc::clone(&self.ref_stars),
+            ref_stars:       None,
             calibr_data:     Arc::clone(&self.calibr_data),
             view_options:    options.preview.preview_params(),
             frame_options:   options.cam.frame.clone(),
@@ -638,7 +634,6 @@ impl Core {
         )?;
         self.live_stacking.clear();
         mode.set_external_guider(&self.ext_guider);
-        mode.set_ref_stars(&self.ref_stars);
         self.start_new_mode(mode, true, true)?;
         Ok(())
     }
@@ -653,7 +648,6 @@ impl Core {
         )?;
         self.live_stacking.clear();
         mode.set_external_guider(&self.ext_guider);
-        mode.set_ref_stars(&self.ref_stars);
         mode.set_live_stacking(&self.live_stacking);
         self.start_new_mode(mode, true, true)?;
         Ok(())

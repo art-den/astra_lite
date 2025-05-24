@@ -655,6 +655,10 @@ impl PreviewUi {
                 self.correct_preview_source();
             }
 
+            MainThreadEvent::Core(Event::OverlayMessage { pos, text }) => {
+                self.show_overlay_message(pos, &text);
+            }
+
             _ => {},
         }
     }
@@ -691,6 +695,14 @@ impl PreviewUi {
         self.widgets.ctrl.scl_wb_green.set_sensitive(rgb_enabled);
         self.widgets.ctrl.l_wb_blue.set_sensitive(rgb_enabled);
         self.widgets.ctrl.scl_wb_blue.set_sensitive(rgb_enabled);
+    }
+
+    fn show_overlay_message(&self, pos: OverlayMessgagePos, text: &str) {
+        match pos {
+            OverlayMessgagePos::Top => {
+                self.widgets.image.l_overlay_top.set_text(text);
+            }
+        }
     }
 
     fn show_image_info(&self) {
@@ -1287,7 +1299,7 @@ impl PreviewUi {
                     make_bad_str("???")
                 };
                 let angle_str = if !item.bad_offset {
-                    format!("{:.1}", offset.angle)
+                    format!("{:.1}", radian_to_degree(offset.angle))
                 } else {
                     make_bad_str("???")
                 };

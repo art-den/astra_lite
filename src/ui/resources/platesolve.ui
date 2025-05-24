@@ -145,7 +145,7 @@
     </child>
     <child>
       <object class="GtkButton">
-        <property name="label" translatable="yes">Platesole current image and goto</property>
+        <property name="label" translatable="yes">Platesolve current image and goto</property>
         <property name="visible">True</property>
         <property name="can-focus">True</property>
         <property name="receives-default">True</property>

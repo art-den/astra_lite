@@ -608,6 +608,7 @@ Useful when the object is not large and is in the center of the image.</property
                     <property name="label" translatable="yes">label</property>
                     <attributes>
                       <attribute name="scale" value="2"/>
+                      <attribute name="foreground" value="#0000ffff0000"/>
                     </attributes>
                   </object>
                   <packing>
