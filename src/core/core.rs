@@ -984,11 +984,47 @@ impl Core {
 ///////////////////////////////////////////////////////////////////////////////
 
 pub fn apply_camera_options_and_take_shot(
-    indi:   &indi::Connection,
-    device: &DeviceAndProp,
-    frame:  &FrameOptions,
+    indi:     &indi::Connection,
+    device:   &DeviceAndProp,
+    frame:    &FrameOptions,
+    cam_ctrl: &CamCtrlOptions,
 ) -> anyhow::Result<u64> {
     let cam_ccd = indi::CamCcd::from_ccd_prop_name(&device.prop);
+
+    // Conversion gain
+
+    if let Some(conv_gain_str) = &cam_ctrl.conv_gain_str {
+        if indi.camera_is_conversion_gain_str_supported(&device.name)? {
+            indi.camera_set_conversion_gain_str(
+                &device.name,
+                conv_gain_str,
+                true,
+                INDI_SET_PROP_TIMEOUT
+            )?;
+        }
+    }
+
+    // Low noise mode
+
+    if indi.camera_is_low_noise_supported(&device.name)? {
+        indi.camera_set_low_noise(
+            &device.name,
+            cam_ctrl.low_noise,
+            true,
+            INDI_SET_PROP_TIMEOUT
+        )?;
+    }
+
+    // High fullwell mode
+
+    if indi.camera_is_high_fullwell_supported(&device.name)? {
+        indi.camera_set_high_fullwell(
+            &device.name,
+            cam_ctrl.high_fullwell,
+            true,
+            INDI_SET_PROP_TIMEOUT
+        )?;
+    }
 
     // Polling period
 
@@ -1075,17 +1111,6 @@ pub fn apply_camera_options_and_take_shot(
         indi.camera_set_offset(
             &device.name,
             frame.offset as f64,
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
-    }
-
-    // Low noise mode
-
-    if indi.camera_is_low_noise_ctrl_supported(&device.name)? {
-        indi.camera_control_low_noise(
-            &device.name,
-            frame.low_noise,
             true,
             INDI_SET_PROP_TIMEOUT
         )?;

@@ -91,6 +91,10 @@ pub struct CamCtrlOptions {
     pub enable_fan:    bool,
     pub heater_str:    Option<String>,
     pub temperature:   f64,
+    pub low_noise:     bool,
+    pub high_fullwell: bool,
+    pub conv_gain_str: Option<String>,
+
 }
 
 impl Default for CamCtrlOptions {
@@ -100,6 +104,9 @@ impl Default for CamCtrlOptions {
             enable_fan:    false,
             heater_str:    None,
             temperature:   0.0,
+            low_noise:     false,
+            high_fullwell: false,
+            conv_gain_str: None,
         }
     }
 }
@@ -115,7 +122,6 @@ pub struct FrameOptions {
     pub frame_type: FrameType,
     pub binning:    Binning,
     pub crop:       Crop,
-    pub low_noise:  bool,
 }
 
 impl Default for FrameOptions {
@@ -129,7 +135,6 @@ impl Default for FrameOptions {
             frame_type: FrameType::default(),
             binning:    Binning::default(),
             crop:       Crop::default(),
-            low_noise:  false,
         }
     }
 }

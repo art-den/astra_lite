@@ -141,7 +141,7 @@ impl GotoMode {
             indi::value_to_sexagesimal(self.eq_coord.ra, true, 9),
             indi::value_to_sexagesimal(self.eq_coord.dec, true, 8)
         );
-        self.indi.set_after_coord_set_action(
+        self.indi.mount_set_after_coord_action(
             &self.mount,
             indi::AfterCoordSetAction::Track,
             true,
@@ -165,7 +165,12 @@ impl GotoMode {
         let camera = self.camera.as_ref().unwrap();
 
         log::debug!("Tacking picture for plate solve with {:?}", &cam_opts.frame);
-        apply_camera_options_and_take_shot(&self.indi, camera, &cam_opts.frame)?;
+        apply_camera_options_and_take_shot(
+            &self.indi,
+            camera,
+            &cam_opts.frame,
+            &cam_opts.ctrl
+        )?;
         Ok(())
     }
 
@@ -233,7 +238,7 @@ impl GotoMode {
 
         match action {
             ProcessPlateSolverResultAction::Sync => {
-                self.indi.set_after_coord_set_action(
+                self.indi.mount_set_after_coord_action(
                     &self.mount,
                     indi::AfterCoordSetAction::Sync,
                     true,

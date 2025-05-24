@@ -206,7 +206,12 @@ impl FocusingMode {
                 if cur_focus as i64 == desired_focus as i64 {
                     log::debug!("Taking picture for focuser value: {}", desired_focus);
                     self.change_time = None;
-                    apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
+                    apply_camera_options_and_take_shot(
+                        &self.indi,
+                        &self.camera,
+                        &self.cam_opts.frame,
+                        &self.cam_opts.ctrl
+                    )?;
                     self.state = FocusingState::WaitingFrame(desired_focus);
                 }
             }
@@ -221,7 +226,12 @@ impl FocusingMode {
                 if cur_focus as i64 == desired_focus as i64 {
                     log::debug!("Taking RESULT shot for focuser value: {}", desired_focus);
                     self.change_time = None;
-                    apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
+                    apply_camera_options_and_take_shot(
+                        &self.indi,
+                        &self.camera,
+                        &self.cam_opts.frame,
+                        &self.cam_opts.ctrl
+                    )?;
                     self.state = FocusingState::WaitingResultImg(desired_focus);
                     return Ok(NotifyResult::ProgressChanges);
                 }
@@ -300,7 +310,12 @@ impl FocusingMode {
                     FocusingStateEvent::Data(event_data)
                 ));
             } else {
-                apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
+                apply_camera_options_and_take_shot(
+                    &self.indi,
+                    &self.camera,
+                    &self.cam_opts.frame,
+                    &self.cam_opts.ctrl
+                )?;
                 return Ok(NotifyResult::ProgressChanges);
             }
         } else {
@@ -402,7 +417,12 @@ impl FocusingMode {
         } else if !info_is_ok {
             log::info!("Stars on received image are not Ok. Taking another image...");
             self.change_time = None;
-            apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
+            apply_camera_options_and_take_shot(
+                &self.indi,
+                &self.camera,
+                &self.cam_opts.frame,
+                &self.cam_opts.ctrl
+            )?;
         }
         Ok(result)
     }
@@ -587,7 +607,12 @@ impl Mode for FocusingMode {
         let cur_pos = self.indi.focuser_get_abs_value(&self.f_opts.device)?.round();
         self.before_pos = cur_pos;
 
-        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
+        apply_camera_options_and_take_shot(
+            &self.indi,
+            &self.camera,
+            &self.cam_opts.frame,
+            &self.cam_opts.ctrl
+        )?;
         self.stage = Stage::Undef;
         self.state = FocusingState::WaitingFirstImage;
 

@@ -120,7 +120,12 @@ impl MountCalibrMode {
     }
 
     fn start_for_axis(&mut self, axis: Axis) -> anyhow::Result<()> {
-        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
+        apply_camera_options_and_take_shot(
+            &self.indi,
+            &self.camera,
+            &self.cam_opts.frame,
+            &self.cam_opts.ctrl
+        )?;
 
         let guid_rate_supported = self.indi.mount_is_guide_rate_supported(&self.mount_device)?;
         self.can_change_g_rate =
@@ -210,7 +215,7 @@ impl MountCalibrMode {
     }
 
     fn restore_orig_coords(&self) -> anyhow::Result<()> {
-        self.indi.set_after_coord_set_action(
+        self.indi.mount_set_after_coord_action(
             &self.mount_device,
             indi::AfterCoordSetAction::Track,
             true,
@@ -282,7 +287,12 @@ impl MountCalibrMode {
                 self.state = State::WaitForSlew(0);
             }
         } else {
-            apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
+            apply_camera_options_and_take_shot(
+                &self.indi,
+                &self.camera,
+                &self.cam_opts.frame,
+                &self.cam_opts.ctrl
+            )?;
         }
         Ok(result)
     }
@@ -357,7 +367,12 @@ impl Mode for MountCalibrMode {
                     *ok_time += 1;
                     if *ok_time == AFTER_MOUNT_MOVE_WAIT_TIME {
                         self.indi.mount_abort_motion(&self.mount_device)?;
-                        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
+                        apply_camera_options_and_take_shot(
+                            &self.indi,
+                            &self.camera,
+                            &self.cam_opts.frame,
+                            &self.cam_opts.ctrl
+                        )?;
                         self.state = State::WaitForImage;
                         result = NotifyResult::ProgressChanges;
                     }

@@ -304,7 +304,12 @@ impl TackingPicturesMode {
     }
 
     fn take_shot_with_options(&mut self, frame_options: FrameOptions) -> anyhow::Result<()> {
-        let cur_shot_id = apply_camera_options_and_take_shot(&self.indi, &self.device, &frame_options)?;
+        let cur_shot_id = apply_camera_options_and_take_shot(
+            &self.indi,
+            &self.device,
+            &frame_options,
+            &self.cam_options.ctrl
+        )?;
         self.cur_shot_id = Some(cur_shot_id);
         self.cur_exposure = frame_options.exposure();
         Ok(())

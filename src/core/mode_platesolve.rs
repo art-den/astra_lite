@@ -122,13 +122,12 @@ impl PlatesolveMode {
         self.subscribers.notify(
             Event::PlateSolve(event)
         );
-        self.indi.set_after_coord_set_action(
+        self.indi.mount_set_after_coord_action(
             &self.mount,
             indi::AfterCoordSetAction::Sync,
             true,
             INDI_SET_PROP_TIMEOUT
         )?;
-
         self.indi.mount_set_eq_coord(
             &self.mount,
             radian_to_hour(result.crd_now.ra),
@@ -177,7 +176,12 @@ impl Mode for PlatesolveMode {
 
     fn start(&mut self) -> anyhow::Result<()> {
         log::debug!("Tacking picture for plate solve with {:?}", &self.cam_opts.frame);
-        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
+        apply_camera_options_and_take_shot(
+            &self.indi,
+            &self.camera,
+            &self.cam_opts.frame,
+            &self.cam_opts.ctrl
+        )?;
         self.state = State::Capturing;
         Ok(())
     }

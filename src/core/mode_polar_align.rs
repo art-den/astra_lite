@@ -407,7 +407,12 @@ impl PolarAlignMode {
     }
 
     fn start_capture(&mut self) -> anyhow::Result<()> {
-        apply_camera_options_and_take_shot(&self.indi, &self.camera, &self.cam_opts.frame)?;
+        apply_camera_options_and_take_shot(
+            &self.indi,
+            &self.camera,
+            &self.cam_opts.frame,
+            &self.cam_opts.ctrl
+        )?;
         self.image_time = Some(Utc::now().naive_utc());
         Ok(())
     }
@@ -584,7 +589,7 @@ impl PolarAlignMode {
                 INDI_SET_PROP_TIMEOUT
             )?;
         }
-        self.indi.set_after_coord_set_action(
+        self.indi.mount_set_after_coord_action(
             &self.mount,
             indi::AfterCoordSetAction::Track,
             true,

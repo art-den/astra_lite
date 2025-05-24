@@ -2957,20 +2957,20 @@ impl Connection {
 
     // Camera window heater
 
-    pub fn camera_is_heater_supported(
+    pub fn camera_is_heater_str_supported(
         &self,
         device_name: &str,
     ) -> Result<bool> {
         self.is_device_support_any_of_props(
             device_name,
-            PROP_CAM_HEAT_ON
+            PROP_CAM_HEAT_CTRL_LIST
         )
     }
 
-    pub fn camera_is_heater_property(
+    pub fn camera_is_heater_str_property(
         prop_name: &str
     ) -> bool {
-        PROP_CAM_HEAT_ON.iter().any(|(prop, _)|
+        PROP_CAM_HEAT_CTRL_LIST.iter().any(|(prop, _)|
             *prop == prop_name
         )
     }
@@ -2978,11 +2978,11 @@ impl Connection {
     pub fn camera_get_heater_items(
         &self,
         device_name: &str
-    ) -> Result<Option<Vec<(Arc<String>, String)>>> {
+    ) -> Result<Option<Vec<(Arc<String>, Arc<String>)>>> {
         let devices = self.devices.lock().unwrap();
         let (prop_name, _) = devices.existing_prop_name(
             device_name,
-            PROP_CAM_HEAT_ON
+            PROP_CAM_HEAT_CTRL_LIST
         )?;
         let device = devices.find_by_name_res(device_name)?;
         let Some(prop) = device.get_property_opt(prop_name) else {
@@ -2990,12 +2990,16 @@ impl Connection {
         };
         Ok(Some(prop.elements
             .iter()
-            .map(|e| (Arc::clone(&e.name), e.label.as_ref().unwrap_or(&e.name.clone()).to_string()))
+            .map(|e| {
+                let name = Arc::clone(&e.name);
+                let caption = Arc::clone(&e.label.as_ref().unwrap_or(&e.name));
+                (name, caption)
+            })
             .collect()
         ))
     }
 
-    pub fn camera_control_heater(
+    pub fn camera_set_heater_str(
         &self,
         device_name: &str,
         value:       &str,
@@ -3005,7 +3009,7 @@ impl Connection {
         let devices = self.devices.lock().unwrap();
         let (prop_name, _) = devices.existing_prop_name(
             device_name,
-            PROP_CAM_HEAT_ON
+            PROP_CAM_HEAT_CTRL_LIST
         )?;
         drop(devices);
         self.command_set_switch_property_and_wait(
@@ -3020,7 +3024,7 @@ impl Connection {
 
     // Camera low noise mode
 
-    pub fn camera_is_low_noise_ctrl_supported(
+    pub fn camera_is_low_noise_supported(
         &self,
         device_name: &str,
     ) -> Result<bool> {
@@ -3030,13 +3034,13 @@ impl Connection {
         )
     }
 
-    pub fn camera_control_low_noise(
+    pub fn camera_set_low_noise(
         &self,
         device_name: &str,
         enable:      bool,
         force_set:   bool,
         timeout_ms:  Option<u64>,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let devices = self.devices.lock().unwrap();
         let (prop, elem) = if enable {
             devices.existing_prop_name(device_name, PROP_CAM_LOW_NOISE_ON)?
@@ -3044,7 +3048,6 @@ impl Connection {
             devices.existing_prop_name(device_name, PROP_CAM_LOW_NOISE_OFF)?
         };
         drop(devices);
-
         self.command_set_switch_property_and_wait(
             force_set,
             timeout_ms,
@@ -3052,7 +3055,110 @@ impl Connection {
             prop,
             &[(elem, true)]
         )?;
-        Ok(true)
+        Ok(())
+    }
+
+    // Conversion gain mode
+
+    pub fn camera_is_conversion_gain_str_supported(
+        &self,
+        device_name: &str,
+    ) -> Result<bool> {
+        self.is_device_support_any_of_props(
+            device_name,
+            PROP_CAM_CONV_GAIN_LIST
+        )
+    }
+
+    pub fn camera_is_conversion_gain_property(
+        prop_name: &str
+    ) -> bool {
+        PROP_CAM_CONV_GAIN_LIST.iter().any(|(prop, _)|
+            *prop == prop_name
+        )
+    }
+
+    pub fn camera_get_conversion_gain_items(
+        &self,
+        device_name: &str
+    ) -> Result<Option<Vec<(Arc<String>, Arc<String>)>>> {
+        let devices = self.devices.lock().unwrap();
+        let (prop_name, _) = devices.existing_prop_name(
+            device_name,
+            PROP_CAM_CONV_GAIN_LIST
+        )?;
+        let device = devices.find_by_name_res(device_name)?;
+        let Some(prop) = device.get_property_opt(prop_name) else {
+            return Ok(None);
+        };
+        Ok(Some(prop.elements
+            .iter()
+            .map(|e| {
+                let name = Arc::clone(&e.name);
+                let caption = Arc::clone(&e.label.as_ref().unwrap_or(&e.name));
+                (name, caption)
+            })
+            .collect()
+        ))
+    }
+
+    pub fn camera_set_conversion_gain_str(
+        &self,
+        device_name: &str,
+        value:       &str,
+        force_set:   bool,
+        timeout_ms:  Option<u64>,
+    ) -> Result<()> {
+        let devices = self.devices.lock().unwrap();
+        let (prop_name, _) = devices.existing_prop_name(
+            device_name,
+            PROP_CAM_CONV_GAIN_LIST
+        )?;
+        drop(devices);
+        self.command_set_switch_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            prop_name, &[(value, true)]
+        )?;
+        Ok(())
+    }
+
+
+    // High fullwell mode
+
+    pub fn camera_is_high_fullwell_supported(
+        &self,
+        device_name: &str,
+    ) -> Result<bool> {
+        self.is_device_support_any_of_props(
+            device_name,
+            PROP_CAM_HIGH_FULLWELL_ON
+        )
+    }
+
+    pub fn camera_set_high_fullwell(
+        &self,
+        device_name: &str,
+        on:          bool,
+        force_set:   bool,
+        timeout_ms:  Option<u64>,
+    ) -> Result<()> {
+        let devices = self.devices.lock().unwrap();
+        let (prop, elem) = if on {
+            devices.existing_prop_name(device_name, PROP_CAM_HIGH_FULLWELL_ON)?
+        } else {
+            devices.existing_prop_name(device_name, PROP_CAM_HIGH_FULLWELL_OFF)?
+        };
+        drop(devices);
+        self.command_set_switch_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            prop,
+            &[(elem, true)]
+        )?;
+        Ok(())
     }
 
     // Camera's telescope info
@@ -3169,7 +3275,7 @@ impl Connection {
         Ok((ra, dec))
     }
 
-    pub fn set_after_coord_set_action(
+    pub fn mount_set_after_coord_action(
         &self,
         device_name:  &str,
         after_action: AfterCoordSetAction,
@@ -4145,7 +4251,7 @@ const PROP_CAM_FAN_OFF: PropsNamePairs = &[
     ("TC_FAN_CONTROL", "TC_FAN_OFF"),
     ("TC_FAN_SPEED",   "INDI_DISABLED"),
 ];
-const PROP_CAM_HEAT_ON: PropsNamePairs = &[
+const PROP_CAM_HEAT_CTRL_LIST: PropsNamePairs = &[
     ("TC_HEAT_CONTROL", ""),
 ];
 const PROP_CAM_LOW_NOISE_ON: PropsNamePairs = &[
@@ -4170,4 +4276,16 @@ const PROP_CAM_BIN_ADD: PropsNamePairs = &[
 ];
 const PROP_DEVICE_CRASH: PropsNamePairs = &[
     ("CCD_SIMULATE_CRASH", "CRASH"),
+];
+
+const PROP_CAM_CONV_GAIN_LIST: PropsNamePairs = &[
+    ("TC_CONVERSION_GAIN", ""),
+];
+
+const PROP_CAM_HIGH_FULLWELL_ON: PropsNamePairs = &[
+    ("TC_HIGHFULLWELL", "INDI_ENABLED"),
+];
+
+const PROP_CAM_HIGH_FULLWELL_OFF: PropsNamePairs = &[
+    ("TC_HIGHFULLWELL", "INDI_DISABLED"),
 ];

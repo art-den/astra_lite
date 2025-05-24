@@ -67,6 +67,7 @@ enum DelayedAction {
     UpdateResolutionList,
     SelectMaxResolution,
     FillHeaterItems,
+    FillConvGainItems,
 }
 
 enum MainThreadEvent {
@@ -216,6 +217,9 @@ struct ControlWidgets {
     l_heater:      gtk::Label,
     cb_heater:     gtk::ComboBoxText,
     chb_low_noise: gtk::CheckButton,
+    l_conv_gain:   gtk::Label,
+    cb_conv_gain:  gtk::ComboBoxText,
+    chb_high_fw:   gtk::CheckButton,
 }
 
 #[derive(FromBuilder)]
@@ -556,10 +560,24 @@ impl CameraUi {
             })
         );
 
+        self.widgets.ctrl.cb_conv_gain.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.cam.ctrl.conv_gain_str = cb.active_id().map(|id| id.to_string());
+            })
+        );
+
         self.widgets.ctrl.chb_low_noise.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let Ok(mut options) = self_.options.try_write() else { return; };
-                options.cam.frame.low_noise = chb.is_active();
+                options.cam.ctrl.low_noise = chb.is_active();
+            })
+        );
+
+        self.widgets.ctrl.chb_high_fw.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.cam.ctrl.high_fullwell = chb.is_active();
             })
         );
 
@@ -810,10 +828,11 @@ impl CameraUi {
 
     fn show_ctrl_options(&self, options: &Options) {
         let ctrl = &self.widgets.ctrl;
-        ctrl.chb_low_noise.set_active(options.cam.frame.low_noise);
         ctrl.chb_cooler.set_active(options.cam.ctrl.enable_cooler);
         ctrl.spb_temp.set_value(options.cam.ctrl.temperature);
         ctrl.chb_fan.set_active(options.cam.ctrl.enable_fan);
+        ctrl.chb_high_fw.set_active(options.cam.ctrl.high_fullwell);
+        ctrl.chb_low_noise.set_active(options.cam.ctrl.low_noise);
     }
 
     fn show_raw_options(&self, options: &Options) {
@@ -853,7 +872,8 @@ impl CameraUi {
         options.cam.ctrl.enable_cooler = ctrl.chb_cooler.is_active();
         options.cam.ctrl.temperature   = ctrl.spb_temp.value();
         options.cam.ctrl.enable_fan    = ctrl.chb_fan.is_active();
-        options.cam.frame.low_noise    = ctrl.chb_low_noise.is_active();
+        options.cam.ctrl.low_noise     = ctrl.chb_low_noise.is_active();
+        options.cam.ctrl.high_fullwell = ctrl.chb_high_fw.is_active();
     }
 
     pub fn get_frame_options(&self, options: &mut Options) {
@@ -981,6 +1001,9 @@ impl CameraUi {
             DelayedAction::FillHeaterItems => {
                 self.fill_heater_items_list();
             }
+            DelayedAction::FillConvGainItems => {
+                self.fill_conv_gain_items_list();
+            }
         }
     }
 
@@ -1012,15 +1035,21 @@ impl CameraUi {
             self.indi.camera_is_fan_supported(&camera.name).unwrap_or(false)
         ).unwrap_or(false);
         let heater_supported = camera.as_ref().map(|camera|
-            self.indi.camera_is_heater_supported(&camera.name).unwrap_or(false)
+            self.indi.camera_is_heater_str_supported(&camera.name).unwrap_or(false)
         ).unwrap_or(false);
         let low_noise_supported = camera.as_ref().map(|camera|
-            self.indi.camera_is_low_noise_ctrl_supported(&camera.name).unwrap_or(false)
+            self.indi.camera_is_low_noise_supported(&camera.name).unwrap_or(false)
         ).unwrap_or(false);
         let crop_supported = camera.as_ref().map(|camera| {
             let cam_ccd = indi::CamCcd::from_ccd_prop_name(&camera.prop);
             self.indi.camera_is_frame_supported(&camera.name, cam_ccd).unwrap_or(false)
         }).unwrap_or(false);
+        let conv_gain_supported = camera.as_ref().map(|camera|
+            self.indi.camera_is_conversion_gain_str_supported(&camera.name).unwrap_or(false)
+        ).unwrap_or(false);
+        let high_fullwell_supported = camera.as_ref().map(|camera|
+            self.indi.camera_is_conversion_gain_str_supported(&camera.name).unwrap_or(false)
+        ).unwrap_or(false);
 
         let indi_connected = self.indi.state() == indi::ConnState::Connected;
 
@@ -1095,6 +1124,9 @@ impl CameraUi {
         widgets.ctrl.chb_fan      .set_visible(fan_supported);
         widgets.ctrl.l_heater     .set_visible(heater_supported);
         widgets.ctrl.cb_heater    .set_visible(heater_supported);
+        widgets.ctrl.l_conv_gain  .set_visible(conv_gain_supported);
+        widgets.ctrl.cb_conv_gain .set_visible(conv_gain_supported);
+        widgets.ctrl.chb_high_fw  .set_visible(high_fullwell_supported);
         widgets.ctrl.chb_low_noise.set_visible(low_noise_supported);
         widgets.ctrl.chb_fan      .set_sensitive(!cooler_active);
         widgets.ctrl.chb_cooler   .set_sensitive(temp_supported && can_change_cam_opts);
@@ -1144,6 +1176,7 @@ impl CameraUi {
 
         _ = self.update_resolution_list_impl(to, &options);
         self.fill_heater_items_list_impl(&options);
+        self.fill_conv_gain_items_list_impl(&options);
 
         // Restore some options for specific camera
 
@@ -1332,23 +1365,52 @@ impl CameraUi {
 
     fn fill_heater_items_list_impl(&self, options: &Options) {
         exec_and_show_error(Some(&self.window), ||{
-            let cb_cam_heater = &self.widgets.ctrl.cb_heater;
-            let last_heater_value = cb_cam_heater.active_id();
-            cb_cam_heater.remove_all();
+            let cb = &self.widgets.ctrl.cb_heater;
+            let last_value = cb.active_id();
+            cb.remove_all();
             let Some(device) = &options.cam.device else { return Ok(()); };
             if device.name.is_empty() { return Ok(()); };
-            if !self.indi.camera_is_heater_supported(&device.name)? { return Ok(()) }
+            if !self.indi.camera_is_heater_str_supported(&device.name)? { return Ok(()) }
             let Some(items) = self.indi.camera_get_heater_items(&device.name)? else { return Ok(()); };
             for (id, label) in items {
-                cb_cam_heater.append(Some(id.as_str()), &label);
+                cb.append(Some(id.as_str()), &label);
             }
-            if last_heater_value.is_some() {
-                cb_cam_heater.set_active_id(last_heater_value.as_deref());
+            if last_value.is_some() {
+                cb.set_active_id(last_value.as_deref());
             } else {
-                cb_cam_heater.set_active_id(options.cam.ctrl.heater_str.as_deref());
+                cb.set_active_id(options.cam.ctrl.heater_str.as_deref());
             }
-            if cb_cam_heater.active_id().is_none() {
-                cb_cam_heater.set_active(Some(0));
+            if cb.active_id().is_none() {
+                cb.set_active(Some(0));
+            }
+            Ok(())
+        });
+    }
+
+    fn fill_conv_gain_items_list(&self) {
+        let options = self.options.read().unwrap();
+        self.fill_conv_gain_items_list_impl(&options);
+    }
+
+    fn fill_conv_gain_items_list_impl(&self, options: &Options) {
+        exec_and_show_error(Some(&self.window), ||{
+            let cb = &self.widgets.ctrl.cb_conv_gain;
+            let last_value = cb.active_id();
+            cb.remove_all();
+            let Some(device) = &options.cam.device else { return Ok(()); };
+            if device.name.is_empty() { return Ok(()); };
+            if !self.indi.camera_is_conversion_gain_str_supported(&device.name)? { return Ok(()) }
+            let Some(items) = self.indi.camera_get_conversion_gain_items(&device.name)? else { return Ok(()); };
+            for (id, label) in items {
+                cb.append(Some(id.as_str()), &label);
+            }
+            if last_value.is_some() {
+                cb.set_active_id(last_value.as_deref());
+            } else {
+                cb.set_active_id(options.cam.ctrl.conv_gain_str.as_deref());
+            }
+            if cb.active_id().is_none() {
+                cb.set_active(Some(0));
             }
             Ok(())
         });
@@ -1423,9 +1485,9 @@ impl CameraUi {
                 )?;
             }
             // Window heater
-            if self.indi.camera_is_heater_supported(camera_name)? {
+            if self.indi.camera_is_heater_str_supported(camera_name)? {
                 if let Some(heater_str) = &options.cam.ctrl.heater_str {
-                    self.indi.camera_control_heater(
+                    self.indi.camera_set_heater_str(
                         camera_name,
                         heater_str,
                         force_set,
@@ -1504,10 +1566,15 @@ impl CameraUi {
         _new_state:  Option<&indi::PropState>,
         value:       &indi::PropValue,
     ) {
-        if indi::Connection::camera_is_heater_property(prop_name) && new_prop {
+        if indi::Connection::camera_is_heater_str_property(prop_name) && new_prop {
             self.delayed_actions.schedule(DelayedAction::FillHeaterItems);
             self.delayed_actions.schedule(DelayedAction::StartCooling);
         }
+
+        if indi::Connection::camera_is_conversion_gain_property(prop_name) && new_prop {
+            self.delayed_actions.schedule(DelayedAction::FillConvGainItems);
+        }
+
         if indi::Connection::camera_is_cooler_pwr_property(prop_name, elem_name) {
             self.show_coolpwr_value(device_name, &value.to_string());
         }
