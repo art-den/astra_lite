@@ -18,13 +18,14 @@ https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-ast
 * Background gradient automatic removal
 * Darks, biases and defective pixels library
 * Light frames quality filter
+* Mount polar alignment
 * Guiding and dithering by PHD2 or **main camera**
 * Autofocus
 * Sky map
 * Plate solving
 * Manual mount control
 * UI for INDI devices control
-* Mount polar alignment
+
 
 # Requirements
 | Condition                        | Requiriments for 12 MP sensors | Requiriments for 24 MP sensors |
