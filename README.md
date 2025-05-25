@@ -13,6 +13,7 @@ Compiled binaries and discussion here:
 https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-astrophotography.html
 
 # Features
+* Supported INDI devices are cameras, focusers and mounts
 * Saving RAW frames
 * Live stacking with **automatic satellites and meteor tracks removal**
 * Background gradient automatic removal
