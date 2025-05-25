@@ -2,7 +2,6 @@
 
 use std::{fs::File, io::{BufReader, BufWriter}, path::Path, u16};
 
-use chrono::prelude::*;
 use itertools::{izip, Itertools};
 
 use crate::ui::gtk_utils::*;
@@ -26,57 +25,12 @@ pub fn load_raw_image_from_fits_reader(
     let Some(image_hdu) = find_mono_image_hdu_in_fits(reader) else {
         anyhow::bail!("No RAW image found in fits data");
     };
-
-    let bitdepth     = image_hdu.get_i64("BITDEPTH").unwrap_or(image_hdu.bitpix() as i64) as i32;
-    let width        = image_hdu.dims()[0];
-    let height       = image_hdu.dims()[1];
-    let exposure     = image_hdu.get_f64("EXPTIME").unwrap_or_default();
-    let integr_time  = image_hdu.get_f64("TOTALEXP");
-    let bayer        = image_hdu.get_str("BAYERPAT").unwrap_or_default();
-    let bin          = image_hdu.get_f64("XBINNING").unwrap_or(1.0) as u8;
-    let gain         = image_hdu.get_f64("GAIN").unwrap_or(0.0) as i32;
-    let offset       = image_hdu.get_f64("OFFSET").unwrap_or(0.0) as i32;
-    let frame_str    = image_hdu.get_str("FRAME");
-    let time_str     = image_hdu.get_str("DATE-OBS").unwrap_or_default();
-    let camera       = image_hdu.get_str("INSTRUME").unwrap_or_default().to_string();
-    let ccd_temp     = image_hdu.get_f64("CCD-TEMP");
-    let focal_len    = image_hdu.get_f64("FOCALLEN");
-    let pixel_size_x = image_hdu.get_f64("PIXSIZE1");
-    let pixel_size_y = image_hdu.get_f64("PIXSIZE2");
-    let dec          = image_hdu.get_f64("DEC");
-    let ra           = image_hdu.get_f64("RA");
-
-    let max_value = if bitdepth > 0 {
-        ((1 << bitdepth) - 1) as u16
-    } else {
-        u16::MAX
-    };
-    let cfa = CfaType::from_str(&bayer);
-    let cfa_arr = cfa.get_array();
-    let frame_type = FrameType::from_str(
-        frame_str.as_deref().unwrap_or_default(),
-        FrameType::Lights
-    );
-
-    let time =
-        NaiveDateTime::parse_from_str(time_str, "%Y-%m-%dT%H:%M:%S%.3f")
-            .map(|dt| Utc.from_utc_datetime(&dt))
-            .ok();
-
-    let info = RawImageInfo {
-        time, width, height, gain, offset, cfa, bin,
-        max_value, frame_type, exposure, integr_time,
-        camera, ccd_temp, focal_len,
-        pixel_size_x, pixel_size_y,
-        calibr_methods: CalibrMethods::empty(),
-        dec, ra
-    };
-
+    let info = RawImageInfo::new_from_fits_header(&image_hdu);
     let mut data = Vec::new();
     data.resize(image_hdu.data_len(), 0);
     FitsReader::read_data(&image_hdu, stream, 0, &mut data)?;
-
-    Ok(RawImage::new(info, data, cfa_arr))
+    let cfa_arrary = info.cfa.get_array();
+    Ok(RawImage::new(info, data, cfa_arrary))
 }
 
 pub fn load_raw_image_from_fits_stream(stream: &mut impl SeekNRead) -> anyhow::Result<RawImage> {
@@ -270,7 +224,7 @@ pub fn load_image_from_fits_reader(
     Ok(())
 }
 
-pub fn load_image_by_pixbuf(
+pub fn load_image_using_pixbuf(
     image:     &mut Image,
     file_name: &Path,
     max_size:  usize,

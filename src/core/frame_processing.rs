@@ -504,7 +504,7 @@ impl<'a> ImageLoader<'a> {
             Self::Tif(file_name) =>
                 load_image_from_tif_file(image, file_name)?,
             Self::ByPixbuf(file_name) =>
-                load_image_by_pixbuf(image, file_name, 6000)?,
+                load_image_using_pixbuf(image, file_name, 6000)?,
         }
         Ok(())
     }
