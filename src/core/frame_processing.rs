@@ -206,7 +206,14 @@ pub struct FrameProcessResult {
     pub data:          FrameProcessResultData,
 }
 
-pub type ResultFun = Box<dyn Fn(FrameProcessResult) + Send + 'static>;
+
+#[derive(Clone)]
+pub enum CommandResult {
+    Result(FrameProcessResult),
+    QueueOverflow,
+}
+
+pub type ResultFun = Box<dyn Fn(CommandResult) + Send + 'static>;
 
 pub enum FrameProcessCommand {
     ProcessImage {
@@ -216,28 +223,21 @@ pub enum FrameProcessCommand {
     Exit
 }
 
-impl FrameProcessCommand {
-    fn name(&self) -> &'static str {
-        match self {
-            FrameProcessCommand::ProcessImage{..} => "PreviewImage",
-            FrameProcessCommand::Exit             => "Exit",
-        }
-    }
-}
-
 pub fn start_frame_processing_thread() -> (mpsc::Sender<FrameProcessCommand>, JoinHandle<()>) {
     let (bg_comands_sender, bg_comands_receiver) = mpsc::channel();
     let thread = std::thread::spawn(move || {
         log::info!("process_blob_thread_fun started");
         'outer:
-        while let Ok(mut cmd) = bg_comands_receiver.recv() {
+        while let Ok(cmd) = bg_comands_receiver.recv() {
+            if matches!(cmd, FrameProcessCommand::Exit) { break 'outer; }
+            let mut commands = Vec::new();
+            commands.push(cmd);
             loop {
-                if matches!(cmd, FrameProcessCommand::Exit) { break; }
                 let next_cmd = bg_comands_receiver.try_recv();
                 match next_cmd {
                     Ok(next_cmd) => {
-                        log::error!("command {} skipped", cmd.name());
-                        cmd = next_cmd;
+                        if matches!(next_cmd, FrameProcessCommand::Exit) { break 'outer; }
+                        commands.push(next_cmd);
                     },
                     Err(mpsc::TryRecvError::Disconnected) => {
                         break 'outer;
@@ -248,12 +248,23 @@ pub fn start_frame_processing_thread() -> (mpsc::Sender<FrameProcessCommand>, Jo
                 }
             }
 
-            match cmd {
-                FrameProcessCommand::Exit =>
-                    break,
-                FrameProcessCommand::ProcessImage{command, result_fun} =>
-                    make_preview_image(command, result_fun),
-            };
+            if commands.len() > 1 {
+                log::info!("Commands queue size > 1 ({})", commands.len());
+            }
+
+            let queue_is_overflowed = commands.len() >= 3;
+
+            for cmd in commands {
+                match cmd {
+                    FrameProcessCommand::ProcessImage{command, result_fun} => {
+                        if queue_is_overflowed {
+                            result_fun(CommandResult::QueueOverflow);
+                        }
+                        make_preview_image(command, result_fun);
+                    }
+                    _ => {}
+                };
+            }
         }
 
         log::info!("process_blob_thread_fun finished");
@@ -439,13 +450,13 @@ fn send_result(
     command:    &FrameProcessCommandData,
     result_fun: &ResultFun
 ) {
-    let result = FrameProcessResult {
+    let result = CommandResult::Result(FrameProcessResult {
         camera:        command.camera.clone(),
         cmd_stop_flag: Arc::clone(&command.stop_flag),
         mode_type:     command.mode_type,
         shot_id:       command.shot_id,
         data,
-    };
+    });
     result_fun(result);
 }
 

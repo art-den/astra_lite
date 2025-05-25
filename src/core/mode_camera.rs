@@ -105,31 +105,33 @@ struct Guider {
 }
 
 pub struct TackingPicturesMode {
-    cam_mode:        CameraMode,
-    state:           State,
-    device:          DeviceAndProp,
-    mount_device:    String,
-    fn_gen:          Arc<Mutex<SeqFileNameGen>>,
-    indi:            Arc<indi::Connection>,
-    subscribers:     Arc<EventSubscriptions>,
-    raw_stacker:     RawStacker,
-    options:         Arc<RwLock<Options>>,
-    next_job:        Option<NextJob>,
-    cam_options:     CamOptions,
-    guider:          Option<Guider>,
-    ref_stars:       Option<Vec<Point>>,
-    progress:        Option<Progress>,
-    cur_exposure:    f64,
-    cur_shot_id:     Option<u64>,
-    shot_id_to_ign:  Option<u64>,
-    live_stacking:   Option<Arc<LiveStackingData>>,
-    autofocuser:     Option<AutoFocuser>,
-    flags:           Flags,
-    fname_utils:     FileNameUtils,
-    out_file_names:  OutFileNames,
-    camera_offset:   Option<u16>,
-    cam_offset_calc: Option<CamOffsetCalc>,
-    next_mode:       Option<ModeBox>,
+    cam_mode:         CameraMode,
+    state:            State,
+    device:           DeviceAndProp,
+    mount_device:     String,
+    fn_gen:           Arc<Mutex<SeqFileNameGen>>,
+    indi:             Arc<indi::Connection>,
+    subscribers:      Arc<EventSubscriptions>,
+    raw_stacker:      RawStacker,
+    options:          Arc<RwLock<Options>>,
+    next_job:         Option<NextJob>,
+    cam_options:      CamOptions,
+    guider:           Option<Guider>,
+    ref_stars:        Option<Vec<Point>>,
+    progress:         Option<Progress>,
+    cur_exposure:     f64,
+    cur_shot_id:      Option<u64>,
+    shot_id_to_ign:   Option<u64>,
+    live_stacking:    Option<Arc<LiveStackingData>>,
+    autofocuser:      Option<AutoFocuser>,
+    flags:            Flags,
+    fname_utils:      FileNameUtils,
+    out_file_names:   OutFileNames,
+    camera_offset:    Option<u16>,
+    cam_offset_calc:  Option<CamOffsetCalc>,
+    next_mode:        Option<ModeBox>,
+    queue_overflowed: bool,
+    slow_down_flag:   bool,
 }
 
 impl TackingPicturesMode {
@@ -199,26 +201,28 @@ impl TackingPicturesMode {
 
         Ok(Self {
             cam_mode,
-            state:           State::Common,
-            device:          cam_device.clone(),
-            mount_device:    opts.mount.device.to_string(),
-            fn_gen:          Arc::new(Mutex::new(SeqFileNameGen::new())),
-            indi:            Arc::clone(indi),
-            subscribers:     Arc::clone(subscribers),
-            raw_stacker:     RawStacker::new(),
-            options:         Arc::clone(options),
-            next_job:        None,
-            ref_stars:       None,
-            cur_exposure:    0.0,
-            cur_shot_id:     None,
-            shot_id_to_ign:  None,
-            live_stacking:   None,
-            out_file_names:  OutFileNames::default(),
-            camera_offset:   None,
-            cam_offset_calc: None,
-            next_mode:       None,
-            flags:           Flags::default(),
-            fname_utils:     FileNameUtils::default(),
+            state:            State::Common,
+            device:           cam_device.clone(),
+            mount_device:     opts.mount.device.to_string(),
+            fn_gen:           Arc::new(Mutex::new(SeqFileNameGen::new())),
+            indi:             Arc::clone(indi),
+            subscribers:      Arc::clone(subscribers),
+            raw_stacker:      RawStacker::new(),
+            options:          Arc::clone(options),
+            next_job:         None,
+            ref_stars:        None,
+            cur_exposure:     0.0,
+            cur_shot_id:      None,
+            shot_id_to_ign:   None,
+            live_stacking:    None,
+            out_file_names:   OutFileNames::default(),
+            camera_offset:    None,
+            cam_offset_calc:  None,
+            next_mode:        None,
+            flags:            Flags::default(),
+            fname_utils:      FileNameUtils::default(),
+            queue_overflowed: false,
+            slow_down_flag:   false,
             cam_options,
             autofocuser,
             progress,
@@ -381,13 +385,10 @@ impl TackingPicturesMode {
     const MIN_EXPOSURE_FOR_DELAYED_CAPTURE_START: f64 = 3.0;
 
     fn have_to_start_new_exposure_at_blob_start(&mut self) -> bool {
-        self.cam_mode != CameraMode::SingleShot &&
-        self.cam_options.frame.exposure() >= Self::MIN_EXPOSURE_FOR_DELAYED_CAPTURE_START
-    }
-
-    fn have_to_start_new_exposure_at_processing_end(&mut self) -> bool {
-        self.cam_mode != CameraMode::SingleShot &&
-        self.cam_options.frame.exposure() < Self::MIN_EXPOSURE_FOR_DELAYED_CAPTURE_START
+        (
+            self.cam_mode == CameraMode::MasterDark ||
+            self.cam_options.frame.exposure() >= Self::MIN_EXPOSURE_FOR_DELAYED_CAPTURE_START
+        ) && !self.slow_down_flag
     }
 
     fn generate_output_file_names(&mut self) -> anyhow::Result<()> {
@@ -805,9 +806,16 @@ impl TackingPicturesMode {
 
         // Start next exposure
         if self.state == State::Common
+        && self.cam_mode != CameraMode::SingleShot
         && !finished
-        && self.have_to_start_new_exposure_at_processing_end() {
+        && !self.have_to_start_new_exposure_at_blob_start() {
             self.take_shot_with_options(self.cam_options.frame.clone())?;
+        }
+
+        // Do we have to slow down with period of tacking camera images?
+        if self.queue_overflowed {
+            self.queue_overflowed = false;
+            self.slow_down_flag = true;
         }
 
         Ok(result)
@@ -1251,7 +1259,8 @@ impl Mode for TackingPicturesMode {
             self.cam_options = options.cam.clone();
         }
 
-        if self.have_to_start_new_exposure_at_blob_start() {
+        if self.cam_mode != CameraMode::SingleShot
+        && self.have_to_start_new_exposure_at_blob_start() {
             self.take_shot_with_options(self.cam_options.frame.clone())?;
         }
 
@@ -1388,6 +1397,11 @@ impl Mode for TackingPicturesMode {
                 }
             }
         }
+        Ok(NotifyResult::Empty)
+    }
+
+    fn notify_processing_queue_overflow(&mut self) -> anyhow::Result<NotifyResult> {
+        self.queue_overflowed = true;
         Ok(NotifyResult::Empty)
     }
 }

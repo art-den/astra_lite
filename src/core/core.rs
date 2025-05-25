@@ -72,6 +72,7 @@ pub trait Mode {
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn custom_command(&mut self, _args: &dyn Any) -> anyhow::Result<Option<Box<dyn Any>>> { Ok(None) }
+    fn notify_processing_queue_overflow(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
 }
 
 pub enum NotifyResult {
@@ -416,7 +417,9 @@ impl Core {
 
         let result_fun = {
             let self_ = Arc::clone(self);
-            move |res: FrameProcessResult| self_.frame_process_result_handler(res)
+            move |res: CommandResult| {
+                self_.frame_process_result_handler(res);
+            }
         };
 
         frame_proc_sender.send(FrameProcessCommand::ProcessImage {
@@ -427,33 +430,49 @@ impl Core {
         Ok(())
     }
 
-    fn frame_process_result_handler(self: &Arc<Self>, res: FrameProcessResult) {
-        if res.cmd_stop_flag.load(Ordering::Relaxed) {
-            return;
+    fn frame_process_result_handler(self: &Arc<Self>, res: CommandResult) {
+        match res {
+            CommandResult::Result(res) => {
+                if res.cmd_stop_flag.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                let is_opening_file = res.mode_type == ModeType::OpeningImgFile;
+
+                let mut mode = self.mode_data.write().unwrap();
+                if Some(&res.camera) != mode.mode.cam_device() && !is_opening_file {
+                    return;
+                }
+
+                if mode.mode.get_type() != res.mode_type && !is_opening_file {
+                    return;
+                }
+
+                self.subscribers.notify(
+                    Event::FrameProcessing(res.clone())
+                );
+
+                let result = || -> anyhow::Result<()> {
+                    let res = mode.mode.notify_about_frame_processing_result(&res)?;
+                    self.apply_change_result(res, &mut mode)?;
+                    Ok(())
+                } ();
+                drop(mode);
+                self.process_error(result, "Core::apply_change_result");
+            }
+
+            CommandResult::QueueOverflow => {
+                let mut mode = self.mode_data.write().unwrap();
+                let result = || -> anyhow::Result<()> {
+                    let res = mode.mode.notify_processing_queue_overflow()?;
+                    self.apply_change_result(res, &mut mode)?;
+                    Ok(())
+                } ();
+                drop(mode);
+                self.process_error(result, "Core::apply_change_result");
+
+            }
         }
-
-        let is_opening_file = res.mode_type == ModeType::OpeningImgFile;
-
-        let mut mode = self.mode_data.write().unwrap();
-        if Some(&res.camera) != mode.mode.cam_device() && !is_opening_file {
-            return;
-        }
-
-        if mode.mode.get_type() != res.mode_type && !is_opening_file {
-            return;
-        }
-
-        self.subscribers.notify(
-            Event::FrameProcessing(res.clone())
-        );
-
-        let result = || -> anyhow::Result<()> {
-            let res = mode.mode.notify_about_frame_processing_result(&res)?;
-            self.apply_change_result(res, &mut mode)?;
-            Ok(())
-        } ();
-        drop(mode);
-        self.process_error(result, "Core::apply_change_result");
     }
 
     fn restart_camera_exposure(self: &Arc<Self>) -> anyhow::Result<()> {
@@ -565,7 +584,7 @@ impl Core {
 
         let result_fun = {
             let self_ = Arc::clone(self);
-            move |res: FrameProcessResult| self_.frame_process_result_handler(res)
+            move |res: CommandResult| self_.frame_process_result_handler(res)
         };
 
         self.img_cmds_sender.send(FrameProcessCommand::ProcessImage {
