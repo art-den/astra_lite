@@ -7,21 +7,27 @@ use chrono::Utc;
 
 use crate::{
     guiding::external_guider::*,
-    image::{histogram::*, raw::{FrameType, RawImage, RawImageInfo}, raw_stacker::RawStacker, stars_offset::*},
+    image::{
+        histogram::*,
+        raw::{FrameType, RawImage, RawImageInfo},
+        raw_stacker::RawStacker,
+        stars_offset::*,
+    },
     indi,
     options::*,
     utils::io_utils::*,
     TimeLogger
 };
+
 use super::{
     consts::*,
     core::*,
-    utils::FileNameArg,
     events::*,
     frame_processing::*,
     mode_darks_lib::MasterFileCreationProgramItem,
+    mode_focusing::FocuserEvent,
     mode_mnt_calib::*,
-    utils::FileNameUtils
+    utils::{FileNameArg, FileNameUtils},
 };
 
 #[derive(PartialEq)]
@@ -52,10 +58,10 @@ enum NextJob {
 }
 
 struct AutoFocuser {
-    options: FocuserOptions,
-    exp_sum: f64,
-    temp:    Vec<f32>,
-    fwhm:    Vec<f32>,
+    options:    FocuserOptions,
+    exp_sum:    f64,
+    start_temp: Option<f64>,
+    fwhm:       Vec<f32>,
 }
 
 #[derive(Default)]
@@ -190,10 +196,10 @@ impl TackingPicturesMode {
 
         let autofocuser = if working_with_light_frames {
             Some(AutoFocuser {
-                options: opts.focuser.clone(),
-                exp_sum: 0.0,
-                temp:    Vec::new(),
-                fwhm:    Vec::new(),
+                options:    opts.focuser.clone(),
+                exp_sum:    0.0,
+                start_temp: None,
+                fwhm:       Vec::new(),
             })
         } else {
             None
@@ -461,12 +467,17 @@ impl TackingPicturesMode {
         // Update exposure sum
         autofocuser.exp_sum += self.cam_options.frame.exposure();
 
-        // push temperature measurement
+        // Temperature measurement
         let temperature = self.indi
             .focuser_get_temperature(&autofocuser.options.device)
             .unwrap_or(f64::NAN);
         if !temperature.is_nan() && !temperature.is_infinite() {
-            autofocuser.temp.push(temperature as f32);
+            if autofocuser.start_temp.is_none() {
+                autofocuser.start_temp = Some(temperature);
+                self.subscribers.notify(
+                    Event::Focusing(FocuserEvent::StartingTemperature(temperature))
+                );
+            }
         }
 
         if self.next_job.is_some() {
@@ -492,23 +503,15 @@ impl TackingPicturesMode {
         // When temperature changed
         if autofocuser.options.on_temp_change
         && autofocuser.options.max_temp_change > 0.0
-        && autofocuser.temp.len() >= 2 {
-            let min = autofocuser.temp
-                .iter()
-                .min_by(|a, b| a.total_cmp(b))
-                .copied()
-                .unwrap_or_default() as f64;
-            let max = autofocuser.temp
-                .iter()
-                .max_by(|a, b| a.total_cmp(b))
-                .copied()
-                .unwrap_or_default() as f64;
-            let delta = max - min;
-            if delta >= autofocuser.options.max_temp_change {
+        && autofocuser.start_temp.is_some() {
+            let first = autofocuser.start_temp.unwrap();
+            let last = temperature;
+            let delta = last - first;
+            if delta.abs() >= autofocuser.options.max_temp_change {
                 log::info!(
                     "Start autofocus after temperature change. \
-                    Min={:.1}, max={:.1}, delta={:.1}",
-                    min, max, delta
+                    first={:.1}°, last={:.1}°, delta={:.1}°",
+                    first, last, delta
                 );
                 have_to_refocus = true;
             }
@@ -523,19 +526,18 @@ impl TackingPicturesMode {
                 .min_by(|a, b| a.total_cmp(b))
                 .copied()
                 .unwrap_or_default() as f64;
-
-            let last = autofocuser.fwhm
-                .last()
+            let max = autofocuser.fwhm
+                .iter()
+                .max_by(|a, b| a.total_cmp(b))
                 .copied()
                 .unwrap_or_default() as f64;
-
-            if min >= 0.0 && last >  min{
-                let diff_percent = (100.0 * (last - min) / min) as u32;
+            if max > min && min != 0.0 {
+                let diff_percent = (100.0 * (max - min) / min) as u32;
                 if diff_percent > autofocuser.options.max_fwhm_change {
                     log::info!(
-                        "Start autofocus after FWHM increase. \
-                        Min={:.1}, last={:.1}, percent={:.0}",
-                        min, last, diff_percent
+                        "Start autofocus after FWHM increase: \
+                        min={:.1}, max={:.1}, diff={:.0}%",
+                        min, max, diff_percent
                     );
                     have_to_refocus = true;
                 }
@@ -544,7 +546,7 @@ impl TackingPicturesMode {
 
         if have_to_refocus {
             autofocuser.exp_sum = 0.0;
-            autofocuser.temp.clear();
+            autofocuser.start_temp = Some(temperature);
             autofocuser.fwhm.clear();
             self.abort_current_unfinised_exposure(shot_id)?;
             self.next_job = Some(NextJob::Autofocus);
@@ -558,6 +560,10 @@ impl TackingPicturesMode {
         info:    &LightFrameInfoData,
         shot_id: Option<u64>,
     ) -> anyhow::Result<()> {
+        if !info.stars.info.is_ok() {
+            return Ok(());
+        }
+
         let mount_device_active = self.indi.is_device_enabled(&self.mount_device).unwrap_or(false);
         if !mount_device_active {
             return Ok(());
@@ -672,6 +678,10 @@ impl TackingPicturesMode {
         info:    &LightFrameInfoData,
         shot_id: Option<u64>,
     ) -> anyhow::Result<()> {
+        if !info.stars.info.is_ok() {
+            return Ok(());
+        }
+
         let Some(guider) = &mut self.guider else {
             return Ok(());
         };
@@ -998,15 +1008,11 @@ impl TackingPicturesMode {
         info:    &LightFrameInfoData,
         shot_id: Option<u64>,
     ) -> anyhow::Result<NotifyResult> {
-        if !info.stars.info.is_ok() {
-            return Ok(NotifyResult::Empty);
-        }
-
         if self.state != State::Common {
             return Ok(NotifyResult::Empty);
         }
 
-        if self.ref_stars.is_none() {
+        if info.stars.info.is_ok() && self.ref_stars.is_none() {
             let ref_stars = info.stars.items.iter().map(|s| Point {x: s.x, y: s.y}).collect();
             self.ref_stars = Some(ref_stars);
         }
@@ -1202,6 +1208,20 @@ impl Mode for TackingPicturesMode {
 
         if self.flags.use_raw_stacker {
             self.raw_stacker.clear();
+        }
+
+        if let Some(autofocuser) = &mut self.autofocuser {
+            let temperature = self.indi
+                .focuser_get_temperature(&autofocuser.options.device)
+                .unwrap_or(f64::NAN);
+            if !temperature.is_nan() && !temperature.is_infinite() {
+                if autofocuser.start_temp.is_none() {
+                    autofocuser.start_temp = Some(temperature);
+                    self.subscribers.notify(
+                        Event::Focusing(FocuserEvent::StartingTemperature(temperature))
+                    );
+                }
+            }
         }
 
         self.start_or_continue()?;

@@ -1,3 +1,4 @@
+use core::f64;
 use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
 use gtk::{glib, gdk, prelude::*, glib::clone};
 use macros::FromBuilder;
@@ -33,6 +34,7 @@ pub fn init_ui(
         indi_evt_conn:   RefCell::new(None),
         delayed_actions: DelayedActions::new(500),
         focusing_data:   RefCell::new(None),
+        starting_temp:   Cell::new(None),
     });
 
     obj.init_widgets();
@@ -51,6 +53,8 @@ struct Widgets {
     grd:             gtk::Grid,
     cb_list:         gtk::ComboBoxText,
     l_value:         gtk::Label,
+    l_temp:          gtk::Label,
+    l_temp_diff:     gtk::Label,
     spb_val:         gtk::SpinButton,
     chb_temp:        gtk::CheckButton,
     spb_temp:        gtk::SpinButton,
@@ -78,6 +82,7 @@ struct FocuserUi {
     indi_evt_conn:   RefCell<Option<indi::Subscription>>,
     delayed_actions: DelayedActions<DelayedAction>,
     focusing_data:   RefCell<Option<FocusingResultData>>,
+    starting_temp:   Cell<Option<f64>>,
 }
 
 enum MainThreadEvent {
@@ -88,6 +93,7 @@ enum MainThreadEvent {
 #[derive(Hash, Eq, PartialEq)]
 enum DelayedAction {
     ShowCurFocuserValue,
+    ShowCurFocuserTemperature,
     UpdateFocPosNew,
     UpdateFocPos,
     CorrectWidgetProps
@@ -178,19 +184,19 @@ impl FocuserUi {
 
     fn process_event_in_main_thread(&self, event: MainThreadEvent) {
         match event {
-            MainThreadEvent::Indi(indi::Event::NewDevice(event)) =>
+            MainThreadEvent::Indi(indi::Event::NewDevice(event)) => {
                 if event.interface.contains(indi::DriverInterface::FOCUSER) {
                     self.update_devices_list();
-                },
-
-            MainThreadEvent::Indi(indi::Event::DeviceConnected(event)) =>
+                }
+            }
+            MainThreadEvent::Indi(indi::Event::DeviceConnected(event)) => {
                 if event.interface.contains(indi::DriverInterface::FOCUSER) {
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
-                },
-
-            MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) =>
-                self.process_indi_conn_state_event(conn_state),
-
+                }
+            }
+            MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) => {
+                self.process_indi_conn_state_event(conn_state);
+            }
             MainThreadEvent::Indi(indi::Event::PropChange(event_data)) => {
                 match &event_data.change {
                     indi::PropChange::New(value) =>
@@ -216,30 +222,37 @@ impl FocuserUi {
                     indi::PropChange::Delete => {}
                 };
             }
-
             MainThreadEvent::Indi(indi::Event::DeviceDelete(event)) => {
                 if event.drv_interface.contains(indi::DriverInterface::FOCUSER) {
                     self.update_devices_list();
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
                     self.delayed_actions.schedule(DelayedAction::UpdateFocPosNew);
                     self.delayed_actions.schedule(DelayedAction::ShowCurFocuserValue);
+                    self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature);
                 }
             }
-
             MainThreadEvent::Core(Event::ModeChanged) => {
                 self.correct_widgets_props();
             }
             MainThreadEvent::Core(Event::CameraDeviceChanged{from, to}) => {
                 self.handler_camera_changed(&from, &to);
             }
-            MainThreadEvent::Core(Event::Focusing(FocusingStateEvent::Data(fdata))) => {
-                *self.focusing_data.borrow_mut() = Some(fdata);
-                self.widgets.da_auto.queue_draw();
-            }
-            MainThreadEvent::Core(Event::Focusing(FocusingStateEvent::Result { value })) => {
-                self.update_focuser_position_after_focusing(value);
-            }
 
+            MainThreadEvent::Core(Event::Focusing(fevent)) => {
+                match fevent {
+                    FocuserEvent::Data(fdata) => {
+                        *self.focusing_data.borrow_mut() = Some(fdata);
+                        self.widgets.da_auto.queue_draw();
+                    }
+                    FocuserEvent::Result { value } => {
+                        self.update_focuser_position_after_focusing(value);
+                    }
+                    FocuserEvent::StartingTemperature(starting_temp) => {
+                        self.starting_temp.set(Some(starting_temp));
+                        self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -267,7 +280,7 @@ impl FocuserUi {
                 self.delayed_actions.schedule(DelayedAction::ShowCurFocuserValue);
             }
             ("FOCUS_TEMPERATURE", ..) => {
-                self.delayed_actions.schedule(DelayedAction::ShowCurFocuserValue);
+                self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature);
             }
             ("FOCUS_MAX", ..) => {
                 self.delayed_actions.schedule(DelayedAction::UpdateFocPosNew);
@@ -290,9 +303,9 @@ impl FocuserUi {
     }
 
     fn init_widgets(&self) {
-        self.widgets.spb_temp.set_range(1.0, 20.0);
-        self.widgets.spb_temp.set_digits(0);
-        self.widgets.spb_temp.set_increments(1.0, 5.0);
+        self.widgets.spb_temp.set_range(0.1, 10.0);
+        self.widgets.spb_temp.set_digits(1);
+        self.widgets.spb_temp.set_increments(0.1, 1.0);
 
         self.widgets.spb_measures.set_range(7.0, 42.0);
         self.widgets.spb_measures.set_digits(0);
@@ -336,6 +349,7 @@ impl FocuserUi {
             self_.delayed_actions.schedule(DelayedAction::UpdateFocPosNew);
             self_.delayed_actions.schedule(DelayedAction::ShowCurFocuserValue);
             self_.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
+            self_.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature);
         }));
 
         self.widgets.chb_temp.connect_active_notify(clone!(@weak self as self_ => move |_| {
@@ -515,6 +529,9 @@ impl FocuserUi {
             DelayedAction::ShowCurFocuserValue => {
                 self.show_cur_focuser_value();
             }
+            DelayedAction::ShowCurFocuserTemperature => {
+                self.show_focuser_temperature();
+            }
             DelayedAction::CorrectWidgetProps => {
                 self.correct_widgets_props();
             }
@@ -531,28 +548,46 @@ impl FocuserUi {
         let options = self.options.read().unwrap();
         let foc_device = options.focuser.device.clone();
         drop(options);
+        let value_str =
+            if let Ok(value) = self.indi.focuser_get_abs_value(&foc_device) {
+                &format!("{:.0}", value)
+            } else {
+                "---"
+            };
+        self.widgets.l_value.set_label(value_str);
+    }
 
-        let value_str = if let Ok(value) = self.indi.focuser_get_abs_value(&foc_device) {
-            &format!("{:.0}", value)
-        } else {
-            "---"
-        };
+    fn show_focuser_temperature(&self) {
+        let options = self.options.read().unwrap();
+        let foc_device = options.focuser.device.clone();
+        drop(options);
 
-        let temp_str = if let Ok(value) = self.indi.focuser_get_temperature(&foc_device) {
-            &format!("{:.1}", value)
-        } else {
-            "---"
-        };
+        let temperature = self.indi
+            .focuser_get_temperature(&foc_device)
+            .unwrap_or(f64::NAN);
 
-        self.widgets.l_value.set_label(
-            &format!("{} / {}", value_str, temp_str)
-        );
+        let temp_str =
+            if !temperature.is_nan() {
+                &format!("{:.1}°", temperature)
+            } else {
+                "---"
+            };
+        self.widgets.l_temp.set_label(temp_str);
+
+        let mut diff_str = String::new();
+        if let Some(starting_temp) = self.starting_temp.get() {
+            if !temperature.is_nan() {
+                let diff = temperature - starting_temp;
+                diff_str = format!("({:+.1}°)", diff);
+            }
+        }
+        self.widgets.l_temp_diff.set_label(&diff_str);
     }
 
     fn draw_focusing_samples(
         &self,
-        da:   &gtk::DrawingArea,
-        ctx:  &gdk::cairo::Context
+        da:  &gtk::DrawingArea,
+        ctx: &gdk::cairo::Context
     ) -> anyhow::Result<()> {
         let focusing_data = self.focusing_data.borrow();
         let Some(ref focusing_data) = *focusing_data else {

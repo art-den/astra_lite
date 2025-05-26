@@ -26,7 +26,7 @@ pub enum Event {
     ModeChanged,
     Progress(Option<Progress>, ModeType),
     FrameProcessing(FrameProcessResult),
-    Focusing(FocusingStateEvent),
+    Focusing(FocuserEvent),
     PlateSolve(PlateSolverEvent),
     PolarAlignment(PolarAlignmentEvent),
     OverlayMessage {

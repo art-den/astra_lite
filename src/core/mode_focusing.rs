@@ -24,7 +24,8 @@ pub struct FocusingResultData {
 }
 
 #[derive(Clone)]
-pub enum FocusingStateEvent {
+pub enum FocuserEvent {
+    StartingTemperature(f64),
     Data(FocusingResultData),
     Result { value: f64 }
 }
@@ -56,6 +57,7 @@ pub struct FocusingMode {
     change_time:   Option<usize>,
     change_cnt:    usize,
     next_mode:     Option<Box<dyn Mode + Sync + Send>>,
+    start_temp:    f64, // temperature when autofocusing is started
 }
 
 #[derive(PartialEq)]
@@ -135,6 +137,7 @@ impl FocusingMode {
             desired_focus: 0.0,
             try_cnt:       0,
             camera:        cam_device.clone(),
+            start_temp:    0.0,
             prelim_step,
             next_mode,
             cam_opts,
@@ -307,7 +310,7 @@ impl FocusingMode {
                     result: None,
                 };
                 self.subscribers.notify(Event::Focusing(
-                    FocusingStateEvent::Data(event_data)
+                    FocuserEvent::Data(event_data)
                 ));
             } else {
                 apply_camera_options_and_take_shot(
@@ -346,7 +349,7 @@ impl FocusingMode {
                             result: Some(result_pos),
                         };
                         self.subscribers.notify(Event::Focusing(
-                            FocusingStateEvent::Data(event_data)
+                            FocuserEvent::Data(event_data)
                         ));
                         if self.stage == Stage::Preliminary {
                             self.start_stage(result_pos, Stage::Final)?;
@@ -367,7 +370,7 @@ impl FocusingMode {
                             anti_backlash_pos,
                             target_pos: result_pos
                         };
-                        let result_event = FocusingStateEvent::Result { value: result_pos };
+                        let result_event = FocuserEvent::Result { value: result_pos };
                         self.subscribers.notify(Event::Focusing(result_event));
                     },
                     CalcResult::Rising(coeffs) => {
@@ -378,7 +381,7 @@ impl FocusingMode {
                             result: None,
                         };
                         self.subscribers.notify(Event::Focusing(
-                            FocusingStateEvent::Data(event_data)
+                            FocuserEvent::Data(event_data)
                         ));
                         let min_sample_pos = self.samples
                             .iter()
@@ -397,7 +400,7 @@ impl FocusingMode {
                             result: None,
                         };
                         self.subscribers.notify(Event::Focusing(
-                            FocusingStateEvent::Data(event_data)
+                            FocuserEvent::Data(event_data)
                         ));
                         log::info!("Results too far from center. Do more measures from right");
                         let max_sample_pos = self.samples
@@ -433,10 +436,20 @@ impl FocusingMode {
         focus_pos: f64
     ) -> anyhow::Result<NotifyResult> {
         log::info!(
-            "RESULT focuser shot is finished. Final FWHM = {:.2?}, ovality={:.2?}, focuser change={:.0} -> {:.0}",
+            "RESULT focuser shot is finished. \
+            Final FWHM = {:.2?}, ovality={:.2?}, focuser change={:.0} -> {:.0}",
             info.stars.info.fwhm, info.stars.info.ovality, self.before_pos, focus_pos
         );
-        Ok(NotifyResult::Finished { next_mode: self.next_mode.take() })
+
+        if !self.start_temp.is_nan() {
+            self.subscribers.notify(
+                Event::Focusing(FocuserEvent::StartingTemperature(self.start_temp))
+            );
+        }
+
+        Ok(NotifyResult::Finished {
+            next_mode: self.next_mode.take()
+        })
     }
 
     fn calc_result(&self, allow_more_measures: bool) -> anyhow::Result<CalcResult> {
@@ -604,7 +617,14 @@ impl Mode for FocusingMode {
     }
 
     fn start(&mut self) -> anyhow::Result<()> {
-        let cur_pos = self.indi.focuser_get_abs_value(&self.f_opts.device)?.round();
+        let cur_pos = self.indi
+            .focuser_get_abs_value(&self.f_opts.device)?
+            .round();
+
+        self.start_temp = self.indi
+            .focuser_get_temperature(&self.f_opts.device)
+            .unwrap_or(f64::NAN);
+
         self.before_pos = cur_pos;
 
         apply_camera_options_and_take_shot(
