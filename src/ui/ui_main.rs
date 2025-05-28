@@ -112,6 +112,7 @@ pub fn init_ui(
     main_ui.update_window_title();
 
     disable_scroll_for_common_widgets(main_ui.widgets.window.upcast_ref());
+    fix_gtk_expander_bug(main_ui.widgets.window.upcast_ref());
 
     main_ui.widgets.window.show();
 }

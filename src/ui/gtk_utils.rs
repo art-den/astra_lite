@@ -337,3 +337,30 @@ pub fn clear_container(container: &impl IsA<gtk::Container>) {
         }
     }
 }
+
+// ISSUE: https://gitlab.gnome.org/GNOME/gtk/-/issues/5510
+pub fn fix_gtk_expander_bug(widget: &gtk::Widget) {
+    if let Some(expander) = widget.downcast_ref::<gtk::Expander>() {
+        let expander_widget = expander.child();
+        if !expander.is_expanded() {
+            expander.remove(expander_widget.as_ref().unwrap());
+        }
+        expander.connect_expanded_notify(move |exp| {
+            if exp.is_expanded() {
+                exp.set_child(expander_widget.as_ref());
+            } else {
+                exp.remove(expander_widget.as_ref().unwrap());
+            }
+        });
+    }
+    if let Some(bin) = widget.downcast_ref::<gtk::Bin>() {
+        if let Some(child) = bin.child() {
+            fix_gtk_expander_bug(&child);
+        }
+    } else if let Some(container) = widget.downcast_ref::<gtk::Container>() {
+        let children = container.children();
+        for child in children {
+            fix_gtk_expander_bug(&child);
+        }
+    }
+}
