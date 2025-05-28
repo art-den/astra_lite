@@ -255,6 +255,7 @@ impl TackingPicturesMode {
             self.cam_options.ctrl.enable_cooler = true;
         }
         self.cam_options.frame.exp_main = item.exposure;
+        self.cam_options.frame.exp_bias = item.exposure;
         self.cam_options.frame.gain = item.gain;
         self.cam_options.frame.offset = item.offset;
         self.cam_options.frame.binning = item.binning;

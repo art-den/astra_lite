@@ -7,7 +7,7 @@ pub const LIVE_STACKING_DIR: &str = "LiveStacking";
 /// Maximum time in seconds to wait while mount slew to target
 pub const MAX_GOTO_TIME: usize = 180;
 
-/// Maximus length of guide impuilse in seconds
+/// Maximus length of guide impulse in seconds
 pub const MAX_TIMED_GUIDE_TIME: f64 = 3.0;
 
 /// How many seconds to wait after mount position correction
