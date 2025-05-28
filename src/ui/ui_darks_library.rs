@@ -385,7 +385,7 @@ impl Default for MasterBiasesOptions {
         Self {
             frames_count: 60,
             temperature:  ValuesItem::default(),
-            exposure:     0.01,
+            exposure:     0.0001,
             gain:         ValuesItem::default(),
             offset:       ValuesItem::default(),
             binning:      BinningOptions::default(),

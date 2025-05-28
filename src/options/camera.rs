@@ -128,7 +128,7 @@ impl Default for FrameOptions {
     fn default() -> Self {
         Self {
             exp_main:   2.0,
-            exp_bias:   0.01,
+            exp_bias:   0.0001,
             exp_flat:   0.5,
             gain:       1.0,
             offset:     0,
