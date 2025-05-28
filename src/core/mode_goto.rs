@@ -466,6 +466,7 @@ impl Mode for GotoMode {
                     ProcessPlateSolverResultAction::SetEqCoord
                 )?;
                 if ok {
+                    self.plate_solver.as_mut().unwrap().reset(); // reset optimization gotten from image
                     self.start_goto()?;
                     return Ok(NotifyResult::ProgressChanges)
                 }

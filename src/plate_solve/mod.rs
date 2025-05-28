@@ -134,6 +134,10 @@ impl PlateSolver {
     pub fn get_result(&mut self) -> anyhow::Result<PlateSolveResult> {
         self.solver.get_result()
     }
+
+    pub fn reset(&mut self) {
+        self.solver.reset();
+    }
 }
 
 trait PlateSolverIface {
@@ -141,6 +145,7 @@ trait PlateSolverIface {
     fn start(&mut self, data: &PlateSolverInData, config: &PlateSolveConfig) -> anyhow::Result<()>;
     fn abort(&mut self);
     fn get_result(&mut self) -> anyhow::Result<PlateSolveResult>;
+    fn reset(&mut self);
 }
 
 #[derive(Clone)]

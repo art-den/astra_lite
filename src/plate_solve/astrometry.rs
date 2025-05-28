@@ -31,17 +31,19 @@ pub struct AstrometryPlateSolver {
     config:     PlateSolveConfig,
     radius_try: RadiusTry,
     start_time: Instant,
+    img_width:  Option<f64>, // radians, to optimize subsequent platesolves
 }
 
 impl AstrometryPlateSolver {
     pub fn new() -> Self {
         Self {
-            child: None,
-            file_name: None,
-            mode: Mode::None,
-            config: PlateSolveConfig::default(),
+            child:      None,
+            file_name:  None,
+            mode:       Mode::None,
+            config:     PlateSolveConfig::default(),
             radius_try: RadiusTry::Blind,
             start_time: Instant::now(),
+            img_width:  None,
         }
     }
 
@@ -83,6 +85,14 @@ impl AstrometryPlateSolver {
             .arg("--index-xyls").arg("none")
             .arg("--new-fits").arg("none")
             .arg("--temp-axy");
+
+        if let Some(img_width) = self.img_width {
+            let degwidth = radian_to_degree(img_width);
+            cmd
+                .arg("--scale-units").arg("degwidth")
+                .arg("--scale-low").arg((0.667*degwidth).to_string())
+                .arg("--scale-high").arg((1.333*degwidth).to_string());
+        }
 
         let mut blind = true;
         if self.config.eq_coord.is_some() || self.config.eq_coord_j2000.is_some() {
@@ -288,6 +298,9 @@ impl AstrometryPlateSolver {
                     rotation: result_rot.unwrap_or(0.0),
                     time: Utc::now(),
                 };
+
+                self.img_width = Some(f64::max(result.width, result.height));
+
                 return Ok(PlateSolveResult::Done(result));
             } else {
                 let mut output = child.stderr.take().unwrap();
@@ -360,5 +373,9 @@ impl PlateSolverIface for AstrometryPlateSolver {
             }
         }
         result
+    }
+
+    fn reset(&mut self) {
+        self.img_width = None;
     }
 }
