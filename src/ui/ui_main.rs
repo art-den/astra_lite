@@ -126,17 +126,26 @@ const CSS: &[u8] = b"
 .greenbutton:disabled {
     background: rgba(0, 255, 0, .05);
 }
+.greenbutton:hover {
+    background: rgba(0, 255, 0, .4);
+}
 .redbutton {
     background: rgba(255, 0, 0, .3);
 }
 .redbutton:disabled {
     background: rgba(255, 0, 0, .05);
 }
+.redbutton:hover {
+    background: rgba(255, 0, 0, .4);
+}
 .yellowbutton {
     background: rgba(255, 255, 0, .3);
 }
 .yellowbutton:disabled {
     background: rgba(255, 255, 0, .05);
+}
+.yellowbutton:hover {
+    background: rgba(255, 255, 0, .4);
 }
 .header_label {
     color: mix(@theme_fg_color, rgb(0, 64, 255), 0.4);

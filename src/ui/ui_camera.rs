@@ -1131,6 +1131,10 @@ impl CameraUi {
         widgets.ctrl.chb_fan      .set_sensitive(!cooler_active);
         widgets.ctrl.chb_cooler   .set_sensitive(temp_supported && can_change_cam_opts);
         widgets.ctrl.spb_temp     .set_sensitive(cooler_active && temp_supported && can_change_cam_opts);
+        widgets.ctrl.chb_low_noise.set_sensitive(indi_connected && can_change_cam_opts);
+        widgets.ctrl.l_conv_gain  .set_sensitive(indi_connected && can_change_cam_opts);
+        widgets.ctrl.cb_conv_gain .set_sensitive(indi_connected && can_change_cam_opts);
+        widgets.ctrl.chb_high_fw  .set_sensitive(indi_connected && can_change_cam_opts);
 
         widgets.frame.grid      .set_sensitive(cam_sensitive);
         widgets.frame.cb_mode   .set_sensitive(can_change_frame_opts);

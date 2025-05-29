@@ -541,7 +541,10 @@ impl Connection {
     }
 
     pub fn discnnect_all_event_handlers(&self) {
-        self.event_handlers.write().unwrap().clear();
+        // The trick because code in event_handler's `Drop` can call `self.event_handlers`
+        let mut event_handlers = HashMap::new();
+        std::mem::swap(&mut event_handlers, &mut *self.event_handlers.write().unwrap());
+        event_handlers.clear();
     }
 
     pub fn is_connected(&self) -> bool {
