@@ -11,21 +11,24 @@ use crate::{
 
 pub enum FileNameArg<'a> {
     Options(&'a CamOptions),
-    RawInfo(&'a RawImageInfo),
+    RawInfo {
+        info:     &'a RawImageInfo,
+        ccd_temp: Option<f64>,
+    },
 }
 
 impl<'a> FileNameArg<'a> {
     pub fn exposure(&self) -> f64 {
         match self {
             Self::Options(opts) => opts.frame.exposure(),
-            Self::RawInfo(info) => info.exposure,
+            Self::RawInfo{info, ..} => info.exposure,
         }
     }
 
     pub fn frame_type(&self) -> FrameType {
         match self {
             Self::Options(opts) => opts.frame.frame_type,
-            Self::RawInfo(info) => info.frame_type,
+            Self::RawInfo{info, ..} => info.frame_type,
         }
     }
 }
@@ -82,7 +85,7 @@ impl FileNameUtils {
                     temperature
                 )
             }
-            FileNameArg::RawInfo(info) => {
+            FileNameArg::RawInfo{info, ccd_temp} => {
                 Self::master_file_name_impl(
                     info.time,
                     master_frame_type,
@@ -92,7 +95,7 @@ impl FileNameUtils {
                     info.width,
                     info.height,
                     info.bin as i32,
-                    info.ccd_temp
+                    ccd_temp.or(info.ccd_temp)
                 )
             },
         }
@@ -105,7 +108,7 @@ impl FileNameUtils {
         master_frame_type: FrameType
     ) -> PathBuf {
         let mut path = PathBuf::new();
-        let cam_name = if let FileNameArg::RawInfo(info) = to_calibrate {
+        let cam_name = if let FileNameArg::RawInfo{info, ..} = to_calibrate {
             info.camera.clone()
         } else {
             self.device.to_file_name_part()
@@ -134,7 +137,7 @@ impl FileNameUtils {
 
                 (file_name, self.device.to_file_name_part())
             }
-            FileNameArg::RawInfo(info) => {
+            FileNameArg::RawInfo{info, ..} => {
                 let file_name = Self::defect_pixels_file_name_impl(
                     info.width, info.height,
                     info.bin as i32,

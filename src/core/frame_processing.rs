@@ -64,6 +64,7 @@ pub struct CalibrParams {
     pub extract_dark:  bool,
     pub dark_lib_path: PathBuf,
     pub flat_fname:    Option<PathBuf>,
+    pub ccd_temp:      Option<f64>,
 
     /// search and remove hot pixles
     pub sar_hot_pixs:  bool,
@@ -286,10 +287,16 @@ fn apply_calibr_data_and_remove_hot_pixels(
     let fn_utils = FileNameUtils::default();
     let (defect_pixel_file, subtrack_fname, subtrack_method) =
         if params.extract_dark {
-            let to_calibrate = FileNameArg::RawInfo(image_info);
-            let defect_pixel_file = fn_utils.defect_pixels_file_name(&to_calibrate, &params.dark_lib_path);
+            let calibr_filename_data = FileNameArg::RawInfo{
+                info:     image_info,
+                ccd_temp: params.ccd_temp,
+            };
+            let defect_pixel_file = fn_utils.defect_pixels_file_name(
+                &calibr_filename_data,
+                &params.dark_lib_path
+            );
             let (subtrack_fname, subtrack_method) = fn_utils.get_subtrack_master_fname(
-                &to_calibrate,
+                &calibr_filename_data,
                 &params.dark_lib_path
             );
             (Some(defect_pixel_file), Some(subtrack_fname), subtrack_method)

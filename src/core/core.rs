@@ -386,11 +386,18 @@ impl Core {
                 prop: device_prop.to_string(),
             };
 
+            let ccd_temp = if options.cam.ctrl.enable_cooler {
+                Some(options.cam.ctrl.temperature)
+            } else {
+                None
+            };
+
             let calibr_params = Some(CalibrParams {
                 extract_dark:  options.calibr.dark_frame_en,
                 dark_lib_path: options.calibr.dark_library_path.clone(),
                 flat_fname:    None,
                 sar_hot_pixs:  options.calibr.hot_pixels,
+                ccd_temp
             });
 
             let new_stop_flag = Arc::new(AtomicBool::new(false));
@@ -564,6 +571,7 @@ impl Core {
             dark_lib_path: options.calibr.dark_library_path.clone(),
             flat_fname:    None,
             sar_hot_pixs:  options.calibr.hot_pixels,
+            ccd_temp:      None,
         });
 
         let command = FrameProcessCommandData {
