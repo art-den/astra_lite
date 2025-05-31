@@ -23,7 +23,6 @@ https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-ast
 * Guiding and dithering by PHD2 or **main camera**
 * Autofocus
 * Sky map
-* Plate solving
 * Manual mount control
 * UI for INDI devices control
 
