@@ -37,19 +37,19 @@ https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-ast
 **>= 4 CPU cores, >= 4 GB of RAM** is enough for most cases
 
 # Additional software required for AstraLite to work
-INDI (https://indilib.org/)
+INDI (https://indilib.org/) - library to access devices (camera, focuser etc)
 ```
 sudo apt-add-repository ppa:mutlaqja/ppa
 sudo apt-get update
 sudo apt-get install indi-full
 ```
-PHD2 (https://openphdguiding.org/)
+PHD2 (https://openphdguiding.org/) for guiding
 ```
 sudo add-apt-repository ppa:pch/phd2
 sudo apt update
 sudo apt-get install phd2
 ```
-Local Astrometry.NET with index (https://astrometry.net/)
+Local Astrometry.NET with index (https://astrometry.net/) - plate solver
 ```
 sudo apt install astrometry.net
 sudo apt install astrometry-data-2mass-08-19 astrometry-data-2mass-07 astrometry-data-2mass-06
