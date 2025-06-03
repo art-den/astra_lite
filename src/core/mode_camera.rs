@@ -268,35 +268,13 @@ impl TackingPicturesMode {
 
     fn update_options_copies(&mut self) {
         let opts = self.options.read().unwrap();
-
-        let working_with_light_frames =
-            opts.cam.frame.frame_type == FrameType::Lights &&
-            (self.cam_mode == CameraMode::SavingRawFrames ||
-            self.cam_mode == CameraMode::LiveStacking);
-
-        let new_focuser_options =
-            if working_with_light_frames && opts.focuser.is_used() {
-                Some(opts.focuser.clone())
-            } else {
-                None
-            };
-
-        let new_guider_options =
-            if self.guider.is_some() {
-                Some(opts.guiding.clone())
-            } else {
-                None
-            };
-
-        drop(opts);
-
         if let Some(autofocuser) = &mut self.autofocuser {
-            autofocuser.options = new_focuser_options.unwrap();
+            autofocuser.options = opts.focuser.clone();
         }
-
         if let Some(guider) = &mut self.guider {
-            guider.options = new_guider_options.unwrap();
+            guider.options = opts.guiding.clone();
         }
+        drop(opts);
     }
 
     fn correct_options_before_start(&mut self) {
