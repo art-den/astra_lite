@@ -504,11 +504,12 @@ impl FocuserUi {
             return;
         };
         if new_prop || self.widgets.spb_val.value() == 0.0 {
+            let focus_max = self.indi.focuser_get_max(&foc_device).ok();
             self.widgets.spb_val.set_range(0.0, prop_info.max);
             self.widgets.spb_val.set_digits(0);
             let mut step = prop_info.step.unwrap_or(1.0);
-            let range = f64::abs(prop_info.max - prop_info.min);
-            if step > range / 10.0 {
+            let max = focus_max.unwrap_or(prop_info.max);
+            if step >= max / 100.0 {
                 step = 10.0;
             }
             self.widgets.spb_val.set_increments(step, step * 10.0);

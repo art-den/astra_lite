@@ -3212,6 +3212,14 @@ impl Connection {
         )
     }
 
+    pub fn focuser_get_max(&self, device_name: &str) -> Result<f64> {
+        self.get_num_property_value(
+            device_name,
+            "FOCUS_MAX",
+            "FOCUS_MAX_VALUE"
+        )
+    }
+
     pub fn focuser_get_temperature(&self, device_name: &str) -> Result<f64> {
         Ok(self.device_get_num_prop(
             device_name,
