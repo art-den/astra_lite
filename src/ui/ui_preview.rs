@@ -555,7 +555,7 @@ impl PreviewUi {
             })
         );
 
-        self.widgets.ctrl.scl_wb_red.connect_value_changed(
+        self.widgets.ctrl.scl_wb_green.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.preview.wb_green = scl.value();
@@ -564,7 +564,7 @@ impl PreviewUi {
             })
         );
 
-        self.widgets.ctrl.scl_wb_red.connect_value_changed(
+        self.widgets.ctrl.scl_wb_blue.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.preview.wb_blue = scl.value();
