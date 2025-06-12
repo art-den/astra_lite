@@ -25,7 +25,8 @@ pub type StarItems = Vec<Star>;
 
 #[derive(Default)]
 pub struct StarsInfo {
-    pub fwhm:          Option<f32>,
+    pub hfd:           Option<f32>, // half flux diameter
+    pub fwhm:          Option<f32>, // full width at half maximum
     pub fwhm_angular:  Option<f32>,
     pub fwhm_is_ok:    bool,
     pub ovality:       Option<f32>,
@@ -97,10 +98,10 @@ impl StarsFinder {
         let star_img = Self::calc_common_star_image(image, &stars, COMMON_STAR_MAG);
         tm.log("StarsFinder::calc_common_star_image");
 
-        let (fwhm, ovality) = if let Some(star_img) = star_img {
-            (star_img.calc_fwhm(), star_img.calc_ovality())
+        let (hfd, fwhm, ovality) = if let Some(star_img) = star_img {
+            (star_img.calc_hfd(), star_img.calc_fwhm(), star_img.calc_ovality())
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         let fwhm_is_ok = if let (Some(max_stars_fwhm), Some(fwhm)) = (max_fwhm, fwhm) {
@@ -118,6 +119,7 @@ impl StarsFinder {
         let fwhm_angular = CommonStarsImage::calc_angular_fwhm(fwhm, raw_info);
 
         let info = StarsInfo {
+            hfd,
             fwhm,
             fwhm_angular,
             fwhm_is_ok,
@@ -632,6 +634,38 @@ struct CommonStarsImage {
 }
 
 impl CommonStarsImage {
+    fn calc_hfd(&self) -> Option<f32> {
+        let mut sum = 0_f64;
+        let mut sum_x = 0_f64;
+        let mut sum_y = 0_f64;
+        for (x, y, v) in self.image.coord_iter() {
+            let v = v as f64;
+            sum += v;
+            sum_x += x as f64 * v;
+            sum_y += y as f64 * v;
+        }
+
+        if sum == 0.0 {
+            return None;
+        }
+
+        let centroid_x = sum_x / sum;
+        let centroid_y = sum_y / sum;
+
+        let mut sum_d = 0_f64;
+        for (x, y, v) in self.image.coord_iter() {
+            let dx = centroid_x - x as f64;
+            let dy = centroid_y - y as f64;
+            let dist = f64::sqrt(dx * dx + dy * dy);
+            sum_d += dist * v as f64;
+        }
+
+        let mut radius = sum_d / sum;
+        radius /=  self.k as f64;
+
+        Some(2.0 * radius as f32)
+    }
+
     fn calc_fwhm(&self) -> Option<f32> {
         use std::f32::consts::PI;
         if self.image.is_empty() {

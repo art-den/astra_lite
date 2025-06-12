@@ -598,8 +598,8 @@ impl FocuserUi {
         let get_plot_points_cnt = |plot_idx: usize| {
             match plot_idx {
                 0 => fd.samples.len(),
-                1 => if fd.left_coeffs.is_some() && fd.right_coeffs.is_some() { PARABOLA_POINTS } else { 0 },
-                2 => if fd.result.is_some() && fd.left_coeffs.is_some() { 1 } else { 0 },
+                1 => if fd.coeffs.is_some() { PARABOLA_POINTS } else { 0 },
+                2 => if fd.result.is_some() && fd.coeffs.is_some() { 1 } else { 0 },
                 _ => unreachable!(),
             }
         };
@@ -623,17 +623,16 @@ impl FocuserUi {
                 _ => unreachable!(),
             }
         };
-        let min_pos = fd.samples.iter().map(|s| s.focus_pos).min_by(cmp_f64).unwrap_or(0.0);
-        let max_pos = fd.samples.iter().map(|s| s.focus_pos).max_by(cmp_f64).unwrap_or(0.0);
+        let min_pos = fd.samples.iter().map(|s| s.position).min_by(cmp_f64).unwrap_or(0.0);
+        let max_pos = fd.samples.iter().map(|s| s.position).max_by(cmp_f64).unwrap_or(0.0);
         let get_plot_point = |plot_idx: usize, point_idx: usize| -> (f64, f64) {
             match plot_idx {
                 0 => {
                     let sample = &fd.samples[point_idx];
-                    (sample.focus_pos, sample.stars_fwhm as f64)
+                    (sample.position, sample.hfd as f64)
                 }
                 1 => {
-                    if let (Some(left_coeffs), Some(right_coeffs))
-                    = (&fd.left_coeffs, &fd.right_coeffs) {
+                    if let Some(coeffs) = &fd.coeffs {
                         let x = linear_interpolate(
                             point_idx as f64,
                             0.0,
@@ -641,11 +640,7 @@ impl FocuserUi {
                             min_pos,
                             max_pos,
                         );
-                        let y = if x < fd.result.unwrap_or_default() {
-                            left_coeffs.calc(x)
-                        } else {
-                            right_coeffs.calc(x)
-                        };
+                        let y = coeffs.calc(x);
                         (x, y)
                     } else {
                         unreachable!();
@@ -653,7 +648,7 @@ impl FocuserUi {
                 }
                 2 => {
                     if let (Some(coeffs), Some(x))
-                    = (&fd.left_coeffs, &fd.result) {
+                    = (&fd.coeffs, &fd.result) {
                         let y = coeffs.calc(*x);
                         (*x, y)
                     } else {
