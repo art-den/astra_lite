@@ -97,6 +97,7 @@ fn main() -> anyhow::Result<()> {
 
     #[cfg(debug_assertions)] {
         std::env::set_var("RUST_BACKTRACE", "1");
+        log::set_max_level(log::LevelFilter::Debug);
     }
 
     log::info!(
