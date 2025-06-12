@@ -516,6 +516,7 @@ impl FocusingMode {
         if let Some(coeffs) = coeffs {
             if coeffs.a2 > 0.0 {
                 if let Some(value) = parabola_extremum(&coeffs) {
+                    let value = value.round();
                     log::debug!("Extremum = {:.1}", value);
                     if !allow_more_measures {
                         let focuser_info = self.indi.focuser_get_abs_value_prop_info(&self.f_opts.device)?;
