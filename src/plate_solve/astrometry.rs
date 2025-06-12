@@ -90,8 +90,8 @@ impl AstrometryPlateSolver {
             let degwidth = radian_to_degree(img_width);
             cmd
                 .arg("--scale-units").arg("degwidth")
-                .arg("--scale-low").arg((0.667*degwidth).to_string())
-                .arg("--scale-high").arg((1.333*degwidth).to_string());
+                .arg("--scale-low").arg((0.5*degwidth).to_string())
+                .arg("--scale-high").arg((2.0*degwidth).to_string());
         }
 
         let mut blind = true;
@@ -173,7 +173,7 @@ impl AstrometryPlateSolver {
 
         // save stars into fits file
 
-        const MAX_STARS_COUNT: usize = 50;
+        const MAX_STARS_COUNT: usize = 500;
 
         let file_name = format!("astralite_platesolve_{}.xyls", rand::random::<u64>());
         let temp_file = std::env::temp_dir().join(&file_name);
@@ -299,7 +299,7 @@ impl AstrometryPlateSolver {
                     time: Utc::now(),
                 };
 
-                self.img_width = Some(f64::max(result.width, result.height));
+                self.img_width = Some(f64::min(result.width, result.height));
 
                 return Ok(PlateSolveResult::Done(result));
             } else {
