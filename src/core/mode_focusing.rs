@@ -16,11 +16,17 @@ const MAX_FOCUS_SAMPLE_TRY_CNT: usize = 4;
 const MAX_FOCUS_CHANGE_TIME: usize = 15;
 const MAX_FOCUS_TRY_SET_CNT: usize = 2;
 
+pub enum FocusingErrorReaction {
+    Fail,
+    IgnoreAndExit,
+}
+
 #[derive(Clone)]
 pub struct FocusingResultData {
-    pub samples: Vec<FocuserSample>,
-    pub coeffs:  Option<QuadraticCoeffs>,
-    pub result:  Option<f64>,
+    pub samples:      Vec<FocuserSample>,
+    pub left_coeffs:  Option<QuadraticCoeffs>,
+    pub right_coeffs: Option<QuadraticCoeffs>,
+    pub result:       Option<f64>,
 }
 
 #[derive(Clone)]
@@ -38,26 +44,27 @@ enum Stage {
 }
 
 pub struct FocusingMode {
-    indi:          Arc<indi::Connection>,
-    subscribers:   Arc<EventSubscriptions>,
-    state:         FocusingState,
-    camera:        DeviceAndProp,
-    f_opts:        FocuserOptions,
-    cam_opts:      CamOptions,
-    before_pos:    f64,
-    to_go:         VecDeque<f64>,
-    samples:       Vec<FocuserSample>,
-    one_pos_fwhm:  Vec<f32>,
-    result_pos:    Option<f64>,
-    max_try:       usize,
-    try_cnt:       usize,
-    prelim_step:   bool,
-    stage:         Stage,
-    desired_focus: f64,
-    change_time:   Option<usize>,
-    change_cnt:    usize,
-    next_mode:     Option<Box<dyn Mode + Sync + Send>>,
-    start_temp:    f64, // temperature when autofocusing is started
+    indi:           Arc<indi::Connection>,
+    subscribers:    Arc<EventSubscriptions>,
+    state:          FocusingState,
+    camera:         DeviceAndProp,
+    f_opts:         FocuserOptions,
+    cam_opts:       CamOptions,
+    before_pos:     f64,
+    to_go:          VecDeque<f64>,
+    samples:        Vec<FocuserSample>,
+    one_pos_fwhm:   Vec<f32>,
+    result_pos:     Option<f64>,
+    max_try:        usize,
+    try_cnt:        usize,
+    prelim_step:    bool,
+    stage:          Stage,
+    desired_focus:  f64,
+    change_time:    Option<usize>,
+    change_cnt:     usize,
+    next_mode:      Option<Box<dyn Mode + Sync + Send>>,
+    start_temp:     f64, // temperature when autofocusing is started
+    error_reaction: FocusingErrorReaction,
 }
 
 #[derive(PartialEq)]
@@ -69,7 +76,7 @@ enum FocusingState {
         target_pos: f64
     },
     WaitingPosition(f64),
-    WaitingFrame(f64),
+    WaitingMeasureFrame(f64),
     WaitingResultPosAntiBacklash{
         anti_backlash_pos: f64,
         target_pos: f64
@@ -84,11 +91,12 @@ pub struct FocuserSample {
     pub stars_fwhm:    f32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum CalcResult {
     Value {
         value:  f64,
-        coeffs: QuadraticCoeffs,
+        left_coeffs: QuadraticCoeffs,
+        right_coeffs: QuadraticCoeffs,
     },
     Rising(QuadraticCoeffs),
     Falling(QuadraticCoeffs),
@@ -96,11 +104,12 @@ enum CalcResult {
 
 impl FocusingMode {
     pub fn new(
-        indi:        &Arc<indi::Connection>,
-        options:     &Arc<RwLock<Options>>,
-        subscribers: &Arc<EventSubscriptions>,
-        next_mode:   Option<Box<dyn Mode + Sync + Send>>,
-        prelim_step: bool,
+        indi:           &Arc<indi::Connection>,
+        options:        &Arc<RwLock<Options>>,
+        subscribers:    &Arc<EventSubscriptions>,
+        next_mode:      Option<Box<dyn Mode + Sync + Send>>,
+        prelim_step:    bool,
+        error_reaction: FocusingErrorReaction,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(cam_device) = &opts.cam.device else {
@@ -142,6 +151,7 @@ impl FocusingMode {
             next_mode,
             cam_opts,
             max_try,
+            error_reaction,
         })
     }
 
@@ -215,7 +225,7 @@ impl FocusingMode {
                         &self.cam_opts.frame,
                         &self.cam_opts.ctrl
                     )?;
-                    self.state = FocusingState::WaitingFrame(desired_focus);
+                    self.state = FocusingState::WaitingMeasureFrame(desired_focus);
                 }
             }
             FocusingState::WaitingResultPosAntiBacklash { anti_backlash_pos, target_pos } => {
@@ -259,7 +269,7 @@ impl FocusingMode {
         Ok(NotifyResult::ProgressChanges)
     }
 
-    fn process_img_info_when_waiting_frame(
+    fn process_img_info_when_waiting_measure(
         &mut self,
         info:      &LightFrameInfoData,
         focus_pos: f64,
@@ -270,63 +280,25 @@ impl FocusingMode {
             "New frame with ovality={:?} and FWHM={:?}",
             info.stars.info.ovality, info.stars.info.fwhm
         );
-        let mut sample_added = false;
-        let mut info_is_ok = false;
+
+        let samples_count_before = self.samples.len();
+        let info_is_ok = info.stars.info.fwhm.is_some();
         if let Some(stars_fwhm) = info.stars.info.fwhm {
-
-            info_is_ok = true;
             self.try_cnt = 0;
-            self.one_pos_fwhm.push(stars_fwhm);
-
-            log::debug!(
-                "Added new FWHM into one pos values (len={}/{})",
-                self.one_pos_fwhm.len(), self.max_try
-            );
-
-            if self.one_pos_fwhm.len() == self.max_try {
-                let stars_fwhm = self.one_pos_fwhm
-                    .iter()
-                    .copied()
-                    .min_by(f32::total_cmp)
-                    .unwrap_or_default();
-                log::info!(
-                    "Best FWHM={:.2} of {:.2?} at {:.0} pos",
-                    stars_fwhm, self.one_pos_fwhm, focus_pos
-                );
-                let sample = FocuserSample {
-                    focus_pos,
-                    stars_fwhm
-                };
-                self.samples.push(sample);
-                self.samples.sort_by(|s1, s2| cmp_f64(&s1.focus_pos, &s2.focus_pos));
-                self.one_pos_fwhm.clear();
-
-                sample_added = true;
-
-                log::debug!("Samples count = {}", self.samples.len());
-                let event_data = FocusingResultData {
-                    samples: self.samples.clone(),
-                    coeffs: None,
-                    result: None,
-                };
-                self.subscribers.notify(Event::Focusing(
-                    FocuserEvent::Data(event_data)
-                ));
-            } else {
-                apply_camera_options_and_take_shot(
-                    &self.indi,
-                    &self.camera,
-                    &self.cam_opts.frame,
-                    &self.cam_opts.ctrl
-                )?;
-                return Ok(NotifyResult::ProgressChanges);
+            let add_res = self.add_measure(stars_fwhm, focus_pos)?;
+            if !matches!(add_res, NotifyResult::Empty) {
+                return Ok(add_res);
             }
         } else {
             self.try_cnt += 1;
         }
+
+        let sample_added = samples_count_before != self.samples.len();
+
         let too_much_total_tries =
             self.try_cnt >= MAX_FOCUS_TOTAL_TRY_CNT &&
             !self.samples.is_empty();
+
         if sample_added
         || self.try_cnt >= MAX_FOCUS_SAMPLE_TRY_CNT
         || too_much_total_tries {
@@ -337,87 +309,12 @@ impl FocusingMode {
                     "Trying to calculate extremum. result_added={}, self.try_cnt={}, self.samples.len={}",
                     sample_added, self.try_cnt, self.samples.len(),
                 );
-
-                let calc_result = self.calc_result(self.stage == Stage::Preliminary)?;
-                log::debug!("Autofocus result = {:?}", calc_result);
-
-                match calc_result {
-                    CalcResult::Value { value: result_pos, coeffs } => {
-                        let event_data = FocusingResultData {
-                            samples: self.samples.clone(),
-                            coeffs: Some(coeffs.clone()),
-                            result: Some(result_pos),
-                        };
-                        self.subscribers.notify(Event::Focusing(
-                            FocuserEvent::Data(event_data)
-                        ));
-                        if self.stage == Stage::Preliminary {
-                            self.start_stage(result_pos, Stage::Final)?;
-                            return Ok(NotifyResult::ProgressChanges)
-                        }
-
-                        self.result_pos = Some(result_pos);
-
-                        // for anti-backlash
-                        let anti_backlash_pos = result_pos - self.f_opts.anti_backlash_steps as f64;
-                        let anti_backlash_pos = anti_backlash_pos.max(0.0).round();
-                        log::debug!(
-                            "Set RESULT focuser value for anti backlash {:.1}",
-                            anti_backlash_pos
-                        );
-                        self.set_new_focus_value(anti_backlash_pos)?;
-                        self.state = FocusingState::WaitingResultPosAntiBacklash {
-                            anti_backlash_pos,
-                            target_pos: result_pos
-                        };
-                        let result_event = FocuserEvent::Result { value: result_pos };
-                        self.subscribers.notify(Event::Focusing(result_event));
-                    },
-                    CalcResult::Rising(coeffs) => {
-                        log::info!("Results too far from center. Do more measures from left");
-                        let event_data = FocusingResultData {
-                            samples: self.samples.clone(),
-                            coeffs: Some(coeffs.clone()),
-                            result: None,
-                        };
-                        self.subscribers.notify(Event::Focusing(
-                            FocuserEvent::Data(event_data)
-                        ));
-                        let min_sample_pos = self.samples
-                            .iter()
-                            .map(|v|v.focus_pos)
-                            .min_by(cmp_f64)
-                            .unwrap_or_default();
-                        for i in (1..(self.f_opts.measures+1)/2).rev() {
-                            self.to_go.push_back(min_sample_pos - i as f64 * self.f_opts.step);
-                        }
-                        self.start_sample(true)?;
-                    },
-                    CalcResult::Falling(coeffs) => {
-                        let event_data = FocusingResultData {
-                            samples: self.samples.clone(),
-                            coeffs: Some(coeffs.clone()),
-                            result: None,
-                        };
-                        self.subscribers.notify(Event::Focusing(
-                            FocuserEvent::Data(event_data)
-                        ));
-                        log::info!("Results too far from center. Do more measures from right");
-                        let max_sample_pos = self.samples
-                            .iter()
-                            .map(|v|v.focus_pos)
-                            .max_by(cmp_f64)
-                            .unwrap_or_default();
-                        for i in 1..(self.f_opts.measures+1)/2 {
-                            self.to_go.push_back(max_sample_pos + i as f64 * self.f_opts.step);
-                        }
-                        self.start_sample(true)?;
-                    },
-                }
+                self.calculate_and_process_result()?;
             } else {
                 self.start_sample(false)?;
             }
         } else if !info_is_ok {
+            result = NotifyResult::ProgressChanges;
             log::info!("Stars on received image are not Ok. Taking another image...");
             self.change_time = None;
             apply_camera_options_and_take_shot(
@@ -428,6 +325,168 @@ impl FocusingMode {
             )?;
         }
         Ok(result)
+    }
+
+    fn add_measure(&mut self, stars_fwhm: f32, focus_pos: f64) -> anyhow::Result<NotifyResult> {
+        self.one_pos_fwhm.push(stars_fwhm);
+
+        log::debug!(
+            "Added new FWHM into one pos values (len={}/{})",
+            self.one_pos_fwhm.len(), self.max_try
+        );
+
+        if self.one_pos_fwhm.len() == self.max_try {
+            let stars_fwhm = self.one_pos_fwhm
+                .iter()
+                .copied()
+                .min_by(f32::total_cmp)
+                .unwrap_or_default();
+            log::info!(
+                "Best FWHM={:.2} of {:.2?} at {:.0} pos",
+                stars_fwhm, self.one_pos_fwhm, focus_pos
+            );
+            let sample = FocuserSample {
+                focus_pos,
+                stars_fwhm
+            };
+            self.samples.push(sample);
+            self.samples.sort_by(|s1, s2| cmp_f64(&s1.focus_pos, &s2.focus_pos));
+            self.one_pos_fwhm.clear();
+
+            log::debug!("Samples count = {}", self.samples.len());
+            let event_data = FocusingResultData {
+                samples: self.samples.clone(),
+                left_coeffs: None,
+                right_coeffs: None,
+                result: None,
+            };
+            self.subscribers.notify(Event::Focusing(
+                FocuserEvent::Data(event_data)
+            ));
+        } else {
+            apply_camera_options_and_take_shot(
+                &self.indi,
+                &self.camera,
+                &self.cam_opts.frame,
+                &self.cam_opts.ctrl
+            )?;
+            return Ok(NotifyResult::ProgressChanges);
+        }
+
+        Ok(NotifyResult::Empty)
+    }
+
+    fn calculate_and_process_result(&mut self) -> anyhow::Result<()> {
+        let calc_result = self.calc_result(self.stage == Stage::Preliminary);
+        log::debug!("Autofocus result = {:?}", calc_result);
+
+        match calc_result {
+            Ok(CalcResult::Value { value: result_pos, left_coeffs, right_coeffs }) => {
+                let event_data = FocusingResultData {
+                    samples: self.samples.clone(),
+                    left_coeffs: Some(left_coeffs.clone()), // TODO: remove clone
+                    right_coeffs: Some(right_coeffs.clone()),
+                    result: Some(result_pos),
+                };
+                self.subscribers.notify(Event::Focusing(
+                    FocuserEvent::Data(event_data)
+                ));
+                if self.stage == Stage::Preliminary {
+                    self.start_stage(result_pos, Stage::Final)?;
+                    return Ok(())
+                }
+
+                self.result_pos = Some(result_pos);
+
+                // for anti-backlash
+                let anti_backlash_pos = result_pos - self.f_opts.anti_backlash_steps as f64;
+                let anti_backlash_pos = anti_backlash_pos.max(0.0).round();
+                log::debug!(
+                    "Set RESULT focuser value (anti backlash pos={:.1}, pos={:.1})",
+                    anti_backlash_pos, result_pos
+                );
+                self.set_new_focus_value(anti_backlash_pos)?;
+                self.state = FocusingState::WaitingResultPosAntiBacklash {
+                    anti_backlash_pos,
+                    target_pos: result_pos
+                };
+                let result_event = FocuserEvent::Result { value: result_pos };
+                self.subscribers.notify(Event::Focusing(result_event));
+            },
+            Ok(CalcResult::Rising(coeffs)) => {
+                log::info!("Results too far from center. Do more measures from left");
+                let event_data = FocusingResultData {
+                    samples: self.samples.clone(),
+                    left_coeffs: Some(coeffs.clone()),
+                    right_coeffs: Some(coeffs.clone()),
+                    result: None,
+                };
+                self.subscribers.notify(Event::Focusing(
+                    FocuserEvent::Data(event_data)
+                ));
+                let min_sample_pos = self.samples
+                    .iter()
+                    .map(|v|v.focus_pos)
+                    .min_by(cmp_f64)
+                    .unwrap_or_default();
+                for i in (1..(self.f_opts.measures+1)/2).rev() {
+                    self.to_go.push_back(min_sample_pos - i as f64 * self.f_opts.step);
+                }
+                self.start_sample(true)?;
+            },
+            Ok(CalcResult::Falling(coeffs)) => {
+                let event_data = FocusingResultData {
+                    samples: self.samples.clone(),
+                    left_coeffs: Some(coeffs.clone()),
+                    right_coeffs: Some(coeffs.clone()),
+                    result: None,
+                };
+                self.subscribers.notify(Event::Focusing(
+                    FocuserEvent::Data(event_data)
+                ));
+                log::info!("Results too far from center. Do more measures from right");
+                let max_sample_pos = self.samples
+                    .iter()
+                    .map(|v|v.focus_pos)
+                    .max_by(cmp_f64)
+                    .unwrap_or_default();
+                for i in 1..(self.f_opts.measures+1)/2 {
+                    self.to_go.push_back(max_sample_pos + i as f64 * self.f_opts.step);
+                }
+                self.start_sample(true)?;
+            },
+
+            Err(error) => {
+                log::error!(
+                    "Position calculation failed with errror {}",
+                    error.to_string()
+                );
+
+                match self.error_reaction {
+                    // restore previous focuser position
+                    FocusingErrorReaction::IgnoreAndExit => {
+                        let anti_backlash_pos = self.before_pos - self.f_opts.anti_backlash_steps as f64;
+                        let anti_backlash_pos = anti_backlash_pos.max(0.0).round();
+                        log::debug!(
+                            "Set PREVIOUS focuser value (anti backlash pos={:.1}, pos={:.1})",
+                            anti_backlash_pos, self.before_pos
+                        );
+                        self.set_new_focus_value(anti_backlash_pos)?;
+                        self.state = FocusingState::WaitingResultPosAntiBacklash {
+                            anti_backlash_pos,
+                            target_pos: self.before_pos
+                        };
+                    }
+                    FocusingErrorReaction::Fail => {
+                        // fail with error
+                        anyhow::bail!(error);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+
     }
 
     fn process_img_info_when_waiting_result_img(
@@ -453,31 +512,97 @@ impl FocusingMode {
     }
 
     fn calc_result(&self, allow_more_measures: bool) -> anyhow::Result<CalcResult> {
+        if self.samples.is_empty() {
+            anyhow::bail!("No samples for position calculation!");
+        }
+
+        let (min_pos_idx, min_pos) = self.samples
+            .iter()
+            .enumerate()
+            .min_by(|(_, s1), (_, s2)| s1.stars_fwhm.total_cmp(&s2.stars_fwhm))
+            .unwrap();
+
         let mut x = Vec::new();
         let mut y = Vec::new();
-        for sample in &self.samples {
+        let mut left_x = Vec::new();
+        let mut left_y = Vec::new();
+        let mut right_x = Vec::new();
+        let mut right_y = Vec::new();
+        for (idx, sample) in self.samples.iter().enumerate() {
             x.push(sample.focus_pos);
             y.push(sample.stars_fwhm as f64);
+
+            if idx <= min_pos_idx {
+                left_x.push(sample.focus_pos);
+                left_y.push(sample.stars_fwhm as f64);
+            }
+            if idx >= min_pos_idx {
+                right_x.push(sample.focus_pos);
+                right_y.push(sample.stars_fwhm as f64);
+            }
         }
-        let quadratic_coeffs = Self::calc_quadratic_coeffs(&x, &y)?;
-        log::debug!("Calculated coefficients = {:?}", quadratic_coeffs);
-        if quadratic_coeffs.a2 > 0.0 {
-            let extr = parabola_extremum(&quadratic_coeffs)
-                .ok_or_else(|| anyhow::anyhow!("Can't find focus extremum"))?;
-            let extr = extr.round();
-            log::debug!("Calculated parabola focus extremum = {}", extr);
+
+        let commom_coeffs = Self::calc_quadratic_coeffs(&x, &y, 2);
+        log::debug!("Common coefficients = {:?}", commom_coeffs);
+
+        let left_coeffs = Self::calc_quadratic_coeffs(&left_x, &left_y, 1);
+        log::debug!("Left coefficients = {:?}", left_coeffs);
+
+        let right_coeffs = Self::calc_quadratic_coeffs(&right_x, &right_y, 1);
+        log::debug!("Right coefficients = {:?}", right_coeffs);
+
+        let mut result = None;
+
+        if let (Some(left_coeffs), Some(right_coeffs)) = (left_coeffs, right_coeffs) {
+            if let Some(pi)
+            = QuadraticCoeffs::intersection(&left_coeffs, &right_coeffs) {
+                let dist0 = f64::abs(pi.0 - min_pos.focus_pos);
+                let dist1 = f64::abs(pi.1 - min_pos.focus_pos);
+                let i_pos = if dist0 < dist1 { pi.0 } else { pi.1 };
+                log::debug!("Intersection pos = {:.1}", i_pos);
+                let mut wrong = false;
+                if let Some(left_res) = parabola_extremum(&left_coeffs) {
+                    log::debug!("left_res = {:.1}", left_res);
+                    wrong |= left_res < i_pos && left_coeffs.a2 > 0.0;
+                }
+                if let Some(right_res) = parabola_extremum(&right_coeffs) {
+                    log::debug!("right_res = {:.1}", right_res);
+                    wrong |= right_res > i_pos && right_coeffs.a2 > 0.0;
+                }
+                log::debug!("wrong = {}", wrong);
+                if !wrong {
+                    result = Some(CalcResult::Value {
+                        value: i_pos.round(),
+                        left_coeffs,
+                        right_coeffs,
+                    });
+                }
+            }
+        }
+
+        if let Some(commom_coeffs) = commom_coeffs {
+            if result.is_none() && commom_coeffs.a2 > 0.0 {
+                if let Some(extr) = parabola_extremum(&commom_coeffs) {
+                    log::debug!("Extremum = {:.1}", extr);
+                    result = Some(CalcResult::Value {
+                        value: extr.round(),
+                        left_coeffs: commom_coeffs.clone(),
+                        right_coeffs: commom_coeffs.clone(),
+                    });
+                }
+            }
+        }
+
+        if let Some(v @ CalcResult::Value {value, ..}) = &result {
             if !allow_more_measures {
                 let focuser_info = self.indi.focuser_get_abs_value_prop_info(&self.f_opts.device)?;
-                if extr < focuser_info.min || extr > focuser_info.max {
+                if *value < focuser_info.min || *value > focuser_info.max {
                     anyhow::bail!(
-                        "Focuser extremum {0:.1} out of focuser range ({1:.1}..{2:.1})",
-                        extr, focuser_info.min, focuser_info.max
+                        "Result pos {0:.1} out of focuser range ({1:.1}..{2:.1})",
+                        value, focuser_info.min, focuser_info.max
                     );
                 }
-                return Ok(CalcResult::Value {
-                    value: extr,
-                    coeffs: quadratic_coeffs
-                });
+                return Ok(v.clone());
             }
             let min_sample_pos = self.samples
                 .iter()
@@ -489,83 +614,78 @@ impl FocusingMode {
                 .map(|v|v.focus_pos)
                 .max_by(cmp_f64)
                 .unwrap_or_default();
-            let min_acceptable = min_sample_pos + (max_sample_pos-min_sample_pos) * 0.33;
-            let max_acceptable = min_sample_pos + (max_sample_pos-min_sample_pos) * 0.66;
+            let min_acceptable = min_sample_pos + (max_sample_pos-min_sample_pos) * 0.20;
+            let max_acceptable = min_sample_pos + (max_sample_pos-min_sample_pos) * 0.80;
             log::debug!("Min/Max acceptable focus extremums = {:.1}/{:.1}", min_acceptable, max_acceptable);
-            if min_acceptable <= extr && extr <= max_acceptable {
-                return Ok(CalcResult::Value {
-                    value: extr,
-                    coeffs: quadratic_coeffs
-                });
+            if min_acceptable <= *value && *value <= max_acceptable {
+                return Ok(v.clone());
             }
         }
-        let linear_coeffs = linear_regression(&x, &y)
-            .ok_or_else(|| anyhow::anyhow!("Can't find focus linear coefficients"))?;
-        let (a, b) = linear_coeffs;
-        let result = if a > 0.0 {
-            CalcResult::Rising(QuadraticCoeffs { a2: 0.0, a1: a, a0: b })
-        } else if a < 0.0 {
-            CalcResult::Falling(QuadraticCoeffs { a2: 0.0, a1: a, a0: b })
-        } else {
-            anyhow::bail!("Can't process focuser data");
-        };
-        Ok(result)
+
+        if allow_more_measures {
+            let linear_coeffs = linear_regression(&x, &y)
+                .ok_or_else(|| anyhow::anyhow!("Can't find focus linear coefficients"))?;
+            let (a, b) = linear_coeffs;
+            if a > 0.0 {
+                return Ok(CalcResult::Rising(QuadraticCoeffs { a2: 0.0, a1: a, a0: b }));
+            } else if a < 0.0 {
+                return Ok(CalcResult::Falling(QuadraticCoeffs { a2: 0.0, a1: a, a0: b }));
+            }
+        }
+
+        anyhow::bail!("Can't calculate focuser result");
     }
 
-    fn calc_quadratic_coeffs(mut x: &[f64], mut y: &[f64]) -> anyhow::Result<QuadraticCoeffs> {
-        let (mut coeff, mut err) = Self::calc_quadratic_coeffs_and_err(x, y)?;
+    fn calc_quadratic_coeffs(
+        x0: &[f64],
+        y0: &[f64],
+        max_pt_to_skip: usize
+    ) -> Option<QuadraticCoeffs> {
+        let orig_len = x0.len();
+        let mut x = Vec::from(x0);
+        let mut y = Vec::from(y0);
+        let mut new_x = Vec::new();
+        let mut new_y = Vec::new();
+
+        let (mut coeff, mut err) = Self::calc_quadratic_coeffs_and_err(x0, y0)?;
         loop {
             let len = x.len();
-            if len <= 7 {
-                return Ok(coeff);
+            if len <= 2 || orig_len-len >= max_pt_to_skip {
+                return Some(coeff);
             }
-            let x1 = &x[1..];
-            let y1 = &y[1..];
-            let (coeff1, err1) = Self::calc_quadratic_coeffs_and_err(x1, y1)?;
-            let x2 = &x[..len-1];
-            let y2 = &y[..len-1];
-            let (coeff2, err2) = Self::calc_quadratic_coeffs_and_err(x2, y2)?;
-            let x3 = &x[1..len-1];
-            let y3 = &y[1..len-1];
-            let (coeff3, err3) = Self::calc_quadratic_coeffs_and_err(x3, y3)?;
-            if err1 > err && err2 > err && err3 > err {
-                return Ok(coeff);
-            }
-            if err1 < err2 && err1 < err3 {
-                log::debug!(
-                    "Removed one left focus point \
-                    (error before={err:.1}, error after={err1:.1})"
-                );
-                x = x1;
-                y = y1;
-                coeff = coeff1;
-                err = err1;
 
-            } else if err2 < err1 && err2 < err3 {
-                log::debug!(
-                    "Removed one right focus point \
-                    (error before={err:.1}, error after={err2:.1})"
-                );
-                x = x2;
-                y = y2;
-                coeff = coeff2;
-                err = err2;
+            let mut best_index = None;
+            for idx_to_skip in [0, len-1] {
+                new_x.clear();
+                new_x.extend_from_slice(&x);
+                new_x.remove(idx_to_skip);
+                new_y.clear();
+                new_y.extend_from_slice(&y);
+                new_y.remove(idx_to_skip);
+
+                if let Some((new_coeff, new_err))
+                = Self::calc_quadratic_coeffs_and_err(&new_x, &new_y) {
+                    if new_err < err {
+                        err = new_err;
+                        coeff = new_coeff;
+                        best_index = Some(idx_to_skip);
+                        continue;
+                    }
+                }
+            }
+
+            if let Some(best_index) = best_index {
+                log::debug!("Skip index {}", best_index);
+                x.remove(best_index);
+                y.remove(best_index);
             } else {
-                log::debug!(
-                    "Removed left and right focus point \
-                    (error before={err:.1}, error after={err3:.1})"
-                );
-                x = x3;
-                y = y3;
-                coeff = coeff3;
-                err = err3;
+                return Some(coeff);
             }
         }
     }
 
-    fn calc_quadratic_coeffs_and_err(x: &[f64], y: &[f64]) -> anyhow::Result<(QuadraticCoeffs, f64)> {
-        let coeffs = square_ls(&x, &y)
-            .ok_or_else(|| anyhow::anyhow!("Can't find focus parabola extremum"))?;
+    fn calc_quadratic_coeffs_and_err(x: &[f64], y: &[f64]) -> Option<(QuadraticCoeffs, f64)> {
+        let coeffs = square_ls(&x, &y)?;
         let sum = izip!(x, y)
             .map(|(x, y)| {
                 let yc = coeffs.calc(*x);
@@ -574,7 +694,7 @@ impl FocusingMode {
             .sum::<f64>();
 
         let err = f64::sqrt(sum / (x.len() as f64));
-        Ok((coeffs, err))
+        Some((coeffs, err))
     }
 
 }
@@ -697,8 +817,8 @@ impl Mode for FocusingMode {
                 match self.state {
                     FocusingState::WaitingFirstImage =>
                         return self.process_img_info_when_waiting_first_img(info),
-                    FocusingState::WaitingFrame(focuser_pos) =>
-                        return self.process_img_info_when_waiting_frame(info, focuser_pos),
+                    FocusingState::WaitingMeasureFrame(focuser_pos) =>
+                        return self.process_img_info_when_waiting_measure(info, focuser_pos),
                     FocusingState::WaitingResultImg(focuser_pos) =>
                         return self.process_img_info_when_waiting_result_img(info, focuser_pos),
                     _ =>

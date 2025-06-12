@@ -248,6 +248,22 @@ impl QuadraticCoeffs {
     pub fn calc(&self, x: f64) -> f64 {
         self.a2*x*x + self.a1*x + self.a0
     }
+
+    pub fn intersection(c1: &Self, c2: &Self) -> Option<(f64, f64)> {
+        let a = c1.a2 - c2.a2;
+        let b = c1.a1 - c2.a1;
+        let c = c1.a0 - c2.a0;
+        if a == 0.0 {
+            return None;
+        }
+        let d = b * b - 4.0 * a * c;
+        if d <= 0.0 {
+            return None;
+        }
+        let x1 = 0.5 * (-b + d.sqrt()) / a;
+        let x2 = 0.5 * (-b - d.sqrt()) / a;
+        Some((x1, x2))
+    }
 }
 
 pub fn square_ls(x_values: &[f64], y_values: &[f64]) -> Option<QuadraticCoeffs> {

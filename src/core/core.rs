@@ -682,7 +682,14 @@ impl Core {
 
     pub fn start_focusing(&self) -> anyhow::Result<()> {
         self.abort_active_mode();
-        let mode = FocusingMode::new(&self.indi, &self.options, &self.subscribers, None, true)?;
+        let mode = FocusingMode::new(
+            &self.indi,
+            &self.options,
+            &self.subscribers,
+            None,
+            true,
+            FocusingErrorReaction::Fail
+        )?;
         self.start_new_mode(mode, false, false)?;
         Ok(())
     }
@@ -933,7 +940,14 @@ impl Core {
             NotifyResult::StartFocusing => {
                 mode_data.mode.abort()?;
                 let prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
-                let mut mode = FocusingMode::new(&self.indi, &self.options, &self.subscribers, Some(prev_mode), false)?;
+                let mut mode = FocusingMode::new(
+                    &self.indi,
+                    &self.options,
+                    &self.subscribers,
+                    Some(prev_mode),
+                    false,
+                    FocusingErrorReaction::IgnoreAndExit
+                )?;
                 mode.start()?;
                 mode_data.mode = Box::new(mode);
                 mode_changed = true;

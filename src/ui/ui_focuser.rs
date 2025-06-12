@@ -591,15 +591,15 @@ impl FocuserUi {
         ctx: &gdk::cairo::Context
     ) -> anyhow::Result<()> {
         let focusing_data = self.focusing_data.borrow();
-        let Some(ref focusing_data) = *focusing_data else {
+        let Some(ref fd) = *focusing_data else {
             return Ok(());
         };
         const PARABOLA_POINTS: usize = 101;
         let get_plot_points_cnt = |plot_idx: usize| {
             match plot_idx {
-                0 => focusing_data.samples.len(),
-                1 => if focusing_data.coeffs.is_some() { PARABOLA_POINTS } else { 0 },
-                2 => if focusing_data.result.is_some() && focusing_data.coeffs.is_some() { 1 } else { 0 },
+                0 => fd.samples.len(),
+                1 => if fd.left_coeffs.is_some() && fd.right_coeffs.is_some() { PARABOLA_POINTS } else { 0 },
+                2 => if fd.result.is_some() && fd.left_coeffs.is_some() { 1 } else { 0 },
                 _ => unreachable!(),
             }
         };
@@ -623,16 +623,17 @@ impl FocuserUi {
                 _ => unreachable!(),
             }
         };
-        let min_pos = focusing_data.samples.iter().map(|s| s.focus_pos).min_by(cmp_f64).unwrap_or(0.0);
-        let max_pos = focusing_data.samples.iter().map(|s| s.focus_pos).max_by(cmp_f64).unwrap_or(0.0);
+        let min_pos = fd.samples.iter().map(|s| s.focus_pos).min_by(cmp_f64).unwrap_or(0.0);
+        let max_pos = fd.samples.iter().map(|s| s.focus_pos).max_by(cmp_f64).unwrap_or(0.0);
         let get_plot_point = |plot_idx: usize, point_idx: usize| -> (f64, f64) {
             match plot_idx {
                 0 => {
-                    let sample = &focusing_data.samples[point_idx];
+                    let sample = &fd.samples[point_idx];
                     (sample.focus_pos, sample.stars_fwhm as f64)
                 }
                 1 => {
-                    if let Some(coeffs) = &focusing_data.coeffs {
+                    if let (Some(left_coeffs), Some(right_coeffs))
+                    = (&fd.left_coeffs, &fd.right_coeffs) {
                         let x = linear_interpolate(
                             point_idx as f64,
                             0.0,
@@ -640,14 +641,19 @@ impl FocuserUi {
                             min_pos,
                             max_pos,
                         );
-                        let y = coeffs.calc(x);
+                        let y = if x < fd.result.unwrap_or_default() {
+                            left_coeffs.calc(x)
+                        } else {
+                            right_coeffs.calc(x)
+                        };
                         (x, y)
                     } else {
                         unreachable!();
                     }
                 }
                 2 => {
-                    if let (Some(coeffs), Some(x)) = (&focusing_data.coeffs, &focusing_data.result) {
+                    if let (Some(coeffs), Some(x))
+                    = (&fd.left_coeffs, &fd.result) {
                         let y = coeffs.calc(*x);
                         (*x, y)
                     } else {
