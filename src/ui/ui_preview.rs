@@ -92,6 +92,7 @@ struct LightHistoryItem {
     time:           Option<DateTime<Utc>>,
     fwhm:           Option<f32>,
     fwhm_angular:   Option<f32>,
+    hfd:            Option<f32>,
     bad_fwhm:       bool,
     stars_ovality:  Option<f32>,
     bad_ovality:    bool,
@@ -723,14 +724,18 @@ impl PreviewUi {
             ResultImageInfo::LightInfo(info) => {
                 self.widgets.info.e_info_exp.set_text(&seconds_to_total_time_str(info.image.exposure, true));
 
-                let mut fwhm_str = String::new();
+                let mut fwhm_hfd_str = String::new();
                 if let Some(value) = info.stars.info.fwhm {
-                    fwhm_str += &format!("{:.1}px", value);
+                    fwhm_hfd_str += &format!("{:.1}", value);
                 }
                 if let Some(value) = info.stars.info.fwhm_angular {
-                    fwhm_str += &format!(" / {:.1}\"", 60.0 * 60.0 * radian_to_degree(value as f64));
+                    fwhm_hfd_str += &format!("({:.1}\")", 60.0 * 60.0 * radian_to_degree(value as f64));
                 }
-                self.widgets.info.e_fwhm.set_text(&fwhm_str);
+                if let Some(value) = info.stars.info.hfd {
+                    fwhm_hfd_str += &format!(" / {:.1}", value);
+                }
+
+                self.widgets.info.e_fwhm.set_text(&fwhm_hfd_str);
 
                 match info.stars.info.ovality {
                     Some(value) => self.widgets.info.e_ovality.set_text(&format!("{:.1}", value)),
@@ -1060,6 +1065,7 @@ impl PreviewUi {
                     mode_type:      result.mode_type,
                     time:           info.image.time.clone(),
                     fwhm:           info.stars.info.fwhm,
+                    hfd:            info.stars.info.hfd,
                     fwhm_angular:   info.stars.info.fwhm_angular,
                     bad_fwhm:       !info.stars.info.fwhm_is_ok,
                     stars_ovality:  info.stars.info.ovality,
@@ -1232,7 +1238,7 @@ impl PreviewUi {
                 init_list_store_model_for_treeview(&tree, &[
                     /* 0 */  ("Mode",       String::static_type(), "text"),
                     /* 1 */  ("Time",       String::static_type(), "text"),
-                    /* 2 */  ("FWHM",       String::static_type(), "markup"),
+                    /* 2 */  ("FWHM / HFD", String::static_type(), "markup"),
                     /* 3 */  ("Ovality",    String::static_type(), "markup"),
                     /* 4 */  ("Stars",      u32::static_type(),    "text"),
                     /* 5 */  ("Noise",      String::static_type(), "text"),
@@ -1263,16 +1269,18 @@ impl PreviewUi {
                     String::new()
                 };
             let mut fwhm_str = item.fwhm
-                .map(|v| format!("{:.1}px", v))
+                .map(|v| format!("{:.1}", v))
                 .unwrap_or_else(String::new);
             if item.bad_fwhm {
                 fwhm_str = make_bad_str(&fwhm_str);
             }
-
             if let Some(fwhm_angular) = item.fwhm_angular {
                 let fwhm_in_degrees = radian_to_degree(fwhm_angular as f64);
                 let fwhm_in_seconds = fwhm_in_degrees * (60.0 * 60.0);
-                fwhm_str += &format!(" / {:.1}\"", fwhm_in_seconds);
+                fwhm_str += &format!("({:.1}\")", fwhm_in_seconds);
+            }
+            if let Some(hfd) = item.hfd {
+                fwhm_str += &format!(" / {:.1}", hfd);
             }
 
             let mut ovality_str = item.stars_ovality
