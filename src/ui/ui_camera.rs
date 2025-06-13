@@ -46,6 +46,7 @@ pub fn init_ui(
     obj.init_raw_widgets();
     obj.init_live_stacking_widgets();
     obj.init_frame_quality_widgets();
+    obj.init_info_widgets();
 
     obj.connect_common_events();
     obj.connect_widgets_events();
@@ -92,7 +93,6 @@ impl FrameType {
             FrameType::Darks  => Some("dark"),
             FrameType::Biases => Some("bias"),
             FrameType::Undef  => Some("light"),
-
         }
     }
 }
@@ -383,9 +383,9 @@ impl UiModule for CameraUi {
             },
             Panel {
                 str_id: "cam_info",
-                name:   String::new(),
+                name:   "Camera".to_string(),
                 widget: self.widgets.info.bx.clone().upcast(),
-                pos:    PanelPosition::BottomLeft,
+                pos:    PanelPosition::Bottom,
                 tab:    TabPage::Main,
                 flags:  PanelFlags::NO_EXPANDER,
             },
@@ -445,6 +445,15 @@ impl CameraUi {
         self.widgets.quality.spb_max_oval.set_digits(1);
         self.widgets.quality.spb_max_oval.set_increments(0.1, 1.0);
     }
+
+    fn init_info_widgets(&self) {
+        let pl = self.widgets.info.da_shot_state.create_pango_layout(Some("#"));
+        let text_height = pl.pixel_size().1;
+        self.widgets.info.da_shot_state.set_width_request(10 * text_height);
+    }
+
+
+    // self.widgets.info.da_shot_state.
 
     fn connect_common_events(self: &Rc<Self>) {
         let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
@@ -731,6 +740,12 @@ impl CameraUi {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.live.remove_tracks = chb.is_active();
                 drop(options);
+            })
+        );
+
+        self.widgets.info.bx.connect_screen_changed(
+            clone!(@weak self as self_ =>  move |_, _| {
+                self_.init_info_widgets();
             })
         );
 

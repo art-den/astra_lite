@@ -9,7 +9,7 @@ pub enum PanelPosition {
     Left,
     Right,
     Center,
-    BottomLeft,
+    Bottom,
     Top,
 }
 

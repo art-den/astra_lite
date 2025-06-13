@@ -192,6 +192,7 @@ impl Default for UiOptions {
 #[derive(FromBuilder)]
 struct Widgets {
     window: gtk::ApplicationWindow,
+    bx_bottom: gtk::Box,
     nb_main: gtk::Notebook,
     lbl_cur_action: gtk::Label,
     bx_hw_left: gtk::Box,
@@ -201,8 +202,7 @@ struct Widgets {
     scr_map_left: gtk::ScrolledWindow,
     bx_map_center: gtk::Box,
     bx_comm_left: gtk::Box,
-    bx_comm_left2: gtk::Box,
-    bx_comm_bot_left: gtk::Box,
+    scr_comm_left: gtk::ScrolledWindow,
     bx_comm_center: gtk::Box,
     bx_comm_right: gtk::Box,
     scr_comm_right: gtk::ScrolledWindow,
@@ -438,7 +438,6 @@ impl MainUi {
 
         expanders.clear();
         clear_container(&self.widgets.bx_comm_left);
-        clear_container(&self.widgets.bx_comm_bot_left);
         clear_container(&self.widgets.bx_comm_center);
         clear_container(&self.widgets.bx_comm_right);
         clear_container(&self.widgets.bx_hw_left);
@@ -453,8 +452,8 @@ impl MainUi {
                 let container = match (&panel.tab, &panel.pos) {
                     (TabPage::Main, PanelPosition::Left) =>
                         self.widgets.bx_comm_left.upcast_ref::<gtk::Container>(),
-                    (TabPage::Main, PanelPosition::BottomLeft) =>
-                        self.widgets.bx_comm_bot_left.upcast_ref::<gtk::Container>(),
+                    (_, PanelPosition::Bottom) =>
+                        self.widgets.bx_bottom.upcast_ref::<gtk::Container>(),
                     (TabPage::Main, PanelPosition::Center) =>
                         self.widgets.bx_comm_center.upcast_ref::<gtk::Container>(),
                     (TabPage::Main, PanelPosition::Right) =>
@@ -622,7 +621,7 @@ impl MainUi {
 
     fn handler_btn_fullscreen(&self, btn: &gtk::ToggleButton) {
         let full_screen = btn.is_active();
-        self.widgets.bx_comm_left2.set_visible(!full_screen);
+        self.widgets.scr_comm_left.set_visible(!full_screen);
         self.widgets.scr_comm_right.set_visible(!full_screen);
         self.widgets.scr_map_left.set_visible(!full_screen);
         let modules = self.modules.borrow();

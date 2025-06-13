@@ -512,10 +512,7 @@ impl MapUi {
 
         self.widgets.obj.da_graph.connect_screen_changed(
             clone!(@weak self as self_ =>  move |_, _| {
-                exec_and_show_error(Some(&self_.window), || {
-                    self_.set_alt_graph_height();
-                    Ok(())
-                });
+                self_.set_alt_graph_height();
             })
         );
 
