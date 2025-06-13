@@ -35,6 +35,8 @@ pub fn init_ui(
         delayed_actions: DelayedActions::new(500),
         focusing_data:   RefCell::new(None),
         starting_temp:   Cell::new(None),
+        step:            Cell::new(10),
+        step_large:      Cell::new(100),
     });
 
     obj.init_widgets();
@@ -56,6 +58,11 @@ struct Widgets {
     l_temp:          gtk::Label,
     l_temp_diff:     gtk::Label,
     spb_val:         gtk::SpinButton,
+    bx_ctrl_btns:    gtk::Box,
+    btn_dec_large:   gtk::Button,
+    btn_dec:         gtk::Button,
+    btn_inc:         gtk::Button,
+    btn_inc_large:   gtk::Button,
     chb_temp:        gtk::CheckButton,
     spb_temp:        gtk::SpinButton,
     chb_fwhm:        gtk::CheckButton,
@@ -83,6 +90,8 @@ struct FocuserUi {
     delayed_actions: DelayedActions<DelayedAction>,
     focusing_data:   RefCell<Option<FocusingResultData>>,
     starting_temp:   Cell<Option<f64>>,
+    step:            Cell<i32>,
+    step_large:      Cell<i32>,
 }
 
 enum MainThreadEvent {
@@ -340,6 +349,22 @@ impl FocuserUi {
             });
         }));
 
+        self.widgets.btn_dec_large.connect_clicked(clone!(@weak self as self_ => move |_| {
+            self_.update_focuser_value(-self_.step_large.get());
+        }));
+
+        self.widgets.btn_dec.connect_clicked(clone!(@weak self as self_ => move |_| {
+            self_.update_focuser_value(-self_.step.get());
+        }));
+
+        self.widgets.btn_inc.connect_clicked(clone!(@weak self as self_ => move |_| {
+            self_.update_focuser_value(self_.step.get());
+        }));
+
+        self.widgets.btn_inc_large.connect_clicked(clone!(@weak self as self_ => move |_| {
+            self_.update_focuser_value(self_.step_large.get());
+        }));
+
         self.widgets.cb_list.connect_active_notify(clone!(@weak self as self_ => move |cb| {
             let Some(cur_id) = cb.active_id() else { return; };
             let Ok(mut options) = self_.options.try_write() else { return; };
@@ -405,6 +430,7 @@ impl FocuserUi {
         self.widgets.cb_period.set_sensitive(self.widgets.chb_period.is_active());
         self.widgets.spb_val.set_sensitive(!focusing);
         self.widgets.cb_list.set_sensitive(!focusing);
+        self.widgets.bx_ctrl_btns.set_sensitive(!focusing);
 
         enable_actions(&self.window, &[
             ("manual_focus",      !focusing && can_change_mode),
@@ -512,10 +538,17 @@ impl FocuserUi {
             if step >= max / 100.0 {
                 step = 10.0;
             }
-            self.widgets.spb_val.set_increments(step, step * 10.0);
+            let large_step = (step * 10.0) as f64;
+            self.step.set(step as i32);
+            self.step_large.set(large_step as i32);
+            self.widgets.spb_val.set_increments(step, large_step);
             self.excl.exec(|| {
                 self.widgets.spb_val.set_value(prop_info.value);
             });
+            self.widgets.btn_dec_large.set_tooltip_text(Some(&format!("- {:.0}", large_step)));
+            self.widgets.btn_dec.set_tooltip_text(Some(&format!("- {:.0}", step)));
+            self.widgets.btn_inc.set_tooltip_text(Some(&format!("+ {:.0}", step)));
+            self.widgets.btn_inc_large.set_tooltip_text(Some(&format!("+ {:.0}", large_step)));
         }
     }
 
@@ -691,5 +724,20 @@ impl FocuserUi {
 
     fn handler_action_stop_manual_focus(&self) {
         self.core.abort_active_mode();
+    }
+
+    fn update_focuser_value(&self, offset: i32) {
+        self.excl.exec(|| {
+            let options = self.options.read().unwrap();
+            if options.focuser.device.is_empty() { return; }
+            exec_and_show_error(Some(&self.window), || {
+                let mut value = self.indi.focuser_get_abs_value(&options.focuser.device)? as i32;
+                value += offset;
+                self.indi.focuser_set_abs_value(&options.focuser.device, value as f64, true, None)?;
+                self.widgets.spb_val.set_value(value as f64);
+                Ok(())
+            });
+        });
+
     }
 }
