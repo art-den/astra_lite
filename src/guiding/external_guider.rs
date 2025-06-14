@@ -55,7 +55,7 @@ impl ExternalGuiderCtrl {
         *self.event_handler.lock().unwrap() = Some(handler);
     }
 
-    pub fn phd2(&self) -> &Arc<phd2::Connection> {
+    pub fn phd2_conn(&self) -> &Arc<phd2::Connection> {
         &self.phd2
     }
 

@@ -147,12 +147,11 @@
               <object class="GtkBox">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
-                <property name="spacing">10</property>
+                <property name="spacing">5</property>
                 <child>
                   <object class="GtkScrolledWindow">
                     <property name="visible">True</property>
                     <property name="can-focus">True</property>
-                    <property name="margin-top">5</property>
                     <property name="hscrollbar-policy">never</property>
                     <property name="kinetic-scrolling">False</property>
                     <child>
@@ -165,6 +164,7 @@
                             <property name="visible">True</property>
                             <property name="can-focus">False</property>
                             <property name="margin-start">5</property>
+                            <property name="margin-top">5</property>
                             <property name="orientation">vertical</property>
                             <property name="spacing">10</property>
                             <child>
@@ -285,6 +285,7 @@
                                 <property name="can-focus">False</property>
                                 <property name="margin-start">5</property>
                                 <property name="margin-end">5</property>
+                                <property name="margin-top">5</property>
                                 <property name="orientation">vertical</property>
                                 <property name="spacing">10</property>
                                 <child>
@@ -360,6 +361,9 @@
                           <object class="GtkBox" id="bx_comm_left">
                             <property name="visible">True</property>
                             <property name="can-focus">False</property>
+                            <property name="margin-start">5</property>
+                            <property name="margin-end">5</property>
+                            <property name="margin-top">5</property>
                             <property name="orientation">vertical</property>
                             <property name="spacing">10</property>
                             <child>
@@ -410,6 +414,9 @@
                               <object class="GtkBox" id="bx_comm_right">
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
+                                <property name="margin-start">5</property>
+                                <property name="margin-end">5</property>
+                                <property name="margin-top">5</property>
                                 <property name="orientation">vertical</property>
                                 <property name="spacing">10</property>
                                 <child>

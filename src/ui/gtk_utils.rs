@@ -364,3 +364,36 @@ pub fn fix_gtk_expander_bug(widget: &gtk::Widget) {
         }
     }
 }
+
+pub fn is_dark_theme() -> bool {
+    let context = gtk::StyleContext::new();
+    let bg_color = context
+        .lookup_color("theme_base_color")
+        .unwrap_or(gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
+    let fg_color = context.color(gtk::StateFlags::NORMAL);
+    let bg_luminance =
+        0.2126 * bg_color.red() +
+        0.7152 * bg_color.green() +
+        0.0722 * bg_color.blue();
+    let fg_luminance =
+        0.2126 * fg_color.red() +
+        0.7152 * fg_color.green() +
+        0.0722 * fg_color.blue();
+    bg_luminance < fg_luminance
+}
+
+pub fn get_err_color_str() -> &'static str {
+    if is_dark_theme() {
+        "#FF4040"
+    } else {
+        "#FF0000"
+    }
+}
+
+pub fn get_warn_color_str() -> &'static str {
+    if is_dark_theme() {
+        "#FFFF00"
+    } else {
+        "#808000"
+    }
+}

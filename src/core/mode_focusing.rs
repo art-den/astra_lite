@@ -519,11 +519,11 @@ impl FocusingMode {
                     let value = value.round();
                     log::debug!("Extremum = {:.1}", value);
                     if !allow_more_measures {
-                        let focuser_info = self.indi.focuser_get_abs_value_prop_info(&self.f_opts.device)?;
-                        if value < focuser_info.min || value > focuser_info.max {
+                        let prop_elem = self.indi.focuser_get_abs_value_prop_elem(&self.f_opts.device)?;
+                        if value < prop_elem.min || value > prop_elem.max {
                             anyhow::bail!(
                                 "Result pos {0:.1} out of focuser range ({1:.1}..{2:.1})",
-                                value, focuser_info.min, focuser_info.max
+                                value, prop_elem.min, prop_elem.max
                             );
                         }
                         return Ok(CalcResult::Value { value, coeffs });
@@ -674,7 +674,7 @@ impl Mode for FocusingMode {
 
     fn start(&mut self) -> anyhow::Result<()> {
         let cur_pos = self.indi
-            .focuser_get_abs_value(&self.f_opts.device)?
+            .focuser_get_abs_value_prop_elem(&self.f_opts.device)?.value
             .round();
 
         self.start_temp = self.indi
@@ -740,7 +740,7 @@ impl Mode for FocusingMode {
                 *change_time = 0;
             }
         }
-        let cur_focus = self.indi.focuser_get_abs_value(&self.f_opts.device)?;
+        let cur_focus = self.indi.focuser_get_abs_value_prop_elem(&self.f_opts.device)?.value;
         self.check_cur_focus_value(cur_focus)
     }
 

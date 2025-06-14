@@ -3193,7 +3193,7 @@ impl Connection {
 
     // Focuser absolute position
 
-    pub fn focuser_get_abs_value_prop_info(
+    pub fn focuser_get_abs_value_prop_elem(
         &self,
         device_name: &str
     ) -> Result<NumPropValue> {
@@ -3203,14 +3203,15 @@ impl Connection {
         )
     }
 
-
-    pub fn focuser_get_abs_value(&self, device_name: &str) -> Result<f64> {
-        self.get_num_property_value(
-            device_name,
-            "ABS_FOCUS_POSITION",
-            "FOCUS_ABSOLUTE_POSITION"
-        )
+    pub fn focuser_get_abs_value_prop(
+        &self,
+        device_name: &str
+    ) -> Result<Property> {
+        let devices = self.devices.lock().unwrap();
+        let prop = devices.get_property(device_name, "ABS_FOCUS_POSITION")?;
+        Ok(prop.clone())
     }
+
 
     pub fn focuser_get_max(&self, device_name: &str) -> Result<f64> {
         self.get_num_property_value(

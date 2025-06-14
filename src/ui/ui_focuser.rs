@@ -1,6 +1,6 @@
 use core::f64;
 use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
-use gtk::{glib, gdk, prelude::*, glib::clone};
+use gtk::{glib, gdk, prelude::*, glib::clone, pango};
 use macros::FromBuilder;
 
 use crate::{
@@ -21,9 +21,11 @@ pub fn init_ui(
     indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/focuser.ui"));
+    let info_widgets = InfoWidgets::new();
 
     let obj = Rc::new(FocuserUi {
         widgets,
+        info_widgets,
         main_ui:         Rc::clone(main_ui),
         window:          window.clone(),
         options:         Arc::clone(options),
@@ -37,6 +39,7 @@ pub fn init_ui(
         starting_temp:   Cell::new(None),
         step:            Cell::new(10),
         step_large:      Cell::new(100),
+        prev_pos_state:  Cell::new(None),
     });
 
     obj.init_widgets();
@@ -77,8 +80,31 @@ struct Widgets {
     da_auto:         gtk::DrawingArea,
 }
 
+struct InfoWidgets {
+    bx: gtk::Box,
+    l_state: gtk::Label,
+}
+
+impl InfoWidgets {
+    fn new() -> Self {
+        let l_state = gtk::Label::builder()
+            .visible(true)
+            .label("State")
+            .use_markup(true)
+            .build();
+        let bx = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(5)
+            .visible(true)
+            .build();
+        bx.add(&l_state);
+        Self { bx, l_state }
+    }
+}
+
 struct FocuserUi {
     widgets:         Widgets,
+    info_widgets:    InfoWidgets,
     main_ui:         Rc<MainUi>,
     window:          gtk::ApplicationWindow,
     options:         Arc<RwLock<Options>>,
@@ -92,6 +118,7 @@ struct FocuserUi {
     starting_temp:   Cell<Option<f64>>,
     step:            Cell<i32>,
     step_large:      Cell<i32>,
+    prev_pos_state:  Cell<Option<indi::PropState>>,
 }
 
 enum MainThreadEvent {
@@ -147,14 +174,24 @@ impl UiModule for FocuserUi {
     }
 
     fn panels(&self) -> Vec<Panel> {
-        vec![Panel {
-            str_id: "focuser",
-            name:   "Focuser".to_string(),
-            widget: self.widgets.bx.clone().upcast(),
-            pos:    PanelPosition::Right,
-            tab:    TabPage::Main,
-            flags:  PanelFlags::empty(),
-        }]
+        vec![
+            Panel {
+                str_id: "focuser",
+                name:   "Focuser".to_string(),
+                widget: self.widgets.bx.clone().upcast(),
+                pos:    PanelPosition::Right,
+                tab:    TabPage::Main,
+                flags:  PanelFlags::empty(),
+            },
+            Panel {
+                str_id: "focuser_info",
+                name:   "Focuser".to_string(),
+                widget: self.info_widgets.bx.clone().upcast(),
+                pos:    PanelPosition::Bottom,
+                tab:    TabPage::Main,
+                flags:  PanelFlags::NO_EXPANDER,
+            }
+        ]
     }
 
     fn process_event(&self, event: &UiModuleEvent) {
@@ -273,7 +310,7 @@ impl FocuserUi {
         elem_name:   &str,
         new_prop:    bool,
         _prev_state: Option<&indi::PropState>,
-        _new_state:  Option<&indi::PropState>,
+        new_state:   Option<&indi::PropState>,
         value:       &indi::PropValue,
     ) {
         let options = self.options.read().unwrap();
@@ -287,6 +324,7 @@ impl FocuserUi {
                     else        { DelayedAction::UpdateFocPos }
                 );
                 self.delayed_actions.schedule(DelayedAction::ShowCurFocuserValue);
+                self.show_info_impl(new_state);
             }
             ("FOCUS_TEMPERATURE", ..) => {
                 self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature);
@@ -436,6 +474,9 @@ impl FocuserUi {
             ("manual_focus",      !focusing && can_change_mode),
             ("stop_manual_focus", focusing),
         ]);
+
+        self.main_ui.set_module_panel_visible(self.info_widgets.bx.upcast_ref(), device_enabled);
+        self.show_info(focuser_device);
     }
 
     fn correct_widgets_props(&self) {
@@ -526,15 +567,15 @@ impl FocuserUi {
         let foc_device = options.focuser.device.clone();
         drop(options);
 
-        let Ok(prop_info) = self.indi.focuser_get_abs_value_prop_info(&foc_device) else {
+        let Ok(prop_elem) = self.indi.focuser_get_abs_value_prop_elem(&foc_device) else {
             return;
         };
         if new_prop || self.widgets.spb_val.value() == 0.0 {
             let focus_max = self.indi.focuser_get_max(&foc_device).ok();
-            self.widgets.spb_val.set_range(0.0, prop_info.max);
+            self.widgets.spb_val.set_range(0.0, prop_elem.max);
             self.widgets.spb_val.set_digits(0);
-            let mut step = prop_info.step.unwrap_or(1.0);
-            let max = focus_max.unwrap_or(prop_info.max);
+            let mut step = prop_elem.step.unwrap_or(1.0);
+            let max = focus_max.unwrap_or(prop_elem.max);
             if step >= max / 100.0 {
                 step = 10.0;
             }
@@ -543,7 +584,7 @@ impl FocuserUi {
             self.step_large.set(large_step as i32);
             self.widgets.spb_val.set_increments(step, large_step);
             self.excl.exec(|| {
-                self.widgets.spb_val.set_value(prop_info.value);
+                self.widgets.spb_val.set_value(prop_elem.value);
             });
             self.widgets.btn_dec_large.set_tooltip_text(Some(&format!("- {:.0}", large_step)));
             self.widgets.btn_dec.set_tooltip_text(Some(&format!("- {:.0}", step)));
@@ -583,8 +624,8 @@ impl FocuserUi {
         let foc_device = options.focuser.device.clone();
         drop(options);
         let value_str =
-            if let Ok(value) = self.indi.focuser_get_abs_value(&foc_device) {
-                &format!("{:.0}", value)
+            if let Ok(prop_elem) = self.indi.focuser_get_abs_value_prop_elem(&foc_device) {
+                &format!("{:.0}", prop_elem.value)
             } else {
                 "---"
             };
@@ -731,13 +772,48 @@ impl FocuserUi {
             let options = self.options.read().unwrap();
             if options.focuser.device.is_empty() { return; }
             exec_and_show_error(Some(&self.window), || {
-                let mut value = self.indi.focuser_get_abs_value(&options.focuser.device)? as i32;
+                let mut value = self
+                    .indi
+                    .focuser_get_abs_value_prop_elem(&options.focuser.device)?
+                    .value as i32;
                 value += offset;
                 self.indi.focuser_set_abs_value(&options.focuser.device, value as f64, true, None)?;
                 self.widgets.spb_val.set_value(value as f64);
                 Ok(())
             });
         });
+    }
 
+    fn show_info(&self, focuser_device: &str) {
+        if let Ok(prop) = self.indi.focuser_get_abs_value_prop(focuser_device) {
+            self.show_info_impl(Some(&prop.state));
+        }
+    }
+
+    fn show_info_impl(&self, prop_state: Option<&indi::PropState>) {
+        enum InfoState { Work, Err }
+        let prop_state = prop_state.copied();
+        if self.prev_pos_state.get() != prop_state {
+            self.prev_pos_state.set(prop_state);
+            let (text, info_state) = match prop_state {
+                Some(indi::PropState::Ok)|
+                Some(indi::PropState::Idle) => ("Stopped", None),
+                Some(indi::PropState::Alert) => ("Error", Some(InfoState::Err)),
+                Some(indi::PropState::Busy) => ("Moving", Some(InfoState::Work)),
+                None => ("Disabled", None),
+            };
+
+            let mut text = format!("<b>{}</b>", text);
+            match info_state {
+                Some(InfoState::Err) =>
+                    text = format!("<span foreground='{}'>{}</span>", get_err_color_str(), text),
+                Some(InfoState::Work) =>
+                    text = format!("<span foreground='{}'>{}</span>", get_warn_color_str(), text),
+                _ => {},
+            }
+
+            self.info_widgets.l_state.set_label(&text);
+
+        }
     }
 }

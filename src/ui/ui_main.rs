@@ -475,11 +475,12 @@ impl MainUi {
                     cfg!(debug_assertions) ||
                     !panel.flags.contains(PanelFlags::DEVELOP);
 
-                panel.widget.set_margin_top(5);
-                panel.widget.set_margin_start(5);
                 let panel_widget = panel.create_widget();
 
                 if let Some(expander) = panel_widget.downcast_ref::<gtk::Expander>() {
+                    panel.widget.set_margin_top(5);
+
+
                     let expanded_by_default = panel.flags.contains(PanelFlags::EXPANDED);
                     expanders.push((
                         panel.str_id.to_string(),
@@ -497,10 +498,19 @@ impl MainUi {
 
                 item.add_widget(&panel.widget, panel_widget.upcast());
 
-                if matches!(panel.pos, PanelPosition::Left|PanelPosition::Right) {
+                if !matches!(panel.pos, PanelPosition::Bottom) && !panel.name.is_empty() {
+                    panel.widget.set_margin_start(10);
+                }
+
+                if matches!(panel.pos, PanelPosition::Left|PanelPosition::Right|PanelPosition::Bottom) {
+                    let orientation = if matches!(panel.pos, PanelPosition::Bottom) {
+                        gtk::Orientation::Vertical
+                    } else {
+                        gtk::Orientation::Horizontal
+                    };
                     let separator = gtk::Separator::builder()
                         .visible(is_visible)
-                        .orientation(gtk::Orientation::Horizontal)
+                        .orientation(orientation)
                         .build();
                     container.add(&separator);
 
