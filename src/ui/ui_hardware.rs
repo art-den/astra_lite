@@ -542,11 +542,11 @@ impl HardwareUi {
             _ = self.indi.command_enable_all_devices(false, true, Some(2000));
         }
 
-        self.core.ext_giuder().phd2().discnnect_all_event_handlers();
-
         log::info!("Stop connection to PHD2...");
         _ = self.core.ext_giuder().phd2().stop();
         log::info!("Done!");
+
+        self.core.ext_giuder().phd2().discnnect_all_event_handlers();
     }
 
     fn correct_widgets_by_cur_state(&self) {
