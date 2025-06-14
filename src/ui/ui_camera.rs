@@ -1117,6 +1117,9 @@ impl CameraUi {
             cam_active &&
             camera.is_some();
 
+
+        self.main_ui.set_module_panel_visible(self.widgets.info.bx.upcast_ref(), cam_sensitive);
+
         enable_actions(&self.window, &[
             ("take_shot",              exposure_supported && !single_shot && can_change_mode),
             ("stop_shot",              single_shot),

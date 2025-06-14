@@ -433,7 +433,7 @@ impl MainUi {
     }
 
     fn build_modules_panels(&self) {
-        let modules = self.modules.borrow();
+        let mut modules = self.modules.borrow_mut();
         let mut expanders = self.expanders.borrow_mut();
 
         expanders.clear();
@@ -446,8 +446,8 @@ impl MainUi {
         clear_container(&self.widgets.bx_map_left);
         clear_container(&self.widgets.bx_map_center);
 
-        for module in modules.items() {
-            let panels = module.panels();
+        for item in modules.items_mut() {
+            let panels = item.module().panels();
             for panel in panels {
                 let container = match (&panel.tab, &panel.pos) {
                     (TabPage::Main, PanelPosition::Left) =>
@@ -478,6 +478,7 @@ impl MainUi {
                 panel.widget.set_margin_top(5);
                 panel.widget.set_margin_start(5);
                 let panel_widget = panel.create_widget();
+
                 if let Some(expander) = panel_widget.downcast_ref::<gtk::Expander>() {
                     let expanded_by_default = panel.flags.contains(PanelFlags::EXPANDED);
                     expanders.push((
@@ -489,16 +490,21 @@ impl MainUi {
                 if let Some(label) = panel.create_caption_label() {
                     label.set_visible(is_visible);
                     container.add(&label);
+                    item.add_widget(&panel.widget, label.upcast());
                 }
                 panel_widget.set_visible(is_visible);
                 container.add(&panel_widget);
-                if matches!(panel.pos, PanelPosition::Left|PanelPosition::Right)
-                {
+
+                item.add_widget(&panel.widget, panel_widget.upcast());
+
+                if matches!(panel.pos, PanelPosition::Left|PanelPosition::Right) {
                     let separator = gtk::Separator::builder()
                         .visible(is_visible)
                         .orientation(gtk::Orientation::Horizontal)
                         .build();
                     container.add(&separator);
+
+                    item.add_widget(&panel.widget, separator.upcast());
                 }
             }
         }
@@ -680,23 +686,26 @@ impl MainUi {
         TabPage::from_tab_index(page_index)
     }
 
-    pub fn show_all_options_impl(&self, options: &Options) {
+    pub fn show_all_options(&self) {
+        let options = self.options.read().unwrap();
         let modules = self.modules.borrow();
         modules.show_options(&options);
     }
 
-    pub fn show_all_options(&self) {
-        let options = self.options.read().unwrap();
-        self.show_all_options_impl(&options);
-    }
-
-    pub fn get_all_options_impl(&self, options: &mut Options) {
-        let modules = self.modules.borrow();
-        modules.get_options(options);
-    }
-
     pub fn get_all_options(&self) {
         let mut options = self.options.write().unwrap();
-        self.get_all_options_impl(&mut options);
+        let modules = self.modules.borrow();
+        modules.get_options(&mut options);
+    }
+
+    pub fn set_module_panel_visible(&self, panel_widget: &gtk::Widget, is_visible: bool) {
+        let modules = self.modules.borrow();
+        for module in modules.items() {
+            if let Some(widgets) = module.widgets().get(panel_widget) {
+                for widget in widgets {
+                    widget.set_visible(is_visible);
+                }
+            }
+        }
     }
 }

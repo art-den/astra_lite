@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{collections::HashMap, rc::Rc};
 
 use gtk::{prelude::*, pango};
 use bitflags::bitflags;
@@ -106,8 +106,30 @@ pub trait UiModule {
     fn process_event(&self, event: &UiModuleEvent);
 }
 
+pub struct UiModuleItem {
+    module: Rc<dyn UiModule>,
+    widgets: HashMap<gtk::Widget, Vec<gtk::Widget>>,
+}
+
+impl UiModuleItem {
+    pub fn module(&self) -> &Rc<dyn UiModule> {
+        &self.module
+    }
+
+    pub fn widgets(&self) -> &HashMap<gtk::Widget, Vec<gtk::Widget>> {
+        &self.widgets
+    }
+
+    pub fn add_widget(&mut self, panel: &gtk::Widget, widget: gtk::Widget) {
+        self.widgets
+            .entry(panel.clone())
+            .and_modify(|v| v.push(widget.clone()))
+            .or_insert(vec![widget]);
+    }
+}
+
 pub struct UiModules {
-    items: Vec<Rc<dyn UiModule>>,
+    items: Vec<UiModuleItem>,
 }
 
 impl UiModules {
@@ -118,28 +140,35 @@ impl UiModules {
     }
 
     pub fn add(&mut self, module: Rc<dyn UiModule>) {
-        self.items.push(module);
+        self.items.push(UiModuleItem {
+            widgets: HashMap::new(),
+            module,
+        });
     }
 
     pub fn show_options(&self, options: &Options) {
-        for module in &self.items {
-            module.show_options(options);
+        for item in &self.items {
+            item.module.show_options(options);
         }
     }
 
     pub fn get_options(&self, options: &mut Options) {
-        for module in &self.items {
-            module.get_options(options);
+        for item in &self.items {
+            item.module.get_options(options);
         }
     }
 
-    pub fn items(&self) -> impl Iterator<Item=&Rc<dyn UiModule>> {
+    pub fn items_mut(&mut self) -> impl Iterator<Item=&mut UiModuleItem> {
+        self.items.iter_mut()
+    }
+
+    pub fn items(&self) -> impl Iterator<Item=&UiModuleItem> {
         self.items.iter()
     }
 
     pub fn process_event(&self, event: &UiModuleEvent) {
-        for module in &self.items {
-            module.process_event(event);
+        for item in &self.items {
+            item.module.process_event(event);
         }
     }
 
