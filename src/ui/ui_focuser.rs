@@ -1,6 +1,6 @@
 use core::f64;
 use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
-use gtk::{glib, gdk, prelude::*, glib::clone, pango};
+use gtk::{glib, gdk, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
