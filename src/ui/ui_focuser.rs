@@ -91,6 +91,9 @@ impl InfoWidgets {
             .visible(true)
             .label("State")
             .use_markup(true)
+            .xalign(0.0)
+            .halign(gtk::Align::Start)
+            .width_chars(10)
             .build();
         let bx = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -813,7 +816,6 @@ impl FocuserUi {
             }
 
             self.info_widgets.l_state.set_label(&text);
-
         }
     }
 }

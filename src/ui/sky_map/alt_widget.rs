@@ -22,11 +22,13 @@ pub fn paint_altitude_by_time(
     let (_, dpmm_y) = get_widget_dpmm(area)
         .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
     let sc = area.style_context();
-    let fg_color = sc.color(gtk::StateFlags::NORMAL);
-    let (fg_r, fg_g, fg_b) = (1.0, 1.0, 1.0);
+    let fg_color = sc
+        .lookup_color("theme_fg_color")
+        .unwrap_or(gdk::RGBA::new(0.9, 0.9, 0.9, 1.0));
+    let (fg_r, fg_g, fg_b) = (fg_color.red(), fg_color.green(), fg_color.blue());
     let bg_color = sc
         .lookup_color("theme_base_color")
-        .unwrap_or(gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
+        .unwrap_or(gdk::RGBA::new(0.0, 0.0, 0.0, 1.0));
 
     let width = area.allocated_width() as f64;
     let height = area.allocated_height() as f64;
@@ -41,7 +43,7 @@ pub fn paint_altitude_by_time(
     let day_color = (0.45, 0.45, 0.0);
     let twilight_color = (0.3, 0.3, 0.0);
     let night_color = (0.0, 0.0, 0.0);
-    let moon_color = (0.02, 0.2, 0.2);
+    let moon_color = (0.02, 0.35, 0.35);
 
     // Legend
 

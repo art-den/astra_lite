@@ -449,11 +449,8 @@ impl CameraUi {
     fn init_info_widgets(&self) {
         let pl = self.widgets.info.da_shot_state.create_pango_layout(Some("#"));
         let text_height = pl.pixel_size().1;
-        self.widgets.info.da_shot_state.set_width_request(10 * text_height);
+        self.widgets.info.da_shot_state.set_width_request(8 * text_height);
     }
-
-
-    // self.widgets.info.da_shot_state.
 
     fn connect_common_events(self: &Rc<Self>) {
         let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();

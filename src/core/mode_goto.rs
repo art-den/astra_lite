@@ -114,7 +114,7 @@ impl GotoMode {
     }
 
     fn start_goto(&mut self) -> anyhow::Result<()> {
-        if self.indi.mount_get_parked(&self.mount)? {
+        if self.indi.mount_is_parked(&self.mount)? {
             self.start_unpark_telescope()?;
         } else {
             self.start_goto_coord()?;
@@ -416,7 +416,7 @@ impl Mode for GotoMode {
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
         match self.state {
             State::Unparking => {
-                if !self.indi.mount_get_parked(&self.mount)? {
+                if !self.indi.mount_is_parked(&self.mount)? {
                     self.start_goto_coord()?;
                     self.state = State::Goto;
                     return Ok(NotifyResult::ProgressChanges);

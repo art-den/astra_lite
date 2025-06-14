@@ -4,8 +4,9 @@ use macros::FromBuilder;
 
 use crate::{
     core::{consts::INDI_SET_PROP_TIMEOUT, core::{Core, ModeType}, events::*},
-    indi,
+    indi::{self, degree_to_str, hour_to_str},
     options::*,
+    ui::ui_main::MainUi,
 };
 
 use super::{gtk_utils::*, module::*, utils::*};
@@ -13,14 +14,18 @@ use super::{gtk_utils::*, module::*, utils::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
+    main_ui: &Rc<MainUi>,
     options: &Arc<RwLock<Options>>,
     core:    &Arc<Core>,
     indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/mount.ui"));
+    let info_widgets = InfoWidgets::new();
 
     let obj = Rc::new(MountUi {
         widgets,
+        info_widgets,
+        main_ui:         Rc::clone(main_ui),
         window:          window.clone(),
         excl:            ExclusiveCaller::new(),
         options:         Arc::clone(options),
@@ -29,6 +34,9 @@ pub fn init_ui(
         delayed_actions: DelayedActions::new(500),
         closed:          Cell::new(false),
         indi_evt_conn:   RefCell::new(None),
+        prev_info_state: Cell::new(None),
+        prev_info_ra:    Cell::new(0.0),
+        prev_info_dec:   Cell::new(0.0),
     });
 
     obj.init_widgets();
@@ -57,6 +65,17 @@ enum DelayedAction {
     FillMountSpdList,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InfoState {
+    Stopped,
+    Parked,
+    Tracking,
+    Slewing,
+    Error,
+    Correcton,
+    Moved,
+}
+
 #[derive(FromBuilder)]
 struct Widgets {
     bx:               gtk::Box,
@@ -78,8 +97,48 @@ struct Widgets {
     chb_inv_we:       gtk::CheckButton,
 }
 
+struct InfoWidgets {
+    bx:      gtk::Box,
+    l_state: gtk::Label,
+    l_pos:   gtk::Label,
+}
+
+impl InfoWidgets {
+    fn new() -> Self {
+        let bx = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(5)
+            .visible(true)
+            .build();
+
+        let l_state = gtk::Label::builder()
+            .label("State")
+            .use_markup(true)
+            .width_chars(10)
+            .xalign(0.0)
+            .halign(gtk::Align::Start)
+            .visible(true)
+            .build();
+
+        let l_pos = gtk::Label::builder()
+            .label("Pos")
+            .use_markup(true)
+            .width_chars(30)
+            .xalign(0.0)
+            .halign(gtk::Align::Start)
+            .visible(true)
+            .build();
+
+        bx.add(&l_state);
+        bx.add(&l_pos);
+        Self { bx, l_state, l_pos }
+    }
+}
+
 struct MountUi {
     widgets:         Widgets,
+    info_widgets:    InfoWidgets,
+    main_ui:         Rc<MainUi>,
     window:          gtk::ApplicationWindow,
     excl:            ExclusiveCaller,
     options:         Arc<RwLock<Options>>,
@@ -88,6 +147,9 @@ struct MountUi {
     delayed_actions: DelayedActions<DelayedAction>,
     closed:          Cell<bool>,
     indi_evt_conn:   RefCell<Option<indi::Subscription>>,
+    prev_info_state: Cell<Option<InfoState>>,
+    prev_info_ra:    Cell<f64>,
+    prev_info_dec:   Cell<f64>,
 }
 
 impl Drop for MountUi {
@@ -109,14 +171,24 @@ impl UiModule for MountUi {
     }
 
     fn panels(&self) -> Vec<Panel> {
-        vec![Panel {
-            str_id: "mount",
-            name:   "Mount control".to_string(),
-            widget: self.widgets.bx.clone().upcast(),
-            pos:    PanelPosition::Right,
-            tab:    TabPage::Main,
-            flags:  PanelFlags::empty(),
-        }]
+        vec![
+            Panel {
+                str_id: "mount",
+                name:   "Mount control".to_string(),
+                widget: self.widgets.bx.clone().upcast(),
+                pos:    PanelPosition::Right,
+                tab:    TabPage::Main,
+                flags:  PanelFlags::empty(),
+            },
+            Panel {
+                str_id: "mount_info",
+                name:   "Mount".to_string(),
+                widget: self.info_widgets.bx.clone().upcast(),
+                pos:    PanelPosition::Bottom,
+                tab:    TabPage::Main,
+                flags:  PanelFlags::NO_EXPANDER,
+            },
+        ]
     }
 
     fn process_event(&self, event: &UiModuleEvent) {
@@ -242,10 +314,10 @@ impl MountUi {
 
     fn correct_widgets_props(&self) {
         let options = self.options.read().unwrap();
-        let mount = options.mount.device.clone();
+        let mount_device = options.mount.device.clone();
         drop(options);
 
-        let mnt_active = self.indi.is_device_enabled(&mount).unwrap_or(false);
+        let mnt_active = self.indi.is_device_enabled(&mount_device).unwrap_or(false);
         let indi_connected = self.indi.state() == indi::ConnState::Connected;
 
         let mode_data = self.core.mode_data();
@@ -270,6 +342,9 @@ impl MountUi {
         for btn in self.get_nav_bittons() {
             btn.set_sensitive(move_enabled);
         }
+
+        self.main_ui.set_module_panel_visible(self.info_widgets.bx.upcast_ref(), mnt_active);
+        self.show_info(&mount_device);
     }
 
     fn handler_closing(&self) {
@@ -462,10 +537,10 @@ impl MountUi {
         self.excl.exec(|| {
             let device = self.options.read().unwrap().mount.device.clone();
 
-            let parked = self.indi.mount_get_parked(&device).unwrap_or(false);
+            let parked = self.indi.mount_is_parked(&device).unwrap_or(false);
             self.show_mount_parked_state(parked);
 
-            let tracking = self.indi.mount_get_tracking(&device).unwrap_or(false);
+            let tracking = self.indi.mount_is_tracking(&device).unwrap_or(false);
             self.show_mount_tracking_state(tracking);
         });
     }
@@ -509,6 +584,7 @@ impl MountUi {
                     else if elem == "TRACK_OFF" { !*prop_value }
                     else { return; };
                 self.show_mount_tracking_state(tracking);
+                self.show_info(&selected_device);
             }
 
             ("TELESCOPE_PARK", elem, indi::PropValue::Switch(prop_value)) => {
@@ -519,9 +595,83 @@ impl MountUi {
                     else if elem == "UNPARK" { !*prop_value }
                     else { return; };
                 self.show_mount_parked_state(parked);
+                self.show_info(&selected_device);
+            }
+
+            ("TELESCOPE_MOTION_NS" | "TELESCOPE_MOTION_WE" |
+             "TELESCOPE_TIMED_GUIDE_NS" | "TELESCOPE_TIMED_GUIDE_WE" |
+             "EQUATORIAL_EOD_COORD", ..) => {
+                let selected_device = self.options.read().unwrap().mount.device.clone();
+                if selected_device != device_name { return; }
+                self.show_info(&selected_device);
             }
 
             _ => {}
+        }
+    }
+
+    fn show_info(&self, mount_device: &str) {
+        let is_parked = self.indi.mount_is_parked(mount_device)
+            .unwrap_or(false);
+        let is_error = self.indi.mount_get_eq_coord_prop_state(mount_device)
+            .map(|v| v == indi::PropState::Alert)
+            .unwrap_or(false);
+        let is_tracking = self.indi.mount_is_tracking(mount_device)
+            .unwrap_or(false);
+        let is_slewing = self.indi.mount_get_eq_coord_prop_state(mount_device)
+            .map(|v| v == indi::PropState::Busy)
+            .unwrap_or(false);
+
+        let is_correction = !self.indi.mount_is_timed_guide_finished(mount_device).unwrap_or(true);
+        let is_moved = self.indi.mount_is_moving(mount_device)
+            .unwrap_or(false);
+
+        let new_state =
+            if is_parked {
+                InfoState::Parked
+            } else if is_error {
+                InfoState::Error
+            } else if is_moved {
+                InfoState::Moved
+            } else if is_correction {
+                InfoState::Correcton
+            } else if is_tracking {
+                InfoState::Tracking
+            } else if is_slewing {
+                InfoState::Slewing
+            } else {
+                InfoState::Stopped
+            };
+
+        if self.prev_info_state.get() != Some(new_state) {
+            self.prev_info_state.set(Some(new_state));
+            let (text, color_str) = match new_state {
+                InfoState::Stopped   => ("Stopped", Some(get_warn_color_str())),
+                InfoState::Parked    => ("Parked", None),
+                InfoState::Tracking  => ("Tracking", Some(get_ok_color_str())),
+                InfoState::Slewing   => ("Slewing", Some(get_warn_color_str())),
+                InfoState::Error     => ("Error", Some(get_err_color_str())),
+                InfoState::Correcton => ("Correction", Some(get_warn_color_str())),
+                InfoState::Moved     => ("Moved", Some(get_warn_color_str())),
+            };
+            let mut text = format!("<b>{}</b>", text);
+            if let Some(color_str) = color_str {
+                text = format!("<span foreground='{}'>{}</span>", color_str, text);
+            }
+            self.info_widgets.l_state.set_label(&text);
+        }
+
+        if let Ok((ra, dec)) = self.indi.mount_get_eq_ra_and_dec(mount_device) {
+            if ra != self.prev_info_ra.get() || dec != self.prev_info_dec.get() {
+                self.prev_info_ra.set(ra);
+                self.prev_info_dec.set(dec);
+                let text = format!(
+                    "{} {}",
+                    hour_to_str(ra),
+                    degree_to_str(dec)
+                );
+                self.info_widgets.l_pos.set_label(&text);
+            }
         }
     }
 }

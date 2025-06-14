@@ -370,7 +370,10 @@ pub fn is_dark_theme() -> bool {
     let bg_color = context
         .lookup_color("theme_base_color")
         .unwrap_or(gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
-    let fg_color = context.color(gtk::StateFlags::NORMAL);
+    let fg_color = context
+        .lookup_color("theme_fg_color")
+        .unwrap_or(gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
+
     let bg_luminance =
         0.2126 * bg_color.red() +
         0.7152 * bg_color.green() +
@@ -380,6 +383,14 @@ pub fn is_dark_theme() -> bool {
         0.7152 * fg_color.green() +
         0.0722 * fg_color.blue();
     bg_luminance < fg_luminance
+}
+
+pub fn get_ok_color_str() -> &'static str {
+    if is_dark_theme() {
+        "#00FF00"
+    } else {
+        "#008000"
+    }
 }
 
 pub fn get_err_color_str() -> &'static str {

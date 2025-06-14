@@ -3356,6 +3356,15 @@ impl Connection {
         )
     }
 
+    pub fn mount_is_moving(&self, device_name: &str) -> Result<bool> {
+        let devices = self.devices.lock().unwrap();
+        let moving_north = devices.get_switch_property(device_name, "TELESCOPE_MOTION_NS", "MOTION_NORTH")?;
+        let moving_south = devices.get_switch_property(device_name, "TELESCOPE_MOTION_NS", "MOTION_SOUTH")?;
+        let moving_west = devices.get_switch_property(device_name, "TELESCOPE_MOTION_WE", "MOTION_WEST")?;
+        let moving_east = devices.get_switch_property(device_name, "TELESCOPE_MOTION_WE", "MOTION_EAST")?;
+        Ok(moving_north || moving_south || moving_west || moving_east)
+    }
+
     pub fn mount_stop_move(&self, device_name: &str) -> Result<()> {
         self.command_set_switch_property(
             device_name,
@@ -3424,7 +3433,7 @@ impl Connection {
         )
     }
 
-    pub fn mount_get_tracking(&self, device_name: &str) -> Result<bool> {
+    pub fn mount_is_tracking(&self, device_name: &str) -> Result<bool> {
         self.get_switch_property(
             device_name,
             "TELESCOPE_TRACK_STATE",
@@ -3453,7 +3462,7 @@ impl Connection {
         )
     }
 
-    pub fn mount_get_parked(&self, device_name: &str) -> Result<bool> {
+    pub fn mount_is_parked(&self, device_name: &str) -> Result<bool> {
         self.get_switch_property(
             device_name,
             "TELESCOPE_PARK",
