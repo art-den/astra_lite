@@ -230,7 +230,7 @@ struct FoundItem {
 
 #[derive(FromBuilder)]
 struct TopWidgets {
-    bx:                 gtk::Box,
+    scr:                gtk::ScrolledWindow,
     scl_max_dso_mag:    gtk::Scale,
     chb_show_stars:     gtk::CheckButton,
     chb_show_dso:       gtk::CheckButton,
@@ -332,7 +332,7 @@ impl UiModule for MapUi {
             Panel {
                 str_id: "map_top",
                 name:   String::new(),
-                widget: self.widgets.top.bx.clone().upcast(),
+                widget: self.widgets.top.scr.clone().upcast(),
                 pos:    PanelPosition::Top,
                 tab:    TabPage::SkyMap,
                 flags:  PanelFlags::empty(),

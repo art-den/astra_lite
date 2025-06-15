@@ -214,7 +214,7 @@ struct ImageWidgets {
 
 #[derive(FromBuilder)]
 struct InfoWidgets {
-    bx_img_info:   gtk::Box,
+    scr_img_info:  gtk::ScrolledWindow,
     e_res_info:    gtk::Entry,
     bx_light_info: gtk::Box,
     e_info_exp:    gtk::Entry,
@@ -1448,7 +1448,7 @@ impl PreviewUi {
         drop(options);
 
         self.widgets.common.pan_preview2.set_visible(!full_screen);
-        self.widgets.info.bx_img_info.set_visible(!full_screen);
+        self.widgets.info.scr_img_info.set_visible(!full_screen);
 
         if matches!(preview_scale, PreviewScale::FitWindow|PreviewScale::CenterAndCorners) {
             gtk::main_iteration_do(true);
