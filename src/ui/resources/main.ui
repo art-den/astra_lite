@@ -364,6 +364,7 @@
                             <property name="margin-start">5</property>
                             <property name="margin-end">5</property>
                             <property name="margin-top">5</property>
+                            <property name="margin-bottom">5</property>
                             <property name="orientation">vertical</property>
                             <property name="spacing">10</property>
                             <child>
@@ -402,7 +403,6 @@
                       <object class="GtkScrolledWindow" id="scr_comm_right">
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
-                        <property name="margin-top">5</property>
                         <property name="hscrollbar-policy">never</property>
                         <property name="overlay-scrolling">False</property>
                         <child>
@@ -417,6 +417,7 @@
                                 <property name="margin-start">5</property>
                                 <property name="margin-end">5</property>
                                 <property name="margin-top">5</property>
+                                <property name="margin-bottom">5</property>
                                 <property name="orientation">vertical</property>
                                 <property name="spacing">10</property>
                                 <child>
@@ -677,12 +678,27 @@
           </packing>
         </child>
         <child>
-          <object class="GtkBox" id="bx_bottom">
+          <object class="GtkScrolledWindow">
             <property name="visible">True</property>
-            <property name="can-focus">False</property>
-            <property name="spacing">5</property>
+            <property name="can-focus">True</property>
+            <property name="hscrollbar-policy">external</property>
+            <property name="vscrollbar-policy">never</property>
             <child>
-              <placeholder/>
+              <object class="GtkViewport">
+                <property name="visible">True</property>
+                <property name="can-focus">False</property>
+                <property name="shadow-type">none</property>
+                <child>
+                  <object class="GtkBox" id="bx_bottom">
+                    <property name="visible">True</property>
+                    <property name="can-focus">False</property>
+                    <property name="spacing">5</property>
+                    <child>
+                      <placeholder/>
+                    </child>
+                  </object>
+                </child>
+              </object>
             </child>
           </object>
           <packing>
