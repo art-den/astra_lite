@@ -287,7 +287,7 @@ pub fn draw_progress_bar(
 }
 
 pub fn fill_devices_list_into_combobox(
-    list:       &Vec<String>,
+    list:       &[String],
     cb:         &gtk::ComboBoxText,
     cur_id:     Option<&str>,
     connected:  bool,
@@ -303,17 +303,17 @@ pub fn fill_devices_list_into_combobox(
     if let Some(cur_id) = cur_id {
         cb.set_active_id(Some(cur_id));
         if cb.active().is_none() {
-            cb.insert(0, Some(&cur_id), cur_id);
+            cb.insert(0, Some(cur_id), cur_id);
             cb.set_active(Some(0));
             device_selected_in_cb = true;
         }
-    } else if list.len() != 0 {
+    } else if !list.is_empty() {
         cb.set_active(Some(0));
         set_id_fun(list[0].as_str());
         device_selected_in_cb = true;
     }
 
-    cb.set_sensitive(list.len() != 0 && connected);
+    cb.set_sensitive(!list.is_empty() && connected);
 
     device_selected_in_cb
 }

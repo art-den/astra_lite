@@ -282,14 +282,14 @@ pub struct RectIterator<'a, T> {
     img: &'a ImageLayer<T>,
 }
 
-impl<'a, T: Copy + Default> RectIterator<'a, T> {
+impl<T: Copy + Default> RectIterator<'_, T> {
     fn init_iter(img: &ImageLayer<T>, x1: usize, x2: usize, y: usize) -> std::slice::Iter<T> {
         let row = img.row(y);
         row[x1 ..= x2].iter()
     }
 }
 
-impl<'a, T: Copy + Default> Iterator for RectIterator<'a, T> {
+impl<T: Copy + Default> Iterator for RectIterator<'_, T> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -314,7 +314,7 @@ pub struct CoordIterator<'a, T> {
     iter: std::slice::Iter<'a, T>,
 }
 
-impl<'a, T: Copy + Default> Iterator for CoordIterator<'a, T> {
+impl<T: Copy + Default> Iterator for CoordIterator<'_, T> {
     type Item = (usize, usize, T);
 
     fn next(&mut self) -> Option<Self::Item> {

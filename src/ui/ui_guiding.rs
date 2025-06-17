@@ -214,7 +214,7 @@ impl GuidingUi {
 
         let mut options = self.options.write().unwrap();
         if let Some(cur_cam_device) = options.cam.device.clone() {
-            self.store_options_for_camera(&cur_cam_device, &mut *options);
+            self.store_options_for_camera(&cur_cam_device, &mut options);
         }
         drop(options);
     }
@@ -281,7 +281,7 @@ impl GuidingUi {
         options: &mut Options
     ) {
         let key = device.to_file_name_part();
-        let sep_options = options.sep_guiding.entry(key).or_insert(Default::default());
+        let sep_options = options.sep_guiding.entry(key).or_default();
         sep_options.exposure = options.guiding.main_cam.calibr_exposure;
         sep_options.gain = options.guiding.main_cam.calibr_gain;
     }

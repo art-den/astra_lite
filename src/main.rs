@@ -3,7 +3,16 @@
     clippy::too_many_arguments,
     clippy::upper_case_acronyms,
     clippy::uninlined_format_args,
-    clippy::wrong_self_convention
+    clippy::wrong_self_convention,
+    clippy::inherent_to_string,
+    clippy::single_match,
+    clippy::manual_div_ceil,
+    clippy::if_same_then_else,
+    clippy::module_inception,
+    clippy::manual_map,
+    clippy::type_complexity,
+    clippy::collapsible_else_if,
+    clippy::manual_range_contains,
 )]
 
 mod ui;
@@ -30,7 +39,7 @@ fn panic_handler(
     panic_info:        &std::panic::PanicHookInfo,
     stop_indi_servers: bool,
     logs_dir:          &Path,
-    def_panic_handler: &Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + 'static + Sync + Send>,
+    def_panic_handler: &(dyn Fn(&std::panic::PanicHookInfo<'_>) + 'static + Sync + Send),
 ) {
     let payload_str =
         if let Some(msg) = panic_info.payload().downcast_ref::<&'static str>() {

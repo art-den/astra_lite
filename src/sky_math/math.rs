@@ -209,7 +209,7 @@ impl Point3D {
         let len2 = pt2.length();
         if len1 != 0.0 || len2 != 0.0 {
             let scalar_prod = (pt1.x * pt2.x + pt1.y * pt2.y + pt1.z * pt2.z) / (len1 * len2);
-            let scalar_prod = scalar_prod.max(-1.0).min(1.0);
+            let scalar_prod = scalar_prod.clamp(-1.0, 1.0);
             Some(f64::acos(scalar_prod))
         } else {
             None
@@ -276,8 +276,8 @@ pub struct EpochCvt {
 
 impl EpochCvt {
     pub fn new(time0: &NaiveDateTime, time: &NaiveDateTime) -> Self {
-        let centuries0 = calc_julian_centuries(&time0);
-        let centuries = calc_julian_centuries(&time);
+        let centuries0 = calc_julian_centuries(time0);
+        let centuries = calc_julian_centuries(time);
         Self {
             pn_mat: pn_matrix(centuries0, centuries),
         }

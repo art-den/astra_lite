@@ -136,12 +136,12 @@ pub fn mini_sun(t: f64) -> EqCoord {
 
 fn cos360(x: f64) -> f64 {
     const RAD: f64 = 0.0174532925199433;
-    return f64::cos(x * RAD);
+     f64::cos(x * RAD)
 }
 
 fn sin360(x: f64) -> f64 {
     const RAD: f64 = 0.0174532925199433;
-    return f64::sin(x * RAD);
+    f64::sin(x * RAD)
 }
 
 fn prec_mat_equ(t1: f64, t2: f64) -> Matrix33 {

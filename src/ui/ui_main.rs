@@ -1,7 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     rc::Rc,
     sync::{Arc, RwLock},
@@ -20,7 +20,7 @@ use super::{gtk_utils::*, module::*, utils::*};
 pub fn init_ui(
     app:      &gtk::Application,
     core:     &Arc<Core>,
-    logs_dir: &PathBuf
+    logs_dir: &Path
 ) {
     let css_provider = gtk::CssProvider::new();
     css_provider.load_from_data(CSS).unwrap();
@@ -50,7 +50,7 @@ pub fn init_ui(
 
     let main_ui = Rc::new(MainUi {
         widgets,
-        logs_dir:       logs_dir.clone(),
+        logs_dir:       logs_dir.to_path_buf(),
         core:           Arc::clone(core),
         indi:           Arc::clone(indi),
         options:        Arc::clone(options),
@@ -298,10 +298,7 @@ impl MainUi {
 
         self.widgets.nb_main.connect_switch_page(
             clone!(@weak self as self_  => move |_, _, page| {
-                let enable_fullscreen = match page {
-                    TAB_MAP|TAB_MAIN => true,
-                    _                  => false
-                };
+                let enable_fullscreen = matches!(page, TAB_MAP|TAB_MAIN);
                 self_.widgets.btn_fullscreen.set_sensitive(enable_fullscreen);
                 let tab = TabPage::from_tab_index(page);
                 let modules = self_.modules.borrow();
@@ -681,7 +678,7 @@ impl MainUi {
             }
             title.push_str("  --  [");
             title.push_str(string_to_append);
-            title.push_str("]");
+            title.push(']');
         };
 
         append_if_not_empty(&self.dev_string.borrow());

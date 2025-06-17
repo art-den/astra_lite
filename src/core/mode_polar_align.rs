@@ -179,7 +179,7 @@ impl PolarAlignment {
         let mut target = point.clone();
         target.rotate_over_x(-pole.az);
         target.rotate_over_y(-pole.alt);
-        let earth_rotations = time_in_seconds as f64 / 86164.09054;
+        let earth_rotations = time_in_seconds / 86164.09054;
         target.rotate_over_z(2.0 * PI * earth_rotations);
         target.rotate_over_y(pole.alt);
         target.rotate_over_x(pole.az);
@@ -379,7 +379,7 @@ impl PolarAlignMode {
         cam_opts.frame.gain = gain_to_value(
             opts.plate_solver.gain,
             opts.cam.frame.gain,
-            &cam_device,
+            cam_device,
             indi
         )?;
 
@@ -419,13 +419,17 @@ impl PolarAlignMode {
 
     fn get_platesolver_config(&self) -> anyhow::Result<PlateSolveConfig> {
         let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
-        let mut config = PlateSolveConfig::default();
-        config.time_out = self.ps_opts.timeout;
-        config.blind_time_out = self.ps_opts.blind_timeout;
-        config.eq_coord = Some(EqCoord {
+        let eq_coord = EqCoord {
             dec: degree_to_radian(dec),
             ra:  hour_to_radian(ra),
-        });
+        };
+        let mut config = PlateSolveConfig {
+            time_out:       self.ps_opts.timeout,
+            blind_time_out: self.ps_opts.blind_timeout,
+            eq_coord:       Some(eq_coord),
+            .. PlateSolveConfig::default()
+        };
+
         if self.step == Step::Corr {
             config.allow_blind = false;
         }
@@ -464,7 +468,7 @@ impl PolarAlignMode {
         if self.step == Step::Corr {
             self.start_capture()?;
             self.state = State::Capture;
-            return Ok(());
+            Ok(())
         } else {
             anyhow::bail!("{}", err_str);
         }
@@ -518,7 +522,7 @@ impl PolarAlignMode {
         let event = PlateSolverEvent {
             cam_name: self.camera.name.clone(),
             result: ps_result.clone(),
-            preview: preview.map(|p| Arc::new(p)),
+            preview: preview.map(Arc::new),
         };
         self.subscribers.notify(Event::PlateSolve(event));
 
@@ -530,7 +534,7 @@ impl PolarAlignMode {
         match self.step {
             Step::First | Step::Second => {
                 self.goto_next_pos()?;
-                return Ok(NotifyResult::ProgressChanges);
+                Ok(NotifyResult::ProgressChanges)
             }
             Step::Third => {
                 self.alignment.calc_mount_pole(
@@ -547,7 +551,7 @@ impl PolarAlignMode {
                 } else {
                     self.state = State::WaitForManualRefresh;
                 }
-                return Ok(NotifyResult::ProgressChanges);
+                Ok(NotifyResult::ProgressChanges)
             }
             Step::Corr => {
                 self.step_cnt += 1;
@@ -558,7 +562,7 @@ impl PolarAlignMode {
                 } else {
                     self.state = State::WaitForManualRefresh;
                 }
-                return Ok(NotifyResult::ProgressChanges);
+                Ok(NotifyResult::ProgressChanges)
             }
 
             _ => unreachable!(),
@@ -621,7 +625,7 @@ impl PolarAlignMode {
     }
 
     fn restart(&mut self) -> anyhow::Result<()> {
-        if let Some(initial_crd) = self.initial_crd.clone() {
+        if let Some(initial_crd) = self.initial_crd {
             self.abort()?;
             self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Empty));
             self.goto_impl(initial_crd.ra, initial_crd.dec)?;
@@ -719,17 +723,17 @@ impl Mode for PolarAlignMode {
             CustomCommand::Restart => {
                 self.restart()?;
                 self.subscribers.notify(Event::Progress(self.progress(), self.get_type()));
-                return Ok(None);
+                Ok(None)
             }
 
             CustomCommand::ManualRefresh => {
                 self.manual_refresh()?;
                 self.subscribers.notify(Event::Progress(self.progress(), self.get_type()));
-                return Ok(None);
+                Ok(None)
             }
 
             CustomCommand::GetState => {
-                return Ok(Some(Box::new(self.state.clone())));
+                Ok(Some(Box::new(self.state.clone())))
             }
         }
     }

@@ -35,7 +35,7 @@ impl StartDialog {
 
         const START_ROW: usize = 2;
 
-        for (index, (caption, value)) in items.into_iter().enumerate() {
+        for (index, (caption, value)) in items.iter().enumerate() {
             let row = index + START_ROW;
             widgets.grd_main.insert_row(row as i32);
             let lbl_caption = gtk::Label::builder()
@@ -45,7 +45,7 @@ impl StartDialog {
                 .build();
 
             let lbl_value = gtk::Label::builder()
-                .label(&format!("<b>{}</b>", value))
+                .label(format!("<b>{}</b>", value))
                 .use_markup(true)
                 .halign(gtk::Align::Start)
                 .visible(true)

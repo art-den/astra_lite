@@ -36,9 +36,7 @@ impl SkymapOptionsDialog {
         widgets.spb_horiz_glow_angle.set_digits(0);
         widgets.spb_horiz_glow_angle.set_increments(1.0, 5.0);
 
-        let result = Rc::new(SkymapOptionsDialog { widgets });
-
-        result
+        Rc::new(SkymapOptionsDialog { widgets })
     }
 
     pub fn show_options(
@@ -80,7 +78,7 @@ impl SkymapOptionsDialog {
         let c = self.widgets.clrb_eq_grid_text.rgba();
         ui_options.paint.eq_grid.text_color = Color { r: c.red(), g: c.green(), b: c.blue(), a: c.alpha() };
 
-        return Ok(());
+        Ok(())
     }
 
     pub fn exec(self: &Rc<Self>, on_apply: impl Fn() -> anyhow::Result<()> + 'static) {

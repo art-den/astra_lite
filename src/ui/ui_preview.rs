@@ -409,7 +409,7 @@ impl PreviewUi {
         self.closed.set(true);
 
         _ = self.core.stop_img_process_thread();
-        _ = self.core.abort_active_mode();
+        self.core.abort_active_mode();
 
         self.get_ui_options_from_widgets();
 
@@ -824,7 +824,7 @@ impl PreviewUi {
             &image,
             &hist,
             &preview_params,
-            stars.as_ref().and_then(|s| s.as_ref().and_then(|s| Some(&**s)))
+            stars.as_ref().and_then(|s| s.as_ref().map(|s| &**s))
         );
         drop(stars);
         drop(hist);
@@ -866,7 +866,7 @@ impl PreviewUi {
             tmr.log("Pixbuf::from_bytes");
 
             if !rgb_bytes.sensor_name.is_empty() {
-                self.widgets.ctrl.l_wb_censor.set_label(&format!("({})", rgb_bytes.sensor_name).as_str());
+                self.widgets.ctrl.l_wb_censor.set_label(format!("({})", rgb_bytes.sensor_name).as_str());
             } else {
                 self.widgets.ctrl.l_wb_censor.set_label("");
             }
@@ -912,7 +912,7 @@ impl PreviewUi {
             let def_file_name = format!(
                 "{}_{}.jpg",
                 fn_prefix,
-                Utc::now().format("%Y-%m-%d_%H-%M-%S").to_string()
+                Utc::now().format("%Y-%m-%d_%H-%M-%S")
             );
             let Some(file_name) = select_file_name_to_save(
                 &self.window,
@@ -952,7 +952,7 @@ impl PreviewUi {
                 let def_file_name = format!(
                     "{}_{}.tif",
                     fn_prefix,
-                    Utc::now().format("%Y-%m-%d_%H-%M-%S").to_string()
+                    Utc::now().format("%Y-%m-%d_%H-%M-%S")
                 );
                 select_file_name_to_save(
                     &self.window,
@@ -1042,7 +1042,7 @@ impl PreviewUi {
             if is_mode_current(false) => {
                 if raw_frame_info.frame_type != FrameType::Lights {
                     let history_item = CalibrHistoryItem {
-                        time:           raw_frame_info.time.clone(),
+                        time:           raw_frame_info.time,
                         mode_type:      result.mode_type,
                         frame_type:     raw_frame_info.frame_type,
                         mean:           raw_frame_info.mean,
@@ -1063,7 +1063,7 @@ impl PreviewUi {
             FrameProcessResultData::LightFrameInfo(info) => {
                 let history_item = LightHistoryItem {
                     mode_type:      result.mode_type,
-                    time:           info.image.time.clone(),
+                    time:           info.image.time,
                     fwhm:           info.stars.info.fwhm,
                     hfd:            info.stars.info.hfd,
                     fwhm_angular:   info.stars.info.fwhm_angular,
@@ -1075,7 +1075,7 @@ impl PreviewUi {
                     stars_count:    info.stars.items.len(),
                     offset:         info.stars.offset.clone(),
                     bad_offset:     !info.stars.offset_is_ok,
-                    calibr_methods: info.image.calibr_methods.clone(),
+                    calibr_methods: info.image.calibr_methods,
                 };
                 self.light_history.borrow_mut().push(history_item);
                 self.update_light_history_table();
@@ -1235,7 +1235,7 @@ impl PreviewUi {
                 model.downcast::<gtk::ListStore>().unwrap()
             },
             None => {
-                init_list_store_model_for_treeview(&tree, &[
+                init_list_store_model_for_treeview(tree, &[
                     /* 0 */  ("Mode",       String::static_type(), "text"),
                     /* 1 */  ("Time",       String::static_type(), "text"),
                     /* 2 */  ("FWHM / HFD", String::static_type(), "markup"),
@@ -1262,7 +1262,7 @@ impl PreviewUi {
         for item in &items[models_row_cnt..to_index] {
             let mode_type_str = Self::mode_type_to_history_str(item.mode_type);
             let local_time_str =
-                if let Some(time) = item.time.clone() {
+                if let Some(time) = item.time {
                     let local_time: DateTime<Local> = DateTime::from(time);
                     local_time.format("%H:%M:%S").to_string()
                 } else {
@@ -1317,7 +1317,7 @@ impl PreviewUi {
             };
             let calibr_str = Self::calibr_method_to_str(item.calibr_methods);
             let last_is_selected =
-                get_list_view_selected_row(&tree).map(|v| v+1) ==
+                get_list_view_selected_row(tree).map(|v| v+1) ==
                 Some(models_row_cnt as i32);
             let last_iter = model.insert_with_values(None, &[
                 (0, &mode_type_str),
@@ -1369,7 +1369,7 @@ impl PreviewUi {
                 model.downcast::<gtk::ListStore>().unwrap()
             },
             None => {
-                init_list_store_model_for_treeview(&tree, &[
+                init_list_store_model_for_treeview(tree, &[
                     /* 0 */  ("Time",     String::static_type(), "text"),
                     /* 1 */  ("Mode",     String::static_type(), "text"),
                     /* 2 */  ("Type",     String::static_type(), "text"),
@@ -1403,7 +1403,7 @@ impl PreviewUi {
             let calibr_str = Self::calibr_method_to_str(item.calibr_methods);
 
             let last_is_selected =
-                get_list_view_selected_row(&tree).map(|v| v+1) ==
+                get_list_view_selected_row(tree).map(|v| v+1) ==
                 Some(models_row_cnt as i32);
 
             let last_iter = model.insert_with_values(None, &[

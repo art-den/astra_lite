@@ -808,7 +808,7 @@ impl CameraUi {
         if let Some(device) = &options.cam.device {
             let id = device.to_string();
             cb_cam_list.set_active_id(Some(&id));
-            if cb_cam_list.active_id().map(|v| v.as_str() != &id).unwrap_or(true) {
+            if cb_cam_list.active_id().map(|v| v.as_str() != id).unwrap_or(true) {
                 cb_cam_list.append(Some(&id), &id);
                 cb_cam_list.set_active_id(Some(&id));
             }
@@ -942,7 +942,7 @@ impl CameraUi {
     ) {
         let Some(device) = device else { return; };
         let key = device.to_file_name_part();
-        let sep_options = options.sep_cam.entry(key).or_insert(Default::default());
+        let sep_options = options.sep_cam.entry(key).or_default();
         sep_options.frame = options.cam.frame.clone();
         sep_options.ctrl = options.cam.ctrl.clone();
         sep_options.calibr = options.calibr.clone();
@@ -966,12 +966,12 @@ impl CameraUi {
 
         _ = self.core.stop_img_process_thread();
 
-        _ = self.core.abort_active_mode();
+        self.core.abort_active_mode();
 
         // Stores current camera options for current camera
 
         let mut options = self.options.write().unwrap();
-        self.store_options_for_camera(options.cam.device.clone(), &mut *options);
+        self.store_options_for_camera(options.cam.device.clone(), &mut options);
         drop(options);
 
         // Unsubscribe events
@@ -1189,11 +1189,11 @@ impl CameraUi {
 
         // Store previous camera options
 
-        self.store_options_for_camera(from.clone(), &mut *options);
+        self.store_options_for_camera(from.clone(), &mut options);
 
         // Change some lists for new camera
 
-        _ = self.update_resolution_list_impl(to, &options);
+        self.update_resolution_list_impl(to, &options);
         self.fill_heater_items_list_impl(&options);
         self.fill_conv_gain_items_list_impl(&options);
 
@@ -1213,7 +1213,7 @@ impl CameraUi {
 
         // Init fn_utils and show calibtarion files
 
-        self.init_fn_utils(Some(&to));
+        self.init_fn_utils(Some(to));
         self.show_calibr_file_for_frame(&options);
 
         drop(options);
@@ -1321,7 +1321,7 @@ impl CameraUi {
 
             if let Some(cur_cam_device) = &cur_cam_device {
                 let Ok(mut options) = self.options.try_write() else { return; };
-                self.restore_options_for_camera(&cur_cam_device, &mut options);
+                self.restore_options_for_camera(cur_cam_device, &mut options);
                 drop(options);
 
                 let options = self.options.read().unwrap();
@@ -1708,7 +1708,7 @@ impl CameraUi {
         let Some(device) = &options.cam.device else { return; };
         let cam_ccd = indi::CamCcd::from_ccd_prop_name(&device.prop);
         let Ok(exposure) = self.indi.camera_get_exposure(&device.name, cam_ccd) else { return; };
-        let progress = ((cur_exposure - exposure) / cur_exposure).max(0.0).min(1.0);
+        let progress = ((cur_exposure - exposure) / cur_exposure).clamp(0.0, 1.0);
         let text_to_show = format!("{:.0} / {:.0}", cur_exposure - exposure, cur_exposure);
         exec_and_show_error(Some(&self.window), || {
             draw_progress_bar(area, cr, progress, &text_to_show)
@@ -1872,7 +1872,7 @@ impl CameraUi {
         match result.data {
             // TODO: move to main_ui
             FrameProcessResultData::Error(error_text) => {
-                _ = self.core.abort_active_mode();
+                self.core.abort_active_mode();
                 self.correct_widgets_props();
                 show_error_message(Some(&self.window), "Fatal Error", &error_text);
             }

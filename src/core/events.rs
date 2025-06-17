@@ -74,7 +74,7 @@ impl EventSubscriptions {
     }
 
     pub fn notify(&self, event: Event) {
-        let items = self.items.write().unwrap();
+        let items = self.items.read().unwrap();
         for s in items.values() {
             s(event.clone());
         }

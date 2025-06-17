@@ -131,7 +131,7 @@ pub fn draw_plots(
     for plot_idx in 0..plots.plot_count {
         draw_plot_points(plot_idx, plots, &range, &area_rect, ctx)?;
     }
-    return Ok(());
+    Ok(())
 }
 
 struct DataRange {
@@ -267,10 +267,10 @@ fn draw_plot_points(
     for pt_idx in 0..points_count {
         let (x, y) = (plots.get_plot_point)(plot_idx, pt_idx);
         let (sx, sy) = calc_xy(x, y, range, area_rect);
-        match &style.point_style {
-            &PlotPointStyle::Round(diam) =>
+        match style.point_style {
+            PlotPointStyle::Round(diam) =>
                 ctx.arc(sx, sy, diam/2.0, 0.0, 2.0 * PI),
-            &PlotPointStyle::Rect(size) => {
+            PlotPointStyle::Rect(size) => {
                 let size2 = 0.5 * size;
                 ctx.rectangle(sx-size2, sy-size2, size, size);
             },
@@ -295,7 +295,7 @@ fn draw_left_axis(
     let y_range = range.max_y - range.min_y;
     let y_div = calc_div(y_range, max_y_cnt);
     let line_color = plots.left_axis.line_color.unwrap_or_else(|| {
-        let mut color = def_fg.clone();
+        let mut color = *def_fg;
         color.set_alpha(0.25);
         color
     });
@@ -358,7 +358,7 @@ fn draw_bottom_axis(
     let x_range = range.max_x - range.min_x;
     let x_div = calc_div(x_range, max_x_cnt);
     let line_color = plots.bottom_axis.line_color.unwrap_or_else(|| {
-        let mut color = def_fg.clone();
+        let mut color = *def_fg;
         color.set_alpha(0.25);
         color
     });

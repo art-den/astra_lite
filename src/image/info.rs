@@ -58,7 +58,7 @@ impl LightFrameInfo {
         tmr.log("calc image background");
 
         Self {
-            time: image.raw_info.as_ref().map(|info| info.time.clone()).flatten(),
+            time: image.raw_info.as_ref().and_then(|info| info.time),
             width: image.width(),
             height: image.height(),
             exposure: 0.0,

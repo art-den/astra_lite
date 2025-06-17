@@ -231,24 +231,15 @@ impl DefectPixelsOptions {
             }
         }
 
-        return Ok(result)
+        Ok(result)
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(default)]
 struct ValuesItem {
     used:   bool,
     values: Vec<f64>,
-}
-
-impl Default for ValuesItem {
-    fn default() -> Self {
-        Self {
-            used:   false,
-            values: Vec::new(),
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -364,7 +355,7 @@ impl MasterDarksOptions {
             }
         }
 
-        return Ok(result);
+        Ok(result)
     }
 }
 
@@ -461,7 +452,7 @@ impl MasterBiasesOptions {
 }
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(default)]
 struct UiOptions {
     defect_pixels: DefectPixelsOptions,
@@ -469,18 +460,6 @@ struct UiOptions {
     master_biases: MasterBiasesOptions,
     cur_tab_page:  i32,
     expanded:      bool,
-}
-
-impl Default for UiOptions {
-    fn default() -> Self {
-        Self {
-            defect_pixels: DefectPixelsOptions::default(),
-            master_darks:  MasterDarksOptions::default(),
-            master_biases: MasterBiasesOptions::default(),
-            cur_tab_page:  0,
-            expanded:      false,
-        }
-    }
 }
 
 #[derive(FromBuilder)]
@@ -1119,7 +1098,7 @@ impl DarksLibraryUI {
 
     fn show_program_info(
         &self,
-        program: &Vec<MasterFileCreationProgramItem>,
+        program: &[MasterFileCreationProgramItem],
         label:   &gtk::Label
     ) {
         let duration: f64 = program.iter()
@@ -1150,11 +1129,11 @@ impl DarksLibraryUI {
             let Some(cam_device) = &options.cam.device else { return Ok(()); };
 
             let program = match mode {
-                DarkLibMode::DefectPixelsFiles =>
+                DarkLibMode::DefectPixels =>
                     ui_options.defect_pixels.create_program(&options.cam, &self.indi, cam_device)?,
-                DarkLibMode::MasterDarkFiles =>
+                DarkLibMode::MasterDark =>
                     ui_options.master_darks.create_program(&options.cam, &self.indi, cam_device)?,
-                DarkLibMode::MasterBiasFiles =>
+                DarkLibMode::MasterBias =>
                     ui_options.master_biases.create_program(&options.cam, &self.indi, cam_device)?,
             };
             drop(ui_options);
@@ -1210,7 +1189,7 @@ impl DarksLibraryUI {
     }
 
     fn handler_action_create_def_pixls_files(&self) {
-        self.start(DarkLibMode::DefectPixelsFiles);
+        self.start(DarkLibMode::DefectPixels);
     }
 
     fn handler_action_stop_def_pxls_files(&self) {
@@ -1218,7 +1197,7 @@ impl DarksLibraryUI {
     }
 
     fn handler_action_create_dark_files(&self) {
-        self.start(DarkLibMode::MasterDarkFiles);
+        self.start(DarkLibMode::MasterDark);
     }
 
     fn handler_action_stop_dark_files(&self) {
@@ -1226,7 +1205,7 @@ impl DarksLibraryUI {
     }
 
     fn handler_action_create_bias_files(&self) {
-        self.start(DarkLibMode::MasterBiasFiles);
+        self.start(DarkLibMode::MasterBias);
     }
 
     fn handler_action_stop_bias_files(&self) {

@@ -76,7 +76,7 @@ pub fn get_free_folder_name(path: &Path) -> PathBuf {
         result.set_file_name(new_name);
         if !result.is_dir() && !result.is_file() { break; }
     }
-    return result;
+    result
 }
 
 pub fn get_free_file_name(path: &Path) -> PathBuf {
@@ -89,5 +89,5 @@ pub fn get_free_file_name(path: &Path) -> PathBuf {
         result.set_file_name(new_name);
         if !result.is_dir() && !result.is_file() { break; }
     }
-    return result;
+    result
 }

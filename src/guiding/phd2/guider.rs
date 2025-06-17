@@ -32,14 +32,14 @@ impl ExternalGuiderPhd2 {
 
     fn connect_events(self: &Arc<Self>) {
         let mut data = self.data.lock().unwrap();
-        let self_ = Arc::clone(&self);
+        let self_ = Arc::clone(self);
         data.phd2_evt_hndlr = Some(self.phd2.connect_event_handler(move |event| {
             // Check for new phd2 application state
 
             if let Event::Object(obj) = &event {
                 let new_app_state = match &**obj {
                     IncomingObject::AppState { state, .. } =>
-                        Some(state.clone()),
+                        Some(*state),
                     IncomingObject::GuideStep {..} =>
                         Some(AppState::Guiding),
                     IncomingObject::Paused {..} =>

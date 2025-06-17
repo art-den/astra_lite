@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::{fs::File, io::{BufReader, BufWriter}, path::Path, u16};
+use std::{fs::File, io::{BufReader, BufWriter}, path::Path};
 
 use itertools::{izip, Itertools};
 
@@ -25,10 +25,9 @@ pub fn load_raw_image_from_fits_reader(
     let Some(image_hdu) = find_mono_image_hdu_in_fits(reader) else {
         anyhow::bail!("No RAW image found in fits data");
     };
-    let info = RawImageInfo::new_from_fits_header(&image_hdu);
-    let mut data = Vec::new();
-    data.resize(image_hdu.data_len(), 0);
-    FitsReader::read_data(&image_hdu, stream, 0, &mut data)?;
+    let info = RawImageInfo::new_from_fits_header(image_hdu);
+    let mut data = vec![0; image_hdu.data_len()];
+    FitsReader::read_data(image_hdu, stream, 0, &mut data)?;
     let cfa_arrary = info.cfa.get_array();
     Ok(RawImage::new(info, data, cfa_arrary))
 }
@@ -131,7 +130,7 @@ pub fn load_image_from_tif_file(
     let height = image.height();
     for chunk_index in 0..chunks_cnt {
         let chunk = decoder.read_chunk(chunk_index as u32)?;
-        let y1 = (chunk_index * chunk_size_y) as usize;
+        let y1 = chunk_index * chunk_size_y;
         let y2 = (y1 + chunk_size_y).min(height);
         match chunk {
             DecodingResult::U8(data) =>
@@ -208,16 +207,16 @@ pub fn load_image_from_fits_reader(
     if let Some(hdu) = mono_hdu {
         let width  = hdu.dims()[0];
         let height = hdu.dims()[1];
-        image.make_monochrome(width as usize, height as usize, 0, u16::MAX);
-        FitsReader::read_data(&hdu, stream, 0, &mut image.l.as_slice_mut())?;
+        image.make_monochrome(width, height, 0, u16::MAX);
+        FitsReader::read_data(hdu, stream, 0, image.l.as_slice_mut())?;
     } else if let Some(hdu) = color_hdu {
         let width  = hdu.dims()[0];
         let height = hdu.dims()[1];
-        image.make_color(width as usize, height as usize, 0, u16::MAX);
+        image.make_color(width, height, 0, u16::MAX);
         let one_color_bytes_len = hdu.bytes_len() / 3;
-        FitsReader::read_data(&hdu, stream,                       0, &mut image.r.as_slice_mut())?;
-        FitsReader::read_data(&hdu, stream,     one_color_bytes_len, &mut image.g.as_slice_mut())?;
-        FitsReader::read_data(&hdu, stream, 2 * one_color_bytes_len, &mut image.b.as_slice_mut())?;
+        FitsReader::read_data(hdu, stream,                       0, image.r.as_slice_mut())?;
+        FitsReader::read_data(hdu, stream,     one_color_bytes_len, image.g.as_slice_mut())?;
+        FitsReader::read_data(hdu, stream, 2 * one_color_bytes_len, image.b.as_slice_mut())?;
     } else {
         anyhow::bail!("No image found in fits");
     }

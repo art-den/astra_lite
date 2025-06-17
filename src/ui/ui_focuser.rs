@@ -499,7 +499,7 @@ impl FocuserUi {
 
         let mut options = self.options.write().unwrap();
         if let Some(cur_cam_device) = options.cam.device.clone() {
-            self.store_options_for_camera(&cur_cam_device, &mut *options);
+            self.store_options_for_camera(&cur_cam_device, &mut options);
         }
         drop(options);
     }
@@ -523,7 +523,7 @@ impl FocuserUi {
         options: &mut Options
     ) {
         let key = device.to_file_name_part();
-        let sep_options = options.sep_focuser.entry(key).or_insert(Default::default());
+        let sep_options = options.sep_focuser.entry(key).or_default();
         sep_options.exposure = options.focuser.exposure;
         sep_options.gain = options.focuser.gain;
     }
@@ -549,7 +549,7 @@ impl FocuserUi {
             .get_devices_list_by_interface(indi::DriverInterface::FOCUSER)
             .iter()
             .map(|dev| dev.name.to_string())
-            .collect();
+            .collect::<Vec<_>>();
 
         let connected = self.indi.state() == indi::ConnState::Connected;
 
@@ -582,7 +582,7 @@ impl FocuserUi {
             if step >= max / 100.0 {
                 step = 10.0;
             }
-            let large_step = (step * 10.0) as f64;
+            let large_step = step * 10.0;
             self.step.set(step as i32);
             self.step_large.set(large_step as i32);
             self.widgets.spb_val.set_increments(step, large_step);

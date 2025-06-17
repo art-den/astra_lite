@@ -442,11 +442,11 @@ pub fn calc_fitting_plane_z_dist(points: &[Point3D]) -> Option<Plane> {
     let xz_sum = points.iter().map(|p| p.x * p.z).sum::<f64>();
     let yz_sum = points.iter().map(|p| p.y * p.z).sum::<f64>();
     let n = points.len() as f64;
-    let Some((a, b, d)) = linear_solve3(
+    let (a, b, d) = linear_solve3(
         x2_sum, xy_sum, x_sum, -xz_sum,
         xy_sum, y2_sum, y_sum, -yz_sum,
         x_sum,  y_sum,  n,     -z_sum,
-    ) else { return None; };
+    )?;
     Some(Plane{a, b, c: 1.0, d})
 }
 

@@ -148,10 +148,10 @@ impl UserTime {
     fn time(&self, local: bool) -> NaiveDateTime {
         let time = match self {
             UserTime::Paused(time) =>
-                time.clone(),
+                *time,
             UserTime::Active(diff) => {
                 let mut now = Utc::now();
-                let diff_duration = chrono::Duration::seconds(*diff as i64);
+                let diff_duration = chrono::Duration::seconds(*diff);
                 now = now.checked_add_signed(diff_duration).unwrap_or(now);
                 now.naive_utc()
             },
@@ -563,7 +563,7 @@ impl MapUi {
 
                 *self.ps_img.borrow_mut() =
                     if let Some(preview) = &ps_event.preview {
-                        Self::create_plate_solve_preview(&preview)
+                        Self::create_plate_solve_preview(preview)
                     } else {
                         None
                     };
@@ -694,8 +694,8 @@ impl MapUi {
                     if focal_len <= 0.1 {
                         anyhow::bail!("Wrong telescope focal lenght");
                     }
-                    let (sensor_width, sensor_height) = self.indi.camera_get_max_frame_size(&cam_name, cam_ccd)?;
-                    let (pixel_width_um, pixel_height_um) = self.indi.camera_get_pixel_size_um(&cam_name, cam_ccd)?;
+                    let (sensor_width, sensor_height) = self.indi.camera_get_max_frame_size(cam_name, cam_ccd)?;
+                    let (pixel_width_um, pixel_height_um) = self.indi.camera_get_pixel_size_um(cam_name, cam_ccd)?;
                     let (width_mm, height_mm) = options.cam.calc_active_zone_mm(
                         sensor_width, sensor_height,
                         pixel_width_um, pixel_height_um
@@ -742,7 +742,7 @@ impl MapUi {
                 = (&*ps_img, &*ps_result, show_ps_image) {
                     Some(PlateSolvedImage {
                         image:       solved_img.clone(),
-                        coord:       ps_result.crd_now.clone(),
+                        coord:       ps_result.crd_now,
                         horiz_angle: ps_result.width,
                         vert_angle:  ps_result.height,
                         rot_angle:   ps_result.rotation,
@@ -791,7 +791,7 @@ impl MapUi {
     fn check_data_loaded(&self) {
         exec_and_show_error(Some(&self.window), || {
             let result = self.check_data_loaded_impl();
-            if let Err(_) = result {
+            if result.is_err() {
                 *self.skymap_data.borrow_mut() = Some(Rc::new(SkyMap::new()));
             }
             result
@@ -1046,8 +1046,8 @@ impl MapUi {
 
         self.widgets.obj.e_names.set_text(&names);
         self.widgets.obj.e_nicknames.set_text(&nicknames);
-        self.widgets.obj.l_type.set_label(&obj_type_str);
-        self.widgets.obj.l_mag_cap.set_label(&mag_cap_str);
+        self.widgets.obj.l_type.set_label(obj_type_str);
+        self.widgets.obj.l_mag_cap.set_label(mag_cap_str);
         self.widgets.obj.l_mag.set_label(&mag_str);
         self.widgets.obj.l_bv.set_label(&bv_str);
         self.widgets.obj.l_ra.set_label(&ra_str);
@@ -1160,7 +1160,7 @@ impl MapUi {
             if indices.len() != 1 {
                 return glib::Propagation::Proceed;
             }
-            let mut cur_index = indices[0] as i32;
+            let mut cur_index = indices[0];
             match event.keyval() {
                 gdk::keys::constants::Up => cur_index -= 1,
                 gdk::keys::constants::Down => cur_index += 1,

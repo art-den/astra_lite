@@ -103,9 +103,9 @@ impl SkymapWidget {
         camera_frame:  &Option<CameraFrame>,
         solved_image:  &Option<PlateSolvedImage>,
     ) {
-        *self.time.borrow_mut() = time.clone();
+        *self.time.borrow_mut() = *time;
         *self.config.borrow_mut() = config.clone();
-        *self.telescope_pos.borrow_mut() = telescope_pos.clone();
+        *self.telescope_pos.borrow_mut() = *telescope_pos;
         *self.camera_frame.borrow_mut() = camera_frame.clone();
         *self.solved_image.borrow_mut() = solved_image.clone();
 
@@ -115,7 +115,7 @@ impl SkymapWidget {
 
         if let Some(center_crd) = &*self.center_crd.borrow() {
             let observer = self.observer.borrow();
-            let cvt = EqToSphereCvt::new(observer.longitude, observer.latitude, &time);
+            let cvt = EqToSphereCvt::new(observer.longitude, observer.latitude, time);
             let sphere_pt = cvt.eq_to_sphere(center_crd);
             self.view_point.borrow_mut().crd = HorizCoord::from_sphere_pt(&sphere_pt);
         }
@@ -203,7 +203,7 @@ impl SkymapWidget {
         let scr = Screen::new(&self.draw_area);
 
         let sphere_pt = scr.screen_to_sphere(&Point2D {x, y}, vp.mag_factor);
-        let Some(sphere_pt) = sphere_pt else { return None; };
+        let sphere_pt = sphere_pt?;
 
         let observer = self.observer.borrow();
 
@@ -280,7 +280,7 @@ impl SkymapWidget {
 
         vp.crd.az = mpress.vp.crd.az + mpress.hcrd.az - hcrd.az;
         vp.crd.alt = mpress.vp.crd.alt + mpress.hcrd.alt - hcrd.alt;
-        vp.crd.alt = vp.crd.alt.min(MAX_ALT).max(MIN_ALT);
+        vp.crd.alt = vp.crd.alt.clamp(MIN_ALT, MAX_ALT);
         *self.center_crd.borrow_mut() = None;
         self.draw_area.queue_draw();
         glib::Propagation::Stop
@@ -348,9 +348,7 @@ impl SkymapWidget {
             _ => {},
         }
 
-        mag_factor = mag_factor
-            .min(MAX_MAG_FACTOR)
-            .max(MIN_MAG_FACTOR);
+        mag_factor = mag_factor.clamp(MIN_MAG_FACTOR, MAX_MAG_FACTOR);
 
         if mag_factor != vp.mag_factor {
             vp.mag_factor = mag_factor;
@@ -379,7 +377,7 @@ impl SkymapWidget {
 
         *self.ani_goto_data.borrow_mut() = Some(AnimatedGotoCrdData {
             start_crd:  start_coord,
-            end_crd:    coord.clone(),
+            end_crd:    *coord,
             stage:      0,
             max_stages: 10,
         });
@@ -414,7 +412,7 @@ impl SkymapWidget {
                         if !has_to_stop {
                             ani_goto_data.stage += 1;
                         } else {
-                            *self_.center_crd.borrow_mut() = Some(ani_goto_data.end_crd.clone());
+                            *self_.center_crd.borrow_mut() = Some(ani_goto_data.end_crd);
                         }
                         self_.draw_area.queue_draw();
                         has_to_stop

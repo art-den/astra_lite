@@ -111,7 +111,7 @@ pub fn paint_altitude_by_time(
             let moon_phase = moon_phase(julian_centuries);
             max_moon_phase = max_moon_phase
                 .map(|v| f64::max(v, moon_phase))
-                .or_else(|| Some(moon_phase));
+                .or(Some(moon_phase));
             (moon_color.0, moon_color.1, moon_color.2, 1.0)
         } else {
             (0.0, 0.0, 0.0, 0.0)
@@ -137,17 +137,17 @@ pub fn paint_altitude_by_time(
             let hour_diff = chrono::Duration::minutes(60 * i / STEPS);
             let pt_time = dt.checked_add_signed(hour_diff).unwrap_or(dt);
             let cvt = EqToSphereCvt::new(observer.longitude, observer.latitude, &pt_time);
-            let horiz_crd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&crd));
+            let horiz_crd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(crd));
             let julian_centuries = calc_julian_centuries(&pt_time);
             let sun_crd = mini_sun(julian_centuries);
             let sun_h_crd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&sun_crd));
             if sun_h_crd.alt < sun_alt_theshold {
                 max_alt = max_alt
                     .map(|v| f64::max(v, horiz_crd.alt))
-                    .or_else(|| Some(horiz_crd.alt));
+                    .or(Some(horiz_crd.alt));
                 min_alt = min_alt
                     .map(|v| f64::min(v, horiz_crd.alt))
-                    .or_else(|| Some(horiz_crd.alt));
+                    .or(Some(horiz_crd.alt));
             }
             let x = linear_interpolate(
                 i as f64,

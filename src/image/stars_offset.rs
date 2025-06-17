@@ -192,7 +192,7 @@ struct Triangle<'a> {
     len:       f64,
 }
 
-impl<'a> Triangle<'a> {
+impl Triangle<'_> {
     fn edge_len_err(&self, other: &Triangle) -> f64 {
         let diff1 = self.edge_lens[0] - other.edge_lens[0];
         let diff2 = self.edge_lens[1] - other.edge_lens[1];

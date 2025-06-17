@@ -101,9 +101,9 @@ impl AstrometryPlateSolver {
                     let j2000 = j2000_time();
                     let time = Utc::now().naive_utc();
                     let epoch_cvt = EpochCvt::new(&time, &j2000);
-                    epoch_cvt.convert_eq(&crd)
+                    epoch_cvt.convert_eq(crd)
                 } else if let Some(crd) = &self.config.eq_coord_j2000 {
-                    crd.clone()
+                    *crd
                 } else {
                     unreachable!()
                 };
@@ -189,8 +189,8 @@ impl AstrometryPlateSolver {
         let mut data = Vec::new();
         let stars_count = stars.len().min(MAX_STARS_COUNT);
         for star in &stars[..stars_count] {
-            data.push((star.x + 1.0) as f64);
-            data.push((star.y + 1.0) as f64);
+            data.push(star.x + 1.0);
+            data.push(star.y + 1.0);
             data.push(star.brightness as f64);
         }
         log::debug!("Saved stars count = {}", stars_count);
@@ -338,7 +338,7 @@ impl PlateSolverIface for AstrometryPlateSolver {
             PlateSolverInData::Image(image) =>
                 self.save_image_file(image)?,
             PlateSolverInData::Stars{ stars, img_width, img_height } =>
-                self.save_stars_file(*stars, *img_width, *img_height)?,
+                self.save_stars_file(stars, *img_width, *img_height)?,
         }
         self.exec_solve_field()?;
         Ok(())

@@ -187,7 +187,7 @@ impl SkyMapPainter {
         let pxls_per_rad = self.calc_pixels_per_radian(args.screen, args.view_point.mag_factor);
 
         let j2000 = j2000_time();
-        let epoch_cvt = EpochCvt::new(&j2000, &args.utc_time);
+        let epoch_cvt = EpochCvt::new(&j2000, args.utc_time);
 
         let ctx = PaintCtx {
             cairo: args.cairo,
@@ -833,7 +833,7 @@ impl ItemPainter {
 
 struct DsoNamePainter<'a>(&'a DsoItem);
 
-impl<'a> Item for DsoNamePainter<'a> {
+impl Item for DsoNamePainter<'_> {
     fn use_now_epoch(&self) -> bool {
         true
     }
@@ -892,7 +892,7 @@ impl Item for DsoEllipse {
     }
 
     fn point_crd(&self, index: usize) -> PainterCrd {
-        PainterCrd::Eq(self.points[index].clone())
+        PainterCrd::Eq(self.points[index])
     }
 
     fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
@@ -997,7 +997,7 @@ struct StarPainter<'a> {
 
 type RgbTuple = (f64, f64, f64);
 
-impl<'a> StarPainter<'a> {
+impl StarPainter<'_> {
     fn calc_light(&self, star_mag: f32) -> (f32, f32) {
         let light = f32::powf(2.0, 0.4 * (self.options.max_mag_value - star_mag)) - 1.0;
         let light_with_gamma = light.powf(0.7);
@@ -1130,14 +1130,14 @@ impl<'a> StarPainter<'a> {
         }
 
         if !self.bayer.is_empty() {
-            paint_text(&self.bayer, 0.5 * light_with_gamma)?;
+            paint_text(self.bayer, 0.5 * light_with_gamma)?;
         }
 
         Ok(())
     }
 }
 
-impl<'a> Item for StarPainter<'a> {
+impl Item for StarPainter<'_> {
     fn use_now_epoch(&self) -> bool {
         true
     }
@@ -1229,7 +1229,7 @@ impl Item for EqGridItem {
             let screen_top = scr_rect.top_line();
             let screen_bottom = scr_rect.bottom_line();
             for (pt1, pt2) in points.iter().tuple_windows() {
-                let line = Line2D { pt1: pt1.clone(), pt2: pt2.clone() };
+                let line = Line2D { pt1: *pt1, pt2: *pt2 };
                 let paint_text = |mut x, y, adjust_right| -> anyhow::Result<()> {
                     let text = match  self.tp {
                         EqGridItemType::Ra => format!("{:.0}h", radian_to_hour(self.ra1)),
@@ -1267,12 +1267,11 @@ struct Ground<'a> {
     view_point: &'a ViewPoint,
 }
 
-impl<'a> Ground<'a> {
+impl Ground<'_> {
     const ANGLE_STEP: usize = 5;
 }
 
-
-impl<'a> Item for Ground<'a> {
+impl Item for Ground<'_> {
     fn points_count(&self) -> usize {
         360 / Self::ANGLE_STEP
     }
@@ -1332,7 +1331,7 @@ struct WorldSide<'a> {
     alpha: f64,
 }
 
-impl<'a> Item for WorldSide<'a> {
+impl Item for WorldSide<'_> {
     fn points_count(&self) -> usize {
         1
     }
@@ -1345,7 +1344,7 @@ impl<'a> Item for WorldSide<'a> {
     }
 
     fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
-        ctx.layout.set_text(&self.text);
+        ctx.layout.set_text(self.text);
         let (width, height) = ctx.layout.pixel_size();
         ctx.cairo.move_to(
             points[0].x - 0.5 * width as f64,
@@ -1369,7 +1368,7 @@ impl Item for HorizonGlowItem {
     }
 
     fn point_crd(&self, index: usize) -> PainterCrd {
-        PainterCrd::Horiz(self.coords[index].clone())
+        PainterCrd::Horiz(self.coords[index])
     }
 
     fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
@@ -1409,7 +1408,7 @@ impl Item for ZoneVisibilityTestObject {
     }
 
     fn point_crd(&self, index: usize) -> PainterCrd {
-        PainterCrd::Eq(self.coords[index].clone())
+        PainterCrd::Eq(self.coords[index])
     }
 }
 
@@ -1428,7 +1427,7 @@ impl Item for PointVisibilityTestObject {
     }
 
     fn point_crd(&self, _index: usize) -> PainterCrd {
-        PainterCrd::Eq(self.coord.clone())
+        PainterCrd::Eq(self.coord)
     }
 }
 
@@ -1442,7 +1441,7 @@ impl Item for TelescopePosPainter {
     }
 
     fn point_crd(&self, _index: usize) -> PainterCrd {
-        PainterCrd::Eq(self.crd.clone())
+        PainterCrd::Eq(self.crd)
     }
 
     fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
@@ -1479,7 +1478,7 @@ impl Item for SelectionPainter {
     }
 
     fn point_crd(&self, _index: usize) -> PainterCrd {
-        PainterCrd::Eq(self.crd.clone())
+        PainterCrd::Eq(self.crd)
     }
 
     fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
@@ -1503,13 +1502,13 @@ struct CameraFramePainter<'a> {
     coords: [EqCoord; 4],
 }
 
- impl<'a> Item for CameraFramePainter<'a> {
+ impl Item for CameraFramePainter<'_> {
     fn points_count(&self) -> usize {
         self.coords.len()
     }
 
     fn point_crd(&self, index: usize) -> PainterCrd {
-        PainterCrd::Eq(self.coords[index].clone())
+        PainterCrd::Eq(self.coords[index])
     }
 
     fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
@@ -1566,7 +1565,7 @@ struct PlateSolvedImagePainter<'a> {
     persp_pnt: &'a RefCell<PerspectivePainter>,
 }
 
-impl<'a> Item for PlateSolvedImagePainter<'a> {
+impl Item for PlateSolvedImagePainter<'_> {
     fn points_count(&self) -> usize {
         self.coords.len()
     }
@@ -1578,7 +1577,7 @@ impl<'a> Item for PlateSolvedImagePainter<'a> {
     fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
         let mut persp_pnt = self.persp_pnt.borrow_mut();
         persp_pnt.paint(
-            &ctx.cairo,
+            ctx.cairo,
             &self.image,
             points[0].x as i32, points[0].y as i32,
             points[1].x as i32, points[1].y as i32,
@@ -1604,7 +1603,7 @@ impl<'a> Item for PlateSolvedImagePainter<'a> {
         let local_time: DateTime<Local> = DateTime::from(self.time);
         let text = format!(
             "Plate solve {}",
-            local_time.format("%Y-%m-%d %H:%M:%S").to_string()
+            local_time.format("%Y-%m-%d %H:%M:%S")
         );
         paint_text_under_line(ctx.cairo, ctx.layout, pt1, pt2, &text)?;
 

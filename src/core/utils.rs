@@ -17,7 +17,7 @@ pub enum FileNameArg<'a> {
     },
 }
 
-impl<'a> FileNameArg<'a> {
+impl FileNameArg<'_> {
     pub fn exposure(&self) -> f64 {
         match self {
             Self::Options(opts) => opts.frame.exposure(),
@@ -115,7 +115,7 @@ impl FileNameUtils {
         };
         path.push(dark_library_path);
         path.push(&cam_name);
-        path.push(&self.master_only_file_name(None, to_calibrate, master_frame_type));
+        path.push(self.master_only_file_name(None, to_calibrate, master_frame_type));
         path
     }
 
@@ -359,7 +359,7 @@ pub fn check_telescope_is_at_desired_position(
         ra: hour_to_radian(cur_ra),
         dec: degree_to_radian(cur_dec)
     };
-    let diff = EqCoord::angle_between(&cur_pos, &desired_pos);
+    let diff = EqCoord::angle_between(&cur_pos, desired_pos);
     if radian_to_degree(diff) > tolerance_in_degree {
         anyhow::bail!("Tepescope position is too far from desired one");
     }

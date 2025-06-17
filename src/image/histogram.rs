@@ -25,7 +25,7 @@ impl HistogramChan {
         self.freq.resize(max_value as usize + 1, 0);
         let total_cnt = self.freq.iter().sum::<u32>() as usize;
         let total_sum = self.freq.iter().enumerate().map(|(i, v)| { i * *v as usize }).sum::<usize>();
-        self.count = total_cnt as usize;
+        self.count = total_cnt;
         let mean = total_sum as f64 / total_cnt as f64;
         self.mean = mean as f32;
         let mut sum = 0_f64;
@@ -223,9 +223,7 @@ impl TmpFreqValues {
     }
 
     fn new() -> Self {
-        let mut freq = Vec::new();
-        freq.resize(u16::MAX as usize + 1, 0);
-        Self(freq)
+        Self(vec![0; u16::MAX as usize + 1])
     }
 
     fn append(&mut self, other: &TmpFreqValues) {

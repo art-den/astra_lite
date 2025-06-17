@@ -31,7 +31,7 @@ impl BadPixels {
     pub fn load_from_file(&mut self, file_name: &Path) -> anyhow::Result<()> {
         let file = BufReader::new(File::open(file_name)?);
         self.items.clear();
-        for line in file.lines().filter_map(|line| line.ok()) {
+        for line in file.lines().map_while(Result::ok) {
             let mut splitted = line.splitn(2, " ");
             let (Some(x_str), Some(y_str)) = (splitted.next(), splitted.next()) else { continue; };
             let (Ok(x), Ok(y)) = (x_str.parse(), y_str.parse()) else { continue; };
@@ -184,9 +184,9 @@ impl RawImageInfo {
         } else {
             u16::MAX
         };
-        let cfa = CfaType::from_str(&bayer);
+        let cfa = CfaType::from_str(bayer);
         let frame_type = FrameType::from_str(
-            frame_str.as_deref().unwrap_or_default(),
+            frame_str.unwrap_or_default(),
             FrameType::Lights
         );
 
@@ -386,7 +386,7 @@ impl RawImage {
                 diffs.len(), p60_value, p70_value, p80_value, p90_value, max, result
             );
 
-            return result;
+            result
         }
 
         #[inline(always)]
@@ -793,8 +793,7 @@ impl RawImage {
     }
 
     pub fn filter_flat(&mut self) {
-        let mut new_data = Vec::new();
-        new_data.resize(self.data.len(), 0);
+        let mut new_data = vec![0; self.data.len()];
         new_data
             .par_chunks_exact_mut(self.info.width)
             .enumerate()
@@ -822,7 +821,7 @@ impl RawImage {
     }
 
     pub fn calc_noise(&self) -> Option<f32> {
-        let rect_size = (self.info.width / 200).max(16).min(42);
+        let rect_size = (self.info.width / 200).clamp(16, 42);
         let step = 7;
         let rows = self.info.height / rect_size;
         let cols = self.info.width / rect_size;
@@ -1080,7 +1079,7 @@ impl<'a> RawRectIterator<'a> {
     }
 }
 
-impl<'a> Iterator for RawRectIterator<'a> {
+impl Iterator for RawRectIterator<'_> {
     type Item = (usize, usize, u16, CfaColor);
 
     fn next(&mut self) -> Option<Self::Item> {

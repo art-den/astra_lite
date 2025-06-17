@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, f64::consts::PI, isize, sync::Mutex};
+use std::{collections::{HashMap, HashSet}, f64::consts::PI, sync::Mutex};
 use itertools::{izip, Itertools};
 use crate::{options::StarRecognSensivity, utils::math::*, TimeLogger};
 use super::{image::ImageLayer, raw::RawImageInfo, utils::*};
@@ -180,8 +180,7 @@ impl StarsFinder {
         const MAX_EXTREMUMS_CNT: usize = 10 * MAX_STARS_CNT;
         loop {
             let find_possible_stars_in_rows = |y1: usize, y2: usize| {
-                let mut filtered = Vec::new();
-                filtered.resize(image.width(), 0);
+                let mut filtered = vec![0; image.width()];
                 let mut too_much_possible_stars = false;
                 for y in y1..y2 {
                     if y < MAX_STAR_DIAM/2 || y > image.height()-MAX_STAR_DIAM/2 {
@@ -202,8 +201,7 @@ impl StarsFinder {
                         let s = median3(*s1, *s2, *s3);
                         let r = median4_u16(*r1, *r2, *r3, *r4);
                         if l > s || r > s { continue; }
-                        let f = *f as u16;
-                        if s > f && (s-f) > *threshold {
+                        if s > *f && (s - *f) > *threshold {
                             let star_x = i as isize;
                             let star_y = y as isize;
                             if star_x < (MAX_STAR_DIAM/2) as isize
@@ -267,7 +265,7 @@ impl StarsFinder {
         let mut cluster = Vec::new();
         let mut possible_star_centers = Vec::new();
 
-        for (crd, _) in extremums {
+        for crd in extremums.keys() {
             if processed_points.contains(crd) { continue; }
             let (x, y) = crd;
             cluster.clear();
@@ -286,7 +284,7 @@ impl StarsFinder {
             cluster.sort_by_key(|(_, _, br)| *br);
 
             if let Some(last) = cluster.last() {
-                possible_star_centers.push(last.clone());
+                possible_star_centers.push(*last);
             }
         }
         possible_star_centers.sort_by_key(|(_, _, v)| -(*v as i32));
@@ -330,7 +328,7 @@ impl StarsFinder {
 
             if max_v <= bg || max_v-bg < threshold { continue; }
             let border = (bg as u32 + (max_v as u32 - bg as u32 + 1) / 3) as u16;
-            if border <= 0 { continue; }
+            if border == 0 { continue; }
             let mut x_summ = 0_f64;
             let mut y_summ = 0_f64;
             let mut crd_cnt = 0_f64;
@@ -388,13 +386,13 @@ impl StarsFinder {
                 continue;
             }
 
-            for ((x, y), _) in &star_points {
+            for (x, y) in star_points.keys() {
                 all_star_coords.insert((*x, *y));
             }
 
             // inflate star points by one pixel
             star_extra_points.clear();
-            for ((x, y), _) in &star_points {
+            for (x, y) in star_points.keys() {
                 for dx in -1..=1 {
                     let sx = x + dx;
                     for dy in -1..=1 {
@@ -437,7 +435,7 @@ impl StarsFinder {
                     x: center_x,
                     y: center_y,
                     background: bg,
-                    max_value: max_v as u16,
+                    max_value: max_v,
                     brightness: brightness as u32,
                     width: width as usize,
                     height: height as usize,
@@ -730,11 +728,11 @@ impl CommonStarsImage {
     }
 
     fn calc_angular_fwhm(fwhm: Option<f32>, raw_info: &Option<RawImageInfo>) -> Option<f32> {
-        let Some(fwhm) = fwhm else { return None; };
-        let Some(raw_info) = raw_info else { return None; };
-        let Some(focal_len) = raw_info.focal_len else { return None; };
-        let Some(pixel_size_x) = raw_info.pixel_size_x else { return None; };
-        let Some(pixel_size_y) = raw_info.pixel_size_y else { return None; };
+        let fwhm = fwhm?;
+        let raw_info = raw_info.as_ref()?;
+        let focal_len = raw_info.focal_len?;
+        let pixel_size_x = raw_info.pixel_size_x?;
+        let pixel_size_y = raw_info.pixel_size_y?;
 
         let pixel_size = 0.5 * (pixel_size_x + pixel_size_y);
         let pixel_size_m = pixel_size / 1_000_000.0;

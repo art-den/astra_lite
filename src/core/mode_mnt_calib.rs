@@ -94,7 +94,7 @@ impl MountCalibrMode {
         cam_opts.frame.gain = gain_to_value(
             opts.guiding.main_cam.calibr_gain,
             opts.cam.frame.gain,
-            &cam_device,
+            cam_device,
             indi
         )?;
         Ok(Self {

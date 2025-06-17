@@ -50,10 +50,9 @@ impl Header {
         }
     }
 
-    fn get_value_impl<T: FromStr>(values: &Vec<Value>, key: &str) -> Option<T> {
+    fn get_value_impl<T: FromStr>(values: &[Value], key: &str) -> Option<T> {
         values.iter()
-            .find(|item| item.name.eq_ignore_ascii_case(key))
-            .as_deref()?
+            .find(|item| item.name.eq_ignore_ascii_case(key))?
             .value.parse()
             .ok()
     }
@@ -64,7 +63,7 @@ impl Header {
         } else {
             let value = Value {
                 name: key.to_string(),
-                value: value,
+                value,
                 comment: None,
             };
             self.values.push(value);
@@ -225,10 +224,9 @@ impl FitsReader {
             ));
         }
         let bzero = header.get_i64("BZERO").unwrap_or(0) as u16;
-        let elem_len = header.bitpix.abs() as usize / 8;
+        let elem_len = header.bitpix.unsigned_abs() as usize / 8;
         const BUF_DATA_LEN: usize = 512;
-        let mut stream_buf = Vec::<u8>::new();
-        stream_buf.resize(BUF_DATA_LEN * elem_len, 0);
+        let mut stream_buf = vec![0_u8; BUF_DATA_LEN * elem_len];
         stream.seek(SeekFrom::Start((header.data_pos + offset) as u64))?;
         for chunk in result.chunks_mut(BUF_DATA_LEN) {
             let len_to_read = chunk.len();
@@ -257,7 +255,7 @@ impl FitsReader {
                 _ => unreachable!(),
             }
         }
-        return Ok(())
+        Ok(())
     }
 }
 
@@ -354,8 +352,7 @@ impl FitsWriter {
         }
         let item_len = bitpix as usize / 8;
         const BUF_DATA_LEN: usize = 512;
-        let mut stream_buf = Vec::<u8>::new();
-        stream_buf.resize(BUF_DATA_LEN * item_len, 0);
+        let mut stream_buf = vec![0_u8; BUF_DATA_LEN * item_len];
         for chunk in data.chunks(BUF_DATA_LEN) {
             let len_to_write = chunk.len();
             let buf = &mut stream_buf[.. item_len * len_to_write];
@@ -400,13 +397,13 @@ impl FitsWriter {
 
         for (idx, col) in cols.iter().enumerate() {
             let name_fld = format!("TTYPE{}", idx + 1);
-            full_hdr.set_str(&name_fld, &col.name);
+            full_hdr.set_str(&name_fld, col.name);
             let type_fld = format!("TFORM{}", idx + 1);
-            full_hdr.set_str(&type_fld, &col.type_);
+            full_hdr.set_str(&type_fld, col.type_);
         }
         for (idx, col) in cols.iter().enumerate() {
             let unit_fld = format!("TUNIT{}", idx + 1);
-            full_hdr.set_str(&unit_fld, &col.unit);
+            full_hdr.set_str(&unit_fld, col.unit);
         }
 
         for value in &hdu.values {
@@ -426,12 +423,10 @@ impl FitsWriter {
     ) -> Result<()> {
         let item_len = std::mem::size_of::<f64>();
         const BUF_DATA_LEN: usize = 512;
-        let mut stream_buf = Vec::<u8>::new();
-        stream_buf.resize(BUF_DATA_LEN * item_len, 0);
+        let mut stream_buf = vec![0_u8; BUF_DATA_LEN * item_len];
         let mut written = 0_usize;
         for chunk in data.chunks(BUF_DATA_LEN) {
-            let len_to_write = chunk.len();
-            let buf = &mut stream_buf[.. item_len * len_to_write];
+            let buf = &mut stream_buf[.. std::mem::size_of_val(chunk)];
             for ((b1, b2, b3, b4, b5, b6, b7, b8), v) in izip!(buf.iter_mut().tuples(), chunk) {
                 [*b1, *b2, *b3, *b4, *b5, *b6, *b7, *b8] = v.to_be_bytes();
             }
@@ -442,8 +437,7 @@ impl FitsWriter {
         written %= 2880;
 
         if written != 0 {
-            let mut zeros = Vec::new();
-            zeros.resize(2880 - written, 0u8);
+            let zeros = vec![0; 2880 - written];
             stream.write_all(&zeros)?;
         }
 

@@ -185,14 +185,14 @@ pub fn exec_and_show_error(
     let exec_res = fun();
     if let Err(err) = exec_res {
         let message = if cfg!(debug_assertions) {
-            format!("{}\n\nat\n\n{}", err.to_string(), err.backtrace().to_string())
+            format!("{}\n\nat\n\n{}", err, err.backtrace())
         } else {
             err.to_string()
         };
         show_error_message(window, "Error", &message);
         return false;
     }
-    return true;
+    true
 }
 
 pub fn get_model_row_count(model: &gtk::TreeModel) -> usize {
@@ -294,7 +294,7 @@ pub fn init_list_store_model_for_treeview(
 ) -> gtk::ListStore {
     let types = columns.iter().map(|(_, tp, _)| *tp).collect::<Vec<_>>();
     let model = gtk::ListStore::new(&types);
-    for (idx, (col_name, _, attr)) in columns.into_iter().enumerate() {
+    for (idx, (col_name, _, attr)) in columns.iter().enumerate() {
         let cell_text = gtk::CellRendererText::new();
         let col = gtk::TreeViewColumn::builder()
             .title(*col_name)
@@ -303,7 +303,7 @@ pub fn init_list_store_model_for_treeview(
             .visible(true)
             .build();
         TreeViewColumnExt::pack_start(&col, &cell_text, true);
-        TreeViewColumnExt::add_attribute(&col, &cell_text, *attr, idx as i32);
+        TreeViewColumnExt::add_attribute(&col, &cell_text, attr, idx as i32);
         tv.append_column(&col);
     }
     tv.set_model(Some(&model));

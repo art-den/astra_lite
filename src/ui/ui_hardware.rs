@@ -43,7 +43,7 @@ pub fn init_ui(
         options.indi.remote = true; // force remote mode if no devices info
     }
 
-    let indi_widget = IndiWidget::new(&indi);
+    let indi_widget = IndiWidget::new(indi);
 
     let widgets = Widgets {
         telescope: TelescopeWidgets  ::from_builder_str(include_str!(r"resources/hw_telescope.ui")),
@@ -343,12 +343,11 @@ impl HardwareUi {
         self.window.connect_key_press_event(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |_, event| {
-                if self_.main_ui.current_tab_page() == TabPage::Hardware {
-                    if event.state().contains(gdk::ModifierType::CONTROL_MASK)
-                    && matches!(event.keyval(), gdk::keys::constants::F|gdk::keys::constants::f) {
+                if self_.main_ui.current_tab_page() == TabPage::Hardware
+                && event.state().contains(gdk::ModifierType::CONTROL_MASK)
+                && matches!(event.keyval(), gdk::keys::constants::F|gdk::keys::constants::f) {
                         self_.widgets.common.se_prop_name.grab_focus();
                         return glib::Propagation::Stop;
-                    }
                 }
                 glib::Propagation::Proceed
             }

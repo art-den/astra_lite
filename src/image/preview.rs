@@ -1,4 +1,4 @@
-use std::{sync::Arc, usize};
+use std::sync::Arc;
 
 use itertools::{izip, Itertools};
 
@@ -134,7 +134,7 @@ pub fn get_preview_rgb_data(
 
     let (wb, censor) = get_wb_and_sensor(
         &params.wb,
-        &image.raw_info
+        image.raw_info
             .as_ref()
             .map(|info| info.camera.as_str())
             .unwrap_or_default()
@@ -392,8 +392,7 @@ fn to_grb_bytes_corners_rgb(
     width:   usize,
     height:  usize
 ) -> Vec<u8> {
-    let mut rgb_bytes = Vec::new();
-    rgb_bytes.resize(3 * width * height, 0);
+    let mut rgb_bytes = vec![0; 3 * width * height];
     let rects = get_rects_for_corners_and_center(image.width(), image.height(), width, height);
     for rect in rects {
         for i in 0..rect.height {
@@ -421,8 +420,7 @@ fn to_grb_bytes_corners_mono(
     width:  usize,
     height: usize
 ) -> Vec<u8> {
-    let mut rgb_bytes = Vec::new();
-    rgb_bytes.resize(3 * width * height, 0);
+    let mut rgb_bytes = vec![0; 3 * width * height];
     let rects = get_rects_for_corners_and_center(layer.width(), layer.height(), width, height);
     for rect in rects {
         for i in 0..rect.height {

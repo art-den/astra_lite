@@ -387,7 +387,7 @@ impl TackingPicturesMode {
             let mut path = PathBuf::new();
             if matches!(self.cam_mode, CameraMode::MasterDark|CameraMode::MasterBias) {
                 path.push(&options.calibr.dark_library_path);
-                path.push(&self.device.to_file_name_part());
+                path.push(self.device.to_file_name_part());
             } else {
                 path.push(&options.raw_frames.out_path);
             }
@@ -450,13 +450,13 @@ impl TackingPicturesMode {
         let temperature = self.indi
             .focuser_get_temperature(&autofocuser.options.device)
             .unwrap_or(f64::NAN);
-        if !temperature.is_nan() && !temperature.is_infinite() {
-            if autofocuser.start_temp.is_none() {
-                autofocuser.start_temp = Some(temperature);
-                self.subscribers.notify(
-                    Event::Focusing(FocuserEvent::StartingTemperature(temperature))
-                );
-            }
+        if !temperature.is_nan()
+        && !temperature.is_infinite()
+        && autofocuser.start_temp.is_none() {
+            autofocuser.start_temp = Some(temperature);
+            self.subscribers.notify(
+                Event::Focusing(FocuserEvent::StartingTemperature(temperature))
+            );
         }
 
         if self.next_job.is_some() {
@@ -556,7 +556,7 @@ impl TackingPicturesMode {
             return Ok(());
         }
 
-        let guider_data = guider.simple.get_or_insert_with(|| SimpleGuider::new());
+        let guider_data = guider.simple.get_or_insert_with(SimpleGuider::new);
         if guider.options.is_used()
         && guider_data.mnt_calibr.is_none()
         && self.next_job.is_none() {
@@ -928,7 +928,7 @@ impl TackingPicturesMode {
         if let Some(parent) = self.out_file_names.master_fname.parent() {
             if !parent.is_dir() {
                 log::debug!("Creating directory {} ...", parent.to_str().unwrap_or_default());
-                std::fs::create_dir_all(&parent)?;
+                std::fs::create_dir_all(parent)?;
             }
         }
 
@@ -946,7 +946,7 @@ impl TackingPicturesMode {
         if let Some(parent) = self.out_file_names.defect_pixels_fname.parent() {
             if !parent.is_dir() {
                 log::debug!("Creating directory {} ...", parent.to_str().unwrap_or_default());
-                std::fs::create_dir_all(&parent)?;
+                std::fs::create_dir_all(parent)?;
             }
         }
 
@@ -1172,10 +1172,7 @@ impl Mode for TackingPicturesMode {
             _ =>
                 false,
         };
-        self.flags.save_defect_pixels = match self.cam_mode {
-            CameraMode::DefectPixels => true,
-            _ => false,
-        };
+        self.flags.save_defect_pixels = matches!(self.cam_mode, CameraMode::DefectPixels);
         self.flags.use_raw_stacker =
             self.flags.save_master_file ||
             self.flags.save_defect_pixels;
@@ -1193,13 +1190,13 @@ impl Mode for TackingPicturesMode {
             let temperature = self.indi
                 .focuser_get_temperature(&autofocuser.options.device)
                 .unwrap_or(f64::NAN);
-            if !temperature.is_nan() && !temperature.is_infinite() {
-                if autofocuser.start_temp.is_none() {
-                    autofocuser.start_temp = Some(temperature);
-                    self.subscribers.notify(
-                        Event::Focusing(FocuserEvent::StartingTemperature(temperature))
-                    );
-                }
+            if !temperature.is_nan()
+            && !temperature.is_infinite()
+            && autofocuser.start_temp.is_none() {
+                autofocuser.start_temp = Some(temperature);
+                self.subscribers.notify(
+                    Event::Focusing(FocuserEvent::StartingTemperature(temperature))
+                );
             }
         }
 
@@ -1232,7 +1229,7 @@ impl Mode for TackingPicturesMode {
     fn set_or_correct_value(&mut self, value: &mut dyn Any) {
         if let Some(value) = value.downcast_mut::<MountMoveCalibrRes>() {
             let Some(guider) = &mut self.guider else { return; };
-            let dith_data = guider.simple.get_or_insert_with(|| SimpleGuider::new());
+            let dith_data = guider.simple.get_or_insert_with(SimpleGuider::new);
             dith_data.mnt_calibr = Some(value.clone());
             log::debug!("New mount calibration set: {:?}", dith_data.mnt_calibr);
         }

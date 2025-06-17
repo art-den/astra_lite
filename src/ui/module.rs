@@ -37,7 +37,7 @@ impl Panel {
             let attrs = pango::AttrList::new();
             attrs.insert(pango::AttrInt::new_weight(pango::Weight::Bold));
             let caption_label = gtk::Label::builder()
-                .label(&format!("[ {} ]", self.name))
+                .label(format!("[ {} ]", self.name))
                 .attributes(&attrs)
                 .visible(true)
                 .build();

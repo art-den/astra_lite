@@ -192,14 +192,13 @@ impl SkyZoneKey {
     pub fn from_coord(mut ra: f64, mut dec: f64) -> Self {
         while ra >= 2.0 * PI { ra -= 2.0 * PI; }
         while ra <= 0.0 { ra += 2.0 * PI; }
-        dec += 0.5*PI;
-        if dec > PI { dec = PI; }
-        if dec < 0.0 { dec = 0.0; }
+        dec += 0.5 * PI;
+        dec = dec.clamp(0.0, PI);
         let ra_int = (Self::RA_COUNT as f64 * ra / (2.0 * PI)) as u16;
         let dec_int = (Self::DEC_COUNT as f64 * dec / PI) as u16;
         SkyZoneKey {
-            ra_key: ra_int as u16,
-            dec_key: dec_int as u16,
+            ra_key: ra_int,
+            dec_key: dec_int,
         }
     }
 
@@ -271,13 +270,13 @@ impl Stars {
             .flat_map(|(_, zone)| &zone.stars)
             .filter(|star| star.data.mag < max_mag)
             .map(|star| (star, EqCoord::angle_between(&star.data.crd.to_eq(), crd)))
-            .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(&angle1, &angle2));
+            .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(angle1, angle2));
 
         let nearest_named = self.zones.iter()
             .flat_map(|(_, zone)| &zone.nstars)
             .filter(|star| star.data.mag < max_mag)
             .map(|star| (star, EqCoord::angle_between(&star.data.crd.to_eq(), crd)))
-            .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(&angle1, &angle2));
+            .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(angle1, angle2));
 
         let star_to_named_star = |star: &Star| -> NamedStar {
             NamedStar {
@@ -709,8 +708,8 @@ impl SkyMap {
                 hour_to_radian(ra),
                 degree_to_radian(dec)
             );
-            let mag_v = mag_v.map(|v| ObjMagnitude::new(v));
-            let mag_b = mag_b.map(|v| ObjMagnitude::new(v));
+            let mag_v = mag_v.map(ObjMagnitude::new);
+            let mag_b = mag_b.map(ObjMagnitude::new);
             let object = DsoItem {
                 names, nicknames, crd, mag_v, mag_b, cnst_id,
                 obj_type, maj_axis, min_axis, angle
@@ -801,8 +800,8 @@ impl SkyMap {
             let dec = degree_to_radian(dec_degrees);
             let star_data = StarData {
                 crd: ObjEqCoord::new(ra, dec),
-                mag: ObjMagnitude::new(magnitude as f32),
-                bv:  StarBV::new(bv as f32),
+                mag: ObjMagnitude::new(magnitude),
+                bv:  StarBV::new(bv),
             };
 
             self.stars.add_star(
@@ -820,7 +819,7 @@ impl SkyMap {
         let reader = std::io::BufReader::new(file);
         let mut name = String::new();
         let mut points = Vec::new();
-        for line in reader.lines().filter_map(|line| line.ok()) {
+        for line in reader.lines().map_while(Result::ok) {
             let line_items = line
                 .split(' ')
                 .filter(|item| !item.is_empty())
@@ -830,14 +829,14 @@ impl SkyMap {
                 let dec = hour_to_radian(dec_str.parse::<f64>()?);
                 Ok((ra, dec))
             };
-            match line_items.as_slice() {
-                &[ra_str, dec_str, "start", item_name] => {
+            match *line_items.as_slice() {
+                [ra_str, dec_str, "start", item_name] => {
                     name = item_name.to_string();
                     points.clear();
                     let (ra, dec) = parse_coords(ra_str, dec_str)?;
                     points.push(ObjEqCoord::new(ra, dec));
                 },
-                &[ra_str, dec_str, "end"] => {
+                [ra_str, dec_str, "end"] => {
                     let (ra, dec) = parse_coords(ra_str, dec_str)?;
                     points.push(ObjEqCoord::new(ra, dec));
                     self.outlines.push(Outline{
@@ -845,7 +844,7 @@ impl SkyMap {
                         polygon: std::mem::take(&mut points),
                     });
                 }
-                &[ra_str, dec_str, "vertex"] => {
+                [ra_str, dec_str, "vertex"] => {
                     let (ra, dec) = parse_coords(ra_str, dec_str)?;
                     points.push(ObjEqCoord::new(ra, dec));
                 },
@@ -898,7 +897,7 @@ impl SkyMap {
             .filter(|obj| obj.obj_type.test_filter_flag(filter))
             .filter(|obj| obj.any_magnitude().map(|mag| mag <= max_mag).unwrap_or(false))
             .map(|obj| (obj, EqCoord::angle_between(&obj.crd.to_eq(), crd)))
-            .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(&angle1, &angle2));
+            .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(angle1, angle2));
         nearest_obj.map(|(obj, angle)| (obj.clone(), angle))
     }
 

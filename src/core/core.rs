@@ -2,7 +2,7 @@ use std::{
     any::Any, path::Path, sync::{
         atomic::{AtomicBool, AtomicU16, Ordering }, mpsc, Arc, Mutex, RwLock, RwLockReadGuard
     },
-    thread::JoinHandle, u64
+    thread::JoinHandle,
 };
 use gtk::glib::PropertySet;
 
@@ -275,7 +275,7 @@ impl Core {
                             }, ..
                         } = &prop_change.change {
                             self_.process_indi_blob_event(
-                                &blob,
+                                blob,
                                 &prop_change.device_name,
                                 &prop_change.prop_name,
                                 &img_cmds_sender,
@@ -323,7 +323,7 @@ impl Core {
         prop_change: &indi::PropChangeEvent,
     ) -> anyhow::Result<()> {
         let mut mode_data = self.mode_data.write().unwrap();
-        let result = mode_data.mode.notify_indi_prop_change(&prop_change)?;
+        let result = mode_data.mode.notify_indi_prop_change(prop_change)?;
         self.apply_change_result(result, &mut mode_data)?;
 
         if let (indi::PropChange::Change { value, new_state, .. }, Some(cur_device))
@@ -487,7 +487,7 @@ impl Core {
         let mode_data = self.mode_data.read().unwrap();
         let Some(cam_device) = mode_data.mode.cam_device() else { return Ok(()); };
         let Some(cur_exposure) = mode_data.mode.get_cur_exposure() else { return Ok(()); };
-        abort_camera_exposure(&self.indi, &cam_device)?;
+        abort_camera_exposure(&self.indi, cam_device)?;
         if self.indi.camera_is_fast_toggle_supported(&cam_device.name)?
         && self.indi.camera_is_fast_toggle_enabled(&cam_device.name)? {
             let prop_info = self.indi.camera_get_fast_frames_count_prop_info(
@@ -725,7 +725,7 @@ impl Core {
     ) -> anyhow::Result<()> {
         self.abort_active_mode();
         let mode = GotoMode::new(
-            GotoDestination::Coord(eq_coord.clone()),
+            GotoDestination::Coord(*eq_coord),
             config,
             &self.options,
             &self.indi,
@@ -853,7 +853,7 @@ impl Core {
         Ok(())
     }
 
-    pub fn abort_active_mode(self: &Self) {
+    pub fn abort_active_mode(&self) {
         let mut mode_data = self.mode_data.write().unwrap();
         if mode_data.mode.get_type() == ModeType::Waiting {
             return;

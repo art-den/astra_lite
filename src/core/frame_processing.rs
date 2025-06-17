@@ -256,15 +256,12 @@ pub fn start_frame_processing_thread() -> (mpsc::Sender<FrameProcessCommand>, Jo
             let queue_is_overflowed = commands.len() >= 3;
 
             for cmd in commands {
-                match cmd {
-                    FrameProcessCommand::ProcessImage{command, result_fun} => {
-                        if queue_is_overflowed {
-                            result_fun(CommandResult::QueueOverflow);
-                        }
-                        make_preview_image(command, result_fun);
+                if let FrameProcessCommand::ProcessImage{command, result_fun} = cmd {
+                    if queue_is_overflowed {
+                        result_fun(CommandResult::QueueOverflow);
                     }
-                    _ => {}
-                };
+                    make_preview_image(command, result_fun);
+                }
             }
         }
 
@@ -321,7 +318,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
                 "Loading defect pixels file {} ...",
                 file_name.to_str().unwrap_or_default()
             );
-            defect_pixels.load_from_file(&file_name)?;
+            defect_pixels.load_from_file(file_name)?;
             calibr.defect_pixels = Some(defect_pixels);
             reload_flat = true;
         }}
@@ -487,7 +484,7 @@ enum ImageLoader<'a> {
     ByPixbuf(PathBuf),
 }
 
-impl<'a> ImageLoader<'a> {
+impl ImageLoader<'_> {
     fn is_raw_image(&self) -> bool {
         match self {
             Self::Fits(reader, _) =>
@@ -688,7 +685,7 @@ fn make_preview_image_impl(
         let raw_frame_info = RawFrameInfo {
             frame_type,
             time:           info.time,
-            calubr_methods: info.calibr_methods.clone(),
+            calubr_methods: info.calibr_methods,
             mean:           raw_mean as f32,
             median:         raw_median,
             std_dev:        raw_std_dev as f32,
@@ -865,7 +862,7 @@ fn make_preview_image_impl(
             .unwrap_or(false);
 
         stars_finder.find_stars_and_get_info(
-            &mono_layer,
+            mono_layer,
             &image.raw_info,
             max_stars_fwhm,
             max_stars_ovality,
@@ -946,7 +943,7 @@ fn make_preview_image_impl(
                 image.height() as f64
             );
             tmr.log("Offset::calculate");
-            let img_offset_is_ok = !image_offset.is_none();
+            let img_offset_is_ok = image_offset.is_some();
             (image_offset, img_offset_is_ok)
         } else {
             (None, true)
@@ -1181,7 +1178,7 @@ fn make_preview_image_impl(
         let result = FrameProcessResultData::ShotProcessingFinished{
             raw_image_info:  Arc::new(raw_info),
             frame_is_ok:     !is_bad_frame,
-            blob:            Arc::clone(&blob),
+            blob:            Arc::clone(blob),
             processing_time: process_time,
             blob_dl_time:    blob.dl_time,
         };

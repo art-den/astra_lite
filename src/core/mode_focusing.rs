@@ -119,12 +119,12 @@ impl FocusingMode {
         cam_opts.frame.gain = gain_to_value(
             opts.focuser.gain,
             opts.cam.frame.gain,
-            &cam_device,
+            cam_device,
             indi
         )?;
 
         let exposure_u = (cam_opts.frame.exposure() as usize).max(1);
-        let max_try = (10 / exposure_u).max(1).min(3);
+        let max_try = (10 / exposure_u).clamp(1, 3);
 
         log::debug!("Creating autofocus mode. max_try={}", max_try);
 
@@ -762,6 +762,6 @@ impl Mode for FocusingMode {
                 }
             _ => {}
         };
-        return Ok(NotifyResult::Empty)
+        Ok(NotifyResult::Empty)
     }
 }

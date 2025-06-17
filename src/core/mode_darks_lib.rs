@@ -11,9 +11,9 @@ enum State {
 }
 
 pub enum DarkLibMode {
-    DefectPixelsFiles,
-    MasterDarkFiles,
-    MasterBiasFiles,
+    DefectPixels,
+    MasterDark,
+    MasterBias,
 }
 
 #[derive(Clone)]
@@ -72,11 +72,11 @@ impl DarkCreationMode {
 impl Mode for DarkCreationMode {
     fn get_type(&self) -> ModeType {
         match self.mode {
-            DarkLibMode::DefectPixelsFiles =>
+            DarkLibMode::DefectPixels =>
                 ModeType::CreatingDefectPixels,
-            DarkLibMode::MasterDarkFiles =>
+            DarkLibMode::MasterDark =>
                 ModeType::CreatingMasterDarks,
-            DarkLibMode::MasterBiasFiles =>
+            DarkLibMode::MasterBias =>
                 ModeType::CreatingMasterBiases,
         }
     }
@@ -85,11 +85,11 @@ impl Mode for DarkCreationMode {
         match (&self.state, &self.mode) {
             (State::WaitingForTemperature(value), _) =>
                 format!("Waiting temperature ({:.1}°С) stabilization...", value),
-            (_, DarkLibMode::DefectPixelsFiles) =>
+            (_, DarkLibMode::DefectPixels) =>
                 "Creating defect pixels files...".to_string(),
-            (_, DarkLibMode::MasterDarkFiles) =>
+            (_, DarkLibMode::MasterDark) =>
                 "Creating master dark files...".to_string(),
-            (_, DarkLibMode::MasterBiasFiles) =>
+            (_, DarkLibMode::MasterBias) =>
                 "Creating master bias files...".to_string(),
         }
     }
@@ -167,11 +167,11 @@ impl Mode for DarkCreationMode {
             let prorgam_item = self.program[self.index].clone();
 
             result = match self.mode {
-                DarkLibMode::DefectPixelsFiles =>
+                DarkLibMode::DefectPixels =>
                     NotifyResult::StartCreatingDefectPixelsFile(prorgam_item),
-                DarkLibMode::MasterDarkFiles =>
+                DarkLibMode::MasterDark =>
                     NotifyResult::StartCreatingMasterDarkFile(prorgam_item),
-                DarkLibMode::MasterBiasFiles =>
+                DarkLibMode::MasterBias =>
                     NotifyResult::StartCreatingMasterBiasFile(prorgam_item),
             };
         }

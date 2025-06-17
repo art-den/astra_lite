@@ -164,24 +164,13 @@ impl FrameOptions {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct CamOptions {
     pub device:    Option<DeviceAndProp>,
     pub live_view: bool,
     pub ctrl:      CamCtrlOptions,
     pub frame:     FrameOptions,
-}
-
-impl Default for CamOptions {
-    fn default() -> Self {
-        Self {
-            device:    None,
-            live_view: false,
-            ctrl:      CamCtrlOptions::default(),
-            frame:     FrameOptions::default(),
-        }
-    }
 }
 
 impl CamOptions {

@@ -401,7 +401,7 @@ impl PropValue {
     pub fn to_f64(&self) -> Result<f64> {
         match self {
             Self::Num(NumPropValue{value, ..}) =>
-                Ok(*value as f64),
+                Ok(*value),
             Self::Text(text) =>
                 text.parse()
                     .map_err(|_| Error::CantConvertPropValue(
@@ -610,7 +610,7 @@ impl Property {
             };
             items.push(PropElement {
                 name: Arc::new(name),
-                label: label.map(|label| Arc::new(label)),
+                label: label.map(Arc::new),
                 value,
             });
         }
@@ -618,13 +618,13 @@ impl Property {
             device: Arc::clone(dev_name),
             name: Arc::new(prop_name.to_string()),
             type_,
-            label: label.map(|label| Arc::new(label)),
-            group: group.map(|label| Arc::new(label)),
+            label: label.map(Arc::new),
+            group: group.map(Arc::new),
             permition,
             state,
             timeout,
             timestamp,
-            message: message.map(|label| Arc::new(label)),
+            message: message.map(Arc::new),
             elements: items,
             change_id: 0,
         })
@@ -655,7 +655,7 @@ impl Property {
         }
         let message = xml.attributes.remove("message");
         if self.message.as_deref() != message.as_ref() {
-            self.message = message.map(|s| Arc::new(s));
+            self.message = message.map(Arc::new);
             changed = true;
         }
 
@@ -833,12 +833,9 @@ impl Device {
     }
 
     fn remove_property(&mut self, prop_name: &str) -> Option<Property> {
-        let Some(index) = self.props
+        let index = self.props
             .iter()
-            .position(|prop| *prop.name == prop_name)
-        else {
-            return None;
-        };
+            .position(|prop| *prop.name == prop_name)?;
         Some(self.props.remove(index))
     }
 
@@ -1038,8 +1035,8 @@ impl Devices {
                     elem_name: Arc::clone(&elem.name),
                     prop_value: elem.value.clone(),
                 },
-                prev_state: prev_state.clone(),
-                new_state: property.state.clone(),
+                new_state: property.state,
+                prev_state,
             };
             let event = PropChangeEvent {
                 timestamp:   Some(Utc::now()),
@@ -1231,13 +1228,6 @@ bitflags! {
     }
 }
 
-pub enum DeviceCap {
-    CcdTemperature,
-    CcdExposure,
-    CcdGain,
-    CcdOffset,
-}
-
 #[derive(Debug)]
 pub struct ExportDevice {
     pub name:      Arc<String>,
@@ -1330,11 +1320,11 @@ impl Connection {
 
     fn start_indi_server(
         exe:     &str,
-        drivers: &Vec<String>,
+        drivers: &[String],
     ) -> anyhow::Result<Child> {
         // Start indiserver process
         let mut child = Command::new(exe)
-            .args(drivers.clone())
+            .args(drivers)
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()?;
@@ -1393,7 +1383,7 @@ impl Connection {
         );
         drop(state);
         let settings = settings.clone();
-        let self_ = Arc::clone(&self);
+        let self_ = Arc::clone(self);
         std::thread::spawn(move || {
             // Start indi drivers
             let mut indiserver = if !settings.remote {
@@ -2656,7 +2646,7 @@ impl Connection {
         let items = self.camera_get_supported_resolutions(device_name)?;
         if items.is_empty() { return Ok(false); }
         let values = items.iter().map(|s|{
-            let mut splitted = s.split(|c| c == 'x' || c == 'X');
+            let mut splitted = s.split(['x', 'X']);
             let width: usize = splitted.next().map(|s| s.trim().parse().unwrap_or(0)).unwrap_or(0);
             let height: usize = splitted.next().map(|s| s.trim().parse().unwrap_or(0)).unwrap_or(0);
             (width + height, s)
@@ -2992,7 +2982,7 @@ impl Connection {
             .iter()
             .map(|e| {
                 let name = Arc::clone(&e.name);
-                let caption = Arc::clone(&e.label.as_ref().unwrap_or(&e.name));
+                let caption = Arc::clone(e.label.as_ref().unwrap_or(&e.name));
                 (name, caption)
             })
             .collect()
@@ -3095,7 +3085,7 @@ impl Connection {
             .iter()
             .map(|e| {
                 let name = Arc::clone(&e.name);
-                let caption = Arc::clone(&e.label.as_ref().unwrap_or(&e.name));
+                let caption = Arc::clone(e.label.as_ref().unwrap_or(&e.name));
                 (name, caption)
             })
             .collect()
@@ -3975,8 +3965,8 @@ impl XmlReceiver {
             };
             let change = PropChange::Change{
                 value,
-                prev_state: prev_state.clone(),
-                new_state: new_state.clone(),
+                prev_state,
+                new_state,
             };
             events_sender.send(EventSenderEvent::Mess(Event::PropChange(Arc::new(PropChangeEvent {
                 timestamp,
@@ -3989,7 +3979,7 @@ impl XmlReceiver {
             && name.as_str() == "CONNECT" {
                 let connected = prop_value.to_bool().unwrap_or(false);
                 let devices = self.devices.lock().unwrap();
-                let di = devices.get_driver_info(&device_name);
+                let di = devices.get_driver_info(device_name);
                 drop(devices);
 
                 let event_data = DeviceConnectEvent {
@@ -4145,7 +4135,7 @@ impl XmlReceiver {
                 ));
             };
             property.change_id = change_id;
-            let prev_state = property.state.clone();
+            let prev_state = property.state;
             let (prop_changed, mut values) = property.update_data_from_xml_and_return_changes(
                 &mut xml_elem,
                 blobs,
@@ -4155,7 +4145,7 @@ impl XmlReceiver {
             )?;
             if prop_changed {
                 let prop_name = Arc::clone(&property.name);
-                let cur_state = property.state.clone();
+                let cur_state = property.state;
                 if values.is_empty() && prev_state != cur_state {
                     values = property.get_values();
                 }

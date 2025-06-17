@@ -178,10 +178,13 @@ impl GotoMode {
     fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> anyhow::Result<()> {
         let plate_solver = self.plate_solver.as_mut().unwrap();
         let image = image.read().unwrap();
-        let mut config = PlateSolveConfig::default();
-        config.eq_coord = Some(self.eq_coord.clone());
-        config.time_out = self.ps_opts.timeout;
-        config.blind_time_out = self.ps_opts.blind_timeout;
+        let config = PlateSolveConfig {
+            eq_coord:       Some(self.eq_coord),
+            time_out:       self.ps_opts.timeout,
+            blind_time_out: self.ps_opts.blind_timeout,
+            .. PlateSolveConfig::default()
+        };
+
         plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
         drop(image);
         Ok(())
@@ -194,10 +197,12 @@ impl GotoMode {
         img_height: usize
     ) -> anyhow::Result<()> {
         let plate_solver = self.plate_solver.as_mut().unwrap();
-        let mut config = PlateSolveConfig::default();
-        config.eq_coord = Some(self.eq_coord.clone());
-        config.time_out = self.ps_opts.timeout;
-        config.blind_time_out = self.ps_opts.blind_timeout;
+        let config = PlateSolveConfig {
+            eq_coord:       Some(self.eq_coord),
+            time_out:       self.ps_opts.timeout,
+            blind_time_out: self.ps_opts.blind_timeout,
+            .. PlateSolveConfig::default()
+        };
         let stars_arg = PlateSolverInData::Stars{
             stars,
             img_width,
@@ -231,7 +236,7 @@ impl GotoMode {
         let event = PlateSolverEvent {
             cam_name: camera.name.clone(),
             result: result.clone(),
-            preview: preview.map(|p| Arc::new(p)),
+            preview: preview.map(Arc::new),
         };
         self.subscribers.notify(
             Event::PlateSolve(event)
@@ -255,7 +260,7 @@ impl GotoMode {
                 )?;
             }
             ProcessPlateSolverResultAction::SetEqCoord => {
-                self.eq_coord = result.crd_now.clone();
+                self.eq_coord = result.crd_now;
             }
         }
         Ok(true)
@@ -356,16 +361,17 @@ impl Mode for GotoMode {
         match &self.destination {
             GotoDestination::Coord(coord) => {
                 self.extra_stages = 0;
-                self.eq_coord = coord.clone();
+                self.eq_coord = *coord;
                 self.start_goto()?;
             }
             GotoDestination::Image{image, info, stars} => {
                 let plate_solver = self.plate_solver.as_mut().unwrap();
-
                 self.extra_stages = 1;
-                let mut config = PlateSolveConfig::default();
-                config.time_out = self.ps_opts.timeout;
-                config.blind_time_out = self.ps_opts.blind_timeout;
+                let mut config = PlateSolveConfig {
+                    time_out:       self.ps_opts.timeout,
+                    blind_time_out: self.ps_opts.blind_timeout,
+                    .. PlateSolveConfig::default()
+                };
                 let image = image.read().unwrap();
                 if let Some(raw_info) = &image.raw_info {
                     if let (Some(dec), Some(ra)) = (raw_info.dec, raw_info.ra) {
@@ -531,7 +537,7 @@ impl Mode for GotoMode {
                 return Ok(NotifyResult::ProgressChanges);
             }
             (State::Checking, FrameProcessResultData::LightFrameInfo(info), true) => {
-                self.show_overlay_message(&info);
+                self.show_overlay_message(info);
                 self.start_take_picture()?;
                 return Ok(NotifyResult::ProgressChanges);
             }

@@ -299,7 +299,6 @@ impl PolarAlignUi {
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
                 }
             }
-
             MainThreadEvent::Core(Event::CameraDeviceChanged{ to, ..}) => {
                 let options = self.options.read().unwrap();
                 let mount_device = options.mount.device.clone();
@@ -331,7 +330,6 @@ impl PolarAlignUi {
                     self.delayed_actions.schedule(DelayedAction::UpdateMountSpeedList);
                 }
             }
-
             _ => {}
         }
     }
@@ -367,7 +365,7 @@ impl PolarAlignUi {
             if self.widgets.cbx_speed.active().is_none() {
                 self.widgets.cbx_speed.append(
                     options.polar_align.speed.as_deref(),
-                    options.polar_align.speed.as_ref().map(|v| v.as_str()).unwrap_or_default()
+                    options.polar_align.speed.as_deref().unwrap_or_default()
                 );
                 self.widgets.cbx_speed.set_active_id(options.polar_align.speed.as_deref());
             }
@@ -457,8 +455,8 @@ impl PolarAlignUi {
 
                 let alt_err_arrow = if horiz.alt < 0.0 { "↑" } else { "↓" };
                 let az_err_arrow = if horiz.az < 0.0 { "→" } else { "←" };
-                self.widgets.l_alt_err_arr.set_label(&alt_err_arrow);
-                self.widgets.l_az_err_arr.set_label(&az_err_arrow);
+                self.widgets.l_alt_err_arr.set_label(alt_err_arrow);
+                self.widgets.l_az_err_arr.set_label(az_err_arrow);
 
                 let set_all_label_size = |label: &gtk::Label, err: f64| {
                     let err_minutes = f64::abs(radian_to_degree(err) * 60.0);

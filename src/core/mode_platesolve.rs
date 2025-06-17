@@ -11,6 +11,7 @@ use crate::{
 
 use super::{events::*, utils::gain_to_value};
 
+#[derive(PartialEq)]
 enum State {
     None,
     Capturing,
@@ -69,13 +70,16 @@ impl PlatesolveMode {
 
     fn get_platesolver_config(&self) -> anyhow::Result<PlateSolveConfig> {
         let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
-        let mut config = PlateSolveConfig::default();
-        config.time_out = self.ps_opts.timeout;
-        config.blind_time_out = self.ps_opts.blind_timeout;
-        config.eq_coord = Some(EqCoord {
+        let eq_coord = EqCoord {
             dec: degree_to_radian(dec),
             ra:  hour_to_radian(ra),
-        });
+        };
+        let config = PlateSolveConfig {
+            time_out:       self.ps_opts.timeout,
+            blind_time_out: self.ps_opts.blind_timeout,
+            eq_coord:       Some(eq_coord),
+            .. PlateSolveConfig::default()
+        };
         Ok(config)
     }
 
@@ -117,7 +121,7 @@ impl PlatesolveMode {
         let event = PlateSolverEvent {
             cam_name: self.camera.name.clone(),
             result: result.clone(),
-            preview: preview.map(|p| Arc::new(p)),
+            preview: preview.map(Arc::new),
         };
         self.subscribers.notify(
             Event::PlateSolve(event)

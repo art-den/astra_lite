@@ -485,7 +485,7 @@ impl MountUi {
             .get_devices_list_by_interface(indi::DriverInterface::TELESCOPE)
             .iter()
             .map(|dev| dev.name.to_string())
-            .collect();
+            .collect::<Vec<_>>();
         let connected = self.indi.state() == indi::ConnState::Connected;
         fill_devices_list_into_combobox(
             &list,

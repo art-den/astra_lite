@@ -216,7 +216,7 @@ impl IndiWidget {
     fn show_device_props(
         indi:        &Arc<indi::Connection>,
         ui_device:   &mut UiIndiDevice,
-        indi_props:  &Vec<indi::Property>,
+        indi_props:  &[indi::Property],
         update_list: bool
     ) {
         let empty_group = Arc::new(String::new());
@@ -279,7 +279,7 @@ impl IndiWidget {
         indi:        &Arc<indi::Connection>,
         device_name: &str,
         ui_group:    &mut UiIndiPropsGroup,
-        indi_props:  &Vec<indi::Property>,
+        indi_props:  &[indi::Property],
         update_list: bool
     ) {
         let empty_group = String::new();
@@ -298,7 +298,7 @@ impl IndiWidget {
                     let caption = indi_prop.label.as_deref().unwrap_or(&indi_prop.name);
                     let prop_label = gtk::Label::builder()
                         .use_markup(true)
-                        .label(&format!("<b>{}</b>", caption))
+                        .label(format!("<b>{}</b>", caption))
                         .visible(true)
                         .halign(gtk::Align::End)
                         .tooltip_text(&*indi_prop.name)
@@ -440,7 +440,7 @@ impl IndiWidget {
                 .label(label_text)
                 .visible(true)
                 .halign(gtk::Align::End)
-                .tooltip_text(&format!("{}.{}", *property.name, elem.name))
+                .tooltip_text(format!("{}.{}", *property.name, elem.name))
                 .build();
             grid.attach(&elem_label, 1, *next_row, 1, 1);
             widgets.push(elem_label.into());
@@ -524,7 +524,7 @@ impl IndiWidget {
                 .label(label_text)
                 .visible(true)
                 .halign(gtk::Align::End)
-                .tooltip_text(&format!("{}.{}", *property.name, *elem.name))
+                .tooltip_text(format!("{}.{}", *property.name, *elem.name))
                 .build();
             grid.attach(&elem_label, 1, *next_row, 1, 1);
             widgets.push(elem_label.into());
@@ -548,7 +548,7 @@ impl IndiWidget {
                 spin.set_range(*min, *max);
                 spin.set_value(*value);
                 spin.set_width_chars(10);
-                let num_format = indi::NumFormat::new_from_indi_format(&*format);
+                let num_format = indi::NumFormat::new_from_indi_format(format);
                 match num_format {
                     indi::NumFormat::Float { prec, .. } => {
                         spin.set_numeric(true);
@@ -563,8 +563,7 @@ impl IndiWidget {
                         };
                         spin.connect_input(move |spin| {
                             let text = spin.text();
-                            let result = indi::sexagesimal_to_value(&text)
-                                .ok_or_else(|| ());
+                            let result = indi::sexagesimal_to_value(&text).ok_or(());
                             Some(result)
                         });
                         let num_format = num_format.clone();
@@ -708,7 +707,7 @@ impl IndiWidget {
                 .label(label_text)
                 .visible(true)
                 .halign(gtk::Align::End)
-                .tooltip_text(&format!("{}.{}", *property.name, *elem.name))
+                .tooltip_text(format!("{}.{}", *property.name, *elem.name))
                 .build();
             grid.attach(&elem_label, 1, *next_row, 1, 1);
             widgets.push(elem_label.into());
@@ -753,7 +752,7 @@ impl IndiWidget {
                 .visible(true)
                 .label(label_text)
                 .halign(gtk::Align::End)
-                .tooltip_text(&format!("{}.{}", *property.name, *elem.name))
+                .tooltip_text(format!("{}.{}", *property.name, *elem.name))
                 .build();
             bx.add(&elem_label);
             let data = UiIndiPropElemData::Light(UiIndiPropLightElem {
