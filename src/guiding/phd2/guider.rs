@@ -20,7 +20,7 @@ impl ExternalGuiderPhd2 {
             evt_handlers:   Vec::new(),
             phd2_evt_hndlr: None,
             app_state:      AppState::Stopped,
-            state:          ExtGuiderState::Other,
+            state:          ExtGuiderState::Stopped,
         };
         let result = Arc::new(Self {
             phd2: Arc::clone(phd2),
@@ -36,61 +36,67 @@ impl ExternalGuiderPhd2 {
         data.phd2_evt_hndlr = Some(self.phd2.connect_event_handler(move |event| {
             // Check for new phd2 application state
 
+            let mut evt = None;
+
             if let Event::Object(obj) = &event {
-                let new_app_state = match &**obj {
+                let mut new_app_state = None;
+                match &**obj {
                     IncomingObject::AppState { state, .. } =>
-                        Some(*state),
+                        new_app_state = Some(*state),
                     IncomingObject::GuideStep {..} =>
-                        Some(AppState::Guiding),
+                        new_app_state = Some(AppState::Guiding),
                     IncomingObject::Paused {..} =>
-                        Some(AppState::Paused),
+                        new_app_state = Some(AppState::Paused),
                     IncomingObject::StartCalibration {..} =>
-                        Some(AppState::Calibrating),
+                        new_app_state = Some(AppState::Calibrating),
                     IncomingObject::LoopingExposures {..} =>
-                        Some(AppState::Looping),
+                        new_app_state = Some(AppState::Looping),
                     IncomingObject::LoopingExposuresStopped {..} =>
-                        Some(AppState::Stopped),
-                    _ => None,
+                        new_app_state = Some(AppState::Stopped),
+                    IncomingObject::SettleDone { status: 0, .. } =>
+                        evt = Some(ExtGuiderEvent::DitheringFinished),
+                    IncomingObject::SettleDone { error: Some(err_str), .. } =>
+                        evt = Some(ExtGuiderEvent::DitheringFinishedWithErr(err_str.clone())),
+                    _ => {},
                 };
                 if let Some(new_app_state) = new_app_state {
                     let mut data = self_.data.lock().unwrap();
-                    data.app_state = new_app_state;
-                    match new_app_state {
-                        AppState::Guiding =>
-                            data.state = ExtGuiderState::Guiding,
-                        _ =>
-                            data.state = ExtGuiderState::Other,
+                    if data.app_state != new_app_state {
+                        data.state = match new_app_state {
+                            AppState::Stopped     => ExtGuiderState::Stopped,
+                            AppState::Selected    => ExtGuiderState::Other,
+                            AppState::Calibrating => ExtGuiderState::Calibrating,
+                            AppState::Guiding     => ExtGuiderState::Guiding,
+                            AppState::LostLock    => ExtGuiderState::Other,
+                            AppState::Paused      => ExtGuiderState::Paused,
+                            AppState::Looping     => ExtGuiderState::Looping,
+                        };
+                        evt = Some(ExtGuiderEvent::State(data.state));
+
                     }
+                    data.app_state = new_app_state;
                 }
             }
-
-            // Events
-
-            let evt = match event {
-                Event::Object(obj) => {
-                    match *obj {
-                        IncomingObject::Resumed { .. } =>
-                            ExtGuiderEvent::GuidingContinued,
-                        IncomingObject::Paused { .. } =>
-                            ExtGuiderEvent::GuidingPaused,
-                        IncomingObject::SettleDone { .. } =>
-                            ExtGuiderEvent::DitheringFinished,
-                        _ =>
-                            return,
-                    }
+            if let Event::RpcResult(result) = &event {
+                if let RpcResult::Error { error, .. } = &**result {
+                    // .. error event
+                    evt = Some(ExtGuiderEvent::Error(error.message.clone()));
                 }
-                Event::RpcResult(result) => {
-                    match &*result {
-                        RpcResult::Error { error, .. } =>
-                            ExtGuiderEvent::Error(error.message.clone()),
-                        _ => return,
-                    }
+            }
+            match event {
+                Event::Connected =>
+                    evt = Some(ExtGuiderEvent::Connected),
+                Event::Disconnected =>
+                    evt = Some(ExtGuiderEvent::Disconnected),
+                _ => {}
+            }
+
+            if let Some(evt) = evt {
+                dbg!(&evt);
+                let data = self_.data.lock().unwrap();
+                for hndlr in &data.evt_handlers {
+                    hndlr(evt.clone());
                 }
-                _ => return,
-            };
-            let data = self_.data.lock().unwrap();
-            for hndlr in &data.evt_handlers {
-                hndlr(evt.clone());
             }
         }));
     }

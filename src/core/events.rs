@@ -1,5 +1,5 @@
 use std::{collections::HashMap, sync::{atomic::AtomicUsize, Arc, RwLock}};
-use crate::{plate_solve::PlateSolverEvent, DeviceAndProp};
+use crate::{guiding::external_guider::ExtGuiderEvent, plate_solve::PlateSolverEvent, DeviceAndProp};
 use super::{core::ModeType, frame_processing::*, mode_focusing::*, mode_polar_align::PolarAlignmentEvent};
 
 #[derive(Clone)]
@@ -33,6 +33,7 @@ pub enum Event {
         pos:  OverlayMessgagePos,
         text: Arc<String>,
     },
+    Guider(ExtGuiderEvent),
 }
 
 type SubscriptionFun = dyn Fn(Event) + Send + Sync + 'static;

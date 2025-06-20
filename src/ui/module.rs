@@ -18,6 +18,7 @@ bitflags! {
         const NO_EXPANDER = 1;
         const EXPANDED    = 2;
         const DEVELOP     = 4;
+        const INVISIBLE   = 8;
     }
 }
 

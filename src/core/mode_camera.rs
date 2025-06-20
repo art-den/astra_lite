@@ -1387,6 +1387,13 @@ impl Mode for TackingPicturesMode {
                         self.start_or_continue()?;
                         return Ok(NotifyResult::ProgressChanges);
                     }
+                    ExtGuiderEvent::DitheringFinishedWithErr(err) => {
+                        log::error!("Dithering finished with error: {}", err);
+                        // continue any way
+                        self.flags.skip_frame_done = false;
+                        self.start_or_continue()?;
+                        return Ok(NotifyResult::ProgressChanges);
+                    }
                     ExtGuiderEvent::Error(error) =>
                         return Err(anyhow::anyhow!("External guider error: {}", error)),
                     _ => {}

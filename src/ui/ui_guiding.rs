@@ -3,7 +3,9 @@ use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{core::*, events::*}, indi, options::*,
+    core::{core::*, events::*},
+    guiding::external_guider::*,
+    indi, options::*,
 };
 
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
@@ -16,9 +18,11 @@ pub fn init_ui(
     indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/guiding.ui"));
+    let info_widgets = InfoWidgets::new();
 
     let obj = Rc::new(GuidingUi {
         widgets,
+        info_widgets,
         window:        window.clone(),
         main_ui:       Rc::clone(main_ui),
         options:       Arc::clone(options),
@@ -49,8 +53,35 @@ struct Widgets {
     spb_ext_dith_dist:   gtk::SpinButton,
 }
 
+struct InfoWidgets {
+    bx:     gtk::Box,
+    l_info: gtk::Label,
+}
+
+impl InfoWidgets {
+    fn new() -> Self {
+        let bx = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(5)
+            .visible(true)
+            .build();
+        let l_info = gtk::Label::builder()
+            .label("info")
+            .use_markup(true)
+            .xalign(0.0)
+            .halign(gtk::Align::Start)
+            .width_chars(10)
+            .max_width_chars(30)
+            .visible(true)
+            .build();
+        bx.add(&l_info);
+        Self { bx, l_info }
+    }
+}
+
 struct GuidingUi {
     widgets:       Widgets,
+    info_widgets:  InfoWidgets,
     main_ui:       Rc<MainUi>,
     window:        gtk::ApplicationWindow,
     options:       Arc<RwLock<Options>>,
@@ -109,14 +140,24 @@ impl UiModule for GuidingUi {
     }
 
     fn panels(&self) -> Vec<Panel> {
-        vec![Panel {
-            str_id: "guiding",
-            name:   "Guiding".to_string(),
-            widget: self.widgets.grd.clone().upcast(),
-            pos:    PanelPosition::Right,
-            tab:    TabPage::Main,
-            flags:  PanelFlags::empty(),
-        }]
+        vec![
+            Panel {
+                str_id: "guiding",
+                name:   "Guiding".to_string(),
+                widget: self.widgets.grd.clone().upcast(),
+                pos:    PanelPosition::Right,
+                tab:    TabPage::Main,
+                flags:  PanelFlags::empty(),
+            },
+            Panel {
+                str_id: "guiding_info",
+                name:   "Guiding".to_string(),
+                widget: self.info_widgets.bx.clone().upcast(),
+                pos:    PanelPosition::Bottom,
+                tab:    TabPage::Main,
+                flags:  PanelFlags::NO_EXPANDER|PanelFlags::INVISIBLE,
+            },
+        ]
     }
 
     fn process_event(&self, event: &UiModuleEvent) {
@@ -180,7 +221,9 @@ impl GuidingUi {
             }
             MainThreadEvent::Core(Event::CameraDeviceChanged{ from, to }) => {
                 self.handler_camera_changed(&from, &to);
-
+            }
+            MainThreadEvent::Core(Event::Guider(evt)) => {
+                self.process_ext_guider_event(evt);
             }
             MainThreadEvent::Indi(indi::Event::ConnChange(_)) => {
                 self.correct_widgets_props();
@@ -309,5 +352,57 @@ impl GuidingUi {
 
     fn handler_action_stop_dither_calibr(&self) {
         self.core.abort_active_mode();
+    }
+
+    fn process_ext_guider_event(&self, evt: ExtGuiderEvent) {
+        match evt {
+            ExtGuiderEvent::State(state) =>
+                self.show_ext_guider_state(state),
+            ExtGuiderEvent::Error(err) =>
+                self.show_ext_guider_error(&err),
+            ExtGuiderEvent::DitheringFinishedWithErr(err) =>
+                self.show_ext_guider_error(&err),
+            ExtGuiderEvent::Connected => {
+                self.main_ui.set_module_panel_visible(
+                    self.info_widgets.bx.upcast_ref(),
+                    true
+                );
+                if let Some(state) = self.core.ext_giuder().state() {
+                    self.show_ext_guider_state(state);
+                }
+            }
+            ExtGuiderEvent::Disconnected =>
+                self.main_ui.set_module_panel_visible(
+                    self.info_widgets.bx.upcast_ref(),
+                    false
+                ),
+            _ => {}
+        }
+    }
+
+    fn show_ext_guider_error(&self, err: &str) {
+        self.show_info_text(err, Some(get_err_color_str()));
+    }
+
+    fn show_ext_guider_state(&self, state: ExtGuiderState) {
+        let color = match state {
+            ExtGuiderState::Guiding =>
+                Some(get_ok_color_str()),
+            ExtGuiderState::Stopped|
+            ExtGuiderState::Looping =>
+                Some(get_warn_color_str()),
+            _ =>
+                None,
+        };
+        self.show_info_text(&format!("{:?}", state), color);
+    }
+
+    fn show_info_text(&self, text: &str, color: Option<&str>) {
+        let mut text_str = format!("<b>{}</b>", text);
+        if let Some(color) = color {
+            text_str = format!("<span foreground='{}'>{}</span>", color, text_str);
+        }
+        self.info_widgets.l_info.set_label(&text_str);
+        self.info_widgets.l_info.set_tooltip_text(Some(text));
     }
 }

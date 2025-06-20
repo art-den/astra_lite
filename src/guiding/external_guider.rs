@@ -10,17 +10,23 @@ pub enum ExtGuiderType {
 
 #[derive(Debug, Clone)]
 pub enum ExtGuiderEvent {
-    GuidingPaused,
-    GuidingContinued,
-    DitheringFinished,
+    Connected,
+    Disconnected,
+    State(ExtGuiderState),
     Error(String),
+    DitheringFinished,
+    DitheringFinishedWithErr(String),
 }
 
 pub type ExtGuiderEventFn = Box<dyn Fn(ExtGuiderEvent) + Send + Sync + 'static>;
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ExtGuiderState {
+    Stopped,
+    Calibrating,
     Guiding,
+    Paused,
+    Looping,
     Other,
 }
 
@@ -57,6 +63,11 @@ impl ExternalGuiderCtrl {
 
     pub fn phd2_conn(&self) -> &Arc<phd2::Connection> {
         &self.phd2
+    }
+
+    pub fn state(&self) -> Option<ExtGuiderState> {
+        let ext_guider = self.ext_guider.lock().unwrap();
+        ext_guider.as_ref().map(|g| g.state())
     }
 
     pub fn create_and_connect(self: &Arc<Self>, guider: ExtGuiderType) -> anyhow::Result<()> {

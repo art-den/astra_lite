@@ -200,10 +200,11 @@ impl Core {
             log::info!("External guider event = {:?}", event);
             let result = || -> anyhow::Result<()> {
                 let mut mode = self_.mode_data.write().unwrap();
-                let res = mode.mode.notify_guider_event(event)?;
+                let res = mode.mode.notify_guider_event(event.clone())?;
                 self_.apply_change_result(res, &mut mode)?;
                 Ok(())
             } ();
+            self_.subscribers.notify(Event::Guider(event));
             self_.process_error(result, "Core::connect_ext_guider_events");
         }));
     }

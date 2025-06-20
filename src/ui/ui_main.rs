@@ -469,8 +469,8 @@ impl MainUi {
                 };
 
                 let is_visible =
-                    cfg!(debug_assertions) ||
-                    !panel.flags.contains(PanelFlags::DEVELOP);
+                    !panel.flags.contains(PanelFlags::INVISIBLE) &&
+                    (cfg!(debug_assertions) || !panel.flags.contains(PanelFlags::DEVELOP));
 
                 let panel_widget = panel.create_widget();
 
