@@ -78,15 +78,10 @@ pub fn init_ui(
     obj.update_widgets_enable_state();
 
     obj.connect_widgets_events();
-    obj.connect_core_events();
 
     obj.set_observer_data_for_widget();
 
     obj
-}
-
-enum MainThreadEvent {
-    Core(Event),
 }
 
 impl SkyItemType {
@@ -408,6 +403,27 @@ impl UiModule for MapUi {
 
         self.show_selected_objects_info();
     }
+
+    fn on_core_event(&self, event: &Event) {
+        match event {
+            Event::PlateSolve(ps_event) => {
+                let mut cam_rotation = self.cam_rotation.borrow_mut();
+                cam_rotation.insert(ps_event.cam_name.clone(), ps_event.result.rotation);
+                drop(cam_rotation);
+
+                *self.ps_img.borrow_mut() =
+                    if let Some(preview) = &ps_event.preview {
+                        Self::create_plate_solve_preview(preview)
+                    } else {
+                        None
+                    };
+                *self.ps_result.borrow_mut() = Some(ps_event.result.clone());
+
+                self.update_skymap_widget(true);
+            }
+            _ => {},
+        }
+    }
 }
 
 impl MapUi {
@@ -521,10 +537,12 @@ impl MapUi {
         );
 
         self.map_widget.get_widget().connect_button_press_event(
-            clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
+            clone!(
+                @weak self as self_ => @default-return glib::Propagation::Proceed,
                 move |_, evt| {
                     self_.handler_widget_mouse_button_press(evt)
-                })
+                }
+            )
         );
 
         self.window.add_events(gdk::EventMask::KEY_PRESS_MASK);
@@ -537,46 +555,6 @@ impl MapUi {
                 glib::Propagation::Proceed
             }
         ));
-    }
-
-    fn connect_core_events(self: &Rc<Self>) {
-        let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
-
-        let sender = main_thread_sender.clone();
-        self.core.event_subscriptions().subscribe(move |event| {
-            sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
-        });
-
-        glib::spawn_future_local(clone!(@weak self as self_ => async move {
-            while let Ok(event) = main_thread_receiver.recv().await {
-                if self_.closed.get() { return; }
-                match event {
-                    MainThreadEvent::Core(event) =>
-                        self_.process_core_event(event),
-                }
-            }
-        }));
-    }
-
-    fn process_core_event(&self, event: Event) {
-        match event {
-            Event::PlateSolve(ps_event) => {
-                let mut cam_rotation = self.cam_rotation.borrow_mut();
-                cam_rotation.insert(ps_event.cam_name, ps_event.result.rotation);
-                drop(cam_rotation);
-
-                *self.ps_img.borrow_mut() =
-                    if let Some(preview) = &ps_event.preview {
-                        Self::create_plate_solve_preview(preview)
-                    } else {
-                        None
-                    };
-                *self.ps_result.borrow_mut() = Some(ps_event.result.clone());
-
-                self.update_skymap_widget(true);
-            }
-            _ => {},
-        }
     }
 
     fn show_options(&self) {

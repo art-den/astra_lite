@@ -63,7 +63,6 @@ pub fn init_ui(
         options:       Arc::clone(options),
         indi_status:   RefCell::new(indi::ConnState::Disconnected),
         indi_drivers:  drivers,
-        indi_evt_conn: RefCell::new(None),
         is_remote:     Cell::new(false),
         main_ui:       Rc::clone(main_ui),
         indi_widget,
@@ -74,7 +73,7 @@ pub fn init_ui(
     obj.fill_devices_name();
 
     obj.connect_widgets_events();
-    obj.connect_indi_and_guider_events();
+    obj.connect_guider_events();
     obj.correct_widgets_by_cur_state();
 
     if let Some(load_drivers_err) = load_drivers_err {
@@ -107,7 +106,6 @@ impl indi::ConnState {
 }
 
 enum HardwareEvent {
-    Indi(indi::Event),
     Phd2(phd2::Event),
 }
 
@@ -182,7 +180,6 @@ struct HardwareUi {
     window:        gtk::ApplicationWindow,
     indi_status:   RefCell<indi::ConnState>,
     indi_drivers:  indi::Drivers,
-    indi_evt_conn: RefCell<Option<indi::Subscription>>,
     indi_widget:   IndiWidget,
     is_remote:     Cell<bool>,
 }
@@ -264,10 +261,6 @@ impl UiModule for HardwareUi {
     }
 
     fn on_app_closing(&self) {
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
-        }
-
         if !self.is_remote.get() {
             _ = self.indi.command_enable_all_devices(false, true, Some(2000));
         }
@@ -286,6 +279,10 @@ impl UiModule for HardwareUi {
             self.get_telescope_options(&mut options);
             self.get_site_options(&mut options);
         }
+    }
+
+    fn on_indi_event(&self, event: &indi::Event) {
+        self.process_indi_event(event);
     }
 }
 
@@ -363,14 +360,8 @@ impl HardwareUi {
         ));
     }
 
-    fn connect_indi_and_guider_events(self: &Rc<Self>) {
+    fn connect_guider_events(self: &Rc<Self>) {
         let (sender, receiver) = async_channel::unbounded();
-
-        // Connect INDI events
-        let sender_clone = sender.clone();
-        *self.indi_evt_conn.borrow_mut() = Some(self.indi.subscribe_events(move |event| {
-            sender_clone.send_blocking(HardwareEvent::Indi(event)).unwrap();
-        }));
 
         // Connect PHD2 events
         let sender_clone = sender.clone();
@@ -382,8 +373,6 @@ impl HardwareUi {
         glib::spawn_future_local(clone!(@weak self as self_ => async move {
             while let Ok(event) = receiver.recv().await {
                 match event {
-                    HardwareEvent::Indi(event) =>
-                        self_.process_indi_event(event),
                     HardwareEvent::Phd2(event) =>
                         self_.process_phd2_event(event),
                 };
@@ -433,7 +422,7 @@ impl HardwareUi {
         }
     }
 
-    fn process_indi_event(&self, event: indi::Event) {
+    fn process_indi_event(&self, event: &indi::Event) {
         match event {
             indi::Event::ConnectionLost => {
                 show_error_message(Some(&self.window), "INDI server", "Lost connection to INDI server ;-(");
@@ -442,7 +431,7 @@ impl HardwareUi {
                 if let indi::ConnState::Error(_) = &conn_state {
                     self.add_log_record(&Some(Utc::now()), "", &conn_state.to_str(false))
                 }
-                *self.indi_status.borrow_mut() = conn_state;
+                *self.indi_status.borrow_mut() = conn_state.clone();
                 self.correct_widgets_by_cur_state();
                 self.update_window_title();
             }

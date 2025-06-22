@@ -31,9 +31,7 @@ pub fn init_ui(
         options:         Arc::clone(options),
         core:            Arc::clone(core),
         indi:            Arc::clone(indi),
-        closed:          Cell::new(false),
         excl:            ExclusiveCaller::new(),
-        indi_evt_conn:   RefCell::new(None),
         delayed_actions: DelayedActions::new(500),
         focusing_data:   RefCell::new(None),
         starting_temp:   Cell::new(None),
@@ -45,7 +43,6 @@ pub fn init_ui(
     obj.init_widgets();
     obj.update_devices_list();
 
-    obj.connect_indi_and_core_events();
     obj.connect_widgets_events();
     obj.connect_delayed_actions_events();
 
@@ -113,20 +110,13 @@ struct FocuserUi {
     options:         Arc<RwLock<Options>>,
     core:            Arc<Core>,
     indi:            Arc<indi::Connection>,
-    closed:          Cell<bool>,
     excl:            ExclusiveCaller,
-    indi_evt_conn:   RefCell<Option<indi::Subscription>>,
     delayed_actions: DelayedActions<DelayedAction>,
     focusing_data:   RefCell<Option<FocusingResultData>>,
     starting_temp:   Cell<Option<f64>>,
     step:            Cell<i32>,
     step_large:      Cell<i32>,
     prev_pos_state:  Cell<Option<indi::PropState>>,
-}
-
-enum MainThreadEvent {
-    Core(Event),
-    Indi(indi::Event),
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -202,57 +192,29 @@ impl UiModule for FocuserUi {
     }
 
     fn on_app_closing(&self) {
-        self.closed.set(true);
-
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
-        }
-
         let mut options = self.options.write().unwrap();
         if let Some(cur_cam_device) = options.cam.device.clone() {
             self.store_options_for_camera(&cur_cam_device, &mut options);
         }
         drop(options);
     }
-}
 
-impl FocuserUi {
-    fn connect_indi_and_core_events(self: &Rc<Self>) {
-        let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
-        let sender = main_thread_sender.clone();
-        self.core.event_subscriptions().subscribe(move |event| {
-            sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
-        });
-
-        let sender = main_thread_sender.clone();
-        *self.indi_evt_conn.borrow_mut() = Some(self.indi.subscribe_events(move |event| {
-            sender.send_blocking(MainThreadEvent::Indi(event)).unwrap();
-        }));
-
-        glib::spawn_future_local(clone!(@weak self as self_ => async move {
-            while let Ok(event) = main_thread_receiver.recv().await {
-                if self_.closed.get() { return; }
-                self_.process_event_in_main_thread(event);
-            }
-        }));
-    }
-
-    fn process_event_in_main_thread(&self, event: MainThreadEvent) {
+    fn on_indi_event(&self, event: &indi::Event) {
         match event {
-            MainThreadEvent::Indi(indi::Event::NewDevice(event)) => {
+            indi::Event::NewDevice(event) => {
                 if event.interface.contains(indi::DriverInterface::FOCUSER) {
                     self.update_devices_list();
                 }
             }
-            MainThreadEvent::Indi(indi::Event::DeviceConnected(event)) => {
+            indi::Event::DeviceConnected(event) => {
                 if event.interface.contains(indi::DriverInterface::FOCUSER) {
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
                 }
             }
-            MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) => {
+            indi::Event::ConnChange(conn_state) => {
                 self.process_indi_conn_state_event(conn_state);
             }
-            MainThreadEvent::Indi(indi::Event::PropChange(event_data)) => {
+            indi::Event::PropChange(event_data) => {
                 match &event_data.change {
                     indi::PropChange::New(value) =>
                         self.process_indi_prop_change(
@@ -277,7 +239,7 @@ impl FocuserUi {
                     indi::PropChange::Delete => {}
                 };
             }
-            MainThreadEvent::Indi(indi::Event::DeviceDelete(event)) => {
+            indi::Event::DeviceDelete(event) => {
                 if event.drv_interface.contains(indi::DriverInterface::FOCUSER) {
                     self.update_devices_list();
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
@@ -286,24 +248,30 @@ impl FocuserUi {
                     self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature);
                 }
             }
-            MainThreadEvent::Core(Event::ModeChanged) => {
+            _ => {}
+        }
+    }
+
+    fn on_core_event(&self, event: &Event) {
+        match event {
+            Event::ModeChanged => {
                 self.correct_widgets_props();
             }
-            MainThreadEvent::Core(Event::CameraDeviceChanged{from, to}) => {
-                self.handler_camera_changed(&from, &to);
+            Event::CameraDeviceChanged{from, to} => {
+                self.handler_camera_changed(from, to);
             }
 
-            MainThreadEvent::Core(Event::Focusing(fevent)) => {
+            Event::Focusing(fevent) => {
                 match fevent {
                     FocuserEvent::Data(fdata) => {
-                        *self.focusing_data.borrow_mut() = Some(fdata);
+                        *self.focusing_data.borrow_mut() = Some(fdata.clone());
                         self.widgets.da_auto.queue_draw();
                     }
                     FocuserEvent::Result { value } => {
-                        self.update_focuser_position_after_focusing(value);
+                        self.update_focuser_position_after_focusing(*value);
                     }
                     FocuserEvent::StartingTemperature(starting_temp) => {
-                        self.starting_temp.set(Some(starting_temp));
+                        self.starting_temp.set(Some(*starting_temp));
                         self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature);
                     }
                 }
@@ -311,7 +279,9 @@ impl FocuserUi {
             _ => {}
         }
     }
+}
 
+impl FocuserUi {
     fn process_indi_prop_change(
         &self,
         device_name: &str,
@@ -345,13 +315,10 @@ impl FocuserUi {
         }
     }
 
-    fn process_indi_conn_state_event(
-        &self,
-        conn_state: indi::ConnState
-    ) {
+    fn process_indi_conn_state_event(&self, conn_state: &indi::ConnState) {
         let update_devices_list =
-            conn_state == indi::ConnState::Disconnected ||
-            conn_state == indi::ConnState::Disconnecting;
+            *conn_state == indi::ConnState::Disconnected ||
+            *conn_state == indi::ConnState::Disconnecting;
         if update_devices_list {
             self.update_devices_list();
         }

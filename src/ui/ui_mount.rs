@@ -1,4 +1,4 @@
-use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
+use std::{cell::Cell, rc::Rc, sync::{Arc, RwLock}};
 use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
@@ -32,15 +32,12 @@ pub fn init_ui(
         core:            Arc::clone(core),
         indi:            Arc::clone(indi),
         delayed_actions: DelayedActions::new(500),
-        closed:          Cell::new(false),
-        indi_evt_conn:   RefCell::new(None),
         prev_info_state: Cell::new(None),
         prev_info_ra:    Cell::new(0.0),
         prev_info_dec:   Cell::new(0.0),
     });
 
     obj.init_widgets();
-    obj.connect_core_and_indi_events();
     obj.connect_widgets_events();
     obj.fill_devices_list();
 
@@ -51,11 +48,6 @@ pub fn init_ui(
     );
 
     obj
-}
-
-enum MainThreadEvent {
-    Indi(indi::Event),
-    Core(Event),
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -145,8 +137,6 @@ struct MountUi {
     core:            Arc<Core>,
     indi:            Arc<indi::Connection>,
     delayed_actions: DelayedActions<DelayedAction>,
-    closed:          Cell<bool>,
-    indi_evt_conn:   RefCell<Option<indi::Subscription>>,
     prev_info_state: Cell<Option<InfoState>>,
     prev_info_ra:    Cell<f64>,
     prev_info_dec:   Cell<f64>,
@@ -195,11 +185,65 @@ impl UiModule for MountUi {
         self.correct_widgets_props();
     }
 
-    fn on_app_closing(&self) {
-        self.closed.set(true);
+    fn on_indi_event(&self, event: &indi::Event) {
+        match event {
+            indi::Event::NewDevice(event) =>
+                if event.interface.contains(indi::DriverInterface::TELESCOPE) {
+                    self.delayed_actions.schedule(DelayedAction::FillDevicesList);
+                },
 
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
+            indi::Event::DeviceConnected(event) =>
+                if event.interface.contains(indi::DriverInterface::TELESCOPE) {
+                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
+                },
+
+            indi::Event::DeviceDelete(event) => {
+                if event.drv_interface.contains(indi::DriverInterface::TELESCOPE) {
+                    self.delayed_actions.schedule(DelayedAction::FillDevicesList);
+                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
+                }
+            }
+            indi::Event::ConnChange(conn_state) => {
+                if *conn_state == indi::ConnState::Disconnected
+                || *conn_state == indi::ConnState::Connected {
+                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
+                }
+            }
+            indi::Event::PropChange(event_data) => {
+                match &event_data.change {
+                    indi::PropChange::New(value) =>
+                        self.process_indi_prop_change(
+                            &event_data.device_name,
+                            &event_data.prop_name,
+                            &value.elem_name,
+                            true,
+                            None,
+                            None,
+                            &value.prop_value
+                        ),
+                    indi::PropChange::Change{ value, prev_state, new_state } =>
+                        self.process_indi_prop_change(
+                            &event_data.device_name,
+                            &event_data.prop_name,
+                            &value.elem_name,
+                            false,
+                            Some(prev_state),
+                            Some(new_state),
+                            &value.prop_value
+                        ),
+                    indi::PropChange::Delete => {}
+                };
+            }
+            _ => {}
+        }
+    }
+
+    fn on_core_event(&self, event: &Event) {
+        match event {
+            Event::ModeChanged => {
+                self.correct_widgets_props();
+            }
+            _ => {}
         }
     }
 }
@@ -220,26 +264,6 @@ impl MountUi {
     }
 
     fn init_widgets(&self) {
-    }
-
-    fn connect_core_and_indi_events(self: &Rc<Self>) {
-        let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
-        let sender = main_thread_sender.clone();
-        *self.indi_evt_conn.borrow_mut() = Some(self.indi.subscribe_events(move |event| {
-            sender.send_blocking(MainThreadEvent::Indi(event)).unwrap();
-        }));
-
-        let sender = main_thread_sender.clone();
-        self.core.event_subscriptions().subscribe(move |event| {
-            sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
-        });
-
-        glib::spawn_future_local(clone!(@weak self as self_ => async move {
-            while let Ok(event) = main_thread_receiver.recv().await {
-                if self_.closed.get() { return; }
-                self_.process_event_in_main_thread(event);
-            }
-        }));
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
@@ -344,64 +368,6 @@ impl MountUi {
 
         self.main_ui.set_module_panel_visible(self.info_widgets.bx.upcast_ref(), mnt_active);
         self.show_info(&mount_device);
-    }
-
-    fn process_event_in_main_thread(&self, event: MainThreadEvent) {
-        match event {
-            MainThreadEvent::Indi(indi::Event::NewDevice(event)) =>
-                if event.interface.contains(indi::DriverInterface::TELESCOPE) {
-                    self.delayed_actions.schedule(DelayedAction::FillDevicesList);
-                },
-
-            MainThreadEvent::Indi(indi::Event::DeviceConnected(event)) =>
-                if event.interface.contains(indi::DriverInterface::TELESCOPE) {
-                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
-                },
-
-            MainThreadEvent::Indi(indi::Event::DeviceDelete(event)) => {
-                if event.drv_interface.contains(indi::DriverInterface::TELESCOPE) {
-                    self.delayed_actions.schedule(DelayedAction::FillDevicesList);
-                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
-                }
-            }
-            MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) => {
-                if conn_state == indi::ConnState::Disconnected
-                || conn_state == indi::ConnState::Connected {
-                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
-                }
-            }
-
-            MainThreadEvent::Indi(indi::Event::PropChange(event_data)) => {
-                match &event_data.change {
-                    indi::PropChange::New(value) =>
-                        self.process_indi_prop_change(
-                            &event_data.device_name,
-                            &event_data.prop_name,
-                            &value.elem_name,
-                            true,
-                            None,
-                            None,
-                            &value.prop_value
-                        ),
-                    indi::PropChange::Change{ value, prev_state, new_state } =>
-                        self.process_indi_prop_change(
-                            &event_data.device_name,
-                            &event_data.prop_name,
-                            &value.elem_name,
-                            false,
-                            Some(prev_state),
-                            Some(new_state),
-                            &value.prop_value
-                        ),
-                    indi::PropChange::Delete => {}
-                };
-            }
-
-            MainThreadEvent::Core(Event::ModeChanged) => {
-                self.correct_widgets_props();
-            }
-            _ => {}
-        }
     }
 
     fn handler_nav_mount_btn_pressed(&self, button: &gtk::Button) {

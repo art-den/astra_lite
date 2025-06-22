@@ -1,4 +1,4 @@
-use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
+use std::{cell::RefCell, rc::Rc, sync::{Arc, RwLock}};
 use gtk::{gdk::ffi::GDK_CURRENT_TIME, glib::{self, clone}, prelude::*};
 use itertools::Itertools;
 use macros::FromBuilder;
@@ -42,7 +42,6 @@ pub fn init_ui(
         indi:              Arc::clone(indi),
         ui_options:        RefCell::new(ui_options),
         core_subscription: RefCell::new(None),
-        closed:            Cell::new(false),
     });
 
     obj.init_widgets();
@@ -575,7 +574,6 @@ pub struct DarksLibraryUI {
     options:           Arc<RwLock<Options>>,
     ui_options:        RefCell<UiOptions>,
     core_subscription: RefCell<Option<Subscription>>,
-    closed:            Cell<bool>,
 }
 
 impl Drop for DarksLibraryUI {
@@ -607,8 +605,6 @@ impl UiModule for DarksLibraryUI {
     }
 
     fn on_app_closing(&self) {
-        self.closed.set(true);
-
         self.get_options();
         let ui_options = self.ui_options.borrow();
         _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);

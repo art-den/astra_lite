@@ -1,5 +1,5 @@
-use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
-use gtk::{glib, prelude::*, glib::clone};
+use std::{rc::Rc, sync::{Arc, RwLock}};
+use gtk::prelude::*;
 use macros::FromBuilder;
 
 use crate::{
@@ -28,13 +28,10 @@ pub fn init_ui(
         options:       Arc::clone(options),
         core:          Arc::clone(core),
         indi:          Arc::clone(indi),
-        closed:        Cell::new(false),
-        indi_evt_conn: RefCell::new(None),
     });
 
     obj.init_widgets();
     obj.connect_widgets_events();
-    obj.connect_indi_and_core_events();
 
     obj
 }
@@ -80,20 +77,13 @@ impl InfoWidgets {
 }
 
 struct GuidingUi {
-    widgets:       Widgets,
-    info_widgets:  InfoWidgets,
-    main_ui:       Rc<MainUi>,
-    window:        gtk::ApplicationWindow,
-    options:       Arc<RwLock<Options>>,
-    core:          Arc<Core>,
-    indi:          Arc<indi::Connection>,
-    closed:        Cell<bool>,
-    indi_evt_conn: RefCell<Option<indi::Subscription>>,
-}
-
-enum MainThreadEvent {
-    Core(Event),
-    Indi(indi::Event),
+    widgets:      Widgets,
+    info_widgets: InfoWidgets,
+    main_ui:      Rc<MainUi>,
+    window:       gtk::ApplicationWindow,
+    options:      Arc<RwLock<Options>>,
+    core:         Arc<Core>,
+    indi:         Arc<indi::Connection>,
 }
 
 impl Drop for GuidingUi {
@@ -165,17 +155,35 @@ impl UiModule for GuidingUi {
     }
 
     fn on_app_closing(&self) {
-        self.closed.set(true);
-
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
-        }
-
         let mut options = self.options.write().unwrap();
         if let Some(cur_cam_device) = options.cam.device.clone() {
             self.store_options_for_camera(&cur_cam_device, &mut options);
         }
         drop(options);
+    }
+
+    fn on_core_event(&self, event: &Event) {
+        match event {
+            Event::ModeChanged => {
+                self.correct_widgets_props();
+            }
+            Event::CameraDeviceChanged{ from, to } => {
+                self.handler_camera_changed(from, to);
+            }
+            Event::Guider(evt) => {
+                self.process_ext_guider_event(evt);
+            }
+            _ => {}
+        }
+    }
+
+    fn on_indi_event(&self, event: &indi::Event) {
+        match event {
+            indi::Event::ConnChange(_) => {
+                self.correct_widgets_props();
+            }
+            _ => {}
+        }
     }
 }
 
@@ -196,46 +204,6 @@ impl GuidingUi {
         self.widgets.spb_ext_dith_dist.set_range(1.0, 300.0);
         self.widgets.spb_ext_dith_dist.set_digits(0);
         self.widgets.spb_ext_dith_dist.set_increments(1.0, 10.0);
-    }
-
-    fn connect_indi_and_core_events(self: &Rc<Self>) {
-        let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
-
-        let sender = main_thread_sender.clone();
-
-        self.core.event_subscriptions().subscribe(move |event| {
-            sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
-        });
-
-        let sender = main_thread_sender.clone();
-        *self.indi_evt_conn.borrow_mut() = Some(self.indi.subscribe_events(move |event| {
-            sender.send_blocking(MainThreadEvent::Indi(event)).unwrap();
-        }));
-
-        glib::spawn_future_local(clone!(@weak self as self_ => async move {
-            while let Ok(event) = main_thread_receiver.recv().await {
-                if self_.closed.get() { return; }
-                self_.process_event_in_main_thread(event);
-            }
-        }));
-    }
-
-    fn process_event_in_main_thread(&self, event: MainThreadEvent) {
-        match event {
-            MainThreadEvent::Core(Event::ModeChanged) => {
-                self.correct_widgets_props();
-            }
-            MainThreadEvent::Core(Event::CameraDeviceChanged{ from, to }) => {
-                self.handler_camera_changed(&from, &to);
-            }
-            MainThreadEvent::Core(Event::Guider(evt)) => {
-                self.process_ext_guider_event(evt);
-            }
-            MainThreadEvent::Indi(indi::Event::ConnChange(_)) => {
-                self.correct_widgets_props();
-            }
-            _ => {}
-        }
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
@@ -346,17 +314,17 @@ impl GuidingUi {
         self.core.abort_active_mode();
     }
 
-    fn process_ext_guider_event(&self, evt: ExtGuiderEvent) {
+    fn process_ext_guider_event(&self, evt: &ExtGuiderEvent) {
         match evt {
             ExtGuiderEvent::State(state) =>
                 self.show_ext_guider_state(state),
             ExtGuiderEvent::Error(err) =>
-                self.show_ext_guider_error(&err),
+                self.show_ext_guider_error(err),
             ExtGuiderEvent::DitheringFinishedWithErr(err) =>
-                self.show_ext_guider_error(&err),
+                self.show_ext_guider_error(err),
             ExtGuiderEvent::Connected => {
                 if let Some(state) = self.core.ext_giuder().state() {
-                    self.show_ext_guider_state(state);
+                    self.show_ext_guider_state(&state);
                 }
             }
             ExtGuiderEvent::Disconnected =>
@@ -369,7 +337,7 @@ impl GuidingUi {
         self.show_info_text(err, Some(get_err_color_str()));
     }
 
-    fn show_ext_guider_state(&self, state: ExtGuiderState) {
+    fn show_ext_guider_state(&self, state: &ExtGuiderState) {
         let color = match state {
             ExtGuiderState::Guiding =>
                 Some(get_ok_color_str()),

@@ -1,4 +1,4 @@
-use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
+use std::{rc::Rc, sync::{Arc, RwLock}};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
@@ -24,14 +24,11 @@ pub fn init_ui(
         options:         Arc::clone(options),
         core:            Arc::clone(core),
         indi:            Arc::clone(indi),
-        closed:          Cell::new(false),
-        indi_evt_conn:   RefCell::new(None),
         delayed_actions: DelayedActions::new(200),
     });
 
     obj.init_widgets();
     obj.connect_widgets_events();
-    obj.connect_indi_and_core_events();
     obj.connect_delayed_actions_events();
     obj.update_mount_speed_list();
 
@@ -42,11 +39,6 @@ pub fn init_ui(
 enum DelayedAction {
     CorrectWidgetsProps,
     UpdateMountSpeedList,
-}
-
-enum MainThreadEvent {
-    Indi(indi::Event),
-    Core(Event),
 }
 
 impl PloarAlignDir {
@@ -92,8 +84,6 @@ struct PolarAlignUi {
     options:         Arc<RwLock<Options>>,
     core:            Arc<Core>,
     indi:            Arc<indi::Connection>,
-    closed:          Cell<bool>,
-    indi_evt_conn:   RefCell<Option<indi::Subscription>>,
     delayed_actions: DelayedActions<DelayedAction>,
 }
 
@@ -140,11 +130,50 @@ impl UiModule for PolarAlignUi {
         self.correct_widgets_props();
     }
 
-    fn on_app_closing(&self) {
-        self.closed.set(true);
+    fn on_core_event(&self, event: &Event) {
+        match event {
+            Event::ModeChanged => {
+                self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
+            }
+            Event::Progress(_, mode) => {
+                if *mode == ModeType::PolarAlignment {
+                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
+                }
+            }
+            Event::CameraDeviceChanged{ to, ..} => {
+                let options = self.options.read().unwrap();
+                let mount_device = options.mount.device.clone();
+                drop(options);
+                self.correct_widgets_props_impl(&mount_device, Some(to));
+            }
+            Event::MountDeviceSelected(mount_device) => {
+                let options = self.options.read().unwrap();
+                let cam_device = options.cam.device.clone();
+                drop(options);
+                self.update_mount_speed_list();
+                self.correct_widgets_props_impl(mount_device, cam_device.as_ref());
+            }
+            Event::PolarAlignment(event) => {
+                self.show_polar_alignment_error(event);
+            }
+            _ => {}
+        }
+    }
 
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
+    fn on_indi_event(&self, event: &indi::Event) {
+        match event {
+            indi::Event::ConnChange(_)|
+            indi::Event::DeviceConnected(_)|
+            indi::Event::DeviceDelete(_)|
+            indi::Event::NewDevice(_) => {
+                self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
+            }
+            indi::Event::PropChange(change) => {
+                if change.prop_name.as_str() == "TELESCOPE_SLEW_RATE" {
+                    self.delayed_actions.schedule(DelayedAction::UpdateMountSpeedList);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -205,7 +234,7 @@ impl PolarAlignUi {
         );
     }
 
-    fn correct_widgets_props_impl(&self, mount_device: &str, cam_device: &Option<DeviceAndProp>) {
+    fn correct_widgets_props_impl(&self, mount_device: &str, cam_device: Option<&DeviceAndProp>) {
         let mnt_active = self.indi.is_device_enabled(mount_device).unwrap_or(false);
         let cam_active = cam_device.as_ref().map(|cam_device|
             self.indi.is_device_enabled(&cam_device.name).unwrap_or(false)
@@ -248,7 +277,7 @@ impl PolarAlignUi {
         let mount_device = options.mount.device.clone();
         let cam_device = options.cam.device.clone();
         drop(options);
-        self.correct_widgets_props_impl(&mount_device, &cam_device);
+        self.correct_widgets_props_impl(&mount_device, cam_device.as_ref());
     }
 
     fn connect_delayed_actions_events(self: &Rc<Self>) {
@@ -257,73 +286,6 @@ impl PolarAlignUi {
                 self_.handler_delayed_action(action);
             })
         );
-    }
-
-    fn connect_indi_and_core_events(self: &Rc<Self>) {
-        let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
-
-        let sender = main_thread_sender.clone();
-
-        self.core.event_subscriptions().subscribe(move |event| {
-            sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
-        });
-
-        let sender = main_thread_sender.clone();
-        *self.indi_evt_conn.borrow_mut() = Some(self.indi.subscribe_events(move |event| {
-            sender.send_blocking(MainThreadEvent::Indi(event)).unwrap();
-        }));
-
-        glib::spawn_future_local(clone!(@weak self as self_ => async move {
-            while let Ok(event) = main_thread_receiver.recv().await {
-                if self_.closed.get() { return; }
-                self_.process_event_in_main_thread(event);
-            }
-        }));
-    }
-
-    fn process_event_in_main_thread(&self, event: MainThreadEvent) {
-        match event {
-            MainThreadEvent::Core(Event::ModeChanged) => {
-                self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
-            }
-            MainThreadEvent::Core(Event::Progress(_, mode)) => {
-                if mode == ModeType::PolarAlignment {
-                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
-                }
-            }
-            MainThreadEvent::Core(Event::CameraDeviceChanged{ to, ..}) => {
-                let options = self.options.read().unwrap();
-                let mount_device = options.mount.device.clone();
-                drop(options);
-                self.correct_widgets_props_impl(&mount_device, &Some(to));
-            }
-            MainThreadEvent::Core(Event::MountDeviceSelected(mount_device)) => {
-                let options = self.options.read().unwrap();
-                let cam_device = options.cam.device.clone();
-                drop(options);
-                self.update_mount_speed_list();
-                self.correct_widgets_props_impl(&mount_device, &cam_device);
-            }
-            MainThreadEvent::Core(Event::PolarAlignment(event)) => {
-                self.show_polar_alignment_error(event);
-            }
-            MainThreadEvent::Indi(
-                indi::Event::ConnChange(_)|
-                indi::Event::DeviceConnected(_)|
-                indi::Event::DeviceDelete(_)|
-                indi::Event::NewDevice(_)
-            ) => {
-                self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
-            }
-            MainThreadEvent::Indi(
-                indi::Event::PropChange(change)
-            ) => {
-                if change.prop_name.as_str() == "TELESCOPE_SLEW_RATE" {
-                    self.delayed_actions.schedule(DelayedAction::UpdateMountSpeedList);
-                }
-            }
-            _ => {}
-        }
     }
 
     fn handler_delayed_action(&self, action: &DelayedAction) {
@@ -431,7 +393,7 @@ impl PolarAlignUi {
         });
     }
 
-    fn show_polar_alignment_error(&self, event: PolarAlignmentEvent) {
+    fn show_polar_alignment_error(&self, event: &PolarAlignmentEvent) {
         match event {
             PolarAlignmentEvent::Error { horiz, total, step } => {
                 self.widgets.l_step.set_label(&format!("({})", step));
@@ -442,7 +404,7 @@ impl PolarAlignUi {
                 let az_err_str = degree_to_str_short(radian_to_degree(horiz.az));
                 self.widgets.l_az_err.set_label(&az_err_str);
 
-                let total_err_str = degree_to_str_short(radian_to_degree(total));
+                let total_err_str = degree_to_str_short(radian_to_degree(*total));
                 self.widgets.l_tot_err.set_label(&total_err_str);
 
                 let alt_err_arrow = if horiz.alt < 0.0 { "↑" } else { "↓" };

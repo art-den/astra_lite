@@ -55,6 +55,7 @@ pub fn init_ui(
         indi:           Arc::clone(indi),
         options:        Arc::clone(options),
         modules:        RefCell::new(UiModules::new()),
+        indi_evt_conn:  RefCell::new(None),
         ui_options:     RefCell::new(ui_options),
         progress:       RefCell::new(None),
         close_win_flag: Cell::new(false),
@@ -63,6 +64,7 @@ pub fn init_ui(
         dev_string:     RefCell::new(String::new()),
         perf_string:    RefCell::new(String::new()),
         expanders:      RefCell::new(Vec::new()),
+        closed:         Cell::new(false),
         self_:          RefCell::new(None), // used to drop MainData in window's delete_event
     });
 
@@ -107,6 +109,7 @@ pub fn init_ui(
     main_ui.connect_delete_event();
     main_ui.connect_close_after_finish_work();
     main_ui.connect_widgets_events();
+    main_ui.connect_common_events();
     main_ui.correct_widgets_props();
     main_ui.connect_state_events();
     main_ui.update_window_title();
@@ -220,6 +223,7 @@ pub struct MainUi {
     logs_dir:       PathBuf,
     options:        Arc<RwLock<Options>>,
     modules:        RefCell<UiModules>,
+    indi_evt_conn:  RefCell<Option<indi::Subscription>>,
     ui_options:     RefCell<UiOptions>,
     progress:       RefCell<Option<Progress>>,
     core:           Arc<Core>,
@@ -230,6 +234,7 @@ pub struct MainUi {
     dev_string:     RefCell<String>,
     perf_string:    RefCell<String>,
     expanders:      RefCell<Vec<(String, gtk::Expander, bool)>>,
+    closed:         Cell<bool>,
     self_:          RefCell<Option<Rc<MainUi>>>
 }
 
@@ -237,6 +242,11 @@ impl Drop for MainUi {
     fn drop(&mut self) {
         log::info!("MainUi dropped");
     }
+}
+
+enum MainThreadEvent {
+    Core(Event),
+    Indi(indi::Event),
 }
 
 impl MainUi {
@@ -374,6 +384,31 @@ impl MainUi {
         ));
     }
 
+    fn connect_common_events(self: &Rc<Self>) {
+        let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
+
+        // INDI
+
+        let sender = main_thread_sender.clone();
+        *self.indi_evt_conn.borrow_mut() = Some(self.indi.subscribe_events(move |event| {
+            sender.send_blocking(MainThreadEvent::Indi(event)).unwrap();
+        }));
+
+        // Core
+
+        let sender = main_thread_sender.clone();
+        self.core.event_subscriptions().subscribe(move |event| {
+            sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
+        });
+
+        glib::spawn_future_local(clone!(@weak self as self_ => async move {
+            while let Ok(event) = main_thread_receiver.recv().await {
+                if self_.closed.get() { return; }
+                self_.process_indi_or_core_event(event);
+            }
+        }));
+    }
+
     fn handler_close_window(self: &Rc<Self>) -> glib::Propagation {
         if self.core.mode_data().mode.get_type() != ModeType::Waiting {
             let dialog = gtk::MessageDialog::builder()
@@ -401,6 +436,8 @@ impl MainUi {
             return glib::Propagation::Stop
         }
 
+        self.closed.set(true);
+
         self.read_ui_options_from_widgets();
 
         let options = self.ui_options.borrow();
@@ -421,7 +458,14 @@ impl MainUi {
 
         self.modules.borrow_mut().clear();
 
+        // Unsubscribe events
+
+        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
+            self.indi.unsubscribe(indi_conn);
+        }
+
         *self.self_.borrow_mut() = None;
+
 
         glib::Propagation::Proceed
     }
@@ -510,6 +554,20 @@ impl MainUi {
 
                     item.add_widget(&panel.widget, separator.upcast());
                 }
+            }
+        }
+    }
+
+    fn process_indi_or_core_event(&self, event: MainThreadEvent) {
+        match event {
+            MainThreadEvent::Indi(indi_event) => {
+                let modules = self.modules.borrow();
+                modules.on_indi_event(&indi_event);
+            }
+
+            MainThreadEvent::Core(core_event) => {
+                let modules = self.modules.borrow();
+                modules.on_core_event(&core_event);
             }
         }
     }

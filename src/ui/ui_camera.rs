@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::{Arc, RwLock}, cell::{RefCell, Cell}};
+use std::{rc::Rc, sync::{Arc, RwLock}, cell::RefCell};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
@@ -36,9 +36,7 @@ pub fn init_ui(
         options:         Arc::clone(options),
         delayed_actions: DelayedActions::new(500),
         conn_state:      RefCell::new(indi::ConnState::Disconnected),
-        indi_evt_conn:   RefCell::new(None),
         fn_utils:        RefCell::new(FileNameUtils::default()),
-        closed:          Cell::new(false),
     });
 
     obj.init_cam_ctrl_widgets();
@@ -48,7 +46,6 @@ pub fn init_ui(
     obj.init_frame_quality_widgets();
     obj.init_info_widgets();
 
-    obj.connect_common_events();
     obj.connect_widgets_events();
 
     obj.delayed_actions.set_event_handler(
@@ -69,11 +66,6 @@ enum DelayedAction {
     SelectMaxResolution,
     FillHeaterItems,
     FillConvGainItems,
-}
-
-enum MainThreadEvent {
-    Core(Event),
-    Indi(indi::Event),
 }
 
 impl FrameType {
@@ -297,9 +289,7 @@ struct CameraUi {
     indi:            Arc<indi::Connection>,
     delayed_actions: DelayedActions<DelayedAction>,
     conn_state:      RefCell<indi::ConnState>,
-    indi_evt_conn:   RefCell<Option<indi::Subscription>>,
     fn_utils:        RefCell<FileNameUtils>,
-    closed:          Cell<bool>,
 }
 
 impl UiModule for CameraUi {
@@ -397,8 +387,6 @@ impl UiModule for CameraUi {
     }
 
     fn on_app_closing(&self) {
-        self.closed.set(true);
-
         _ = self.core.stop_img_process_thread();
 
         self.core.abort_active_mode();
@@ -408,11 +396,64 @@ impl UiModule for CameraUi {
         let mut options = self.options.write().unwrap();
         self.store_options_for_camera(options.cam.device.clone(), &mut options);
         drop(options);
+    }
 
-        // Unsubscribe events
+    fn on_indi_event(&self, event: &indi::Event) {
+        match event {
+            indi::Event::ConnChange(conn_state) =>
+                self.process_indi_conn_state_event(conn_state),
+            indi::Event::PropChange(event_data) => {
+                match &event_data.change {
+                    indi::PropChange::New(value) =>
+                        self.process_indi_prop_change(
+                            &event_data.device_name,
+                            &event_data.prop_name,
+                            &value.elem_name,
+                            true,
+                            None,
+                            None,
+                            &value.prop_value
+                        ),
+                    indi::PropChange::Change{ value, prev_state, new_state } =>
+                        self.process_indi_prop_change(
+                            &event_data.device_name,
+                            &event_data.prop_name,
+                            &value.elem_name,
+                            false,
+                            Some(prev_state),
+                            Some(new_state),
+                            &value.prop_value
+                        ),
+                    indi::PropChange::Delete => {}
+                };
+            },
 
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
+            indi::Event::DeviceConnected(_)|
+            indi::Event::DeviceDelete(_)|
+            indi::Event::NewDevice(_) => {
+                self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
+            }
+
+            _ => {}
+        }
+    }
+
+    fn on_core_event(&self, event: &Event) {
+        match event {
+            Event::ModeChanged => {
+                self.correct_widgets_props();
+            }
+            Event::ModeContinued => {
+                let options = self.options.read().unwrap();
+                self.show_frame_options(&options);
+            }
+            Event::FrameProcessing(result) => {
+                self.show_frame_processing_result(result);
+            }
+            Event::CameraDeviceChanged { from, to } => {
+                self.handler_camera_changed(from, to);
+            }
+            _ => {},
         }
     }
 }
@@ -462,31 +503,6 @@ impl CameraUi {
         let pl = self.widgets.info.da_shot_state.create_pango_layout(Some("#"));
         let text_height = pl.pixel_size().1;
         self.widgets.info.da_shot_state.set_width_request(8 * text_height);
-    }
-
-    fn connect_common_events(self: &Rc<Self>) {
-        let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
-
-        // INDI
-
-        let sender = main_thread_sender.clone();
-        *self.indi_evt_conn.borrow_mut() = Some(self.indi.subscribe_events(move |event| {
-            sender.send_blocking(MainThreadEvent::Indi(event)).unwrap();
-        }));
-
-        // Core
-
-        let sender = main_thread_sender.clone();
-        self.core.event_subscriptions().subscribe(move |event| {
-            sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
-        });
-
-        glib::spawn_future_local(clone!(@weak self as self_ => async move {
-            while let Ok(event) = main_thread_receiver.recv().await {
-                if self_.closed.get() { return; }
-                self_.process_indi_or_core_event(event);
-            }
-        }));
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
@@ -758,60 +774,6 @@ impl CameraUi {
             })
         );
 
-    }
-
-    fn process_indi_or_core_event(&self, event: MainThreadEvent) {
-        match event {
-            MainThreadEvent::Indi(indi::Event::ConnChange(conn_state)) =>
-                self.process_indi_conn_state_event(conn_state),
-            MainThreadEvent::Indi(indi::Event::PropChange(event_data)) => {
-                match &event_data.change {
-                    indi::PropChange::New(value) =>
-                        self.process_indi_prop_change(
-                            &event_data.device_name,
-                            &event_data.prop_name,
-                            &value.elem_name,
-                            true,
-                            None,
-                            None,
-                            &value.prop_value
-                        ),
-                    indi::PropChange::Change{ value, prev_state, new_state } =>
-                        self.process_indi_prop_change(
-                            &event_data.device_name,
-                            &event_data.prop_name,
-                            &value.elem_name,
-                            false,
-                            Some(prev_state),
-                            Some(new_state),
-                            &value.prop_value
-                        ),
-                    indi::PropChange::Delete => {}
-                };
-            },
-
-            MainThreadEvent::Indi(
-                indi::Event::DeviceConnected(_)|
-                indi::Event::DeviceDelete(_)|
-                indi::Event::NewDevice(_)
-            ) => {
-                self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
-            }
-            MainThreadEvent::Core(Event::ModeChanged) => {
-                self.correct_widgets_props();
-            }
-            MainThreadEvent::Core(Event::ModeContinued) => {
-                let options = self.options.read().unwrap();
-                self.show_frame_options(&options);
-            }
-            MainThreadEvent::Core(Event::FrameProcessing(result)) => {
-                self.show_frame_processing_result(result);
-            }
-            MainThreadEvent::Core(Event::CameraDeviceChanged { from, to }) => {
-                self.handler_camera_changed(&from, &to);
-            }
-            _ => {},
-        }
     }
 
     fn show_common_options(&self, options: &Options) {
@@ -1550,11 +1512,11 @@ impl CameraUi {
         }
     }
 
-    fn process_indi_conn_state_event(&self, conn_state: indi::ConnState) {
+    fn process_indi_conn_state_event(&self, conn_state: &indi::ConnState) {
         let disconnect_event =
-            conn_state == indi::ConnState::Disconnected ||
-            conn_state == indi::ConnState::Disconnecting;
-        *self.conn_state.borrow_mut() = conn_state;
+            *conn_state == indi::ConnState::Disconnected ||
+            *conn_state == indi::ConnState::Disconnecting;
+        *self.conn_state.borrow_mut() = conn_state.clone();
 
         if disconnect_event {
             let mut options = self.options.write().unwrap();
@@ -1860,16 +1822,16 @@ impl CameraUi {
         self.show_total_raw_time_impl(&options);
     }
 
-    fn show_frame_processing_result(&self, result: FrameProcessResult) {
-        match result.data {
+    fn show_frame_processing_result(&self, result: &FrameProcessResult) {
+        match &result.data {
             // TODO: move to main_ui
             FrameProcessResultData::Error(error_text) => {
                 self.core.abort_active_mode();
                 self.correct_widgets_props();
-                show_error_message(Some(&self.window), "Fatal Error", &error_text);
+                show_error_message(Some(&self.window), "Fatal Error", error_text);
             }
             FrameProcessResultData::MasterSaved { frame_type: FrameType::Flats, file_name } => {
-                self.widgets.calibr.fch_flat.set_filename(&file_name);
+                self.widgets.calibr.fch_flat.set_filename(file_name);
             }
             _ => {}
         }
