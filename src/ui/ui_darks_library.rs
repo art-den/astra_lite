@@ -606,12 +606,16 @@ impl UiModule for DarksLibraryUI {
         ]
     }
 
-    fn process_event(&self, event: &UiModuleEvent) {
-        match event {
-            UiModuleEvent::ProgramClosing => {
-                self.handler_closing();
-            }
-            _ => {}
+    fn on_app_closing(&self) {
+        self.closed.set(true);
+
+        self.get_options();
+        let ui_options = self.ui_options.borrow();
+        _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
+        drop(ui_options);
+
+        if let Some(core_conn) = self.core_subscription.borrow_mut().take() {
+            self.core.event_subscriptions().unsubscribe(core_conn);
         }
     }
 }
@@ -977,19 +981,6 @@ impl DarksLibraryUI {
         connect_action(&self.window, self, "stop_dark_files",        Self::handler_action_stop_dark_files);
         connect_action(&self.window, self, "create_bias_files",      Self::handler_action_create_bias_files);
         connect_action(&self.window, self, "stop_bias_files",        Self::handler_action_stop_bias_files);
-    }
-
-    fn handler_closing(&self) {
-        self.closed.set(true);
-
-        self.get_options();
-        let ui_options = self.ui_options.borrow();
-        _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
-        drop(ui_options);
-
-        if let Some(core_conn) = self.core_subscription.borrow_mut().take() {
-            self.core.event_subscriptions().unsubscribe(core_conn);
-        }
     }
 
     fn connect_core_events(self: &Rc<Self>) {

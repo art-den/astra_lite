@@ -136,15 +136,15 @@ impl UiModule for PolarAlignUi {
         }]
     }
 
-    fn process_event(&self, event: &UiModuleEvent) {
-        match event {
-            UiModuleEvent::AfterFirstShowOptions => {
-                self.correct_widgets_props();
-            }
-            UiModuleEvent::ProgramClosing => {
-                self.handler_closing();
-            }
-            _ => {}
+    fn on_show_options_first_time(&self) {
+        self.correct_widgets_props();
+    }
+
+    fn on_app_closing(&self) {
+        self.closed.set(true);
+
+        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
+            self.indi.unsubscribe(indi_conn);
         }
     }
 }
@@ -175,14 +175,6 @@ impl PolarAlignUi {
         self.widgets.spb_sim_az_err.set_range(-45.0, 45.0);
         self.widgets.spb_sim_az_err.set_digits(2);
         self.widgets.spb_sim_az_err.set_increments(0.01, 0.1);
-    }
-
-    fn handler_closing(&self) {
-        self.closed.set(true);
-
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
-        }
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {

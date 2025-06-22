@@ -348,19 +348,37 @@ impl UiModule for PreviewUi {
         ]
     }
 
-    fn process_event(&self, event: &UiModuleEvent) {
-        match event {
-            UiModuleEvent::AfterFirstShowOptions => {
-                self.correct_widgets_props();
-            }
-            UiModuleEvent::FullScreen(full_screen) => {
-                self.set_full_screen_mode(*full_screen);
-            }
-            UiModuleEvent::ProgramClosing => {
-                self.handler_closing();
-            }
-            _ => {}
+    fn on_show_options_first_time(&self) {
+        self.correct_widgets_props();
+    }
+
+    fn on_full_screen(&self, full_screen: bool) {
+        let options = self.options.read().unwrap();
+        let preview_scale = options.preview.scale;
+        drop(options);
+
+        self.widgets.common.pan_preview2.set_visible(!full_screen);
+        self.widgets.info.scr_img_info.set_visible(!full_screen);
+
+        if matches!(preview_scale, PreviewScale::FitWindow|PreviewScale::CenterAndCorners) {
+            gtk::main_iteration_do(true);
+            gtk::main_iteration_do(true);
+            gtk::main_iteration_do(true);
+            self.create_and_show_preview_image();
         }
+    }
+
+    fn on_app_closing(&self) {
+        self.closed.set(true);
+
+        _ = self.core.stop_img_process_thread();
+        self.core.abort_active_mode();
+
+        self.get_ui_options_from_widgets();
+
+        let ui_options = self.ui_options.borrow();
+        _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
+        drop(ui_options);
     }
 }
 
@@ -403,19 +421,6 @@ impl PreviewUi {
 
         self.widgets.image.l_overlay_top.set_text("");
         self.widgets.image.l_overlay_bottom.set_text("");
-    }
-
-    fn handler_closing(&self) {
-        self.closed.set(true);
-
-        _ = self.core.stop_img_process_thread();
-        self.core.abort_active_mode();
-
-        self.get_ui_options_from_widgets();
-
-        let ui_options = self.ui_options.borrow();
-        _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
-        drop(ui_options);
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
@@ -1439,22 +1444,6 @@ impl PreviewUi {
             }
 
             _ => {},
-        }
-    }
-
-    fn set_full_screen_mode(&self, full_screen: bool) {
-        let options = self.options.read().unwrap();
-        let preview_scale = options.preview.scale;
-        drop(options);
-
-        self.widgets.common.pan_preview2.set_visible(!full_screen);
-        self.widgets.info.scr_img_info.set_visible(!full_screen);
-
-        if matches!(preview_scale, PreviewScale::FitWindow|PreviewScale::CenterAndCorners) {
-            gtk::main_iteration_do(true);
-            gtk::main_iteration_do(true);
-            gtk::main_iteration_do(true);
-            self.create_and_show_preview_image();
         }
     }
 

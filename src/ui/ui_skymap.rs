@@ -372,34 +372,12 @@ impl UiModule for MapUi {
         ]
     }
 
-    fn process_event(&self, event: &UiModuleEvent) {
-        match event {
-            UiModuleEvent::AfterFirstShowOptions => {
-                let widget = self.map_widget.get_widget();
-                widget.set_expand(true);
-            }
-            UiModuleEvent::ProgramClosing => {
-                self.handler_closing();
-            }
-            UiModuleEvent::TabChanged { to: TabPage::SkyMap, .. } => {
-                self.check_data_loaded();
-                self.set_observer_data_for_widget();
-                self.update_date_time_widgets(true);
-                self.update_skymap_widget(true);
-                self.show_selected_objects_info();
-            }
-            UiModuleEvent::Timer => {
-                self.handler_main_timer();
-            }
-            _ => {}
-        }
+    fn on_show_options_first_time(&self) {
+        let widget = self.map_widget.get_widget();
+        widget.set_expand(true);
     }
-}
 
-impl MapUi {
-    const CONF_FN: &'static str = "ui_skymap";
-
-    fn handler_closing(&self) {
+    fn on_app_closing(&self) {
         self.closed.set(true);
 
         self.read_ui_options_from_widgets();
@@ -408,6 +386,32 @@ impl MapUi {
         _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
         drop(ui_options);
     }
+
+    fn on_tab_changed(&self, _from: TabPage, _to: TabPage) {
+        self.check_data_loaded();
+        self.set_observer_data_for_widget();
+        self.update_date_time_widgets(true);
+        self.update_skymap_widget(true);
+        self.show_selected_objects_info();
+    }
+
+    fn on_250ms_timer(&self) {
+        if self.main_ui.current_tab_page() != TabPage::SkyMap {
+            return;
+        }
+
+        // Change time in widget if second is changed
+        self.update_date_time_widgets(false);
+
+        // Update map 2 times per second
+        self.update_skymap_widget(false);
+
+        self.show_selected_objects_info();
+    }
+}
+
+impl MapUi {
+    const CONF_FN: &'static str = "ui_skymap";
 
     fn init_widgets(&self) {
         let set_range = |spb: &gtk::SpinButton, min, max| {
@@ -641,20 +645,6 @@ impl MapUi {
     fn set_observer_data_for_widget(&self) {
         let observer = self.create_observer();
         self.map_widget.set_observer(&observer);
-    }
-
-    fn handler_main_timer(&self) {
-        if self.main_ui.current_tab_page() != TabPage::SkyMap {
-            return;
-        }
-
-        // Change time in widget if second is changed
-        self.update_date_time_widgets(false);
-
-        // Update map 2 times per second
-        self.update_skymap_widget(false);
-
-        self.show_selected_objects_info();
     }
 
     fn update_date_time_widgets(&self, force: bool) {

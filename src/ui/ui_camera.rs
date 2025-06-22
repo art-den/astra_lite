@@ -323,6 +323,10 @@ impl UiModule for CameraUi {
         self.get_frame_quality_options(options);
     }
 
+    fn on_show_options_first_time(&self) {
+        self.correct_widgets_props();
+    }
+
     fn panels(&self) -> Vec<Panel> {
         vec![
             Panel {
@@ -392,15 +396,23 @@ impl UiModule for CameraUi {
         ]
     }
 
-    fn process_event(&self, event: &UiModuleEvent) {
-        match event {
-            UiModuleEvent::AfterFirstShowOptions => {
-                self.correct_widgets_props();
-            }
-            UiModuleEvent::ProgramClosing => {
-                self.handler_closing();
-            }
-            _ => {}
+    fn on_app_closing(&self) {
+        self.closed.set(true);
+
+        _ = self.core.stop_img_process_thread();
+
+        self.core.abort_active_mode();
+
+        // Stores current camera options for current camera
+
+        let mut options = self.options.write().unwrap();
+        self.store_options_for_camera(options.cam.device.clone(), &mut options);
+        drop(options);
+
+        // Unsubscribe events
+
+        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
+            self.indi.unsubscribe(indi_conn);
         }
     }
 }
@@ -958,26 +970,6 @@ impl CameraUi {
             options.cam.frame = sep_options.frame.clone();
             options.cam.ctrl = sep_options.ctrl.clone();
             options.calibr = sep_options.calibr.clone();
-        }
-    }
-
-    fn handler_closing(&self) {
-        self.closed.set(true);
-
-        _ = self.core.stop_img_process_thread();
-
-        self.core.abort_active_mode();
-
-        // Stores current camera options for current camera
-
-        let mut options = self.options.write().unwrap();
-        self.store_options_for_camera(options.cam.device.clone(), &mut options);
-        drop(options);
-
-        // Unsubscribe events
-
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
         }
     }
 

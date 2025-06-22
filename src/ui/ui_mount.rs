@@ -191,16 +191,15 @@ impl UiModule for MountUi {
         ]
     }
 
-    fn process_event(&self, event: &UiModuleEvent) {
-        match event {
-            UiModuleEvent::AfterFirstShowOptions => {
-                self.correct_widgets_props();
-            }
-            UiModuleEvent::ProgramClosing => {
-                self.handler_closing();
-            }
+    fn on_show_options_first_time(&self) {
+        self.correct_widgets_props();
+    }
 
-            _ => {}
+    fn on_app_closing(&self) {
+        self.closed.set(true);
+
+        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
+            self.indi.unsubscribe(indi_conn);
         }
     }
 }
@@ -345,14 +344,6 @@ impl MountUi {
 
         self.main_ui.set_module_panel_visible(self.info_widgets.bx.upcast_ref(), mnt_active);
         self.show_info(&mount_device);
-    }
-
-    fn handler_closing(&self) {
-        self.closed.set(true);
-
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
-        }
     }
 
     fn process_event_in_main_thread(&self, event: MainThreadEvent) {

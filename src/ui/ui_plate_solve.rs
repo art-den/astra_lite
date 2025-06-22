@@ -123,17 +123,22 @@ impl UiModule for PlateSolveUi {
         }]
     }
 
-    fn process_event(&self, event: &UiModuleEvent) {
-        match event {
-            UiModuleEvent::AfterFirstShowOptions => {
-                self.correct_widgets_props();
-            }
-            UiModuleEvent::ProgramClosing => {
-                self.handler_closing();
-            }
+    fn on_show_options_first_time(&self) {
+        self.correct_widgets_props();
+    }
 
-            _ => {}
+    fn on_app_closing(&self) {
+        self.closed.set(true);
+
+        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
+            self.indi.unsubscribe(indi_conn);
         }
+
+        let mut options = self.options.write().unwrap();
+        if let Some(cur_cam_device) = options.cam.device.clone() {
+            self.store_options_for_camera(&cur_cam_device, &mut options);
+        }
+        drop(options);
     }
 }
 
@@ -150,20 +155,6 @@ impl PlateSolveUi {
         self.widgets.spb_blind_timeout.set_range(5.0, 120.0);
         self.widgets.spb_blind_timeout.set_digits(0);
         self.widgets.spb_blind_timeout.set_increments(5.0, 20.0);
-    }
-
-    fn handler_closing(&self) {
-        self.closed.set(true);
-
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
-        }
-
-        let mut options = self.options.write().unwrap();
-        if let Some(cur_cam_device) = options.cam.device.clone() {
-            self.store_options_for_camera(&cur_cam_device, &mut options);
-        }
-        drop(options);
     }
 
     fn connect_core_and_indi_events(self: &Rc<Self>) {

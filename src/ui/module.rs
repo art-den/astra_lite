@@ -92,19 +92,15 @@ impl TabPage {
     }
 }
 
-pub enum UiModuleEvent {
-    AfterFirstShowOptions,
-    FullScreen(bool),
-    ProgramClosing,
-    TabChanged { from: TabPage, to: TabPage },
-    Timer,
-}
-
 pub trait UiModule {
     fn show_options(&self, options: &Options);
     fn get_options(&self, options: &mut Options);
     fn panels(&self) -> Vec<Panel>;
-    fn process_event(&self, event: &UiModuleEvent);
+    fn on_show_options_first_time(&self) {}
+    fn on_full_screen(&self, _full_screen: bool) {}
+    fn on_app_closing(&self) {}
+    fn on_tab_changed(&self, _from: TabPage, _to: TabPage) {}
+    fn on_250ms_timer(&self) {}
 }
 
 pub struct UiModuleItem {
@@ -147,6 +143,10 @@ impl UiModules {
         });
     }
 
+    pub fn clear(&mut self) {
+        self.items.clear();
+    }
+
     pub fn show_options(&self, options: &Options) {
         for item in &self.items {
             item.module.show_options(options);
@@ -167,13 +167,34 @@ impl UiModules {
         self.items.iter()
     }
 
-    pub fn process_event(&self, event: &UiModuleEvent) {
+    pub fn on_show_first_options(&self) {
         for item in &self.items {
-            item.module.process_event(event);
+            item.module.on_show_options_first_time();
         }
     }
 
-    pub fn clear(&mut self) {
-        self.items.clear();
+    pub fn on_full_screen(&self, full_screen: bool) {
+        for item in &self.items {
+            item.module.on_full_screen(full_screen);
+        }
     }
+
+    pub fn on_app_closing(&self) {
+        for item in &self.items {
+            item.module.on_app_closing();
+        }
+    }
+
+    pub fn on_tab_changed(&self, from: TabPage, to: TabPage) {
+        for item in &self.items {
+            item.module.on_tab_changed(from, to);
+        }
+    }
+
+    pub fn on_250ms_timer(&self) {
+        for item in &self.items {
+            item.module.on_250ms_timer();
+        }
+    }
+
 }

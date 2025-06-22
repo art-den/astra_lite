@@ -259,23 +259,32 @@ impl UiModule for HardwareUi {
         ]
     }
 
-    fn process_event(&self, event: &UiModuleEvent) {
-        match event {
-            UiModuleEvent::AfterFirstShowOptions => {
-                self.correct_widgets_by_cur_state();
-            }
-            UiModuleEvent::ProgramClosing => {
-                self.handler_closing();
-            }
-            UiModuleEvent::TabChanged { from, to } => {
-                self.indi_widget.set_enabled(*to == TabPage::Hardware);
-                if *from == TabPage::Hardware {
-                    let mut options = self.options.write().unwrap();
-                    self.get_telescope_options(&mut options);
-                    self.get_site_options(&mut options);
-                }
-            }
-            _ => {}
+    fn on_show_options_first_time(&self) {
+        self.correct_widgets_by_cur_state();
+    }
+
+    fn on_app_closing(&self) {
+        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
+            self.indi.unsubscribe(indi_conn);
+        }
+
+        if !self.is_remote.get() {
+            _ = self.indi.command_enable_all_devices(false, true, Some(2000));
+        }
+
+        log::info!("Stop connection to PHD2...");
+        _ = self.core.ext_giuder().phd2_conn().stop();
+        log::info!("Done!");
+
+        //self.core.ext_giuder().phd2_conn().discnnect_all_event_handlers();
+    }
+
+    fn on_tab_changed(&self, from: TabPage, to: TabPage) {
+        self.indi_widget.set_enabled(to == TabPage::Hardware);
+        if from == TabPage::Hardware {
+            let mut options = self.options.write().unwrap();
+            self.get_telescope_options(&mut options);
+            self.get_site_options(&mut options);
         }
     }
 }
@@ -530,22 +539,6 @@ impl HardwareUi {
         };
 
         self.widgets.conn_stat.lbl_phd2.set_label(status_text);
-    }
-
-    fn handler_closing(&self) {
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
-        }
-
-        if !self.is_remote.get() {
-            _ = self.indi.command_enable_all_devices(false, true, Some(2000));
-        }
-
-        log::info!("Stop connection to PHD2...");
-        _ = self.core.ext_giuder().phd2_conn().stop();
-        log::info!("Done!");
-
-        //self.core.ext_giuder().phd2_conn().discnnect_all_event_handlers();
     }
 
     fn correct_widgets_by_cur_state(&self) {

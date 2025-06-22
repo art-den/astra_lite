@@ -160,16 +160,22 @@ impl UiModule for GuidingUi {
         ]
     }
 
-    fn process_event(&self, event: &UiModuleEvent) {
-        match event {
-            UiModuleEvent::AfterFirstShowOptions => {
-                self.correct_widgets_props();
-            }
-            UiModuleEvent::ProgramClosing => {
-                self.handler_closing();
-            }
-            _ => {}
+    fn on_show_options_first_time(&self) {
+        self.correct_widgets_props();
+    }
+
+    fn on_app_closing(&self) {
+        self.closed.set(true);
+
+        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
+            self.indi.unsubscribe(indi_conn);
         }
+
+        let mut options = self.options.write().unwrap();
+        if let Some(cur_cam_device) = options.cam.device.clone() {
+            self.store_options_for_camera(&cur_cam_device, &mut options);
+        }
+        drop(options);
     }
 }
 
@@ -246,20 +252,6 @@ impl GuidingUi {
         connect_rbtn(&self.widgets.rbtn_no_guiding);
         connect_rbtn(&self.widgets.rbtn_guide_main_cam);
         connect_rbtn(&self.widgets.rbtn_guide_ext);
-    }
-
-    fn handler_closing(&self) {
-        self.closed.set(true);
-
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
-        }
-
-        let mut options = self.options.write().unwrap();
-        if let Some(cur_cam_device) = options.cam.device.clone() {
-            self.store_options_for_camera(&cur_cam_device, &mut options);
-        }
-        drop(options);
     }
 
     fn correct_widgets_props_impl(&self, cam_device: Option<&DeviceAndProp>) {
@@ -363,19 +355,12 @@ impl GuidingUi {
             ExtGuiderEvent::DitheringFinishedWithErr(err) =>
                 self.show_ext_guider_error(&err),
             ExtGuiderEvent::Connected => {
-                self.main_ui.set_module_panel_visible(
-                    self.info_widgets.bx.upcast_ref(),
-                    true
-                );
                 if let Some(state) = self.core.ext_giuder().state() {
                     self.show_ext_guider_state(state);
                 }
             }
             ExtGuiderEvent::Disconnected =>
-                self.main_ui.set_module_panel_visible(
-                    self.info_widgets.bx.upcast_ref(),
-                    false
-                ),
+                self.show_info_text("Disconnected", Some(get_err_color_str())),
             _ => {}
         }
     }

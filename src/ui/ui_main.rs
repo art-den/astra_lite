@@ -99,7 +99,7 @@ pub fn init_ui(
 
     main_ui.show_all_options();
     let modules = main_ui.modules.borrow();
-    modules.process_event(&UiModuleEvent::AfterFirstShowOptions);
+    modules.on_show_first_options();
     drop(modules);
 
     main_ui.apply_panel_options();
@@ -302,10 +302,7 @@ impl MainUi {
                 self_.widgets.btn_fullscreen.set_sensitive(enable_fullscreen);
                 let tab = TabPage::from_tab_index(page);
                 let modules = self_.modules.borrow();
-                modules.process_event(&UiModuleEvent::TabChanged {
-                    from: self_.prev_tab_page.get(),
-                    to:   tab
-                });
+                modules.on_tab_changed(self_.prev_tab_page.get(), tab);
                 self_.prev_tab_page.set(tab);
             })
         );
@@ -371,7 +368,7 @@ impl MainUi {
                     return glib::ControlFlow::Break;
                 }
                 let modules = self_.modules.borrow();
-                modules.process_event(&UiModuleEvent::Timer);
+                modules.on_250ms_timer();
                 glib::ControlFlow::Continue
             }
         ));
@@ -416,7 +413,7 @@ impl MainUi {
         }
 
         let modules = self.modules.borrow();
-        modules.process_event(&UiModuleEvent::ProgramClosing);
+        modules.on_app_closing();
         drop(modules);
 
         self.core.event_subscriptions().clear();
@@ -638,7 +635,7 @@ impl MainUi {
         self.widgets.scr_comm_right.set_visible(!full_screen);
         self.widgets.scr_map_left.set_visible(!full_screen);
         let modules = self.modules.borrow();
-        modules.process_event(&UiModuleEvent::FullScreen(full_screen));
+        modules.on_full_screen(full_screen);
         drop(modules);
     }
 

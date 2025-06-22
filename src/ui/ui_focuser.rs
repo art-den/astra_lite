@@ -197,16 +197,22 @@ impl UiModule for FocuserUi {
         ]
     }
 
-    fn process_event(&self, event: &UiModuleEvent) {
-        match event {
-            UiModuleEvent::AfterFirstShowOptions => {
-                self.correct_widgets_props();
-            }
-            UiModuleEvent::ProgramClosing => {
-                self.handler_closing();
-            }
-            _ => {}
+    fn on_show_options_first_time(&self) {
+        self.correct_widgets_props();
+    }
+
+    fn on_app_closing(&self) {
+        self.closed.set(true);
+
+        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
+            self.indi.unsubscribe(indi_conn);
         }
+
+        let mut options = self.options.write().unwrap();
+        if let Some(cur_cam_device) = options.cam.device.clone() {
+            self.store_options_for_camera(&cur_cam_device, &mut options);
+        }
+        drop(options);
     }
 }
 
@@ -488,20 +494,6 @@ impl FocuserUi {
         let cam_device = options.cam.device.clone();
         drop(options);
         self.correct_widgets_props_impl(&focuser_device, cam_device.as_ref());
-    }
-
-    fn handler_closing(&self) {
-        self.closed.set(true);
-
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
-        }
-
-        let mut options = self.options.write().unwrap();
-        if let Some(cur_cam_device) = options.cam.device.clone() {
-            self.store_options_for_camera(&cur_cam_device, &mut options);
-        }
-        drop(options);
     }
 
     fn handler_camera_changed(&self, from: &Option<DeviceAndProp>, to: &DeviceAndProp) {
