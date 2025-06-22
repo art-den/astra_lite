@@ -204,6 +204,8 @@ impl GuidingUi {
         self.widgets.spb_ext_dith_dist.set_range(1.0, 300.0);
         self.widgets.spb_ext_dith_dist.set_digits(0);
         self.widgets.spb_ext_dith_dist.set_increments(1.0, 10.0);
+
+        self.show_info_text_disconnected();
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
@@ -257,6 +259,11 @@ impl GuidingUi {
             ("start_dither_calibr", !dither_calibr && by_main_cam && can_change_mode),
             ("stop_dither_calibr", dither_calibr),
         ]);
+
+        self.main_ui.set_module_panel_visible(
+            self.info_widgets.bx.upcast_ref(),
+            self.widgets.rbtn_guide_ext.is_active()
+        );
     }
 
     fn correct_widgets_props(&self) {
@@ -328,9 +335,13 @@ impl GuidingUi {
                 }
             }
             ExtGuiderEvent::Disconnected =>
-                self.show_info_text("Disconnected", Some(get_err_color_str())),
+                self.show_info_text_disconnected(),
             _ => {}
         }
+    }
+
+    fn show_info_text_disconnected(&self) {
+        self.show_info_text("Disconnected", Some(get_err_color_str()));
     }
 
     fn show_ext_guider_error(&self, err: &str) {
