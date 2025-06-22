@@ -43,7 +43,6 @@ pub fn init_ui(
         options:            Arc::clone(options),
         ui_options:         RefCell::new(ui_options),
         preview_scroll_pos: RefCell::new(None),
-        closed:             Cell::new(false),
         light_history:      RefCell::new(Vec::new()),
         calibr_history:     RefCell::new(Vec::new()),
         flat_info:          RefCell::new(FlatImageInfo::default()),
@@ -54,7 +53,6 @@ pub fn init_ui(
     obj.show_ui_options();
 
     obj.connect_widgets_events();
-    obj.connect_core_events();
     obj.connect_img_mouse_scroll_events();
 
     obj.update_light_history_table();
@@ -81,10 +79,6 @@ impl Default for UiOptions {
             hist_width:     -1,
         }
     }
-}
-
-enum MainThreadEvent {
-    Core(Event),
 }
 
 struct LightHistoryItem {
@@ -288,7 +282,6 @@ struct PreviewUi {
     preview_scroll_pos: RefCell<Option<((f64, f64), (f64, f64))>>,
     light_history:      RefCell<Vec<LightHistoryItem>>,
     calibr_history:     RefCell<Vec<CalibrHistoryItem>>,
-    closed:             Cell<bool>,
     flat_info:          RefCell<FlatImageInfo>,
     is_color_image:     Cell<bool>,
 }
@@ -369,8 +362,6 @@ impl UiModule for PreviewUi {
     }
 
     fn on_app_closing(&self) {
-        self.closed.set(true);
-
         _ = self.core.stop_img_process_thread();
         self.core.abort_active_mode();
 
@@ -379,6 +370,25 @@ impl UiModule for PreviewUi {
         let ui_options = self.ui_options.borrow();
         _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
         drop(ui_options);
+    }
+
+    fn on_core_event(&self, event: &Event) {
+        match event {
+            Event::FrameProcessing(result) => {
+                self.show_frame_processing_result(result);
+            }
+            Event::ModeChanged => {
+                self.correct_preview_source();
+            }
+            Event::ModeContinued => {
+                self.correct_preview_source();
+            }
+            Event::OverlayMessage { pos, text } => {
+                self.show_overlay_message(pos, text);
+            }
+            _ => {},
+        }
+
     }
 }
 
@@ -587,22 +597,6 @@ impl PreviewUi {
         }));
     }
 
-    fn connect_core_events(self: &Rc<Self>) {
-        let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
-
-        let sender = main_thread_sender.clone();
-        self.core.event_subscriptions().subscribe(move |event| {
-            sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
-        });
-
-        glib::spawn_future_local(clone!(@weak self as self_ => async move {
-            while let Ok(event) = main_thread_receiver.recv().await {
-                if self_.closed.get() { return; }
-                self_.process_core_event(event);
-            }
-        }));
-    }
-
     fn connect_img_mouse_scroll_events(self: &Rc<Self>) {
         self.widgets.image.eb_img.connect_button_press_event(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
@@ -647,28 +641,6 @@ impl PreviewUi {
         );
     }
 
-    fn process_core_event(&self, event: MainThreadEvent) {
-        match event {
-            MainThreadEvent::Core(Event::FrameProcessing(result)) => {
-                self.show_frame_processing_result(result);
-            }
-
-            MainThreadEvent::Core(Event::ModeChanged) => {
-                self.correct_preview_source();
-            }
-
-            MainThreadEvent::Core(Event::ModeContinued) => {
-                self.correct_preview_source();
-            }
-
-            MainThreadEvent::Core(Event::OverlayMessage { pos, text }) => {
-                self.show_overlay_message(pos, &text);
-            }
-
-            _ => {},
-        }
-    }
-
     fn show_ui_options(&self) {
         let options = self.ui_options.borrow();
         self.widgets.stat.ch_hist_log_y.set_active(options.hist_log_y);
@@ -703,7 +675,7 @@ impl PreviewUi {
         self.widgets.ctrl.scl_wb_blue.set_sensitive(rgb_enabled);
     }
 
-    fn show_overlay_message(&self, pos: OverlayMessgagePos, text: &str) {
+    fn show_overlay_message(&self, pos: &OverlayMessgagePos, text: &str) {
         match pos {
             OverlayMessgagePos::Top => {
                 self.widgets.image.l_overlay_top.set_text(text);
@@ -994,13 +966,10 @@ impl PreviewUi {
         });
     }
 
-    fn show_frame_processing_result(
-        &self,
-        result: FrameProcessResult
-    ) {
+    fn show_frame_processing_result(&self, result: &FrameProcessResult) {
         let options = self.options.read().unwrap();
         if !result.camera.name.is_empty()
-        && options.cam.device != Some(result.camera) {
+        && options.cam.device.as_ref() != Some(&result.camera) {
             return;
         }
         let live_stacking_preview = options.preview.source == PreviewSource::LiveStacking;
@@ -1014,7 +983,7 @@ impl PreviewUi {
             live_result == live_stacking_preview
         };
 
-        match result.data {
+        match &result.data {
             FrameProcessResultData::ShotProcessingFinished {
                 processing_time, blob_dl_time, ..
             } => {

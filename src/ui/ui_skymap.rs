@@ -62,7 +62,6 @@ pub fn init_ui(
         search_result: RefCell::new(Vec::new()),
         clicked_crd:   RefCell::new(None),
         goto_started:  Cell::new(false),
-        closed:        Cell::new(false),
         cam_rotation:  RefCell::new(HashMap::new()),
         ps_img:        RefCell::new(None),
         ps_result:     RefCell::new(None),
@@ -302,7 +301,6 @@ struct MapUi {
     search_result: RefCell<Vec<FoundItem>>,
     clicked_crd:   RefCell<Option<EqCoord>>,
     goto_started:  Cell<bool>,
-    closed:        Cell<bool>,
     cam_rotation:  RefCell<HashMap<String, f64>>,
     ps_img:        RefCell<Option<gdk::gdk_pixbuf::Pixbuf>>,
     ps_result:     RefCell<Option<PlateSolveOkResult>>,
@@ -373,8 +371,6 @@ impl UiModule for MapUi {
     }
 
     fn on_app_closing(&self) {
-        self.closed.set(true);
-
         self.read_ui_options_from_widgets();
 
         let ui_options = self.ui_options.borrow();
