@@ -92,7 +92,6 @@ impl ExternalGuiderPhd2 {
             }
 
             if let Some(evt) = evt {
-                dbg!(&evt);
                 let data = self_.data.lock().unwrap();
                 for hndlr in &data.evt_handlers {
                     hndlr(evt.clone());
