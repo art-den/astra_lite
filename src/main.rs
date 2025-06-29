@@ -168,6 +168,7 @@ fn main() -> anyhow::Result<()> {
     drop(options);
     log::info!("Options saved");
 
+    log::info!("Core stopping...");
     core.stop();
     log::info!("Core stopped");
 

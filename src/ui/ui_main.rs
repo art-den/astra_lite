@@ -55,7 +55,6 @@ pub fn init_ui(
         indi:           Arc::clone(indi),
         options:        Arc::clone(options),
         modules:        RefCell::new(UiModules::new()),
-        indi_evt_conn:  RefCell::new(None),
         ui_options:     RefCell::new(ui_options),
         progress:       RefCell::new(None),
         close_win_flag: Cell::new(false),
@@ -223,7 +222,6 @@ pub struct MainUi {
     logs_dir:       PathBuf,
     options:        Arc<RwLock<Options>>,
     modules:        RefCell<UiModules>,
-    indi_evt_conn:  RefCell<Option<indi::Subscription>>,
     ui_options:     RefCell<UiOptions>,
     progress:       RefCell<Option<Progress>>,
     core:           Arc<Core>,
@@ -324,7 +322,7 @@ impl MainUi {
 
     fn connect_state_events(self: &Rc<Self>) {
         let (sender, receiver) = async_channel::unbounded();
-        self.core.event_subscriptions().subscribe(move |event| {
+        self.core.events().subscribe(move |event| {
             sender.send_blocking(event).unwrap();
         });
 
@@ -390,14 +388,14 @@ impl MainUi {
         // INDI
 
         let sender = main_thread_sender.clone();
-        *self.indi_evt_conn.borrow_mut() = Some(self.indi.subscribe_events(move |event| {
+        Some(self.indi.subscribe_events(move |event| {
             sender.send_blocking(MainThreadEvent::Indi(event)).unwrap();
         }));
 
         // Core
 
         let sender = main_thread_sender.clone();
-        self.core.event_subscriptions().subscribe(move |event| {
+        self.core.events().subscribe(move |event| {
             sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
         });
 
@@ -453,16 +451,9 @@ impl MainUi {
         modules.on_app_closing();
         drop(modules);
 
-        self.core.event_subscriptions().clear();
-        self.indi.unsubscribe_all();
-
         self.modules.borrow_mut().clear();
 
         // Unsubscribe events
-
-        if let Some(indi_conn) = self.indi_evt_conn.borrow_mut().take() {
-            self.indi.unsubscribe(indi_conn);
-        }
 
         *self.self_.borrow_mut() = None;
 

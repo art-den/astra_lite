@@ -44,7 +44,7 @@ enum Stage {
 
 pub struct FocusingMode {
     indi:           Arc<indi::Connection>,
-    subscribers:    Arc<EventSubscriptions>,
+    subscribers:    Arc<Events>,
     state:          FocusingState,
     camera:         DeviceAndProp,
     f_opts:         FocuserOptions,
@@ -104,7 +104,7 @@ impl FocusingMode {
     pub fn new(
         indi:           &Arc<indi::Connection>,
         options:        &Arc<RwLock<Options>>,
-        subscribers:    &Arc<EventSubscriptions>,
+        subscribers:    &Arc<Events>,
         next_mode:      Option<Box<dyn Mode + Sync + Send>>,
         prelim_step:    bool,
         error_reaction: FocusingErrorReaction,

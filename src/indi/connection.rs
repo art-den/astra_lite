@@ -2376,6 +2376,15 @@ impl Connection {
 
     // CCD temperature
 
+    pub fn camera_is_temperature_property(
+        prop_name: &str,
+        elem_name: &str,
+    ) -> bool {
+        PROP_CAM_TEMPERATURE.iter().any(|(prop, elem)|
+            *prop == prop_name && *elem == elem_name
+        )
+    }
+
     pub fn camera_is_temperature_supported(
         &self,
         device_name: &str
@@ -2422,6 +2431,15 @@ impl Connection {
         )
     }
 
+    pub fn camera_is_cooler_pwr_property(
+        prop_name: &str,
+        elem_name: &str
+    ) -> bool {
+        PROP_CAM_COOLING_PWR.iter().any(|(prop, elem)|
+            *prop == prop_name && *elem == elem_name
+        )
+    }
+
     pub fn camera_get_cooler_pwr_property(
         &self,
         device_name: &str
@@ -2433,14 +2451,258 @@ impl Connection {
         Ok((property.clone(), elem.clone()))
     }
 
-    pub fn camera_is_cooler_pwr_property(
-        prop_name: &str,
-        elem_name: &str
-    ) -> bool {
-        PROP_CAM_COOLING_PWR.iter().any(|(prop, elem)|
-            *prop == prop_name && *elem == elem_name
+
+    // Camera fan
+
+    pub fn camera_is_fan_supported(
+        &self,
+        device_name: &str,
+    ) -> Result<bool> {
+        self.is_device_support_any_of_props(
+            device_name,
+            PROP_CAM_FAN_ON
         )
     }
+
+    pub fn camera_is_fan_str_property(
+        prop_name: &str
+    ) -> bool {
+        PROP_CAM_FAN_ON.iter().any(|(prop, _)|
+            *prop == prop_name
+        )
+    }
+
+    pub fn camera_control_fan(
+        &self,
+        device_name: &str,
+        enable:      bool,
+        force_set:   bool,
+        timeout_ms:  Option<u64>,
+    ) -> Result<bool> {
+        let devices = self.devices.lock().unwrap();
+        let (prop, elem) = if enable {
+            devices.existing_prop_name(device_name, PROP_CAM_FAN_ON)?
+        } else {
+            devices.existing_prop_name(device_name, PROP_CAM_FAN_OFF)?
+        };
+        drop(devices);
+        self.command_set_switch_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            prop,
+            &[(elem, true)]
+        )?;
+        Ok(true)
+    }
+
+    // Camera window heater
+
+    pub fn camera_is_heater_str_supported(
+        &self,
+        device_name: &str,
+    ) -> Result<bool> {
+        self.is_device_support_any_of_props(
+            device_name,
+            PROP_CAM_HEAT_CTRL_LIST
+        )
+    }
+
+    pub fn camera_is_heater_str_property(
+        prop_name: &str
+    ) -> bool {
+        PROP_CAM_HEAT_CTRL_LIST.iter().any(|(prop, _)|
+            *prop == prop_name
+        )
+    }
+
+    pub fn camera_get_heater_items(
+        &self,
+        device_name: &str
+    ) -> Result<Option<Vec<(Arc<String>, Arc<String>)>>> {
+        let devices = self.devices.lock().unwrap();
+        let (prop_name, _) = devices.existing_prop_name(
+            device_name,
+            PROP_CAM_HEAT_CTRL_LIST
+        )?;
+        let device = devices.find_by_name_res(device_name)?;
+        let Some(prop) = device.get_property_opt(prop_name) else {
+            return Ok(None);
+        };
+        Ok(Some(prop.elements
+            .iter()
+            .map(|e| {
+                let name = Arc::clone(&e.name);
+                let caption = Arc::clone(e.label.as_ref().unwrap_or(&e.name));
+                (name, caption)
+            })
+            .collect()
+        ))
+    }
+
+    pub fn camera_set_heater_str(
+        &self,
+        device_name: &str,
+        value:       &str,
+        force_set:   bool,
+        timeout_ms:  Option<u64>,
+    ) -> Result<()> {
+        let devices = self.devices.lock().unwrap();
+        let (prop_name, _) = devices.existing_prop_name(
+            device_name,
+            PROP_CAM_HEAT_CTRL_LIST
+        )?;
+        drop(devices);
+        self.command_set_switch_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            prop_name, &[(value, true)]
+        )?;
+        Ok(())
+    }
+
+
+    // Camera low noise mode
+
+    pub fn camera_is_low_noise_supported(
+        &self,
+        device_name: &str,
+    ) -> Result<bool> {
+        self.is_device_support_any_of_props(
+            device_name,
+            PROP_CAM_LOW_NOISE_ON
+        )
+    }
+
+    pub fn camera_set_low_noise(
+        &self,
+        device_name: &str,
+        enable:      bool,
+        force_set:   bool,
+        timeout_ms:  Option<u64>,
+    ) -> Result<()> {
+        let devices = self.devices.lock().unwrap();
+        let (prop, elem) = if enable {
+            devices.existing_prop_name(device_name, PROP_CAM_LOW_NOISE_ON)?
+        } else {
+            devices.existing_prop_name(device_name, PROP_CAM_LOW_NOISE_OFF)?
+        };
+        drop(devices);
+        self.command_set_switch_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            prop,
+            &[(elem, true)]
+        )?;
+        Ok(())
+    }
+
+
+    // Conversion gain mode
+
+    pub fn camera_is_conversion_gain_str_supported(
+        &self,
+        device_name: &str,
+    ) -> Result<bool> {
+        self.is_device_support_any_of_props(
+            device_name,
+            PROP_CAM_CONV_GAIN_LIST
+        )
+    }
+
+    pub fn camera_is_conversion_gain_property(
+        prop_name: &str
+    ) -> bool {
+        PROP_CAM_CONV_GAIN_LIST.iter().any(|(prop, _)|
+            *prop == prop_name
+        )
+    }
+
+    pub fn camera_get_conversion_gain_items(
+        &self,
+        device_name: &str
+    ) -> Result<Option<Vec<(Arc<String>, Arc<String>)>>> {
+        let devices = self.devices.lock().unwrap();
+        let (prop_name, _) = devices.existing_prop_name(
+            device_name,
+            PROP_CAM_CONV_GAIN_LIST
+        )?;
+        let device = devices.find_by_name_res(device_name)?;
+        let Some(prop) = device.get_property_opt(prop_name) else {
+            return Ok(None);
+        };
+        Ok(Some(prop.elements
+            .iter()
+            .map(|e| {
+                let name = Arc::clone(&e.name);
+                let caption = Arc::clone(e.label.as_ref().unwrap_or(&e.name));
+                (name, caption)
+            })
+            .collect()
+        ))
+    }
+
+    pub fn camera_set_conversion_gain_str(
+        &self,
+        device_name: &str,
+        value:       &str,
+        force_set:   bool,
+        timeout_ms:  Option<u64>,
+    ) -> Result<()> {
+        let devices = self.devices.lock().unwrap();
+        let (prop_name, _) = devices.existing_prop_name(
+            device_name,
+            PROP_CAM_CONV_GAIN_LIST
+        )?;
+        drop(devices);
+        self.command_set_switch_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            prop_name, &[(value, true)]
+        )?;
+        Ok(())
+    }
+
+
+    // High fullwell mode
+
+    pub fn camera_is_high_fullwell_supported(
+        &self,
+        device_name: &str,
+    ) -> Result<bool> {
+        self.is_device_support_any_of_props(
+            device_name,
+            PROP_CAM_HIGH_FULLWELL_ON
+        )
+    }
+
+    pub fn camera_set_high_fullwell(
+        &self,
+        device_name: &str,
+        on:          bool,
+        force_set:   bool,
+        timeout_ms:  Option<u64>,
+    ) -> Result<()> {
+        let devices = self.devices.lock().unwrap();
+        let (prop, elem) = if on {
+            devices.existing_prop_name(device_name, PROP_CAM_HIGH_FULLWELL_ON)?
+        } else {
+            devices.existing_prop_name(device_name, PROP_CAM_HIGH_FULLWELL_OFF)?
+        };
+        drop(devices);
+        self.command_set_switch_property_and_wait(
+            force_set,
+            timeout_ms,
+            device_name,
+            prop,
+            &[(elem, true)]
+        )?;
+        Ok(())
+    }
+
 
     // Camera gain
 
@@ -2906,249 +3168,6 @@ impl Connection {
             CamCcd::Primary => "CCD_FRAME_TYPE",
             CamCcd::Secondary => "GUIDER_FRAME_TYPE",
         }
-    }
-
-
-    // Camera fan
-
-    pub fn camera_is_fan_supported(
-        &self,
-        device_name: &str,
-    ) -> Result<bool> {
-        self.is_device_support_any_of_props(
-            device_name,
-            PROP_CAM_FAN_ON
-        )
-    }
-
-    pub fn camera_control_fan(
-        &self,
-        device_name: &str,
-        enable:      bool,
-        force_set:   bool,
-        timeout_ms:  Option<u64>,
-    ) -> Result<bool> {
-        let devices = self.devices.lock().unwrap();
-        let (prop, elem) = if enable {
-            devices.existing_prop_name(device_name, PROP_CAM_FAN_ON)?
-        } else {
-            devices.existing_prop_name(device_name, PROP_CAM_FAN_OFF)?
-        };
-        drop(devices);
-        self.command_set_switch_property_and_wait(
-            force_set,
-            timeout_ms,
-            device_name,
-            prop,
-            &[(elem, true)]
-        )?;
-        Ok(true)
-    }
-
-    // Camera window heater
-
-    pub fn camera_is_heater_str_supported(
-        &self,
-        device_name: &str,
-    ) -> Result<bool> {
-        self.is_device_support_any_of_props(
-            device_name,
-            PROP_CAM_HEAT_CTRL_LIST
-        )
-    }
-
-    pub fn camera_is_heater_str_property(
-        prop_name: &str
-    ) -> bool {
-        PROP_CAM_HEAT_CTRL_LIST.iter().any(|(prop, _)|
-            *prop == prop_name
-        )
-    }
-
-    pub fn camera_get_heater_items(
-        &self,
-        device_name: &str
-    ) -> Result<Option<Vec<(Arc<String>, Arc<String>)>>> {
-        let devices = self.devices.lock().unwrap();
-        let (prop_name, _) = devices.existing_prop_name(
-            device_name,
-            PROP_CAM_HEAT_CTRL_LIST
-        )?;
-        let device = devices.find_by_name_res(device_name)?;
-        let Some(prop) = device.get_property_opt(prop_name) else {
-            return Ok(None);
-        };
-        Ok(Some(prop.elements
-            .iter()
-            .map(|e| {
-                let name = Arc::clone(&e.name);
-                let caption = Arc::clone(e.label.as_ref().unwrap_or(&e.name));
-                (name, caption)
-            })
-            .collect()
-        ))
-    }
-
-    pub fn camera_set_heater_str(
-        &self,
-        device_name: &str,
-        value:       &str,
-        force_set:   bool,
-        timeout_ms:  Option<u64>,
-    ) -> Result<()> {
-        let devices = self.devices.lock().unwrap();
-        let (prop_name, _) = devices.existing_prop_name(
-            device_name,
-            PROP_CAM_HEAT_CTRL_LIST
-        )?;
-        drop(devices);
-        self.command_set_switch_property_and_wait(
-            force_set,
-            timeout_ms,
-            device_name,
-            prop_name, &[(value, true)]
-        )?;
-        Ok(())
-    }
-
-
-    // Camera low noise mode
-
-    pub fn camera_is_low_noise_supported(
-        &self,
-        device_name: &str,
-    ) -> Result<bool> {
-        self.is_device_support_any_of_props(
-            device_name,
-            PROP_CAM_LOW_NOISE_ON
-        )
-    }
-
-    pub fn camera_set_low_noise(
-        &self,
-        device_name: &str,
-        enable:      bool,
-        force_set:   bool,
-        timeout_ms:  Option<u64>,
-    ) -> Result<()> {
-        let devices = self.devices.lock().unwrap();
-        let (prop, elem) = if enable {
-            devices.existing_prop_name(device_name, PROP_CAM_LOW_NOISE_ON)?
-        } else {
-            devices.existing_prop_name(device_name, PROP_CAM_LOW_NOISE_OFF)?
-        };
-        drop(devices);
-        self.command_set_switch_property_and_wait(
-            force_set,
-            timeout_ms,
-            device_name,
-            prop,
-            &[(elem, true)]
-        )?;
-        Ok(())
-    }
-
-    // Conversion gain mode
-
-    pub fn camera_is_conversion_gain_str_supported(
-        &self,
-        device_name: &str,
-    ) -> Result<bool> {
-        self.is_device_support_any_of_props(
-            device_name,
-            PROP_CAM_CONV_GAIN_LIST
-        )
-    }
-
-    pub fn camera_is_conversion_gain_property(
-        prop_name: &str
-    ) -> bool {
-        PROP_CAM_CONV_GAIN_LIST.iter().any(|(prop, _)|
-            *prop == prop_name
-        )
-    }
-
-    pub fn camera_get_conversion_gain_items(
-        &self,
-        device_name: &str
-    ) -> Result<Option<Vec<(Arc<String>, Arc<String>)>>> {
-        let devices = self.devices.lock().unwrap();
-        let (prop_name, _) = devices.existing_prop_name(
-            device_name,
-            PROP_CAM_CONV_GAIN_LIST
-        )?;
-        let device = devices.find_by_name_res(device_name)?;
-        let Some(prop) = device.get_property_opt(prop_name) else {
-            return Ok(None);
-        };
-        Ok(Some(prop.elements
-            .iter()
-            .map(|e| {
-                let name = Arc::clone(&e.name);
-                let caption = Arc::clone(e.label.as_ref().unwrap_or(&e.name));
-                (name, caption)
-            })
-            .collect()
-        ))
-    }
-
-    pub fn camera_set_conversion_gain_str(
-        &self,
-        device_name: &str,
-        value:       &str,
-        force_set:   bool,
-        timeout_ms:  Option<u64>,
-    ) -> Result<()> {
-        let devices = self.devices.lock().unwrap();
-        let (prop_name, _) = devices.existing_prop_name(
-            device_name,
-            PROP_CAM_CONV_GAIN_LIST
-        )?;
-        drop(devices);
-        self.command_set_switch_property_and_wait(
-            force_set,
-            timeout_ms,
-            device_name,
-            prop_name, &[(value, true)]
-        )?;
-        Ok(())
-    }
-
-
-    // High fullwell mode
-
-    pub fn camera_is_high_fullwell_supported(
-        &self,
-        device_name: &str,
-    ) -> Result<bool> {
-        self.is_device_support_any_of_props(
-            device_name,
-            PROP_CAM_HIGH_FULLWELL_ON
-        )
-    }
-
-    pub fn camera_set_high_fullwell(
-        &self,
-        device_name: &str,
-        on:          bool,
-        force_set:   bool,
-        timeout_ms:  Option<u64>,
-    ) -> Result<()> {
-        let devices = self.devices.lock().unwrap();
-        let (prop, elem) = if on {
-            devices.existing_prop_name(device_name, PROP_CAM_HIGH_FULLWELL_ON)?
-        } else {
-            devices.existing_prop_name(device_name, PROP_CAM_HIGH_FULLWELL_OFF)?
-        };
-        drop(devices);
-        self.command_set_switch_property_and_wait(
-            force_set,
-            timeout_ms,
-            device_name,
-            prop,
-            &[(elem, true)]
-        )?;
-        Ok(())
     }
 
     // Camera's telescope info

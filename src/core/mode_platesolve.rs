@@ -24,7 +24,7 @@ pub struct PlatesolveMode {
     indi:         Arc<indi::Connection>,
     cur_frame:    Arc<ResultImage>,
     options:      Arc<RwLock<Options>>,
-    subscribers:  Arc<EventSubscriptions>,
+    subscribers:  Arc<Events>,
     camera:       DeviceAndProp,
     mount:        String,
     cam_opts:     CamOptions,
@@ -37,7 +37,7 @@ impl PlatesolveMode {
         options:     &Arc<RwLock<Options>>,
         indi:        &Arc<indi::Connection>,
         cur_frame:   &Arc<ResultImage>,
-        subscribers: &Arc<EventSubscriptions>,
+        subscribers: &Arc<Events>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(camera) = opts.cam.device.clone() else {

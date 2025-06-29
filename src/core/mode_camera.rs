@@ -117,7 +117,7 @@ pub struct TackingPicturesMode {
     mount_device:     String,
     fn_gen:           Arc<Mutex<SeqFileNameGen>>,
     indi:             Arc<indi::Connection>,
-    subscribers:      Arc<EventSubscriptions>,
+    subscribers:      Arc<Events>,
     raw_stacker:      RawStacker,
     options:          Arc<RwLock<Options>>,
     next_job:         Option<NextJob>,
@@ -143,7 +143,7 @@ pub struct TackingPicturesMode {
 impl TackingPicturesMode {
     pub fn new(
         indi:        &Arc<indi::Connection>,
-        subscribers: &Arc<EventSubscriptions>,
+        subscribers: &Arc<Events>,
         cam_mode:    CameraMode,
         options:     &Arc<RwLock<Options>>,
     ) -> anyhow::Result<Self> {

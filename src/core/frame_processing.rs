@@ -207,7 +207,6 @@ pub struct FrameProcessResult {
     pub data:          FrameProcessResultData,
 }
 
-
 #[derive(Clone)]
 pub enum CommandResult {
     Result(FrameProcessResult),

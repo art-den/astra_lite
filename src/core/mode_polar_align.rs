@@ -242,7 +242,7 @@ pub struct PolarAlignMode {
     options:      Arc<RwLock<Options>>,
     indi:         Arc<indi::Connection>,
     cur_frame:    Arc<ResultImage>,
-    subscribers:  Arc<EventSubscriptions>,
+    subscribers:  Arc<Events>,
     ps_opts:      PlateSolverOptions,
     plate_solver: PlateSolver,
     alignment:    PolarAlignment,
@@ -365,7 +365,7 @@ impl PolarAlignMode {
         indi:        &Arc<indi::Connection>,
         cur_frame:   &Arc<ResultImage>,
         options:     &Arc<RwLock<Options>>,
-        subscribers: &Arc<EventSubscriptions>,
+        subscribers: &Arc<Events>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(cam_device) = &opts.cam.device else {

@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use core::panic;
-use std::{rc::Rc, path::PathBuf};
+use std::{path::PathBuf, rc::Rc};
 use gtk::{prelude::*, gio, glib, glib::clone, gdk};
 
 pub fn set_dialog_default_button<T: IsA<gtk::Dialog>>(dialog: &T) {
@@ -193,6 +193,15 @@ pub fn exec_and_show_error(
         return false;
     }
     true
+}
+
+pub fn show_message_if_result_is_error<T>(
+    window: Option<&impl IsA<gtk::Window>>,
+    result: &anyhow::Result<T>
+) {
+    if let Err(err) = result {
+        show_error_message(window, "Error", &err.to_string());
+    }
 }
 
 pub fn get_model_row_count(model: &gtk::TreeModel) -> usize {

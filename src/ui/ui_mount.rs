@@ -296,7 +296,7 @@ impl MountUi {
                 self_.fill_mount_speed_list_widget();
                 self_.show_cur_mount_state();
                 self_.correct_widgets_props();
-                self_.core.event_subscriptions().notify(
+                self_.core.events().notify(
                     Event::MountDeviceSelected(cur_id.to_string())
                 );
             })

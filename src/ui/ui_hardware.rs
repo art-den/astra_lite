@@ -593,57 +593,9 @@ impl HardwareUi {
     fn handler_action_conn_indi(&self) {
         self.read_options_from_widgets();
         exec_and_show_error(Some(&self.window), || {
+            self.core.connect_indi(&self.indi_drivers)?;
             let options = self.options.read().unwrap();
-            let drivers = if !options.indi.remote {
-                let telescopes = self.indi_drivers.get_group_by_name("Telescopes")?;
-                let cameras = self.indi_drivers.get_group_by_name("CCDs")?;
-                let focusers = self.indi_drivers.get_group_by_name("Focusers")?;
-                let telescope_driver_name = options.indi.mount.as_ref()
-                    .and_then(|name| telescopes.get_item_by_device_name(name))
-                    .map(|d| &d.driver);
-                let camera_driver_name = options.indi.camera.as_ref()
-                    .and_then(|name| cameras.get_item_by_device_name(name))
-                    .map(|d| &d.driver);
-                let guid_cam_driver_name = options.indi.guid_cam.as_ref()
-                    .and_then(|name| cameras.get_item_by_device_name(name))
-                    .map(|d| &d.driver);
-                let focuser_driver_name = options.indi.focuser.as_ref()
-                    .and_then(|name| focusers.get_item_by_device_name(name))
-                    .map(|d| &d.driver);
-                [ telescope_driver_name,
-                camera_driver_name,
-                guid_cam_driver_name,
-                focuser_driver_name
-                ].iter()
-                    .filter_map(|v| *v)
-                    .cloned()
-                    .unique()
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
-
-            if !options.indi.remote && drivers.is_empty() {
-                anyhow::bail!("No devices selected");
-            }
-
-            log::info!(
-                "Connecting to INDI, remote={}, address={}, drivers='{}' ...",
-                options.indi.remote,
-                options.indi.address,
-                drivers.iter().join(",")
-            );
-
-            let conn_settings = indi::ConnSettings {
-                drivers,
-                remote:               options.indi.remote,
-                host:                 options.indi.address.clone(),
-                activate_all_devices: !options.indi.remote,
-                .. Default::default()
-            };
             self.is_remote.set(options.indi.remote);
-            drop(options);
-            self.indi.connect(&conn_settings)?;
             Ok(())
         });
     }

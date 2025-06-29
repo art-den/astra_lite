@@ -2,10 +2,10 @@ use std::{rc::Rc, sync::{Arc, RwLock}, cell::RefCell};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{consts::*, core::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}},
+    core::{core::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}},
     image::{info::*, raw::{CalibrMethods, FrameType}},
     indi,
-    options::*,
+    options::*, ui::gtk_utils,
 };
 use super::{gtk_utils::*, module::*, ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
@@ -60,7 +60,6 @@ pub fn init_ui(
 enum DelayedAction {
     UpdateCamList,
     StartLiveView,
-    StartCooling,
     UpdateCtrlWidgets,
     UpdateResolutionList,
     SelectMaxResolution,
@@ -450,9 +449,6 @@ impl UiModule for CameraUi {
             Event::FrameProcessing(result) => {
                 self.show_frame_processing_result(result);
             }
-            Event::CameraDeviceChanged { from, to } => {
-                self.handler_camera_changed(from, to);
-            }
             _ => {},
         }
     }
@@ -533,9 +529,15 @@ impl CameraUi {
                     return;
                 }
                 options.cam.device = Some(new_device.clone());
+
+                self_.handler_camera_changed(&old_device, &new_device, &mut options);
+
                 drop(options);
 
-                self_.core.event_subscriptions().notify(
+                self_.correct_widgets_props_impl(Some(&new_device));
+                self_.correct_frame_quality_widgets_props();
+
+                self_.core.events().notify(
                     Event::CameraDeviceChanged {
                         from: old_device,
                         to:   new_device,
@@ -558,9 +560,15 @@ impl CameraUi {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.cam.ctrl.enable_cooler = chb.is_active();
                 self_.show_calibr_file_for_frame(&options);
+                let res = self_.core.control_camera_cooling(
+                    options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default(),
+                    &options,
+                    false
+                );
                 drop(options);
-                self_.control_camera_by_options(false);
                 self_.correct_widgets_props();
+                gtk_utils::show_message_if_result_is_error(Some(&self_.window), &res);
+
             })
         );
 
@@ -568,9 +576,14 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.cam.ctrl.heater_str = cb.active_id().map(|id| id.to_string());
+                let res = self_.core.control_camera_heater(
+                    options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default(),
+                    &options,
+                    false
+                );
                 drop(options);
-                self_.control_camera_by_options(false);
                 self_.correct_widgets_props();
+                gtk_utils::show_message_if_result_is_error(Some(&self_.window), &res);
             })
         );
 
@@ -578,9 +591,14 @@ impl CameraUi {
             clone!(@weak self as self_ => move |chb| {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.cam.ctrl.enable_fan = chb.is_active();
+                let res = self_.core.control_camera_fan(
+                    options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default(),
+                    &options,
+                    false
+                );
                 drop(options);
-                self_.control_camera_by_options(false);
                 self_.correct_widgets_props();
+                gtk_utils::show_message_if_result_is_error(Some(&self_.window), &res);
             })
         );
 
@@ -589,8 +607,13 @@ impl CameraUi {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.cam.ctrl.temperature = spb.value();
                 self_.show_calibr_file_for_frame(&options);
+                let res = self_.core.control_camera_cooling(
+                    options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default(),
+                    &options,
+                    false
+                );
                 drop(options);
-                self_.control_camera_by_options(false);
+                gtk_utils::show_message_if_result_is_error(Some(&self_.window), &res);
             })
         );
 
@@ -948,9 +971,6 @@ impl CameraUi {
                     self.start_live_view();
                 }
             }
-            DelayedAction::StartCooling => {
-                self.control_camera_by_options(true);
-            }
             DelayedAction::UpdateCtrlWidgets => {
                 self.correct_widgets_props();
             }
@@ -1132,18 +1152,21 @@ impl CameraUi {
         widgets.quality.bx.set_sensitive(cam_sensitive);
     }
 
-    fn handler_camera_changed(&self, from: &Option<DeviceAndProp>, to: &DeviceAndProp) {
-        let Ok(mut options) = self.options.try_write() else { return; };
-
+    fn handler_camera_changed(
+        &self,
+        from:    &Option<DeviceAndProp>,
+        to:      &DeviceAndProp,
+        options: &mut Options,
+    ) {
         // Read options from widgets
 
-        self.get_frame_options(&mut options);
-        self.get_ctrl_options(&mut options);
-        self.get_calibr_options(&mut options);
+        self.get_frame_options(options);
+        self.get_ctrl_options(options);
+        self.get_calibr_options(options);
 
         // Store previous camera options
 
-        self.store_options_for_camera(from.clone(), &mut options);
+        self.store_options_for_camera(from.clone(), options);
 
         // Change some lists for new camera
 
@@ -1153,13 +1176,13 @@ impl CameraUi {
 
         // Restore some options for specific camera
 
-        self.restore_options_for_camera(to, &mut options);
+        self.restore_options_for_camera(to, options);
 
         // Show some options for specific camera
 
-        self.show_frame_options(&options);
-        self.show_ctrl_options(&options);
-        self.show_calibr_options(&options);
+        self.show_frame_options(options);
+        self.show_ctrl_options(options);
+        self.show_calibr_options(options);
 
         // Show new total time
 
@@ -1169,11 +1192,6 @@ impl CameraUi {
 
         self.init_fn_utils(Some(to));
         self.show_calibr_file_for_frame(&options);
-
-        drop(options);
-
-        self.correct_widgets_props_impl(Some(to));
-        self.correct_frame_quality_widgets_props();
     }
 
     fn correct_widgets_props(&self) {
@@ -1426,52 +1444,6 @@ impl CameraUi {
         self.core.abort_active_mode();
     }
 
-    // TODO: move camera control code into `core` module
-    fn control_camera_by_options(&self, force_set: bool) {
-        let options = self.options.read().unwrap();
-        let Some(device) = &options.cam.device else { return; };
-        let camera_name = &device.name;
-        if camera_name.is_empty() { return; };
-        exec_and_show_error(Some(&self.window), || {
-            // Cooler + Temperature
-            if self.indi.camera_is_cooler_supported(camera_name)? {
-                self.indi.camera_enable_cooler(
-                    camera_name,
-                    options.cam.ctrl.enable_cooler,
-                    true,
-                    INDI_SET_PROP_TIMEOUT
-                )?;
-                if options.cam.ctrl.enable_cooler {
-                    self.indi.camera_set_temperature(
-                        camera_name,
-                        options.cam.ctrl.temperature
-                    )?;
-                }
-            }
-            // Fan
-            if self.indi.camera_is_fan_supported(camera_name)? {
-                self.indi.camera_control_fan(
-                    camera_name,
-                    options.cam.ctrl.enable_fan || options.cam.ctrl.enable_cooler,
-                    force_set,
-                    INDI_SET_PROP_TIMEOUT
-                )?;
-            }
-            // Window heater
-            if self.indi.camera_is_heater_str_supported(camera_name)? {
-                if let Some(heater_str) = &options.cam.ctrl.heater_str {
-                    self.indi.camera_set_heater_str(
-                        camera_name,
-                        heater_str,
-                        force_set,
-                        INDI_SET_PROP_TIMEOUT
-                    )?;
-                }
-            }
-            Ok(())
-        });
-    }
-
     fn show_cur_temperature_value(
         &self,
         device_name: &str,
@@ -1541,7 +1513,6 @@ impl CameraUi {
     ) {
         if indi::Connection::camera_is_heater_str_property(prop_name) && new_prop {
             self.delayed_actions.schedule(DelayedAction::FillHeaterItems);
-            self.delayed_actions.schedule(DelayedAction::StartCooling);
         }
 
         if indi::Connection::camera_is_conversion_gain_property(prop_name) && new_prop {
@@ -1555,17 +1526,11 @@ impl CameraUi {
         match (prop_name, elem_name, value) {
             ("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE"|"CCD_TEMPERATURE",
              indi::PropValue::Num(indi::NumPropValue{value, ..})) => {
-                if new_prop {
-                    self.delayed_actions.schedule(
-                        DelayedAction::StartCooling
-                    );
-                }
                 self.show_cur_temperature_value(device_name, *value);
             }
 
             ("CCD_COOLER", ..)
             if new_prop => {
-                self.delayed_actions.schedule(DelayedAction::StartCooling);
                 self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
             }
 

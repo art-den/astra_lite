@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::{atomic::AtomicUsize, Arc, RwLock}};
+use std::sync::{Arc, RwLock};
 use crate::{guiding::external_guider::ExtGuiderEvent, plate_solve::PlateSolverEvent, DeviceAndProp};
 use super::{core::ModeType, frame_processing::*, mode_focusing::*, mode_polar_align::PolarAlignmentEvent};
 
@@ -12,7 +12,6 @@ pub struct Progress {
 pub enum OverlayMessgagePos {
     Top,
 }
-
 
 #[derive(Clone)]
 pub enum Event {
@@ -36,47 +35,35 @@ pub enum Event {
     Guider(ExtGuiderEvent),
 }
 
-type SubscriptionFun = dyn Fn(Event) + Send + Sync + 'static;
+type EventFun = dyn Fn(Event) + Send + Sync + 'static;
 
-pub struct Subscription(usize);
-
-pub struct EventSubscriptions {
-    items:   RwLock<HashMap<usize, Box<SubscriptionFun>>>,
-    next_id: AtomicUsize,
+pub struct Events {
+    items: RwLock<Vec<Box<EventFun>>>,
 }
 
-impl EventSubscriptions {
+impl Events {
     pub fn new() -> Self {
         Self {
-            items:   RwLock::new(HashMap::new()),
-            next_id: AtomicUsize::new(1),
+            items:RwLock::new(Vec::new()),
         }
     }
 
     pub fn subscribe(
         &self,
         fun: impl Fn(Event) + Send + Sync + 'static
-    ) -> Subscription {
+    ) {
         let mut items = self.items.write().unwrap();
-        let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        items.insert(id, Box::new(fun));
-        Subscription(id)
+        items.push(Box::new(fun));
     }
 
-    pub fn unsubscribe(&self, subscription: Subscription) {
-        let Subscription(id) = subscription;
-        let mut items = self.items.write().unwrap();
-        items.remove(&id);
-    }
-
-    pub fn clear(&self) {
+    pub fn unsubscribe_all(&self) {
         let mut items = self.items.write().unwrap();
         items.clear();
     }
 
     pub fn notify(&self, event: Event) {
         let items = self.items.read().unwrap();
-        for s in items.values() {
+        for s in &*items {
             s(event.clone());
         }
     }

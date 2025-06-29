@@ -36,12 +36,11 @@ pub fn init_ui(
 
     let obj = Rc::new(DarksLibraryUI {
         widgets,
-        window:            window.clone(),
-        options:           Arc::clone(options),
-        core:              Arc::clone(core),
-        indi:              Arc::clone(indi),
-        ui_options:        RefCell::new(ui_options),
-        core_subscription: RefCell::new(None),
+        window:     window.clone(),
+        options:    Arc::clone(options),
+        core:       Arc::clone(core),
+        indi:       Arc::clone(indi),
+        ui_options: RefCell::new(ui_options),
     });
 
     obj.init_widgets();
@@ -567,13 +566,12 @@ struct Widgets {
 }
 
 pub struct DarksLibraryUI {
-    widgets:           Widgets,
-    window:            gtk::ApplicationWindow,
-    core:              Arc<Core>,
-    indi:              Arc<indi::Connection>,
-    options:           Arc<RwLock<Options>>,
-    ui_options:        RefCell<UiOptions>,
-    core_subscription: RefCell<Option<Subscription>>,
+    widgets:    Widgets,
+    window:     gtk::ApplicationWindow,
+    core:       Arc<Core>,
+    indi:       Arc<indi::Connection>,
+    options:    Arc<RwLock<Options>>,
+    ui_options: RefCell<UiOptions>,
 }
 
 impl Drop for DarksLibraryUI {
@@ -609,10 +607,6 @@ impl UiModule for DarksLibraryUI {
         let ui_options = self.ui_options.borrow();
         _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
         drop(ui_options);
-
-        if let Some(core_conn) = self.core_subscription.borrow_mut().take() {
-            self.core.event_subscriptions().unsubscribe(core_conn);
-        }
     }
 }
 
@@ -981,7 +975,7 @@ impl DarksLibraryUI {
 
     fn connect_core_events(self: &Rc<Self>) {
         let (sender, receiver) = async_channel::unbounded();
-        let subscription = self.core.event_subscriptions().subscribe(move |evt| {
+        self.core.events().subscribe(move |evt| {
             sender.send_blocking(evt).unwrap();
         });
         glib::spawn_future_local(clone!(@weak self as self_ => async move {
@@ -989,7 +983,6 @@ impl DarksLibraryUI {
                 self_.process_core_event(event);
             }
         }));
-        *self.core_subscription.borrow_mut() = Some(subscription);
     }
 
     fn correct_widgets_enable_state(&self) {

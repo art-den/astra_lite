@@ -7,7 +7,7 @@ use crate::{
     plate_solve::*,
     sky_math::math::*
 };
-use super::{core::*, events::EventSubscriptions, utils::*};
+use super::{core::*, events::Events, utils::*};
 
 const MAX_MOUNT_UNPARK_TIME: usize = 20; // seconds
 
@@ -53,7 +53,7 @@ pub struct GotoMode {
     indi:            Arc<indi::Connection>,
     cur_frame:       Arc<ResultImage>,
     options:         Arc<RwLock<Options>>,
-    subscribers:     Arc<EventSubscriptions>,
+    subscribers:     Arc<Events>,
     plate_solver:    Option<PlateSolver>,
     unpark_seconds:  usize,
     goto_seconds:    usize,
@@ -68,7 +68,7 @@ impl GotoMode {
         options:     &Arc<RwLock<Options>>,
         indi:        &Arc<indi::Connection>,
         cur_frame:   &Arc<ResultImage>,
-        subscribers: &Arc<EventSubscriptions>,
+        subscribers: &Arc<Events>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let (camera, cam_opts, plate_solver) = if config == GotoConfig::GotoPlateSolveAndCorrect {
