@@ -227,7 +227,7 @@ impl Core {
         Ok(())
     }
 
-    pub fn mode_data(&self) -> RwLockReadGuard<ModeData> {
+    pub fn mode_data(&self) -> RwLockReadGuard<'_, ModeData> {
         self.mode_data.read().unwrap()
     }
 

@@ -324,7 +324,7 @@ impl RawImage {
         }
     }
 
-    fn rect_iter(&self, mut x1: isize, mut y1: isize, mut x2: isize, mut y2: isize) -> RawRectIterator {
+    fn rect_iter(&self, mut x1: isize, mut y1: isize, mut x2: isize, mut y2: isize) -> RawRectIterator<'_> {
         if x1 < 0 { x1 = 0; }
         if y1 < 0 { y1 = 0; }
         if x2 >= self.info.width as isize { x2 = self.info.width as isize - 1; }

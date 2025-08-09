@@ -88,7 +88,7 @@ pub fn init_ui(
 }
 
 impl indi::ConnState {
-    fn to_str(&self, short: bool) -> Cow<str> {
+    fn to_str(&self, short: bool) -> Cow<'_, str> {
         match self {
             indi::ConnState::Disconnected =>
                 Cow::from("Disconnected"),

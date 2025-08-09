@@ -233,7 +233,7 @@ fn generate_triangles(
     max_points_cnt:   usize,
     min_triangle_len: f64,
     _triangulate:     bool // TODO: add trinagulation!!!
-) -> Vec<Triangle> {
+) -> Vec<Triangle<'_>> {
     fn add_triangles<'a>(
         result:       &mut Vec<Triangle<'a>>,
         p1:           &'a Point,

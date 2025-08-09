@@ -95,7 +95,7 @@ impl<T: Copy + Default> ImageLayer<T> {
         self.width
     }
 
-    pub fn coord_iter(&self) -> CoordIterator<T> {
+    pub fn coord_iter(&self) -> CoordIterator<'_, T> {
         CoordIterator::<T> {
             x: 0,
             y: 0,
@@ -104,7 +104,7 @@ impl<T: Copy + Default> ImageLayer<T> {
         }
     }
 
-    pub fn rect_iter(&self, mut x1: isize, mut y1: isize, mut x2: isize, mut y2: isize) -> RectIterator<T> {
+    pub fn rect_iter(&self, mut x1: isize, mut y1: isize, mut x2: isize, mut y2: isize) -> RectIterator<'_, T> {
         if x1 < 0 { x1 = 0; }
         if y1 < 0 { y1 = 0; }
         if x2 >= self.width as isize { x2 = self.width as isize - 1; }
@@ -283,7 +283,7 @@ pub struct RectIterator<'a, T> {
 }
 
 impl<T: Copy + Default> RectIterator<'_, T> {
-    fn init_iter(img: &ImageLayer<T>, x1: usize, x2: usize, y: usize) -> std::slice::Iter<T> {
+    fn init_iter(img: &ImageLayer<T>, x1: usize, x2: usize, y: usize) -> std::slice::Iter<'_, T> {
         let row = img.row(y);
         row[x1 ..= x2].iter()
     }

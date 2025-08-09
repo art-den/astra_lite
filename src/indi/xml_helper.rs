@@ -10,7 +10,7 @@ pub trait XmlElementHelper {
     fn attr_string_or_err(&mut self, attr_name: &str) -> Result<String>;
     fn attr_str_or_err<'a>(&'a self, attr_name: &str) -> Result<&'a str>;
     fn attr_time(&self, attr_name: &str) -> Option<DateTime<Utc>>;
-    fn text_or_err(&self) -> Result<Cow<str>>;
+    fn text_or_err(&self) -> Result<Cow<'_, str>>;
     fn child_mut_or_err(&mut self, child_name: &str) -> Result<&mut xmltree::Element>;
 }
 
@@ -75,7 +75,7 @@ impl XmlElementHelper for xmltree::Element {
             .map(|dt| Utc.from_utc_datetime(&dt))
     }
 
-    fn text_or_err(&self) -> Result<Cow<str>> {
+    fn text_or_err(&self) -> Result<Cow<'_, str>> {
         self
             .get_text()
             .ok_or_else(||Error::Xml(format!(
