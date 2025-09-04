@@ -7,6 +7,7 @@ pub mod gtk_utils;
 
 mod ui_hardware;
 mod indi_widget;
+mod ui_debug;
 mod ui_camera;
 mod ui_preview;
 mod ui_skymap;

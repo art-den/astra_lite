@@ -125,7 +125,6 @@ pub struct TackingPicturesMode {
     guider:           Option<Guider>,
     ref_stars:        Option<Vec<Point>>,
     progress:         Option<Progress>,
-    cur_exposure:     f64,
     cur_shot_id:      Option<u64>,
     shot_id_to_ign:   Option<u64>,
     live_stacking:    Option<Arc<LiveStackingData>>,
@@ -138,6 +137,7 @@ pub struct TackingPicturesMode {
     next_mode:        Option<ModeBox>,
     queue_overflowed: bool,
     slow_down_flag:   bool,
+    cur_frame_opts:   Option<FrameOptions>,
 }
 
 impl TackingPicturesMode {
@@ -217,7 +217,6 @@ impl TackingPicturesMode {
             options:          Arc::clone(options),
             next_job:         None,
             ref_stars:        None,
-            cur_exposure:     0.0,
             cur_shot_id:      None,
             shot_id_to_ign:   None,
             live_stacking:    None,
@@ -229,6 +228,7 @@ impl TackingPicturesMode {
             fname_utils:      FileNameUtils::default(),
             queue_overflowed: false,
             slow_down_flag:   false,
+            cur_frame_opts:   None,
             cam_options,
             autofocuser,
             progress,
@@ -278,6 +278,7 @@ impl TackingPicturesMode {
     }
 
     fn correct_options_before_start(&mut self) {
+        self.cur_frame_opts = None;
         match self.cam_mode {
             CameraMode::LiveStacking => {
                 let mut options = self.options.write().unwrap();
@@ -288,7 +289,11 @@ impl TackingPicturesMode {
         }
     }
 
-    fn take_shot_with_options(&mut self, frame_options: FrameOptions) -> anyhow::Result<()> {
+    fn take_shot_with_options(
+        &mut self,
+        frame_options: FrameOptions,
+        store_frame_options: bool
+    ) -> anyhow::Result<()> {
         let cur_shot_id = apply_camera_options_and_take_shot(
             &self.indi,
             &self.device,
@@ -296,24 +301,28 @@ impl TackingPicturesMode {
             &self.cam_options.ctrl
         )?;
         self.cur_shot_id = Some(cur_shot_id);
-        self.cur_exposure = frame_options.exposure();
+        if store_frame_options {
+            self.cur_frame_opts = Some(frame_options.clone());
+        }
         Ok(())
     }
 
-    fn start_or_continue(&mut self) -> anyhow::Result<()> {
-        // First frame must be skiped
-        // for saving frames and live stacking mode
-        let need_skip_first_frame = matches!(
+    fn need_skip_first_frame(&self) -> bool {
+        matches!(
             self.cam_mode,
             CameraMode::SavingRawFrames|
             CameraMode::LiveStacking|
             CameraMode::DefectPixels|
             CameraMode::MasterDark|
             CameraMode::MasterBias
-        );
-        if !self.flags.skip_frame_done && need_skip_first_frame {
+        )
+    }
+
+    fn start_or_continue(&mut self) -> anyhow::Result<()> {
+        if !self.flags.skip_frame_done && self.need_skip_first_frame() {
+            // First frame must be skiped
+            // for saving frames and live stacking mode
             self.start_first_shot_that_will_be_skipped()?;
-            self.state = State::FrameToSkip;
             return Ok(());
         }
 
@@ -343,7 +352,7 @@ impl TackingPicturesMode {
             }
         }
 
-        self.take_shot_with_options(self.cam_options.frame.clone())?;
+        self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
         self.state = State::Common;
         Ok(())
     }
@@ -354,7 +363,9 @@ impl TackingPicturesMode {
         if frame_opts.exposure() > MAX_EXP {
             frame_opts.set_exposure(MAX_EXP);
         }
-        self.take_shot_with_options(frame_opts)?;
+        log::info!("Staring preliminary shot exposure ({} s) to clear CCD", frame_opts.exposure());
+        self.take_shot_with_options(frame_opts, false)?;
+        self.state = State::FrameToSkip;
         Ok(())
     }
 
@@ -362,7 +373,7 @@ impl TackingPicturesMode {
         if let Some(offset_calc) = &self.cam_offset_calc {
             let mut frame_opts = self.cam_options.frame.clone();
             if offset_calc.step % 2 == 0 { frame_opts.offset = 0; }
-            self.take_shot_with_options(frame_opts)?;
+            self.take_shot_with_options(frame_opts, true)?;
         }
         Ok(())
     }
@@ -798,7 +809,7 @@ impl TackingPicturesMode {
         && self.cam_mode != CameraMode::SingleShot
         && !finished
         && !self.have_to_start_new_exposure_at_blob_start() {
-            self.take_shot_with_options(self.cam_options.frame.clone())?;
+            self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
         }
 
         // Do we have to slow down with period of tacking camera images?
@@ -1130,7 +1141,10 @@ impl Mode for TackingPicturesMode {
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
-        Some(self.cur_exposure)
+        Some(
+            self.cur_frame_opts
+                .as_ref().map(|o| o.exposure())
+                .unwrap_or(0.0))
     }
 
     fn can_be_stopped(&self) -> bool {
@@ -1226,6 +1240,20 @@ impl Mode for TackingPicturesMode {
         Ok(())
     }
 
+    fn restart_cam_exposure(&mut self) -> anyhow::Result<bool> {
+        if self.need_skip_first_frame() {
+            self.start_first_shot_that_will_be_skipped()?;
+        } else {
+            if let Some(cur_frame_opts) = self.cur_frame_opts.clone() {
+                self.take_shot_with_options(cur_frame_opts, false)?;
+            } else {
+                self.take_shot_with_options(self.cam_options.frame.clone(), false)?;
+            }
+        }
+
+        Ok(true)
+    }
+
     fn set_or_correct_value(&mut self, value: &mut dyn Any) {
         if let Some(value) = value.downcast_mut::<MountMoveCalibrRes>() {
             let Some(guider) = &mut self.guider else { return; };
@@ -1257,7 +1285,7 @@ impl Mode for TackingPicturesMode {
 
         if self.cam_mode != CameraMode::SingleShot
         && self.have_to_start_new_exposure_at_blob_start() {
-            self.take_shot_with_options(self.cam_options.frame.clone())?;
+            self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
         }
 
         Ok(NotifyResult::Empty)
@@ -1363,7 +1391,7 @@ impl Mode for TackingPicturesMode {
                     *ok_time += 1;
                     if *ok_time == AFTER_MOUNT_MOVE_WAIT_TIME {
                         self.indi.mount_abort_motion(&self.mount_device)?;
-                        self.take_shot_with_options(self.cam_options.frame.clone())?;
+                        self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
                         self.state = State::Common;
                         result = NotifyResult::ProgressChanges;
                     }

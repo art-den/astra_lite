@@ -88,7 +88,7 @@ pub struct PropChangeValue {
 #[derive(Debug)]
 pub enum PropChange {
     New(PropChangeValue),
-    Change{
+    Change {
         value:      PropChangeValue,
         prev_state: PropState,
         new_state:  PropState,
@@ -2265,6 +2265,17 @@ impl Connection {
 
     // Exposure
 
+
+    pub fn camera_get_exposure_property(
+        &self,
+        device_name: &str,
+        ccd:         CamCcd
+    ) -> Result<(Property, PropElement)> {
+        let (prop_name, prop_elem) = Self::exposure_prop_name(ccd);
+        let devices = self.devices.lock().unwrap();
+        self.get_property_and_element(&devices, device_name, prop_name, prop_elem)
+    }
+
     pub fn camera_get_exposure_prop_value(
         &self,
         device_name: &str,
@@ -2446,8 +2457,22 @@ impl Connection {
     ) -> Result<(Property, PropElement)> {
         let devices = self.devices.lock().unwrap();
         let (prop_name, prop_elem) = devices.existing_prop_name(device_name, PROP_CAM_COOLING_PWR)?;
+        self.get_property_and_element(&devices, device_name, prop_name, prop_elem)
+    }
+
+    fn get_property_and_element(
+        &self,
+        devices:     &Devices,
+        device_name: &str,
+        prop_name:   &str,
+        prop_elem:   &str,
+    ) -> Result<(Property, PropElement)> {
         let property = devices.get_property(device_name, prop_name)?;
-        let elem = property.get_elem(prop_elem).unwrap();
+        let elem = property.get_elem(prop_elem).ok_or_else(|| Error::PropertyElemNotExists(
+            device_name.to_string(),
+            prop_name.to_string(),
+            prop_elem.to_string()
+        ))?;
         Ok((property.clone(), elem.clone()))
     }
 
@@ -3892,7 +3917,7 @@ impl XmlReceiver {
                     timeout_processed = false;
                     let process_xml_res = self.process_xml(&xml, blobs, &events_sender);
                     if let Err(err) = process_xml_res {
-                        log::error!("indi_api: '{}' for XML\n{}", err, xml);
+                        log::debug!("indi_api: '{}' for XML\n{}", err, xml);
                     } else {
                         let mut state = self.conn_state.lock().unwrap();
                         if *state == ConnState::Connecting {

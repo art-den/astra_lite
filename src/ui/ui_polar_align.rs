@@ -65,10 +65,6 @@ struct Widgets {
     cbx_dir:          gtk::ComboBoxText,
     cbx_speed:        gtk::ComboBoxText,
     chb_auto_refresh: gtk::CheckButton,
-    l_sim_alt_err:    gtk::Label,
-    spb_sim_alt_err:  gtk::SpinButton,
-    l_sim_az_err:     gtk::Label,
-    spb_sim_az_err:   gtk::SpinButton,
     l_step:           gtk::Label,
     l_alt_err:        gtk::Label,
     l_az_err:         gtk::Label,
@@ -99,16 +95,12 @@ impl UiModule for PolarAlignUi {
         self.widgets.cbx_dir.set_active_id(options.polar_align.direction.to_active_id());
         self.widgets.cbx_speed.set_active_id(options.polar_align.speed.as_deref());
         self.widgets.chb_auto_refresh.set_active(options.polar_align.auto_refresh);
-        self.widgets.spb_sim_alt_err.set_value(options.polar_align.sim_alt_err);
-        self.widgets.spb_sim_az_err.set_value(options.polar_align.sim_az_err);
     }
 
     fn get_options(&self, options: &mut Options) {
         options.polar_align.angle        = self.widgets.spb_angle.value();
         options.polar_align.speed        = self.widgets.cbx_speed.active_id().map(|s| s.to_string());
         options.polar_align.auto_refresh = self.widgets.chb_auto_refresh.is_active();
-        options.polar_align.sim_alt_err  = self.widgets.spb_sim_alt_err.value();
-        options.polar_align.sim_az_err   = self.widgets.spb_sim_az_err.value();
 
         options.polar_align.direction = PloarAlignDir::from_active_id(
             self.widgets.cbx_dir.active_id().as_deref()
@@ -189,21 +181,6 @@ impl PolarAlignUi {
         self.widgets.l_tot_err.set_label("---");
         self.widgets.l_alt_err_arr.set_label("");
         self.widgets.l_az_err_arr.set_label("");
-
-        if cfg!(debug_assertions) {
-            self.widgets.l_sim_alt_err.set_visible(true);
-            self.widgets.spb_sim_alt_err.set_visible(true);
-            self.widgets.l_sim_az_err.set_visible(true);
-            self.widgets.spb_sim_az_err.set_visible(true);
-        }
-
-        self.widgets.spb_sim_alt_err.set_range(-45.0, 45.0);
-        self.widgets.spb_sim_alt_err.set_digits(2);
-        self.widgets.spb_sim_alt_err.set_increments(0.01, 0.1);
-
-        self.widgets.spb_sim_az_err.set_range(-45.0, 45.0);
-        self.widgets.spb_sim_az_err.set_digits(2);
-        self.widgets.spb_sim_az_err.set_increments(0.01, 0.1);
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
@@ -211,21 +188,6 @@ impl PolarAlignUi {
         connect_action(&self.window, self, "restart_polar_alignment", Self::handler_action_restart_polar_align);
         connect_action(&self.window, self, "stop_polar_alignment", Self::handler_action_stop_polar_align);
         connect_action(&self.window, self, "pa_manual_refresh", Self::handler_action_manual_refresh);
-
-
-        self.widgets.spb_sim_alt_err.connect_value_changed(
-            clone!(@weak self as self_ => move |spb| {
-                let Ok(mut options) = self_.options.try_write() else { return; };
-                options.polar_align.sim_alt_err = spb.value();
-            })
-        );
-
-        self.widgets.spb_sim_az_err.connect_value_changed(
-            clone!(@weak self as self_ => move |spb| {
-                let Ok(mut options) = self_.options.try_write() else { return; };
-                options.polar_align.sim_az_err = spb.value();
-            })
-        );
 
         self.widgets.chb_auto_refresh.connect_active_notify(
             clone!(@weak self as self_ => move |_| {

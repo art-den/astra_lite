@@ -82,6 +82,7 @@ pub fn init_ui(
     let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, core, options, indi);
+    let debug         = super::ui_debug        ::init_ui(options);
 
     let mut modules = main_ui.modules.borrow_mut();
     modules.add(hardware);
@@ -94,6 +95,7 @@ pub fn init_ui(
     modules.add(plate_solve);
     modules.add(polar_align);
     modules.add(map);
+    modules.add(debug);
     drop(modules);
 
     main_ui.build_modules_panels();

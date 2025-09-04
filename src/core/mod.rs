@@ -12,3 +12,4 @@ mod mode_waiting;
 mod mode_camera;
 mod mode_mnt_calib;
 mod mode_platesolve;
+mod cam_watchdog;
