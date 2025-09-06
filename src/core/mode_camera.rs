@@ -291,7 +291,7 @@ impl TackingPicturesMode {
 
     fn take_shot_with_options(
         &mut self,
-        frame_options: FrameOptions,
+        frame_options:       FrameOptions,
         store_frame_options: bool
     ) -> anyhow::Result<()> {
         let cur_shot_id = apply_camera_options_and_take_shot(
@@ -1244,11 +1244,14 @@ impl Mode for TackingPicturesMode {
         if self.need_skip_first_frame() {
             self.start_first_shot_that_will_be_skipped()?;
         } else {
-            if let Some(cur_frame_opts) = self.cur_frame_opts.clone() {
-                self.take_shot_with_options(cur_frame_opts, false)?;
-            } else {
-                self.take_shot_with_options(self.cam_options.frame.clone(), false)?;
-            }
+            let frame_opts =
+                if let Some(cur_frame_opts) = &self.cur_frame_opts {
+                    cur_frame_opts
+                } else {
+                    &self.cam_options.frame
+                };
+
+            self.take_shot_with_options(frame_opts.clone(), false)?;
         }
 
         Ok(true)

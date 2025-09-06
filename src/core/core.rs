@@ -63,6 +63,7 @@ pub trait Mode {
     fn start(&mut self) -> anyhow::Result<()> { Ok(()) }
     fn abort(&mut self) -> anyhow::Result<()> { Ok(()) }
     fn continue_work(&mut self) -> anyhow::Result<()> { Ok(()) }
+    fn frame_options_to_restart_exposure(&self) -> Option<&FrameOptions> { None }
     fn restart_cam_exposure(&mut self) -> anyhow::Result<bool> { Ok(false) }
     fn take_next_mode(&mut self) -> Option<ModeBox> { None }
     fn set_or_correct_value(&mut self, _value: &mut dyn Any) {}
@@ -277,7 +278,7 @@ impl Core {
                         CamWatchdogResult::Waiting =>
                             return Ok(()),
                         CamWatchdogResult::RestartCameraShot => {
-                            self.restart_camera_exposure(&mut mode_data)?;
+                            self.restart_camera_exposure(&mut mode_data, &options)?;
                         }
                         _ => {},
                     }
@@ -582,7 +583,7 @@ impl Core {
         }
     }
 
-    fn restart_camera_exposure(self: &Arc<Self>, mode_data: &mut ModeData) -> anyhow::Result<()> {
+    fn restart_camera_exposure(self: &Arc<Self>, mode_data: &mut ModeData, options: &Options) -> anyhow::Result<()> {
         let Some(cam_device) = mode_data.mode.cam_device().cloned() else { return Ok(()); };
         log::error!("Begin restart exposure of camera {}...", cam_device.name);
 
@@ -591,21 +592,22 @@ impl Core {
 
         if !restarted_by_mode {
             // Mode not restarted the camera exposure. Do it itself
+
             abort_camera_exposure(&self.indi, &cam_device)?;
-            if self.indi.camera_is_fast_toggle_supported(&cam_device.name)?
-            && self.indi.camera_is_fast_toggle_enabled(&cam_device.name)? {
-                let prop_info = self.indi.camera_get_fast_frames_count_prop_info(
-                    &cam_device.name,
-                ).unwrap();
-                self.indi.camera_set_fast_frames_count(
-                    &cam_device.name,
-                    prop_info.max as usize,
-                    true,
-                    INDI_SET_PROP_TIMEOUT,
-                )?;
-            }
-            let Some(cur_exposure) = mode_data.mode.get_cur_exposure() else { return Ok(()); };
-            start_camera_exposure(&self.indi, &cam_device, cur_exposure)?;
+
+            let mode_cam_opts =
+                if let Some(frame_opts) = mode_data.mode.frame_options_to_restart_exposure() {
+                    frame_opts
+                } else {
+                    &options.cam.frame
+                };
+
+            apply_camera_options_and_take_shot(
+                &self.indi,
+                &cam_device,
+                mode_cam_opts,
+                &options.cam.ctrl
+            )?;
         }
         log::error!("Exposure of camera {} restarted!", &cam_device.name);
         Ok(())
@@ -935,15 +937,6 @@ impl Core {
             return Ok(());
         };
 
-        // Disable fast toggle
-
-        self.indi.camera_enable_fast_toggle(
-            &cam_device.name,
-            false, // <- do not use fast toggle
-            true,
-            INDI_SET_PROP_TIMEOUT,
-        )?;
-
         // Enable blob
 
         self.indi.command_enable_blob(
@@ -1131,6 +1124,12 @@ pub fn apply_camera_options_and_take_shot(
 ) -> anyhow::Result<u64> {
     let cam_ccd = indi::CamCcd::from_ccd_prop_name(&device.prop);
 
+    // Disable fast toggle
+
+    if indi.camera_is_fast_toggle_supported(&device.name).unwrap_or(false) {
+         indi.camera_enable_fast_toggle(&device.name, false, false, None)?;
+    }
+
     // Conversion gain
 
     if let Some(conv_gain_str) = &cam_ctrl.conv_gain_str {
@@ -1269,21 +1268,12 @@ pub fn apply_camera_options_and_take_shot(
 
     // Start exposure
 
-    let shot_id = start_camera_exposure(indi, device, frame.exposure())?;
-
-    Ok(shot_id)
-}
-
-pub fn start_camera_exposure(
-    indi:     &indi::Connection,
-    device:   &DeviceAndProp,
-    exposure: f64,
-) -> anyhow::Result<u64> {
     let shot_id = indi.camera_start_exposure(
         &device.name,
         indi::CamCcd::from_ccd_prop_name(&device.prop),
-        exposure
+        frame.exposure()
     )?;
+
     Ok(shot_id)
 }
 

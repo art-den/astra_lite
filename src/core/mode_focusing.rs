@@ -701,6 +701,10 @@ impl Mode for FocusingMode {
         Ok(())
     }
 
+    fn frame_options_to_restart_exposure(&self) -> Option<&FrameOptions> {
+        Some(&self.cam_opts.frame)
+    }
+
     fn take_next_mode(&mut self) -> Option<ModeBox> {
         self.next_mode.take()
     }

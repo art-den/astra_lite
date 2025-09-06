@@ -197,6 +197,10 @@ impl Mode for PlatesolveMode {
         Ok(())
     }
 
+    fn frame_options_to_restart_exposure(&self) -> Option<&FrameOptions> {
+        Some(&self.cam_opts.frame)
+    }
+
     fn notify_about_frame_processing_result(
         &mut self,
         fp_result: &FrameProcessResult

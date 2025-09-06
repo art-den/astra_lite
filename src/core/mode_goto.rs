@@ -354,7 +354,9 @@ impl Mode for GotoMode {
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
-        self.cam_opts.as_ref().map(|cam_opts| cam_opts.frame.exposure())
+        self.cam_opts
+            .as_ref()
+            .map(|cam_opts| cam_opts.frame.exposure())
     }
 
     fn start(&mut self) -> anyhow::Result<()> {
@@ -417,6 +419,10 @@ impl Mode for GotoMode {
         });
 
         Ok(())
+    }
+
+    fn frame_options_to_restart_exposure(&self) -> Option<&FrameOptions> {
+        self.cam_opts.as_ref().map(|cam_opts| &cam_opts.frame)
     }
 
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
