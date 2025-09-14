@@ -159,7 +159,7 @@ impl Core {
         result. set_ext_guider_events_handler();
         result.connect_indi_events();
         result.connect_events();
-        result.connect_1s_timer_event();
+        result.start_1s_timer();
         result
     }
 
@@ -244,7 +244,7 @@ impl Core {
         log::info!("Error has informed!");
     }
 
-    fn connect_1s_timer_event(self: &Arc<Self>) {
+    fn start_1s_timer(self: &Arc<Self>) {
         let self_ = Arc::clone(self);
         self.timer.exec(1000, true, move || {
             let result = self_.timer_event_handler();
@@ -343,7 +343,7 @@ impl Core {
     }
 
     pub fn connect_indi(
-        self: &Arc<Self>,
+        self:         &Arc<Self>,
         indi_drivers: &indi::Drivers
     ) -> anyhow::Result<()> {
         let mut cam_watchdog = self.cam_watchdog.lock().unwrap();
@@ -425,7 +425,6 @@ impl Core {
 
         Ok(())
     }
-
 
     fn process_indi_blob_event(
         self:              &Arc<Self>,
