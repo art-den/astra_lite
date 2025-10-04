@@ -694,7 +694,7 @@ impl MainUi {
         exec_and_show_error(Some(&self.widgets.window), || {
             if cfg!(target_os = "windows") {
                 Command::new("explorer")
-                    .args([self.logs_dir.to_str().unwrap_or_default()])
+                    .args([&self.logs_dir])
                     .spawn()?;
             } else {
                 let uri = glib::filename_to_uri(&self.logs_dir, None)?;

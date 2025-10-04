@@ -876,32 +876,29 @@ impl HardwareUi {
                 let (_, latitude, longitude) = result[0];
                 self.widgets.site.e_lat.set_text(&indi::value_to_sexagesimal(latitude, true, 6));
                 self.widgets.site.e_long.set_text(&indi::value_to_sexagesimal(longitude, true, 6));
-                return Ok(());
+            } else {
+                let menu = gtk::Menu::new();
+                for (dev, lat, long) in result {
+                    let mi_text = format!(
+                        "{} {} ({})",
+                        indi::value_to_sexagesimal(lat, true, 6),
+                        indi::value_to_sexagesimal(long, true, 6),
+                        dev.name
+                    );
+                    let menu_item = gtk::MenuItem::builder().label(mi_text).build();
+                    menu.append(&menu_item);
+                    menu_item.connect_activate(
+                        clone!(@weak self as self_ => move |_| {
+                            self_.widgets.site.e_lat.set_text(&indi::value_to_sexagesimal(lat, true, 6));
+                            self_.widgets.site.e_long.set_text(&indi::value_to_sexagesimal(long, true, 6));
+                        })
+                    );
+                }
+                menu.set_attach_widget(Some(&self.widgets.site.btn_get_site));
+                menu.show_all();
+                menu.popup_easy(gtk::gdk::ffi::GDK_BUTTON_SECONDARY as u32, 0);
             }
-
-            let menu = gtk::Menu::new();
-            for (dev, lat, long) in result {
-                let mi_text = format!(
-                    "{} {} ({})",
-                    indi::value_to_sexagesimal(lat, true, 6),
-                    indi::value_to_sexagesimal(long, true, 6),
-                    dev.name
-                );
-                let menu_item = gtk::MenuItem::builder().label(mi_text).build();
-                menu.append(&menu_item);
-                menu_item.connect_activate(
-                    clone!(@weak self as self_ => move |_| {
-                        self_.widgets.site.e_lat.set_text(&indi::value_to_sexagesimal(lat, true, 6));
-                        self_.widgets.site.e_long.set_text(&indi::value_to_sexagesimal(long, true, 6));
-                    })
-                );
-            }
-
-            menu.set_attach_widget(Some(&self.widgets.site.btn_get_site));
-            menu.show_all();
-            menu.popup_easy(gtk::gdk::ffi::GDK_BUTTON_SECONDARY as u32, 0);
-
-            Ok(())
+            return Ok(());
         });
     }
 }
