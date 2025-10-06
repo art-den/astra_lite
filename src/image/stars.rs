@@ -28,15 +28,7 @@ pub struct StarsInfo {
     pub hfd:           Option<f32>, // half flux diameter
     pub fwhm:          Option<f32>, // full width at half maximum
     pub fwhm_angular:  Option<f32>,
-    pub fwhm_is_ok:    bool,
     pub ovality:       Option<f32>,
-    pub ovality_is_ok: bool,
-}
-
-impl StarsInfo {
-    pub fn is_ok(&self) -> bool {
-        self.fwhm_is_ok && self.ovality_is_ok
-    }
 }
 
 #[derive(Default)]
@@ -60,8 +52,6 @@ impl StarsFinder {
         &mut self,
         image:            &ImageLayer<u16>,
         raw_info:         &Option<RawImageInfo>,
-        max_fwhm:         Option<f32>,
-        max_ovality:      Option<f32>,
         sensitivity:      StarRecognSensivity,
         ignore_3px_stars: bool,
         mt:               bool,
@@ -104,27 +94,13 @@ impl StarsFinder {
             (None, None, None)
         };
 
-        let fwhm_is_ok = if let (Some(max_stars_fwhm), Some(fwhm)) = (max_fwhm, fwhm) {
-            fwhm < max_stars_fwhm
-        } else {
-            true
-        };
-
-        let ovality_is_ok = if let (Some(max_stars_ovality), Some(ovality)) = (max_ovality, ovality) {
-            ovality < max_stars_ovality
-        } else {
-            true
-        };
-
         let fwhm_angular = CommonStarsImage::calc_angular_fwhm(fwhm, raw_info);
 
         let info = StarsInfo {
             hfd,
             fwhm,
             fwhm_angular,
-            fwhm_is_ok,
             ovality,
-            ovality_is_ok,
         };
 
         tm_total.log("StarsFinder TOTAL");
@@ -590,10 +566,10 @@ impl StarsFinder {
             .map(|(s, _)| s.height)
             .sum::<usize>() / stars_count;
         let mut result_width = usize::min(aver_width, MAX_STAR_DIAM) * k;
-        if result_width % 2 == 0 { result_width += 1; }
+        if result_width.is_multiple_of(2) { result_width += 1; }
         let result_width2 = (result_width / 2) as isize;
         let mut result_height = usize::min(aver_height, MAX_STAR_DIAM) * k;
-        if result_height % 2 == 0 { result_height += 1; }
+        if result_height.is_multiple_of(2) { result_height += 1; }
         let result_height2 = (result_height / 2) as isize;
 
         // Create image

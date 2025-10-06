@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use crate::utils::log_utils::TimeLogger;
 use super::{histogram::*, image::*, raw::CalibrMethods};
 
@@ -28,7 +27,6 @@ pub fn seconds_to_total_time_str(seconds: f64, short: bool) -> String {
 }
 
 pub struct LightFrameInfo {
-    pub time:           Option<DateTime<Utc>>,
     pub width:          usize,
     pub height:         usize,
     pub exposure:       f64,
@@ -58,7 +56,6 @@ impl LightFrameInfo {
         tmr.log("calc image background");
 
         Self {
-            time: image.raw_info.as_ref().and_then(|info| info.time),
             width: image.width(),
             height: image.height(),
             exposure: 0.0,

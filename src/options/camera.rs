@@ -166,7 +166,6 @@ impl FrameOptions {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(default)]
-
 pub struct CamDebugOptions {
     /// Imitate sutuation when camera exposure is finished but no blob is received
     pub blob_frozen: bool,

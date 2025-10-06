@@ -61,6 +61,11 @@ pub fn init_ui(
     obj
 }
 
+fn make_bad_str(s: &str) -> String {
+    format!(r##"<span color="#FF4040"><b>{}</b></span>"##, s)
+}
+
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 struct UiOptions {
@@ -84,6 +89,8 @@ impl Default for UiOptions {
 struct LightHistoryItem {
     mode_type:      ModeType,
     time:           Option<DateTime<Utc>>,
+    ccd_temp:       Option<f32>,
+    bad_ccd_temp:   bool,
     fwhm:           Option<f32>,
     fwhm_angular:   Option<f32>,
     hfd:            Option<f32>,
@@ -102,6 +109,8 @@ struct CalibrHistoryItem {
     time:           Option<DateTime<Utc>>,
     mode_type:      ModeType,
     frame_type:     FrameType,
+    ccd_temp:       Option<f32>,
+    bad_ccd_temp:   bool,
     mean:           f32,
     median:         u16,
     std_dev:        f32,
@@ -684,79 +693,90 @@ impl PreviewUi {
     }
 
     fn show_image_info(&self) {
-        let info = match self.options.read().unwrap().preview.source {
-            PreviewSource::OrigFrame =>
-                self.core.cur_frame().info.read().unwrap(),
-            PreviewSource::LiveStacking =>
-                self.core.live_stacking().info.read().unwrap(),
-        };
-
         let update_info_panel_vis = |is_light_info: bool, is_flat_info: bool, is_raw_info: bool| {
             self.widgets.info.bx_light_info.set_visible(is_light_info);
             self.widgets.info.bx_flat_info.set_visible(is_flat_info);
             self.widgets.info.bx_raw_info.set_visible(is_raw_info);
         };
 
-        match &*info {
-            ResultImageInfo::LightInfo(info) => {
-                self.widgets.info.e_info_exp.set_text(&seconds_to_total_time_str(info.image.exposure, true));
+        let show_light_info = |stars: &StarsInfoData, image: &LightFrameInfo| {
+            self.widgets.info.e_info_exp.set_text(&seconds_to_total_time_str(image.exposure, true));
 
-                let mut fwhm_hfd_str = String::new();
-                if let Some(value) = info.stars.info.fwhm {
-                    fwhm_hfd_str += &format!("{:.1}", value);
-                }
-                if let Some(value) = info.stars.info.fwhm_angular {
-                    fwhm_hfd_str += &format!("({:.1}\")", 60.0 * 60.0 * radian_to_degree(value as f64));
-                }
-                if let Some(value) = info.stars.info.hfd {
-                    fwhm_hfd_str += &format!(" / {:.1}", value);
-                }
+            let mut fwhm_hfd_str = String::new();
+            if let Some(value) = stars.info.fwhm {
+                fwhm_hfd_str += &format!("{:.1}", value);
+            }
+            if let Some(value) = stars.info.fwhm_angular {
+                fwhm_hfd_str += &format!("({:.1}\")", 60.0 * 60.0 * radian_to_degree(value as f64));
+            }
+            if let Some(value) = stars.info.hfd {
+                fwhm_hfd_str += &format!(" / {:.1}", value);
+            }
 
-                self.widgets.info.e_fwhm.set_text(&fwhm_hfd_str);
+            self.widgets.info.e_fwhm.set_text(&fwhm_hfd_str);
 
-                match info.stars.info.ovality {
-                    Some(value) => self.widgets.info.e_ovality.set_text(&format!("{:.1}", value)),
-                    None        => self.widgets.info.e_ovality.set_text(""),
+            match stars.info.ovality {
+                Some(value) => self.widgets.info.e_ovality.set_text(&format!("{:.1}", value)),
+                None        => self.widgets.info.e_ovality.set_text(""),
+            }
+            let stars_cnt = stars.items.len();
+            let overexp_stars = stars.items.iter().filter(|s| s.overexposured).count();
+            self.widgets.info.e_stars.set_text(&format!("{} ({})", stars_cnt, overexp_stars));
+            let bg = 100_f64 * image.background as f64 / image.max_value as f64;
+            self.widgets.info.e_background.set_text(&format!("{:.2}%", bg));
+            let noise = 100_f64 * image.noise as f64 / image.max_value as f64;
+            self.widgets.info.e_noise.set_text(&format!("{:.4}%", noise));
+            update_info_panel_vis(true, false, false);
+        };
+
+        match self.options.read().unwrap().preview.source {
+            PreviewSource::OrigFrame => {
+                let info = self.core.cur_frame().info.read().unwrap();
+                match &*info {
+                    ResultImageInfo::LightInfo(info) => {
+                        show_light_info(&info.stars, &info.image);
+                    },
+                    ResultImageInfo::FlatInfo(info) => {
+                        *self.flat_info.borrow_mut() = info.clone();
+                        update_info_panel_vis(false, true, false);
+                        self.show_flat_info();
+                    },
+                    ResultImageInfo::RawInfo(info) => {
+                        let aver_text = format!(
+                            "{:.1} ({:.1}%)",
+                            info.aver,
+                            100.0 * info.aver / info.max_value as f32
+                        );
+                        self.widgets.info.e_aver.set_text(&aver_text);
+                        let median_text = format!(
+                            "{} ({:.1}%)",
+                            info.median,
+                            100.0 * info.median as f64 / info.max_value as f64
+                        );
+                        self.widgets.info.e_median.set_text(&median_text);
+                        let dev_text = format!(
+                            "{:.1} ({:.3}%)",
+                            info.std_dev,
+                            100.0 * info.std_dev / info.max_value as f32
+                        );
+                        self.widgets.info.e_std_dev.set_text(&dev_text);
+                        update_info_panel_vis(false, false, true);
+                    },
+                    _ => {
+                        update_info_panel_vis(false, false, false);
+                    },
                 }
-                let stars_cnt = info.stars.items.len();
-                let overexp_stars = info.stars.items.iter().filter(|s| s.overexposured).count();
-                self.widgets.info.e_stars.set_text(&format!("{} ({})", stars_cnt, overexp_stars));
-                let bg = 100_f64 * info.image.background as f64 / info.image.max_value as f64;
-                self.widgets.info.e_background.set_text(&format!("{:.2}%", bg));
-                let noise = 100_f64 * info.image.noise as f64 / info.image.max_value as f64;
-                self.widgets.info.e_noise.set_text(&format!("{:.4}%", noise));
-                update_info_panel_vis(true, false, false);
-            },
-            ResultImageInfo::FlatInfo(info) => {
-                *self.flat_info.borrow_mut() = info.clone();
-                update_info_panel_vis(false, true, false);
-                self.show_flat_info();
-            },
-            ResultImageInfo::RawInfo(info) => {
-                let aver_text = format!(
-                    "{:.1} ({:.1}%)",
-                    info.aver,
-                    100.0 * info.aver / info.max_value as f32
-                );
-                self.widgets.info.e_aver.set_text(&aver_text);
-                let median_text = format!(
-                    "{} ({:.1}%)",
-                    info.median,
-                    100.0 * info.median as f64 / info.max_value as f64
-                );
-                self.widgets.info.e_median.set_text(&median_text);
-                let dev_text = format!(
-                    "{:.1} ({:.3}%)",
-                    info.std_dev,
-                    100.0 * info.std_dev / info.max_value as f32
-                );
-                self.widgets.info.e_std_dev.set_text(&dev_text);
-                update_info_panel_vis(false, false, true);
-            },
-            _ => {
-                update_info_panel_vis(false, false, false);
-            },
-        }
+            }
+            PreviewSource::LiveStacking => {
+                let ls_info = self.core.live_stacking().info.read().unwrap();
+                if let Some(ls_info) = &*ls_info {
+                    show_light_info(&ls_info.stars, &ls_info.image);
+                } else {
+                    update_info_panel_vis(false, false, false);
+                }
+            }
+        };
+
     }
 
     fn show_flat_info(&self) {
@@ -1012,17 +1032,20 @@ impl PreviewUi {
                 self.repaint_histogram();
                 self.show_histogram_stat();
             }
-            FrameProcessResultData::RawFrameInfo(raw_frame_info)
+            FrameProcessResultData::RawFrameInfo(info)
             if is_mode_current(false) => {
-                if raw_frame_info.frame_type != FrameType::Lights {
+                let image_info = info.image.info();
+                if image_info.frame_type != FrameType::Lights {
                     let history_item = CalibrHistoryItem {
-                        time:           raw_frame_info.time,
+                        time:           image_info.time,
                         mode_type:      result.mode_type,
-                        frame_type:     raw_frame_info.frame_type,
-                        mean:           raw_frame_info.mean,
-                        median:         raw_frame_info.median,
-                        std_dev:        raw_frame_info.std_dev,
-                        calibr_methods: raw_frame_info.calubr_methods,
+                        frame_type:     image_info.frame_type,
+                        ccd_temp:       image_info.ccd_temp.map(|v| v as f32),
+                        bad_ccd_temp:   !info.ccd_temp_is_ok,
+                        mean:           info.mean,
+                        median:         info.median,
+                        std_dev:        info.std_dev,
+                        calibr_methods: image_info.calibr_methods,
                     };
                     self.calibr_history.borrow_mut().push(history_item);
                     self.update_calibr_history_table();
@@ -1037,18 +1060,20 @@ impl PreviewUi {
             FrameProcessResultData::LightFrameInfo(info) => {
                 let history_item = LightHistoryItem {
                     mode_type:      result.mode_type,
-                    time:           info.image.time,
+                    time:           info.raw.as_ref().and_then(|raw| raw.time),
+                    ccd_temp:       info.raw.as_ref().and_then(|raw| raw.ccd_temp.map(|v| v as f32)),
+                    bad_ccd_temp:   !info.quality.ccd_temp_is_ok,
                     fwhm:           info.stars.info.fwhm,
                     hfd:            info.stars.info.hfd,
                     fwhm_angular:   info.stars.info.fwhm_angular,
-                    bad_fwhm:       !info.stars.info.fwhm_is_ok,
+                    bad_fwhm:       !info.quality.fwhm_is_ok,
                     stars_ovality:  info.stars.info.ovality,
-                    bad_ovality:    !info.stars.info.ovality_is_ok,
+                    bad_ovality:    !info.quality.ovality_is_ok,
                     background:     info.image.bg_percent,
                     noise:          info.image.raw_noise.map(|n| 100.0 * n / info.image.max_value as f32),
                     stars_count:    info.stars.items.len(),
-                    offset:         info.stars.offset.clone(),
-                    bad_offset:     !info.stars.offset_is_ok,
+                    offset:         info.offset.clone(),
+                    bad_offset:     !info.quality.offset_is_ok,
                     calibr_methods: info.image.calibr_methods,
                 };
                 self.light_history.borrow_mut().push(history_item);
@@ -1212,15 +1237,16 @@ impl PreviewUi {
                 init_list_store_model_for_treeview(tree, &[
                     /* 0 */  ("Mode",       String::static_type(), "text"),
                     /* 1 */  ("Time",       String::static_type(), "text"),
-                    /* 2 */  ("FWHM / HFD", String::static_type(), "markup"),
-                    /* 3 */  ("Ovality",    String::static_type(), "markup"),
-                    /* 4 */  ("Stars",      u32::static_type(),    "text"),
-                    /* 5 */  ("Noise",      String::static_type(), "text"),
-                    /* 6 */  ("Background", String::static_type(), "text"),
-                    /* 7 */  ("Calibr.",    String::static_type(), "text"),
-                    /* 8 */  ("Offs.X",     String::static_type(), "markup"),
-                    /* 9 */  ("Offs.Y",     String::static_type(), "markup"),
-                    /* 10 */ ("Rot.",       String::static_type(), "markup"),
+                    /* 2 */  ("CCD T.",     String::static_type(), "markup"),
+                    /* 3 */  ("FWHM / HFD", String::static_type(), "markup"),
+                    /* 4 */  ("Ovality",    String::static_type(), "markup"),
+                    /* 5 */  ("Stars",      u32::static_type(),    "text"),
+                    /* 6 */  ("Noise",      String::static_type(), "text"),
+                    /* 7 */  ("Background", String::static_type(), "text"),
+                    /* 8 */  ("Calibr.",    String::static_type(), "text"),
+                    /* 9 */  ("Offs.X",     String::static_type(), "markup"),
+                    /* 10 */ ("Offs.Y",     String::static_type(), "markup"),
+                    /* 11 */ ("Rot.",       String::static_type(), "markup"),
                 ])
             },
         };
@@ -1230,9 +1256,6 @@ impl PreviewUi {
         }
         let models_row_cnt = get_model_row_count(model.upcast_ref());
         let to_index = items.len();
-        let make_bad_str = |s: &str| -> String {
-            format!(r##"<span color="#FF4040"><b>{}</b></span>"##, s)
-        };
         for item in &items[models_row_cnt..to_index] {
             let mode_type_str = Self::mode_type_to_history_str(item.mode_type);
             let local_time_str =
@@ -1242,6 +1265,12 @@ impl PreviewUi {
                 } else {
                     String::new()
                 };
+            let mut temp_str = item.ccd_temp
+                .map(|v| format!("{:.1}", v))
+                .unwrap_or_else(String::new);
+            if item.bad_ccd_temp {
+                temp_str = make_bad_str(&temp_str);
+            }
             let mut fwhm_str = item.fwhm
                 .map(|v| format!("{:.1}", v))
                 .unwrap_or_else(String::new);
@@ -1256,7 +1285,6 @@ impl PreviewUi {
             if let Some(hfd) = item.hfd {
                 fwhm_str += &format!(" / {:.1}", hfd);
             }
-
             let mut ovality_str = item.stars_ovality
                 .map(|v| format!("{:.1}", v))
                 .unwrap_or_else(String::new);
@@ -1296,15 +1324,16 @@ impl PreviewUi {
             let last_iter = model.insert_with_values(None, &[
                 (0, &mode_type_str),
                 (1, &local_time_str),
-                (2, &fwhm_str),
-                (3, &ovality_str),
-                (4, &stars_cnt),
-                (5, &noise_str),
-                (6, &bg_str),
-                (7, &calibr_str),
-                (8, &x_str),
-                (9, &y_str),
-                (10, &angle_str),
+                (2, &temp_str),
+                (3, &fwhm_str),
+                (4, &ovality_str),
+                (5, &stars_cnt),
+                (6, &noise_str),
+                (7, &bg_str),
+                (8, &calibr_str),
+                (9, &x_str),
+                (10, &y_str),
+                (11, &angle_str),
             ]);
             if last_is_selected || models_row_cnt == 0 {
                 // Select and scroll to last row
@@ -1347,10 +1376,11 @@ impl PreviewUi {
                     /* 0 */  ("Time",     String::static_type(), "text"),
                     /* 1 */  ("Mode",     String::static_type(), "text"),
                     /* 2 */  ("Type",     String::static_type(), "text"),
-                    /* 3 */  ("Mean",     String::static_type(), "text"),
-                    /* 4 */  ("Median",   String::static_type(), "text"),
-                    /* 5 */  ("Std.dev.", String::static_type(), "text"),
-                    /* 6 */  ("Calibr.",  String::static_type(), "text"),
+                    /* 3 */  ("CCD T.",   String::static_type(), "markup"),
+                    /* 4 */  ("Mean",     String::static_type(), "text"),
+                    /* 5 */  ("Median",   String::static_type(), "text"),
+                    /* 6 */  ("Std.dev.", String::static_type(), "text"),
+                    /* 7 */  ("Calibr.",  String::static_type(), "text"),
                 ])
             },
         };
@@ -1371,6 +1401,15 @@ impl PreviewUi {
 
             let mode_type_str = Self::mode_type_to_history_str(item.mode_type);
             let type_str = item.frame_type.to_str();
+            let mut temp_str =
+                if let Some(ccd_temp) = item.ccd_temp {
+                    format!("{:.1}", ccd_temp)
+                } else {
+                    String::new()
+                };
+            if item.bad_ccd_temp {
+                temp_str = make_bad_str(&temp_str);
+            }
             let mean_str = format!("{:.1}", item.mean);
             let median_str = format!("{}", item.median);
             let dev_str = format!("{:.1}", item.std_dev);
@@ -1384,10 +1423,11 @@ impl PreviewUi {
                 (0, &local_time_str),
                 (1, &mode_type_str),
                 (2, &type_str),
-                (3, &mean_str),
-                (4, &median_str),
-                (5, &dev_str),
-                (6, &calibr_str),
+                (3, &temp_str),
+                (4, &mean_str),
+                (5, &median_str),
+                (6, &dev_str),
+                (7, &calibr_str),
             ]);
             if last_is_selected || models_row_cnt == 0 {
                 // Select and scroll to last row

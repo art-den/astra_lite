@@ -390,9 +390,9 @@ impl MainUi {
         // INDI
 
         let sender = main_thread_sender.clone();
-        Some(self.indi.subscribe_events(move |event| {
+        self.indi.subscribe_events(move |event| {
             sender.send_blocking(MainThreadEvent::Indi(event)).unwrap();
-        }));
+        });
 
         // Core
 

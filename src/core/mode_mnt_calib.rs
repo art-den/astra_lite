@@ -237,7 +237,7 @@ impl MountCalibrMode {
         info: &LightFrameInfoData,
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
-        if info.stars.info.fwhm_is_ok && info.stars.info.ovality_is_ok {
+        if info.quality.fwhm_is_ok && info.quality.ovality_is_ok {
             if self.image_width == 0 || self.image_height == 0 {
                 self.image_width = info.image.width;
                 self.image_height = info.image.height;

@@ -133,7 +133,7 @@ impl ImageLayer<u16> {
                 *v9 as u32 + *v10 as u32 + 5
             ) / 10;
             let m = *m as u32;
-            let diff = if m > aver { m - aver } else { aver - m };
+            let diff = u32::abs_diff(m, aver);
             diffs.push(diff as u16);
         }
         let max_pos = 80 * diffs.len() / 100; // 80%

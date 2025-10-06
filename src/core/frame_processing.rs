@@ -1,6 +1,6 @@
 use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, sync::{mpsc, RwLock, Mutex}, thread::JoinHandle, path::*, io::Cursor};
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local};
 
 use crate::{
     core::{core::ModeType, utils::{FileNameArg, FileNameUtils}},
@@ -11,13 +11,53 @@ use crate::{
 
 #[derive(Default)]
 pub struct StarsInfoData {
-    pub items:        Arc<StarItems>,
-    pub info:         Arc<StarsInfo>,
-    pub offset:       Option<Offset>,
-    pub offset_is_ok: bool,
+    pub items:   Arc<StarItems>,
+    pub info:    Arc<StarsInfo>,
+}
+
+#[derive(Clone)]
+pub struct LightFrameQualInfoData {
+    pub ccd_temp_is_ok: bool,
+    pub offset_is_ok:   bool,
+    pub fwhm_is_ok:     bool,
+    pub ovality_is_ok:  bool,
+}
+
+impl Default for LightFrameQualInfoData {
+    fn default() -> Self {
+        Self {
+            ccd_temp_is_ok: true,
+            offset_is_ok:   true,
+            fwhm_is_ok:     true,
+            ovality_is_ok:  true,
+        }
+    }
+}
+
+impl LightFrameQualInfoData {
+    pub fn is_ok(&self) -> bool {
+        self.ccd_temp_is_ok &&
+        self.offset_is_ok &&
+        self.fwhm_is_ok &&
+        self.ovality_is_ok
+    }
+
+    pub fn stars_is_ok(&self) -> bool {
+        self.fwhm_is_ok &&
+        self.ovality_is_ok
+    }
 }
 
 pub struct LightFrameInfoData {
+    pub raw:     Option<RawImageInfo>,
+    pub image:   Arc<LightFrameInfo>,
+    pub stars:   Arc<StarsInfoData>,
+    pub offset:  Option<Offset>,
+    pub quality: LightFrameQualInfoData,
+}
+
+#[derive(Clone)]
+pub struct LiveStackingInfo {
     pub image: Arc<LightFrameInfo>,
     pub stars: Arc<StarsInfoData>,
 }
@@ -95,7 +135,7 @@ pub struct LiveStackingData {
     pub stacker:  RwLock<ImageStacker>,
     pub image:    RwLock<Image>,
     pub hist:     RwLock<Histogram>,
-    pub info:     RwLock<ResultImageInfo>,
+    pub info:     RwLock<Option<LiveStackingInfo>>,
     pub time_cnt: Mutex<f64>,
 }
 
@@ -105,7 +145,7 @@ impl LiveStackingData {
             stacker:  RwLock::new(ImageStacker::new()),
             image:    RwLock::new(Image::new_empty()),
             hist:     RwLock::new(Histogram::new()),
-            info:     RwLock::new(ResultImageInfo::None),
+            info:     RwLock::new(None),
             time_cnt: Mutex::new(0.0),
         }
     }
@@ -114,7 +154,7 @@ impl LiveStackingData {
         self.stacker.write().unwrap().clear();
         self.image.write().unwrap().clear();
         self.hist.write().unwrap().clear();
-        *self.info.write().unwrap() = ResultImageInfo::None;
+        *self.info.write().unwrap() = None;
         *self.time_cnt.lock().unwrap() = 0.0;
     }
 }
@@ -152,6 +192,7 @@ pub struct FrameProcessCommandData {
     pub calibr_data:     Arc<Mutex<CalibrData>>,
     pub view_options:    PreviewParams,
     pub frame_options:   FrameOptions,
+    pub cam_ctrl_opts:   Option<CamCtrlOptions>,
     pub quality_options: Option<QualityOptions>,
     pub live_stacking:   Option<LiveStackingParams>,
 }
@@ -163,9 +204,8 @@ pub struct Preview8BitImgData {
 
 #[derive(Clone)]
 pub struct RawFrameInfo {
-    pub frame_type:     FrameType,
-    pub time:           Option<DateTime<Utc>>,
-    pub calubr_methods: CalibrMethods,
+    pub image:          Arc<RawImage>,
+    pub ccd_temp_is_ok: bool,
     pub mean:           f32,
     pub median:         u16,
     pub std_dev:        f32,
@@ -177,7 +217,6 @@ pub enum FrameProcessResultData {
     ShotProcessingStarted,
     RawFrameInfo(RawFrameInfo),
     HistorgamRaw(Arc<RwLock<Histogram>>),
-    RawFrame(Arc<RawImage>),
     Image(Arc<RwLock<Image>>),
     PreviewFrame(Arc<Preview8BitImgData>),
     PreviewLiveRes(Arc<Preview8BitImgData>),
@@ -597,6 +636,8 @@ fn make_preview_image_impl(
     let mut raw_info = None;
     let mut raw_noise = None;
 
+    let mut quality = LightFrameQualInfoData::default();
+
     let mut image = if is_raw_image {
         let mut raw_image = loader.load_raw_image()?;
         drop(loader);
@@ -619,10 +660,22 @@ fn make_preview_image_impl(
         log::debug!("Raw CFA       = {:?}", info.cfa);
         log::debug!("Raw bin       = {}",   info.bin);
         log::debug!("Raw exposure  = {}s",  info.exposure);
+        log::debug!("Raw CCD temp  = {:?}", info.ccd_temp);
 
         if command.stop_flag.load(Ordering::Relaxed) {
             log::debug!("Command stopped");
             return Ok(());
+        }
+
+        // Check is frame CCD temperature is good
+
+        if let (Some(qo), Some(ctrl_o)) = (&command.quality_options, &command.cam_ctrl_opts) {
+            if ctrl_o.enable_cooler && qo.check_ccd_temp {
+                if let Some(ccd_temp) = info.ccd_temp {
+                    let diff = f64::abs(ccd_temp - ctrl_o.temperature);
+                    quality.ccd_temp_is_ok = diff <= qo.max_ccd_temp_diff;
+                }
+            }
         }
 
         let is_monochrome_img =
@@ -681,24 +734,17 @@ fn make_preview_image_impl(
             info = raw_image.info().clone()
         }
 
+        let raw_image = Arc::new(raw_image);
+
         let raw_frame_info = RawFrameInfo {
-            frame_type,
-            time:           info.time,
-            calubr_methods: info.calibr_methods,
+            image:          Arc::clone(&raw_image),
+            ccd_temp_is_ok: quality.ccd_temp_is_ok,
             mean:           raw_mean as f32,
             median:         raw_median,
             std_dev:        raw_std_dev as f32,
         };
         send_result(
             FrameProcessResultData::RawFrameInfo(raw_frame_info),
-            command,
-            result_fun
-        );
-
-        let raw_image = Arc::new(raw_image);
-
-        send_result(
-            FrameProcessResultData::RawFrame(Arc::clone(&raw_image)),
             command,
             result_fun
         );
@@ -840,19 +886,11 @@ fn make_preview_image_impl(
 
     // Stars
 
-    let max_stars_fwhm = command.quality_options
-        .as_ref()
-        .and_then(|qo| if qo.use_max_fwhm { Some(qo.max_fwhm) } else { None });
-
-    let max_stars_ovality = command.quality_options
-        .as_ref()
-        .and_then(|qo| if qo.use_max_ovality { Some(qo.max_ovality) } else { None });
-
-    let stars_recgn_send = command.quality_options
-        .as_ref().map(|qo| qo.star_recgn_sens)
-        .unwrap_or_default();
-
     let frame_stars = if is_light_frame {
+        let stars_recgn_send = command.quality_options
+            .as_ref().map(|qo| qo.star_recgn_sens)
+            .unwrap_or_default();
+
         let mono_layer = if image.is_color() { &image.g } else { &image.l };
         let mut stars_finder = StarsFinder::new();
         let ignore_3px_stars = command.quality_options
@@ -863,8 +901,6 @@ fn make_preview_image_impl(
         stars_finder.find_stars_and_get_info(
             mono_layer,
             &image.raw_info,
-            max_stars_fwhm,
-            max_stars_ovality,
             stars_recgn_send,
             ignore_3px_stars,
             true
@@ -872,11 +908,6 @@ fn make_preview_image_impl(
     } else {
         Stars::default()
     };
-
-    let stars_items = Arc::new(frame_stars.items);
-    let stars_info = Arc::new(frame_stars.info);
-
-    *command.frame.stars.write().unwrap() = Some(Arc::clone(&stars_items));
 
     // Preview image RGB bytes
 
@@ -886,7 +917,7 @@ fn make_preview_image_impl(
         &image,
         &hist,
         &command.view_options,
-        if is_light_frame { Some(&*stars_items)} else { None },
+        if is_light_frame { Some(&frame_stars.items)} else { None },
     );
     tmr.log("get_rgb_bytes_from_preview_image");
 
@@ -907,7 +938,23 @@ fn make_preview_image_impl(
         );
     }
 
-    let is_bad_frame = if frame_type == FrameType::Lights {
+    if frame_type == FrameType::Lights {
+        let stars_items = Arc::new(frame_stars.items);
+        let stars_info = Arc::new(frame_stars.info);
+
+        *command.frame.stars.write().unwrap() = Some(Arc::clone(&stars_items));
+
+        // Stars quality
+
+        if let Some(qo) = &command.quality_options {
+            if qo.use_max_fwhm { if let Some(fwhm) = stars_info.fwhm {
+                quality.fwhm_is_ok = fwhm < qo.max_fwhm;
+            }}
+            if qo.use_max_ovality { if let Some(ovality) = stars_info.ovality {
+                quality.ovality_is_ok = ovality < qo.max_ovality;
+            }}
+        }
+
         // Light frame information
 
         let tmr = TimeLogger::start();
@@ -929,33 +976,34 @@ fn make_preview_image_impl(
 
         // Offset by previous stars
 
-        let (stars_offset, offset_is_ok) = if let (Some(stars_for_offset), true, true) =
-        (&command.ref_stars, stars_info.fwhm_is_ok, stars_info.ovality_is_ok) {
-            let tmr = TimeLogger::start();
-            let cur_stars_points: Vec<_> = stars_items.iter()
-                .map(|star| Point {x: star.x, y: star.y })
-                .collect();
-            let image_offset = Offset::calculate(
-                stars_for_offset,
-                &cur_stars_points,
-                image.width() as f64,
-                image.height() as f64
-            );
-            tmr.log("Offset::calculate");
-            let img_offset_is_ok = image_offset.is_some();
-            (image_offset, img_offset_is_ok)
-        } else {
-            (None, true)
-        };
+        let stars_offset =
+            if let (Some(stars_for_offset), true) = (&command.ref_stars, quality.stars_is_ok()) {
+                let tmr = TimeLogger::start();
+                let cur_stars_points: Vec<_> = stars_items.iter()
+                    .map(|star| Point {x: star.x, y: star.y })
+                    .collect();
+                let image_offset = Offset::calculate(
+                    stars_for_offset,
+                    &cur_stars_points,
+                    image.width() as f64,
+                    image.height() as f64
+                );
+                tmr.log("Offset::calculate");
+                quality.offset_is_ok = image_offset.is_some();
+                image_offset
+            } else {
+                None
+            };
 
         let info = Arc::new(LightFrameInfoData {
+            raw: raw_info.clone(),
             image: Arc::new(info),
             stars: Arc::new(StarsInfoData {
                 items: stars_items,
                 info: stars_info,
-                offset: stars_offset,
-                offset_is_ok,
-            })
+            }),
+            offset: stars_offset,
+            quality: quality.clone(),
         });
 
         // Send message about light frame calculated
@@ -975,13 +1023,11 @@ fn make_preview_image_impl(
             result_fun
         );
 
-        let bad_frame = !info.stars.info.fwhm_is_ok || !info.stars.info.ovality_is_ok;
-
         // Live stacking
 
-        if let (Some(live_stacking), false) = (&command.live_stacking, bad_frame) {
+        if let (Some(live_stacking), true) = (&command.live_stacking, quality.is_ok()) {
             // Translate/rotate image to reference image and add
-            let offset = info.stars.offset.clone().unwrap_or_default();
+            let offset = info.offset.clone().unwrap_or_default();
             let mut stacker = live_stacking.data.stacker.write().unwrap();
             let tmr = TimeLogger::start();
             stacker.add(
@@ -1059,8 +1105,6 @@ fn make_preview_image_impl(
             let ls_stars = stars_finder.find_stars_and_get_info(
                 ls_mono_layer,
                 &raw_info,
-                max_stars_fwhm,
-                max_stars_ovality,
                 stars_recgn_send,
                 ignore_3px_stars,
                 true
@@ -1078,22 +1122,18 @@ fn make_preview_image_impl(
                 return Ok(());
             }
 
-            let ls_light_frame_info = LightFrameInfoData {
+            let ls_light_frame_info = LiveStackingInfo {
                 image: Arc::new(live_stacking_info),
                 stars: Arc::new(StarsInfoData {
                     items: Arc::new(ls_stars.items),
                     info: Arc::new(ls_stars.info),
-                    offset: None,
-                    offset_is_ok: false
                 }),
             };
 
 
-            let ls_light_frame_info = Arc::new(ls_light_frame_info);
+            //let ls_light_frame_info = Arc::new(ls_light_frame_info);
 
-            *live_stacking.data.info.write().unwrap() = ResultImageInfo::LightInfo(
-                Arc::clone(&ls_light_frame_info)
-            );
+            *live_stacking.data.info.write().unwrap() = Some(ls_light_frame_info.clone());
             send_result(
                 FrameProcessResultData::FrameInfoLiveRes,
                 command,
@@ -1159,11 +1199,8 @@ fn make_preview_image_impl(
                 }
             }
         }
-
-        bad_frame
     } else {
         *command.frame.stars.write().unwrap() = None;
-        false
     };
 
     if command.stop_flag.load(Ordering::Relaxed) {
@@ -1176,7 +1213,7 @@ fn make_preview_image_impl(
     if let (ImageSource::Blob(blob), Some(raw_info)) = (&command.img_source, raw_info) {
         let result = FrameProcessResultData::ShotProcessingFinished{
             raw_image_info:  Arc::new(raw_info),
-            frame_is_ok:     !is_bad_frame,
+            frame_is_ok:     quality.is_ok(),
             blob:            Arc::clone(blob),
             processing_time: process_time,
             blob_dl_time:    blob.dl_time,

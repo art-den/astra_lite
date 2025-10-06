@@ -266,6 +266,8 @@ struct QualityWidgets {
     spb_max_oval:         gtk::SpinButton,
     chb_ignore_3px_stars: gtk::CheckButton,
     cbx_stars_sens:       gtk::ComboBox,
+    chb_max_temp_diff:    gtk::CheckButton,
+    spb_max_temp_diff:    gtk::SpinButton,
 }
 
 struct Widgets {
@@ -368,7 +370,7 @@ impl UiModule for CameraUi {
             },
             Panel {
                 str_id: "cam_quality",
-                name:   "Light frame quality".to_string(),
+                name:   "Frames quality".to_string(),
                 widget: self.widgets.quality.bx.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    TabPage::Main,
@@ -493,6 +495,10 @@ impl CameraUi {
         self.widgets.quality.spb_max_oval.set_range(0.2, 2.0);
         self.widgets.quality.spb_max_oval.set_digits(1);
         self.widgets.quality.spb_max_oval.set_increments(0.1, 1.0);
+
+        self.widgets.quality.spb_max_temp_diff.set_range(0.1, 10.0);
+        self.widgets.quality.spb_max_temp_diff.set_digits(1);
+        self.widgets.quality.spb_max_temp_diff.set_increments(0.1, 1.0);
     }
 
     fn init_info_widgets(&self) {
@@ -707,18 +713,18 @@ impl CameraUi {
             })
         );
 
+        self.widgets.quality.spb_max_fwhm.connect_value_changed(
+            clone!(@weak self as self_ => move |sb| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.quality.max_fwhm = sb.value() as f32;
+            })
+        );
+
         self.widgets.quality.chb_max_oval.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.quality.use_max_ovality = chb.is_active();
                 self_.correct_frame_quality_widgets_props();
-            })
-        );
-
-        self.widgets.quality.spb_max_fwhm.connect_value_changed(
-            clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.options.try_write() else { return; };
-                options.quality.max_fwhm = sb.value() as f32;
             })
         );
 
@@ -742,6 +748,21 @@ impl CameraUi {
                 options.quality.star_recgn_sens = StarRecognSensivity::from_active_id(
                     cb.active_id().as_deref()
                 )
+            })
+        );
+
+        self.widgets.quality.chb_max_temp_diff.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.quality.check_ccd_temp = chb.is_active();
+                self_.correct_frame_quality_widgets_props();
+            })
+        );
+
+        self.widgets.quality.spb_max_temp_diff.connect_value_changed(
+            clone!(@weak self as self_ => move |sb| {
+                let Ok(mut options) = self_.options.try_write() else { return; };
+                options.quality.max_ccd_temp_diff = sb.value();
             })
         );
 
@@ -865,6 +886,8 @@ impl CameraUi {
         qual.spb_max_oval.set_value(options.quality.max_ovality as f64);
         qual.chb_ignore_3px_stars.set_active(options.quality.ignore_3px_stars);
         qual.cbx_stars_sens.set_active_id(options.quality.star_recgn_sens.to_active_id());
+        qual.chb_max_temp_diff.set_active(options.quality.check_ccd_temp);
+        qual.spb_max_temp_diff.set_value(options.quality.max_ccd_temp_diff);
     }
 
     pub fn get_common_options(&self, options: &mut Options) {
@@ -926,6 +949,8 @@ impl CameraUi {
         options.quality.star_recgn_sens  = StarRecognSensivity::from_active_id(
             qual.cbx_stars_sens.active_id().as_deref()
         );
+        options.quality.check_ccd_temp = qual.chb_max_temp_diff.is_active();
+        options.quality.max_ccd_temp_diff = qual.spb_max_temp_diff.value();
     }
 
     fn store_options_for_camera(
@@ -1166,9 +1191,9 @@ impl CameraUi {
 
         // Change some lists for new camera
 
-        self.update_resolution_list_impl(to, &options);
-        self.fill_heater_items_list_impl(&options);
-        self.fill_conv_gain_items_list_impl(&options);
+        self.update_resolution_list_impl(to, options);
+        self.fill_heater_items_list_impl(options);
+        self.fill_conv_gain_items_list_impl(options);
 
         // Restore some options for specific camera
 
@@ -1182,12 +1207,12 @@ impl CameraUi {
 
         // Show new total time
 
-        self.show_total_raw_time_impl(&options);
+        self.show_total_raw_time_impl(options);
 
         // Init fn_utils and show calibtarion files
 
         self.init_fn_utils(Some(to));
-        self.show_calibr_file_for_frame(&options);
+        self.show_calibr_file_for_frame(options);
     }
 
     fn correct_widgets_props(&self) {
@@ -1202,6 +1227,7 @@ impl CameraUi {
         let qual = &self.widgets.quality;
         qual.spb_max_fwhm.set_sensitive(qual.chb_max_fwhm.is_active());
         qual.spb_max_oval.set_sensitive(qual.chb_max_oval.is_active());
+        qual.spb_max_temp_diff.set_sensitive(qual.chb_max_temp_diff.is_active());
     }
 
     fn init_fn_utils(&self, cam_device: Option<&DeviceAndProp>) {

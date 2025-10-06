@@ -331,7 +331,7 @@ impl Core {
     }
 
     fn connect_events(self: &Arc<Self>) {
-        let self_ = Arc::clone(&self);
+        let self_ = Arc::clone(self);
         self.events.subscribe(move |event| {
             match event {
                 Event::CameraDeviceChanged { from, to } => {
@@ -497,6 +497,7 @@ impl Core {
                 view_options:    options.preview.preview_params(),
                 frame_options:   options.cam.frame.clone(),
                 quality_options: Some(options.quality.clone()),
+                cam_ctrl_opts:   Some(options.cam.ctrl.clone()),
                 live_stacking:   None,
                 calibr_params,
             }
@@ -693,6 +694,7 @@ impl Core {
             view_options:    options.preview.preview_params(),
             frame_options:   options.cam.frame.clone(),
             quality_options: None,
+            cam_ctrl_opts:   None,
             live_stacking:   None,
             calibr_params,
         };

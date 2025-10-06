@@ -267,7 +267,7 @@ impl GotoMode {
     }
 
     fn show_overlay_message(&self, info: &LightFrameInfoData) {
-        let message = if let Some(offset) = &info.stars.offset {
+        let message = if let Some(offset) = &info.offset {
             format!(
                 "Offset x={:.1}, y={:.1}\nRotation = {:.2}°",
                 offset.x,

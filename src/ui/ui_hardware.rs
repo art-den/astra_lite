@@ -898,7 +898,7 @@ impl HardwareUi {
                 menu.show_all();
                 menu.popup_easy(gtk::gdk::ffi::GDK_BUTTON_SECONDARY as u32, 0);
             }
-            return Ok(());
+            Ok(())
         });
     }
 }

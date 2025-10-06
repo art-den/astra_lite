@@ -449,7 +449,7 @@ impl TackingPicturesMode {
 
         // push fwhm
         if let Some(fwhm) = info.stars.info.fwhm {
-            if info.stars.info.ovality_is_ok {
+            if info.quality.ovality_is_ok {
                 autofocuser.fwhm.push(fwhm);
             }
         }
@@ -550,7 +550,7 @@ impl TackingPicturesMode {
         info:    &LightFrameInfoData,
         shot_id: Option<u64>,
     ) -> anyhow::Result<()> {
-        if !info.stars.info.is_ok() {
+        if !info.quality.is_ok() {
             return Ok(());
         }
 
@@ -594,7 +594,7 @@ impl TackingPicturesMode {
         }
 
         // guiding
-        if let Some(offset) = &info.stars.offset {
+        if let Some(offset) = &info.offset {
             let mut offset_x = offset.x;
             let mut offset_y = offset.y;
             offset_x -= guider_data.dither_x;
@@ -668,7 +668,7 @@ impl TackingPicturesMode {
         info:    &LightFrameInfoData,
         shot_id: Option<u64>,
     ) -> anyhow::Result<()> {
-        if !info.stars.info.is_ok() {
+        if !info.quality.is_ok() {
             return Ok(());
         }
 
@@ -978,17 +978,17 @@ impl TackingPicturesMode {
 
     fn process_raw_image(
         &mut self,
-        raw_image: &RawImage,
+        raw_info: &RawFrameInfo,
     ) -> anyhow::Result<NotifyResult> {
         if self.state != State::Common {
             return Ok(NotifyResult::Empty);
         }
 
         let frame_for_raw_stacker =
-            Self::is_frame_type_for_raw_stacker(raw_image.info().frame_type);
+            Self::is_frame_type_for_raw_stacker(raw_info.image.info().frame_type);
 
-        if frame_for_raw_stacker && self.flags.use_raw_stacker {
-            self.add_raw_image(raw_image)?;
+        if frame_for_raw_stacker && self.flags.use_raw_stacker && raw_info.ccd_temp_is_ok {
+            self.add_raw_image(&raw_info.image)?;
         }
         Ok(NotifyResult::Empty)
     }
@@ -1002,7 +1002,7 @@ impl TackingPicturesMode {
             return Ok(NotifyResult::Empty);
         }
 
-        if info.stars.info.is_ok() && self.ref_stars.is_none() {
+        if info.quality.stars_is_ok() && self.ref_stars.is_none() {
             let ref_stars = info.stars.items.iter().map(|s| Point {x: s.x, y: s.y}).collect();
             self.ref_stars = Some(ref_stars);
         }
@@ -1325,8 +1325,8 @@ impl Mode for TackingPicturesMode {
         }
 
         match &fp_result.data {
-            FrameProcessResultData::RawFrame(raw_image) =>
-                self.process_raw_image(raw_image),
+            FrameProcessResultData::RawFrameInfo(raw_info) =>
+                self.process_raw_image(raw_info),
 
             FrameProcessResultData::LightFrameInfo(info) =>
                 self.process_light_frame_info(info, fp_result.shot_id),
