@@ -22,6 +22,7 @@ struct InitFlags {
     cooler: bool,
     fan: bool,
     heater: bool,
+    max_res: bool,
 }
 
 pub enum CamWatchdogResult {
@@ -135,6 +136,10 @@ impl CameraWatchdog {
                     self.init_flags.heater = false;
                     self.control_camera_heater(indi, &cam_device.name, options, true)?;
                 }
+                if self.init_flags.max_res {
+                    self.init_flags.max_res = false;
+                    self.select_maximum_resolution(indi, &cam_device.name)?;
+                }
             }
         }
 
@@ -194,6 +199,11 @@ impl CameraWatchdog {
                 indi::Connection::camera_is_heater_str_property(&prop_change.prop_name);
             if is_heater_str_property {
                 self.init_flags.heater = true;
+                self.init_timer = INIT_DELAY * CORE_TIMER_FREQ;
+            }
+
+            if prop_change.prop_name.as_str() == "CCD_RESOLUTION" {
+                self.init_flags.max_res = true;
                 self.init_timer = INIT_DELAY * CORE_TIMER_FREQ;
             }
 
@@ -276,5 +286,27 @@ impl CameraWatchdog {
         }
         Ok(())
     }
+
+    fn select_maximum_resolution(
+        &self,
+        indi:       &Arc<indi::Connection>,
+        cam_device: &str,
+    ) -> anyhow::Result<()> {
+        if cam_device.contains(" Simulator") // don't do it for simulators
+        || cam_device.is_empty() {
+            return Ok(());
+        }
+
+        if indi.camera_is_resolution_supported(cam_device).unwrap_or(false) {
+            log::info!("Setting maximum CCD resolution for camera {}", cam_device);
+            indi.camera_select_max_resolution(
+                cam_device,
+                true,
+                None
+            )?;
+        }
+        Ok(())
+    }
+
 
 }

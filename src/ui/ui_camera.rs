@@ -62,7 +62,6 @@ enum DelayedAction {
     StartLiveView,
     UpdateCtrlWidgets,
     UpdateResolutionList,
-    SelectMaxResolution,
     FillHeaterItems,
     FillConvGainItems,
 }
@@ -1002,9 +1001,6 @@ impl CameraUi {
                 self.show_calibr_file_for_frame(&options);
                 drop(options);
             }
-            DelayedAction::SelectMaxResolution => { // TODO: move to Core
-                self.select_maximum_resolution();
-            }
             DelayedAction::FillHeaterItems => {
                 self.fill_heater_items_list();
             }
@@ -1429,23 +1425,6 @@ impl CameraUi {
         });
     }
 
-    fn select_maximum_resolution(&self) { // TODO: move to Core
-        let options = self.options.read().unwrap();
-        let Some(device) = &options.cam.device else { return; };
-        let cam_name = &device.name;
-        if cam_name.contains(" Simulator") { return; } // don't do it for simulators
-
-        if cam_name.is_empty() { return; }
-
-        if self.indi.camera_is_resolution_supported(cam_name).unwrap_or(false) {
-            _ = self.indi.camera_select_max_resolution(
-                cam_name,
-                true,
-                None
-            );
-        }
-    }
-
     fn start_live_view(&self) {
         self.main_ui.get_all_options();
         exec_and_show_error(Some(&self.window), || {
@@ -1575,12 +1554,6 @@ impl CameraUi {
                 } else {
                     self.update_shot_state();
                 }
-            }
-
-            ("CCD_RESOLUTION", ..) if new_prop => {
-                self.delayed_actions.schedule(
-                    DelayedAction::SelectMaxResolution
-                );
             }
 
             ("CCD_INFO", "CCD_MAX_X", ..) |

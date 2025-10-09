@@ -352,7 +352,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
         calibr.defect_pixels = None;
         if let Some(file_name) = &defect_pixel_file { if file_name.is_file() {
             let mut defect_pixels = BadPixels::default();
-            log::debug!(
+            log::info!(
                 "Loading defect pixels file {} ...",
                 file_name.to_str().unwrap_or_default()
             );
@@ -368,7 +368,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
     if calibr.subtract_fname != subtrack_fname {
         calibr.subtract_image = None;
         if let Some(file_name) = &subtrack_fname { if file_name.is_file() {
-            log::debug!(
+            log::info!(
                 "Loading master dark file {} ...",
                 file_name.to_str().unwrap_or_default()
             );
@@ -416,7 +416,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
             let tmr = TimeLogger::start();
             master_flat.filter_flat();
             tmr.log("filter master flat");
-            log::debug!(
+            log::info!(
                 "Loaded master flat file {}",
                 file_name.to_str().unwrap_or_default()
             );
