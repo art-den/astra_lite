@@ -607,7 +607,7 @@ impl HardwareUi {
                 self.indi.command_enable_all_devices(false, true, Some(2000))?;
                 log::info!("Done");
             }
-            log::info!("Disabling disconnecting INDI...");
+            log::info!("Disconnecting INDI...");
             self.indi.disconnect_and_wait()?;
             log::info!("Done");
             Ok(())
