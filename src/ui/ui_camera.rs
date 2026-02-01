@@ -311,6 +311,10 @@ impl UiModule for CameraUi {
         self.get_raw_options(options);
         self.get_live_stacking_options(options);
         self.get_frame_quality_options(options);
+
+        if let Some(cam_device) = options.cam.device.clone() {
+            self.restore_options_for_camera(&cam_device, options);
+        }
     }
 
     fn on_show_options_first_time(&self) {
