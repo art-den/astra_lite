@@ -3,7 +3,7 @@ use std::{any::Any, f64::consts::PI, sync::{Arc, RwLock}};
 use chrono::{NaiveDateTime, Utc};
 
 use crate::{
-    core::{core::*, frame_processing::*},
+    core::{cam_starter::CamStarter, core::*, frame_processing::*},
     image::{image::*, stars::StarItems},
     indi::{self, degree_to_str},
     options::*,
@@ -235,6 +235,7 @@ pub struct PolarAlignMode {
     state:        State,
     step:         Step,
     camera:       DeviceAndProp,
+    cam_starter:  Arc<CamStarter>,
     mount:        String,
     cam_opts:     CamOptions,
     pa_opts:      PloarAlignOptions,
@@ -363,6 +364,7 @@ impl PolarAlignMode {
 
     pub fn new(
         indi:        &Arc<indi::Connection>,
+        cam_starter: &Arc<CamStarter>,
         cur_frame:   &Arc<ResultImage>,
         options:     &Arc<RwLock<Options>>,
         subscribers: &Arc<Events>,
@@ -389,6 +391,7 @@ impl PolarAlignMode {
             state:       State::Undefined,
             step:        Step::Undefined,
             camera:      cam_device.clone(),
+            cam_starter: Arc::clone(&cam_starter),
             mount:       opts.mount.device.clone(),
             pa_opts:     opts.polar_align.clone(),
             s_opts:      opts.site.clone(),
@@ -407,8 +410,8 @@ impl PolarAlignMode {
     }
 
     fn start_capture(&mut self) -> anyhow::Result<()> {
-        apply_camera_options_and_take_shot(
-            &self.indi,
+        self.cam_starter.take_shot(
+            self.get_type(),
             &self.camera,
             &self.cam_opts.frame,
             &self.cam_opts.ctrl
@@ -739,7 +742,7 @@ impl Mode for PolarAlignMode {
     }
 
     fn abort(&mut self) -> anyhow::Result<()> {
-        _ = abort_camera_exposure(&self.indi, &self.camera);
+        _ = self.cam_starter.abort(&self.camera);
         _ = self.indi.mount_abort_motion(&self.mount);
         self.plate_solver.abort();
         self.state = State::Undefined;

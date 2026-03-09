@@ -986,7 +986,7 @@ impl DarksLibraryUI {
     }
 
     fn correct_widgets_enable_state(&self) {
-        let mode = self.core.mode_data().mode.get_type();
+        let mode = self.core.mode().active.get_type();
         let is_waiting = mode == ModeType::Waiting;
         let saving_defect_pixels =
             mode == ModeType::DefectPixels ||

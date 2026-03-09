@@ -5,9 +5,7 @@ use std::{
 use itertools::{izip, Itertools};
 
 use crate::{
-    indi,
-    options::*,
-    utils::math::*
+    core::cam_starter::CamStarter, indi, options::*, utils::math::*
 };
 use super::{core::*, events::*, frame_processing::*, utils::*};
 
@@ -47,6 +45,7 @@ pub struct FocusingMode {
     subscribers:    Arc<Events>,
     state:          FocusingState,
     camera:         DeviceAndProp,
+    cam_starter:    Arc<CamStarter>,
     f_opts:         FocuserOptions,
     cam_opts:       CamOptions,
     before_pos:     f64,
@@ -103,6 +102,7 @@ enum CalcResult {
 impl FocusingMode {
     pub fn new(
         indi:           &Arc<indi::Connection>,
+        cam_starter:    &Arc<CamStarter>,
         options:        &Arc<RwLock<Options>>,
         subscribers:    &Arc<Events>,
         next_mode:      Option<Box<dyn Mode + Sync + Send>>,
@@ -131,6 +131,7 @@ impl FocusingMode {
         Ok(FocusingMode {
             indi:          Arc::clone(indi),
             subscribers:   Arc::clone(subscribers),
+            cam_starter:   Arc::clone(&cam_starter),
             state:         FocusingState::Undefined,
             f_opts:        opts.focuser.clone(),
             before_pos:    0.0,
@@ -217,8 +218,8 @@ impl FocusingMode {
                 if cur_focus as i64 == desired_focus as i64 {
                     log::debug!("Taking picture for focuser value: {}", desired_focus);
                     self.change_time = None;
-                    apply_camera_options_and_take_shot(
-                        &self.indi,
+                    self.cam_starter.take_shot(
+                        self.get_type(),
                         &self.camera,
                         &self.cam_opts.frame,
                         &self.cam_opts.ctrl
@@ -237,8 +238,8 @@ impl FocusingMode {
                 if cur_focus as i64 == desired_focus as i64 {
                     log::debug!("Taking RESULT shot for focuser value: {}", desired_focus);
                     self.change_time = None;
-                    apply_camera_options_and_take_shot(
-                        &self.indi,
+                    self.cam_starter.take_shot(
+                        self.get_type(),
                         &self.camera,
                         &self.cam_opts.frame,
                         &self.cam_opts.ctrl
@@ -316,8 +317,8 @@ impl FocusingMode {
             result = NotifyResult::ProgressChanges;
             log::info!("Stars on received image are not Ok. Taking another image...");
             self.change_time = None;
-            apply_camera_options_and_take_shot(
-                &self.indi,
+            self.cam_starter.take_shot(
+                self.get_type(),
                 &self.camera,
                 &self.cam_opts.frame,
                 &self.cam_opts.ctrl
@@ -362,8 +363,8 @@ impl FocusingMode {
                 FocuserEvent::Data(event_data)
             ));
         } else {
-            apply_camera_options_and_take_shot(
-                &self.indi,
+            self.cam_starter.take_shot(
+                self.get_type(),
                 &self.camera,
                 &self.cam_opts.frame,
                 &self.cam_opts.ctrl
@@ -683,8 +684,8 @@ impl Mode for FocusingMode {
 
         self.before_pos = cur_pos;
 
-        apply_camera_options_and_take_shot(
-            &self.indi,
+        self.cam_starter.take_shot(
+            self.get_type(),
             &self.camera,
             &self.cam_opts.frame,
             &self.cam_opts.ctrl
@@ -696,7 +697,7 @@ impl Mode for FocusingMode {
     }
 
     fn abort(&mut self) -> anyhow::Result<()> {
-        abort_camera_exposure(&self.indi, &self.camera)?;
+        self.cam_starter.abort(&self.camera)?;
         self.indi.focuser_set_abs_value(&self.f_opts.device, self.before_pos, true, None)?;
         Ok(())
     }

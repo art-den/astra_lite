@@ -1,7 +1,7 @@
 use std::{sync::{Arc, RwLock}, f64::consts::PI};
 use itertools::Itertools;
 use crate::{
-    image::{stars::*, stars_offset::*}, indi, options::*, utils::math::*
+    core::cam_starter::CamStarter, image::{stars::*, stars_offset::*}, indi, options::*, utils::math::*
 };
 use super::{consts::*, core::*, events::*, frame_processing::*, utils::*};
 
@@ -43,6 +43,7 @@ pub struct MountCalibrMode {
     state:             State,
     axis:              Axis,
     cam_opts:          CamOptions,
+    cam_starter:       Arc<CamStarter>,
     telescope:         TelescopeOptions,
     start_dec:         f64,
     start_ra:          f64,
@@ -80,9 +81,10 @@ struct CalibrAtempt {
 
 impl MountCalibrMode {
     pub fn new(
-        indi:      &Arc<indi::Connection>,
-        options:   &Arc<RwLock<Options>>,
-        next_mode: Option<Box<dyn Mode + Sync + Send>>,
+        indi:        &Arc<indi::Connection>,
+        cam_starter: &Arc<CamStarter>,
+        options:     &Arc<RwLock<Options>>,
+        next_mode:   Option<Box<dyn Mode + Sync + Send>>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(cam_device) = &opts.cam.device else {
@@ -106,6 +108,7 @@ impl MountCalibrMode {
             start_ra:          0.0,
             mount_device:      opts.mount.device.clone(),
             camera:            cam_device.clone(),
+            cam_starter:       Arc::clone(cam_starter),
             attempt_num:       0,
             attempts:          Vec::new(),
             image_width:       0,
@@ -120,8 +123,8 @@ impl MountCalibrMode {
     }
 
     fn start_for_axis(&mut self, axis: Axis) -> anyhow::Result<()> {
-        apply_camera_options_and_take_shot(
-            &self.indi,
+        self.cam_starter.take_shot(
+            self.get_type(),
             &self.camera,
             &self.cam_opts.frame,
             &self.cam_opts.ctrl
@@ -287,8 +290,8 @@ impl MountCalibrMode {
                 self.state = State::WaitForSlew(0);
             }
         } else {
-            apply_camera_options_and_take_shot(
-                &self.indi,
+            self.cam_starter.take_shot(
+                self.get_type(),
                 &self.camera,
                 &self.cam_opts.frame,
                 &self.cam_opts.ctrl
@@ -371,8 +374,8 @@ impl Mode for MountCalibrMode {
                     *ok_time += 1;
                     if *ok_time == AFTER_MOUNT_MOVE_WAIT_TIME {
                         self.indi.mount_abort_motion(&self.mount_device)?;
-                        apply_camera_options_and_take_shot(
-                            &self.indi,
+                        self.cam_starter.take_shot(
+                            self.get_type(),
                             &self.camera,
                             &self.cam_opts.frame,
                             &self.cam_opts.ctrl

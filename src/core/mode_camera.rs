@@ -6,17 +6,12 @@ use std::{
 use chrono::Utc;
 
 use crate::{
-    guiding::external_guider::*,
-    image::{
+    TimeLogger, core::cam_starter::CamStarter, guiding::external_guider::*, image::{
         histogram::*,
         raw::{FrameType, RawImage, RawImageInfo},
         raw_stacker::RawStacker,
         stars_offset::*,
-    },
-    indi,
-    options::*,
-    utils::io_utils::*,
-    TimeLogger
+    }, indi, options::*, utils::io_utils::*
 };
 
 use super::{
@@ -114,6 +109,7 @@ pub struct TackingPicturesMode {
     cam_mode:         CameraMode,
     state:            State,
     device:           DeviceAndProp,
+    cam_starter:      Arc<CamStarter>,
     mount_device:     String,
     fn_gen:           Arc<Mutex<SeqFileNameGen>>,
     indi:             Arc<indi::Connection>,
@@ -143,6 +139,7 @@ pub struct TackingPicturesMode {
 impl TackingPicturesMode {
     pub fn new(
         indi:        &Arc<indi::Connection>,
+        cam_starter: &Arc<CamStarter>,
         subscribers: &Arc<Events>,
         cam_mode:    CameraMode,
         options:     &Arc<RwLock<Options>>,
@@ -209,6 +206,7 @@ impl TackingPicturesMode {
             cam_mode,
             state:            State::Common,
             device:           cam_device.clone(),
+            cam_starter:      Arc::clone(&cam_starter),
             mount_device:     opts.mount.device.to_string(),
             fn_gen:           Arc::new(Mutex::new(SeqFileNameGen::new())),
             indi:             Arc::clone(indi),
@@ -294,8 +292,8 @@ impl TackingPicturesMode {
         frame_options:       FrameOptions,
         store_frame_options: bool
     ) -> anyhow::Result<()> {
-        let cur_shot_id = apply_camera_options_and_take_shot(
-            &self.indi,
+        let cur_shot_id = self.cam_starter.take_shot(
+            self.get_type(),
             &self.device,
             &frame_options,
             &self.cam_options.ctrl
@@ -1045,7 +1043,7 @@ impl TackingPicturesMode {
     }
 
     fn abort_current_unfinised_exposure(&mut self, shot_id: Option<u64>) -> anyhow::Result<()> {
-        abort_camera_exposure(&self.indi, &self.device)?;
+        self.cam_starter.abort(&self.device)?;
         if self.cur_shot_id != shot_id {
             self.shot_id_to_ign = self.cur_shot_id;
         }
@@ -1219,7 +1217,7 @@ impl Mode for TackingPicturesMode {
     }
 
     fn abort(&mut self) -> anyhow::Result<()> {
-        abort_camera_exposure(&self.indi, &self.device)?;
+        self.cam_starter.abort(&self.device)?;
         self.flags.skip_frame_done = false; // will skip first frame when continue
         Ok(())
     }

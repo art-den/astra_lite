@@ -8,7 +8,7 @@ use gtk::glib::PropertySet;
 use itertools::Itertools;
 
 use crate::{
-    core::{cam_watchdog::{CamWatchdogResult, CameraWatchdog}, consts::*},
+    core::{cam_starter::CamStarter, cam_watchdog::{CamWatchdogResult, CameraWatchdog}, consts::*},
     guiding::external_guider::*,
     image::raw::FrameType,
     indi, options::*,
@@ -76,6 +76,7 @@ pub trait Mode {
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn custom_command(&mut self, _args: &dyn Any) -> anyhow::Result<Option<Box<dyn Any>>> { Ok(None) }
     fn notify_processing_queue_overflow(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn _can_work_with_live_veiw_in_paparella(&mut self) -> bool { false }
 }
 
 pub enum NotifyResult {
@@ -90,19 +91,21 @@ pub enum NotifyResult {
 }
 
 pub struct ModeData {
-    pub mode:          ModeBox,
-    pub finished_mode: Option<ModeBox>,
-    pub aborted_mode:  Option<ModeBox>,
-    prev_mode:         Option<ModeBox>,
+    pub active:    ModeBox,
+    pub _live_view: Option<ModeBox>,
+    pub finished:  Option<ModeBox>,
+    pub aborted:   Option<ModeBox>,
+    previous:      Option<ModeBox>,
 }
 
 impl ModeData {
     fn new() -> Self {
         Self {
-            mode:           Box::new(WaitingMode),
-            finished_mode:  None,
-            aborted_mode:   None,
-            prev_mode:      Some(Box::new(WaitingMode)),
+            active:    Box::new(WaitingMode),
+            _live_view: None,
+            finished:  None,
+            aborted:   None,
+            previous:  None,
         }
     }
 }
@@ -110,7 +113,8 @@ impl ModeData {
 pub struct Core {
     indi:               Arc<indi::Connection>,
     options:            Arc<RwLock<Options>>,
-    mode_data:          RwLock<ModeData>,
+    mode:               RwLock<ModeData>,
+    cam_starter:        Arc<CamStarter>,
     events:             Arc<Events>,
     cur_frame:          Arc<ResultImage>,
     calibr_data:        Arc<Mutex<CalibrData>>,
@@ -140,10 +144,14 @@ impl Drop for Core {
 impl Core {
     pub fn new() -> Arc<Self> {
         let (img_cmds_sender, frame_proc_thread) = start_frame_processing_thread();
+
+        let indi = Arc::new(indi::Connection::new());
+
         let result = Arc::new(Self {
-            indi:               Arc::new(indi::Connection::new()),
+            indi:               Arc::clone(&indi),
             options:            Arc::new(RwLock::new(Options::default())),
-            mode_data:          RwLock::new(ModeData::new()),
+            mode:               RwLock::new(ModeData::new()),
+            cam_starter:        Arc::new(CamStarter::new(&indi)),
             events:             Arc::new(Events::new()),
             cur_frame:          Arc::new(ResultImage::new()),
             calibr_data:        Arc::new(Mutex::new(CalibrData::default())),
@@ -156,7 +164,8 @@ impl Core {
             img_cmds_sender,
         });
 
-        result. set_ext_guider_events_handler();
+        result.connect_cam_start_event();
+        result.set_ext_guider_events_handler();
         result.connect_indi_events();
         result.connect_events();
         result.start_1s_timer();
@@ -193,13 +202,20 @@ impl Core {
         Arc::clone(&self.ext_guider)
     }
 
+    fn connect_cam_start_event(self: &Arc<Self>) {
+        let _self_ = Arc::clone(&self);
+        self.cam_starter.connect_before_shot_fun(move |_mode_type| {
+
+        });
+    }
+
     fn set_ext_guider_events_handler(self: &Arc<Self>) {
         let self_ = Arc::clone(self);
         self.ext_guider.set_events_handler(Box::new(move |event| {
             log::info!("External guider event = {:?}", event);
             let result = || -> anyhow::Result<()> {
-                let mut mode = self_.mode_data.write().unwrap();
-                let res = mode.mode.notify_guider_event(event.clone())?;
+                let mut mode = self_.mode.write().unwrap();
+                let res = mode.active.notify_guider_event(event.clone())?;
                 self_.apply_change_result(res, &mut mode)?;
                 Ok(())
             } ();
@@ -215,8 +231,8 @@ impl Core {
         Ok(())
     }
 
-    pub fn mode_data(&self) -> RwLockReadGuard<'_, ModeData> {
-        self.mode_data.read().unwrap()
+    pub fn mode(&self) -> RwLockReadGuard<'_, ModeData> {
+        self.mode.read().unwrap()
     }
 
     pub fn cur_frame(&self) -> &Arc<ResultImage> {
@@ -253,7 +269,7 @@ impl Core {
     }
 
     fn timer_event_handler(self: &Arc<Self>) -> anyhow::Result<()> {
-        let mut mode_data = self.mode_data.write().unwrap();
+        let mut mode = self.mode.write().unwrap();
         let options = self.options.read().unwrap();
 
         let debug_blob_frozen = if cfg!(debug_assertions) {
@@ -278,7 +294,7 @@ impl Core {
                         CamWatchdogResult::Waiting =>
                             return Ok(()),
                         CamWatchdogResult::RestartCameraShot => {
-                            self.restart_camera_exposure(&mut mode_data, &options)?;
+                            self.restart_camera_exposure(&mut mode, &options)?;
                         }
                         _ => {},
                     }
@@ -289,8 +305,8 @@ impl Core {
             }
         }
 
-        let result = mode_data.mode.notify_timer_1s()?;
-        self.apply_change_result(result, &mut mode_data)?;
+        let result = mode.active.notify_timer_1s()?;
+        self.apply_change_result(result, &mut mode)?;
 
         Ok(())
     }
@@ -302,9 +318,9 @@ impl Core {
             let result = || -> anyhow::Result<()> {
                 match event {
                     indi::Event::BlobStart(event) => {
-                        let mut mode_data = self_.mode_data.write().unwrap();
-                        let result = mode_data.mode.notify_blob_start_event(&event)?;
-                        self_.apply_change_result(result, &mut mode_data)?;
+                        let mut mode = self_.mode.write().unwrap();
+                        let result = mode.active.notify_blob_start_event(&event)?;
+                        self_.apply_change_result(result, &mut mode)?;
                     }
                     indi::Event::PropChange(prop_change) => {
                         if let indi::PropChange::Change {
@@ -408,12 +424,10 @@ impl Core {
         self:        &Arc<Self>,
         prop_change: &indi::PropChangeEvent,
     ) -> anyhow::Result<()> {
-        let mut mode_data = self.mode_data.write().unwrap();
-
-        let result = mode_data.mode.notify_indi_prop_change(prop_change)?;
-        self.apply_change_result(result, &mut mode_data)?;
-
-        drop(mode_data);
+        let mut mode = self.mode.write().unwrap();
+        let result = mode.active.notify_indi_prop_change(prop_change)?;
+        self.apply_change_result(result, &mut mode)?;
+        drop(mode);
 
         let options = self.options.read().unwrap();
 
@@ -439,8 +453,8 @@ impl Core {
             device_name, device_prop, blob.dl_time
         );
 
-        let mut mode = self.mode_data.write().unwrap();
-        let Some(mode_cam) = mode.mode.cam_device() else {
+        let mut mode = self.mode.write().unwrap();
+        let Some(mode_cam) = mode.active.cam_device() else {
             return Ok(());
         };
 
@@ -455,7 +469,7 @@ impl Core {
         }
 
         let mut should_be_processed = true;
-        let res = mode.mode.notify_before_frame_processing_start(blob, &mut should_be_processed)?;
+        let res = mode.active.notify_before_frame_processing_start(blob, &mut should_be_processed)?;
         self.apply_change_result(res, &mut mode)?;
         if !should_be_processed {
             return Ok(());
@@ -486,7 +500,7 @@ impl Core {
             *self.img_proc_stop_flag.lock().unwrap() = Arc::clone(&new_stop_flag);
 
             FrameProcessCommandData {
-                mode_type:       mode.mode.get_type(),
+                mode_type:       mode.active.get_type(),
                 camera:          device,
                 shot_id:         blob.shot_id,
                 img_source:      ImageSource::Blob(Arc::clone(blob)),
@@ -503,7 +517,7 @@ impl Core {
             }
         };
 
-        mode.mode.complete_img_process_params(&mut command_data);
+        mode.active.complete_img_process_params(&mut command_data);
 
         let result_fun = {
             let self_ = Arc::clone(self);
@@ -547,12 +561,12 @@ impl Core {
 
                 let is_opening_file = res.mode_type == ModeType::OpeningImgFile;
 
-                let mut mode = self.mode_data.write().unwrap();
-                if Some(&res.camera) != mode.mode.cam_device() && !is_opening_file {
+                let mut mode = self.mode.write().unwrap();
+                if Some(&res.camera) != mode.active.cam_device() && !is_opening_file {
                     return;
                 }
 
-                if mode.mode.get_type() != res.mode_type && !is_opening_file {
+                if mode.active.get_type() != res.mode_type && !is_opening_file {
                     return;
                 }
 
@@ -561,7 +575,7 @@ impl Core {
                 );
 
                 let result = || -> anyhow::Result<()> {
-                    let res = mode.mode.notify_about_frame_processing_result(&res)?;
+                    let res = mode.active.notify_about_frame_processing_result(&res)?;
                     self.apply_change_result(res, &mut mode)?;
                     Ok(())
                 } ();
@@ -570,9 +584,9 @@ impl Core {
             }
 
             CommandResult::QueueOverflow => {
-                let mut mode = self.mode_data.write().unwrap();
+                let mut mode = self.mode.write().unwrap();
                 let result = || -> anyhow::Result<()> {
-                    let res = mode.mode.notify_processing_queue_overflow()?;
+                    let res = mode.active.notify_processing_queue_overflow()?;
                     self.apply_change_result(res, &mut mode)?;
                     Ok(())
                 } ();
@@ -583,27 +597,27 @@ impl Core {
         }
     }
 
-    fn restart_camera_exposure(self: &Arc<Self>, mode_data: &mut ModeData, options: &Options) -> anyhow::Result<()> {
-        let Some(cam_device) = mode_data.mode.cam_device().cloned() else { return Ok(()); };
+    fn restart_camera_exposure(self: &Arc<Self>, mode: &mut ModeData, options: &Options) -> anyhow::Result<()> {
+        let Some(cam_device) = mode.active.cam_device().cloned() else { return Ok(()); };
         log::error!("Begin restart exposure of camera {}...", cam_device.name);
 
         // Try to restart exposure by current mode
-        let restarted_by_mode = mode_data.mode.restart_cam_exposure()?;
+        let restarted_by_mode = mode.active.restart_cam_exposure()?;
 
         if !restarted_by_mode {
             // Mode not restarted the camera exposure. Do it itself
 
-            abort_camera_exposure(&self.indi, &cam_device)?;
+            self.cam_starter.abort(&cam_device)?;
 
             let mode_cam_opts =
-                if let Some(frame_opts) = mode_data.mode.frame_options_to_restart_exposure() {
+                if let Some(frame_opts) = mode.active.frame_options_to_restart_exposure() {
                     frame_opts
                 } else {
                     &options.cam.frame
                 };
 
-            apply_camera_options_and_take_shot(
-                &self.indi,
+            self.cam_starter.take_shot(
+                mode.active.get_type(),
                 &cam_device,
                 mode_cam_opts,
                 &options.cam.ctrl
@@ -621,49 +635,46 @@ impl Core {
         self: &Arc<Self>,
         args: &dyn std::any::Any
     ) -> anyhow::Result<Option<Box<dyn Any>>> {
-        let mut mode_data = self.mode_data.write().unwrap();
-        mode_data.mode.custom_command(args)
+        let mut mode = self.mode.write().unwrap();
+        mode.active.custom_command(args)
     }
 
     fn start_new_mode(
         &self,
-        mode:                impl Mode + Send + Sync + 'static,
+        new_mode:            impl Mode + Send + Sync + 'static,
         reset_aborted_mode:  bool,
         reset_finished_mode: bool,
     ) -> anyhow::Result<()> {
+        let mut mode = self.mode.write().unwrap();
+
         // abort previous mode
-        let mut mode_data = self.mode_data.write().unwrap();
-        mode_data.prev_mode = Some(std::mem::replace(
-            &mut mode_data.mode,
+        mode.previous = Some(std::mem::replace(
+            &mut mode.active,
             Box::new(WaitingMode)
         ));
-        mode_data.mode.abort()?;
-        drop(mode_data);
+        mode.active.abort()?;
 
         // init camera for mode
-        self.init_cam_for_mode(&mode)?;
+        self.init_cam_for_mode(&new_mode)?;
 
-        let mut mode_data = self.mode_data.write().unwrap();
-        mode_data.mode = Box::new(mode);
+        mode.active = Box::new(new_mode);
         if reset_aborted_mode {
-            mode_data.aborted_mode = None;
+            mode.aborted = None;
         }
         if reset_finished_mode {
-            mode_data.finished_mode = None;
+            mode.finished = None;
         }
-
         // Start new mode
-        mode_data.mode.start()?;
+        mode.active.start()?;
 
-        let progress = mode_data.mode.progress();
-        let mode_type = mode_data.mode.get_type();
+        let progress = mode.active.progress();
+        let mode_type = mode.active.get_type();
 
-        drop(mode_data);
+        drop(mode);
 
         // Inform about progress and and mode change
         self.events.notify(Event::Progress(progress, mode_type));
         self.events.notify(Event::ModeChanged);
-
 
         Ok(())
     }
@@ -715,6 +726,7 @@ impl Core {
     pub fn start_single_shot(&self) -> anyhow::Result<()> {
         let mode = TackingPicturesMode::new(
             &self.indi,
+            &self.cam_starter,
             &self.events,
             CameraMode::SingleShot,
             &self.options,
@@ -726,6 +738,7 @@ impl Core {
     pub fn start_live_view(&self) -> anyhow::Result<()> {
         let mode = TackingPicturesMode::new(
             &self.indi,
+            &self.cam_starter,
             &self.events,
             CameraMode::LiveView,
             &self.options,
@@ -764,6 +777,7 @@ impl Core {
         self.abort_active_mode();
         let mut mode = TackingPicturesMode::new(
             &self.indi,
+            &self.cam_starter,
             &self.events,
             CameraMode::SavingRawFrames,
             &self.options,
@@ -778,6 +792,7 @@ impl Core {
         self.abort_active_mode();
         let mut mode = TackingPicturesMode::new(
             &self.indi,
+            &self.cam_starter,
             &self.events,
             CameraMode::LiveStacking,
             &self.options,
@@ -793,6 +808,7 @@ impl Core {
         self.abort_active_mode();
         let mode = FocusingMode::new(
             &self.indi,
+            &self.cam_starter,
             &self.options,
             &self.events,
             None,
@@ -805,7 +821,12 @@ impl Core {
 
     pub fn start_mount_calibr(&self) -> anyhow::Result<()> {
         self.abort_active_mode();
-        let mode = MountCalibrMode::new(&self.indi, &self.options, None)?;
+        let mode = MountCalibrMode::new(
+            &self.indi,
+            &self.cam_starter,
+            &self.options,
+            None
+        )?;
         self.start_new_mode(mode, false, false)?;
         Ok(())
     }
@@ -834,10 +855,11 @@ impl Core {
     ) -> anyhow::Result<()> {
         self.abort_active_mode();
         let mode = GotoMode::new(
+            &self.indi,
+            &self.cam_starter,
             GotoDestination::Coord(*eq_coord),
             config,
             &self.options,
-            &self.indi,
             &self.cur_frame,
             &self.events,
         )?;
@@ -856,8 +878,10 @@ impl Core {
         let ResultImageInfo::LightInfo(light_frame_info) = &*image_info else {
             anyhow::bail!("Image is not light frame");
         };
-        self.mode_data.write().unwrap().mode.abort()?;
+        self.mode.write().unwrap().active.abort()?;
         let mode = GotoMode::new(
+            &self.indi,
+            &self.cam_starter,
             GotoDestination::Image{
                 image: Arc::clone(&self.cur_frame.image),
                 info: Arc::clone(&light_frame_info.image),
@@ -865,7 +889,6 @@ impl Core {
             },
             GotoConfig::GotoPlateSolveAndCorrect,
             &self.options,
-            &self.indi,
             &self.cur_frame,
             &self.events,
         )?;
@@ -876,8 +899,9 @@ impl Core {
     pub fn start_capture_and_platesolve(&self) -> anyhow::Result<()> {
         self.abort_active_mode();
         let mode = PlatesolveMode::new(
-            &self.options,
             &self.indi,
+            &self.cam_starter,
+            &self.options,
             &self.cur_frame,
             &self.events,
         )?;
@@ -889,6 +913,7 @@ impl Core {
         self.abort_active_mode();
         let mode = PolarAlignMode::new(
             &self.indi,
+            &self.cam_starter,
             &self.cur_frame,
             &self.options,
             &self.events,
@@ -954,18 +979,20 @@ impl Core {
     }
 
     pub fn abort_active_mode(&self) {
-        let mut mode_data = self.mode_data.write().unwrap();
-        if mode_data.mode.get_type() == ModeType::Waiting {
+        let mut mode = self.mode.write().unwrap();
+
+        if mode.active.get_type() == ModeType::Waiting {
             return;
         }
-        _ = mode_data.mode.abort();
+
+        _ = mode.active.abort();
 
         self.img_proc_stop_flag.lock().unwrap().set(true);
 
-        let mut prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
+        let mut prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
         loop {
             if prev_mode.can_be_continued_after_stop() {
-                mode_data.aborted_mode = Some(prev_mode);
+                mode.aborted = Some(prev_mode);
                 break;
             }
             if let Some(next_mode) = prev_mode.take_next_mode() {
@@ -974,31 +1001,32 @@ impl Core {
                 break;
             }
         }
-        mode_data.finished_mode = None;
-        drop(mode_data);
+        mode.finished = None;
+        drop(mode);
         self.events.notify(Event::ModeChanged);
     }
 
     pub fn continue_prev_mode(&self) -> anyhow::Result<()> {
-        let mut mode_data = self.mode_data.write().unwrap();
-        let Some(perv_mode) = mode_data.aborted_mode.take() else {
+        let mut mode = self.mode.write().unwrap();
+        let Some(perv_mode) = mode.aborted.take() else {
             anyhow::bail!("Aborted state is empty");
         };
-        mode_data.mode = perv_mode;
-        mode_data.mode.continue_work()?;
-        let progress = mode_data.mode.progress();
-        let mode_type = mode_data.mode.get_type();
-        drop(mode_data);
+        mode.active = perv_mode;
+        mode.active.continue_work()?;
+        let progress = mode.active.progress();
+        let mode_type = mode.active.get_type();
+        drop(mode);
         self.events.notify(Event::ModeContinued);
         self.events.notify(Event::Progress(progress, mode_type));
         self.events.notify(Event::ModeChanged);
         Ok(())
     }
 
+    // TODO: do it in modes!
     fn apply_change_result(
-        self:      &Arc<Self>,
-        result:    NotifyResult,
-        mode_data: &mut ModeData,
+        self:   &Arc<Self>,
+        result: NotifyResult,
+        mode:   &mut ModeData,
     ) -> anyhow::Result<()> {
         let mut mode_changed = false;
         let mut progress_changed = false;
@@ -1011,68 +1039,74 @@ impl Core {
                 let next_is_none = next_mode.is_none();
                 if next_is_none {
                     finished_progress_and_type = Some((
-                        mode_data.mode.progress(),
-                        mode_data.mode.get_type()
+                        mode.active.progress(),
+                        mode.active.get_type()
                     ));
                 }
                 if let Some(next_mode) = next_mode {
                     _ = std::mem::replace(
-                        &mut mode_data.mode,
+                        &mut mode.active,
                         next_mode
                     );
-                } else if let Some(prev_mode) = mode_data.prev_mode.take() {
-                    mode_data.finished_mode = Some(std::mem::replace(
-                        &mut mode_data.mode,
+                } else if let Some(prev_mode) = mode.previous.take() {
+                    mode.finished = Some(std::mem::replace(
+                        &mut mode.active,
                         prev_mode
                     ));
                 } else {
-                    mode_data.finished_mode = Some(std::mem::replace(
-                        &mut mode_data.mode,
+                    mode.finished = Some(std::mem::replace(
+                        &mut mode.active,
                         Box::new(WaitingMode)
                     ));
                 }
 
-                mode_data.mode.continue_work()?;
+                mode.active.continue_work()?;
                 mode_changed = true;
                 progress_changed = true;
             }
             NotifyResult::StartFocusing => {
-                mode_data.mode.abort()?;
-                let prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
-                let mut mode = FocusingMode::new(
+                mode.active.abort()?;
+                let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
+                let mut new_mode = FocusingMode::new(
                     &self.indi,
+                    &self.cam_starter,
                     &self.options,
                     &self.events,
                     Some(prev_mode),
                     false,
                     FocusingErrorReaction::IgnoreAndExit
                 )?;
-                mode.start()?;
-                mode_data.mode = Box::new(mode);
+                new_mode.start()?;
+                mode.active = Box::new(new_mode);
                 mode_changed = true;
                 progress_changed = true;
             }
             NotifyResult::StartMountCalibr => {
-                mode_data.mode.abort()?;
-                let prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
-                let mut mode = MountCalibrMode::new(&self.indi, &self.options, Some(prev_mode))?;
-                mode.start()?;
-                mode_data.mode = Box::new(mode);
+                mode.active.abort()?;
+                let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
+                let mut new_mode = MountCalibrMode::new(
+                    &self.indi,
+                    &self.cam_starter,
+                    &self.options,
+                    Some(prev_mode)
+                )?;
+                new_mode.start()?;
+                mode.active = Box::new(new_mode);
                 mode_changed = true;
                 progress_changed = true;
             }
             NotifyResult::StartCreatingDefectPixelsFile(item) => {
-                self.start_dark_libarary_mode_stage(mode_data, CameraMode::DefectPixels, &item)?;
+                self.start_dark_libarary_mode_stage(mode, CameraMode::DefectPixels, &item)?;
                 mode_changed = true;
                 progress_changed = true;
             }
             NotifyResult::StartCreatingMasterDarkFile(item) => {
-                self.start_dark_libarary_mode_stage(mode_data, CameraMode::MasterDark, &item)?;
+                self.start_dark_libarary_mode_stage(mode, CameraMode::MasterDark, &item)?;
                 mode_changed = true;
                 progress_changed = true;
             }
             NotifyResult::StartCreatingMasterBiasFile(item) => {
-                self.start_dark_libarary_mode_stage(mode_data, CameraMode::MasterBias, &item)?;
+                self.start_dark_libarary_mode_stage(mode, CameraMode::MasterBias, &item)?;
                 mode_changed = true;
                 progress_changed = true;
             }
@@ -1089,8 +1123,8 @@ impl Core {
             ));
         } else if progress_changed || mode_changed {
             self.events.notify(Event::Progress(
-                mode_data.mode.progress(),
-                mode_data.mode.get_type(),
+                mode.active.progress(),
+                mode.active.get_type(),
             ));
         }
 
@@ -1099,193 +1133,27 @@ impl Core {
 
     fn start_dark_libarary_mode_stage(
         self:         &Arc<Self>,
-        mode_data:    &mut ModeData,
-        mode:         CameraMode,
+        mode:         &mut ModeData,
+        cam_mode:     CameraMode,
         program_item: &MasterFileCreationProgramItem
     ) -> anyhow::Result<()> {
-        mode_data.mode.abort()?;
-        let prev_mode = std::mem::replace(&mut mode_data.mode, Box::new(WaitingMode));
-        let mut mode = TackingPicturesMode::new(&self.indi, &self.events, mode, &self.options)?;
-        mode.set_dark_creation_program_item(program_item);
-        mode.set_next_mode(Some(prev_mode));
-        self.init_cam_for_mode(&mode)?;
-        mode.start()?;
-        mode_data.mode = Box::new(mode);
+        mode.active.abort()?;
+        let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
+        let mut new_mode = TackingPicturesMode::new(
+            &self.indi,
+            &self.cam_starter,
+            &self.events,
+            cam_mode,
+            &self.options
+        )?;
+        new_mode.set_dark_creation_program_item(program_item);
+        new_mode.set_next_mode(Some(prev_mode));
+        self.init_cam_for_mode(&new_mode)?;
+        new_mode.start()?;
+        mode.active = Box::new(new_mode);
         Ok(())
     }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-
-pub fn apply_camera_options_and_take_shot(
-    indi:     &indi::Connection,
-    device:   &DeviceAndProp,
-    frame:    &FrameOptions,
-    cam_ctrl: &CamCtrlOptions,
-) -> anyhow::Result<u64> {
-    let cam_ccd = indi::CamCcd::from_ccd_prop_name(&device.prop);
-
-    // Disable fast toggle
-
-    if indi.camera_is_fast_toggle_supported(&device.name).unwrap_or(false) {
-         indi.camera_enable_fast_toggle(&device.name, false, false, None)?;
-    }
-
-    // Conversion gain
-
-    if let Some(conv_gain_str) = &cam_ctrl.conv_gain_str {
-        if indi.camera_is_conversion_gain_str_supported(&device.name)? {
-            indi.camera_set_conversion_gain_str(
-                &device.name,
-                conv_gain_str,
-                true,
-                INDI_SET_PROP_TIMEOUT
-            )?;
-        }
-    }
-
-    // Low noise mode
-
-    if indi.camera_is_low_noise_supported(&device.name)? {
-        indi.camera_set_low_noise(
-            &device.name,
-            cam_ctrl.low_noise,
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
-    }
-
-    // High fullwell mode
-
-    if indi.camera_is_high_fullwell_supported(&device.name)? {
-        indi.camera_set_high_fullwell(
-            &device.name,
-            cam_ctrl.high_fullwell,
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
-    }
-
-    // Polling period
-
-    if indi.device_is_polling_period_supported(&device.name)? {
-        indi.device_set_polling_period(&device.name, 500, true, None)?;
-    }
-
-    // Frame type
-
-    use crate::image::raw::*; // for FrameType::
-    let frame_type = match frame.frame_type {
-        FrameType::Lights => indi::FrameType::Light,
-        FrameType::Flats  => indi::FrameType::Flat,
-        FrameType::Darks  => indi::FrameType::Dark,
-        FrameType::Biases => indi::FrameType::Bias,
-        FrameType::Undef  => panic!("Undefined frame type"),
-    };
-
-    indi.camera_set_frame_type(
-        &device.name,
-        cam_ccd,
-        frame_type,
-        true,
-        INDI_SET_PROP_TIMEOUT
-    )?;
-
-    // Frame size
-
-    if indi.camera_is_frame_supported(&device.name, cam_ccd)? {
-        let (width, height) = indi.camera_get_max_frame_size(&device.name, cam_ccd)?;
-        let crop_width = frame.crop.translate(width);
-        let crop_height = frame.crop.translate(height);
-        indi.camera_set_frame_size(
-            &device.name,
-            cam_ccd,
-            (width - crop_width) / 2,
-            (height - crop_height) / 2,
-            crop_width,
-            crop_height,
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
-    }
-
-    // Make binning mode is alwais AVG (if camera supports it)
-
-    if indi.camera_is_binning_mode_supported(&device.name, cam_ccd)?
-    && frame.binning != Binning::Orig {
-        indi.camera_set_binning_mode(
-            &device.name,
-            indi::BinningMode::Avg,
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
-    }
-
-    // Binning
-
-    if indi.camera_is_binning_supported(&device.name, cam_ccd)? {
-        indi.camera_set_binning(
-            &device.name,
-            cam_ccd,
-            frame.binning.get_ratio(),
-            frame.binning.get_ratio(),
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
-    }
-
-    // Gain
-
-    if indi.camera_is_gain_supported(&device.name)? {
-        indi.camera_set_gain(
-            &device.name,
-            frame.gain,
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
-    }
-
-    // Offset
-
-    if indi.camera_is_offset_supported(&device.name)? {
-        indi.camera_set_offset(
-            &device.name,
-            frame.offset as f64,
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
-    }
-
-    // Capture format = RAW
-
-    if indi.camera_is_capture_format_supported(&device.name)? {
-        indi.camera_set_capture_format(
-            &device.name,
-            indi::CaptureFormat::Raw,
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
-    }
-
-    // Start exposure
-
-    let shot_id = indi.camera_start_exposure(
-        &device.name,
-        indi::CamCcd::from_ccd_prop_name(&device.prop),
-        frame.exposure()
-    )?;
-
-    Ok(shot_id)
-}
-
-pub fn abort_camera_exposure(
-    indi:   &indi::Connection,
-    device: &DeviceAndProp,
-) -> anyhow::Result<()> {
-    indi.camera_abort_exposure(
-        &device.name,
-        indi::CamCcd::from_ccd_prop_name(&device.prop)
-    )?;
-    Ok(())
-}
 

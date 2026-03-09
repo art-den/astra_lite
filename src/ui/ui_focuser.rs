@@ -421,9 +421,9 @@ impl FocuserUi {
     }
 
     fn correct_widgets_props_impl(&self, focuser_device: &str, cam_device: Option<&DeviceAndProp>) {
-        let mode_data = self.core.mode_data();
-        let mode_type = mode_data.mode.get_type();
-        drop(mode_data);
+        let mode = self.core.mode();
+        let mode_type = mode.active.get_type();
+        drop(mode);
 
         if let Some(cam_device) = cam_device {
             let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_device.prop);

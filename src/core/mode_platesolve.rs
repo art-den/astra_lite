@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use crate::{
-    core::{consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*},
+    core::{cam_starter::CamStarter, consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*},
     image::{image::*, stars::StarItems},
     indi,
     options::*,
@@ -26,6 +26,7 @@ pub struct PlatesolveMode {
     options:      Arc<RwLock<Options>>,
     subscribers:  Arc<Events>,
     camera:       DeviceAndProp,
+    cam_starter:  Arc<CamStarter>,
     mount:        String,
     cam_opts:     CamOptions,
     ps_opts:      PlateSolverOptions,
@@ -34,8 +35,9 @@ pub struct PlatesolveMode {
 
 impl PlatesolveMode {
     pub fn new(
-        options:     &Arc<RwLock<Options>>,
         indi:        &Arc<indi::Connection>,
+        cam_starter: &Arc<CamStarter>,
+        options:     &Arc<RwLock<Options>>,
         cur_frame:   &Arc<ResultImage>,
         subscribers: &Arc<Events>,
     ) -> anyhow::Result<Self> {
@@ -62,6 +64,7 @@ impl PlatesolveMode {
             subscribers:  Arc::clone(subscribers),
             mount:        opts.mount.device.clone(),
             ps_opts:      opts.plate_solver.clone(),
+            cam_starter:  Arc::clone(&cam_starter),
             plate_solver,
             camera,
             cam_opts,
@@ -180,8 +183,8 @@ impl Mode for PlatesolveMode {
 
     fn start(&mut self) -> anyhow::Result<()> {
         log::debug!("Tacking picture for plate solve with {:?}", &self.cam_opts.frame);
-        apply_camera_options_and_take_shot(
-            &self.indi,
+        self.cam_starter.take_shot(
+            self.get_type(),
             &self.camera,
             &self.cam_opts.frame,
             &self.cam_opts.ctrl
@@ -191,7 +194,7 @@ impl Mode for PlatesolveMode {
     }
 
     fn abort(&mut self) -> anyhow::Result<()> {
-        _ = abort_camera_exposure(&self.indi, &self.camera);
+        _ = self.cam_starter.abort(&self.camera);
         _ = self.indi.mount_abort_motion(&self.mount);
         self.state = State::None;
         Ok(())

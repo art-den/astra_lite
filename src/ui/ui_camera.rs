@@ -990,7 +990,7 @@ impl CameraUi {
             }
             DelayedAction::StartLiveView => {
                 let live_view_flag = self.options.read().unwrap().cam.live_view;
-                let mode = self.core.mode_data().mode.get_type();
+                let mode = self.core.mode().active.get_type();
                 if live_view_flag && mode == ModeType::Waiting {
                     self.start_live_view();
                 }
@@ -1069,22 +1069,22 @@ impl CameraUi {
         let frame_mode_is_flat = frame_mode == FrameType::Flats;
         let frame_mode_is_dark = frame_mode == FrameType::Darks;
 
-        let mode_data = self.core.mode_data();
-        let mode_type = mode_data.mode.get_type();
+        let mode = self.core.mode();
+        let mode_type = mode.active.get_type();
         let waiting = mode_type == ModeType::Waiting;
         let single_shot = mode_type == ModeType::SingleShot;
         let liveview_active = mode_type == ModeType::LiveView;
         let saving_frames = mode_type == ModeType::SavingRawFrames;
-        let saving_frames_paused = mode_data.aborted_mode
+        let saving_frames_paused = mode.aborted
             .as_ref()
             .map(|mode| mode.get_type() == ModeType::SavingRawFrames)
             .unwrap_or(false);
         let live_active = mode_type == ModeType::LiveStacking;
-        let livestacking_paused = mode_data.aborted_mode
+        let livestacking_paused = mode.aborted
             .as_ref()
             .map(|mode| mode.get_type() == ModeType::LiveStacking)
             .unwrap_or(false);
-        drop(mode_data);
+        drop(mode);
 
         let save_raw_btn_cap = match frame_mode {
             FrameType::Lights => "Start save\nLIGHTs",
@@ -1617,8 +1617,8 @@ impl CameraUi {
         area: &gtk::DrawingArea,
         cr:   &cairo::Context
     ) {
-        let mode_data = self.core.mode_data();
-        let Some(cur_exposure) = mode_data.mode.get_cur_exposure() else {
+        let mode = self.core.mode();
+        let Some(cur_exposure) = mode.active.get_cur_exposure() else {
             return;
         };
         if cur_exposure < 1.0 { return; };

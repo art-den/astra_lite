@@ -343,8 +343,8 @@ impl MountUi {
         let mnt_active = self.indi.is_device_enabled(&mount_device).unwrap_or(false);
         let indi_connected = self.indi.state() == indi::ConnState::Connected;
 
-        let mode_data = self.core.mode_data();
-        let mode_type = mode_data.mode.get_type();
+        let mode = self.core.mode();
+        let mode_type = mode.active.get_type();
         let waiting = mode_type == ModeType::Waiting;
         let live_view = mode_type == ModeType::LiveView;
         let single_shot = mode_type == ModeType::SingleShot;

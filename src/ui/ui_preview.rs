@@ -1484,7 +1484,7 @@ impl PreviewUi {
     }
 
     fn correct_preview_source(&self) {
-        let mode_type = self.core.mode_data().mode.get_type();
+        let mode_type = self.core.mode().active.get_type();
         let cb_preview_src_aid = match mode_type {
             ModeType::LiveStacking => "live",
             ModeType::Waiting      => return,

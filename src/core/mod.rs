@@ -7,6 +7,7 @@ pub mod mode_darks_lib;
 pub mod mode_goto;
 pub mod mode_polar_align;
 pub mod utils;
+pub mod cam_starter;
 
 mod mode_waiting;
 mod mode_camera;

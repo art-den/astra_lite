@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 use crate::{
-    core::{consts::*, events::*, frame_processing::*},
+    core::{cam_starter::CamStarter, consts::*, events::*, frame_processing::*},
     image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point},
     indi,
     options::*,
@@ -47,6 +47,7 @@ pub struct GotoMode {
     config:          GotoConfig,
     eq_coord:        EqCoord,
     camera:          Option<DeviceAndProp>,
+    cam_starter:     Arc<CamStarter>,
     cam_opts:        Option<CamOptions>,
     ps_opts:         PlateSolverOptions,
     mount:           String,
@@ -63,10 +64,11 @@ pub struct GotoMode {
 
 impl GotoMode {
     pub fn new(
+        indi:        &Arc<indi::Connection>,
+        cam_starter: &Arc<CamStarter>,
         destination: GotoDestination,
         config:      GotoConfig,
         options:     &Arc<RwLock<Options>>,
-        indi:        &Arc<indi::Connection>,
         cur_frame:   &Arc<ResultImage>,
         subscribers: &Arc<Events>,
     ) -> anyhow::Result<Self> {
@@ -94,7 +96,7 @@ impl GotoMode {
 
         Ok(Self {
             state:           State::None,
-            config,
+            cam_starter:     Arc::clone(&cam_starter),
             eq_coord:        EqCoord::default(),
             ps_opts:         opts.plate_solver.clone(),
             mount:           opts.mount.device.clone(),
@@ -106,6 +108,7 @@ impl GotoMode {
             goto_seconds:    0,
             goto_ok_seconds: 0,
             extra_stages:    0,
+            config,
             plate_solver,
             destination,
             camera,
@@ -166,8 +169,8 @@ impl GotoMode {
         let camera = self.camera.as_ref().unwrap();
 
         log::debug!("Tacking picture for plate solve with {:?}", &cam_opts.frame);
-        apply_camera_options_and_take_shot(
-            &self.indi,
+        self.cam_starter.take_shot(
+            self.get_type(),
             camera,
             &cam_opts.frame,
             &cam_opts.ctrl
@@ -408,7 +411,7 @@ impl Mode for GotoMode {
 
     fn abort(&mut self) -> anyhow::Result<()> {
         if let Some(camera) = &self.camera {
-            _ = abort_camera_exposure(&self.indi, camera);
+            _ = self.cam_starter.abort(&camera);
         }
         _ = self.indi.mount_abort_motion(&self.mount);
         self.state = State::None;
