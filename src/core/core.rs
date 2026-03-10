@@ -76,7 +76,6 @@ pub trait Mode {
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn custom_command(&mut self, _args: &dyn Any) -> anyhow::Result<Option<Box<dyn Any>>> { Ok(None) }
     fn notify_processing_queue_overflow(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn _can_work_with_live_veiw_in_paparella(&mut self) -> bool { false }
 }
 
 pub enum NotifyResult {
@@ -91,18 +90,16 @@ pub enum NotifyResult {
 }
 
 pub struct ModeData {
-    pub active:    ModeBox,
-    pub _live_view: Option<ModeBox>,
-    pub finished:  Option<ModeBox>,
-    pub aborted:   Option<ModeBox>,
-    previous:      Option<ModeBox>,
+    pub active:   ModeBox,
+    pub finished: Option<ModeBox>,
+    pub aborted:  Option<ModeBox>,
+    previous:     Option<ModeBox>,
 }
 
 impl ModeData {
     fn new() -> Self {
         Self {
             active:    Box::new(WaitingMode),
-            _live_view: None,
             finished:  None,
             aborted:   None,
             previous:  None,
@@ -307,6 +304,7 @@ impl Core {
 
         let result = mode.active.notify_timer_1s()?;
         self.apply_change_result(result, &mut mode)?;
+        drop(mode);
 
         Ok(())
     }
