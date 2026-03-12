@@ -988,6 +988,7 @@ impl DarksLibraryUI {
     fn correct_widgets_enable_state(&self) {
         let mode = self.core.mode().active.get_type();
         let is_waiting = mode == ModeType::Waiting;
+        let is_live_view = mode == ModeType::LiveView;
         let saving_defect_pixels =
             mode == ModeType::DefectPixels ||
             mode == ModeType::CreatingDefectPixels;
@@ -1004,17 +1005,18 @@ impl DarksLibraryUI {
         let dark = &self.widgets.darks;
         let bias = &self.widgets.biases;
 
+        def.grd_def.set_sensitive(is_waiting || is_live_view);
         def.spb_def_temp.set_sensitive(def.chb_def_temp.is_active());
         def.spb_def_exp.set_sensitive(def.chb_def_exp.is_active());
         def.spb_def_gain.set_sensitive(def.chb_def_gain.is_active());
         def.spb_def_offs.set_sensitive(def.chb_def_offs.is_active());
         def.bx_def_bin.set_sensitive(def.chb_def_bin.is_active());
         def.grd_def_crop.set_sensitive(def.chb_def_crop.is_active());
-        def.grd_def.set_sensitive(is_waiting);
         def.prb_def.set_sensitive(saving_defect_pixels);
         def.spb_def_cnt.set_sensitive(def.rbtn_def_frames_cnt.is_active());
         def.spb_def_integr.set_sensitive(def.rbtn_def_integr_time.is_active());
 
+        dark.grd_dark.set_sensitive(is_waiting || is_live_view);
         dark.spb_dark_cnt.set_sensitive(dark.rbtn_dark_frames_cnt.is_active());
         dark.spb_dark_integr.set_sensitive(dark.rbtn_dark_integr_time.is_active());
         dark.e_dark_temp.set_sensitive(dark.chb_dark_temp.is_active());
@@ -1025,23 +1027,22 @@ impl DarksLibraryUI {
         dark.grd_dark_crop.set_sensitive(dark.chb_dark_crop.is_active());
         dark.chb_min_count.set_sensitive(dark.rbtn_dark_integr_time.is_active());
         dark.spb_min_count.set_sensitive(dark.chb_min_count.is_active() && dark.rbtn_dark_integr_time.is_active());
-        dark.grd_dark.set_sensitive(is_waiting);
         dark.prb_dark.set_sensitive(saving_master_darks);
 
+        bias.grd_bias.set_sensitive(is_waiting || is_live_view);
         bias.e_bias_temp.set_sensitive(bias.chb_bias_temp.is_active());
         bias.e_bias_gain.set_sensitive(bias.chb_bias_gain.is_active());
         bias.e_bias_offset.set_sensitive(bias.chb_bias_offset.is_active());
         bias.bx_bias_bin.set_sensitive(bias.chb_bias_bin.is_active());
         bias.grd_bias_crop.set_sensitive(bias.chb_bias_crop.is_active());
-        bias.grd_bias.set_sensitive(is_waiting);
         bias.prb_bias.set_sensitive(saving_master_biases);
 
         enable_actions(&self.window, &[
-            ("create_def_pixls_files", is_waiting),
+            ("create_def_pixls_files", is_waiting || is_live_view),
             ("stop_def_pxls_files",    saving_defect_pixels),
-            ("create_dark_files",      is_waiting),
+            ("create_dark_files",      is_waiting || is_live_view),
             ("stop_dark_files",        saving_master_darks),
-            ("create_bias_files",      is_waiting),
+            ("create_bias_files",      is_waiting || is_live_view),
             ("stop_bias_files",        saving_master_biases),
         ]);
     }

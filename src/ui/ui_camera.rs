@@ -1100,7 +1100,7 @@ impl CameraUi {
             .unwrap_or(false);
 
         let can_change_cam_opts = !saving_frames && !live_active;
-        let can_change_mode = waiting || single_shot;
+        let can_change_mode = waiting || single_shot || liveview_active;
         let can_change_frame_opts = waiting || liveview_active;
         let can_change_live_stacking_opts = waiting || liveview_active;
         let can_change_cal_ops = !liveview_active;
@@ -1113,7 +1113,7 @@ impl CameraUi {
         self.main_ui.set_module_panel_visible(self.widgets.info.bx.upcast_ref(), cam_sensitive);
 
         enable_actions(&self.window, &[
-            ("take_shot",              exposure_supported && !single_shot && can_change_mode),
+            ("take_shot",              exposure_supported && !single_shot && waiting),
             ("stop_shot",              single_shot),
 
             ("start_save_raw_frames",  exposure_supported && !saving_frames && can_change_mode),

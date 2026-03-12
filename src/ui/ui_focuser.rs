@@ -432,9 +432,10 @@ impl FocuserUi {
         }
 
         let waiting = mode_type == ModeType::Waiting;
+        let live_view = mode_type == ModeType::LiveView;
         let single_shot = mode_type == ModeType::SingleShot;
         let focusing = mode_type == ModeType::Focusing;
-        let can_change_mode = waiting || single_shot;
+        let can_change_mode = waiting || live_view || single_shot;
 
         let device_enabled = self.indi.is_device_enabled(focuser_device).unwrap_or(false);
 
