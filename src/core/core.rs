@@ -76,6 +76,7 @@ pub trait Mode {
     fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn custom_command(&mut self, _args: &dyn Any) -> anyhow::Result<Option<Box<dyn Any>>> { Ok(None) }
     fn notify_processing_queue_overflow(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn stop_live_view_before_this_mode(&self) -> bool { return true; }
 }
 
 pub enum NotifyResult {
@@ -181,6 +182,14 @@ impl Core {
         &self.cam_watchdog
     }
 
+    pub fn cam_starter(&self) -> &Arc<CamStarter> {
+        &self.cam_starter
+    }
+
+    pub fn events(&self) -> &Arc<Events> {
+        &self.events
+    }
+
     pub fn stop(self: &Arc<Self>) {
         self.abort_active_mode();
         self.timer.clear();
@@ -195,8 +204,8 @@ impl Core {
         log::info!("Done!");
     }
 
-    pub fn ext_giuder(&self) -> Arc<ExternalGuiderCtrl> {
-        Arc::clone(&self.ext_guider)
+    pub fn ext_giuder(&self) -> &Arc<ExternalGuiderCtrl> {
+        &self.ext_guider
     }
 
     fn connect_cam_start_event(self: &Arc<Self>) {
@@ -625,10 +634,6 @@ impl Core {
         Ok(())
     }
 
-    pub fn events(&self) -> &Arc<Events> {
-        &self.events
-    }
-
     pub fn exec_mode_custom_command(
         self: &Arc<Self>,
         args: &dyn std::any::Any
@@ -645,15 +650,27 @@ impl Core {
     ) -> anyhow::Result<()> {
         let mut mode = self.mode.write().unwrap();
 
+        let have_to_abort_mode =
+            new_mode.stop_live_view_before_this_mode() ||
+            mode.active.get_type() != ModeType::LiveView;
+
+        dbg!(have_to_abort_mode);
+
         // abort previous mode
+        if have_to_abort_mode {
+            mode.active.abort()?;
+        }
+
+        // move mode.active to mode.previous
         mode.previous = Some(std::mem::replace(
             &mut mode.active,
             Box::new(WaitingMode)
         ));
-        mode.active.abort()?;
 
         // init camera for mode
-        self.init_cam_for_mode(&new_mode)?;
+        if have_to_abort_mode {
+            self.init_cam_for_mode(&new_mode)?;
+        }
 
         mode.active = Box::new(new_mode);
         if reset_aborted_mode {
@@ -721,30 +738,6 @@ impl Core {
         Ok(())
     }
 
-    pub fn start_single_shot(&self) -> anyhow::Result<()> {
-        let mode = TackingPicturesMode::new(
-            &self.indi,
-            &self.cam_starter,
-            &self.events,
-            CameraMode::SingleShot,
-            &self.options,
-        )?;
-        self.start_new_mode(mode, false, true)?;
-        Ok(())
-    }
-
-    pub fn start_live_view(&self) -> anyhow::Result<()> {
-        let mode = TackingPicturesMode::new(
-            &self.indi,
-            &self.cam_starter,
-            &self.events,
-            CameraMode::LiveView,
-            &self.options,
-        )?;
-        self.start_new_mode(mode, false, true)?;
-        Ok(())
-    }
-
     pub fn check_before_saving_raw_or_live_stacking(&self) -> anyhow::Result<()> {
         let options = self.options.read().unwrap();
         if options.cam.frame.frame_type == FrameType::Lights {
@@ -771,39 +764,31 @@ impl Core {
         Ok(())
     }
 
+    pub fn start_single_shot(&self) -> anyhow::Result<()> {
+        let mode = TackingPicturesMode::new(CameraMode::SingleShot, &self)?;
+        self.start_new_mode(mode, false, true)?;
+        Ok(())
+    }
+
+    pub fn start_live_view(&self) -> anyhow::Result<()> {
+        let mode = TackingPicturesMode::new(CameraMode::LiveView, &self)?;
+        self.start_new_mode(mode, false, true)?;
+        Ok(())
+    }
+
     pub fn start_saving_raw_frames(&self) -> anyhow::Result<()> {
-        self.abort_active_mode();
-        let mut mode = TackingPicturesMode::new(
-            &self.indi,
-            &self.cam_starter,
-            &self.events,
-            CameraMode::SavingRawFrames,
-            &self.options,
-        )?;
-        self.live_stacking.clear();
-        mode.set_external_guider(&self.ext_guider);
+        let mode = TackingPicturesMode::new(CameraMode::SavingRawFrames, &self)?;
         self.start_new_mode(mode, true, true)?;
         Ok(())
     }
 
     pub fn start_live_stacking(&self) -> anyhow::Result<()> {
-        self.abort_active_mode();
-        let mut mode = TackingPicturesMode::new(
-            &self.indi,
-            &self.cam_starter,
-            &self.events,
-            CameraMode::LiveStacking,
-            &self.options,
-        )?;
-        self.live_stacking.clear();
-        mode.set_external_guider(&self.ext_guider);
-        mode.set_live_stacking(&self.live_stacking);
+        let mode = TackingPicturesMode::new(CameraMode::LiveStacking, &self)?;
         self.start_new_mode(mode, true, true)?;
         Ok(())
     }
 
     pub fn start_focusing(&self) -> anyhow::Result<()> {
-        self.abort_active_mode();
         let mode = FocusingMode::new(
             &self.indi,
             &self.cam_starter,
@@ -818,7 +803,6 @@ impl Core {
     }
 
     pub fn start_mount_calibr(&self) -> anyhow::Result<()> {
-        self.abort_active_mode();
         let mode = MountCalibrMode::new(
             &self.indi,
             &self.cam_starter,
@@ -834,7 +818,6 @@ impl Core {
         dark_lib_mode: DarkLibMode,
         program: &[MasterFileCreationProgramItem]
     ) -> anyhow::Result<()> {
-        self.abort_active_mode();
         let mode = DarkCreationMode::new(
             dark_lib_mode,
             &self.calibr_data,
@@ -851,7 +834,6 @@ impl Core {
         eq_coord: &EqCoord,
         config:   GotoConfig,
     ) -> anyhow::Result<()> {
-        self.abort_active_mode();
         let mode = GotoMode::new(
             &self.indi,
             &self.cam_starter,
@@ -866,7 +848,6 @@ impl Core {
     }
 
     pub fn start_goto_image(&self) -> anyhow::Result<()> {
-        self.abort_active_mode();
         let image = self.cur_frame.image.read().unwrap();
         if image.is_empty() {
             anyhow::bail!("Image is empty");
@@ -895,7 +876,6 @@ impl Core {
     }
 
     pub fn start_capture_and_platesolve(&self) -> anyhow::Result<()> {
-        self.abort_active_mode();
         let mode = PlatesolveMode::new(
             &self.indi,
             &self.cam_starter,
@@ -908,7 +888,6 @@ impl Core {
     }
 
     pub fn start_polar_alignment(&self) -> anyhow::Result<()> {
-        self.abort_active_mode();
         let mode = PolarAlignMode::new(
             &self.indi,
             &self.cam_starter,
@@ -1137,13 +1116,7 @@ impl Core {
     ) -> anyhow::Result<()> {
         mode.active.abort()?;
         let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
-        let mut new_mode = TackingPicturesMode::new(
-            &self.indi,
-            &self.cam_starter,
-            &self.events,
-            cam_mode,
-            &self.options
-        )?;
+        let mut new_mode = TackingPicturesMode::new(cam_mode, &self)?;
         new_mode.set_dark_creation_program_item(program_item);
         new_mode.set_next_mode(Some(prev_mode));
         self.init_cam_for_mode(&new_mode)?;

@@ -6,12 +6,14 @@ use std::{
 use chrono::Utc;
 
 use crate::{
-    TimeLogger, core::cam_starter::CamStarter, guiding::external_guider::*, image::{
+    TimeLogger, core::cam_starter::CamStarter, guiding::external_guider::*,
+    image::{
         histogram::*,
         raw::{FrameType, RawImage, RawImageInfo},
         raw_stacker::RawStacker,
         stars_offset::*,
-    }, indi, options::*, utils::io_utils::*
+    },
+    indi, options::*, utils::io_utils::*
 };
 
 use super::{
@@ -102,7 +104,7 @@ struct Guider {
     options:        GuidingOptions,
     dither_exp_sum: f64,
     simple:         Option<SimpleGuider>,
-    external:       Option<Arc<ExternalGuiderCtrl>>,
+    external:       Option<Arc<ExternalGuiderCtrl>>, // TODO: remove Option???
 }
 
 pub struct TackingPicturesMode {
@@ -113,7 +115,7 @@ pub struct TackingPicturesMode {
     mount_device:     String,
     fn_gen:           Arc<Mutex<SeqFileNameGen>>,
     indi:             Arc<indi::Connection>,
-    subscribers:      Arc<Events>,
+    event:            Arc<Events>,
     raw_stacker:      RawStacker,
     options:          Arc<RwLock<Options>>,
     next_job:         Option<NextJob>,
@@ -137,13 +139,9 @@ pub struct TackingPicturesMode {
 }
 
 impl TackingPicturesMode {
-    pub fn new(
-        indi:        &Arc<indi::Connection>,
-        cam_starter: &Arc<CamStarter>,
-        subscribers: &Arc<Events>,
-        cam_mode:    CameraMode,
-        options:     &Arc<RwLock<Options>>,
-    ) -> anyhow::Result<Self> {
+    pub fn new(cam_mode: CameraMode, core: &Core) -> anyhow::Result<Self> {
+        let options = core.options();
+
         let opts = options.read().unwrap();
         let Some(cam_device) = &opts.cam.device else {
             anyhow::bail!("Camera is not selected");
@@ -185,7 +183,7 @@ impl TackingPicturesMode {
                 options:        opts.guiding.clone(),
                 dither_exp_sum: 0.0,
                 simple:         None,
-                external:       None,
+                external:       Some(Arc::clone(core.ext_giuder())),
             })
         } else {
             None
@@ -202,22 +200,32 @@ impl TackingPicturesMode {
             None
         };
 
+        let live_stacking = if cam_mode == CameraMode::LiveStacking {
+            Some(Arc::clone(core.live_stacking()))
+        } else {
+            None
+        };
+
+        if matches!(cam_mode, CameraMode::LiveStacking|CameraMode::SavingRawFrames) {
+            core.live_stacking().clear();
+        }
+
         Ok(Self {
             cam_mode,
+            live_stacking,
             state:            State::Common,
             device:           cam_device.clone(),
-            cam_starter:      Arc::clone(&cam_starter),
+            cam_starter:      Arc::clone(core.cam_starter()),
             mount_device:     opts.mount.device.to_string(),
             fn_gen:           Arc::new(Mutex::new(SeqFileNameGen::new())),
-            indi:             Arc::clone(indi),
-            subscribers:      Arc::clone(subscribers),
+            indi:             Arc::clone(core.indi()),
+            event:      Arc::clone(core.events()),
             raw_stacker:      RawStacker::new(),
             options:          Arc::clone(options),
             next_job:         None,
             ref_stars:        None,
             cur_shot_id:      None,
             shot_id_to_ign:   None,
-            live_stacking:    None,
             out_file_names:   OutFileNames::default(),
             camera_offset:    None,
             cam_offset_calc:  None,
@@ -232,18 +240,6 @@ impl TackingPicturesMode {
             progress,
             guider,
         })
-    }
-
-    pub fn set_external_guider(
-        &mut self,
-        ext_guider: &Arc<ExternalGuiderCtrl>
-    ) {
-        let Some(guider) = &mut self.guider else { return; };
-        guider.external = Some(Arc::clone(ext_guider));
-    }
-
-    pub fn set_live_stacking(&mut self, live_stacking: &Arc<LiveStackingData>) {
-        self.live_stacking = Some(Arc::clone(live_stacking));
     }
 
     pub fn set_dark_creation_program_item(&mut self, item: &MasterFileCreationProgramItem) {
@@ -463,7 +459,7 @@ impl TackingPicturesMode {
         && !temperature.is_infinite()
         && autofocuser.start_temp.is_none() {
             autofocuser.start_temp = Some(temperature);
-            self.subscribers.notify(
+            self.event.notify(
                 Event::Focusing(FocuserEvent::StartingTemperature(temperature))
             );
         }
@@ -769,7 +765,7 @@ impl TackingPicturesMode {
                     data:          result,
                 };
 
-                self.subscribers.notify(Event::FrameProcessing(event_data));
+                self.event.notify(Event::FrameProcessing(event_data));
             }
 
             if is_last_frame && self.flags.save_defect_pixels {
@@ -1206,7 +1202,7 @@ impl Mode for TackingPicturesMode {
             && !temperature.is_infinite()
             && autofocuser.start_temp.is_none() {
                 autofocuser.start_temp = Some(temperature);
-                self.subscribers.notify(
+                self.event.notify(
                     Event::Focusing(FocuserEvent::StartingTemperature(temperature))
                 );
             }
