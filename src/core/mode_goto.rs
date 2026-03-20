@@ -386,22 +386,16 @@ impl Mode for GotoMode {
                         });
                     }
                 }
-                if plate_solver.support_stars_as_input() {
-                    plate_solver.start(
-                        &PlateSolverInData::Stars{
-                            stars: &stars.items,
-                            img_width: info.width,
-                            img_height: info.height,
-                        },
-                        &config
-                    )?;
+                let plate_solver_input = if plate_solver.support_stars_as_input() {
+                    &PlateSolverInData::Stars{
+                        stars: &stars.items,
+                        img_width: info.width,
+                        img_height: info.height,
+                    }
                 } else {
-
-                    plate_solver.start(
-                        &PlateSolverInData::Image(&image),
-                        &config
-                    )?;
+                    &PlateSolverInData::Image(&image)
                 };
+                plate_solver.start(plate_solver_input, &config)?;
                 self.state = State::ImagePlateSolving;
             }
         }
