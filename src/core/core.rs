@@ -218,7 +218,7 @@ impl Core {
             let result = || -> anyhow::Result<()> {
                 let mut mode = self_.mode.write().unwrap();
                 let res = mode.active.notify_guider_event(event.clone())?;
-                self_.apply_change_result(res, &mut mode)?;
+                self_.apply_notify_result(res, &mut mode)?;
                 Ok(())
             } ();
             self_.events.notify(Event::Guider(event));
@@ -308,7 +308,7 @@ impl Core {
         }
 
         let result = mode.active.notify_timer_1s()?;
-        self.apply_change_result(result, &mut mode)?;
+        self.apply_notify_result(result, &mut mode)?;
         drop(mode);
 
         Ok(())
@@ -323,7 +323,7 @@ impl Core {
                     indi::Event::BlobStart(event) => {
                         let mut mode = self_.mode.write().unwrap();
                         let result = mode.active.notify_blob_start_event(&event)?;
-                        self_.apply_change_result(result, &mut mode)?;
+                        self_.apply_notify_result(result, &mut mode)?;
                     }
                     indi::Event::PropChange(prop_change) => {
                         if let indi::PropChange::Change {
@@ -429,7 +429,7 @@ impl Core {
     ) -> anyhow::Result<()> {
         let mut mode = self.mode.write().unwrap();
         let result = mode.active.notify_indi_prop_change(prop_change)?;
-        self.apply_change_result(result, &mut mode)?;
+        self.apply_notify_result(result, &mut mode)?;
         drop(mode);
 
         let options = self.options.read().unwrap();
@@ -473,7 +473,7 @@ impl Core {
 
         let mut should_be_processed = true;
         let res = mode.active.notify_before_frame_processing_start(blob, &mut should_be_processed)?;
-        self.apply_change_result(res, &mut mode)?;
+        self.apply_notify_result(res, &mut mode)?;
         if !should_be_processed {
             return Ok(());
         }
@@ -514,7 +514,7 @@ impl Core {
                 view_options:    options.preview.preview_params(),
                 frame_options:   options.cam.frame.clone(),
                 quality_options: Some(options.quality.clone()),
-                cam_ctrl_opts:   Some(options.cam.ctrl.clone()),
+                cam_ctrl_opts:   None,
                 live_stacking:   None,
                 calibr_params,
             }
@@ -579,7 +579,7 @@ impl Core {
 
                 let result = || -> anyhow::Result<()> {
                     let res = mode.active.notify_about_frame_processing_result(&res)?;
-                    self.apply_change_result(res, &mut mode)?;
+                    self.apply_notify_result(res, &mut mode)?;
                     Ok(())
                 } ();
                 drop(mode);
@@ -590,7 +590,7 @@ impl Core {
                 let mut mode = self.mode.write().unwrap();
                 let result = || -> anyhow::Result<()> {
                     let res = mode.active.notify_processing_queue_overflow()?;
-                    self.apply_change_result(res, &mut mode)?;
+                    self.apply_notify_result(res, &mut mode)?;
                     Ok(())
                 } ();
                 drop(mode);
@@ -649,8 +649,6 @@ impl Core {
         let have_to_abort_mode =
             new_mode.stop_live_view_before_this_mode() ||
             mode.active.get_type() != ModeType::LiveView;
-
-        dbg!(have_to_abort_mode);
 
         // abort previous mode
         if have_to_abort_mode {
@@ -995,7 +993,7 @@ impl Core {
         Ok(())
     }
 
-    fn apply_change_result(
+    fn apply_notify_result(
         self:   &Arc<Self>,
         result: NotifyResult,
         mode:   &mut ModeData,
@@ -1050,7 +1048,7 @@ impl Core {
                 finished_progress,
                 finished_mode_type,
             ));
-        } else if mode_changed {
+        } else {
             self.events.notify(Event::Progress(
                 mode.active.progress(),
                 mode.active.get_type(),

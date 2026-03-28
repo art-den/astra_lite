@@ -135,14 +135,14 @@ pub struct TackingPicturesMode {
     next_mode:        Option<ModeBox>,
     queue_overflowed: bool,
     slow_down_flag:   bool,
-    cur_frame_opts:   Option<FrameOptions>,
+    exp_for_restart:  Option<f64>,
 }
 
 impl TackingPicturesMode {
     pub fn new(cam_mode: CameraMode, core: &Core) -> anyhow::Result<Self> {
         let options = core.options();
-
         let opts = options.read().unwrap();
+
         let Some(cam_device) = &opts.cam.device else {
             anyhow::bail!("Camera is not selected");
         };
@@ -234,7 +234,7 @@ impl TackingPicturesMode {
             fname_utils:      FileNameUtils::default(),
             queue_overflowed: false,
             slow_down_flag:   false,
-            cur_frame_opts:   None,
+            exp_for_restart:  None,
             cam_options,
             autofocuser,
             progress,
@@ -272,7 +272,7 @@ impl TackingPicturesMode {
     }
 
     fn correct_options_before_start(&mut self) {
-        self.cur_frame_opts = None;
+        self.exp_for_restart = None;
         match self.cam_mode {
             CameraMode::LiveStacking => {
                 let mut options = self.options.write().unwrap();
@@ -285,8 +285,8 @@ impl TackingPicturesMode {
 
     fn take_shot_with_options(
         &mut self,
-        frame_options:       FrameOptions,
-        store_frame_options: bool
+        frame_options:         FrameOptions,
+        store_exp_for_restart: bool
     ) -> anyhow::Result<()> {
         let cur_shot_id = self.cam_starter.take_shot(
             self.get_type(),
@@ -295,8 +295,8 @@ impl TackingPicturesMode {
             &self.cam_options.ctrl
         )?;
         self.cur_shot_id = Some(cur_shot_id);
-        if store_frame_options {
-            self.cur_frame_opts = Some(frame_options.clone());
+        if store_exp_for_restart {
+            self.exp_for_restart = Some(frame_options.exposure());
         }
         Ok(())
     }
@@ -1174,10 +1174,7 @@ impl Mode for TackingPicturesMode {
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
-        Some(
-            self.cur_frame_opts
-                .as_ref().map(|o| o.exposure())
-                .unwrap_or(0.0))
+        self.exp_for_restart
     }
 
     fn can_be_stopped(&self) -> bool {
@@ -1277,14 +1274,13 @@ impl Mode for TackingPicturesMode {
         if self.need_skip_first_frame() {
             self.start_first_shot_that_will_be_skipped()?;
         } else {
-            let frame_opts =
-                if let Some(cur_frame_opts) = &self.cur_frame_opts {
-                    cur_frame_opts
-                } else {
-                    &self.cam_options.frame
-                };
-
-            self.take_shot_with_options(frame_opts.clone(), false)?;
+            let mut frame_opts = self.cam_options.frame.clone();
+            if let Some(cur_exp) = self.exp_for_restart {
+                frame_opts.exp_main = cur_exp;
+                frame_opts.exp_bias = cur_exp;
+                frame_opts.exp_flat = cur_exp;
+            }
+            self.take_shot_with_options(frame_opts, false)?;
         }
 
         Ok(true)
@@ -1386,6 +1382,8 @@ impl Mode for TackingPicturesMode {
         if self.shot_id_to_ign == cmd.shot_id {
             return;
         }
+
+        cmd.cam_ctrl_opts = Some(self.cam_options.ctrl.clone());
 
         let options = self.options.read().unwrap();
 
