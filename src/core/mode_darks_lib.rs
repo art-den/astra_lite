@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, sync::{Arc, Mutex, RwLock}};
 
-use crate::{core::frame_processing::*, indi::{self}, options::*};
+use crate::{core::{frame_processing::*, mode_camera::{CameraMode, TackingPicturesMode}, mode_waiting::WaitingMode}, indi::{self}, options::*};
 
 use super::{core::*, events::Progress};
 
@@ -67,6 +67,25 @@ impl DarkCreationMode {
         let mut calibr_data = self.calibr_data.lock().unwrap();
         calibr_data.clear();
     }
+
+    pub fn create_notify_result_for_starting_mode(
+        program_item: MasterFileCreationProgramItem,
+        cam_mode:     CameraMode,
+    ) -> NotifyResult {
+        let start_focusing_fun = move |core: &Arc<Core>, mode: &mut ModeData| -> anyhow::Result<()> {
+            mode.active.abort()?;
+            let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
+            let mut new_mode = TackingPicturesMode::new(cam_mode, &core)?;
+            new_mode.set_dark_creation_program_item(&program_item);
+            new_mode.set_next_mode(Some(prev_mode));
+            core.init_cam_for_mode(&new_mode)?;
+            new_mode.start()?;
+            mode.active = Box::new(new_mode);
+            Ok(())
+        };
+        return NotifyResult::Exec(Box::new(start_focusing_fun))
+    }
+
 }
 
 impl Mode for DarkCreationMode {
@@ -168,14 +187,24 @@ impl Mode for DarkCreationMode {
 
             result = match self.mode {
                 DarkLibMode::DefectPixels =>
-                    NotifyResult::StartCreatingDefectPixelsFile(prorgam_item),
+                    Self::create_notify_result_for_starting_mode(
+                        prorgam_item,
+                        CameraMode::DefectPixels
+                    ),
                 DarkLibMode::MasterDark =>
-                    NotifyResult::StartCreatingMasterDarkFile(prorgam_item),
+                    Self::create_notify_result_for_starting_mode(
+                        prorgam_item,
+                        CameraMode::MasterDark
+                    ),
                 DarkLibMode::MasterBias =>
-                    NotifyResult::StartCreatingMasterBiasFile(prorgam_item),
+                    Self::create_notify_result_for_starting_mode(
+                        prorgam_item,
+                        CameraMode::MasterBias
+                    ),
             };
         }
 
         Ok(result)
     }
+
 }

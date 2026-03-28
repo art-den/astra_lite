@@ -6,7 +6,7 @@ use std::{
 use chrono::Utc;
 
 use crate::{
-    TimeLogger, core::cam_starter::CamStarter, guiding::external_guider::*,
+    TimeLogger, core::{cam_starter::CamStarter, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode}, guiding::external_guider::*,
     image::{
         histogram::*,
         raw::{FrameType, RawImage, RawImageInfo},
@@ -115,10 +115,10 @@ pub struct TackingPicturesMode {
     mount_device:     String,
     fn_gen:           Arc<Mutex<SeqFileNameGen>>,
     indi:             Arc<indi::Connection>,
-    event:            Arc<Events>,
+    events:           Arc<Events>,
     raw_stacker:      RawStacker,
     options:          Arc<RwLock<Options>>,
-    next_job:         Option<NextJob>,
+    next_job:         Option<NextJob>, // after frame processing is finished
     cam_options:      CamOptions,
     guider:           Option<Guider>,
     ref_stars:        Option<Vec<Point>>,
@@ -219,7 +219,7 @@ impl TackingPicturesMode {
             mount_device:     opts.mount.device.to_string(),
             fn_gen:           Arc::new(Mutex::new(SeqFileNameGen::new())),
             indi:             Arc::clone(core.indi()),
-            event:      Arc::clone(core.events()),
+            events:           Arc::clone(core.events()),
             raw_stacker:      RawStacker::new(),
             options:          Arc::clone(options),
             next_job:         None,
@@ -459,7 +459,7 @@ impl TackingPicturesMode {
         && !temperature.is_infinite()
         && autofocuser.start_temp.is_none() {
             autofocuser.start_temp = Some(temperature);
-            self.event.notify(
+            self.events.notify(
                 Event::Focusing(FocuserEvent::StartingTemperature(temperature))
             );
         }
@@ -765,7 +765,7 @@ impl TackingPicturesMode {
                     data:          result,
                 };
 
-                self.event.notify(Event::FrameProcessing(event_data));
+                self.events.notify(Event::FrameProcessing(event_data));
             }
 
             if is_last_frame && self.flags.save_defect_pixels {
@@ -778,8 +778,25 @@ impl TackingPicturesMode {
         if !finished {
             // Start next job/mode
             match self.next_job.take() {
-                Some(NextJob::MountCalibration) =>
-                    return Ok(NotifyResult::StartMountCalibr),
+                Some(NextJob::MountCalibration) => {
+                    let indi = Arc::clone(&self.indi);
+                    let cam_starter = Arc::clone(&self.cam_starter);
+                    let options = Arc::clone(&self.options);
+
+                    let start_mode_mnt_calibr_fun = move |_core: &Arc<Core>, mode: &mut ModeData| -> anyhow::Result<()> {
+                        mode.active.abort()?;
+                        let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
+                        let mut new_mode = MountCalibrMode::new(
+                            &indi,
+                            &cam_starter,
+                            &options,
+                            Some(prev_mode)
+                        )?;
+                        new_mode.start()?;
+                        Ok(())
+                    };
+                    return Ok(NotifyResult::Exec(Box::new(start_mode_mnt_calibr_fun)))
+                }
 
                 Some(NextJob::InternalDithering { ra_pulse, dec_pulse }) => {
                     self.start_dithering_in_main_cam_mode(ra_pulse, dec_pulse)?;
@@ -791,8 +808,30 @@ impl TackingPicturesMode {
                     return Ok(NotifyResult::ProgressChanges);
                 }
 
-                Some(NextJob::Autofocus) =>
-                    return Ok(NotifyResult::StartFocusing),
+                Some(NextJob::Autofocus) => {
+                    // Start autofocus mode
+                    let indi = Arc::clone(&self.indi);
+                    let cam_starter = Arc::clone(&self.cam_starter);
+                    let options = Arc::clone(&self.options);
+                    let events = Arc::clone(&self.events);
+                    let start_focusing_fun = move |_core: &Arc<Core>, mode: &mut ModeData| -> anyhow::Result<()> {
+                        mode.active.abort()?;
+                        let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
+                        let mut new_mode = FocusingMode::new(
+                            &indi,
+                            &cam_starter,
+                            &options,
+                            &events,
+                            Some(prev_mode),
+                            false,
+                            FocusingErrorReaction::IgnoreAndExit
+                        )?;
+                        new_mode.start()?;
+                        mode.active = Box::new(new_mode);
+                        Ok(())
+                    };
+                    return Ok(NotifyResult::Exec(Box::new(start_focusing_fun)))
+                }
 
                 _ => {},
             }
@@ -1202,7 +1241,7 @@ impl Mode for TackingPicturesMode {
             && !temperature.is_infinite()
             && autofocuser.start_temp.is_none() {
                 autofocuser.start_temp = Some(temperature);
-                self.event.notify(
+                self.events.notify(
                     Event::Focusing(FocuserEvent::StartingTemperature(temperature))
                 );
             }

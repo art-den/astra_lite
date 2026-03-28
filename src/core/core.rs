@@ -83,11 +83,7 @@ pub enum NotifyResult {
     Empty,
     ProgressChanges,
     Finished { next_mode: Option<ModeBox> },
-    StartFocusing,
-    StartMountCalibr,
-    StartCreatingDefectPixelsFile(MasterFileCreationProgramItem),
-    StartCreatingMasterDarkFile(MasterFileCreationProgramItem),
-    StartCreatingMasterBiasFile(MasterFileCreationProgramItem),
+    Exec(Box<dyn FnOnce(&Arc<Core>, &mut ModeData)-> anyhow::Result<()> + 'static + Send + Sync>),
 }
 
 pub struct ModeData {
@@ -935,7 +931,7 @@ impl Core {
         Ok(())
     }
 
-    fn init_cam_for_mode(&self, mode: &dyn Mode) -> anyhow::Result<()> {
+    pub fn init_cam_for_mode(&self, mode: &dyn Mode) -> anyhow::Result<()> {
         let Some(cam_device) = &mode.cam_device() else {
             return Ok(());
         };
@@ -999,18 +995,18 @@ impl Core {
         Ok(())
     }
 
-    // TODO: do it in modes!
     fn apply_change_result(
         self:   &Arc<Self>,
         result: NotifyResult,
         mode:   &mut ModeData,
     ) -> anyhow::Result<()> {
         let mut mode_changed = false;
-        let mut progress_changed = false;
         let mut finished_progress_and_type = None;
         match result {
+            NotifyResult::Empty => {
+                return Ok(());
+            }
             NotifyResult::ProgressChanges => {
-                progress_changed = true;
             }
             NotifyResult::Finished { next_mode } => {
                 let next_is_none = next_mode.is_none();
@@ -1039,55 +1035,11 @@ impl Core {
 
                 mode.active.continue_work()?;
                 mode_changed = true;
-                progress_changed = true;
             }
-            NotifyResult::StartFocusing => {
-                mode.active.abort()?;
-                let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
-                let mut new_mode = FocusingMode::new(
-                    &self.indi,
-                    &self.cam_starter,
-                    &self.options,
-                    &self.events,
-                    Some(prev_mode),
-                    false,
-                    FocusingErrorReaction::IgnoreAndExit
-                )?;
-                new_mode.start()?;
-                mode.active = Box::new(new_mode);
+            NotifyResult::Exec(fun) => {
+                fun(self, mode)?;
                 mode_changed = true;
-                progress_changed = true;
             }
-            NotifyResult::StartMountCalibr => {
-                mode.active.abort()?;
-                let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
-                let mut new_mode = MountCalibrMode::new(
-                    &self.indi,
-                    &self.cam_starter,
-                    &self.options,
-                    Some(prev_mode)
-                )?;
-                new_mode.start()?;
-                mode.active = Box::new(new_mode);
-                mode_changed = true;
-                progress_changed = true;
-            }
-            NotifyResult::StartCreatingDefectPixelsFile(item) => {
-                self.start_dark_libarary_mode_stage(mode, CameraMode::DefectPixels, &item)?;
-                mode_changed = true;
-                progress_changed = true;
-            }
-            NotifyResult::StartCreatingMasterDarkFile(item) => {
-                self.start_dark_libarary_mode_stage(mode, CameraMode::MasterDark, &item)?;
-                mode_changed = true;
-                progress_changed = true;
-            }
-            NotifyResult::StartCreatingMasterBiasFile(item) => {
-                self.start_dark_libarary_mode_stage(mode, CameraMode::MasterBias, &item)?;
-                mode_changed = true;
-                progress_changed = true;
-            }
-            _ => {}
         }
 
         if mode_changed {
@@ -1098,30 +1050,13 @@ impl Core {
                 finished_progress,
                 finished_mode_type,
             ));
-        } else if progress_changed || mode_changed {
+        } else if mode_changed {
             self.events.notify(Event::Progress(
                 mode.active.progress(),
                 mode.active.get_type(),
             ));
         }
 
-        Ok(())
-    }
-
-    fn start_dark_libarary_mode_stage(
-        self:         &Arc<Self>,
-        mode:         &mut ModeData,
-        cam_mode:     CameraMode,
-        program_item: &MasterFileCreationProgramItem
-    ) -> anyhow::Result<()> {
-        mode.active.abort()?;
-        let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
-        let mut new_mode = TackingPicturesMode::new(cam_mode, &self)?;
-        new_mode.set_dark_creation_program_item(program_item);
-        new_mode.set_next_mode(Some(prev_mode));
-        self.init_cam_for_mode(&new_mode)?;
-        new_mode.start()?;
-        mode.active = Box::new(new_mode);
         Ok(())
     }
 }
