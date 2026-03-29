@@ -455,10 +455,8 @@ impl MainUi {
 
         self.modules.borrow_mut().clear();
 
-        // Unsubscribe events
-
+        // Allow to delete Rc<Self>
         *self.self_.borrow_mut() = None;
-
 
         glib::Propagation::Proceed
     }
