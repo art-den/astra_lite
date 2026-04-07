@@ -17,16 +17,16 @@ pub struct StarsInfoData {
 
 #[derive(Clone)]
 pub struct LightFrameQualInfoData {
-    pub ccd_temp_is_ok: bool,
-    pub offset_is_ok:   bool,
-    pub fwhm_is_ok:     bool,
-    pub ovality_is_ok:  bool,
+    pub ccd_temp_ok:   bool,
+    pub offset_is_ok:  bool,
+    pub fwhm_is_ok:    bool,
+    pub ovality_is_ok: bool,
 }
 
 impl Default for LightFrameQualInfoData {
     fn default() -> Self {
         Self {
-            ccd_temp_is_ok: true,
+            ccd_temp_ok: true,
             offset_is_ok:   true,
             fwhm_is_ok:     true,
             ovality_is_ok:  true,
@@ -36,7 +36,7 @@ impl Default for LightFrameQualInfoData {
 
 impl LightFrameQualInfoData {
     pub fn is_ok(&self) -> bool {
-        self.ccd_temp_is_ok &&
+        self.ccd_temp_ok &&
         self.offset_is_ok &&
         self.fwhm_is_ok &&
         self.ovality_is_ok
@@ -204,11 +204,11 @@ pub struct Preview8BitImgData {
 
 #[derive(Clone)]
 pub struct RawFrameInfo {
-    pub image:          Arc<RawImage>,
-    pub ccd_temp_is_ok: bool,
-    pub mean:           f32,
-    pub median:         u16,
-    pub std_dev:        f32,
+    pub image:       Arc<RawImage>,
+    pub ccd_temp_ok: bool,
+    pub mean:        f32,
+    pub median:      u16,
+    pub std_dev:     f32,
 }
 
 #[derive(Clone)]
@@ -673,7 +673,7 @@ fn make_preview_image_impl(
             if ctrl_o.enable_cooler && qo.check_ccd_temp {
                 if let Some(ccd_temp) = info.ccd_temp {
                     let diff = f64::abs(ccd_temp - ctrl_o.temperature);
-                    quality.ccd_temp_is_ok = diff <= qo.max_ccd_temp_diff;
+                    quality.ccd_temp_ok = diff <= qo.max_ccd_temp_diff;
                 }
             }
         }
@@ -737,11 +737,11 @@ fn make_preview_image_impl(
         let raw_image = Arc::new(raw_image);
 
         let raw_frame_info = RawFrameInfo {
-            image:          Arc::clone(&raw_image),
-            ccd_temp_is_ok: quality.ccd_temp_is_ok,
-            mean:           raw_mean as f32,
-            median:         raw_median,
-            std_dev:        raw_std_dev as f32,
+            image:       Arc::clone(&raw_image),
+            ccd_temp_ok: quality.ccd_temp_ok,
+            mean:        raw_mean as f32,
+            median:      raw_median,
+            std_dev:     raw_std_dev as f32,
         };
         send_result(
             FrameProcessResultData::RawFrameInfo(raw_frame_info),

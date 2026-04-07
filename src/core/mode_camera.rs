@@ -1020,7 +1020,7 @@ impl TackingPicturesMode {
         let frame_for_raw_stacker =
             Self::is_frame_type_for_raw_stacker(raw_info.image.info().frame_type);
 
-        if frame_for_raw_stacker && self.flags.use_raw_stacker && raw_info.ccd_temp_is_ok {
+        if frame_for_raw_stacker && self.flags.use_raw_stacker && raw_info.ccd_temp_ok {
             self.add_raw_image(&raw_info.image)?;
         }
         Ok(NotifyResult::Empty)
