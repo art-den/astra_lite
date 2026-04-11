@@ -793,6 +793,7 @@ impl TackingPicturesMode {
                             Some(prev_mode)
                         )?;
                         new_mode.start()?;
+                        mode.active = Box::new(new_mode);
                         Ok(())
                     };
                     return Ok(NotifyResult::Exec(Box::new(start_mode_mnt_calibr_fun)))

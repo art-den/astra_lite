@@ -307,6 +307,8 @@ impl Core {
             }
         }
 
+        drop(options);
+
         let result = mode.active.notify_timer_1s()?;
         self.apply_notify_result(result, &mut mode)?;
         drop(mode);
