@@ -1692,19 +1692,6 @@ impl CameraUi {
                             "By main camera".to_string(),
                             false
                         ));
-                        if options.guiding.dith_period != 0 {
-                            result.push((
-                                "Dithering".to_string(),
-                                format!(
-                                    "{} px each {} minutes",
-                                    options.guiding.main_cam.dith_dist,
-                                    options.guiding.dith_period
-                                ),
-                                false
-                            ));
-                        } else {
-                            result.push(("Dithering".to_string(), "No dithering".to_string(), true));
-                        }
                     }
                     GuidingMode::External => {
                         result.push((
@@ -1712,19 +1699,28 @@ impl CameraUi {
                             "By external program".to_string(),
                             false
                         ));
-                        if options.guiding.dith_period != 0 {
-                            result.push((
-                                "Dithering".to_string(),
-                                format!(
-                                    "{} px each {} minutes",
-                                    options.guiding.ext_guider.dith_dist,
-                                    options.guiding.dith_period
-                                ),
-                                false
-                            ));
-                        }
                     }
                     _ => {},
+                }
+                if options.guiding.mode != GuidingMode::Disabled {
+                    if options.guiding.dith_period != 0 {
+                        let guiding_dist = if options.guiding.mode == GuidingMode::MainCamera {
+                            options.guiding.main_cam.dith_dist
+                        } else {
+                            options.guiding.ext_guider.dith_dist
+                        };
+                        result.push((
+                            "Dithering".to_string(),
+                            format!(
+                                "{} px each {} minutes",
+                                guiding_dist,
+                                options.guiding.dith_period
+                            ),
+                            false
+                        ));
+                    } else {
+                        result.push(("Dithering".to_string(), "No dithering".to_string(), true));
+                    }
                 }
             } else {
                 result.push(("Guiding/Dithering".to_string(), "Not used".to_string(), true));
