@@ -391,14 +391,14 @@ impl MainUi {
 
         let sender = main_thread_sender.clone();
         self.indi.subscribe_events(move |event| {
-            sender.send_blocking(MainThreadEvent::Indi(event)).unwrap();
+            _ = sender.send_blocking(MainThreadEvent::Indi(event));
         });
 
         // Core
 
         let sender = main_thread_sender.clone();
         self.core.events().subscribe(move |event| {
-            sender.send_blocking(MainThreadEvent::Core(event)).unwrap();
+            _ = sender.send_blocking(MainThreadEvent::Core(event));
         });
 
         glib::spawn_future_local(clone!(@weak self as self_ => async move {
