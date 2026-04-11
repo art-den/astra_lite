@@ -1573,7 +1573,7 @@ impl CameraUi {
         });
         if !ok { return; }
 
-        let info_pairs = self.get_short_info_pairs(true);
+        let info_pairs = self.get_short_info(true);
         let dialog = StartDialog::new(
             self.window.upcast_ref(),
             "Start live stacking",
@@ -1623,105 +1623,115 @@ impl CameraUi {
         });
     }
 
-    fn get_short_info_pairs(&self, for_live_stacking: bool) -> Vec<(String, String)> {
-        let mut pairs = Vec::new();
+    fn get_short_info(&self, for_live_stacking: bool) -> Vec<(String, String, bool)> {
+        let mut result = Vec::new();
         let options = self.core.options().read().unwrap();
         let cam = options.cam.device.as_ref().map(|d| d.to_string()).unwrap_or_default();
         let total_time = options.cam.frame.exposure() * options.raw_frames.frame_cnt as f64;
         let light_frames = options.cam.frame.frame_type == FrameType::Lights;
 
-        pairs.push(("Camera".to_string(), cam));
-        pairs.push(("Frames".to_string(), options.cam.frame.frame_type.to_str().to_string()));
-        pairs.push(("Exposure".to_string(), format!("{:.4}", options.cam.frame.exposure())));
+        result.push(("Camera".to_string(), cam, false));
+        result.push(("Frames".to_string(), options.cam.frame.frame_type.to_str().to_string(), false));
+        result.push(("Exposure".to_string(), format!("{:.4}", options.cam.frame.exposure()), false));
 
         if !for_live_stacking {
-            pairs.push(("Frames count".to_string(), format!("{}", options.raw_frames.frame_cnt)));
-            pairs.push(("Total time".to_string(), format!("~{}", seconds_to_total_time_str(total_time, true))));
+            result.push(("Frames count".to_string(), format!("{}", options.raw_frames.frame_cnt), false));
+            result.push(("Total time".to_string(), format!("~{}", seconds_to_total_time_str(total_time, true)), false));
         } else {
             if options.live.save_enabled {
-                pairs.push(("Save every".to_string(), format!("{} minutes", options.live.save_minutes)));
+                result.push(("Save every".to_string(), format!("{} minutes", options.live.save_minutes), false));
             }
             if options.live.save_orig {
-                pairs.push(("Save originals".to_string(), "Yes".to_string()));
+                result.push(("Save originals".to_string(), "Yes".to_string(), false));
             }
             if options.live.remove_tracks {
-                pairs.push(("Remove tracks".to_string(), "Yes".to_string()));
+                result.push(("Remove tracks".to_string(), "Yes".to_string(), false));
             }
         }
 
-        if (for_live_stacking || light_frames)
-        && (options.calibr.dark_frame_en || options.calibr.flat_frame_en) {
-            let mut value = String::new();
-            if options.calibr.dark_frame_en {
-                value += "Darks library";
-            }
-            if options.calibr.flat_frame_en {
-                if !value.is_empty() { value += "\n"; }
-                value += "Master flat frame";
-            }
-            pairs.push(("Calibration".to_string(), value));
-        }
-
-        if (for_live_stacking || light_frames)
-        && options.focuser.is_used() {
-            let mut value = String::new();
-
-            if options.focuser.on_temp_change {
-                value += &format!("Temp. change >{:.1}°", options.focuser.max_temp_change);
-            }
-
-            if options.focuser.on_fwhm_change {
-                if !value.is_empty() { value += "\n"; }
-                value += &format!("FWHM change >{:.1}px", options.focuser.max_fwhm_change);
-            }
-
-            if options.focuser.periodically {
-                if !value.is_empty() { value += "\n"; }
-                value += &format!("Each {} minutes", options.focuser.period_minutes);
-            }
-
-            pairs.push(("Autofocus".to_string(), value));
-        }
-
-        if (for_live_stacking || light_frames) && options.guiding.is_used() {
-            match options.guiding.mode {
-                GuidingMode::MainCamera => {
-                    pairs.push((
-                        "Guiding".to_string(),
-                        "By main camera".to_string(),
-                    ));
-                    if options.guiding.dith_period != 0 {
-                        pairs.push((
-                            "Dithering".to_string(),
-                            format!(
-                                "{} px each {} minutes",
-                                options.guiding.main_cam.dith_dist,
-                                options.guiding.dith_period
-                            )
-                        ));
-                    }
+        if for_live_stacking || light_frames {
+            if options.calibr.dark_frame_en || options.calibr.flat_frame_en {
+                let mut value = String::new();
+                if options.calibr.dark_frame_en {
+                    value += "Darks library";
                 }
-                GuidingMode::External => {
-                    pairs.push((
-                        "Guiding".to_string(),
-                        "By external program".to_string(),
-                    ));
-                    if options.guiding.dith_period != 0 {
-                        pairs.push((
-                            "Dithering".to_string(),
-                            format!(
-                                "{} px each {} minutes",
-                                options.guiding.ext_guider.dith_dist,
-                                options.guiding.dith_period
-                            )
-                        ));
-                    }
+                if options.calibr.flat_frame_en {
+                    if !value.is_empty() { value += "\n"; }
+                    value += "Master flat frame";
                 }
-                _ => {},
+                result.push(("Calibration".to_string(), value, false));
+            }
+
+            if options.focuser.is_used() {
+                let mut value = String::new();
+
+                if options.focuser.on_temp_change {
+                    value += &format!("Temp. change >{:.1}°", options.focuser.max_temp_change);
+                }
+
+                if options.focuser.on_fwhm_change {
+                    if !value.is_empty() { value += "\n"; }
+                    value += &format!("FWHM change >{:.1}px", options.focuser.max_fwhm_change);
+                }
+
+                if options.focuser.periodically {
+                    if !value.is_empty() { value += "\n"; }
+                    value += &format!("Each {} minutes", options.focuser.period_minutes);
+                }
+
+                result.push(("Autofocus".to_string(), value, false));
+            } else {
+                result.push(("Autofocus".to_string(), "Not used".to_string(), true));
+            }
+
+            if options.guiding.is_used() {
+                match options.guiding.mode {
+                    GuidingMode::MainCamera => {
+                        result.push((
+                            "Guiding".to_string(),
+                            "By main camera".to_string(),
+                            false
+                        ));
+                        if options.guiding.dith_period != 0 {
+                            result.push((
+                                "Dithering".to_string(),
+                                format!(
+                                    "{} px each {} minutes",
+                                    options.guiding.main_cam.dith_dist,
+                                    options.guiding.dith_period
+                                ),
+                                false
+                            ));
+                        } else {
+                            result.push(("Dithering".to_string(), "No dithering".to_string(), true));
+                        }
+                    }
+                    GuidingMode::External => {
+                        result.push((
+                            "Guiding".to_string(),
+                            "By external program".to_string(),
+                            false
+                        ));
+                        if options.guiding.dith_period != 0 {
+                            result.push((
+                                "Dithering".to_string(),
+                                format!(
+                                    "{} px each {} minutes",
+                                    options.guiding.ext_guider.dith_dist,
+                                    options.guiding.dith_period
+                                ),
+                                false
+                            ));
+                        }
+                    }
+                    _ => {},
+                }
+            } else {
+                result.push(("Guiding/Dithering".to_string(), "Not used".to_string(), true));
             }
         }
 
-        pairs
+        result
     }
 
     fn handler_action_start_save_raw_frames(self: &Rc<Self>) {
@@ -1733,7 +1743,7 @@ impl CameraUi {
         });
         if !ok { return; }
 
-        let info_pairs = self.get_short_info_pairs(false);
+        let info_pairs = self.get_short_info(false);
         let dialog = StartDialog::new(
             self.window.upcast_ref(),
             "Start save RAW files",

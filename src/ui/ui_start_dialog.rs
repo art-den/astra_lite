@@ -19,7 +19,7 @@ impl StartDialog {
     pub fn new(
         transient_for: &gtk::Window,
         caption:       &str,
-        items:         &[(String, String)],
+        items:         &[(String, String, bool/*warn*/)],
     ) -> Rc<Self> {
         let widgets = Widgets::from_builder_str(include_str!("resources/start_dialog.ui"));
 
@@ -35,7 +35,7 @@ impl StartDialog {
 
         const START_ROW: usize = 2;
 
-        for (index, (caption, value)) in items.iter().enumerate() {
+        for (index, (caption, value, warn)) in items.iter().enumerate() {
             let row = index + START_ROW;
             widgets.grd_main.insert_row(row as i32);
             let lbl_caption = gtk::Label::builder()
@@ -44,8 +44,14 @@ impl StartDialog {
                 .visible(true)
                 .build();
 
+            let text = if !warn {
+                format!("<b>{}</b>", value)
+            } else {
+                format!("<span foreground='{}'><b>{}</b></span>", get_warn_color_str(), value)
+            };
+
             let lbl_value = gtk::Label::builder()
-                .label(format!("<b>{}</b>", value))
+                .label(&text)
                 .use_markup(true)
                 .halign(gtk::Align::Start)
                 .visible(true)
