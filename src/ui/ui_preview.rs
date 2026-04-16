@@ -47,6 +47,7 @@ pub fn init_ui(
         calibr_history:     RefCell::new(Vec::new()),
         flat_info:          RefCell::new(FlatImageInfo::default()),
         is_color_image:     Cell::new(false),
+        size_adj_pair:      RefCell::new(None),
     });
 
     obj.init_widgets();
@@ -293,6 +294,7 @@ struct PreviewUi {
     calibr_history:     RefCell<Vec<CalibrHistoryItem>>,
     flat_info:          RefCell<FlatImageInfo>,
     is_color_image:     Cell<bool>,
+    size_adj_pair:      RefCell<Option<(f64, f64)>>,
 }
 
 impl Drop for PreviewUi {
@@ -366,7 +368,7 @@ impl UiModule for PreviewUi {
             gtk::main_iteration_do(true);
             gtk::main_iteration_do(true);
             gtk::main_iteration_do(true);
-            self.create_and_show_preview_image();
+            //self.create_and_show_preview_image(None);
         }
     }
 
@@ -480,7 +482,7 @@ impl PreviewUi {
                 let source = PreviewSource::from_active_id(cb.active_id().as_deref());
                 options.preview.source = source;
                 drop(options);
-                self_.create_and_show_preview_image();
+                self_.create_and_show_preview_image(None);
                 self_.repaint_histogram();
                 self_.show_histogram_stat();
                 self_.show_image_info();
@@ -501,7 +503,7 @@ impl PreviewUi {
                 let scale = PreviewScale::from_active_id(cb.active_id().as_deref());
                 options.preview.scale = scale;
                 drop(options);
-                self_.create_and_show_preview_image();
+                self_.create_and_show_preview_image(None);
             })
         );
 
@@ -511,7 +513,7 @@ impl PreviewUi {
                 let color = PreviewColorMode::from_active_id(cb.active_id().as_deref());
                 options.preview.color = color;
                 drop(options);
-                self_.create_and_show_preview_image();
+                self_.create_and_show_preview_image(None);
             })
         );
 
@@ -520,7 +522,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.preview.dark_lvl = scl.value();
                 drop(options);
-                self_.create_and_show_preview_image();
+                self_.create_and_show_preview_image(None);
             })
         );
 
@@ -529,7 +531,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.preview.light_lvl = scl.value();
                 drop(options);
-                self_.create_and_show_preview_image();
+                self_.create_and_show_preview_image(None);
             })
         );
 
@@ -538,7 +540,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.preview.gamma = scl.value();
                 drop(options);
-                self_.create_and_show_preview_image();
+                self_.create_and_show_preview_image(None);
             })
         );
 
@@ -547,7 +549,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.preview.remove_grad = chb.is_active();
                 drop(options);
-                self_.create_and_show_preview_image();
+                self_.create_and_show_preview_image(None);
             })
         );
 
@@ -567,7 +569,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.preview.wb_auto = chb.is_active();
                 drop(options);
-                self_.create_and_show_preview_image();
+                self_.create_and_show_preview_image(None);
             })
         );
 
@@ -576,7 +578,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.preview.wb_red = scl.value();
                 drop(options);
-                self_.create_and_show_preview_image();
+                self_.create_and_show_preview_image(None);
             })
         );
 
@@ -585,7 +587,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.preview.wb_green = scl.value();
                 drop(options);
-                self_.create_and_show_preview_image();
+                self_.create_and_show_preview_image(None);
             })
         );
 
@@ -594,7 +596,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.options.try_write() else { return; };
                 options.preview.wb_blue = scl.value();
                 drop(options);
-                self_.create_and_show_preview_image();
+                self_.create_and_show_preview_image(None);
             })
         );
 
@@ -602,7 +604,7 @@ impl PreviewUi {
             let Ok(mut options) = self_.options.try_write() else { return; };
             options.preview.stars = chb.is_active();
             drop(options);
-            self_.create_and_show_preview_image();
+            self_.create_and_show_preview_image(None);
         }));
     }
 
@@ -648,6 +650,14 @@ impl PreviewUi {
                 glib::Propagation::Proceed
             })
         );
+
+        self.widgets.image.img_preview.connect_size_allocate(clone!(@weak self as self_ => move |_, _| {
+            let mut size_adj_pair = self_.size_adj_pair.borrow_mut();
+            if let Some((h_adj_value, v_adj_value)) = size_adj_pair.take() {
+                self_.widgets.image.sw_img.hadjustment().set_value(h_adj_value);
+                self_.widgets.image.sw_img.vadjustment().set_value(v_adj_value);
+            }
+        }));
     }
 
     fn show_ui_options(&self) {
@@ -804,7 +814,7 @@ impl PreviewUi {
         show_chan(&self.widgets.info.l_flat_l, &self.widgets.info.e_flat_l, info.l.as_ref());
     }
 
-    fn create_and_show_preview_image(&self) {
+    fn create_and_show_preview_image(&self, center: Option<(f64, f64)>) {
         let options = self.options.read().unwrap();
         let preview_params = options.preview.preview_params();
         let (image, hist, stars) = match options.preview.source {
@@ -828,9 +838,9 @@ impl PreviewUi {
         drop(image);
 
         if let Some(rgb_bytes) = rgb_bytes {
-            self.show_preview_image(Some(&rgb_bytes), None);
+            self.show_preview_image(Some(&rgb_bytes), None, center);
         } else {
-            self.show_preview_image(None, None);
+            self.show_preview_image(None, None, center);
         }
         self.correct_widgets_props();
     }
@@ -839,11 +849,12 @@ impl PreviewUi {
         &self,
         rgb_bytes:  Option<&PreviewRgbData>,
         src_params: Option<&PreviewParams>,
+        center:     Option<(f64, f64)>,
     ) {
         let preview_options = self.options.read().unwrap().preview.clone();
         let pp = preview_options.preview_params();
         if src_params.is_some() && src_params != Some(&pp) {
-            self.create_and_show_preview_image();
+            self.create_and_show_preview_image(None);
             return;
         }
 
@@ -882,7 +893,41 @@ impl PreviewUi {
                 ).unwrap();
                 tmr.log("Pixbuf::scale_simple");
             }
+
+            let prev_pixbuf = self.widgets.image.img_preview.pixbuf();
+            let (prev_image_width, prev_image_height) = if let Some(prev_pixbuf) = prev_pixbuf {
+                (prev_pixbuf.width(), prev_pixbuf.height())
+            } else {
+                (100, 100)
+            };
+
+            let sw_img = self.widgets.image.sw_img.clone();
+            let mut prev_hadj_value = sw_img.hadjustment().value();
+            let mut prev_vadj_value = sw_img.vadjustment().value();
+
+            let sw_child = sw_img.child().unwrap();
+            let sw_client_width = sw_child.allocated_width();
+            let sw_client_height = sw_child.allocated_height();
+
+            let (center_x, center_y) = center.unwrap_or((
+                0.5 * prev_image_width as f64, 0.5 * prev_image_height as f64
+            ));
+
+            if sw_client_width >= prev_image_width {
+                prev_hadj_value = 0.5 * (prev_image_width - sw_client_width) as f64;
+            }
+
+            if sw_client_height >= prev_image_height {
+                prev_vadj_value = 0.5 * (prev_image_height - sw_client_height) as f64;
+            }
             self.widgets.image.img_preview.set_pixbuf(Some(&pixbuf));
+
+            let mag = img_width as f64 / prev_image_width as f64;
+            *self.size_adj_pair.borrow_mut() = Some((
+                prev_hadj_value + center_x * (mag - 1.0),
+                prev_vadj_value + center_y * (mag - 1.0),
+            ));
+
             is_color_image = rgb_bytes.is_color_image;
         } else {
             self.widgets.image.img_preview.clear();
@@ -890,8 +935,9 @@ impl PreviewUi {
         }
 
         self.is_color_image.set(is_color_image);
-
     }
+
+
 
     fn handler_action_save_image_preview(&self) {
         exec_and_show_error(Some(&self.window), || {
@@ -1015,14 +1061,14 @@ impl PreviewUi {
             }
             FrameProcessResultData::PreviewFrame(img)
             if is_mode_current(false) => {
-                self.show_preview_image(Some(&img.rgb_data), Some(&img.params));
+                self.show_preview_image(Some(&img.rgb_data), Some(&img.params), None);
                 self.correct_widgets_props();
 
                 show_resolution_info(img.rgb_data.orig_width, img.rgb_data.orig_height);
             }
             FrameProcessResultData::PreviewLiveRes(img)
             if is_mode_current(true) => {
-                self.show_preview_image(Some(&img.rgb_data), Some(&img.params));
+                self.show_preview_image(Some(&img.rgb_data), Some(&img.params), None);
                 self.correct_widgets_props();
 
                 show_resolution_info(img.rgb_data.orig_width, img.rgb_data.orig_height);

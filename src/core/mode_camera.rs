@@ -579,9 +579,9 @@ impl TackingPicturesMode {
             if guider.dither_exp_sum >= (guider.options.dith_period * 60) as f64 {
                 guider.dither_exp_sum = 0.0;
                 use rand::prelude::*;
-                let mut rng = rand::thread_rng();
-                guider_data.dither_x = guider.options.main_cam.dith_dist as f64 * (rng.gen::<f64>() - 0.5);
-                guider_data.dither_y = guider.options.main_cam.dith_dist as f64 * (rng.gen::<f64>() - 0.5);
+                let mut rng = rand::rng();
+                guider_data.dither_x = guider.options.main_cam.dith_dist as f64 * (rng.random::<f64>() - 0.5);
+                guider_data.dither_y = guider.options.main_cam.dith_dist as f64 * (rng.random::<f64>() - 0.5);
                 log::debug!("dithering position = {}px,{}px", guider_data.dither_x, guider_data.dither_y);
                 dithering_flag = true;
             }

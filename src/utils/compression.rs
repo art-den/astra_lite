@@ -312,15 +312,15 @@ fn test_compression_decompression() {
 
     fn test_random_u32() {
         use rand::prelude::*;
-        let len = random::<u16>();
-        let mut rng = thread_rng();
+        let len = rand::random::<u16>();
+        let mut rng = rand::rng();
         let mut values = Vec::new();
-        let offset = (random::<u16>() / 8) as u32;
+        let offset = (rand::random::<u16>() / 8) as u32;
         for _ in 0..len {
-            values.push((rng.gen::<u16>() as u32 + offset) as f32);
-            if rng.gen::<u16>() & 0xFFF == 0 {
-                let eq_len = random::<u16>() / 4;
-                let value = rng.gen::<u16>();
+            values.push((rng.random::<u16>() as u32 + offset) as f32);
+            if rng.random::<u16>() & 0xFFF == 0 {
+                let eq_len = rand::random::<u16>() / 4;
+                let value = rng.random::<u16>();
                 for _ in 0..eq_len {
                     values.push(value as f32);
                 }
@@ -331,14 +331,14 @@ fn test_compression_decompression() {
 
     fn test_random_u32_f32() {
         use rand::prelude::*;
-        let len = random::<u16>();
-        let mut rng = thread_rng();
+        let len = rand::random::<u16>();
+        let mut rng = rand::rng();
         let mut values = Vec::new();
         for _ in 0..len {
-            values.push(rng.gen::<u16>() as f32 / u16::MAX as f32);
-            if rng.gen::<u16>() & 0xFFF == 0 {
-                let eq_len = random::<u16>() / 4;
-                let value = rng.gen::<u16>() as f32 / u16::MAX as f32;
+            values.push(rng.random::<u16>() as f32 / u16::MAX as f32);
+            if rng.random::<u16>() & 0xFFF == 0 {
+                let eq_len = rand::random::<u16>() / 4;
+                let value = rng.random::<u16>() as f32 / u16::MAX as f32;
                 for _ in 0..eq_len {
                     values.push(value as f32);
                 }
@@ -349,14 +349,14 @@ fn test_compression_decompression() {
 
     fn test_random_f32() {
         use rand::prelude::*;
-        let len = random::<u16>();
-        let mut rng = thread_rng();
+        let len = rand::random::<u16>();
+        let mut rng = rand::rng();
         let mut values = Vec::new();
         for _ in 0..len {
-            values.push(rng.gen::<f32>());
-            if rng.gen::<u16>() & 0xFFF == 0 {
-                let eq_len = random::<u16>() / 4;
-                let value = rng.gen::<f32>();
+            values.push(rng.random::<f32>());
+            if rng.random::<u16>() & 0xFFF == 0 {
+                let eq_len = rand::random::<u16>() / 4;
+                let value = rng.random::<f32>();
                 for _ in 0..eq_len {
                     values.push(value as f32);
                 }
@@ -367,14 +367,14 @@ fn test_compression_decompression() {
 
     fn test_random_f32_neg() {
         use rand::prelude::*;
-        let len = random::<u16>();
-        let mut rng = thread_rng();
+        let len = rand::random::<u16>();
+        let mut rng = rand::rng();
         let mut values = Vec::new();
         for _ in 0..len {
-            values.push(rng.gen_range(-2.0..2.0));
-            if rng.gen::<u16>() & 0xFFF == 0 {
-                let eq_len = random::<u16>() / 4;
-                let value = rng.gen_range(-10.0..10.0);
+            values.push(rng.random_range(-2.0..2.0));
+            if rng.random::<u16>() & 0xFFF == 0 {
+                let eq_len = rand::random::<u16>() / 4;
+                let value = rng.random_range(-10.0..10.0);
                 for _ in 0..eq_len {
                     values.push(value as f32);
                 }

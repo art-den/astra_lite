@@ -105,7 +105,7 @@ fn main() -> anyhow::Result<()> {
     log::set_max_level(log::LevelFilter::Info);
 
     #[cfg(debug_assertions)] {
-        std::env::set_var("RUST_BACKTRACE", "1");
+        unsafe { std::env::set_var("RUST_BACKTRACE", "1"); }
         log::set_max_level(log::LevelFilter::Debug);
     }
 
