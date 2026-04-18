@@ -19,6 +19,9 @@ pub enum PreviewSource {
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone, Copy)]
 pub enum PreviewScale {
     #[default]FitWindow,
+    P400,
+    P300,
+    P200,
     Original,
     P75,
     P50,

@@ -378,6 +378,9 @@
                         <property name="valign">center</property>
                         <items>
                           <item id="fit" translatable="yes">Fit window</item>
+                          <item id="p400" translatable="yes">400%</item>
+                          <item id="p300" translatable="yes">300%</item>
+                          <item id="p200" translatable="yes">200%</item>
                           <item id="orig" translatable="yes">100%</item>
                           <item id="p75" translatable="yes">75%</item>
                           <item id="p50" translatable="yes">50%</item>

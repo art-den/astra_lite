@@ -24,8 +24,13 @@ pub struct PreviewParams {
 }
 
 impl PreviewParams {
-    pub fn get_preview_img_size(&self, orig_width: usize, orig_height: usize) -> (usize, usize) {
-        match self.scale {
+    pub fn get_preview_img_size_for_scale(
+        &self,
+        scale: PreviewScale,
+        orig_width: usize,
+        orig_height: usize
+    ) -> (usize, usize) {
+        match scale {
             PreviewScale::FitWindow => {
                 let img_ratio = orig_width as f64 / orig_height as f64;
                 let gui_ratio = self.pr_area_width as f64 / self.pr_area_height as f64;
@@ -35,7 +40,7 @@ impl PreviewParams {
                     ((self.pr_area_height as f64 * img_ratio) as usize, self.pr_area_height)
                 }
             }
-            PreviewScale::Original =>
+            PreviewScale::Original|PreviewScale::P200|PreviewScale::P300|PreviewScale::P400 =>
                 (orig_width, orig_height),
             PreviewScale::P75 =>
                 (3*orig_width/4, 3*orig_height/4),
@@ -53,6 +58,10 @@ impl PreviewParams {
         }
     }
 
+    pub fn get_preview_img_size(&self, orig_width: usize, orig_height: usize) -> (usize, usize) {
+        self.get_preview_img_size_for_scale(self.scale, orig_width, orig_height)
+    }
+
     fn calc_reduct_ratio(&self, img_width: usize, img_height: usize) -> usize {
         match self.scale {
             PreviewScale::FitWindow => {
@@ -66,6 +75,9 @@ impl PreviewParams {
                     1
                 }
             },
+            PreviewScale::P400 => 1,
+            PreviewScale::P300 => 1,
+            PreviewScale::P200 => 1,
             PreviewScale::Original => 1,
             PreviewScale::P75 => 1,
             PreviewScale::P50 => 2,

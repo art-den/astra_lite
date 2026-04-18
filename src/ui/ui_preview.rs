@@ -1,6 +1,6 @@
 use std::{cell::{Cell, RefCell}, path::PathBuf, rc::Rc, sync::{Arc, RwLock}};
 use chrono::{DateTime, Local, Utc};
-use gtk::{cairo, glib::{self, clone}, prelude::*};
+use gtk::{cairo, glib::{self, clone}, prelude::*, gdk};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
@@ -42,12 +42,13 @@ pub fn init_ui(
         core:               Arc::clone(core),
         options:            Arc::clone(options),
         ui_options:         RefCell::new(ui_options),
-        preview_scroll_pos: RefCell::new(None),
+        preview_scroll_pos: Cell::new(None),
         light_history:      RefCell::new(Vec::new()),
         calibr_history:     RefCell::new(Vec::new()),
         flat_info:          RefCell::new(FlatImageInfo::default()),
         is_color_image:     Cell::new(false),
-        size_adj_pair:      RefCell::new(None),
+        size_adj_pair:      Cell::new(None),
+        image_size:         Cell::new((0, 0)),
     });
 
     obj.init_widgets();
@@ -122,6 +123,9 @@ impl PreviewScale {
     pub fn from_active_id(id: Option<&str>) -> PreviewScale {
         match id {
             Some("fit")     => PreviewScale::FitWindow,
+            Some("p400")    => PreviewScale::P400,
+            Some("p300")    => PreviewScale::P300,
+            Some("p200")    => PreviewScale::P200,
             Some("orig")    => PreviewScale::Original,
             Some("p75")     => PreviewScale::P75,
             Some("p50")     => PreviewScale::P50,
@@ -135,6 +139,9 @@ impl PreviewScale {
     pub fn to_active_id(&self) -> Option<&'static str> {
         match self {
             PreviewScale::FitWindow        => Some("fit"),
+            PreviewScale::P400             => Some("p400"),
+            PreviewScale::P300             => Some("p300"),
+            PreviewScale::P200             => Some("p200"),
             PreviewScale::Original         => Some("orig"),
             PreviewScale::P75              => Some("p75"),
             PreviewScale::P50              => Some("p50"),
@@ -289,12 +296,13 @@ struct PreviewUi {
     options:            Arc<RwLock<Options>>,
     core:               Arc<Core>,
     ui_options:         RefCell<UiOptions>,
-    preview_scroll_pos: RefCell<Option<((f64, f64), (f64, f64))>>,
+    preview_scroll_pos: Cell<Option<((f64, f64), (f64, f64))>>,
     light_history:      RefCell<Vec<LightHistoryItem>>,
     calibr_history:     RefCell<Vec<CalibrHistoryItem>>,
     flat_info:          RefCell<FlatImageInfo>,
     is_color_image:     Cell<bool>,
-    size_adj_pair:      RefCell<Option<(f64, f64)>>,
+    size_adj_pair:      Cell<Option<(f64, f64)>>,
+    image_size:         Cell<(usize, usize)>,
 }
 
 impl Drop for PreviewUi {
@@ -612,13 +620,13 @@ impl PreviewUi {
         self.widgets.image.eb_img.connect_button_press_event(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |_, evt| {
-                if evt.button() == gtk::gdk::ffi::GDK_BUTTON_PRIMARY as u32 {
+                if evt.button() == gdk::ffi::GDK_BUTTON_PRIMARY as u32 {
                     let hadjustment = self_.widgets.image.sw_img.hadjustment();
                     let vadjustment = self_.widgets.image.sw_img.vadjustment();
-                    *self_.preview_scroll_pos.borrow_mut() = Some((
+                    self_.preview_scroll_pos.set(Some((
                         evt.root(),
                         (hadjustment.value(), vadjustment.value())
-                    ));
+                    )));
                 }
                 glib::Propagation::Proceed
             })
@@ -627,8 +635,8 @@ impl PreviewUi {
         self.widgets.image.eb_img.connect_button_release_event(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |_, evt| {
-                if evt.button() == gtk::gdk::ffi::GDK_BUTTON_PRIMARY as u32 {
-                    *self_.preview_scroll_pos.borrow_mut() = None;
+                if evt.button() == gdk::ffi::GDK_BUTTON_PRIMARY as u32 {
+                    self_.preview_scroll_pos.set(None);
                 }
                 glib::Propagation::Proceed
             })
@@ -638,7 +646,7 @@ impl PreviewUi {
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |_, evt| {
                 const SCROLL_SPEED: f64 = 2.0;
-                if let Some((start_mouse_pos, start_scroll_pos)) = *self_.preview_scroll_pos.borrow() {
+                if let Some((start_mouse_pos, start_scroll_pos)) = self_.preview_scroll_pos.get() {
                     let new_pos = evt.root();
                     let move_x = new_pos.0 - start_mouse_pos.0;
                     let move_y = new_pos.1 - start_mouse_pos.1;
@@ -652,12 +660,78 @@ impl PreviewUi {
         );
 
         self.widgets.image.img_preview.connect_size_allocate(clone!(@weak self as self_ => move |_, _| {
-            let mut size_adj_pair = self_.size_adj_pair.borrow_mut();
-            if let Some((h_adj_value, v_adj_value)) = size_adj_pair.take() {
+            if let Some((h_adj_value, v_adj_value)) = self_.size_adj_pair.take() {
                 self_.widgets.image.sw_img.hadjustment().set_value(h_adj_value);
                 self_.widgets.image.sw_img.vadjustment().set_value(v_adj_value);
             }
         }));
+
+        self.widgets.image.sw_img.connect_scroll_event(
+            clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
+            move |_, evt| {
+                if let Some((src_x, src_y)) = evt.coords()
+                && evt.state().contains(gdk::ModifierType::CONTROL_MASK) {
+                    let image_coords = self_.widgets.image.sw_img.translate_coordinates(
+                        &self_.widgets.image.img_preview,
+                        src_x as _,
+                        src_y as _
+                    );
+                    if let Some((image_x, image_y)) = image_coords {
+                        let Ok(mut options) = self_.options.try_write() else {
+                            return glib::Propagation::Stop;
+                        };
+
+                        let pp = options.preview.preview_params();
+                        let (orig_img_width, orig_img_height)  = self_.image_size.get();
+
+                        let width_for_scale = |scale: PreviewScale| -> usize {
+                            pp.get_preview_img_size_for_scale(scale, orig_img_width, orig_img_height).0
+                        };
+
+                        let mut scale_and_width = [
+                            (PreviewScale::FitWindow, width_for_scale(PreviewScale::FitWindow)),
+                            (PreviewScale::P400,      width_for_scale(PreviewScale::Original) * 4),
+                            (PreviewScale::P300,      width_for_scale(PreviewScale::Original) * 3),
+                            (PreviewScale::P200,      width_for_scale(PreviewScale::Original) * 2),
+                            (PreviewScale::Original,  width_for_scale(PreviewScale::Original)),
+                            (PreviewScale::P75,       width_for_scale(PreviewScale::P75)),
+                            (PreviewScale::P50,       width_for_scale(PreviewScale::P50)),
+                            (PreviewScale::P25,       width_for_scale(PreviewScale::P25)),
+                        ];
+
+                        scale_and_width.sort_by_key(|(_, width)| *width);
+
+                        let scale_index = scale_and_width
+                            .iter()
+                            .position(|(scale, _)| *scale == options.preview.scale);
+                        let Some(scale_index) = scale_index else {
+                            return glib::Propagation::Stop;
+                        };
+
+                        let new_scale_index =
+                            if evt.direction() == gdk::ScrollDirection::Smooth
+                            && evt.delta().1 > 0.0 && scale_index != 0 {
+                                scale_index - 1
+                            } else if evt.direction() == gdk::ScrollDirection::Smooth
+                            && evt.delta().1 < 0.0 && scale_index != scale_and_width.len() - 1 {
+                                scale_index + 1
+                            } else {
+                                return glib::Propagation::Stop;
+                            };
+
+                        let new_scale = scale_and_width[new_scale_index].0;
+                        options.preview.scale = new_scale;
+                        self_.widgets.ctrl.cb_scale.set_active_id(options.preview.scale.to_active_id());
+                        drop(options);
+
+                        self_.create_and_show_preview_image(Some((image_x as _, image_y as _)));
+                    }
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            })
+        );
     }
 
     fn show_ui_options(&self) {
@@ -860,6 +934,8 @@ impl PreviewUi {
 
         let mut is_color_image = false;
         if let Some(rgb_bytes) = rgb_bytes {
+            self.image_size.set((rgb_bytes.orig_width, rgb_bytes.orig_height));
+
             let tmr = TimeLogger::start();
             let bytes = glib::Bytes::from_owned(rgb_bytes.bytes.clone());
             let mut pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
@@ -879,7 +955,7 @@ impl PreviewUi {
                 self.widgets.ctrl.l_wb_censor.set_label("");
             }
 
-            let (img_width, img_height) = pp.get_preview_img_size(
+            let (mut img_width, mut img_height) = pp.get_preview_img_size(
                 rgb_bytes.orig_width,
                 rgb_bytes.orig_height
             );
@@ -894,12 +970,10 @@ impl PreviewUi {
                 tmr.log("Pixbuf::scale_simple");
             }
 
-            let prev_pixbuf = self.widgets.image.img_preview.pixbuf();
-            let (prev_image_width, prev_image_height) = if let Some(prev_pixbuf) = prev_pixbuf {
-                (prev_pixbuf.width(), prev_pixbuf.height())
-            } else {
-                (100, 100)
-            };
+            //let prev_pixbuf = self.widgets.image.img_preview.pixbuf();
+            let (mut prev_image_width, mut prev_image_height) = self.widgets.image.img_preview.size_request();
+            prev_image_width = prev_image_width.max(100);
+            prev_image_height = prev_image_height.max(100);
 
             let sw_img = self.widgets.image.sw_img.clone();
             let mut prev_hadj_value = sw_img.hadjustment().value();
@@ -920,15 +994,42 @@ impl PreviewUi {
             if sw_client_height >= prev_image_height {
                 prev_vadj_value = 0.5 * (prev_image_height - sw_client_height) as f64;
             }
+
             self.widgets.image.img_preview.set_pixbuf(Some(&pixbuf));
 
+            match pp.scale {
+                PreviewScale::P400 => {
+                    self.widgets.image.img_preview.set_widget_name("sized-image-x4");
+                    img_width *= 4;
+                    img_height *= 4;
+                }
+                PreviewScale::P300 => {
+                    self.widgets.image.img_preview.set_widget_name("sized-image-x3");
+                    img_width *= 3;
+                    img_height *= 3;
+                }
+                PreviewScale::P200 => {
+                    self.widgets.image.img_preview.set_widget_name("sized-image-x2");
+                    img_width *= 2;
+                    img_height *= 2;
+                }
+                _ => {
+                    self.widgets.image.img_preview.set_widget_name("");
+                }
+            };
+
+            self.widgets.image.img_preview.set_size_request(img_width as _, img_height as _);
+
             let mag = img_width as f64 / prev_image_width as f64;
-            *self.size_adj_pair.borrow_mut() = Some((
+            self.size_adj_pair.set(Some((
                 prev_hadj_value + center_x * (mag - 1.0),
                 prev_vadj_value + center_y * (mag - 1.0),
-            ));
+            )));
 
             is_color_image = rgb_bytes.is_color_image;
+
+            // New adjustment on scrolled window will be assiged in Gtk.Widget.size-allocalte event handler
+            // (search self.widgets.image.img_preview.connect_size_allocate here)
         } else {
             self.widgets.image.img_preview.clear();
             self.widgets.image.img_preview.set_pixbuf(None);
