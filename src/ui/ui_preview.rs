@@ -671,6 +671,11 @@ impl PreviewUi {
             move |_, evt| {
                 if let Some((src_x, src_y)) = evt.coords()
                 && evt.state().contains(gdk::ModifierType::CONTROL_MASK) {
+                    if self_.size_adj_pair.get().is_some() {
+                        // Prev image repaint is in progress
+                        return glib::Propagation::Stop;
+                    }
+
                     let image_coords = self_.widgets.image.sw_img.translate_coordinates(
                         &self_.widgets.image.img_preview,
                         src_x as _,
@@ -1022,13 +1027,13 @@ impl PreviewUi {
                 }
             };
 
-            self.widgets.image.img_preview.set_size_request(img_width as _, img_height as _);
-
             let mag = img_width as f64 / prev_image_width as f64;
             self.size_adj_pair.set(Some((
                 prev_hadj_value + center_x * (mag - 1.0),
                 prev_vadj_value + center_y * (mag - 1.0),
             )));
+
+            self.widgets.image.img_preview.set_size_request(img_width as _, img_height as _);
 
             is_color_image = rgb_bytes.is_color_image;
 
