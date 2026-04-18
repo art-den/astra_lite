@@ -911,11 +911,7 @@ impl PreviewUi {
         drop(hist);
         drop(image);
 
-        if let Some(rgb_bytes) = rgb_bytes {
-            self.show_preview_image(Some(&rgb_bytes), None, center);
-        } else {
-            self.show_preview_image(None, None, center);
-        }
+        self.show_preview_image(rgb_bytes.as_ref(), None, center);
         self.correct_widgets_props();
     }
 
@@ -975,7 +971,7 @@ impl PreviewUi {
             prev_image_width = prev_image_width.max(100);
             prev_image_height = prev_image_height.max(100);
 
-            let sw_img = self.widgets.image.sw_img.clone();
+            let sw_img = &self.widgets.image.sw_img;
             let mut prev_hadj_value = sw_img.hadjustment().value();
             let mut prev_vadj_value = sw_img.vadjustment().value();
 
@@ -983,15 +979,23 @@ impl PreviewUi {
             let sw_client_width = sw_child.allocated_width();
             let sw_client_height = sw_child.allocated_height();
 
-            let (center_x, center_y) = center.unwrap_or((
-                0.5 * prev_image_width as f64, 0.5 * prev_image_height as f64
-            ));
+            let (mut center_x, mut center_y) = center.unwrap_or_else(|| {
+                let (img_visible_center_x, img_visible_center_y) =
+                    sw_img.translate_coordinates(
+                        &self.widgets.image.img_preview,
+                        sw_client_width / 2,
+                        sw_client_height / 2,
+                    ).unwrap_or_default();
+                (img_visible_center_x as f64, img_visible_center_y as f64)
+            });
 
             if sw_client_width >= prev_image_width {
+                center_x = 0.5 * prev_image_width as f64;
                 prev_hadj_value = 0.5 * (prev_image_width - sw_client_width) as f64;
             }
 
             if sw_client_height >= prev_image_height {
+                center_y = 0.5 * prev_image_height as f64;
                 prev_vadj_value = 0.5 * (prev_image_height - sw_client_height) as f64;
             }
 
@@ -1637,6 +1641,8 @@ impl PreviewUi {
             ModeType::Waiting      => return,
             _                      => "frame",
         };
-        self.widgets.ctrl.cb_src.set_active_id(Some(cb_preview_src_aid));
+        if self.widgets.ctrl.cb_src.active_id().as_deref() != Some(cb_preview_src_aid) {
+            self.widgets.ctrl.cb_src.set_active_id(Some(cb_preview_src_aid));
+        }
     }
 }
