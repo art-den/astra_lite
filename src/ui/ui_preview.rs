@@ -713,12 +713,20 @@ impl PreviewUi {
                             return glib::Propagation::Stop;
                         };
 
+                        let zoom_out =
+                            evt.direction() == gdk::ScrollDirection::Smooth &&
+                            evt.delta().1 > 0.0;
+                        let scroll_down = evt.direction() == gdk::ScrollDirection::Down;
+
+                        let zoom_in =
+                            evt.direction() == gdk::ScrollDirection::Smooth
+                            && evt.delta().1 < 0.0;
+                        let scroll_up = evt.direction() == gdk::ScrollDirection::Up;
+
                         let new_scale_index =
-                            if evt.direction() == gdk::ScrollDirection::Smooth
-                            && evt.delta().1 > 0.0 && scale_index != 0 {
+                            if (zoom_out || scroll_down) && scale_index != 0 {
                                 scale_index - 1
-                            } else if evt.direction() == gdk::ScrollDirection::Smooth
-                            && evt.delta().1 < 0.0 && scale_index != scale_and_width.len() - 1 {
+                            } else if (zoom_in || scroll_up) && scale_index != scale_and_width.len() - 1 {
                                 scale_index + 1
                             } else {
                                 return glib::Propagation::Stop;
