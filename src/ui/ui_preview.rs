@@ -669,76 +669,8 @@ impl PreviewUi {
         self.widgets.image.sw_img.connect_scroll_event(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |_, evt| {
-                if let Some((src_x, src_y)) = evt.coords()
-                && evt.state().contains(gdk::ModifierType::CONTROL_MASK) {
-                    if self_.size_adj_pair.get().is_some() {
-                        // Prev image repaint is in progress
-                        return glib::Propagation::Stop;
-                    }
-
-                    let image_coords = self_.widgets.image.sw_img.translate_coordinates(
-                        &self_.widgets.image.img_preview,
-                        src_x as _,
-                        src_y as _
-                    );
-                    if let Some((image_x, image_y)) = image_coords {
-                        let Ok(mut options) = self_.options.try_write() else {
-                            return glib::Propagation::Stop;
-                        };
-
-                        let pp = options.preview.preview_params();
-                        let (orig_img_width, orig_img_height)  = self_.image_size.get();
-
-                        let width_for_scale = |scale: PreviewScale| -> usize {
-                            pp.get_preview_img_size_for_scale(scale, orig_img_width, orig_img_height).0
-                        };
-
-                        let mut scale_and_width = [
-                            (PreviewScale::FitWindow, width_for_scale(PreviewScale::FitWindow)),
-                            (PreviewScale::P400,      width_for_scale(PreviewScale::Original) * 4),
-                            (PreviewScale::P300,      width_for_scale(PreviewScale::Original) * 3),
-                            (PreviewScale::P200,      width_for_scale(PreviewScale::Original) * 2),
-                            (PreviewScale::Original,  width_for_scale(PreviewScale::Original)),
-                            (PreviewScale::P75,       width_for_scale(PreviewScale::P75)),
-                            (PreviewScale::P50,       width_for_scale(PreviewScale::P50)),
-                            (PreviewScale::P25,       width_for_scale(PreviewScale::P25)),
-                        ];
-
-                        scale_and_width.sort_by_key(|(_, width)| *width);
-
-                        let scale_index = scale_and_width
-                            .iter()
-                            .position(|(scale, _)| *scale == options.preview.scale);
-                        let Some(scale_index) = scale_index else {
-                            return glib::Propagation::Stop;
-                        };
-
-                        let zoom_out =
-                            evt.direction() == gdk::ScrollDirection::Smooth &&
-                            evt.delta().1 > 0.0;
-                        let scroll_down = evt.direction() == gdk::ScrollDirection::Down;
-
-                        let zoom_in =
-                            evt.direction() == gdk::ScrollDirection::Smooth
-                            && evt.delta().1 < 0.0;
-                        let scroll_up = evt.direction() == gdk::ScrollDirection::Up;
-
-                        let new_scale_index =
-                            if (zoom_out || scroll_down) && scale_index != 0 {
-                                scale_index - 1
-                            } else if (zoom_in || scroll_up) && scale_index != scale_and_width.len() - 1 {
-                                scale_index + 1
-                            } else {
-                                return glib::Propagation::Stop;
-                            };
-
-                        let new_scale = scale_and_width[new_scale_index].0;
-                        options.preview.scale = new_scale;
-                        self_.widgets.ctrl.cb_scale.set_active_id(options.preview.scale.to_active_id());
-                        drop(options);
-
-                        self_.create_and_show_preview_image(Some((image_x as _, image_y as _)));
-                    }
+                if evt.state().contains(gdk::ModifierType::CONTROL_MASK) {
+                    self_.zoom_by_mouse(evt);
                     glib::Propagation::Stop
                 } else {
                     glib::Propagation::Proceed
@@ -1003,12 +935,16 @@ impl PreviewUi {
             });
 
             if sw_client_width >= prev_image_width {
-                center_x = 0.5 * prev_image_width as f64;
+                if center.is_none() {
+                    center_x = 0.5 * prev_image_width as f64;
+                }
                 prev_hadj_value = 0.5 * (prev_image_width - sw_client_width) as f64;
             }
 
             if sw_client_height >= prev_image_height {
-                center_y = 0.5 * prev_image_height as f64;
+                if center.is_none() {
+                    center_y = 0.5 * prev_image_height as f64;
+                }
                 prev_vadj_value = 0.5 * (prev_image_height - sw_client_height) as f64;
             }
 
@@ -1055,7 +991,76 @@ impl PreviewUi {
         self.is_color_image.set(is_color_image);
     }
 
+    fn zoom_by_mouse(&self, evt: &gdk::EventScroll) {
+        if self.size_adj_pair.get().is_some() {
+            // Prev image repaint is in progress
+            return;
+        }
 
+        let Some((src_x, src_y)) = evt.coords() else { return; };
+
+        let image_coords = self.widgets.image.sw_img.translate_coordinates(
+            &self.widgets.image.img_preview,
+            src_x as _,
+            src_y as _
+        );
+        let Some((image_x, image_y)) = image_coords else { return; };
+
+        let Ok(mut options) = self.options.try_write() else {
+            return;
+        };
+
+        let pp = options.preview.preview_params();
+        let (orig_img_width, orig_img_height)  = self.image_size.get();
+
+        let width_for_scale = |scale: PreviewScale| -> usize {
+            pp.get_preview_img_size_for_scale(scale, orig_img_width, orig_img_height).0
+        };
+
+        let mut scale_and_width = [
+            (PreviewScale::FitWindow, width_for_scale(PreviewScale::FitWindow)),
+            (PreviewScale::P400,      width_for_scale(PreviewScale::Original) * 4),
+            (PreviewScale::P300,      width_for_scale(PreviewScale::Original) * 3),
+            (PreviewScale::P200,      width_for_scale(PreviewScale::Original) * 2),
+            (PreviewScale::Original,  width_for_scale(PreviewScale::Original)),
+            (PreviewScale::P75,       width_for_scale(PreviewScale::P75)),
+            (PreviewScale::P50,       width_for_scale(PreviewScale::P50)),
+            (PreviewScale::P25,       width_for_scale(PreviewScale::P25)),
+        ];
+
+        scale_and_width.sort_by_key(|(_, width)| *width);
+
+        let scale_index = scale_and_width
+            .iter()
+            .position(|(scale, _)| *scale == options.preview.scale);
+        let Some(scale_index) = scale_index else { return; };
+
+        let zoom_out =
+            evt.direction() == gdk::ScrollDirection::Smooth &&
+            evt.delta().1 > 0.0;
+        let scroll_down = evt.direction() == gdk::ScrollDirection::Down;
+
+        let zoom_in =
+            evt.direction() == gdk::ScrollDirection::Smooth
+            && evt.delta().1 < 0.0;
+        let scroll_up = evt.direction() == gdk::ScrollDirection::Up;
+
+        let new_scale_index =
+            if (zoom_out || scroll_down) && scale_index != 0 {
+                scale_index - 1
+            } else if (zoom_in || scroll_up) && scale_index != scale_and_width.len() - 1 {
+                scale_index + 1
+            } else {
+                return;
+            };
+
+        let new_scale = scale_and_width[new_scale_index].0;
+        options.preview.scale = new_scale;
+        self.widgets.ctrl.cb_scale.set_active_id(options.preview.scale.to_active_id());
+        drop(options);
+
+        self.create_and_show_preview_image(Some((image_x as _, image_y as _)));
+    }
 
     fn handler_action_save_image_preview(&self) {
         exec_and_show_error(Some(&self.window), || {

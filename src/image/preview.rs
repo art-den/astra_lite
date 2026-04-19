@@ -26,8 +26,8 @@ pub struct PreviewParams {
 impl PreviewParams {
     pub fn get_preview_img_size_for_scale(
         &self,
-        scale: PreviewScale,
-        orig_width: usize,
+        scale:       PreviewScale,
+        orig_width:  usize,
         orig_height: usize
     ) -> (usize, usize) {
         match scale {
