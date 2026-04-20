@@ -49,6 +49,7 @@ pub fn init_ui(
         is_color_image:     Cell::new(false),
         size_adj_pair:      Cell::new(None),
         image_size:         Cell::new((0, 0)),
+        image_css_provider: Cell::new(None),
     });
 
     obj.init_widgets();
@@ -303,6 +304,7 @@ struct PreviewUi {
     is_color_image:     Cell<bool>,
     size_adj_pair:      Cell<Option<(f64, f64)>>,
     image_size:         Cell<(usize, usize)>,
+    image_css_provider: Cell<Option<gtk::CssProvider>>,
 }
 
 impl Drop for PreviewUi {
@@ -952,22 +954,23 @@ impl PreviewUi {
 
             match pp.scale {
                 PreviewScale::P400 => {
-                    self.widgets.image.img_preview.set_widget_name("sized-image-x4");
+                    self.set_image_scale_factor(4.0);
+                    //self.widgets.image.img_preview.set_widget_name("sized-image-x4");
                     img_width *= 4;
                     img_height *= 4;
                 }
                 PreviewScale::P300 => {
-                    self.widgets.image.img_preview.set_widget_name("sized-image-x3");
+                    self.set_image_scale_factor(3.0);
                     img_width *= 3;
                     img_height *= 3;
                 }
                 PreviewScale::P200 => {
-                    self.widgets.image.img_preview.set_widget_name("sized-image-x2");
+                    self.set_image_scale_factor(2.0);
                     img_width *= 2;
                     img_height *= 2;
                 }
                 _ => {
-                    self.widgets.image.img_preview.set_widget_name("");
+                    self.set_image_scale_factor(1.0);
                 }
             };
 
@@ -989,6 +992,24 @@ impl PreviewUi {
         }
 
         self.is_color_image.set(is_color_image);
+    }
+
+    pub fn set_image_scale_factor(&self, scale: f64) {
+        let image = &self.widgets.image.img_preview;
+        let context = image.style_context();
+
+        if let Some(prev_provider) = self.image_css_provider.take() {
+            context.remove_provider(&prev_provider);
+        }
+
+        let provider = gtk::CssProvider::new();
+        _ = provider.load_from_data(
+            format!("#image-with-scale {{ -gtk-icon-transform: scale({scale}); }}").as_bytes()
+        );
+        context.add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+        image.set_widget_name("image-with-scale");
+
+        self.image_css_provider.set(Some(provider));
     }
 
     fn zoom_by_mouse(&self, evt: &gdk::EventScroll) {

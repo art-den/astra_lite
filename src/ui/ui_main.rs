@@ -162,15 +162,6 @@ const CSS: &[u8] = b"
 .bold {
     font-weight: bold;
 }
-#sized-image-x2 {
-    -gtk-icon-transform: scale(2);
-}
-#sized-image-x3 {
-    -gtk-icon-transform: scale(3);
-}
-#sized-image-x4 {
-    -gtk-icon-transform: scale(4);
-}
 ";
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
