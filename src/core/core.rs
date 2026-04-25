@@ -376,6 +376,7 @@ impl Core {
             let telescopes = indi_drivers.get_group_by_name("Telescopes")?;
             let cameras = indi_drivers.get_group_by_name("CCDs")?;
             let focusers = indi_drivers.get_group_by_name("Focusers")?;
+            let filter_wheels = indi_drivers.get_group_by_name("Filter Wheels")?;
             let telescope_driver_name = options.indi.mount.as_ref()
                 .and_then(|name| telescopes.get_item_by_device_name(name))
                 .map(|d| &d.driver);
@@ -388,10 +389,14 @@ impl Core {
             let focuser_driver_name = options.indi.focuser.as_ref()
                 .and_then(|name| focusers.get_item_by_device_name(name))
                 .map(|d| &d.driver);
+            let filter_wheel_driver_name = options.indi.flt_wheel.as_ref()
+                .and_then(|name| filter_wheels.get_item_by_device_name(name))
+                .map(|d| &d.driver);
             [ telescope_driver_name,
               camera_driver_name,
               guid_cam_driver_name,
-              focuser_driver_name
+              focuser_driver_name,
+              filter_wheel_driver_name,
             ].iter()
                 .filter_map(|v| *v)
                 .cloned()

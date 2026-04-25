@@ -127,19 +127,21 @@ struct SiteWidgets {
 
 #[derive(FromBuilder)]
 struct IndiWidgets {
-    bx:                  gtk::Box,
-    l_mount_drivers:     gtk::Label,
-    cb_mount_drivers:    gtk::ComboBox,
-    l_camera_drivers:    gtk::Label,
-    cb_camera_drivers:   gtk::ComboBox,
-    l_guid_cam_drivers:  gtk::Label,
-    cb_guid_cam_drivers: gtk::ComboBox,
-    l_focuser_drivers:   gtk::Label,
-    cb_focuser_drivers:  gtk::ComboBox,
-    chb_remote:          gtk::CheckButton,
-    e_remote_addr:       gtk::Entry,
-    btn_conn_indi:       gtk::Button,
-    btn_diconn_indi:     gtk::Button,
+    bx:                   gtk::Box,
+    l_mount_drivers:      gtk::Label,
+    cb_mount_drivers:     gtk::ComboBox,
+    l_camera_drivers:     gtk::Label,
+    cb_camera_drivers:    gtk::ComboBox,
+    l_guid_cam_drivers:   gtk::Label,
+    cb_guid_cam_drivers:  gtk::ComboBox,
+    l_focuser_drivers:    gtk::Label,
+    cb_focuser_drivers:   gtk::ComboBox,
+    l_flt_wheel_drivers:  gtk::Label,
+    cb_flt_wheel_drivers: gtk::ComboBox,
+    chb_remote:           gtk::CheckButton,
+    e_remote_addr:        gtk::Entry,
+    btn_conn_indi:        gtk::Button,
+    btn_diconn_indi:      gtk::Button,
 }
 
 #[derive(FromBuilder)]
@@ -397,12 +399,13 @@ impl HardwareUi {
     }
 
     fn get_indi_options(&self, options: &mut Options) {
-        options.indi.mount    = self.widgets.indi.cb_mount_drivers.active_id().map(|s| s.to_string());
-        options.indi.camera   = self.widgets.indi.cb_camera_drivers.active_id().map(|s| s.to_string());
-        options.indi.guid_cam = self.widgets.indi.cb_guid_cam_drivers.active_id().map(|s| s.to_string());
-        options.indi.focuser  = self.widgets.indi.cb_focuser_drivers.active_id().map(|s| s.to_string());
-        options.indi.remote   = self.widgets.indi.chb_remote.is_active();
-        options.indi.address  = self.widgets.indi.e_remote_addr.text().into();
+        options.indi.mount     = self.widgets.indi.cb_mount_drivers.active_id().map(|s| s.to_string());
+        options.indi.camera    = self.widgets.indi.cb_camera_drivers.active_id().map(|s| s.to_string());
+        options.indi.guid_cam  = self.widgets.indi.cb_guid_cam_drivers.active_id().map(|s| s.to_string());
+        options.indi.focuser   = self.widgets.indi.cb_focuser_drivers.active_id().map(|s| s.to_string());
+        options.indi.flt_wheel = self.widgets.indi.cb_flt_wheel_drivers.active_id().map(|s| s.to_string());
+        options.indi.remote    = self.widgets.indi.chb_remote.is_active();
+        options.indi.address   = self.widgets.indi.e_remote_addr.text().into();
     }
 
     fn get_telescope_options(&self, options: &mut Options) {
@@ -570,6 +573,7 @@ impl HardwareUi {
         let cam_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi.cb_camera_drivers);
         let guid_cam_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi.cb_guid_cam_drivers);
         let foc_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi.cb_focuser_drivers);
+        let flt_wheel_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi.cb_flt_wheel_drivers);
 
         self.widgets.indi.l_mount_drivers.set_sensitive(mnt_sensitive);
         self.widgets.indi.cb_mount_drivers.set_sensitive(mnt_sensitive);
@@ -579,6 +583,8 @@ impl HardwareUi {
         self.widgets.indi.cb_guid_cam_drivers.set_sensitive(guid_cam_sensitive);
         self.widgets.indi.l_focuser_drivers.set_sensitive(foc_sensitive);
         self.widgets.indi.cb_focuser_drivers.set_sensitive(foc_sensitive);
+        self.widgets.indi.l_flt_wheel_drivers.set_sensitive(flt_wheel_sensitive);
+        self.widgets.indi.cb_flt_wheel_drivers.set_sensitive(flt_wheel_sensitive);
         self.widgets.indi.chb_remote.set_sensitive(!self.indi_drivers.groups.is_empty() && disconnected);
         self.widgets.indi.e_remote_addr.set_sensitive(remote && disconnected);
 
@@ -670,10 +676,11 @@ impl HardwareUi {
         }
 
         let options = self.options.read().unwrap();
-        fill_cb_list(self, &self.widgets.indi.cb_mount_drivers,    "Telescopes", &options.indi.mount);
-        fill_cb_list(self, &self.widgets.indi.cb_camera_drivers,   "CCDs",       &options.indi.camera);
-        fill_cb_list(self, &self.widgets.indi.cb_guid_cam_drivers, "CCDs",       &options.indi.guid_cam);
-        fill_cb_list(self, &self.widgets.indi.cb_focuser_drivers,  "Focusers",   &options.indi.focuser);
+        fill_cb_list(self, &self.widgets.indi.cb_mount_drivers,     "Telescopes",    &options.indi.mount);
+        fill_cb_list(self, &self.widgets.indi.cb_camera_drivers,    "CCDs",          &options.indi.camera);
+        fill_cb_list(self, &self.widgets.indi.cb_guid_cam_drivers,  "CCDs",          &options.indi.guid_cam);
+        fill_cb_list(self, &self.widgets.indi.cb_focuser_drivers,   "Focusers",      &options.indi.focuser);
+        fill_cb_list(self, &self.widgets.indi.cb_flt_wheel_drivers, "Filter Wheels", &options.indi.flt_wheel);
     }
 
     fn read_options_from_widgets(&self) {
@@ -800,10 +807,11 @@ impl HardwareUi {
         let options = self.options.read().unwrap();
         let status = self.indi_status.borrow();
         let dev_list = [
-            ("mnt",    &options.indi.mount),
-            ("cam.",   &options.indi.camera),
-            ("guid.",  &options.indi.guid_cam),
-            ("focus.", &options.indi.focuser),
+            ("mnt",     &options.indi.mount),
+            ("cam.",    &options.indi.camera),
+            ("guid.",   &options.indi.guid_cam),
+            ("focus.",  &options.indi.focuser),
+            ("f.wheel", &options.indi.flt_wheel),
         ].iter()
             .filter_map(|(str, v)| v.as_deref().map(|v| (str, v))) // skip None at v
             .filter(|(_, v)| !v.is_empty()) // skip empty driver name

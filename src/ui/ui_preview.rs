@@ -835,7 +835,7 @@ impl PreviewUi {
         show_chan(&self.widgets.info.l_flat_l, &self.widgets.info.e_flat_l, info.l.as_ref());
     }
 
-    fn create_and_show_preview_image(&self, center: Option<(f64, f64)>) {
+    fn create_and_show_preview_image(&self, keep_center: Option<(f64, f64)>) {
         let options = self.options.read().unwrap();
         let preview_params = options.preview.preview_params();
         let (image, hist, stars) = match options.preview.source {
@@ -858,15 +858,15 @@ impl PreviewUi {
         drop(hist);
         drop(image);
 
-        self.show_preview_image(rgb_bytes.as_ref(), None, center);
+        self.show_preview_image(rgb_bytes.as_ref(), None, keep_center);
         self.correct_widgets_props();
     }
 
     fn show_preview_image(
         &self,
-        rgb_bytes:  Option<&PreviewRgbData>,
-        src_params: Option<&PreviewParams>,
-        center:     Option<(f64, f64)>,
+        rgb_bytes:   Option<&PreviewRgbData>,
+        src_params:  Option<&PreviewParams>,
+        keep_center: Option<(f64, f64)>,
     ) {
         let preview_options = self.options.read().unwrap().preview.clone();
         let pp = preview_options.preview_params();
@@ -926,7 +926,7 @@ impl PreviewUi {
             let sw_client_width = sw_child.allocated_width();
             let sw_client_height = sw_child.allocated_height();
 
-            let (mut center_x, mut center_y) = center.unwrap_or_else(|| {
+            let (mut center_x, mut center_y) = keep_center.unwrap_or_else(|| {
                 let (img_visible_center_x, img_visible_center_y) =
                     sw_img.translate_coordinates(
                         &self.widgets.image.img_preview,
@@ -937,14 +937,14 @@ impl PreviewUi {
             });
 
             if sw_client_width >= prev_image_width {
-                if center.is_none() {
+                if keep_center.is_none() {
                     center_x = 0.5 * prev_image_width as f64;
                 }
                 prev_hadj_value = 0.5 * (prev_image_width - sw_client_width) as f64;
             }
 
             if sw_client_height >= prev_image_height {
-                if center.is_none() {
+                if keep_center.is_none() {
                     center_y = 0.5 * prev_image_height as f64;
                 }
                 prev_vadj_value = 0.5 * (prev_image_height - sw_client_height) as f64;
@@ -955,7 +955,6 @@ impl PreviewUi {
             match pp.scale {
                 PreviewScale::P400 => {
                     self.set_image_scale_factor(4.0);
-                    //self.widgets.image.img_preview.set_widget_name("sized-image-x4");
                     img_width *= 4;
                     img_height *= 4;
                 }
@@ -994,7 +993,7 @@ impl PreviewUi {
         self.is_color_image.set(is_color_image);
     }
 
-    pub fn set_image_scale_factor(&self, scale: f64) {
+    fn set_image_scale_factor(&self, scale: f64) {
         let image = &self.widgets.image.img_preview;
         let context = image.style_context();
 
