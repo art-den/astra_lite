@@ -198,7 +198,7 @@ impl UiModule for MountUi {
                 },
 
             indi::Event::DeviceDelete(event) => {
-                if event.drv_interface.contains(indi::DriverInterface::TELESCOPE) {
+                if event.interface.contains(indi::DriverInterface::TELESCOPE) {
                     self.delayed_actions.schedule(DelayedAction::FillDevicesList);
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
                 }

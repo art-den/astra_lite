@@ -15,6 +15,7 @@ mod ui_skymap_options;
 mod ui_focuser;
 mod ui_guiding;
 mod ui_mount;
+mod ui_fw_wheel;
 mod ui_darks_library;
 mod ui_plate_solve;
 mod ui_polar_align;

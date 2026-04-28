@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::io::{prelude::*, BufWriter, Cursor};
 use std::net::TcpStream;
 use std::process::{Command, Child, Stdio};
-use std::sync::atomic::*;
+use std::sync::{MutexGuard, atomic::*};
 use std::sync::{Mutex, Arc, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -69,6 +69,7 @@ pub enum ConnState {
 pub struct NewDeviceEvent {
     pub timestamp:   Option<DateTime<Utc>>,
     pub device_name: Arc<String>,
+    pub connected:   bool,
     pub interface:   DriverInterface,
 }
 
@@ -79,13 +80,13 @@ pub struct DeviceConnectEvent {
     pub interface:   DriverInterface,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct PropChangeValue {
     pub elem_name:  Arc<String>,
     pub prop_value: PropValue,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum PropChange {
     New(PropChangeValue),
     Change {
@@ -105,9 +106,9 @@ pub struct PropChangeEvent {
 }
 
 pub struct DeviceDeleteEvent {
-    pub timestamp:     Option<DateTime<Utc>>,
-    pub device_name:   Arc<String>,
-    pub drv_interface: DriverInterface,
+    pub timestamp:   Option<DateTime<Utc>>,
+    pub device_name: Arc<String>,
+    pub interface:   DriverInterface,
 }
 
 pub struct MessageEvent {
@@ -782,13 +783,17 @@ impl Property {
 struct Device {
     name: Arc<String>,
     props: Vec<Property>,
+    is_connected: bool,
+    interface: DriverInterface,
 }
 
 impl Device {
     fn new(name: &Arc<String>) -> Self {
         Self {
-            name: Arc::clone(name),
-            props: Vec::new(),
+            name:         Arc::clone(name),
+            props:        Vec::new(),
+            is_connected: false,
+            interface:    DriverInterface::empty(),
         }
     }
 
@@ -1892,8 +1897,9 @@ impl Connection {
         Ok(())
     }
 
-    pub fn command_set_num_property(
+    fn command_set_num_property_impl(
         &self,
+        devices:     &mut MutexGuard<Devices>,
         device_name: &str,
         prop_name:   &str,
         elements:    &[(&str, f64)]
@@ -1902,7 +1908,6 @@ impl Connection {
             device_name,
             prop_name
         )?;
-        let mut devices = self.devices.lock().unwrap();
         devices.check_property_ok_for_writing(
             device_name,
             prop_name,
@@ -1924,7 +1929,18 @@ impl Connection {
             )?;
             Ok(())
         })?;
+        Ok(())
+    }
 
+
+    pub fn command_set_num_property(
+        &self,
+        device_name: &str,
+        prop_name:   &str,
+        elements:    &[(&str, f64)]
+    ) -> Result<()> {
+        let mut devices = self.devices.lock().unwrap();
+        self.command_set_num_property_impl(&mut devices, device_name, prop_name, elements)?;
         Ok(())
     }
 
@@ -3657,6 +3673,40 @@ impl Connection {
         let elevation = devices.get_num_property(device_name, "GEOGRAPHIC_COORD", "ELEV")?.value;
         Ok((latitude, longitude, elevation))
     }
+
+    pub fn filter_get_list_and_active(&self, device_name: &str) -> Result<(Vec<Arc<String>>, usize)> {
+        let mut result = Vec::new();
+        let devices = self.devices.lock().unwrap();
+        let active_prop = devices.get_num_property(device_name, "FILTER_SLOT", "FILTER_SLOT_VALUE")?;
+        let min_filter = active_prop.min as i32;
+        let max_filter = active_prop.max as i32;
+        for i in min_filter..=max_filter {
+            let elem_name = format!("FILTER_SLOT_NAME_{i}");
+            result.push(devices.get_text_property(device_name, "FILTER_NAME", &elem_name)?);
+        }
+        let active_num = active_prop.value as i32;
+        let active_id = if active_num >= min_filter { active_num - min_filter } else { 0 };
+        Ok((result, active_id as _))
+    }
+
+    pub fn filter_get_active(&self, device_name: &str) -> Result<i32> {
+        let devices = self.devices.lock().unwrap();
+        let result = devices.get_num_property(device_name, "FILTER_SLOT", "FILTER_SLOT_VALUE")?.value as i32;
+        Ok(result)
+    }
+
+    pub fn filter_set_active(&self, device_name: &str, active_id: i32) -> Result<()> {
+        let mut devices = self.devices.lock().unwrap();
+        let cur_prop = devices.get_num_property(device_name, "FILTER_SLOT", "FILTER_SLOT_VALUE")?;
+        let new_value = cur_prop.min as i32 + active_id;
+        self.command_set_num_property_impl(
+            &mut devices,
+            device_name,
+            "FILTER_SLOT",
+            &[("FILTER_SLOT_VALUE", new_value as _)]
+        )?;
+        Ok(())
+    }
 }
 
 struct XmlSender {
@@ -3956,13 +4006,33 @@ impl XmlReceiver {
         }
     }
 
+    fn update_device_info(
+        &self,
+        device:         &mut Device,
+        prop_name:      &String,
+        changed_values: &Vec<(Arc<String>, PropValue)>
+    ) {
+        for (name, value) in changed_values {
+            if prop_name.as_str() == "CONNECTION"
+            && name.as_str() == "CONNECT" {
+                device.is_connected = value.to_bool().unwrap_or(false);
+            }
+
+            if prop_name.as_str() == "DRIVER_INFO"
+            && name.as_str() == "DRIVER_INTERFACE" {
+                let flag_bits = value.to_i32().unwrap_or(0);
+                device.interface = DriverInterface::from_bits_truncate(flag_bits as u32);
+            }
+        }
+    }
+
     fn notify_subcribers_about_new_prop(
         &self,
+        device:         &mut Device,
         timestamp:      Option<DateTime<Utc>>,
-        device_name:    &Arc<String>,
         prop_name:      &Arc<String>,
         changed_values: Vec<(Arc<String>, PropValue)>,
-        events_sender:  &mpsc::Sender<EventSenderEvent>
+        events_sender:  &mpsc::Sender<EventSenderEvent>,
     ) {
         for (name, value) in changed_values {
             let prop_change_value = PropChangeValue {
@@ -3971,7 +4041,7 @@ impl XmlReceiver {
             };
             events_sender.send(EventSenderEvent::Mess(Event::PropChange(Arc::new(PropChangeEvent {
                 timestamp,
-                device_name: Arc::clone(device_name),
+                device_name: Arc::clone(&device.name),
                 prop_name:   Arc::clone(prop_name),
                 change:      PropChange::New(prop_change_value),
             })))).unwrap();
@@ -3981,7 +4051,8 @@ impl XmlReceiver {
                 let flag_bits = value.to_i32().unwrap_or(0);
                 let interface = DriverInterface::from_bits_truncate(flag_bits as u32);
                 let event_data = NewDeviceEvent {
-                    device_name: Arc::clone(device_name),
+                    device_name: Arc::clone(&device.name),
+                    connected: device.is_connected,
                     interface,
                     timestamp,
                 };
@@ -3995,7 +4066,7 @@ impl XmlReceiver {
     fn notify_subcribers_about_prop_change(
         &self,
         timestamp:      Option<DateTime<Utc>>,
-        device_name:    &Arc<String>,
+        device:         &mut Device,
         prop_name:      &Arc<String>,
         prev_state:     PropState,
         new_state:      PropState,
@@ -4014,7 +4085,7 @@ impl XmlReceiver {
             };
             events_sender.send(EventSenderEvent::Mess(Event::PropChange(Arc::new(PropChangeEvent {
                 timestamp,
-                device_name: Arc::clone(device_name),
+                device_name: Arc::clone(&device.name),
                 prop_name: Arc::clone(prop_name),
                 change,
             })))).unwrap();
@@ -4022,13 +4093,10 @@ impl XmlReceiver {
             if prop_name.as_str() == "CONNECTION"
             && name.as_str() == "CONNECT" {
                 let connected = prop_value.to_bool().unwrap_or(false);
-                let devices = self.devices.lock().unwrap();
-                let di = devices.get_driver_info(device_name);
-                drop(devices);
 
                 let event_data = DeviceConnectEvent {
-                    device_name: Arc::clone(device_name),
-                    interface: di.map(|di| di.interface).unwrap_or(DriverInterface::empty()),
+                    device_name: Arc::clone(&device.name),
+                    interface: device.interface,
                     timestamp,
                     connected,
                 };
@@ -4065,7 +4133,7 @@ impl XmlReceiver {
         events_sender.send(EventSenderEvent::Mess(Event::DeviceDelete(Arc::new(DeviceDeleteEvent {
             timestamp:   time,
             device_name: Arc::clone(device_name),
-            drv_interface
+            interface:   drv_interface
         })))).unwrap();
     }
 
@@ -4126,7 +4194,10 @@ impl XmlReceiver {
                 anyhow::bail!("Empty device name");
             }
             let mut devices = self.devices.lock().unwrap();
+
             let change_id = devices.change_id;
+            devices.change_id += 1;
+
             let device_name = Arc::new(device_name);
             let device = if let Some(device) = devices.find_by_name_opt_mut(&device_name) {
                 device
@@ -4150,16 +4221,16 @@ impl XmlReceiver {
             property.change_id = change_id;
             let prop_name = Arc::clone(&property.name);
             device.props.push(property);
-
-            devices.change_id += 1;
-            drop(devices);
+            self.update_device_info(device, &prop_name, &values);
             self.notify_subcribers_about_new_prop(
+                device,
                 timestamp,
-                &device_name,
                 &prop_name,
                 values,
                 events_sender,
             );
+
+            drop(devices);
         } else if xml_elem.name.starts_with("set") { // setXXXXVector
             // Changed property data from INDI server
             let device_name = xml_elem.attr_string_or_err("device")?;
@@ -4193,16 +4264,17 @@ impl XmlReceiver {
                 if values.is_empty() && prev_state != cur_state {
                     values = property.get_values();
                 }
-                drop(devices);
+                self.update_device_info(device, &prop_name, &values);
                 self.notify_subcribers_about_prop_change(
                     timestamp,
-                    &device_name,
+                    device,
                     &prop_name,
                     prev_state,
                     cur_state,
                     values,
                     events_sender,
                 );
+                drop(devices);
             }
         } else if xml_elem.name == "delProperty" { // delProperty
             let device_name = xml_elem.attr_string_or_err("device")?;

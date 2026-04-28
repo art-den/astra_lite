@@ -240,7 +240,7 @@ impl UiModule for FocuserUi {
                 };
             }
             indi::Event::DeviceDelete(event) => {
-                if event.drv_interface.contains(indi::DriverInterface::FOCUSER) {
+                if event.interface.contains(indi::DriverInterface::FOCUSER) {
                     self.update_devices_list();
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
                     self.delayed_actions.schedule(DelayedAction::UpdateFocPosNew);

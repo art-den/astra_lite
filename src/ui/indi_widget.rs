@@ -257,7 +257,9 @@ impl IndiWidget {
             // remove properties groups from notebook
             for ui_group in &ui_device.groups {
                 if !indi_groups.iter().any(|g| **g == ui_group.name) {
-                    let page_num = ui_device.notebook.page_num(&ui_group.scrollwin).unwrap();
+                    let Some(page_num) = ui_device.notebook.page_num(&ui_group.scrollwin) else {
+                        continue;
+                    };
                     ui_device.notebook.remove_page(Some(page_num));
                 }
             }

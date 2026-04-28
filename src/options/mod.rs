@@ -40,6 +40,9 @@ pub use guiding::*;
 pub mod polar_align;
 pub use polar_align::*;
 
+pub mod filter_wheel;
+pub use filter_wheel::*;
+
 use std::collections::HashMap;
 
 use serde::{Serialize, Deserialize};
@@ -76,6 +79,7 @@ pub struct Options {
     pub guiding:      GuidingOptions,
     pub sep_guiding:  HashMap<String, SeparatedGuidingOptions>,
     pub polar_align:  PloarAlignOptions,
+    pub filter_wheel: FilterWheelOptions,
 }
 
 impl Options {
