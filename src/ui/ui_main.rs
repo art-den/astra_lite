@@ -72,11 +72,11 @@ pub fn init_ui(
     main_ui.apply_options();
     main_ui.apply_theme();
 
-    let hardware      = super::ui_hardware     ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
+    let hardware      = super::ui_hardware     ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let camera        = super::ui_camera       ::init_ui(&main_ui.widgets.window, &main_ui, core);
-    let darks_library = super::ui_darks_library::init_ui(&main_ui.widgets.window, options, core, indi);
-    let preview       = super::ui_preview      ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
-    let focuser       = super::ui_focuser      ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
+    let darks_library = super::ui_darks_library::init_ui(&main_ui.widgets.window, core);
+    let preview       = super::ui_preview      ::init_ui(&main_ui.widgets.window, &main_ui, core);
+    let focuser       = super::ui_focuser      ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let fw_wheel      = super::ui_fw_wheel     ::init_ui(&main_ui.widgets.window, core);
     let guiding       = super::ui_guiding      ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let mount         = super::ui_mount        ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);

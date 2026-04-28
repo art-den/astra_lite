@@ -5,7 +5,7 @@ use std::{
     borrow::Cow,
     io::{prelude::*, BufWriter},
     fs::File,
-    sync::{RwLock, Arc},
+    sync::Arc,
 };
 use gtk::{prelude::*, gdk, glib, glib::clone};
 use itertools::Itertools;
@@ -22,9 +22,7 @@ use super::{gtk_utils::*, indi_widget::*, module::*, ui_main::*};
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,
-    options: &Arc<RwLock<Options>>,
     core:    &Arc<Core>,
-    indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
     let (drivers, load_drivers_err) =
         if cfg!(target_os = "windows") {
@@ -39,11 +37,11 @@ pub fn init_ui(
         };
 
     if drivers.groups.is_empty() {
-        let mut options = options.write().unwrap();
+        let mut options = core.options().write().unwrap();
         options.indi.remote = true; // force remote mode if no devices info
     }
 
-    let indi_widget = IndiWidget::new(indi);
+    let indi_widget = IndiWidget::new(core.indi());
 
     let widgets = Widgets {
         telescope: TelescopeWidgets  ::from_builder_str(include_str!(r"resources/hw_telescope.ui")),
@@ -57,16 +55,14 @@ pub fn init_ui(
     widgets.common.bx_devices_ctrl.add(indi_widget.widget());
 
     let obj = Rc::new(HardwareUi {
+        core:         Arc::clone(core),
+        indi_status:  RefCell::new(indi::ConnState::Disconnected),
+        indi_drivers: drivers,
+        is_remote:    Cell::new(false),
+        main_ui:      Rc::clone(main_ui),
+        window:       window.clone(),
         widgets,
-        core:          Arc::clone(core),
-        indi:          Arc::clone(indi),
-        options:       Arc::clone(options),
-        indi_status:   RefCell::new(indi::ConnState::Disconnected),
-        indi_drivers:  drivers,
-        is_remote:     Cell::new(false),
-        main_ui:       Rc::clone(main_ui),
         indi_widget,
-        window:        window.clone(),
     });
 
     obj.init_widgets();
@@ -174,16 +170,14 @@ struct Widgets {
 }
 
 struct HardwareUi {
-    widgets:       Widgets,
-    main_ui:       Rc<MainUi>,
-    core:          Arc<Core>,
-    indi:          Arc<indi::Connection>,
-    options:       Arc<RwLock<Options>>,
-    window:        gtk::ApplicationWindow,
-    indi_status:   RefCell<indi::ConnState>,
-    indi_drivers:  indi::Drivers,
-    indi_widget:   IndiWidget,
-    is_remote:     Cell<bool>,
+    widgets:      Widgets,
+    main_ui:      Rc<MainUi>,
+    core:         Arc<Core>,
+    window:       gtk::ApplicationWindow,
+    indi_status:  RefCell<indi::ConnState>,
+    indi_drivers: indi::Drivers,
+    indi_widget:  IndiWidget,
+    is_remote:    Cell<bool>,
 }
 
 impl Drop for HardwareUi {
@@ -264,7 +258,8 @@ impl UiModule for HardwareUi {
 
     fn on_app_closing(&self) {
         if !self.is_remote.get() {
-            _ = self.indi.command_enable_all_devices(false, true, Some(2000));
+            let indi = self.core.indi();
+            _ = indi.command_enable_all_devices(false, true, Some(2000));
         }
 
         log::info!("Stop connection to PHD2...");
@@ -277,7 +272,7 @@ impl UiModule for HardwareUi {
     fn on_tab_changed(&self, from: TabPage, to: TabPage) {
         self.indi_widget.set_enabled(to == TabPage::Hardware);
         if from == TabPage::Hardware {
-            let mut options = self.options.write().unwrap();
+            let mut options = self.core.options().write().unwrap();
             self.get_telescope_options(&mut options);
             self.get_site_options(&mut options);
         }
@@ -331,7 +326,7 @@ impl HardwareUi {
 
         self.widgets.telescope.spb_foc_len.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.options.try_write() else { return; };
+                let Ok(mut options) = self_.core.options().try_write() else { return; };
                 options.telescope.focal_len = sb.value();
                 drop(options);
                 _ = self_.core.init_cam_telescope_data();
@@ -340,7 +335,7 @@ impl HardwareUi {
 
         self.widgets.telescope.spb_barlow.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.options.try_write() else { return; };
+                let Ok(mut options) = self_.core.options().try_write() else { return; };
                 options.telescope.barlow = sb.value();
                 drop(options);
                 _ = self_.core.init_cam_telescope_data();
@@ -600,7 +595,7 @@ impl HardwareUi {
         self.read_options_from_widgets();
         exec_and_show_error(Some(&self.window), || {
             self.core.connect_indi(&self.indi_drivers)?;
-            let options = self.options.read().unwrap();
+            let options = self.core.options().read().unwrap();
             self.is_remote.set(options.indi.remote);
             Ok(())
         });
@@ -608,13 +603,14 @@ impl HardwareUi {
 
     fn handler_action_disconn_indi(&self) {
         exec_and_show_error(Some(&self.window), || {
+            let indi = self.core.indi();
             if !self.is_remote.get() {
                 log::info!("Disabling all INDI devices before disconnect...");
-                self.indi.command_enable_all_devices(false, true, Some(2000))?;
+                indi.command_enable_all_devices(false, true, Some(2000))?;
                 log::info!("Done");
             }
             log::info!("Disconnecting INDI...");
-            self.indi.disconnect_and_wait()?;
+            indi.disconnect_and_wait()?;
             log::info!("Done");
             Ok(())
         });
@@ -675,7 +671,7 @@ impl HardwareUi {
             cb.set_active_iter(active_iter.as_ref());
         }
 
-        let options = self.options.read().unwrap();
+        let options = self.core.options().read().unwrap();
         fill_cb_list(self, &self.widgets.indi.cb_mount_drivers,     "Telescopes",    &options.indi.mount);
         fill_cb_list(self, &self.widgets.indi.cb_camera_drivers,    "CCDs",          &options.indi.camera);
         fill_cb_list(self, &self.widgets.indi.cb_guid_cam_drivers,  "CCDs",          &options.indi.guid_cam);
@@ -684,7 +680,7 @@ impl HardwareUi {
     }
 
     fn read_options_from_widgets(&self) {
-        let mut options = self.options.write().unwrap();
+        let mut options = self.core.options().write().unwrap();
         self.get_indi_options(&mut options);
         self.get_indi_options(&mut options);
         self.get_telescope_options(&mut options);
@@ -782,7 +778,8 @@ impl HardwareUi {
         fc.close();
         if resp == gtk::ResponseType::Accept {
             exec_and_show_error(Some(&self.window), || {
-                let all_props = self.indi.get_properties_list(None, None);
+                let indi = self.core.indi();
+                let all_props = indi.get_properties_list(None, None);
                 let file_name = fc.file().expect("File name").path().unwrap().with_extension("txt");
                 let mut file = BufWriter::new(File::create(file_name)?);
                 for prop in all_props {
@@ -804,7 +801,7 @@ impl HardwareUi {
     }
 
     fn update_window_title(&self) {
-        let options = self.options.read().unwrap();
+        let options = self.core.options().read().unwrap();
         let status = self.indi_status.borrow();
         let dev_list = [
             ("mnt",     &options.indi.mount),
@@ -843,9 +840,10 @@ impl HardwareUi {
 
     fn set_switch_property_for_all_device(&self, prop_name: &str, elem_name: &str) {
         exec_and_show_error(Some(&self.window), || {
-            let devices = self.indi.get_devices_list();
+            let indi = self.core.indi();
+            let devices = indi.get_devices_list();
             for device in devices {
-                self.indi.command_set_switch_property(
+                indi.command_set_switch_property(
                     &device.name,
                     prop_name,
                     &[(elem_name, true)]
@@ -857,7 +855,7 @@ impl HardwareUi {
 
     fn handler_action_get_site_from_devices(self: &Rc<Self>) {
         exec_and_show_error(Some(&self.window), || {
-            let indi = &self.indi;
+            let indi = self.core.indi();
             if indi.state() != indi::ConnState::Connected {
                 anyhow::bail!("INDI is not connected!");
             }

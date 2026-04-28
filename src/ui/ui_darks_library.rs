@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc, sync::{Arc, RwLock}};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 use gtk::{gdk::ffi::GDK_CURRENT_TIME, glib::{self, clone}, prelude::*};
 use itertools::Itertools;
 use macros::FromBuilder;
@@ -14,10 +14,8 @@ use crate::{
 use super::{gtk_utils::*, module::*};
 
 pub fn init_ui(
-    window:  &gtk::ApplicationWindow,
-    options: &Arc<RwLock<Options>>,
-    core:    &Arc<Core>,
-    indi:    &Arc<indi::Connection>,
+    window: &gtk::ApplicationWindow,
+    core:   &Arc<Core>,
 ) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();
     exec_and_show_error(Some(window), || {
@@ -37,9 +35,7 @@ pub fn init_ui(
     let obj = Rc::new(DarksLibraryUI {
         widgets,
         window:     window.clone(),
-        options:    Arc::clone(options),
         core:       Arc::clone(core),
-        indi:       Arc::clone(indi),
         ui_options: RefCell::new(ui_options),
     });
 
@@ -569,8 +565,6 @@ pub struct DarksLibraryUI {
     widgets:    Widgets,
     window:     gtk::ApplicationWindow,
     core:       Arc<Core>,
-    indi:       Arc<indi::Connection>,
-    options:    Arc<RwLock<Options>>,
     ui_options: RefCell<UiOptions>,
 }
 
@@ -1049,30 +1043,22 @@ impl DarksLibraryUI {
 
     fn show_info(&self) {
         let ui_options = self.ui_options.borrow();
-        let options = self.options.read().unwrap();
+        let options = self.core.options().read().unwrap();
         let Some(cam_device) = &options.cam.device else { return; };
+        let indi = self.core.indi();
 
-        if let Ok(defect_pixels_program) = ui_options.defect_pixels.create_program(
-            &options.cam,
-            &self.indi,
-            cam_device
-        ) {
+        let defect_pixels_program = ui_options.defect_pixels.create_program(&options.cam, indi, cam_device);
+        if let Ok(defect_pixels_program) = defect_pixels_program {
             self.show_program_info(&defect_pixels_program, &self.widgets.dp.l_def_info);
         };
 
-        if let Ok(dark_library_program) = ui_options.master_darks.create_program(
-            &options.cam,
-            &self.indi,
-            cam_device
-        ) {
+        let dark_library_program = ui_options.master_darks.create_program(&options.cam, indi, cam_device);
+        if let Ok(dark_library_program) = dark_library_program {
             self.show_program_info(&dark_library_program,  &self.widgets.darks.l_dark_info);
         }
 
-        if let Ok(bias_library_program) = ui_options.master_biases.create_program(
-            &options.cam,
-            &self.indi,
-            cam_device
-        ) {
+        let bias_library_program = ui_options.master_biases.create_program(&options.cam, indi, cam_device);
+        if let Ok(bias_library_program) = bias_library_program {
             self.show_program_info(&bias_library_program, &self.widgets.biases.l_bias_info);
         }
     }
@@ -1104,18 +1090,19 @@ impl DarksLibraryUI {
             self.get_options();
             self.save_options();
 
-            let options = self.options.read().unwrap();
+            let options = self.core.options().read().unwrap();
             let ui_options = self.ui_options.borrow();
 
             let Some(cam_device) = &options.cam.device else { return Ok(()); };
 
+            let indi = self.core.indi();
             let program = match mode {
                 DarkLibMode::DefectPixels =>
-                    ui_options.defect_pixels.create_program(&options.cam, &self.indi, cam_device)?,
+                    ui_options.defect_pixels.create_program(&options.cam, indi, cam_device)?,
                 DarkLibMode::MasterDark =>
-                    ui_options.master_darks.create_program(&options.cam, &self.indi, cam_device)?,
+                    ui_options.master_darks.create_program(&options.cam, indi, cam_device)?,
                 DarkLibMode::MasterBias =>
-                    ui_options.master_biases.create_program(&options.cam, &self.indi, cam_device)?,
+                    ui_options.master_biases.create_program(&options.cam, indi, cam_device)?,
             };
             drop(ui_options);
             drop(options);
@@ -1158,7 +1145,7 @@ impl DarksLibraryUI {
     }
 
     fn handler_action_open_dark_lib_folder(&self) {
-        let options = self.options.read().unwrap();
+        let options = self.core.options().read().unwrap();
         let lib_path = &options.calibr.dark_library_path.to_str().unwrap_or_default();
         let uri = "file:///".to_string() + lib_path;
         drop(options);

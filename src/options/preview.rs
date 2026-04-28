@@ -10,7 +10,7 @@ pub enum PreviewColorMode {
     Blue
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone, Copy)]
 pub enum PreviewSource {
     #[default]OrigFrame,
     LiveStacking
