@@ -27,7 +27,9 @@ impl DevicesWatchdog {
         let connected = new_prop.prop_value.to_bool()?;
         if connected { return Ok(()); }
 
-        let existing = self.not_init_yet.iter_mut().find(|dev| dev.name == prop_change.device_name.as_str());
+        let existing = self.not_init_yet
+            .iter_mut()
+            .find(|dev| dev.name == prop_change.device_name.as_str());
         if let Some(existing) = existing {
             existing.wait_time_ms = 0;
         } else {

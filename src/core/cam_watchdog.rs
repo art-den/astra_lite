@@ -122,10 +122,9 @@ impl CameraWatchdog {
             }
         }
 
-        if let Some(init_timer) = &mut self.init_timer {
-            if *init_timer > timer_period_ms {
-                *init_timer -= timer_period_ms;
-            } else {
+        if let Some(init_timer_ms) = &mut self.init_timer {
+            *init_timer_ms += timer_period_ms;
+            if *init_timer_ms >= INIT_DELAY * 1000 {
                 self.init_timer = None;
                 if self.init_flags.cooler {
                     self.init_flags.cooler = false;
@@ -151,7 +150,7 @@ impl CameraWatchdog {
     pub fn notify_indi_prop_change(
         &mut self,
         cur_cam_device: &Option<DeviceAndProp>,
-        prop_change: &indi::PropChangeEvent
+        prop_change:    &indi::PropChangeEvent
     ) -> anyhow::Result<()> {
         let Some(cur_cam_device) = cur_cam_device else { return Ok(()); };
 
@@ -184,26 +183,26 @@ impl CameraWatchdog {
                 indi::Connection::camera_is_temperature_property(&prop_change.prop_name, &new_prop.elem_name);
             if is_temperature_property {
                 self.init_flags.cooler = true;
-                self.init_timer = Some(INIT_DELAY * 1000);
+                self.init_timer = Some(0);
             }
 
             let is_fan_str_property =
                 indi::Connection::camera_is_fan_str_property(&prop_change.prop_name);
             if is_fan_str_property {
                 self.init_flags.fan = true;
-                self.init_timer = Some(INIT_DELAY * 1000);
+                self.init_timer = Some(0);
             }
 
             let is_heater_str_property =
                 indi::Connection::camera_is_heater_str_property(&prop_change.prop_name);
             if is_heater_str_property {
                 self.init_flags.heater = true;
-                self.init_timer = Some(INIT_DELAY * 1000);
+                self.init_timer = Some(0);
             }
 
             if prop_change.prop_name.as_str() == "CCD_RESOLUTION" {
                 self.init_flags.max_res = true;
-                self.init_timer = Some(INIT_DELAY * 1000);
+                self.init_timer = Some(0);
             }
 
             let is_exposure_property =
