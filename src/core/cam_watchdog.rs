@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{core::consts::*, indi, options::{DeviceAndProp, Options}};
+use crate::{core::{cam_starter::CamStarter, consts::*, core::ModeData}, indi, options::{DeviceAndProp, Options}};
 
 const MAX_WAIT_BLOB_TIME: usize = 30; // in seconds
 const MAX_SHUTDOWN_TIME: usize = 2; // in seconds
@@ -25,43 +25,41 @@ struct InitFlags {
     max_res: bool,
 }
 
-pub enum CamWatchdogResult {
-    Ok,
-    Waiting,
-    RestartCameraShot,
-}
-
 pub struct CameraWatchdog {
-    mode:       Mode,
-    init_flags: InitFlags,
-    init_timer: usize,
+    cam_starter: Arc<CamStarter>,
+    mode:        Mode,
+    init_flags:  InitFlags,
+    init_timer:  Option<usize>,
 }
 
 impl CameraWatchdog {
-    pub fn new() -> Self {
+    pub fn new(cam_starter: &Arc<CamStarter>) -> Self {
         Self {
-            mode:       Mode::Waiting,
-            init_flags: InitFlags::default(),
-            init_timer: 0,
+            cam_starter: Arc::clone(cam_starter),
+            mode:        Mode::Waiting,
+            init_flags:  InitFlags::default(),
+            init_timer:  None,
         }
     }
 
-    pub fn clear(&mut self) {
+    pub fn reset(&mut self) {
         self.mode = Mode::Waiting;
         self.init_flags = InitFlags::default();
-        self.init_timer = 0;
+        self.init_timer = None;
     }
 
-    pub fn notify_timer_1s(
+    pub fn notify_timer(
         &mut self,
-        indi:              &Arc<indi::Connection>,
-        options:           &Options,
-        cam_device:        &DeviceAndProp,
-        debug_blob_frozen: bool,
-    ) -> anyhow::Result<CamWatchdogResult> {
+        timer_period_ms: usize,
+        mode:            &mut ModeData,
+        indi:            &Arc<indi::Connection>,
+        options:         &Options,
+    ) -> anyhow::Result<()> {
         if indi.state() != indi::ConnState::Connected {
-            return Ok(CamWatchdogResult::Ok);
+            return Ok(());
         }
+
+        let Some(cam_device) = &options.cam.device else { return Ok(()); };
 
         let is_waiting_for_blob_now = || -> anyhow::Result<bool> {
             let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_device.prop);
@@ -72,7 +70,7 @@ impl CameraWatchdog {
                 return Ok(false)
             };
             Ok(
-                (debug_blob_frozen || exp_prop.state == indi::PropState::Busy) &&
+                (exp_prop.state == indi::PropState::Busy) &&
                 expr_prop_num.value/*exposure*/ == 0.0
             )
         };
@@ -83,58 +81,63 @@ impl CameraWatchdog {
                     self.mode = Mode::WaitBlob(0)
                 }
             }
-            Mode::WaitBlob(cnt) => {
+            Mode::WaitBlob(time_ms) => {
                 if !is_waiting_for_blob_now()? {
                     self.mode = Mode::Waiting;
-                    return Ok(CamWatchdogResult::Ok);
+                    return Ok(());
                 }
-                *cnt += 1;
-                if *cnt == MAX_WAIT_BLOB_TIME * CORE_TIMER_FREQ {
-                    log::info!("Waiting BLOB of camera {} too logn time (> {}) seconds", cam_device.name, MAX_WAIT_BLOB_TIME);
+                *time_ms += timer_period_ms;
+                if *time_ms >= MAX_WAIT_BLOB_TIME * 1000 {
+                    log::info!(
+                        "Waiting BLOB of camera {} too logn time (> {}) seconds",
+                        cam_device.name, MAX_WAIT_BLOB_TIME
+                    );
                     log::info!("Shutdown camera {} ...", cam_device.name);
                     indi.command_enable_device(&cam_device.name, false, true, None)?;
                     self.mode = Mode::Shutdown(0)
                 }
             }
-            Mode::Shutdown(cnt) => {
-                *cnt += 1;
-                if *cnt == MAX_SHUTDOWN_TIME * CORE_TIMER_FREQ {
+            Mode::Shutdown(time_ms) => {
+                *time_ms += timer_period_ms;
+                if *time_ms >= MAX_SHUTDOWN_TIME * 1000 {
                     log::info!("Switching-on camera {} ...", cam_device.name);
                     indi.command_enable_device(&cam_device.name, true, true, None)?;
                     self.mode = Mode::WaitExposureProp(0);
                 }
             }
 
-            Mode::WaitExposureProp(cnt) => {
-                *cnt += 1;
-                if *cnt >= WAIT_EXPOSURE_TIME * CORE_TIMER_FREQ {
+            Mode::WaitExposureProp(time_ms) => {
+                *time_ms += timer_period_ms;
+                if *time_ms >= WAIT_EXPOSURE_TIME * 1000 {
                     anyhow::bail!("Waiting exposure property too long time!");
                 }
             }
 
-            Mode::WaitAfterRestart(cnt) => {
-                *cnt += 1;
-                if *cnt == MAX_SWITCHING_ON_TIME * CORE_TIMER_FREQ {
+            Mode::WaitAfterRestart(time_ms) => {
+                *time_ms += timer_period_ms;
+                if *time_ms == MAX_SWITCHING_ON_TIME * 1000 {
                     self.mode = Mode::Waiting;
-                    return Ok(CamWatchdogResult::RestartCameraShot);
+                    self.restart_camera_exposure(mode, options)?;
                 }
             }
         }
 
-        if self.init_timer != 0 {
-            self.init_timer -= 1;
-            if self.init_timer == 0 {
+        if let Some(init_timer) = &mut self.init_timer {
+            if *init_timer > timer_period_ms {
+                *init_timer -= timer_period_ms;
+            } else {
+                self.init_timer = None;
                 if self.init_flags.cooler {
                     self.init_flags.cooler = false;
-                    self.control_camera_cooling(indi, &cam_device.name, options, true)?;
+                    Self::control_camera_cooling(indi, &cam_device.name, options, true)?;
                 }
                 if self.init_flags.fan {
                     self.init_flags.fan = false;
-                    self.control_camera_fan(indi, &cam_device.name, options, true)?;
+                    Self::control_camera_fan(indi, &cam_device.name, options, true)?;
                 }
                 if self.init_flags.heater {
                     self.init_flags.heater = false;
-                    self.control_camera_heater(indi, &cam_device.name, options, true)?;
+                    Self::control_camera_heater(indi, &cam_device.name, options, true)?;
                 }
                 if self.init_flags.max_res {
                     self.init_flags.max_res = false;
@@ -142,21 +145,17 @@ impl CameraWatchdog {
                 }
             }
         }
-
-        match self.mode {
-            Mode::WaitAfterRestart(_) | Mode::Shutdown(_) =>
-                Ok(CamWatchdogResult::Waiting),
-            _ =>
-                Ok(CamWatchdogResult::Ok),
-        }
+        Ok(())
     }
 
     pub fn notify_indi_prop_change(
         &mut self,
-        mode_cam_device: &DeviceAndProp,
+        cur_cam_device: &Option<DeviceAndProp>,
         prop_change: &indi::PropChangeEvent
     ) -> anyhow::Result<()> {
-        if mode_cam_device.name != *prop_change.device_name {
+        let Some(cur_cam_device) = cur_cam_device else { return Ok(()); };
+
+        if cur_cam_device.name != *prop_change.device_name {
             return Ok(());
         }
 
@@ -165,7 +164,7 @@ impl CameraWatchdog {
                 indi::Connection::camera_is_exposure_property(
                     &prop_change.prop_name,
                     &value.elem_name,
-                    indi::CamCcd::from_ccd_prop_name(&mode_cam_device.prop)
+                    indi::CamCcd::from_ccd_prop_name(&cur_cam_device.prop)
                 );
 
             let is_ready =
@@ -185,33 +184,33 @@ impl CameraWatchdog {
                 indi::Connection::camera_is_temperature_property(&prop_change.prop_name, &new_prop.elem_name);
             if is_temperature_property {
                 self.init_flags.cooler = true;
-                self.init_timer = INIT_DELAY * CORE_TIMER_FREQ;
+                self.init_timer = Some(INIT_DELAY * 1000);
             }
 
             let is_fan_str_property =
                 indi::Connection::camera_is_fan_str_property(&prop_change.prop_name);
             if is_fan_str_property {
                 self.init_flags.fan = true;
-                self.init_timer = INIT_DELAY * CORE_TIMER_FREQ;
+                self.init_timer = Some(INIT_DELAY * 1000);
             }
 
             let is_heater_str_property =
                 indi::Connection::camera_is_heater_str_property(&prop_change.prop_name);
             if is_heater_str_property {
                 self.init_flags.heater = true;
-                self.init_timer = INIT_DELAY * CORE_TIMER_FREQ;
+                self.init_timer = Some(INIT_DELAY * 1000);
             }
 
             if prop_change.prop_name.as_str() == "CCD_RESOLUTION" {
                 self.init_flags.max_res = true;
-                self.init_timer = INIT_DELAY * CORE_TIMER_FREQ;
+                self.init_timer = Some(INIT_DELAY * 1000);
             }
 
             let is_exposure_property =
                 indi::Connection::camera_is_exposure_property(
                     &prop_change.prop_name,
                     &new_prop.elem_name,
-                    indi::CamCcd::from_ccd_prop_name(&mode_cam_device.prop)
+                    indi::CamCcd::from_ccd_prop_name(&cur_cam_device.prop)
                 );
             if is_exposure_property && matches!(self.mode, Mode::WaitExposureProp(_)) {
                 self.mode = Mode::WaitAfterRestart(0);
@@ -222,7 +221,6 @@ impl CameraWatchdog {
     }
 
     pub fn control_camera_cooling(
-        &self,
         indi:       &Arc<indi::Connection>,
         cam_device: &str,
         options:    &Options,
@@ -247,7 +245,6 @@ impl CameraWatchdog {
     }
 
     pub fn control_camera_fan(
-        &self,
         indi:       &Arc<indi::Connection>,
         cam_device: &str,
         options:    &Options,
@@ -267,7 +264,6 @@ impl CameraWatchdog {
     }
 
     pub fn control_camera_heater(
-        &self,
         indi:       &Arc<indi::Connection>,
         cam_device: &str,
         options:    &Options,
@@ -308,5 +304,33 @@ impl CameraWatchdog {
         Ok(())
     }
 
+    fn restart_camera_exposure(&self, mode: &mut ModeData, options: &Options) -> anyhow::Result<()> {
+        let Some(cam_device) = mode.active.cam_device().cloned() else { return Ok(()); };
+        log::error!("Begin restart exposure of camera {}...", cam_device.name);
 
+        // Try to restart exposure by current mode
+        let restarted_by_mode = mode.active.restart_cam_exposure()?;
+
+        if !restarted_by_mode {
+            // Mode not restarted the camera exposure. Do it itself
+
+            self.cam_starter.abort(&cam_device)?;
+
+            let mode_cam_opts =
+                if let Some(frame_opts) = mode.active.frame_options_to_restart_exposure() {
+                    frame_opts
+                } else {
+                    &options.cam.frame
+                };
+
+            self.cam_starter.take_shot(
+                mode.active.get_type(),
+                &cam_device,
+                mode_cam_opts,
+                &options.cam.ctrl
+            )?;
+        }
+        log::error!("Exposure of camera {} restarted!", &cam_device.name);
+        Ok(())
+    }
 }

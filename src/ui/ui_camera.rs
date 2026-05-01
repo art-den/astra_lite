@@ -2,7 +2,7 @@ use std::{rc::Rc, sync::Arc, cell::RefCell};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{core::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}},
+    core::{cam_watchdog::CameraWatchdog, core::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}},
     image::{info::*, raw::{CalibrMethods, FrameType}},
     indi,
     options::*, ui::gtk_utils,
@@ -559,10 +559,8 @@ impl CameraUi {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
                 options.cam.ctrl.enable_cooler = chb.is_active();
                 self_.show_calibr_file_for_frame(&options);
-                let cam_watchdog = self_.core.cam_watchdog().lock().unwrap();
                 let cam_device = options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default();
-                let res = cam_watchdog.control_camera_cooling(&self_.core.indi(), cam_device, &options, false);
-                drop(cam_watchdog);
+                let res = CameraWatchdog::control_camera_cooling(&self_.core.indi(), cam_device, &options, false);
                 drop(options);
                 self_.correct_widgets_props();
                 gtk_utils::show_message_if_result_is_error(Some(&self_.window), &res);
@@ -574,10 +572,8 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
                 options.cam.ctrl.heater_str = cb.active_id().map(|id| id.to_string());
-                let cam_watchdog = self_.core.cam_watchdog().lock().unwrap();
                 let cam_device = options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default();
-                let res = cam_watchdog.control_camera_heater(&self_.core.indi(), cam_device, &options, false);
-                drop(cam_watchdog);
+                let res = CameraWatchdog::control_camera_heater(&self_.core.indi(), cam_device, &options, false);
                 drop(options);
                 self_.correct_widgets_props();
                 gtk_utils::show_message_if_result_is_error(Some(&self_.window), &res);
@@ -588,10 +584,8 @@ impl CameraUi {
             clone!(@weak self as self_ => move |chb| {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
                 options.cam.ctrl.enable_fan = chb.is_active();
-                let cam_watchdog = self_.core.cam_watchdog().lock().unwrap();
                 let cam_device = options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default();
-                let res = cam_watchdog.control_camera_fan(&self_.core.indi(), cam_device, &options, false);
-                drop(cam_watchdog);
+                let res = CameraWatchdog::control_camera_fan(&self_.core.indi(), cam_device, &options, false);
                 drop(options);
                 self_.correct_widgets_props();
                 gtk_utils::show_message_if_result_is_error(Some(&self_.window), &res);
@@ -603,10 +597,8 @@ impl CameraUi {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
                 options.cam.ctrl.temperature = spb.value();
                 self_.show_calibr_file_for_frame(&options);
-                let cam_watchdog = self_.core.cam_watchdog().lock().unwrap();
                 let cam_device = options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default();
-                let res = cam_watchdog.control_camera_cooling(&self_.core.indi(), cam_device, &options, false);
-                drop(cam_watchdog);
+                let res = CameraWatchdog::control_camera_cooling(&self_.core.indi(), cam_device, &options, false);
                 drop(options);
                 gtk_utils::show_message_if_result_is_error(Some(&self_.window), &res);
             })

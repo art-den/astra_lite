@@ -4,6 +4,8 @@ use crate::{core::{frame_processing::*, mode_camera::{CameraMode, TackingPicture
 
 use super::{core::*, events::Progress};
 
+const WAIT_TEMERATURE_TIME: usize = 20; // seconds
+
 enum State {
     Undefined,
     WaitingForTemperature(f64),
@@ -130,7 +132,7 @@ impl Mode for DarkCreationMode {
         Ok(())
     }
 
-    fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
+    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         let mut have_to_start = false;
         match self.state {
@@ -155,7 +157,7 @@ impl Mode for DarkCreationMode {
                 )?.value;
 
                 self.temperature.push_back(temperature);
-                if self.temperature.len() > 20 {
+                if self.temperature.len() * timer_period_ms > WAIT_TEMERATURE_TIME * 1000 {
                     self.temperature.pop_front();
 
                     let min_temperature = self.temperature.iter()

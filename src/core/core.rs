@@ -8,7 +8,7 @@ use gtk::glib::PropertySet;
 use itertools::Itertools;
 
 use crate::{
-    core::{cam_starter::CamStarter, cam_watchdog::{CamWatchdogResult, CameraWatchdog}, consts::*},
+    core::{cam_starter::CamStarter, cam_watchdog::CameraWatchdog, consts::*, dev_watchdog::DevicesWatchdog},
     guiding::external_guider::*,
     image::raw::FrameType,
     indi, options::*,
@@ -73,7 +73,7 @@ pub trait Mode {
     fn notify_before_frame_processing_start(&mut self, _blob: &Arc<indi::BlobPropValue>, _should_be_processed: &mut bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_timer(&mut self, _timer_period_ms: usize) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn custom_command(&mut self, _args: &dyn Any) -> anyhow::Result<Option<Box<dyn Any>>> { Ok(None) }
     fn notify_processing_queue_overflow(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn stop_live_view_before_this_mode(&self) -> bool { return true; }
@@ -104,6 +104,11 @@ impl ModeData {
     }
 }
 
+struct Watchdogs {
+    camera:  CameraWatchdog,
+    devices: DevicesWatchdog,
+}
+
 pub struct Core {
     indi:               Arc<indi::Connection>,
     options:            Arc<RwLock<Options>>,
@@ -114,7 +119,7 @@ pub struct Core {
     calibr_data:        Arc<Mutex<CalibrData>>,
     live_stacking:      Arc<LiveStackingData>,
     timer:              Arc<Timer>,
-    cam_watchdog:       Arc<Mutex<CameraWatchdog>>,
+    watchdogs:          Arc<Mutex<Watchdogs>>,
     img_proc_stop_flag: Mutex<Arc<AtomicBool>>, // stop flag for last command
 
     /// commands for passing into frame processing thread
@@ -140,21 +145,27 @@ impl Core {
         let (img_cmds_sender, frame_proc_thread) = start_frame_processing_thread();
 
         let indi = Arc::new(indi::Connection::new());
+        let cam_starter = Arc::new(CamStarter::new(&indi));
+
+        let watchdogs = Watchdogs {
+            camera: CameraWatchdog::new(&cam_starter),
+            devices: DevicesWatchdog::new(),
+        };
 
         let result = Arc::new(Self {
             indi:               Arc::clone(&indi),
             options:            Arc::new(RwLock::new(Options::default())),
             mode:               RwLock::new(ModeData::new()),
-            cam_starter:        Arc::new(CamStarter::new(&indi)),
             events:             Arc::new(Events::new()),
             cur_frame:          Arc::new(ResultImage::new()),
             calibr_data:        Arc::new(Mutex::new(CalibrData::default())),
             live_stacking:      Arc::new(LiveStackingData::new()),
             timer:              Arc::new(Timer::new()),
-            cam_watchdog:       Arc::new(Mutex::new(CameraWatchdog::new())),
+            watchdogs:          Arc::new(Mutex::new(watchdogs)),
             img_proc_stop_flag: Mutex::new(Arc::new(AtomicBool::new(false))),
             ext_guider:         ExternalGuiderCtrl::new(),
             frame_proc_thread:  Some(frame_proc_thread),
+            cam_starter,
             img_cmds_sender,
         });
 
@@ -162,7 +173,7 @@ impl Core {
         result.set_ext_guider_events_handler();
         result.connect_indi_events();
         result.connect_events();
-        result.start_1s_timer();
+        result.start_timer();
         result
     }
 
@@ -172,10 +183,6 @@ impl Core {
 
     pub fn options(&self) -> &Arc<RwLock<Options>> {
         &self.options
-    }
-
-    pub fn cam_watchdog(&self) -> &Arc<Mutex<CameraWatchdog>> {
-        &self.cam_watchdog
     }
 
     pub fn cam_starter(&self) -> &Arc<CamStarter> {
@@ -262,9 +269,11 @@ impl Core {
         log::info!("Error has informed!");
     }
 
-    fn start_1s_timer(self: &Arc<Self>) {
+    const TIMER_PERIOD_MS: usize = 250;
+
+    fn start_timer(self: &Arc<Self>) {
         let self_ = Arc::clone(self);
-        self.timer.exec(1000, true, move || {
+        self.timer.exec(Self::TIMER_PERIOD_MS as _, true, move || {
             let result = self_.timer_event_handler();
             self_.process_error(result, "Core::connect_events (timer closure)");
         });
@@ -274,42 +283,14 @@ impl Core {
         let mut mode = self.mode.write().unwrap();
         let options = self.options.read().unwrap();
 
-        let debug_blob_frozen = if cfg!(debug_assertions) {
-            options.cam.debug.blob_frozen
-        } else {
-            false
-        };
-
-        if let Some(cam_device) = &options.cam.device {
-            let mut cam_watchdog = self.cam_watchdog.lock().unwrap();
-
-            let cam_watchdog_1s_res = cam_watchdog.notify_timer_1s(
-                &self.indi,
-                &options,
-                cam_device,
-                debug_blob_frozen,
-            );
-
-            match cam_watchdog_1s_res {
-                Ok(cam_watchdog_result) => {
-                    match cam_watchdog_result {
-                        CamWatchdogResult::Waiting =>
-                            return Ok(()),
-                        CamWatchdogResult::RestartCameraShot => {
-                            self.restart_camera_exposure(&mut mode, &options)?;
-                        }
-                        _ => {},
-                    }
-                }
-                Err(err) => {
-                    log::error!("Error in cam_watchdog.notify_timer_1s(): {}", err)
-                }
-            }
-        }
+        let mut watchdogs = self.watchdogs.lock().unwrap();
+        watchdogs.camera.notify_timer(Self::TIMER_PERIOD_MS, &mut mode, &self.indi, &options)?;
+        watchdogs.devices.notify_timer(Self::TIMER_PERIOD_MS, &self.indi)?;
+        drop(watchdogs);
 
         drop(options);
 
-        let result = mode.active.notify_timer_1s()?;
+        let result = mode.active.notify_timer(Self::TIMER_PERIOD_MS)?;
         self.apply_notify_result(result, &mut mode)?;
         drop(mode);
 
@@ -367,9 +348,9 @@ impl Core {
         self:         &Arc<Self>,
         indi_drivers: &indi::Drivers
     ) -> anyhow::Result<()> {
-        let mut cam_watchdog = self.cam_watchdog.lock().unwrap();
-        cam_watchdog.clear();
-        drop(cam_watchdog);
+        let mut watchdogs = self.watchdogs.lock().unwrap();
+        watchdogs.camera.reset();
+        drop(watchdogs);
 
         let options = self.options.read().unwrap();
         let drivers = if !options.indi.remote {
@@ -419,9 +400,8 @@ impl Core {
 
         let conn_settings = indi::ConnSettings {
             drivers,
-            remote:               options.indi.remote,
-            host:                 options.indi.address.clone(),
-            activate_all_devices: !options.indi.remote,
+            remote: options.indi.remote,
+            host:   options.indi.address.clone(),
             .. Default::default()
         };
 
@@ -440,13 +420,9 @@ impl Core {
         drop(mode);
 
         let options = self.options.read().unwrap();
-
-        if let Some(mode_cam_device) = &options.cam.device {
-            let mut cam_watchdog = self.cam_watchdog.lock().unwrap();
-            cam_watchdog.notify_indi_prop_change(mode_cam_device, prop_change)?;
-            drop(cam_watchdog);
-        }
-
+        let mut watchdogs = self.watchdogs.lock().unwrap();
+        watchdogs.camera.notify_indi_prop_change(&options.cam.device, prop_change)?;
+        watchdogs.devices.notify_indi_prop_change(prop_change)?;
         Ok(())
     }
 
@@ -550,15 +526,15 @@ impl Core {
             return;
         }
 
-        let cam_watchdog = self.cam_watchdog.lock().unwrap();
+        // TODO: move this code inside CameraWatchdog
 
-        let res = cam_watchdog.control_camera_cooling(&self.indi, &to.name, &options, true);
+        let res = CameraWatchdog::control_camera_cooling(&self.indi, &to.name, &options, true);
         self.process_error(res, "Core::control_camera_cooling");
 
-        let res = cam_watchdog.control_camera_fan(&self.indi,&to.name, &options, true);
+        let res = CameraWatchdog::control_camera_fan(&self.indi,&to.name, &options, true);
         self.process_error(res, "Core::control_camera_fan");
 
-        let res = cam_watchdog.control_camera_heater(&self.indi,&to.name, &options, true);
+        let res = CameraWatchdog::control_camera_heater(&self.indi,&to.name, &options, true);
         self.process_error(res, "Core::control_camera_heater");
     }
 
@@ -605,36 +581,6 @@ impl Core {
 
             }
         }
-    }
-
-    fn restart_camera_exposure(self: &Arc<Self>, mode: &mut ModeData, options: &Options) -> anyhow::Result<()> {
-        let Some(cam_device) = mode.active.cam_device().cloned() else { return Ok(()); };
-        log::error!("Begin restart exposure of camera {}...", cam_device.name);
-
-        // Try to restart exposure by current mode
-        let restarted_by_mode = mode.active.restart_cam_exposure()?;
-
-        if !restarted_by_mode {
-            // Mode not restarted the camera exposure. Do it itself
-
-            self.cam_starter.abort(&cam_device)?;
-
-            let mode_cam_opts =
-                if let Some(frame_opts) = mode.active.frame_options_to_restart_exposure() {
-                    frame_opts
-                } else {
-                    &options.cam.frame
-                };
-
-            self.cam_starter.take_shot(
-                mode.active.get_type(),
-                &cam_device,
-                mode_cam_opts,
-                &options.cam.ctrl
-            )?;
-        }
-        log::error!("Exposure of camera {} restarted!", &cam_device.name);
-        Ok(())
     }
 
     pub fn exec_mode_custom_command(

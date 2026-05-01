@@ -42,24 +42,24 @@ pub enum GotoConfig {
 }
 
 pub struct GotoMode {
-    state:           State,
-    destination:     GotoDestination,
-    config:          GotoConfig,
-    eq_coord:        EqCoord,
-    camera:          Option<DeviceAndProp>,
-    cam_starter:     Arc<CamStarter>,
-    cam_opts:        Option<CamOptions>,
-    ps_opts:         PlateSolverOptions,
-    mount:           String,
-    indi:            Arc<indi::Connection>,
-    cur_frame:       Arc<ResultImage>,
-    options:         Arc<RwLock<Options>>,
-    subscribers:     Arc<Events>,
-    plate_solver:    Option<PlateSolver>,
-    unpark_seconds:  usize,
-    goto_seconds:    usize,
-    goto_ok_seconds: usize,
-    extra_stages:    usize,
+    state:        State,
+    destination:  GotoDestination,
+    config:       GotoConfig,
+    eq_coord:     EqCoord,
+    camera:       Option<DeviceAndProp>,
+    cam_starter:  Arc<CamStarter>,
+    cam_opts:     Option<CamOptions>,
+    ps_opts:      PlateSolverOptions,
+    mount:        String,
+    indi:         Arc<indi::Connection>,
+    cur_frame:    Arc<ResultImage>,
+    options:      Arc<RwLock<Options>>,
+    subscribers:  Arc<Events>,
+    plate_solver: Option<PlateSolver>,
+    unpark_ms:    usize,
+    goto_ms:      usize,
+    goto_ok_ms:   usize,
+    extra_stages: usize,
 }
 
 impl GotoMode {
@@ -104,9 +104,9 @@ impl GotoMode {
             cur_frame:       Arc::clone(cur_frame),
             options:         Arc::clone(options),
             subscribers:     Arc::clone(subscribers),
-            unpark_seconds:  0,
-            goto_seconds:    0,
-            goto_ok_seconds: 0,
+            unpark_ms:  0,
+            goto_ms:    0,
+            goto_ok_ms: 0,
             extra_stages:    0,
             config,
             plate_solver,
@@ -134,7 +134,7 @@ impl GotoMode {
             true,
             None
         )?;
-        self.unpark_seconds = 0;
+        self.unpark_ms = 0;
         self.state = State::Unparking;
         Ok(())
     }
@@ -159,8 +159,8 @@ impl GotoMode {
             true,
             None
         )?;
-        self.goto_seconds = 0;
-        self.goto_ok_seconds = 0;
+        self.goto_ms = 0;
+        self.goto_ok_ms = 0;
         Ok(())
     }
 
@@ -422,7 +422,7 @@ impl Mode for GotoMode {
         self.cam_opts.as_ref().map(|cam_opts| &cam_opts.frame)
     }
 
-    fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
+    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         match self.state {
             State::Unparking => {
                 if !self.indi.mount_is_parked(&self.mount)? {
@@ -430,8 +430,8 @@ impl Mode for GotoMode {
                     self.state = State::Goto;
                     return Ok(NotifyResult::ProgressChanges);
                 }
-                self.unpark_seconds += 1;
-                if self.unpark_seconds > MAX_MOUNT_UNPARK_TIME {
+                self.unpark_ms += timer_period_ms;
+                if self.unpark_ms > MAX_MOUNT_UNPARK_TIME * 1000 {
                     anyhow::bail!(
                         "Mount unpark time out (> {} seconds)!",
                         MAX_MOUNT_UNPARK_TIME
@@ -442,8 +442,8 @@ impl Mode for GotoMode {
             State::Goto | State::CorrectMount => {
                 let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.mount)?;
                 if matches!(crd_prop_state, indi::PropState::Ok | indi::PropState::Idle) {
-                    self.goto_ok_seconds += 1;
-                    if self.goto_ok_seconds >= AFTER_GOTO_WAIT_TIME {
+                    self.goto_ok_ms += timer_period_ms;
+                    if self.goto_ok_ms >= AFTER_GOTO_WAIT_TIME * 1000 {
                         check_telescope_is_at_desired_position(
                             &self.indi,
                             &self.mount,
@@ -463,8 +463,8 @@ impl Mode for GotoMode {
                         return Ok(NotifyResult::ProgressChanges);
                     }
                 } else {
-                    self.goto_seconds += 1;
-                    if self.goto_seconds > MAX_GOTO_TIME {
+                    self.goto_ms += timer_period_ms;
+                    if self.goto_ms > MAX_GOTO_TIME * 1000 {
                         anyhow::bail!("Telescope is moving too long time (> {}s)", MAX_GOTO_TIME);
                     }
                 }

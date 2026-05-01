@@ -71,8 +71,8 @@ enum Axis {
 enum State {
     Undefined,
     WaitForImage,
-    WaitForSlew(usize /* ok_time */),
-    WaitForOrigCoords(usize /* ok time */),
+    WaitForSlew(usize /* ok_time in ms */),
+    WaitForOrigCoords(usize /* ok time in ms */),
 }
 
 struct CalibrAtempt {
@@ -365,14 +365,14 @@ impl Mode for MountCalibrMode {
         }
     }
 
-    fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
+    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         match &mut self.state {
-            State::WaitForSlew(ok_time) => {
+            State::WaitForSlew(ok_time_ms) => {
                 let guide_pulse_finished = self.indi.mount_is_timed_guide_finished(&self.mount_device)?;
                 if guide_pulse_finished {
-                    *ok_time += 1;
-                    if *ok_time == AFTER_MOUNT_MOVE_WAIT_TIME {
+                    *ok_time_ms += timer_period_ms;
+                    if *ok_time_ms >= AFTER_MOUNT_MOVE_WAIT_TIME * 1000 {
                         self.indi.mount_abort_motion(&self.mount_device)?;
                         self.cam_starter.take_shot(
                             self.get_type(),
@@ -385,11 +385,11 @@ impl Mode for MountCalibrMode {
                     }
                 }
             }
-            State::WaitForOrigCoords(ok_time) => {
+            State::WaitForOrigCoords(ok_time_ms) => {
                 let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.mount_device)?;
                 if matches!(crd_prop_state, indi::PropState::Ok|indi::PropState::Idle) {
-                    *ok_time += 1;
-                    if *ok_time >= AFTER_GOTO_WAIT_TIME {
+                    *ok_time_ms += timer_period_ms;
+                    if *ok_time_ms >= AFTER_GOTO_WAIT_TIME {
                         result = NotifyResult::Finished {
                             next_mode: self.next_mode.take()
                         };

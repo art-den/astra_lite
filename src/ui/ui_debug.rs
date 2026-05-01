@@ -17,7 +17,6 @@ pub fn init_ui(options: &Arc<RwLock<Options>>) -> Rc<dyn UiModule> {
 
 struct Widgets {
     grd:             gtk::Grid,
-    chb_blob_frozen: gtk::CheckButton,
     spb_sim_alt_err: gtk::SpinButton,
     spb_sim_az_err:  gtk::SpinButton,
 }
@@ -115,7 +114,6 @@ impl Widgets {
 
         Widgets {
             grd,
-            chb_blob_frozen,
             spb_sim_alt_err,
             spb_sim_az_err
         }
@@ -135,15 +133,13 @@ impl Drop for DebugUi {
 
 impl UiModule for DebugUi {
     fn show_options(&self, options: &Options) {
-        self.widgets.chb_blob_frozen.set_active(options.cam.debug.blob_frozen);
         self.widgets.spb_sim_alt_err.set_value(options.polar_align.sim_alt_err);
-        self.widgets.spb_sim_az_err.set_value(options.polar_align.sim_az_err);
+        self.widgets.spb_sim_az_err .set_value(options.polar_align.sim_az_err);
     }
 
     fn get_options(&self, options: &mut Options) {
-        options.cam.debug.blob_frozen = self.widgets.chb_blob_frozen.is_active();
-        options.polar_align.sim_alt_err  = self.widgets.spb_sim_alt_err.value();
-        options.polar_align.sim_az_err   = self.widgets.spb_sim_az_err.value();
+        options.polar_align.sim_alt_err = self.widgets.spb_sim_alt_err.value();
+        options.polar_align.sim_az_err  = self.widgets.spb_sim_az_err.value();
     }
 
     fn panels(&self) -> Vec<Panel> {
@@ -160,13 +156,6 @@ impl UiModule for DebugUi {
 
 impl DebugUi {
     fn connect_widgets_events(self: &Rc<Self>) {
-        self.widgets.chb_blob_frozen.connect_active_notify(
-            clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.options.try_write() else { return; };
-                options.cam.debug.blob_frozen = chb.is_active();
-            })
-        );
-
         self.widgets.spb_sim_alt_err.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
                 let Ok(mut options) = self_.options.try_write() else { return; };

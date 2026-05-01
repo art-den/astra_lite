@@ -202,9 +202,9 @@ pub enum CustomCommand {
 pub enum State {
     Undefined,
     Goto {
-        time:   usize,
-        ok_cnt: usize,
-        target: EqCoord,
+        time_ms:         usize,
+        goto_ok_time_ms: usize,
+        target:          EqCoord,
     },
     Capture,
     PlateSolve,
@@ -610,9 +610,9 @@ impl PolarAlignMode {
             None
         )?;
         self.state = State::Goto {
-            time: 0,
-            ok_cnt: 0,
-            target: EqCoord { dec, ra },
+            time_ms:         0,
+            goto_ok_time_ms: 0,
+            target: EqCoord  { dec, ra },
         };
         Ok(())
     }
@@ -776,17 +776,17 @@ impl Mode for PolarAlignMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
+    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         match &mut self.state {
             State::PlateSolve => {
                 return self.try_process_plate_solving_result();
             }
 
-            State::Goto {ok_cnt: goto_ok_cnt, time: goto_time, target: goto_pos} => {
+            State::Goto {goto_ok_time_ms, time_ms, target: goto_pos} => {
                 let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.mount)?;
                 if matches!(crd_prop_state, indi::PropState::Ok|indi::PropState::Idle) {
-                    *goto_ok_cnt += 1;
-                    if *goto_ok_cnt >= AFTER_GOTO_WAIT_TIME {
+                    *goto_ok_time_ms += timer_period_ms;
+                    if *goto_ok_time_ms >= AFTER_GOTO_WAIT_TIME * 1000 {
                         check_telescope_is_at_desired_position(
                             &self.indi,
                             &self.mount,
@@ -818,8 +818,8 @@ impl Mode for PolarAlignMode {
                     }
                 }
 
-                *goto_time += 1;
-                if *goto_time > MAX_GOTO_TIME {
+                *time_ms += timer_period_ms;
+                if *time_ms > MAX_GOTO_TIME * 1000 {
                     anyhow::bail!("Telescope is moving too long time (> {}s)", MAX_GOTO_TIME);
                 }
             }

@@ -226,7 +226,7 @@ impl Mode for PlatesolveMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
+    fn notify_timer(&mut self, _timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         match self.state {
             State::PlateSolve => {
                 let ok = self.try_process_plate_solving_result()?;

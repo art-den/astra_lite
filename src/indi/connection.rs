@@ -21,7 +21,6 @@ pub struct ConnSettings {
     pub host: String,
     pub server_exe: String,
     pub drivers: Vec<String>,
-    pub activate_all_devices: bool,
 }
 
 impl Default for ConnSettings {
@@ -31,7 +30,6 @@ impl Default for ConnSettings {
             host: "localhost".to_string(),
             server_exe: "indiserver".to_string(),
             drivers: Vec::new(),
-            activate_all_devices: true,
         }
     }
 }
@@ -135,7 +133,6 @@ pub enum Event {
     DeviceConnected(Arc<DeviceConnectEvent>),
     PropChange(Arc<PropChangeEvent>),
     DeviceDelete(Arc<DeviceDeleteEvent>),
-    ReadTimeOut,
     Message(Arc<MessageEvent>),
     BlobStart(Arc<BlobStartEvent>),
 }
@@ -1506,7 +1503,6 @@ impl Connection {
                         &self_.devices,
                         stream,
                         XmlSender { xml_sender },
-                        settings.activate_all_devices,
                         &self_.shot_ids_by_dev
                     );
                     receiver.main(events_sender_clone);
@@ -3893,22 +3889,12 @@ impl XmlSender {
     }
 }
 
-
-enum XmlReceiverState {
-    Undef,
-    WaitForDevicesList,
-    WaitForDevicesOn,
-    Working
-}
-
 struct XmlReceiver {
     conn_state:      Arc<Mutex<ConnState>>,
     devices:         Arc<Mutex<Devices>>,
     stream:          TcpStream,
     reader:          XmlStreamReader,
     xml_sender:      XmlSender,
-    state:           XmlReceiverState,
-    activate_devs:   bool,
     shot_ids_by_dev: ShotIdsByCCD,
     active_shot_ids: ShotIdsByCCD,
 }
@@ -3919,19 +3905,16 @@ impl XmlReceiver {
         devices:         &Arc<Mutex<Devices>>,
         stream:          TcpStream,
         xml_sender:      XmlSender,
-        activate_devs:   bool,
         shot_ids_by_dev: &ShotIdsByCCD,
     ) -> Self {
         Self {
             conn_state:      Arc::clone(conn_state),
             devices:         Arc::clone(devices),
             reader:          XmlStreamReader::new(),
-            state:           XmlReceiverState::Undef,
             shot_ids_by_dev: Arc::clone(shot_ids_by_dev),
             active_shot_ids: Arc::new(Mutex::new(HashMap::new())),
             stream,
             xml_sender,
-            activate_devs,
         }
     }
 
@@ -3939,9 +3922,7 @@ impl XmlReceiver {
         self.stream.set_read_timeout(Some(Duration::from_millis(1000))).unwrap(); // TODO: check error
 
         self.xml_sender.command_get_properties_impl(None, None).unwrap(); // TODO: check error
-        self.state = XmlReceiverState::WaitForDevicesList;
 
-        let mut timeout_processed = false;
         loop {
             let xml_res = self.reader.receive_xml(&mut self.stream);
             match xml_res {
@@ -3964,7 +3945,6 @@ impl XmlReceiver {
                     if log::log_enabled!(log::Level::Trace) {
                         log::trace!("indi_api: incoming xml =\n{}", xml);
                     }
-                    timeout_processed = false;
                     let process_xml_res = self.process_xml(&xml, blobs, &events_sender);
                     if let Err(err) = process_xml_res {
                         log::debug!("indi_api: '{}' for XML\n{}", err, xml);
@@ -3987,16 +3967,7 @@ impl XmlReceiver {
                     break;
                 }
                 Ok(XmlStreamReaderResult::TimeOut) => {
-                    if !timeout_processed {
-                        timeout_processed = true;
-                        events_sender.send(EventSenderEvent::Mess(
-                            Event::ReadTimeOut
-                        )).unwrap();
-                        let to_res = self.process_time_out();
-                        if let Err(err) = to_res {
-                            log::error!("indi_api: {}", err.to_string());
-                        }
-                    }
+                    /* do nothing */
                 }
                 Err(err) => {
                     self.reader.recover_after_error();
@@ -4317,31 +4288,6 @@ impl XmlReceiver {
             self.notify_subcribers_about_message(timestamp, &device, &message, events_sender);
         } else if !matches!(xml_elem.name.as_str(), "newTextVector"|"newNumberVector"|"newSwitchVector"|"newBLOBVector") {
             log::error!("Unknown tag: {}, xml=\n{}", xml_elem.name, xml_text);
-        }
-        Ok(())
-    }
-
-    fn process_time_out(&mut self) -> anyhow::Result<()> {
-        match self.state {
-            XmlReceiverState::WaitForDevicesList => {
-                if self.activate_devs {
-                    let devices = self.devices.lock().unwrap();
-                    let names = devices.get_names();
-                    for device_name in names {
-                        self.xml_sender.command_enable_device(
-                            &device_name,
-                            true
-                        )?;
-                    }
-                    self.state = XmlReceiverState::WaitForDevicesOn;
-                } else {
-                    self.state = XmlReceiverState::Working;
-                }
-            },
-            XmlReceiverState::WaitForDevicesOn => {
-                self.state = XmlReceiverState::Working;
-            }
-            _ => {}
         }
         Ok(())
     }

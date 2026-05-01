@@ -58,7 +58,7 @@ pub struct FocusingMode {
     prelim_step:    bool,
     stage:          Stage,
     desired_focus:  f64,
-    change_time:    Option<usize>,
+    change_time_ms: Option<usize>,
     change_cnt:     usize,
     next_mode:      Option<Box<dyn Mode + Sync + Send>>,
     start_temp:     f64, // temperature when autofocusing is started
@@ -129,23 +129,23 @@ impl FocusingMode {
         log::debug!("Creating autofocus mode. max_try={}", max_try);
 
         Ok(FocusingMode {
-            indi:          Arc::clone(indi),
-            subscribers:   Arc::clone(subscribers),
-            cam_starter:   Arc::clone(&cam_starter),
-            state:         FocusingState::Undefined,
-            f_opts:        opts.focuser.clone(),
-            before_pos:    0.0,
-            to_go:         VecDeque::new(),
-            samples:       Vec::new(),
-            one_pos_hfd:   Vec::new(),
-            result_pos:    None,
-            stage:         Stage::Undef,
-            change_time:   None,
-            change_cnt:    0,
-            desired_focus: 0.0,
-            try_cnt:       0,
-            camera:        cam_device.clone(),
-            start_temp:    0.0,
+            indi:           Arc::clone(indi),
+            subscribers:    Arc::clone(subscribers),
+            cam_starter:    Arc::clone(&cam_starter),
+            state:          FocusingState::Undefined,
+            f_opts:         opts.focuser.clone(),
+            before_pos:     0.0,
+            to_go:          VecDeque::new(),
+            samples:        Vec::new(),
+            one_pos_hfd:    Vec::new(),
+            result_pos:     None,
+            stage:          Stage::Undef,
+            change_time_ms: None,
+            change_cnt:     0,
+            desired_focus:  0.0,
+            try_cnt:        0,
+            camera:         cam_device.clone(),
+            start_temp:     0.0,
             prelim_step,
             next_mode,
             cam_opts,
@@ -176,7 +176,7 @@ impl FocusingMode {
     fn set_new_focus_value(&mut self, value: f64) -> anyhow::Result<()> {
         self.indi.focuser_set_abs_value(&self.f_opts.device, value, true, None)?;
         self.desired_focus = value;
-        self.change_time = Some(0);
+        self.change_time_ms = Some(0);
         self.change_cnt = 0;
         Ok(())
     }
@@ -217,7 +217,7 @@ impl FocusingMode {
             FocusingState::WaitingPosition(desired_focus) => {
                 if cur_focus as i64 == desired_focus as i64 {
                     log::debug!("Taking picture for focuser value: {}", desired_focus);
-                    self.change_time = None;
+                    self.change_time_ms = None;
                     self.cam_starter.take_shot(
                         self.get_type(),
                         &self.camera,
@@ -237,7 +237,7 @@ impl FocusingMode {
             FocusingState::WaitingResultPos(desired_focus) => {
                 if cur_focus as i64 == desired_focus as i64 {
                     log::debug!("Taking RESULT shot for focuser value: {}", desired_focus);
-                    self.change_time = None;
+                    self.change_time_ms = None;
                     self.cam_starter.take_shot(
                         self.get_type(),
                         &self.camera,
@@ -316,7 +316,7 @@ impl FocusingMode {
         } else if !info_is_ok {
             result = NotifyResult::ProgressChanges;
             log::info!("Stars on received image are not Ok. Taking another image...");
-            self.change_time = None;
+            self.change_time_ms = None;
             self.cam_starter.take_shot(
                 self.get_type(),
                 &self.camera,
@@ -731,10 +731,10 @@ impl Mode for FocusingMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
-        if let Some(change_time) = &mut self.change_time {
-            *change_time += 1;
-            if *change_time > MAX_FOCUS_CHANGE_TIME {
+    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+        if let Some(change_time_ms) = &mut self.change_time_ms {
+            *change_time_ms += timer_period_ms;
+            if *change_time_ms > MAX_FOCUS_CHANGE_TIME * 1000 {
                 self.change_cnt += 1;
                 log::error!("Time out waiting new focus value!");
                 if self.change_cnt > MAX_FOCUS_TRY_SET_CNT {
@@ -742,7 +742,7 @@ impl Mode for FocusingMode {
                 }
                 log::error!("Setting new value {:.0} again. Try = {}", self.desired_focus, self.change_cnt);
                 self.indi.focuser_set_abs_value(&self.f_opts.device, self.desired_focus, true, None)?;
-                *change_time = 0;
+                *change_time_ms = 0;
             }
         }
         let cur_focus = self.indi.focuser_get_abs_value_prop_elem(&self.f_opts.device)?.value;

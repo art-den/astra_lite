@@ -43,7 +43,7 @@ enum State {
     FrameToSkip,
     Common,
     CameraOffsetCalculation,
-    InternalMountCorrection(usize /* ok_time */),
+    InternalMountCorrection(usize /* ok_time in ms */),
     ExternalDithering,
 }
 
@@ -1417,14 +1417,14 @@ impl Mode for TackingPicturesMode {
         }
     }
 
-    fn notify_timer_1s(&mut self) -> anyhow::Result<NotifyResult> {
+    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         match &mut self.state {
-            State::InternalMountCorrection(ok_time) => {
+            State::InternalMountCorrection(ok_time_ms) => {
                 let guide_pulse_finished = self.indi.mount_is_timed_guide_finished(&self.mount_device)?;
                 if guide_pulse_finished {
-                    *ok_time += 1;
-                    if *ok_time == AFTER_MOUNT_MOVE_WAIT_TIME {
+                    *ok_time_ms += timer_period_ms;
+                    if *ok_time_ms >= AFTER_MOUNT_MOVE_WAIT_TIME * 1000 {
                         self.indi.mount_abort_motion(&self.mount_device)?;
                         self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
                         self.state = State::Common;

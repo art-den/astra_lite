@@ -495,9 +495,6 @@ impl HardwareUi {
                     &message.text
                 );
             }
-            indi::Event::ReadTimeOut => {
-                log::debug!("indi: read time out");
-            }
             indi::Event::BlobStart(_) => {
                 log::debug!("indi: blob start");
             }
