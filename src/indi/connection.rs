@@ -71,6 +71,7 @@ pub struct NewDeviceEvent {
     pub interface:   DriverInterface,
 }
 
+#[derive(Clone)]
 pub struct DeviceConnectEvent {
     pub timestamp:   Option<DateTime<Utc>>,
     pub device_name: Arc<String>,
@@ -78,43 +79,48 @@ pub struct DeviceConnectEvent {
     pub interface:   DriverInterface,
 }
 
-#[derive(Debug, PartialEq)]
-pub struct PropChangeValue {
-    pub elem_name:  Arc<String>,
-    pub prop_value: PropValue,
-}
-
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum PropChange {
-    New(PropChangeValue),
+    New {
+        prop_name: Arc<String>,
+        elem_name: Arc<String>,
+        value:     PropValue,
+        state:     PropState,
+    },
     Change {
-        value:      PropChangeValue,
+        prop_name:  Arc<String>,
+        elem_name:  Arc<String>,
+        value:      PropValue,
         prev_state: PropState,
         new_state:  PropState,
     },
-    Delete,
+    Delete {
+        prop_name: Arc<String>,
+    }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PropChangeEvent {
     pub timestamp:   Option<DateTime<Utc>>,
     pub device_name: Arc<String>,
-    pub prop_name:   Arc<String>,
     pub change:      PropChange,
 }
 
+#[derive(Clone)]
 pub struct DeviceDeleteEvent {
     pub timestamp:   Option<DateTime<Utc>>,
     pub device_name: Arc<String>,
     pub interface:   DriverInterface,
 }
 
+#[derive(Clone)]
 pub struct MessageEvent {
     pub timestamp:   Option<DateTime<Utc>>,
     pub device_name: Arc<String>,
     pub text:        Arc<String>,
 }
 
+#[derive(Clone)]
 pub struct BlobStartEvent {
     pub device_name: Arc<String>,
     pub prop_name:   Arc<String>,
@@ -130,11 +136,11 @@ pub enum Event {
     ConnChange(ConnState),
     ConnectionLost,
     NewDevice(NewDeviceEvent),
-    DeviceConnected(Arc<DeviceConnectEvent>),
-    PropChange(Arc<PropChangeEvent>),
-    DeviceDelete(Arc<DeviceDeleteEvent>),
-    Message(Arc<MessageEvent>),
-    BlobStart(Arc<BlobStartEvent>),
+    DeviceConnected(DeviceConnectEvent),
+    PropChange(PropChangeEvent),
+    DeviceDelete(DeviceDeleteEvent),
+    Message(MessageEvent),
+    BlobStart(BlobStartEvent),
 }
 
 type EventFun = dyn Fn(Event) + Send + 'static;
@@ -1033,21 +1039,19 @@ impl Devices {
         property.state = PropState::Busy;
         for elem in &property.elements {
             let change = PropChange::Change {
-                value: PropChangeValue {
-                    elem_name: Arc::clone(&elem.name),
-                    prop_value: elem.value.clone(),
-                },
+                prop_name: Arc::clone(&property.name),
+                elem_name: Arc::clone(&elem.name),
+                value:     elem.value.clone(),
                 new_state: property.state,
                 prev_state,
             };
             let event = PropChangeEvent {
                 timestamp:   Some(Utc::now()),
                 device_name: Arc::clone(&device_name),
-                prop_name:   Arc::clone(&property.name),
                 change
             };
             events_sender
-                .send(EventSenderEvent::Mess(Event::PropChange(Arc::new(event))))
+                .send(EventSenderEvent::Mess(Event::PropChange(event)))
                 .map_err(|e| Error::Internal(e.to_string()))?;
         }
         Ok(())
@@ -4002,20 +4006,22 @@ impl XmlReceiver {
         device:         &mut Device,
         timestamp:      Option<DateTime<Utc>>,
         prop_name:      &Arc<String>,
+        state:          PropState,
         changed_values: Vec<(Arc<String>, PropValue)>,
         events_sender:  &mpsc::Sender<EventSenderEvent>,
     ) {
         for (name, value) in changed_values {
-            let prop_change_value = PropChangeValue {
+            let change = PropChange::New {
+                prop_name:  Arc::clone(prop_name),
                 elem_name:  Arc::clone(&name),
-                prop_value: value.clone(),
+                value:      value.clone(),
+                state
             };
-            events_sender.send(EventSenderEvent::Mess(Event::PropChange(Arc::new(PropChangeEvent {
+            events_sender.send(EventSenderEvent::Mess(Event::PropChange(PropChangeEvent {
                 timestamp,
                 device_name: Arc::clone(&device.name),
-                prop_name:   Arc::clone(prop_name),
-                change:      PropChange::New(prop_change_value),
-            })))).unwrap();
+                change,
+            }))).unwrap();
 
             if prop_name.as_str() == "DRIVER_INFO"
             && name.as_str() == "DRIVER_INTERFACE" {
@@ -4045,21 +4051,18 @@ impl XmlReceiver {
         events_sender:  &mpsc::Sender<EventSenderEvent>
     ) {
         for (name, prop_value) in changed_values {
-            let value = PropChangeValue {
-                elem_name:  Arc::clone(&name),
-                prop_value: prop_value.clone(),
-            };
             let change = PropChange::Change{
-                value,
+                prop_name:  Arc::clone(prop_name),
+                elem_name:  Arc::clone(&name),
+                value:      prop_value.clone(),
                 prev_state,
                 new_state,
             };
-            events_sender.send(EventSenderEvent::Mess(Event::PropChange(Arc::new(PropChangeEvent {
+            events_sender.send(EventSenderEvent::Mess(Event::PropChange(PropChangeEvent {
                 timestamp,
                 device_name: Arc::clone(&device.name),
-                prop_name: Arc::clone(prop_name),
                 change,
-            })))).unwrap();
+            }))).unwrap();
 
             if prop_name.as_str() == "CONNECTION"
             && name.as_str() == "CONNECT" {
@@ -4073,7 +4076,7 @@ impl XmlReceiver {
                 };
 
                 events_sender.send(EventSenderEvent::Mess(Event::DeviceConnected(
-                    Arc::new(event_data)
+                    event_data
                 ))).unwrap();
             }
         }
@@ -4086,12 +4089,14 @@ impl XmlReceiver {
         prop_name:     &Arc<String>,
         events_sender: &mpsc::Sender<EventSenderEvent>
     ) {
-        events_sender.send(EventSenderEvent::Mess(Event::PropChange(Arc::new(PropChangeEvent {
+        let change = PropChange::Delete {
+            prop_name: Arc::clone(prop_name)
+        };
+        events_sender.send(EventSenderEvent::Mess(Event::PropChange(PropChangeEvent {
             timestamp:   time,
             device_name: Arc::clone(device_name),
-            prop_name:   Arc::clone(prop_name),
-            change:      PropChange::Delete,
-        })))).unwrap();
+            change,
+        }))).unwrap();
     }
 
     fn notify_subcribers_about_device_delete(
@@ -4101,11 +4106,11 @@ impl XmlReceiver {
         events_sender: &mpsc::Sender<EventSenderEvent>,
         drv_interface: DriverInterface,
     ) {
-        events_sender.send(EventSenderEvent::Mess(Event::DeviceDelete(Arc::new(DeviceDeleteEvent {
+        events_sender.send(EventSenderEvent::Mess(Event::DeviceDelete(DeviceDeleteEvent {
             timestamp:   time,
             device_name: Arc::clone(device_name),
             interface:   drv_interface
-        })))).unwrap();
+        }))).unwrap();
     }
 
     fn notify_subcribers_about_message(
@@ -4115,11 +4120,11 @@ impl XmlReceiver {
         message:       &Arc<String>,
         events_sender: &mpsc::Sender<EventSenderEvent>
     ) {
-        events_sender.send(EventSenderEvent::Mess(Event::Message(Arc::new(MessageEvent {
+        events_sender.send(EventSenderEvent::Mess(Event::Message(MessageEvent {
             timestamp,
             device_name: Arc::clone(device_name),
             text:        Arc::clone(message),
-        })))).unwrap();
+        }))).unwrap();
     }
 
     fn notify_subcribers_about_blob_start(
@@ -4141,14 +4146,14 @@ impl XmlReceiver {
             active_shot_ids.insert((device_name.to_string(), ccd), shot_id);
         }
 
-        events_sender.send(EventSenderEvent::Mess(Event::BlobStart(Arc::new(BlobStartEvent {
+        events_sender.send(EventSenderEvent::Mess(Event::BlobStart(BlobStartEvent {
             device_name: Arc::clone(device_name),
             prop_name:   Arc::clone(prop_name),
             elem_name:   Arc::clone(elem_name),
             format:      Arc::new(format.to_string()),
             len,
             shot_id
-        })))).unwrap();
+        }))).unwrap();
     }
 
     fn process_xml(
@@ -4188,6 +4193,7 @@ impl XmlReceiver {
                 &device.name,
                 &prop_name
             )?;
+            let state = property.state;
             let values = property.get_values();
             property.change_id = change_id;
             let prop_name = Arc::clone(&property.name);
@@ -4197,6 +4203,7 @@ impl XmlReceiver {
                 device,
                 timestamp,
                 &prop_name,
+                state,
                 values,
                 events_sender,
             );

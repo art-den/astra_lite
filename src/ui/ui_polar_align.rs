@@ -161,7 +161,8 @@ impl UiModule for PolarAlignUi {
                 self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
             }
             indi::Event::PropChange(change) => {
-                if change.prop_name.as_str() == "TELESCOPE_SLEW_RATE" {
+                if let indi::PropChange::Change{ prop_name, .. } = &change.change
+                && **prop_name == "TELESCOPE_SLEW_RATE" {
                     self.delayed_actions.schedule(DelayedAction::UpdateMountSpeedList);
                 }
             }

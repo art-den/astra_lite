@@ -723,9 +723,9 @@ impl Mode for FocusingMode {
         if *prop_change.device_name != self.f_opts.device {
             return Ok(NotifyResult::Empty);
         }
-        if let ("ABS_FOCUS_POSITION", indi::PropChange::Change { value, .. })
-        = (prop_change.prop_name.as_str(), &prop_change.change) {
-            let cur_focus = value.prop_value.to_f64()?;
+        if let indi::PropChange::Change { prop_name, value, .. } = &prop_change.change
+        && **prop_name == "ABS_FOCUS_POSITION" {
+            let cur_focus = value.to_f64()?;
             return self.check_cur_focus_value(cur_focus);
         }
         Ok(NotifyResult::Empty)

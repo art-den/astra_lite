@@ -435,51 +435,52 @@ impl HardwareUi {
             }
             indi::Event::PropChange(event) => {
                 match &event.change {
-                    indi::PropChange::New(value) => {
+                    indi::PropChange::New {prop_name, elem_name, value, state} => {
                         if log::log_enabled!(log::Level::Debug) {
                             let prop_name_string = format!(
                                 "(+) {:20}.{:27}.{:27}",
                                 event.device_name,
-                                event.prop_name,
-                                value.elem_name,
+                                prop_name,
+                                elem_name,
                             );
                             log::debug!(
-                                "{} = {}",
+                                "{} = {} ({:?})",
                                 prop_name_string,
-                                value.prop_value.to_string_for_logging()
+                                value.to_string_for_logging(),
+                                state
                             );
                         }
                     },
-                    indi::PropChange::Change{value, prev_state, new_state} => {
+                    indi::PropChange::Change{ prop_name, elem_name, value, prev_state, new_state } => {
                         if log::log_enabled!(log::Level::Debug) {
                             let prop_name_string = format!(
                                 "(*) {:20}.{:27}.{:27}",
                                 event.device_name,
-                                event.prop_name,
-                                value.elem_name,
+                                prop_name,
+                                elem_name,
                             );
                             if prev_state == new_state {
                                 log::debug!(
                                     "{} = {}",
                                     prop_name_string,
-                                    value.prop_value.to_string_for_logging()
+                                    value.to_string_for_logging()
                                 );
                             } else {
                                 log::debug!(
                                     "{} = {} ({:?} -> {:?})",
                                     prop_name_string,
-                                    value.prop_value.to_string_for_logging(),
+                                    value.to_string_for_logging(),
                                     prev_state,
                                     new_state
                                 );
                             }
                         }
                     },
-                    indi::PropChange::Delete => {
+                    indi::PropChange::Delete { prop_name } => {
                         log::debug!(
                             "(-) {:20}.{:27}",
                             event.device_name,
-                            event.prop_name
+                            prop_name
                         );
                     },
                 };

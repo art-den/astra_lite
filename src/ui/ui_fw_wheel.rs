@@ -150,38 +150,43 @@ impl FltWheelUi {
     }
 
     fn process_indi_prop_change(&self, prop_change: &indi::PropChangeEvent) {
-        if prop_change.change == indi::PropChange::Delete {
-            return;
-        }
-
-        if prop_change.prop_name.as_ref() == "FILTER_NAME" {
-            self.delayed_actions.schedule(DelayedAction::UpdateFilterList);
-        }
-
-        let show_slot_from_prop_value = |prop_value: &indi::NumPropValue| {
+        let show_slot_from_prop_value = |state: indi::PropState, prop_value: &indi::PropValue| {
+            let state_is_ok = state == indi::PropState::Ok;
+            self.widgets.cb_filter.set_sensitive(state_is_ok);
+            if !state_is_ok { return; }
+            let indi::PropValue::Num(prop_value) = prop_value else { return; };
             let index = prop_value.value as i32 - prop_value.min as i32;
             if index >= 0 {
                 self.widgets.cb_filter.set_active(Some(index as _));
             }
         };
 
-        if prop_change.prop_name.as_ref() == "FILTER_SLOT"
-        && let indi::PropChange::Change{value: indi::PropChangeValue{prop_value, ..}, new_state, ..} = &prop_change.change {
-            let state_is_ok = new_state == &indi::PropState::Ok;
-            self.widgets.cb_filter.set_sensitive(state_is_ok);
-            if !state_is_ok { return; }
-            let indi::PropValue::Num(prop_value) = prop_value else { return; };
-            self.excl_caller.exec(|| {
-                show_slot_from_prop_value(prop_value);
-            });
-        }
+        match &prop_change.change {
+            indi::PropChange::New { prop_name, value, state, .. }
+            if **prop_name == "FILTER_SLOT" => {
+                self.excl_caller.exec(|| {
+                    show_slot_from_prop_value(*state, value);
+                });
+            }
 
-        if prop_change.prop_name.as_ref() == "FILTER_SLOT"
-        && let indi::PropChange::New(prop) = &prop_change.change {
-            let indi::PropValue::Num(prop_value) = &prop.prop_value else { return; };
-            self.excl_caller.exec(|| {
-                show_slot_from_prop_value(prop_value);
-            });
+            indi::PropChange::Change { prop_name, .. }
+            if **prop_name == "FILTER_NAME" => {
+                self.delayed_actions.schedule(DelayedAction::UpdateFilterList);
+            }
+
+            indi::PropChange::Change { prop_name, value, new_state, .. }
+            if **prop_name == "FILTER_SLOT" => {
+                self.excl_caller.exec(|| {
+                    show_slot_from_prop_value(*new_state, value);
+                });
+            }
+
+            indi::PropChange::Delete { prop_name, .. }
+            if **prop_name == "FILTER_NAME" => {
+                self.delayed_actions.schedule(DelayedAction::UpdateFilterList);
+            }
+
+            _ => {}
         }
     }
 

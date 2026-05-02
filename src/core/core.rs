@@ -310,14 +310,14 @@ impl Core {
                     }
                     indi::Event::PropChange(prop_change) => {
                         if let indi::PropChange::Change {
-                            value: indi::PropChangeValue{
-                                prop_value: indi::PropValue::Blob(blob), ..
-                            }, ..
+                            value: indi::PropValue::Blob(blob),
+                            prop_name,
+                            ..
                         } = &prop_change.change {
                             self_.process_indi_blob_event(
                                 blob,
                                 &prop_change.device_name,
-                                &prop_change.prop_name,
+                                prop_name,
                                 &img_cmds_sender,
                             )?;
                         } else {

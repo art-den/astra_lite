@@ -21,15 +21,19 @@ impl DevicesWatchdog {
     }
 
     pub fn notify_indi_prop_change(&mut self, prop_change: &indi::PropChangeEvent) -> anyhow::Result<()> {
-        if prop_change.prop_name.as_str() != "CONNECTION" { return Ok(()); }
-        let indi::PropChange::New(new_prop) = &prop_change.change else { return Ok(()); };
-        if new_prop.elem_name.as_str() != "CONNECT" { return Ok(()); }
-        let connected = new_prop.prop_value.to_bool()?;
-        if connected { return Ok(()); }
-
+        let indi::PropChange::New{ prop_name, elem_name, value, .. } = &prop_change.change else {
+            return Ok(());
+        };
+        if !(**elem_name == "CONNECT" && **prop_name == "CONNECTION") {
+            return Ok(());
+        }
+        let connected = value.to_bool()?;
+        if connected {
+            return Ok(());
+        }
         let existing = self.not_init_yet
             .iter_mut()
-            .find(|dev| dev.name == prop_change.device_name.as_str());
+            .find(|dev| dev.name == **prop_change.device_name);
         if let Some(existing) = existing {
             existing.wait_time_ms = 0;
         } else {

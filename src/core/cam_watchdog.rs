@@ -158,11 +158,11 @@ impl CameraWatchdog {
             return Ok(());
         }
 
-        if let indi::PropChange::Change { value, prev_state, new_state } = &prop_change.change {
+        if let indi::PropChange::Change { prop_name, elem_name, prev_state, new_state, .. } = &prop_change.change {
             let is_exposure_property =
                 indi::Connection::camera_is_exposure_property(
-                    &prop_change.prop_name,
-                    &value.elem_name,
+                    prop_name,
+                    elem_name,
                     indi::CamCcd::from_ccd_prop_name(&cur_cam_device.prop)
                 );
 
@@ -178,37 +178,37 @@ impl CameraWatchdog {
             }
         }
 
-        if let indi::PropChange::New(new_prop) = &prop_change.change {
+        if let indi::PropChange::New { prop_name, elem_name, .. } = &prop_change.change {
             let is_temperature_property =
-                indi::Connection::camera_is_temperature_property(&prop_change.prop_name, &new_prop.elem_name);
+                indi::Connection::camera_is_temperature_property(prop_name, elem_name);
             if is_temperature_property {
                 self.init_flags.cooler = true;
                 self.init_timer = Some(0);
             }
 
             let is_fan_str_property =
-                indi::Connection::camera_is_fan_str_property(&prop_change.prop_name);
+                indi::Connection::camera_is_fan_str_property(prop_name);
             if is_fan_str_property {
                 self.init_flags.fan = true;
                 self.init_timer = Some(0);
             }
 
             let is_heater_str_property =
-                indi::Connection::camera_is_heater_str_property(&prop_change.prop_name);
+                indi::Connection::camera_is_heater_str_property(prop_name);
             if is_heater_str_property {
                 self.init_flags.heater = true;
                 self.init_timer = Some(0);
             }
 
-            if prop_change.prop_name.as_str() == "CCD_RESOLUTION" {
+            if **prop_name == "CCD_RESOLUTION" {
                 self.init_flags.max_res = true;
                 self.init_timer = Some(0);
             }
 
             let is_exposure_property =
                 indi::Connection::camera_is_exposure_property(
-                    &prop_change.prop_name,
-                    &new_prop.elem_name,
+                    prop_name,
+                    elem_name,
                     indi::CamCcd::from_ccd_prop_name(&cur_cam_device.prop)
                 );
             if is_exposure_property && matches!(self.mode, Mode::WaitExposureProp(_)) {

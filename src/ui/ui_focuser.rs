@@ -210,27 +210,27 @@ impl UiModule for FocuserUi {
             }
             indi::Event::PropChange(event_data) => {
                 match &event_data.change {
-                    indi::PropChange::New(value) =>
+                    indi::PropChange::New { prop_name, elem_name, value, .. } =>
                         self.process_indi_prop_change(
                             &event_data.device_name,
-                            &event_data.prop_name,
-                            &value.elem_name,
+                            prop_name,
+                            elem_name,
                             true,
                             None,
                             None,
-                            &value.prop_value
+                            value
                         ),
-                    indi::PropChange::Change{ value, prev_state, new_state } =>
+                    indi::PropChange::Change{ prop_name, elem_name, value, prev_state, new_state, .. } =>
                         self.process_indi_prop_change(
                             &event_data.device_name,
-                            &event_data.prop_name,
-                            &value.elem_name,
+                            prop_name,
+                            elem_name,
                             false,
                             Some(prev_state),
                             Some(new_state),
-                            &value.prop_value
+                            value
                         ),
-                    indi::PropChange::Delete => {}
+                    indi::PropChange::Delete {..} => {}
                 };
             }
             indi::Event::DeviceDelete(event) => {

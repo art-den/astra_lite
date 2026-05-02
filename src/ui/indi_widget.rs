@@ -79,8 +79,8 @@ impl IndiWidget {
                         data.list_changed = true,
                     indi::Event::PropChange(pch) =>
                         match pch.change {
-                            indi::PropChange::New(_) |
-                            indi::PropChange::Delete =>
+                            indi::PropChange::New{..} |
+                            indi::PropChange::Delete{..} =>
                                 data.list_changed = true,
                             indi::PropChange::Change{..} =>
                                 data.prop_changed = true,
