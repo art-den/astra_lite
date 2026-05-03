@@ -1532,9 +1532,9 @@ impl CameraUi {
                     if options.cam.device.as_ref().map(|d| d.name == device_name).unwrap_or(false) {
                         self.delayed_actions.schedule_ex(
                             DelayedAction::StartLiveView,
-                            // 2000 ms pause to start live view from camera
+                            // 3000 ms pause to start live view from camera
                             // after connecting to INDI server
-                            2000
+                            3000
                         );
                     }
                 } else {
