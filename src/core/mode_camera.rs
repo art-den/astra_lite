@@ -41,6 +41,14 @@ pub enum CameraMode {
 #[derive(PartialEq)]
 enum State {
     FrameToSkip,
+    BiasCalculationFrame,
+    CalculatingFlatExp {
+        bias: i32,
+        cur_exp: f64,
+        count: usize,
+        min_exp: f64,
+        max_exp: f64,
+    },
     Common,
     CameraOffsetCalculation,
     InternalMountCorrection(usize /* ok_time in ms */),
@@ -63,11 +71,12 @@ struct AutoFocuser {
 
 #[derive(Default)]
 struct Flags {
-    skip_frame_done:    bool,
-    save_raw_files:     bool,
-    use_raw_stacker:    bool,
-    save_master_file:   bool,
-    save_defect_pixels: bool,
+    skip_frame_done:     bool,
+    save_raw_files:      bool,
+    use_raw_stacker:     bool,
+    save_master_file:    bool,
+    save_defect_pixels:  bool,
+    flat_exp_calculated: bool,
 }
 
 #[derive(Default, Debug)]
@@ -320,6 +329,14 @@ impl TackingPicturesMode {
             return Ok(());
         }
 
+        if matches!(self.cam_mode, CameraMode::SavingRawFrames|CameraMode::LiveStacking|CameraMode::LiveView)
+        && self.cam_options.frame.frame_type == FrameType::Flats
+        && self.cam_options.frame.auto_exp
+        && !self.flags.flat_exp_calculated {
+            self.start_bias_calc_frame()?;
+            return Ok(());
+        }
+
         if self.cam_mode == CameraMode::SavingRawFrames
         && self.cam_options.frame.frame_type == FrameType::Flats
         && self.cam_options.frame.offset != 0
@@ -358,8 +375,29 @@ impl TackingPicturesMode {
             frame_opts.set_exposure(MAX_EXP);
         }
         log::info!("Staring preliminary shot exposure ({} s) to clear CCD", frame_opts.exposure());
-        self.take_shot_with_options(frame_opts, false)?;
         self.state = State::FrameToSkip;
+        self.take_shot_with_options(frame_opts, false)?;
+        Ok(())
+    }
+
+    fn start_bias_calc_frame(&mut self) -> anyhow::Result<()> {
+        let mut frame_opts = self.cam_options.frame.clone();
+        frame_opts.exp_bias = 1e-10;
+        frame_opts.frame_type = FrameType::Biases;
+        frame_opts.crop = Crop::P50; // faster
+        log::info!("Staring bias frame ({} s) before flat auto exposure calculation", frame_opts.exposure());
+        self.state = State::BiasCalculationFrame;
+        self.take_shot_with_options(frame_opts, false)?;
+        Ok(())
+    }
+
+    fn start_flat_exp_calc_frame(&mut self, exp: f64) -> anyhow::Result<()> {
+        let mut frame_opts = self.cam_options.frame.clone();
+        frame_opts.exp_flat = exp;
+        frame_opts.frame_type = FrameType::Flats;
+        frame_opts.crop = Crop::P50; // faster
+        log::info!("Staring flat exposure calc frame ({} s)", frame_opts.exposure());
+        self.take_shot_with_options(frame_opts, false)?;
         Ok(())
     }
 
@@ -863,43 +901,128 @@ impl TackingPicturesMode {
     ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
 
-        if let (State::CameraOffsetCalculation, Some(offset_calc))
-        = (&self.state, &mut self.cam_offset_calc) {
+        let get_median_from_histogram = |min: bool| ->u16 {
             let hist = hist.read().unwrap();
-            let chan = if hist.g.is_some() { &hist.g } else { &hist.l };
-            if let Some(chan) = chan {
-                if offset_calc.step % 2 == 0 {
-                    offset_calc.low_values.push((chan.median(), chan.std_dev));
+            let mut channels = Vec::new();
+            if let Some(chan) = &hist.l {
+                channels.push(chan.median());
+            }
+            if let Some(chan) = &hist.r {
+                channels.push(chan.median());
+            }
+            if let Some(chan) = &hist.g {
+                channels.push(chan.median());
+            }
+            if let Some(chan) = &hist.b {
+                channels.push(chan.median());
+            }
+            let res = if min {
+                channels.iter().min()
+            } else {
+                channels.iter().max()
+            };
+            res.copied().unwrap_or_default()
+        };
+
+        match &mut self.state {
+            State::BiasCalculationFrame => {
+                let bias = get_median_from_histogram(true) as i32;
+                let cur_exp: f64 = 0.1;
+                let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.device.prop);
+                let exp_prop = self.indi.camera_get_exposure_prop_value(&self.device.name, cam_ccd)?;
+                let cur_exp = cur_exp.clamp(exp_prop.min, exp_prop.max);
+                self.state = State::CalculatingFlatExp {
+                    bias,
+                    cur_exp,
+                    count: 0,
+                    min_exp: exp_prop.min,
+                    max_exp: exp_prop.max,
+                };
+                self.start_flat_exp_calc_frame(cur_exp)?;
+            }
+
+            State::CalculatingFlatExp { bias, cur_exp, count, min_exp, max_exp } => {
+                const MAX_VALUE: i32 = 65535;
+                let median = get_median_from_histogram(false) as i32;
+                let desired_min = *bias + 20/*%*/ * MAX_VALUE / 100;
+                let desired_max = *bias + 30/*%*/ * MAX_VALUE / 100;
+                let desired_max = desired_max.clamp(0, MAX_VALUE);
+                if desired_min < median && median < desired_max {
+                    let mut options = self.options.write().unwrap();
+                    options.cam.frame.exp_flat = *cur_exp;
+                    drop(options);
+                    self.cam_options.frame.exp_flat = *cur_exp;
+                    self.flags.flat_exp_calculated = true;
+                    self.events.notify(Event::FlatExposureCalculated(*cur_exp));
+                    self.start_or_continue()?;
+                    result = NotifyResult::ProgressChanges;
                 } else {
-                    offset_calc.high_values.push((chan.median(), chan.std_dev));
+                    if median > 80/*%*/ * MAX_VALUE / 100 {
+                        *cur_exp /= 2.5;
+                    } else if (median - *bias) < (20/*%*/ * MAX_VALUE / 100) {
+                        *cur_exp *= 2.5;
+                    }
+                    else if median < desired_min {
+                        *cur_exp *= 1.4;
+                    } else {
+                        *cur_exp /= 1.4;
+                    }
+                    if *cur_exp < *min_exp {
+                        anyhow::bail!("Minimal exposure ({}) reached!", *min_exp);
+                    }
+                    if *cur_exp > *max_exp {
+                        anyhow::bail!("Maximal exposure ({}) reached!", *max_exp);
+                    }
+                    *count += 1;
+                    const MAX_TRY: usize = 20;
+                    if *count >= MAX_TRY {
+                        anyhow::bail!("Maximal tries ({}) reached!", MAX_TRY);
+                    }
+                    let exp = *cur_exp;
+                    self.start_flat_exp_calc_frame(exp)?;
+                    result = NotifyResult::ProgressChanges;
                 }
             }
 
-            offset_calc.step += 1;
-            if offset_calc.step != Self::MAX_OFFSET_CALC_STEPS {
-                self.start_offset_calculation_shot()?;
-            } else {
-                log::debug!(
-                    "Calculating camera offset from low = {:?} and high = {:?} values ...",
-                    offset_calc.low_values, offset_calc.high_values
-                );
-                let mut min_deviation_diff = f32::MAX;
-                let mut result_value = 0i32;
-                for (m1, d1) in &offset_calc.low_values {
-                    for (m2, d2) in &offset_calc.high_values {
-                        let dev_diff = f32::abs(d1 - d2);
-                        if dev_diff < min_deviation_diff {
-                            min_deviation_diff = dev_diff;
-                            result_value = *m2 as i32 - *m1 as i32;
-                        }
+            State::CameraOffsetCalculation
+            if let Some(offset_calc) = &mut self.cam_offset_calc => {
+                let hist = hist.read().unwrap();
+                let chan = if hist.g.is_some() { &hist.g } else { &hist.l };
+                if let Some(chan) = chan {
+                    if offset_calc.step % 2 == 0 {
+                        offset_calc.low_values.push((chan.median(), chan.std_dev));
+                    } else {
+                        offset_calc.high_values.push((chan.median(), chan.std_dev));
                     }
                 }
-                log::debug!("Camera offset result = {}", result_value);
-                result_value = result_value.min(u16::MAX as i32);
-                result_value = result_value.max(u16::MIN as i32);
-                self.camera_offset = Some(result_value as u16);
-                result = NotifyResult::ProgressChanges;
+
+                offset_calc.step += 1;
+                if offset_calc.step != Self::MAX_OFFSET_CALC_STEPS {
+                    self.start_offset_calculation_shot()?;
+                } else {
+                    log::debug!(
+                        "Calculating camera offset from low = {:?} and high = {:?} values ...",
+                        offset_calc.low_values, offset_calc.high_values
+                    );
+                    let mut min_deviation_diff = f32::MAX;
+                    let mut result_value = 0i32;
+                    for (m1, d1) in &offset_calc.low_values {
+                        for (m2, d2) in &offset_calc.high_values {
+                            let dev_diff = f32::abs(d1 - d2);
+                            if dev_diff < min_deviation_diff {
+                                min_deviation_diff = dev_diff;
+                                result_value = *m2 as i32 - *m1 as i32;
+                            }
+                        }
+                    }
+                    log::debug!("Camera offset result = {}", result_value);
+                    result_value = result_value.min(u16::MAX as i32);
+                    result_value = result_value.max(u16::MIN as i32);
+                    self.camera_offset = Some(result_value as u16);
+                    result = NotifyResult::ProgressChanges;
+                }
             }
+            _ => {}
         }
 
         Ok(result)
@@ -1115,6 +1238,9 @@ impl Mode for TackingPicturesMode {
                 "Dithering".to_string(),
             (State::CameraOffsetCalculation, _) =>
                 "Camera calibration...".to_string(),
+            (State::BiasCalculationFrame, _) |
+            (State::CalculatingFlatExp {..}, _) =>
+                "Exposure calculation".to_string(),
             (_, CameraMode::SingleShot) =>
                 "Taking shot".to_string(),
             (_, CameraMode::LiveView) =>
@@ -1313,7 +1439,8 @@ impl Mode for TackingPicturesMode {
         if self.cam_mode == CameraMode::LiveView {
             // We need fresh frame options in live view mode
             let options = self.options.read().unwrap();
-            self.cam_options = options.cam.clone();
+            self.cam_options.ctrl = options.cam.ctrl.clone();
+            self.cam_options.frame = options.cam.frame.clone();
         }
 
         if self.cam_mode != CameraMode::SingleShot
@@ -1387,6 +1514,12 @@ impl Mode for TackingPicturesMode {
         cmd.cam_ctrl_opts = Some(self.cam_options.ctrl.clone());
 
         let options = self.options.read().unwrap();
+
+        match self.state {
+            State::BiasCalculationFrame | State::CalculatingFlatExp {..} =>
+                cmd.flags.set(FrameProcessCommandFlags::HISTOGRAM_ONLY, true),
+            _ => {}
+        }
 
         match self.cam_mode {
             CameraMode::SavingRawFrames => {

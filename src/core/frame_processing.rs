@@ -1,6 +1,7 @@
 use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, sync::{mpsc, RwLock, Mutex}, thread::JoinHandle, path::*, io::Cursor};
 
 use chrono::{DateTime, Local};
+use bitflags::bitflags;
 
 use crate::{
     core::{core::ModeType, utils::{FileNameArg, FileNameUtils}},
@@ -180,11 +181,18 @@ impl ImageSource {
     }
 }
 
+bitflags! {
+    pub struct FrameProcessCommandFlags: u32 {
+        const HISTOGRAM_ONLY = 1;
+    }
+}
+
 pub struct FrameProcessCommandData {
     pub mode_type:       ModeType,
     pub camera:          DeviceAndProp,
     pub shot_id:         Option<u64>,
     pub img_source:      ImageSource,
+    pub flags:           FrameProcessCommandFlags,
     pub frame:           Arc<ResultImage>,
     pub stop_flag:       Arc<AtomicBool>,
     pub ref_stars:       Option<Vec<Point>>,
@@ -721,6 +729,10 @@ fn make_preview_image_impl(
             command,
             result_fun
         );
+
+        if command.flags.contains(FrameProcessCommandFlags::HISTOGRAM_ONLY) {
+            return Ok(());
+        }
 
         // Applying calibration data
         if is_light_frame

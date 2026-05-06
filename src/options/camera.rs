@@ -114,6 +114,7 @@ impl Default for CamCtrlOptions {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct FrameOptions {
+    pub auto_exp:   bool, // only for flats
     pub exp_main:   f64,
     pub exp_bias:   f64,
     pub exp_flat:   f64,
@@ -127,6 +128,7 @@ pub struct FrameOptions {
 impl Default for FrameOptions {
     fn default() -> Self {
         Self {
+            auto_exp:   true,
             exp_main:   2.0,
             exp_bias:   0.0001,
             exp_flat:   0.5,

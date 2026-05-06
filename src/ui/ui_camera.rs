@@ -210,14 +210,15 @@ struct ControlWidgets {
 
 #[derive(FromBuilder)]
 struct FrameWidgets {
-    grid:       gtk::Grid,
-    cb_mode:    gtk::ComboBoxText,
-    spb_exp:    gtk::SpinButton,
-    spb_gain:   gtk::SpinButton,
-    spb_offset: gtk::SpinButton,
-    cb_bin:     gtk::ComboBoxText,
-    cb_crop:    gtk::ComboBoxText,
-    l_calibr:   gtk::Label,
+    grid:         gtk::Grid,
+    cb_mode:      gtk::ComboBoxText,
+    spb_exp:      gtk::SpinButton,
+    chb_auto_exp: gtk::CheckButton,
+    spb_gain:     gtk::SpinButton,
+    spb_offset:   gtk::SpinButton,
+    cb_bin:       gtk::ComboBoxText,
+    cb_crop:      gtk::ComboBoxText,
+    l_calibr:     gtk::Label,
 }
 
 #[derive(FromBuilder)]
@@ -443,6 +444,9 @@ impl UiModule for CameraUi {
             }
             Event::FrameProcessing(result) => {
                 self.show_frame_processing_result(result);
+            }
+            Event::FlatExposureCalculated(exp_value) => {
+                self.widgets.frame.spb_exp.set_value(*exp_value);
             }
             _ => {},
         }
@@ -822,6 +826,7 @@ impl CameraUi {
         frame.cb_bin.set_active_id(options.cam.frame.binning.to_active_id());
         frame.cb_crop.set_active_id(options.cam.frame.crop.to_active_id());
 
+        frame.chb_auto_exp.set_active(options.cam.frame.auto_exp);
         set_spb_value(&frame.spb_exp, options.cam.frame.exposure());
         set_spb_value(&frame.spb_gain, options.cam.frame.gain);
         set_spb_value(&frame.spb_offset, options.cam.frame.offset as f64);
@@ -893,6 +898,7 @@ impl CameraUi {
         let frame = &self.widgets.frame;
         options.cam.frame.frame_type   = FrameType::from_active_id(frame.cb_mode.active_id().as_deref());
         options.cam.frame.set_exposure   (frame.spb_exp.value());
+        options.cam.frame.auto_exp     = frame.chb_auto_exp.is_active();
         options.cam.frame.gain         = frame.spb_gain.value();
         options.cam.frame.offset       = frame.spb_offset.value() as i32;
         options.cam.frame.binning      = Binning::from_active_id(frame.cb_bin.active_id().as_deref());
@@ -1128,13 +1134,14 @@ impl CameraUi {
         widgets.ctrl.cb_conv_gain .set_sensitive(indi_connected && can_change_cam_opts);
         widgets.ctrl.chb_high_fw  .set_sensitive(indi_connected && can_change_cam_opts);
 
-        widgets.frame.grid      .set_sensitive(cam_sensitive);
-        widgets.frame.cb_mode   .set_sensitive(can_change_frame_opts);
-        widgets.frame.spb_exp   .set_sensitive(exposure_supported && can_change_frame_opts);
-        widgets.frame.cb_crop   .set_sensitive(crop_supported && can_change_frame_opts);
-        widgets.frame.spb_gain  .set_sensitive(gain_supported && can_change_frame_opts);
-        widgets.frame.spb_offset.set_sensitive(offset_supported && can_change_frame_opts);
-        widgets.frame.cb_bin    .set_sensitive(bin_supported && can_change_frame_opts);
+        widgets.frame.grid        .set_sensitive(cam_sensitive);
+        widgets.frame.cb_mode     .set_sensitive(can_change_frame_opts);
+        widgets.frame.chb_auto_exp.set_sensitive(exposure_supported && can_change_frame_opts && frame_mode_is_flat);
+        widgets.frame.spb_exp     .set_sensitive(exposure_supported && can_change_frame_opts);
+        widgets.frame.cb_crop     .set_sensitive(crop_supported && can_change_frame_opts);
+        widgets.frame.spb_gain    .set_sensitive(gain_supported && can_change_frame_opts);
+        widgets.frame.spb_offset  .set_sensitive(offset_supported && can_change_frame_opts);
+        widgets.frame.cb_bin      .set_sensitive(bin_supported && can_change_frame_opts);
 
         widgets.calibr.grid    .set_sensitive(cam_sensitive);
         widgets.calibr.chb_dark.set_sensitive(can_change_cal_ops);

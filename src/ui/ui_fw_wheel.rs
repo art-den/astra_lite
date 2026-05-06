@@ -218,8 +218,6 @@ impl FltWheelUi {
             .map(|dev| dev.name.to_string())
             .collect::<Vec<_>>();
 
-        dbg!(&list);
-
         fill_devices_list_into_combobox(
             &list,
             &self.widgets.cb_device,

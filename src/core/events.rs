@@ -33,6 +33,7 @@ pub enum Event {
         text: Arc<String>,
     },
     Guider(ExtGuiderEvent),
+    FlatExposureCalculated(f64),
 }
 
 type EventFun = dyn Fn(Event) + Send + Sync + 'static;
