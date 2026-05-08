@@ -354,30 +354,29 @@ impl Core {
 
         let options = self.options.read().unwrap();
         let drivers = if !options.indi.remote {
-            let telescopes = indi_drivers.get_group_by_name("Telescopes")?;
-            let cameras = indi_drivers.get_group_by_name("CCDs")?;
-            let focusers = indi_drivers.get_group_by_name("Focusers")?;
+            let telescopes    = indi_drivers.get_group_by_name("Telescopes")?;
+            let cameras       = indi_drivers.get_group_by_name("CCDs")?;
+            let focusers      = indi_drivers.get_group_by_name("Focusers")?;
             let filter_wheels = indi_drivers.get_group_by_name("Filter Wheels")?;
-            let telescope_driver_name = options.indi.mount.as_ref()
-                .and_then(|name| telescopes.get_item_by_device_name(name))
-                .map(|d| &d.driver);
-            let camera_driver_name = options.indi.camera.as_ref()
-                .and_then(|name| cameras.get_item_by_device_name(name))
-                .map(|d| &d.driver);
-            let guid_cam_driver_name = options.indi.guid_cam.as_ref()
-                .and_then(|name| cameras.get_item_by_device_name(name))
-                .map(|d| &d.driver);
-            let focuser_driver_name = options.indi.focuser.as_ref()
-                .and_then(|name| focusers.get_item_by_device_name(name))
-                .map(|d| &d.driver);
-            let filter_wheel_driver_name = options.indi.flt_wheel.as_ref()
-                .and_then(|name| filter_wheels.get_item_by_device_name(name))
-                .map(|d| &d.driver);
-            [ telescope_driver_name,
-              camera_driver_name,
-              guid_cam_driver_name,
-              focuser_driver_name,
-              filter_wheel_driver_name,
+            let aux           = indi_drivers.get_group_by_name("Auxiliary")?;
+
+            fn get_driver<'a>(
+                device_name: &Option<String>,
+                group:       &'a indi::DriverGroup
+            ) -> Option<&'a String> {
+                device_name
+                    .as_ref()
+                    .and_then(|name| group.get_item_by_device_name(name))
+                    .map(|d| &d.driver)
+            }
+
+            [ get_driver(&options.indi.mount,     &telescopes),
+              get_driver(&options.indi.camera,    &cameras),
+              get_driver(&options.indi.guid_cam,  &cameras),
+              get_driver(&options.indi.focuser,   &focusers),
+              get_driver(&options.indi.flt_wheel, &filter_wheels),
+              get_driver(&options.indi.aux1,      &aux),
+              get_driver(&options.indi.aux1,      &aux),
             ].iter()
                 .filter_map(|v| *v)
                 .cloned()

@@ -134,6 +134,10 @@ struct IndiWidgets {
     cb_focuser_drivers:   gtk::ComboBox,
     l_flt_wheel_drivers:  gtk::Label,
     cb_flt_wheel_drivers: gtk::ComboBox,
+    l_aux1_drivers:       gtk::Label,
+    cb_aux1_drivers:      gtk::ComboBox,
+    l_aux2_drivers:       gtk::Label,
+    cb_aux2_drivers:      gtk::ComboBox,
     chb_remote:           gtk::CheckButton,
     e_remote_addr:        gtk::Entry,
     btn_conn_indi:        gtk::Button,
@@ -399,6 +403,8 @@ impl HardwareUi {
         options.indi.guid_cam  = self.widgets.indi.cb_guid_cam_drivers.active_id().map(|s| s.to_string());
         options.indi.focuser   = self.widgets.indi.cb_focuser_drivers.active_id().map(|s| s.to_string());
         options.indi.flt_wheel = self.widgets.indi.cb_flt_wheel_drivers.active_id().map(|s| s.to_string());
+        options.indi.aux1      = self.widgets.indi.cb_aux1_drivers.active_id().map(|s| s.to_string());
+        options.indi.aux2      = self.widgets.indi.cb_aux2_drivers.active_id().map(|s| s.to_string());
         options.indi.remote    = self.widgets.indi.chb_remote.is_active();
         options.indi.address   = self.widgets.indi.e_remote_addr.text().into();
     }
@@ -567,7 +573,10 @@ impl HardwareUi {
         let guid_cam_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi.cb_guid_cam_drivers);
         let foc_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi.cb_focuser_drivers);
         let flt_wheel_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi.cb_flt_wheel_drivers);
+        let aux1_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi.cb_aux1_drivers);
+        let aux2_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi.cb_aux2_drivers);
 
+        self.widgets.indi.chb_remote.set_sensitive(!self.indi_drivers.groups.is_empty() && disconnected);
         self.widgets.indi.l_mount_drivers.set_sensitive(mnt_sensitive);
         self.widgets.indi.cb_mount_drivers.set_sensitive(mnt_sensitive);
         self.widgets.indi.l_camera_drivers.set_sensitive(cam_sensitive);
@@ -578,7 +587,12 @@ impl HardwareUi {
         self.widgets.indi.cb_focuser_drivers.set_sensitive(foc_sensitive);
         self.widgets.indi.l_flt_wheel_drivers.set_sensitive(flt_wheel_sensitive);
         self.widgets.indi.cb_flt_wheel_drivers.set_sensitive(flt_wheel_sensitive);
-        self.widgets.indi.chb_remote.set_sensitive(!self.indi_drivers.groups.is_empty() && disconnected);
+        self.widgets.indi.l_aux1_drivers.set_sensitive(aux1_sensitive);
+        self.widgets.indi.cb_aux1_drivers.set_sensitive(aux1_sensitive);
+        self.widgets.indi.l_aux2_drivers.set_sensitive(aux2_sensitive);
+        self.widgets.indi.cb_aux2_drivers.set_sensitive(aux2_sensitive);
+
+
         self.widgets.indi.e_remote_addr.set_sensitive(remote && disconnected);
 
         enable_actions(&self.window, &[
@@ -675,6 +689,8 @@ impl HardwareUi {
         fill_cb_list(self, &self.widgets.indi.cb_guid_cam_drivers,  "CCDs",          &options.indi.guid_cam);
         fill_cb_list(self, &self.widgets.indi.cb_focuser_drivers,   "Focusers",      &options.indi.focuser);
         fill_cb_list(self, &self.widgets.indi.cb_flt_wheel_drivers, "Filter Wheels", &options.indi.flt_wheel);
+        fill_cb_list(self, &self.widgets.indi.cb_aux1_drivers,      "Auxiliary",     &options.indi.aux1);
+        fill_cb_list(self, &self.widgets.indi.cb_aux2_drivers,      "Auxiliary",     &options.indi.aux2);
     }
 
     fn read_options_from_widgets(&self) {
