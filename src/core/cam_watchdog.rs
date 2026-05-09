@@ -110,13 +110,14 @@ impl CameraWatchdog {
             Mode::WaitExposureProp(time_ms) => {
                 *time_ms += timer_period_ms;
                 if *time_ms >= WAIT_EXPOSURE_TIME * 1000 {
-                    anyhow::bail!("Waiting exposure property too long time!");
+                    self.mode = Mode::Waiting;
+                    anyhow::bail!("Waiting camera restart too long time!");
                 }
             }
 
             Mode::WaitAfterRestart(time_ms) => {
                 *time_ms += timer_period_ms;
-                if *time_ms == MAX_SWITCHING_ON_TIME * 1000 {
+                if *time_ms >= MAX_SWITCHING_ON_TIME * 1000 {
                     self.mode = Mode::Waiting;
                     self.restart_camera_exposure(mode, options)?;
                 }
