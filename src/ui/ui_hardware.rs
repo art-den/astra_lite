@@ -793,7 +793,7 @@ impl HardwareUi {
         if resp == gtk::ResponseType::Accept {
             exec_and_show_error(Some(&self.window), || {
                 let indi = self.core.indi();
-                let all_props = indi.get_properties_list(None, None);
+                let (_, all_props) = indi.get_properties_list(None);
                 let file_name = fc.file().expect("File name").path().unwrap().with_extension("txt");
                 let mut file = BufWriter::new(File::create(file_name)?);
                 for prop in all_props {

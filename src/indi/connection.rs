@@ -935,14 +935,10 @@ impl Devices {
 
     fn get_properties_list(
         &self,
-        device_name:   Option<&str>,
         changed_after: Option<u64>,
     ) -> Vec<Property> {
         self.list
             .iter()
-            .filter(|device| {
-                device_name.is_none() || Some(device.name.as_str()) == device_name
-            })
             .flat_map(|device| {
                 device.props.iter().filter_map(|prop| {
                     if let Some(changed_after) = changed_after {
@@ -1642,11 +1638,13 @@ impl Connection {
 
     pub fn get_properties_list(
         &self,
-        device:        Option<&str>,
         changed_after: Option<u64>,
-    ) -> Vec<Property> {
+    ) -> (Vec<ExportDevice>, Vec<Property>) {
         let devices = self.devices.lock().unwrap();
-        devices.get_properties_list(device, changed_after)
+
+        let devices_list = devices.get_list_iter().collect();
+        let properties_list = devices.get_properties_list(changed_after);
+        (devices_list, properties_list)
     }
 
     pub fn property_exists(

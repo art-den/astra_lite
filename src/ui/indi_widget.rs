@@ -159,48 +159,85 @@ impl IndiWidget {
         data:        &mut UiIndiGuiData,
         update_list: bool
     ) {
-        let indi_props = indi.get_properties_list(
-            None,
+        let (mut indi_devices, indi_props) = indi.get_properties_list(
             if update_list { None } else { Some(data.last_change_id) }
         );
-        let indi_devices: Vec<_> = indi_props.iter()
-            .map(|p| p.device.as_str())
-            .unique()
-            .collect();
 
         if update_list {
-            // add devices into sidebar
-            for &indi_device in &indi_devices {
-                if !data.devices.iter().any(|d| d.name == *indi_device) {
+            let get_device_sort_prio = |interface: indi::DriverInterface| -> usize {
+                let interfaces = [
+                    indi::DriverInterface::CCD,
+                    indi::DriverInterface::GUIDER,
+                    indi::DriverInterface::TELESCOPE,
+                    indi::DriverInterface::FOCUSER,
+                    indi::DriverInterface::FILTER,
+                    indi::DriverInterface::ROTATOR
+                ];
+                for (index, flag) in interfaces.iter().enumerate() {
+                    if interface.contains(*flag) {
+                        return index;
+                    }
+                }
+                return 100;
+            };
+
+            indi_devices.sort_by_key(|d| get_device_sort_prio(d.interface));
+
+            let mut devices_list_changed = false;
+
+            if indi_devices.len() != data.devices.len() {
+                devices_list_changed = true;
+            } else {
+                // Devices order changed?
+                for (indi_device, ui_device) in izip!(&indi_devices, &data.devices) {
+                    if *indi_device.name != ui_device.name
+                    || get_device_sort_prio(indi_device.interface) != get_device_sort_prio(ui_device.interface) {
+                        devices_list_changed = true;
+                    }
+                }
+            }
+
+            // Add new devices
+            let devices_count_before_add = data.devices.len();
+            for indi_device in &indi_devices {
+                if !data.devices.iter().any(|d| d.name == *indi_device.name) {
                     let notebook = gtk::Notebook::builder()
                         .visible(true)
                         .tab_pos(gtk::PositionType::Left)
                         .build();
-                    stack.add_titled(&notebook, indi_device, indi_device);
                     data.devices.push(UiIndiDevice {
-                        name: indi_device.to_string(),
-                        groups: Vec::new(),
+                        name:      indi_device.name.to_string(),
+                        interface: indi_device.interface,
+                        groups:    Vec::new(),
                         notebook,
                     });
                 }
             }
+            devices_list_changed |= devices_count_before_add != data.devices.len();
 
-            // remove devices from sidebar
-            for ui_device in &data.devices {
-                if !indi_devices.iter().any(|&d| *d == ui_device.name) {
-                    stack.remove(&ui_device.notebook);
-                }
-            }
+            // remove devices
+            let devices_count_before_remove = data.devices.len();
             data.devices.retain(|existing|
-                indi_devices.iter().any(|&d|
-                    *d == existing.name
+                indi_devices.iter().any(|d|
+                    *d.name == existing.name
                 )
             );
+            devices_list_changed |= devices_count_before_remove != data.devices.len();
+
+            if devices_list_changed {
+                data.devices.sort_by_key(|d| get_device_sort_prio(d.interface));
+                let children = stack.children();
+                for child in children {
+                    stack.remove(&child);
+                }
+                for device in &data.devices {
+                    stack.add_titled(&device.notebook, &device.name, &device.name);
+                }
+            }
         }
 
         // build device UI
-        for indi_device in indi_devices {
-            let ui_device = data.devices.iter_mut().find(|d| d.name == indi_device).unwrap();
+        for ui_device in &mut data.devices {
             Self::show_device_props(indi, ui_device, &indi_props, update_list);
         }
 
@@ -917,9 +954,10 @@ impl IndiWidget {
 }
 
 struct UiIndiDevice {
-    name:     String,
-    groups:   Vec<UiIndiPropsGroup>,
-    notebook: gtk::Notebook,
+    name:      String,
+    interface: indi::DriverInterface,
+    groups:    Vec<UiIndiPropsGroup>,
+    notebook:  gtk::Notebook,
 }
 
 struct UiIndiPropsGroup {
