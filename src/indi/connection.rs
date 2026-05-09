@@ -927,7 +927,8 @@ impl Devices {
                 ExportDevice {
                     name:      Arc::clone(&device.name),
                     interface: di.interface,
-                    driver:    Arc::clone(&di.driver)
+                    driver:    Arc::clone(&di.driver),
+                    connected: device.is_connected,
                 }
             )
         )
@@ -1235,6 +1236,7 @@ pub struct ExportDevice {
     pub name:      Arc<String>,
     pub interface: DriverInterface,
     pub driver:    Arc<String>,
+    pub connected: bool,
 }
 
 pub enum FrameType {

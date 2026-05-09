@@ -12,7 +12,7 @@ use itertools::Itertools;
 use chrono::prelude::*;
 use macros::FromBuilder;
 use crate::{
-    core::core::Core,
+    core::{core::Core, events::Event},
     guiding::{external_guider::ExtGuiderType, phd2},
     indi::{self, sexagesimal_to_value, value_to_sexagesimal},
     options::*,
@@ -333,7 +333,7 @@ impl HardwareUi {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
                 options.telescope.focal_len = sb.value();
                 drop(options);
-                _ = self_.core.init_cam_telescope_data();
+                self_.core.events().notify(Event::TelescopeFocalLenChanged);
             })
         );
 
@@ -342,7 +342,16 @@ impl HardwareUi {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
                 options.telescope.barlow = sb.value();
                 drop(options);
-                _ = self_.core.init_cam_telescope_data();
+                self_.core.events().notify(Event::TelescopeBarlowChanged);
+            })
+        );
+
+        self.widgets.telescope.spb_guid_foc_len.connect_value_changed(
+            clone!(@weak self as self_ => move |sb| {
+                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                options.guiding.foc_len = sb.value();
+                drop(options);
+                self_.core.events().notify(Event::GuiderFocalLenChanged);
             })
         );
 

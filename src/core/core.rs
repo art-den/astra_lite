@@ -8,7 +8,7 @@ use gtk::glib::PropertySet;
 use itertools::Itertools;
 
 use crate::{
-    core::{cam_starter::CamStarter, cam_watchdog::CameraWatchdog, consts::*, dev_watchdog::DevicesWatchdog},
+    core::{cam_starter::CamStarter, cam_watchdog::CameraWatchdog, dev_watchdog::DevicesWatchdog},
     guiding::external_guider::*,
     image::raw::FrameType,
     indi, options::*,
@@ -339,6 +339,11 @@ impl Core {
                 Event::CameraDeviceChanged { from, to } => {
                     self_.process_camera_changed(from, to);
                 },
+                Event::TelescopeFocalLenChanged|
+                Event::TelescopeBarlowChanged|
+                Event::GuiderFocalLenChanged => {
+                    self_.process_focal_len_changed();
+                }
                 _ => {},
             }
         });
@@ -529,13 +534,25 @@ impl Core {
         // TODO: move this code inside CameraWatchdog
 
         let res = CameraWatchdog::control_camera_cooling(&self.indi, &to.name, &options, true);
-        self.process_error(res, "Core::control_camera_cooling");
+        self.process_error(res, "CameraWatchdog::control_camera_cooling");
 
         let res = CameraWatchdog::control_camera_fan(&self.indi,&to.name, &options, true);
-        self.process_error(res, "Core::control_camera_fan");
+        self.process_error(res, "CameraWatchdog::control_camera_fan");
 
         let res = CameraWatchdog::control_camera_heater(&self.indi,&to.name, &options, true);
-        self.process_error(res, "Core::control_camera_heater");
+        self.process_error(res, "CameraWatchdog::control_camera_heater");
+
+        let res = CameraWatchdog::set_telescope_focal_len(&self.indi, &options);
+        self.process_error(res, "CameraWatchdog::set_telescope_focal_len");
+    }
+
+    fn process_focal_len_changed(self: &Arc<Self>) {
+        let options = self.options.read().unwrap();
+
+        // TODO: move this code inside CameraWatchdog
+
+        let res = CameraWatchdog::set_telescope_focal_len(&self.indi, &options);
+        self.process_error(res, "CameraWatchdog::set_telescope_focal_len");
     }
 
     fn frame_process_result_handler(self: &Arc<Self>, res: CommandResult) {
@@ -847,42 +864,6 @@ impl Core {
         Ok(())
     }
 
-    pub fn init_cam_telescope_data(&self) -> anyhow::Result<()> {
-        if self.indi.state() != indi::ConnState::Connected {
-            return Ok(());
-        }
-
-        self.init_cam_telescope_data_impl()?;
-        Ok(())
-    }
-
-    fn init_cam_telescope_data_impl(&self) -> anyhow::Result<()> {
-        let cam_devices = self.indi.get_devices_list_by_interface(indi::DriverInterface::CCD);
-        let options = self.options.read().unwrap();
-        for device in cam_devices {
-            if !self.indi.camera_is_telescope_info_supported(&device.name)? {
-                continue;
-            }
-            let is_sim_guider = *device.driver == "indi_simulator_guide";
-            let is_selected_guider = options.indi.guid_cam.as_deref() == Some(&*device.name);
-            let is_guider_cam = is_sim_guider || is_selected_guider;
-            let focal_len = if !is_guider_cam {
-                options.telescope.real_focal_length()
-            } else {
-                options.guiding.foc_len
-            };
-            let aperture = 0.2 * focal_len;
-            self.indi.camera_set_telescope_info(
-                &device.name,
-                focal_len,
-                aperture,
-                false,
-                INDI_SET_PROP_TIMEOUT
-            )?;
-        }
-        Ok(())
-    }
-
     pub fn init_cam_for_mode(&self, mode: &dyn Mode) -> anyhow::Result<()> {
         let Some(cam_device) = &mode.cam_device() else {
             return Ok(());
@@ -895,10 +876,6 @@ impl Core {
             None,
             indi::BlobEnable::Also,
         )?;
-
-        // Set telescope info into camera props
-
-        self.init_cam_telescope_data_impl()?;
 
         Ok(())
     }

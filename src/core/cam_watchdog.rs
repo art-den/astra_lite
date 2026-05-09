@@ -23,6 +23,7 @@ struct InitFlags {
     fan: bool,
     heater: bool,
     max_res: bool,
+    focal_len: bool,
 }
 
 pub struct CameraWatchdog {
@@ -142,6 +143,10 @@ impl CameraWatchdog {
                     self.init_flags.max_res = false;
                     self.select_maximum_resolution(indi, &cam_device.name)?;
                 }
+                if self.init_flags.focal_len {
+                    self.init_flags.focal_len = false;
+                    Self::set_telescope_focal_len(indi, options)?;
+                }
             }
         }
         Ok(())
@@ -202,6 +207,11 @@ impl CameraWatchdog {
 
             if **prop_name == "CCD_RESOLUTION" {
                 self.init_flags.max_res = true;
+                self.init_timer = Some(0);
+            }
+
+            if **prop_name == "SCOPE_INFO" && **elem_name == "FOCAL_LENGTH" {
+                self.init_flags.focal_len = true;
                 self.init_timer = Some(0);
             }
 
@@ -330,6 +340,36 @@ impl CameraWatchdog {
             )?;
         }
         log::error!("Exposure of camera {} restarted!", &cam_device.name);
+        Ok(())
+    }
+
+    pub fn set_telescope_focal_len(
+        indi:    &Arc<indi::Connection>,
+        options: &Options
+    ) -> anyhow::Result<()> {
+        let cam_devices = indi.get_devices_list_by_interface(indi::DriverInterface::CCD);
+        let main_cam_name = options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default();
+
+        for cam_device in &cam_devices {
+            if !cam_device.connected {
+                continue;
+            }
+            let is_main_cam = main_cam_name == *cam_device.name;
+            let focal_len = if is_main_cam {
+                options.telescope.real_focal_length()
+            } else {
+                options.guiding.foc_len
+            };
+            log::info!("Setting focal len {:.1} for camera \"{}\"", focal_len, &cam_device.name);
+            indi.camera_set_telescope_info(
+                &cam_device.name,
+                focal_len,
+                focal_len / 4.0,
+                false,
+                None
+            )?;
+        }
+
         Ok(())
     }
 }

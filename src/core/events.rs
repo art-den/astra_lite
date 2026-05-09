@@ -34,6 +34,9 @@ pub enum Event {
     },
     Guider(ExtGuiderEvent),
     FlatExposureCalculated(f64),
+    TelescopeFocalLenChanged,
+    TelescopeBarlowChanged,
+    GuiderFocalLenChanged,
 }
 
 type EventFun = dyn Fn(Event) + Send + Sync + 'static;
