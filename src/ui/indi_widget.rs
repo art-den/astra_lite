@@ -243,14 +243,17 @@ impl IndiWidget {
                         .margin(8)
                         .build();
                     scrollwin.add(&grid);
-                    ui_device.notebook.append_page(&scrollwin, Some(&tab_label));
-                    ui_device.groups.push(UiIndiPropsGroup {
+
+                    let insert_pos = Self::get_group_insert_index(&indi_group, &ui_device);
+                    ui_device.notebook.insert_page(&scrollwin, Some(&tab_label), Some(insert_pos));
+                    let new_ui_props_group = UiIndiPropsGroup {
                         name: indi_group.to_string(),
                         props: Vec::new(),
                         grid,
                         scrollwin,
                         next_row: 0,
-                    });
+                    };
+                    ui_device.groups.insert(insert_pos as _, new_ui_props_group);
                 }
             }
 
@@ -275,6 +278,30 @@ impl IndiWidget {
             let ui_group = ui_device.groups.iter_mut().find(|g| g.name == *indi_group).unwrap();
             Self::show_device_prop_group(indi, &ui_device.name, ui_group, indi_props, update_list);
         }
+    }
+
+    fn get_group_insert_index(name: &str, ui_device: &UiIndiDevice) -> u32 {
+        if name == "Main Control" {
+            return 0;
+        }
+
+        let lower_list = [
+            "Connection",
+            "Simulation",
+            "Simulator Settings",
+            "Simulator Config",
+            "General Info",
+        ];
+
+        let first_in_lower_list_pos = ui_device.groups
+            .iter()
+            .position(|v| lower_list.contains(&v.name.as_str()));
+
+        if let Some(first_in_lower_list_pos) = first_in_lower_list_pos {
+            return first_in_lower_list_pos as _;
+        }
+
+        ui_device.groups.len() as _
     }
 
     fn show_device_prop_group(
