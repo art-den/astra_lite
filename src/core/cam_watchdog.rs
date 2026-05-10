@@ -111,7 +111,7 @@ impl CameraWatchdog {
                 *time_ms += timer_period_ms;
                 if *time_ms >= WAIT_EXPOSURE_TIME * 1000 {
                     self.mode = Mode::Waiting;
-                    anyhow::bail!("Waiting camera restart too long time!");
+                    anyhow::bail!("Waiting camera restart too long time (>{}s)!", WAIT_EXPOSURE_TIME);
                 }
             }
 
@@ -316,7 +316,7 @@ impl CameraWatchdog {
 
     fn restart_camera_exposure(&self, mode: &mut ModeData, options: &Options) -> anyhow::Result<()> {
         let Some(cam_device) = mode.active.cam_device().cloned() else { return Ok(()); };
-        log::error!("Begin restart exposure of camera {}...", cam_device.name);
+        log::info!("Begin restart exposure of camera {}...", cam_device.name);
 
         // Try to restart exposure by current mode
         let restarted_by_mode = mode.active.restart_cam_exposure()?;
@@ -340,7 +340,7 @@ impl CameraWatchdog {
                 &options.cam.ctrl
             )?;
         }
-        log::error!("Exposure of camera {} restarted!", &cam_device.name);
+        log::info!("Exposure of camera {} restarted!", &cam_device.name);
         Ok(())
     }
 
