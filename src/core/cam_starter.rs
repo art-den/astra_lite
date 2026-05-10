@@ -159,6 +159,16 @@ impl CamStarter {
         // Offset
 
         if self.indi.camera_is_offset_supported(&device.name)? {
+            // First try to set offset as value + 1 due to bug in INDI
+            // (you have to change offset in order to INDI get it)
+            let mut changed_offset = frame.offset + 1;
+            let offset_prop = self.indi.camera_get_offset_prop_value(&device.name)?;
+            if changed_offset == offset_prop.max as i32 {
+                changed_offset = frame.offset - 1;
+            }
+            self.indi.camera_set_offset(&device.name, changed_offset as f64, false, None)?;
+
+            // Then set true offset value
             self.indi.camera_set_offset(
                 &device.name,
                 frame.offset as f64,
