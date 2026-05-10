@@ -201,14 +201,31 @@ impl IndiWidget {
             let devices_count_before_add = data.devices.len();
             for indi_device in &indi_devices {
                 if !data.devices.iter().any(|d| d.name == *indi_device.name) {
+                    let vert_box = gtk::Box::builder()
+                        .orientation(gtk::Orientation::Vertical)
+                        .visible(true)
+                        .expand(true)
+                        .spacing(10)
+                        .build();
+                    let caption_label = gtk::Label::builder()
+                        .visible(true)
+                        .use_markup(true)
+                        .halign(gtk::Align::Start)
+                        .label(&format!("<span size=\"large\">    <b>{}</b> control panel</span>", *indi_device.name))
+                        .build();
                     let notebook = gtk::Notebook::builder()
                         .visible(true)
                         .tab_pos(gtk::PositionType::Left)
+                        .vexpand_set(true)
+                        .vexpand(true)
                         .build();
+                    vert_box.add(&caption_label);
+                    vert_box.add(&notebook);
                     data.devices.push(UiIndiDevice {
                         name:      indi_device.name.to_string(),
                         interface: indi_device.interface,
                         groups:    Vec::new(),
+                        layout:    vert_box,
                         notebook,
                     });
                 }
@@ -231,7 +248,7 @@ impl IndiWidget {
                     stack.remove(&child);
                 }
                 for device in &data.devices {
-                    stack.add_titled(&device.notebook, &device.name, &device.name);
+                    stack.add_titled(&device.layout, &device.name, &device.name);
                 }
             }
         }
@@ -958,6 +975,7 @@ struct UiIndiDevice {
     interface: indi::DriverInterface,
     groups:    Vec<UiIndiPropsGroup>,
     notebook:  gtk::Notebook,
+    layout:    gtk::Box,
 }
 
 struct UiIndiPropsGroup {
