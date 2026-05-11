@@ -1,4 +1,5 @@
 /.vscode
+/.zed
 /target
 /target_cross
 /dist
