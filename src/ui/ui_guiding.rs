@@ -162,7 +162,7 @@ impl UiModule for GuidingUi {
         drop(options);
     }
 
-    fn on_core_event(&self, event: &Event) {
+    fn on_event(&self, event: &Event) {
         match event {
             Event::ModeChanged => {
                 self.correct_widgets_props();

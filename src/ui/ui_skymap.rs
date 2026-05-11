@@ -400,7 +400,7 @@ impl UiModule for MapUi {
         self.show_selected_objects_info();
     }
 
-    fn on_core_event(&self, event: &Event) {
+    fn on_event(&self, event: &Event) {
         match event {
             Event::PlateSolve(ps_event) => {
                 let mut cam_rotation = self.cam_rotation.borrow_mut();

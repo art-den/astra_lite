@@ -433,7 +433,7 @@ impl UiModule for CameraUi {
         }
     }
 
-    fn on_core_event(&self, event: &Event) {
+    fn on_event(&self, event: &Event) {
         match event {
             Event::ModeChanged => {
                 self.correct_widgets_props();
@@ -447,6 +447,12 @@ impl UiModule for CameraUi {
             }
             Event::FlatExposureCalculated(exp_value) => {
                 self.widgets.frame.spb_exp.set_value(*exp_value);
+            }
+            Event::CameraDeviceChanged { to, .. } => {
+                let cam_str = to.to_string();
+                if self.widgets.common.cb_cam_list.active_id().as_deref() != Some(cam_str.as_str()) {
+                    self.widgets.common.cb_cam_list.set_active_id(Some(cam_str.as_str()));
+                }
             }
             _ => {},
         }
@@ -1539,9 +1545,9 @@ impl CameraUi {
                     if options.cam.device.as_ref().map(|d| d.name == device_name).unwrap_or(false) {
                         self.delayed_actions.schedule_ex(
                             DelayedAction::StartLiveView,
-                            // 3000 ms pause to start live view from camera
+                            // 4000 ms pause to start live view from camera
                             // after connecting to INDI server
-                            3000
+                            4000
                         );
                     }
                 } else {

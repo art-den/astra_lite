@@ -27,6 +27,7 @@ struct InitFlags {
 }
 
 pub struct CameraWatchdog {
+    indi:        Arc<indi::Connection>,
     cam_starter: Arc<CamStarter>,
     mode:        Mode,
     init_flags:  InitFlags,
@@ -34,8 +35,9 @@ pub struct CameraWatchdog {
 }
 
 impl CameraWatchdog {
-    pub fn new(cam_starter: &Arc<CamStarter>) -> Self {
+    pub fn new(cam_starter: &Arc<CamStarter>, indi: &Arc<indi::Connection>) -> Self {
         Self {
+            indi:        Arc::clone(indi),
             cam_starter: Arc::clone(cam_starter),
             mode:        Mode::Waiting,
             init_flags:  InitFlags::default(),
@@ -53,10 +55,9 @@ impl CameraWatchdog {
         &mut self,
         timer_period_ms: usize,
         mode:            &mut ModeData,
-        indi:            &Arc<indi::Connection>,
         options:         &Options,
     ) -> anyhow::Result<()> {
-        if indi.state() != indi::ConnState::Connected {
+        if self.indi.state() != indi::ConnState::Connected {
             return Ok(());
         }
 
@@ -64,7 +65,8 @@ impl CameraWatchdog {
 
         let is_waiting_for_blob_now = || -> anyhow::Result<bool> {
             let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_device.prop);
-            let Ok((exp_prop, exp_prop_elem)) = indi.camera_get_exposure_property(&cam_device.name, cam_ccd) else {
+            let exp_prop = self.indi.camera_get_exposure_property(&cam_device.name, cam_ccd);
+            let Ok((exp_prop, exp_prop_elem)) = exp_prop else {
                 return Ok(false);
             };
             let indi::PropValue::Num(expr_prop_num) = &exp_prop_elem.value else {
@@ -94,7 +96,7 @@ impl CameraWatchdog {
                         cam_device.name, MAX_WAIT_BLOB_TIME
                     );
                     log::info!("Shutdown camera {} ...", cam_device.name);
-                    indi.command_enable_device(&cam_device.name, false, true, None)?;
+                    self.indi.command_enable_device(&cam_device.name, false, true, None)?;
                     self.mode = Mode::Shutdown(0)
                 }
             }
@@ -102,7 +104,7 @@ impl CameraWatchdog {
                 *time_ms += timer_period_ms;
                 if *time_ms >= MAX_SHUTDOWN_TIME * 1000 {
                     log::info!("Switching-on camera {} ...", cam_device.name);
-                    indi.command_enable_device(&cam_device.name, true, true, None)?;
+                    self.indi.command_enable_device(&cam_device.name, true, true, None)?;
                     self.mode = Mode::WaitExposureProp(0);
                 }
             }
@@ -130,23 +132,23 @@ impl CameraWatchdog {
                 self.init_timer = None;
                 if self.init_flags.cooler {
                     self.init_flags.cooler = false;
-                    Self::control_camera_cooling(indi, &cam_device.name, options, true)?;
+                    Self::control_camera_cooling(&self.indi, &cam_device.name, options, true)?;
                 }
                 if self.init_flags.fan {
                     self.init_flags.fan = false;
-                    Self::control_camera_fan(indi, &cam_device.name, options, true)?;
+                    Self::control_camera_fan(&self.indi, &cam_device.name, options, true)?;
                 }
                 if self.init_flags.heater {
                     self.init_flags.heater = false;
-                    Self::control_camera_heater(indi, &cam_device.name, options, true)?;
+                    Self::control_camera_heater(&self.indi, &cam_device.name, options, true)?;
                 }
                 if self.init_flags.max_res {
                     self.init_flags.max_res = false;
-                    self.select_maximum_resolution(indi, &cam_device.name)?;
+                    self.select_maximum_resolution(&self.indi, &cam_device.name)?;
                 }
                 if self.init_flags.focal_len {
                     self.init_flags.focal_len = false;
-                    Self::set_telescope_focal_len(indi, options)?;
+                    Self::set_telescope_focal_len(&self.indi, options)?;
                 }
             }
         }

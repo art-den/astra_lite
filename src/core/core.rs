@@ -144,19 +144,20 @@ impl Core {
     pub fn new() -> Arc<Self> {
         let (img_cmds_sender, frame_proc_thread) = start_frame_processing_thread();
 
+        let events = Arc::new(Events::new());
+        let options = Arc::new(RwLock::new(Options::default()));
         let indi = Arc::new(indi::Connection::new());
         let cam_starter = Arc::new(CamStarter::new(&indi));
 
         let watchdogs = Watchdogs {
-            camera: CameraWatchdog::new(&cam_starter),
-            devices: DevicesWatchdog::new(),
+            camera: CameraWatchdog::new(&cam_starter, &indi),
+            devices: DevicesWatchdog::new(&options, &indi, &events),
         };
 
         let result = Arc::new(Self {
             indi:               Arc::clone(&indi),
-            options:            Arc::new(RwLock::new(Options::default())),
+            options:            Arc::clone(&options),
             mode:               RwLock::new(ModeData::new()),
-            events:             Arc::new(Events::new()),
             cur_frame:          Arc::new(ResultImage::new()),
             calibr_data:        Arc::new(Mutex::new(CalibrData::default())),
             live_stacking:      Arc::new(LiveStackingData::new()),
@@ -165,6 +166,7 @@ impl Core {
             img_proc_stop_flag: Mutex::new(Arc::new(AtomicBool::new(false))),
             ext_guider:         ExternalGuiderCtrl::new(),
             frame_proc_thread:  Some(frame_proc_thread),
+            events,
             cam_starter,
             img_cmds_sender,
         });
@@ -284,11 +286,11 @@ impl Core {
         let options = self.options.read().unwrap();
 
         let mut watchdogs = self.watchdogs.lock().unwrap();
-        watchdogs.camera.notify_timer(Self::TIMER_PERIOD_MS, &mut mode, &self.indi, &options)?;
-        watchdogs.devices.notify_timer(Self::TIMER_PERIOD_MS, &self.indi)?;
-        drop(watchdogs);
-
+        watchdogs.camera.notify_timer(Self::TIMER_PERIOD_MS, &mut mode, &options)?;
         drop(options);
+
+        watchdogs.devices.notify_timer(Self::TIMER_PERIOD_MS)?;
+        drop(watchdogs);
 
         let result = mode.active.notify_timer(Self::TIMER_PERIOD_MS)?;
         self.apply_notify_result(result, &mut mode)?;
@@ -991,4 +993,3 @@ impl Core {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-

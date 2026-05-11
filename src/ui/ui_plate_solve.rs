@@ -125,7 +125,7 @@ impl UiModule for PlateSolveUi {
         drop(options);
     }
 
-    fn on_core_event(&self, event: &Event) {
+    fn on_event(&self, event: &Event) {
         match event {
             Event::ModeChanged => {
                 self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
@@ -133,7 +133,7 @@ impl UiModule for PlateSolveUi {
             Event::CameraDeviceChanged{ from, to } => {
                 self.handler_camera_changed(from, to);
             }
-            Event::MountDeviceSelected(mount_device) => {
+            Event::MountDeviceChanged(mount_device) => {
                 let options = self.options.read().unwrap();
                 let cam_device = options.cam.device.clone();
                 drop(options);

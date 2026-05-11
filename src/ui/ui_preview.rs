@@ -390,7 +390,7 @@ impl UiModule for PreviewUi {
         drop(ui_options);
     }
 
-    fn on_core_event(&self, event: &Event) {
+    fn on_event(&self, event: &Event) {
         match event {
             Event::FrameProcessing(result) => {
                 self.show_frame_processing_result(result);

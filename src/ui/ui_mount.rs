@@ -238,10 +238,15 @@ impl UiModule for MountUi {
         }
     }
 
-    fn on_core_event(&self, event: &Event) {
+    fn on_event(&self, event: &Event) {
         match event {
             Event::ModeChanged => {
                 self.correct_widgets_props();
+            }
+            Event::MountDeviceChanged(new_device_name) => {
+                if self.widgets.cb_list.active_id().as_deref() != Some(new_device_name.as_str()) {
+                    self.widgets.cb_list.set_active_id(Some(new_device_name.as_str()));
+                }
             }
             _ => {}
         }
@@ -288,16 +293,16 @@ impl MountUi {
 
         self.widgets.cb_list.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Some(cur_id) = cb.active_id() else { return; };
+                let Some(new_device_name) = cb.active_id() else { return; };
                 let Ok(mut options) = self_.options.try_write() else { return; };
-                if options.mount.device == cur_id.as_str() { return; }
-                options.mount.device = cur_id.to_string();
+                if options.mount.device == new_device_name { return; }
+                options.mount.device = new_device_name.to_string();
                 drop(options);
                 self_.fill_mount_speed_list_widget();
                 self_.show_cur_mount_state();
                 self_.correct_widgets_props();
                 self_.core.events().notify(
-                    Event::MountDeviceSelected(cur_id.to_string())
+                    Event::MountDeviceChanged(new_device_name.to_string())
                 );
             })
         );

@@ -122,7 +122,7 @@ impl UiModule for PolarAlignUi {
         self.correct_widgets_props();
     }
 
-    fn on_core_event(&self, event: &Event) {
+    fn on_event(&self, event: &Event) {
         match event {
             Event::ModeChanged => {
                 self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
@@ -138,7 +138,7 @@ impl UiModule for PolarAlignUi {
                 drop(options);
                 self.correct_widgets_props_impl(&mount_device, Some(to));
             }
-            Event::MountDeviceSelected(mount_device) => {
+            Event::MountDeviceChanged(mount_device) => {
                 let options = self.options.read().unwrap();
                 let cam_device = options.cam.device.clone();
                 drop(options);

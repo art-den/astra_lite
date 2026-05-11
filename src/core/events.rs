@@ -21,7 +21,9 @@ pub enum Event {
         from: Option<DeviceAndProp>,
         to:   DeviceAndProp
     },
-    MountDeviceSelected(String),
+    MountDeviceChanged(String),
+    FocuserDeviceChanged(String),
+    FltWheelDeviceChanged(String),
     ModeChanged,
     Progress(Option<Progress>, ModeType),
     FrameProcessing(FrameProcessResult),

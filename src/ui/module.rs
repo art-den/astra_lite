@@ -102,7 +102,7 @@ pub trait UiModule {
     fn on_tab_changed(&self, _from: TabPage, _to: TabPage) {}
     fn on_250ms_timer(&self) {}
     fn on_indi_event(&self, _event: &indi::Event) {}
-    fn on_core_event(&self, _event: &Event) {}
+    fn on_event(&self, _event: &Event) {}
 }
 
 pub struct UiModuleItem {
@@ -207,7 +207,7 @@ impl UiModules {
 
     pub fn on_core_event(&self, event: &Event) {
         for item in &self.items {
-            item.module.on_core_event(event);
+            item.module.on_event(event);
         }
     }
 }
