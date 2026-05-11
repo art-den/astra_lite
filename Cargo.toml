@@ -30,6 +30,7 @@ once_cell = "1"
 msgbox = "0.6"
 rand = "0.10"
 csv = "1.2"
+strsim = "0.11"
 macros = { path = "./macros" }
 
 [target.'cfg(windows)'.build-dependencies]

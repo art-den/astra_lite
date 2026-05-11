@@ -1,5 +1,7 @@
 use std::sync::{Arc, RwLock};
 
+use itertools::Itertools;
+
 use crate::{core::events::{Event, Events}, indi, options::{DeviceAndProp, Options}};
 
 const DEVICE_WAIT_BEFORE_CONNECT_TIME: usize = 1; // in seconds
@@ -139,39 +141,54 @@ impl DevicesWatchdog {
             if *to_check_cur_dev >= DEVICE_WAIT_CHECK_CUR_DEV_TIME * 1000 {
                 self.to_check_cur_dev = None;
                 let mut options = self.options.write().unwrap();
-
                 let all_cameras = self.indi.get_devices_list_by_interface(indi::DriverInterface::CCD);
-                if all_cameras.len() == 1 && options.cam.device.as_ref().map(|d| &d.name) != Some(&all_cameras[0].name) {
+                let cur_cam_device = options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default();
+                let exists = all_cameras.iter().any(|d| *d.name == cur_cam_device);
+                if !all_cameras.is_empty() && !exists {
                     let prev_value = options.cam.device.clone();
                     let new_value = DeviceAndProp {
                         name: all_cameras[0].name.to_string(),
                         prop: "CCD1".to_string(),
                     };
-                    log::info!("Camera device correcting from \"{:?}\" to \"{:?}\"", prev_value, new_value);
+                    log::info!("Camera device corrected from \"{:?}\" to \"{:?}\"", prev_value, new_value);
                     options.cam.device = Some(new_value.clone());
                     self.events.notify(Event::CameraDeviceChanged {
                         from: prev_value,
                         to: new_value
                     });
                 }
+
+                let select_best_device_name = |list: &Vec<indi::ExportDevice>, old: &str| -> String {
+                    // Select "Toupteck AAF 2" from list=["Toupteck AAF 2", "Focuser Similator"] and old="Toupteck AAF 5"
+                    let best_name_pos =
+                        list.iter()
+                            .map(|d| strsim::levenshtein(d.name.as_str(), old))
+                            .position_min()
+                            .unwrap_or_default();
+                    list[best_name_pos].name.to_string()
+                };
+
                 let all_mounts = self.indi.get_devices_list_by_interface(indi::DriverInterface::TELESCOPE);
-                if all_mounts.len() == 1 && options.mount.device != *all_mounts[0].name {
-                    let new_device_name = all_mounts[0].name.to_string();
-                    log::info!("Mount device correcting from \"{}\" to \"{}\"", options.mount.device, new_device_name);
+                let exists = all_mounts.iter().any(|d| *d.name == options.mount.device);
+                if !all_mounts.is_empty() && !exists {
+                    let new_device_name = select_best_device_name(&all_mounts, &options.mount.device);
+                    log::info!("Mount device corrected from \"{}\" to \"{}\"", options.mount.device, new_device_name);
                     options.mount.device = new_device_name.clone();
                     self.events.notify(Event::MountDeviceChanged(new_device_name));
                 }
-                let all_focuser = self.indi.get_devices_list_by_interface(indi::DriverInterface::FOCUSER);
-                if all_focuser.len() == 1 && options.focuser.device != *all_focuser[0].name {
-                    let new_device_name = all_focuser[0].name.to_string();
-                    log::info!("Focuser device correcting from \"{}\" to \"{}\"", options.focuser.device, new_device_name);
+                let all_focusers = self.indi.get_devices_list_by_interface(indi::DriverInterface::FOCUSER);
+                let exists = all_focusers.iter().any(|d| *d.name == options.focuser.device);
+                if !all_focusers.is_empty() && !exists {
+                    let new_device_name = select_best_device_name(&all_focusers, &options.focuser.device);
+                    log::info!("Focuser device corrected from \"{}\" to \"{}\"", options.focuser.device, new_device_name);
                     options.focuser.device = new_device_name.clone();
                     self.events.notify(Event::FocuserDeviceChanged(new_device_name));
                 }
                 let all_filter_wheels = self.indi.get_devices_list_by_interface(indi::DriverInterface::FILTER);
-                if all_filter_wheels.len() == 1 && options.filter_wheel.device != *all_filter_wheels[0].name {
-                    let new_device_name = all_filter_wheels[0].name.to_string();
-                    log::info!("Filter wheel device correcting from \"{}\" to \"{}\"", options.filter_wheel.device, new_device_name);
+                let exists = all_filter_wheels.iter().any(|d| *d.name == options.filter_wheel.device);
+                if !all_filter_wheels.is_empty() && !exists {
+                    let new_device_name = select_best_device_name(&all_filter_wheels, &options.filter_wheel.device);
+                    log::info!("Filter wheel device corrected from \"{}\" to \"{}\"", options.filter_wheel.device, new_device_name);
                     options.filter_wheel.device = new_device_name.clone();
                     self.events.notify(Event::FltWheelDeviceChanged(new_device_name));
                 }
