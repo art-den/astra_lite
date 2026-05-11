@@ -4,7 +4,7 @@ use crate::{core::events::{Event, Events}, indi, options::{DeviceAndProp, Option
 
 const DEVICE_WAIT_BEFORE_CONNECT_TIME: usize = 1; // in seconds
 const DEVICE_WAIT_BEFORE_LOAD_OPTS_TIME: usize = 2; // in seconds
-const DEVICE_WAIT_CHECK_CUR_DEV_TIME: usize = 1; // in seconds
+const DEVICE_WAIT_CHECK_CUR_DEV_TIME: usize = 3; // in seconds after last device appeared
 
 struct DeviceIsWaitingForAction {
     name: String,
@@ -17,7 +17,7 @@ pub struct DevicesWatchdog {
     events:              Arc<Events>,
     not_connected_yet:   Vec<DeviceIsWaitingForAction>,
     not_opts_loaded_yet: Vec<DeviceIsWaitingForAction>,
-    to_check_cur_dev:    Vec<DeviceIsWaitingForAction>,
+    to_check_cur_dev:    Option<usize>,
 }
 
 impl DevicesWatchdog {
@@ -32,7 +32,7 @@ impl DevicesWatchdog {
             events:              Arc::clone(events),
             not_connected_yet:   Vec::new(),
             not_opts_loaded_yet: Vec::new(),
-            to_check_cur_dev:    Vec::new(),
+            to_check_cur_dev:    None,
         }
     }
 
@@ -59,6 +59,7 @@ impl DevicesWatchdog {
                         &prop_change.device_name,
                     );
                 }
+                self.to_check_cur_dev = Some(0);
             }
             indi::PropChange::Change {
                 prop_name,
@@ -131,33 +132,14 @@ impl DevicesWatchdog {
                 "CONFIG_PROCESS",
                 &[("CONFIG_LOAD", true)],
             )?;
-
-            self.to_check_cur_dev.push(DeviceIsWaitingForAction {
-                name: dev.name,
-                wait_time_ms: 0
-            });
         }
 
-        for dev in &mut self.to_check_cur_dev {
-            dev.wait_time_ms += timer_period_ms;
-        }
-        loop {
-            let pos = self
-                .to_check_cur_dev
-                .iter()
-                .position(|dev| dev.wait_time_ms > DEVICE_WAIT_CHECK_CUR_DEV_TIME * 1000);
-            let Some(pos) = pos else {
-                break;
-            };
-            let dev = self.to_check_cur_dev.remove(pos);
-            let Ok(driver_info) = self.indi.get_driver_info(&dev.name) else { continue; };
-            let is_camera       = driver_info.interface.contains(indi::DriverInterface::CCD);
-            let is_mount        = driver_info.interface.contains(indi::DriverInterface::TELESCOPE);
-            let is_focuser      = driver_info.interface.contains(indi::DriverInterface::FOCUSER);
-            let is_filter_wheel = driver_info.interface.contains(indi::DriverInterface::FILTER);
-            if !(is_camera || is_mount || is_focuser || is_filter_wheel) { continue; }
-            let mut options = self.options.write().unwrap();
-            if is_camera {
+        if let Some(to_check_cur_dev) = &mut self.to_check_cur_dev {
+            *to_check_cur_dev += timer_period_ms;
+            if *to_check_cur_dev >= DEVICE_WAIT_CHECK_CUR_DEV_TIME * 1000 {
+                self.to_check_cur_dev = None;
+                let mut options = self.options.write().unwrap();
+
                 let all_cameras = self.indi.get_devices_list_by_interface(indi::DriverInterface::CCD);
                 if all_cameras.len() == 1 && options.cam.device.as_ref().map(|d| &d.name) != Some(&all_cameras[0].name) {
                     let prev_value = options.cam.device.clone();
@@ -172,8 +154,6 @@ impl DevicesWatchdog {
                         to: new_value
                     });
                 }
-            }
-            if is_mount {
                 let all_mounts = self.indi.get_devices_list_by_interface(indi::DriverInterface::TELESCOPE);
                 if all_mounts.len() == 1 && options.mount.device != *all_mounts[0].name {
                     let new_device_name = all_mounts[0].name.to_string();
@@ -181,8 +161,6 @@ impl DevicesWatchdog {
                     options.mount.device = new_device_name.clone();
                     self.events.notify(Event::MountDeviceChanged(new_device_name));
                 }
-            }
-            if is_focuser {
                 let all_focuser = self.indi.get_devices_list_by_interface(indi::DriverInterface::FOCUSER);
                 if all_focuser.len() == 1 && options.focuser.device != *all_focuser[0].name {
                     let new_device_name = all_focuser[0].name.to_string();
@@ -190,8 +168,6 @@ impl DevicesWatchdog {
                     options.focuser.device = new_device_name.clone();
                     self.events.notify(Event::FocuserDeviceChanged(new_device_name));
                 }
-            }
-            if is_filter_wheel {
                 let all_filter_wheels = self.indi.get_devices_list_by_interface(indi::DriverInterface::FILTER);
                 if all_filter_wheels.len() == 1 && options.filter_wheel.device != *all_filter_wheels[0].name {
                     let new_device_name = all_filter_wheels[0].name.to_string();
