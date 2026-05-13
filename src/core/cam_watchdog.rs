@@ -1,6 +1,15 @@
 use std::sync::Arc;
 
-use crate::{core::{cam_starter::CamStarter, consts::*, core::ModeData}, indi, options::{DeviceAndProp, Options}};
+use crate::{
+    core::{
+        cam_starter::CamStarter,
+        cam_utils::{CcdPurpose, get_all_ccd_with_purposes_list},
+        core::ModeData,
+        consts::*,
+    },
+    indi,
+    options::{DeviceAndProp, Options},
+};
 
 const MAX_WAIT_BLOB_TIME: usize = 30; // in seconds
 const MAX_SHUTDOWN_TIME: usize = 2; // in seconds
@@ -148,7 +157,7 @@ impl CameraWatchdog {
                 }
                 if self.init_flags.focal_len {
                     self.init_flags.focal_len = false;
-                    Self::set_telescope_focal_len(&self.indi, options)?;
+                    Self::set_focal_len_for_indi_devices(&self.indi, options)?;
                 }
             }
         }
@@ -346,31 +355,29 @@ impl CameraWatchdog {
         Ok(())
     }
 
-    pub fn set_telescope_focal_len(
+    pub fn set_focal_len_for_indi_devices(
         indi:    &Arc<indi::Connection>,
         options: &Options
     ) -> anyhow::Result<()> {
-        let cam_devices = indi.get_devices_list_by_interface(indi::DriverInterface::CCD);
-        let main_cam_name = options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default();
-
-        for cam_device in &cam_devices {
-            if !cam_device.connected {
-                continue;
-            }
-            let is_main_cam = main_cam_name == *cam_device.name;
-            let focal_len = if is_main_cam {
-                options.telescope.real_focal_length()
-            } else {
-                options.guiding.foc_len
-            };
-            log::info!("Setting focal len {:.1} for camera \"{}\"", focal_len, &cam_device.name);
-            indi.camera_set_telescope_info(
-                &cam_device.name,
+        let set_focal_len_for_device = |device_name: &str, focal_len: f64| -> anyhow::Result<()> {
+            log::info!("Setting focal len {:.1} for camera \"{}\"", focal_len, device_name);
+            indi.camera_set_telescope_focal_len(
+                device_name,
                 focal_len,
-                focal_len / 4.0,
                 false,
                 None
             )?;
+            Ok(())
+        };
+
+        let all_ccds = get_all_ccd_with_purposes_list(indi)?;
+
+        if let Some(ccd) = all_ccds.iter().find(|ccd| ccd.purpose == CcdPurpose::MainTelescopeCcd) {
+            set_focal_len_for_device(&ccd.device_name, options.telescope.real_focal_length())?;
+        }
+
+        if let Some(ccd) = all_ccds.iter().find(|ccd| ccd.purpose == CcdPurpose::GuiderCcd) {
+            set_focal_len_for_device(&ccd.device_name, options.guiding.foc_len)?;
         }
 
         Ok(())

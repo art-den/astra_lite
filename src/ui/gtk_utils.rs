@@ -53,7 +53,6 @@ pub fn add_ok_cancel_and_apply_buttons(
     }
 }
 
-
 pub fn disable_scroll_for_common_widgets(widget: &gtk::Widget) {
     if let Some(spin) = widget.downcast_ref::<gtk::SpinButton>() {
         spin.connect_scroll_event(|_, _| {

@@ -341,9 +341,9 @@ impl Core {
                 Event::CameraDeviceChanged { from, to } => {
                     self_.process_camera_changed(from, to);
                 },
-                Event::TelescopeFocalLenChanged|
+                Event::TelescopeFocalLenChanged(_)|
                 Event::TelescopeBarlowChanged|
-                Event::GuiderFocalLenChanged => {
+                Event::GuiderFocalLenChanged(_) => {
                     self_.process_focal_len_changed();
                 }
                 _ => {},
@@ -544,7 +544,7 @@ impl Core {
         let res = CameraWatchdog::control_camera_heater(&self.indi,&to.name, &options, true);
         self.process_error(res, "CameraWatchdog::control_camera_heater");
 
-        let res = CameraWatchdog::set_telescope_focal_len(&self.indi, &options);
+        let res = CameraWatchdog::set_focal_len_for_indi_devices(&self.indi, &options);
         self.process_error(res, "CameraWatchdog::set_telescope_focal_len");
     }
 
@@ -553,7 +553,7 @@ impl Core {
 
         // TODO: move this code inside CameraWatchdog
 
-        let res = CameraWatchdog::set_telescope_focal_len(&self.indi, &options);
+        let res = CameraWatchdog::set_focal_len_for_indi_devices(&self.indi, &options);
         self.process_error(res, "CameraWatchdog::set_telescope_focal_len");
     }
 
@@ -845,6 +845,7 @@ impl Core {
     pub fn start_capture_and_platesolve(&self) -> anyhow::Result<()> {
         let mode = PlatesolveMode::new(
             &self.indi,
+            &self.events,
             &self.cam_starter,
             &self.options,
             &self.cur_frame,

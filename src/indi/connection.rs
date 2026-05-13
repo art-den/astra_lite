@@ -1231,7 +1231,7 @@ bitflags! {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExportDevice {
     pub name:      Arc<String>,
     pub interface: DriverInterface,
@@ -3220,11 +3220,10 @@ impl Connection {
         self.property_exists(device_name, "SCOPE_INFO", None)
     }
 
-    pub fn camera_set_telescope_info(
+    pub fn camera_set_telescope_focal_len(
         &self,
         device_name:  &str,
         focal_length: f64,
-        aperture:     f64,
         force_set:    bool,
         timeout_ms:   Option<u64>,
     ) -> Result<()> {
@@ -3233,13 +3232,11 @@ impl Connection {
             timeout_ms,
             device_name,
             "SCOPE_INFO",
-            &[
-                ("FOCAL_LENGTH", focal_length),
-                ("APERTURE",     aperture),
-            ]
+            &[("FOCAL_LENGTH", focal_length)]
         )?;
         Ok(())
     }
+
 
     // Focuser absolute position
 

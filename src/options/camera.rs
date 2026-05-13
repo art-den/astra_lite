@@ -16,6 +16,15 @@ impl Binning {
             Self::Bin4 => "4x4",
         }
     }
+
+    pub fn get_ratio(&self) -> usize {
+        match self {
+            Self::Orig => 1,
+            Self::Bin2 => 2,
+            Self::Bin3 => 3,
+            Self::Bin4 => 4,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]

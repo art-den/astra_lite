@@ -150,7 +150,8 @@ trait PlateSolverIface {
 
 #[derive(Clone)]
 pub struct PlateSolverEvent {
-    pub cam_name: String,
-    pub result:   PlateSolveOkResult,
-    pub preview:  Option<Arc<PreviewRgbData>>,
+    pub cam_name:  String,
+    pub result:    PlateSolveOkResult,
+    pub preview:   Option<Arc<PreviewRgbData>>,
+
 }

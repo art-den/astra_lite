@@ -111,6 +111,7 @@ struct TelescopeWidgets {
     spb_foc_len:      gtk::SpinButton,
     spb_barlow:       gtk::SpinButton,
     spb_guid_foc_len: gtk::SpinButton,
+    chb_corr_foc_len: gtk::CheckButton,
 }
 
 #[derive(FromBuilder)]
@@ -285,6 +286,22 @@ impl UiModule for HardwareUi {
     fn on_indi_event(&self, event: &indi::Event) {
         self.process_indi_event(event);
     }
+
+    fn on_event(&self, event: &Event) {
+        match event {
+            Event::TelescopeFocalLenChanged(focal_len) => {
+                let diff_with_cur = f64::abs(self.widgets.telescope.spb_foc_len.value() - focal_len);
+                if diff_with_cur < 0.1 { return; }
+                self.widgets.telescope.spb_foc_len.set_value(*focal_len);
+            }
+            Event::GuiderFocalLenChanged(focal_len) => {
+                let diff_with_cur = f64::abs(self.widgets.telescope.spb_guid_foc_len.value() - focal_len);
+                if diff_with_cur < 0.1 { return; }
+                self.widgets.telescope.spb_guid_foc_len.set_value(*focal_len);
+            }
+            _ => {},
+        }
+    }
 }
 
 impl HardwareUi {
@@ -331,9 +348,11 @@ impl HardwareUi {
         self.widgets.telescope.spb_foc_len.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
-                options.telescope.focal_len = sb.value();
+                let value = sb.value();
+                if f64::abs(options.telescope.focal_len - value) < 0.1 { return; }
+                options.telescope.focal_len = value;
                 drop(options);
-                self_.core.events().notify(Event::TelescopeFocalLenChanged);
+                self_.core.events().notify(Event::TelescopeFocalLenChanged(value));
             })
         );
 
@@ -349,9 +368,11 @@ impl HardwareUi {
         self.widgets.telescope.spb_guid_foc_len.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
-                options.guiding.foc_len = sb.value();
+                let value = sb.value();
+                if f64::abs(options.guiding.foc_len - value) < 0.1 { return; }
+                options.guiding.foc_len = value;
                 drop(options);
-                self_.core.events().notify(Event::GuiderFocalLenChanged);
+                self_.core.events().notify(Event::GuiderFocalLenChanged(value));
             })
         );
 
@@ -399,6 +420,7 @@ impl HardwareUi {
         self.widgets.telescope.spb_foc_len.set_value(options.telescope.focal_len);
         self.widgets.telescope.spb_barlow.set_value(options.telescope.barlow);
         self.widgets.telescope.spb_guid_foc_len.set_value(options.guiding.foc_len);
+        self.widgets.telescope.chb_corr_foc_len.set_active(options.telescope.from_platesolve);
     }
 
     fn show_site_options(&self, options: &Options) {
@@ -419,9 +441,10 @@ impl HardwareUi {
     }
 
     fn get_telescope_options(&self, options: &mut Options) {
-        options.telescope.focal_len = self.widgets.telescope.spb_foc_len.value();
-        options.telescope.barlow    = self.widgets.telescope.spb_barlow.value();
-        options.guiding.foc_len     = self.widgets.telescope.spb_guid_foc_len.value();
+        options.telescope.focal_len       = self.widgets.telescope.spb_foc_len.value();
+        options.telescope.barlow          = self.widgets.telescope.spb_barlow.value();
+        options.guiding.foc_len           = self.widgets.telescope.spb_guid_foc_len.value();
+        options.telescope.from_platesolve = self.widgets.telescope.chb_corr_foc_len.is_active();
     }
 
     fn get_site_options(&self, options: &mut Options) {

@@ -126,15 +126,6 @@ impl Binning {
             Self::Bin4 => Some("4"),
         }
     }
-
-    pub fn get_ratio(&self) -> usize {
-        match self {
-            Self::Orig => 1,
-            Self::Bin2 => 2,
-            Self::Bin3 => 3,
-            Self::Bin4 => 4,
-        }
-    }
 }
 
 impl Crop {
@@ -1279,7 +1270,7 @@ impl CameraUi {
 
         let mut list = Vec::new();
         for camera in cameras {
-            for prop in ["CCD1", "CCD2", "CCD3"] {
+            for prop in ["CCD1", "CCD2"] {
                 if self.core.indi().property_exists(&camera.name, prop, None).unwrap_or(false) {
                     let dev_and_prop = DeviceAndProp {
                         name: camera.name.to_string(),

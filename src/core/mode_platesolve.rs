@@ -1,7 +1,13 @@
 use std::sync::{Arc, RwLock};
 
 use crate::{
-    core::{cam_starter::CamStarter, consts::INDI_SET_PROP_TIMEOUT, core::*, frame_processing::*},
+    core::{
+        cam_starter::CamStarter,
+        cam_utils::{CcdPurpose, get_ccd_purpose},
+        consts::INDI_SET_PROP_TIMEOUT,
+        core::*,
+        frame_processing::*,
+    },
     image::{image::*, stars::StarItems},
     indi,
     options::*,
@@ -22,6 +28,7 @@ enum State {
 pub struct PlatesolveMode {
     state:        State,
     indi:         Arc<indi::Connection>,
+    events:       Arc<Events>,
     cur_frame:    Arc<ResultImage>,
     options:      Arc<RwLock<Options>>,
     subscribers:  Arc<Events>,
@@ -36,6 +43,7 @@ pub struct PlatesolveMode {
 impl PlatesolveMode {
     pub fn new(
         indi:        &Arc<indi::Connection>,
+        events:      &Arc<Events>,
         cam_starter: &Arc<CamStarter>,
         options:     &Arc<RwLock<Options>>,
         cur_frame:   &Arc<ResultImage>,
@@ -59,6 +67,7 @@ impl PlatesolveMode {
         Ok(Self {
             state:        State::None,
             indi:         Arc::clone(indi),
+            events:       Arc::clone(events),
             cur_frame:    Arc::clone(cur_frame),
             options:      Arc::clone(options),
             subscribers:  Arc::clone(subscribers),
@@ -116,19 +125,24 @@ impl PlatesolveMode {
         result.print_to_log();
 
         // Image for preview in map
-
         let options = self.options.read().unwrap();
         let preview = self.cur_frame.create_preview_for_platesolve_image(&options.preview);
         drop(options);
 
+        // Calculate and correct focal length in options
+        self.calc_focal_len(&result)?;
+
+        // Send event about platesolve result
         let event = PlateSolverEvent {
-            cam_name: self.camera.name.clone(),
-            result: result.clone(),
-            preview: preview.map(Arc::new),
+            cam_name:  self.camera.to_string(),
+            result:    result.clone(),
+            preview:   preview.map(Arc::new),
         };
         self.subscribers.notify(
             Event::PlateSolve(event)
         );
+
+        // Sync coordinates
         self.indi.mount_set_after_coord_action(
             &self.mount,
             indi::AfterCoordSetAction::Sync,
@@ -144,6 +158,50 @@ impl PlatesolveMode {
         )?;
 
         Ok(true)
+    }
+
+    fn calc_focal_len(&self, ps_result: &PlateSolveOkResult) -> anyhow::Result<()> {
+        let mut options = self.options.write().unwrap();
+        if !options.telescope.from_platesolve { return Ok(()); }
+        let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.camera.prop);
+        let (pixel_size_x, pixel_size_y) = self.indi.camera_get_pixel_size_um(&self.camera.name, cam_ccd)?;
+        let (sensor_width, sensor_height) = self.indi.camera_get_max_frame_size(&self.camera.name, cam_ccd)?;
+        let (frame_width, _) = options.cam.frame.active_sensor_size(sensor_width, sensor_height);
+        let bin_ratio = options.cam.frame.binning.get_ratio();
+        let cam_purpose = get_ccd_purpose(&self.indi, &self.camera.name, cam_ccd)?;
+
+        if pixel_size_x == pixel_size_y && cam_purpose != CcdPurpose::Unknown {
+            let frame_horiz_size = (frame_width * bin_ratio) as f64 * pixel_size_x * 0.000_001;
+            let is_telescope_ccd = matches!(cam_purpose, CcdPurpose::MainTelescopeCcd|CcdPurpose::SecodnaryTelescopeCcd);
+            let mut focal_len = 1000.0/*mm*/ * frame_horiz_size / (2.0 * f64::tan(0.5 * ps_result.width));
+            if is_telescope_ccd && options.telescope.barlow > 0.0 {
+                focal_len /= options.telescope.barlow;
+            }
+
+            log::debug!("cam_purpose={:?}, frame_horiz_size={:.1}mm", cam_purpose, frame_horiz_size * 1000.0);
+            log::info!("Calculated telescope focal len = {focal_len}");
+
+            let cur_len =
+                if is_telescope_ccd {
+                    &mut options.telescope.focal_len
+                } else {
+                    &mut options.guiding.foc_len
+                };
+            let ok_to_set_new_value = f64::abs(*cur_len - focal_len) >= 2.0;
+            if ok_to_set_new_value {
+                log::info!("Correcting options focal len from {:.1} to {:.1}", *cur_len, focal_len);
+                *cur_len = focal_len;
+            }
+            drop(options);
+            if ok_to_set_new_value {
+                if is_telescope_ccd {
+                    self.events.notify(Event::TelescopeFocalLenChanged(focal_len));
+                } else {
+                    self.events.notify(Event::GuiderFocalLenChanged(focal_len));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
