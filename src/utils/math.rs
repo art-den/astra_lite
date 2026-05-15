@@ -471,3 +471,91 @@ fn test_fitting_plane_z_dist() {
         assert!(f64::abs(z - p.z) < 0.001);
     }
 }
+
+pub fn angles_mean(angles: impl std::iter::Iterator::<Item=f64>) -> f64 {
+    let mut v1 = 0.0_f64;
+    let mut v2 = 0.0_f64;
+    for angle in angles {
+        v1 += f64::sin(angle);
+        v2 += f64::cos(angle);
+    }
+    f64::atan2(v1, v2)
+}
+
+pub fn point_in_polygon(polygon: &[[f64; 2]], point: [f64; 2]) -> bool {
+    let n = polygon.len();
+    if n < 3 {
+        return false;
+    }
+
+    let (x, y) = (point[0], point[1]);
+    let eps = 1e-9;
+
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (x1, y1) = (polygon[i][0], polygon[i][1]);
+        let (x2, y2) = (polygon[j][0], polygon[j][1]);
+        if point_on_segment(x, y, x1, y1, x2, y2, eps) {
+            return true;
+        }
+    }
+
+    let mut intersections = 0;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (x1, y1) = (polygon[i][0], polygon[i][1]);
+        let (x2, y2) = (polygon[j][0], polygon[j][1]);
+
+        if (y1 <= y && y < y2) || (y2 <= y && y < y1) {
+            let x_intersect = x1 + (y - y1) * (x2 - x1) / (y2 - y1);
+            if x_intersect > x {
+                intersections += 1;
+            }
+        }
+    }
+
+    intersections % 2 == 1
+}
+
+fn point_on_segment(
+    x: f64,
+    y: f64,
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+    eps: f64,
+) -> bool {
+    let cross = (x - x1) * (y2 - y1) - (y - y1) * (x2 - x1);
+    if cross.abs() > eps {
+        return false;
+    }
+    let min_x = x1.min(x2) - eps;
+    let max_x = x1.max(x2) + eps;
+    let min_y = y1.min(y2) - eps;
+    let max_y = y1.max(y2) + eps;
+    x >= min_x && x <= max_x && y >= min_y && y <= max_y
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_square() {
+        let square = vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]];
+        assert!(point_in_polygon(&square, [1.0, 1.0]));
+        assert!(point_in_polygon(&square, [0.0, 1.0]));
+        assert!(point_in_polygon(&square, [2.0, 2.0]));
+        assert!(!point_in_polygon(&square, [3.0, 1.0]));
+    }
+
+    #[test]
+    fn test_triangle() {
+        let triangle = vec![[0.0, 0.0], [2.0, 3.0], [4.0, 0.0]];
+        assert!(point_in_polygon(&triangle, [2.0, 1.0]));
+        assert!(point_in_polygon(&triangle, [2.0, 0.0]));
+        assert!(!point_in_polygon(&triangle, [2.0, -0.5]));
+        assert!(!point_in_polygon(&triangle, [-1.0, 1.0]));
+    }
+}

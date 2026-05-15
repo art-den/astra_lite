@@ -4,9 +4,10 @@ use std::{collections::*, f64::consts::PI, fmt::Debug, io::{BufRead, Read}, path
 use bitflags::bitflags;
 use bitstream_io::{BigEndian, BitReader};
 use serde::{Deserialize, Serialize};
-use crate::{indi::sexagesimal_to_value, utils::compression::ValuesDecompressor, sky_math::math::*};
+use crate::{indi::sexagesimal_to_value, sky_math::math::*, utils::{compression::ValuesDecompressor, math::angles_mean}};
 
 enum SearchMode {
+    Eq,
     StartWith,
     Contains,
 }
@@ -17,7 +18,7 @@ pub struct Observer {
     pub longitude: f64, // λ₀
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct ObjEqCoord {
     ra:  u32,
     dec: i32,
@@ -307,16 +308,18 @@ impl Stars {
         None
     }
 
-    fn find(&self, text: &str, mode: SearchMode) -> Vec<SkymapObject> {
+    fn find(&self, text_lc: &str, mode: SearchMode) -> Vec<SkymapObject> {
         let mut result = Vec::new();
         for star in self.zones.iter().flat_map(|(_, zone)| &zone.nstars) {
             let found = match mode {
+                SearchMode::Eq =>
+                    star.name_lc == text_lc || star.bayer_lc == text_lc,
                 SearchMode::StartWith =>
-                    star.name_lc.starts_with(text) ||
-                    star.bayer_lc.starts_with(text),
+                    (star.name_lc.starts_with(text_lc) && star.name_lc != text_lc) ||
+                    (star.bayer_lc.starts_with(text_lc) && star.bayer_lc != text_lc),
                 SearchMode::Contains =>
-                    star.name_lc.contains(text) ||
-                    star.bayer_lc.contains(text),
+                    (star.name_lc.contains(text_lc) && !star.name_lc.starts_with(text_lc)) ||
+                    (star.bayer_lc.contains(text_lc) && !star.bayer_lc.starts_with(text_lc)),
             };
             if found {
                 result.push(SkymapObject::Star(star.clone()));
@@ -324,7 +327,6 @@ impl Stars {
         }
         result
     }
-
 }
 
 bitflags! {
@@ -337,6 +339,7 @@ bitflags! {
         const CLUSTERS = 1 << 3;
         const NEBULAS  = 1 << 4;
         const GALAXIES = 1 << 5;
+        const CONSTS   = 1 << 6;
     }
 }
 
@@ -346,8 +349,9 @@ impl Default for ItemsToShow {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum SkyItemType {
+    #[default]
     None,
     Star,
     DoubleStar,
@@ -365,6 +369,7 @@ pub enum SkyItemType {
     GroupOfGalaxies,
     AssociationOfStars,
     StarClusterAndNebula,
+    Constellation,
 }
 
 impl SkyItemType {
@@ -423,7 +428,8 @@ type NameParts = Vec<DsoNamePart>;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct DsoName{
-    orig_text: String,
+    orig:   String,
+    lc:     String,
     parts:  NameParts,
 }
 
@@ -455,13 +461,14 @@ impl DsoName {
         }
         add_part(&mut part, &mut parts);
         Self {
-            orig_text: text.to_string(),
+            orig: text.to_string(),
+            lc:   text.to_lowercase(),
             parts,
         }
     }
 
     pub fn text(&self) -> &str {
-        &self.orig_text
+        &self.orig
     }
 }
 
@@ -488,7 +495,7 @@ impl DsoNickName {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DsoItem {
     pub names:     Vec<DsoName>,
     pub nicknames: Vec<DsoNickName>,
@@ -522,7 +529,7 @@ impl SkymapObject {
     pub fn names(&self) -> Vec<&str> {
         match self {
             Self::Dso(dso) => {
-                dso.names.iter().map(|n| n.orig_text.as_str()).collect()
+                dso.names.iter().map(|n| n.orig.as_str()).collect()
             }
             Self::Star(star) => {
                 let mut result = Vec::new();
@@ -585,15 +592,24 @@ impl SkymapObject {
             Self::Star(star) => Some(star.data.bv.get()),
         }
     }
+}
 
+pub type Polyline = Vec<EqCoord>;
+
+#[derive(Clone)]
+pub struct Constellation {
+    pub name: String,
+    pub bounds: Vec<Polyline>,
+    pub lines: Vec<Polyline>,
 }
 
 pub struct SkyMap {
-    constellations:   HashMap<u8, &'static str>,
+    const_map:        HashMap<u8, &'static str>,
     const_id_by_name: HashMap<&'static str, u8>,
     stars:            Stars,
     objects:          Vec<DsoItem>,
     outlines:         Vec<Outline>,
+    constellations:   HashMap<u8, Constellation>,
 }
 
 impl SkyMap {
@@ -622,15 +638,16 @@ impl SkyMap {
             (81, "cae"), (82, "ret"), (83, "tra"), (84, "sct"),
             (85, "cir"), (86, "sge"), (87, "equ"), (88, "cru"),
         ];
-        let constellations = HashMap::from(const_data);
+        let const_map = HashMap::from(const_data);
         let const_id_by_name = const_data.into_iter().map(|(id, name)| (name, id)).collect();
 
         Self {
-            constellations,
+            stars:          Stars::new(),
+            objects:        Vec::new(),
+            outlines:       Vec::new(),
+            constellations: HashMap::new(),
+            const_map,
             const_id_by_name,
-            stars:           Stars::new(),
-            objects:         Vec::new(),
-            outlines:        Vec::new(),
         }
     }
 
@@ -646,9 +663,17 @@ impl SkyMap {
         &self.stars
     }
 
+    pub fn constellations(&self) -> &HashMap<u8, Constellation> {
+        &self.constellations
+    }
+
     pub fn merge_other_skymaps(&mut self, other: &Self) {
         self.objects.extend_from_slice(&other.objects);
         self.outlines.extend_from_slice(&other.outlines);
+        for (id, constellation) in &other.constellations {
+            self.constellations.entry(*id).or_insert_with(|| constellation.clone());
+        }
+        self.constellations = other.constellations.clone();
 
         for (key, star_zone) in &other.stars.zones {
             self.stars.zones.entry(*key)
@@ -658,6 +683,82 @@ impl SkyMap {
                 })
                 .or_insert(star_zone.clone());
         }
+    }
+
+    pub fn load_constellations(&mut self, path: impl AsRef<Path>, as_bounds: bool) -> anyhow::Result<()> {
+        let reader = std::io::BufReader::new(std::fs::File::open(path)?);
+        let v: serde_json::Value = serde_json::from_reader(reader)?;
+        let Some(features_js) = v["features"].as_array() else { anyhow::bail!("features not found"); };
+
+        for feature in features_js {
+            let properties_js = &feature["properties"];
+
+            let Some(name) = properties_js["name"].as_str() else {
+                anyhow::bail!("properties.name not found");
+            };
+            let Some(id) = properties_js["id"].as_str() else {
+                anyhow::bail!("properties.id not found");
+            };
+
+            let geometry_js = &feature["geometry"];
+
+            let Some(coordinates_js) = geometry_js["coordinates"].as_array() else {
+                anyhow::bail!("coordinates json object not found");
+            };
+
+            let geometry_type = geometry_js["type"].as_str().unwrap_or("");
+
+            let mut figures = Vec::new();
+            let mut load = |json: &Vec<serde_json::Value>| -> anyhow::Result<()> {
+                for points_js in json {
+                    let Some(points_js) = points_js.as_array() else {
+                        anyhow::bail!("polyline is not json array");
+                    };
+                    let mut points = Vec::new();
+                    for point_js in points_js {
+                        let Some(ra_degree) = point_js[0].as_f64() else { continue; };
+                        let Some(dec_degree) = point_js[1].as_f64() else { continue; };
+                        points.push(EqCoord {
+                            ra: degree_to_radian(ra_degree),
+                            dec: degree_to_radian(dec_degree),
+                        });
+                    }
+                    figures.push(points);
+                }
+                Ok(())
+            };
+
+            match geometry_type {
+                "MultiLineString" => {
+                    load(coordinates_js)?;
+                }
+                "MultiPolygon" => {
+                    for item in coordinates_js {
+                        let Some(item) = item.as_array() else { continue; };
+                        load(item)?;
+                    }
+                }
+                _ => anyhow::bail!("Unknown geometry type {geometry_type}"),
+            }
+
+            let id_lc = id.to_ascii_lowercase();
+            let Some(id_u8) = self.const_id_by_name.get(id_lc.as_str()) else {
+                anyhow::bail!("Unknown constellation id ({id})");
+            };
+            let constellation = self.constellations
+                .entry(*id_u8)
+                .or_insert_with(|| Constellation {
+                    name:   name.to_string(),
+                    bounds: Vec::new(),
+                    lines:  Vec::new(),
+                });
+            if as_bounds {
+                constellation.bounds = figures;
+            } else {
+                constellation.lines = figures;
+            }
+        }
+        Ok(())
     }
 
     pub fn load_dso(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
@@ -916,10 +1017,19 @@ impl SkyMap {
                 uniq_names.insert(names);
             }
         };
+
+        apdate_result(self.find_const(&text_lc, SearchMode::Eq));
+        apdate_result(self.find(&text_lc, SearchMode::Eq));
+        apdate_result(self.stars.find(&text_lc, SearchMode::Eq));
+
+        apdate_result(self.find_const(&text_lc, SearchMode::StartWith));
         apdate_result(self.find(&text_lc, SearchMode::StartWith));
         apdate_result(self.stars.find(&text_lc, SearchMode::StartWith));
+
+        apdate_result(self.find_const(&text_lc, SearchMode::Contains));
         apdate_result(self.find(&text_lc, SearchMode::Contains));
         apdate_result(self.stars.find(&text_lc, SearchMode::Contains));
+
         result
     }
 
@@ -930,25 +1040,63 @@ impl SkyMap {
             let mut matched = false;
             for name in &item.names {
                 matched |= match mode {
-                    SearchMode::StartWith =>
-                        name.orig_text.starts_with(text_lc) ||
+                    SearchMode::Eq =>
+                        name.lc == text_lc ||
                         name.parts == name_to_search.parts,
+                    SearchMode::StartWith =>
+                        name.lc.starts_with(text_lc) && name.lc != text_lc,
                     SearchMode::Contains =>
-                        name.orig_text.contains(text_lc),
+                        name.lc.contains(text_lc) && !name.lc.starts_with(text_lc),
                 };
             }
 
             for nickname in &item.nicknames {
                 matched |= match mode {
+                    SearchMode::Eq =>
+                        nickname.lc == text_lc,
                     SearchMode::StartWith =>
-                        nickname.lc.starts_with(text_lc),
+                        nickname.lc.starts_with(text_lc) && nickname.lc != text_lc,
                     SearchMode::Contains =>
-                        nickname.lc.contains(text_lc),
+                        nickname.lc.contains(text_lc) && !nickname.lc.starts_with(text_lc),
                 };
             }
 
             if matched {
                 result.push(SkymapObject::Dso(item.clone()));
+            }
+        }
+        result
+    }
+
+    fn find_const(&self, text_lc: &str, mode: SearchMode) -> Vec<SkymapObject> {
+        let mut result = Vec::new();
+        for (id, constellation) in &self.constellations {
+            let name_lc = constellation.name.to_lowercase();
+            let found = match mode {
+                SearchMode::Eq =>
+                    name_lc == text_lc,
+                SearchMode::StartWith =>
+                    name_lc.starts_with(text_lc),
+                SearchMode::Contains =>
+                    name_lc.contains(text_lc) && !name_lc.starts_with(text_lc),
+            };
+            if found {
+                let all_ra = constellation.lines.iter().flat_map(|l| l.iter().map(|pt| pt.ra));
+                let all_dec = constellation.lines.iter().flat_map(|l| l.iter().map(|pt| pt.dec));
+                let mut aver_ra = angles_mean(all_ra);
+                let aver_dec = angles_mean(all_dec);
+
+                if aver_ra < 0.0 {
+                    aver_ra += 2.0 * PI;
+                }
+
+                result.push(SkymapObject::Dso(DsoItem {
+                    obj_type: SkyItemType::Constellation,
+                    names:    vec![DsoName::from_str(&constellation.name)],
+                    crd:      ObjEqCoord::new(aver_ra, aver_dec),
+                    cnst_id:  *id,
+                    ..Default::default()
+                }));
             }
         }
         result

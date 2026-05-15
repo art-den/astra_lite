@@ -114,3 +114,6 @@ DSO:
 Stars:
 * Tycho-2 catalogue - https://www.cosmos.esa.int/web/hipparcos/tycho-2
 * HYG v3 catalogue - https://github.com/astronexus/HYG-Database/tree/main/hyg/v3
+
+Constellations:
+* Celestial Data - github.com/dieghernan/celestial_data

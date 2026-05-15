@@ -1,6 +1,8 @@
 use std::{f64::consts::PI, collections::HashMap};
 use itertools::Itertools;
 
+use crate::utils::math::angles_mean;
+
 #[derive(Clone)]
 pub struct Point {
     pub x: f64,
@@ -131,7 +133,7 @@ fn try_calculate(
 
         angle_values.clear();
         for (angle, ..) in &similar_triangles { angle_values.push(*angle); }
-        let angle = angles_mean(&angle_values);
+        let angle = angles_mean(angle_values.iter().copied());
 
         // Caluclate x and y offset for similar_triangles and median values
         let center_x = (image_width - 1.0) / 2.0;
@@ -175,7 +177,7 @@ fn try_calculate(
     for (angle, ..) in &similar_triangles {
         angle_values.push(*angle);
     }
-    let aver_angle = angles_mean(&angle_values);
+    let aver_angle = angles_mean(angle_values.iter().copied());
     let aver_x_offs = similar_triangles.iter().map(|(_, _, _, x_offs, _)| *x_offs).sum::<f64>() / count;
     let aver_y_offs = similar_triangles.iter().map(|(_, _, _, _, y_offs)| *y_offs).sum::<f64>() / count;
 
@@ -217,7 +219,7 @@ impl Triangle<'_> {
             calc_angle(1, 2),
             calc_angle(2, 0)
         ];
-        angles_mean(&angles)
+        angles_mean(angles.into_iter())
     }
 
     fn center(&self) -> Point {
@@ -310,10 +312,4 @@ fn rotate_point(x: f64, y: f64, x0: f64, y0: f64, angle: f64) -> Point {
         x: x0 + dx * cos_a - dy * sin_a,
         y: y0 + dy * cos_a + dx * sin_a
     }
-}
-
-fn angles_mean(angles: &[f64]) -> f64 {
-    let v1 = angles.iter().map(|a| f64::sin(*a)).sum();
-    let v2 = angles.iter().map(|a| f64::cos(*a)).sum();
-    f64::atan2(v1, v2)
 }

@@ -103,6 +103,7 @@ impl SkyItemType {
             SkyItemType::GroupOfGalaxies      => "Group of Galaxies",
             SkyItemType::AssociationOfStars   => "Association of Stars",
             SkyItemType::StarClusterAndNebula => "Star Cluster and Nebula",
+            SkyItemType::Constellation        => "Constellation",
         }
     }
 }
@@ -111,18 +112,18 @@ impl SkyItemType {
 #[serde(default)]
 pub struct UiOptions {
     pub paint: PaintConfig,
-    show_ccd:  bool,
-    show_ps:   bool,
-    exp_dt:    bool,
+    show_ccd:   bool,
+    show_ps:    bool,
+    exp_dt:     bool,
 }
 
 impl Default for UiOptions {
     fn default() -> Self {
         Self {
             paint:    PaintConfig::default(),
-            show_ccd: true,
-            exp_dt:   true,
-            show_ps:  true,
+            show_ccd:   true,
+            exp_dt:     true,
+            show_ps:    true,
         }
     }
 }
@@ -233,6 +234,7 @@ struct TopWidgets {
     chb_show_sclusters: gtk::CheckButton,
     chb_show_eq_grid:   gtk::CheckButton,
     chb_show_ccd:       gtk::CheckButton,
+    chb_show_const:     gtk::CheckButton,
     chb_show_ps:        gtk::CheckButton,
 }
 
@@ -495,6 +497,7 @@ impl MapUi {
         connect_obj_visibility_changed(&self.widgets.top.chb_show_sclusters);
         connect_obj_visibility_changed(&self.widgets.top.chb_show_eq_grid);
         connect_obj_visibility_changed(&self.widgets.top.chb_show_ccd);
+        connect_obj_visibility_changed(&self.widgets.top.chb_show_const);
         connect_obj_visibility_changed(&self.widgets.top.chb_show_ps);
 
         self.map_widget.add_obj_sel_handler(
@@ -563,6 +566,7 @@ impl MapUi {
         self.widgets.top.chb_show_sclusters.set_active(opts.paint.filter.contains(ItemsToShow::CLUSTERS));
         self.widgets.top.chb_show_eq_grid.set_active(opts.paint.eq_grid.visible);
         self.widgets.top.chb_show_ccd.set_active(opts.show_ccd);
+        self.widgets.top.chb_show_const.set_active(opts.paint.filter.contains(ItemsToShow::CONSTS));
         self.widgets.top.chb_show_ps.set_active(opts.show_ps);
         self.widgets.top.scl_max_dso_mag.set_value(opts.paint.max_dso_mag as f64);
 
@@ -582,6 +586,7 @@ impl MapUi {
         opts.paint.filter.set(ItemsToShow::GALAXIES, self.widgets.top.chb_show_galaxies.is_active());
         opts.paint.filter.set(ItemsToShow::NEBULAS, self.widgets.top.chb_show_nebulas.is_active());
         opts.paint.filter.set(ItemsToShow::CLUSTERS, self.widgets.top.chb_show_sclusters.is_active());
+        opts.paint.filter.set(ItemsToShow::CONSTS, self.widgets.top.chb_show_const.is_active());
 
         opts.paint.eq_grid.visible = self.widgets.top.chb_show_eq_grid.is_active();
         opts.show_ccd = self.widgets.top.chb_show_ccd.is_active();
@@ -780,17 +785,31 @@ impl MapUi {
             .join(env!("CARGO_PKG_NAME"))
             .join("data");
 
+        // Constellations
+
+        const CONST_BOUNDS_FILE: &str = "constellations.bounds.geojson";
+        map
+            .load_constellations(skymap_local_data_path.join(CONST_BOUNDS_FILE), true)
+            .or_else(|_| { map.load_constellations(skymap_data_path.join(CONST_BOUNDS_FILE), true) })?;
+
+        const CONST_LINES_FILE: &str = "constellations.lines.geojson";
+        map
+            .load_constellations(skymap_local_data_path.join(CONST_LINES_FILE), false)
+            .or_else(|_| { map.load_constellations(skymap_data_path.join(CONST_LINES_FILE), false) })?;
+
+        // DSO objects
+
         const DSO_FILE: &str = "dso.csv";
-        map.load_dso(skymap_local_data_path.join(DSO_FILE)).
-            or_else(|_| {
-                map.load_dso(skymap_data_path.join(DSO_FILE))
-            })?;
+        map
+            .load_dso(skymap_local_data_path.join(DSO_FILE))
+            .or_else(|_| { map.load_dso(skymap_data_path.join(DSO_FILE)) })?;
+
+        // Named stars
 
         const NAMED_STARS_FILE: &str = "named_stars.csv";
-        map.load_named_stars(skymap_local_data_path.join(NAMED_STARS_FILE))
-            .or_else(|_| {
-                map.load_named_stars(skymap_data_path.join(NAMED_STARS_FILE))
-            })?;
+        map
+            .load_named_stars(skymap_local_data_path.join(NAMED_STARS_FILE))
+            .or_else(|_| { map.load_named_stars(skymap_data_path.join(NAMED_STARS_FILE)) })?;
 
         let map = Rc::new(map);
         *skymap = Some(Rc::clone(&map));
@@ -798,17 +817,15 @@ impl MapUi {
 
         self.map_widget.set_skymap(&map);
 
-        // Load stars in another thread
+        // Load other stars in another thread
 
         let (stars_sender, stars_receiver) = async_channel::unbounded();
-
         std::thread::spawn(move || {
             let mut stars_map = SkyMap::new();
             const STARS_FILE: &str = "stars.bin";
-            let res = stars_map.load_stars(skymap_local_data_path.join(STARS_FILE))
-                .or_else(|_| {
-                    stars_map.load_stars(skymap_data_path.join(STARS_FILE))
-                });
+            let res = stars_map
+                .load_stars(skymap_local_data_path.join(STARS_FILE))
+                .or_else(|_| { stars_map.load_stars(skymap_data_path.join(STARS_FILE)) });
             if let Err(err) = res {
                 stars_sender.send_blocking(Err(err)).unwrap();
                 return;
@@ -1081,7 +1098,7 @@ impl MapUi {
             let mut names_str = item.obj.names().join(", ");
             let mut type_str = item.obj.obj_type().to_str().to_string();
             let make_gray = |text: &mut String| {
-                *text = format!(r##"<span color="gray">{}</span>"##, text);
+                *text = format!(r##"<span alpha='50%'>{}</span>"##, text);
             };
             if !item.above_horiz {
                 make_gray(&mut names_str);

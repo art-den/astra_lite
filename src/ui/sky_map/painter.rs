@@ -1,9 +1,9 @@
-use std::{cell::RefCell, collections::HashSet, f64::consts::PI, rc::Rc};
+use std::{cell::{Cell, RefCell}, collections::HashSet, f64::consts::PI, rc::Rc};
 use chrono::{DateTime, Local, NaiveDateTime, Utc};
 use gtk::{cairo, gdk_pixbuf, pango};
 use itertools::{izip, Itertools};
 use serde::{Deserialize, Serialize};
-use crate::{utils::math::linear_interpolate, sky_math::math::*};
+use crate::{sky_math::math::*, utils::math::{angles_mean, linear_interpolate, point_in_polygon}};
 use super::{consts::*, data::*, perspective_painter::PerspectivePainter, utils::*};
 
 const GRID_TEXT_FONT_SIZE: f64 = 0.8;
@@ -159,6 +159,7 @@ pub struct SkyMapPainter {
     dso_ellipse:   DsoEllipse,
     visible_zones: HashSet<SkyZoneKey>,
     persp_pnt:     RefCell<PerspectivePainter>,
+    cur_cont_id:   Option<u8>,
 }
 
 impl SkyMapPainter {
@@ -168,6 +169,7 @@ impl SkyMapPainter {
             dso_ellipse:   DsoEllipse::new(),
             visible_zones: HashSet::new(),
             persp_pnt:     RefCell::new(PerspectivePainter::new()),
+            cur_cont_id:   None,
         }
     }
 
@@ -205,6 +207,7 @@ impl SkyMapPainter {
         self.paint_platesolved_image(args.plate_solve, &ctx)?;
 
         // Equatorial grid
+
         if args.config.eq_grid.visible {
             let mut font = ctx.layout.font_description().unwrap();
             font.set_size((GRID_TEXT_FONT_SIZE * ctx.screen.font_size()) as _);
@@ -215,12 +218,25 @@ impl SkyMapPainter {
         }
 
         if let Some(sky_map) = args.sky_map {
+            // Current constellations bounds
+            //
+            if args.config.filter.contains(ItemsToShow::CONSTS) {
+                self.paint_constellation_bounds(sky_map, &ctx)?;
+            }
+
             // DSO objects
+
             self.paint_dso_items(sky_map, &ctx, PainterMode::Objects)?;
 
-            let star_painter_params = self.get_star_painter_params(&ctx);
+            // Constellations
+            //
+            if args.config.filter.contains(ItemsToShow::CONSTS) {
+                self.paint_constellations_lines(sky_map, &ctx)?;
+            }
 
             // Stars objects
+
+            let star_painter_params = self.get_star_painter_params(&ctx);
             if args.config.filter.contains(ItemsToShow::STARS) {
                 self.fill_visible_zones(&ctx);
 
@@ -232,18 +248,17 @@ impl SkyMapPainter {
                 )?;
             }
 
+            // Constellation names
+
+            if args.config.filter.contains(ItemsToShow::CONSTS) {
+                self.paint_constellations_names(sky_map, &ctx)?;
+            }
+
             // DSO names
-            let mut font = ctx.layout.font_description().unwrap();
-            font.set_size(ctx.screen.font_size() as _);
-            ctx.layout.set_font_description(Some(&font));
 
             self.paint_dso_items(sky_map, &ctx, PainterMode::Names)?;
 
             // Stars names
-
-            let mut font = ctx.layout.font_description().unwrap();
-            font.set_size(ctx.screen.font_size() as _);
-            ctx.layout.set_font_description(Some(&font));
 
             if args.config.filter.contains(ItemsToShow::STARS) {
                 self.paint_stars(
@@ -256,22 +271,21 @@ impl SkyMapPainter {
         }
 
         // Horizon glow
+
         if args.config.horizon_glow.visible {
             self.paint_horizon_glow(&ctx)?;
         }
 
         // Ground
 
-        let mut font = ctx.layout.font_description().unwrap();
-        font.set_size((WORD_SIZE_FONT_SIZE * ctx.screen.font_size()) as _);
-        ctx.layout.set_font_description(Some(&font));
-
         self.paint_ground(&ctx)?;
 
         // Selected object
+
         self.paint_selection(args.selection, &ctx)?;
 
         // Optionally telescope position
+
         self.paint_telescope_position(args.tele_pos, &ctx)?;
 
         // Optionally camera frame
@@ -324,10 +338,16 @@ impl SkyMapPainter {
 
     fn paint_dso_items(
         &mut self,
-        sky_map:    &SkyMap,
-        ctx:        &PaintCtx,
-        mode:       PainterMode,
+        sky_map: &SkyMap,
+        ctx:     &PaintCtx,
+        mode:    PainterMode,
     ) -> anyhow::Result<()> {
+        if mode == PainterMode::Names {
+            let mut font = ctx.layout.font_description().unwrap();
+            font.set_size(ctx.screen.font_size() as _);
+            ctx.layout.set_font_description(Some(&font));
+        }
+
         for dso_object in sky_map.objects() {
             let Some(mag) = dso_object.any_magnitude() else {
                 continue;
@@ -432,14 +452,97 @@ impl SkyMapPainter {
         }
     }
 
+    fn paint_constellation_bounds(
+        &mut self,
+        sky_map: &SkyMap,
+        ctx:     &PaintCtx,
+    ) -> anyhow::Result<()> {
+        let constellations = sky_map.constellations();
+
+        // Find current constellation (at screen center)
+        self.cur_cont_id = None;
+        let mut test_object = PolygonIsAtScreenCenterTestObject {
+            polygon:    None,
+            tmp_buffer: RefCell::new(Vec::new()),
+            result:    Cell::new(false)
+        };
+        for (id, constellation) in constellations {
+            for polygon in &constellation.bounds {
+                test_object.polygon = Some(polygon);
+                self.item_painter.paint(&test_object, ctx, false)?;
+                if test_object.result.get() {
+                    self.cur_cont_id = Some(*id);
+                    break;
+                }
+            }
+            if self.cur_cont_id.is_some() { break; }
+        }
+
+        for (id, constellation) in constellations {
+            for polygon in &constellation.bounds {
+                let test_object = ConstBoundsPainter {
+                    polygon,
+                    is_active: Some(*id) == self.cur_cont_id
+                };
+                self.item_painter.paint(&test_object, ctx, false)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn paint_constellations_lines(
+        &mut self,
+        sky_map: &SkyMap,
+        ctx:     &PaintCtx,
+    ) -> anyhow::Result<()> {
+        let constellations = sky_map.constellations();
+        for (id, constellation) in constellations {
+            for polyline in &constellation.lines {
+                let painter = ConstLinesPainter {
+                    polyline,
+                    is_current: Some(*id) == self.cur_cont_id
+                };
+                self.item_painter.paint(&painter, ctx, false)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn paint_constellations_names(
+        &mut self,
+        sky_map: &SkyMap,
+        ctx:     &PaintCtx,
+    ) -> anyhow::Result<()> {
+        let mut font = ctx.layout.font_description().unwrap();
+        font.set_size((2.0 * ctx.screen.font_size()) as _);
+        ctx.layout.set_font_description(Some(&font));
+
+        let constellations = sky_map.constellations();
+        for (id, constellation) in constellations {
+            let all_ra = constellation.lines.iter().flat_map(|l| l.iter().map(|pt| pt.ra));
+            let all_dec = constellation.lines.iter().flat_map(|l| l.iter().map(|pt| pt.dec));
+            let aver_ra = angles_mean(all_ra);
+            let aver_dec = angles_mean(all_dec);
+            let painter = ConstNamePainter {
+                ra: aver_ra,
+                dec: aver_dec,
+                name: &constellation.name,
+                is_current: Some(*id) == self.cur_cont_id,
+            };
+            self.item_painter.paint(&painter, ctx, false)?;
+        }
+        Ok(())
+    }
+
     fn paint_star(
         &mut self,
-        star_data:  &StarData,
-        name:       &str,
-        bayer:      &str,
-        options:    &StarPainterParams,
-        ctx:        &PaintCtx,
-        mode:       PainterMode,
+        star_data: &StarData,
+        name:      &str,
+        bayer:     &str,
+        options:   &StarPainterParams,
+        ctx:       &PaintCtx,
+        mode:      PainterMode,
     ) -> anyhow::Result<bool> {
         let star_painter = StarPainter {
             mode,
@@ -459,6 +562,12 @@ impl SkyMapPainter {
         ctx:     &PaintCtx,
         mode:    PainterMode,
     ) -> anyhow::Result<()> {
+        if mode == PainterMode::Names {
+            let mut font = ctx.layout.font_description().unwrap();
+            font.set_size(ctx.screen.font_size() as _);
+            ctx.layout.set_font_description(Some(&font));
+        }
+
         ctx.cairo.set_antialias(ctx.config.get_antialias());
 
         let max_mag_value = calc_max_star_magnitude_for_painting(ctx.view_point.mag_factor);
@@ -559,6 +668,10 @@ impl SkyMapPainter {
     }
 
     fn paint_ground(&mut self, ctx: &PaintCtx) -> anyhow::Result<()> {
+        let mut font = ctx.layout.font_description().unwrap();
+        font.set_size((WORD_SIZE_FONT_SIZE * ctx.screen.font_size()) as _);
+        ctx.layout.set_font_description(Some(&font));
+
         let ground = Ground { view_point: ctx.view_point };
         self.item_painter.paint(&ground, ctx, false)?;
         let world_sides = [
@@ -723,7 +836,7 @@ struct PaintCtx<'a> {
 }
 
 trait Item {
-    fn use_now_epoch(&self) -> bool { false }
+    fn has_to_convert_to_now_epoch(&self) -> bool;
     fn points_count(&self) -> usize;
     fn point_crd(&self, index: usize) -> PainterCrd;
     fn paint(&self, _ctx: &PaintCtx, _points: &[Point2D]) -> anyhow::Result<()> { Ok(()) }
@@ -749,7 +862,7 @@ impl ItemPainter {
         under_horiz: bool,
     ) -> anyhow::Result<bool> {
         let points_count = obj.points_count();
-        let use_now_epoch = obj.use_now_epoch();
+        let use_now_epoch = obj.has_to_convert_to_now_epoch();
 
         self.points_3d.clear();
         let mut obj_is_visible = false;
@@ -834,7 +947,7 @@ impl ItemPainter {
 struct DsoNamePainter<'a>(&'a DsoItem);
 
 impl Item for DsoNamePainter<'_> {
-    fn use_now_epoch(&self) -> bool {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
         true
     }
 
@@ -883,7 +996,7 @@ impl DsoEllipse {
 }
 
 impl Item for DsoEllipse {
-    fn use_now_epoch(&self) -> bool {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
         true
     }
 
@@ -945,7 +1058,7 @@ impl Item for DsoEllipse {
 // Paint outline
 
 impl Item for Outline {
-    fn use_now_epoch(&self) -> bool {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
         true
     }
 
@@ -1138,7 +1251,7 @@ impl StarPainter<'_> {
 }
 
 impl Item for StarPainter<'_> {
-    fn use_now_epoch(&self) -> bool {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
         true
     }
 
@@ -1182,6 +1295,10 @@ impl EqGridItem {
 }
 
 impl Item for EqGridItem {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
+        false
+    }
+
     fn points_count(&self) -> usize {
         Self::POINTS_CNT
     }
@@ -1272,6 +1389,10 @@ impl Ground<'_> {
 }
 
 impl Item for Ground<'_> {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
+        false
+    }
+
     fn points_count(&self) -> usize {
         360 / Self::ANGLE_STEP
     }
@@ -1332,6 +1453,10 @@ struct WorldSide<'a> {
 }
 
 impl Item for WorldSide<'_> {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
+        false
+    }
+
     fn points_count(&self) -> usize {
         1
     }
@@ -1363,6 +1488,10 @@ struct HorizonGlowItem {
 }
 
 impl Item for HorizonGlowItem {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
+        false
+    }
+
     fn points_count(&self) -> usize {
         self.coords.len()
     }
@@ -1399,7 +1528,7 @@ struct ZoneVisibilityTestObject {
 }
 
 impl Item for ZoneVisibilityTestObject {
-    fn use_now_epoch(&self) -> bool {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
         true
     }
 
@@ -1418,7 +1547,7 @@ struct PointVisibilityTestObject {
 }
 
 impl Item for PointVisibilityTestObject {
-    fn use_now_epoch(&self) -> bool {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
         self.use_now_epoch
     }
 
@@ -1436,6 +1565,10 @@ struct TelescopePosPainter {
 }
 
 impl Item for TelescopePosPainter {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
+        false
+    }
+
     fn points_count(&self) -> usize {
         1
     }
@@ -1469,7 +1602,7 @@ struct SelectionPainter {
 }
 
 impl Item for SelectionPainter {
-    fn use_now_epoch(&self) -> bool {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
         true
     }
 
@@ -1503,6 +1636,10 @@ struct CameraFramePainter<'a> {
 }
 
  impl Item for CameraFramePainter<'_> {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
+        false
+    }
+
     fn points_count(&self) -> usize {
         self.coords.len()
     }
@@ -1566,6 +1703,10 @@ struct PlateSolvedImagePainter<'a> {
 }
 
 impl Item for PlateSolvedImagePainter<'_> {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
+        false
+    }
+
     fn points_count(&self) -> usize {
         self.coords.len()
     }
@@ -1606,6 +1747,166 @@ impl Item for PlateSolvedImagePainter<'_> {
             local_time.format("%Y-%m-%d %H:%M:%S")
         );
         paint_text_under_line(ctx.cairo, ctx.layout, pt1, pt2, &text)?;
+
+        Ok(())
+    }
+}
+
+struct PolygonIsAtScreenCenterTestObject<'a> {
+    polygon:    Option<&'a Vec<EqCoord>>,
+    tmp_buffer: RefCell<Vec<[f64; 2]>>,
+    result:     Cell<bool>,
+}
+
+impl<'a> Item for PolygonIsAtScreenCenterTestObject<'a> {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
+        true
+    }
+
+    fn points_count(&self) -> usize {
+        if let Some(polygon) = &self.polygon {
+            polygon.len()
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn point_crd(&self, index: usize) -> PainterCrd {
+        if let Some(polygon) = &self.polygon {
+            PainterCrd::Eq(polygon[index])
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+        let screen_center = [ctx.screen.center_x, ctx.screen.center_y];
+        let mut tmp_buffer = self.tmp_buffer.borrow_mut();
+        tmp_buffer.clear();
+        for point in points {
+            tmp_buffer.push([point.x, point.y]);
+        }
+        let polygon_in_center = point_in_polygon(&tmp_buffer, screen_center);
+        self.result.set(polygon_in_center);
+        Ok(())
+    }
+}
+
+struct ConstLinesPainter<'a> {
+    polyline:   &'a Polyline,
+    is_current: bool,
+}
+
+impl<'a> Item for ConstLinesPainter<'a> {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
+        true
+    }
+
+    fn points_count(&self) -> usize {
+        self.polyline.len()
+    }
+
+    fn point_crd(&self, index: usize) -> PainterCrd {
+        PainterCrd::Eq(self.polyline[index])
+    }
+
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+        ctx.cairo.move_to(points[0].x, points[0].y);
+        for pt in &points[1..] {
+            ctx.cairo.line_to(pt.x, pt.y);
+        }
+        ctx.cairo.set_antialias(ctx.config.get_antialias());
+
+        ctx.cairo.set_dash(&[], 0.0);
+        if self.is_current {
+            ctx.cairo.set_source_rgba(0.3, 0.6, 0.3, 0.5);
+            ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.7, 1.0));
+        } else {
+            ctx.cairo.set_source_rgba(0.45, 0.45, 1.0, 0.5);
+            ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.5, 1.0));
+        }
+        ctx.cairo.stroke()?;
+
+        Ok(())
+    }
+}
+
+struct ConstNamePainter<'a> {
+    ra:         f64,
+    dec:        f64,
+    name:       &'a str,
+    is_current: bool,
+}
+
+impl<'a> Item for ConstNamePainter<'a> {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
+        true
+    }
+
+    fn points_count(&self) -> usize {
+        1
+    }
+
+    fn point_crd(&self, _index: usize) -> PainterCrd {
+        PainterCrd::Eq(EqCoord { dec: self.dec, ra: self.ra })
+    }
+
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+        ctx.layout.set_text(self.name);
+        let (width, height) = ctx.layout.pixel_size();
+        ctx.cairo.move_to(
+            points[0].x - 0.5 * width as f64,
+            points[0].y - 0.5 * height as f64
+        );
+        if self.is_current {
+            ctx.cairo.set_source_rgb(0.4, 0.7, 0.4);
+        } else {
+            ctx.cairo.set_source_rgb(0.2, 0.2, 0.6);
+        }
+        pangocairo::show_layout(ctx.cairo, ctx.layout);
+
+        Ok(())
+    }
+}
+
+struct ConstBoundsPainter<'a> {
+    polygon:   &'a Vec<EqCoord>,
+    is_active: bool,
+}
+
+impl<'a> Item for ConstBoundsPainter<'a> {
+    fn has_to_convert_to_now_epoch(&self) -> bool {
+        true
+    }
+
+    fn points_count(&self) -> usize {
+        self.polygon.len()
+    }
+
+    fn point_crd(&self, index: usize) -> PainterCrd {
+        PainterCrd::Eq(self.polygon[index])
+    }
+
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+        ctx.cairo.move_to(points[0].x, points[0].y);
+        for pt in &points[1..] {
+            ctx.cairo.line_to(pt.x, pt.y);
+        }
+        ctx.cairo.close_path();
+        ctx.cairo.set_antialias(ctx.config.get_antialias());
+        if self.is_active {
+            ctx.cairo.set_source_rgba(0.3, 0.6, 0.3, 0.3);
+            ctx.cairo.fill_preserve()?;
+            ctx.cairo.set_source_rgb(0.4, 0.7, 0.4);
+            ctx.cairo.set_dash(&[6.0, 6.0], 0.0);
+            ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.7, 1.0));
+            ctx.cairo.stroke()?;
+        } else {
+            ctx.cairo.set_source_rgba(0.2, 0.5, 0.2, 0.3);
+            ctx.cairo.set_dash(&[], 0.0);
+            ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.5, 1.0));
+            ctx.cairo.stroke()?;
+        }
 
         Ok(())
     }

@@ -2,13 +2,13 @@ use gtk::prelude::*;
 use crate::{ui::gtk_utils::*, utils::math::linear_solve2, sky_math::math::*};
 
 pub struct Screen {
-    rect:      Rect,
-    tolerance: Rect,
-    main_size: f64,
-    center_x:  f64,
-    center_y:  f64,
-    dpmm_x:    f64,
-    font_size: f64,
+    pub rect:      Rect,
+    pub tolerance: Rect,
+    pub main_size: f64,
+    pub center_x:  f64,
+    pub center_y:  f64,
+    pub dpmm_x:    f64,
+    pub font_size: f64,
 }
 
 impl Screen {
