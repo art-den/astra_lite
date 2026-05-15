@@ -35,6 +35,121 @@ use crate::{
     core::core::Core,
 };
 
+fn main() -> anyhow::Result<()> {
+    let application = gtk::Application::new(
+        Some(&format!("com.github.art-den.{}", env!("CARGO_PKG_NAME"))),
+        Default::default(),
+    );
+    application.connect_activate(app_activate_handler);
+    application.run();
+    Ok(())
+}
+
+fn app_activate_handler(app: &gtk::Application) {
+    // Check application already started
+
+    if let Some(window) = app.active_window() {
+        log::info!("Launched twice. Activating main window...");
+        window.present();
+        return;
+    }
+
+    // Init logger and write log record about start
+
+    let Ok(mut logs_dir) = get_app_dir() else {
+        eprintln!("Can't get app dir!");
+        return;
+    };
+    logs_dir.push("logs");
+    cleanup_old_logs(&logs_dir, 14/*days*/);
+    let start_log_res = start_logger(&logs_dir);
+    if let Err(start_log_res) = start_log_res {
+        eprintln!("Fail to start logger: {}!", start_log_res);
+        return;
+    }
+    log::set_max_level(log::LevelFilter::Info);
+
+    log::info!(
+        "{} {} ver. {} is started",
+        env!("CARGO_PKG_NAME"),
+        std::env::consts::ARCH,
+        env!("CARGO_PKG_VERSION")
+    );
+
+    // Enable stacktrace in errors in debug builds
+
+    #[cfg(debug_assertions)] {
+        unsafe { std::env::set_var("RUST_BACKTRACE", "1"); }
+        log::set_max_level(log::LevelFilter::Debug);
+    }
+
+    // Create core
+
+    log::info!("Creating core...");
+    let core = Core::new();
+
+    // Register panic handler
+
+    let indi_for_panic = Arc::clone(core.indi());
+    if cfg!(not(debug_assertions)) {
+        std::panic::set_hook({
+            let logs_dir = logs_dir.clone();
+            let indi = Arc::clone(&indi_for_panic);
+            let default_panic_handler = std::panic::take_hook();
+            Box::new(move |panic_info| {
+                panic_handler(
+                    panic_info,
+                    indi.is_drivers_started(),
+                    &logs_dir,
+                    &default_panic_handler
+                )
+            })
+        });
+    }
+
+    // Load options
+
+    exec_and_show_error(None::<&gtk::Window>, || {
+        log::info!("Loading options...");
+        let mut options = core.options().write().unwrap();
+        load_json_from_config_file::<Options>(&mut options, "options")?;
+
+        log::info!("Check options...");
+        options.check()?;
+
+        Ok(())
+    });
+
+    // Create UI
+
+    log::info!("Building UI...");
+    ui::ui_main::init_ui(app, &core, &logs_dir);
+
+    // Connect shutdoun signal
+
+    app.connect_shutdown(clone!(@weak core => move |app| {
+        app_shutdown_handler(app, &core);
+    }));
+}
+
+fn app_shutdown_handler(_app: &gtk::Application, core: &Arc<Core>) {
+    log::info!("Application shutdown signal");
+
+    // Save options
+
+    log::info!("Saving options...");
+    let options = core.options().read().unwrap();
+    _ = save_json_to_config::<Options>(&options, "options");
+    drop(options);
+    log::info!("Options saved");
+
+    // Stopping core
+
+    log::info!("Core stopping...");
+    core.stop();
+    log::info!("Core stopped");
+}
+
 fn panic_handler(
     panic_info:        &std::panic::PanicHookInfo,
     stop_indi_servers: bool,
@@ -94,83 +209,4 @@ fn panic_handler(
     _ = msgbox::create(&message_caption, &message_text, msgbox::IconType::Error);
 
     def_panic_handler(panic_info);
-}
-
-
-fn main() -> anyhow::Result<()> {
-    let mut logs_dir = get_app_dir()?;
-    logs_dir.push("logs");
-    cleanup_old_logs(&logs_dir, 14/*days*/);
-    start_logger(&logs_dir)?;
-    log::set_max_level(log::LevelFilter::Info);
-
-    #[cfg(debug_assertions)] {
-        unsafe { std::env::set_var("RUST_BACKTRACE", "1"); }
-        log::set_max_level(log::LevelFilter::Debug);
-    }
-
-    log::info!(
-        "{} {} ver. {} is started",
-        env!("CARGO_PKG_NAME"),
-        std::env::consts::ARCH,
-        env!("CARGO_PKG_VERSION")
-    );
-
-    log::info!("Creating Core...");
-    let core = Core::new();
-
-    let indi_for_panic = Arc::clone(core.indi());
-    if cfg!(not(debug_assertions)) {
-        std::panic::set_hook({
-            let logs_dir = logs_dir.clone();
-            let indi = Arc::clone(&indi_for_panic);
-            let default_panic_handler = std::panic::take_hook();
-            Box::new(move |panic_info| {
-                panic_handler(
-                    panic_info,
-                    indi.is_drivers_started(),
-                    &logs_dir,
-                    &default_panic_handler
-                )
-            })
-        });
-    }
-
-    log::info!("Creating gtk::Application...");
-    let application = gtk::Application::new(
-        Some(&format!("com.github.art-den.{}", env!("CARGO_PKG_NAME"))),
-        Default::default(),
-    );
-
-    application.connect_activate(clone!(@weak core => move |app|
-        exec_and_show_error(None::<&gtk::Window>, || {
-            log::info!("Loading options...");
-            let mut options = core.options().write().unwrap();
-            load_json_from_config_file::<Options>(&mut options, "options")?;
-
-            log::info!("Check options...");
-            options.check()?;
-
-            Ok(())
-        });
-
-        ui::ui_main::init_ui(app, &core, &logs_dir)
-    ));
-
-    log::info!("Running application.run...");
-    application.run();
-
-    log::info!("Exited from application.run");
-
-    log::info!("Saving options...");
-    let options = core.options().read().unwrap();
-    _ = save_json_to_config::<Options>(&options, "options");
-    drop(options);
-    log::info!("Options saved");
-
-    log::info!("Core stopping...");
-    core.stop();
-    log::info!("Core stopped");
-
-    Ok(())
 }
