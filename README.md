@@ -116,4 +116,4 @@ Stars:
 * HYG v3 catalogue - https://github.com/astronexus/HYG-Database/tree/main/hyg/v3
 
 Constellations:
-* Celestial Data - github.com/dieghernan/celestial_data
+* Celestial Data - https://github.com/dieghernan/celestial_data
