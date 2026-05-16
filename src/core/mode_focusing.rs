@@ -494,7 +494,7 @@ impl FocusingMode {
         let duration = self.start_time.unwrap().elapsed();
 
         log::info!(
-            "RESULT focuser shot is finished. Duration = {:.1}s\
+            "RESULT focuser shot is finished. Duration = {:.1}s \
             Final FWHM = {:.2?}, ovality={:.2?}, focuser change={:.0} -> {:.0}",
             duration.as_secs_f64(), info.stars.info.fwhm, info.stars.info.ovality, self.before_pos, focus_pos
         );
