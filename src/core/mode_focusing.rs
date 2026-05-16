@@ -63,6 +63,7 @@ pub struct FocusingMode {
     next_mode:      Option<Box<dyn Mode + Sync + Send>>,
     start_temp:     f64, // temperature when autofocusing is started
     error_reaction: FocusingErrorReaction,
+    start_time:     Option<std::time::Instant>,
 }
 
 #[derive(PartialEq)]
@@ -146,6 +147,7 @@ impl FocusingMode {
             try_cnt:        0,
             camera:         cam_device.clone(),
             start_temp:     0.0,
+            start_time:     None,
             prelim_step,
             next_mode,
             cam_opts,
@@ -482,7 +484,6 @@ impl FocusingMode {
         }
 
         Ok(())
-
     }
 
     fn process_img_info_when_waiting_result_img(
@@ -490,10 +491,12 @@ impl FocusingMode {
         info:      &LightFrameInfoData,
         focus_pos: f64
     ) -> anyhow::Result<NotifyResult> {
+        let duration = self.start_time.unwrap().elapsed();
+
         log::info!(
-            "RESULT focuser shot is finished. \
+            "RESULT focuser shot is finished. Duration = {:.1}s\
             Final FWHM = {:.2?}, ovality={:.2?}, focuser change={:.0} -> {:.0}",
-            info.stars.info.fwhm, info.stars.info.ovality, self.before_pos, focus_pos
+            duration.as_secs_f64(), info.stars.info.fwhm, info.stars.info.ovality, self.before_pos, focus_pos
         );
 
         if !self.start_temp.is_nan() {
@@ -633,7 +636,6 @@ impl FocusingMode {
         let err = f64::sqrt(sum / (x.len() as f64));
         Some((coeffs, err))
     }
-
 }
 
 impl Mode for FocusingMode {
@@ -692,6 +694,8 @@ impl Mode for FocusingMode {
         )?;
         self.stage = Stage::Undef;
         self.state = FocusingState::WaitingFirstImage;
+
+        self.start_time = Some(std::time::Instant::now());
 
         Ok(())
     }

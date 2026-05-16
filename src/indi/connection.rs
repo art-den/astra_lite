@@ -3227,16 +3227,21 @@ impl Connection {
         force_set:    bool,
         timeout_ms:   Option<u64>,
     ) -> Result<()> {
+        let aperture = self.get_num_property_value(
+            device_name,
+            "SCOPE_INFO",
+            "APERTURE"
+        )?;
         self.command_set_num_property_and_wait(
             force_set,
             timeout_ms,
             device_name,
             "SCOPE_INFO",
-            &[("FOCAL_LENGTH", focal_length)]
+            &[("FOCAL_LENGTH", focal_length),
+              ("APERTURE",     aperture)]
         )?;
         Ok(())
     }
-
 
     // Focuser absolute position
 
