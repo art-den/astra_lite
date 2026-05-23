@@ -1,4 +1,4 @@
-pub const INDI_SET_PROP_TIMEOUT: Option<u64> = Some(1000);
+pub const INDI_SET_PROP_TIMEOUT: Option<u64> = Some(1000); // TODO: remove!
 
 pub const DIRECTORY: &str = "Astro";
 pub const RAW_FRAMES_DIR: &str = "RawFrames";

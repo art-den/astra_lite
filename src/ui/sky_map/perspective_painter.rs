@@ -22,7 +22,7 @@ impl PerspectivePainter {
         x1: i32, y1: i32,
         x2: i32, y2: i32,
         x3: i32, y3: i32,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let mut min_x = x0.min(x1).min(x2).min(x3);
         let mut max_x = x0.max(x1).max(x2).max(x3);
         let mut min_y = y0.min(y1).min(y2).min(y3);

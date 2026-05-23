@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration, cell::RefCell, rc::Rc};
 use gtk::{prelude::*, glib, glib::clone};
 use itertools::{Itertools, izip};
-use crate::indi;
+use crate::hal::indi;
 
 pub struct IndiWidget {
     indi:      Arc<indi::Connection>,

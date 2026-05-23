@@ -4,11 +4,7 @@ use gtk::{cairo, glib::{self, clone}, prelude::*, gdk};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{core::*, events::*, frame_processing::*},
-    image::{histogram::*, info::*, io::save_image_to_tif_file, preview::*, raw::{CalibrMethods, FrameType}, stars_offset::Offset},
-    options::*,
-    sky_math::math::radian_to_degree,
-    utils::{io_utils::*, log_utils::*}
+    core::{core::*, events::*, frame_processing::*}, hal::FrameType, image::{histogram::*, info::*, io::save_image_to_tif_file, preview::*, raw::CalibrMethods, stars_offset::Offset}, options::*, sky_math::math::radian_to_degree, utils::{io_utils::*, log_utils::*}
 };
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 
@@ -1111,7 +1107,7 @@ impl PreviewUi {
             let hist = hist.read().unwrap();
             let preview_params = preview_options.preview_params();
             let rgb_data = get_preview_rgb_data(&image, &hist, &preview_params, None);
-            let Some(rgb_data) = rgb_data else { anyhow::bail!("wrong RGB fata"); };
+            let Some(rgb_data) = rgb_data else { eyre::bail!("wrong RGB fata"); };
             let bytes = glib::Bytes::from_owned(rgb_data.bytes);
             let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
                 &bytes,
@@ -1356,7 +1352,7 @@ impl PreviewUi {
         &self,
         area: &gtk::DrawingArea,
         cr:   &cairo::Context
-    ) ->anyhow::Result<()> {
+    ) ->eyre::Result<()> {
         let options = self.core.options().read().unwrap();
         let hist = match options.preview.source {
             PreviewSource::OrigFrame =>

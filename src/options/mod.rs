@@ -1,7 +1,7 @@
 pub mod indi;
-pub mod camera;
-
 pub use indi::*;
+
+pub mod camera;
 pub use camera::*;
 
 pub mod calibration;
@@ -83,7 +83,7 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn check(&mut self) -> anyhow::Result<()> {
+    pub fn check(&mut self) -> eyre::Result<()> {
         self.calibr.check()?;
         self.raw_frames.check()?;
         self.live.check()?;

@@ -18,7 +18,9 @@ pub enum Event {
     Error(String),
     ModeContinued,
     CameraDeviceChanged{
+        prev_camera_id: String,
         from: Option<DeviceAndProp>,
+        new_camera_id: String,
         to:   DeviceAndProp
     },
     MountDeviceChanged(String),

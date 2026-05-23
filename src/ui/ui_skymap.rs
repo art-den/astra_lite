@@ -4,10 +4,10 @@ use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use crate::{
+    options::*,
     core::{core::*, events::*, mode_goto::GotoConfig},
     image::preview::PreviewRgbData,
-    indi::{self, degree_to_str, hour_to_str},
-    options::*,
+    hal::indi::{self, degree_to_str, hour_to_str},
     plate_solve::PlateSolveOkResult,
     utils::io_utils::*,
     sky_math::math::*,
@@ -653,15 +653,15 @@ impl MapUi {
             let indi_is_connected = self.indi.state() == indi::ConnState::Connected;
 
             let cam_frame = if show_ccd && indi_is_connected {
-                || -> anyhow::Result<CameraFrame> {
+                || -> eyre::Result<CameraFrame> {
                     let options = self.options.read().unwrap();
-                    let Some(device) = &options.cam.device else { anyhow::bail!("Camera is not selected"); };
+                    let Some(device) = &options.cam.device else { eyre::bail!("Camera is not selected"); };
                     let cam_name = &device.name;
                     let cam_ccd_prop = &device.prop;
                     let cam_ccd = indi::CamCcd::from_ccd_prop_name(cam_ccd_prop);
                     let focal_len = options.telescope.real_focal_length();
                     if focal_len <= 0.1 {
-                        anyhow::bail!("Wrong telescope focal lenght");
+                        eyre::bail!("Wrong telescope focal lenght");
                     }
                     let (sensor_width, sensor_height) = self.indi.camera_get_max_frame_size(cam_name, cam_ccd)?;
                     let (pixel_width_um, pixel_height_um) = self.indi.camera_get_pixel_size_um(cam_name, cam_ccd)?;
@@ -690,7 +690,7 @@ impl MapUi {
             };
 
             let telescope_pos = if indi_is_connected {
-                let tele_pos_fun = || -> anyhow::Result<EqCoord> {
+                let tele_pos_fun = || -> eyre::Result<EqCoord> {
                     let options = self.options.read().unwrap();
                     let device_name = &options.mount.device;
                     let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(device_name)?;
@@ -767,7 +767,7 @@ impl MapUi {
         });
     }
 
-    fn check_data_loaded_impl(&self) -> anyhow::Result<()> {
+    fn check_data_loaded_impl(&self) -> eyre::Result<()> {
         let mut skymap = self.skymap_data.borrow_mut();
         if skymap.is_some() {
             return Ok(());
@@ -777,11 +777,11 @@ impl MapUi {
         let cur_exe = std::env::current_exe()?;
 
         let cur_path = cur_exe.parent()
-            .ok_or_else(|| anyhow::anyhow!("Error getting cur_exe.parent()"))?;
+            .ok_or_else(|| eyre::eyre!("Error getting cur_exe.parent()"))?;
         let skymap_data_path = cur_path.join("data");
 
         let skymap_local_data_path = dirs::data_local_dir()
-            .ok_or_else(|| anyhow::anyhow!("dirs::data_local_dir"))?
+            .ok_or_else(|| eyre::eyre!("dirs::data_local_dir"))?
             .join(env!("CARGO_PKG_NAME"))
             .join("data");
 
@@ -835,7 +835,7 @@ impl MapUi {
 
         let weak_self = self.weak_self_.borrow();
         let Some(self_) = weak_self.upgrade() else {
-            return Err(anyhow::anyhow!("self.weak_self_ is empty"));
+            return Err(eyre::eyre!("self.weak_self_ is empty"));
         };
         glib::spawn_future_local(clone!(@weak self_ => async move {
             while let Ok(skymaps_with_stars_res) = stars_receiver.recv().await {
@@ -1188,7 +1188,7 @@ impl MapUi {
         &self,
         area: &gtk::DrawingArea,
         cr:   &cairo::Context
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let user_time = self.user_time.borrow();
         let cur_dt = user_time.time(false);
         let cur_dt_local = user_time.time(true);

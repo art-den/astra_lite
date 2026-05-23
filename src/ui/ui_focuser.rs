@@ -5,7 +5,7 @@ use macros::FromBuilder;
 
 use crate::{
     core::{core::{Core, ModeType}, events::*, mode_focusing::*},
-    indi,
+    hal::indi,
     options::*,
     ui::plots::*,
     utils::math::{cmp_f64, linear_interpolate},
@@ -251,7 +251,7 @@ impl UiModule for FocuserUi {
             Event::ModeChanged => {
                 self.correct_widgets_props();
             }
-            Event::CameraDeviceChanged{from, to} => {
+            Event::CameraDeviceChanged{from, to, ..} => {
                 self.handler_camera_changed(from, to);
             }
             Event::Focusing(fevent) => {
@@ -512,7 +512,7 @@ impl FocuserUi {
         let list = indi
             .get_devices_list_by_interface(indi::DriverInterface::FOCUSER)
             .iter()
-            .map(|dev| dev.name.to_string())
+            .map(|dev| (dev.name.to_string(), dev.name.to_string()))
             .collect::<Vec<_>>();
 
         let connected = indi.state() == indi::ConnState::Connected;
@@ -634,7 +634,7 @@ impl FocuserUi {
         &self,
         da:  &gtk::DrawingArea,
         ctx: &gdk::cairo::Context
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let focusing_data = self.focusing_data.borrow();
         let Some(ref fd) = *focusing_data else {
             return Ok(());

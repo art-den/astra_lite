@@ -4,7 +4,7 @@ use macros::FromBuilder;
 
 use crate::{
     core::{core::{Core, ModeType}, events::*},
-    indi,
+    hal::indi,
     options::*,
 };
 
@@ -130,7 +130,7 @@ impl UiModule for PlateSolveUi {
             Event::ModeChanged => {
                 self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
             }
-            Event::CameraDeviceChanged{ from, to } => {
+            Event::CameraDeviceChanged{ from, to, .. } => {
                 self.handler_camera_changed(from, to);
             }
             Event::MountDeviceChanged(mount_device) => {

@@ -1,11 +1,6 @@
 use std::sync::{Arc, RwLock};
 use crate::{
-    core::{cam_starter::CamStarter, consts::*, events::*, frame_processing::*},
-    image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point},
-    indi,
-    options::*,
-    plate_solve::*,
-    sky_math::math::*
+    core::{cam_starter::CamStarter, consts::*, events::*, frame_processing::*}, hal::{FrameType, indi}, image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point}, options::*, plate_solve::*, sky_math::math::*
 };
 use super::{core::*, events::Events, utils::*};
 
@@ -71,14 +66,14 @@ impl GotoMode {
         options:     &Arc<RwLock<Options>>,
         cur_frame:   &Arc<ResultImage>,
         subscribers: &Arc<Events>,
-    ) -> anyhow::Result<Self> {
+    ) -> eyre::Result<Self> {
         let opts = options.read().unwrap();
         let (camera, cam_opts, plate_solver) = if config == GotoConfig::GotoPlateSolveAndCorrect {
             let Some(camera) = opts.cam.device.clone() else {
-                anyhow::bail!("Camera is not selected!");
+                eyre::bail!("Camera is not selected!");
             };
             let mut cam_opts = opts.cam.clone();
-            cam_opts.frame.frame_type = crate::image::raw::FrameType::Lights;
+            cam_opts.frame.frame_type = FrameType::Lights;
             cam_opts.frame.exp_main = opts.plate_solver.exposure;
             cam_opts.frame.binning = opts.plate_solver.bin;
             cam_opts.frame.gain = gain_to_value(
@@ -116,7 +111,7 @@ impl GotoMode {
         })
     }
 
-    fn start_goto(&mut self) -> anyhow::Result<()> {
+    fn start_goto(&mut self) -> eyre::Result<()> {
         if self.indi.mount_is_parked(&self.mount)? {
             self.start_unpark_telescope()?;
         } else {
@@ -126,7 +121,7 @@ impl GotoMode {
         Ok(())
     }
 
-    fn start_unpark_telescope(&mut self) -> anyhow::Result<()> {
+    fn start_unpark_telescope(&mut self) -> eyre::Result<()> {
         log::debug!("Unparking mount...");
         self.indi.mount_set_parked(
             &self.mount,
@@ -139,7 +134,7 @@ impl GotoMode {
         Ok(())
     }
 
-    fn start_goto_coord(&mut self) -> anyhow::Result<()> {
+    fn start_goto_coord(&mut self) -> eyre::Result<()> {
         log::debug!(
             "Goto {}, {} ...",
             indi::value_to_sexagesimal(self.eq_coord.ra, true, 9),
@@ -164,12 +159,12 @@ impl GotoMode {
         Ok(())
     }
 
-    fn start_take_picture(&mut self) -> anyhow::Result<()> {
+    fn start_take_picture(&mut self) -> eyre::Result<()> {
         let cam_opts = self.cam_opts.as_ref().unwrap();
         let camera = self.camera.as_ref().unwrap();
 
         log::debug!("Tacking picture for plate solve with {:?}", &cam_opts.frame);
-        self.cam_starter.take_shot(
+        self.cam_starter.take_shot_old(
             self.get_type(),
             camera,
             &cam_opts.frame,
@@ -178,7 +173,7 @@ impl GotoMode {
         Ok(())
     }
 
-    fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> anyhow::Result<()> {
+    fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> eyre::Result<()> {
         let plate_solver = self.plate_solver.as_mut().unwrap();
         let image = image.read().unwrap();
         let config = PlateSolveConfig {
@@ -198,7 +193,7 @@ impl GotoMode {
         stars:      &StarItems,
         img_width:  usize,
         img_height: usize
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let plate_solver = self.plate_solver.as_mut().unwrap();
         let config = PlateSolveConfig {
             eq_coord:       Some(self.eq_coord),
@@ -218,14 +213,14 @@ impl GotoMode {
     fn try_process_plate_solving_result(
         &mut self,
         action: ProcessPlateSolverResultAction,
-    ) -> anyhow::Result<bool> {
+    ) -> eyre::Result<bool> {
         let plate_solver = self.plate_solver.as_mut().unwrap();
         let camera = self.camera.as_ref().unwrap();
 
         let result = match plate_solver.get_result()? {
             PlateSolveResult::Waiting => return Ok(false),
             PlateSolveResult::Done(result) => result,
-            PlateSolveResult::Failed => anyhow::bail!("Can't platesolve image")
+            PlateSolveResult::Failed => eyre::bail!("Can't platesolve image")
         };
 
         result.print_to_log();
@@ -362,7 +357,7 @@ impl Mode for GotoMode {
             .map(|cam_opts| cam_opts.frame.exposure())
     }
 
-    fn start(&mut self) -> anyhow::Result<()> {
+    fn start(&mut self) -> eyre::Result<()> {
         match &self.destination {
             GotoDestination::Coord(coord) => {
                 self.extra_stages = 0;
@@ -403,7 +398,7 @@ impl Mode for GotoMode {
         Ok(())
     }
 
-    fn abort(&mut self) -> anyhow::Result<()> {
+    fn abort(&mut self) -> eyre::Result<()> {
         if let Some(camera) = &self.camera {
             _ = self.cam_starter.abort(&camera);
         }
@@ -422,7 +417,7 @@ impl Mode for GotoMode {
         self.cam_opts.as_ref().map(|cam_opts| &cam_opts.frame)
     }
 
-    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_timer(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         match self.state {
             State::Unparking => {
                 if !self.indi.mount_is_parked(&self.mount)? {
@@ -432,7 +427,7 @@ impl Mode for GotoMode {
                 }
                 self.unpark_ms += timer_period_ms;
                 if self.unpark_ms > MAX_MOUNT_UNPARK_TIME * 1000 {
-                    anyhow::bail!(
+                    eyre::bail!(
                         "Mount unpark time out (> {} seconds)!",
                         MAX_MOUNT_UNPARK_TIME
                     );
@@ -465,7 +460,7 @@ impl Mode for GotoMode {
                 } else {
                     self.goto_ms += timer_period_ms;
                     if self.goto_ms > MAX_GOTO_TIME * 1000 {
-                        anyhow::bail!("Telescope is moving too long time (> {}s)", MAX_GOTO_TIME);
+                        eyre::bail!("Telescope is moving too long time (> {}s)", MAX_GOTO_TIME);
                     }
                 }
             }
@@ -515,7 +510,7 @@ impl Mode for GotoMode {
     fn notify_about_frame_processing_result(
         &mut self,
         fp_result:  &FrameProcessResult
-    ) -> anyhow::Result<NotifyResult> {
+    ) -> eyre::Result<NotifyResult> {
         let plate_solver = self.plate_solver.as_mut().unwrap();
         let xy_supported = plate_solver.support_stars_as_input();
         match (&self.state, &fp_result.data, xy_supported) {

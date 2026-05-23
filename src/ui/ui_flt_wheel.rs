@@ -6,7 +6,7 @@ use macros::FromBuilder;
 
 use crate::{
     core::{core::Core, events::Event},
-    indi,
+    hal::indi,
     options::Options,
     ui::{gtk_utils, module::*, utils::{DelayedActions, ExclusiveCaller, fill_devices_list_into_combobox}}
 };
@@ -229,7 +229,7 @@ impl FltWheelUi {
         let list = indi
             .get_devices_list_by_interface(indi::DriverInterface::FILTER)
             .iter()
-            .map(|dev| dev.name.to_string())
+            .map(|dev| (dev.name.to_string(), dev.name.to_string()))
             .collect::<Vec<_>>();
 
         fill_devices_list_into_combobox(

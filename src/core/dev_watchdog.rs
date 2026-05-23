@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use itertools::Itertools;
 
-use crate::{core::events::{Event, Events}, indi, options::{DeviceAndProp, Options}};
+use crate::{core::events::{Event, Events}, hal::indi, options::{DeviceAndProp, Options}};
 
 const DEVICE_WAIT_BEFORE_CONNECT_TIME: usize = 1; // in seconds
 const DEVICE_WAIT_BEFORE_LOAD_OPTS_TIME: usize = 2; // in seconds
@@ -41,7 +41,7 @@ impl DevicesWatchdog {
     pub fn notify_indi_prop_change(
         &mut self,
         prop_change: &indi::PropChangeEvent,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         match &prop_change.change {
             indi::PropChange::New {
                 prop_name,
@@ -94,7 +94,7 @@ impl DevicesWatchdog {
         }
     }
 
-    pub fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<()> {
+    pub fn notify_timer(&mut self, timer_period_ms: usize) -> eyre::Result<()> {
         for dev in &mut self.not_connected_yet {
             dev.wait_time_ms += timer_period_ms;
         }
@@ -143,18 +143,22 @@ impl DevicesWatchdog {
                 let mut options = self.options.write().unwrap();
                 let all_cameras = self.indi.get_devices_list_by_interface(indi::DriverInterface::CCD);
                 let cur_cam_device = options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default();
+                let prev_camera_id = options.cam.device_id.clone();
                 let exists = all_cameras.iter().any(|d| *d.name == cur_cam_device);
                 if !all_cameras.is_empty() && !exists {
                     let prev_value = options.cam.device.clone();
+                    let new_camera_id = all_cameras[0].name.to_string();
                     let new_value = DeviceAndProp {
-                        name: all_cameras[0].name.to_string(),
+                        name: new_camera_id.clone(),
                         prop: "CCD1".to_string(),
                     };
                     log::info!("Camera device corrected from \"{:?}\" to \"{:?}\"", prev_value, new_value);
                     options.cam.device = Some(new_value.clone());
                     self.events.notify(Event::CameraDeviceChanged {
                         from: prev_value,
-                        to: new_value
+                        prev_camera_id,
+                        to: new_value,
+                        new_camera_id,
                     });
                 }
 

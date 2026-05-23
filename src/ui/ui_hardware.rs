@@ -14,7 +14,7 @@ use macros::FromBuilder;
 use crate::{
     core::{core::Core, events::Event},
     guiding::{external_guider::ExtGuiderType, phd2},
-    indi::{self, sexagesimal_to_value, value_to_sexagesimal},
+    hal::indi::{self, sexagesimal_to_value, value_to_sexagesimal},
     options::*,
 };
 use super::{gtk_utils::*, indi_widget::*, module::*, ui_main::*};
@@ -903,7 +903,7 @@ impl HardwareUi {
         exec_and_show_error(Some(&self.window), || {
             let indi = self.core.indi();
             if indi.state() != indi::ConnState::Connected {
-                anyhow::bail!("INDI is not connected!");
+                eyre::bail!("INDI is not connected!");
             }
             let devices = indi.get_devices_list_by_interface(
                 indi::DriverInterface::GPS |
@@ -921,7 +921,7 @@ impl HardwareUi {
                 .collect();
 
             if result.is_empty() {
-                anyhow::bail!("No GPS or geographic data found!");
+                eyre::bail!("No GPS or geographic data found!");
             }
 
             if result.len() == 1 {

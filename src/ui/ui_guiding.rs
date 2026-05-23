@@ -5,7 +5,7 @@ use macros::FromBuilder;
 use crate::{
     core::{core::*, events::*},
     guiding::external_guider::*,
-    indi, options::*,
+    hal::indi, options::*,
 };
 
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
@@ -167,7 +167,7 @@ impl UiModule for GuidingUi {
             Event::ModeChanged => {
                 self.correct_widgets_props();
             }
-            Event::CameraDeviceChanged{ from, to } => {
+            Event::CameraDeviceChanged{ from, to, .. } => {
                 self.handler_camera_changed(from, to);
             }
             Event::Guider(evt) => {

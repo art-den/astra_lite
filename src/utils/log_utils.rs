@@ -17,7 +17,7 @@ impl TimeLogger {
     }
 }
 
-pub fn start_logger(log_path: &Path) -> anyhow::Result<()> {
+pub fn start_logger(log_path: &Path) -> eyre::Result<()> {
     let custom_format_fun = |
         w:      &mut dyn std::io::Write,
         now:    &mut DeferredNow,

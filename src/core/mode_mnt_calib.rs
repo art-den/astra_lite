@@ -1,7 +1,7 @@
 use std::{sync::{Arc, RwLock}, f64::consts::PI};
 use itertools::Itertools;
 use crate::{
-    core::cam_starter::CamStarter, image::{stars::*, stars_offset::*}, indi, options::*, utils::math::*
+    core::cam_starter::CamStarter, hal::{FrameType, indi}, image::{stars::*, stars_offset::*}, options::*, utils::math::*
 };
 use super::{consts::*, core::*, events::*, frame_processing::*, utils::*};
 
@@ -85,13 +85,13 @@ impl MountCalibrMode {
         cam_starter: &Arc<CamStarter>,
         options:     &Arc<RwLock<Options>>,
         next_mode:   Option<Box<dyn Mode + Sync + Send>>,
-    ) -> anyhow::Result<Self> {
+    ) -> eyre::Result<Self> {
         let opts = options.read().unwrap();
         let Some(cam_device) = &opts.cam.device else {
-            anyhow::bail!("Camera is not selected");
+            eyre::bail!("Camera is not selected");
         };
         let mut cam_opts = opts.cam.clone();
-        cam_opts.frame.frame_type = crate::image::raw::FrameType::Lights;
+        cam_opts.frame.frame_type = FrameType::Lights;
         cam_opts.frame.exp_main = opts.guiding.main_cam.calibr_exposure;
         cam_opts.frame.gain = gain_to_value(
             opts.guiding.main_cam.calibr_gain,
@@ -122,8 +122,8 @@ impl MountCalibrMode {
         })
     }
 
-    fn start_for_axis(&mut self, axis: Axis) -> anyhow::Result<()> {
-        self.cam_starter.take_shot(
+    fn start_for_axis(&mut self, axis: Axis) -> eyre::Result<()> {
+        self.cam_starter.take_shot_old(
             self.get_type(),
             &self.camera,
             &self.cam_opts.frame,
@@ -149,7 +149,7 @@ impl MountCalibrMode {
         Ok(())
     }
 
-    fn process_axis_results(&mut self) -> anyhow::Result<()> {
+    fn process_axis_results(&mut self) -> eyre::Result<()> {
         #[derive(Debug)]
         struct AttemptRes {move_x: f64, move_y: f64, dist: f64}
         let mut result = Vec::new();
@@ -217,7 +217,7 @@ impl MountCalibrMode {
         Ok(())
     }
 
-    fn restore_orig_coords(&self) -> anyhow::Result<()> {
+    fn restore_orig_coords(&self) -> eyre::Result<()> {
         self.indi.mount_set_after_coord_action(
             &self.mount_device,
             indi::AfterCoordSetAction::Track,
@@ -238,7 +238,7 @@ impl MountCalibrMode {
     fn process_light_frame_info(
         &mut self,
         info: &LightFrameInfoData,
-    ) -> anyhow::Result<NotifyResult> {
+    ) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         if info.quality.fwhm_is_ok && info.quality.ovality_is_ok {
             if self.image_width == 0 || self.image_height == 0 {
@@ -290,7 +290,7 @@ impl MountCalibrMode {
                 self.state = State::WaitForSlew(0);
             }
         } else {
-            self.cam_starter.take_shot(
+            self.cam_starter.take_shot_old(
                 self.get_type(),
                 &self.camera,
                 &self.cam_opts.frame,
@@ -317,7 +317,7 @@ impl Mode for MountCalibrMode {
         }
     }
 
-    fn abort(&mut self) -> anyhow::Result<()> {
+    fn abort(&mut self) -> eyre::Result<()> {
         self.restore_orig_coords()?;
         Ok(())
     }
@@ -345,7 +345,7 @@ impl Mode for MountCalibrMode {
         })
     }
 
-    fn start(&mut self) -> anyhow::Result<()> {
+    fn start(&mut self) -> eyre::Result<()> {
         self.start_dec = self.indi.mount_get_eq_dec(&self.mount_device)?;
         self.start_ra = self.indi.mount_get_eq_ra(&self.mount_device)?;
         self.start_for_axis(Axis::Ra)?;
@@ -355,7 +355,7 @@ impl Mode for MountCalibrMode {
     fn notify_about_frame_processing_result(
         &mut self,
         fp_result: &FrameProcessResult
-    ) -> anyhow::Result<NotifyResult> {
+    ) -> eyre::Result<NotifyResult> {
         match &fp_result.data {
             FrameProcessResultData::LightFrameInfo(info) =>
                 self.process_light_frame_info(info),
@@ -365,7 +365,7 @@ impl Mode for MountCalibrMode {
         }
     }
 
-    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_timer(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         match &mut self.state {
             State::WaitForSlew(ok_time_ms) => {
@@ -374,7 +374,7 @@ impl Mode for MountCalibrMode {
                     *ok_time_ms += timer_period_ms;
                     if *ok_time_ms >= AFTER_MOUNT_MOVE_WAIT_TIME * 1000 {
                         self.indi.mount_abort_motion(&self.mount_device)?;
-                        self.cam_starter.take_shot(
+                        self.cam_starter.take_shot_old(
                             self.get_type(),
                             &self.camera,
                             &self.cam_opts.frame,

@@ -1,18 +1,46 @@
 use serde::{Serialize, Deserialize};
-
-use crate::image::raw::FrameType;
+use crate::hal::FrameType;
 
 use super::CalibrOptions;
 
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
-pub enum Binning {#[default]Orig, Bin2, Bin3, Bin4}
+pub enum Binning {#[default]Orig, Bin2, Bin4}
+
+impl FrameType {
+    pub fn from_str(text: &str, def: FrameType) -> Self {
+        match text {
+            "Light" => FrameType::Lights,
+            "Flat"  => FrameType::Flats,
+            "Dark"  => FrameType::Darks,
+            "Bias"  => FrameType::Biases,
+            _       => def,
+        }
+    }
+
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            FrameType::Lights => "Light",
+            FrameType::Flats  => "Flat",
+            FrameType::Darks  => "Dark",
+            FrameType::Biases => "Bias",
+        }
+    }
+
+    pub fn to_readable_str(&self) -> &'static str {
+        match self {
+            FrameType::Lights => "Saving LIGHT frames",
+            FrameType::Flats  => "Saving FLAT frames",
+            FrameType::Darks  => "Saving DARK frames",
+            FrameType::Biases => "Saving BIAS frames",
+        }
+    }
+}
 
 impl Binning {
     pub fn to_str(self) -> &'static str {
         match self {
             Self::Orig => "1x1",
             Self::Bin2 => "2x2",
-            Self::Bin3 => "3x3",
             Self::Bin4 => "4x4",
         }
     }
@@ -21,7 +49,6 @@ impl Binning {
         match self {
             Self::Orig => 1,
             Self::Bin2 => 2,
-            Self::Bin3 => 3,
             Self::Bin4 => 4,
         }
     }
@@ -60,29 +87,33 @@ pub struct DeviceAndProp {
 }
 
 impl DeviceAndProp {
-    pub fn new(text: &str) -> Self {
-        let mut result = Self::default();
-        let mut splitted = text.split(" | ");
-        if let Some(name) = splitted.next() {
-            result.name = name.trim().to_string();
-            result.prop = if let Some(prop) = splitted.next() {
-                prop.trim().to_string()
-            } else {
-                "CCD1".to_string()
-            };
+    pub const CCD2_POSTFIX: &str = "_CCD2";
+
+    pub fn new(mut text: &str) -> Self {
+        let prop = if text.ends_with(Self::CCD2_POSTFIX) {
+            let new_len = text.len() - Self::CCD2_POSTFIX.len();
+            text = &text[..new_len];
+            "CCD2"
+        } else {
+            "CCD1"
+        };
+
+        Self {
+            name: text.to_string(),
+            prop: prop.to_string(),
         }
-        result
     }
 
     pub fn to_string(&self) -> String {
         let mut result = self.name.clone();
         if !result.is_empty() && !self.prop.is_empty() && self.prop != "CCD1" {
-            result += " | ";
+            result += "_";
             result += &self.prop;
         }
         result
     }
 
+    // TODO: remove!
     pub fn to_file_name_part(&self) -> String {
         let mut result = self.name.clone();
         if !result.is_empty() && !self.prop.is_empty() && self.prop != "CCD1" {
@@ -103,7 +134,6 @@ pub struct CamCtrlOptions {
     pub low_noise:     bool,
     pub high_fullwell: bool,
     pub conv_gain_str: Option<String>,
-
 }
 
 impl Default for CamCtrlOptions {
@@ -178,6 +208,7 @@ impl FrameOptions {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct CamOptions {
+    pub device_id: String,
     pub device:    Option<DeviceAndProp>,
     pub live_view: bool,
     pub ctrl:      CamCtrlOptions,

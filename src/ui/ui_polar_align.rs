@@ -3,7 +3,7 @@ use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
     core::{core::{Core, ModeType}, events::*, mode_polar_align::{CustomCommand, PolarAlignMode, PolarAlignmentEvent, State}},
-    indi::{self, degree_to_str_short},
+    hal::indi::{self, degree_to_str_short},
     options::*,
     sky_math::math::*,
 };

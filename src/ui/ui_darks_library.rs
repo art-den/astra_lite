@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     core::{core::*, events::*, mode_darks_lib::*},
     image::info::seconds_to_total_time_str,
-    indi,
+    hal::indi,
     options::*,
     utils::io_utils::*
 };
@@ -177,7 +177,7 @@ impl DefectPixelsOptions {
         cam_opts:   &CamOptions,
         indi:       &indi::Connection,
         cam_device: &DeviceAndProp
-    ) -> anyhow::Result<Vec<MasterFileCreationProgramItem>> {
+    ) -> eyre::Result<Vec<MasterFileCreationProgramItem>> {
         let mut result = Vec::new();
 
         let mut binnings = self.binning.get_binnings();
@@ -276,7 +276,7 @@ impl MasterDarksOptions {
         cam_opts:   &CamOptions,
         indi:       &indi::Connection,
         cam_device: &DeviceAndProp
-    ) -> anyhow::Result<Vec<MasterFileCreationProgramItem>> {
+    ) -> eyre::Result<Vec<MasterFileCreationProgramItem>> {
         let mut result = Vec::new();
 
         let mut temperatures = Vec::new();
@@ -385,7 +385,7 @@ impl MasterBiasesOptions {
         cam_opts:   &CamOptions,
         indi:       &indi::Connection,
         cam_device: &DeviceAndProp
-    ) -> anyhow::Result<Vec<MasterFileCreationProgramItem>> {
+    ) -> eyre::Result<Vec<MasterFileCreationProgramItem>> {
         let mut result = Vec::new();
 
         let mut temperatures = Vec::new();

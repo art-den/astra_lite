@@ -25,7 +25,7 @@ impl Default for RawFrameOptions {
 }
 
 impl RawFrameOptions {
-    pub fn check(&mut self) -> anyhow::Result<()> {
+    pub fn check(&mut self) -> eyre::Result<()> {
         if self.out_path.as_os_str().is_empty() {
             let mut out_path = dirs::home_dir().unwrap();
             out_path.push(DIRECTORY);
@@ -38,4 +38,3 @@ impl RawFrameOptions {
         Ok(())
     }
 }
-

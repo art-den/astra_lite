@@ -4,7 +4,7 @@ use std::{collections::*, f64::consts::PI, fmt::Debug, io::{BufRead, Read}, path
 use bitflags::bitflags;
 use bitstream_io::{BigEndian, BitReader};
 use serde::{Deserialize, Serialize};
-use crate::{indi::sexagesimal_to_value, sky_math::math::*, utils::{compression::ValuesDecompressor, math::angles_mean}};
+use crate::{hal::indi::sexagesimal_to_value, sky_math::math::*, utils::{compression::ValuesDecompressor, math::angles_mean}};
 
 enum SearchMode {
     Eq,
@@ -685,34 +685,34 @@ impl SkyMap {
         }
     }
 
-    pub fn load_constellations(&mut self, path: impl AsRef<Path>, as_bounds: bool) -> anyhow::Result<()> {
+    pub fn load_constellations(&mut self, path: impl AsRef<Path>, as_bounds: bool) -> eyre::Result<()> {
         let reader = std::io::BufReader::new(std::fs::File::open(path)?);
         let v: serde_json::Value = serde_json::from_reader(reader)?;
-        let Some(features_js) = v["features"].as_array() else { anyhow::bail!("features not found"); };
+        let Some(features_js) = v["features"].as_array() else { eyre::bail!("features not found"); };
 
         for feature in features_js {
             let properties_js = &feature["properties"];
 
             let Some(name) = properties_js["name"].as_str() else {
-                anyhow::bail!("properties.name not found");
+                eyre::bail!("properties.name not found");
             };
             let Some(id) = properties_js["id"].as_str() else {
-                anyhow::bail!("properties.id not found");
+                eyre::bail!("properties.id not found");
             };
 
             let geometry_js = &feature["geometry"];
 
             let Some(coordinates_js) = geometry_js["coordinates"].as_array() else {
-                anyhow::bail!("coordinates json object not found");
+                eyre::bail!("coordinates json object not found");
             };
 
             let geometry_type = geometry_js["type"].as_str().unwrap_or("");
 
             let mut figures = Vec::new();
-            let mut load = |json: &Vec<serde_json::Value>| -> anyhow::Result<()> {
+            let mut load = |json: &Vec<serde_json::Value>| -> eyre::Result<()> {
                 for points_js in json {
                     let Some(points_js) = points_js.as_array() else {
-                        anyhow::bail!("polyline is not json array");
+                        eyre::bail!("polyline is not json array");
                     };
                     let mut points = Vec::new();
                     for point_js in points_js {
@@ -738,12 +738,12 @@ impl SkyMap {
                         load(item)?;
                     }
                 }
-                _ => anyhow::bail!("Unknown geometry type {geometry_type}"),
+                _ => eyre::bail!("Unknown geometry type {geometry_type}"),
             }
 
             let id_lc = id.to_ascii_lowercase();
             let Some(id_u8) = self.const_id_by_name.get(id_lc.as_str()) else {
-                anyhow::bail!("Unknown constellation id ({id})");
+                eyre::bail!("Unknown constellation id ({id})");
             };
             let constellation = self.constellations
                 .entry(*id_u8)
@@ -761,15 +761,15 @@ impl SkyMap {
         Ok(())
     }
 
-    pub fn load_dso(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+    pub fn load_dso(&mut self, path: impl AsRef<Path>) -> eyre::Result<()> {
         let mut rdr = csv::ReaderBuilder::new()
             .delimiter(b';')
             .from_path(path)?;
         let headers = rdr.headers()?;
-        let find_col = |name| -> anyhow::Result<usize> {
+        let find_col = |name| -> eyre::Result<usize> {
             headers.iter()
                 .position(|c| c.eq_ignore_ascii_case(name))
-                .ok_or_else(|| anyhow::anyhow!("`{}` col not found", name))
+                .ok_or_else(|| eyre::eyre!("`{}` col not found", name))
         };
         let type_col      = find_col("type")?;
         let ra_col        = find_col("ra")?;
@@ -820,7 +820,7 @@ impl SkyMap {
         Ok(())
     }
 
-    pub fn load_stars(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+    pub fn load_stars(&mut self, path: impl AsRef<Path>) -> eyre::Result<()> {
         let file = std::fs::File::open(path)?;
         let mut buffer = std::io::BufReader::new(file);
 
@@ -829,7 +829,7 @@ impl SkyMap {
         let mut header_buf = [0_u8; 15];
         buffer.read_exact(&mut header_buf)?;
         if &header_buf != b"astralite-stars" {
-            anyhow::bail!("Not a astralite stars file");
+            eyre::bail!("Not a astralite stars file");
         }
 
         // file version
@@ -838,7 +838,7 @@ impl SkyMap {
         buffer.read_exact(&mut buf_u16)?;
         let version = u16::from_be_bytes(buf_u16);
         if version != 1 {
-            anyhow::bail!("File version {} is not supported", version);
+            eyre::bail!("File version {} is not supported", version);
         }
 
         // stars count
@@ -871,15 +871,15 @@ impl SkyMap {
         Ok(())
     }
 
-    pub fn load_named_stars(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+    pub fn load_named_stars(&mut self, path: impl AsRef<Path>) -> eyre::Result<()> {
         let mut rdr = csv::ReaderBuilder::new()
             .delimiter(b';')
             .from_path(path)?;
         let headers = rdr.headers()?;
-        let find_col = |name| -> anyhow::Result<usize> {
+        let find_col = |name| -> eyre::Result<usize> {
             headers.iter()
                 .position(|c| c.eq_ignore_ascii_case(name))
-                .ok_or_else(|| anyhow::anyhow!("`{}` col not found", name))
+                .ok_or_else(|| eyre::eyre!("`{}` col not found", name))
         };
         let name_col  = find_col("name")?;
         let bayer_col = find_col("bayer")?;
@@ -915,7 +915,7 @@ impl SkyMap {
         Ok(())
     }
 
-    pub fn load_stellarium_outlines_file(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+    pub fn load_stellarium_outlines_file(&mut self, path: impl AsRef<Path>) -> eyre::Result<()> {
         let file = std::fs::File::open(path)?;
         let reader = std::io::BufReader::new(file);
         let mut name = String::new();
@@ -925,7 +925,7 @@ impl SkyMap {
                 .split(' ')
                 .filter(|item| !item.is_empty())
                 .collect::<Vec<_>>();
-            let parse_coords = |ra_str: &str, dec_str: &str| -> anyhow::Result<(f64, f64)> {
+            let parse_coords = |ra_str: &str, dec_str: &str| -> eyre::Result<(f64, f64)> {
                 let ra = hour_to_radian( ra_str.parse::<f64>()?);
                 let dec = hour_to_radian(dec_str.parse::<f64>()?);
                 Ok((ra, dec))

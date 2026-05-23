@@ -4,10 +4,8 @@ use chrono::{DateTime, Local};
 use bitflags::bitflags;
 
 use crate::{
-    core::{core::ModeType, utils::{FileNameArg, FileNameUtils}},
-    image::{histogram::*, image::*, info::*, io::*, preview::*, raw::*, simple_fits::{FitsReader, SeekNRead}, image_stacker::ImageStacker, stars::{StarItems, Stars, StarsFinder, StarsInfo}, stars_offset::*},
-    indi,
-    options::*, utils::log_utils::*
+    core::{core::ModeType, utils::{FileNameArg, FileNameUtils}}, hal::{FrameType, indi}, image::{
+        histogram::*, image::*, image_stacker::ImageStacker, info::*, io::*, preview::*, raw::*, simple_fits::{FitsReader, SeekNRead}, stars::{StarItems, Stars, StarsFinder, StarsInfo}, stars_offset::*}, options::*, utils::log_utils::*
 };
 
 #[derive(Default)]
@@ -190,7 +188,6 @@ bitflags! {
 pub struct FrameProcessCommandData {
     pub mode_type:       ModeType,
     pub camera:          DeviceAndProp,
-    pub shot_id:         Option<u64>,
     pub img_source:      ImageSource,
     pub flags:           FrameProcessCommandFlags,
     pub frame:           Arc<ResultImage>,
@@ -250,7 +247,6 @@ pub struct FrameProcessResult {
     pub camera:        DeviceAndProp,
     pub cmd_stop_flag: Arc<AtomicBool>,
     pub mode_type:     ModeType,
-    pub shot_id:       Option<u64>,
     pub data:          FrameProcessResultData,
 }
 
@@ -320,7 +316,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
     params:    &Option<CalibrParams>,
     raw_image: &mut RawImage,
     calibr:    &mut CalibrData,
-) -> anyhow::Result<()> {
+) -> eyre::Result<()> {
     let Some(params) = params else { return Ok(()); };
 
     let image_info = raw_image.info();
@@ -382,7 +378,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
             );
             let tmr = TimeLogger::start();
             let subtract_image = load_raw_image_from_fits_file(file_name)
-                .map_err(|e| anyhow::anyhow!(
+                .map_err(|e| eyre::eyre!(
                     "Error '{}'\nwhen reading master dark '{}'",
                     e.to_string(),
                     file_name.to_str().unwrap_or_default()
@@ -410,7 +406,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
         if let Some(file_name) = &params.flat_fname {
             let tmr = TimeLogger::start();
             let mut master_flat = load_raw_image_from_fits_file(file_name)
-                .map_err(|e| anyhow::anyhow!(
+                .map_err(|e| eyre::eyre!(
                     "Error '{}'\nreading master flat '{}'",
                     e.to_string(),
                     file_name.to_str().unwrap_or_default()
@@ -438,7 +434,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
     if let (Some(file_name), Some(dark_image)) = (&subtrack_fname, &calibr.subtract_image) {
         let tmr = TimeLogger::start();
         raw_image.subtract_dark_or_bias(dark_image)
-            .map_err(|err| anyhow::anyhow!(
+            .map_err(|err| eyre::eyre!(
                 "Error {}\nwhen trying to subtract image {}",
                 err.to_string(),
                 file_name.to_str().unwrap_or_default()
@@ -452,7 +448,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
     if let (Some(file_name), Some(flat_image)) = (&params.flat_fname, &calibr.master_flat) {
         let tmr = TimeLogger::start();
         raw_image.apply_flat(flat_image)
-            .map_err(|err| anyhow::anyhow!(
+            .map_err(|err| eyre::eyre!(
                 "Error {}\nwher trying to apply flat image {}",
                 err.to_string(),
                 file_name.to_str().unwrap_or_default()
@@ -504,7 +500,6 @@ fn send_result(
         camera:        command.camera.clone(),
         cmd_stop_flag: Arc::clone(&command.stop_flag),
         mode_type:     command.mode_type,
-        shot_id:       command.shot_id,
         data,
     });
     result_fun(result);
@@ -549,16 +544,16 @@ impl ImageLoader<'_> {
         }
     }
 
-    fn load_raw_image(&mut self) -> anyhow::Result<RawImage> {
+    fn load_raw_image(&mut self) -> eyre::Result<RawImage> {
         match self {
             Self::Fits(reader, stream) =>
                 load_raw_image_from_fits_reader(reader, stream),
             _ =>
-                anyhow::bail!("Format not support raw images"),
+                eyre::bail!("Format not support raw images"),
         }
     }
 
-    fn load_image(&mut self, image: &mut Image) -> anyhow::Result<()> {
+    fn load_image(&mut self, image: &mut Image) -> eyre::Result<()> {
         match self {
             Self::Fits(reader, stream) =>
                 load_image_from_fits_reader(image, reader, stream)?,
@@ -574,7 +569,7 @@ impl ImageLoader<'_> {
 fn make_preview_image_impl(
     command:    &FrameProcessCommandData,
     result_fun: &ResultFun
-) -> anyhow::Result<()> {
+) -> eyre::Result<()> {
     if command.stop_flag.load(Ordering::Relaxed) {
         log::debug!("Command stopped");
         return Ok(());
@@ -628,14 +623,14 @@ fn make_preview_image_impl(
             unreachable!();
         }
     } else {
-        anyhow::bail!("Image format {} is not supported", type_hint);
+        eyre::bail!("Image format {} is not supported", type_hint);
     };
 
     let is_raw_image = loader.is_raw_image();
     let is_ready_mage = loader.is_ready_image();
 
     if !is_raw_image && !is_ready_mage {
-        anyhow::bail!("No supported image found in {}", type_hint);
+        eyre::bail!("No supported image found in {}", type_hint);
     }
 
     let mut frame_type = FrameType::Lights;
@@ -1198,7 +1193,7 @@ fn make_preview_image_impl(
                         .join("Result");
                     if !file_path.exists() {
                         std::fs::create_dir_all(&file_path)
-                            .map_err(|e|anyhow::anyhow!(
+                            .map_err(|e|eyre::eyre!(
                                 "Error '{}'\nwhen trying to create directory '{}' for saving result live stack image",
                                 e.to_string(),
                                 file_path.to_str().unwrap_or_default()

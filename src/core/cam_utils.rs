@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::indi;
+use crate::hal::indi;
 
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum CcdPurpose {
@@ -15,7 +15,7 @@ pub struct CcdPurposeItem {
     pub purpose:     CcdPurpose,
 }
 
-pub fn get_all_ccd_with_purposes_list(indi: &indi::Connection) -> anyhow::Result<Vec<CcdPurposeItem>> {
+pub fn get_all_ccd_with_purposes_list(indi: &indi::Connection) -> eyre::Result<Vec<CcdPurposeItem>> {
     struct SensorSize {
         device: indi::ExportDevice,
         sensor_width: isize,
@@ -24,7 +24,7 @@ pub fn get_all_ccd_with_purposes_list(indi: &indi::Connection) -> anyhow::Result
     let mut all_cemeras: Vec<_> = indi.get_devices_list_by_interface(indi::DriverInterface::CCD)
         .iter()
         .filter_map(|d| {
-            let fun = || -> anyhow::Result<SensorSize> {
+            let fun = || -> eyre::Result<SensorSize> {
                 let (pixel_size_x, _) = indi.camera_get_pixel_size_um(&d.name, indi::CamCcd::Primary)?;
                 let (sensor_width, _) = indi.camera_get_max_frame_size(&d.name, indi::CamCcd::Primary)?;
                 Ok(SensorSize {
@@ -76,7 +76,7 @@ pub fn get_ccd_purpose(
     indi:        &indi::Connection,
     device_name: &str,
     cam_ccd:     indi::CamCcd
-) -> anyhow::Result<CcdPurpose> {
+) -> eyre::Result<CcdPurpose> {
     let all_ccd_list = get_all_ccd_with_purposes_list(indi)?;
     let result = all_ccd_list
         .iter()

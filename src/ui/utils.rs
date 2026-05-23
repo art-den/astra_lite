@@ -1,6 +1,35 @@
-use std::{rc::Rc, cell::{RefCell, Cell}, time::Duration, collections::HashMap, hash::Hash};
+use std::{cell::{Cell, RefCell}, collections::HashMap, hash::Hash, ops::Range, rc::Rc, time::Duration};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
-use crate::{image::histogram::*, indi};
+use crate::{image::histogram::*, hal::indi};
+
+pub fn correct_spinbutton_by_range(
+    spb:    &gtk::SpinButton,
+    range:  Option<Range<f64>>,
+    digits: u32,
+    step:   Option<f64>,
+) {
+    if let Some(range) = range {
+        spb.set_sensitive(true);
+        spb.set_range(range.start, range.end);
+        let value = spb.value();
+        if value < range.start {
+            spb.set_value(range.start);
+        }
+        if value > range.end {
+            spb.set_value(range.end);
+        }
+        let desired_step =
+            if      range.end <= 10.0   { 0.1 }
+            else if range.end <= 100.0  { 1.0 }
+            else if range.end <= 1000.0 { 10.0 }
+            else                        { 100.0 };
+        let step = step.unwrap_or(desired_step);
+        spb.set_increments(step, 10.0 * step);
+        spb.set_digits(digits);
+    } else {
+        spb.set_sensitive(false);
+    }
+}
 
 pub fn correct_spinbutton_by_cam_prop(
     spb:       &gtk::SpinButton,
@@ -118,7 +147,7 @@ pub fn draw_histogram(
     width:  i32,
     height: i32,
     log_y:  bool,
-) -> anyhow::Result<()> {
+) -> eyre::Result<()> {
     if width == 0 { return Ok(()); }
 
     let p0 = "0%";
@@ -174,7 +203,7 @@ pub fn draw_histogram(
             total_max_v = f64::log10(total_max_v);
         }
 
-        let paint_channel = |chan: &Option<HistogramChan>, r, g, b, a| -> anyhow::Result<()> {
+        let paint_channel = |chan: &Option<HistogramChan>, r, g, b, a| -> eyre::Result<()> {
             let Some(chan) = chan.as_ref() else { return Ok(()); };
             let k = max_count as f64 / chan.count as f64;
             let max_x = hist.max as f64;
@@ -216,7 +245,7 @@ pub fn draw_histogram(
     cr.move_to(0.0, height as f64 - bottom_margin - layout.pixel_size().1 as f64);
     pangocairo::show_layout(cr, &layout);
 
-    let paint_x_percent = |x, text| -> anyhow::Result<()> {
+    let paint_x_percent = |x, text| -> eyre::Result<()> {
         layout.set_text(text);
         let (text_width, _) = layout.pixel_size();
 
@@ -248,7 +277,7 @@ pub fn draw_progress_bar(
     cr:       &cairo::Context,
     progress: f64,
     text:     &str,
-) -> anyhow::Result<()> {
+) -> eyre::Result<()> {
     let width = area.allocated_width() as f64;
     let height = area.allocated_height() as f64;
     let style_context = area.style_context();
@@ -287,7 +316,7 @@ pub fn draw_progress_bar(
 }
 
 pub fn fill_devices_list_into_combobox(
-    list:       &[String],
+    list:       &[(String/*id*/, String/*text*/)],
     cb:         &gtk::ComboBoxText,
     cur_id:     Option<&str>,
     connected:  bool,
@@ -295,8 +324,8 @@ pub fn fill_devices_list_into_combobox(
 ) -> bool {
     cb.remove_all();
 
-    for item in list {
-        cb.append(Some(item), item);
+    for (id, text) in list {
+        cb.append(Some(id), text);
     }
 
     let mut device_selected_in_cb = false;
@@ -309,7 +338,7 @@ pub fn fill_devices_list_into_combobox(
         }
     } else if !list.is_empty() {
         cb.set_active(Some(0));
-        set_id_fun(list[0].as_str());
+        set_id_fun(list[0].0.as_str());
         device_selected_in_cb = true;
     }
 

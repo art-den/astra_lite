@@ -3,7 +3,7 @@ use std::{collections::HashMap, rc::Rc};
 use gtk::{prelude::*, pango};
 use bitflags::bitflags;
 
-use crate::{core::events::Event, indi, options::Options};
+use crate::{core::events::Event, hal::indi, options::Options};
 
 pub enum PanelPosition {
     Left,

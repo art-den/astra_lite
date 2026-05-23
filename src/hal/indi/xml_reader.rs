@@ -102,7 +102,7 @@ impl XmlStreamReader {
     pub fn receive_xml(
         &mut self,
         stream: &mut dyn std::io::Read
-    ) -> anyhow::Result<XmlStreamReaderResult> {
+    ) -> eyre::Result<XmlStreamReaderResult> {
         loop {
             match self.state {
                 XmlStreamReaderState::Undefined => {

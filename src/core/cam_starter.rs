@@ -1,6 +1,6 @@
-use std::{sync::{Arc, RwLock}};
+use std::sync::{Arc, RwLock};
 
-use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::ModeType}, indi, options::{Binning, CamCtrlOptions, DeviceAndProp, FrameOptions}};
+use crate::{core::{consts::INDI_SET_PROP_TIMEOUT, core::ModeType}, hal::{Camera, FrameType, indi}, options::{CamCtrlOptions, DeviceAndProp, FrameOptions}};
 
 pub struct CamStarter {
     before_shot_fun: RwLock<Option<Box<dyn Fn(ModeType) + Send + Sync + 'static>>>,
@@ -23,10 +23,88 @@ impl CamStarter {
     pub fn take_shot(
         &self,
         mode_type: ModeType,
+        camera:    &Arc<dyn Camera + Send + Sync>,
+        frame:     &FrameOptions,
+        cam_ctrl:  &CamCtrlOptions,
+    ) -> eyre::Result<u64> {
+        let before_shot_fun = self.before_shot_fun.read().unwrap();
+        if let Some(before_shot_fun) = &*before_shot_fun {
+            before_shot_fun(mode_type);
+        }
+        drop(before_shot_fun);
+
+        // Initialization before start
+
+        camera.init_before_shot()?;
+
+
+        // Conversion gain
+
+        if let Some(conv_gain_str) = &cam_ctrl.conv_gain_str
+        && camera.is_conversion_gain_str_supported()? {
+            camera.set_conversion_gain(conv_gain_str)?;
+        }
+
+        // Low noise mode
+
+        if camera.is_low_noise_supported()? {
+            camera.enable_low_noise_mode(cam_ctrl.low_noise)?;
+        }
+
+        // High fullwell mode
+
+        if camera.is_high_fullwell_supported()? {
+            camera.enable_high_fullwell_mode(cam_ctrl.high_fullwell)?;
+        }
+
+        // Frame type
+
+        camera.set_frame_type(frame.frame_type)?;
+
+        // Frame
+
+        if camera.is_frame_supported()? {
+            let (width, height) = camera.ccd_size()?;
+            let crop_width = frame.crop.translate(width);
+            let crop_height = frame.crop.translate(height);
+            camera.set_frame(
+                (width - crop_width) / 2, (height - crop_height) / 2,
+                crop_width, crop_height
+            )?;
+        }
+
+        // Binning
+
+        if camera.is_binning_supported()? {
+            camera.set_binning(frame.binning.get_ratio(), frame.binning.get_ratio())?;
+        }
+
+        // Gain
+
+        if camera.is_gain_supported()? {
+            camera.set_gain(frame.gain)?;
+        }
+
+        // Offset
+
+        if camera.is_offset_supported()? {
+            camera.set_offset(frame.offset as _)?;
+        }
+
+        // Start exposure
+
+        camera.start_exposure(frame.exposure())?;
+
+        Ok(0)
+    }
+
+    pub fn take_shot_old(
+        &self,
+        mode_type: ModeType,
         device:    &DeviceAndProp,
         frame:     &FrameOptions,
         cam_ctrl:  &CamCtrlOptions,
-    ) -> anyhow::Result<u64> {
+    ) -> eyre::Result<u64> {
 
         let before_shot_fun = self.before_shot_fun.read().unwrap();
         if let Some(before_shot_fun) = &*before_shot_fun {
@@ -85,13 +163,11 @@ impl CamStarter {
 
         // Frame type
 
-        use crate::image::raw::*; // for FrameType::
         let frame_type = match frame.frame_type {
             FrameType::Lights => indi::FrameType::Light,
             FrameType::Flats  => indi::FrameType::Flat,
             FrameType::Darks  => indi::FrameType::Dark,
             FrameType::Biases => indi::FrameType::Bias,
-            FrameType::Undef  => panic!("Undefined frame type"),
         };
 
         self.indi.camera_set_frame_type(
@@ -108,25 +184,13 @@ impl CamStarter {
             let (width, height) = self.indi.camera_get_max_frame_size(&device.name, cam_ccd)?;
             let crop_width = frame.crop.translate(width);
             let crop_height = frame.crop.translate(height);
-            self.indi.camera_set_frame_size(
+            self.indi.camera_set_frame(
                 &device.name,
                 cam_ccd,
                 (width - crop_width) / 2,
                 (height - crop_height) / 2,
                 crop_width,
                 crop_height,
-                true,
-                INDI_SET_PROP_TIMEOUT
-            )?;
-        }
-
-        // Make binning mode is alwais AVG (if camera supports it)
-
-        if self.indi.camera_is_binning_mode_supported(&device.name, cam_ccd)?
-        && frame.binning != Binning::Orig {
-            self.indi.camera_set_binning_mode(
-                &device.name,
-                indi::BinningMode::Avg,
                 true,
                 INDI_SET_PROP_TIMEOUT
             )?;
@@ -190,19 +254,19 @@ impl CamStarter {
 
         // Start exposure
 
-        let shot_id = self.indi.camera_start_exposure(
+        self.indi.camera_start_exposure(
             &device.name,
-            indi::CamCcd::from_ccd_prop_name(&device.prop),
+            cam_ccd,
             frame.exposure()
         )?;
 
-        Ok(shot_id)
+        Ok(0)
     }
 
     pub fn abort(
         &self,
         device: &DeviceAndProp,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         self.indi.camera_abort_exposure(
             &device.name,
             indi::CamCcd::from_ccd_prop_name(&device.prop)

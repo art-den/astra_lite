@@ -4,7 +4,7 @@ use macros::FromBuilder;
 
 use crate::{
     core::{consts::INDI_SET_PROP_TIMEOUT, core::{Core, ModeType}, events::*},
-    indi::{self, degree_to_str, hour_to_str},
+    hal::indi::{self, degree_to_str, hour_to_str},
     options::*,
     ui::ui_main::MainUi,
 };
@@ -446,7 +446,7 @@ impl MountUi {
         let list = self.indi
             .get_devices_list_by_interface(indi::DriverInterface::TELESCOPE)
             .iter()
-            .map(|dev| dev.name.to_string())
+            .map(|dev| (dev.name.to_string(), dev.name.to_string()))
             .collect::<Vec<_>>();
         let connected = self.indi.state() == indi::ConnState::Connected;
         fill_devices_list_into_combobox(

@@ -18,7 +18,7 @@
 mod ui;
 mod utils;
 mod image;
-mod indi;
+mod hal;
 mod guiding;
 mod plate_solve;
 mod core;
@@ -35,7 +35,7 @@ use crate::{
     core::core::Core,
 };
 
-fn main() -> anyhow::Result<()> {
+fn main() -> eyre::Result<()> {
     let application = gtk::Application::new(
         Some(&format!("com.github.art-den.{}", env!("CARGO_PKG_NAME"))),
         Default::default(),
@@ -78,9 +78,11 @@ fn app_activate_handler(app: &gtk::Application) {
 
     // Enable stacktrace in errors in debug builds
 
-    #[cfg(debug_assertions)] {
-        unsafe { std::env::set_var("RUST_BACKTRACE", "1"); }
+    if cfg!(debug_assertions) {
+        unsafe { std::env::set_var("RUST_BACKTRACE", "full"); }
         log::set_max_level(log::LevelFilter::Debug);
+    } else {
+        unsafe { std::env::set_var("RUST_BACKTRACE", "0"); }
     }
 
     // Create core

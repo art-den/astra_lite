@@ -7,12 +7,7 @@ use crate::{
         consts::INDI_SET_PROP_TIMEOUT,
         core::*,
         frame_processing::*,
-    },
-    image::{image::*, stars::StarItems},
-    indi,
-    options::*,
-    plate_solve::*,
-    sky_math::math::*
+    }, hal::{FrameType, indi}, image::{image::*, stars::StarItems}, options::*, plate_solve::*, sky_math::math::*
 };
 
 use super::{events::*, utils::gain_to_value};
@@ -48,13 +43,13 @@ impl PlatesolveMode {
         options:     &Arc<RwLock<Options>>,
         cur_frame:   &Arc<ResultImage>,
         subscribers: &Arc<Events>,
-    ) -> anyhow::Result<Self> {
+    ) -> eyre::Result<Self> {
         let opts = options.read().unwrap();
         let Some(camera) = opts.cam.device.clone() else {
-            anyhow::bail!("Camera is not selected");
+            eyre::bail!("Camera is not selected");
         };
         let mut cam_opts = opts.cam.clone();
-        cam_opts.frame.frame_type = crate::image::raw::FrameType::Lights;
+        cam_opts.frame.frame_type = FrameType::Lights;
         cam_opts.frame.exp_main = opts.plate_solver.exposure;
         cam_opts.frame.binning = opts.plate_solver.bin;
         cam_opts.frame.gain = gain_to_value(
@@ -80,7 +75,7 @@ impl PlatesolveMode {
         })
     }
 
-    fn get_platesolver_config(&self) -> anyhow::Result<PlateSolveConfig> {
+    fn get_platesolver_config(&self) -> eyre::Result<PlateSolveConfig> {
         let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
         let eq_coord = EqCoord {
             dec: degree_to_radian(dec),
@@ -95,7 +90,7 @@ impl PlatesolveMode {
         Ok(config)
     }
 
-    fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> anyhow::Result<()> {
+    fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> eyre::Result<()> {
         let image = image.read().unwrap();
         let config = self.get_platesolver_config()?;
         self.plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
@@ -108,18 +103,18 @@ impl PlatesolveMode {
         stars:      &StarItems,
         img_width:  usize,
         img_height: usize
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let config = self.get_platesolver_config()?;
         let stars_arg = PlateSolverInData::Stars{ stars, img_width, img_height };
         self.plate_solver.start(&stars_arg, &config)?;
         Ok(())
     }
 
-    fn try_process_plate_solving_result(&mut self) -> anyhow::Result<bool> {
+    fn try_process_plate_solving_result(&mut self) -> eyre::Result<bool> {
         let result = match self.plate_solver.get_result()? {
             PlateSolveResult::Waiting => return Ok(false),
             PlateSolveResult::Done(result) => result,
-            PlateSolveResult::Failed => anyhow::bail!("Can't platesolve image")
+            PlateSolveResult::Failed => eyre::bail!("Can't platesolve image")
         };
 
         result.print_to_log();
@@ -160,7 +155,7 @@ impl PlatesolveMode {
         Ok(true)
     }
 
-    fn calc_focal_len(&self, ps_result: &PlateSolveOkResult) -> anyhow::Result<()> {
+    fn calc_focal_len(&self, ps_result: &PlateSolveOkResult) -> eyre::Result<()> {
         let mut options = self.options.write().unwrap();
         if !options.telescope.from_platesolve { return Ok(()); }
         let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.camera.prop);
@@ -239,9 +234,9 @@ impl Mode for PlatesolveMode {
         Some(self.cam_opts.frame.exp_main)
     }
 
-    fn start(&mut self) -> anyhow::Result<()> {
+    fn start(&mut self) -> eyre::Result<()> {
         log::debug!("Tacking picture for plate solve with {:?}", &self.cam_opts.frame);
-        self.cam_starter.take_shot(
+        self.cam_starter.take_shot_old(
             self.get_type(),
             &self.camera,
             &self.cam_opts.frame,
@@ -251,7 +246,7 @@ impl Mode for PlatesolveMode {
         Ok(())
     }
 
-    fn abort(&mut self) -> anyhow::Result<()> {
+    fn abort(&mut self) -> eyre::Result<()> {
         _ = self.cam_starter.abort(&self.camera);
         _ = self.indi.mount_abort_motion(&self.mount);
         self.state = State::None;
@@ -265,7 +260,7 @@ impl Mode for PlatesolveMode {
     fn notify_about_frame_processing_result(
         &mut self,
         fp_result: &FrameProcessResult
-    ) -> anyhow::Result<NotifyResult> {
+    ) -> eyre::Result<NotifyResult> {
         let xy_supported = self.plate_solver.support_stars_as_input();
         match (&self.state, &fp_result.data, xy_supported) {
             (State::Capturing, FrameProcessResultData::Image(image), false) => {
@@ -284,7 +279,7 @@ impl Mode for PlatesolveMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn notify_timer(&mut self, _timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_timer(&mut self, _timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         match self.state {
             State::PlateSolve => {
                 let ok = self.try_process_plate_solving_result()?;

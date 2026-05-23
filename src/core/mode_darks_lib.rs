@@ -1,6 +1,10 @@
 use std::{collections::VecDeque, sync::{Arc, Mutex, RwLock}};
 
-use crate::{core::{frame_processing::*, mode_camera::{CameraMode, TackingPicturesMode}, mode_waiting::WaitingMode}, indi::{self}, options::*};
+use crate::{
+    core::{frame_processing::*, mode_camera::{CameraMode, TackingPicturesMode}, mode_waiting::WaitingMode},
+    hal::indi,
+   options::*
+};
 
 use super::{core::*, events::Progress};
 
@@ -47,10 +51,10 @@ impl DarkCreationMode {
         options:     &Arc<RwLock<Options>>,
         indi:        &Arc<indi::Connection>,
         program:     &[MasterFileCreationProgramItem]
-    ) -> anyhow::Result<Self> {
+    ) -> eyre::Result<Self> {
         let opts = options.read().unwrap();
         let Some(cam_device) = &opts.cam.device else {
-            anyhow::bail!("Camera is not selected");
+            eyre::bail!("Camera is not selected");
         };
 
         Ok(Self {
@@ -74,7 +78,7 @@ impl DarkCreationMode {
         program_item: MasterFileCreationProgramItem,
         cam_mode:     CameraMode,
     ) -> NotifyResult {
-        let start_focusing_fun = move |core: &Arc<Core>, mode: &mut ModeData| -> anyhow::Result<()> {
+        let start_focusing_fun = move |core: &Arc<Core>, mode: &mut ModeData| -> eyre::Result<()> {
             mode.active.abort()?;
             let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
             let mut new_mode = TackingPicturesMode::new(cam_mode, &core)?;
@@ -126,13 +130,13 @@ impl Mode for DarkCreationMode {
         })
     }
 
-    fn start(&mut self) -> anyhow::Result<()> {
+    fn start(&mut self) -> eyre::Result<()> {
         self.state = State::Undefined;
         self.clear_calibr_data();
         Ok(())
     }
 
-    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_timer(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         let mut have_to_start = false;
         match self.state {

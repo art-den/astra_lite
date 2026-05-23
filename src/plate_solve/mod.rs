@@ -2,7 +2,12 @@ use std::sync::Arc;
 
 use astrometry::*;
 use chrono::{DateTime, Utc};
-use crate::{image::{image::Image, preview::PreviewRgbData, stars::StarItems}, options::PlateSolverType, sky_math::math::*};
+use crate::{
+    image::{image::Image, preview::PreviewRgbData, stars::StarItems},
+    options::PlateSolverType,
+    sky_math::math::*,
+    hal::indi::value_to_sexagesimal
+};
 
 mod astrometry;
 
@@ -39,7 +44,6 @@ pub struct PlateSolveOkResult {
 
 impl PlateSolveOkResult {
     pub fn print_to_log(&self) {
-        use crate::indi::value_to_sexagesimal;
         log::debug!(
             "plate solver j2000 = (ra: {}, dec: {}), now = (ra: {}, dec: {}), image size = {:.6} x {:.6}",
             value_to_sexagesimal(radian_to_hour(self.crd_j2000.ra), true, 9),
@@ -92,16 +96,16 @@ impl PlateSolver {
         &mut self,
         data:   &PlateSolverInData,
         config: &PlateSolveConfig
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         match data {
             PlateSolverInData::Image(image) => {
                 if image.is_empty() {
-                    anyhow::bail!("Image is empty!");
+                    eyre::bail!("Image is empty!");
                 }
             }
             PlateSolverInData::Stars { stars, .. } => {
                 if stars.is_empty() {
-                    anyhow::bail!("No stars for platesolving!");
+                    eyre::bail!("No stars for platesolving!");
                 }
             }
         }
@@ -131,7 +135,7 @@ impl PlateSolver {
         self.solver.abort();
     }
 
-    pub fn get_result(&mut self) -> anyhow::Result<PlateSolveResult> {
+    pub fn get_result(&mut self) -> eyre::Result<PlateSolveResult> {
         self.solver.get_result()
     }
 
@@ -142,9 +146,9 @@ impl PlateSolver {
 
 trait PlateSolverIface {
     fn support_stars_as_input(&self) -> bool;
-    fn start(&mut self, data: &PlateSolverInData, config: &PlateSolveConfig) -> anyhow::Result<()>;
+    fn start(&mut self, data: &PlateSolverInData, config: &PlateSolveConfig) -> eyre::Result<()>;
     fn abort(&mut self);
-    fn get_result(&mut self) -> anyhow::Result<PlateSolveResult>;
+    fn get_result(&mut self) -> eyre::Result<PlateSolveResult>;
     fn reset(&mut self);
 }
 

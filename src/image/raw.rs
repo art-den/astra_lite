@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use itertools::{izip, Itertools};
 use serde::{Serialize, Deserialize};
 
-use crate::utils::math::square_ls;
+use crate::{hal::FrameType, utils::math::square_ls};
 use super::{image::*, simple_fits::*};
 
 #[derive(Clone)]
@@ -20,7 +20,7 @@ pub struct BadPixels{
 }
 
 impl BadPixels {
-    pub fn save_to_file(&self, file_name: &Path) -> anyhow::Result<()> {
+    pub fn save_to_file(&self, file_name: &Path) -> eyre::Result<()> {
         let mut file = BufWriter::new(File::create(file_name)?);
         for pixel in &self.items {
             writeln!(file, "{} {}", pixel.x, pixel.y)?;
@@ -28,7 +28,7 @@ impl BadPixels {
         Ok(())
     }
 
-    pub fn load_from_file(&mut self, file_name: &Path) -> anyhow::Result<()> {
+    pub fn load_from_file(&mut self, file_name: &Path) -> eyre::Result<()> {
         let file = BufReader::new(File::open(file_name)?);
         self.items.clear();
         for line in file.lines().map_while(Result::ok) {
@@ -78,48 +78,6 @@ impl CfaType {
             CfaType::RGBG => Some("RGBG"),
             CfaType::GRBG => Some("GRBG"),
             CfaType::RGGB => Some("RGGB"),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy, Default)]
-pub enum FrameType {
-    #[default]
-    Undef,
-    Lights,
-    Flats,
-    Darks,
-    Biases,
-}
-
-impl FrameType {
-    pub fn from_str(text: &str, def: FrameType) -> Self {
-        match text {
-            "Light" => FrameType::Lights,
-            "Flat"  => FrameType::Flats,
-            "Dark"  => FrameType::Darks,
-            "Bias"  => FrameType::Biases,
-            _       => def,
-        }
-    }
-
-    pub fn to_str(&self) -> &'static str {
-        match self {
-            FrameType::Undef  => "Undefined",
-            FrameType::Lights => "Light",
-            FrameType::Flats  => "Flat",
-            FrameType::Darks  => "Dark",
-            FrameType::Biases => "Bias",
-        }
-    }
-
-    pub fn to_readable_str(&self) -> &'static str {
-        match self {
-            FrameType::Lights => "Saving LIGHT frames",
-            FrameType::Flats  => "Saving FLAT frames",
-            FrameType::Darks  => "Saving DARK frames",
-            FrameType::Biases => "Saving BIAS frames",
-            FrameType::Undef  => "Unknows save frames state :("
         }
     }
 }
@@ -250,7 +208,7 @@ impl RawImage {
         Self { info, data, cfa_arr }
     }
 
-    pub fn save_to_fits_file(&self, file_name: &Path) -> anyhow::Result<()> {
+    pub fn save_to_fits_file(&self, file_name: &Path) -> eyre::Result<()> {
         let mut file = File::create(file_name)?;
         let writer = FitsWriter::new();
         let mut hdu = Header::new_2d(self.info.width, self.info.height);
@@ -669,9 +627,9 @@ impl RawImage {
         &self,
         master_frame: &RawImage,
         frame_types:  &[FrameType],
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         if !frame_types.contains(&master_frame.info.frame_type) {
-            anyhow::bail!(
+            eyre::bail!(
                 "Wrong frame type. Expected {:?}, found {:?}",
                 frame_types,
                 master_frame.info.frame_type,
@@ -680,7 +638,7 @@ impl RawImage {
 
         if self.info.width != master_frame.info.width
         || self.info.height != master_frame.info.height {
-            anyhow::bail!(
+            eyre::bail!(
                 "Different sizes (light frame: {}x{}, calibration frame: {}x{})",
                 self.info.width, self.info.height,
                 master_frame.info.width, master_frame.info.height,
@@ -688,7 +646,7 @@ impl RawImage {
         }
 
         if self.info.cfa != master_frame.info.cfa {
-            anyhow::bail!(
+            eyre::bail!(
                 "Different CFA (light frame: {:?}, calibration frame: {:?})",
                 self.info.cfa,
                 master_frame.info.cfa,
@@ -698,7 +656,7 @@ impl RawImage {
         Ok(())
     }
 
-    pub fn subtract_dark_or_bias(&mut self, dark: &RawImage) -> anyhow::Result<()> {
+    pub fn subtract_dark_or_bias(&mut self, dark: &RawImage) -> eyre::Result<()> {
         self.check_master_frame_is_compatible(dark, &[FrameType::Darks, FrameType::Biases])?;
         debug_assert!(self.data.len() == dark.data.len());
         let dark_sum: i64 = dark.as_slice().iter().map(|v| *v as i64).sum();
@@ -721,7 +679,7 @@ impl RawImage {
         Ok(())
     }
 
-    pub fn apply_flat(&mut self, flat: &RawImage) -> anyhow::Result<()> {
+    pub fn apply_flat(&mut self, flat: &RawImage) -> eyre::Result<()> {
         self.check_master_frame_is_compatible(flat, &[FrameType::Flats])?;
         debug_assert!(self.data.len() == flat.data.len());
         let zero = self.info.offset as i64;

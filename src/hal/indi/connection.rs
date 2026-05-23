@@ -127,8 +127,6 @@ pub struct BlobStartEvent {
     pub elem_name:   Arc<String>,
     pub format:      Arc<String>,
     pub len:         Option<usize>,
-    pub shot_id:     Option<u64>,
-
 }
 
 #[derive(Clone)]
@@ -239,13 +237,13 @@ impl NumFormat {
 pub enum PropState { Idle, Ok, Busy, Alert }
 
 impl PropState {
-    fn from_str(text: &str) -> anyhow::Result<Self> {
+    fn from_str(text: &str) -> eyre::Result<Self> {
         match text {
             "Idle"  => Ok(PropState::Idle),
             "Ok"    => Ok(PropState::Ok),
             "Busy"  => Ok(PropState::Busy),
             "Alert" => Ok(PropState::Alert),
-            s       => Err(anyhow::anyhow!("Unknown property state: {}", s)),
+            s       => Err(eyre::eyre!("Unknown property state: {}", s)),
         }
     }
 }
@@ -254,12 +252,12 @@ impl PropState {
 pub enum PropPermition { RO, WO, RW }
 
 impl PropPermition {
-    fn from_str(text: Option<&str>) -> anyhow::Result<Self> {
+    fn from_str(text: Option<&str>) -> eyre::Result<Self> {
         match text {
             Some("ro") => Ok(PropPermition::RO),
             Some("wo") => Ok(PropPermition::WO),
             Some("rw") => Ok(PropPermition::RW),
-            Some(s)    => Err(anyhow::anyhow!("Unknown property permission: {}", s)),
+            Some(s)    => Err(eyre::eyre!("Unknown property permission: {}", s)),
             _          => Ok(PropPermition::RO),
         }
     }
@@ -269,12 +267,12 @@ impl PropPermition {
 pub enum SwitchRule { OneOfMany, AtMostOne, AnyOfMany }
 
 impl SwitchRule {
-    fn from_str(text: &str) -> anyhow::Result<Self> {
+    fn from_str(text: &str) -> eyre::Result<Self> {
         match text {
             "OneOfMany" => Ok(SwitchRule::OneOfMany),
             "AtMostOne" => Ok(SwitchRule::AtMostOne),
             "AnyOfMany" => Ok(SwitchRule::AnyOfMany),
-            s           => Err(anyhow::anyhow!("Unknown switch rule: {}", s)),
+            s           => Err(eyre::eyre!("Unknown switch rule: {}", s)),
         }
     }
 }
@@ -320,7 +318,6 @@ pub struct BlobPropValue {
     pub format:  String,
     pub data:    Vec<u8>,
     pub dl_time: f64,
-    pub shot_id: Option<u64>,
 }
 
 impl PartialEq for BlobPropValue {
@@ -534,7 +531,7 @@ impl Property {
         xml:       xmltree::Element,
         dev_name:  &Arc<String>,
         prop_name: &str
-    ) -> anyhow::Result<Self> {
+    ) -> eyre::Result<Self> {
         let mut xml = xml;
         let type_ = match xml.name.as_str() {
             "defTextVector" => PropType::Text,
@@ -545,7 +542,7 @@ impl Property {
             },
             "defBLOBVector" => PropType::Blob,
             "defLightVector" => PropType::Light,
-            s => anyhow::bail!("Unknown vector: {}", s),
+            s => eyre::bail!("Unknown vector: {}", s),
         };
 
         let label = xml.attributes.remove("label");
@@ -579,7 +576,7 @@ impl Property {
                     let step = child.attributes.get("step").map(|v| v.parse::<f64>().unwrap_or(0.0));
                     let value = child
                         .get_text()
-                        .ok_or_else(||anyhow::anyhow!("{} without value", child.name))?
+                        .ok_or_else(||eyre::eyre!("{} without value", child.name))?
                         .trim()
                         .parse::<f64>()?;
                     PropValue::Num(NumPropValue{ value, min, max, step, format: Arc::new(format) })
@@ -587,7 +584,7 @@ impl Property {
                 "defSwitch" => {
                     let value = child
                         .get_text()
-                        .ok_or_else(||anyhow::anyhow!("{} without value", child.name))?
+                        .ok_or_else(||eyre::eyre!("{} without value", child.name))?
                         .trim()
                         .eq_ignore_ascii_case("On");
                     PropValue::Switch(value)
@@ -595,7 +592,7 @@ impl Property {
                 "defLight" => {
                     let value = child
                         .get_text()
-                        .ok_or_else(||anyhow::anyhow!("{} without value", child.name))?
+                        .ok_or_else(||eyre::eyre!("{} without value", child.name))?
                         .trim()
                         .to_string();
                     PropValue::Light(Arc::new(value))
@@ -605,12 +602,11 @@ impl Property {
                         format:  String::new(),
                         data:    Vec::new(),
                         dl_time: 0.0,
-                        shot_id: None,
                     };
                     PropValue::Blob(Arc::new(value))
                 },
                 other =>
-                    anyhow::bail!("Unknown tag `{}`", other),
+                    eyre::bail!("Unknown tag `{}`", other),
             };
             items.push(PropElement {
                 name: Arc::new(name),
@@ -636,12 +632,11 @@ impl Property {
 
     fn update_data_from_xml_and_return_changes(
         &mut self,
-        xml:             &mut xmltree::Element,
-        mut blobs:       Vec<XmlStreamReaderBlob>,
-        device_name:     &str, // for error message
-        prop_name:       &str, // same
-        shot_ids_by_dev: &ShotIdsByCCD,
-    ) -> anyhow::Result<(bool, Vec<(Arc<String>, PropValue)>)> {
+        xml:         &mut xmltree::Element,
+        mut blobs:   Vec<XmlStreamReaderBlob>,
+        device_name: &str, // for error message
+        prop_name:   &str, // same
+    ) -> eyre::Result<(bool, Vec<(Arc<String>, PropValue)>)> {
         let mut changed = false;
         if let Some(state_str) = xml.attributes.get("state") {
             let new_state = PropState::from_str(state_str)?;
@@ -685,7 +680,7 @@ impl Property {
                     PropValue::Num(NumPropValue{ value, .. }) => {
                         let new_value = child
                             .get_text()
-                            .ok_or_else(||anyhow::anyhow!("{} without value", child.name))?
+                            .ok_or_else(||eyre::eyre!("{} without value", child.name))?
                             .trim()
                             .parse::<f64>()?;
                         if *value != new_value {
@@ -697,7 +692,7 @@ impl Property {
                     PropValue::Switch(value) => {
                         let new_value = child
                             .get_text()
-                            .ok_or_else(||anyhow::anyhow!("{} without value", child.name))?
+                            .ok_or_else(||eyre::eyre!("{} without value", child.name))?
                             .trim()
                             .eq_ignore_ascii_case("On");
                         if *value != new_value {
@@ -709,7 +704,7 @@ impl Property {
                     PropValue::Light(value) => {
                         let new_value = child
                             .get_text()
-                            .ok_or_else(||anyhow::anyhow!("{} without value", child.name))?;
+                            .ok_or_else(||eyre::eyre!("{} without value", child.name))?;
                         let new_value = new_value.trim();
                         if **value != new_value {
                             *value = Arc::new(new_value.to_string());
@@ -724,27 +719,21 @@ impl Property {
                                 .get("size")
                                 .map(|size_str| size_str.parse())
                                 .transpose()?
-                                .ok_or_else(|| anyhow::anyhow!(
+                                .ok_or_else(|| eyre::eyre!(
                                     "`size` attribute of `{}` not found",
                                     elem.name
                                 ))?;
                             if blob_size != new_blob.data.len() {
-                                anyhow::bail!(
+                                eyre::bail!(
                                     "Declared size of blob ({}) is not equal real blob size ({})",
                                     blob_size, new_blob.data.len()
                                 );
                             }
 
-                            let key = (device_name.to_string(), CamCcd::from_ccd_prop_name(prop_name));
-                            let shot_ids_by_dev = shot_ids_by_dev.lock().unwrap();
-                            let shot_id = shot_ids_by_dev.get(&key).copied();
-                            drop(shot_ids_by_dev);
-
                             *blob = Arc::new(BlobPropValue {
                                 format:  new_blob.format,
                                 data:    new_blob.data,
                                 dl_time: new_blob.dl_time,
-                                shot_id
                             });
                             changed = true;
                             elem_changed = true;
@@ -757,7 +746,7 @@ impl Property {
                     changed_values.push((Arc::clone(&elem.name), changed_elem_value));
                 }
             } else {
-                anyhow::bail!(
+                eyre::bail!(
                     "Element `{}` of property {} of device `{}` not found",
                     elem_name, prop_name, device_name
                 );
@@ -1271,8 +1260,6 @@ pub struct Connection {
     devices:         Arc<Mutex<Devices>>,
     subscriptions:   Arc<Mutex<Subscriptions>>,
     drivers_started: AtomicBool,
-    shot_ids_by_dev: ShotIdsByCCD,
-    last_shot_id:    AtomicU64,
 }
 
 impl Connection {
@@ -1291,10 +1278,6 @@ impl Connection {
                 Mutex::new(Subscriptions::new())
             ),
             drivers_started: AtomicBool::new(false),
-            shot_ids_by_dev: Arc::new(Mutex::new(
-                HashMap::new())
-            ),
-            last_shot_id: AtomicU64::new(0),
         }
     }
 
@@ -1325,7 +1308,7 @@ impl Connection {
     fn start_indi_server(
         exe:     &str,
         drivers: &[String],
-    ) -> anyhow::Result<Child> {
+    ) -> eyre::Result<Child> {
         // Start indiserver process
         let mut child = Command::new(exe)
             .args(drivers)
@@ -1355,13 +1338,13 @@ impl Connection {
                     if let Some(space_pos) = err_text.find(" ") {
                         err_text = &err_text[space_pos..];
                     }
-                    anyhow::bail!(
+                    eyre::bail!(
                         "Process `{}` terminated with code `{}` and text `{}`",
                         exe, status.code().unwrap_or(0), err_text
                     );
                 }
             }
-            anyhow::bail!(
+            eyre::bail!(
                 "Process `{}` terminated with code `{}`",
                 exe, status.code().unwrap_or(0)
             );
@@ -1505,7 +1488,6 @@ impl Connection {
                         &self_.devices,
                         stream,
                         XmlSender { xml_sender },
-                        &self_.shot_ids_by_dev
                     );
                     receiver.main(events_sender_clone);
                     log::info!("Exit read_thread");
@@ -2334,18 +2316,14 @@ impl Connection {
         device_name: &str,
         ccd:         CamCcd,
         exposure:    f64
-    ) -> Result<u64> {
-        let short_id = self.last_shot_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut shot_ids_by_dev = self.shot_ids_by_dev.lock().unwrap();
-        shot_ids_by_dev.insert((device_name.to_string(), ccd), short_id);
-        drop(shot_ids_by_dev);
+    ) -> Result<()> {
         let (prop_name, prop_elem) = Self::exposure_prop_name(ccd);
         self.command_set_num_property(
             device_name,
             prop_name,
             &[(prop_elem, exposure)]
         )?;
-        Ok(short_id)
+        Ok(())
     }
 
     pub fn camera_abort_exposure(
@@ -2560,17 +2538,17 @@ impl Connection {
     pub fn camera_get_heater_items(
         &self,
         device_name: &str
-    ) -> Result<Option<Vec<(Arc<String>, Arc<String>)>>> {
+    ) -> Result<Vec<(Arc<String>, Arc<String>)>> {
         let devices = self.devices.lock().unwrap();
         let (prop_name, _) = devices.existing_prop_name(
             device_name,
             PROP_CAM_HEAT_CTRL_LIST
         )?;
         let device = devices.find_by_name_res(device_name)?;
-        let Some(prop) = device.get_property_opt(prop_name) else {
-            return Ok(None);
-        };
-        Ok(Some(prop.elements
+        let prop = device
+            .get_property_opt(prop_name)
+            .ok_or_else(|| Error::PropertyNotExists(device_name.to_string(), prop_name.to_string()))?;
+        Ok(prop.elements
             .iter()
             .map(|e| {
                 let name = Arc::clone(&e.name);
@@ -2578,7 +2556,7 @@ impl Connection {
                 (name, caption)
             })
             .collect()
-        ))
+        )
     }
 
     pub fn camera_set_heater_str(
@@ -2992,7 +2970,7 @@ impl Connection {
         }
     }
 
-    pub fn camera_set_frame_size(
+    pub fn camera_set_frame(
         &self,
         device_name: &str,
         cam_ccd:     CamCcd,
@@ -3901,24 +3879,19 @@ struct XmlReceiver {
     stream:          TcpStream,
     reader:          XmlStreamReader,
     xml_sender:      XmlSender,
-    shot_ids_by_dev: ShotIdsByCCD,
-    active_shot_ids: ShotIdsByCCD,
 }
 
 impl XmlReceiver {
     fn new(
-        conn_state:      &Arc<Mutex<ConnState>>,
-        devices:         &Arc<Mutex<Devices>>,
-        stream:          TcpStream,
-        xml_sender:      XmlSender,
-        shot_ids_by_dev: &ShotIdsByCCD,
+        conn_state: &Arc<Mutex<ConnState>>,
+        devices:    &Arc<Mutex<Devices>>,
+        stream:     TcpStream,
+        xml_sender: XmlSender,
     ) -> Self {
         Self {
-            conn_state:      Arc::clone(conn_state),
-            devices:         Arc::clone(devices),
-            reader:          XmlStreamReader::new(),
-            shot_ids_by_dev: Arc::clone(shot_ids_by_dev),
-            active_shot_ids: Arc::new(Mutex::new(HashMap::new())),
+            conn_state: Arc::clone(conn_state),
+            devices:    Arc::clone(devices),
+            reader:     XmlStreamReader::new(),
             stream,
             xml_sender,
         }
@@ -4138,23 +4111,12 @@ impl XmlReceiver {
         len:           Option<usize>,
         events_sender: &mpsc::Sender<EventSenderEvent>
     ) {
-        let ccd = CamCcd::from_ccd_prop_name(prop_name);
-        let shot_ids_by_dev = self.shot_ids_by_dev.lock().unwrap();
-        let shot_id = shot_ids_by_dev.get(&(device_name.to_string(), ccd)).copied();
-        drop(shot_ids_by_dev);
-
-        if let Some(shot_id) = shot_id {
-            let mut active_shot_ids = self.active_shot_ids.lock().unwrap();
-            active_shot_ids.insert((device_name.to_string(), ccd), shot_id);
-        }
-
         events_sender.send(EventSenderEvent::Mess(Event::BlobStart(BlobStartEvent {
             device_name: Arc::clone(device_name),
             prop_name:   Arc::clone(prop_name),
             elem_name:   Arc::clone(elem_name),
             format:      Arc::new(format.to_string()),
             len,
-            shot_id
         }))).unwrap();
     }
 
@@ -4163,13 +4125,13 @@ impl XmlReceiver {
         xml_text:      &str,
         blobs:         Vec<XmlStreamReaderBlob>,
         events_sender: &mpsc::Sender<EventSenderEvent>
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let mut xml_elem = xmltree::Element::parse(xml_text.as_bytes())?;
         if xml_elem.name.starts_with("def") { // defXXXXVector
             // New property from INDI server
             let device_name = xml_elem.attr_string_or_err("device")?;
             if device_name.is_empty() {
-                anyhow::bail!("Empty device name");
+                eyre::bail!("Empty device name");
             }
             let mut devices = self.devices.lock().unwrap();
 
@@ -4220,11 +4182,11 @@ impl XmlReceiver {
             devices.change_id += 1;
             let change_id = devices.change_id;
             let Some(device) = devices.find_by_name_opt_mut(&device_name) else {
-                anyhow::bail!(Error::DeviceNotExists(device_name));
+                eyre::bail!(Error::DeviceNotExists(device_name));
             };
             let device_name = Arc::clone(&device.name);
             let Some(property) = device.get_property_opt_mut(&prop_name) else {
-                anyhow::bail!(Error::PropertyNotExists(
+                eyre::bail!(Error::PropertyNotExists(
                     device_name.to_string(),
                     prop_name
                 ));
@@ -4236,7 +4198,6 @@ impl XmlReceiver {
                 blobs,
                 &device_name,
                 &prop_name,
-                &self.active_shot_ids,
             )?;
             if prop_changed {
                 let prop_name = Arc::clone(&property.name);
@@ -4262,7 +4223,7 @@ impl XmlReceiver {
             let mut devices = self.devices.lock().unwrap();
             if let Some(prop_name) = xml_elem.attributes.remove("name") {
                 let Some(device) = devices.find_by_name_opt_mut(&device_name) else {
-                    anyhow::bail!(Error::DeviceNotExists(device_name));
+                    eyre::bail!(Error::DeviceNotExists(device_name));
                 };
                 let dev_name_arc = Arc::clone(&device.name);
                 let removed_prop = device.remove_property(&prop_name)
@@ -4278,7 +4239,7 @@ impl XmlReceiver {
             } else {
                 let drv_info = devices.get_driver_info(&device_name)?;
                 let Some(removed) = devices.remove(&device_name) else {
-                    anyhow::bail!(Error::DeviceNotExists(device_name));
+                    eyre::bail!(Error::DeviceNotExists(device_name));
                 };
                 self.notify_subcribers_about_device_delete(
                     timestamp,
