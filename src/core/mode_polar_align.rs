@@ -3,7 +3,7 @@ use std::{any::Any, f64::consts::PI, sync::{Arc, RwLock}};
 use chrono::{NaiveDateTime, Utc};
 
 use crate::{
-    core::{cam_starter::CamStarter, core::*, frame_processing::*}, hal::{FrameType, indi::{self, degree_to_str}}, image::{image::*, stars::StarItems}, options::*, plate_solve::*, sky_math::{math::*, solar_system::calc_atmospheric_refraction}
+    core::{cam_starter::take_shot, core::*, frame_processing::*}, hal::{Camera, FrameType, Hal, indi::{self, degree_to_str}}, image::{image::*, stars::StarItems}, options::*, plate_solve::*, sky_math::{math::*, solar_system::calc_atmospheric_refraction}
 };
 
 use super::{consts::*, events::*, utils::{check_telescope_is_at_desired_position, gain_to_value}};
@@ -227,10 +227,10 @@ pub enum PolarAlignmentEvent {
 }
 
 pub struct PolarAlignMode {
+    camera:       Arc<dyn Camera + Send + Sync>,
     state:        State,
     step:         Step,
-    camera:       DeviceAndProp,
-    cam_starter:  Arc<CamStarter>,
+    camera_dev:   DeviceAndProp,
     mount:        String,
     cam_opts:     CamOptions,
     pa_opts:      PloarAlignOptions,
@@ -358,8 +358,8 @@ impl PolarAlignMode {
     }
 
     pub fn new(
+        hal:         &Hal,
         indi:        &Arc<indi::Connection>,
-        cam_starter: &Arc<CamStarter>,
         cur_frame:   &Arc<ResultImage>,
         options:     &Arc<RwLock<Options>>,
         subscribers: &Arc<Events>,
@@ -369,6 +369,8 @@ impl PolarAlignMode {
             eyre::bail!("Camera is not selected");
         };
 
+        let camera = hal.camera(&opts.cam.device_id)?;
+
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;
         cam_opts.frame.exp_main = opts.plate_solver.exposure;
@@ -376,17 +378,14 @@ impl PolarAlignMode {
         cam_opts.frame.gain = gain_to_value(
             opts.plate_solver.gain,
             opts.cam.frame.gain,
-            cam_device,
-            indi
-        )?;
+            camera.gain_range()?
+        );
 
         let plate_solver = PlateSolver::new(opts.plate_solver.solver);
 
         Ok(Self{
             state:       State::Undefined,
             step:        Step::Undefined,
-            camera:      cam_device.clone(),
-            cam_starter: Arc::clone(&cam_starter),
             mount:       opts.mount.device.clone(),
             pa_opts:     opts.polar_align.clone(),
             s_opts:      opts.site.clone(),
@@ -399,18 +398,15 @@ impl PolarAlignMode {
             image_time:  None,
             initial_crd: None,
             step_cnt:    0,
+            camera_dev:  cam_device.clone(),
+            camera,
             cam_opts,
             plate_solver
         })
     }
 
     fn start_capture(&mut self) -> eyre::Result<()> {
-        self.cam_starter.take_shot_old(
-            self.get_type(),
-            &self.camera,
-            &self.cam_opts.frame,
-            &self.cam_opts.ctrl
-        )?;
+        take_shot(&self.camera, &self.cam_opts.frame, &self.cam_opts.ctrl)?;
         self.image_time = Some(Utc::now().naive_utc());
         Ok(())
     }
@@ -518,7 +514,7 @@ impl PolarAlignMode {
         drop(options);
 
         let event = PlateSolverEvent {
-            cam_name: self.camera.name.clone(),
+            cam_name: self.camera_dev.name.clone(),
             result: ps_result.clone(),
             preview: preview.map(Arc::new),
         };
@@ -686,8 +682,12 @@ impl Mode for PolarAlignMode {
         }.to_string()
     }
 
-    fn cam_device(&self) -> Option<&DeviceAndProp> {
+    fn camera(&self) -> Option<&Arc<dyn Camera + Send + Sync>> {
         Some(&self.camera)
+    }
+
+    fn cam_device(&self) -> Option<&DeviceAndProp> {
+        Some(&self.camera_dev)
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
@@ -737,7 +737,7 @@ impl Mode for PolarAlignMode {
     }
 
     fn abort(&mut self) -> eyre::Result<()> {
-        _ = self.cam_starter.abort(&self.camera);
+        _ = self.camera.abort_exposure();
         _ = self.indi.mount_abort_motion(&self.mount);
         self.plate_solver.abort();
         self.state = State::Undefined;

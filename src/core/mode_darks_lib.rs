@@ -2,7 +2,7 @@ use std::{collections::VecDeque, sync::{Arc, Mutex, RwLock}};
 
 use crate::{
     core::{frame_processing::*, mode_camera::{CameraMode, TackingPicturesMode}, mode_waiting::WaitingMode},
-    hal::indi,
+    hal::{Camera, Hal},
    options::*
 };
 
@@ -34,11 +34,10 @@ pub struct MasterFileCreationProgramItem {
 }
 
 pub struct DarkCreationMode {
+    camera:      Arc<dyn Camera + Send + Sync>,
     mode:        DarkLibMode,
     calibr_data: Arc<Mutex<CalibrData>>,
-    indi:        Arc<indi::Connection>,
     program:     Vec<MasterFileCreationProgramItem>,
-    device:      DeviceAndProp,
     index:       usize,
     state:       State,
     temperature: VecDeque<f64>,
@@ -46,23 +45,20 @@ pub struct DarkCreationMode {
 
 impl DarkCreationMode {
     pub fn new(
+        hal:         &Hal,
         mode:        DarkLibMode,
         calibr_data: &Arc<Mutex<CalibrData>>,
         options:     &Arc<RwLock<Options>>,
-        indi:        &Arc<indi::Connection>,
         program:     &[MasterFileCreationProgramItem]
     ) -> eyre::Result<Self> {
         let opts = options.read().unwrap();
-        let Some(cam_device) = &opts.cam.device else {
-            eyre::bail!("Camera is not selected");
-        };
+        let camera = hal.camera(&opts.cam.device_id)?;
 
         Ok(Self {
+            camera,
             mode,
             calibr_data: Arc::clone(calibr_data),
-            indi:        Arc::clone(indi),
             program:     program.to_vec(),
-            device:      cam_device.clone(),
             index:       0,
             state:       State::Undefined,
             temperature: VecDeque::new(),
@@ -147,7 +143,7 @@ impl Mode for DarkCreationMode {
 
                 if let Some(temperature) = item.temperature {
                     self.temperature.clear();
-                    self.indi.camera_set_temperature(&self.device.name, temperature)?;
+                    self.camera.set_temperature(Some(temperature))?;
                     self.state = State::WaitingForTemperature(temperature);
                     result = NotifyResult::ProgressChanges;
                 } else {
@@ -156,9 +152,7 @@ impl Mode for DarkCreationMode {
             }
 
             State::WaitingForTemperature(desired_temperature) => {
-                let temperature = self.indi.camera_get_temperature_prop_value(
-                    &self.device.name
-                )?.value;
+                let temperature = self.camera.temperature()?;
 
                 self.temperature.push_back(temperature);
                 if self.temperature.len() * timer_period_ms > WAIT_TEMERATURE_TIME * 1000 {

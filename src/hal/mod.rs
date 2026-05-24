@@ -125,11 +125,13 @@ pub trait Camera : Device {
     // Exposure
     fn exposure_range(&self) -> eyre::Result<Range<f64>>;
     fn start_exposure(&self, value: f64) -> eyre::Result<()>;
+    fn abort_exposure(&self) -> eyre::Result<()>;
 
     // Frame type
     fn set_frame_type(&self, frame_type: FrameType) -> eyre::Result<()>;
 
     // Frame
+    fn pixel_size_um(&self) -> eyre::Result<(f64, f64)>;
     fn is_frame_supported(&self) -> eyre::Result<bool>;
     fn ccd_size(&self) -> eyre::Result<(usize, usize)>;
     fn set_frame(&self, x: usize, y: usize, width: usize, height: usize) -> eyre::Result<()>;
@@ -151,6 +153,7 @@ pub trait Camera : Device {
 
     // Cooler
     fn is_cooler_supported(&self) -> eyre::Result<bool>;
+    fn temperature(&self) -> eyre::Result<f64>;
     fn temperature_range(&self) -> eyre::Result<Range<f64>>;
     fn set_temperature(&self, temperature: Option<f64>) -> eyre::Result<()>;
 

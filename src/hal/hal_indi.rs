@@ -217,6 +217,11 @@ impl Camera for IndiCamera {
         Ok(())
     }
 
+    fn abort_exposure(&self) -> eyre::Result<()> {
+        self.indi.camera_abort_exposure(&self.name, self.ccd)?;
+        Ok(())
+    }
+
     // Frame type
 
     fn set_frame_type(&self, frame_type: FrameType) -> eyre::Result<()> {
@@ -238,6 +243,10 @@ impl Camera for IndiCamera {
     }
 
     // Frame
+
+    fn pixel_size_um(&self) -> eyre::Result<(f64, f64)> {
+        Ok(self.indi.camera_get_pixel_size_um(&self.name, self.ccd)?)
+    }
 
     fn is_frame_supported(&self) -> eyre::Result<bool> {
         Ok(self.indi.camera_is_frame_supported(&self.name, self.ccd)?)
@@ -321,6 +330,10 @@ impl Camera for IndiCamera {
 
     fn is_cooler_supported(&self) -> eyre::Result<bool> {
         Ok(self.indi.camera_is_cooler_supported(&self.name)?)
+    }
+
+    fn temperature(&self) -> eyre::Result<f64> {
+        Ok(self.indi.camera_get_temperature_prop_value(&self.name)?.value)
     }
 
     fn temperature_range(&self) -> eyre::Result<Range<f64>> {

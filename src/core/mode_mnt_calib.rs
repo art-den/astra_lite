@@ -1,7 +1,7 @@
 use std::{sync::{Arc, RwLock}, f64::consts::PI};
 use itertools::Itertools;
 use crate::{
-    core::cam_starter::CamStarter, hal::{FrameType, indi}, image::{stars::*, stars_offset::*}, options::*, utils::math::*
+    core::cam_starter::take_shot, hal::{Camera, FrameType, Hal, indi}, image::{stars::*, stars_offset::*}, options::*, utils::math::*
 };
 use super::{consts::*, core::*, events::*, frame_processing::*, utils::*};
 
@@ -39,16 +39,16 @@ impl MountMoveCalibrRes {
 }
 
 pub struct MountCalibrMode {
+    camera:            Arc<dyn Camera + Send + Sync>,
     indi:              Arc<indi::Connection>,
     state:             State,
     axis:              Axis,
     cam_opts:          CamOptions,
-    cam_starter:       Arc<CamStarter>,
     telescope:         TelescopeOptions,
     start_dec:         f64,
     start_ra:          f64,
     mount_device:      String,
-    camera:            DeviceAndProp,
+    camera_dev:        DeviceAndProp,
     attempt_num:       usize,
     attempts:          Vec<CalibrAtempt>,
     image_width:       usize,
@@ -81,12 +81,15 @@ struct CalibrAtempt {
 
 impl MountCalibrMode {
     pub fn new(
-        indi:        &Arc<indi::Connection>,
-        cam_starter: &Arc<CamStarter>,
-        options:     &Arc<RwLock<Options>>,
-        next_mode:   Option<Box<dyn Mode + Sync + Send>>,
+        hal:       &Hal,
+        indi:      &Arc<indi::Connection>,
+        options:   &Arc<RwLock<Options>>,
+        next_mode: Option<Box<dyn Mode + Sync + Send>>,
     ) -> eyre::Result<Self> {
         let opts = options.read().unwrap();
+
+        let camera = hal.camera(&opts.cam.device_id)?;
+
         let Some(cam_device) = &opts.cam.device else {
             eyre::bail!("Camera is not selected");
         };
@@ -96,10 +99,10 @@ impl MountCalibrMode {
         cam_opts.frame.gain = gain_to_value(
             opts.guiding.main_cam.calibr_gain,
             opts.cam.frame.gain,
-            cam_device,
-            indi
-        )?;
+            camera.gain_range()?
+        );
         Ok(Self {
+            camera:            Arc::clone(&camera),
             indi:              Arc::clone(indi),
             state:             State::Undefined,
             axis:              Axis::Undefined,
@@ -107,8 +110,7 @@ impl MountCalibrMode {
             start_dec:         0.0,
             start_ra:          0.0,
             mount_device:      opts.mount.device.clone(),
-            camera:            cam_device.clone(),
-            cam_starter:       Arc::clone(cam_starter),
+            camera_dev:        cam_device.clone(),
             attempt_num:       0,
             attempts:          Vec::new(),
             image_width:       0,
@@ -123,8 +125,7 @@ impl MountCalibrMode {
     }
 
     fn start_for_axis(&mut self, axis: Axis) -> eyre::Result<()> {
-        self.cam_starter.take_shot_old(
-            self.get_type(),
+        take_shot(
             &self.camera,
             &self.cam_opts.frame,
             &self.cam_opts.ctrl
@@ -244,9 +245,7 @@ impl MountCalibrMode {
             if self.image_width == 0 || self.image_height == 0 {
                 self.image_width = info.image.width;
                 self.image_height = info.image.height;
-                let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.camera.prop);
-                if let Ok((pix_size_x, pix_size_y))
-                = self.indi.camera_get_pixel_size_um(&self.camera.name, cam_ccd) {
+                if let Ok((pix_size_x, pix_size_y)) = self.camera.pixel_size_um() {
                     let min_size = f64::min(info.image.width as f64, info.image.height as f64);
                     let min_pix_size = f64::min(pix_size_x, pix_size_y);
                     let cam_size_mm = min_size * min_pix_size / 1000.0;
@@ -290,12 +289,7 @@ impl MountCalibrMode {
                 self.state = State::WaitForSlew(0);
             }
         } else {
-            self.cam_starter.take_shot_old(
-                self.get_type(),
-                &self.camera,
-                &self.cam_opts.frame,
-                &self.cam_opts.ctrl
-            )?;
+            take_shot(&self.camera, &self.cam_opts.frame, &self.cam_opts.ctrl)?;
         }
         Ok(result)
     }
@@ -330,8 +324,12 @@ impl Mode for MountCalibrMode {
         self.next_mode.take()
     }
 
-    fn cam_device(&self) -> Option<&DeviceAndProp> {
+    fn camera(&self) -> Option<&Arc<dyn Camera + Send + Sync>> {
         Some(&self.camera)
+    }
+
+    fn cam_device(&self) -> Option<&DeviceAndProp> {
+        Some(&self.camera_dev)
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
@@ -374,8 +372,7 @@ impl Mode for MountCalibrMode {
                     *ok_time_ms += timer_period_ms;
                     if *ok_time_ms >= AFTER_MOUNT_MOVE_WAIT_TIME * 1000 {
                         self.indi.mount_abort_motion(&self.mount_device)?;
-                        self.cam_starter.take_shot_old(
-                            self.get_type(),
+                        take_shot(
                             &self.camera,
                             &self.cam_opts.frame,
                             &self.cam_opts.ctrl

@@ -10,7 +10,7 @@ use itertools::Itertools;
 use crate::{
     core::{cam_starter::CamStarter,  cam_watchdog::CameraWatchdog, dev_watchdog::DevicesWatchdog},
     guiding::external_guider::*,
-    hal::{FrameType, Hal, indi},
+    hal::{Camera, FrameType, Hal, indi},
     options::*,
     sky_math::math::EqCoord,
     utils::timer::*,
@@ -56,6 +56,7 @@ pub trait Mode {
     fn get_type(&self) -> ModeType;
     fn progress_string(&self) -> String;
     fn cam_device(&self) -> Option<&DeviceAndProp> { None }
+    fn camera(&self) -> Option<&Arc<dyn Camera + Send + Sync>> { None }
     fn progress(&self) -> Option<Progress> { None }
     fn get_cur_exposure(&self) -> Option<f64> { None }
     fn can_be_stopped(&self) -> bool { true }
@@ -195,10 +196,6 @@ impl Core {
 
     pub fn options(&self) -> &Arc<RwLock<Options>> {
         &self.options
-    }
-
-    pub fn cam_starter(&self) -> &Arc<CamStarter> {
-        &self.cam_starter
     }
 
     pub fn events(&self) -> &Arc<Events> {
@@ -807,8 +804,8 @@ impl Core {
 
     pub fn start_focusing(&self) -> eyre::Result<()> {
         let mode = FocusingMode::new(
+            &self.hal,
             &self.indi,
-            &self.cam_starter,
             &self.options,
             &self.events,
             None,
@@ -821,8 +818,8 @@ impl Core {
 
     pub fn start_mount_calibr(&self) -> eyre::Result<()> {
         let mode = MountCalibrMode::new(
+            &self.hal,
             &self.indi,
-            &self.cam_starter,
             &self.options,
             None
         )?;
@@ -836,10 +833,10 @@ impl Core {
         program: &[MasterFileCreationProgramItem]
     ) -> eyre::Result<()> {
         let mode = DarkCreationMode::new(
+            &self.hal,
             dark_lib_mode,
             &self.calibr_data,
             &self.options,
-            &self.indi,
             program
         )?;
         self.start_new_mode(mode, false, false)?;
@@ -852,8 +849,8 @@ impl Core {
         config:   GotoConfig,
     ) -> eyre::Result<()> {
         let mode = GotoMode::new(
+            &self.hal,
             &self.indi,
-            &self.cam_starter,
             GotoDestination::Coord(*eq_coord),
             config,
             &self.options,
@@ -876,8 +873,8 @@ impl Core {
         };
         self.mode.write().unwrap().active.abort()?;
         let mode = GotoMode::new(
+            &self.hal,
             &self.indi,
-            &self.cam_starter,
             GotoDestination::Image{
                 image: Arc::clone(&self.cur_frame.image),
                 info: Arc::clone(&light_frame_info.image),
@@ -894,9 +891,9 @@ impl Core {
 
     pub fn start_capture_and_platesolve(&self) -> eyre::Result<()> {
         let mode = PlatesolveMode::new(
+            &self.hal,
             &self.indi,
             &self.events,
-            &self.cam_starter,
             &self.options,
             &self.cur_frame,
             &self.events,
@@ -907,8 +904,8 @@ impl Core {
 
     pub fn start_polar_alignment(&self) -> eyre::Result<()> {
         let mode = PolarAlignMode::new(
+            &self.hal,
             &self.indi,
-            &self.cam_starter,
             &self.cur_frame,
             &self.options,
             &self.events,

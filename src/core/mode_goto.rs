@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 use crate::{
-    core::{cam_starter::CamStarter, consts::*, events::*, frame_processing::*}, hal::{FrameType, indi}, image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point}, options::*, plate_solve::*, sky_math::math::*
+    core::{cam_starter::take_shot, consts::*, events::*, frame_processing::*}, hal::{Camera, FrameType, Hal, indi}, image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point}, options::*, plate_solve::*, sky_math::math::*
 };
 use super::{core::*, events::Events, utils::*};
 
@@ -37,12 +37,12 @@ pub enum GotoConfig {
 }
 
 pub struct GotoMode {
+    camera:       Option<Arc<dyn Camera + Send + Sync>>,
     state:        State,
     destination:  GotoDestination,
     config:       GotoConfig,
     eq_coord:     EqCoord,
-    camera:       Option<DeviceAndProp>,
-    cam_starter:  Arc<CamStarter>,
+    camera_dev:   Option<DeviceAndProp>,
     cam_opts:     Option<CamOptions>,
     ps_opts:      PlateSolverOptions,
     mount:        String,
@@ -59,8 +59,8 @@ pub struct GotoMode {
 
 impl GotoMode {
     pub fn new(
+        hal:         &Hal,
         indi:        &Arc<indi::Connection>,
-        cam_starter: &Arc<CamStarter>,
         destination: GotoDestination,
         config:      GotoConfig,
         options:     &Arc<RwLock<Options>>,
@@ -68,10 +68,12 @@ impl GotoMode {
         subscribers: &Arc<Events>,
     ) -> eyre::Result<Self> {
         let opts = options.read().unwrap();
-        let (camera, cam_opts, plate_solver) = if config == GotoConfig::GotoPlateSolveAndCorrect {
-            let Some(camera) = opts.cam.device.clone() else {
+        let (camera, camera_dev, cam_opts, plate_solver) = if config == GotoConfig::GotoPlateSolveAndCorrect {
+            let Some(camera_dev) = opts.cam.device.clone() else {
                 eyre::bail!("Camera is not selected!");
             };
+
+            let camera = hal.camera(&opts.cam.device_id)?;
             let mut cam_opts = opts.cam.clone();
             cam_opts.frame.frame_type = FrameType::Lights;
             cam_opts.frame.exp_main = opts.plate_solver.exposure;
@@ -79,19 +81,18 @@ impl GotoMode {
             cam_opts.frame.gain = gain_to_value(
                 opts.plate_solver.gain,
                 opts.cam.frame.gain,
-                &camera,
-                indi
-            )?;
+                camera.gain_range()?
+            );
             let plate_solver = PlateSolver::new(opts.plate_solver.solver);
 
-            (Some(camera), Some(cam_opts), Some(plate_solver))
+            (Some(camera), Some(camera_dev), Some(cam_opts), Some(plate_solver))
         } else {
-            (None, None, None)
+            (None, None, None, None)
         };
 
         Ok(Self {
+            camera_dev:      camera_dev.clone(),
             state:           State::None,
-            cam_starter:     Arc::clone(&cam_starter),
             eq_coord:        EqCoord::default(),
             ps_opts:         opts.plate_solver.clone(),
             mount:           opts.mount.device.clone(),
@@ -164,12 +165,7 @@ impl GotoMode {
         let camera = self.camera.as_ref().unwrap();
 
         log::debug!("Tacking picture for plate solve with {:?}", &cam_opts.frame);
-        self.cam_starter.take_shot_old(
-            self.get_type(),
-            camera,
-            &cam_opts.frame,
-            &cam_opts.ctrl
-        )?;
+        take_shot(&camera, &cam_opts.frame, &cam_opts.ctrl)?;
         Ok(())
     }
 
@@ -215,7 +211,7 @@ impl GotoMode {
         action: ProcessPlateSolverResultAction,
     ) -> eyre::Result<bool> {
         let plate_solver = self.plate_solver.as_mut().unwrap();
-        let camera = self.camera.as_ref().unwrap();
+        let camera_dev = self.camera_dev.as_ref().unwrap();
 
         let result = match plate_solver.get_result()? {
             PlateSolveResult::Waiting => return Ok(false),
@@ -232,7 +228,7 @@ impl GotoMode {
         drop(options);
 
         let event = PlateSolverEvent {
-            cam_name: camera.name.clone(),
+            cam_name: camera_dev.name.clone(),
             result: result.clone(),
             preview: preview.map(Arc::new),
         };
@@ -342,13 +338,12 @@ impl Mode for GotoMode {
         }
     }
 
+    fn camera(&self) -> Option<&Arc<dyn Camera + Send + Sync>> {
+        self.camera.as_ref()
+    }
+
     fn cam_device(&self) -> Option<&DeviceAndProp> {
-        match self.config {
-            GotoConfig::GotoPlateSolveAndCorrect =>
-                self.camera.as_ref(),
-            GotoConfig::OnlyGoto =>
-                None,
-        }
+        self.camera_dev.as_ref()
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
@@ -400,7 +395,7 @@ impl Mode for GotoMode {
 
     fn abort(&mut self) -> eyre::Result<()> {
         if let Some(camera) = &self.camera {
-            _ = self.cam_starter.abort(&camera);
+            _ = camera.abort_exposure();
         }
         _ = self.indi.mount_abort_motion(&self.mount);
         self.state = State::None;

@@ -1,4 +1,4 @@
-use std::{path::{Path, PathBuf}, sync::Arc};
+use std::{ops::Range, path::{Path, PathBuf}, sync::Arc};
 
 use chrono::{DateTime, Utc};
 
@@ -316,22 +316,19 @@ impl FileNameUtils {
     fn bin_to_str(bin: i32) -> String {
         format!("bin{0}x{0}", bin)
     }
-
 }
 
 pub fn gain_to_value(
-    gain:     Gain,
-    cur_gain: f64,
-    camera:   &DeviceAndProp,
-    indi:     &indi::Connection
-) -> eyre::Result<f64> {
-    let calc_gain = |part| -> eyre::Result<f64> {
-        let prop = indi.camera_get_gain_prop_value(&camera.name)?;
-        Ok(part * (prop.max - prop.min) + prop.min)
+    gain:       Gain,
+    cur_gain:   f64,
+    gain_range: Range<f64>,
+) -> f64 {
+    let calc_gain = |part| -> f64 {
+        part * (gain_range.end - gain_range.start) + gain_range.start
     };
 
     match gain {
-        Gain::Same => Ok(cur_gain),
+        Gain::Same => cur_gain,
         Gain::Min => calc_gain(0.0),
         Gain::P25 => calc_gain(0.25),
         Gain::P50 => calc_gain(0.50),

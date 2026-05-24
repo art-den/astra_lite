@@ -5,7 +5,7 @@ use std::{
 use itertools::{izip, Itertools};
 
 use crate::{
-    core::cam_starter::CamStarter, hal::{FrameType, indi}, options::*, utils::math::*
+    core::cam_starter::take_shot, hal::{Camera, FrameType, Hal, indi}, options::*, utils::math::*
 };
 use super::{core::*, events::*, frame_processing::*, utils::*};
 
@@ -41,11 +41,11 @@ enum Stage {
 }
 
 pub struct FocusingMode {
+    camera:         Arc<dyn Camera + Send + Sync>,
     indi:           Arc<indi::Connection>,
     subscribers:    Arc<Events>,
     state:          FocusingState,
-    camera:         DeviceAndProp,
-    cam_starter:    Arc<CamStarter>,
+    camera_dev:     DeviceAndProp,
     f_opts:         FocuserOptions,
     cam_opts:       CamOptions,
     before_pos:     f64,
@@ -102,8 +102,8 @@ enum CalcResult {
 
 impl FocusingMode {
     pub fn new(
+        hal:            &Hal,
         indi:           &Arc<indi::Connection>,
-        cam_starter:    &Arc<CamStarter>,
         options:        &Arc<RwLock<Options>>,
         subscribers:    &Arc<Events>,
         next_mode:      Option<Box<dyn Mode + Sync + Send>>,
@@ -111,18 +111,20 @@ impl FocusingMode {
         error_reaction: FocusingErrorReaction,
     ) -> eyre::Result<Self> {
         let opts = options.read().unwrap();
+        let camera = hal.camera(&opts.cam.device_id)?;
+
         let Some(cam_device) = &opts.cam.device else {
             eyre::bail!("Camera is not selected");
         };
+
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;
         cam_opts.frame.exp_main = opts.focuser.exposure;
         cam_opts.frame.gain = gain_to_value(
             opts.focuser.gain,
             opts.cam.frame.gain,
-            cam_device,
-            indi
-        )?;
+            camera.gain_range()?
+        );
 
         let exposure_u = (cam_opts.frame.exposure() as usize).max(1);
         let max_try = (10 / exposure_u).clamp(1, 3);
@@ -130,9 +132,9 @@ impl FocusingMode {
         log::debug!("Creating autofocus mode. max_try={}", max_try);
 
         Ok(FocusingMode {
+            camera:         Arc::clone(&camera),
             indi:           Arc::clone(indi),
             subscribers:    Arc::clone(subscribers),
-            cam_starter:    Arc::clone(&cam_starter),
             state:          FocusingState::Undefined,
             f_opts:         opts.focuser.clone(),
             before_pos:     0.0,
@@ -145,7 +147,7 @@ impl FocusingMode {
             change_cnt:     0,
             desired_focus:  0.0,
             try_cnt:        0,
-            camera:         cam_device.clone(),
+            camera_dev:     cam_device.clone(),
             start_temp:     0.0,
             start_time:     None,
             prelim_step,
@@ -220,12 +222,7 @@ impl FocusingMode {
                 if cur_focus as i64 == desired_focus as i64 {
                     log::debug!("Taking picture for focuser value: {}", desired_focus);
                     self.change_time_ms = None;
-                    self.cam_starter.take_shot_old(
-                        self.get_type(),
-                        &self.camera,
-                        &self.cam_opts.frame,
-                        &self.cam_opts.ctrl
-                    )?;
+                    take_shot(&self.camera, &self.cam_opts.frame, &self.cam_opts.ctrl)?;
                     self.state = FocusingState::WaitingMeasureFrame(desired_focus);
                 }
             }
@@ -240,12 +237,7 @@ impl FocusingMode {
                 if cur_focus as i64 == desired_focus as i64 {
                     log::debug!("Taking RESULT shot for focuser value: {}", desired_focus);
                     self.change_time_ms = None;
-                    self.cam_starter.take_shot_old(
-                        self.get_type(),
-                        &self.camera,
-                        &self.cam_opts.frame,
-                        &self.cam_opts.ctrl
-                    )?;
+                    take_shot(&self.camera, &self.cam_opts.frame, &self.cam_opts.ctrl)?;
                     self.state = FocusingState::WaitingResultImg(desired_focus);
                     return Ok(NotifyResult::ProgressChanges);
                 }
@@ -319,12 +311,7 @@ impl FocusingMode {
             result = NotifyResult::ProgressChanges;
             log::info!("Stars on received image are not Ok. Taking another image...");
             self.change_time_ms = None;
-            self.cam_starter.take_shot_old(
-                self.get_type(),
-                &self.camera,
-                &self.cam_opts.frame,
-                &self.cam_opts.ctrl
-            )?;
+            take_shot(&self.camera, &self.cam_opts.frame, &self.cam_opts.ctrl)?;
         }
         Ok(result)
     }
@@ -365,12 +352,7 @@ impl FocusingMode {
                 FocuserEvent::Data(event_data)
             ));
         } else {
-            self.cam_starter.take_shot_old(
-                self.get_type(),
-                &self.camera,
-                &self.cam_opts.frame,
-                &self.cam_opts.ctrl
-            )?;
+            take_shot(&self.camera, &self.cam_opts.frame, &self.cam_opts.ctrl)?;
             return Ok(NotifyResult::ProgressChanges);
         }
 
@@ -654,8 +636,12 @@ impl Mode for FocusingMode {
         }
     }
 
-    fn cam_device(&self) -> Option<&DeviceAndProp> {
+    fn camera(&self) -> Option<&Arc<dyn Camera + Send + Sync>> {
         Some(&self.camera)
+    }
+
+    fn cam_device(&self) -> Option<&DeviceAndProp> {
+        Some(&self.camera_dev)
     }
 
     fn progress(&self) -> Option<Progress> {
@@ -686,8 +672,7 @@ impl Mode for FocusingMode {
 
         self.before_pos = cur_pos;
 
-        self.cam_starter.take_shot_old(
-            self.get_type(),
+        take_shot(
             &self.camera,
             &self.cam_opts.frame,
             &self.cam_opts.ctrl
@@ -701,7 +686,7 @@ impl Mode for FocusingMode {
     }
 
     fn abort(&mut self) -> eyre::Result<()> {
-        self.cam_starter.abort(&self.camera)?;
+        self.camera.abort_exposure()?;
         self.indi.focuser_set_abs_value(&self.f_opts.device, self.before_pos, true, None)?;
         Ok(())
     }

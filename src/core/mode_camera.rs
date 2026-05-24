@@ -6,7 +6,7 @@ use std::{
 use chrono::Utc;
 
 use crate::{
-    TimeLogger, core::{cam_starter::CamStarter, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode}, guiding::external_guider::*, hal::{Camera, FrameType, indi}, image::{
+    TimeLogger, core::{cam_starter::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode}, guiding::external_guider::*, hal::{Camera, FrameType, indi}, image::{
         histogram::*,
         raw::{RawImage, RawImageInfo},
         raw_stacker::RawStacker,
@@ -123,7 +123,6 @@ pub struct TackingPicturesMode {
     cam_mode:         CameraMode,
     state:            State,
     device:           DeviceAndProp,
-    cam_starter:      Arc<CamStarter>,
     mount_device:     String,
     fn_gen:           Arc<Mutex<SeqFileNameGen>>,
     indi:             Arc<indi::Connection>,
@@ -226,7 +225,6 @@ impl TackingPicturesMode {
         Ok(Self {
             state:            State::Common,
             device:           cam_device.clone(),
-            cam_starter:      Arc::clone(core.cam_starter()),
             mount_device:     opts.mount.device.to_string(),
             fn_gen:           Arc::new(Mutex::new(SeqFileNameGen::new())),
             indi:             Arc::clone(core.indi()),
@@ -299,12 +297,7 @@ impl TackingPicturesMode {
         frame_options:         FrameOptions,
         store_exp_for_restart: bool
     ) -> eyre::Result<()> {
-        self.cam_starter.take_shot(
-            self.get_type(),
-            &self.camera,
-            &frame_options,
-            &self.cam_options.ctrl
-        )?;
+        take_shot(&self.camera, &frame_options, &self.cam_options.ctrl)?;
         if store_exp_for_restart {
             self.exp_for_restart = Some(frame_options.exposure());
         }
@@ -561,7 +554,6 @@ impl TackingPicturesMode {
             autofocuser.exp_sum = 0.0;
             autofocuser.start_temp = Some(temperature);
             autofocuser.fwhm.clear();
-            self.abort_current_unfinised_exposure()?;
             self.next_job = Some(NextJob::Autofocus);
         }
 
@@ -593,7 +585,6 @@ impl TackingPicturesMode {
         if guider.options.is_used()
         && guider_data.mnt_calibr.is_none()
         && self.next_job.is_none() {
-            self.abort_current_unfinised_exposure()?;
             self.next_job = Some(NextJob::MountCalibration);
             return Ok(());
         }
@@ -644,7 +635,6 @@ impl TackingPicturesMode {
         if let (Some((offset_x, offset_y)), Some(mnt_calibr)) = (move_offset, &guider_data.mnt_calibr) {
             if mnt_calibr.is_ok() && self.next_job.is_none() {
                 if let Some((ra_pulse, dec_pulse)) = mnt_calibr.calc(offset_x, offset_y) {
-                    self.abort_current_unfinised_exposure()?;
                     self.next_job = Some(NextJob::InternalDithering { ra_pulse, dec_pulse });
                 }
             }
@@ -714,7 +704,6 @@ impl TackingPicturesMode {
         if guider.dither_exp_sum >= (guider.options.dith_period * 60) as f64
         && self.next_job.is_none() {
             guider.dither_exp_sum = 0.0;
-            self.abort_current_unfinised_exposure()?;
             self.next_job = Some(NextJob::ExternalDithering);
         }
         Ok(())
@@ -767,7 +756,6 @@ impl TackingPicturesMode {
                     result = NotifyResult::ProgressChanges;
                 }
                 if progress.cur == progress.total {
-                    self.abort_current_unfinised_exposure()?;
                     result = NotifyResult::Finished {
                         next_mode: self.next_mode.take()
                     };
@@ -807,15 +795,14 @@ impl TackingPicturesMode {
             match self.next_job.take() {
                 Some(NextJob::MountCalibration) => {
                     let indi = Arc::clone(&self.indi);
-                    let cam_starter = Arc::clone(&self.cam_starter);
                     let options = Arc::clone(&self.options);
 
                     let start_mode_mnt_calibr_fun = move |_core: &Arc<Core>, mode: &mut ModeData| -> eyre::Result<()> {
                         mode.active.abort()?;
                         let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
                         let mut new_mode = MountCalibrMode::new(
+                            _core.hal(),
                             &indi,
-                            &cam_starter,
                             &options,
                             Some(prev_mode)
                         )?;
@@ -839,15 +826,14 @@ impl TackingPicturesMode {
                 Some(NextJob::Autofocus) => {
                     // Start autofocus mode
                     let indi = Arc::clone(&self.indi);
-                    let cam_starter = Arc::clone(&self.cam_starter);
                     let options = Arc::clone(&self.options);
                     let events = Arc::clone(&self.events);
                     let start_focusing_fun = move |_core: &Arc<Core>, mode: &mut ModeData| -> eyre::Result<()> {
                         mode.active.abort()?;
                         let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
                         let mut new_mode = FocusingMode::new(
+                            _core.hal(),
                             &indi,
-                            &cam_starter,
                             &options,
                             &events,
                             Some(prev_mode),
@@ -1186,12 +1172,6 @@ impl TackingPicturesMode {
             self.cam_options.frame.crop.to_str(),
         )
     }
-
-    fn abort_current_unfinised_exposure(&mut self) -> eyre::Result<()> {
-        self.cam_starter.abort(&self.device)?;
-        Ok(())
-    }
-
 }
 
 impl Mode for TackingPicturesMode {
@@ -1209,6 +1189,10 @@ impl Mode for TackingPicturesMode {
 
     fn cam_device(&self) -> Option<&DeviceAndProp> {
         Some(&self.device)
+    }
+
+    fn camera(&self) -> Option<&Arc<dyn Camera + Send + Sync>> {
+        Some(&self.camera)
     }
 
     fn progress_string(&self) -> String {
@@ -1361,7 +1345,7 @@ impl Mode for TackingPicturesMode {
     }
 
     fn abort(&mut self) -> eyre::Result<()> {
-        self.cam_starter.abort(&self.device)?;
+        self.camera.abort_exposure()?;
         self.flags.skip_frame_done = false; // will skip first frame when continue
         Ok(())
     }

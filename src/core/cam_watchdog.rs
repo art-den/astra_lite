@@ -334,7 +334,7 @@ impl CameraWatchdog {
         if !restarted_by_mode {
             // Mode not restarted the camera exposure. Do it itself
 
-            self.cam_starter.abort(&cam_device)?;
+            self.cam_starter.abort_old(&cam_device)?;
 
             let mode_cam_opts =
                 if let Some(frame_opts) = mode.active.frame_options_to_restart_exposure() {
