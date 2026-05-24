@@ -5,7 +5,7 @@ use macros::FromBuilder;
 
 use crate::{
     core::{core::{Core, ModeType}, events::*, mode_focusing::*},
-    hal::indi,
+    hal::{DeviceType, HalState, indi},
     options::*,
     ui::plots::*,
     utils::math::{cmp_f64, linear_interpolate},
@@ -507,21 +507,20 @@ impl FocuserUi {
         let cur_focuser = options.focuser.device.clone();
         drop(options);
 
-        let indi = self.core.indi();
-
-        let list = indi
-            .get_devices_list_by_interface(indi::DriverInterface::FOCUSER)
-            .iter()
-            .map(|dev| (dev.name.to_string(), dev.name.to_string()))
+        let hal = self.core.hal();
+        let Ok(focusers) = hal.devices(DeviceType::FOCUSER) else { return; };
+        let focusers_ids_and_names = focusers
+            .into_iter()
+            .map(|dev| (dev.id, dev.name))
             .collect::<Vec<_>>();
 
-        let connected = indi.state() == indi::ConnState::Connected;
+        let devices_connected = hal.state() == HalState::Connected;
 
         fill_devices_list_into_combobox(
-            &list,
+            &focusers_ids_and_names,
             &self.widgets.cb_list,
             if !cur_focuser.is_empty() { Some(cur_focuser.as_str()) } else { None },
-            connected,
+            devices_connected,
             |id| {
                 let mut options = self.core.options().write().unwrap();
                 options.focuser.device = id.to_string();

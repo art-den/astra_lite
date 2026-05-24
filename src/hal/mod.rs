@@ -72,12 +72,12 @@ impl Hal {
         self.event_subscibers.disconnect_all_subscribers();
     }
 
-    pub fn state(&self) -> eyre::Result<HalState> {
+    pub fn state(&self) -> HalState {
         let impl_ = self.impl_.read().unwrap();
         if let Some(impl_) = &*impl_ {
-            Ok(impl_.state()?)
+            impl_.state()
         } else {
-            Ok(HalState::ImplNotDefined)
+            HalState::ImplNotDefined
         }
     }
 
@@ -110,7 +110,7 @@ impl Hal {
 }
 
 pub trait HalImpl {
-    fn state(&self) -> eyre::Result<HalState>;
+    fn state(&self) -> HalState;
     fn devices(&self, type_filter: DeviceType) -> eyre::Result<Vec<DeviceInfo>>;
     fn camera(&self, id: &str) -> eyre::Result<Arc<dyn Camera + Send + Sync>>;
     fn focuser(&self, id: &str) -> eyre::Result<Arc<dyn Focuser + Send + Sync>>;

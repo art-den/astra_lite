@@ -1116,7 +1116,7 @@ impl CameraUi {
         self.widgets.raw.btn_start.set_label(save_raw_btn_cap);
 
         let cam_active = camera.is_active().unwrap_or(false);
-        let indi_connected = matches!(hal.state(), Ok(HalState::Connected));
+        let devices_connected = hal.state() == HalState::Connected;
 
         let can_change_cam_opts = !saving_frames && !live_active;
         let can_change_mode = waiting || single_shot || liveview_active;
@@ -1124,7 +1124,7 @@ impl CameraUi {
         let can_change_live_stacking_opts = waiting || liveview_active;
         let can_change_cal_ops = !liveview_active;
         let cam_sensitive =
-            indi_connected &&
+            devices_connected &&
             cam_active;
 
         self.main_ui.set_module_panel_visible(self.widgets.info.bx.upcast_ref(), cam_sensitive);
@@ -1143,8 +1143,8 @@ impl CameraUi {
             ("load_image",             waiting),
         ]);
 
-        widgets.common.l_cam_list   .set_sensitive(waiting && indi_connected);
-        widgets.common.cb_cam_list  .set_sensitive(waiting && indi_connected);
+        widgets.common.l_cam_list   .set_sensitive(waiting && devices_connected);
+        widgets.common.cb_cam_list  .set_sensitive(waiting && devices_connected);
         widgets.common.chb_live_view.set_sensitive((exposure_supported && liveview_active) || can_change_mode);
 
         widgets.ctrl.grid         .set_sensitive(cam_sensitive);
@@ -1158,10 +1158,10 @@ impl CameraUi {
         widgets.ctrl.chb_fan      .set_sensitive(!cooler_active);
         widgets.ctrl.chb_cooler   .set_sensitive(temp_supported && can_change_cam_opts);
         widgets.ctrl.spb_temp     .set_sensitive(cooler_active && temp_supported && can_change_cam_opts);
-        widgets.ctrl.chb_low_noise.set_sensitive(indi_connected && can_change_cam_opts);
-        widgets.ctrl.l_conv_gain  .set_sensitive(indi_connected && can_change_cam_opts);
-        widgets.ctrl.cb_conv_gain .set_sensitive(indi_connected && can_change_cam_opts);
-        widgets.ctrl.chb_high_fw  .set_sensitive(indi_connected && can_change_cam_opts);
+        widgets.ctrl.chb_low_noise.set_sensitive(devices_connected && can_change_cam_opts);
+        widgets.ctrl.l_conv_gain  .set_sensitive(devices_connected && can_change_cam_opts);
+        widgets.ctrl.cb_conv_gain .set_sensitive(devices_connected && can_change_cam_opts);
+        widgets.ctrl.chb_high_fw  .set_sensitive(devices_connected && can_change_cam_opts);
 
         widgets.frame.grid        .set_sensitive(cam_sensitive);
         widgets.frame.cb_mode     .set_sensitive(can_change_frame_opts);
@@ -1296,20 +1296,24 @@ impl CameraUi {
         let cur_cam_device = options.cam.device.clone();
         drop(options);
 
-        let Ok(cameras) = self.core.hal().devices(DeviceType::CAMERA) else {
+        let hal = self.core.hal();
+
+        let Ok(cameras) = hal.devices(DeviceType::CAMERA) else {
             return;
         };
 
-        let cameras: Vec<_> = cameras
+        let cameras_ids_and_names: Vec<_> = cameras
             .into_iter()
             .map(|d| (d.id, d.name))
             .collect();
 
+        let devices_connected = hal.state() == HalState::Connected;
+
         fill_devices_list_into_combobox(
-            &cameras,
+            &cameras_ids_and_names,
             &self.widgets.common.cb_cam_list,
             cur_cam_device.as_ref().map(|d| d.name.as_str()),
-            self.core.indi().state() == indi::ConnState::Connected,
+            devices_connected,
             |id| {
                 let Ok(mut options) = self.core.options().try_write() else { return; };
                 options.cam.device = Some(DeviceAndProp::new(id));

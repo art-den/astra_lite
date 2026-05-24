@@ -102,14 +102,14 @@ impl Drop for IndiHalImpl {
 }
 
 impl HalImpl for IndiHalImpl {
-    fn state(&self) -> eyre::Result<HalState> {
+    fn state(&self) -> HalState {
         let indi_state = self.indi.state();
         match indi_state {
-            indi::ConnState::Connecting    => Ok(HalState::Connecting),
-            indi::ConnState::Connected     => Ok(HalState::Connected),
-            indi::ConnState::Disconnecting => Ok(HalState::Disconnecting),
-            indi::ConnState::Disconnected  => Ok(HalState::Disconnected),
-            indi::ConnState::Error(err)    => Ok(HalState::Error(err)),
+            indi::ConnState::Connecting    => HalState::Connecting,
+            indi::ConnState::Connected     => HalState::Connected,
+            indi::ConnState::Disconnecting => HalState::Disconnecting,
+            indi::ConnState::Disconnected  => HalState::Disconnected,
+            indi::ConnState::Error(err)    => HalState::Error(err),
         }
     }
 
