@@ -10,7 +10,7 @@ use itertools::Itertools;
 use crate::{
     core::{cam_starter::CamStarter,  cam_watchdog::CameraWatchdog, dev_watchdog::DevicesWatchdog},
     guiding::external_guider::*,
-    hal::{Camera, FrameType, Hal, indi},
+    hal::{FrameType, Hal, indi},
     options::*,
     sky_math::math::EqCoord,
     utils::timer::*,
@@ -56,7 +56,6 @@ pub trait Mode {
     fn get_type(&self) -> ModeType;
     fn progress_string(&self) -> String;
     fn cam_device(&self) -> Option<&DeviceAndProp> { None }
-    fn camera(&self) -> Option<&Arc<dyn Camera + Send + Sync>> { None }
     fn progress(&self) -> Option<Progress> { None }
     fn get_cur_exposure(&self) -> Option<f64> { None }
     fn can_be_stopped(&self) -> bool { true }
@@ -805,7 +804,6 @@ impl Core {
     pub fn start_focusing(&self) -> eyre::Result<()> {
         let mode = FocusingMode::new(
             &self.hal,
-            &self.indi,
             &self.options,
             &self.events,
             None,

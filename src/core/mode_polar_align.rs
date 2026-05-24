@@ -682,10 +682,6 @@ impl Mode for PolarAlignMode {
         }.to_string()
     }
 
-    fn camera(&self) -> Option<&Arc<dyn Camera + Send + Sync>> {
-        Some(&self.camera)
-    }
-
     fn cam_device(&self) -> Option<&DeviceAndProp> {
         Some(&self.camera_dev)
     }

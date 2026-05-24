@@ -7,15 +7,16 @@ pub mod hal_ascom_alpaca;
 
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
-use std::{ops::Range, sync::{Arc, RwLock}};
+use std::{ops:: RangeInclusive, sync::{Arc, RwLock}};
 
 use crate::hal::{events::{HalEvent, HalEventSubscribers}, hal_indi::IndiHalImpl};
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     pub struct DeviceType: u32 {
-        const CAMERA = (1 << 0);
+        const CAMERA =    (1 << 0);
         const TELESCOPE = (1 << 1);
+        const FOCUSER =   (1 << 2);
     }
 }
 
@@ -97,18 +98,34 @@ impl Hal {
             eyre::bail!("HAL is not selected!");
         }
     }
+
+    pub fn focuser(&self, id: &str) -> eyre::Result<Arc<dyn Focuser + Send + Sync>> {
+        let impl_ = self.impl_.read().unwrap();
+        if let Some(impl_) = &*impl_ {
+            impl_.focuser(id)
+        } else {
+            eyre::bail!("HAL is not selected!");
+        }
+    }
 }
 
 pub trait HalImpl {
     fn state(&self) -> eyre::Result<HalState>;
     fn devices(&self, type_filter: DeviceType) -> eyre::Result<Vec<DeviceInfo>>;
     fn camera(&self, id: &str) -> eyre::Result<Arc<dyn Camera + Send + Sync>>;
+    fn focuser(&self, id: &str) -> eyre::Result<Arc<dyn Focuser + Send + Sync>>;
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// Device
 
 pub trait Device {
     fn id(&self) -> &str;
     fn is_active(&self) -> eyre::Result<bool>;
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// Camera
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy, Default)]
 pub enum FrameType {
@@ -123,7 +140,7 @@ pub trait Camera : Device {
     fn init_before_shot(&self) -> eyre::Result<()>;
 
     // Exposure
-    fn exposure_range(&self) -> eyre::Result<Range<f64>>;
+    fn exposure_range(&self) -> eyre::Result<RangeInclusive<f64>>;
     fn start_exposure(&self, value: f64) -> eyre::Result<()>;
     fn abort_exposure(&self) -> eyre::Result<()>;
 
@@ -138,12 +155,12 @@ pub trait Camera : Device {
 
     // Gain
     fn is_gain_supported(&self) -> eyre::Result<bool>;
-    fn gain_range(&self) -> eyre::Result<Range<f64>>;
+    fn gain_range(&self) -> eyre::Result<RangeInclusive<f64>>;
     fn set_gain(&self, value: f64) -> eyre::Result<()>;
 
     // Offset
     fn is_offset_supported(&self) -> eyre::Result<bool>;
-    fn offset_range(&self) -> eyre::Result<Range<f64>>;
+    fn offset_range(&self) -> eyre::Result<RangeInclusive<f64>>;
     fn set_offset(&self, value: f64) -> eyre::Result<()>;
 
     // Bin
@@ -154,7 +171,7 @@ pub trait Camera : Device {
     // Cooler
     fn is_cooler_supported(&self) -> eyre::Result<bool>;
     fn temperature(&self) -> eyre::Result<f64>;
-    fn temperature_range(&self) -> eyre::Result<Range<f64>>;
+    fn temperature_range(&self) -> eyre::Result<RangeInclusive<f64>>;
     fn set_temperature(&self, temperature: Option<f64>) -> eyre::Result<()>;
 
     // Heater
@@ -177,4 +194,14 @@ pub trait Camera : Device {
     fn is_conversion_gain_supported(&self) -> eyre::Result<bool>;
     fn conversion_gain_list(&self) -> eyre::Result<Vec<(String/*id*/, String/*text*/)>>;
     fn set_conversion_gain(&self, id: &str) -> eyre::Result<()>;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Focuser
+
+pub trait Focuser : Device {
+    fn abs_position_range(&self) -> eyre::Result<RangeInclusive<f64>>;
+    fn abs_position(&self) -> eyre::Result<f64>;
+    fn set_abs_position(&self, value: f64) -> eyre::Result<()>;
+    fn temperature(&self) -> eyre::Result<f64>;
 }

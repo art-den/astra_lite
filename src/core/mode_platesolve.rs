@@ -226,10 +226,6 @@ impl Mode for PlatesolveMode {
         Some(Progress { cur: stage, total: 2 })
     }
 
-    fn camera(&self) -> Option<&Arc<dyn Camera + Send + Sync>> {
-        Some(&self.camera)
-    }
-
     fn cam_device(&self) -> Option<&DeviceAndProp> {
         Some(&self.camera_dev)
     }

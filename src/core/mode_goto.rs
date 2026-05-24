@@ -338,10 +338,6 @@ impl Mode for GotoMode {
         }
     }
 
-    fn camera(&self) -> Option<&Arc<dyn Camera + Send + Sync>> {
-        self.camera.as_ref()
-    }
-
     fn cam_device(&self) -> Option<&DeviceAndProp> {
         self.camera_dev.as_ref()
     }

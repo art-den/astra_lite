@@ -324,10 +324,6 @@ impl Mode for MountCalibrMode {
         self.next_mode.take()
     }
 
-    fn camera(&self) -> Option<&Arc<dyn Camera + Send + Sync>> {
-        Some(&self.camera)
-    }
-
     fn cam_device(&self) -> Option<&DeviceAndProp> {
         Some(&self.camera_dev)
     }

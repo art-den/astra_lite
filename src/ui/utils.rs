@@ -1,28 +1,28 @@
-use std::{cell::{Cell, RefCell}, collections::HashMap, hash::Hash, ops::Range, rc::Rc, time::Duration};
+use std::{cell::{Cell, RefCell}, collections::HashMap, hash::Hash, ops::RangeInclusive, rc::Rc, time::Duration};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
 use crate::{image::histogram::*, hal::indi};
 
 pub fn correct_spinbutton_by_range(
     spb:    &gtk::SpinButton,
-    range:  Option<Range<f64>>,
+    range:  Option<RangeInclusive<f64>>,
     digits: u32,
     step:   Option<f64>,
 ) {
     if let Some(range) = range {
         spb.set_sensitive(true);
-        spb.set_range(range.start, range.end);
+        spb.set_range(*range.start(), *range.end());
         let value = spb.value();
-        if value < range.start {
-            spb.set_value(range.start);
+        if value < *range.start() {
+            spb.set_value(*range.start());
         }
-        if value > range.end {
-            spb.set_value(range.end);
+        if value > *range.end() {
+            spb.set_value(*range.end());
         }
         let desired_step =
-            if      range.end <= 10.0   { 0.1 }
-            else if range.end <= 100.0  { 1.0 }
-            else if range.end <= 1000.0 { 10.0 }
-            else                        { 100.0 };
+            if      *range.end() <= 10.0   { 0.1 }
+            else if *range.end() <= 100.0  { 1.0 }
+            else if *range.end() <= 1000.0 { 10.0 }
+            else                           { 100.0 };
         let step = step.unwrap_or(desired_step);
         spb.set_increments(step, 10.0 * step);
         spb.set_digits(digits);

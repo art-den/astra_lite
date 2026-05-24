@@ -6,7 +6,7 @@ use std::{
 use chrono::Utc;
 
 use crate::{
-    TimeLogger, core::{cam_starter::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode}, guiding::external_guider::*, hal::{Camera, FrameType, indi}, image::{
+    TimeLogger, core::{cam_starter::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode}, guiding::external_guider::*, hal::{Camera, Focuser, FrameType, indi}, image::{
         histogram::*,
         raw::{RawImage, RawImageInfo},
         raw_stacker::RawStacker,
@@ -61,6 +61,7 @@ enum NextJob {
 }
 
 struct AutoFocuser {
+    device:     Arc<dyn Focuser + Send + Sync>,
     options:    FocuserOptions,
     exp_sum:    f64,
     start_temp: Option<f64>,
@@ -203,6 +204,7 @@ impl TackingPicturesMode {
 
         let autofocuser = if working_with_light_frames {
             Some(AutoFocuser {
+                device:     hal.focuser(&opts.focuser.device)?,
                 options:    opts.focuser.clone(),
                 exp_sum:    0.0,
                 start_temp: None,
@@ -459,7 +461,7 @@ impl TackingPicturesMode {
         let Some(autofocuser) = &mut self.autofocuser else {
             return Ok(());
         };
-        if !self.indi.is_device_enabled(&autofocuser.options.device).unwrap_or(false) {
+        if !autofocuser.device.is_active().unwrap_or(false) {
             return Ok(());
         }
 
@@ -474,9 +476,7 @@ impl TackingPicturesMode {
         autofocuser.exp_sum += self.cam_options.frame.exposure();
 
         // Temperature measurement
-        let temperature = self.indi
-            .focuser_get_temperature(&autofocuser.options.device)
-            .unwrap_or(f64::NAN);
+        let temperature = autofocuser.device.temperature().unwrap_or(f64::NAN);
         if !temperature.is_nan()
         && !temperature.is_infinite()
         && autofocuser.start_temp.is_none() {
@@ -825,7 +825,6 @@ impl TackingPicturesMode {
 
                 Some(NextJob::Autofocus) => {
                     // Start autofocus mode
-                    let indi = Arc::clone(&self.indi);
                     let options = Arc::clone(&self.options);
                     let events = Arc::clone(&self.events);
                     let start_focusing_fun = move |_core: &Arc<Core>, mode: &mut ModeData| -> eyre::Result<()> {
@@ -833,7 +832,6 @@ impl TackingPicturesMode {
                         let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
                         let mut new_mode = FocusingMode::new(
                             _core.hal(),
-                            &indi,
                             &options,
                             &events,
                             Some(prev_mode),
@@ -902,15 +900,14 @@ impl TackingPicturesMode {
             State::BiasCalculationFrame => {
                 let bias = get_median_from_histogram(true) as i32;
                 let cur_exp: f64 = 0.1;
-                let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.device.prop);
-                let exp_prop = self.indi.camera_get_exposure_prop_value(&self.device.name, cam_ccd)?;
-                let cur_exp = cur_exp.clamp(exp_prop.min, exp_prop.max);
+                let exp_range = self.camera.exposure_range()?;
+                let cur_exp = cur_exp.clamp(*exp_range.start(), *exp_range.end());
                 self.state = State::CalculatingFlatExp {
                     bias,
                     cur_exp,
                     count: 0,
-                    min_exp: exp_prop.min,
-                    max_exp: exp_prop.max,
+                    min_exp: *exp_range.start(),
+                    max_exp: *exp_range.end(),
                 };
                 self.start_flat_exp_calc_frame(cur_exp)?;
             }
@@ -1191,10 +1188,6 @@ impl Mode for TackingPicturesMode {
         Some(&self.device)
     }
 
-    fn camera(&self) -> Option<&Arc<dyn Camera + Send + Sync>> {
-        Some(&self.camera)
-    }
-
     fn progress_string(&self) -> String {
         let mut mode_str = match (&self.state, &self.cam_mode) {
             (State::FrameToSkip, _) =>
@@ -1327,9 +1320,7 @@ impl Mode for TackingPicturesMode {
         }
 
         if let Some(autofocuser) = &mut self.autofocuser {
-            let temperature = self.indi
-                .focuser_get_temperature(&autofocuser.options.device)
-                .unwrap_or(f64::NAN);
+            let temperature = autofocuser.device.temperature().unwrap_or(f64::NAN);
             if !temperature.is_nan()
             && !temperature.is_infinite()
             && autofocuser.start_temp.is_none() {

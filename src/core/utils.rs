@@ -1,4 +1,4 @@
-use std::{ops::Range, path::{Path, PathBuf}, sync::Arc};
+use std::{ops::RangeInclusive, path::{Path, PathBuf}, sync::Arc};
 
 use chrono::{DateTime, Utc};
 
@@ -321,10 +321,10 @@ impl FileNameUtils {
 pub fn gain_to_value(
     gain:       Gain,
     cur_gain:   f64,
-    gain_range: Range<f64>,
+    gain_range: RangeInclusive<f64>,
 ) -> f64 {
     let calc_gain = |part| -> f64 {
-        part * (gain_range.end - gain_range.start) + gain_range.start
+        part * (gain_range.end() - gain_range.start()) + gain_range.start()
     };
 
     match gain {

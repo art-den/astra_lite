@@ -5,7 +5,7 @@ use std::{
 use itertools::{izip, Itertools};
 
 use crate::{
-    core::cam_starter::take_shot, hal::{Camera, FrameType, Hal, indi}, options::*, utils::math::*
+    core::cam_starter::take_shot, hal::{Camera, Focuser, FrameType, Hal}, options::*, utils::math::*
 };
 use super::{core::*, events::*, frame_processing::*, utils::*};
 
@@ -42,7 +42,7 @@ enum Stage {
 
 pub struct FocusingMode {
     camera:         Arc<dyn Camera + Send + Sync>,
-    indi:           Arc<indi::Connection>,
+    focuser:        Arc<dyn Focuser + Send + Sync>,
     subscribers:    Arc<Events>,
     state:          FocusingState,
     camera_dev:     DeviceAndProp,
@@ -103,7 +103,6 @@ enum CalcResult {
 impl FocusingMode {
     pub fn new(
         hal:            &Hal,
-        indi:           &Arc<indi::Connection>,
         options:        &Arc<RwLock<Options>>,
         subscribers:    &Arc<Events>,
         next_mode:      Option<Box<dyn Mode + Sync + Send>>,
@@ -112,6 +111,7 @@ impl FocusingMode {
     ) -> eyre::Result<Self> {
         let opts = options.read().unwrap();
         let camera = hal.camera(&opts.cam.device_id)?;
+        let focuser = hal.focuser(&opts.focuser.device)?;
 
         let Some(cam_device) = &opts.cam.device else {
             eyre::bail!("Camera is not selected");
@@ -132,8 +132,6 @@ impl FocusingMode {
         log::debug!("Creating autofocus mode. max_try={}", max_try);
 
         Ok(FocusingMode {
-            camera:         Arc::clone(&camera),
-            indi:           Arc::clone(indi),
             subscribers:    Arc::clone(subscribers),
             state:          FocusingState::Undefined,
             f_opts:         opts.focuser.clone(),
@@ -150,6 +148,8 @@ impl FocusingMode {
             camera_dev:     cam_device.clone(),
             start_temp:     0.0,
             start_time:     None,
+            camera,
+            focuser,
             prelim_step,
             next_mode,
             cam_opts,
@@ -178,7 +178,7 @@ impl FocusingMode {
     }
 
     fn set_new_focus_value(&mut self, value: f64) -> eyre::Result<()> {
-        self.indi.focuser_set_abs_value(&self.f_opts.device, value, true, None)?;
+        self.focuser.set_abs_position(value)?;
         self.desired_focus = value;
         self.change_time_ms = Some(0);
         self.change_cnt = 0;
@@ -505,11 +505,12 @@ impl FocusingMode {
                     let value = value.round();
                     log::debug!("Extremum = {:.1}", value);
                     if !allow_more_measures {
-                        let prop_elem = self.indi.focuser_get_abs_value_prop_elem(&self.f_opts.device)?;
-                        if value < prop_elem.min || value > prop_elem.max {
+                        let range = self.focuser.abs_position_range()?;
+
+                        if !range.contains(&value) {
                             eyre::bail!(
                                 "Result pos {0:.1} out of focuser range ({1:.1}..{2:.1})",
-                                value, prop_elem.min, prop_elem.max
+                                value, *range.start(), *range.end()
                             );
                         }
                         return Ok(CalcResult::Value { value, coeffs });
@@ -636,10 +637,6 @@ impl Mode for FocusingMode {
         }
     }
 
-    fn camera(&self) -> Option<&Arc<dyn Camera + Send + Sync>> {
-        Some(&self.camera)
-    }
-
     fn cam_device(&self) -> Option<&DeviceAndProp> {
         Some(&self.camera_dev)
     }
@@ -662,14 +659,8 @@ impl Mode for FocusingMode {
     }
 
     fn start(&mut self) -> eyre::Result<()> {
-        let cur_pos = self.indi
-            .focuser_get_abs_value_prop_elem(&self.f_opts.device)?.value
-            .round();
-
-        self.start_temp = self.indi
-            .focuser_get_temperature(&self.f_opts.device)
-            .unwrap_or(f64::NAN);
-
+        let cur_pos = self.focuser.abs_position()?.round();
+        self.start_temp = self.focuser.temperature().unwrap_or(f64::NAN);
         self.before_pos = cur_pos;
 
         take_shot(
@@ -687,7 +678,7 @@ impl Mode for FocusingMode {
 
     fn abort(&mut self) -> eyre::Result<()> {
         self.camera.abort_exposure()?;
-        self.indi.focuser_set_abs_value(&self.f_opts.device, self.before_pos, true, None)?;
+        self.focuser.set_abs_position(self.before_pos)?;
         Ok(())
     }
 
@@ -705,21 +696,6 @@ impl Mode for FocusingMode {
         }
     }
 
-    fn notify_indi_prop_change(
-        &mut self,
-        prop_change: &indi::PropChangeEvent
-    ) -> eyre::Result<NotifyResult> {
-        if *prop_change.device_name != self.f_opts.device {
-            return Ok(NotifyResult::Empty);
-        }
-        if let indi::PropChange::Change { prop_name, value, .. } = &prop_change.change
-        && **prop_name == "ABS_FOCUS_POSITION" {
-            let cur_focus = value.to_f64()?;
-            return self.check_cur_focus_value(cur_focus);
-        }
-        Ok(NotifyResult::Empty)
-    }
-
     fn notify_timer(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         if let Some(change_time_ms) = &mut self.change_time_ms {
             *change_time_ms += timer_period_ms;
@@ -730,11 +706,11 @@ impl Mode for FocusingMode {
                     eyre::bail!("Can't set new focus value for focuser!");
                 }
                 log::error!("Setting new value {:.0} again. Try = {}", self.desired_focus, self.change_cnt);
-                self.indi.focuser_set_abs_value(&self.f_opts.device, self.desired_focus, true, None)?;
+                self.focuser.set_abs_position(self.desired_focus)?;
                 *change_time_ms = 0;
             }
         }
-        let cur_focus = self.indi.focuser_get_abs_value_prop_elem(&self.f_opts.device)?.value;
+        let cur_focus = self.focuser.abs_position()?;
         self.check_cur_focus_value(cur_focus)
     }
 

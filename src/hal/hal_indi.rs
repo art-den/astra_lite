@@ -1,6 +1,6 @@
-use std::{ops::Range, sync::{Arc, Mutex}};
+use std::{ops::RangeInclusive, sync::{Arc, Mutex}};
 
-use crate::hal::{Device, FrameType, HalState, events::{HalEvent, HalEventSubscribers}, indi::Subscription};
+use crate::hal::{Device, Focuser, FrameType, HalState, events::{HalEvent, HalEventSubscribers}, indi::Subscription};
 
 use super::{indi, HalImpl, Camera, DeviceInfo, DeviceType};
 
@@ -70,14 +70,24 @@ impl IndiHalImpl {
     }
 
     fn driver_interface_to_dev_type(drv_interface: indi::DriverInterface) -> DeviceType {
-        let is_ccd = drv_interface.contains(indi::DriverInterface::CCD);
+        let is_ccd       = drv_interface.contains(indi::DriverInterface::CCD);
         let is_telescope = drv_interface.contains(indi::DriverInterface::TELESCOPE);
+        let is_focuser   = drv_interface.contains(indi::DriverInterface::FOCUSER);
 
         let mut device_type = DeviceType::empty();
-        device_type.set(DeviceType::CAMERA, is_ccd);
+        device_type.set(DeviceType::CAMERA,    is_ccd);
         device_type.set(DeviceType::TELESCOPE, is_telescope);
+        device_type.set(DeviceType::FOCUSER,   is_focuser);
 
         device_type
+    }
+
+    fn create_indi_device(&self, id: &str) -> IndiDevice {
+        IndiDevice {
+            id:   id.to_string(),
+            name: id.to_string(),
+            indi: Arc::clone(&self.indi),
+        }
     }
 }
 
@@ -143,6 +153,10 @@ impl HalImpl for IndiHalImpl {
         };
         let camera = IndiCamera { device, ccd };
         Ok(Arc::new(camera))
+    }
+
+    fn focuser(&self, id: &str) -> eyre::Result<Arc<dyn Focuser + Send + Sync>> {
+        Ok(Arc::new(self.create_indi_device(id)))
     }
 }
 
@@ -224,9 +238,9 @@ impl Camera for IndiCamera {
 
     // Exposure
 
-    fn exposure_range(&self) -> eyre::Result<Range<f64>> {
+    fn exposure_range(&self) -> eyre::Result<RangeInclusive<f64>> {
         let exp_prop_value = self.device.indi.camera_get_exposure_prop_value(&self.device.name, self.ccd)?;
-        Ok(exp_prop_value.min..exp_prop_value.max)
+        Ok(exp_prop_value.min..=exp_prop_value.max)
     }
 
     fn start_exposure(&self, duration: f64) -> eyre::Result<()> {
@@ -288,9 +302,9 @@ impl Camera for IndiCamera {
         Ok(self.device.indi.camera_is_gain_supported(&self.device.name)?)
     }
 
-    fn gain_range(&self) -> eyre::Result<Range<f64>> {
+    fn gain_range(&self) -> eyre::Result<RangeInclusive<f64>> {
         let gain_prop = self.device.indi.camera_get_gain_prop_value(&self.device.name)?;
-        Ok(gain_prop.min..gain_prop.max)
+        Ok(gain_prop.min..=gain_prop.max)
     }
 
     fn set_gain(&self, value: f64) -> eyre::Result<()> {
@@ -304,9 +318,9 @@ impl Camera for IndiCamera {
         Ok(self.device.indi.camera_is_offset_supported(&self.device.name)?)
     }
 
-    fn offset_range(&self) -> eyre::Result<Range<f64>> {
+    fn offset_range(&self) -> eyre::Result<RangeInclusive<f64>> {
         let offset_prop = self.device.indi.camera_get_offset_prop_value(&self.device.name)?;
-        Ok(offset_prop.min..offset_prop.max)
+        Ok(offset_prop.min..=offset_prop.max)
     }
 
     fn set_offset(&self, value: f64) -> eyre::Result<()> {
@@ -353,9 +367,9 @@ impl Camera for IndiCamera {
         Ok(self.device.indi.camera_get_temperature_prop_value(&self.device.name)?.value)
     }
 
-    fn temperature_range(&self) -> eyre::Result<Range<f64>> {
+    fn temperature_range(&self) -> eyre::Result<RangeInclusive<f64>> {
         let temp_prop = self.device.indi.camera_get_temperature_prop_value(&self.device.name)?;
-        Ok(temp_prop.min..temp_prop.max)
+        Ok(temp_prop.min..=temp_prop.max)
     }
 
     fn set_temperature(&self, temperature: Option<f64>) -> eyre::Result<()> {
@@ -451,3 +465,23 @@ impl Camera for IndiCamera {
 
 ///////////////////////////////////////////////////////////////////////////////
 // Focuser
+
+impl Focuser for IndiDevice {
+    fn abs_position_range(&self) -> eyre::Result<RangeInclusive<f64>> {
+        let prop = self.indi.focuser_get_abs_value_prop_elem(&self.name)?;
+        Ok(prop.min..=prop.max)
+    }
+
+    fn abs_position(&self) -> eyre::Result<f64> {
+        Ok(self.indi.focuser_get_abs_value_prop_elem(&self.name)?.value)
+    }
+
+    fn set_abs_position(&self, value: f64) -> eyre::Result<()> {
+        self.indi.focuser_set_abs_value(&self.name, value, true, None)?;
+        Ok(())
+    }
+
+    fn temperature(&self) -> eyre::Result<f64> {
+        Ok(self.indi.focuser_get_temperature(&self.name)?)
+    }
+}
