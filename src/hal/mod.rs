@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod indi;
+pub mod events;
 pub mod hal_indi;
 pub mod hal_ascom_alpaca;
 
@@ -8,13 +9,17 @@ use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use std::{ops::Range, sync::{Arc, RwLock}};
 
+use crate::hal::{events::{HalEvent, HalEventSubscribers}, hal_indi::IndiHalImpl};
+
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     pub struct DeviceType: u32 {
         const CAMERA = (1 << 0);
+        const TELESCOPE = (1 << 1);
     }
 }
 
+#[derive(Debug)]
 pub struct DeviceInfo {
     pub id:    String,
     pub name:  String,
@@ -32,19 +37,38 @@ pub enum HalState {
 }
 
 pub struct Hal {
-    impl_: RwLock<Option<Arc<dyn HalImpl + Send + Sync + 'static>>>,
+    impl_:            RwLock<Option<Arc<dyn HalImpl + Send + Sync + 'static>>>,
+    event_subscibers: Arc<HalEventSubscribers>,
 }
 
 impl Hal {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            impl_: RwLock::new(None),
+            impl_:            RwLock::new(None),
+            event_subscibers: Arc::new(HalEventSubscribers::new()),
         })
+    }
+
+    pub fn create_indy_impl(&self, indi: &Arc<indi::Connection>) -> Arc<IndiHalImpl> {
+        IndiHalImpl::new(indi, &self.event_subscibers)
     }
 
     pub fn set_impl(&self, hal_impl: Arc<dyn HalImpl + Send + Sync + 'static>) {
         let mut impl_ = self.impl_.write().unwrap();
         *impl_ = Some(hal_impl);
+    }
+
+    pub fn reset_impl(&self) {
+        let mut impl_ = self.impl_.write().unwrap();
+        *impl_ = None;
+    }
+
+    pub fn connect_event_handler(&self, fun: impl Fn(HalEvent) + Send + Sync + 'static) {
+        self.event_subscibers.connect_event_handler(fun);
+    }
+
+    pub fn disconnect_all_subscribers(&self) {
+        self.event_subscibers.disconnect_all_subscribers();
     }
 
     pub fn state(&self) -> eyre::Result<HalState> {
@@ -147,6 +171,7 @@ pub trait Camera : Device {
     fn enable_high_fullwell_mode(&self, enable: bool) -> eyre::Result<()>;
 
     // Conversion gain
-    fn is_conversion_gain_str_supported(&self) -> eyre::Result<bool>;
+    fn is_conversion_gain_supported(&self) -> eyre::Result<bool>;
+    fn conversion_gain_list(&self) -> eyre::Result<Vec<(String/*id*/, String/*text*/)>>;
     fn set_conversion_gain(&self, id: &str) -> eyre::Result<()>;
 }

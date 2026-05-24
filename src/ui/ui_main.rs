@@ -12,7 +12,7 @@ use gtk::{prelude::*, glib, glib::clone, cairo};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{core::*, events::*}, hal::indi, options::*, utils::io_utils::*,
+    core::{core::*, events::*}, hal::{events::HalEvent, indi}, options::*, utils::io_utils::*,
 };
 use super::{gtk_utils::*, module::*, utils::*};
 
@@ -249,6 +249,7 @@ impl Drop for MainUi {
 enum MainThreadEvent {
     Core(Event),
     Indi(indi::Event),
+    Hal(HalEvent),
 }
 
 impl MainUi {
@@ -394,6 +395,11 @@ impl MainUi {
         let sender = main_thread_sender.clone();
         self.indi.subscribe_events(move |event| {
             _ = sender.send_blocking(MainThreadEvent::Indi(event));
+        });
+
+        let sender = main_thread_sender.clone();
+        self.core.hal().connect_event_handler(move |event| {
+            _ = sender.send_blocking(MainThreadEvent::Hal(event));
         });
 
         // Core
@@ -561,6 +567,11 @@ impl MainUi {
             MainThreadEvent::Core(core_event) => {
                 let modules = self.modules.borrow();
                 modules.on_core_event(&core_event);
+            }
+
+            MainThreadEvent::Hal(hal_event) => {
+                let modules = self.modules.borrow();
+                modules.on_hal_event(&hal_event);
             }
         }
     }

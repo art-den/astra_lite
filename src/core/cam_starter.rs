@@ -20,6 +20,11 @@ impl CamStarter {
         *before_shot_fun = Some(Box::new(fun));
     }
 
+    pub fn disconnect_before_shot_fun(&self) {
+        let mut before_shot_fun = self.before_shot_fun.write().unwrap();
+        *before_shot_fun = None;
+    }
+
     pub fn take_shot(
         &self,
         mode_type: ModeType,
@@ -41,7 +46,7 @@ impl CamStarter {
         // Conversion gain
 
         if let Some(conv_gain_str) = &cam_ctrl.conv_gain_str
-        && camera.is_conversion_gain_str_supported()? {
+        && camera.is_conversion_gain_supported()? {
             camera.set_conversion_gain(conv_gain_str)?;
         }
 

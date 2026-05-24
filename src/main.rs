@@ -29,10 +29,7 @@ use std::{path::Path, sync::Arc};
 use gtk::{prelude::*, glib, glib::clone};
 use ui::gtk_utils::exec_and_show_error;
 use crate::{
-    utils::io_utils::*,
-    utils::log_utils::*,
-    options::*,
-    core::core::Core,
+    core::core::Core, options::*, utils::{io_utils::*, log_utils::*}
 };
 
 fn main() -> eyre::Result<()> {
@@ -119,6 +116,10 @@ fn app_activate_handler(app: &gtk::Application) {
         log::info!("Check options...");
         options.check()?;
 
+        drop(options);
+
+        core.init_after_options_loaded();
+
         Ok(())
     });
 
@@ -150,6 +151,8 @@ fn app_shutdown_handler(_app: &gtk::Application, core: &Arc<Core>) {
     log::info!("Core stopping...");
     core.stop();
     log::info!("Core stopped");
+
+    dbg!(Arc::strong_count(core));
 }
 
 fn panic_handler(

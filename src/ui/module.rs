@@ -3,7 +3,7 @@ use std::{collections::HashMap, rc::Rc};
 use gtk::{prelude::*, pango};
 use bitflags::bitflags;
 
-use crate::{core::events::Event, hal::indi, options::Options};
+use crate::{core::events::Event, hal::{events::HalEvent, indi}, options::Options};
 
 pub enum PanelPosition {
     Left,
@@ -102,6 +102,7 @@ pub trait UiModule {
     fn on_tab_changed(&self, _from: TabPage, _to: TabPage) {}
     fn on_250ms_timer(&self) {}
     fn on_indi_event(&self, _event: &indi::Event) {}
+    fn on_hal_event(&self, _event: &HalEvent) {}
     fn on_event(&self, _event: &Event) {}
 }
 
@@ -202,6 +203,12 @@ impl UiModules {
     pub fn on_indi_event(&self, event: &indi::Event) {
         for item in &self.items {
             item.module.on_indi_event(event);
+        }
+    }
+
+    pub fn on_hal_event(&self, event: &HalEvent) {
+        for item in &self.items {
+            item.module.on_hal_event(event);
         }
     }
 

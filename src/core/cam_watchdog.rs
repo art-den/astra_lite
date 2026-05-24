@@ -2,13 +2,10 @@ use std::sync::Arc;
 
 use crate::{
     core::{
-        cam_starter::CamStarter,
-        cam_utils::{CcdPurpose, get_all_ccd_with_purposes_list},
-        core::ModeData,
-        consts::*,
+        cam_starter::CamStarter, cam_utils::{CcdPurpose, get_all_ccd_with_purposes_list}, consts::*, core::ModeData
     },
-    hal::indi,
-    options::{DeviceAndProp, Options},
+    hal::{Camera, Hal, indi},
+    options::{CamCtrlOptions, DeviceAndProp, Options},
 };
 
 const MAX_WAIT_BLOB_TIME: usize = 30; // in seconds
@@ -36,18 +33,22 @@ struct InitFlags {
 }
 
 pub struct CameraWatchdog {
-    indi:        Arc<indi::Connection>,
     cam_starter: Arc<CamStarter>,
+    indi:        Arc<indi::Connection>,
+    hal:         Arc<Hal>,
+    camera:      Option<Arc<dyn Camera + Send + Sync>>,
     mode:        Mode,
     init_flags:  InitFlags,
     init_timer:  Option<usize>,
 }
 
 impl CameraWatchdog {
-    pub fn new(cam_starter: &Arc<CamStarter>, indi: &Arc<indi::Connection>) -> Self {
+    pub fn new(cam_starter: &Arc<CamStarter>, indi: &Arc<indi::Connection>, hal: &Arc<Hal>,) -> Self {
         Self {
-            indi:        Arc::clone(indi),
             cam_starter: Arc::clone(cam_starter),
+            indi:        Arc::clone(indi),
+            hal:         Arc::clone(hal),
+            camera:      None,
             mode:        Mode::Waiting,
             init_flags:  InitFlags::default(),
             init_timer:  None,
@@ -58,6 +59,14 @@ impl CameraWatchdog {
         self.mode = Mode::Waiting;
         self.init_flags = InitFlags::default();
         self.init_timer = None;
+    }
+
+    pub fn select_camera(&mut self, camera_id: &str) {
+        let current_id = self.camera.as_ref().map(|c| c.id()).unwrap_or_default();
+        if current_id == camera_id {
+            return;
+        }
+        self.camera = self.hal.camera(camera_id).ok();
     }
 
     pub fn notify_timer(
@@ -141,7 +150,7 @@ impl CameraWatchdog {
                 self.init_timer = None;
                 if self.init_flags.cooler {
                     self.init_flags.cooler = false;
-                    Self::control_camera_cooling(&self.indi, &cam_device.name, options, true)?;
+                    self.control_camera_cooling(&options.cam.ctrl)?;
                 }
                 if self.init_flags.fan {
                     self.init_flags.fan = false;
@@ -241,26 +250,16 @@ impl CameraWatchdog {
         Ok(())
     }
 
-    pub fn control_camera_cooling(
-        indi:       &Arc<indi::Connection>,
-        cam_device: &str,
-        options:    &Options,
-        force_set:  bool,
-    ) -> eyre::Result<()> {
-        if indi.camera_is_cooler_supported(cam_device)? {
-            if options.cam.ctrl.enable_cooler {
-                log::info!("Setting camera temperature = {}", options.cam.ctrl.temperature);
-                indi.camera_set_temperature(
-                    cam_device,
-                    options.cam.ctrl.temperature
-                )?;
+    pub fn control_camera_cooling(&self, options: &CamCtrlOptions) -> eyre::Result<()> {
+        let camera = self.camera.as_ref().ok_or_else(|| eyre::eyre!("Camera is not defined"))?;
+
+        if camera.is_cooler_supported()? {
+            if options.enable_cooler {
+                log::info!("Setting camera temperature = {}", options.temperature);
+                camera.set_temperature(Some(options.temperature))?;
+            } else {
+                camera.set_temperature(None)?;
             }
-            indi.camera_enable_cooler(
-                cam_device,
-                options.cam.ctrl.enable_cooler,
-                force_set,
-                INDI_SET_PROP_TIMEOUT
-            )?;
         }
         Ok(())
     }

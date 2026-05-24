@@ -41,6 +41,7 @@ pub enum Event {
     TelescopeFocalLenChanged(f64),
     TelescopeBarlowChanged,
     GuiderFocalLenChanged(f64),
+    CameraCoolingOptionsChanged,
 }
 
 type EventFun = dyn Fn(Event) + Send + Sync + 'static;
@@ -65,8 +66,13 @@ impl Events {
     }
 
     pub fn unsubscribe_all(&self) {
+        let mut event_handlers = Vec::new();
+
         let mut items = self.items.write().unwrap();
-        items.clear();
+        std::mem::swap(&mut event_handlers, &mut items);
+        drop(items);
+
+        event_handlers.clear();
     }
 
     pub fn notify(&self, event: Event) {

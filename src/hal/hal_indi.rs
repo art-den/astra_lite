@@ -1,6 +1,6 @@
-use std::{sync::Arc, ops::Range};
+use std::{ops::Range, sync::{Arc, Mutex}};
 
-use crate::hal::{Device, FrameType, HalState};
+use crate::hal::{Device, FrameType, HalState, events::{HalEvent, HalEventSubscribers}, indi::Subscription};
 
 use super::{indi, HalImpl, Camera, DeviceInfo, DeviceType};
 
@@ -8,15 +8,86 @@ pub const CAM_CCD2_POSTFIX: &str = "_CCD2";
 pub const SET_PROP_TIME_OUT: u64 = 2000; // ms
 
 ///////////////////////////////////////////////////////////////////////////////
-// HAL
+// IndiHalImpl
 
 pub struct IndiHalImpl {
-    indi: Arc<indi::Connection>,
+    indi:              Arc<indi::Connection>,
+    event_subscribers: Arc<HalEventSubscribers>,
+    indi_evt_subscr:   Mutex<Option<Subscription>>,
 }
 
 impl IndiHalImpl {
-    pub fn new(indi: &Arc<indi::Connection>) -> Arc<Self> {
-        Arc::new(Self { indi: Arc::clone(indi) })
+    pub fn new(
+        indi:              &Arc<indi::Connection>,
+        event_subscribers: &Arc<HalEventSubscribers>
+    ) -> Arc<Self> {
+        let result = Arc::new(Self {
+            indi:              Arc::clone(indi),
+            event_subscribers: Arc::clone(event_subscribers),
+            indi_evt_subscr:   Mutex::new(None),
+        });
+
+        let self_ = Arc::clone(&result);
+        let indi_evt_subscr = indi.subscribe_events(move |event| {
+            self_.indi_event_handler(event);
+        });
+
+        *result.indi_evt_subscr.lock().unwrap() = Some(indi_evt_subscr);
+        result
+    }
+
+    fn indi_event_handler(&self, event: indi::Event) {
+        match event {
+            indi::Event::NewDevice(evt) => if evt.connected {
+                self.process_dev_conn_evt(&evt.device_name, evt.interface, evt.connected);
+            }
+            indi::Event::DeviceConnected(evt) => {
+                self.process_dev_conn_evt(&evt.device_name, evt.interface, evt.connected);
+            }
+            indi::Event::DeviceDelete(evt) => {
+                self.process_dev_conn_evt(&evt.device_name, evt.interface, false);
+            }
+            _ => {}
+        }
+    }
+
+    fn process_dev_conn_evt(&self, device_name: &str, interface: indi::DriverInterface, connected: bool) {
+        let device_type = Self::driver_interface_to_dev_type(interface);
+        if device_type.is_empty() {
+            return;
+        }
+        let device_info = DeviceInfo {
+            id:    device_name.to_string(),
+            name:  device_name.to_string(),
+            type_: device_type,
+        };
+        let event_to_send = if connected {
+            HalEvent::DeviceConnected(Arc::new(device_info))
+        } else {
+            HalEvent::DeviceDisconnected(Arc::new(device_info))
+        };
+        self.event_subscribers.send_event(event_to_send);
+    }
+
+    fn driver_interface_to_dev_type(drv_interface: indi::DriverInterface) -> DeviceType {
+        let is_ccd = drv_interface.contains(indi::DriverInterface::CCD);
+        let is_telescope = drv_interface.contains(indi::DriverInterface::TELESCOPE);
+
+        let mut device_type = DeviceType::empty();
+        device_type.set(DeviceType::CAMERA, is_ccd);
+        device_type.set(DeviceType::TELESCOPE, is_telescope);
+
+        device_type
+    }
+}
+
+impl Drop for IndiHalImpl {
+    fn drop(&mut self) {
+        let mut indi_evt_subscr = self.indi_evt_subscr.lock().unwrap();
+        if let Some(indi_evt_subscr) = indi_evt_subscr.take() {
+            self.indi.unsubscribe(indi_evt_subscr);
+        }
+        log::info!("IndiHalImpl dropped");
     }
 }
 
@@ -36,23 +107,20 @@ impl HalImpl for IndiHalImpl {
         let mut result = Vec::new();
         let indi_devices = self.indi.get_devices_list();
         for device in indi_devices {
-            let mut type_ = DeviceType::empty();
-            let is_ccd = device.interface.contains(indi::DriverInterface::CCD);
-            if is_ccd {
-                type_.set(DeviceType::CAMERA, true);
-            }
-            if type_.contains(type_filter) {
+            let device_type = Self::driver_interface_to_dev_type(device.interface);
+
+            if device_type.contains(type_filter) {
                 result.push(DeviceInfo{
                     id: device.name.to_string(),
                     name: device.name.to_string(),
-                    type_,
+                    type_: device_type,
                 });
                 let ccd2_prop_exists = self.indi.property_exists(&device.name, "CCD2", None).unwrap_or(false);
-                if is_ccd && ccd2_prop_exists {
+                if device_type.contains(DeviceType::CAMERA) && ccd2_prop_exists {
                     result.push(DeviceInfo{
                         id: device.name.to_string() + CAM_CCD2_POSTFIX,
                         name: device.name.to_string() + CAM_CCD2_POSTFIX,
-                        type_,
+                        type_: device_type,
                     });
                 }
             };
@@ -68,10 +136,6 @@ impl HalImpl for IndiHalImpl {
             name = &id[..new_len];
             ccd = indi::CamCcd::Secondary;
         }
-        let indi_devices = self.indi.get_devices_list_by_interface(indi::DriverInterface::CCD);
-        let Some(_device_with_name) = indi_devices.iter().find(|d| *d.name == name) else {
-            eyre::bail!("Camera with ID=\"{id}\" not found");
-        };
         let camera = IndiCamera {
             id:   id.to_string(),
             name: name.to_string(),
@@ -334,8 +398,14 @@ impl Camera for IndiCamera {
 
     // Conversion gain
 
-    fn is_conversion_gain_str_supported(&self) -> eyre::Result<bool> {
+    fn is_conversion_gain_supported(&self) -> eyre::Result<bool> {
         Ok(self.indi.camera_is_conversion_gain_str_supported(&self.name)?)
+    }
+
+    fn conversion_gain_list(&self) -> eyre::Result<Vec<(String/*id*/, String/*text*/)>> {
+        let list = self.indi.camera_get_conversion_gain_items(&self.name)?;
+        let result: Vec<_> = list.iter().map(|(id, text)| (id.to_string(), text.to_string())).collect();
+        Ok(result)
     }
 
     fn set_conversion_gain(&self, id: &str) -> eyre::Result<()> {

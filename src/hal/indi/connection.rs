@@ -1301,8 +1301,13 @@ impl Connection {
     }
 
     pub fn unsubscribe_all(&self) {
+        let mut items = HashMap::new();
+
         let mut subscriptions = self.subscriptions.lock().unwrap();
-        subscriptions.items.clear();
+        std::mem::swap(&mut items, &mut subscriptions.items);
+        drop(subscriptions);
+
+        items.clear();
     }
 
     fn start_indi_server(
@@ -2642,7 +2647,7 @@ impl Connection {
     pub fn camera_get_conversion_gain_items(
         &self,
         device_name: &str
-    ) -> Result<Option<Vec<(Arc<String>, Arc<String>)>>> {
+    ) -> Result<Vec<(Arc<String>, Arc<String>)>> {
         let devices = self.devices.lock().unwrap();
         let (prop_name, _) = devices.existing_prop_name(
             device_name,
@@ -2650,9 +2655,9 @@ impl Connection {
         )?;
         let device = devices.find_by_name_res(device_name)?;
         let Some(prop) = device.get_property_opt(prop_name) else {
-            return Ok(None);
+            return Err(Error::PropertyNotExists(device_name.to_string(), prop_name.to_string()));
         };
-        Ok(Some(prop.elements
+        Ok(prop.elements
             .iter()
             .map(|e| {
                 let name = Arc::clone(&e.name);
@@ -2660,7 +2665,7 @@ impl Connection {
                 (name, caption)
             })
             .collect()
-        ))
+        )
     }
 
     pub fn camera_set_conversion_gain_str(
