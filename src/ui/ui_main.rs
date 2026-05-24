@@ -363,7 +363,6 @@ impl MainUi {
                 let res = self_.handler_close_window();
                 if res == glib::Propagation::Proceed {
                     gtk::main_iteration_do(true);
-                    self_.get_all_options();
                     *self_.self_.borrow_mut() = None;
                 }
                 res
@@ -452,10 +451,7 @@ impl MainUi {
         _ = save_json_to_config::<UiOptions>(&options, MainUi::CONF_FN);
         drop(options);
 
-        if let Ok(mut options) = self.options.try_write() {
-            let modules = self.modules.borrow();
-            modules.get_options(&mut options);
-        }
+        self.get_all_options();
 
         let modules = self.modules.borrow();
         modules.on_app_closing();
@@ -759,9 +755,12 @@ impl MainUi {
     }
 
     pub fn get_all_options(&self) {
-        let mut options = self.options.write().unwrap();
-        let modules = self.modules.borrow();
-        modules.get_options(&mut options);
+        if let Ok(mut options) = self.options.try_write() {
+            let modules = self.modules.borrow();
+            modules.get_options(&mut options);
+        } else {
+            log::error!("Fail to unlock options for changing!");
+        }
     }
 
     pub fn set_module_panel_visible(&self, panel_widget: &gtk::Widget, is_visible: bool) {
