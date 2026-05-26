@@ -3576,13 +3576,13 @@ impl Connection {
         Ok(())
     }
 
-    pub fn mount_is_timed_guide_finished(&self, device_name: &str) -> Result<bool> {
+    pub fn mount_is_timed_guiding(&self, device_name: &str) -> Result<bool> {
         let devices = self.devices.lock().unwrap();
         let property_ns = devices.get_property(device_name, "TELESCOPE_TIMED_GUIDE_NS")?;
         let property_we = devices.get_property(device_name, "TELESCOPE_TIMED_GUIDE_WE")?;
         let result =
-            matches!(property_ns.state, PropState::Ok|PropState::Idle) &&
-            matches!(property_we.state, PropState::Ok|PropState::Idle);
+            matches!(property_ns.state, PropState::Busy) &&
+            matches!(property_we.state, PropState::Busy);
         Ok(result)
     }
 

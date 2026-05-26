@@ -99,6 +99,15 @@ impl Hal {
         }
     }
 
+    pub fn telescope(&self, id: &str) -> eyre::Result<Arc<dyn Telescope + Send + Sync>> {
+        let impl_ = self.impl_.read().unwrap();
+        if let Some(impl_) = &*impl_ {
+            impl_.telescope(id)
+        } else {
+            eyre::bail!("HAL is not selected!");
+        }
+    }
+
     pub fn focuser(&self, id: &str) -> eyre::Result<Arc<dyn Focuser + Send + Sync>> {
         let impl_ = self.impl_.read().unwrap();
         if let Some(impl_) = &*impl_ {
@@ -113,6 +122,7 @@ pub trait HalImpl {
     fn state(&self) -> HalState;
     fn devices(&self, type_filter: DeviceType) -> eyre::Result<Vec<DeviceInfo>>;
     fn camera(&self, id: &str) -> eyre::Result<Arc<dyn Camera + Send + Sync>>;
+    fn telescope(&self, id: &str) -> eyre::Result<Arc<dyn Telescope + Send + Sync>>;
     fn focuser(&self, id: &str) -> eyre::Result<Arc<dyn Focuser + Send + Sync>>;
 }
 
@@ -143,6 +153,7 @@ pub trait Camera : Device {
     fn exposure_range(&self) -> eyre::Result<RangeInclusive<f64>>;
     fn start_exposure(&self, value: f64) -> eyre::Result<()>;
     fn abort_exposure(&self) -> eyre::Result<()>;
+    fn remaining_time(&self) -> eyre::Result<f64>;
 
     // Frame type
     fn set_frame_type(&self, frame_type: FrameType) -> eyre::Result<()>;
@@ -194,6 +205,25 @@ pub trait Camera : Device {
     fn is_conversion_gain_supported(&self) -> eyre::Result<bool>;
     fn conversion_gain_list(&self) -> eyre::Result<Vec<(String/*id*/, String/*text*/)>>;
     fn set_conversion_gain(&self, id: &str) -> eyre::Result<()>;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Telescope (mount)
+
+pub trait Telescope : Device {
+    fn is_abort_motion_supported(&self) -> bool;
+    fn abort_motion(&self) -> eyre::Result<()>;
+
+    fn eq_coord(&self) -> eyre::Result<(f64/*ra*/, f64/*dec*/)>;
+    fn goto_and_track(&self, ra: f64, dec: f64) -> eyre::Result<()>;
+    fn slewing(&self) -> eyre::Result<bool>;
+
+    fn is_guide_rate_supported(&self) -> eyre::Result<bool>;
+    fn guide_rate(&self) -> eyre::Result<(f64/*ra*/, f64/*dec*/)>;
+    fn can_set_guide_rate(&self) -> eyre::Result<bool>;
+    fn set_guide_rate(&self, rate_ns: f64, rate_we: f64) -> eyre::Result<()>;
+    fn pulse_guide(&self, duration_ns: f64, duration_we: f64) -> eyre::Result<()>;
+    fn is_pulse_guiding(&self) -> eyre::Result<bool>;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

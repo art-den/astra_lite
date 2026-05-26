@@ -1,6 +1,6 @@
 use std::{ops::RangeInclusive, sync::{Arc, Mutex}};
 
-use crate::hal::{Device, Focuser, FrameType, HalState, events::{HalEvent, HalEventSubscribers}, indi::Subscription};
+use crate::hal::{Device, Focuser, FrameType, HalState, Telescope, events::{HalEvent, HalEventSubscribers}, indi::Subscription};
 
 use super::{indi, HalImpl, Camera, DeviceInfo, DeviceType};
 
@@ -155,6 +155,10 @@ impl HalImpl for IndiHalImpl {
         Ok(Arc::new(camera))
     }
 
+    fn telescope(&self, id: &str) -> eyre::Result<Arc<dyn Telescope + Send + Sync>> {
+        Ok(Arc::new(self.create_indi_device(id)))
+    }
+
     fn focuser(&self, id: &str) -> eyre::Result<Arc<dyn Focuser + Send + Sync>> {
         Ok(Arc::new(self.create_indi_device(id)))
     }
@@ -253,6 +257,10 @@ impl Camera for IndiCamera {
         Ok(())
     }
 
+    fn remaining_time(&self) -> eyre::Result<f64> {
+        Ok(self.device.indi.camera_get_exposure(&self.device.name, self.ccd)?)
+    }
+
     // Frame type
 
     fn set_frame_type(&self, frame_type: FrameType) -> eyre::Result<()> {
@@ -264,11 +272,9 @@ impl Camera for IndiCamera {
         };
 
         self.device.indi.camera_set_frame_type(
-            &self.device.name,
-            self.ccd,
+            &self.device.name, self.ccd,
             frame_type,
-            true,
-            Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIME_OUT)
         )?;
         Ok(())
     }
@@ -379,8 +385,7 @@ impl Camera for IndiCamera {
         self.device.indi.camera_enable_cooler(
             &self.device.name,
             temperature.is_some(),
-            true,
-            Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIME_OUT)
         )?;
         Ok(())
     }
@@ -398,7 +403,11 @@ impl Camera for IndiCamera {
     }
 
     fn control_heater(&self, id: &str) -> eyre::Result<()> {
-        self.device.indi.camera_set_heater_str(&self.device.name, id, true, Some(SET_PROP_TIME_OUT))?;
+        self.device.indi.camera_set_heater_str(
+            &self.device.name,
+            id,
+            true, Some(SET_PROP_TIME_OUT)
+        )?;
         Ok(())
     }
 
@@ -418,8 +427,7 @@ impl Camera for IndiCamera {
         self.device.indi.camera_set_low_noise(
             &self.device.name,
             enable,
-            true,
-            Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIME_OUT)
         )?;
         Ok(())
     }
@@ -434,8 +442,7 @@ impl Camera for IndiCamera {
         self.device.indi.camera_set_high_fullwell(
             &self.device.name,
             enable,
-            true,
-            Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIME_OUT)
         )?;
         Ok(())
     }
@@ -456,12 +463,75 @@ impl Camera for IndiCamera {
         self.device.indi.camera_set_conversion_gain_str(
             &self.device.name,
             id,
-            true,
-            Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIME_OUT)
         )?;
         Ok(())
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// Telescope (mount)
+
+impl Telescope for IndiDevice {
+    fn is_abort_motion_supported(&self) -> bool {
+        true
+    }
+
+    fn abort_motion(&self) -> eyre::Result<()> {
+        self.indi.mount_abort_motion(&self.name)?;
+        Ok(())
+    }
+
+    fn eq_coord(&self) -> eyre::Result<(f64/*ra*/, f64/*dec*/)> {
+        Ok(self.indi.mount_get_eq_ra_and_dec(&self.name)?)
+    }
+
+    fn goto_and_track(&self, ra: f64, dec: f64) -> eyre::Result<()> {
+        self.indi.mount_set_after_coord_action(
+            &self.name,
+            indi::AfterCoordSetAction::Track,
+            true, Some(SET_PROP_TIME_OUT)
+        )?;
+        self.indi.mount_set_eq_coord(&self.name, ra, dec, true, None)?;
+        Ok(())
+    }
+
+    fn slewing(&self) -> eyre::Result<bool> {
+        let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.name)?;
+        Ok(crd_prop_state == indi::PropState::Busy)
+    }
+
+    fn is_guide_rate_supported(&self) -> eyre::Result<bool> {
+        Ok(self.indi.mount_is_guide_rate_supported(&self.name)?)
+    }
+
+    fn guide_rate(&self) -> eyre::Result<(f64/*ra*/, f64/*dec*/)> {
+        Ok(self.indi.mount_get_guide_rate(&self.name)?)
+    }
+
+    fn can_set_guide_rate(&self) -> eyre::Result<bool> {
+        let prop_data = self.indi.mount_get_guide_rate_prop_data(&self.name)?;
+        Ok(prop_data.permition != indi::PropPermition::RO)
+    }
+
+    fn set_guide_rate(&self, rate_ns: f64, rate_we: f64) -> eyre::Result<()> {
+        self.indi.mount_set_guide_rate(
+            &self.name,
+            rate_ns, rate_we,
+            true, Some(SET_PROP_TIME_OUT)
+        )?;
+        Ok(())
+    }
+
+    fn pulse_guide(&self, duration_ns: f64, duration_we: f64) -> eyre::Result<()> {
+        Ok(self.indi.mount_timed_guide(&self.name, duration_ns, duration_we)?)
+    }
+
+    fn is_pulse_guiding(&self) -> eyre::Result<bool> {
+        Ok(self.indi.mount_is_timed_guiding(&self.name)?)
+    }
+}
+
 
 ///////////////////////////////////////////////////////////////////////////////
 // Focuser

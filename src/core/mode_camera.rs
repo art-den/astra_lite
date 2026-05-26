@@ -1,17 +1,18 @@
-use core::f64;
-use std::{
-    any::Any, path::PathBuf, sync::{atomic::AtomicBool, Arc, Mutex, RwLock}
-};
-
+use std::{any::Any, path::PathBuf, sync::{atomic::AtomicBool, Arc, Mutex, RwLock}};
 use chrono::Utc;
-
 use crate::{
-    TimeLogger, core::{cam_starter::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode}, guiding::external_guider::*, hal::{Camera, Focuser, FrameType, indi}, image::{
+    TimeLogger,
+    core::{cam_starter::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode},
+    guiding::external_guider::*,
+    hal::{Camera, Focuser, FrameType, Telescope, indi},
+    image::{
         histogram::*,
         raw::{RawImage, RawImageInfo},
         raw_stacker::RawStacker,
         stars_offset::*,
-    }, options::*, utils::io_utils::*
+    },
+    options::*,
+    utils::io_utils::*,
 };
 
 use super::{
@@ -125,6 +126,7 @@ pub struct TackingPicturesMode {
     state:            State,
     device:           DeviceAndProp,
     mount_device:     String,
+    mount:            Option<Arc<dyn Telescope + Send + Sync>>,
     fn_gen:           Arc<Mutex<SeqFileNameGen>>,
     indi:             Arc<indi::Connection>,
     events:           Arc<Events>,
@@ -156,6 +158,7 @@ impl TackingPicturesMode {
         let Some(cam_device) = &opts.cam.device else {
             eyre::bail!("Camera is not selected");
         };
+
         let progress = match cam_mode {
             CameraMode::SavingRawFrames => {
                 if opts.raw_frames.use_cnt && opts.raw_frames.frame_cnt != 0 {
@@ -171,6 +174,7 @@ impl TackingPicturesMode {
         let qual_options = opts.quality.clone();
 
         let camera = hal.camera(&cam_options.device_id)?;
+        let mount = hal.telescope(&opts.mount.device).ok();
 
         match cam_mode {
             CameraMode::LiveStacking =>
@@ -243,6 +247,7 @@ impl TackingPicturesMode {
             fname_utils:      FileNameUtils::default(),
             exp_for_restart:  None,
             camera,
+            mount,
             cam_mode,
             live_stacking,
             cam_options,
@@ -568,7 +573,10 @@ impl TackingPicturesMode {
             return Ok(());
         }
 
-        let mount_device_active = self.indi.is_device_enabled(&self.mount_device).unwrap_or(false);
+        let mount_device_active = self.mount
+                .as_ref()
+                .map(|m| m.is_active().unwrap_or(false))
+                .unwrap_or(false);
         if !mount_device_active {
             return Ok(());
         }
@@ -648,17 +656,11 @@ impl TackingPicturesMode {
         mut ra_pulse: f64,
         mut dec_pulse: f64
     ) -> eyre::Result<()> {
-        let can_set_guide_rate =
-            self.indi.mount_is_guide_rate_supported(&self.mount_device)? &&
-            self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.permition == indi::PropPermition::RW;
+        let mount = self.mount.as_ref().expect("Mount");
+
+        let can_set_guide_rate = mount.is_guide_rate_supported()? && mount.can_set_guide_rate()?;
         if can_set_guide_rate {
-            self.indi.mount_set_guide_rate(
-                &self.mount_device,
-                MOUNT_CALIBR_SPEED,
-                MOUNT_CALIBR_SPEED,
-                true,
-                INDI_SET_PROP_TIMEOUT
-            )?;
+            mount.set_guide_rate(MOUNT_CALIBR_SPEED, MOUNT_CALIBR_SPEED)?;
         }
         let (max_dec, max_ra) = self.indi.mount_get_timed_guide_max(&self.mount_device)?;
         let max_dec = f64::min(MAX_TIMED_GUIDE_TIME * 1000.0, max_dec).round();
@@ -794,7 +796,6 @@ impl TackingPicturesMode {
             // Start next job/mode
             match self.next_job.take() {
                 Some(NextJob::MountCalibration) => {
-                    let indi = Arc::clone(&self.indi);
                     let options = Arc::clone(&self.options);
 
                     let start_mode_mnt_calibr_fun = move |_core: &Arc<Core>, mode: &mut ModeData| -> eyre::Result<()> {
@@ -802,7 +803,6 @@ impl TackingPicturesMode {
                         let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
                         let mut new_mode = MountCalibrMode::new(
                             _core.hal(),
-                            &indi,
                             &options,
                             Some(prev_mode)
                         )?;
@@ -1495,7 +1495,7 @@ impl Mode for TackingPicturesMode {
         let mut result = NotifyResult::Empty;
         match &mut self.state {
             State::InternalMountCorrection(ok_time_ms) => {
-                let guide_pulse_finished = self.indi.mount_is_timed_guide_finished(&self.mount_device)?;
+                let guide_pulse_finished = !self.indi.mount_is_timed_guiding(&self.mount_device)?;
                 if guide_pulse_finished {
                     *ok_time_ms += timer_period_ms;
                     if *ok_time_ms >= AFTER_MOUNT_MOVE_WAIT_TIME * 1000 {

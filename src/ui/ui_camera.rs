@@ -588,6 +588,16 @@ impl CameraUi {
             })
         );
 
+        self.widgets.ctrl.spb_temp.connect_value_changed(
+            clone!(@weak self as self_ => move |spb| {
+                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                options.cam.ctrl.temperature = spb.value();
+                self_.show_calibr_file_for_frame(&options);
+                drop(options);
+                self_.core.events().notify(Event::CameraCoolingOptionsChanged);
+            })
+        );
+
         self.widgets.ctrl.cb_heater.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
@@ -609,16 +619,6 @@ impl CameraUi {
                 drop(options);
                 self_.correct_widgets_props();
                 gtk_utils::show_message_if_result_is_error(Some(&self_.window), &res);
-            })
-        );
-
-        self.widgets.ctrl.spb_temp.connect_value_changed(
-            clone!(@weak self as self_ => move |spb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
-                options.cam.ctrl.temperature = spb.value();
-                self_.show_calibr_file_for_frame(&options);
-                drop(options);
-                self_.core.events().notify(Event::CameraCoolingOptionsChanged);
             })
         );
 
@@ -1464,7 +1464,7 @@ impl CameraUi {
     }
 
     fn handler_live_view_changed(&self) {
-        if self.core.indi().state() != indi::ConnState::Connected {
+        if self.core.hal().state() != HalState::Connected {
             return;
         }
         if self.core.options().read().unwrap().cam.live_view {
@@ -1609,12 +1609,10 @@ impl CameraUi {
             return;
         };
         if cur_exposure < 1.0 { return; };
-        let options = self.core.options().read().unwrap();
-        let Some(device) = &options.cam.device else { return; };
-        let cam_ccd = indi::CamCcd::from_ccd_prop_name(&device.prop);
-        let Ok(exposure) = self.core.indi().camera_get_exposure(&device.name, cam_ccd) else { return; };
-        let progress = ((cur_exposure - exposure) / cur_exposure).clamp(0.0, 1.0);
-        let text_to_show = format!("{:.0} / {:.0}", cur_exposure - exposure, cur_exposure);
+        let Some(camera) = &*self.camera.borrow() else { return; };
+        let Ok(remaining_time) = camera.remaining_time() else { return; };
+        let progress = ((cur_exposure - remaining_time) / cur_exposure).clamp(0.0, 1.0);
+        let text_to_show = format!("{:.0} / {:.0}", cur_exposure - remaining_time, cur_exposure);
         exec_and_show_error(Some(&self.window), || {
             draw_progress_bar(area, cr, progress, &text_to_show)
         });

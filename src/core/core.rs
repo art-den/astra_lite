@@ -817,7 +817,6 @@ impl Core {
     pub fn start_mount_calibr(&self) -> eyre::Result<()> {
         let mode = MountCalibrMode::new(
             &self.hal,
-            &self.indi,
             &self.options,
             None
         )?;

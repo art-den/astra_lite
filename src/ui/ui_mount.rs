@@ -589,7 +589,7 @@ impl MountUi {
             .map(|v| v == indi::PropState::Busy)
             .unwrap_or(false);
 
-        let is_correction = !self.indi.mount_is_timed_guide_finished(mount_device).unwrap_or(true);
+        let is_correction = self.indi.mount_is_timed_guiding(mount_device).unwrap_or(true);
         let is_moved = self.indi.mount_is_moving(mount_device)
             .unwrap_or(false);
 

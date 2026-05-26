@@ -1,7 +1,7 @@
 use std::{sync::{Arc, RwLock}, f64::consts::PI};
 use itertools::Itertools;
 use crate::{
-    core::cam_starter::take_shot, hal::{Camera, FrameType, Hal, indi}, image::{stars::*, stars_offset::*}, options::*, utils::math::*
+    core::cam_starter::take_shot, hal::{Camera, FrameType, Hal, Telescope}, image::{stars::*, stars_offset::*}, options::*, utils::math::*
 };
 use super::{consts::*, core::*, events::*, frame_processing::*, utils::*};
 
@@ -40,14 +40,13 @@ impl MountMoveCalibrRes {
 
 pub struct MountCalibrMode {
     camera:            Arc<dyn Camera + Send + Sync>,
-    indi:              Arc<indi::Connection>,
+    telescope:         Arc<dyn Telescope + Send + Sync>,
     state:             State,
     axis:              Axis,
     cam_opts:          CamOptions,
-    telescope:         TelescopeOptions,
+    telescope_opts:    TelescopeOptions,
     start_dec:         f64,
     start_ra:          f64,
-    mount_device:      String,
     camera_dev:        DeviceAndProp,
     attempt_num:       usize,
     attempts:          Vec<CalibrAtempt>,
@@ -82,13 +81,13 @@ struct CalibrAtempt {
 impl MountCalibrMode {
     pub fn new(
         hal:       &Hal,
-        indi:      &Arc<indi::Connection>,
         options:   &Arc<RwLock<Options>>,
         next_mode: Option<Box<dyn Mode + Sync + Send>>,
     ) -> eyre::Result<Self> {
         let opts = options.read().unwrap();
 
         let camera = hal.camera(&opts.cam.device_id)?;
+        let telescope = hal.telescope(&opts.mount.device)?;
 
         let Some(cam_device) = &opts.cam.device else {
             eyre::bail!("Camera is not selected");
@@ -102,14 +101,11 @@ impl MountCalibrMode {
             camera.gain_range()?
         );
         Ok(Self {
-            camera:            Arc::clone(&camera),
-            indi:              Arc::clone(indi),
             state:             State::Undefined,
             axis:              Axis::Undefined,
-            telescope:         opts.telescope.clone(),
+            telescope_opts:    opts.telescope.clone(),
             start_dec:         0.0,
             start_ra:          0.0,
-            mount_device:      opts.mount.device.clone(),
             camera_dev:        cam_device.clone(),
             attempt_num:       0,
             attempts:          Vec::new(),
@@ -119,6 +115,8 @@ impl MountCalibrMode {
             result:            MountMoveCalibrRes::default(),
             can_change_g_rate: false,
             calibr_speed:      0.0,
+            camera,
+            telescope,
             cam_opts,
             next_mode,
         })
@@ -131,15 +129,14 @@ impl MountCalibrMode {
             &self.cam_opts.ctrl
         )?;
 
-        let guid_rate_supported = self.indi.mount_is_guide_rate_supported(&self.mount_device)?;
+        let guid_rate_supported = self.telescope.is_guide_rate_supported()?;
         self.can_change_g_rate =
-            guid_rate_supported &&
-            self.indi.mount_get_guide_rate_prop_data(&self.mount_device)?.permition == indi::PropPermition::RW;
+            guid_rate_supported && self.telescope.can_set_guide_rate()?;
 
         if self.can_change_g_rate {
             self.calibr_speed = MOUNT_CALIBR_SPEED;
         } else if guid_rate_supported {
-            self.calibr_speed = self.indi.mount_get_guide_rate(&self.mount_device)?.0;
+            self.calibr_speed = self.telescope.guide_rate()?.0;
         } else {
             self.calibr_speed = 1.0;
         }
@@ -210,29 +207,11 @@ impl MountCalibrMode {
                 if let Some(next_mode) = &mut self.next_mode {
                     next_mode.set_or_correct_value(&mut self.result);
                 }
-                self.restore_orig_coords()?;
+                self.telescope.goto_and_track(self.start_ra, self.start_dec)?;
                 self.state = State::WaitForOrigCoords(0);
             }
             _ => unreachable!()
         }
-        Ok(())
-    }
-
-    fn restore_orig_coords(&self) -> eyre::Result<()> {
-        self.indi.mount_set_after_coord_action(
-            &self.mount_device,
-            indi::AfterCoordSetAction::Track,
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
-
-        self.indi.mount_set_eq_coord(
-            &self.mount_device,
-            self.start_ra,
-            self.start_dec,
-            true,
-            None
-        )?;
         Ok(())
     }
 
@@ -249,7 +228,7 @@ impl MountCalibrMode {
                     let min_size = f64::min(info.image.width as f64, info.image.height as f64);
                     let min_pix_size = f64::min(pix_size_x, pix_size_y);
                     let cam_size_mm = min_size * min_pix_size / 1000.0;
-                    let camera_angle = f64::atan2(cam_size_mm, self.telescope.real_focal_length());
+                    let camera_angle = f64::atan2(cam_size_mm, self.telescope_opts.real_focal_length());
                     let sky_angle_in_seconds = 2.0 * PI / (60.0 * 60.0 * 24.0);
                     // time when point went all camera matrix on sky rotation speed = DITHER_CALIBR_SPEED
                     let cam_time = camera_angle / (sky_angle_in_seconds * self.calibr_speed);
@@ -277,15 +256,9 @@ impl MountCalibrMode {
                     _ => unreachable!()
                 };
                 if self.can_change_g_rate {
-                    self.indi.mount_set_guide_rate(
-                        &self.mount_device,
-                        MOUNT_CALIBR_SPEED,
-                        MOUNT_CALIBR_SPEED,
-                        true,
-                        INDI_SET_PROP_TIMEOUT
-                    )?;
+                    self.telescope.set_guide_rate(MOUNT_CALIBR_SPEED, MOUNT_CALIBR_SPEED)?;
                 }
-                self.indi.mount_timed_guide(&self.mount_device, ns, we)?;
+                self.telescope.pulse_guide(ns, we)?;
                 self.state = State::WaitForSlew(0);
             }
         } else {
@@ -312,7 +285,7 @@ impl Mode for MountCalibrMode {
     }
 
     fn abort(&mut self) -> eyre::Result<()> {
-        self.restore_orig_coords()?;
+        self.telescope.goto_and_track(self.start_ra, self.start_dec)?;
         Ok(())
     }
 
@@ -340,8 +313,9 @@ impl Mode for MountCalibrMode {
     }
 
     fn start(&mut self) -> eyre::Result<()> {
-        self.start_dec = self.indi.mount_get_eq_dec(&self.mount_device)?;
-        self.start_ra = self.indi.mount_get_eq_ra(&self.mount_device)?;
+        let (ra, dec) = self.telescope.eq_coord()?;
+        self.start_dec = ra;
+        self.start_ra = dec;
         self.start_for_axis(Axis::Ra)?;
         Ok(())
     }
@@ -363,11 +337,14 @@ impl Mode for MountCalibrMode {
         let mut result = NotifyResult::Empty;
         match &mut self.state {
             State::WaitForSlew(ok_time_ms) => {
-                let guide_pulse_finished = self.indi.mount_is_timed_guide_finished(&self.mount_device)?;
+                let guide_pulse_finished = !self.telescope.is_pulse_guiding()?;
                 if guide_pulse_finished {
                     *ok_time_ms += timer_period_ms;
                     if *ok_time_ms >= AFTER_MOUNT_MOVE_WAIT_TIME * 1000 {
-                        self.indi.mount_abort_motion(&self.mount_device)?;
+                        if self.telescope.is_abort_motion_supported() {
+                            self.telescope.abort_motion()?
+                        }
+
                         take_shot(
                             &self.camera,
                             &self.cam_opts.frame,
@@ -379,8 +356,7 @@ impl Mode for MountCalibrMode {
                 }
             }
             State::WaitForOrigCoords(ok_time_ms) => {
-                let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.mount_device)?;
-                if matches!(crd_prop_state, indi::PropState::Ok|indi::PropState::Idle) {
+                if !self.telescope.slewing()? {
                     *ok_time_ms += timer_period_ms;
                     if *ok_time_ms >= AFTER_GOTO_WAIT_TIME {
                         result = NotifyResult::Finished {
