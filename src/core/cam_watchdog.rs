@@ -74,14 +74,14 @@ impl CameraWatchdog {
         timer_period_ms: usize,
         mode:            &mut ModeData,
         options:         &Options,
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         if self.indi.state() != indi::ConnState::Connected {
             return Ok(());
         }
 
         let Some(cam_device) = &options.cam.device else { return Ok(()); };
 
-        let is_waiting_for_blob_now = || -> eyre::Result<bool> {
+        let is_waiting_for_blob_now = || -> anyhow::Result<bool> {
             let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_device.prop);
             let exp_prop = self.indi.camera_get_exposure_property(&cam_device.name, cam_ccd);
             let Ok((exp_prop, exp_prop_elem)) = exp_prop else {
@@ -131,7 +131,7 @@ impl CameraWatchdog {
                 *time_ms += timer_period_ms;
                 if *time_ms >= WAIT_EXPOSURE_TIME * 1000 {
                     self.mode = Mode::Waiting;
-                    eyre::bail!("Waiting camera restart too long time (>{}s)!", WAIT_EXPOSURE_TIME);
+                    anyhow::bail!("Waiting camera restart too long time (>{}s)!", WAIT_EXPOSURE_TIME);
                 }
             }
 
@@ -177,7 +177,7 @@ impl CameraWatchdog {
         &mut self,
         cur_cam_device: &Option<DeviceAndProp>,
         prop_change:    &indi::PropChangeEvent
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         let Some(cur_cam_device) = cur_cam_device else { return Ok(()); };
 
         if cur_cam_device.name != *prop_change.device_name {
@@ -250,8 +250,8 @@ impl CameraWatchdog {
         Ok(())
     }
 
-    pub fn control_camera_cooling(&self, options: &CamCtrlOptions) -> eyre::Result<()> {
-        let camera = self.camera.as_ref().ok_or_else(|| eyre::eyre!("Camera is not defined"))?;
+    pub fn control_camera_cooling(&self, options: &CamCtrlOptions) -> anyhow::Result<()> {
+        let camera = self.camera.as_ref().ok_or_else(|| anyhow::anyhow!("Camera is not defined"))?;
 
         if camera.is_cooler_supported()? {
             if options.enable_cooler {
@@ -269,7 +269,7 @@ impl CameraWatchdog {
         cam_device: &str,
         options:    &Options,
         force_set:  bool,
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         if indi.camera_is_fan_supported(cam_device)? {
             let fan_enabled = options.cam.ctrl.enable_fan || options.cam.ctrl.enable_cooler;
             log::info!("Setting camera fan = {}", fan_enabled);
@@ -288,7 +288,7 @@ impl CameraWatchdog {
         cam_device: &str,
         options:    &Options,
         force_set:  bool,
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         if indi.camera_is_heater_str_supported(cam_device)? {
             if let Some(heater_str) = &options.cam.ctrl.heater_str {
                 log::info!("Setting camera heater = {}", heater_str);
@@ -307,7 +307,7 @@ impl CameraWatchdog {
         &self,
         indi:       &Arc<indi::Connection>,
         cam_device: &str,
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         if cam_device.contains(" Simulator") // don't do it for simulators
         || cam_device.is_empty() {
             return Ok(());
@@ -324,7 +324,7 @@ impl CameraWatchdog {
         Ok(())
     }
 
-    fn restart_camera_exposure(&self, mode: &mut ModeData, options: &Options) -> eyre::Result<()> {
+    fn restart_camera_exposure(&self, mode: &mut ModeData, options: &Options) -> anyhow::Result<()> {
         let Some(cam_device) = mode.active.cam_device().cloned() else { return Ok(()); };
         log::info!("Begin restart exposure of camera {}...", cam_device.name);
 
@@ -357,8 +357,8 @@ impl CameraWatchdog {
     pub fn set_focal_len_for_indi_devices(
         indi:    &Arc<indi::Connection>,
         options: &Options
-    ) -> eyre::Result<()> {
-        let set_focal_len_for_device = |device_name: &str, focal_len: f64| -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
+        let set_focal_len_for_device = |device_name: &str, focal_len: f64| -> anyhow::Result<()> {
             log::info!("Setting focal len {:.1} for camera \"{}\"", focal_len, device_name);
             indi.camera_set_telescope_focal_len(
                 device_name,

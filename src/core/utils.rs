@@ -342,7 +342,7 @@ pub fn check_telescope_is_at_desired_position(
     mount_dev:           &str,
     desired_pos:         &EqCoord,
     tolerance_in_degree: f64,
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     let (cur_ra, cur_dec) = indi.mount_get_eq_ra_and_dec(mount_dev)?;
     let cur_pos = EqCoord {
         ra: hour_to_radian(cur_ra),
@@ -350,7 +350,7 @@ pub fn check_telescope_is_at_desired_position(
     };
     let diff = EqCoord::angle_between(&cur_pos, desired_pos);
     if radian_to_degree(diff) > tolerance_in_degree {
-        eyre::bail!("Tepescope position is too far from desired one");
+        anyhow::bail!("Tepescope position is too far from desired one");
     }
     Ok(())
 }

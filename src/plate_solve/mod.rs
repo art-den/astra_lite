@@ -96,16 +96,16 @@ impl PlateSolver {
         &mut self,
         data:   &PlateSolverInData,
         config: &PlateSolveConfig
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         match data {
             PlateSolverInData::Image(image) => {
                 if image.is_empty() {
-                    eyre::bail!("Image is empty!");
+                    anyhow::bail!("Image is empty!");
                 }
             }
             PlateSolverInData::Stars { stars, .. } => {
                 if stars.is_empty() {
-                    eyre::bail!("No stars for platesolving!");
+                    anyhow::bail!("No stars for platesolving!");
                 }
             }
         }
@@ -135,7 +135,7 @@ impl PlateSolver {
         self.solver.abort();
     }
 
-    pub fn get_result(&mut self) -> eyre::Result<PlateSolveResult> {
+    pub fn get_result(&mut self) -> anyhow::Result<PlateSolveResult> {
         self.solver.get_result()
     }
 
@@ -146,9 +146,9 @@ impl PlateSolver {
 
 trait PlateSolverIface {
     fn support_stars_as_input(&self) -> bool;
-    fn start(&mut self, data: &PlateSolverInData, config: &PlateSolveConfig) -> eyre::Result<()>;
+    fn start(&mut self, data: &PlateSolverInData, config: &PlateSolveConfig) -> anyhow::Result<()>;
     fn abort(&mut self);
-    fn get_result(&mut self) -> eyre::Result<PlateSolveResult>;
+    fn get_result(&mut self) -> anyhow::Result<PlateSolveResult>;
     fn reset(&mut self);
 }
 

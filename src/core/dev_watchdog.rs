@@ -41,7 +41,7 @@ impl DevicesWatchdog {
     pub fn notify_indi_prop_change(
         &mut self,
         prop_change: &indi::PropChangeEvent,
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         match &prop_change.change {
             indi::PropChange::New {
                 prop_name,
@@ -94,7 +94,7 @@ impl DevicesWatchdog {
         }
     }
 
-    pub fn notify_timer(&mut self, timer_period_ms: usize) -> eyre::Result<()> {
+    pub fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<()> {
         for dev in &mut self.not_connected_yet {
             dev.wait_time_ms += timer_period_ms;
         }

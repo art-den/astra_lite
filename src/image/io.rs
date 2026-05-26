@@ -21,9 +21,9 @@ pub fn find_mono_image_hdu_in_fits(reader: &FitsReader) -> Option<&Header> {
 pub fn load_raw_image_from_fits_reader(
     reader: &FitsReader,
     stream: &mut impl SeekNRead
-) -> eyre::Result<RawImage> {
+) -> anyhow::Result<RawImage> {
     let Some(image_hdu) = find_mono_image_hdu_in_fits(reader) else {
-        eyre::bail!("No RAW image found in fits data");
+        anyhow::bail!("No RAW image found in fits data");
     };
     let info = RawImageInfo::new_from_fits_header(image_hdu);
     let mut data = vec![0; image_hdu.data_len()];
@@ -32,12 +32,12 @@ pub fn load_raw_image_from_fits_reader(
     Ok(RawImage::new(info, data, cfa_arrary))
 }
 
-pub fn load_raw_image_from_fits_stream(stream: &mut impl SeekNRead) -> eyre::Result<RawImage> {
+pub fn load_raw_image_from_fits_stream(stream: &mut impl SeekNRead) -> anyhow::Result<RawImage> {
     let reader = FitsReader::new(stream)?;
     load_raw_image_from_fits_reader(&reader, stream)
 }
 
-pub fn load_raw_image_from_fits_file(file_name: &Path) -> eyre::Result<RawImage> {
+pub fn load_raw_image_from_fits_file(file_name: &Path) -> anyhow::Result<RawImage> {
     let file = File::open(file_name)?;
     let mut reader = BufReader::with_capacity(1024*1024, file);
     load_raw_image_from_fits_stream(&mut reader)
@@ -50,7 +50,7 @@ pub fn load_raw_image_from_fits_file(file_name: &Path) -> eyre::Result<RawImage>
 pub fn save_image_layer_to_tif_file(
     image_layer: &ImageLayer<u16>,
     file_name:   &Path
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     use tiff::encoder::*;
     let mut file = BufWriter::new(File::create(file_name)?);
     let mut decoder = TiffEncoder::new(&mut file)?;
@@ -77,7 +77,7 @@ pub fn save_image_layer_to_tif_file(
 pub fn load_image_from_tif_file(
     image:     &mut Image,
     file_name: &Path
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     let stream = BufReader::new(File::open(file_name)?);
     use tiff::decoder::*;
 
@@ -88,7 +88,7 @@ pub fn load_image_from_tif_file(
         y2:     usize,
         is_rgb: bool,
         cvt:    fn (from: S) -> u16
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         let from = y1 * img.width();
         let to = y2 * img.width();
         if is_rgb {
@@ -122,7 +122,7 @@ pub fn load_image_from_tif_file(
             true
         }
         ct =>
-            eyre::bail!("Color type {:?} unsupported", ct)
+            anyhow::bail!("Color type {:?} unsupported", ct)
     };
 
     let chunk_size_y = decoder.chunk_dimensions().1 as usize;
@@ -146,14 +146,14 @@ pub fn load_image_from_tif_file(
                 assign_img_data(&data, image, y1, y2, is_rgb, |v| (v * u16::MAX as f64) as u16),
 
             _ =>
-                Err(eyre::eyre!("Format unsupported"))
+                Err(anyhow::anyhow!("Format unsupported"))
         }?;
     }
 
     Ok(())
 }
 
-pub fn save_image_to_tif_file(image: &Image, file_name: &Path) -> eyre::Result<()> {
+pub fn save_image_to_tif_file(image: &Image, file_name: &Path) -> anyhow::Result<()> {
     if image.is_monochrome() {
         save_image_layer_to_tif_file(&image.l, file_name)?;
     } else if image.is_color() {
@@ -201,7 +201,7 @@ pub fn load_image_from_fits_reader(
     image:  &mut Image,
     reader: &FitsReader,
     stream: &mut impl SeekNRead
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     let mono_hdu = find_mono_image_hdu_in_fits(reader);
     let color_hdu = find_color_image_hdu_in_fits(reader);
     if let Some(hdu) = mono_hdu {
@@ -218,7 +218,7 @@ pub fn load_image_from_fits_reader(
         FitsReader::read_data(hdu, stream,     one_color_bytes_len, image.g.as_slice_mut())?;
         FitsReader::read_data(hdu, stream, 2 * one_color_bytes_len, image.b.as_slice_mut())?;
     } else {
-        eyre::bail!("No image found in fits");
+        anyhow::bail!("No image found in fits");
     }
     Ok(())
 }
@@ -227,13 +227,13 @@ pub fn load_image_using_pixbuf(
     image:     &mut Image,
     file_name: &Path,
     max_size:  usize,
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_file(file_name)?;
     let pixbuf = limit_pixbuf_by_longest_size(pixbuf, max_size as i32);
     let has_alpha = pixbuf.has_alpha();
     let bytes = pixbuf
         .pixel_bytes()
-        .ok_or_else(|| eyre::eyre!("pixbuf dosn't contain pixel_bytes()"))?;
+        .ok_or_else(|| anyhow::anyhow!("pixbuf dosn't contain pixel_bytes()"))?;
 
     let width = pixbuf.width() as usize;
     let height = pixbuf.height() as usize;

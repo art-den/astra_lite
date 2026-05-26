@@ -316,7 +316,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
     params:    &Option<CalibrParams>,
     raw_image: &mut RawImage,
     calibr:    &mut CalibrData,
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     let Some(params) = params else { return Ok(()); };
 
     let image_info = raw_image.info();
@@ -378,7 +378,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
             );
             let tmr = TimeLogger::start();
             let subtract_image = load_raw_image_from_fits_file(file_name)
-                .map_err(|e| eyre::eyre!(
+                .map_err(|e| anyhow::anyhow!(
                     "Error '{}'\nwhen reading master dark '{}'",
                     e.to_string(),
                     file_name.to_str().unwrap_or_default()
@@ -406,7 +406,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
         if let Some(file_name) = &params.flat_fname {
             let tmr = TimeLogger::start();
             let mut master_flat = load_raw_image_from_fits_file(file_name)
-                .map_err(|e| eyre::eyre!(
+                .map_err(|e| anyhow::anyhow!(
                     "Error '{}'\nreading master flat '{}'",
                     e.to_string(),
                     file_name.to_str().unwrap_or_default()
@@ -434,7 +434,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
     if let (Some(file_name), Some(dark_image)) = (&subtrack_fname, &calibr.subtract_image) {
         let tmr = TimeLogger::start();
         raw_image.subtract_dark_or_bias(dark_image)
-            .map_err(|err| eyre::eyre!(
+            .map_err(|err| anyhow::anyhow!(
                 "Error {}\nwhen trying to subtract image {}",
                 err.to_string(),
                 file_name.to_str().unwrap_or_default()
@@ -448,7 +448,7 @@ fn apply_calibr_data_and_remove_hot_pixels(
     if let (Some(file_name), Some(flat_image)) = (&params.flat_fname, &calibr.master_flat) {
         let tmr = TimeLogger::start();
         raw_image.apply_flat(flat_image)
-            .map_err(|err| eyre::eyre!(
+            .map_err(|err| anyhow::anyhow!(
                 "Error {}\nwher trying to apply flat image {}",
                 err.to_string(),
                 file_name.to_str().unwrap_or_default()
@@ -544,16 +544,16 @@ impl ImageLoader<'_> {
         }
     }
 
-    fn load_raw_image(&mut self) -> eyre::Result<RawImage> {
+    fn load_raw_image(&mut self) -> anyhow::Result<RawImage> {
         match self {
             Self::Fits(reader, stream) =>
                 load_raw_image_from_fits_reader(reader, stream),
             _ =>
-                eyre::bail!("Format not support raw images"),
+                anyhow::bail!("Format not support raw images"),
         }
     }
 
-    fn load_image(&mut self, image: &mut Image) -> eyre::Result<()> {
+    fn load_image(&mut self, image: &mut Image) -> anyhow::Result<()> {
         match self {
             Self::Fits(reader, stream) =>
                 load_image_from_fits_reader(image, reader, stream)?,
@@ -569,7 +569,7 @@ impl ImageLoader<'_> {
 fn make_preview_image_impl(
     command:    &FrameProcessCommandData,
     result_fun: &ResultFun
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     if command.stop_flag.load(Ordering::Relaxed) {
         log::debug!("Command stopped");
         return Ok(());
@@ -623,14 +623,14 @@ fn make_preview_image_impl(
             unreachable!();
         }
     } else {
-        eyre::bail!("Image format {} is not supported", type_hint);
+        anyhow::bail!("Image format {} is not supported", type_hint);
     };
 
     let is_raw_image = loader.is_raw_image();
     let is_ready_mage = loader.is_ready_image();
 
     if !is_raw_image && !is_ready_mage {
-        eyre::bail!("No supported image found in {}", type_hint);
+        anyhow::bail!("No supported image found in {}", type_hint);
     }
 
     let mut frame_type = FrameType::Lights;
@@ -1193,7 +1193,7 @@ fn make_preview_image_impl(
                         .join("Result");
                     if !file_path.exists() {
                         std::fs::create_dir_all(&file_path)
-                            .map_err(|e|eyre::eyre!(
+                            .map_err(|e|anyhow::anyhow!(
                                 "Error '{}'\nwhen trying to create directory '{}' for saving result live stack image",
                                 e.to_string(),
                                 file_path.to_str().unwrap_or_default()

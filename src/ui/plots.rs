@@ -75,7 +75,7 @@ pub fn draw_plots(
     plots: &Plots,
     da:    &gtk::DrawingArea,
     ctx:   &gtk::cairo::Context,
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     let range = calc_data_range(plots);
     let margin = 8.0;
     let area_rect =
@@ -188,7 +188,7 @@ fn calc_plot_area(
     range:  &Option<DataRange>,
     da:     &gtk::DrawingArea,
     ctx:    &gtk::cairo::Context,
-) -> eyre::Result<AreaRect> {
+) -> anyhow::Result<AreaRect> {
     let Some(range) = range else {
         return Ok(AreaRect{
             left: margin,
@@ -217,7 +217,7 @@ fn draw_plot_lines(
     range:     &DataRange,
     area_rect: &AreaRect,
     ctx:       &gtk::cairo::Context,
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     let points_count = (plots.get_plot_points_cnt)(plot_idx);
     if points_count < 2 {
         return Ok(());
@@ -248,7 +248,7 @@ fn draw_plot_points(
     range:     &DataRange,
     area_rect: &AreaRect,
     ctx:       &gtk::cairo::Context,
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     let points_count = (plots.get_plot_points_cnt)(plot_idx);
     if points_count == 0 {
         return Ok(());
@@ -289,7 +289,7 @@ fn draw_left_axis(
     ctx:       &gtk::cairo::Context,
     layout:    &pango::Layout,
     def_fg:    &gtk::gdk::RGBA,
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     let font_height = ctx.text_extents("0")?.height();
     let max_y_cnt = f64::ceil((area_rect.bottom - area_rect.top) / (3.0 * font_height));
     let y_range = range.max_y - range.min_y;
@@ -350,7 +350,7 @@ fn draw_bottom_axis(
     ctx:       &gtk::cairo::Context,
     layout:    &pango::Layout,
     def_fg:    &gtk::gdk::RGBA,
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     let dec_digits = plots.bottom_axis.dec_digits;
     let sample_text = format!("{:.dec_digits$}", range.max_x);
     let text_width = ctx.text_extents(&sample_text)?.width();

@@ -150,13 +150,13 @@ pub struct TackingPicturesMode {
 }
 
 impl TackingPicturesMode {
-    pub fn new(cam_mode: CameraMode, core: &Core) -> eyre::Result<Self> {
+    pub fn new(cam_mode: CameraMode, core: &Core) -> anyhow::Result<Self> {
         let hal = core.hal();
         let options = core.options();
         let opts = options.read().unwrap();
 
         let Some(cam_device) = &opts.cam.device else {
-            eyre::bail!("Camera is not selected");
+            anyhow::bail!("Camera is not selected");
         };
 
         let progress = match cam_mode {
@@ -303,7 +303,7 @@ impl TackingPicturesMode {
         &mut self,
         frame_options:         FrameOptions,
         store_exp_for_restart: bool
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         take_shot(&self.camera, &frame_options, &self.cam_options.ctrl)?;
         if store_exp_for_restart {
             self.exp_for_restart = Some(frame_options.exposure());
@@ -322,7 +322,7 @@ impl TackingPicturesMode {
         )
     }
 
-    fn start_or_continue(&mut self) -> eyre::Result<()> {
+    fn start_or_continue(&mut self) -> anyhow::Result<()> {
         if !self.flags.skip_frame_done && self.need_skip_first_frame() {
             // First frame must be skiped
             // for saving frames and live stacking mode
@@ -369,7 +369,7 @@ impl TackingPicturesMode {
         Ok(())
     }
 
-    fn start_first_shot_that_will_be_skipped(&mut self) -> eyre::Result<()> {
+    fn start_first_shot_that_will_be_skipped(&mut self) -> anyhow::Result<()> {
         let mut frame_opts = self.cam_options.frame.clone();
         const MAX_EXP: f64 = 1.0;
         if frame_opts.exposure() > MAX_EXP {
@@ -381,7 +381,7 @@ impl TackingPicturesMode {
         Ok(())
     }
 
-    fn start_bias_calc_frame(&mut self) -> eyre::Result<()> {
+    fn start_bias_calc_frame(&mut self) -> anyhow::Result<()> {
         let mut frame_opts = self.cam_options.frame.clone();
         frame_opts.exp_bias = 1e-10;
         frame_opts.frame_type = FrameType::Biases;
@@ -392,7 +392,7 @@ impl TackingPicturesMode {
         Ok(())
     }
 
-    fn start_flat_exp_calc_frame(&mut self, exp: f64) -> eyre::Result<()> {
+    fn start_flat_exp_calc_frame(&mut self, exp: f64) -> anyhow::Result<()> {
         let mut frame_opts = self.cam_options.frame.clone();
         frame_opts.exp_flat = exp;
         frame_opts.frame_type = FrameType::Flats;
@@ -402,7 +402,7 @@ impl TackingPicturesMode {
         Ok(())
     }
 
-    fn start_offset_calculation_shot(&mut self) -> eyre::Result<()> {
+    fn start_offset_calculation_shot(&mut self) -> anyhow::Result<()> {
         if let Some(offset_calc) = &self.cam_offset_calc {
             let mut frame_opts = self.cam_options.frame.clone();
             if offset_calc.step % 2 == 0 { frame_opts.offset = 0; }
@@ -411,7 +411,7 @@ impl TackingPicturesMode {
         Ok(())
     }
 
-    fn generate_output_file_names(&mut self) -> eyre::Result<()> {
+    fn generate_output_file_names(&mut self) -> anyhow::Result<()> {
         let options = self.options.read().unwrap();
 
         let time = Utc::now();
@@ -462,7 +462,7 @@ impl TackingPicturesMode {
     fn process_light_frame_info_and_refocus(
         &mut self,
         info: &LightFrameInfoData,
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         let Some(autofocuser) = &mut self.autofocuser else {
             return Ok(());
         };
@@ -568,7 +568,7 @@ impl TackingPicturesMode {
     fn process_light_frame_info_and_dither_by_main_camera(
         &mut self,
         info: &LightFrameInfoData,
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         if !info.quality.is_ok() {
             return Ok(());
         }
@@ -655,7 +655,7 @@ impl TackingPicturesMode {
         &mut self,
         mut ra_pulse: f64,
         mut dec_pulse: f64
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         let mount = self.mount.as_ref().expect("Mount");
 
         let can_set_guide_rate = mount.is_guide_rate_supported()? && mount.can_set_guide_rate()?;
@@ -680,7 +680,7 @@ impl TackingPicturesMode {
     fn process_light_frame_info_and_dither_by_ext_guider(
         &mut self,
         info: &LightFrameInfoData,
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         if !info.quality.is_ok() {
             return Ok(());
         }
@@ -711,7 +711,7 @@ impl TackingPicturesMode {
         Ok(())
     }
 
-    fn start_dithering_in_external_guider_mode(&mut self) -> eyre::Result<()> {
+    fn start_dithering_in_external_guider_mode(&mut self) -> anyhow::Result<()> {
         let guider = self.guider.as_ref().expect("self.guider");
         let external_guider = guider.external.as_ref().expect("guider.external");
         let dist = guider.options.ext_guider.dith_dist;
@@ -727,7 +727,7 @@ impl TackingPicturesMode {
         blob:           &indi::BlobPropValue,
         raw_image_info: &RawImageInfo,
         cmd_stop_flag:  &Arc<AtomicBool>,
-    ) -> eyre::Result<NotifyResult> {
+    ) -> anyhow::Result<NotifyResult> {
         if self.cam_mode == CameraMode::SingleShot {
             return Ok(NotifyResult::Finished {
                 next_mode: self.next_mode.take()
@@ -798,7 +798,7 @@ impl TackingPicturesMode {
                 Some(NextJob::MountCalibration) => {
                     let options = Arc::clone(&self.options);
 
-                    let start_mode_mnt_calibr_fun = move |_core: &Arc<Core>, mode: &mut ModeData| -> eyre::Result<()> {
+                    let start_mode_mnt_calibr_fun = move |_core: &Arc<Core>, mode: &mut ModeData| -> anyhow::Result<()> {
                         mode.active.abort()?;
                         let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
                         let mut new_mode = MountCalibrMode::new(
@@ -827,7 +827,7 @@ impl TackingPicturesMode {
                     // Start autofocus mode
                     let options = Arc::clone(&self.options);
                     let events = Arc::clone(&self.events);
-                    let start_focusing_fun = move |_core: &Arc<Core>, mode: &mut ModeData| -> eyre::Result<()> {
+                    let start_focusing_fun = move |_core: &Arc<Core>, mode: &mut ModeData| -> anyhow::Result<()> {
                         mode.active.abort()?;
                         let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
                         let mut new_mode = FocusingMode::new(
@@ -870,7 +870,7 @@ impl TackingPicturesMode {
     fn process_raw_histogram(
         &mut self,
         hist: &Arc<RwLock<Histogram>>
-    ) -> eyre::Result<NotifyResult> {
+    ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
 
         let get_median_from_histogram = |min: bool| ->u16 {
@@ -939,15 +939,15 @@ impl TackingPicturesMode {
                         *cur_exp /= 1.4;
                     }
                     if *cur_exp < *min_exp {
-                        eyre::bail!("Minimal exposure ({}) reached!", *min_exp);
+                        anyhow::bail!("Minimal exposure ({}) reached!", *min_exp);
                     }
                     if *cur_exp > *max_exp {
-                        eyre::bail!("Maximal exposure ({}) reached!", *max_exp);
+                        anyhow::bail!("Maximal exposure ({}) reached!", *max_exp);
                     }
                     *count += 1;
                     const MAX_TRY: usize = 20;
                     if *count >= MAX_TRY {
-                        eyre::bail!("Maximal tries ({}) reached!", MAX_TRY);
+                        anyhow::bail!("Maximal tries ({}) reached!", MAX_TRY);
                     }
                     let exp = *cur_exp;
                     self.start_flat_exp_calc_frame(exp)?;
@@ -999,7 +999,7 @@ impl TackingPicturesMode {
         Ok(result)
     }
 
-    fn add_raw_image(&mut self, raw_image: &RawImage) -> eyre::Result<()> {
+    fn add_raw_image(&mut self, raw_image: &RawImage) -> anyhow::Result<()> {
         if raw_image.info().frame_type == FrameType::Flats {
             let mut normalized_flat = raw_image.clone();
             let tmr = TimeLogger::start();
@@ -1024,7 +1024,7 @@ impl TackingPicturesMode {
         &mut self,
         blob:           &indi::BlobPropValue,
         raw_image_info: &RawImageInfo,
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         let prefix = match raw_image_info.frame_type {
             FrameType::Lights => "light",
             FrameType::Flats => "flat",
@@ -1033,7 +1033,7 @@ impl TackingPicturesMode {
         };
         if !self.out_file_names.raw_files_dir.is_dir() {
             std::fs::create_dir_all(&self.out_file_names.raw_files_dir)
-                .map_err(|e|eyre::eyre!(
+                .map_err(|e|anyhow::anyhow!(
                     "Error '{}'\nwhen trying to create directory '{}' for saving RAW frame",
                     e.to_string(),
                     self.out_file_names.raw_files_dir.to_str().unwrap_or_default()
@@ -1048,7 +1048,7 @@ impl TackingPicturesMode {
 
         let tmr = TimeLogger::start();
         std::fs::write(&file_name, blob.data.as_slice())
-            .map_err(|e| eyre::eyre!(
+            .map_err(|e| anyhow::anyhow!(
                 "Error '{}'\nwhen saving file '{}'",
                 e.to_string(),
                 file_name.to_str().unwrap_or_default()
@@ -1058,7 +1058,7 @@ impl TackingPicturesMode {
         Ok(())
     }
 
-    fn save_master_file(&mut self) -> eyre::Result<()> {
+    fn save_master_file(&mut self) -> anyhow::Result<()> {
         log::debug!("Saving master frame...");
         let raw_image = self.raw_stacker.get()?;
         self.raw_stacker.clear();
@@ -1076,7 +1076,7 @@ impl TackingPicturesMode {
         Ok(())
     }
 
-    fn save_defect_pixels_file(&mut self) -> eyre::Result<()> {
+    fn save_defect_pixels_file(&mut self) -> anyhow::Result<()> {
         log::debug!("Saving defect pixels file...");
         let raw_image = self.raw_stacker.get()?;
         self.raw_stacker.clear();
@@ -1106,7 +1106,7 @@ impl TackingPicturesMode {
     fn process_raw_image(
         &mut self,
         raw_info: &RawFrameInfo,
-    ) -> eyre::Result<NotifyResult> {
+    ) -> anyhow::Result<NotifyResult> {
         if self.state != State::Common {
             return Ok(NotifyResult::Empty);
         }
@@ -1123,7 +1123,7 @@ impl TackingPicturesMode {
     fn process_light_frame_info(
         &mut self,
         info: &LightFrameInfoData,
-    ) -> eyre::Result<NotifyResult> {
+    ) -> anyhow::Result<NotifyResult> {
         if self.state != State::Common {
             return Ok(NotifyResult::Empty);
         }
@@ -1284,7 +1284,7 @@ impl Mode for TackingPicturesMode {
         )
     }
 
-    fn start(&mut self) -> eyre::Result<()> {
+    fn start(&mut self) -> anyhow::Result<()> {
         self.correct_options_before_start();
         self.update_options_copies();
 
@@ -1335,13 +1335,13 @@ impl Mode for TackingPicturesMode {
         Ok(())
     }
 
-    fn abort(&mut self) -> eyre::Result<()> {
+    fn abort(&mut self) -> anyhow::Result<()> {
         self.camera.abort_exposure()?;
         self.flags.skip_frame_done = false; // will skip first frame when continue
         Ok(())
     }
 
-    fn continue_work(&mut self) -> eyre::Result<()> {
+    fn continue_work(&mut self) -> anyhow::Result<()> {
         self.correct_options_before_start();
         self.update_options_copies();
         self.state = State::Common;
@@ -1357,7 +1357,7 @@ impl Mode for TackingPicturesMode {
         Ok(())
     }
 
-    fn restart_cam_exposure(&mut self) -> eyre::Result<bool> {
+    fn restart_cam_exposure(&mut self) -> anyhow::Result<bool> {
         if self.need_skip_first_frame() {
             self.start_first_shot_that_will_be_skipped()?;
         } else {
@@ -1385,7 +1385,7 @@ impl Mode for TackingPicturesMode {
     fn notify_blob_start_event(
         &mut self,
         event: &indi::BlobStartEvent
-    ) -> eyre::Result<NotifyResult> {
+    ) -> anyhow::Result<NotifyResult> {
         self.flags.next_exp_started = false;
 
         if *event.device_name != self.device.name
@@ -1409,7 +1409,7 @@ impl Mode for TackingPicturesMode {
         &mut self,
         _blob: &Arc<indi::BlobPropValue>,
         should_be_processed: &mut bool
-    ) -> eyre::Result<NotifyResult> {
+    ) -> anyhow::Result<NotifyResult> {
         self.next_job = None;
 
         if self.state == State::FrameToSkip {
@@ -1425,7 +1425,7 @@ impl Mode for TackingPicturesMode {
     fn notify_about_frame_processing_result(
         &mut self,
         fp_result: &FrameProcessResult
-    ) -> eyre::Result<NotifyResult> {
+    ) -> anyhow::Result<NotifyResult> {
         match &fp_result.data {
             FrameProcessResultData::RawFrameInfo(raw_info) =>
                 self.process_raw_image(raw_info),
@@ -1491,7 +1491,7 @@ impl Mode for TackingPicturesMode {
         }
     }
 
-    fn notify_timer(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
+    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         match &mut self.state {
             State::InternalMountCorrection(ok_time_ms) => {
@@ -1514,7 +1514,7 @@ impl Mode for TackingPicturesMode {
     fn notify_guider_event(
         &mut self,
         event: ExtGuiderEvent
-    ) -> eyre::Result<NotifyResult> {
+    ) -> anyhow::Result<NotifyResult> {
         if let Some(guider) = &self.guider {
             if guider.options.mode == GuidingMode::External
             && self.state == State::ExternalDithering {
@@ -1532,7 +1532,7 @@ impl Mode for TackingPicturesMode {
                         return Ok(NotifyResult::ProgressChanges);
                     }
                     ExtGuiderEvent::Error(error) =>
-                        return Err(eyre::eyre!("External guider error: {}", error)),
+                        return Err(anyhow::anyhow!("External guider error: {}", error)),
                     _ => {}
                 }
             }
@@ -1540,7 +1540,7 @@ impl Mode for TackingPicturesMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn notify_processing_queue_overflow(&mut self) -> eyre::Result<NotifyResult> {
+    fn notify_processing_queue_overflow(&mut self) -> anyhow::Result<NotifyResult> {
         self.flags.queue_overflowed = true;
         Ok(NotifyResult::Empty)
     }

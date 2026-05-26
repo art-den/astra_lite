@@ -40,25 +40,25 @@ impl RawStacker {
         &mut self,
         raw:        &RawImage,
         use_median: bool
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         let raw_info = raw.info();
         if let Some(info) = &self.info {
             if info.width != raw_info.width
             || info.height != raw_info.height {
-                eyre::bail!(
+                anyhow::bail!(
                     "Size of images differ: stacker {}x{}, raw {}x{}",
                     info.width, info.height,
                     raw_info.width, raw_info.height,
                 );
             }
             if info.cfa != raw_info.cfa {
-                eyre::bail!("CFA of images differ");
+                anyhow::bail!("CFA of images differ");
             }
             if info.frame_type != raw_info.frame_type {
-                eyre::bail!("Frame type of images differ");
+                anyhow::bail!("Frame type of images differ");
             }
             if self.data.len() != raw.as_slice().len() {
-                eyre::bail!("Internal error: self.data.len() != raw.data.len()");
+                anyhow::bail!("Internal error: self.data.len() != raw.data.len()");
             }
         } else {
             self.info = Some(raw_info.clone());
@@ -95,9 +95,9 @@ impl RawStacker {
         Ok(())
     }
 
-    pub fn get(&mut self) -> eyre::Result<RawImage> {
+    pub fn get(&mut self) -> anyhow::Result<RawImage> {
         let Some(info) = &self.info else {
-            eyre::bail!("Raw added is empty");
+            anyhow::bail!("Raw added is empty");
         };
 
         let cfa_arr = info.cfa.get_array();

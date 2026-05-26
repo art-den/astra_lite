@@ -83,7 +83,7 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn check(&mut self) -> eyre::Result<()> {
+    pub fn check(&mut self) -> anyhow::Result<()> {
         self.calibr.check()?;
         self.raw_frames.check()?;
         self.live.check()?;

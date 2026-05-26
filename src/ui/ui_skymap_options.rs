@@ -60,7 +60,7 @@ impl SkymapOptionsDialog {
     pub fn get_options(
         self:       &Rc<Self>,
         ui_options: &mut UiOptions,
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
 
         ui_options.paint.high_quality = self.widgets.chb_high_qual.is_active();
         ui_options.paint.horizon_glow.visible = self.widgets.chb_horiz_glow.is_active();
@@ -81,7 +81,7 @@ impl SkymapOptionsDialog {
         Ok(())
     }
 
-    pub fn exec(self: &Rc<Self>, on_apply: impl Fn() -> eyre::Result<()> + 'static) {
+    pub fn exec(self: &Rc<Self>, on_apply: impl Fn() -> anyhow::Result<()> + 'static) {
         self.widgets.dialog.connect_response(clone!(@strong self as self_ => move |dlg, resp| {
             match resp {
                 gtk::ResponseType::Ok | gtk::ResponseType::Apply => {

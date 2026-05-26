@@ -31,7 +31,7 @@ impl CamStarter {
         device:    &DeviceAndProp,
         frame:     &FrameOptions,
         cam_ctrl:  &CamCtrlOptions,
-    ) -> eyre::Result<u64> {
+    ) -> anyhow::Result<u64> {
 
         let before_shot_fun = self.before_shot_fun.read().unwrap();
         if let Some(before_shot_fun) = &*before_shot_fun {
@@ -193,7 +193,7 @@ impl CamStarter {
     pub fn abort_old(
         &self,
         device: &DeviceAndProp,
-    ) -> eyre::Result<()> {
+    ) -> anyhow::Result<()> {
         self.indi.camera_abort_exposure(
             &device.name,
             indi::CamCcd::from_ccd_prop_name(&device.prop)
@@ -206,7 +206,7 @@ pub fn take_shot(
     camera:    &Arc<dyn Camera + Send + Sync>,
     frame:     &FrameOptions,
     cam_ctrl:  &CamCtrlOptions,
-) -> eyre::Result<u64> {
+) -> anyhow::Result<u64> {
     // Initialization before start
 
     camera.init_before_shot()?;

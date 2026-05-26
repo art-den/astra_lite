@@ -147,7 +147,7 @@ pub fn draw_histogram(
     width:  i32,
     height: i32,
     log_y:  bool,
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     if width == 0 { return Ok(()); }
 
     let p0 = "0%";
@@ -203,7 +203,7 @@ pub fn draw_histogram(
             total_max_v = f64::log10(total_max_v);
         }
 
-        let paint_channel = |chan: &Option<HistogramChan>, r, g, b, a| -> eyre::Result<()> {
+        let paint_channel = |chan: &Option<HistogramChan>, r, g, b, a| -> anyhow::Result<()> {
             let Some(chan) = chan.as_ref() else { return Ok(()); };
             let k = max_count as f64 / chan.count as f64;
             let max_x = hist.max as f64;
@@ -245,7 +245,7 @@ pub fn draw_histogram(
     cr.move_to(0.0, height as f64 - bottom_margin - layout.pixel_size().1 as f64);
     pangocairo::show_layout(cr, &layout);
 
-    let paint_x_percent = |x, text| -> eyre::Result<()> {
+    let paint_x_percent = |x, text| -> anyhow::Result<()> {
         layout.set_text(text);
         let (text_width, _) = layout.pixel_size();
 
@@ -277,7 +277,7 @@ pub fn draw_progress_bar(
     cr:       &cairo::Context,
     progress: f64,
     text:     &str,
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     let width = area.allocated_width() as f64;
     let height = area.allocated_height() as f64;
     let style_context = area.style_context();

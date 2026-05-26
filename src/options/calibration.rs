@@ -27,7 +27,7 @@ impl Default for CalibrOptions {
 }
 
 impl CalibrOptions {
-    pub fn check(&mut self) -> eyre::Result<()> {
+    pub fn check(&mut self) -> anyhow::Result<()> {
         if self.dark_library_path.as_os_str().is_empty() {
             let mut dark_lib_path = dirs::home_dir().unwrap();
             dark_lib_path.push(DIRECTORY);

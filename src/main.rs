@@ -32,7 +32,7 @@ use crate::{
     core::core::Core, options::*, utils::{io_utils::*, log_utils::*}
 };
 
-fn main() -> eyre::Result<()> {
+fn main() -> anyhow::Result<()> {
     let application = gtk::Application::new(
         Some(&format!("com.github.art-den.{}", env!("CARGO_PKG_NAME"))),
         Default::default(),

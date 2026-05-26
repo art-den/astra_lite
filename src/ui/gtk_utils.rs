@@ -179,7 +179,7 @@ pub fn show_error_message(
 
 pub fn exec_and_show_error(
     window: Option<&impl IsA<gtk::Window>>,
-    fun:    impl FnOnce() -> eyre::Result<()>
+    fun:    impl FnOnce() -> anyhow::Result<()>
 ) -> bool {
     let exec_res = fun();
     if let Err(err) = exec_res {
@@ -196,7 +196,7 @@ pub fn exec_and_show_error(
 
 pub fn show_message_if_result_is_error<T>(
     window: Option<&impl IsA<gtk::Window>>,
-    result: &eyre::Result<T>
+    result: &anyhow::Result<T>
 ) {
     if let Err(err) = result {
         show_error_message(window, "Error", &err.to_string());

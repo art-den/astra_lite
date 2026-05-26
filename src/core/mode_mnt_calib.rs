@@ -83,14 +83,14 @@ impl MountCalibrMode {
         hal:       &Hal,
         options:   &Arc<RwLock<Options>>,
         next_mode: Option<Box<dyn Mode + Sync + Send>>,
-    ) -> eyre::Result<Self> {
+    ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
 
         let camera = hal.camera(&opts.cam.device_id)?;
         let telescope = hal.telescope(&opts.mount.device)?;
 
         let Some(cam_device) = &opts.cam.device else {
-            eyre::bail!("Camera is not selected");
+            anyhow::bail!("Camera is not selected");
         };
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;
@@ -122,7 +122,7 @@ impl MountCalibrMode {
         })
     }
 
-    fn start_for_axis(&mut self, axis: Axis) -> eyre::Result<()> {
+    fn start_for_axis(&mut self, axis: Axis) -> anyhow::Result<()> {
         take_shot(
             &self.camera,
             &self.cam_opts.frame,
@@ -147,7 +147,7 @@ impl MountCalibrMode {
         Ok(())
     }
 
-    fn process_axis_results(&mut self) -> eyre::Result<()> {
+    fn process_axis_results(&mut self) -> anyhow::Result<()> {
         #[derive(Debug)]
         struct AttemptRes {move_x: f64, move_y: f64, dist: f64}
         let mut result = Vec::new();
@@ -218,7 +218,7 @@ impl MountCalibrMode {
     fn process_light_frame_info(
         &mut self,
         info: &LightFrameInfoData,
-    ) -> eyre::Result<NotifyResult> {
+    ) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         if info.quality.fwhm_is_ok && info.quality.ovality_is_ok {
             if self.image_width == 0 || self.image_height == 0 {
@@ -284,7 +284,7 @@ impl Mode for MountCalibrMode {
         }
     }
 
-    fn abort(&mut self) -> eyre::Result<()> {
+    fn abort(&mut self) -> anyhow::Result<()> {
         self.telescope.goto_and_track(self.start_ra, self.start_dec)?;
         Ok(())
     }
@@ -312,7 +312,7 @@ impl Mode for MountCalibrMode {
         })
     }
 
-    fn start(&mut self) -> eyre::Result<()> {
+    fn start(&mut self) -> anyhow::Result<()> {
         let (ra, dec) = self.telescope.eq_coord()?;
         self.start_dec = ra;
         self.start_ra = dec;
@@ -323,7 +323,7 @@ impl Mode for MountCalibrMode {
     fn notify_about_frame_processing_result(
         &mut self,
         fp_result: &FrameProcessResult
-    ) -> eyre::Result<NotifyResult> {
+    ) -> anyhow::Result<NotifyResult> {
         match &fp_result.data {
             FrameProcessResultData::LightFrameInfo(info) =>
                 self.process_light_frame_info(info),
@@ -333,7 +333,7 @@ impl Mode for MountCalibrMode {
         }
     }
 
-    fn notify_timer(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
+    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         match &mut self.state {
             State::WaitForSlew(ok_time_ms) => {

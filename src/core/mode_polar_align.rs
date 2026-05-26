@@ -37,7 +37,7 @@ impl PolarAlignment {
         self.measurements.push(measurement);
     }
 
-    fn calc_mount_pole(&mut self, longitude: f64, latitude: f64) -> eyre::Result<()> {
+    fn calc_mount_pole(&mut self, longitude: f64, latitude: f64) -> anyhow::Result<()> {
         assert!(self.measurements.len() >= 3);
 
         log::debug!(
@@ -66,7 +66,7 @@ impl PolarAlignment {
 
         let mut mount_pole_3d = Point3D::normal(&pt1.coord, &pt2.coord, &pt3.coord)
             .normalized()
-            .ok_or_else(|| eyre::eyre!("Can't calculate mount pole!"))?;
+            .ok_or_else(|| anyhow::anyhow!("Can't calculate mount pole!"))?;
 
         if mount_pole_3d.x.is_sign_positive() != earth_pole_3d.x.is_sign_positive() {
             mount_pole_3d.x = -mount_pole_3d.x;
@@ -251,7 +251,7 @@ impl PolarAlignMode {
     pub fn check_before_start(
         indi:    &Arc<indi::Connection>,
         options: &Arc<RwLock<Options>>,
-    ) -> eyre::Result<String> {
+    ) -> anyhow::Result<String> {
         const MIN_ALT: f64 = 10.0 ; // in degrees
 
         let opts = options.read().unwrap();
@@ -290,7 +290,7 @@ impl PolarAlignMode {
         let init_alt_degree = radian_to_degree(init_horiz_crd.alt);
 
         if init_alt_degree < 0.0 {
-            eyre::bail!(
+            anyhow::bail!(
                 "Telescope is pointed under the horizon (altitude = {:.1})°",
                 init_alt_degree
             );
@@ -339,7 +339,7 @@ impl PolarAlignMode {
         let final_alt_degree = radian_to_degree(final_horiz_crd.alt);
 
         if final_alt_degree < 0.0 || mid_alt_degree < 0.0 {
-            eyre::bail!("Telescope will cross the horizon!");
+            anyhow::bail!("Telescope will cross the horizon!");
         }
 
         if final_alt_degree < MIN_ALT {
@@ -351,7 +351,7 @@ impl PolarAlignMode {
         }
 
         if init_horiz_crd.az.is_sign_positive() != final_horiz_crd.az.is_sign_positive() {
-            eyre::bail!("Telescope will cross meridian!");
+            anyhow::bail!("Telescope will cross meridian!");
         }
 
         Ok(warnings.join("\n"))
@@ -363,10 +363,10 @@ impl PolarAlignMode {
         cur_frame:   &Arc<ResultImage>,
         options:     &Arc<RwLock<Options>>,
         subscribers: &Arc<Events>,
-    ) -> eyre::Result<Self> {
+    ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(cam_device) = &opts.cam.device else {
-            eyre::bail!("Camera is not selected");
+            anyhow::bail!("Camera is not selected");
         };
 
         let camera = hal.camera(&opts.cam.device_id)?;
@@ -405,13 +405,13 @@ impl PolarAlignMode {
         })
     }
 
-    fn start_capture(&mut self) -> eyre::Result<()> {
+    fn start_capture(&mut self) -> anyhow::Result<()> {
         take_shot(&self.camera, &self.cam_opts.frame, &self.cam_opts.ctrl)?;
         self.image_time = Some(Utc::now().naive_utc());
         Ok(())
     }
 
-    fn get_platesolver_config(&self) -> eyre::Result<PlateSolveConfig> {
+    fn get_platesolver_config(&self) -> anyhow::Result<PlateSolveConfig> {
         let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
         let eq_coord = EqCoord {
             dec: degree_to_radian(dec),
@@ -431,7 +431,7 @@ impl PolarAlignMode {
     }
 
     // Returns Ok(true) on silent error
-    fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> eyre::Result<bool> {
+    fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> anyhow::Result<bool> {
         let image = image.read().unwrap();
         let config = self.get_platesolver_config()?;
         let start_result = self.plate_solver.start(&PlateSolverInData::Image(&image), &config);
@@ -447,7 +447,7 @@ impl PolarAlignMode {
         stars:      &StarItems,
         img_width:  usize,
         img_height: usize
-    ) -> eyre::Result<bool> {
+    ) -> anyhow::Result<bool> {
         let config = self.get_platesolver_config()?;
         let stars_arg = PlateSolverInData::Stars{ stars, img_width, img_height };
         let start_result = self.plate_solver.start(&stars_arg, &config);
@@ -458,17 +458,17 @@ impl PolarAlignMode {
         Ok(true)
     }
 
-    fn process_platesolver_fail(&mut self, err_str: &str) -> eyre::Result<()> {
+    fn process_platesolver_fail(&mut self, err_str: &str) -> anyhow::Result<()> {
         if self.step == Step::Corr {
             self.start_capture()?;
             self.state = State::Capture;
             Ok(())
         } else {
-            eyre::bail!("{}", err_str);
+            anyhow::bail!("{}", err_str);
         }
 }
 
-    fn try_process_plate_solving_result(&mut self) -> eyre::Result<NotifyResult> {
+    fn try_process_plate_solving_result(&mut self) -> anyhow::Result<NotifyResult> {
         assert!(matches!(self.state, State::PlateSolve));
 
         let ps_result = match self.plate_solver.get_result()? {
@@ -483,7 +483,7 @@ impl PolarAlignMode {
         ps_result.print_to_log();
 
         let image_time = self.image_time
-            .ok_or_else(|| eyre::eyre!("Image time is not stored"))?;
+            .ok_or_else(|| anyhow::anyhow!("Image time is not stored"))?;
 
         let cvt = EqToSphereCvt::new(
             degree_to_radian(self.s_opts.longitude),
@@ -563,7 +563,7 @@ impl PolarAlignMode {
         }
     }
 
-    fn goto_next_pos(&mut self) -> eyre::Result<()> {
+    fn goto_next_pos(&mut self) -> anyhow::Result<()> {
         let (cur_ra, cur_dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
         let cur_ra = hour_to_radian(cur_ra);
         let cur_dec = degree_to_radian(cur_dec);
@@ -578,7 +578,7 @@ impl PolarAlignMode {
         Ok(())
     }
 
-    fn goto_impl(&mut self, ra: f64, dec: f64) -> eyre::Result<()> {
+    fn goto_impl(&mut self, ra: f64, dec: f64) -> anyhow::Result<()> {
         if let Some(slew_speed) = &self.pa_opts.speed {
             self.indi.mount_set_slew_speed(
                 &self.mount,
@@ -608,9 +608,9 @@ impl PolarAlignMode {
         Ok(())
     }
 
-    fn notify_error(&self) -> eyre::Result<()> {
+    fn notify_error(&self) -> anyhow::Result<()> {
         let Some((horiz, total)) = self.alignment.pole_error() else {
-            eyre::bail!("Mount pole is not calculated!");
+            anyhow::bail!("Mount pole is not calculated!");
         };
         self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Error {
             horiz, total, step: self.step_cnt
@@ -618,7 +618,7 @@ impl PolarAlignMode {
         Ok(())
     }
 
-    fn restart(&mut self) -> eyre::Result<()> {
+    fn restart(&mut self) -> anyhow::Result<()> {
         if let Some(initial_crd) = self.initial_crd {
             self.abort()?;
             self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Empty));
@@ -629,7 +629,7 @@ impl PolarAlignMode {
         Ok(())
     }
 
-    fn manual_refresh(&mut self) -> eyre::Result<()> {
+    fn manual_refresh(&mut self) -> anyhow::Result<()> {
         if !matches!(self.state, State::WaitForManualRefresh) {
             return Ok(());
         }
@@ -690,7 +690,7 @@ impl Mode for PolarAlignMode {
         Some(self.cam_opts.frame.exp_main)
     }
 
-    fn start(&mut self) -> eyre::Result<()> {
+    fn start(&mut self) -> anyhow::Result<()> {
         let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
 
         self.step_cnt = 0;
@@ -708,7 +708,7 @@ impl Mode for PolarAlignMode {
         Ok(())
     }
 
-    fn custom_command(&mut self, args: &dyn Any) -> eyre::Result<Option<Box<dyn Any>>> {
+    fn custom_command(&mut self, args: &dyn Any) -> anyhow::Result<Option<Box<dyn Any>>> {
         let Some(command) = args.downcast_ref::<CustomCommand>() else {
             return Ok(None);
         };
@@ -732,7 +732,7 @@ impl Mode for PolarAlignMode {
         }
     }
 
-    fn abort(&mut self) -> eyre::Result<()> {
+    fn abort(&mut self) -> anyhow::Result<()> {
         _ = self.camera.abort_exposure();
         _ = self.indi.mount_abort_motion(&self.mount);
         self.plate_solver.abort();
@@ -747,7 +747,7 @@ impl Mode for PolarAlignMode {
     fn notify_about_frame_processing_result(
         &mut self,
         fp_result: &FrameProcessResult
-    ) -> eyre::Result<NotifyResult> {
+    ) -> anyhow::Result<NotifyResult> {
         let stars_supported = self.plate_solver.support_stars_as_input();
         match (&self.state, &fp_result.data, stars_supported) {
             (State::Capture, FrameProcessResultData::Image(image), false) => {
@@ -767,7 +767,7 @@ impl Mode for PolarAlignMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn notify_timer(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
+    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         match &mut self.state {
             State::PlateSolve => {
                 return self.try_process_plate_solving_result();
@@ -811,7 +811,7 @@ impl Mode for PolarAlignMode {
 
                 *time_ms += timer_period_ms;
                 if *time_ms > MAX_GOTO_TIME * 1000 {
-                    eyre::bail!("Telescope is moving too long time (> {}s)", MAX_GOTO_TIME);
+                    anyhow::bail!("Telescope is moving too long time (> {}s)", MAX_GOTO_TIME);
                 }
             }
 

@@ -113,7 +113,7 @@ impl HalImpl for IndiHalImpl {
         }
     }
 
-    fn devices(&self, type_filter: DeviceType) -> eyre::Result<Vec<DeviceInfo>> {
+    fn devices(&self, type_filter: DeviceType) -> anyhow::Result<Vec<DeviceInfo>> {
         let mut result = Vec::new();
         let indi_devices = self.indi.get_devices_list();
         for device in indi_devices {
@@ -138,7 +138,7 @@ impl HalImpl for IndiHalImpl {
         Ok(result)
     }
 
-    fn camera(&self, id: &str) -> eyre::Result<Arc<dyn Camera + Send + Sync>> {
+    fn camera(&self, id: &str) -> anyhow::Result<Arc<dyn Camera + Send + Sync>> {
         let mut ccd = indi::CamCcd::Primary;
         let mut name = id;
         if id.ends_with(CAM_CCD2_POSTFIX) {
@@ -155,11 +155,11 @@ impl HalImpl for IndiHalImpl {
         Ok(Arc::new(camera))
     }
 
-    fn telescope(&self, id: &str) -> eyre::Result<Arc<dyn Telescope + Send + Sync>> {
+    fn telescope(&self, id: &str) -> anyhow::Result<Arc<dyn Telescope + Send + Sync>> {
         Ok(Arc::new(self.create_indi_device(id)))
     }
 
-    fn focuser(&self, id: &str) -> eyre::Result<Arc<dyn Focuser + Send + Sync>> {
+    fn focuser(&self, id: &str) -> anyhow::Result<Arc<dyn Focuser + Send + Sync>> {
         Ok(Arc::new(self.create_indi_device(id)))
     }
 }
@@ -178,7 +178,7 @@ impl Device for IndiDevice {
         &self.id
     }
 
-    fn is_active(&self) -> eyre::Result<bool> {
+    fn is_active(&self) -> anyhow::Result<bool> {
         Ok(self.indi.is_device_enabled(&self.name)?)
     }
 }
@@ -196,7 +196,7 @@ impl Device for IndiCamera {
         self.device.id()
     }
 
-    fn is_active(&self) -> eyre::Result<bool> {
+    fn is_active(&self) -> anyhow::Result<bool> {
         self.device.is_active()
     }
 }
@@ -204,7 +204,7 @@ impl Device for IndiCamera {
 impl Camera for IndiCamera {
     // Common
 
-    fn init_before_shot(&self) -> eyre::Result<()> {
+    fn init_before_shot(&self) -> anyhow::Result<()> {
         // Disable fast toggle
 
         if self.device.indi.camera_is_fast_toggle_supported(&self.device.name).unwrap_or(false) {
@@ -242,28 +242,28 @@ impl Camera for IndiCamera {
 
     // Exposure
 
-    fn exposure_range(&self) -> eyre::Result<RangeInclusive<f64>> {
+    fn exposure_range(&self) -> anyhow::Result<RangeInclusive<f64>> {
         let exp_prop_value = self.device.indi.camera_get_exposure_prop_value(&self.device.name, self.ccd)?;
         Ok(exp_prop_value.min..=exp_prop_value.max)
     }
 
-    fn start_exposure(&self, duration: f64) -> eyre::Result<()> {
+    fn start_exposure(&self, duration: f64) -> anyhow::Result<()> {
         self.device.indi.camera_start_exposure(&self.device.name, self.ccd, duration)?;
         Ok(())
     }
 
-    fn abort_exposure(&self) -> eyre::Result<()> {
+    fn abort_exposure(&self) -> anyhow::Result<()> {
         self.device.indi.camera_abort_exposure(&self.device.name, self.ccd)?;
         Ok(())
     }
 
-    fn remaining_time(&self) -> eyre::Result<f64> {
+    fn remaining_time(&self) -> anyhow::Result<f64> {
         Ok(self.device.indi.camera_get_exposure(&self.device.name, self.ccd)?)
     }
 
     // Frame type
 
-    fn set_frame_type(&self, frame_type: FrameType) -> eyre::Result<()> {
+    fn set_frame_type(&self, frame_type: FrameType) -> anyhow::Result<()> {
         let frame_type = match frame_type {
             FrameType::Lights => indi::FrameType::Light,
             FrameType::Flats  => indi::FrameType::Flat,
@@ -281,19 +281,19 @@ impl Camera for IndiCamera {
 
     // Frame
 
-    fn pixel_size_um(&self) -> eyre::Result<(f64, f64)> {
+    fn pixel_size_um(&self) -> anyhow::Result<(f64, f64)> {
         Ok(self.device.indi.camera_get_pixel_size_um(&self.device.name, self.ccd)?)
     }
 
-    fn is_frame_supported(&self) -> eyre::Result<bool> {
+    fn is_frame_supported(&self) -> anyhow::Result<bool> {
         Ok(self.device.indi.camera_is_frame_supported(&self.device.name, self.ccd)?)
     }
 
-    fn ccd_size(&self) -> eyre::Result<(usize, usize)> {
+    fn ccd_size(&self) -> anyhow::Result<(usize, usize)> {
         Ok(self.device.indi.camera_get_max_frame_size(&self.device.name, self.ccd)?)
     }
 
-    fn set_frame(&self, x: usize, y: usize, width: usize, height: usize) -> eyre::Result<()> {
+    fn set_frame(&self, x: usize, y: usize, width: usize, height: usize) -> anyhow::Result<()> {
         self.device.indi.camera_set_frame(
             &self.device.name, self.ccd,
             x, y, width, height,
@@ -304,32 +304,32 @@ impl Camera for IndiCamera {
 
     // Gain
 
-    fn is_gain_supported(&self) -> eyre::Result<bool> {
+    fn is_gain_supported(&self) -> anyhow::Result<bool> {
         Ok(self.device.indi.camera_is_gain_supported(&self.device.name)?)
     }
 
-    fn gain_range(&self) -> eyre::Result<RangeInclusive<f64>> {
+    fn gain_range(&self) -> anyhow::Result<RangeInclusive<f64>> {
         let gain_prop = self.device.indi.camera_get_gain_prop_value(&self.device.name)?;
         Ok(gain_prop.min..=gain_prop.max)
     }
 
-    fn set_gain(&self, value: f64) -> eyre::Result<()> {
+    fn set_gain(&self, value: f64) -> anyhow::Result<()> {
         self.device.indi.camera_set_gain(&self.device.name, value, true, Some(SET_PROP_TIME_OUT))?;
         Ok(())
     }
 
     // Offset
 
-    fn is_offset_supported(&self) -> eyre::Result<bool> {
+    fn is_offset_supported(&self) -> anyhow::Result<bool> {
         Ok(self.device.indi.camera_is_offset_supported(&self.device.name)?)
     }
 
-    fn offset_range(&self) -> eyre::Result<RangeInclusive<f64>> {
+    fn offset_range(&self) -> anyhow::Result<RangeInclusive<f64>> {
         let offset_prop = self.device.indi.camera_get_offset_prop_value(&self.device.name)?;
         Ok(offset_prop.min..=offset_prop.max)
     }
 
-    fn set_offset(&self, value: f64) -> eyre::Result<()> {
+    fn set_offset(&self, value: f64) -> anyhow::Result<()> {
         let offset_prop = self.device.indi.camera_get_offset_prop_value(&self.device.name)?;
         let mut next_offset = value + 1.0;
         if next_offset > offset_prop.max {
@@ -345,16 +345,16 @@ impl Camera for IndiCamera {
 
     // Bin
 
-    fn is_binning_supported(&self) -> eyre::Result<bool> {
+    fn is_binning_supported(&self) -> anyhow::Result<bool> {
         Ok(self.device.indi.camera_is_binning_supported(&self.device.name, self.ccd)?)
     }
 
-    fn max_binning(&self) -> eyre::Result<(usize, usize)> {
+    fn max_binning(&self) -> anyhow::Result<(usize, usize)> {
         let (max_bin_x, max_bin_y) = self.device.indi.camera_get_max_binning(&self.device.name, self.ccd)?;
         Ok((max_bin_x, max_bin_y))
     }
 
-    fn set_binning(&self, bin_x: usize, bin_y: usize) -> eyre::Result<()> {
+    fn set_binning(&self, bin_x: usize, bin_y: usize) -> anyhow::Result<()> {
         self.device.indi.camera_set_binning(
             &self.device.name, self.ccd,
             bin_x, bin_y,
@@ -365,20 +365,20 @@ impl Camera for IndiCamera {
 
     // Cooler
 
-    fn is_cooler_supported(&self) -> eyre::Result<bool> {
+    fn is_cooler_supported(&self) -> anyhow::Result<bool> {
         Ok(self.device.indi.camera_is_cooler_supported(&self.device.name)?)
     }
 
-    fn temperature(&self) -> eyre::Result<f64> {
+    fn temperature(&self) -> anyhow::Result<f64> {
         Ok(self.device.indi.camera_get_temperature_prop_value(&self.device.name)?.value)
     }
 
-    fn temperature_range(&self) -> eyre::Result<RangeInclusive<f64>> {
+    fn temperature_range(&self) -> anyhow::Result<RangeInclusive<f64>> {
         let temp_prop = self.device.indi.camera_get_temperature_prop_value(&self.device.name)?;
         Ok(temp_prop.min..=temp_prop.max)
     }
 
-    fn set_temperature(&self, temperature: Option<f64>) -> eyre::Result<()> {
+    fn set_temperature(&self, temperature: Option<f64>) -> anyhow::Result<()> {
         if let Some(temperature) = temperature {
             self.device.indi.camera_set_temperature(&self.device.name, temperature)?;
         }
@@ -392,17 +392,17 @@ impl Camera for IndiCamera {
 
     // Heater
 
-    fn is_heater_supported(&self) -> eyre::Result<bool> {
+    fn is_heater_supported(&self) -> anyhow::Result<bool> {
         Ok(self.device.indi.camera_is_heater_str_supported(&self.device.name)?)
     }
 
-    fn heater_ctrl_list(&self) -> eyre::Result<Vec<(String/*id*/, String/*text*/)>> {
+    fn heater_ctrl_list(&self) -> anyhow::Result<Vec<(String/*id*/, String/*text*/)>> {
         let list = self.device.indi.camera_get_heater_items(&self.device.name)?;
         let result: Vec<_> = list.iter().map(|(id, text)| (id.to_string(), text.to_string())).collect();
         Ok(result)
     }
 
-    fn control_heater(&self, id: &str) -> eyre::Result<()> {
+    fn control_heater(&self, id: &str) -> anyhow::Result<()> {
         self.device.indi.camera_set_heater_str(
             &self.device.name,
             id,
@@ -413,17 +413,17 @@ impl Camera for IndiCamera {
 
     // Fan
 
-    fn is_fan_ctrl_supported(&self) -> eyre::Result<bool> {
+    fn is_fan_ctrl_supported(&self) -> anyhow::Result<bool> {
         Ok(self.device.indi.camera_is_fan_supported(&self.device.name)?)
     }
 
     // Low noise mode
 
-    fn is_low_noise_supported(&self) -> eyre::Result<bool> {
+    fn is_low_noise_supported(&self) -> anyhow::Result<bool> {
         Ok(self.device.indi.camera_is_low_noise_supported(&self.device.name)?)
     }
 
-    fn enable_low_noise_mode(&self, enable: bool) -> eyre::Result<()> {
+    fn enable_low_noise_mode(&self, enable: bool) -> anyhow::Result<()> {
         self.device.indi.camera_set_low_noise(
             &self.device.name,
             enable,
@@ -434,11 +434,11 @@ impl Camera for IndiCamera {
 
     // High fullwell mode
 
-    fn is_high_fullwell_supported(&self) -> eyre::Result<bool> {
+    fn is_high_fullwell_supported(&self) -> anyhow::Result<bool> {
         Ok(self.device.indi.camera_is_high_fullwell_supported(&self.device.name)?)
     }
 
-    fn enable_high_fullwell_mode(&self, enable: bool) -> eyre::Result<()> {
+    fn enable_high_fullwell_mode(&self, enable: bool) -> anyhow::Result<()> {
         self.device.indi.camera_set_high_fullwell(
             &self.device.name,
             enable,
@@ -449,17 +449,17 @@ impl Camera for IndiCamera {
 
     // Conversion gain
 
-    fn is_conversion_gain_supported(&self) -> eyre::Result<bool> {
+    fn is_conversion_gain_supported(&self) -> anyhow::Result<bool> {
         Ok(self.device.indi.camera_is_conversion_gain_str_supported(&self.device.name)?)
     }
 
-    fn conversion_gain_list(&self) -> eyre::Result<Vec<(String/*id*/, String/*text*/)>> {
+    fn conversion_gain_list(&self) -> anyhow::Result<Vec<(String/*id*/, String/*text*/)>> {
         let list = self.device.indi.camera_get_conversion_gain_items(&self.device.name)?;
         let result: Vec<_> = list.iter().map(|(id, text)| (id.to_string(), text.to_string())).collect();
         Ok(result)
     }
 
-    fn set_conversion_gain(&self, id: &str) -> eyre::Result<()> {
+    fn set_conversion_gain(&self, id: &str) -> anyhow::Result<()> {
         self.device.indi.camera_set_conversion_gain_str(
             &self.device.name,
             id,
@@ -477,16 +477,16 @@ impl Telescope for IndiDevice {
         true
     }
 
-    fn abort_motion(&self) -> eyre::Result<()> {
+    fn abort_motion(&self) -> anyhow::Result<()> {
         self.indi.mount_abort_motion(&self.name)?;
         Ok(())
     }
 
-    fn eq_coord(&self) -> eyre::Result<(f64/*ra*/, f64/*dec*/)> {
+    fn eq_coord(&self) -> anyhow::Result<(f64/*ra*/, f64/*dec*/)> {
         Ok(self.indi.mount_get_eq_ra_and_dec(&self.name)?)
     }
 
-    fn goto_and_track(&self, ra: f64, dec: f64) -> eyre::Result<()> {
+    fn goto_and_track(&self, ra: f64, dec: f64) -> anyhow::Result<()> {
         self.indi.mount_set_after_coord_action(
             &self.name,
             indi::AfterCoordSetAction::Track,
@@ -496,25 +496,25 @@ impl Telescope for IndiDevice {
         Ok(())
     }
 
-    fn slewing(&self) -> eyre::Result<bool> {
+    fn slewing(&self) -> anyhow::Result<bool> {
         let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.name)?;
         Ok(crd_prop_state == indi::PropState::Busy)
     }
 
-    fn is_guide_rate_supported(&self) -> eyre::Result<bool> {
+    fn is_guide_rate_supported(&self) -> anyhow::Result<bool> {
         Ok(self.indi.mount_is_guide_rate_supported(&self.name)?)
     }
 
-    fn guide_rate(&self) -> eyre::Result<(f64/*ra*/, f64/*dec*/)> {
+    fn guide_rate(&self) -> anyhow::Result<(f64/*ra*/, f64/*dec*/)> {
         Ok(self.indi.mount_get_guide_rate(&self.name)?)
     }
 
-    fn can_set_guide_rate(&self) -> eyre::Result<bool> {
+    fn can_set_guide_rate(&self) -> anyhow::Result<bool> {
         let prop_data = self.indi.mount_get_guide_rate_prop_data(&self.name)?;
         Ok(prop_data.permition != indi::PropPermition::RO)
     }
 
-    fn set_guide_rate(&self, rate_ns: f64, rate_we: f64) -> eyre::Result<()> {
+    fn set_guide_rate(&self, rate_ns: f64, rate_we: f64) -> anyhow::Result<()> {
         self.indi.mount_set_guide_rate(
             &self.name,
             rate_ns, rate_we,
@@ -523,11 +523,11 @@ impl Telescope for IndiDevice {
         Ok(())
     }
 
-    fn pulse_guide(&self, duration_ns: f64, duration_we: f64) -> eyre::Result<()> {
+    fn pulse_guide(&self, duration_ns: f64, duration_we: f64) -> anyhow::Result<()> {
         Ok(self.indi.mount_timed_guide(&self.name, duration_ns, duration_we)?)
     }
 
-    fn is_pulse_guiding(&self) -> eyre::Result<bool> {
+    fn is_pulse_guiding(&self) -> anyhow::Result<bool> {
         Ok(self.indi.mount_is_timed_guiding(&self.name)?)
     }
 }
@@ -537,21 +537,21 @@ impl Telescope for IndiDevice {
 // Focuser
 
 impl Focuser for IndiDevice {
-    fn abs_position_range(&self) -> eyre::Result<RangeInclusive<f64>> {
+    fn abs_position_range(&self) -> anyhow::Result<RangeInclusive<f64>> {
         let prop = self.indi.focuser_get_abs_value_prop_elem(&self.name)?;
         Ok(prop.min..=prop.max)
     }
 
-    fn abs_position(&self) -> eyre::Result<f64> {
+    fn abs_position(&self) -> anyhow::Result<f64> {
         Ok(self.indi.focuser_get_abs_value_prop_elem(&self.name)?.value)
     }
 
-    fn set_abs_position(&self, value: f64) -> eyre::Result<()> {
+    fn set_abs_position(&self, value: f64) -> anyhow::Result<()> {
         self.indi.focuser_set_abs_value(&self.name, value, true, None)?;
         Ok(())
     }
 
-    fn temperature(&self) -> eyre::Result<f64> {
+    fn temperature(&self) -> anyhow::Result<f64> {
         Ok(self.indi.focuser_get_temperature(&self.name)?)
     }
 }
