@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     core::{
-        cam_starter::CamStarter, cam_utils::{CcdPurpose, get_all_ccd_with_purposes_list}, consts::*, core::ModeData
+        cam_starter::take_shot, cam_utils::{CcdPurpose, get_all_ccd_with_purposes_list}, consts::*, core::ModeData
     },
     hal::{Camera, Hal, indi},
     options::{CamCtrlOptions, DeviceAndProp, Options},
@@ -32,8 +32,7 @@ struct InitFlags {
     focal_len: bool,
 }
 
-pub struct CameraWatchdog {
-    cam_starter: Arc<CamStarter>,
+pub struct IndiCamWatchdog {
     indi:        Arc<indi::Connection>,
     hal:         Arc<Hal>,
     camera:      Option<Arc<dyn Camera + Send + Sync>>,
@@ -42,10 +41,9 @@ pub struct CameraWatchdog {
     init_timer:  Option<usize>,
 }
 
-impl CameraWatchdog {
-    pub fn new(cam_starter: &Arc<CamStarter>, indi: &Arc<indi::Connection>, hal: &Arc<Hal>,) -> Self {
+impl IndiCamWatchdog {
+    pub fn new(indi: &Arc<indi::Connection>, hal: &Arc<Hal>) -> Self {
         Self {
-            cam_starter: Arc::clone(cam_starter),
             indi:        Arc::clone(indi),
             hal:         Arc::clone(hal),
             camera:      None,
@@ -333,8 +331,8 @@ impl CameraWatchdog {
 
         if !restarted_by_mode {
             // Mode not restarted the camera exposure. Do it itself
-
-            self.cam_starter.abort_old(&cam_device)?;
+            let camera = self.hal.camera(&options.cam.device_id)?;
+            _ = camera.abort_exposure();
 
             let mode_cam_opts =
                 if let Some(frame_opts) = mode.active.frame_options_to_restart_exposure() {
@@ -343,12 +341,7 @@ impl CameraWatchdog {
                     &options.cam.frame
                 };
 
-            self.cam_starter.take_shot_old(
-                mode.active.get_type(),
-                &cam_device,
-                mode_cam_opts,
-                &options.cam.ctrl
-            )?;
+            take_shot(&camera, mode_cam_opts, &options.cam.ctrl)?;
         }
         log::info!("Exposure of camera {} restarted!", &cam_device.name);
         Ok(())

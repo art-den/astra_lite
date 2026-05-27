@@ -4,10 +4,9 @@ use crate::{
     core::{
         cam_starter::take_shot,
         cam_utils::{CcdPurpose, get_ccd_purpose},
-        consts::INDI_SET_PROP_TIMEOUT,
         core::*,
         frame_processing::*,
-    }, hal::{Camera, FrameType, Hal, indi}, image::{image::*, stars::StarItems}, options::*, plate_solve::*, sky_math::math::*
+    }, hal::{Camera, FrameType, Hal, Telescope, indi}, image::{image::*, stars::StarItems}, options::*, plate_solve::*, sky_math::math::*
 };
 
 use super::{events::*, utils::gain_to_value};
@@ -23,13 +22,13 @@ enum State {
 pub struct PlatesolveMode {
     state:        State,
     camera:       Arc<dyn Camera + Send + Sync>,
+    mount:        Arc<dyn Telescope + Send + Sync>,
     indi:         Arc<indi::Connection>,
     events:       Arc<Events>,
     cur_frame:    Arc<ResultImage>,
     options:      Arc<RwLock<Options>>,
     subscribers:  Arc<Events>,
     camera_dev:   DeviceAndProp,
-    mount:        String,
     cam_opts:     CamOptions,
     ps_opts:      PlateSolverOptions,
     plate_solver: PlateSolver,
@@ -46,6 +45,7 @@ impl PlatesolveMode {
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let camera = hal.camera(&opts.cam.device_id)?;
+        let mount = hal.telescope(&opts.mount.device)?;
         let Some(camera_dev) = opts.cam.device.clone() else {
             anyhow::bail!("Camera is not selected");
         };
@@ -66,9 +66,9 @@ impl PlatesolveMode {
             cur_frame:    Arc::clone(cur_frame),
             options:      Arc::clone(options),
             subscribers:  Arc::clone(subscribers),
-            mount:        opts.mount.device.clone(),
             ps_opts:      opts.plate_solver.clone(),
             camera,
+            mount,
             plate_solver,
             camera_dev,
             cam_opts,
@@ -76,7 +76,7 @@ impl PlatesolveMode {
     }
 
     fn get_platesolver_config(&self) -> anyhow::Result<PlateSolveConfig> {
-        let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
+        let (ra, dec) = self.mount.eq_coord()?;
         let eq_coord = EqCoord {
             dec: degree_to_radian(dec),
             ra:  hour_to_radian(ra),
@@ -138,18 +138,9 @@ impl PlatesolveMode {
         );
 
         // Sync coordinates
-        self.indi.mount_set_after_coord_action(
-            &self.mount,
-            indi::AfterCoordSetAction::Sync,
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
-        self.indi.mount_set_eq_coord(
-            &self.mount,
+        self.mount.sync(
             radian_to_hour(result.crd_now.ra),
             radian_to_degree(result.crd_now.dec),
-            true,
-            INDI_SET_PROP_TIMEOUT
         )?;
 
         Ok(true)
@@ -159,8 +150,8 @@ impl PlatesolveMode {
         let mut options = self.options.write().unwrap();
         if !options.telescope.from_platesolve { return Ok(()); }
         let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.camera_dev.prop);
-        let (pixel_size_x, pixel_size_y) = self.indi.camera_get_pixel_size_um(&self.camera_dev.name, cam_ccd)?;
-        let (sensor_width, sensor_height) = self.indi.camera_get_max_frame_size(&self.camera_dev.name, cam_ccd)?;
+        let (pixel_size_x, pixel_size_y) = self.camera.pixel_size_um()?;
+        let (sensor_width, sensor_height) = self.camera.ccd_size()?;
         let (frame_width, _) = options.cam.frame.active_sensor_size(sensor_width, sensor_height);
         let bin_ratio = options.cam.frame.binning.get_ratio();
         let cam_purpose = get_ccd_purpose(&self.indi, &self.camera_dev.name, cam_ccd)?;
@@ -243,7 +234,7 @@ impl Mode for PlatesolveMode {
 
     fn abort(&mut self) -> anyhow::Result<()> {
         _ = self.camera.abort_exposure();
-        _ = self.indi.mount_abort_motion(&self.mount);
+        _ = self.mount.abort_motion();
         self.state = State::None;
         Ok(())
     }

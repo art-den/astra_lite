@@ -8,7 +8,7 @@ use gtk::glib::PropertySet;
 use itertools::Itertools;
 
 use crate::{
-    core::{cam_starter::CamStarter,  cam_watchdog::CameraWatchdog, dev_watchdog::DevicesWatchdog},
+    core::{indi_cam_watchdog::IndiCamWatchdog, dev_watchdog::DevicesWatchdog},
     guiding::external_guider::*,
     hal::{FrameType, Hal, indi},
     options::*,
@@ -105,7 +105,7 @@ impl ModeData {
 }
 
 struct Watchdogs {
-    camera:  CameraWatchdog,
+    camera:  IndiCamWatchdog,
     devices: DevicesWatchdog,
 }
 
@@ -114,7 +114,6 @@ pub struct Core {
     indi:               Arc<indi::Connection>,
     options:            Arc<RwLock<Options>>,
     mode:               RwLock<ModeData>,
-    cam_starter:        Arc<CamStarter>,
     events:             Arc<Events>,
     cur_frame:          Arc<ResultImage>,
     calibr_data:        Arc<Mutex<CalibrData>>,
@@ -149,10 +148,9 @@ impl Core {
         let events = Arc::new(Events::new());
         let options = Arc::new(RwLock::new(Options::default()));
         let indi = Arc::new(indi::Connection::new());
-        let cam_starter = Arc::new(CamStarter::new(&indi));
 
         let watchdogs = Watchdogs {
-            camera: CameraWatchdog::new(&cam_starter, &indi, &hal),
+            camera: IndiCamWatchdog::new(&indi, &hal),
             devices: DevicesWatchdog::new(&options, &indi, &events),
         };
 
@@ -173,11 +171,9 @@ impl Core {
             ext_guider:         ExternalGuiderCtrl::new(),
             frame_proc_thread:  Some(frame_proc_thread),
             events,
-            cam_starter,
             img_cmds_sender,
         });
 
-        result.connect_cam_start_event();
         result.set_ext_guider_events_handler();
         result.connect_indi_events();
         result.connect_events();
@@ -211,7 +207,6 @@ impl Core {
         self.timer.clear();
         self.ext_guider.disconnect_events_handler();
         self.ext_guider.phd2_conn().discnnect_all_event_handlers();
-        self.cam_starter.disconnect_before_shot_fun();
 
         self.abort_active_mode();
         *self.mode.write().unwrap() = ModeData::new();
@@ -233,13 +228,6 @@ impl Core {
 
     pub fn ext_giuder(&self) -> &Arc<ExternalGuiderCtrl> {
         &self.ext_guider
-    }
-
-    fn connect_cam_start_event(self: &Arc<Self>) {
-        let _self_ = Arc::clone(&self);
-        self.cam_starter.connect_before_shot_fun(move |_mode_type| {
-
-        });
     }
 
     fn set_ext_guider_events_handler(self: &Arc<Self>) {
@@ -585,13 +573,13 @@ impl Core {
         let res = watchdogs.camera.control_camera_cooling(&options.cam.ctrl);
         self.process_error(res, "CameraWatchdog::control_camera_cooling");
 
-        let res = CameraWatchdog::control_camera_fan(&self.indi,&to.name, &options, true);
+        let res = IndiCamWatchdog::control_camera_fan(&self.indi,&to.name, &options, true);
         self.process_error(res, "CameraWatchdog::control_camera_fan");
 
-        let res = CameraWatchdog::control_camera_heater(&self.indi,&to.name, &options, true);
+        let res = IndiCamWatchdog::control_camera_heater(&self.indi,&to.name, &options, true);
         self.process_error(res, "CameraWatchdog::control_camera_heater");
 
-        let res = CameraWatchdog::set_focal_len_for_indi_devices(&self.indi, &options);
+        let res = IndiCamWatchdog::set_focal_len_for_indi_devices(&self.indi, &options);
         self.process_error(res, "CameraWatchdog::set_telescope_focal_len");
     }
 
@@ -600,7 +588,7 @@ impl Core {
 
         // TODO: move this code inside CameraWatchdog
 
-        let res = CameraWatchdog::set_focal_len_for_indi_devices(&self.indi, &options);
+        let res = IndiCamWatchdog::set_focal_len_for_indi_devices(&self.indi, &options);
         self.process_error(res, "CameraWatchdog::set_telescope_focal_len");
     }
 

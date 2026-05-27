@@ -8,7 +8,7 @@ pub mod mode_goto;
 pub mod mode_polar_align;
 pub mod utils;
 pub mod cam_starter;
-pub mod cam_watchdog;
+pub mod indi_cam_watchdog;
 pub mod cam_utils;
 
 mod mode_waiting;

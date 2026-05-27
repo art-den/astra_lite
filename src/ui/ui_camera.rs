@@ -2,7 +2,7 @@ use std::{rc::Rc, sync::Arc, cell::RefCell};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{cam_watchdog::CameraWatchdog, core::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{Camera, DeviceType, FrameType, HalState, events::HalEvent, indi}, image::{info::*, raw::CalibrMethods}, options::*, ui::gtk_utils
+    core::{indi_cam_watchdog::IndiCamWatchdog, core::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{Camera, DeviceType, FrameType, HalState, events::HalEvent, indi}, image::{info::*, raw::CalibrMethods}, options::*, ui::gtk_utils
 };
 use super::{gtk_utils::*, module::*, ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
@@ -603,7 +603,7 @@ impl CameraUi {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
                 options.cam.ctrl.heater_str = cb.active_id().map(|id| id.to_string());
                 let cam_device = options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default();
-                let res = CameraWatchdog::control_camera_heater(&self_.core.indi(), cam_device, &options, false);
+                let res = IndiCamWatchdog::control_camera_heater(&self_.core.indi(), cam_device, &options, false);
                 drop(options);
                 self_.correct_widgets_props();
                 gtk_utils::show_message_if_result_is_error(Some(&self_.window), &res);
@@ -615,7 +615,7 @@ impl CameraUi {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
                 options.cam.ctrl.enable_fan = chb.is_active();
                 let cam_device = options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default();
-                let res = CameraWatchdog::control_camera_fan(&self_.core.indi(), cam_device, &options, false);
+                let res = IndiCamWatchdog::control_camera_fan(&self_.core.indi(), cam_device, &options, false);
                 drop(options);
                 self_.correct_widgets_props();
                 gtk_utils::show_message_if_result_is_error(Some(&self_.window), &res);

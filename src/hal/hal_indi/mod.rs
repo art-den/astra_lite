@@ -501,6 +501,16 @@ impl Telescope for IndiDevice {
         Ok(crd_prop_state == indi::PropState::Busy)
     }
 
+    fn sync(&self, ra: f64, dec: f64) -> anyhow::Result<()> {
+        self.indi.mount_set_after_coord_action(
+            &self.name,
+            indi::AfterCoordSetAction::Sync,
+            true, Some(SET_PROP_TIME_OUT)
+        )?;
+        self.indi.mount_set_eq_coord(&self.name, ra, dec, true, None)?;
+        Ok(())
+    }
+
     fn is_guide_rate_supported(&self) -> anyhow::Result<bool> {
         Ok(self.indi.mount_is_guide_rate_supported(&self.name)?)
     }

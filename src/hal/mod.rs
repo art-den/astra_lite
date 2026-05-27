@@ -218,6 +218,8 @@ pub trait Telescope : Device {
     fn goto_and_track(&self, ra: f64, dec: f64) -> anyhow::Result<()>;
     fn slewing(&self) -> anyhow::Result<bool>;
 
+    fn sync(&self, ra: f64, dec: f64) -> anyhow::Result<()>;
+
     fn is_guide_rate_supported(&self) -> anyhow::Result<bool>;
     fn guide_rate(&self) -> anyhow::Result<(f64/*ra*/, f64/*dec*/)>;
     fn can_set_guide_rate(&self) -> anyhow::Result<bool>;
