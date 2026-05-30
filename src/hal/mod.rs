@@ -81,6 +81,15 @@ impl Hal {
         }
     }
 
+    pub fn notify_periodical_timer_tick(&self, timer_period: usize) -> anyhow::Result<()> {
+        let impl_ = self.impl_.read().unwrap();
+        if let Some(impl_) = &*impl_ {
+            impl_.notify_periodical_timer_tick(timer_period)
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn devices(&self, type_filter: DeviceType) -> anyhow::Result<Vec<DeviceInfo>> {
         let impl_ = self.impl_.read().unwrap();
         if let Some(impl_) = &*impl_ {
@@ -120,6 +129,7 @@ impl Hal {
 
 pub trait HalImpl {
     fn state(&self) -> HalState;
+    fn notify_periodical_timer_tick(&self, timer_period: usize) -> anyhow::Result<()>;
     fn devices(&self, type_filter: DeviceType) -> anyhow::Result<Vec<DeviceInfo>>;
     fn camera(&self, id: &str) -> anyhow::Result<Arc<dyn Camera + Send + Sync>>;
     fn telescope(&self, id: &str) -> anyhow::Result<Arc<dyn Telescope + Send + Sync>>;
@@ -192,6 +202,7 @@ pub trait Camera : Device {
 
     // Fan
     fn is_fan_ctrl_supported(&self) -> anyhow::Result<bool>;
+    fn enable_fan(&self, enable: bool) -> anyhow::Result<()>;
 
     // Low noise mode
     fn is_low_noise_supported(&self) -> anyhow::Result<bool>;

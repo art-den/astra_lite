@@ -3,7 +3,7 @@ use std::{any::Any, f64::consts::PI, sync::{Arc, RwLock}};
 use chrono::{NaiveDateTime, Utc};
 
 use crate::{
-    core::{cam_starter::take_shot, core::*, frame_processing::*}, hal::{Camera, FrameType, Hal, indi::{self, degree_to_str}}, image::{image::*, stars::StarItems}, options::*, plate_solve::*, sky_math::{math::*, solar_system::calc_atmospheric_refraction}
+    core::{cam_ctrl::take_shot, core::*, frame_processing::*}, hal::{Camera, FrameType, Hal, indi::{self, degree_to_str}}, image::{image::*, stars::StarItems}, options::*, plate_solve::*, sky_math::{math::*, solar_system::calc_atmospheric_refraction}
 };
 
 use super::{consts::*, events::*, utils::{check_telescope_is_at_desired_position, gain_to_value}};
@@ -767,7 +767,7 @@ impl Mode for PolarAlignMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         match &mut self.state {
             State::PlateSolve => {
                 return self.try_process_plate_solving_result();

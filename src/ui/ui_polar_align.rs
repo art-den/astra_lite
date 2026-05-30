@@ -132,18 +132,18 @@ impl UiModule for PolarAlignUi {
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
                 }
             }
-            Event::CameraDeviceChanged{ to, ..} => {
+            Event::CameraDeviceChanged { new_camera_id, .. } => {
                 let options = self.options.read().unwrap();
                 let mount_device = options.mount.device.clone();
                 drop(options);
-                self.correct_widgets_props_impl(&mount_device, Some(to));
+                self.correct_widgets_props_impl(&mount_device, new_camera_id);
             }
             Event::MountDeviceChanged(mount_device) => {
                 let options = self.options.read().unwrap();
-                let cam_device = options.cam.device.clone();
+                let cam_device = options.cam.device_id.clone();
                 drop(options);
                 self.update_mount_speed_list();
-                self.correct_widgets_props_impl(mount_device, cam_device.as_ref());
+                self.correct_widgets_props_impl(mount_device, &cam_device);
             }
             Event::PolarAlignment(event) => {
                 self.show_polar_alignment_error(event);
@@ -197,11 +197,12 @@ impl PolarAlignUi {
         );
     }
 
-    fn correct_widgets_props_impl(&self, mount_device: &str, cam_device: Option<&DeviceAndProp>) {
+    fn correct_widgets_props_impl(&self, mount_device: &str, cam_device: &str) {
+        let hal = self.core.hal();
+        let camera = hal.camera(cam_device).ok();
+
         let mnt_active = self.indi.is_device_enabled(mount_device).unwrap_or(false);
-        let cam_active = cam_device.as_ref().map(|cam_device|
-            self.indi.is_device_enabled(&cam_device.name).unwrap_or(false)
-        ).unwrap_or(false);
+        let cam_active = camera.as_ref().map(|cam| cam.is_active().ok()).flatten().unwrap_or(false);
         let indi_connected = self.indi.state() == indi::ConnState::Connected;
 
         let mode = self.core.mode();
@@ -238,9 +239,9 @@ impl PolarAlignUi {
     fn correct_widgets_props(&self) {
         let options = self.options.read().unwrap();
         let mount_device = options.mount.device.clone();
-        let cam_device = options.cam.device.clone();
+        let cam_device = options.cam.device_id.clone();
         drop(options);
-        self.correct_widgets_props_impl(&mount_device, cam_device.as_ref());
+        self.correct_widgets_props_impl(&mount_device, &cam_device);
     }
 
     fn connect_delayed_actions_events(self: &Rc<Self>) {

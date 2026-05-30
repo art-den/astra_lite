@@ -119,9 +119,8 @@ impl UiModule for PlateSolveUi {
 
     fn on_app_closing(&self) {
         let mut options = self.options.write().unwrap();
-        if let Some(cur_cam_device) = options.cam.device.clone() {
-            self.store_options_for_camera(&cur_cam_device, &mut options);
-        }
+        let cur_cam_device = options.cam.device_id.to_string();
+        self.store_options_for_camera(&cur_cam_device, &mut options);
         drop(options);
     }
 
@@ -130,14 +129,14 @@ impl UiModule for PlateSolveUi {
             Event::ModeChanged => {
                 self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
             }
-            Event::CameraDeviceChanged{ from, to, .. } => {
-                self.handler_camera_changed(from, to);
+            Event::CameraDeviceChanged{ prev_camera_id, new_camera_id } => {
+                self.handler_camera_changed(prev_camera_id, new_camera_id);
             }
             Event::MountDeviceChanged(mount_device) => {
                 let options = self.options.read().unwrap();
-                let cam_device = options.cam.device.clone();
+                let cam_device = options.cam.device_id.clone();
                 drop(options);
-                self.correct_widgets_props_impl(mount_device, cam_device.as_ref());
+                self.correct_widgets_props_impl(mount_device, &cam_device);
             }
             _ => {}
         }
@@ -185,10 +184,15 @@ impl PlateSolveUi {
         );
     }
 
-    fn correct_widgets_props_impl(&self, mount_device: &str, cam_device: Option<&DeviceAndProp>) {
+    fn correct_widgets_props_impl(&self, mount_device: &str, cam_device: &str) {
+        let hal = self.core.hal();
+        let camera = hal.camera(cam_device).ok();
+
         let mnt_active = self.indi.is_device_enabled(mount_device).unwrap_or(false);
-        let cam_active = cam_device.as_ref()
-            .map(|cam_device| self.indi.is_device_enabled(&cam_device.name).unwrap_or(false))
+
+        let cam_active = camera.as_ref()
+            .map(|cam| cam.is_active().ok())
+            .flatten()
             .unwrap_or(false);
         let indi_connected = self.indi.state() == indi::ConnState::Connected;
 
@@ -203,10 +207,9 @@ impl PlateSolveUi {
             mnt_active && cam_active &&
             (waiting || single_shot || live_view);
 
-        if let Some(cam_device) = cam_device {
-            let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_device.prop);
-            let exp_value = self.indi.camera_get_exposure_prop_value(&cam_device.name, cam_ccd);
-            correct_spinbutton_by_cam_prop(&self.widgets.spb_exp, &exp_value, 1, Some(1.0));
+        if let Some(camera) = camera {
+            let exp_range = camera.exposure_range().ok();
+            correct_spinbutton_by_range(&self.widgets.spb_exp, exp_range, 1, Some(1.0));
         }
 
         self.widgets.grd.set_sensitive(plate_solve_sensitive);
@@ -215,31 +218,33 @@ impl PlateSolveUi {
     fn correct_widgets_props(&self) {
         let options = self.options.read().unwrap();
         let mount_device = options.mount.device.clone();
-        let cam_device = options.cam.device.clone();
+        let cam_device = options.cam.device_id.clone();
         drop(options);
-        self.correct_widgets_props_impl(&mount_device, cam_device.as_ref());
+        self.correct_widgets_props_impl(&mount_device, &cam_device);
     }
 
-    fn handler_camera_changed(&self, from: &Option<DeviceAndProp>, to: &DeviceAndProp) {
+    fn handler_camera_changed(&self, from: &str, to: &str) {
         let mut options = self.options.write().unwrap();
         self.get_options(&mut options);
-        if let Some(from) = from {
+        if !from.is_empty() {
             self.store_options_for_camera(from, &mut options);
         }
         self.restore_options_for_camera(to, &mut options);
         self.show_options(&options);
         let mount_device = options.mount.device.clone();
         drop(options);
-        self.correct_widgets_props_impl(&mount_device, Some(to));
+        self.correct_widgets_props_impl(&mount_device, to);
     }
 
     fn store_options_for_camera(
         &self,
-        device:  &DeviceAndProp,
+        device:  &str,
         options: &mut Options
     ) {
-        let key = device.to_file_name_part();
-        let sep_options = options.sep_ps.entry(key).or_default();
+        if device.is_empty() {
+            return;
+        }
+        let sep_options = options.sep_ps.entry(device.to_string()).or_default();
         sep_options.exposure = options.plate_solver.exposure;
         sep_options.gain = options.plate_solver.gain;
         sep_options.bin = options.plate_solver.bin;
@@ -247,11 +252,10 @@ impl PlateSolveUi {
 
     fn restore_options_for_camera(
         &self,
-        device:  &DeviceAndProp,
+        device:  &str,
         options: &mut Options
     ) {
-        let key = device.to_file_name_part();
-        if let Some(sep_options) = options.sep_ps.get(&key) {
+        if let Some(sep_options) = options.sep_ps.get(device) {
             options.plate_solver.exposure = sep_options.exposure;
             options.plate_solver.gain = sep_options.gain;
             options.plate_solver.bin = sep_options.bin;

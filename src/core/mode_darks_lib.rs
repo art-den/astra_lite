@@ -132,7 +132,7 @@ impl Mode for DarkCreationMode {
         Ok(())
     }
 
-    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         let mut have_to_start = false;
         match self.state {

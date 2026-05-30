@@ -1,6 +1,6 @@
 use std::{cell::{Cell, RefCell}, collections::HashMap, hash::Hash, ops::RangeInclusive, rc::Rc, time::Duration};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
-use crate::{image::histogram::*, hal::indi};
+use crate::image::histogram::*;
 
 pub fn correct_spinbutton_by_range(
     spb:    &gtk::SpinButton,
@@ -28,35 +28,6 @@ pub fn correct_spinbutton_by_range(
         spb.set_digits(digits);
     } else {
         spb.set_sensitive(false);
-    }
-}
-
-pub fn correct_spinbutton_by_cam_prop(
-    spb:       &gtk::SpinButton,
-    prop_info: &indi::Result<indi::NumPropValue>,
-    digits:    u32,
-    step:      Option<f64>,
-) -> bool {
-    if let Ok(info) = prop_info {
-        spb.set_range(info.min, info.max);
-        let value = spb.value();
-        if value < info.min {
-            spb.set_value(info.min);
-        }
-        if value > info.max {
-            spb.set_value(info.max);
-        }
-        let desired_step =
-            if      info.max <= 1.0   { 0.1 }
-            else if info.max <= 10.0  { 1.0 }
-            else if info.max <= 100.0 { 10.0 }
-            else                      { 100.0 };
-        let step = step.unwrap_or(desired_step);
-        spb.set_increments(step, 10.0 * step);
-        spb.set_digits(digits);
-        true
-    } else {
-        false
     }
 }
 

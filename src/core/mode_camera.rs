@@ -2,7 +2,7 @@ use std::{any::Any, path::PathBuf, sync::{atomic::AtomicBool, Arc, Mutex, RwLock
 use chrono::Utc;
 use crate::{
     TimeLogger,
-    core::{cam_starter::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode},
+    core::{cam_ctrl::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode},
     guiding::external_guider::*,
     hal::{Camera, Focuser, FrameType, Telescope, indi},
     image::{
@@ -1491,7 +1491,7 @@ impl Mode for TackingPicturesMode {
         }
     }
 
-    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         match &mut self.state {
             State::InternalMountCorrection(ok_time_ms) => {

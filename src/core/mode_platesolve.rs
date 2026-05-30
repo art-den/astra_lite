@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::{
     core::{
-        cam_starter::take_shot,
+        cam_ctrl::take_shot,
         cam_utils::{CcdPurpose, get_ccd_purpose},
         core::*,
         frame_processing::*,
@@ -265,7 +265,7 @@ impl Mode for PlatesolveMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn notify_timer(&mut self, _timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_periodical_timer_tick(&mut self, _timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         match self.state {
             State::PlateSolve => {
                 let ok = self.try_process_plate_solving_result()?;

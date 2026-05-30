@@ -9,4 +9,3 @@ mod error;
 pub use sexagesimal::*;
 pub use connection::*;
 pub use drivers::*;
-pub use error::*;

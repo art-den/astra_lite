@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 use crate::{
-    core::{cam_starter::take_shot, consts::*, events::*, frame_processing::*}, hal::{Camera, FrameType, Hal, indi}, image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point}, options::*, plate_solve::*, sky_math::math::*
+    core::{cam_ctrl::take_shot, consts::*, events::*, frame_processing::*}, hal::{Camera, FrameType, Hal, indi}, image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point}, options::*, plate_solve::*, sky_math::math::*
 };
 use super::{core::*, events::Events, utils::*};
 
@@ -408,7 +408,7 @@ impl Mode for GotoMode {
         self.cam_opts.as_ref().map(|cam_opts| &cam_opts.frame)
     }
 
-    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         match self.state {
             State::Unparking => {
                 if !self.indi.mount_is_parked(&self.mount)? {

@@ -6,6 +6,12 @@ use crate::hal::DeviceInfo;
 pub enum HalEvent {
     DeviceConnected(Arc<DeviceInfo>),
     DeviceDisconnected(Arc<DeviceInfo>),
+
+    NeedRestartCameraExposure(Arc<String/*camera id*/>),
+    NeedInitTelescopeFocalLenForCamera(Arc<String/*camera id*/>),
+    CameraIsReadyForCooling(Arc<String/*camera id*/>),
+    CameraIsReadyForCtrlFan(Arc<String/*camera id*/>),
+    CameraIsReadyForCtrlHeater(Arc<String/*camera id*/>),
 }
 
 pub struct HalEventSubscribers {

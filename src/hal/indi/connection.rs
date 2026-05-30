@@ -2303,6 +2303,20 @@ impl Connection {
         prop_name == name && elem_name == elem
     }
 
+    pub fn camera_get_ccd_for_property(
+        prop_name: &str,
+        elem_name: &str,
+    ) -> Option<CamCcd> {
+        match (prop_name, elem_name) {
+            ("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE") =>
+                Some(CamCcd::Primary),
+            ("GUIDER_EXPOSURE", "GUIDER_EXPOSURE_VALUE") =>
+                Some(CamCcd::Secondary),
+            _ =>
+                None,
+        }
+    }
+
     pub fn camera_get_exposure(
         &self,
         device_name: &str,

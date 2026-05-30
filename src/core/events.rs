@@ -1,5 +1,5 @@
 use std::sync::{Arc, RwLock};
-use crate::{guiding::external_guider::ExtGuiderEvent, plate_solve::PlateSolverEvent, DeviceAndProp};
+use crate::{guiding::external_guider::ExtGuiderEvent, plate_solve::PlateSolverEvent};
 use super::{core::ModeType, frame_processing::*, mode_focusing::*, mode_polar_align::PolarAlignmentEvent};
 
 #[derive(Clone)]
@@ -19,9 +19,7 @@ pub enum Event {
     ModeContinued,
     CameraDeviceChanged{
         prev_camera_id: String,
-        from: Option<DeviceAndProp>,
         new_camera_id: String,
-        to:   DeviceAndProp
     },
     MountDeviceChanged(String),
     FocuserDeviceChanged(String),
@@ -42,6 +40,8 @@ pub enum Event {
     TelescopeBarlowChanged,
     GuiderFocalLenChanged(f64),
     CameraCoolingOptionsChanged,
+    CameraFanOptionsChanged,
+    CameraHeaterOptionsChanged,
 }
 
 type EventFun = dyn Fn(Event) + Send + Sync + 'static;

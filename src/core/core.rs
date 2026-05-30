@@ -8,9 +8,9 @@ use gtk::glib::PropertySet;
 use itertools::Itertools;
 
 use crate::{
-    core::{indi_cam_watchdog::IndiCamWatchdog, dev_watchdog::DevicesWatchdog},
+    core::cam_ctrl::*,
     guiding::external_guider::*,
-    hal::{FrameType, Hal, indi},
+    hal::{FrameType, Hal, events::HalEvent, indi},
     options::*,
     sky_math::math::EqCoord,
     utils::timer::*,
@@ -73,7 +73,7 @@ pub trait Mode {
     fn notify_before_frame_processing_start(&mut self, _blob: &Arc<indi::BlobPropValue>, _should_be_processed: &mut bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_timer(&mut self, _timer_period_ms: usize) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_periodical_timer_tick(&mut self, _timer_period_ms: usize) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn custom_command(&mut self, _args: &dyn Any) -> anyhow::Result<Option<Box<dyn Any>>> { Ok(None) }
     fn notify_processing_queue_overflow(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn stop_live_view_before_this_mode(&self) -> bool { return true; }
@@ -104,11 +104,6 @@ impl ModeData {
     }
 }
 
-struct Watchdogs {
-    camera:  IndiCamWatchdog,
-    devices: DevicesWatchdog,
-}
-
 pub struct Core {
     hal:                Arc<Hal>,
     indi:               Arc<indi::Connection>,
@@ -119,7 +114,6 @@ pub struct Core {
     calibr_data:        Arc<Mutex<CalibrData>>,
     live_stacking:      Arc<LiveStackingData>,
     timer:              Arc<Timer>,
-    watchdogs:          Arc<Mutex<Watchdogs>>,
     img_proc_stop_flag: Mutex<Arc<AtomicBool>>, // stop flag for last command
 
     /// commands for passing into frame processing thread
@@ -149,11 +143,6 @@ impl Core {
         let options = Arc::new(RwLock::new(Options::default()));
         let indi = Arc::new(indi::Connection::new());
 
-        let watchdogs = Watchdogs {
-            camera: IndiCamWatchdog::new(&indi, &hal),
-            devices: DevicesWatchdog::new(&options, &indi, &events),
-        };
-
         let hal_impl = hal.create_indy_impl(&indi);
         hal.set_impl(hal_impl);
 
@@ -166,7 +155,6 @@ impl Core {
             calibr_data:        Arc::new(Mutex::new(CalibrData::default())),
             live_stacking:      Arc::new(LiveStackingData::new()),
             timer:              Arc::new(Timer::new()),
-            watchdogs:          Arc::new(Mutex::new(watchdogs)),
             img_proc_stop_flag: Mutex::new(Arc::new(AtomicBool::new(false))),
             ext_guider:         ExternalGuiderCtrl::new(),
             frame_proc_thread:  Some(frame_proc_thread),
@@ -176,6 +164,7 @@ impl Core {
 
         result.set_ext_guider_events_handler();
         result.connect_indi_events();
+        result.connect_hal_events();
         result.connect_events();
         result.start_timer();
         result
@@ -195,12 +184,6 @@ impl Core {
 
     pub fn events(&self) -> &Arc<Events> {
         &self.events
-    }
-
-    pub fn init_after_options_loaded(&self) {
-        let mut watchdogs = self.watchdogs.lock().unwrap();
-        let options = self.options.read().unwrap();
-        watchdogs.camera.select_camera(&options.cam.device_id);
     }
 
     pub fn stop(self: &Arc<Self>) {
@@ -270,7 +253,7 @@ impl Core {
         context: &str,
     ) {
         let Err(err) = result else { return; };
-        log::error!("Error in {}: {}", context, err.to_string());
+        log::error!("Error {}, context: {}", err.to_string(), context);
 
         log::info!("Aborting active mode...");
         self.abort_active_mode();
@@ -293,18 +276,11 @@ impl Core {
 
     fn timer_event_handler(self: &Arc<Self>) -> anyhow::Result<()> {
         let mut mode = self.mode.write().unwrap();
-        let options = self.options.read().unwrap();
-
-        let mut watchdogs = self.watchdogs.lock().unwrap();
-        watchdogs.camera.notify_timer(Self::TIMER_PERIOD_MS, &mut mode, &options)?;
-        drop(options);
-
-        watchdogs.devices.notify_timer(Self::TIMER_PERIOD_MS)?;
-        drop(watchdogs);
-
-        let result = mode.active.notify_timer(Self::TIMER_PERIOD_MS)?;
+        let result = mode.active.notify_periodical_timer_tick(Self::TIMER_PERIOD_MS)?;
         self.apply_notify_result(result, &mut mode)?;
         drop(mode);
+
+        self.hal.notify_periodical_timer_tick(Self::TIMER_PERIOD_MS)?;
 
         Ok(())
     }
@@ -315,14 +291,6 @@ impl Core {
         self.indi.subscribe_events(move |event| {
             let result = || -> anyhow::Result<()> {
                 match event {
-                    indi::Event::DeviceConnected(event) => {
-                        let options = self_.options.read().unwrap();
-                        let is_camera = event.interface.contains(indi::DriverInterface::CCD);
-                        if is_camera && *event.device_name == options.cam.device_id {
-                            let mut watchdogs = self_.watchdogs.lock().unwrap();
-                            watchdogs.camera.select_camera(&options.cam.device_id);
-                        }
-                    }
                     indi::Event::BlobStart(event) => {
                         let mut mode = self_.mode.write().unwrap();
                         let result = mode.active.notify_blob_start_event(&event)?;
@@ -352,6 +320,37 @@ impl Core {
         });
     }
 
+    fn connect_hal_events(self: &Arc<Self>) {
+        let self_ = Arc::clone(self);
+        self.hal.connect_event_handler(move |event| {
+            self_.hal_event_handler(event);
+        });
+    }
+
+    fn hal_event_handler(self: &Arc<Self>, event: HalEvent) {
+        match &event {
+            HalEvent::CameraIsReadyForCooling(device_id) |
+            HalEvent::CameraIsReadyForCtrlFan(device_id) |
+            HalEvent::CameraIsReadyForCtrlHeater(device_id) => {
+                let options = self.options().read().unwrap();
+                if options.cam.device_id == **device_id {
+                    let Ok(camera) = self.hal.camera(&options.cam.device_id) else { return; };
+                    let ctrl_result = match &event {
+                        HalEvent::CameraIsReadyForCooling(_) =>
+                            control_camera_cooling(&camera, &options.cam.ctrl),
+                        HalEvent::CameraIsReadyForCtrlFan(_) =>
+                            control_camera_fan(&camera, &options.cam.ctrl),
+                        HalEvent::CameraIsReadyForCtrlHeater(_) =>
+                            control_camera_heater(&camera, &options.cam.ctrl),
+                        _ => unreachable!()
+                    };
+                    self.process_error(ctrl_result, "hal_event_handler");
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn connect_events(self: &Arc<Self>) {
         let self_ = Arc::clone(self);
         self.events.subscribe(move |event| {
@@ -360,19 +359,30 @@ impl Core {
     }
 
     fn event_handler(self: &Arc<Self>, event: Event) {
-        match event {
-            Event::CameraDeviceChanged { from, to, prev_camera_id, new_camera_id } => {
-                self.process_camera_changed(from, to, &prev_camera_id, &new_camera_id);
+        match &event {
+            Event::CameraDeviceChanged { new_camera_id, .. } => {
+                self.process_camera_changed(new_camera_id);
             },
             Event::TelescopeFocalLenChanged(_)|
             Event::TelescopeBarlowChanged|
             Event::GuiderFocalLenChanged(_) => {
                 self.process_focal_len_changed();
             }
-            Event::CameraCoolingOptionsChanged => {
+            Event::CameraCoolingOptionsChanged |
+            Event::CameraFanOptionsChanged |
+            Event::CameraHeaterOptionsChanged => {
                 let options = self.options.read().unwrap();
-                let watchdogs = self.watchdogs.lock().unwrap();
-                _ = watchdogs.camera.control_camera_cooling(&options.cam.ctrl);
+                let Ok(camera) = self.hal.camera(&options.cam.device_id) else { return; };
+                let res = match &event {
+                    Event::CameraCoolingOptionsChanged =>
+                        control_camera_cooling(&camera, &options.cam.ctrl),
+                    Event::CameraFanOptionsChanged =>
+                        control_camera_fan(&camera, &options.cam.ctrl),
+                    Event::CameraHeaterOptionsChanged =>
+                        control_camera_heater(&camera, &options.cam.ctrl),
+                    _ => unreachable!(),
+                };
+                self.process_error(res, "event_handler, camera control");
             }
             _ => {},
         }
@@ -382,10 +392,6 @@ impl Core {
         self:         &Arc<Self>,
         indi_drivers: &indi::Drivers
     ) -> anyhow::Result<()> {
-        let mut watchdogs = self.watchdogs.lock().unwrap();
-        watchdogs.camera.reset();
-        drop(watchdogs);
-
         let options = self.options.read().unwrap();
         let drivers = if !options.indi.remote {
             let telescopes    = indi_drivers.get_group_by_name("Telescopes")?;
@@ -452,10 +458,6 @@ impl Core {
         self.apply_notify_result(result, &mut mode)?;
         drop(mode);
 
-        let options = self.options.read().unwrap();
-        let mut watchdogs = self.watchdogs.lock().unwrap();
-        watchdogs.camera.notify_indi_prop_change(&options.cam.device, prop_change)?;
-        watchdogs.devices.notify_indi_prop_change(prop_change)?;
         Ok(())
     }
 
@@ -553,43 +555,31 @@ impl Core {
         Ok(())
     }
 
-    fn process_camera_changed(
-        self: &Arc<Self>,
-        _from: Option<DeviceAndProp>,
-        to: DeviceAndProp,
-        _prev_camera_id: &str,
-        new_camera_id: &str,
-    ) {
+    fn process_camera_changed(self: &Arc<Self>, new_camera_id: &str) {
         let options = self.options.read().unwrap();
-        if options.cam.device.as_ref() != Some(&to) {
+        if options.cam.device_id != new_camera_id {
             return;
         }
 
-        let mut watchdogs = self.watchdogs.lock().unwrap();
-        watchdogs.camera.select_camera(new_camera_id);
+        let Ok(camera) = self.hal.camera(new_camera_id) else { return; };
 
-        // TODO: move this code inside CameraWatchdog
+        let res = control_camera_cooling(&camera, &options.cam.ctrl);
+        self.process_error(res, "control_camera_cooling");
 
-        let res = watchdogs.camera.control_camera_cooling(&options.cam.ctrl);
-        self.process_error(res, "CameraWatchdog::control_camera_cooling");
+        let res = control_camera_fan(&camera, &options.cam.ctrl);
+        self.process_error(res, "control_camera_fan");
 
-        let res = IndiCamWatchdog::control_camera_fan(&self.indi,&to.name, &options, true);
-        self.process_error(res, "CameraWatchdog::control_camera_fan");
+        let res = control_camera_heater(&camera, &options.cam.ctrl);
+        self.process_error(res, "control_camera_heater");
 
-        let res = IndiCamWatchdog::control_camera_heater(&self.indi,&to.name, &options, true);
-        self.process_error(res, "CameraWatchdog::control_camera_heater");
-
-        let res = IndiCamWatchdog::set_focal_len_for_indi_devices(&self.indi, &options);
-        self.process_error(res, "CameraWatchdog::set_telescope_focal_len");
+        //let res = CameraCtrl::set_focal_len_for_indi_devices(&self.indi, &options);
+        //self.process_error(res, "CameraWatchdog::set_telescope_focal_len");
     }
 
     fn process_focal_len_changed(self: &Arc<Self>) {
-        let options = self.options.read().unwrap();
-
-        // TODO: move this code inside CameraWatchdog
-
-        let res = IndiCamWatchdog::set_focal_len_for_indi_devices(&self.indi, &options);
-        self.process_error(res, "CameraWatchdog::set_telescope_focal_len");
+        //let options = self.options.read().unwrap();
+        //let res = CameraCtrl::set_focal_len_for_indi_devices(&self.indi, &options);
+        //self.process_error(res, "CameraWatchdog::set_telescope_focal_len");
     }
 
     fn frame_process_result_handler(self: &Arc<Self>, res: CommandResult) {

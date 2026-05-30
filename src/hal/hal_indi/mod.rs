@@ -1,11 +1,19 @@
 use std::{ops::RangeInclusive, sync::{Arc, Mutex}};
 
-use crate::hal::{Device, Focuser, FrameType, HalState, Telescope, events::{HalEvent, HalEventSubscribers}, indi::Subscription};
+use crate::hal::{Device, Focuser, FrameType, HalState, Telescope, events::{HalEvent, HalEventSubscribers}, hal_indi::{camera_watchdog::CamWatchdog, dev_watchdog::DevicesWatchdog}, indi::Subscription};
 
 use super::{indi, HalImpl, Camera, DeviceInfo, DeviceType};
 
 pub const CAM_CCD2_POSTFIX: &str = "_CCD2";
 pub const SET_PROP_TIME_OUT: u64 = 2000; // ms
+
+mod dev_watchdog;
+mod camera_watchdog;
+
+struct Watchdogs {
+    camera: CamWatchdog,
+    devices: DevicesWatchdog,
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // IndiHalImpl
@@ -14,6 +22,7 @@ pub struct IndiHalImpl {
     indi:              Arc<indi::Connection>,
     event_subscribers: Arc<HalEventSubscribers>,
     indi_evt_subscr:   Mutex<Option<Subscription>>,
+    watchdogs:         Mutex<Watchdogs>,
 }
 
 impl IndiHalImpl {
@@ -21,10 +30,16 @@ impl IndiHalImpl {
         indi:              &Arc<indi::Connection>,
         event_subscribers: &Arc<HalEventSubscribers>
     ) -> Arc<Self> {
+        let watchdogs = Watchdogs {
+            camera:  CamWatchdog::new(indi, event_subscribers),
+            devices: DevicesWatchdog::new(indi),
+        };
+
         let result = Arc::new(Self {
             indi:              Arc::clone(indi),
             event_subscribers: Arc::clone(event_subscribers),
             indi_evt_subscr:   Mutex::new(None),
+            watchdogs:         Mutex::new(watchdogs),
         });
 
         let self_ = Arc::clone(&result);
@@ -38,6 +53,12 @@ impl IndiHalImpl {
 
     fn indi_event_handler(&self, event: indi::Event) {
         match event {
+            indi::Event::ConnChange(indi::ConnState::Disconnected) => {
+                let mut watchdogs = self.watchdogs.lock().unwrap();
+                watchdogs.camera.reset();
+                watchdogs.devices.reset();
+                drop(watchdogs);
+            }
             indi::Event::NewDevice(evt) => if evt.connected {
                 self.process_dev_conn_evt(&evt.device_name, evt.interface, evt.connected);
             }
@@ -47,15 +68,32 @@ impl IndiHalImpl {
             indi::Event::DeviceDelete(evt) => {
                 self.process_dev_conn_evt(&evt.device_name, evt.interface, false);
             }
+            indi::Event::PropChange(prop_change) => {
+                let mut watchdogs = self.watchdogs.lock().unwrap();
+                _ = watchdogs.camera.notify_indi_prop_change(&prop_change);
+                _ = watchdogs.devices.notify_indi_prop_change(&prop_change);
+                drop(watchdogs);
+            }
             _ => {}
         }
     }
 
-    fn process_dev_conn_evt(&self, device_name: &str, interface: indi::DriverInterface, connected: bool) {
+    fn process_dev_conn_evt(&self, device_name: &Arc<String>, interface: indi::DriverInterface, connected: bool) {
         let device_type = Self::driver_interface_to_dev_type(interface);
         if device_type.is_empty() {
             return;
         }
+
+        if interface.contains(indi::DriverInterface::CCD) {
+            let mut watchdogs = self.watchdogs.lock().unwrap();
+            if connected {
+                watchdogs.camera.notify_device_added(device_name);
+            } else {
+                watchdogs.camera.notify_device_deleted(device_name);
+            }
+            drop(watchdogs);
+        }
+
         let device_info = DeviceInfo {
             id:    device_name.to_string(),
             name:  device_name.to_string(),
@@ -111,6 +149,15 @@ impl HalImpl for IndiHalImpl {
             indi::ConnState::Disconnected  => HalState::Disconnected,
             indi::ConnState::Error(err)    => HalState::Error(err),
         }
+    }
+
+    fn notify_periodical_timer_tick(&self, timer_period_ms: usize) -> anyhow::Result<()> {
+        let mut watchdogs = self.watchdogs.lock().unwrap();
+        watchdogs.camera.notify_periodical_timer_tick(timer_period_ms)?;
+        watchdogs.devices.notify_periodical_timer_tick(timer_period_ms)?;
+        drop(watchdogs);
+
+        Ok(())
     }
 
     fn devices(&self, type_filter: DeviceType) -> anyhow::Result<Vec<DeviceInfo>> {
@@ -415,6 +462,15 @@ impl Camera for IndiCamera {
 
     fn is_fan_ctrl_supported(&self) -> anyhow::Result<bool> {
         Ok(self.device.indi.camera_is_fan_supported(&self.device.name)?)
+    }
+
+    fn enable_fan(&self, enable: bool) -> anyhow::Result<()> {
+        self.device.indi.camera_control_fan(
+            &self.device.name,
+            enable,
+            true, Some(SET_PROP_TIME_OUT)
+        )?;
+        Ok(())
     }
 
     // Low noise mode

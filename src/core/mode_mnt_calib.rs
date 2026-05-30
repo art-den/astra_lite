@@ -1,7 +1,7 @@
 use std::{sync::{Arc, RwLock}, f64::consts::PI};
 use itertools::Itertools;
 use crate::{
-    core::cam_starter::take_shot, hal::{Camera, FrameType, Hal, Telescope}, image::{stars::*, stars_offset::*}, options::*, utils::math::*
+    core::cam_ctrl::take_shot, hal::{Camera, FrameType, Hal, Telescope}, image::{stars::*, stars_offset::*}, options::*, utils::math::*
 };
 use super::{consts::*, core::*, events::*, frame_processing::*, utils::*};
 
@@ -333,7 +333,7 @@ impl Mode for MountCalibrMode {
         }
     }
 
-    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         match &mut self.state {
             State::WaitForSlew(ok_time_ms) => {

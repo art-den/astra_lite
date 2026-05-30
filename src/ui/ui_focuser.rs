@@ -187,9 +187,8 @@ impl UiModule for FocuserUi {
 
     fn on_app_closing(&self) {
         let mut options = self.core.options().write().unwrap();
-        if let Some(cur_cam_device) = options.cam.device.clone() {
-            self.store_options_for_camera(&cur_cam_device, &mut options);
-        }
+        let cur_cam_device = options.cam.device_id.clone();
+        self.store_options_for_camera(&cur_cam_device, &mut options);
         drop(options);
     }
 
@@ -251,8 +250,8 @@ impl UiModule for FocuserUi {
             Event::ModeChanged => {
                 self.correct_widgets_props();
             }
-            Event::CameraDeviceChanged{from, to, ..} => {
-                self.handler_camera_changed(from, to);
+            Event::CameraDeviceChanged{prev_camera_id, new_camera_id} => {
+                self.handler_camera_changed(prev_camera_id, new_camera_id);
             }
             Event::Focusing(fevent) => {
                 match fevent {
@@ -420,16 +419,14 @@ impl FocuserUi {
         );
     }
 
-    fn correct_widgets_props_impl(&self, focuser_device: &str, cam_device: Option<&DeviceAndProp>) {
+    fn correct_widgets_props_impl(&self, focuser_device: &str, cam_device: &str) {
         let mode = self.core.mode();
         let mode_type = mode.active.get_type();
         drop(mode);
 
-        if let Some(cam_device) = cam_device {
-            let indi = self.core.indi();
-            let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_device.prop);
-            let exp_value = indi.camera_get_exposure_prop_value(&cam_device.name, cam_ccd);
-            correct_spinbutton_by_cam_prop(&self.widgets.spb_exp, &exp_value, 1, Some(1.0));
+        if let Ok(camera) = self.core.hal().camera(cam_device) {
+            let exp_range = camera.exposure_range().ok();
+            correct_spinbutton_by_range(&self.widgets.spb_exp, exp_range, 1, Some(1.0));
         }
 
         let waiting = mode_type == ModeType::Waiting;
@@ -461,42 +458,43 @@ impl FocuserUi {
     fn correct_widgets_props(&self) {
         let options = self.core.options().read().unwrap();
         let focuser_device = options.focuser.device.clone();
-        let cam_device = options.cam.device.clone();
+        let cam_device = options.cam.device_id.clone();
         drop(options);
-        self.correct_widgets_props_impl(&focuser_device, cam_device.as_ref());
+        self.correct_widgets_props_impl(&focuser_device, &cam_device);
     }
 
-    fn handler_camera_changed(&self, from: &Option<DeviceAndProp>, to: &DeviceAndProp) {
+    fn handler_camera_changed(&self, from: &str, to: &str) {
         let mut options = self.core.options().write().unwrap();
         self.get_options(&mut options);
-        if let Some(from) = from {
+        if !from.is_empty() {
             self.store_options_for_camera(from, &mut options);
         }
         self.restore_options_for_camera(to, &mut options);
         self.show_options(&options);
         let focuser_device = options.focuser.device.clone();
         drop(options);
-        self.correct_widgets_props_impl(&focuser_device, Some(to));
+        self.correct_widgets_props_impl(&focuser_device, to);
     }
 
     fn store_options_for_camera(
         &self,
-        device:  &DeviceAndProp,
+        device:  &str,
         options: &mut Options
     ) {
-        let key = device.to_file_name_part();
-        let sep_options = options.sep_focuser.entry(key).or_default();
+        if device.is_empty() {
+            return;
+        }
+        let sep_options = options.sep_focuser.entry(device.to_string()).or_default();
         sep_options.exposure = options.focuser.exposure;
         sep_options.gain = options.focuser.gain;
     }
 
     fn restore_options_for_camera(
         &self,
-        device:  &DeviceAndProp,
+        device:  &str,
         options: &mut Options
     ) {
-        let key = device.to_file_name_part();
-        if let Some(sep_options) = options.sep_focuser.get(&key) {
+        if let Some(sep_options) = options.sep_focuser.get(device) {
             options.focuser.exposure = sep_options.exposure;
             options.focuser.gain = sep_options.gain;
         }

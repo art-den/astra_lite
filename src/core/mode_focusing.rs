@@ -5,7 +5,7 @@ use std::{
 use itertools::{izip, Itertools};
 
 use crate::{
-    core::cam_starter::take_shot, hal::{Camera, Focuser, FrameType, Hal}, options::*, utils::math::*
+    core::cam_ctrl::take_shot, hal::{Camera, Focuser, FrameType, Hal}, options::*, utils::math::*
 };
 use super::{core::*, events::*, frame_processing::*, utils::*};
 
@@ -696,7 +696,7 @@ impl Mode for FocusingMode {
         }
     }
 
-    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         if let Some(change_time_ms) = &mut self.change_time_ms {
             *change_time_ms += timer_period_ms;
             if *change_time_ms > MAX_FOCUS_CHANGE_TIME * 1000 {

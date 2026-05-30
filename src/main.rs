@@ -118,8 +118,6 @@ fn app_activate_handler(app: &gtk::Application) {
 
         drop(options);
 
-        core.init_after_options_loaded();
-
         Ok(())
     });
 

@@ -70,3 +70,45 @@ pub fn take_shot(
 
     Ok(0)
 }
+
+
+pub fn control_camera_cooling(
+    camera:  &Arc<dyn Camera + Send + Sync>,
+    options: &CamCtrlOptions
+) -> anyhow::Result<()> {
+    if camera.is_cooler_supported()? {
+        if options.enable_cooler {
+            log::info!("Setting camera temperature = {}", options.temperature);
+            camera.set_temperature(Some(options.temperature))?;
+        } else {
+            camera.set_temperature(None)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn control_camera_fan(
+    camera:  &Arc<dyn Camera + Send + Sync>,
+    options: &CamCtrlOptions,
+) -> anyhow::Result<()> {
+    if camera.is_fan_ctrl_supported()? {
+        let fan_enabled = options.enable_fan || options.enable_cooler;
+        log::info!("Setting camera fan = {}", fan_enabled);
+        camera.enable_fan(fan_enabled)?;
+    }
+    Ok(())
+}
+
+pub fn control_camera_heater(
+    camera:  &Arc<dyn Camera + Send + Sync>,
+    options: &CamCtrlOptions
+) -> anyhow::Result<()> {
+
+    if camera.is_heater_supported()? {
+        if let Some(heater_str) = &options.heater_str {
+            log::info!("Setting camera heater = {}", heater_str);
+            camera.control_heater(heater_str)?;
+        }
+    }
+    Ok(())
+}

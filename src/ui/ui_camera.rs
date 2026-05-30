@@ -2,7 +2,10 @@ use std::{rc::Rc, sync::Arc, cell::RefCell};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{indi_cam_watchdog::IndiCamWatchdog, core::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{Camera, DeviceType, FrameType, HalState, events::HalEvent, indi}, image::{info::*, raw::CalibrMethods}, options::*, ui::gtk_utils
+    core::{core::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}},
+    hal::{Camera, DeviceType, FrameType, HalState, events::HalEvent, indi},
+    image::{info::*, raw::CalibrMethods},
+    options::*,
 };
 use super::{gtk_utils::*, module::*, ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
@@ -436,6 +439,7 @@ impl UiModule for CameraUi {
                     self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
                 }
             }
+            _ => {},
         }
     }
 
@@ -454,10 +458,9 @@ impl UiModule for CameraUi {
             Event::FlatExposureCalculated(exp_value) => {
                 self.widgets.frame.spb_exp.set_value(*exp_value);
             }
-            Event::CameraDeviceChanged { to, .. } => {
-                let cam_str = to.to_string();
-                if self.widgets.common.cb_cam_list.active_id().as_deref() != Some(cam_str.as_str()) {
-                    self.widgets.common.cb_cam_list.set_active_id(Some(cam_str.as_str()));
+            Event::CameraDeviceChanged { new_camera_id, .. } => {
+                if self.widgets.common.cb_cam_list.active_id().as_deref() != Some(new_camera_id) {
+                    self.widgets.common.cb_cam_list.set_active_id(Some(new_camera_id));
                 }
             }
             _ => {},
@@ -557,14 +560,10 @@ impl CameraUi {
                 self_.correct_widgets_props_impl();
                 self_.correct_frame_quality_widgets_props();
 
-                self_.core.events().notify(
-                    Event::CameraDeviceChanged {
-                        from: old_device,
-                        to:   new_device,
-                        prev_camera_id,
-                        new_camera_id: cur_id.to_string(),
-                    }
-                );
+                self_.core.events().notify(Event::CameraDeviceChanged {
+                    prev_camera_id,
+                    new_camera_id: cur_id.to_string(),
+                });
             })
         );
 
@@ -594,6 +593,7 @@ impl CameraUi {
                 options.cam.ctrl.temperature = spb.value();
                 self_.show_calibr_file_for_frame(&options);
                 drop(options);
+                self_.correct_widgets_props();
                 self_.core.events().notify(Event::CameraCoolingOptionsChanged);
             })
         );
@@ -602,11 +602,9 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
                 options.cam.ctrl.heater_str = cb.active_id().map(|id| id.to_string());
-                let cam_device = options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default();
-                let res = IndiCamWatchdog::control_camera_heater(&self_.core.indi(), cam_device, &options, false);
                 drop(options);
                 self_.correct_widgets_props();
-                gtk_utils::show_message_if_result_is_error(Some(&self_.window), &res);
+                self_.core.events().notify(Event::CameraFanOptionsChanged);
             })
         );
 
@@ -614,11 +612,9 @@ impl CameraUi {
             clone!(@weak self as self_ => move |chb| {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
                 options.cam.ctrl.enable_fan = chb.is_active();
-                let cam_device = options.cam.device.as_ref().map(|d| d.name.as_str()).unwrap_or_default();
-                let res = IndiCamWatchdog::control_camera_fan(&self_.core.indi(), cam_device, &options, false);
                 drop(options);
                 self_.correct_widgets_props();
-                gtk_utils::show_message_if_result_is_error(Some(&self_.window), &res);
+                self_.core.events().notify(Event::CameraHeaterOptionsChanged);
             })
         );
 

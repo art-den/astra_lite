@@ -1,8 +1,6 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
-use itertools::Itertools;
-
-use crate::{core::events::{Event, Events}, hal::indi, options::{DeviceAndProp, Options}};
+use crate::hal::indi;
 
 const DEVICE_WAIT_BEFORE_CONNECT_TIME: usize = 1; // in seconds
 const DEVICE_WAIT_BEFORE_LOAD_OPTS_TIME: usize = 2; // in seconds
@@ -14,28 +12,26 @@ struct DeviceIsWaitingForAction {
 }
 
 pub struct DevicesWatchdog {
-    options:             Arc<RwLock<Options>>,
-    indi:                Arc<indi::Connection>,
-    events:              Arc<Events>,
-    not_connected_yet:   Vec<DeviceIsWaitingForAction>,
-    not_opts_loaded_yet: Vec<DeviceIsWaitingForAction>,
-    to_check_cur_dev:    Option<usize>,
+    indi:                  Arc<indi::Connection>,
+    not_connected_yet:     Vec<DeviceIsWaitingForAction>,
+    not_opts_loaded_yet:   Vec<DeviceIsWaitingForAction>,
+    time_to_check_cur_dev: Option<usize>,
 }
 
 impl DevicesWatchdog {
-    pub fn new(
-        options: &Arc<RwLock<Options>>,
-        indi:    &Arc<indi::Connection>,
-        events:  &Arc<Events>,
-    ) -> Self {
+    pub fn new(indi: &Arc<indi::Connection>) -> Self {
         Self {
-            options:             Arc::clone(options),
-            indi:                Arc::clone(indi),
-            events:              Arc::clone(events),
-            not_connected_yet:   Vec::new(),
-            not_opts_loaded_yet: Vec::new(),
-            to_check_cur_dev:    None,
+            indi:                  Arc::clone(indi),
+            not_connected_yet:     Vec::new(),
+            not_opts_loaded_yet:   Vec::new(),
+            time_to_check_cur_dev: None,
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.not_connected_yet.clear();
+        self.not_opts_loaded_yet.clear();
+        self.time_to_check_cur_dev = None;
     }
 
     pub fn notify_indi_prop_change(
@@ -61,7 +57,7 @@ impl DevicesWatchdog {
                         &prop_change.device_name,
                     );
                 }
-                self.to_check_cur_dev = Some(0);
+                self.time_to_check_cur_dev = Some(0);
             }
             indi::PropChange::Change {
                 prop_name,
@@ -88,13 +84,13 @@ impl DevicesWatchdog {
             existing.wait_time_ms = 0;
         } else {
             items.push(DeviceIsWaitingForAction {
-                name: device_name.to_string(),
+                name:         device_name.to_string(),
                 wait_time_ms: 0,
             });
         }
     }
 
-    pub fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<()> {
+    pub fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<()> {
         for dev in &mut self.not_connected_yet {
             dev.wait_time_ms += timer_period_ms;
         }
@@ -136,6 +132,7 @@ impl DevicesWatchdog {
             )?;
         }
 
+/*
         if let Some(to_check_cur_dev) = &mut self.to_check_cur_dev {
             *to_check_cur_dev += timer_period_ms;
             if *to_check_cur_dev >= DEVICE_WAIT_CHECK_CUR_DEV_TIME * 1000 {
@@ -198,6 +195,7 @@ impl DevicesWatchdog {
                 }
             }
         }
+*/
         Ok(())
     }
 }
