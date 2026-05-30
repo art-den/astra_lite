@@ -207,32 +207,6 @@ impl CameraToInit {
         }
         Ok(())
     }
-
-    // pub fn set_focal_len_for_indi_devices(indi: &Arc<indi::Connection>) -> anyhow::Result<()> {
-        // let set_focal_len_for_device = |device_name: &str, focal_len: f64| -> anyhow::Result<()> {
-        //     log::info!("Setting focal len {:.1} for camera \"{}\"", focal_len, device_name);
-        //     indi.camera_set_telescope_focal_len(
-        //         device_name,
-        //         focal_len,
-        //         false,
-        //         None
-        //     )?;
-        //     Ok(())
-        // };
-
-        // let all_ccds = get_all_ccd_with_purposes_list(indi)?;
-
-        // if let Some(ccd) = all_ccds.iter().find(|ccd| ccd.purpose == CcdPurpose::MainTelescopeCcd) {
-        //     set_focal_len_for_device(&ccd.device_name, options.telescope.real_focal_length())?;
-        // }
-
-        // if let Some(ccd) = all_ccds.iter().find(|ccd| ccd.purpose == CcdPurpose::GuiderCcd) {
-        //     set_focal_len_for_device(&ccd.device_name, options.guiding.foc_len)?;
-        // }
-
-    //     Ok(())
-    // }
-
 }
 
 pub struct CamWatchdog {
@@ -382,31 +356,6 @@ impl CamWatchdog {
         self.notify_indi_prop_change_for_ccd(prop_change)?;
         self.notify_indi_prop_change_for_camera(prop_change)?;
 
-        Ok(())
-    }
-
-    fn restart_camera_exposure(&self) -> anyhow::Result<()> {
-        // let Some(cam_device) = mode.active.cam_device().cloned() else { return Ok(()); };
-        // log::info!("Begin restart exposure of camera {}...", cam_device.name);
-
-        // // Try to restart exposure by current mode
-        // let restarted_by_mode = mode.active.restart_cam_exposure()?;
-
-        // if !restarted_by_mode {
-        //     // Mode not restarted the camera exposure. Do it itself
-        //     let camera = self.hal.camera(&options.cam.device_id)?;
-        //     _ = camera.abort_exposure();
-
-        //     let mode_cam_opts =
-        //         if let Some(frame_opts) = mode.active.frame_options_to_restart_exposure() {
-        //             frame_opts
-        //         } else {
-        //             &options.cam.frame
-        //         };
-
-        //     take_shot(&camera, mode_cam_opts, &options.cam.ctrl)?;
-        // }
-        // log::info!("Exposure of camera {} restarted!", &cam_device.name);
         Ok(())
     }
 }

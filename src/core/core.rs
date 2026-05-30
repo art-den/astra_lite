@@ -347,6 +347,20 @@ impl Core {
                     self.process_error(ctrl_result, "hal_event_handler");
                 }
             }
+            HalEvent::NeedRestartCameraExposure(camera_id) => {
+                let options = self.options().read().unwrap();
+                if options.cam.device_id == **camera_id {
+                    let Ok(camera) = self.hal.camera(&options.cam.device_id) else { return; };
+                    let mut mode = self.mode.write().unwrap();
+                    let restart_result = restart_camera_exposure(
+                        &camera,
+                        &mut mode,
+                        &options.cam.frame,
+                        &options.cam.ctrl,
+                    );
+                    self.process_error(restart_result, "restart_camera_exposure");
+                }
+            }
             _ => {}
         }
     }

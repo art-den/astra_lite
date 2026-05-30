@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{hal::Camera, options::{CamCtrlOptions, FrameOptions}};
+use crate::{core::core::ModeData, hal::Camera, options::{CamCtrlOptions, FrameOptions}};
 
 pub fn take_shot(
     camera:    &Arc<dyn Camera + Send + Sync>,
@@ -110,5 +110,36 @@ pub fn control_camera_heater(
             camera.control_heater(heater_str)?;
         }
     }
+    Ok(())
+}
+
+pub fn restart_camera_exposure(
+    camera: &Arc<dyn Camera + Send + Sync>,
+    mode:   &mut ModeData,
+    frame_opts:  &FrameOptions,
+    ctrl_opts:   &CamCtrlOptions,
+) -> anyhow::Result<()> {
+    log::info!("Begin restart exposure of camera {}...", camera.id());
+
+    // Try to restart exposure by current mode
+    let restarted_by_mode = mode.active.restart_cam_exposure()?;
+    if restarted_by_mode {
+        log::info!("Exposure of camera {} restarted by mode!", camera.id());
+        return Ok(());
+    }
+
+    // Mode not restarted the camera exposure. Do it itself
+    _ = camera.abort_exposure();
+
+    let mode_cam_opts =
+        if let Some(frame_opts) = mode.active.frame_options_to_restart_exposure() {
+            frame_opts
+        } else {
+            frame_opts
+        };
+
+    take_shot(&camera, mode_cam_opts, ctrl_opts)?;
+
+    log::info!("Exposure of camera {} restarted!", camera.id());
     Ok(())
 }
