@@ -25,8 +25,8 @@ pub fn get_all_ccd_with_purposes_list(indi: &indi::Connection) -> anyhow::Result
         .iter()
         .filter_map(|d| {
             let fun = || -> anyhow::Result<SensorSize> {
-                let (pixel_size_x, _) = indi.camera_get_pixel_size_um(&d.name, indi::CamCcd::Primary)?;
-                let (sensor_width, _) = indi.camera_get_max_frame_size(&d.name, indi::CamCcd::Primary)?;
+                let (pixel_size_x, _) = indi.camera_get_pixel_size_um(&d.name, indi::CamCcd::Main)?;
+                let (sensor_width, _) = indi.camera_get_max_frame_size(&d.name, indi::CamCcd::Main)?;
                 Ok(SensorSize {
                     device: d.clone(),
                     sensor_width: (pixel_size_x * sensor_width as f64) as _,
@@ -52,7 +52,7 @@ pub fn get_all_ccd_with_purposes_list(indi: &indi::Connection) -> anyhow::Result
 
         result.push(CcdPurposeItem {
             device_name: camera.device.name.clone(),
-            cam_ccd: indi::CamCcd::Primary,
+            cam_ccd: indi::CamCcd::Main,
             purpose,
         });
 
@@ -64,7 +64,7 @@ pub fn get_all_ccd_with_purposes_list(indi: &indi::Connection) -> anyhow::Result
             };
             result.push(CcdPurposeItem {
                 device_name: camera.device.name.clone(),
-                cam_ccd:     indi::CamCcd::Secondary,
+                cam_ccd:     indi::CamCcd::Guider,
                 purpose,
             });
         }

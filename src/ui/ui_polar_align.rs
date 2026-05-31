@@ -296,7 +296,7 @@ impl PolarAlignUi {
         // Check before start mode
 
         let check_result = PolarAlignMode::check_before_start(
-            &self.indi,
+            self.core.hal(),
             &self.options
         );
 

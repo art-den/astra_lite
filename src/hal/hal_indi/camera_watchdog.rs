@@ -248,8 +248,8 @@ impl CamWatchdog {
     }
 
     pub fn notify_device_added(&mut self, device_name: &Arc<String>) {
-        self.add_ccd(device_name, indi::CamCcd::Primary);
-        self.add_ccd(device_name, indi::CamCcd::Secondary);
+        self.add_ccd(device_name, indi::CamCcd::Main);
+        self.add_ccd(device_name, indi::CamCcd::Guider);
         self.add_camera(device_name);
     }
 
@@ -261,7 +261,7 @@ impl CamWatchdog {
             return;
         }
         let mut device_id = device_name.to_string();
-        if ccd == indi::CamCcd::Secondary {
+        if ccd == indi::CamCcd::Guider {
             device_id += "_CCD2";
         }
 
@@ -288,8 +288,8 @@ impl CamWatchdog {
     }
 
     pub fn notify_device_deleted(&mut self, device_name: &Arc<String>) {
-        self.delete_ccd(device_name, indi::CamCcd::Primary);
-        self.delete_ccd(device_name, indi::CamCcd::Secondary);
+        self.delete_ccd(device_name, indi::CamCcd::Main);
+        self.delete_ccd(device_name, indi::CamCcd::Guider);
         self.delete_camera(device_name);
     }
 

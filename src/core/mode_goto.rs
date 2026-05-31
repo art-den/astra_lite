@@ -1,6 +1,11 @@
 use std::sync::{Arc, RwLock};
 use crate::{
-    core::{cam_ctrl::take_shot, consts::*, events::*, frame_processing::*}, hal::{Camera, FrameType, Hal, indi}, image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point}, options::*, plate_solve::*, sky_math::math::*
+    core::{cam_ctrl::take_shot, consts::*, events::*, frame_processing::*},
+    hal::{Camera, FrameType, Hal, Telescope, indi},
+    image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point},
+    options::*,
+    plate_solve::*,
+    sky_math::math::*,
 };
 use super::{core::*, events::Events, utils::*};
 
@@ -38,6 +43,7 @@ pub enum GotoConfig {
 
 pub struct GotoMode {
     camera:       Option<Arc<dyn Camera + Send + Sync>>,
+    telescope:    Arc<dyn Telescope + Send + Sync>,
     state:        State,
     destination:  GotoDestination,
     config:       GotoConfig,
@@ -45,8 +51,6 @@ pub struct GotoMode {
     camera_dev:   Option<DeviceAndProp>,
     cam_opts:     Option<CamOptions>,
     ps_opts:      PlateSolverOptions,
-    mount:        String,
-    indi:         Arc<indi::Connection>,
     cur_frame:    Arc<ResultImage>,
     options:      Arc<RwLock<Options>>,
     subscribers:  Arc<Events>,
@@ -60,7 +64,6 @@ pub struct GotoMode {
 impl GotoMode {
     pub fn new(
         hal:         &Hal,
-        indi:        &Arc<indi::Connection>,
         destination: GotoDestination,
         config:      GotoConfig,
         options:     &Arc<RwLock<Options>>,
@@ -68,6 +71,7 @@ impl GotoMode {
         subscribers: &Arc<Events>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
+        let telescope = hal.telescope(&opts.mount.device)?;
         let (camera, camera_dev, cam_opts, plate_solver) = if config == GotoConfig::GotoPlateSolveAndCorrect {
             let Some(camera_dev) = opts.cam.device.clone() else {
                 anyhow::bail!("Camera is not selected!");
@@ -91,29 +95,28 @@ impl GotoMode {
         };
 
         Ok(Self {
-            camera_dev:      camera_dev.clone(),
-            state:           State::None,
-            eq_coord:        EqCoord::default(),
-            ps_opts:         opts.plate_solver.clone(),
-            mount:           opts.mount.device.clone(),
-            indi:            Arc::clone(indi),
-            cur_frame:       Arc::clone(cur_frame),
-            options:         Arc::clone(options),
-            subscribers:     Arc::clone(subscribers),
-            unpark_ms:  0,
-            goto_ms:    0,
-            goto_ok_ms: 0,
-            extra_stages:    0,
+            camera_dev:   camera_dev.clone(),
+            state:        State::None,
+            eq_coord:     EqCoord::default(),
+            ps_opts:      opts.plate_solver.clone(),
+            cur_frame:    Arc::clone(cur_frame),
+            options:      Arc::clone(options),
+            subscribers:  Arc::clone(subscribers),
+            unpark_ms:    0,
+            goto_ms:      0,
+            goto_ok_ms:   0,
+            extra_stages: 0,
             config,
             plate_solver,
             destination,
             camera,
+            telescope,
             cam_opts,
         })
     }
 
     fn start_goto(&mut self) -> anyhow::Result<()> {
-        if self.indi.mount_is_parked(&self.mount)? {
+        if self.telescope.is_parked()? {
             self.start_unpark_telescope()?;
         } else {
             self.start_goto_coord()?;
@@ -124,12 +127,7 @@ impl GotoMode {
 
     fn start_unpark_telescope(&mut self) -> anyhow::Result<()> {
         log::debug!("Unparking mount...");
-        self.indi.mount_set_parked(
-            &self.mount,
-            false,
-            true,
-            None
-        )?;
+        self.telescope.unpark()?;
         self.unpark_ms = 0;
         self.state = State::Unparking;
         Ok(())
@@ -141,19 +139,9 @@ impl GotoMode {
             indi::value_to_sexagesimal(self.eq_coord.ra, true, 9),
             indi::value_to_sexagesimal(self.eq_coord.dec, true, 8)
         );
-        self.indi.mount_set_after_coord_action(
-            &self.mount,
-            indi::AfterCoordSetAction::Track,
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
-
-        self.indi.mount_set_eq_coord(
-            &self.mount,
+        self.telescope.goto_and_track(
             radian_to_hour(self.eq_coord.ra),
-            radian_to_degree(self.eq_coord.dec),
-            true,
-            None
+            radian_to_degree(self.eq_coord.dec)
         )?;
         self.goto_ms = 0;
         self.goto_ok_ms = 0;
@@ -238,19 +226,9 @@ impl GotoMode {
 
         match action {
             ProcessPlateSolverResultAction::Sync => {
-                self.indi.mount_set_after_coord_action(
-                    &self.mount,
-                    indi::AfterCoordSetAction::Sync,
-                    true,
-                    INDI_SET_PROP_TIMEOUT
-                )?;
-
-                self.indi.mount_set_eq_coord(
-                    &self.mount,
+                self.telescope.sync(
                     radian_to_hour(result.crd_now.ra),
-                    radian_to_degree(result.crd_now.dec),
-                    true,
-                    INDI_SET_PROP_TIMEOUT
+                    radian_to_degree(result.crd_now.dec)
                 )?;
             }
             ProcessPlateSolverResultAction::SetEqCoord => {
@@ -393,7 +371,8 @@ impl Mode for GotoMode {
         if let Some(camera) = &self.camera {
             _ = camera.abort_exposure();
         }
-        _ = self.indi.mount_abort_motion(&self.mount);
+        _ = self.telescope.abort_motion();
+
         self.state = State::None;
 
         self.subscribers.notify(Event::OverlayMessage {
@@ -411,7 +390,7 @@ impl Mode for GotoMode {
     fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         match self.state {
             State::Unparking => {
-                if !self.indi.mount_is_parked(&self.mount)? {
+                if !self.telescope.is_parked()? {
                     self.start_goto_coord()?;
                     self.state = State::Goto;
                     return Ok(NotifyResult::ProgressChanges);
@@ -426,13 +405,13 @@ impl Mode for GotoMode {
             }
 
             State::Goto | State::CorrectMount => {
-                let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.mount)?;
-                if matches!(crd_prop_state, indi::PropState::Ok | indi::PropState::Idle) {
+                if !self.telescope.is_slewing()? {
                     self.goto_ok_ms += timer_period_ms;
                     if self.goto_ok_ms >= AFTER_GOTO_WAIT_TIME * 1000 {
+                        let (cur_ra, cur_dec) = self.telescope.eq_coord()?;
                         check_telescope_is_at_desired_position(
-                            &self.indi,
-                            &self.mount,
+                            cur_ra,
+                            cur_dec,
                             &self.eq_coord,
                             0.5
                         )?;

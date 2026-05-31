@@ -156,8 +156,15 @@ pub enum FrameType {
     Biases,
 }
 
+pub enum CcdPurpose {
+    Main,
+    Guider,
+}
+
 pub trait Camera : Device {
     fn init_before_shot(&self) -> anyhow::Result<()>;
+
+    fn ccd_type(&self) -> CcdPurpose; // For multy-CCD cameras
 
     // Exposure
     fn exposure_range(&self) -> anyhow::Result<RangeInclusive<f64>>;
@@ -225,9 +232,14 @@ pub trait Telescope : Device {
     fn is_abort_motion_supported(&self) -> bool;
     fn abort_motion(&self) -> anyhow::Result<()>;
 
+    fn is_parked(&self) -> anyhow::Result<bool>;
+    fn park(&self) -> anyhow::Result<()>;
+    fn unpark(&self) -> anyhow::Result<()>;
+
+    fn set_slew_speed(&self, speed_id: &str) -> anyhow::Result<()>;
     fn eq_coord(&self) -> anyhow::Result<(f64/*ra*/, f64/*dec*/)>;
     fn goto_and_track(&self, ra: f64, dec: f64) -> anyhow::Result<()>;
-    fn slewing(&self) -> anyhow::Result<bool>;
+    fn is_slewing(&self) -> anyhow::Result<bool>;
 
     fn sync(&self, ra: f64, dec: f64) -> anyhow::Result<()>;
 

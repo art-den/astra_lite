@@ -280,13 +280,13 @@ impl SwitchRule {
 pub enum BlobEnable { Never, Also, Only }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub enum CamCcd { Primary, Secondary }
+pub enum CamCcd { Main, Guider }
 
 impl CamCcd {
     pub fn from_ccd_prop_name(name: &str) -> Self {
         match name {
-            "CCD1"|"" => Self::Primary,
-            "CCD2"    => Self::Secondary,
+            "CCD1"|"" => Self::Main,
+            "CCD2"    => Self::Guider,
             _         => panic!("Wrong CCD property name ({})", name),
         }
     }
@@ -2309,9 +2309,9 @@ impl Connection {
     ) -> Option<CamCcd> {
         match (prop_name, elem_name) {
             ("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE") =>
-                Some(CamCcd::Primary),
+                Some(CamCcd::Main),
             ("GUIDER_EXPOSURE", "GUIDER_EXPOSURE_VALUE") =>
-                Some(CamCcd::Secondary),
+                Some(CamCcd::Guider),
             _ =>
                 None,
         }
@@ -2351,8 +2351,8 @@ impl Connection {
         ccd:         CamCcd,
     ) -> Result<()> {
         let prop_name = match ccd {
-            CamCcd::Primary   => "CCD_ABORT_EXPOSURE",
-            CamCcd::Secondary => "GUIDER_ABORT_EXPOSURE",
+            CamCcd::Main   => "CCD_ABORT_EXPOSURE",
+            CamCcd::Guider => "GUIDER_ABORT_EXPOSURE",
         };
         self.command_set_switch_property(
             device_name,
@@ -2363,8 +2363,8 @@ impl Connection {
 
     fn exposure_prop_name(ccd: CamCcd) -> (&'static str, &'static str) {
         match ccd {
-            CamCcd::Primary   => ("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE"),
-            CamCcd::Secondary => ("GUIDER_EXPOSURE", "GUIDER_EXPOSURE_VALUE"),
+            CamCcd::Main   => ("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE"),
+            CamCcd::Guider => ("GUIDER_EXPOSURE", "GUIDER_EXPOSURE_VALUE"),
         }
     }
 
@@ -3026,15 +3026,15 @@ impl Connection {
 
     fn ccd_frame_prop_name(cam_ccd: CamCcd) -> &'static str {
         match cam_ccd {
-            CamCcd::Primary => "CCD_FRAME",
-            CamCcd::Secondary => "GUIDER_FRAME",
+            CamCcd::Main => "CCD_FRAME",
+            CamCcd::Guider => "GUIDER_FRAME",
         }
     }
 
     fn ccd_info_prop_name(cam_ccd: CamCcd) -> &'static str {
         match cam_ccd {
-            CamCcd::Primary => "CCD_INFO",
-            CamCcd::Secondary => "GUIDER_INFO",
+            CamCcd::Main => "CCD_INFO",
+            CamCcd::Guider => "GUIDER_INFO",
         }
     }
 
@@ -3164,15 +3164,15 @@ impl Connection {
 
     fn ccd_bin_prop_name(cam_ccd: CamCcd) -> &'static str {
         match cam_ccd {
-            CamCcd::Primary => "CCD_BINNING",
-            CamCcd::Secondary => "GUIDER_BINNING",
+            CamCcd::Main => "CCD_BINNING",
+            CamCcd::Guider => "GUIDER_BINNING",
         }
     }
 
     fn ccd_bin_mode_prop_name(cam_ccd: CamCcd) -> &'static str {
         match cam_ccd {
-            CamCcd::Primary => "CCD_BINNING_MODE",
-            CamCcd::Secondary => "GUIDER_BINNING_MODE",
+            CamCcd::Main => "CCD_BINNING_MODE",
+            CamCcd::Guider => "GUIDER_BINNING_MODE",
         }
     }
 
@@ -3203,8 +3203,8 @@ impl Connection {
 
     fn ccd_frame_type_prop_name(cam_ccd: CamCcd) -> &'static str {
         match cam_ccd {
-            CamCcd::Primary => "CCD_FRAME_TYPE",
-            CamCcd::Secondary => "GUIDER_FRAME_TYPE",
+            CamCcd::Main => "CCD_FRAME_TYPE",
+            CamCcd::Guider => "GUIDER_FRAME_TYPE",
         }
     }
 

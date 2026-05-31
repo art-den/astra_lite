@@ -1,6 +1,6 @@
 use std::{ops::RangeInclusive, sync::{Arc, Mutex}};
 
-use crate::hal::{Device, Focuser, FrameType, HalState, Telescope, events::{HalEvent, HalEventSubscribers}, hal_indi::{camera_watchdog::CamWatchdog, dev_watchdog::DevicesWatchdog}, indi::Subscription};
+use crate::hal::{CcdPurpose, Device, Focuser, FrameType, HalState, Telescope, events::{HalEvent, HalEventSubscribers}, hal_indi::{camera_watchdog::CamWatchdog, dev_watchdog::DevicesWatchdog}, indi::Subscription};
 
 use super::{indi, HalImpl, Camera, DeviceInfo, DeviceType};
 
@@ -186,12 +186,12 @@ impl HalImpl for IndiHalImpl {
     }
 
     fn camera(&self, id: &str) -> anyhow::Result<Arc<dyn Camera + Send + Sync>> {
-        let mut ccd = indi::CamCcd::Primary;
+        let mut ccd = indi::CamCcd::Main;
         let mut name = id;
         if id.ends_with(CAM_CCD2_POSTFIX) {
             let new_len = id.len() - CAM_CCD2_POSTFIX.len();
             name = &id[..new_len];
-            ccd = indi::CamCcd::Secondary;
+            ccd = indi::CamCcd::Guider;
         }
         let device = IndiDevice {
             id:   id.to_string(),
@@ -285,6 +285,13 @@ impl Camera for IndiCamera {
         }
 
         Ok(())
+    }
+
+    fn ccd_type(&self) -> CcdPurpose {
+        match self.ccd {
+            indi::CamCcd::Main   => CcdPurpose::Main,
+            indi::CamCcd::Guider => CcdPurpose::Guider,
+        }
     }
 
     // Exposure
@@ -538,6 +545,29 @@ impl Telescope for IndiDevice {
         Ok(())
     }
 
+    fn is_parked(&self) -> anyhow::Result<bool> {
+        Ok(self.indi.mount_is_parked(&self.name)?)
+    }
+
+    fn park(&self) -> anyhow::Result<()> {
+        self.indi.mount_set_parked(&self.name, true, true, None)?;
+        Ok(())
+    }
+
+    fn unpark(&self) -> anyhow::Result<()> {
+        self.indi.mount_set_parked(&self.name, false, true, None)?;
+        Ok(())
+    }
+
+    fn set_slew_speed(&self, speed_id: &str) -> anyhow::Result<()> {
+        self.indi.mount_set_slew_speed(
+            &self.name,
+            speed_id,
+            true, Some(SET_PROP_TIME_OUT),
+        )?;
+        Ok(())
+    }
+
     fn eq_coord(&self) -> anyhow::Result<(f64/*ra*/, f64/*dec*/)> {
         Ok(self.indi.mount_get_eq_ra_and_dec(&self.name)?)
     }
@@ -552,7 +582,7 @@ impl Telescope for IndiDevice {
         Ok(())
     }
 
-    fn slewing(&self) -> anyhow::Result<bool> {
+    fn is_slewing(&self) -> anyhow::Result<bool> {
         let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.name)?;
         Ok(crd_prop_state == indi::PropState::Busy)
     }

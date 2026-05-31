@@ -3,7 +3,7 @@ use std::{ops::RangeInclusive, path::{Path, PathBuf}, sync::Arc};
 use chrono::{DateTime, Utc};
 
 use crate::{
-    hal::{Camera, FrameType, indi}, image::raw::*, options::*, sky_math::math::*
+    hal::{Camera, FrameType}, image::raw::*, options::*, sky_math::math::*
 };
 
 pub enum FileNameArg<'a> {
@@ -338,15 +338,14 @@ pub fn gain_to_value(
 }
 
 pub fn check_telescope_is_at_desired_position(
-    indi:                &indi::Connection,
-    mount_dev:           &str,
-    desired_pos:         &EqCoord,
+    telescope_ra:  f64,
+    telescope_dec: f64,
+    desired_pos:   &EqCoord,
     tolerance_in_degree: f64,
 ) -> anyhow::Result<()> {
-    let (cur_ra, cur_dec) = indi.mount_get_eq_ra_and_dec(mount_dev)?;
     let cur_pos = EqCoord {
-        ra: hour_to_radian(cur_ra),
-        dec: degree_to_radian(cur_dec)
+        ra: hour_to_radian(telescope_ra),
+        dec: degree_to_radian(telescope_dec)
     };
     let diff = EqCoord::angle_between(&cur_pos, desired_pos);
     if radian_to_degree(diff) > tolerance_in_degree {

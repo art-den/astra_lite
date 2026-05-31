@@ -839,7 +839,6 @@ impl Core {
     ) -> anyhow::Result<()> {
         let mode = GotoMode::new(
             &self.hal,
-            &self.indi,
             GotoDestination::Coord(*eq_coord),
             config,
             &self.options,
@@ -863,7 +862,6 @@ impl Core {
         self.mode.write().unwrap().active.abort()?;
         let mode = GotoMode::new(
             &self.hal,
-            &self.indi,
             GotoDestination::Image{
                 image: Arc::clone(&self.cur_frame.image),
                 info: Arc::clone(&light_frame_info.image),
@@ -894,7 +892,6 @@ impl Core {
     pub fn start_polar_alignment(&self) -> anyhow::Result<()> {
         let mode = PolarAlignMode::new(
             &self.hal,
-            &self.indi,
             &self.cur_frame,
             &self.options,
             &self.events,
