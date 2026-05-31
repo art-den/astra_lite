@@ -6,7 +6,12 @@ use crate::{
         cam_utils::{CcdPurpose, get_ccd_purpose},
         core::*,
         frame_processing::*,
-    }, hal::{Camera, FrameType, Hal, Telescope, indi}, image::{image::*, stars::StarItems}, options::*, plate_solve::*, sky_math::math::*
+    },
+    hal::{Camera, FrameType, Hal, Telescope, indi},
+    image::{image::*, stars::StarItems},
+    options::*,
+    plate_solve::*,
+    sky_math::math::*,
 };
 
 use super::{events::*, utils::gain_to_value};

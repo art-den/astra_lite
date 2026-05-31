@@ -1,7 +1,11 @@
 use std::{sync::{Arc, RwLock}, f64::consts::PI};
 use itertools::Itertools;
 use crate::{
-    core::cam_ctrl::take_shot, hal::{Camera, FrameType, Hal, Telescope}, image::{stars::*, stars_offset::*}, options::*, utils::math::*
+    core::cam_ctrl::take_shot,
+    hal::{Camera, FrameType, Hal, Telescope},
+    image::{stars::*, stars_offset::*},
+    options::*,
+    utils::math::*,
 };
 use super::{consts::*, core::*, events::*, frame_processing::*, utils::*};
 
