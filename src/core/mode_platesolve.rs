@@ -3,11 +3,10 @@ use std::sync::{Arc, RwLock};
 use crate::{
     core::{
         cam_ctrl::take_shot,
-        cam_utils::{CcdPurpose, get_ccd_purpose},
         core::*,
         frame_processing::*,
     },
-    hal::{Camera, FrameType, Hal, Telescope, indi},
+    hal::{Camera, CcdPurpose, FrameType, Hal, Telescope},
     image::{image::*, stars::StarItems},
     options::*,
     plate_solve::*,
@@ -28,7 +27,7 @@ pub struct PlatesolveMode {
     state:        State,
     camera:       Arc<dyn Camera + Send + Sync>,
     mount:        Arc<dyn Telescope + Send + Sync>,
-    indi:         Arc<indi::Connection>,
+    hal:          Arc<Hal>,
     events:       Arc<Events>,
     cur_frame:    Arc<ResultImage>,
     options:      Arc<RwLock<Options>>,
@@ -41,8 +40,7 @@ pub struct PlatesolveMode {
 
 impl PlatesolveMode {
     pub fn new(
-        hal:         &Hal,
-        indi:        &Arc<indi::Connection>,
+        hal:         &Arc<Hal>,
         events:      &Arc<Events>,
         options:     &Arc<RwLock<Options>>,
         cur_frame:   &Arc<ResultImage>,
@@ -66,7 +64,7 @@ impl PlatesolveMode {
         let plate_solver = PlateSolver::new(opts.plate_solver.solver);
         Ok(Self {
             state:        State::None,
-            indi:         Arc::clone(indi),
+            hal:          Arc::clone(hal),
             events:       Arc::clone(events),
             cur_frame:    Arc::clone(cur_frame),
             options:      Arc::clone(options),
@@ -134,7 +132,7 @@ impl PlatesolveMode {
 
         // Send event about platesolve result
         let event = PlateSolverEvent {
-            cam_name:  self.camera_dev.to_string(),
+            cam_name:  self.camera.id().to_string(),
             result:    result.clone(),
             preview:   preview.map(Arc::new),
         };
@@ -154,14 +152,23 @@ impl PlatesolveMode {
     fn calc_focal_len(&self, ps_result: &PlateSolveOkResult) -> anyhow::Result<()> {
         let mut options = self.options.write().unwrap();
         if !options.telescope.from_platesolve { return Ok(()); }
-        let cam_ccd = indi::CamCcd::from_ccd_prop_name(&self.camera_dev.prop);
+
+        let cameras = self.hal.cameras()?;
+        let cam_purpose = cameras.iter()
+            .find(|cam| cam.id == self.camera.id())
+            .map(|cam| cam.ccd)
+            .unwrap_or(CcdPurpose::Unknown);
+
+        if cam_purpose == CcdPurpose::Unknown {
+            return Ok(());
+        }
+
         let (pixel_size_x, pixel_size_y) = self.camera.pixel_size_um()?;
         let (sensor_width, sensor_height) = self.camera.ccd_size()?;
         let (frame_width, _) = options.cam.frame.active_sensor_size(sensor_width, sensor_height);
         let bin_ratio = options.cam.frame.binning.get_ratio();
-        let cam_purpose = get_ccd_purpose(&self.indi, &self.camera_dev.name, cam_ccd)?;
 
-        if pixel_size_x == pixel_size_y && cam_purpose != CcdPurpose::Unknown {
+        if pixel_size_x == pixel_size_y {
             let frame_horiz_size = (frame_width * bin_ratio) as f64 * pixel_size_x * 0.000_001;
             let is_telescope_ccd = matches!(cam_purpose, CcdPurpose::MainTelescopeCcd|CcdPurpose::SecodnaryTelescopeCcd);
             let mut focal_len = 1000.0/*mm*/ * frame_horiz_size / (2.0 * f64::tan(0.5 * ps_result.width));
@@ -178,6 +185,9 @@ impl PlatesolveMode {
                 } else {
                     &mut options.guiding.foc_len
                 };
+
+            dbg!(focal_len);
+
             let ok_to_set_new_value = f64::abs(*cur_len - focal_len) >= 2.0;
             if ok_to_set_new_value {
                 log::info!("Correcting options focal len from {:.1} to {:.1}", *cur_len, focal_len);

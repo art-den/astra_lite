@@ -1187,7 +1187,7 @@ impl CameraUi {
         widgets.quality.bx.set_sensitive(cam_sensitive);
     }
 
-    // TODO: must be called from event handler alsw
+    // TODO: must be called from event handler also
     fn handler_camera_changed(
         &self,
         from_id: &str,

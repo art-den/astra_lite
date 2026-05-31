@@ -27,6 +27,20 @@ pub struct DeviceInfo {
     pub type_: DeviceType,
 }
 
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub enum CcdPurpose {
+    MainTelescopeCcd,
+    SecodnaryTelescopeCcd,
+    GuiderCcd,
+    Unknown,
+}
+
+pub struct CameraInfo {
+    pub id:    String,
+    pub name:  String,
+    pub ccd:   CcdPurpose,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum HalState {
     ImplNotDefined,
@@ -99,6 +113,15 @@ impl Hal {
         }
     }
 
+    pub fn cameras(&self) -> anyhow::Result<Vec<CameraInfo>> {
+        let impl_ = self.impl_.read().unwrap();
+        if let Some(impl_) = &*impl_ {
+            impl_.cameras()
+        } else {
+            anyhow::bail!("HAL is not selected!");
+        }
+    }
+
     pub fn camera(&self, id: &str) -> anyhow::Result<Arc<dyn Camera + Send + Sync>> {
         let impl_ = self.impl_.read().unwrap();
         if let Some(impl_) = &*impl_ {
@@ -131,6 +154,7 @@ pub trait HalImpl {
     fn state(&self) -> HalState;
     fn notify_periodical_timer_tick(&self, timer_period: usize) -> anyhow::Result<()>;
     fn devices(&self, type_filter: DeviceType) -> anyhow::Result<Vec<DeviceInfo>>;
+    fn cameras(&self) -> anyhow::Result<Vec<CameraInfo>>;
     fn camera(&self, id: &str) -> anyhow::Result<Arc<dyn Camera + Send + Sync>>;
     fn telescope(&self, id: &str) -> anyhow::Result<Arc<dyn Telescope + Send + Sync>>;
     fn focuser(&self, id: &str) -> anyhow::Result<Arc<dyn Focuser + Send + Sync>>;
@@ -141,6 +165,7 @@ pub trait HalImpl {
 
 pub trait Device {
     fn id(&self) -> &str;
+    fn name(&self) -> &str;
     fn is_active(&self) -> anyhow::Result<bool>;
 }
 
@@ -156,15 +181,8 @@ pub enum FrameType {
     Biases,
 }
 
-pub enum CcdPurpose {
-    Main,
-    Guider,
-}
-
 pub trait Camera : Device {
     fn init_before_shot(&self) -> anyhow::Result<()>;
-
-    fn ccd_type(&self) -> CcdPurpose; // For multy-CCD cameras
 
     // Exposure
     fn exposure_range(&self) -> anyhow::Result<RangeInclusive<f64>>;

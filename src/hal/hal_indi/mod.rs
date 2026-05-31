@@ -1,6 +1,6 @@
 use std::{ops::RangeInclusive, sync::{Arc, Mutex}};
 
-use crate::hal::{CcdPurpose, Device, Focuser, FrameType, HalState, Telescope, events::{HalEvent, HalEventSubscribers}, hal_indi::{camera_watchdog::CamWatchdog, dev_watchdog::DevicesWatchdog}, indi::Subscription};
+use crate::hal::{*, events::*, hal_indi::{camera_watchdog::CamWatchdog, dev_watchdog::DevicesWatchdog}, indi::Subscription};
 
 use super::{indi, HalImpl, Camera, DeviceInfo, DeviceType};
 
@@ -185,6 +185,64 @@ impl HalImpl for IndiHalImpl {
         Ok(result)
     }
 
+    fn cameras(&self) -> anyhow::Result<Vec<CameraInfo>> {
+        struct SensorSize {
+            device: indi::ExportDevice,
+            sensor_width: isize,
+        }
+
+        let mut all_cemeras: Vec<_> = self.indi.get_devices_list_by_interface(indi::DriverInterface::CCD)
+            .iter()
+            .filter_map(|d| {
+                let fun = || -> anyhow::Result<SensorSize> {
+                    let (pixel_size_x, _) = self.indi.camera_get_pixel_size_um(&d.name, indi::CamCcd::Main)?;
+                    let (sensor_width, _) = self.indi.camera_get_max_frame_size(&d.name, indi::CamCcd::Main)?;
+                    Ok(SensorSize {
+                        device: d.clone(),
+                        sensor_width: (pixel_size_x * sensor_width as f64) as _,
+                    })
+                };
+                fun().ok()
+            })
+            .collect();
+
+        all_cemeras.sort_by_key(|ss| -ss.sensor_width);
+        let all_cemeras_len = all_cemeras.len();
+
+        let mut result = Vec::new();
+
+        for (idx, camera) in all_cemeras.into_iter().enumerate() {
+            let purpose = if idx == 0 || *camera.device.name == "CCD Simulator" {
+                CcdPurpose::MainTelescopeCcd
+            } else if (idx == 1 && all_cemeras_len == 2) || *camera.device.name == "Guide Simulator" {
+                CcdPurpose::GuiderCcd
+            } else {
+                CcdPurpose::Unknown
+            };
+
+            result.push(CameraInfo {
+                name: camera.device.name.to_string(),
+                id: camera.device.name.to_string(),
+                ccd: purpose,
+            });
+
+            if self.indi.property_exists(&camera.device.name, "CCD2", None).unwrap_or(false) {
+                let purpose = if idx == 0 {
+                    CcdPurpose::SecodnaryTelescopeCcd
+                } else {
+                    CcdPurpose::Unknown
+                };
+                result.push(CameraInfo {
+                    name: camera.device.name.to_string(),
+                    id:   camera.device.name.to_string()+CAM_CCD2_POSTFIX,
+                    ccd:  purpose,
+                });
+            }
+        }
+        Ok(result)
+
+    }
+
     fn camera(&self, id: &str) -> anyhow::Result<Arc<dyn Camera + Send + Sync>> {
         let mut ccd = indi::CamCcd::Main;
         let mut name = id;
@@ -225,6 +283,10 @@ impl Device for IndiDevice {
         &self.id
     }
 
+    fn name(&self) -> &str {
+        &self.name
+    }
+
     fn is_active(&self) -> anyhow::Result<bool> {
         Ok(self.indi.is_device_enabled(&self.name)?)
     }
@@ -241,6 +303,10 @@ struct IndiCamera {
 impl Device for IndiCamera {
     fn id(&self) -> &str {
         self.device.id()
+    }
+
+    fn name(&self) -> &str {
+        &self.device.name()
     }
 
     fn is_active(&self) -> anyhow::Result<bool> {
@@ -285,13 +351,6 @@ impl Camera for IndiCamera {
         }
 
         Ok(())
-    }
-
-    fn ccd_type(&self) -> CcdPurpose {
-        match self.ccd {
-            indi::CamCcd::Main   => CcdPurpose::Main,
-            indi::CamCcd::Guider => CcdPurpose::Guider,
-        }
     }
 
     // Exposure

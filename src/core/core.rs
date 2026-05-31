@@ -361,6 +361,9 @@ impl Core {
                     self.process_error(restart_result, "restart_camera_exposure");
                 }
             }
+            HalEvent::NeedInitTelescopeFocalLenForCamera(_camera_id) => {
+
+            }
             _ => {}
         }
     }
@@ -879,7 +882,6 @@ impl Core {
     pub fn start_capture_and_platesolve(&self) -> anyhow::Result<()> {
         let mode = PlatesolveMode::new(
             &self.hal,
-            &self.indi,
             &self.events,
             &self.options,
             &self.cur_frame,
