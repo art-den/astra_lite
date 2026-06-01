@@ -1,9 +1,11 @@
+// Widget for controlling properties of INDI devices
+
 use std::{sync::Arc, time::Duration, cell::RefCell, rc::Rc};
 use gtk::{prelude::*, glib, glib::clone};
 use itertools::{Itertools, izip};
 use crate::hal::indi;
 
-pub struct IndiWidget {
+pub struct IndiPanelWidget {
     indi:      Arc<indi::Connection>,
     indi_conn: indi::Subscription,
     data:      Rc<RefCell<UiIndiGuiData>>,
@@ -11,14 +13,14 @@ pub struct IndiWidget {
     stack:     gtk::Stack,
 }
 
-impl Drop for IndiWidget {
+impl Drop for IndiPanelWidget {
     fn drop(&mut self) {
         self.indi.unsubscribe(self.indi_conn);
         log::info!("IndiUi dropped");
     }
 }
 
-impl IndiWidget {
+impl IndiPanelWidget {
     const CSS: &'static [u8] = b"
         .indi_on_btn {
             text-decoration: underline;

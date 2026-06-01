@@ -17,7 +17,7 @@ use crate::{
     hal::indi::{self, sexagesimal_to_value, value_to_sexagesimal},
     options::*,
 };
-use super::{gtk_utils::*, indi_widget::*, module::*, ui_main::*};
+use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
@@ -41,7 +41,7 @@ pub fn init_ui(
         options.indi.remote = true; // force remote mode if no devices info
     }
 
-    let indi_widget = IndiWidget::new(core.indi());
+    let indi_widget = IndiPanelWidget::new(core.indi());
 
     let widgets = Widgets {
         telescope: TelescopeWidgets  ::from_builder_str(include_str!(r"resources/hw_telescope.ui")),
@@ -181,7 +181,7 @@ struct HardwareUi {
     window:       gtk::ApplicationWindow,
     indi_status:  RefCell<indi::ConnState>,
     indi_drivers: indi::Drivers,
-    indi_widget:  IndiWidget,
+    indi_widget:  IndiPanelWidget,
     is_remote:    Cell<bool>,
 }
 
