@@ -12,6 +12,8 @@ pub enum HalEvent {
     CameraIsReadyForCooling(Arc<String/*camera id*/>),
     CameraIsReadyForCtrlFan(Arc<String/*camera id*/>),
     CameraIsReadyForCtrlHeater(Arc<String/*camera id*/>),
+
+    BeginDownloadCameraData(Arc<String/*camera id*/>),
 }
 
 pub struct HalEventSubscribers {

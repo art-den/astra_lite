@@ -51,7 +51,7 @@ impl IndiHalImpl {
         result
     }
 
-    fn indi_event_handler(&self, event: indi::Event) {
+    fn indi_event_handler(self: &Arc<Self>, event: indi::Event) {
         match event {
             indi::Event::ConnChange(indi::ConnState::Disconnected) => {
                 let mut watchdogs = self.watchdogs.lock().unwrap();
@@ -73,9 +73,22 @@ impl IndiHalImpl {
                 _ = watchdogs.camera.notify_indi_prop_change(&prop_change);
                 _ = watchdogs.devices.notify_indi_prop_change(&prop_change);
                 drop(watchdogs);
+                self.process_indi_prop_change_event(&prop_change);
+            }
+            indi::Event::BlobStart(blob_start) => {
+                let mut device_id = blob_start.device_name.to_string();
+                dbg!(&blob_start.elem_name);
+                if *blob_start.elem_name == "CCD2" {
+                    device_id += CAM_CCD2_POSTFIX;
+                }
+                self.event_subscribers.send_event(HalEvent::BeginDownloadCameraData(Arc::new(device_id)));
             }
             _ => {}
         }
+    }
+
+    fn process_indi_prop_change_event(self: &Arc<Self>, _prop_change: &indi::PropChangeEvent) {
+        //todo!()
     }
 
     fn process_dev_conn_evt(&self, device_name: &Arc<String>, interface: indi::DriverInterface, connected: bool) {

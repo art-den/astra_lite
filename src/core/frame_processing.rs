@@ -16,8 +16,8 @@ use crate::{
 
 #[derive(Default)]
 pub struct StarsInfoData {
-    pub items:   Arc<StarItems>,
-    pub info:    Arc<StarsInfo>,
+    pub items: Arc<StarItems>,
+    pub info:  Arc<StarsInfo>,
 }
 
 #[derive(Clone)]
@@ -31,10 +31,10 @@ pub struct LightFrameQualInfoData {
 impl Default for LightFrameQualInfoData {
     fn default() -> Self {
         Self {
-            ccd_temp_ok: true,
-            offset_is_ok:   true,
-            fwhm_is_ok:     true,
-            ovality_is_ok:  true,
+            ccd_temp_ok:   true,
+            offset_is_ok:  true,
+            fwhm_is_ok:    true,
+            ovality_is_ok: true,
         }
     }
 }
@@ -250,10 +250,9 @@ pub enum FrameProcessResultData {
 
 #[derive(Clone)]
 pub struct FrameProcessResult {
-    pub camera:        DeviceAndProp,
-    pub cmd_stop_flag: Arc<AtomicBool>,
-    pub mode_type:     ModeType,
-    pub data:          FrameProcessResultData,
+    pub camera:    DeviceAndProp,
+    pub mode_type: ModeType,
+    pub data:      FrameProcessResultData,
 }
 
 #[derive(Clone)]
@@ -269,7 +268,7 @@ pub enum FrameProcessCommand {
         command:    FrameProcessCommandData,
         result_fun: ResultFun,
     },
-    Exit
+    Stop
 }
 
 pub fn start_frame_processing_thread() -> (mpsc::Sender<FrameProcessCommand>, JoinHandle<()>) {
@@ -278,14 +277,14 @@ pub fn start_frame_processing_thread() -> (mpsc::Sender<FrameProcessCommand>, Jo
         log::info!("process_blob_thread_fun started");
         'outer:
         while let Ok(cmd) = bg_comands_receiver.recv() {
-            if matches!(cmd, FrameProcessCommand::Exit) { break 'outer; }
+            if matches!(cmd, FrameProcessCommand::Stop) { break 'outer; }
             let mut commands = Vec::new();
             commands.push(cmd);
             loop {
                 let next_cmd = bg_comands_receiver.try_recv();
                 match next_cmd {
                     Ok(next_cmd) => {
-                        if matches!(next_cmd, FrameProcessCommand::Exit) { break 'outer; }
+                        if matches!(next_cmd, FrameProcessCommand::Stop) { break 'outer; }
                         commands.push(next_cmd);
                     },
                     Err(mpsc::TryRecvError::Disconnected) => {
@@ -503,9 +502,8 @@ fn send_result(
     result_fun: &ResultFun
 ) {
     let result = CommandResult::Result(FrameProcessResult {
-        camera:        command.camera.clone(),
-        cmd_stop_flag: Arc::clone(&command.stop_flag),
-        mode_type:     command.mode_type,
+        camera:    command.camera.clone(),
+        mode_type: command.mode_type,
         data,
     });
     result_fun(result);

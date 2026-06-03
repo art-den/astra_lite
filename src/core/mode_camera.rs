@@ -1,4 +1,4 @@
-use std::{any::Any, path::PathBuf, sync::{atomic::AtomicBool, Arc, Mutex, RwLock}};
+use std::{any::Any, path::PathBuf, sync::{Arc, Mutex, RwLock}};
 use chrono::Utc;
 use crate::{
     TimeLogger,
@@ -726,7 +726,6 @@ impl TackingPicturesMode {
         frame_is_ok:    bool,
         blob:           &indi::BlobPropValue,
         raw_image_info: &RawImageInfo,
-        cmd_stop_flag:  &Arc<AtomicBool>,
     ) -> anyhow::Result<NotifyResult> {
         if self.cam_mode == CameraMode::SingleShot {
             return Ok(NotifyResult::Finished {
@@ -776,10 +775,9 @@ impl TackingPicturesMode {
                 };
 
                 let event_data = FrameProcessResult {
-                    camera:        self.device.clone(),
-                    cmd_stop_flag: Arc::clone(cmd_stop_flag),
-                    mode_type:     self.get_type(),
-                    data:          result,
+                    camera:    self.device.clone(),
+                    mode_type: self.get_type(),
+                    data:      result,
                 };
 
                 self.events.notify(Event::FrameProcessing(event_data));
@@ -1443,7 +1441,6 @@ impl Mode for TackingPicturesMode {
                     *frame_is_ok,
                     blob,
                     raw_image_info,
-                    &fp_result.cmd_stop_flag,
                 ),
 
             _ =>

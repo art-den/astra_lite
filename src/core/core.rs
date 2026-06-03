@@ -1,6 +1,6 @@
 use std::{
     any::Any, path::Path, sync::{
-        atomic::{AtomicBool, Ordering }, mpsc, Arc, Mutex, RwLock, RwLockReadGuard
+        atomic::AtomicBool, mpsc, Arc, Mutex, RwLock, RwLockReadGuard
     },
     thread::JoinHandle,
 };
@@ -230,7 +230,7 @@ impl Core {
 
     pub fn stop_img_process_thread(&self) -> anyhow::Result<()> {
         self.img_cmds_sender
-            .send(FrameProcessCommand::Exit)
+            .send(FrameProcessCommand::Stop)
             .map_err(|_| anyhow::anyhow!("Can't send exit command"))?;
         Ok(())
     }
@@ -602,10 +602,6 @@ impl Core {
     fn frame_process_result_handler(self: &Arc<Self>, res: CommandResult) {
         match res {
             CommandResult::Result(res) => {
-                if res.cmd_stop_flag.load(Ordering::Relaxed) {
-                    return;
-                }
-
                 let is_opening_file = res.mode_type == ModeType::OpeningImgFile;
 
                 let mut mode = self.mode.write().unwrap();
@@ -733,11 +729,10 @@ impl Core {
             calibr_params,
         };
 
-        let result_fun = {
-            let self_ = Arc::clone(self);
-            move |res: CommandResult| self_.frame_process_result_handler(res)
+        let self_ = Arc::clone(self);
+        let result_fun = move |res| {
+            self_.frame_process_result_handler(res);
         };
-
         self.img_cmds_sender.send(FrameProcessCommand::ProcessImage {
             command,
             result_fun: Box::new(result_fun),
