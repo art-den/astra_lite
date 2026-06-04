@@ -1775,12 +1775,6 @@ impl CameraUi {
 
     fn show_frame_processing_result(&self, result: &FrameProcessResult) {
         match &result.data {
-            // TODO: move to main_ui
-            FrameProcessResultData::Error(error_text) => {
-                self.core.abort_active_mode();
-                self.correct_widgets_props();
-                show_error_message(Some(&self.window), "Fatal Error", error_text);
-            }
             FrameProcessResultData::MasterSaved { frame_type: FrameType::Flats, file_name } => {
                 self.widgets.calibr.fch_flat.set_filename(file_name);
             }

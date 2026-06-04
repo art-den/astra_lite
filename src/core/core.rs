@@ -1,8 +1,7 @@
 use std::{
     any::Any, path::Path, sync::{
-        atomic::AtomicBool, mpsc, Arc, Mutex, RwLock, RwLockReadGuard
+        atomic::AtomicBool, Arc, Mutex, RwLock, RwLockReadGuard
     },
-    thread::JoinHandle,
 };
 use gtk::glib::PropertySet;
 use itertools::Itertools;
@@ -115,29 +114,18 @@ pub struct Core {
     live_stacking:      Arc<LiveStackingData>,
     timer:              Arc<Timer>,
     img_proc_stop_flag: Mutex<Arc<AtomicBool>>, // stop flag for last command
-
-    /// commands for passing into frame processing thread
-    img_cmds_sender:    mpsc::Sender<FrameProcessCommand>, // TODO: make API
-    frame_proc_thread:  Option<JoinHandle<()>>,
+    frame_processing:   Arc<FrameProcessing>,
     ext_guider:         Arc<ExternalGuiderCtrl>,
 }
 
 impl Drop for Core {
     fn drop(&mut self) {
-        if let Some(frame_proc_thread) = self.frame_proc_thread.take() {
-            log::info!("Process thread joining...");
-            _ = frame_proc_thread.join();
-            log::info!("Process thread joined");
-        }
-
         log::info!("Core dropped");
     }
 }
 
 impl Core {
     pub fn new() -> Arc<Self> {
-        let (img_cmds_sender, frame_proc_thread) = start_frame_processing_thread();
-
         let hal = Hal::new();
         let events = Arc::new(Events::new());
         let options = Arc::new(RwLock::new(Options::default()));
@@ -146,8 +134,9 @@ impl Core {
         let hal_impl = hal.create_indy_impl(&indi);
         hal.set_impl(hal_impl);
 
-        let result = Arc::new(Self {
-            hal,
+        let frame_processing = FrameProcessing::new();
+
+        let this = Arc::new(Self {
             indi:               Arc::clone(&indi),
             options:            Arc::clone(&options),
             mode:               RwLock::new(ModeData::new()),
@@ -157,17 +146,16 @@ impl Core {
             timer:              Arc::new(Timer::new()),
             img_proc_stop_flag: Mutex::new(Arc::new(AtomicBool::new(false))),
             ext_guider:         ExternalGuiderCtrl::new(),
-            frame_proc_thread:  Some(frame_proc_thread),
+            hal,
+            frame_processing,
             events,
-            img_cmds_sender,
         });
 
-        result.set_ext_guider_events_handler();
-        result.connect_indi_events();
-        result.connect_hal_events();
-        result.connect_events();
-        result.start_timer();
-        result
+        this.set_ext_guider_events_handler();
+        this.connect_indi_events();
+        this.connect_events();
+        this.start_timer();
+        this
     }
 
     pub fn hal(&self) -> &Arc<Hal> {
@@ -229,9 +217,7 @@ impl Core {
     }
 
     pub fn stop_img_process_thread(&self) -> anyhow::Result<()> {
-        self.img_cmds_sender
-            .send(FrameProcessCommand::Stop)
-            .map_err(|_| anyhow::anyhow!("Can't send exit command"))?;
+        self.frame_processing.add_to_queue(FrameProcessCommand::Stop)?;
         Ok(())
     }
 
@@ -287,7 +273,6 @@ impl Core {
 
     fn connect_indi_events(self: &Arc<Self>) {
         let self_ = Arc::clone(self);
-        let img_cmds_sender = self.img_cmds_sender.clone();
         self.indi.subscribe_events(move |event| {
             let result = || -> anyhow::Result<()> {
                 match event {
@@ -306,7 +291,6 @@ impl Core {
                                 blob,
                                 &prop_change.device_name,
                                 prop_name,
-                                &img_cmds_sender,
                             )?;
                         } else {
                             self_.process_indi_prop_change_event(&prop_change)?;
@@ -317,13 +301,6 @@ impl Core {
                 Ok(())
             } ();
             self_.process_error(result, "Core::connect_indi_events");
-        });
-    }
-
-    fn connect_hal_events(self: &Arc<Self>) {
-        let self_ = Arc::clone(self);
-        self.hal.connect_event_handler(move |event| {
-            self_.hal_event_handler(event);
         });
     }
 
@@ -369,10 +346,23 @@ impl Core {
     }
 
     fn connect_events(self: &Arc<Self>) {
+        // HAL events
+        let self_ = Arc::clone(self);
+        self.hal.connect_event_handler(move |event| {
+            self_.hal_event_handler(event);
+        });
+
+        // Main events
         let self_ = Arc::clone(self);
         self.events.subscribe(move |event| {
             self_.event_handler(event);
         });
+
+        // Frame processing events
+        let self_ = Arc::clone(&self);
+        self.frame_processing.connect_result_fun(
+            move |res| self_.frame_process_result_handler(res)
+        );
     }
 
     fn event_handler(self: &Arc<Self>, event: Event) {
@@ -479,11 +469,10 @@ impl Core {
     }
 
     fn process_indi_blob_event(
-        self:              &Arc<Self>,
-        blob:              &Arc<indi::BlobPropValue>,
-        device_name:       &str,
-        device_prop:       &str,
-        frame_proc_sender: &mpsc::Sender<FrameProcessCommand>,
+        self:        &Arc<Self>,
+        blob:        &Arc<indi::BlobPropValue>,
+        device_name: &str,
+        device_prop: &str,
     ) -> anyhow::Result<()> {
         if blob.data.is_empty() { return Ok(()); }
         log::debug!(
@@ -557,17 +546,9 @@ impl Core {
 
         mode.active.complete_img_process_params(&mut command_data);
 
-        let result_fun = {
-            let self_ = Arc::clone(self);
-            move |res: CommandResult| {
-                self_.frame_process_result_handler(res);
-            }
-        };
-
-        frame_proc_sender.send(FrameProcessCommand::ProcessImage {
-            command: command_data,
-            result_fun: Box::new(result_fun),
-        }).unwrap();
+        self.frame_processing.add_to_queue(
+            FrameProcessCommand::ProcessImage(command_data)
+        )?;
 
         Ok(())
     }
@@ -636,6 +617,10 @@ impl Core {
                 drop(mode);
                 self.process_error(result, "Core::apply_change_result");
 
+            }
+            CommandResult::Error(error_str) => {
+                self.abort_active_mode();
+                self.events.notify(Event::Error(error_str));
             }
         }
     }
@@ -729,14 +714,9 @@ impl Core {
             calibr_params,
         };
 
-        let self_ = Arc::clone(self);
-        let result_fun = move |res| {
-            self_.frame_process_result_handler(res);
-        };
-        self.img_cmds_sender.send(FrameProcessCommand::ProcessImage {
-            command,
-            result_fun: Box::new(result_fun),
-        }).unwrap();
+        self.frame_processing.add_to_queue(
+            FrameProcessCommand::ProcessImage(command)
+        )?;
 
         Ok(())
     }

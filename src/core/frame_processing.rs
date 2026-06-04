@@ -1,4 +1,4 @@
-use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, sync::{mpsc, RwLock, Mutex}, thread::JoinHandle, path::*, io::Cursor};
+use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, sync::{mpsc, RwLock, Mutex}, path::*, io::Cursor};
 
 use chrono::{DateTime, Local};
 use bitflags::bitflags;
@@ -224,7 +224,6 @@ pub struct RawFrameInfo {
 
 #[derive(Clone)]
 pub enum FrameProcessResultData {
-    Error(String),
     ShotProcessingStarted,
     RawFrameInfo(RawFrameInfo),
     HistorgamRaw(Arc<RwLock<Histogram>>),
@@ -258,269 +257,930 @@ pub struct FrameProcessResult {
 #[derive(Clone)]
 pub enum CommandResult {
     Result(FrameProcessResult),
+    Error(String),
     QueueOverflow,
 }
 
 pub type ResultFun = Box<dyn Fn(CommandResult) + Send + 'static>;
 
 pub enum FrameProcessCommand {
-    ProcessImage {
-        command:    FrameProcessCommandData,
-        result_fun: ResultFun,
-    },
+    ProcessImage(FrameProcessCommandData),
     Stop
 }
 
-pub fn start_frame_processing_thread() -> (mpsc::Sender<FrameProcessCommand>, JoinHandle<()>) {
-    let (bg_comands_sender, bg_comands_receiver) = mpsc::channel();
-    let thread = std::thread::spawn(move || {
-        log::info!("process_blob_thread_fun started");
-        'outer:
-        while let Ok(cmd) = bg_comands_receiver.recv() {
-            if matches!(cmd, FrameProcessCommand::Stop) { break 'outer; }
-            let mut commands = Vec::new();
-            commands.push(cmd);
-            loop {
-                let next_cmd = bg_comands_receiver.try_recv();
-                match next_cmd {
-                    Ok(next_cmd) => {
-                        if matches!(next_cmd, FrameProcessCommand::Stop) { break 'outer; }
-                        commands.push(next_cmd);
-                    },
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        break 'outer;
-                    },
-                    Err(mpsc::TryRecvError::Empty) => {
-                        break;
-                    },
-                }
-            }
-
-            if commands.len() > 1 {
-                log::info!("Commands queue size > 1 ({})", commands.len());
-            }
-
-            let queue_is_overflowed = commands.len() >= 3;
-
-            for cmd in commands {
-                if let FrameProcessCommand::ProcessImage{command, result_fun} = cmd {
-                    if queue_is_overflowed {
-                        result_fun(CommandResult::QueueOverflow);
-                    }
-                    make_preview_image(command, result_fun);
-                }
-            }
-        }
-
-        log::info!("process_blob_thread_fun finished");
-    });
-    (bg_comands_sender, thread)
+pub struct FrameProcessing {
+    sender:     mpsc::Sender<FrameProcessCommand>,
+    result_fun: Mutex<Option<ResultFun>>,
 }
 
-fn apply_calibr_data_and_remove_hot_pixels(
-    params:    &Option<CalibrParams>,
-    raw_image: &mut RawImage,
-    calibr:    &mut CalibrData,
-) -> anyhow::Result<()> {
-    let Some(params) = params else { return Ok(()); };
+impl FrameProcessing {
+    pub fn new() -> Arc<Self> {
+        let (sender, receiver) = mpsc::channel();
+        let this = Arc::new(FrameProcessing{ sender, result_fun: Mutex::new(None) });
+        let weak_this = Arc::downgrade(&this);
+        std::thread::spawn(move || {
+            log::info!("process_blob_thread_fun started");
+            'outer:
+            while let Ok(cmd) = receiver.recv() {
+                if matches!(cmd, FrameProcessCommand::Stop) { break 'outer; }
+                let mut commands = Vec::new();
+                commands.push(cmd);
+                loop {
+                    let next_cmd = receiver.try_recv();
+                    match next_cmd {
+                        Ok(next_cmd) => {
+                            if matches!(next_cmd, FrameProcessCommand::Stop) { break 'outer; }
+                            commands.push(next_cmd);
+                        },
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            break 'outer;
+                        },
+                        Err(mpsc::TryRecvError::Empty) => {
+                            break;
+                        },
+                    }
+                }
 
-    let image_info = raw_image.info();
-    let is_flat_file = image_info.frame_type == FrameType::Flats;
-    let mut calibr_methods = CalibrMethods::empty();
+                if commands.len() > 1 {
+                    log::info!("Commands queue size > 1 ({})", commands.len());
+                }
 
-    let fn_utils = FileNameUtils::default();
-    let (defect_pixel_file, subtrack_fname, subtrack_method) =
-        if params.extract_dark {
-            let calibr_filename_data = FileNameArg::RawInfo{
-                info:     image_info,
-                ccd_temp: params.ccd_temp,
+                let queue_is_overflowed = commands.len() >= 3;
+                if queue_is_overflowed {
+                    let Some(self_) = weak_this.upgrade() else { break 'outer; };
+                    self_.notify_cmd_result(CommandResult::QueueOverflow);
+                }
+
+                for cmd in commands {
+                    if let FrameProcessCommand::ProcessImage(cmd) = cmd {
+                        let Some(self_) = weak_this.upgrade() else { break 'outer; };
+                        let process_cmd_res = self_.process_command(cmd);
+                        if let Err(err) = process_cmd_res {
+                            self_.notify_cmd_result(CommandResult::Error(err.to_string()));
+                        }
+                    }
+                }
+            }
+
+            log::info!("process_blob_thread_fun finished");
+        });
+
+        this
+    }
+
+    pub fn connect_result_fun(&self, fun: impl Fn(CommandResult) + Send + 'static) {
+        let mut result_fun = self.result_fun.lock().unwrap();
+        *result_fun = Some(Box::new(fun));
+    }
+
+    pub fn add_to_queue(&self, cmd: FrameProcessCommand) -> anyhow::Result<()> {
+        self.sender.send(cmd)?;
+        Ok(())
+    }
+
+    fn notify_cmd_result(&self, result: CommandResult) {
+        let result_fun_mutex = self.result_fun.lock().unwrap();
+        let result_fun = result_fun_mutex.as_ref().expect("FrameProcessing::result_fun");
+        result_fun(result);
+    }
+
+    fn notify_frame_result(&self, result: FrameProcessResultData, command: &FrameProcessCommandData) {
+        self.notify_cmd_result(CommandResult::Result(FrameProcessResult {
+            camera:    command.camera.clone(),
+            mode_type: command.mode_type,
+            data:      result
+        }));
+    }
+
+    fn process_command(&self, command: FrameProcessCommandData) -> anyhow::Result<()> {
+        if command.stop_flag.load(Ordering::Relaxed) {
+            log::debug!("Command stopped");
+            return Ok(());
+        }
+
+        let total_tmr = TimeLogger::start();
+
+        self.notify_frame_result(
+            FrameProcessResultData::ShotProcessingStarted,
+            &command,
+        );
+
+        let type_hint = command.img_source.type_hint();
+
+        let is_fits_file =
+            type_hint.eq_ignore_ascii_case("fit") ||
+            type_hint.eq_ignore_ascii_case("fits") ||
+            type_hint.eq_ignore_ascii_case(".fit") ||
+            type_hint.eq_ignore_ascii_case(".fits");
+
+        let is_tif_file =
+            type_hint.eq_ignore_ascii_case("tif");
+
+        let is_file_for_pixbuf =
+            type_hint.eq_ignore_ascii_case("jpg") ||
+            type_hint.eq_ignore_ascii_case("jpeg") ||
+            type_hint.eq_ignore_ascii_case("png");
+
+        let mut loader = if is_fits_file {
+            let mut stream: Box<dyn SeekNRead> = match &command.img_source {
+                ImageSource::Blob(blob) =>
+                    Box::new(Cursor::new(blob.data.as_slice())),
+                ImageSource::FileName(file_name) => {
+                    let file = std::fs::File::open(file_name)?;
+                    Box::new(file)
+                },
             };
-            let defect_pixel_file = fn_utils.defect_pixels_file_name(
-                &calibr_filename_data,
-                &params.dark_lib_path
-            );
-            let (subtrack_fname, subtrack_method) = fn_utils.get_subtrack_master_fname(
-                &calibr_filename_data,
-                &params.dark_lib_path
-            );
-            (Some(defect_pixel_file), Some(subtrack_fname), subtrack_method)
+            let reader = FitsReader::new(&mut stream)?;
+            ImageLoader::Fits(reader, stream)
+        } else if is_tif_file {
+            if let ImageSource::FileName(file_name) = &command.img_source {
+                ImageLoader::Tif(file_name.clone())
+            } else {
+                unreachable!();
+            }
+        } else if is_file_for_pixbuf {
+            if let ImageSource::FileName(file_name) = &command.img_source {
+                ImageLoader::ByPixbuf(file_name.clone())
+            } else {
+                unreachable!();
+            }
         } else {
-            (None, None, CalibrMethods::empty())
+            anyhow::bail!("Image format {} is not supported", type_hint);
         };
 
-    log::debug!("apply_calibr_data_and_remove_hot_pixels params={:?}", params);
-    log::debug!("calibr.defect_pixels_fname={:?}", calibr.defect_pixels_fname);
-    log::debug!("calibr.subtract_fname={:?}", calibr.subtract_fname);
-    log::debug!("calibr.master_flat_fname={:?}", calibr.master_flat_fname);
+        let is_raw_image = loader.is_raw_image();
+        let is_ready_mage = loader.is_ready_image();
 
-    let mut reload_flat = false;
+        if !is_raw_image && !is_ready_mage {
+            anyhow::bail!("No supported image found in {}", type_hint);
+        }
 
-    // Load defect pixels file
+        let mut frame_type = FrameType::Lights;
+        let mut is_light_frame = true;
+        let mut exposure = 0_f64;
+        let mut raw_info = None;
+        let mut raw_noise = None;
 
-    if calibr.defect_pixels_fname != defect_pixel_file {
-        calibr.defect_pixels = None;
-        if let Some(file_name) = &defect_pixel_file { if file_name.is_file() {
-            let mut defect_pixels = BadPixels::default();
-            log::info!(
-                "Loading defect pixels file {} ...",
-                file_name.to_str().unwrap_or_default()
+        let mut quality = LightFrameQualInfoData::default();
+
+        let mut image = if is_raw_image {
+            let mut raw_image = loader.load_raw_image()?;
+            drop(loader);
+
+            let mut info = raw_image.info().clone();
+            if info.offset == 0 {
+                info.offset = command.frame_options.offset;
+                raw_image.set_offset(info.offset);
+            }
+
+            frame_type = info.frame_type;
+            exposure = info.exposure;
+            is_light_frame = frame_type == FrameType::Lights;
+
+            log::debug!("Raw type      = {:?}", frame_type);
+            log::debug!("Raw width     = {}",   info.width);
+            log::debug!("Raw height    = {}",   info.height);
+            log::debug!("Raw zero      = {}",   info.offset);
+            log::debug!("Raw max_value = {}",   info.max_value);
+            log::debug!("Raw CFA       = {:?}", info.cfa);
+            log::debug!("Raw bin       = {}",   info.bin);
+            log::debug!("Raw exposure  = {}s",  info.exposure);
+            log::debug!("Raw CCD temp  = {:?}", info.ccd_temp);
+
+            if command.stop_flag.load(Ordering::Relaxed) {
+                log::debug!("Command stopped");
+                return Ok(());
+            }
+
+            // Check is frame CCD temperature is good
+
+            if let (Some(qo), Some(ctrl_o)) = (&command.quality_options, &command.cam_ctrl_opts) {
+                if ctrl_o.enable_cooler && qo.check_ccd_temp {
+                    if let Some(ccd_temp) = info.ccd_temp {
+                        let diff = f64::abs(ccd_temp - ctrl_o.temperature);
+                        quality.ccd_temp_ok = diff <= qo.max_ccd_temp_diff;
+                    }
+                }
+            }
+
+            let is_monochrome_img =
+                matches!(frame_type, FrameType::Biases) ||
+                matches!(frame_type, FrameType::Darks);
+
+            // Raw histogram (before applying calibration data)
+
+            let mut raw_hist = command.frame.raw_hist.write().unwrap();
+            let tmr = TimeLogger::start();
+            raw_hist.from_raw_image(
+                &raw_image,
+                is_monochrome_img
             );
-            defect_pixels.load_from_file(file_name)?;
-            calibr.defect_pixels = Some(defect_pixels);
-            reload_flat = true;
-        }}
-        calibr.defect_pixels_fname = defect_pixel_file.clone();
+            tmr.log("histogram from raw image");
+            let debug_log_hist_chan = |name, chan: &Option<HistogramChan>| {
+                if let Some(chan) = chan {
+                    log::debug!("Raw {} median = {}", name, chan.median());
+                    log::debug!("Raw {} mean   = {}", name, chan.mean);
+                }
+            };
+            debug_log_hist_chan("L", &raw_hist.l);
+            debug_log_hist_chan("R", &raw_hist.r);
+            debug_log_hist_chan("G", &raw_hist.g);
+            debug_log_hist_chan("B", &raw_hist.b);
+
+            let chan = if let Some(chan) = &raw_hist.l {
+                chan
+            } else if let Some(chan) = &raw_hist.g {
+                chan
+            } else {
+                unreachable!();
+            };
+
+            let raw_mean = chan.mean;
+            let raw_median = chan.median();
+            let raw_std_dev = chan.std_dev;
+
+            drop(raw_hist);
+
+
+            self.notify_frame_result(
+                FrameProcessResultData::HistorgamRaw(Arc::clone(&command.frame.raw_hist)),
+                &command,
+            );
+
+            if command.flags.contains(FrameProcessCommandFlags::HISTOGRAM_ONLY) {
+                return Ok(());
+            }
+
+            // Applying calibration data
+            if is_light_frame
+            || frame_type == FrameType::Flats {
+                let mut calibr = command.calibr_data.lock().unwrap();
+                Self::apply_calibr_data_and_remove_hot_pixels(
+                    &command.calibr_params,
+                    &mut raw_image,
+                    &mut calibr
+                )?;
+                info = raw_image.info().clone()
+            }
+
+            let raw_image = Arc::new(raw_image);
+
+            let raw_frame_info = RawFrameInfo {
+                image:       Arc::clone(&raw_image),
+                ccd_temp_ok: quality.ccd_temp_ok,
+                mean:        raw_mean as f32,
+                median:      raw_median,
+                std_dev:     raw_std_dev as f32,
+            };
+            self.notify_frame_result(
+                FrameProcessResultData::RawFrameInfo(raw_frame_info),
+                &command,
+            );
+
+            if command.stop_flag.load(Ordering::Relaxed) {
+                log::debug!("Command stopped");
+                return Ok(());
+            }
+
+            // Raw noise
+            raw_noise = if is_light_frame {
+                let tmr = TimeLogger::start();
+                let noise = raw_image.calc_noise();
+                tmr.log("light frame raw noise calculation");
+                noise
+            } else {
+                None
+            };
+
+            log::debug!("Raw noise = {:?}", raw_noise);
+
+            if command.stop_flag.load(Ordering::Relaxed) {
+                log::debug!("Command stopped");
+                return Ok(());
+            }
+
+            match frame_type {
+                FrameType::Flats => {
+                    let hist = command.frame.raw_hist.read().unwrap();
+                    *command.frame.info.write().unwrap() = ResultImageInfo::FlatInfo(
+                        FlatImageInfo::from_histogram(&hist)
+                    );
+                    self.notify_frame_result(
+                        FrameProcessResultData::FrameInfo,
+                        &command,
+                    );
+                },
+                FrameType::Darks | FrameType::Biases => {
+                    let hist = command.frame.raw_hist.read().unwrap();
+                    *command.frame.info.write().unwrap() = ResultImageInfo::RawInfo(
+                        RawImageStat::from_histogram(&hist)
+                    );
+                    self.notify_frame_result(
+                        FrameProcessResultData::FrameInfo,
+                        &command,
+                    );
+                },
+
+                _ => {},
+            }
+
+            if command.stop_flag.load(Ordering::Relaxed) {
+                log::debug!("Command stopped");
+                return Ok(());
+            }
+
+            // Demosaic
+
+            let mut image = command.frame.image.write().unwrap();
+
+            let tmr = TimeLogger::start();
+            if !is_monochrome_img {
+                raw_image.demosaic_into(&mut image, true);
+            } else {
+                raw_image.copy_into_monochrome(&mut image);
+            }
+            tmr.log("demosaic");
+
+            if command.stop_flag.load(Ordering::Relaxed) {
+                log::debug!("Command stopped");
+                return Ok(());
+            }
+
+            raw_info = Some(info);
+
+            image
+        } else if is_ready_mage {
+            let mut image = command.frame.image.write().unwrap();
+            loader.load_image(&mut image)?;
+            drop(loader);
+            image
+        } else {
+            unreachable!();
+        };
+
+        // Remove gradient from light frame
+
+        if is_light_frame
+        && (command.view_options.remove_gradient
+        || command.mode_type == ModeType::LiveStacking) {
+            let tmr = TimeLogger::start();
+            image.remove_gradient();
+            tmr.log("remove gradient from light frame");
+        }
+
+        drop(image);
+
+        if command.stop_flag.load(Ordering::Relaxed) {
+            log::debug!("Command stopped");
+            return Ok(());
+        }
+
+        self.notify_frame_result(
+            FrameProcessResultData::Image(Arc::clone(&command.frame.image)),
+            &command,
+        );
+
+        if command.stop_flag.load(Ordering::Relaxed) {
+            log::debug!("Command stopped");
+            return Ok(());
+        }
+
+        // Result image histogram
+
+        let image = command.frame.image.read().unwrap();
+        let mut hist = command.frame.img_hist.write().unwrap();
+        let tmr = TimeLogger::start();
+        hist.from_image(&image);
+        tmr.log("histogram for result image");
+
+        if is_ready_mage {
+            *command.frame.raw_hist.write().unwrap() = hist.clone();
+            self.notify_frame_result(
+                FrameProcessResultData::HistorgamRaw(Arc::clone(&command.frame.raw_hist)),
+                &command,
+            );
+        }
+
+        drop(hist);
+
+        if command.stop_flag.load(Ordering::Relaxed) {
+            log::debug!("Command stopped");
+            return Ok(());
+        }
+
+        // Stars
+
+        let frame_stars = if is_light_frame {
+            let stars_recgn_send = command.quality_options
+                .as_ref().map(|qo| qo.star_recgn_sens)
+                .unwrap_or_default();
+
+            let mono_layer = if image.is_color() { &image.g } else { &image.l };
+            let mut stars_finder = StarsFinder::new();
+            let ignore_3px_stars = command.quality_options
+                .as_ref()
+                .map(|opts| opts.ignore_3px_stars)
+                .unwrap_or(false);
+
+            stars_finder.find_stars_and_get_info(
+                mono_layer,
+                &image.raw_info,
+                stars_recgn_send,
+                ignore_3px_stars,
+                true
+            )
+        } else {
+            Stars::default()
+        };
+
+        // Preview image RGB bytes
+
+        let hist = command.frame.img_hist.read().unwrap();
+        let tmr = TimeLogger::start();
+        let rgb_data = get_preview_rgb_data(
+            &image,
+            &hist,
+            &command.view_options,
+            if is_light_frame { Some(&frame_stars.items)} else { None },
+        );
+        tmr.log("get_rgb_bytes_from_preview_image");
+
+        if command.stop_flag.load(Ordering::Relaxed) {
+            log::debug!("Command stopped");
+            return Ok(());
+        }
+
+        if let Some(rgb_data) = rgb_data {
+            let preview_data = Arc::new(Preview8BitImgData {
+                rgb_data,
+                params: command.view_options.clone(),
+            });
+            self.notify_frame_result(
+                FrameProcessResultData::PreviewFrame(preview_data),
+                &command,
+            );
+        }
+
+        if frame_type == FrameType::Lights {
+            let stars_items = Arc::new(frame_stars.items);
+            let stars_info = Arc::new(frame_stars.info);
+
+            *command.frame.stars.write().unwrap() = Some(Arc::clone(&stars_items));
+
+            // Stars quality
+
+            if let Some(qo) = &command.quality_options {
+                if qo.use_max_fwhm { if let Some(fwhm) = stars_info.fwhm {
+                    quality.fwhm_is_ok = fwhm < qo.max_fwhm;
+                }}
+                if qo.use_max_ovality { if let Some(ovality) = stars_info.ovality {
+                    quality.ovality_is_ok = ovality < qo.max_ovality;
+                }}
+            }
+
+            // Light frame information
+
+            let tmr = TimeLogger::start();
+            let mut info = LightFrameInfo::from_image(
+                &image,
+                true,
+            );
+            info.exposure = exposure;
+            info.raw_noise = raw_noise;
+            info.calibr_methods = raw_info.as_ref()
+                .map(|i| i.calibr_methods)
+                .unwrap_or(CalibrMethods::empty());
+            tmr.log("TOTAL LightImageInfo::from_image");
+
+            if command.stop_flag.load(Ordering::Relaxed) {
+                log::debug!("Command stopped");
+                return Ok(());
+            }
+
+            // Offset by previous stars
+
+            let stars_offset =
+                if let (Some(stars_for_offset), true) = (&command.ref_stars, quality.stars_is_ok()) {
+                    let tmr = TimeLogger::start();
+                    let cur_stars_points: Vec<_> = stars_items.iter()
+                        .map(|star| Point {x: star.x, y: star.y })
+                        .collect();
+                    let image_offset = Offset::calculate(
+                        stars_for_offset,
+                        &cur_stars_points,
+                        image.width() as f64,
+                        image.height() as f64
+                    );
+                    tmr.log("Offset::calculate");
+                    quality.offset_is_ok = image_offset.is_some();
+                    image_offset
+                } else {
+                    None
+                };
+
+            let info = Arc::new(LightFrameInfoData {
+                raw: raw_info.clone(),
+                image: Arc::new(info),
+                stars: Arc::new(StarsInfoData {
+                    items: stars_items,
+                    info: stars_info,
+                }),
+                offset: stars_offset,
+                quality: quality.clone(),
+            });
+
+            // Send message about light frame calculated
+
+            self.notify_frame_result(
+                FrameProcessResultData::LightFrameInfo(Arc::clone(&info)),
+                &command,
+            );
+
+            // Send message about light frame info stored
+
+            *command.frame.info.write().unwrap() = ResultImageInfo::LightInfo(Arc::clone(&info));
+            self.notify_frame_result(
+                FrameProcessResultData::FrameInfo,
+                &command,
+            );
+
+            // Live stacking
+
+            if let (Some(live_stacking), true) = (&command.live_stacking, quality.is_ok()) {
+                // Translate/rotate image to reference image and add
+                let offset = info.offset.clone().unwrap_or_default();
+                let mut stacker = live_stacking.data.stacker.write().unwrap();
+                let tmr = TimeLogger::start();
+                stacker.add(
+                    &image,
+                    &hist,
+                    -offset.x,
+                    -offset.y,
+                    -offset.angle,
+                    exposure,
+                    live_stacking.options.remove_tracks
+                );
+                tmr.log("ImageStacker::add");
+                drop(stacker);
+
+                if command.stop_flag.load(Ordering::Relaxed) {
+                    log::debug!("Command stopped");
+                    return Ok(());
+                }
+
+                let stacker = live_stacking.data.stacker.read().unwrap();
+
+                let mut res_image = live_stacking.data.image.write().unwrap();
+                let tmr = TimeLogger::start();
+                stacker.copy_to_image(&mut res_image);
+                tmr.log("ImageStacker::copy_to_image");
+
+                if command.view_options.remove_gradient {
+                    let tmr = TimeLogger::start();
+                    res_image.remove_gradient();
+                    tmr.log("remove gradient from live stacking result");
+                }
+
+                drop(res_image);
+
+                let res_image = live_stacking.data.image.read().unwrap();
+
+                // Histogram for live stacking image
+
+                let mut hist = live_stacking.data.hist.write().unwrap();
+                let tmr = TimeLogger::start();
+                hist.from_image(&res_image);
+                tmr.log("histogram from live view image");
+                drop(hist);
+
+                if command.stop_flag.load(Ordering::Relaxed) {
+                    log::debug!("Command stopped");
+                    return Ok(());
+                }
+
+                let hist = live_stacking.data.hist.read().unwrap();
+                self.notify_frame_result(
+                    FrameProcessResultData::HistogramLiveRes,
+                    &command,
+                );
+
+                // stars on live stacking image
+
+                let ls_mono_layer = if res_image.is_color() {
+                    &res_image.g
+                } else {
+                    &res_image.l
+                };
+
+                let ignore_3px_stars = command.quality_options
+                    .as_ref()
+                    .map(|opts| opts.ignore_3px_stars)
+                    .unwrap_or(false);
+
+                let stars_recgn_send = command.quality_options
+                    .as_ref().map(|qo| qo.star_recgn_sens)
+                    .unwrap_or_default();
+
+                let mut stars_finder = StarsFinder::new();
+                let ls_stars = stars_finder.find_stars_and_get_info(
+                    ls_mono_layer,
+                    &raw_info,
+                    stars_recgn_send,
+                    ignore_3px_stars,
+                    true
+                );
+
+                // Live stacking image info
+
+                let tmr = TimeLogger::start();
+                let mut live_stacking_info = LightFrameInfo::from_image(&res_image, true);
+                live_stacking_info.exposure = stacker.total_exposure();
+                tmr.log("LightImageInfo::from_image for livestacking");
+
+                if command.stop_flag.load(Ordering::Relaxed) {
+                    log::debug!("Command stopped");
+                    return Ok(());
+                }
+
+                let ls_light_frame_info = LiveStackingInfo {
+                    image: Arc::new(live_stacking_info),
+                    stars: Arc::new(StarsInfoData {
+                        items: Arc::new(ls_stars.items),
+                        info: Arc::new(ls_stars.info),
+                    }),
+                };
+
+
+                //let ls_light_frame_info = Arc::new(ls_light_frame_info);
+
+                *live_stacking.data.info.write().unwrap() = Some(ls_light_frame_info.clone());
+                self.notify_frame_result(
+                    FrameProcessResultData::FrameInfoLiveRes,
+                    &command,
+                );
+
+                // Convert into preview RGB bytes
+
+                if !command.view_options.orig_frame_in_ls {
+                    let tmr = TimeLogger::start();
+                    let rgb_data = get_preview_rgb_data(
+                        &res_image,
+                        &hist,
+                        &command.view_options,
+                        Some(&ls_light_frame_info.stars.items),
+                    );
+                    tmr.log("get_rgb_bytes_from_preview_image");
+
+                    if command.stop_flag.load(Ordering::Relaxed) {
+                        log::debug!("Command stopped");
+                        return Ok(());
+                    }
+
+                    if let Some(rgb_data) = rgb_data {
+                        let preview_data = Arc::new(Preview8BitImgData {
+                            rgb_data,
+                            params: command.view_options.clone(),
+                        });
+
+                        self.notify_frame_result(
+                            FrameProcessResultData::PreviewLiveRes(preview_data),
+                            &command,
+                        );
+                    }
+                }
+
+                // save result image
+
+                if live_stacking.options.save_enabled {
+                    let save_res_interv = live_stacking.options.save_minutes as f64 * 60.0;
+                    let mut save_cnt = live_stacking.data.time_cnt.lock().unwrap();
+                    *save_cnt += exposure;
+                    if *save_cnt >= save_res_interv {
+                        *save_cnt = 0.0;
+                        drop(save_cnt);
+                        let now_time: DateTime<Local> = Local::now();
+                        let now_time_str = now_time.format("%Y%m%d-%H%M%S").to_string();
+                        let file_path = live_stacking.options.out_dir
+                            .join("Result");
+                        if !file_path.exists() {
+                            std::fs::create_dir_all(&file_path)
+                                .map_err(|e|anyhow::anyhow!(
+                                    "Error '{}'\nwhen trying to create directory '{}' for saving result live stack image",
+                                    e.to_string(),
+                                    file_path.to_str().unwrap_or_default()
+                                ))?;
+                        }
+                        let file_path = file_path.join(format!("Live_{}.tif", now_time_str));
+                        let tmr = TimeLogger::start();
+                        stacker.save_to_tiff(&file_path)?;
+                        tmr.log("save live stacking result image");
+                    }
+                }
+            }
+        } else {
+            *command.frame.stars.write().unwrap() = None;
+        };
+
+        if command.stop_flag.load(Ordering::Relaxed) {
+            log::debug!("Command stopped");
+            return Ok(());
+        }
+
+        let process_time = total_tmr.log("TOTAL PREVIEW");
+
+        if let (ImageSource::Blob(blob), Some(raw_info)) = (&command.img_source, raw_info) {
+            let result = FrameProcessResultData::ShotProcessingFinished{
+                raw_image_info:  Arc::new(raw_info),
+                frame_is_ok:     quality.is_ok(),
+                blob:            Arc::clone(blob),
+                processing_time: process_time,
+                blob_dl_time:    blob.dl_time,
+            };
+            self.notify_frame_result(result, &command);
+        }
+
+        Ok(())
     }
 
-    // Load master dark or bias file
+    fn apply_calibr_data_and_remove_hot_pixels(
+        params:    &Option<CalibrParams>,
+        raw_image: &mut RawImage,
+        calibr:    &mut CalibrData,
+    ) -> anyhow::Result<()> {
+        let Some(params) = params else { return Ok(()); };
 
-    if calibr.subtract_fname != subtrack_fname {
-        calibr.subtract_image = None;
-        if let Some(file_name) = &subtrack_fname { if file_name.is_file() {
-            log::info!(
-                "Loading master dark file {} ...",
-                file_name.to_str().unwrap_or_default()
-            );
-            let tmr = TimeLogger::start();
-            let subtract_image = load_raw_image_from_fits_file(file_name)
-                .map_err(|e| anyhow::anyhow!(
-                    "Error '{}'\nwhen reading master dark '{}'",
-                    e.to_string(),
+        let image_info = raw_image.info();
+        let is_flat_file = image_info.frame_type == FrameType::Flats;
+        let mut calibr_methods = CalibrMethods::empty();
+
+        let fn_utils = FileNameUtils::default();
+        let (defect_pixel_file, subtrack_fname, subtrack_method) =
+            if params.extract_dark {
+                let calibr_filename_data = FileNameArg::RawInfo{
+                    info:     image_info,
+                    ccd_temp: params.ccd_temp,
+                };
+                let defect_pixel_file = fn_utils.defect_pixels_file_name(
+                    &calibr_filename_data,
+                    &params.dark_lib_path
+                );
+                let (subtrack_fname, subtrack_method) = fn_utils.get_subtrack_master_fname(
+                    &calibr_filename_data,
+                    &params.dark_lib_path
+                );
+                (Some(defect_pixel_file), Some(subtrack_fname), subtrack_method)
+            } else {
+                (None, None, CalibrMethods::empty())
+            };
+
+        log::debug!("apply_calibr_data_and_remove_hot_pixels params={:?}", params);
+        log::debug!("calibr.defect_pixels_fname={:?}", calibr.defect_pixels_fname);
+        log::debug!("calibr.subtract_fname={:?}", calibr.subtract_fname);
+        log::debug!("calibr.master_flat_fname={:?}", calibr.master_flat_fname);
+
+        let mut reload_flat = false;
+
+        // Load defect pixels file
+
+        if calibr.defect_pixels_fname != defect_pixel_file {
+            calibr.defect_pixels = None;
+            if let Some(file_name) = &defect_pixel_file { if file_name.is_file() {
+                let mut defect_pixels = BadPixels::default();
+                log::info!(
+                    "Loading defect pixels file {} ...",
                     file_name.to_str().unwrap_or_default()
-                ))?;
-            tmr.log("loading master dark from file");
-
-            if subtrack_method.contains(CalibrMethods::BY_DARK)
-            && calibr.defect_pixels.is_none() {
-                let tmr = TimeLogger::start();
-                let defect_pixels = subtract_image.find_hot_pixels_in_master_dark();
-                tmr.log("searching hot pixels in dark image");
+                );
+                defect_pixels.load_from_file(file_name)?;
                 calibr.defect_pixels = Some(defect_pixels);
                 reload_flat = true;
+            }}
+            calibr.defect_pixels_fname = defect_pixel_file.clone();
+        }
+
+        // Load master dark or bias file
+
+        if calibr.subtract_fname != subtrack_fname {
+            calibr.subtract_image = None;
+            if let Some(file_name) = &subtrack_fname { if file_name.is_file() {
+                log::info!(
+                    "Loading master dark file {} ...",
+                    file_name.to_str().unwrap_or_default()
+                );
+                let tmr = TimeLogger::start();
+                let subtract_image = load_raw_image_from_fits_file(file_name)
+                    .map_err(|e| anyhow::anyhow!(
+                        "Error '{}'\nwhen reading master dark '{}'",
+                        e.to_string(),
+                        file_name.to_str().unwrap_or_default()
+                    ))?;
+                tmr.log("loading master dark from file");
+
+                if subtrack_method.contains(CalibrMethods::BY_DARK)
+                && calibr.defect_pixels.is_none() {
+                    let tmr = TimeLogger::start();
+                    let defect_pixels = subtract_image.find_hot_pixels_in_master_dark();
+                    tmr.log("searching hot pixels in dark image");
+                    calibr.defect_pixels = Some(defect_pixels);
+                    reload_flat = true;
+                }
+
+                calibr.subtract_image = Some(subtract_image);
+            }}
+            calibr.subtract_fname = subtrack_fname.clone();
+        }
+
+        // Load master flat file
+
+        if !is_flat_file && (calibr.master_flat_fname != params.flat_fname || reload_flat) {
+            calibr.master_flat = None;
+            if let Some(file_name) = &params.flat_fname {
+                let tmr = TimeLogger::start();
+                let mut master_flat = load_raw_image_from_fits_file(file_name)
+                    .map_err(|e| anyhow::anyhow!(
+                        "Error '{}'\nreading master flat '{}'",
+                        e.to_string(),
+                        file_name.to_str().unwrap_or_default()
+                    ))?;
+                tmr.log("loading master flat from file");
+                if let Some(defect_pixels) = &calibr.defect_pixels {
+                    let tmr = TimeLogger::start();
+                    master_flat.remove_bad_pixels(&defect_pixels.items);
+                    tmr.log("removing bad pixels from master flat");
+                }
+                let tmr = TimeLogger::start();
+                master_flat.filter_flat();
+                tmr.log("filter master flat");
+                log::info!(
+                    "Loaded master flat file {}",
+                    file_name.to_str().unwrap_or_default()
+                );
+                calibr.master_flat = Some(master_flat);
             }
+            calibr.master_flat_fname = params.flat_fname.clone();
+        }
 
-            calibr.subtract_image = Some(subtract_image);
-        }}
-        calibr.subtract_fname = subtrack_fname.clone();
-    }
+        // Apply master dark or bias image
 
-    // Load master flat file
-
-    if !is_flat_file && (calibr.master_flat_fname != params.flat_fname || reload_flat) {
-        calibr.master_flat = None;
-        if let Some(file_name) = &params.flat_fname {
+        if let (Some(file_name), Some(dark_image)) = (&subtrack_fname, &calibr.subtract_image) {
             let tmr = TimeLogger::start();
-            let mut master_flat = load_raw_image_from_fits_file(file_name)
-                .map_err(|e| anyhow::anyhow!(
-                    "Error '{}'\nreading master flat '{}'",
-                    e.to_string(),
+            raw_image.subtract_dark_or_bias(dark_image)
+                .map_err(|err| anyhow::anyhow!(
+                    "Error {}\nwhen trying to subtract image {}",
+                    err.to_string(),
                     file_name.to_str().unwrap_or_default()
                 ))?;
-            tmr.log("loading master flat from file");
-            if let Some(defect_pixels) = &calibr.defect_pixels {
+            tmr.log("subtracting master dark");
+            calibr_methods.set(subtrack_method, true);
+        }
+
+        // Apply master flat image
+
+        if let (Some(file_name), Some(flat_image)) = (&params.flat_fname, &calibr.master_flat) {
+            let tmr = TimeLogger::start();
+            raw_image.apply_flat(flat_image)
+                .map_err(|err| anyhow::anyhow!(
+                    "Error {}\nwher trying to apply flat image {}",
+                    err.to_string(),
+                    file_name.to_str().unwrap_or_default()
+                ))?;
+
+            tmr.log("applying master flat");
+            calibr_methods.set(CalibrMethods::BY_FLAT, true);
+        }
+
+        // remove defect pixels
+
+        if let Some(defect_pixels) = &calibr.defect_pixels {
+            if !defect_pixels.items.is_empty() {
                 let tmr = TimeLogger::start();
-                master_flat.remove_bad_pixels(&defect_pixels.items);
-                tmr.log("removing bad pixels from master flat");
+                raw_image.remove_bad_pixels(&defect_pixels.items);
+                tmr.log("removing hot pixels from light frame");
             }
-            let tmr = TimeLogger::start();
-            master_flat.filter_flat();
-            tmr.log("filter master flat");
-            log::info!(
-                "Loaded master flat file {}",
-                file_name.to_str().unwrap_or_default()
-            );
-            calibr.master_flat = Some(master_flat);
+            calibr_methods.set(CalibrMethods::DEFECTIVE_PIXELS, true);
         }
-        calibr.master_flat_fname = params.flat_fname.clone();
-    }
 
-    // Apply master dark or bias image
+        // Search and remove hot pixels if there is no calibration data
 
-    if let (Some(file_name), Some(dark_image)) = (&subtrack_fname, &calibr.subtract_image) {
-        let tmr = TimeLogger::start();
-        raw_image.subtract_dark_or_bias(dark_image)
-            .map_err(|err| anyhow::anyhow!(
-                "Error {}\nwhen trying to subtract image {}",
-                err.to_string(),
-                file_name.to_str().unwrap_or_default()
-            ))?;
-        tmr.log("subtracting master dark");
-        calibr_methods.set(subtrack_method, true);
-    }
-
-    // Apply master flat image
-
-    if let (Some(file_name), Some(flat_image)) = (&params.flat_fname, &calibr.master_flat) {
-        let tmr = TimeLogger::start();
-        raw_image.apply_flat(flat_image)
-            .map_err(|err| anyhow::anyhow!(
-                "Error {}\nwher trying to apply flat image {}",
-                err.to_string(),
-                file_name.to_str().unwrap_or_default()
-            ))?;
-
-        tmr.log("applying master flat");
-        calibr_methods.set(CalibrMethods::BY_FLAT, true);
-    }
-
-    // remove defect pixels
-
-    if let Some(defect_pixels) = &calibr.defect_pixels {
-        if !defect_pixels.items.is_empty() {
+        if !is_flat_file
+        && params.sar_hot_pixs
+        && calibr.defect_pixels.is_none() {
             let tmr = TimeLogger::start();
-            raw_image.remove_bad_pixels(&defect_pixels.items);
-            tmr.log("removing hot pixels from light frame");
+            let hot_pixels = raw_image.find_hot_pixels_in_light();
+            tmr.log("searching hot pixels in light image");
+            log::debug!("hot pixels count = {}", hot_pixels.len());
+            if !hot_pixels.is_empty() {
+                let tmr = TimeLogger::start();
+                raw_image.remove_bad_pixels(&hot_pixels);
+                tmr.log("removing hot pixels");
+            }
+            calibr_methods.set(CalibrMethods::HOT_PIXELS_SEARCH, true);
         }
-        calibr_methods.set(CalibrMethods::DEFECTIVE_PIXELS, true);
+
+        raw_image.set_calibr_methods(calibr_methods);
+
+        Ok(())
     }
 
-    // Search and remove hot pixels if there is no calibration data
-
-    if !is_flat_file
-    && params.sar_hot_pixs
-    && calibr.defect_pixels.is_none() {
-        let tmr = TimeLogger::start();
-        let hot_pixels = raw_image.find_hot_pixels_in_light();
-        tmr.log("searching hot pixels in light image");
-        log::debug!("hot pixels count = {}", hot_pixels.len());
-        if !hot_pixels.is_empty() {
-            let tmr = TimeLogger::start();
-            raw_image.remove_bad_pixels(&hot_pixels);
-            tmr.log("removing hot pixels");
-        }
-        calibr_methods.set(CalibrMethods::HOT_PIXELS_SEARCH, true);
-    }
-
-    raw_image.set_calibr_methods(calibr_methods);
-
-    Ok(())
-}
-
-fn send_result(
-    data:       FrameProcessResultData,
-    command:    &FrameProcessCommandData,
-    result_fun: &ResultFun
-) {
-    let result = CommandResult::Result(FrameProcessResult {
-        camera:    command.camera.clone(),
-        mode_type: command.mode_type,
-        data,
-    });
-    result_fun(result);
-}
-
-fn make_preview_image(
-    command:    FrameProcessCommandData,
-    result_fun: ResultFun
-) {
-    let res = make_preview_image_impl(&command, &result_fun);
-    if let Err(err) = res {
-        send_result(
-            FrameProcessResultData::Error(err.to_string()),
-            &command,
-            &result_fun
-        );
-    }
 }
 
 enum ImageLoader<'a> {
@@ -568,669 +1228,4 @@ impl ImageLoader<'_> {
         }
         Ok(())
     }
-}
-
-fn make_preview_image_impl(
-    command:    &FrameProcessCommandData,
-    result_fun: &ResultFun
-) -> anyhow::Result<()> {
-    if command.stop_flag.load(Ordering::Relaxed) {
-        log::debug!("Command stopped");
-        return Ok(());
-    }
-
-    let total_tmr = TimeLogger::start();
-
-    send_result(
-        FrameProcessResultData::ShotProcessingStarted,
-        command,
-        result_fun
-    );
-
-    let type_hint = command.img_source.type_hint();
-
-    let is_fits_file =
-        type_hint.eq_ignore_ascii_case("fit") ||
-        type_hint.eq_ignore_ascii_case("fits") ||
-        type_hint.eq_ignore_ascii_case(".fit") ||
-        type_hint.eq_ignore_ascii_case(".fits");
-
-    let is_tif_file =
-        type_hint.eq_ignore_ascii_case("tif");
-
-    let is_file_for_pixbuf =
-        type_hint.eq_ignore_ascii_case("jpg") ||
-        type_hint.eq_ignore_ascii_case("jpeg") ||
-        type_hint.eq_ignore_ascii_case("png");
-
-    let mut loader = if is_fits_file {
-        let mut stream: Box<dyn SeekNRead> = match &command.img_source {
-            ImageSource::Blob(blob) =>
-                Box::new(Cursor::new(blob.data.as_slice())),
-            ImageSource::FileName(file_name) => {
-                let file = std::fs::File::open(file_name)?;
-                Box::new(file)
-            },
-        };
-        let reader = FitsReader::new(&mut stream)?;
-        ImageLoader::Fits(reader, stream)
-    } else if is_tif_file {
-        if let ImageSource::FileName(file_name) = &command.img_source {
-            ImageLoader::Tif(file_name.clone())
-        } else {
-            unreachable!();
-        }
-    } else if is_file_for_pixbuf {
-        if let ImageSource::FileName(file_name) = &command.img_source {
-            ImageLoader::ByPixbuf(file_name.clone())
-        } else {
-            unreachable!();
-        }
-    } else {
-        anyhow::bail!("Image format {} is not supported", type_hint);
-    };
-
-    let is_raw_image = loader.is_raw_image();
-    let is_ready_mage = loader.is_ready_image();
-
-    if !is_raw_image && !is_ready_mage {
-        anyhow::bail!("No supported image found in {}", type_hint);
-    }
-
-    let mut frame_type = FrameType::Lights;
-    let mut is_light_frame = true;
-    let mut exposure = 0_f64;
-    let mut raw_info = None;
-    let mut raw_noise = None;
-
-    let mut quality = LightFrameQualInfoData::default();
-
-    let mut image = if is_raw_image {
-        let mut raw_image = loader.load_raw_image()?;
-        drop(loader);
-
-        let mut info = raw_image.info().clone();
-        if info.offset == 0 {
-            info.offset = command.frame_options.offset;
-            raw_image.set_offset(info.offset);
-        }
-
-        frame_type = info.frame_type;
-        exposure = info.exposure;
-        is_light_frame = frame_type == FrameType::Lights;
-
-        log::debug!("Raw type      = {:?}", frame_type);
-        log::debug!("Raw width     = {}",   info.width);
-        log::debug!("Raw height    = {}",   info.height);
-        log::debug!("Raw zero      = {}",   info.offset);
-        log::debug!("Raw max_value = {}",   info.max_value);
-        log::debug!("Raw CFA       = {:?}", info.cfa);
-        log::debug!("Raw bin       = {}",   info.bin);
-        log::debug!("Raw exposure  = {}s",  info.exposure);
-        log::debug!("Raw CCD temp  = {:?}", info.ccd_temp);
-
-        if command.stop_flag.load(Ordering::Relaxed) {
-            log::debug!("Command stopped");
-            return Ok(());
-        }
-
-        // Check is frame CCD temperature is good
-
-        if let (Some(qo), Some(ctrl_o)) = (&command.quality_options, &command.cam_ctrl_opts) {
-            if ctrl_o.enable_cooler && qo.check_ccd_temp {
-                if let Some(ccd_temp) = info.ccd_temp {
-                    let diff = f64::abs(ccd_temp - ctrl_o.temperature);
-                    quality.ccd_temp_ok = diff <= qo.max_ccd_temp_diff;
-                }
-            }
-        }
-
-        let is_monochrome_img =
-            matches!(frame_type, FrameType::Biases) ||
-            matches!(frame_type, FrameType::Darks);
-
-        // Raw histogram (before applying calibration data)
-
-        let mut raw_hist = command.frame.raw_hist.write().unwrap();
-        let tmr = TimeLogger::start();
-        raw_hist.from_raw_image(
-            &raw_image,
-            is_monochrome_img
-        );
-        tmr.log("histogram from raw image");
-        let debug_log_hist_chan = |name, chan: &Option<HistogramChan>| {
-            if let Some(chan) = chan {
-                log::debug!("Raw {} median = {}", name, chan.median());
-                log::debug!("Raw {} mean   = {}", name, chan.mean);
-            }
-        };
-        debug_log_hist_chan("L", &raw_hist.l);
-        debug_log_hist_chan("R", &raw_hist.r);
-        debug_log_hist_chan("G", &raw_hist.g);
-        debug_log_hist_chan("B", &raw_hist.b);
-
-        let chan = if let Some(chan) = &raw_hist.l {
-            chan
-        } else if let Some(chan) = &raw_hist.g {
-            chan
-        } else {
-            unreachable!();
-        };
-
-        let raw_mean = chan.mean;
-        let raw_median = chan.median();
-        let raw_std_dev = chan.std_dev;
-
-        drop(raw_hist);
-
-        send_result(
-            FrameProcessResultData::HistorgamRaw(Arc::clone(&command.frame.raw_hist)),
-            command,
-            result_fun
-        );
-
-        if command.flags.contains(FrameProcessCommandFlags::HISTOGRAM_ONLY) {
-            return Ok(());
-        }
-
-        // Applying calibration data
-        if is_light_frame
-        || frame_type == FrameType::Flats {
-            let mut calibr = command.calibr_data.lock().unwrap();
-            apply_calibr_data_and_remove_hot_pixels(
-                &command.calibr_params,
-                &mut raw_image,
-                &mut calibr
-            )?;
-            info = raw_image.info().clone()
-        }
-
-        let raw_image = Arc::new(raw_image);
-
-        let raw_frame_info = RawFrameInfo {
-            image:       Arc::clone(&raw_image),
-            ccd_temp_ok: quality.ccd_temp_ok,
-            mean:        raw_mean as f32,
-            median:      raw_median,
-            std_dev:     raw_std_dev as f32,
-        };
-        send_result(
-            FrameProcessResultData::RawFrameInfo(raw_frame_info),
-            command,
-            result_fun
-        );
-
-        if command.stop_flag.load(Ordering::Relaxed) {
-            log::debug!("Command stopped");
-            return Ok(());
-        }
-
-        // Raw noise
-        raw_noise = if is_light_frame {
-            let tmr = TimeLogger::start();
-            let noise = raw_image.calc_noise();
-            tmr.log("light frame raw noise calculation");
-            noise
-        } else {
-            None
-        };
-
-        log::debug!("Raw noise = {:?}", raw_noise);
-
-        if command.stop_flag.load(Ordering::Relaxed) {
-            log::debug!("Command stopped");
-            return Ok(());
-        }
-
-        match frame_type {
-            FrameType::Flats => {
-                let hist = command.frame.raw_hist.read().unwrap();
-                *command.frame.info.write().unwrap() = ResultImageInfo::FlatInfo(
-                    FlatImageInfo::from_histogram(&hist)
-                );
-                send_result(
-                    FrameProcessResultData::FrameInfo,
-                    command,
-                    result_fun
-                );
-            },
-            FrameType::Darks | FrameType::Biases => {
-                let hist = command.frame.raw_hist.read().unwrap();
-                *command.frame.info.write().unwrap() = ResultImageInfo::RawInfo(
-                    RawImageStat::from_histogram(&hist)
-                );
-                send_result(
-                    FrameProcessResultData::FrameInfo,
-                    command,
-                    result_fun
-                );
-            },
-
-            _ => {},
-        }
-
-        if command.stop_flag.load(Ordering::Relaxed) {
-            log::debug!("Command stopped");
-            return Ok(());
-        }
-
-        // Demosaic
-
-        let mut image = command.frame.image.write().unwrap();
-
-        let tmr = TimeLogger::start();
-        if !is_monochrome_img {
-            raw_image.demosaic_into(&mut image, true);
-        } else {
-            raw_image.copy_into_monochrome(&mut image);
-        }
-        tmr.log("demosaic");
-
-        if command.stop_flag.load(Ordering::Relaxed) {
-            log::debug!("Command stopped");
-            return Ok(());
-        }
-
-        raw_info = Some(info);
-
-        image
-    } else if is_ready_mage {
-        let mut image = command.frame.image.write().unwrap();
-        loader.load_image(&mut image)?;
-        drop(loader);
-        image
-    } else {
-        unreachable!();
-    };
-
-    // Remove gradient from light frame
-
-    if is_light_frame
-    && (command.view_options.remove_gradient
-    || command.mode_type == ModeType::LiveStacking) {
-        let tmr = TimeLogger::start();
-        image.remove_gradient();
-        tmr.log("remove gradient from light frame");
-    }
-
-    drop(image);
-
-    if command.stop_flag.load(Ordering::Relaxed) {
-        log::debug!("Command stopped");
-        return Ok(());
-    }
-
-    send_result(
-        FrameProcessResultData::Image(Arc::clone(&command.frame.image)),
-        command,
-        result_fun
-    );
-
-    if command.stop_flag.load(Ordering::Relaxed) {
-        log::debug!("Command stopped");
-        return Ok(());
-    }
-
-    // Result image histogram
-
-    let image = command.frame.image.read().unwrap();
-    let mut hist = command.frame.img_hist.write().unwrap();
-    let tmr = TimeLogger::start();
-    hist.from_image(&image);
-    tmr.log("histogram for result image");
-
-    if is_ready_mage {
-        *command.frame.raw_hist.write().unwrap() = hist.clone();
-        send_result(
-            FrameProcessResultData::HistorgamRaw(Arc::clone(&command.frame.raw_hist)),
-            command,
-            result_fun
-        );
-    }
-
-    drop(hist);
-
-    if command.stop_flag.load(Ordering::Relaxed) {
-        log::debug!("Command stopped");
-        return Ok(());
-    }
-
-    // Stars
-
-    let frame_stars = if is_light_frame {
-        let stars_recgn_send = command.quality_options
-            .as_ref().map(|qo| qo.star_recgn_sens)
-            .unwrap_or_default();
-
-        let mono_layer = if image.is_color() { &image.g } else { &image.l };
-        let mut stars_finder = StarsFinder::new();
-        let ignore_3px_stars = command.quality_options
-            .as_ref()
-            .map(|opts| opts.ignore_3px_stars)
-            .unwrap_or(false);
-
-        stars_finder.find_stars_and_get_info(
-            mono_layer,
-            &image.raw_info,
-            stars_recgn_send,
-            ignore_3px_stars,
-            true
-        )
-    } else {
-        Stars::default()
-    };
-
-    // Preview image RGB bytes
-
-    let hist = command.frame.img_hist.read().unwrap();
-    let tmr = TimeLogger::start();
-    let rgb_data = get_preview_rgb_data(
-        &image,
-        &hist,
-        &command.view_options,
-        if is_light_frame { Some(&frame_stars.items)} else { None },
-    );
-    tmr.log("get_rgb_bytes_from_preview_image");
-
-    if command.stop_flag.load(Ordering::Relaxed) {
-        log::debug!("Command stopped");
-        return Ok(());
-    }
-
-    if let Some(rgb_data) = rgb_data {
-        let preview_data = Arc::new(Preview8BitImgData {
-            rgb_data,
-            params: command.view_options.clone(),
-        });
-        send_result(
-            FrameProcessResultData::PreviewFrame(preview_data),
-            command,
-            result_fun
-        );
-    }
-
-    if frame_type == FrameType::Lights {
-        let stars_items = Arc::new(frame_stars.items);
-        let stars_info = Arc::new(frame_stars.info);
-
-        *command.frame.stars.write().unwrap() = Some(Arc::clone(&stars_items));
-
-        // Stars quality
-
-        if let Some(qo) = &command.quality_options {
-            if qo.use_max_fwhm { if let Some(fwhm) = stars_info.fwhm {
-                quality.fwhm_is_ok = fwhm < qo.max_fwhm;
-            }}
-            if qo.use_max_ovality { if let Some(ovality) = stars_info.ovality {
-                quality.ovality_is_ok = ovality < qo.max_ovality;
-            }}
-        }
-
-        // Light frame information
-
-        let tmr = TimeLogger::start();
-        let mut info = LightFrameInfo::from_image(
-            &image,
-            true,
-        );
-        info.exposure = exposure;
-        info.raw_noise = raw_noise;
-        info.calibr_methods = raw_info.as_ref()
-            .map(|i| i.calibr_methods)
-            .unwrap_or(CalibrMethods::empty());
-        tmr.log("TOTAL LightImageInfo::from_image");
-
-        if command.stop_flag.load(Ordering::Relaxed) {
-            log::debug!("Command stopped");
-            return Ok(());
-        }
-
-        // Offset by previous stars
-
-        let stars_offset =
-            if let (Some(stars_for_offset), true) = (&command.ref_stars, quality.stars_is_ok()) {
-                let tmr = TimeLogger::start();
-                let cur_stars_points: Vec<_> = stars_items.iter()
-                    .map(|star| Point {x: star.x, y: star.y })
-                    .collect();
-                let image_offset = Offset::calculate(
-                    stars_for_offset,
-                    &cur_stars_points,
-                    image.width() as f64,
-                    image.height() as f64
-                );
-                tmr.log("Offset::calculate");
-                quality.offset_is_ok = image_offset.is_some();
-                image_offset
-            } else {
-                None
-            };
-
-        let info = Arc::new(LightFrameInfoData {
-            raw: raw_info.clone(),
-            image: Arc::new(info),
-            stars: Arc::new(StarsInfoData {
-                items: stars_items,
-                info: stars_info,
-            }),
-            offset: stars_offset,
-            quality: quality.clone(),
-        });
-
-        // Send message about light frame calculated
-
-        send_result(
-            FrameProcessResultData::LightFrameInfo(Arc::clone(&info)),
-            command,
-            result_fun
-        );
-
-        // Send message about light frame info stored
-
-        *command.frame.info.write().unwrap() = ResultImageInfo::LightInfo(Arc::clone(&info));
-        send_result(
-            FrameProcessResultData::FrameInfo,
-            command,
-            result_fun
-        );
-
-        // Live stacking
-
-        if let (Some(live_stacking), true) = (&command.live_stacking, quality.is_ok()) {
-            // Translate/rotate image to reference image and add
-            let offset = info.offset.clone().unwrap_or_default();
-            let mut stacker = live_stacking.data.stacker.write().unwrap();
-            let tmr = TimeLogger::start();
-            stacker.add(
-                &image,
-                &hist,
-                -offset.x,
-                -offset.y,
-                -offset.angle,
-                exposure,
-                live_stacking.options.remove_tracks
-            );
-            tmr.log("ImageStacker::add");
-            drop(stacker);
-
-            if command.stop_flag.load(Ordering::Relaxed) {
-                log::debug!("Command stopped");
-                return Ok(());
-            }
-
-            let stacker = live_stacking.data.stacker.read().unwrap();
-
-            let mut res_image = live_stacking.data.image.write().unwrap();
-            let tmr = TimeLogger::start();
-            stacker.copy_to_image(&mut res_image);
-            tmr.log("ImageStacker::copy_to_image");
-
-            if command.view_options.remove_gradient {
-                let tmr = TimeLogger::start();
-                res_image.remove_gradient();
-                tmr.log("remove gradient from live stacking result");
-            }
-
-            drop(res_image);
-
-            let res_image = live_stacking.data.image.read().unwrap();
-
-            // Histogram for live stacking image
-
-            let mut hist = live_stacking.data.hist.write().unwrap();
-            let tmr = TimeLogger::start();
-            hist.from_image(&res_image);
-            tmr.log("histogram from live view image");
-            drop(hist);
-
-            if command.stop_flag.load(Ordering::Relaxed) {
-                log::debug!("Command stopped");
-                return Ok(());
-            }
-
-            let hist = live_stacking.data.hist.read().unwrap();
-            send_result(
-                FrameProcessResultData::HistogramLiveRes,
-                command,
-                result_fun
-            );
-
-            // stars on live stacking image
-
-            let ls_mono_layer = if res_image.is_color() {
-                &res_image.g
-            } else {
-                &res_image.l
-            };
-
-            let ignore_3px_stars = command.quality_options
-                .as_ref()
-                .map(|opts| opts.ignore_3px_stars)
-                .unwrap_or(false);
-
-            let stars_recgn_send = command.quality_options
-                .as_ref().map(|qo| qo.star_recgn_sens)
-                .unwrap_or_default();
-
-            let mut stars_finder = StarsFinder::new();
-            let ls_stars = stars_finder.find_stars_and_get_info(
-                ls_mono_layer,
-                &raw_info,
-                stars_recgn_send,
-                ignore_3px_stars,
-                true
-            );
-
-            // Live stacking image info
-
-            let tmr = TimeLogger::start();
-            let mut live_stacking_info = LightFrameInfo::from_image(&res_image, true);
-            live_stacking_info.exposure = stacker.total_exposure();
-            tmr.log("LightImageInfo::from_image for livestacking");
-
-            if command.stop_flag.load(Ordering::Relaxed) {
-                log::debug!("Command stopped");
-                return Ok(());
-            }
-
-            let ls_light_frame_info = LiveStackingInfo {
-                image: Arc::new(live_stacking_info),
-                stars: Arc::new(StarsInfoData {
-                    items: Arc::new(ls_stars.items),
-                    info: Arc::new(ls_stars.info),
-                }),
-            };
-
-
-            //let ls_light_frame_info = Arc::new(ls_light_frame_info);
-
-            *live_stacking.data.info.write().unwrap() = Some(ls_light_frame_info.clone());
-            send_result(
-                FrameProcessResultData::FrameInfoLiveRes,
-                command,
-                result_fun
-            );
-
-            // Convert into preview RGB bytes
-
-            if !command.view_options.orig_frame_in_ls {
-                let tmr = TimeLogger::start();
-                let rgb_data = get_preview_rgb_data(
-                    &res_image,
-                    &hist,
-                    &command.view_options,
-                    Some(&ls_light_frame_info.stars.items),
-                );
-                tmr.log("get_rgb_bytes_from_preview_image");
-
-                if command.stop_flag.load(Ordering::Relaxed) {
-                    log::debug!("Command stopped");
-                    return Ok(());
-                }
-
-                if let Some(rgb_data) = rgb_data {
-                    let preview_data = Arc::new(Preview8BitImgData {
-                        rgb_data,
-                        params: command.view_options.clone(),
-                    });
-
-                    send_result(
-                        FrameProcessResultData::PreviewLiveRes(preview_data),
-                        command,
-                        result_fun
-                    );
-                }
-            }
-
-            // save result image
-
-            if live_stacking.options.save_enabled {
-                let save_res_interv = live_stacking.options.save_minutes as f64 * 60.0;
-                let mut save_cnt = live_stacking.data.time_cnt.lock().unwrap();
-                *save_cnt += exposure;
-                if *save_cnt >= save_res_interv {
-                    *save_cnt = 0.0;
-                    drop(save_cnt);
-                    let now_time: DateTime<Local> = Local::now();
-                    let now_time_str = now_time.format("%Y%m%d-%H%M%S").to_string();
-                    let file_path = live_stacking.options.out_dir
-                        .join("Result");
-                    if !file_path.exists() {
-                        std::fs::create_dir_all(&file_path)
-                            .map_err(|e|anyhow::anyhow!(
-                                "Error '{}'\nwhen trying to create directory '{}' for saving result live stack image",
-                                e.to_string(),
-                                file_path.to_str().unwrap_or_default()
-                            ))?;
-                    }
-                    let file_path = file_path.join(format!("Live_{}.tif", now_time_str));
-                    let tmr = TimeLogger::start();
-                    stacker.save_to_tiff(&file_path)?;
-                    tmr.log("save live stacking result image");
-                }
-            }
-        }
-    } else {
-        *command.frame.stars.write().unwrap() = None;
-    };
-
-    if command.stop_flag.load(Ordering::Relaxed) {
-        log::debug!("Command stopped");
-        return Ok(());
-    }
-
-    let process_time = total_tmr.log("TOTAL PREVIEW");
-
-    if let (ImageSource::Blob(blob), Some(raw_info)) = (&command.img_source, raw_info) {
-        let result = FrameProcessResultData::ShotProcessingFinished{
-            raw_image_info:  Arc::new(raw_info),
-            frame_is_ok:     quality.is_ok(),
-            blob:            Arc::clone(blob),
-            processing_time: process_time,
-            blob_dl_time:    blob.dl_time,
-        };
-        send_result(result, command, result_fun);
-    }
-
-    Ok(())
 }
