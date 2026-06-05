@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::{Arc, Mutex, atomic::AtomicU64}};
 
 use chrono::{DateTime, Utc};
 
-use super::connection::*;
+use super::{connection::*, property::*};
 
 #[derive(Clone)]
 pub struct NewDeviceEvent {
