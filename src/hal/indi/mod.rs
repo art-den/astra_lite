@@ -7,6 +7,7 @@ mod xml_helper;
 mod error;
 mod events;
 mod property;
+mod device;
 
 pub use num_format::*;
 pub use connection::*;
