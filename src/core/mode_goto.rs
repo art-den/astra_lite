@@ -325,6 +325,10 @@ impl Mode for GotoMode {
         self.camera_dev.as_ref()
     }
 
+    fn camera_id(&self) -> Option<&str> {
+        self.camera.as_ref().map(|c| c.id())
+    }
+
     fn get_cur_exposure(&self) -> Option<f64> {
         self.cam_opts
             .as_ref()

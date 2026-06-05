@@ -1186,6 +1186,10 @@ impl Mode for TackingPicturesMode {
         Some(&self.device)
     }
 
+    fn camera_id(&self) -> Option<&str> {
+        Some(&self.camera.id())
+    }
+
     fn progress_string(&self) -> String {
         let mut mode_str = match (&self.state, &self.cam_mode) {
             (State::FrameToSkip, _) =>

@@ -236,6 +236,10 @@ impl Mode for PlatesolveMode {
         Some(&self.camera_dev)
     }
 
+    fn camera_id(&self) -> Option<&str> {
+        Some(&self.camera.id())
+    }
+
     fn get_cur_exposure(&self) -> Option<f64> {
         Some(self.cam_opts.frame.exp_main)
     }

@@ -641,6 +641,10 @@ impl Mode for FocusingMode {
         Some(&self.camera_dev)
     }
 
+    fn camera_id(&self) -> Option<&str> {
+        Some(&self.camera.id())
+    }
+
     fn progress(&self) -> Option<Progress> {
         let total = self.samples.len() + self.to_go.len() + 1;
         let mut cur = self.samples.len();

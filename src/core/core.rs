@@ -55,6 +55,7 @@ pub trait Mode {
     fn get_type(&self) -> ModeType;
     fn progress_string(&self) -> String;
     fn cam_device(&self) -> Option<&DeviceAndProp> { None }
+    fn camera_id(&self) -> Option<&str> { None }
     fn progress(&self) -> Option<Progress> { None }
     fn get_cur_exposure(&self) -> Option<f64> { None }
     fn can_be_stopped(&self) -> bool { true }
