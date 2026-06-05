@@ -392,7 +392,7 @@ impl MainUi {
         // INDI
 
         let sender = main_thread_sender.clone();
-        self.indi.subscribe_events(move |event| {
+        self.indi.connect_event_handler(move |event| {
             _ = sender.send_blocking(MainThreadEvent::Indi(event));
         });
 

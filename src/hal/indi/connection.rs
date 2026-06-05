@@ -12,7 +12,8 @@ use std::time::Duration;
 use bitflags::bitflags;
 use chrono::prelude::*;
 use itertools::Itertools;
-use super::{num_format::*, xml_reader::*, error::*, xml_helper::*};
+
+use super::{num_format::*, xml_reader::*, error::*, xml_helper::*, events::*};
 
 
 #[derive(Clone)]
@@ -61,109 +62,6 @@ pub enum ConnState {
     Connected,
     Disconnecting,
     Error(String)
-}
-
-#[derive(Clone)]
-pub struct NewDeviceEvent {
-    pub timestamp:   Option<DateTime<Utc>>,
-    pub device_name: Arc<String>,
-    pub connected:   bool,
-    pub interface:   DriverInterface,
-}
-
-#[derive(Clone)]
-pub struct DeviceConnectEvent {
-    pub timestamp:   Option<DateTime<Utc>>,
-    pub device_name: Arc<String>,
-    pub connected:   bool,
-    pub interface:   DriverInterface,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub enum PropChange {
-    New {
-        prop_name: Arc<String>,
-        elem_name: Arc<String>,
-        value:     PropValue,
-        state:     PropState,
-    },
-    Change {
-        prop_name:  Arc<String>,
-        elem_name:  Arc<String>,
-        value:      PropValue,
-        prev_state: PropState,
-        new_state:  PropState,
-    },
-    Delete {
-        prop_name: Arc<String>,
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct PropChangeEvent {
-    pub timestamp:   Option<DateTime<Utc>>,
-    pub device_name: Arc<String>,
-    pub change:      PropChange,
-}
-
-#[derive(Clone)]
-pub struct DeviceDeleteEvent {
-    pub timestamp:   Option<DateTime<Utc>>,
-    pub device_name: Arc<String>,
-    pub interface:   DriverInterface,
-}
-
-#[derive(Clone)]
-pub struct MessageEvent {
-    pub timestamp:   Option<DateTime<Utc>>,
-    pub device_name: Arc<String>,
-    pub text:        Arc<String>,
-}
-
-#[derive(Clone)]
-pub struct BlobStartEvent {
-    pub device_name: Arc<String>,
-    pub prop_name:   Arc<String>,
-    pub elem_name:   Arc<String>,
-    pub format:      Arc<String>,
-    pub len:         Option<usize>,
-}
-
-#[derive(Clone)]
-pub enum Event {
-    ConnChange(ConnState),
-    ConnectionLost,
-    NewDevice(NewDeviceEvent),
-    DeviceConnected(DeviceConnectEvent),
-    PropChange(PropChangeEvent),
-    DeviceDelete(DeviceDeleteEvent),
-    Message(MessageEvent),
-    BlobStart(BlobStartEvent),
-}
-
-type EventFun = dyn Fn(Event) + Send + 'static;
-
-#[derive(Hash, Eq, PartialEq, Clone, Copy)]
-pub struct Subscription(u64);
-
-struct Subscriptions {
-    items: HashMap<Subscription, Box<EventFun>>,
-    key:   u64,
-}
-
-impl Subscriptions {
-    fn new() -> Self {
-        Self {
-            items: HashMap::new(),
-            key:   0,
-        }
-    }
-
-    fn inform_all(&self, event: Event) {
-        for fun in self.items.values() {
-            fun(event.clone());
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1191,7 +1089,7 @@ pub struct Connection {
     data:            Arc<Mutex<Option<ActiveConnData>>>,
     state:           Arc<Mutex<ConnState>>,
     devices:         Arc<Mutex<Devices>>,
-    subscriptions:   Arc<Mutex<Subscriptions>>,
+    event_handlers:  Arc<EventHandlers>,
     drivers_started: AtomicBool,
 }
 
@@ -1207,40 +1105,26 @@ impl Connection {
             devices: Arc::new(Mutex::new(
                 Devices::new()
             )),
-            subscriptions: Arc::new(
-                Mutex::new(Subscriptions::new())
+            event_handlers: Arc::new(
+                EventHandlers::new()
             ),
             drivers_started: AtomicBool::new(false),
         }
     }
 
-    pub fn subscribe_events(
+    pub fn connect_event_handler(
         &self,
         fun: impl Fn(Event) + Send + 'static
-    ) -> Subscription {
-        let mut subscriptions = self.subscriptions.lock().unwrap();
-        subscriptions.key += 1;
-        let subscription = Subscription(subscriptions.key);
-        subscriptions.items.insert(
-            subscription,
-            Box::new(fun)
-        );
-        subscription
+    ) -> EventHandlerId {
+        self.event_handlers.connect(fun)
     }
 
-    pub fn unsubscribe(&self, subscription: Subscription) {
-        let mut subscriptions = self.subscriptions.lock().unwrap();
-        subscriptions.items.remove(&subscription);
+    pub fn disconnect_event_handler(&self, event_handlers: EventHandlerId) {
+        self.event_handlers.disconnect(event_handlers);
     }
 
-    pub fn unsubscribe_all(&self) {
-        let mut items = HashMap::new();
-
-        let mut subscriptions = self.subscriptions.lock().unwrap();
-        std::mem::swap(&mut items, &mut subscriptions.items);
-        drop(subscriptions);
-
-        items.clear();
+    pub fn disconnect_all_event_handlers(&self) {
+        self.event_handlers.disconnect_all();
     }
 
     fn start_indi_server(
@@ -1304,7 +1188,7 @@ impl Connection {
         Self::set_new_conn_state(
             ConnState::Connecting,
             &mut state,
-            &self.subscriptions.lock().unwrap()
+            &self.event_handlers
         );
         drop(state);
         let settings = settings.clone();
@@ -1322,7 +1206,7 @@ impl Connection {
                         Self::set_new_conn_state(
                             ConnState::Error(err.to_string()),
                             &mut self_.state.lock().unwrap(),
-                            &self_.subscriptions.lock().unwrap()
+                            &self_.event_handlers
                         );
                         return;
                     }
@@ -1349,7 +1233,7 @@ impl Connection {
                     Self::set_new_conn_state(
                         ConnState::Error(err.to_string()),
                         &mut self_.state.lock().unwrap(),
-                        &self_.subscriptions.lock().unwrap()
+                        &self_.event_handlers
                     );
                     return;
                 },
@@ -1379,7 +1263,7 @@ impl Connection {
                 Self::set_new_conn_state(
                     ConnState::Error(format!("Can't connect to {}", addr)),
                     &mut self_.state.lock().unwrap(),
-                    &self_.subscriptions.lock().unwrap()
+                    &self_.event_handlers
                 );
                 return;
             };
@@ -1396,14 +1280,14 @@ impl Connection {
                                 if let Event::ConnChange(state) = &event {
                                     if *state == ConnState::Disconnected &&
                                     *self_.state.lock().unwrap() == ConnState::Connected {
-                                        self_.subscriptions.lock().unwrap().inform_all(Event::ConnectionLost);
+                                        self_.event_handlers.send(Event::ConnectionLost);
                                         std::thread::spawn(move || {
                                             _ = self_.disconnect_and_wait();
                                         });
                                         break;
                                     }
                                 }
-                                self_.subscriptions.lock().unwrap().inform_all(event);
+                                self_.event_handlers.send(event);
                             }
                             EventSenderEvent::Exit => break,
                         }
@@ -1460,7 +1344,7 @@ impl Connection {
 
             self_.drivers_started.store(!settings.remote, Ordering::Relaxed);
 
-            // Read from indiserver's stderr and inform subscribers
+            // Read from indiserver's stderr and inform event handlers
             if let Some(mut indiserver_stderr) = indiserver_stderr {
                 let mut stderr_data = Vec::new();
                 let mut buffer = [0_u8; 256];
@@ -1480,20 +1364,20 @@ impl Connection {
     }
 
     fn set_new_conn_state(
-        new_state:    ConnState,
-        state:        &mut ConnState,
-        subscriptons: &Subscriptions
+        new_state:      ConnState,
+        state:          &mut ConnState,
+        event_handlers: &EventHandlers
     ) {
         if new_state == *state { return; }
         *state = new_state;
-        subscriptons.inform_all(Event::ConnChange(state.clone()));
+        event_handlers.send(Event::ConnChange(state.clone()));
     }
 
     pub fn disconnect_and_wait(&self) -> Result<()> {
         Self::set_new_conn_state(
             ConnState::Disconnecting,
             &mut self.state.lock().unwrap(),
-            &self.subscriptions.lock().unwrap()
+            &self.event_handlers
         );
         let mut data = self.data.lock().unwrap();
         if let Some(conn) = data.take() {
@@ -1528,7 +1412,7 @@ impl Connection {
             Self::set_new_conn_state(
                 ConnState::Disconnected,
                 &mut self.state.lock().unwrap(),
-                &self.subscriptions.lock().unwrap()
+                &self.event_handlers
             );
         } else {
             return Err(Error::WrongSequense("Not connected".into()));

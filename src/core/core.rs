@@ -185,7 +185,7 @@ impl Core {
 
         log::info!("Unsubscribing all...");
         self.events.unsubscribe_all();
-        self.indi.unsubscribe_all();
+        self.indi.disconnect_all_event_handlers();
         log::info!("Done");
 
         log::info!("Disconnecting from INDI...");
@@ -274,7 +274,7 @@ impl Core {
 
     fn connect_indi_events(self: &Arc<Self>) {
         let self_ = Arc::clone(self);
-        self.indi.subscribe_events(move |event| {
+        self.indi.connect_event_handler(move |event| {
             let result = || -> anyhow::Result<()> {
                 match event {
                     indi::Event::BlobStart(event) => {

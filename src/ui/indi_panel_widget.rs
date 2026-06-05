@@ -7,7 +7,7 @@ use crate::hal::indi;
 
 pub struct IndiPanelWidget {
     indi:      Arc<indi::Connection>,
-    indi_conn: indi::Subscription,
+    indi_conn: indi::EventHandlerId,
     data:      Rc<RefCell<UiIndiGuiData>>,
     layout:    gtk::Box,
     stack:     gtk::Stack,
@@ -15,7 +15,7 @@ pub struct IndiPanelWidget {
 
 impl Drop for IndiPanelWidget {
     fn drop(&mut self) {
-        self.indi.unsubscribe(self.indi_conn);
+        self.indi.disconnect_event_handler(self.indi_conn);
         log::info!("IndiUi dropped");
     }
 }
@@ -40,7 +40,7 @@ impl IndiPanelWidget {
 
         let (sender, receiver) = async_channel::unbounded();
 
-        let indi_conn = indi.subscribe_events(move |evt| {
+        let indi_conn = indi.connect_event_handler(move |evt| {
             sender.send_blocking(evt).unwrap();
         });
 

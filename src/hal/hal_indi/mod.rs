@@ -1,6 +1,6 @@
 use std::{ops::RangeInclusive, sync::{Arc, Mutex}};
 
-use crate::hal::{*, events::*, hal_indi::{camera_watchdog::CamWatchdog, dev_watchdog::DevicesWatchdog}, indi::Subscription};
+use crate::hal::{*, events::*, hal_indi::{camera_watchdog::CamWatchdog, dev_watchdog::DevicesWatchdog}, indi::EventHandlerId};
 
 use super::{indi, HalImpl, Camera, DeviceInfo, DeviceType};
 
@@ -21,7 +21,7 @@ struct Watchdogs {
 pub struct IndiHalImpl {
     indi:              Arc<indi::Connection>,
     event_subscribers: Arc<HalEventSubscribers>,
-    indi_evt_subscr:   Mutex<Option<Subscription>>,
+    indi_evt_subscr:   Mutex<Option<EventHandlerId>>,
     watchdogs:         Mutex<Watchdogs>,
 }
 
@@ -43,7 +43,7 @@ impl IndiHalImpl {
         });
 
         let self_ = Arc::clone(&result);
-        let indi_evt_subscr = indi.subscribe_events(move |event| {
+        let indi_evt_subscr = indi.connect_event_handler(move |event| {
             self_.indi_event_handler(event);
         });
 
@@ -146,7 +146,7 @@ impl Drop for IndiHalImpl {
     fn drop(&mut self) {
         let mut indi_evt_subscr = self.indi_evt_subscr.lock().unwrap();
         if let Some(indi_evt_subscr) = indi_evt_subscr.take() {
-            self.indi.unsubscribe(indi_evt_subscr);
+            self.indi.disconnect_event_handler(indi_evt_subscr);
         }
         log::info!("IndiHalImpl dropped");
     }
