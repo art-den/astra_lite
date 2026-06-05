@@ -41,6 +41,11 @@ pub enum GotoConfig {
     GotoPlateSolveAndCorrect,
 }
 
+enum ProcessPlateSolverResultAction {
+    Sync,
+    SetEqCoord,
+}
+
 pub struct GotoMode {
     camera:       Option<Arc<dyn Camera + Send + Sync>>,
     telescope:    Arc<dyn Telescope + Send + Sync>,
@@ -523,9 +528,4 @@ impl Mode for GotoMode {
         }
     }
 
-}
-
-enum ProcessPlateSolverResultAction {
-    Sync,
-    SetEqCoord,
 }
