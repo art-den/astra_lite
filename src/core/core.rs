@@ -109,7 +109,7 @@ pub struct Core {
     indi:               Arc<indi::Connection>,
     options:            Arc<RwLock<Options>>,
     mode:               RwLock<ModeData>,
-    events:             Arc<Events>,
+    events:             Arc<EventHandlers>,
     cur_frame:          Arc<ResultImage>,
     calibr_data:        Arc<Mutex<CalibrData>>,
     live_stacking:      Arc<LiveStackingData>,
@@ -128,7 +128,7 @@ impl Drop for Core {
 impl Core {
     pub fn new() -> Arc<Self> {
         let hal = Hal::new();
-        let events = Arc::new(Events::new());
+        let events = Arc::new(EventHandlers::new());
         let options = Arc::new(RwLock::new(Options::default()));
         let indi = Arc::new(indi::Connection::new());
 
@@ -171,7 +171,7 @@ impl Core {
         &self.options
     }
 
-    pub fn events(&self) -> &Arc<Events> {
+    pub fn events(&self) -> &Arc<EventHandlers> {
         &self.events
     }
 
@@ -184,7 +184,7 @@ impl Core {
         *self.mode.write().unwrap() = ModeData::new();
 
         log::info!("Unsubscribing all...");
-        self.events.unsubscribe_all();
+        self.events.disconnect_all();
         self.indi.disconnect_all_event_handlers();
         log::info!("Done");
 
@@ -212,7 +212,7 @@ impl Core {
                 self_.apply_notify_result(res, &mut mode)?;
                 Ok(())
             } ();
-            self_.events.notify(Event::Guider(event));
+            self_.events.send(Event::Guider(event));
             self_.process_error(result, "Core::connect_ext_guider_events");
         }));
     }
@@ -247,7 +247,7 @@ impl Core {
         log::info!("Active mode aborted!");
 
         log::info!("Inform about error...");
-        self.events.notify(Event::Error(err.to_string()));
+        self.events.send(Event::Error(err.to_string()));
         log::info!("Error has informed!");
     }
 
@@ -355,7 +355,7 @@ impl Core {
 
         // Main events
         let self_ = Arc::clone(self);
-        self.events.subscribe(move |event| {
+        self.events.connect(move |event| {
             self_.event_handler(event);
         });
 
@@ -595,7 +595,7 @@ impl Core {
                     return;
                 }
 
-                self.events.notify(
+                self.events.send(
                     Event::FrameProcessing(res.clone())
                 );
 
@@ -621,7 +621,7 @@ impl Core {
             }
             CommandResult::Error(error_str) => {
                 self.abort_active_mode();
-                self.events.notify(Event::Error(error_str));
+                self.events.send(Event::Error(error_str));
             }
         }
     }
@@ -678,8 +678,8 @@ impl Core {
         drop(mode);
 
         // Inform about progress and and mode change
-        self.events.notify(Event::Progress(progress, mode_type));
-        self.events.notify(Event::ModeChanged);
+        self.events.send(Event::Progress(progress, mode_type));
+        self.events.send(Event::ModeChanged);
 
         Ok(())
     }
@@ -919,7 +919,7 @@ impl Core {
         }
         mode.finished = None;
         drop(mode);
-        self.events.notify(Event::ModeChanged);
+        self.events.send(Event::ModeChanged);
     }
 
     pub fn continue_prev_mode(&self) -> anyhow::Result<()> {
@@ -932,9 +932,9 @@ impl Core {
         let progress = mode.active.progress();
         let mode_type = mode.active.get_type();
         drop(mode);
-        self.events.notify(Event::ModeContinued);
-        self.events.notify(Event::Progress(progress, mode_type));
-        self.events.notify(Event::ModeChanged);
+        self.events.send(Event::ModeContinued);
+        self.events.send(Event::Progress(progress, mode_type));
+        self.events.send(Event::ModeChanged);
         Ok(())
     }
 
@@ -986,15 +986,15 @@ impl Core {
         }
 
         if mode_changed {
-            self.events.notify(Event::ModeChanged);
+            self.events.send(Event::ModeChanged);
         }
         if let Some((finished_progress, finished_mode_type)) = finished_progress_and_type {
-            self.events.notify(Event::Progress(
+            self.events.send(Event::Progress(
                 finished_progress,
                 finished_mode_type,
             ));
         } else {
-            self.events.notify(Event::Progress(
+            self.events.send(Event::Progress(
                 mode.active.progress(),
                 mode.active.get_type(),
             ));

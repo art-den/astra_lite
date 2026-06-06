@@ -7,7 +7,7 @@ use crate::{
     plate_solve::*,
     sky_math::math::*,
 };
-use super::{core::*, events::Events, utils::*};
+use super::{core::*, events::EventHandlers, utils::*};
 
 const MAX_MOUNT_UNPARK_TIME: usize = 20; // seconds
 
@@ -58,7 +58,7 @@ pub struct GotoMode {
     ps_opts:      PlateSolverOptions,
     cur_frame:    Arc<ResultImage>,
     options:      Arc<RwLock<Options>>,
-    subscribers:  Arc<Events>,
+    subscribers:  Arc<EventHandlers>,
     plate_solver: Option<PlateSolver>,
     unpark_ms:    usize,
     goto_ms:      usize,
@@ -73,7 +73,7 @@ impl GotoMode {
         config:      GotoConfig,
         options:     &Arc<RwLock<Options>>,
         cur_frame:   &Arc<ResultImage>,
-        subscribers: &Arc<Events>,
+        subscribers: &Arc<EventHandlers>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let telescope = hal.telescope(&opts.mount.device)?;
@@ -225,7 +225,7 @@ impl GotoMode {
             result: result.clone(),
             preview: preview.map(Arc::new),
         };
-        self.subscribers.notify(
+        self.subscribers.send(
             Event::PlateSolve(event)
         );
 
@@ -255,7 +255,7 @@ impl GotoMode {
             "???".to_string()
         };
 
-        self.subscribers.notify(Event::OverlayMessage {
+        self.subscribers.send(Event::OverlayMessage {
             pos: OverlayMessgagePos::Top,
             text: Arc::new(message)
         });
@@ -384,7 +384,7 @@ impl Mode for GotoMode {
 
         self.state = State::None;
 
-        self.subscribers.notify(Event::OverlayMessage {
+        self.subscribers.send(Event::OverlayMessage {
             pos: OverlayMessgagePos::Top,
             text: Arc::new(String::new())
         });

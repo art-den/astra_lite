@@ -327,7 +327,7 @@ impl MainUi {
 
     fn connect_state_events(self: &Rc<Self>) {
         let (sender, receiver) = async_channel::unbounded();
-        self.core.events().subscribe(move |event| {
+        self.core.events().connect(move |event| {
             sender.send_blocking(event).unwrap();
         });
 
@@ -404,7 +404,7 @@ impl MainUi {
         // Core
 
         let sender = main_thread_sender.clone();
-        self.core.events().subscribe(move |event| {
+        self.core.events().connect(move |event| {
             _ = sender.send_blocking(MainThreadEvent::Core(event));
         });
 

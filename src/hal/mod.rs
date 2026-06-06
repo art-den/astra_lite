@@ -9,7 +9,7 @@ use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use std::{ops:: RangeInclusive, sync::{Arc, RwLock}};
 
-use crate::hal::{events::{HalEvent, HalEventSubscribers}, hal_indi::IndiHalImpl};
+use crate::hal::{events::{HalEvent, HalEventHandlers}, hal_indi::IndiHalImpl};
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
@@ -53,14 +53,14 @@ pub enum HalState {
 
 pub struct Hal {
     impl_:            RwLock<Option<Arc<dyn HalImpl + Send + Sync + 'static>>>,
-    event_subscibers: Arc<HalEventSubscribers>,
+    event_subscibers: Arc<HalEventHandlers>,
 }
 
 impl Hal {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             impl_:            RwLock::new(None),
-            event_subscibers: Arc::new(HalEventSubscribers::new()),
+            event_subscibers: Arc::new(HalEventHandlers::new()),
         })
     }
 
@@ -79,11 +79,11 @@ impl Hal {
     }
 
     pub fn connect_event_handler(&self, fun: impl Fn(HalEvent) + Send + Sync + 'static) {
-        self.event_subscibers.connect_event_handler(fun);
+        self.event_subscibers.connect(fun);
     }
 
     pub fn disconnect_all_subscribers(&self) {
-        self.event_subscibers.disconnect_all_subscribers();
+        self.event_subscibers.disconnect_all();
     }
 
     pub fn state(&self) -> HalState {

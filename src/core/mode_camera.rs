@@ -129,7 +129,7 @@ pub struct TackingPicturesMode {
     mount:            Option<Arc<dyn Telescope + Send + Sync>>,
     fn_gen:           Arc<Mutex<SeqFileNameGen>>,
     indi:             Arc<indi::Connection>,
-    events:           Arc<Events>,
+    events:           Arc<EventHandlers>,
     raw_stacker:      RawStacker,
     options:          Arc<RwLock<Options>>,
     next_job:         Option<NextJob>, // after frame processing is finished
@@ -486,7 +486,7 @@ impl TackingPicturesMode {
         && !temperature.is_infinite()
         && autofocuser.start_temp.is_none() {
             autofocuser.start_temp = Some(temperature);
-            self.events.notify(
+            self.events.send(
                 Event::Focusing(FocuserEvent::StartingTemperature(temperature))
             );
         }
@@ -780,7 +780,7 @@ impl TackingPicturesMode {
                     data:      result,
                 };
 
-                self.events.notify(Event::FrameProcessing(event_data));
+                self.events.send(Event::FrameProcessing(event_data));
             }
 
             if is_last_frame && self.flags.save_defect_pixels {
@@ -922,7 +922,7 @@ impl TackingPicturesMode {
                     drop(options);
                     self.cam_options.frame.exp_flat = *cur_exp;
                     self.flags.flat_exp_calculated = true;
-                    self.events.notify(Event::FlatExposureCalculated(*cur_exp));
+                    self.events.send(Event::FlatExposureCalculated(*cur_exp));
                     self.start_or_continue()?;
                     result = NotifyResult::ProgressChanges;
                 } else {
@@ -1327,7 +1327,7 @@ impl Mode for TackingPicturesMode {
             && !temperature.is_infinite()
             && autofocuser.start_temp.is_none() {
                 autofocuser.start_temp = Some(temperature);
-                self.events.notify(
+                self.events.send(
                     Event::Focusing(FocuserEvent::StartingTemperature(temperature))
                 );
             }

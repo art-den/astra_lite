@@ -559,7 +559,7 @@ impl CameraUi {
                 self_.correct_widgets_props_impl();
                 self_.correct_frame_quality_widgets_props();
 
-                self_.core.events().notify(Event::CameraDeviceChanged {
+                self_.core.events().send(Event::CameraDeviceChanged {
                     prev_camera_id,
                     new_camera_id: cur_id.to_string(),
                 });
@@ -582,7 +582,7 @@ impl CameraUi {
                 self_.show_calibr_file_for_frame(&options);
                 drop(options);
                 self_.correct_widgets_props();
-                self_.core.events().notify(Event::CameraCoolingOptionsChanged);
+                self_.core.events().send(Event::CameraCoolingOptionsChanged);
             })
         );
 
@@ -593,7 +593,7 @@ impl CameraUi {
                 self_.show_calibr_file_for_frame(&options);
                 drop(options);
                 self_.correct_widgets_props();
-                self_.core.events().notify(Event::CameraCoolingOptionsChanged);
+                self_.core.events().send(Event::CameraCoolingOptionsChanged);
             })
         );
 
@@ -603,7 +603,7 @@ impl CameraUi {
                 options.cam.ctrl.heater_str = cb.active_id().map(|id| id.to_string());
                 drop(options);
                 self_.correct_widgets_props();
-                self_.core.events().notify(Event::CameraFanOptionsChanged);
+                self_.core.events().send(Event::CameraFanOptionsChanged);
             })
         );
 
@@ -613,7 +613,7 @@ impl CameraUi {
                 options.cam.ctrl.enable_fan = chb.is_active();
                 drop(options);
                 self_.correct_widgets_props();
-                self_.core.events().notify(Event::CameraHeaterOptionsChanged);
+                self_.core.events().send(Event::CameraHeaterOptionsChanged);
             })
         );
 

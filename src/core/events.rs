@@ -44,20 +44,20 @@ pub enum Event {
     CameraHeaterOptionsChanged,
 }
 
-type EventFun = dyn Fn(Event) + Send + Sync + 'static;
+type EventHandlerFun = dyn Fn(Event) + Send + Sync + 'static;
 
-pub struct Events {
-    items: RwLock<Vec<Box<EventFun>>>,
+pub struct EventHandlers {
+    items: RwLock<Vec<Box<EventHandlerFun>>>,
 }
 
-impl Events {
+impl EventHandlers {
     pub fn new() -> Self {
         Self {
             items:RwLock::new(Vec::new()),
         }
     }
 
-    pub fn subscribe(
+    pub fn connect(
         &self,
         fun: impl Fn(Event) + Send + Sync + 'static
     ) {
@@ -65,20 +65,18 @@ impl Events {
         items.push(Box::new(fun));
     }
 
-    pub fn unsubscribe_all(&self) {
-        let mut event_handlers = Vec::new();
-
-        let mut items = self.items.write().unwrap();
-        std::mem::swap(&mut event_handlers, &mut items);
-        drop(items);
-
-        event_handlers.clear();
-    }
-
-    pub fn notify(&self, event: Event) {
+    pub fn send(&self, event: Event) {
         let items = self.items.read().unwrap();
         for s in &*items {
             s(event.clone());
         }
+    }
+
+    pub fn disconnect_all(&self) {
+        let mut event_handlers = Vec::new();
+        let mut items = self.items.write().unwrap();
+        std::mem::swap(&mut event_handlers, &mut items);
+        drop(items);
+        event_handlers.clear();
     }
 }

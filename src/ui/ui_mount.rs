@@ -301,7 +301,7 @@ impl MountUi {
                 self_.fill_mount_speed_list_widget();
                 self_.show_cur_mount_state();
                 self_.correct_widgets_props();
-                self_.core.events().notify(
+                self_.core.events().send(
                     Event::MountDeviceChanged(new_device_name.to_string())
                 );
             })

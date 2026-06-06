@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::hal::{events::{HalEvent, HalEventSubscribers}, indi};
+use crate::hal::{events::{HalEvent, HalEventHandlers}, indi};
 
 const MAX_WAIT_BLOB_TIME: usize = 30; // in seconds
 const MAX_SHUTDOWN_TIME: usize = 2; // in seconds
@@ -56,7 +56,7 @@ impl CcdToToWatch {
         &mut self,
         timer_period_ms: usize,
         indi:            &Arc<indi::Connection>,
-        events:          &Arc<HalEventSubscribers>,
+        events:          &Arc<HalEventHandlers>,
     ) -> anyhow::Result<()> {
         match &mut self.mode {
             CcdMode::Waiting => {}
@@ -93,7 +93,7 @@ impl CcdToToWatch {
                 *time_ms += timer_period_ms;
                 if *time_ms >= MAX_SWITCHING_ON_TIME * 1000 {
                     self.mode = CcdMode::Waiting;
-                    events.send_event(HalEvent::NeedRestartCameraExposure(Arc::clone(&self.device_id)));
+                    events.send(HalEvent::NeedRestartCameraExposure(Arc::clone(&self.device_id)));
                 }
             }
         }
@@ -161,7 +161,7 @@ impl CameraToInit {
         &mut self,
         timer_period_ms: usize,
         indi:            &Arc<indi::Connection>,
-        events:          &Arc<HalEventSubscribers>,
+        events:          &Arc<HalEventHandlers>,
     ) -> anyhow::Result<()> {
         if let Some(init_timer_ms) = &mut self.init_timer {
             *init_timer_ms += timer_period_ms;
@@ -169,18 +169,18 @@ impl CameraToInit {
                 self.init_timer = None;
                 if self.init_flags.cooler {
                     self.init_flags.cooler = false;
-                    events.send_event(HalEvent::CameraIsReadyForCooling(Arc::clone(&self.device_id1)));
-                    events.send_event(HalEvent::CameraIsReadyForCooling(Arc::clone(&self.device_id2)));
+                    events.send(HalEvent::CameraIsReadyForCooling(Arc::clone(&self.device_id1)));
+                    events.send(HalEvent::CameraIsReadyForCooling(Arc::clone(&self.device_id2)));
                 }
                 if self.init_flags.fan {
                     self.init_flags.fan = false;
-                    events.send_event(HalEvent::CameraIsReadyForCtrlFan(Arc::clone(&self.device_id1)));
-                    events.send_event(HalEvent::CameraIsReadyForCtrlFan(Arc::clone(&self.device_id2)));
+                    events.send(HalEvent::CameraIsReadyForCtrlFan(Arc::clone(&self.device_id1)));
+                    events.send(HalEvent::CameraIsReadyForCtrlFan(Arc::clone(&self.device_id2)));
                 }
                 if self.init_flags.heater {
                     self.init_flags.heater = false;
-                    events.send_event(HalEvent::CameraIsReadyForCtrlHeater(Arc::clone(&self.device_id1)));
-                    events.send_event(HalEvent::CameraIsReadyForCtrlHeater(Arc::clone(&self.device_id2)));
+                    events.send(HalEvent::CameraIsReadyForCtrlHeater(Arc::clone(&self.device_id1)));
+                    events.send(HalEvent::CameraIsReadyForCtrlHeater(Arc::clone(&self.device_id2)));
                 }
                 if self.init_flags.max_res {
                     self.init_flags.max_res = false;
@@ -188,7 +188,7 @@ impl CameraToInit {
                 }
                 if self.init_flags.focal_len {
                     self.init_flags.focal_len = false;
-                    events.send_event(HalEvent::NeedInitTelescopeFocalLenForCamera(Arc::clone(&self.name)));
+                    events.send(HalEvent::NeedInitTelescopeFocalLenForCamera(Arc::clone(&self.name)));
                 }
             }
         }
@@ -211,13 +211,13 @@ impl CameraToInit {
 
 pub struct CamWatchdog {
     indi:      Arc<indi::Connection>,
-    events:    Arc<HalEventSubscribers>,
+    events:    Arc<HalEventHandlers>,
     ccd_list:  Vec<CcdToToWatch>,
     init_list: Vec<CameraToInit>,
 }
 
 impl CamWatchdog {
-    pub fn new(indi: &Arc<indi::Connection>, events: &Arc<HalEventSubscribers>) -> Self {
+    pub fn new(indi: &Arc<indi::Connection>, events: &Arc<HalEventHandlers>) -> Self {
         Self {
             indi:      Arc::clone(indi),
             events:    Arc::clone(events),

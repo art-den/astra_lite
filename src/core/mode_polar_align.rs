@@ -242,7 +242,7 @@ pub struct PolarAlignMode {
     s_opts:       SiteOptions,
     options:      Arc<RwLock<Options>>,
     cur_frame:    Arc<ResultImage>,
-    subscribers:  Arc<Events>,
+    subscribers:  Arc<EventHandlers>,
     ps_opts:      PlateSolverOptions,
     plate_solver: PlateSolver,
     alignment:    PolarAlignment,
@@ -365,7 +365,7 @@ impl PolarAlignMode {
         hal:         &Hal,
         cur_frame:   &Arc<ResultImage>,
         options:     &Arc<RwLock<Options>>,
-        subscribers: &Arc<Events>,
+        subscribers: &Arc<EventHandlers>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let Some(cam_device) = &opts.cam.device else {
@@ -521,7 +521,7 @@ impl PolarAlignMode {
             result: ps_result.clone(),
             preview: preview.map(Arc::new),
         };
-        self.subscribers.notify(Event::PlateSolve(event));
+        self.subscribers.send(Event::PlateSolve(event));
 
         self.alignment.add_measurement(PolarAlignmentMeasure {
             coord:    coord.clone(),
@@ -598,7 +598,7 @@ impl PolarAlignMode {
         let Some((horiz, total)) = self.alignment.pole_error() else {
             anyhow::bail!("Mount pole is not calculated!");
         };
-        self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Error {
+        self.subscribers.send(Event::PolarAlignment(PolarAlignmentEvent::Error {
             horiz, total, step: self.step_cnt
         }));
         Ok(())
@@ -607,7 +607,7 @@ impl PolarAlignMode {
     fn restart(&mut self) -> anyhow::Result<()> {
         if let Some(initial_crd) = self.initial_crd {
             self.abort()?;
-            self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Empty));
+            self.subscribers.send(Event::PolarAlignment(PolarAlignmentEvent::Empty));
             self.goto_impl(initial_crd.ra, initial_crd.dec)?;
             self.alignment.clear();
             self.step = Step::GotoInitialPos;
@@ -690,7 +690,7 @@ impl Mode for PolarAlignMode {
             dec: degree_to_radian(dec),
         });
 
-        self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Empty));
+        self.subscribers.send(Event::PolarAlignment(PolarAlignmentEvent::Empty));
 
         self.start_capture()?;
         self.state = State::Capture;
@@ -706,13 +706,13 @@ impl Mode for PolarAlignMode {
         match command {
             CustomCommand::Restart => {
                 self.restart()?;
-                self.subscribers.notify(Event::Progress(self.progress(), self.get_type()));
+                self.subscribers.send(Event::Progress(self.progress(), self.get_type()));
                 Ok(None)
             }
 
             CustomCommand::ManualRefresh => {
                 self.manual_refresh()?;
-                self.subscribers.notify(Event::Progress(self.progress(), self.get_type()));
+                self.subscribers.send(Event::Progress(self.progress(), self.get_type()));
                 Ok(None)
             }
 

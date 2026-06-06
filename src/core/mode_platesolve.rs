@@ -28,10 +28,10 @@ pub struct PlatesolveMode {
     camera:       Arc<dyn Camera + Send + Sync>,
     mount:        Arc<dyn Telescope + Send + Sync>,
     hal:          Arc<Hal>,
-    events:       Arc<Events>,
+    events:       Arc<EventHandlers>,
     cur_frame:    Arc<ResultImage>,
     options:      Arc<RwLock<Options>>,
-    subscribers:  Arc<Events>,
+    subscribers:  Arc<EventHandlers>,
     camera_dev:   DeviceAndProp,
     cam_opts:     CamOptions,
     ps_opts:      PlateSolverOptions,
@@ -41,10 +41,10 @@ pub struct PlatesolveMode {
 impl PlatesolveMode {
     pub fn new(
         hal:         &Arc<Hal>,
-        events:      &Arc<Events>,
+        events:      &Arc<EventHandlers>,
         options:     &Arc<RwLock<Options>>,
         cur_frame:   &Arc<ResultImage>,
-        subscribers: &Arc<Events>,
+        subscribers: &Arc<EventHandlers>,
     ) -> anyhow::Result<Self> {
         let opts = options.read().unwrap();
         let camera = hal.camera(&opts.cam.device_id)?;
@@ -136,7 +136,7 @@ impl PlatesolveMode {
             result:    result.clone(),
             preview:   preview.map(Arc::new),
         };
-        self.subscribers.notify(
+        self.subscribers.send(
             Event::PlateSolve(event)
         );
 
@@ -196,9 +196,9 @@ impl PlatesolveMode {
             drop(options);
             if ok_to_set_new_value {
                 if is_telescope_ccd {
-                    self.events.notify(Event::TelescopeFocalLenChanged(focal_len));
+                    self.events.send(Event::TelescopeFocalLenChanged(focal_len));
                 } else {
-                    self.events.notify(Event::GuiderFocalLenChanged(focal_len));
+                    self.events.send(Event::GuiderFocalLenChanged(focal_len));
                 }
             }
         }

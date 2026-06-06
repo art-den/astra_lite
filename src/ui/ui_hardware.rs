@@ -352,7 +352,7 @@ impl HardwareUi {
                 if f64::abs(options.telescope.focal_len - value) < 0.1 { return; }
                 options.telescope.focal_len = value;
                 drop(options);
-                self_.core.events().notify(Event::TelescopeFocalLenChanged(value));
+                self_.core.events().send(Event::TelescopeFocalLenChanged(value));
             })
         );
 
@@ -361,7 +361,7 @@ impl HardwareUi {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
                 options.telescope.barlow = sb.value();
                 drop(options);
-                self_.core.events().notify(Event::TelescopeBarlowChanged);
+                self_.core.events().send(Event::TelescopeBarlowChanged);
             })
         );
 
@@ -372,7 +372,7 @@ impl HardwareUi {
                 if f64::abs(options.guiding.foc_len - value) < 0.1 { return; }
                 options.guiding.foc_len = value;
                 drop(options);
-                self_.core.events().notify(Event::GuiderFocalLenChanged(value));
+                self_.core.events().send(Event::GuiderFocalLenChanged(value));
             })
         );
 

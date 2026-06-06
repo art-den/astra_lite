@@ -125,7 +125,7 @@ impl FltWheelUi {
             if options.filter_wheel.device == new_device_name { return; }
             options.filter_wheel.device = new_device_name.to_string();
             drop(options);
-            self_.core.events().notify(Event::FltWheelDeviceChanged(new_device_name.to_string()));
+            self_.core.events().send(Event::FltWheelDeviceChanged(new_device_name.to_string()));
             self_.excl_caller.exec(|| {
                 self_.update_filters_list_and_select_active();
             });

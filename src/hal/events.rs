@@ -7,7 +7,6 @@ pub enum HalEvent {
     Error(Arc<String>),
     DeviceConnected(Arc<DeviceInfo>),
     DeviceDisconnected(Arc<DeviceInfo>),
-
     NeedRestartCameraExposure(Arc<String/*camera id*/>),
     NeedInitTelescopeFocalLenForCamera(Arc<String/*camera id*/>),
     CameraIsReadyForCooling(Arc<String/*camera id*/>),
@@ -20,33 +19,33 @@ pub enum HalEvent {
     }
 }
 
-pub struct HalEventSubscribers {
-    funs: RwLock<Vec<Box<dyn Fn(HalEvent) + Send + Sync>>>,
+pub struct HalEventHandlers {
+    items: RwLock<Vec<Box<dyn Fn(HalEvent) + Send + Sync>>>,
 }
 
-impl HalEventSubscribers {
+impl HalEventHandlers {
     pub fn new() -> Self {
         Self {
-            funs: RwLock::new(Vec::new()),
+            items: RwLock::new(Vec::new()),
         }
     }
 
-    pub fn connect_event_handler(&self, fun: impl Fn(HalEvent) + Send + Sync + 'static) {
-        let mut funs = self.funs.write().unwrap();
+    pub fn connect(&self, fun: impl Fn(HalEvent) + Send + Sync + 'static) {
+        let mut funs = self.items.write().unwrap();
         funs.push(Box::new(fun));
     }
 
-    pub fn send_event(&self, event: HalEvent) {
-        let funs = self.funs.read().unwrap();
+    pub fn send(&self, event: HalEvent) {
+        let funs = self.items.read().unwrap();
         for fun in &*funs {
             fun(event.clone());
         }
     }
 
-    pub fn disconnect_all_subscribers(&self) {
+    pub fn disconnect_all(&self) {
         let mut event_handlers = Vec::new();
 
-        let mut funs = self.funs.write().unwrap();
+        let mut funs = self.items.write().unwrap();
         std::mem::swap(&mut event_handlers, &mut funs);
         drop(funs);
 

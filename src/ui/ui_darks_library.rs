@@ -969,7 +969,7 @@ impl DarksLibraryUI {
 
     fn connect_core_events(self: &Rc<Self>) {
         let (sender, receiver) = async_channel::unbounded();
-        self.core.events().subscribe(move |evt| {
+        self.core.events().connect(move |evt| {
             sender.send_blocking(evt).unwrap();
         });
         glib::spawn_future_local(clone!(@weak self as self_ => async move {

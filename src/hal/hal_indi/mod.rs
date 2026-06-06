@@ -20,7 +20,7 @@ struct Watchdogs {
 
 pub struct IndiHalImpl {
     indi:              Arc<indi::Connection>,
-    event_subscribers: Arc<HalEventSubscribers>,
+    event_subscribers: Arc<HalEventHandlers>,
     indi_evt_subscr:   Mutex<Option<EventHandlerId>>,
     watchdogs:         Mutex<Watchdogs>,
 }
@@ -28,7 +28,7 @@ pub struct IndiHalImpl {
 impl IndiHalImpl {
     pub fn new(
         indi:              &Arc<indi::Connection>,
-        event_subscribers: &Arc<HalEventSubscribers>
+        event_subscribers: &Arc<HalEventHandlers>
     ) -> Arc<Self> {
         let watchdogs = Watchdogs {
             camera:  CamWatchdog::new(indi, event_subscribers),
@@ -82,7 +82,7 @@ impl IndiHalImpl {
                     if *blob_start.elem_name == "CCD2" {
                         device_id += CAM_CCD2_POSTFIX;
                     }
-                    self.event_subscribers.send_event(HalEvent::BeginDownloadCameraData(
+                    self.event_subscribers.send(HalEvent::BeginDownloadCameraData(
                         Arc::new(device_id)
                     ));
                 }
@@ -92,7 +92,7 @@ impl IndiHalImpl {
         }();
 
         if let Err(err) = result {
-            self.event_subscribers.send_event(HalEvent::Error(
+            self.event_subscribers.send(HalEvent::Error(
                 Arc::new(err.to_string())
             ));
         }
@@ -126,7 +126,7 @@ impl IndiHalImpl {
             device_id += CAM_CCD2_POSTFIX;
         }
         let camera_shot = IndiCameraShot::new(blob)?;
-        self.event_subscribers.send_event(HalEvent::CareraShotResult{
+        self.event_subscribers.send(HalEvent::CareraShotResult{
             cam_id: Arc::new(device_id),
             shot:   Arc::new(camera_shot),
         });
@@ -164,7 +164,7 @@ impl IndiHalImpl {
         } else {
             HalEvent::DeviceDisconnected(Arc::new(device_info))
         };
-        self.event_subscribers.send_event(event_to_send);
+        self.event_subscribers.send(event_to_send);
     }
 
     fn driver_interface_to_dev_type(drv_interface: indi::DriverInterface) -> DeviceType {

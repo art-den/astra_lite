@@ -43,7 +43,7 @@ enum Stage {
 pub struct FocusingMode {
     camera:         Arc<dyn Camera + Send + Sync>,
     focuser:        Arc<dyn Focuser + Send + Sync>,
-    subscribers:    Arc<Events>,
+    subscribers:    Arc<EventHandlers>,
     state:          FocusingState,
     camera_dev:     DeviceAndProp,
     f_opts:         FocuserOptions,
@@ -104,7 +104,7 @@ impl FocusingMode {
     pub fn new(
         hal:            &Hal,
         options:        &Arc<RwLock<Options>>,
-        subscribers:    &Arc<Events>,
+        subscribers:    &Arc<EventHandlers>,
         next_mode:      Option<Box<dyn Mode + Sync + Send>>,
         prelim_step:    bool,
         error_reaction: FocusingErrorReaction,
@@ -348,7 +348,7 @@ impl FocusingMode {
                 coeffs: None,
                 result: None,
             };
-            self.subscribers.notify(Event::Focusing(
+            self.subscribers.send(Event::Focusing(
                 FocuserEvent::Data(event_data)
             ));
         } else {
@@ -370,7 +370,7 @@ impl FocusingMode {
                     coeffs: Some(coeffs.clone()), // TODO: remove clone
                     result: Some(result_pos),
                 };
-                self.subscribers.notify(Event::Focusing(
+                self.subscribers.send(Event::Focusing(
                     FocuserEvent::Data(event_data)
                 ));
                 if self.stage == Stage::Preliminary {
@@ -393,7 +393,7 @@ impl FocusingMode {
                     target_pos: result_pos
                 };
                 let result_event = FocuserEvent::Result { value: result_pos };
-                self.subscribers.notify(Event::Focusing(result_event));
+                self.subscribers.send(Event::Focusing(result_event));
             },
             Ok(CalcResult::Rising(coeffs)) => {
                 log::info!("Results too far from center. Do more measures from left");
@@ -402,7 +402,7 @@ impl FocusingMode {
                     coeffs: Some(coeffs.clone()),
                     result: None,
                 };
-                self.subscribers.notify(Event::Focusing(
+                self.subscribers.send(Event::Focusing(
                     FocuserEvent::Data(event_data)
                 ));
                 let min_sample_pos = self.samples
@@ -421,7 +421,7 @@ impl FocusingMode {
                     coeffs: Some(coeffs.clone()),
                     result: None,
                 };
-                self.subscribers.notify(Event::Focusing(
+                self.subscribers.send(Event::Focusing(
                     FocuserEvent::Data(event_data)
                 ));
                 log::info!("Results too far from center. Do more measures from right");
@@ -482,7 +482,7 @@ impl FocusingMode {
         );
 
         if !self.start_temp.is_nan() {
-            self.subscribers.notify(
+            self.subscribers.send(
                 Event::Focusing(FocuserEvent::StartingTemperature(self.start_temp))
             );
         }

@@ -354,7 +354,7 @@ impl FocuserUi {
             if options.focuser.device == new_device_name.as_str() { return; }
             options.focuser.device = new_device_name.to_string();
             drop(options);
-            self_.core.events().notify(Event::FocuserDeviceChanged(new_device_name.to_string()));
+            self_.core.events().send(Event::FocuserDeviceChanged(new_device_name.to_string()));
             self_.delayed_actions.schedule(DelayedAction::UpdateFocPosNew);
             self_.delayed_actions.schedule(DelayedAction::ShowCurFocuserValue);
             self_.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
