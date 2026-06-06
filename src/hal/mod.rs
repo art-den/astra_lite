@@ -74,8 +74,11 @@ impl Hal {
     }
 
     pub fn reset_impl(&self) {
-        let mut impl_ = self.impl_.write().unwrap();
-        *impl_ = None;
+        let mut impl_mutex = self.impl_.write().unwrap();
+        if let Some(impl_) = impl_mutex.take() {
+            drop(impl_mutex);
+            drop(impl_);
+        }
     }
 
     pub fn connect_event_handler(&self, fun: impl Fn(HalEvent) + Send + Sync + 'static) {
