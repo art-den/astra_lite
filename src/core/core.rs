@@ -61,7 +61,6 @@ pub trait Mode {
     fn take_next_mode(&mut self) -> Option<ModeBox> { None }
     fn set_or_correct_value(&mut self, _value: &mut dyn Any) {}
     fn complete_img_process_params(&self, _cmd: &mut FrameProcessCommandData) {}
-    fn notify_indi_prop_change(&mut self, _prop_change: &indi::PropChangeEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_camera_douwnload_started(&mut self, _camera_id: &str) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_before_frame_processing_start(&mut self, _camera_shot: &Arc<dyn CameraShot + Send + Sync>, _should_be_processed: &mut bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
@@ -146,7 +145,6 @@ impl Core {
         });
 
         this.set_ext_guider_events_handler();
-        this.connect_indi_events();
         this.connect_events();
         this.start_timer();
         this
@@ -267,34 +265,6 @@ impl Core {
         self.hal.notify_periodical_timer_tick(Self::TIMER_PERIOD_MS)?;
 
         Ok(())
-    }
-
-    fn connect_indi_events(self: &Arc<Self>) {
-        let self_ = Arc::clone(self);
-        self.indi.connect_event_handler(move |event| {
-            let result = || -> anyhow::Result<()> {
-                match event {
-                    indi::Event::PropChange(prop_change) => {
-                        if let indi::PropChange::Change {
-                            value: indi::PropValue::Blob(_blob),
-                            prop_name: _,
-                            ..
-                        } = &prop_change.change {
-                            // self_.process_indi_blob_event(
-                            //     blob,
-                            //     &prop_change.device_name,
-                            //     prop_name,
-                            // )?;
-                        } else {
-                            self_.process_indi_prop_change_event(&prop_change)?;
-                        }
-                    },
-                    _ => {}
-                }
-                Ok(())
-            } ();
-            self_.process_error(result, "Core::connect_indi_events");
-        });
     }
 
     fn hal_event_handler(self: &Arc<Self>, event: HalEvent) -> anyhow::Result<()> {
@@ -526,18 +496,6 @@ impl Core {
 
         drop(options);
         self.indi.connect(&conn_settings)?;
-        Ok(())
-    }
-
-    fn process_indi_prop_change_event(
-        self:        &Arc<Self>,
-        prop_change: &indi::PropChangeEvent,
-    ) -> anyhow::Result<()> {
-        let mut mode = self.mode.write().unwrap();
-        let result = mode.active.notify_indi_prop_change(prop_change)?;
-        self.apply_notify_result(result, &mut mode)?;
-        drop(mode);
-
         Ok(())
     }
 
