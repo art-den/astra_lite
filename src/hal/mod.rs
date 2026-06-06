@@ -181,6 +181,17 @@ pub enum FrameType {
     Biases,
 }
 
+pub enum CameraShotType {
+    RawCcdData,
+    ReadyImage,
+}
+
+pub trait CameraShot {
+    fn get_type(&self) -> CameraShotType;
+    fn get_raw(&self) -> anyhow::Result<crate::image::raw::RawImage>;
+    fn get_image(&self, image: &mut crate::image::image::Image) -> anyhow::Result<()>;
+}
+
 pub trait Camera : Device {
     fn init_before_shot(&self) -> anyhow::Result<()>;
 

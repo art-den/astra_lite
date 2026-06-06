@@ -420,7 +420,6 @@ impl UiModule for CameraUi {
     }
 
     fn on_hal_event(&self, event: &HalEvent) {
-        println!("{:?}", event);
         match event {
             HalEvent::DeviceConnected(evt) => {
                 let options = self.core.options().read().unwrap();

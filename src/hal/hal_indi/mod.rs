@@ -1,6 +1,6 @@
-use std::{ops::RangeInclusive, sync::{Arc, Mutex}};
+use std::{io::Cursor, ops::RangeInclusive, sync::{Arc, Mutex}};
 
-use crate::hal::{*, events::*, hal_indi::{camera_watchdog::CamWatchdog, dev_watchdog::DevicesWatchdog}, indi::EventHandlerId};
+use crate::{hal::{events::*, hal_indi::{camera_watchdog::CamWatchdog, dev_watchdog::DevicesWatchdog}, indi::EventHandlerId, *}, image::{io::{find_color_image_hdu_in_fits, find_mono_image_hdu_in_fits, load_raw_image_from_fits_reader}, simple_fits::FitsReader}};
 
 use super::{indi, HalImpl, Camera, DeviceInfo, DeviceType};
 
@@ -52,46 +52,93 @@ impl IndiHalImpl {
     }
 
     fn indi_event_handler(self: &Arc<Self>, event: indi::Event) {
-        match event {
-            indi::Event::ConnChange(indi::ConnState::Disconnected) => {
-                let mut watchdogs = self.watchdogs.lock().unwrap();
-                watchdogs.camera.reset();
-                watchdogs.devices.reset();
-                drop(watchdogs);
-            }
-            indi::Event::NewDevice(evt) => if evt.connected {
-                self.process_dev_conn_evt(&evt.device_name, evt.interface, evt.connected);
-            }
-            indi::Event::DeviceConnected(evt) => {
-                self.process_dev_conn_evt(&evt.device_name, evt.interface, evt.connected);
-            }
-            indi::Event::DeviceDelete(evt) => {
-                self.process_dev_conn_evt(&evt.device_name, evt.interface, false);
-            }
-            indi::Event::PropChange(prop_change) => {
-                let mut watchdogs = self.watchdogs.lock().unwrap();
-                _ = watchdogs.camera.notify_indi_prop_change(&prop_change);
-                _ = watchdogs.devices.notify_indi_prop_change(&prop_change);
-                drop(watchdogs);
-                self.process_indi_prop_change_event(&prop_change);
-            }
-            indi::Event::BlobStart(blob_start) => {
-                let mut device_id = blob_start.device_name.to_string();
-                dbg!(&blob_start.elem_name);
-                if *blob_start.elem_name == "CCD2" {
-                    device_id += CAM_CCD2_POSTFIX;
+        let result = || -> anyhow::Result<()> {
+            match event {
+                indi::Event::ConnChange(indi::ConnState::Disconnected) => {
+                    let mut watchdogs = self.watchdogs.lock().unwrap();
+                    watchdogs.camera.reset();
+                    watchdogs.devices.reset();
+                    drop(watchdogs);
                 }
-                self.event_subscribers.send_event(HalEvent::BeginDownloadCameraData(Arc::new(device_id)));
+                indi::Event::NewDevice(evt) => if evt.connected {
+                    self.process_dev_conn_evt(&evt.device_name, evt.interface, evt.connected);
+                }
+                indi::Event::DeviceConnected(evt) => {
+                    self.process_dev_conn_evt(&evt.device_name, evt.interface, evt.connected);
+                }
+                indi::Event::DeviceDelete(evt) => {
+                    self.process_dev_conn_evt(&evt.device_name, evt.interface, false);
+                }
+                indi::Event::PropChange(prop_change) => {
+                    let mut watchdogs = self.watchdogs.lock().unwrap();
+                    _ = watchdogs.camera.notify_indi_prop_change(&prop_change);
+                    _ = watchdogs.devices.notify_indi_prop_change(&prop_change);
+                    drop(watchdogs);
+                    self.process_indi_prop_change_event(&prop_change)?;
+                }
+                indi::Event::BlobStart(blob_start) => {
+                    let mut device_id = blob_start.device_name.to_string();
+                    dbg!(&blob_start.elem_name);
+                    if *blob_start.elem_name == "CCD2" {
+                        device_id += CAM_CCD2_POSTFIX;
+                    }
+                    self.event_subscribers.send_event(HalEvent::BeginDownloadCameraData(
+                        Arc::new(device_id)
+                    ));
+                }
+                _ => {}
             }
-            _ => {}
+            Ok(())
+        }();
+
+        if let Err(err) = result {
+            self.event_subscribers.send_event(HalEvent::Error(
+                Arc::new(err.to_string())
+            ));
         }
     }
 
-    fn process_indi_prop_change_event(self: &Arc<Self>, _prop_change: &indi::PropChangeEvent) {
-        //todo!()
+    fn process_indi_prop_change_event(
+        self: &Arc<Self>,
+        prop_change: &indi::PropChangeEvent
+    ) -> anyhow::Result<()> {
+        match &prop_change.change {
+            indi::PropChange::Change {value: indi::PropValue::Blob(blob), prop_name, ..} => {
+                self.process_indi_blob_event(
+                    blob,
+                    &prop_change.device_name,
+                    prop_name,
+                )?;
+            }
+             _ => {},
+        }
+        Ok(())
     }
 
-    fn process_dev_conn_evt(&self, device_name: &Arc<String>, interface: indi::DriverInterface, connected: bool) {
+    fn process_indi_blob_event(
+        self:        &Arc<Self>,
+        blob:        &Arc<indi::BlobPropValue>,
+        device_name: &str,
+        device_prop: &str,
+    ) -> anyhow::Result<()> {
+        let mut device_id = device_name.to_string();
+        if device_prop == "CCD2" {
+            device_id += CAM_CCD2_POSTFIX;
+        }
+        let camera_shot = IndiCameraShot::new(blob)?;
+        self.event_subscribers.send_event(HalEvent::CareraShotResult{
+            cam_id: Arc::new(device_id),
+            shot:   Arc::new(camera_shot),
+        });
+        Ok(())
+    }
+
+    fn process_dev_conn_evt(
+        &self,
+        device_name: &Arc<String>,
+        interface:   indi::DriverInterface,
+        connected:   bool
+    ) {
         let device_type = Self::driver_interface_to_dev_type(interface);
         if device_type.is_empty() {
             return;
@@ -302,6 +349,51 @@ impl Device for IndiDevice {
 
     fn is_active(&self) -> anyhow::Result<bool> {
         Ok(self.indi.is_device_enabled(&self.name)?)
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// CameraShot
+
+struct IndiCameraShot {
+    blob:       Arc<indi::BlobPropValue>,
+    image_type: CameraShotType,
+}
+
+impl IndiCameraShot {
+    fn new(blob: &Arc<indi::BlobPropValue>) -> anyhow::Result<Self> {
+        let mut stream = Cursor::new(blob.data.as_slice());
+        let fits_reader = FitsReader::new(&mut stream)?;
+        let is_raw_image = find_mono_image_hdu_in_fits(&fits_reader).is_some();
+        let is_color_image = find_color_image_hdu_in_fits(&fits_reader).is_some();
+        let image_type = if is_raw_image {
+            CameraShotType::RawCcdData
+        } else if is_color_image {
+            CameraShotType::ReadyImage
+        } else {
+            anyhow::bail!("Can't find out type of image");
+        };
+        Ok(Self {
+            blob: Arc::clone(blob),
+            image_type
+        })
+    }
+}
+
+impl CameraShot for IndiCameraShot {
+    fn get_type(&self) -> CameraShotType {
+        todo!()
+    }
+
+    fn get_raw(&self) -> anyhow::Result<crate::image::raw::RawImage> {
+        let mut stream = Cursor::new(self.blob.data.as_slice());
+        let reader = FitsReader::new(&mut stream)?;
+        let raw_image = load_raw_image_from_fits_reader(&reader, &mut stream)?;
+        Ok(raw_image)
+    }
+
+    fn get_image(&self, _image: &mut crate::image::image::Image) -> anyhow::Result<()> {
+        anyhow::bail!("Color image is unimplemented for INDI drivers");
     }
 }
 

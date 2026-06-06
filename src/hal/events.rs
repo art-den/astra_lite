@@ -1,9 +1,10 @@
 use std::sync::{Arc, RwLock};
 
-use crate::hal::DeviceInfo;
+use crate::hal::{CameraShot, DeviceInfo};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum HalEvent {
+    Error(Arc<String>),
     DeviceConnected(Arc<DeviceInfo>),
     DeviceDisconnected(Arc<DeviceInfo>),
 
@@ -12,8 +13,11 @@ pub enum HalEvent {
     CameraIsReadyForCooling(Arc<String/*camera id*/>),
     CameraIsReadyForCtrlFan(Arc<String/*camera id*/>),
     CameraIsReadyForCtrlHeater(Arc<String/*camera id*/>),
-
     BeginDownloadCameraData(Arc<String/*camera id*/>),
+    CareraShotResult {
+        cam_id: Arc<String>,
+        shot:   Arc<dyn CameraShot + Send + Sync>,
+    }
 }
 
 pub struct HalEventSubscribers {
