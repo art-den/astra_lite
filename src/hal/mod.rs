@@ -7,7 +7,7 @@ pub mod hal_ascom_alpaca;
 
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
-use std::{ops:: RangeInclusive, sync::{Arc, RwLock}};
+use std::{ops:: RangeInclusive, path::Path, sync::{Arc, RwLock}};
 
 use crate::hal::{events::{HalEvent, HalEventHandlers}, hal_indi::IndiHalImpl};
 
@@ -181,6 +181,7 @@ pub enum FrameType {
     Biases,
 }
 
+#[derive(PartialEq, Clone, Copy)]
 pub enum CameraShotType {
     RawCcdData,
     ReadyImage,
@@ -190,6 +191,9 @@ pub trait CameraShot {
     fn get_type(&self) -> CameraShotType;
     fn get_raw(&self) -> anyhow::Result<crate::image::raw::RawImage>;
     fn get_image(&self, image: &mut crate::image::image::Image) -> anyhow::Result<()>;
+    fn download_time(&self) -> f64;
+    fn file_ext(&self) -> &str;
+    fn save_to_file(&self, file_name: &Path) -> anyhow::Result<()>;
 }
 
 pub trait Camera : Device {

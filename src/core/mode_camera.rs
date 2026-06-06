@@ -4,7 +4,7 @@ use crate::{
     TimeLogger,
     core::{cam_ctrl::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode},
     guiding::external_guider::*,
-    hal::{Camera, Focuser, FrameType, Telescope, indi},
+    hal::{Camera, CameraShot, Focuser, FrameType, Telescope, indi},
     image::{
         histogram::*,
         raw::{RawImage, RawImageInfo},
@@ -724,7 +724,7 @@ impl TackingPicturesMode {
     fn process_frame_processing_finished_event(
         &mut self,
         frame_is_ok:    bool,
-        blob:           &indi::BlobPropValue,
+        camera_shot:    &Arc<dyn CameraShot + Send + Sync>,
         raw_image_info: &RawImageInfo,
     ) -> anyhow::Result<NotifyResult> {
         if self.cam_mode == CameraMode::SingleShot {
@@ -747,7 +747,7 @@ impl TackingPicturesMode {
         if self.state == State::Common {
             if frame_is_ok && self.flags.save_raw_files {
                 // Save raw image
-                self.save_raw_image(blob, raw_image_info)?;
+                self.save_raw_image(camera_shot.as_ref(), raw_image_info)?;
             }
 
             let mut is_last_frame = false;
@@ -775,7 +775,7 @@ impl TackingPicturesMode {
                 };
 
                 let event_data = FrameProcessResult {
-                    camera:    self.device.clone(),
+                    camera_id: self.camera.id().to_string(),
                     mode_type: self.get_type(),
                     data:      result,
                 };
@@ -1020,7 +1020,7 @@ impl TackingPicturesMode {
 
     fn save_raw_image(
         &mut self,
-        blob:           &indi::BlobPropValue,
+        camera_shot:    &(dyn CameraShot + Send + Sync + 'static),
         raw_image_info: &RawImageInfo,
     ) -> anyhow::Result<()> {
         let prefix = match raw_image_info.frame_type {
@@ -1037,7 +1037,7 @@ impl TackingPicturesMode {
                     self.out_file_names.raw_files_dir.to_str().unwrap_or_default()
                 ))?;
         }
-        let mut file_ext = blob.format.as_str().trim();
+        let mut file_ext = camera_shot.file_ext();
         while file_ext.starts_with('.') { file_ext = &file_ext[1..]; }
         let fn_mask = format!("{}_${{num}}.{}", prefix, file_ext);
         let mut fn_gen = self.fn_gen.lock().unwrap();
@@ -1045,12 +1045,7 @@ impl TackingPicturesMode {
         drop(fn_gen);
 
         let tmr = TimeLogger::start();
-        std::fs::write(&file_name, blob.data.as_slice())
-            .map_err(|e| anyhow::anyhow!(
-                "Error '{}'\nwhen saving file '{}'",
-                e.to_string(),
-                file_name.to_str().unwrap_or_default()
-            ))?;
+        camera_shot.save_to_file(&file_name)?;
         tmr.log("Saving raw image");
 
         Ok(())
@@ -1384,15 +1379,10 @@ impl Mode for TackingPicturesMode {
         }
     }
 
-    fn notify_blob_start_event(
-        &mut self,
-        event: &indi::BlobStartEvent
-    ) -> anyhow::Result<NotifyResult> {
+    fn notify_camera_douwnload_started(&mut self, camera_id: &str) -> anyhow::Result<NotifyResult> {
         self.flags.next_exp_started = false;
 
-        if *event.device_name != self.device.name
-        || *event.prop_name != self.device.prop
-        || self.state == State::FrameToSkip {
+        if camera_id != self.camera.id() || self.state == State::FrameToSkip {
             return Ok(NotifyResult::Empty);
         }
 
@@ -1407,9 +1397,10 @@ impl Mode for TackingPicturesMode {
         Ok(NotifyResult::Empty)
     }
 
+
     fn notify_before_frame_processing_start(
         &mut self,
-        _blob: &Arc<indi::BlobPropValue>,
+        _camera_shot:        &Arc<dyn CameraShot + Send + Sync>,
         should_be_processed: &mut bool
     ) -> anyhow::Result<NotifyResult> {
         self.next_job = None;
@@ -1439,11 +1430,11 @@ impl Mode for TackingPicturesMode {
                 self.process_raw_histogram(histogram),
 
             FrameProcessResultData::ShotProcessingFinished {
-                frame_is_ok, blob, raw_image_info, ..
+                frame_is_ok, camera_shot, raw_image_info, ..
             } =>
                 self.process_frame_processing_finished_event(
                     *frame_is_ok,
-                    blob,
+                    camera_shot,
                     raw_image_info,
                 ),
 

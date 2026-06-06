@@ -1,18 +1,12 @@
 use std::{
-    any::Any, path::Path, sync::{
-        atomic::AtomicBool, Arc, Mutex, RwLock, RwLockReadGuard
-    },
+    any::Any, fmt::Display, path::Path, sync::{
+        Arc, Mutex, RwLock, RwLockReadGuard, atomic::AtomicBool
+    }
 };
-use gtk::glib::PropertySet;
 use itertools::Itertools;
 
 use crate::{
-    core::cam_ctrl::*,
-    guiding::external_guider::*,
-    hal::{FrameType, Hal, events::HalEvent, indi},
-    options::*,
-    sky_math::math::EqCoord,
-    utils::timer::*,
+    core::cam_ctrl::*, guiding::external_guider::*, hal::{CameraShot, FrameType, Hal, events::HalEvent, indi}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*
 };
 
 use super::{
@@ -69,8 +63,8 @@ pub trait Mode {
     fn set_or_correct_value(&mut self, _value: &mut dyn Any) {}
     fn complete_img_process_params(&self, _cmd: &mut FrameProcessCommandData) {}
     fn notify_indi_prop_change(&mut self, _prop_change: &indi::PropChangeEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_blob_start_event(&mut self, _event: &indi::BlobStartEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_before_frame_processing_start(&mut self, _blob: &Arc<indi::BlobPropValue>, _should_be_processed: &mut bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_camera_douwnload_started(&mut self, _camera_id: &str) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_before_frame_processing_start(&mut self, _camera_shot: &Arc<dyn CameraShot + Send + Sync>, _should_be_processed: &mut bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_periodical_timer_tick(&mut self, _timer_period_ms: usize) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
@@ -240,14 +234,18 @@ impl Core {
         context: &str,
     ) {
         let Err(err) = result else { return; };
-        log::error!("Error {}, context: {}", err.to_string(), context);
+        self.process_error_str(&err, context);
+    }
+
+    fn process_error_str(self: &Arc<Self>, error_text: &impl Display, context: &str) {
+        log::error!("Error {}, context: {}", error_text, context);
 
         log::info!("Aborting active mode...");
         self.abort_active_mode();
         log::info!("Active mode aborted!");
 
         log::info!("Inform about error...");
-        self.events.send(Event::Error(err.to_string()));
+        self.events.send(Event::Error(error_text.to_string()));
         log::info!("Error has informed!");
     }
 
@@ -277,22 +275,17 @@ impl Core {
         self.indi.connect_event_handler(move |event| {
             let result = || -> anyhow::Result<()> {
                 match event {
-                    indi::Event::BlobStart(event) => {
-                        let mut mode = self_.mode.write().unwrap();
-                        let result = mode.active.notify_blob_start_event(&event)?;
-                        self_.apply_notify_result(result, &mut mode)?;
-                    }
                     indi::Event::PropChange(prop_change) => {
                         if let indi::PropChange::Change {
-                            value: indi::PropValue::Blob(blob),
-                            prop_name,
+                            value: indi::PropValue::Blob(_blob),
+                            prop_name: _,
                             ..
                         } = &prop_change.change {
-                            self_.process_indi_blob_event(
-                                blob,
-                                &prop_change.device_name,
-                                prop_name,
-                            )?;
+                            // self_.process_indi_blob_event(
+                            //     blob,
+                            //     &prop_change.device_name,
+                            //     prop_name,
+                            // )?;
                         } else {
                             self_.process_indi_prop_change_event(&prop_change)?;
                         }
@@ -305,38 +298,48 @@ impl Core {
         });
     }
 
-    fn hal_event_handler(self: &Arc<Self>, event: HalEvent) {
+    fn hal_event_handler(self: &Arc<Self>, event: HalEvent) -> anyhow::Result<()> {
         match &event {
+            HalEvent::Error(err) => {
+                self.process_error_str(&err.as_str(), "HAL error");
+            }
+            HalEvent::CareraShotResult { cam_id, shot } => {
+                let result = self.process_camera_shot_result(cam_id, shot);
+                self.process_error(result, "process_camera_shot_result");
+            }
             HalEvent::CameraIsReadyForCooling(device_id) |
             HalEvent::CameraIsReadyForCtrlFan(device_id) |
             HalEvent::CameraIsReadyForCtrlHeater(device_id) => {
                 let options = self.options().read().unwrap();
                 if options.cam.device_id == **device_id {
-                    let Ok(camera) = self.hal.camera(&options.cam.device_id) else { return; };
-                    let ctrl_result = match &event {
+                    let Ok(camera) = self.hal.camera(&options.cam.device_id) else { return Ok(()); };
+                    match &event {
                         HalEvent::CameraIsReadyForCooling(_) =>
-                            control_camera_cooling(&camera, &options.cam.ctrl),
+                            control_camera_cooling(&camera, &options.cam.ctrl)?,
                         HalEvent::CameraIsReadyForCtrlFan(_) =>
-                            control_camera_fan(&camera, &options.cam.ctrl),
+                            control_camera_fan(&camera, &options.cam.ctrl)?,
                         HalEvent::CameraIsReadyForCtrlHeater(_) =>
-                            control_camera_heater(&camera, &options.cam.ctrl),
+                            control_camera_heater(&camera, &options.cam.ctrl)?,
                         _ => unreachable!()
                     };
-                    self.process_error(ctrl_result, "hal_event_handler");
                 }
+            }
+            HalEvent::BeginDownloadCameraData(camera_id) => {
+                let mut mode = self.mode.write().unwrap();
+                let res = mode.active.notify_camera_douwnload_started(camera_id)?;
+                self.apply_notify_result(res, &mut mode)?;
             }
             HalEvent::NeedRestartCameraExposure(camera_id) => {
                 let options = self.options().read().unwrap();
                 if options.cam.device_id == **camera_id {
-                    let Ok(camera) = self.hal.camera(&options.cam.device_id) else { return; };
+                    let Ok(camera) = self.hal.camera(&options.cam.device_id) else { return Ok(()); };
                     let mut mode = self.mode.write().unwrap();
-                    let restart_result = restart_camera_exposure(
+                    restart_camera_exposure(
                         &camera,
                         &mut mode,
                         &options.cam.frame,
                         &options.cam.ctrl,
-                    );
-                    self.process_error(restart_result, "restart_camera_exposure");
+                    )?;
                 }
             }
             HalEvent::NeedInitTelescopeFocalLenForCamera(_camera_id) => {
@@ -344,13 +347,83 @@ impl Core {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    fn process_camera_shot_result(
+        self:        &Arc<Self>,
+        camera_id:   &str,
+        camera_shot: &Arc<dyn CameraShot + Send + Sync>
+    ) -> anyhow::Result<()> {
+        let mut mode = self.mode.write().unwrap();
+
+        if Some(camera_id) != mode.active.camera_id() {
+            return Ok(());
+        }
+
+        let mut should_be_processed = true;
+        let res = mode.active.notify_before_frame_processing_start(
+            camera_shot,
+            &mut should_be_processed
+        )?;
+        self.apply_notify_result(res, &mut mode)?;
+        if !should_be_processed {
+            return Ok(());
+        }
+
+        let mut command_data = {
+            let options = self.options.read().unwrap();
+
+            let ccd_temp = if options.cam.ctrl.enable_cooler {
+                Some(options.cam.ctrl.temperature)
+            } else {
+                None
+            };
+
+            let calibr_params = Some(CalibrParams {
+                extract_dark:  options.calibr.dark_frame_en,
+                dark_lib_path: options.calibr.dark_library_path.clone(),
+                flat_fname:    None,
+                sar_hot_pixs:  options.calibr.hot_pixels,
+                ccd_temp
+            });
+
+            let new_stop_flag = Arc::new(AtomicBool::new(false));
+            *self.img_proc_stop_flag.lock().unwrap() = Arc::clone(&new_stop_flag);
+
+            FrameProcessCommandData {
+                mode_type:       mode.active.get_type(),
+                camera_id:       camera_id.to_string(),
+                img_source:      Arc::clone(camera_shot),
+                flags:           FrameProcessCommandFlags::empty(),
+                frame:           Arc::clone(&self.cur_frame),
+                stop_flag:       new_stop_flag,
+                ref_stars:       None,
+                calibr_data:     Arc::clone(&self.calibr_data),
+                view_options:    options.preview.preview_params(),
+                frame_options:   options.cam.frame.clone(),
+                quality_options: Some(options.quality.clone()),
+                cam_ctrl_opts:   None,
+                live_stacking:   None,
+                calibr_params,
+            }
+        };
+
+        mode.active.complete_img_process_params(&mut command_data);
+
+        self.frame_processing.add_to_queue(
+            FrameProcessCommand::ProcessImage(command_data)
+        )?;
+
+        Ok(())
     }
 
     fn connect_events(self: &Arc<Self>) {
         // HAL events
         let self_ = Arc::clone(self);
         self.hal.connect_event_handler(move |event| {
-            self_.hal_event_handler(event);
+            let res = self_.hal_event_handler(event);
+            self_.process_error(res, "hal_event_handler");
         });
 
         // Main events
@@ -469,91 +542,6 @@ impl Core {
         Ok(())
     }
 
-    fn process_indi_blob_event(
-        self:        &Arc<Self>,
-        blob:        &Arc<indi::BlobPropValue>,
-        device_name: &str,
-        device_prop: &str,
-    ) -> anyhow::Result<()> {
-        if blob.data.is_empty() { return Ok(()); }
-        log::debug!(
-            "process_blob_event, device_name = {}, device_prop = {}, dl_time = {:.2}s",
-            device_name, device_prop, blob.dl_time
-        );
-
-        let mut mode = self.mode.write().unwrap();
-        let Some(mode_cam) = mode.active.cam_device() else {
-            return Ok(());
-        };
-
-        if device_name != mode_cam.name {
-            log::debug!("device_name({}) != mode_cam.name({}). Exiting...", device_name, mode_cam.name);
-            return Ok(());
-        }
-
-        if device_prop != mode_cam.prop {
-            log::debug!("device_prop({}) != mode_cam.prop({}). Exiting...", device_prop, mode_cam.prop);
-            return Ok(());
-        }
-
-        let mut should_be_processed = true;
-        let res = mode.active.notify_before_frame_processing_start(blob, &mut should_be_processed)?;
-        self.apply_notify_result(res, &mut mode)?;
-        if !should_be_processed {
-            return Ok(());
-        }
-
-        let mut command_data = {
-            let options = self.options.read().unwrap();
-            let device = DeviceAndProp {
-                name: device_name.to_string(),
-                prop: device_prop.to_string(),
-            };
-
-            let ccd_temp = if options.cam.ctrl.enable_cooler {
-                Some(options.cam.ctrl.temperature)
-            } else {
-                None
-            };
-
-            let calibr_params = Some(CalibrParams {
-                extract_dark:  options.calibr.dark_frame_en,
-                dark_lib_path: options.calibr.dark_library_path.clone(),
-                flat_fname:    None,
-                sar_hot_pixs:  options.calibr.hot_pixels,
-                ccd_temp
-            });
-
-            let new_stop_flag = Arc::new(AtomicBool::new(false));
-            *self.img_proc_stop_flag.lock().unwrap() = Arc::clone(&new_stop_flag);
-
-            FrameProcessCommandData {
-                mode_type:       mode.active.get_type(),
-                camera:          device,
-                img_source:      ImageSource::Blob(Arc::clone(blob)),
-                flags:           FrameProcessCommandFlags::empty(),
-                frame:           Arc::clone(&self.cur_frame),
-                stop_flag:       new_stop_flag,
-                ref_stars:       None,
-                calibr_data:     Arc::clone(&self.calibr_data),
-                view_options:    options.preview.preview_params(),
-                frame_options:   options.cam.frame.clone(),
-                quality_options: Some(options.quality.clone()),
-                cam_ctrl_opts:   None,
-                live_stacking:   None,
-                calibr_params,
-            }
-        };
-
-        mode.active.complete_img_process_params(&mut command_data);
-
-        self.frame_processing.add_to_queue(
-            FrameProcessCommand::ProcessImage(command_data)
-        )?;
-
-        Ok(())
-    }
-
     fn process_camera_changed(self: &Arc<Self>, new_camera_id: &str) {
         let options = self.options.read().unwrap();
         if options.cam.device_id != new_camera_id {
@@ -587,7 +575,7 @@ impl Core {
                 let is_opening_file = res.mode_type == ModeType::OpeningImgFile;
 
                 let mut mode = self.mode.write().unwrap();
-                if Some(&res.camera) != mode.active.cam_device() && !is_opening_file {
+                if Some(res.camera_id.as_str()) != mode.active.camera_id() && !is_opening_file {
                     return;
                 }
 
@@ -700,8 +688,8 @@ impl Core {
 
         let command = FrameProcessCommandData {
             mode_type:       ModeType::OpeningImgFile,
-            camera:          DeviceAndProp::default(),
-            img_source:      ImageSource::FileName(file_name.to_path_buf()),
+            camera_id:       String::new(),
+            img_source:      Arc::new(FromFileCameraShot::new(file_name)),
             flags:           FrameProcessCommandFlags::empty(),
             frame:           Arc::clone(&self.cur_frame),
             stop_flag:       new_stop_flag,
@@ -903,7 +891,7 @@ impl Core {
 
         _ = mode.active.abort();
 
-        self.img_proc_stop_flag.lock().unwrap().set(true);
+        self.img_proc_stop_flag.lock().unwrap().store(true, std::sync::atomic::Ordering::Relaxed);
 
         let mut prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
         loop {

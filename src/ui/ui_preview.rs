@@ -1171,8 +1171,7 @@ impl PreviewUi {
 
     fn show_frame_processing_result(&self, result: &FrameProcessResult) {
         let options = self.core.options().read().unwrap();
-        if !result.camera.name.is_empty()
-        && options.cam.device.as_ref() != Some(&result.camera) {
+        if options.cam.device_id != result.camera_id {
             return;
         }
         let live_stacking_preview = options.preview.source == PreviewSource::LiveStacking;
@@ -1188,11 +1187,11 @@ impl PreviewUi {
 
         match &result.data {
             FrameProcessResultData::ShotProcessingFinished {
-                processing_time, blob_dl_time, ..
+                camera_shot, processing_time, ..
             } => {
                 let perf_str = format!(
                     "Download time = {:.2}s, img. process time = {:.2}s",
-                    blob_dl_time, processing_time
+                    camera_shot.download_time(), processing_time
                 );
                 self.main_ui.set_perf_string(perf_str);
             }

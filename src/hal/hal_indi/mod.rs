@@ -382,7 +382,7 @@ impl IndiCameraShot {
 
 impl CameraShot for IndiCameraShot {
     fn get_type(&self) -> CameraShotType {
-        todo!()
+        self.image_type
     }
 
     fn get_raw(&self) -> anyhow::Result<crate::image::raw::RawImage> {
@@ -394,6 +394,24 @@ impl CameraShot for IndiCameraShot {
 
     fn get_image(&self, _image: &mut crate::image::image::Image) -> anyhow::Result<()> {
         anyhow::bail!("Color image is unimplemented for INDI drivers");
+    }
+
+    fn download_time(&self) -> f64 {
+        self.blob.dl_time
+    }
+
+    fn file_ext(&self) -> &str {
+        self.blob.format.trim()
+    }
+
+    fn save_to_file(&self, file_name: &Path) -> anyhow::Result<()> {
+        std::fs::write(&file_name, self.blob.data.as_slice())
+            .map_err(|e| anyhow::anyhow!(
+                "Error '{}'\nwhen saving file '{}'",
+                e.to_string(),
+                file_name.to_str().unwrap_or_default()
+            ))?;
+        Ok(())
     }
 }
 
