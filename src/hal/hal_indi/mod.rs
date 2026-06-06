@@ -441,6 +441,13 @@ impl Camera for IndiCamera {
     // Common
 
     fn init_before_shot(&self) -> anyhow::Result<()> {
+        // Enable blob
+        self.device.indi.command_enable_blob(
+            &self.device.name,
+            None,
+            indi::BlobEnable::Also,
+        )?;
+
         // Disable fast toggle
 
         if self.device.indi.camera_is_fast_toggle_supported(&self.device.name).unwrap_or(false) {

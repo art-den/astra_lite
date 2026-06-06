@@ -668,10 +668,6 @@ impl Mode for PolarAlignMode {
         }.to_string()
     }
 
-    fn cam_device(&self) -> Option<&DeviceAndProp> {
-        Some(&self.camera_dev)
-    }
-
     fn camera_id(&self) -> Option<&str> {
         Some(&self.camera.id())
     }

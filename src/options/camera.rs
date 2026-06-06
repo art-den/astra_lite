@@ -112,16 +112,6 @@ impl DeviceAndProp {
         }
         result
     }
-
-    // TODO: remove!
-    pub fn to_file_name_part(&self) -> String {
-        let mut result = self.name.clone();
-        if !result.is_empty() && !self.prop.is_empty() && self.prop != "CCD1" {
-            result += "_";
-            result += &self.prop;
-        }
-        result
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

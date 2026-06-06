@@ -48,7 +48,6 @@ pub type ModeBox = Box<dyn Mode + Send + Sync>;
 pub trait Mode {
     fn get_type(&self) -> ModeType;
     fn progress_string(&self) -> String;
-    fn cam_device(&self) -> Option<&DeviceAndProp> { None }
     fn camera_id(&self) -> Option<&str> { None }
     fn progress(&self) -> Option<Progress> { None }
     fn get_cur_exposure(&self) -> Option<f64> { None }
@@ -645,11 +644,6 @@ impl Core {
             Box::new(WaitingMode)
         ));
 
-        // init camera for mode
-        if have_to_abort_mode {
-            self.init_cam_for_mode(&new_mode)?;
-        }
-
         mode.active = Box::new(new_mode);
         if reset_aborted_mode {
             mode.aborted = None;
@@ -863,22 +857,6 @@ impl Core {
             &self.events,
         )?;
         self.start_new_mode(mode, false, false)?;
-        Ok(())
-    }
-
-    pub fn init_cam_for_mode(&self, mode: &dyn Mode) -> anyhow::Result<()> {
-        let Some(cam_device) = &mode.cam_device() else {
-            return Ok(());
-        };
-
-        // Enable blob
-
-        self.indi.command_enable_blob(
-            &cam_device.name,
-            None,
-            indi::BlobEnable::Also,
-        )?;
-
         Ok(())
     }
 

@@ -124,7 +124,6 @@ pub struct TackingPicturesMode {
     camera:           Arc<dyn Camera + Send + Sync>,
     cam_mode:         CameraMode,
     state:            State,
-    device:           DeviceAndProp,
     mount_device:     String,
     mount:            Option<Arc<dyn Telescope + Send + Sync>>,
     fn_gen:           Arc<Mutex<SeqFileNameGen>>,
@@ -154,10 +153,6 @@ impl TackingPicturesMode {
         let hal = core.hal();
         let options = core.options();
         let opts = options.read().unwrap();
-
-        let Some(cam_device) = &opts.cam.device else {
-            anyhow::bail!("Camera is not selected");
-        };
 
         let progress = match cam_mode {
             CameraMode::SavingRawFrames => {
@@ -230,7 +225,6 @@ impl TackingPicturesMode {
 
         Ok(Self {
             state:            State::Common,
-            device:           cam_device.clone(),
             mount_device:     opts.mount.device.to_string(),
             fn_gen:           Arc::new(Mutex::new(SeqFileNameGen::new())),
             indi:             Arc::clone(core.indi()),
@@ -422,7 +416,7 @@ impl TackingPicturesMode {
             let mut path = PathBuf::new();
             if matches!(self.cam_mode, CameraMode::MasterDark|CameraMode::MasterBias) {
                 path.push(&options.calibr.dark_library_path);
-                path.push(self.device.to_file_name_part());
+                path.push(self.camera.id().to_string());
             } else {
                 path.push(&options.raw_frames.out_path);
             }
@@ -1175,10 +1169,6 @@ impl Mode for TackingPicturesMode {
             CameraMode::MasterDark      => ModeType::MasterDark,
             CameraMode::MasterBias      => ModeType::MasterBias,
         }
-    }
-
-    fn cam_device(&self) -> Option<&DeviceAndProp> {
-        Some(&self.device)
     }
 
     fn camera_id(&self) -> Option<&str> {

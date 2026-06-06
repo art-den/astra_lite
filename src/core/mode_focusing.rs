@@ -45,7 +45,6 @@ pub struct FocusingMode {
     focuser:        Arc<dyn Focuser + Send + Sync>,
     subscribers:    Arc<EventHandlers>,
     state:          FocusingState,
-    camera_dev:     DeviceAndProp,
     f_opts:         FocuserOptions,
     cam_opts:       CamOptions,
     before_pos:     f64,
@@ -113,10 +112,6 @@ impl FocusingMode {
         let camera = hal.camera(&opts.cam.device_id)?;
         let focuser = hal.focuser(&opts.focuser.device)?;
 
-        let Some(cam_device) = &opts.cam.device else {
-            anyhow::bail!("Camera is not selected");
-        };
-
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;
         cam_opts.frame.exp_main = opts.focuser.exposure;
@@ -145,7 +140,6 @@ impl FocusingMode {
             change_cnt:     0,
             desired_focus:  0.0,
             try_cnt:        0,
-            camera_dev:     cam_device.clone(),
             start_temp:     0.0,
             start_time:     None,
             camera,
@@ -635,10 +629,6 @@ impl Mode for FocusingMode {
             Stage::Final =>
                 "Focusing".to_string(),
         }
-    }
-
-    fn cam_device(&self) -> Option<&DeviceAndProp> {
-        Some(&self.camera_dev)
     }
 
     fn camera_id(&self) -> Option<&str> {

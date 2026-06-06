@@ -80,7 +80,6 @@ impl DarkCreationMode {
             let mut new_mode = TackingPicturesMode::new(cam_mode, &core)?;
             new_mode.set_dark_creation_program_item(&program_item);
             new_mode.set_next_mode(Some(prev_mode));
-            core.init_cam_for_mode(&new_mode)?;
             new_mode.start()?;
             mode.active = Box::new(new_mode);
             Ok(())

@@ -51,7 +51,6 @@ pub struct MountCalibrMode {
     telescope_opts:    TelescopeOptions,
     start_dec:         f64,
     start_ra:          f64,
-    camera_dev:        DeviceAndProp,
     attempt_num:       usize,
     attempts:          Vec<CalibrAtempt>,
     image_width:       usize,
@@ -93,9 +92,6 @@ impl MountCalibrMode {
         let camera = hal.camera(&opts.cam.device_id)?;
         let telescope = hal.telescope(&opts.mount.device)?;
 
-        let Some(cam_device) = &opts.cam.device else {
-            anyhow::bail!("Camera is not selected");
-        };
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;
         cam_opts.frame.exp_main = opts.guiding.main_cam.calibr_exposure;
@@ -110,7 +106,6 @@ impl MountCalibrMode {
             telescope_opts:    opts.telescope.clone(),
             start_dec:         0.0,
             start_ra:          0.0,
-            camera_dev:        cam_device.clone(),
             attempt_num:       0,
             attempts:          Vec::new(),
             image_width:       0,
@@ -299,10 +294,6 @@ impl Mode for MountCalibrMode {
 
     fn take_next_mode(&mut self) -> Option<ModeBox> {
         self.next_mode.take()
-    }
-
-    fn cam_device(&self) -> Option<&DeviceAndProp> {
-        Some(&self.camera_dev)
     }
 
     fn camera_id(&self) -> Option<&str> {

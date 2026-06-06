@@ -32,7 +32,6 @@ pub struct PlatesolveMode {
     cur_frame:    Arc<ResultImage>,
     options:      Arc<RwLock<Options>>,
     subscribers:  Arc<EventHandlers>,
-    camera_dev:   DeviceAndProp,
     cam_opts:     CamOptions,
     ps_opts:      PlateSolverOptions,
     plate_solver: PlateSolver,
@@ -49,9 +48,6 @@ impl PlatesolveMode {
         let opts = options.read().unwrap();
         let camera = hal.camera(&opts.cam.device_id)?;
         let mount = hal.telescope(&opts.mount.device)?;
-        let Some(camera_dev) = opts.cam.device.clone() else {
-            anyhow::bail!("Camera is not selected");
-        };
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;
         cam_opts.frame.exp_main = opts.plate_solver.exposure;
@@ -73,7 +69,6 @@ impl PlatesolveMode {
             camera,
             mount,
             plate_solver,
-            camera_dev,
             cam_opts,
         })
     }
@@ -230,10 +225,6 @@ impl Mode for PlatesolveMode {
             State::Finished   => 2,
         };
         Some(Progress { cur: stage, total: 2 })
-    }
-
-    fn cam_device(&self) -> Option<&DeviceAndProp> {
-        Some(&self.camera_dev)
     }
 
     fn camera_id(&self) -> Option<&str> {

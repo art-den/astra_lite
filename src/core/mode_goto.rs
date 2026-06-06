@@ -321,10 +321,6 @@ impl Mode for GotoMode {
         }
     }
 
-    fn cam_device(&self) -> Option<&DeviceAndProp> {
-        self.camera_dev.as_ref()
-    }
-
     fn camera_id(&self) -> Option<&str> {
         self.camera.as_ref().map(|c| c.id())
     }
