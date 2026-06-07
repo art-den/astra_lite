@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 use crate::{
     core::{cam_ctrl::take_shot, consts::*, events::*, frame_processing::*},
-    hal::{Camera, FrameType, Hal, Telescope, indi},
+    hal::{Camera, FrameType, Hal, Telescope, indi::value_to_sexagesimal},
     image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point},
     options::*,
     plate_solve::*,
@@ -141,8 +141,8 @@ impl GotoMode {
     fn start_goto_coord(&mut self) -> anyhow::Result<()> {
         log::debug!(
             "Goto {}, {} ...",
-            indi::value_to_sexagesimal(self.eq_coord.ra, true, 9),
-            indi::value_to_sexagesimal(self.eq_coord.dec, true, 8)
+            value_to_sexagesimal(self.eq_coord.ra, true, 9),
+            value_to_sexagesimal(self.eq_coord.dec, true, 8)
         );
         self.telescope.goto_and_track(
             radian_to_hour(self.eq_coord.ra),
