@@ -794,6 +794,10 @@ impl Telescope for IndiDevice {
         Ok(self.indi.mount_get_guide_rate(&self.name)?)
     }
 
+    fn pulse_max_duration(&self) -> anyhow::Result<(f64/*ns*/, f64/*we*/)> {
+        Ok(self.indi.mount_get_timed_guide_max(&self.name)?)
+    }
+
     fn can_set_guide_rate(&self) -> anyhow::Result<bool> {
         let prop_data = self.indi.mount_get_guide_rate_prop_data(&self.name)?;
         Ok(prop_data.permition != indi::PropPermition::RO)

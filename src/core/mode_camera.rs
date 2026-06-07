@@ -4,7 +4,7 @@ use crate::{
     TimeLogger,
     core::{cam_ctrl::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode},
     guiding::external_guider::*,
-    hal::{Camera, CameraShot, Focuser, FrameType, Telescope, indi},
+    hal::{Camera, CameraShot, Focuser, FrameType, Telescope},
     image::{
         histogram::*,
         raw::{RawImage, RawImageInfo},
@@ -124,10 +124,8 @@ pub struct TackingPicturesMode {
     camera:           Arc<dyn Camera + Send + Sync>,
     cam_mode:         CameraMode,
     state:            State,
-    mount_device:     String,
     mount:            Option<Arc<dyn Telescope + Send + Sync>>,
     fn_gen:           Arc<Mutex<SeqFileNameGen>>,
-    indi:             Arc<indi::Connection>,
     events:           Arc<EventHandlers>,
     raw_stacker:      RawStacker,
     options:          Arc<RwLock<Options>>,
@@ -225,9 +223,7 @@ impl TackingPicturesMode {
 
         Ok(Self {
             state:            State::Common,
-            mount_device:     opts.mount.device.to_string(),
             fn_gen:           Arc::new(Mutex::new(SeqFileNameGen::new())),
-            indi:             Arc::clone(core.indi()),
             events:           Arc::clone(core.events()),
             raw_stacker:      RawStacker::new(),
             options:          Arc::clone(options),
@@ -651,12 +647,11 @@ impl TackingPicturesMode {
         mut dec_pulse: f64
     ) -> anyhow::Result<()> {
         let mount = self.mount.as_ref().expect("Mount");
-
         let can_set_guide_rate = mount.is_guide_rate_supported()? && mount.can_set_guide_rate()?;
         if can_set_guide_rate {
             mount.set_guide_rate(MOUNT_CALIBR_SPEED, MOUNT_CALIBR_SPEED)?;
         }
-        let (max_dec, max_ra) = self.indi.mount_get_timed_guide_max(&self.mount_device)?;
+        let (max_dec, max_ra) = mount.pulse_max_duration()?;
         let max_dec = f64::min(MAX_TIMED_GUIDE_TIME * 1000.0, max_dec).round();
         let max_ra = f64::min(MAX_TIMED_GUIDE_TIME * 1000.0, max_ra).round();
         ra_pulse = (ra_pulse * 1000.0).round();
@@ -666,7 +661,7 @@ impl TackingPicturesMode {
         if dec_pulse > max_dec { dec_pulse = max_dec; }
         if dec_pulse < -max_dec { dec_pulse = -max_dec; }
         log::debug!("Timed guide, NS = {:.2}ms, WE = {:.2}ms", dec_pulse, ra_pulse);
-        self.indi.mount_timed_guide(&self.mount_device, dec_pulse, ra_pulse)?;
+        mount.pulse_guide(dec_pulse, ra_pulse)?;
         self.state = State::InternalMountCorrection(0);
         Ok(())
     }
@@ -1477,11 +1472,12 @@ impl Mode for TackingPicturesMode {
         let mut result = NotifyResult::Empty;
         match &mut self.state {
             State::InternalMountCorrection(ok_time_ms) => {
-                let guide_pulse_finished = !self.indi.mount_is_timed_guiding(&self.mount_device)?;
+                let mount = self.mount.as_ref().unwrap();
+                let guide_pulse_finished = !mount.is_pulse_guiding()?;
                 if guide_pulse_finished {
                     *ok_time_ms += timer_period_ms;
                     if *ok_time_ms >= AFTER_MOUNT_MOVE_WAIT_TIME * 1000 {
-                        self.indi.mount_abort_motion(&self.mount_device)?;
+                        mount.abort_motion()?;
                         self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
                         self.state = State::Common;
                         result = NotifyResult::ProgressChanges;

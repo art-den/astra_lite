@@ -313,8 +313,8 @@ impl Mode for MountCalibrMode {
 
     fn start(&mut self) -> anyhow::Result<()> {
         let (ra, dec) = self.telescope.eq_coord()?;
-        self.start_dec = ra;
-        self.start_ra = dec;
+        self.start_dec = dec;
+        self.start_ra = ra;
         self.start_for_axis(Axis::Ra)?;
         Ok(())
     }
@@ -343,7 +343,6 @@ impl Mode for MountCalibrMode {
                         if self.telescope.is_abort_motion_supported() {
                             self.telescope.abort_motion()?
                         }
-
                         take_shot(
                             &self.camera,
                             &self.cam_opts.frame,

@@ -280,7 +280,8 @@ pub trait Telescope : Device {
     fn sync(&self, ra: f64, dec: f64) -> anyhow::Result<()>;
 
     fn is_guide_rate_supported(&self) -> anyhow::Result<bool>;
-    fn guide_rate(&self) -> anyhow::Result<(f64/*ra*/, f64/*dec*/)>;
+    fn guide_rate(&self) -> anyhow::Result<(f64/*ns*/, f64/*we*/)>;
+    fn pulse_max_duration(&self) -> anyhow::Result<(f64/*ns*/, f64/*we*/)>;
     fn can_set_guide_rate(&self) -> anyhow::Result<bool>;
     fn set_guide_rate(&self, rate_ns: f64, rate_we: f64) -> anyhow::Result<()>;
     fn pulse_guide(&self, duration_ns: f64, duration_we: f64) -> anyhow::Result<()>;
