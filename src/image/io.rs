@@ -309,10 +309,10 @@ impl CameraShot for FromFileCameraShot {
         let ext = self.file_ext();
         let ext_cmp = |other| ext.eq_ignore_ascii_case(other);
 
-        let is_fits = ext_cmp(".fits") || ext_cmp(".fit");
-        let is_tif = ext_cmp(".tif") || ext_cmp(".tiff");
-        let is_jpeg = ext_cmp(".jpg") || ext_cmp(".jpeg");
-        let is_png = ext_cmp(".png");
+        let is_fits = ext_cmp("fits") || ext_cmp("fit");
+        let is_tif = ext_cmp("tif") || ext_cmp("tiff");
+        let is_jpeg = ext_cmp("jpg") || ext_cmp("jpeg");
+        let is_png = ext_cmp("png");
 
         if is_fits {
             let mut stream = BufReader::new(File::open(&self.file_name)?);

@@ -1171,7 +1171,8 @@ impl PreviewUi {
 
     fn show_frame_processing_result(&self, result: &FrameProcessResult) {
         let options = self.core.options().read().unwrap();
-        if options.cam.device_id != result.camera_id {
+        let is_from_file_image = result.mode_type == ModeType::OpeningImgFile;
+        if !is_from_file_image && options.cam.device_id != result.camera_id {
             return;
         }
         let live_stacking_preview = options.preview.source == PreviewSource::LiveStacking;
@@ -1196,10 +1197,9 @@ impl PreviewUi {
                 self.main_ui.set_perf_string(perf_str);
             }
             FrameProcessResultData::PreviewFrame(img)
-            if is_mode_current(false) => {
+            if is_mode_current(false) || is_from_file_image => {
                 self.show_preview_image(Some(&img.rgb_data), Some(&img.params), None);
                 self.correct_widgets_props();
-
                 show_resolution_info(img.rgb_data.orig_width, img.rgb_data.orig_height);
             }
             FrameProcessResultData::PreviewLiveRes(img)
@@ -1210,12 +1210,12 @@ impl PreviewUi {
                 show_resolution_info(img.rgb_data.orig_width, img.rgb_data.orig_height);
             }
             FrameProcessResultData::HistorgamRaw(_)
-            if is_mode_current(false) => {
+            if is_mode_current(false) || is_from_file_image => {
                 self.repaint_histogram();
                 self.show_histogram_stat();
             }
             FrameProcessResultData::RawFrameInfo(info)
-            if is_mode_current(false) => {
+            if is_mode_current(false) || is_from_file_image => {
                 let image_info = info.image.info();
                 if image_info.frame_type != FrameType::Lights {
                     let history_item = CalibrHistoryItem {
@@ -1263,7 +1263,7 @@ impl PreviewUi {
                 self.set_hist_tab_active(Self::HIST_TAB_LIGHT);
             }
             FrameProcessResultData::FrameInfo
-            if is_mode_current(false) => {
+            if is_mode_current(false) || is_from_file_image => {
                 self.show_image_info();
             }
             FrameProcessResultData::FrameInfoLiveRes

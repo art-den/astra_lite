@@ -526,28 +526,25 @@ impl Core {
     fn frame_process_result_handler(self: &Arc<Self>, res: CommandResult) {
         match res {
             CommandResult::Result(res) => {
-                let is_opening_file = res.mode_type == ModeType::OpeningImgFile;
-
-                let mut mode = self.mode.write().unwrap();
-                if Some(res.camera_id.as_str()) != mode.active.camera_id() && !is_opening_file {
-                    return;
+                if res.mode_type != ModeType::OpeningImgFile  {
+                    let mut mode = self.mode.write().unwrap();
+                    if Some(res.camera_id.as_str()) != mode.active.camera_id() {
+                        return;
+                    }
+                    if mode.active.get_type() != res.mode_type {
+                        return;
+                    }
+                    let result = || -> anyhow::Result<()> {
+                        let res = mode.active.notify_about_frame_processing_result(&res)?;
+                        self.apply_notify_result(res, &mut mode)?;
+                        Ok(())
+                    } ();
+                    drop(mode);
+                    self.process_error(result, "Core::apply_change_result");
                 }
-
-                if mode.active.get_type() != res.mode_type && !is_opening_file {
-                    return;
-                }
-
                 self.events.send(
                     Event::FrameProcessing(res.clone())
                 );
-
-                let result = || -> anyhow::Result<()> {
-                    let res = mode.active.notify_about_frame_processing_result(&res)?;
-                    self.apply_notify_result(res, &mut mode)?;
-                    Ok(())
-                } ();
-                drop(mode);
-                self.process_error(result, "Core::apply_change_result");
             }
 
             CommandResult::QueueOverflow => {
