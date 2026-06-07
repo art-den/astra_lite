@@ -719,6 +719,23 @@ impl Camera for IndiCamera {
         )?;
         Ok(())
     }
+
+    fn set_telescope_focal_len(&self, focal_len: f64) -> anyhow::Result<()> {
+        let (foc_len, aperture) = self.device.indi.camera_get_telescope_focal_len_and_aperture(&self.device.name)?;
+        let apertute_to_set = if aperture < 0.01 {
+            Some(0.2 * foc_len)
+        } else {
+            None
+        };
+        self.device.indi.camera_set_telescope_focal_len_and_aperture(
+            &self.device.name,
+            focal_len,
+            apertute_to_set,
+            true,
+            Some(SET_PROP_TIME_OUT)
+        )?;
+        Ok(())
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -312,7 +312,7 @@ impl Core {
                 }
             }
             HalEvent::NeedInitTelescopeFocalLenForCamera(_camera_id) => {
-
+                self.init_focal_len_for_cameras();
             }
             _ => {}
         }
@@ -416,7 +416,7 @@ impl Core {
             Event::TelescopeFocalLenChanged(_)|
             Event::TelescopeBarlowChanged|
             Event::GuiderFocalLenChanged(_) => {
-                self.process_focal_len_changed();
+                self.init_focal_len_for_cameras();
             }
             Event::CameraCoolingOptionsChanged |
             Event::CameraFanOptionsChanged |
@@ -515,15 +515,12 @@ impl Core {
 
         let res = control_camera_heater(&camera, &options.cam.ctrl);
         self.process_error(res, "control_camera_heater");
-
-        //let res = CameraCtrl::set_focal_len_for_indi_devices(&self.indi, &options);
-        //self.process_error(res, "CameraWatchdog::set_telescope_focal_len");
     }
 
-    fn process_focal_len_changed(self: &Arc<Self>) {
-        //let options = self.options.read().unwrap();
-        //let res = CameraCtrl::set_focal_len_for_indi_devices(&self.indi, &options);
-        //self.process_error(res, "CameraWatchdog::set_telescope_focal_len");
+    fn init_focal_len_for_cameras(self: &Arc<Self>) {
+        let options = self.options.read().unwrap();
+        let res = set_focal_len_for_cameras(&self.hal(), &options);
+        self.process_error(res, "set_focal_len_for_cameras");
     }
 
     fn frame_process_result_handler(self: &Arc<Self>, res: CommandResult) {

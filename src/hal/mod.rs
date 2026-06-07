@@ -259,6 +259,9 @@ pub trait Camera : Device {
     fn is_conversion_gain_supported(&self) -> anyhow::Result<bool>;
     fn conversion_gain_list(&self) -> anyhow::Result<Vec<(String/*id*/, String/*text*/)>>;
     fn set_conversion_gain(&self, id: &str) -> anyhow::Result<()>;
+
+    // Telescope
+    fn set_telescope_focal_len(&self, focal_len: f64) -> anyhow::Result<()>;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

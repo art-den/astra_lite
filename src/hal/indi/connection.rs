@@ -2074,25 +2074,36 @@ impl Connection {
         self.property_exists(device_name, "SCOPE_INFO", None)
     }
 
-    pub fn camera_set_telescope_focal_len(
+    pub fn camera_get_telescope_focal_len_and_aperture(&self, device_name: &str) -> Result<(f64, f64)> {
+        let devices = self.devices.lock().unwrap();
+        let focal_len = devices.get_num_property(device_name, "SCOPE_INFO", "FOCAL_LENGTH")?.value;
+        let aperture = devices.get_num_property(device_name, "SCOPE_INFO", "APERTURE")?.value;
+        Ok((focal_len, aperture))
+    }
+
+    pub fn camera_set_telescope_focal_len_and_aperture(
         &self,
         device_name:  &str,
         focal_length: f64,
+        aperture:     Option<f64>,
         force_set:    bool,
         timeout_ms:   Option<u64>,
     ) -> Result<()> {
-        let aperture = self.get_num_property_value(
+        let mut cur_aperture = self.get_num_property_value(
             device_name,
             "SCOPE_INFO",
             "APERTURE"
         )?;
+        if let Some(aperture) = aperture {
+            cur_aperture = aperture;
+        }
         self.command_set_num_property_and_wait(
             force_set,
             timeout_ms,
             device_name,
             "SCOPE_INFO",
             &[("FOCAL_LENGTH", focal_length),
-              ("APERTURE",     aperture)]
+              ("APERTURE",     cur_aperture)]
         )?;
         Ok(())
     }

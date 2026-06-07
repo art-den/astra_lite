@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{core::core::ModeData, hal::Camera, options::{CamCtrlOptions, FrameOptions}};
+use crate::{core::core::ModeData, hal::{Camera, CcdPurpose, Hal}, options::{CamCtrlOptions, FrameOptions, Options}};
 
 pub fn take_shot(
     camera:    &Arc<dyn Camera + Send + Sync>,
@@ -71,7 +71,6 @@ pub fn take_shot(
     Ok(0)
 }
 
-
 pub fn control_camera_cooling(
     camera:  &Arc<dyn Camera + Send + Sync>,
     options: &CamCtrlOptions
@@ -141,5 +140,27 @@ pub fn restart_camera_exposure(
     take_shot(&camera, mode_cam_opts, ctrl_opts)?;
 
     log::info!("Exposure of camera {} restarted!", camera.id());
+    Ok(())
+}
+
+pub fn set_focal_len_for_cameras(hal: &Hal, options: &Options) -> anyhow::Result<()> {
+    let cameras = hal.cameras()?;
+    for cam_info in cameras {
+        if cam_info.ccd == CcdPurpose::Unknown {
+            continue;
+        }
+
+        let camera = hal.camera(&cam_info.id)?;
+
+        match cam_info.ccd {
+            CcdPurpose::MainTelescopeCcd => {
+                camera.set_telescope_focal_len(options.telescope.real_focal_length())?;
+            }
+            CcdPurpose::GuiderCcd => {
+                camera.set_telescope_focal_len(options.guiding.foc_len)?;
+            }
+            _ => {},
+        }
+    }
     Ok(())
 }
