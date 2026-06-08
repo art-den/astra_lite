@@ -93,7 +93,7 @@ impl CcdToToWatch {
                 *time_ms += timer_period_ms;
                 if *time_ms >= MAX_SWITCHING_ON_TIME * 1000 {
                     self.mode = CcdMode::Waiting;
-                    events.send(HalEvent::NeedRestartCameraExposure(Arc::clone(&self.device_id)));
+                    events.send(HalEvent::CameraNeedRestartExposure(Arc::clone(&self.device_id)));
                 }
             }
         }
@@ -188,7 +188,7 @@ impl CameraToInit {
                 }
                 if self.init_flags.focal_len {
                     self.init_flags.focal_len = false;
-                    events.send(HalEvent::NeedInitTelescopeFocalLenForCamera(Arc::clone(&self.name)));
+                    events.send(HalEvent::CameraNeedInitTelescopeFocalLen(Arc::clone(&self.name)));
                 }
             }
         }

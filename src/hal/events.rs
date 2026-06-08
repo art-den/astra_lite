@@ -7,16 +7,31 @@ pub enum HalEvent {
     Error(Arc<String>),
     DeviceConnected(Arc<DeviceInfo>),
     DeviceDisconnected(Arc<DeviceInfo>),
-    NeedRestartCameraExposure(Arc<String/*camera id*/>),
-    NeedInitTelescopeFocalLenForCamera(Arc<String/*camera id*/>),
+
+    CameraNeedRestartExposure(Arc<String/*camera id*/>),
+    CameraNeedInitTelescopeFocalLen(Arc<String/*camera id*/>),
     CameraIsReadyForCooling(Arc<String/*camera id*/>),
     CameraIsReadyForCtrlFan(Arc<String/*camera id*/>),
     CameraIsReadyForCtrlHeater(Arc<String/*camera id*/>),
-    BeginDownloadCameraData(Arc<String/*camera id*/>),
-    CareraShotResult {
+    CameraBeginDownloadData(Arc<String/*camera id*/>),
+    CameraShotResult {
         cam_id: Arc<String>,
         shot:   Arc<dyn CameraShot + Send + Sync>,
-    }
+    },
+    CameraCoolerPwrChanged {
+        cam_id: Arc<String>,
+        power:  f64,
+    },
+    CameraIsReadyToWork(Arc<String/*camera id*/>),
+    CameraTimeUntilEndOfExposure {
+        cam_id: Arc<String>,
+        time:   f64,
+    },
+    CameraCcdTempChanged {
+        cam_id:      Arc<String>,
+        temperature: f64,
+    },
+
 }
 
 pub struct HalEventHandlers {

@@ -272,7 +272,7 @@ impl Core {
             HalEvent::Error(err) => {
                 self.process_error_str(&err.as_str(), "HAL error");
             }
-            HalEvent::CareraShotResult { cam_id, shot } => {
+            HalEvent::CameraShotResult { cam_id, shot } => {
                 let result = self.process_camera_shot_result(cam_id, shot);
                 self.process_error(result, "process_camera_shot_result");
             }
@@ -293,12 +293,12 @@ impl Core {
                     };
                 }
             }
-            HalEvent::BeginDownloadCameraData(camera_id) => {
+            HalEvent::CameraBeginDownloadData(camera_id) => {
                 let mut mode = self.mode.write().unwrap();
                 let res = mode.active.notify_camera_douwnload_started(camera_id)?;
                 self.apply_notify_result(res, &mut mode)?;
             }
-            HalEvent::NeedRestartCameraExposure(camera_id) => {
+            HalEvent::CameraNeedRestartExposure(camera_id) => {
                 let options = self.options().read().unwrap();
                 if options.cam.device_id == **camera_id {
                     let Ok(camera) = self.hal.camera(&options.cam.device_id) else { return Ok(()); };
@@ -311,7 +311,7 @@ impl Core {
                     )?;
                 }
             }
-            HalEvent::NeedInitTelescopeFocalLenForCamera(_camera_id) => {
+            HalEvent::CameraNeedInitTelescopeFocalLen(_camera_id) => {
                 self.init_focal_len_for_cameras();
             }
             _ => {}

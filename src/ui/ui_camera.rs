@@ -438,6 +438,26 @@ impl UiModule for CameraUi {
                     self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
                 }
             }
+            HalEvent::CameraCoolerPwrChanged { cam_id, power } => {
+                self.show_coolpwr_value(cam_id, *power);
+            }
+            HalEvent::CameraIsReadyToWork(camera_id) => {
+                let options = self.core.options().read().unwrap();
+                if options.cam.device_id == **camera_id {
+                    self.delayed_actions.schedule_ex(
+                        DelayedAction::StartLiveView,
+                        // 4000 ms pause to start live view from camera
+                        // after connecting to INDI server
+                        4000
+                    );
+                }
+            }
+            HalEvent::CameraTimeUntilEndOfExposure{..} => {
+                self.update_shot_state();
+            }
+            HalEvent::CameraCcdTempChanged { cam_id, temperature } => {
+                self.show_cur_temperature_value(cam_id, *temperature);
+            }
             _ => {},
         }
     }
@@ -1432,28 +1452,22 @@ impl CameraUi {
 
     fn show_cur_temperature_value(
         &self,
-        device_name: &str,
+        device_id: &str,
         temparature: f64
     ) {
         let options = self.core.options().read().unwrap();
-        let Some(cur_cam_device) = &options.cam.device else { return; };
-        if cur_cam_device.name == device_name {
+        if options.cam.device_id == device_id {
             self.widgets.info.l_temp_value.set_label(
                 &format!("T: {:.1}°C", temparature)
             );
         }
     }
 
-    fn show_coolpwr_value(
-        &self,
-        device_name: &str,
-        pwr_str:     &str
-    ) {
+    fn show_coolpwr_value(&self, device_id: &str, pwr: f64) {
         let options = self.core.options().read().unwrap();
-        let Some(cur_cam_device) = &options.cam.device else { return; };
-        if cur_cam_device.name == device_name {
+        if options.cam.device_id == device_id {
             self.widgets.info.l_coolpwr_value.set_label(
-                &format!("Pwr: {}", pwr_str)
+                &format!("Pwr: {}", pwr)
             );
         }
     }
@@ -1506,16 +1520,7 @@ impl CameraUi {
             self.delayed_actions.schedule(DelayedAction::FillConvGainItems);
         }
 
-        if indi::Connection::camera_is_cooler_pwr_property(prop_name, elem_name) {
-            self.show_coolpwr_value(device_name, &value.to_string());
-        }
-
         match (prop_name, elem_name, value) {
-            ("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE"|"CCD_TEMPERATURE",
-             indi::PropValue::Num(indi::NumPropValue{value, ..})) => {
-                self.show_cur_temperature_value(device_name, *value);
-            }
-
             ("CCD_COOLER", ..)
             if new_prop => {
                 self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
@@ -1524,22 +1529,6 @@ impl CameraUi {
             ("CCD_OFFSET", ..) | ("CCD_GAIN", ..) | ("CCD_CONTROLS", ..)
             if new_prop => {
                 self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
-            }
-
-            ("CCD_EXPOSURE"|"GUIDER_EXPOSURE", ..) => {
-                let options = self.core.options().read().unwrap();
-                if new_prop {
-                    if options.cam.device.as_ref().map(|d| d.name == device_name).unwrap_or(false) {
-                        self.delayed_actions.schedule_ex(
-                            DelayedAction::StartLiveView,
-                            // 4000 ms pause to start live view from camera
-                            // after connecting to INDI server
-                            4000
-                        );
-                    }
-                } else {
-                    self.update_shot_state();
-                }
             }
 
             ("CCD_INFO", "CCD_MAX_X", ..) |

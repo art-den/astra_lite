@@ -19,10 +19,10 @@ struct Watchdogs {
 // IndiHalImpl
 
 pub struct IndiHalImpl {
-    indi:              Arc<indi::Connection>,
-    event_subscribers: Arc<HalEventHandlers>,
-    indi_evt_subscr:   Mutex<Option<EventHandlerId>>,
-    watchdogs:         Mutex<Watchdogs>,
+    indi:            Arc<indi::Connection>,
+    event_handlers:  Arc<HalEventHandlers>,
+    indi_evt_subscr: Mutex<Option<EventHandlerId>>,
+    watchdogs:       Mutex<Watchdogs>,
 }
 
 impl IndiHalImpl {
@@ -36,10 +36,10 @@ impl IndiHalImpl {
         };
 
         let result = Arc::new(Self {
-            indi:              Arc::clone(indi),
-            event_subscribers: Arc::clone(event_subscribers),
-            indi_evt_subscr:   Mutex::new(None),
-            watchdogs:         Mutex::new(watchdogs),
+            indi:            Arc::clone(indi),
+            event_handlers:  Arc::clone(event_subscribers),
+            indi_evt_subscr: Mutex::new(None),
+            watchdogs:       Mutex::new(watchdogs),
         });
 
         let self_ = Arc::clone(&result);
@@ -78,39 +78,108 @@ impl IndiHalImpl {
                 }
                 indi::Event::BlobStart(blob_start) => {
                     let mut device_id = blob_start.device_name.to_string();
-                    dbg!(&blob_start.elem_name);
                     if *blob_start.elem_name == "CCD2" {
                         device_id += CAM_CCD2_POSTFIX;
                     }
-                    self.event_subscribers.send(HalEvent::BeginDownloadCameraData(
+                    self.event_handlers.send(HalEvent::CameraBeginDownloadData(
                         Arc::new(device_id)
                     ));
                 }
                 _ => {}
             }
             Ok(())
-        }();
-
+        } ();
         if let Err(err) = result {
-            self.event_subscribers.send(HalEvent::Error(
+            self.event_handlers.send(HalEvent::Error(
                 Arc::new(err.to_string())
             ));
         }
     }
 
     fn process_indi_prop_change_event(
-        self: &Arc<Self>,
+        self:        &Arc<Self>,
         prop_change: &indi::PropChangeEvent
     ) -> anyhow::Result<()> {
+        use indi::*;
+
         match &prop_change.change {
-            indi::PropChange::Change {value: indi::PropValue::Blob(blob), prop_name, ..} => {
-                self.process_indi_blob_event(
-                    blob,
-                    &prop_change.device_name,
-                    prop_name,
-                )?;
+            PropChange::New { prop_name, elem_name, value, state } => {
+                self.process_new_prop(&prop_change.device_name, prop_name, elem_name, value, *state)?;
+            }
+            PropChange::Change { value, prop_name, elem_name, prev_state, new_state } => {
+                self.process_prop_change(&prop_change.device_name, prop_name, elem_name, value, *prev_state, *new_state)?;
             }
              _ => {},
+        }
+        Ok(())
+    }
+
+    fn process_new_prop(
+        &self,
+        device_name: &Arc<String>,
+        prop_name:   &str,
+        elem_name:   &str,
+        value:       &indi::PropValue,
+        state:       indi::PropState
+    ) -> anyhow::Result<()> {
+        match (prop_name, elem_name, value, state) {
+            ("CCD_EXPOSURE", _, _, _) => {
+                self.event_handlers.send(HalEvent::CameraIsReadyToWork(
+                    Arc::clone(device_name)
+                ));
+            }
+            ("GUIDER_EXPOSURE", _, _, _) => {
+                self.event_handlers.send(HalEvent::CameraIsReadyToWork(
+                    Arc::new(device_name.to_string() + CAM_CCD2_POSTFIX)
+                ));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn process_prop_change(
+        self:        &Arc<Self>,
+        device_name: &Arc<String>,
+        prop_name:   &str,
+        elem_name:   &str,
+        value:       &indi::PropValue,
+        prev_state:  indi::PropState,
+        new_state:   indi::PropState,
+    ) -> anyhow::Result<()> {
+        use indi::*;
+
+        match (prop_name, elem_name, value, prev_state, new_state) {
+            (_, _, PropValue::Blob(blob), _, _) => {
+                self.process_indi_blob_event(blob, device_name, prop_name)?;
+            }
+            (_, _, PropValue::Num(value), _, _)
+            if Connection::camera_is_cooler_pwr_property(prop_name, elem_name) => {
+                self.event_handlers.send(HalEvent::CameraCoolerPwrChanged {
+                    cam_id: Arc::clone(device_name),
+                    power:  value.value
+                });
+            }
+            ("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE", PropValue::Num(value), _, _) => {
+                self.event_handlers.send(HalEvent::CameraTimeUntilEndOfExposure {
+                    cam_id: Arc::clone(device_name),
+                    time:   value.value
+                });
+            }
+            ("GUIDER_EXPOSURE", "GUIDER_EXPOSURE_VALUE", PropValue::Num(value), _, _) => {
+                self.event_handlers.send(HalEvent::CameraTimeUntilEndOfExposure {
+                    cam_id: Arc::new(device_name.to_string() + CAM_CCD2_POSTFIX),
+                    time:   value.value
+                });
+            }
+            ("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE"|"CCD_TEMPERATURE", PropValue::Num(value), _, _) => {
+                self.event_handlers.send(HalEvent::CameraCcdTempChanged {
+                    cam_id:       Arc::clone(device_name),
+                    temperature:  value.value
+                });
+            }
+
+            _ => {}
         }
         Ok(())
     }
@@ -126,7 +195,7 @@ impl IndiHalImpl {
             device_id += CAM_CCD2_POSTFIX;
         }
         let camera_shot = IndiCameraShot::new(blob)?;
-        self.event_subscribers.send(HalEvent::CareraShotResult{
+        self.event_handlers.send(HalEvent::CameraShotResult{
             cam_id: Arc::new(device_id),
             shot:   Arc::new(camera_shot),
         });
@@ -164,7 +233,7 @@ impl IndiHalImpl {
         } else {
             HalEvent::DeviceDisconnected(Arc::new(device_info))
         };
-        self.event_subscribers.send(event_to_send);
+        self.event_handlers.send(event_to_send);
     }
 
     fn driver_interface_to_dev_type(drv_interface: indi::DriverInterface) -> DeviceType {
