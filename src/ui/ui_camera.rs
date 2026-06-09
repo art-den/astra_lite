@@ -32,7 +32,6 @@ pub fn init_ui(
         core:            Arc::clone(core),
         camera:          RefCell::new(None),
         delayed_actions: DelayedActions::new(500),
-        conn_state:      RefCell::new(indi::ConnState::Disconnected),
         fn_utils:        RefCell::new(FileNameUtils::default()),
     });
 
@@ -274,7 +273,6 @@ struct CameraUi {
     core:            Arc<Core>,
     camera:          RefCell<Option<Arc<dyn Camera>>>,
     delayed_actions: DelayedActions<DelayedAction>,
-    conn_state:      RefCell<indi::ConnState>,
     fn_utils:        RefCell<FileNameUtils>,
 }
 
@@ -387,8 +385,6 @@ impl UiModule for CameraUi {
 
     fn on_indi_event(&self, event: &indi::Event) {
         match event {
-            indi::Event::ConnChange(conn_state) =>
-                self.process_indi_conn_state_event(conn_state),
             indi::Event::PropChange(event_data) => {
                 match &event_data.change {
                     indi::PropChange::New { prop_name, elem_name, value, .. } =>
@@ -421,6 +417,9 @@ impl UiModule for CameraUi {
 
     fn on_hal_event(&self, event: &HalEvent) {
         match event {
+            HalEvent::StateChanged(state) => {
+                self.process_hal_state_event(state);
+            }
             HalEvent::DeviceConnected(evt) => {
                 let options = self.core.options().read().unwrap();
                 if evt.id == options.cam.device_id {
@@ -428,6 +427,18 @@ impl UiModule for CameraUi {
                     *self.camera.borrow_mut() = camera.map(|cam| cam.clone() as Arc<_>);
                     drop(options);
                     self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
+                }
+            }
+            HalEvent::CameraIsReadyToWork(camera_id) => {
+                let options = self.core.options().read().unwrap();
+                 self.delayed_actions.schedule(DelayedAction::UpdateCamList);
+                if options.cam.device_id == **camera_id {
+                    self.delayed_actions.schedule_ex(
+                        DelayedAction::StartLiveView,
+                        // 4000 ms pause to start live view from camera
+                        // after connecting to INDI server
+                        4000
+                    );
                 }
             }
             HalEvent::DeviceDisconnected(evt) => {
@@ -441,23 +452,33 @@ impl UiModule for CameraUi {
             HalEvent::CameraCoolerPwrChanged { cam_id, power } => {
                 self.show_coolpwr_value(cam_id, *power);
             }
-            HalEvent::CameraIsReadyToWork(camera_id) => {
-                let options = self.core.options().read().unwrap();
-                if options.cam.device_id == **camera_id {
-                    self.delayed_actions.schedule_ex(
-                        DelayedAction::StartLiveView,
-                        // 4000 ms pause to start live view from camera
-                        // after connecting to INDI server
-                        4000
-                    );
-                }
-            }
             HalEvent::CameraTimeUntilEndOfExposure{..} => {
                 self.update_shot_state();
             }
             HalEvent::CameraCcdTempChanged { cam_id, temperature } => {
                 self.show_cur_temperature_value(cam_id, *temperature);
             }
+            HalEvent::CameraCoolerCanBeControlled(camera_id) => {
+                let options = self.core.options().read().unwrap();
+                if options.cam.device_id == **camera_id {
+                    self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
+                }
+            }
+            HalEvent::CameraHeaterCanBeControlled(camera_id) => {
+                let options = self.core.options().read().unwrap();
+                if options.cam.device_id == **camera_id {
+                    self.delayed_actions.schedule(DelayedAction::FillHeaterItems);
+                }
+            }
+
+            HalEvent::CameraConvGainCanBeControlled(camera_id) => {
+                let options = self.core.options().read().unwrap();
+                if options.cam.device_id == **camera_id {
+                    self.delayed_actions.schedule(DelayedAction::FillConvGainItems);
+                }
+            }
+
+
             _ => {},
         }
     }
@@ -1484,19 +1505,15 @@ impl CameraUi {
         }
     }
 
-    fn process_indi_conn_state_event(&self, conn_state: &indi::ConnState) {
+    fn process_hal_state_event(&self, state: &HalState) {
         let disconnect_event =
-            *conn_state == indi::ConnState::Disconnected ||
-            *conn_state == indi::ConnState::Disconnecting;
-        *self.conn_state.borrow_mut() = conn_state.clone();
+            *state == HalState::Disconnecting ||
+            *state == HalState::Disconnected;
 
         if disconnect_event {
             let mut options = self.core.options().write().unwrap();
             let cam_id = options.cam.device_id.clone();
             self.store_options_for_camera(&cam_id, &mut options);
-        }
-
-        if disconnect_event {
             self.update_devices_list();
         }
         self.correct_widgets_props();
@@ -1512,20 +1529,7 @@ impl CameraUi {
         _new_state:  Option<&indi::PropState>,
         value:       &indi::PropValue,
     ) {
-        if indi::Connection::camera_is_heater_str_property(prop_name) && new_prop {
-            self.delayed_actions.schedule(DelayedAction::FillHeaterItems);
-        }
-
-        if indi::Connection::camera_is_conversion_gain_property(prop_name) && new_prop {
-            self.delayed_actions.schedule(DelayedAction::FillConvGainItems);
-        }
-
         match (prop_name, elem_name, value) {
-            ("CCD_COOLER", ..)
-            if new_prop => {
-                self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
-            }
-
             ("CCD_OFFSET", ..) | ("CCD_GAIN", ..) | ("CCD_CONTROLS", ..)
             if new_prop => {
                 self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
@@ -1536,10 +1540,6 @@ impl CameraUi {
                 self.delayed_actions.schedule(
                     DelayedAction::UpdateResolutionList
                 );
-            }
-
-            ("CCD1"|"CCD2", ..) if new_prop => {
-                self.delayed_actions.schedule(DelayedAction::UpdateCamList);
             }
             _ => {},
         }

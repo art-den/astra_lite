@@ -41,7 +41,7 @@ pub struct CameraInfo {
     pub ccd:   CcdPurpose,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum HalState {
     ImplNotDefined,
     Connecting,

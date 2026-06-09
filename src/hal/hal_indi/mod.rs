@@ -54,11 +54,21 @@ impl IndiHalImpl {
     fn indi_event_handler(self: &Arc<Self>, event: indi::Event) {
         let result = || -> anyhow::Result<()> {
             match event {
-                indi::Event::ConnChange(indi::ConnState::Disconnected) => {
-                    let mut watchdogs = self.watchdogs.lock().unwrap();
-                    watchdogs.camera.reset();
-                    watchdogs.devices.reset();
-                    drop(watchdogs);
+                indi::Event::ConnChange(state) => {
+                    if state == indi::ConnState::Disconnected {
+                        let mut watchdogs = self.watchdogs.lock().unwrap();
+                        watchdogs.camera.reset();
+                        watchdogs.devices.reset();
+                        drop(watchdogs);
+                    }
+                    let hal_state = match state {
+                        indi::ConnState::Disconnected   => HalState::Disconnected,
+                        indi::ConnState::Connecting     => HalState::Connecting,
+                        indi::ConnState::Connected      => HalState::Connected,
+                        indi::ConnState::Disconnecting  => HalState::Disconnecting,
+                        indi::ConnState::Error(err_str) => HalState::Error(err_str),
+                    };
+                    self.event_handlers.send(HalEvent::StateChanged(hal_state));
                 }
                 indi::Event::NewDevice(evt) => if evt.connected {
                     self.process_dev_conn_evt(&evt.device_name, evt.interface, evt.connected);
@@ -122,6 +132,18 @@ impl IndiHalImpl {
         value:       &indi::PropValue,
         state:       indi::PropState
     ) -> anyhow::Result<()> {
+        if indi::Connection::camera_is_heater_str_property(prop_name) {
+            self.event_handlers.send(HalEvent::CameraHeaterCanBeControlled (
+                Arc::clone(device_name)
+            ));
+        }
+
+        if indi::Connection::camera_is_conversion_gain_property(prop_name) {
+            self.event_handlers.send(HalEvent::CameraConvGainCanBeControlled (
+                Arc::clone(device_name)
+            ));
+        }
+
         match (prop_name, elem_name, value, state) {
             ("CCD_EXPOSURE", _, _, _) => {
                 self.event_handlers.send(HalEvent::CameraIsReadyToWork(
@@ -131,6 +153,11 @@ impl IndiHalImpl {
             ("GUIDER_EXPOSURE", _, _, _) => {
                 self.event_handlers.send(HalEvent::CameraIsReadyToWork(
                     Arc::new(device_name.to_string() + CAM_CCD2_POSTFIX)
+                ));
+            }
+            ("CCD_COOLER", _, _, _) => {
+                self.event_handlers.send(HalEvent::CameraCoolerCanBeControlled(
+                    Arc::clone(device_name)
                 ));
             }
             _ => {}
@@ -178,6 +205,7 @@ impl IndiHalImpl {
                     temperature:  value.value
                 });
             }
+
 
             _ => {}
         }

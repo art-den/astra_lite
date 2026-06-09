@@ -1,28 +1,30 @@
 use std::sync::{Arc, RwLock};
 
-use crate::hal::{CameraShot, DeviceInfo};
+use crate::hal::{CameraShot, DeviceInfo, HalState};
 
 #[derive(Clone)]
 pub enum HalEvent {
     Error(Arc<String>),
+    StateChanged(HalState),
     DeviceConnected(Arc<DeviceInfo>),
     DeviceDisconnected(Arc<DeviceInfo>),
 
+    CameraShotResult {
+        cam_id: Arc<String>,
+        shot:   Arc<dyn CameraShot + Send + Sync>,
+    },
+    CameraIsReadyToWork(Arc<String/*camera id*/>),
     CameraNeedRestartExposure(Arc<String/*camera id*/>),
     CameraNeedInitTelescopeFocalLen(Arc<String/*camera id*/>),
     CameraIsReadyForCooling(Arc<String/*camera id*/>),
     CameraIsReadyForCtrlFan(Arc<String/*camera id*/>),
     CameraIsReadyForCtrlHeater(Arc<String/*camera id*/>),
     CameraBeginDownloadData(Arc<String/*camera id*/>),
-    CameraShotResult {
-        cam_id: Arc<String>,
-        shot:   Arc<dyn CameraShot + Send + Sync>,
-    },
     CameraCoolerPwrChanged {
         cam_id: Arc<String>,
         power:  f64,
     },
-    CameraIsReadyToWork(Arc<String/*camera id*/>),
+
     CameraTimeUntilEndOfExposure {
         cam_id: Arc<String>,
         time:   f64,
@@ -31,7 +33,9 @@ pub enum HalEvent {
         cam_id:      Arc<String>,
         temperature: f64,
     },
-
+    CameraCoolerCanBeControlled(Arc<String/*camera id*/>),
+    CameraHeaterCanBeControlled(Arc<String/*camera id*/>),
+    CameraConvGainCanBeControlled(Arc<String/*camera id*/>),
 }
 
 pub struct HalEventHandlers {
