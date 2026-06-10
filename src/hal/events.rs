@@ -35,7 +35,10 @@ pub enum HalEvent {
     },
     CameraCoolerCanBeControlled(Arc<String/*camera id*/>),
     CameraHeaterCanBeControlled(Arc<String/*camera id*/>),
+    CameraOffsetCanBeControlled(Arc<String/*camera id*/>),
+    CameraGainCanBeControlled(Arc<String/*camera id*/>),
     CameraConvGainCanBeControlled(Arc<String/*camera id*/>),
+    CameraCcdSizeChanged(Arc<String/*camera id*/>),
 }
 
 pub struct HalEventHandlers {

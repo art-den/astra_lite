@@ -137,13 +137,11 @@ impl IndiHalImpl {
                 Arc::clone(device_name)
             ));
         }
-
         if indi::Connection::camera_is_conversion_gain_property(prop_name) {
             self.event_handlers.send(HalEvent::CameraConvGainCanBeControlled (
                 Arc::clone(device_name)
             ));
         }
-
         match (prop_name, elem_name, value, state) {
             ("CCD_EXPOSURE", _, _, _) => {
                 self.event_handlers.send(HalEvent::CameraIsReadyToWork(
@@ -157,6 +155,16 @@ impl IndiHalImpl {
             }
             ("CCD_COOLER", _, _, _) => {
                 self.event_handlers.send(HalEvent::CameraCoolerCanBeControlled(
+                    Arc::clone(device_name)
+                ));
+            }
+            ("CCD_OFFSET", _, _, _) => {
+                self.event_handlers.send(HalEvent::CameraOffsetCanBeControlled(
+                    Arc::clone(device_name)
+                ));
+            }
+            ("CCD_GAIN", _, _, _) => {
+                self.event_handlers.send(HalEvent::CameraGainCanBeControlled(
                     Arc::clone(device_name)
                 ));
             }
@@ -205,6 +213,14 @@ impl IndiHalImpl {
                     temperature:  value.value
                 });
             }
+            ("CCD_INFO", "CCD_MAX_X"|"CCD_MAX_Y", _, _, _) => {
+                self.event_handlers.send(HalEvent::CameraCcdSizeChanged(
+                    Arc::clone(device_name)
+                ));
+            }
+
+
+            // CameraCcdSizeChanged(Arc<String/*camera id*/>),
 
 
             _ => {}

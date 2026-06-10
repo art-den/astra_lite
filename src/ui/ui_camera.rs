@@ -3,7 +3,7 @@ use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
     core::{core::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}},
-    hal::{Camera, DeviceType, FrameType, HalState, events::HalEvent, indi},
+    hal::{Camera, DeviceType, FrameType, HalState, events::HalEvent},
     image::{info::*, raw::CalibrMethods},
     options::*,
 };
@@ -383,38 +383,6 @@ impl UiModule for CameraUi {
         drop(options);
     }
 
-    fn on_indi_event(&self, event: &indi::Event) {
-        match event {
-            indi::Event::PropChange(event_data) => {
-                match &event_data.change {
-                    indi::PropChange::New { prop_name, elem_name, value, .. } =>
-                        self.process_indi_prop_change(
-                            &event_data.device_name,
-                            prop_name,
-                            elem_name,
-                            true,
-                            None,
-                            None,
-                            value
-                        ),
-                    indi::PropChange::Change { prop_name, elem_name, value, prev_state, new_state } =>
-                        self.process_indi_prop_change(
-                            &event_data.device_name,
-                            prop_name,
-                            elem_name,
-                            false,
-                            Some(prev_state),
-                            Some(new_state),
-                            value
-                        ),
-                    indi::PropChange::Delete {..} => {}
-                };
-            },
-
-            _ => {}
-        }
-    }
-
     fn on_hal_event(&self, event: &HalEvent) {
         match event {
             HalEvent::StateChanged(state) => {
@@ -458,7 +426,9 @@ impl UiModule for CameraUi {
             HalEvent::CameraCcdTempChanged { cam_id, temperature } => {
                 self.show_cur_temperature_value(cam_id, *temperature);
             }
-            HalEvent::CameraCoolerCanBeControlled(camera_id) => {
+            HalEvent::CameraCoolerCanBeControlled(camera_id) |
+            HalEvent::CameraOffsetCanBeControlled(camera_id) |
+            HalEvent::CameraGainCanBeControlled(camera_id) => {
                 let options = self.core.options().read().unwrap();
                 if options.cam.device_id == **camera_id {
                     self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
@@ -470,15 +440,18 @@ impl UiModule for CameraUi {
                     self.delayed_actions.schedule(DelayedAction::FillHeaterItems);
                 }
             }
-
             HalEvent::CameraConvGainCanBeControlled(camera_id) => {
                 let options = self.core.options().read().unwrap();
                 if options.cam.device_id == **camera_id {
                     self.delayed_actions.schedule(DelayedAction::FillConvGainItems);
                 }
             }
-
-
+            HalEvent::CameraCcdSizeChanged(camera_id) => {
+                let options = self.core.options().read().unwrap();
+                if options.cam.device_id == **camera_id {
+                    self.delayed_actions.schedule(DelayedAction::UpdateResolutionList);
+                }
+            }
             _ => {},
         }
     }
@@ -1517,32 +1490,6 @@ impl CameraUi {
             self.update_devices_list();
         }
         self.correct_widgets_props();
-    }
-
-    fn process_indi_prop_change(
-        &self,
-        device_name: &str,
-        prop_name:   &str,
-        elem_name:   &str,
-        new_prop:    bool,
-        _prev_state: Option<&indi::PropState>,
-        _new_state:  Option<&indi::PropState>,
-        value:       &indi::PropValue,
-    ) {
-        match (prop_name, elem_name, value) {
-            ("CCD_OFFSET", ..) | ("CCD_GAIN", ..) | ("CCD_CONTROLS", ..)
-            if new_prop => {
-                self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
-            }
-
-            ("CCD_INFO", "CCD_MAX_X", ..) |
-            ("CCD_INFO", "CCD_MAX_Y", ..) => {
-                self.delayed_actions.schedule(
-                    DelayedAction::UpdateResolutionList
-                );
-            }
-            _ => {},
-        }
     }
 
     fn handler_action_start_live_stacking(self: &Rc<Self>) {
