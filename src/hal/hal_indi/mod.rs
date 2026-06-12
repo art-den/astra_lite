@@ -170,6 +170,11 @@ impl IndiHalImpl {
                     Arc::clone(device_name)
                 ));
             }
+            ("TELESCOPE_SLEW_RATE", ..) => {
+                self.event_handlers.send(HalEvent::TelescopeSlewRateListReady(
+                    Arc::clone(device_name)
+                ));
+            }
             ("ABS_FOCUS_POSITION", "FOCUS_ABSOLUTE_POSITION", PropValue::Num(value), PropState::Idle|PropState::Ok) => {
                 self.event_handlers.send(HalEvent::FocuserAbsValueCanBeControlled {
                     device_id: Arc::clone(device_name),
@@ -235,6 +240,47 @@ impl IndiHalImpl {
                 self.event_handlers.send(HalEvent::CameraCcdSizeChanged(
                     Arc::clone(device_name)
                 ));
+            }
+            ("TELESCOPE_TRACK_STATE", elem, indi::PropValue::Switch(prop_value), _, _) => {
+                let tracking =
+                    if elem == "TRACK_ON" { *prop_value }
+                    else if elem == "TRACK_OFF" { !*prop_value }
+                    else { return Ok(()); };
+                self.event_handlers.send(HalEvent::TelescopeTrackingChanged {
+                    device_id: Arc::clone(device_name),
+                    tracking,
+                });
+                self.event_handlers.send(HalEvent::TelescopeStateChanged {
+                    device_id: Arc::clone(device_name),
+                    state:     telescope_state(&self.indi, device_name).unwrap_or(TelescopeState::Error),
+                });
+            }
+            ("TELESCOPE_PARK", "PARK", indi::PropValue::Switch(true), _, _) => {
+                self.event_handlers.send(HalEvent::TelescopeParked(
+                    Arc::clone(device_name)
+                ));
+                self.event_handlers.send(HalEvent::TelescopeStateChanged {
+                    device_id: Arc::clone(device_name),
+                    state:     telescope_state(&self.indi, device_name).unwrap_or(TelescopeState::Error),
+                });
+            }
+            ("TELESCOPE_PARK", "UNPARK", indi::PropValue::Switch(true), _, _) => {
+                self.event_handlers.send(HalEvent::TelescopeUnparked(
+                    Arc::clone(device_name)
+                ));
+                self.event_handlers.send(HalEvent::TelescopeStateChanged {
+                    device_id: Arc::clone(device_name),
+                    state:     telescope_state(&self.indi, device_name).unwrap_or(TelescopeState::Error),
+                });
+            }
+            ("TELESCOPE_MOTION_NS" | "TELESCOPE_MOTION_WE" |
+             "TELESCOPE_TIMED_GUIDE_NS" | "TELESCOPE_TIMED_GUIDE_WE" |
+             "EQUATORIAL_EOD_COORD",
+             ..) => {
+                self.event_handlers.send(HalEvent::TelescopeStateChanged {
+                    device_id: Arc::clone(device_name),
+                    state:     telescope_state(&self.indi, device_name).unwrap_or(TelescopeState::Error),
+                });
             }
             ("ABS_FOCUS_POSITION", "FOCUS_ABSOLUTE_POSITION", PropValue::Num(value), _, state) => {
                 self.event_handlers.send(HalEvent::FocuserAbsValueChanged {
@@ -883,13 +929,47 @@ impl Camera for IndiCamera {
 ///////////////////////////////////////////////////////////////////////////////
 // Telescope (mount)
 
+fn telescope_state(
+    indi:        &Arc<indi::Connection>,
+    device_name: &str
+) -> anyhow::Result<TelescopeState> {
+    let eq_coord_prop_state = indi.mount_get_eq_coord_prop_state(device_name)?;
+    let is_parked = indi.mount_is_parked(device_name)?;
+    let is_error = eq_coord_prop_state == indi::PropState::Alert;
+    let is_tracking = indi.mount_is_tracking(device_name)?;
+    let is_slewing = eq_coord_prop_state == indi::PropState::Busy;
+    let is_correction = indi.mount_is_timed_guiding(device_name)?;
+    let is_moved = indi.mount_is_moving(device_name)?;
+    let result = if is_parked {
+        TelescopeState::Parked
+    } else if is_error {
+        TelescopeState::Error
+    } else if is_moved {
+        TelescopeState::Moved
+    } else if is_correction {
+        TelescopeState::Correcton
+    } else if is_tracking {
+        TelescopeState::Tracking
+    } else if is_slewing {
+        TelescopeState::Slewing
+    } else {
+        TelescopeState::Stopped
+    };
+    Ok(result)
+}
+
 impl Telescope for IndiDevice {
+    fn state(&self) -> anyhow::Result<TelescopeState> {
+        telescope_state(&self.indi, &self.name)
+    }
+
     fn is_abort_motion_supported(&self) -> bool {
         true
     }
 
     fn abort_motion(&self) -> anyhow::Result<()> {
         self.indi.mount_abort_motion(&self.name)?;
+        self.indi.mount_stop_move(&self.name)?;
         Ok(())
     }
 
@@ -905,6 +985,66 @@ impl Telescope for IndiDevice {
     fn unpark(&self) -> anyhow::Result<()> {
         self.indi.mount_set_parked(&self.name, false, true, None)?;
         Ok(())
+    }
+
+    fn is_tracking(&self) -> anyhow::Result<bool> {
+        Ok(self.indi.mount_is_tracking(&self.name)?)
+    }
+
+    fn track(&self, enabled: bool) -> anyhow::Result<()> {
+        self.indi.mount_set_tracking(&self.name, enabled, true, None)?;
+        Ok(())
+    }
+
+    fn revert_motion(&self, reverse_ns: bool, reverse_we: bool) -> anyhow::Result<()> {
+        self.indi.mount_revert_motion(
+            &self.name,
+            reverse_ns, reverse_we,
+            true, Some(SET_PROP_TIME_OUT)
+        )?;
+        Ok(())
+    }
+
+    fn move_(&self, direction: TelescopeMoveDir) -> anyhow::Result<()> {
+        match direction {
+            TelescopeMoveDir::North => {
+                self.indi.mount_start_move_north(&self.name)?;
+            }
+            TelescopeMoveDir::South => {
+                self.indi.mount_start_move_south(&self.name)?;
+            }
+            TelescopeMoveDir::West => {
+                self.indi.mount_start_move_west(&self.name)?;
+            }
+            TelescopeMoveDir::East => {
+                self.indi.mount_start_move_east(&self.name)?;
+            }
+            TelescopeMoveDir::NorthWest => {
+                self.indi.mount_start_move_north(&self.name)?;
+                self.indi.mount_start_move_west(&self.name)?;
+            }
+            TelescopeMoveDir::NorthEast => {
+                self.indi.mount_start_move_north(&self.name)?;
+                self.indi.mount_start_move_east(&self.name)?;
+            }
+            TelescopeMoveDir::SouthWest => {
+                self.indi.mount_start_move_south(&self.name)?;
+                self.indi.mount_start_move_west(&self.name)?;
+            }
+            TelescopeMoveDir::SouthEast => {
+                self.indi.mount_start_move_south(&self.name)?;
+                self.indi.mount_start_move_east(&self.name)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn slew_speed_list(&self) -> anyhow::Result<Vec<(String/*id*/, String/*text*/)>> {
+        let list = self.indi.mount_get_slew_speed_list(&self.name)?
+            .into_iter()
+            .map(|(id, text)| (id.to_string(), text.unwrap_or(id).to_string()))
+            .collect();
+        Ok(list)
     }
 
     fn set_slew_speed(&self, speed_id: &str) -> anyhow::Result<()> {

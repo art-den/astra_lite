@@ -267,7 +267,25 @@ pub trait Camera : Device {
 ///////////////////////////////////////////////////////////////////////////////
 // Telescope (mount)
 
+pub enum TelescopeMoveDir {
+    North, South, West, East,
+    NorthWest, NorthEast, SouthWest, SouthEast,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum TelescopeState {
+    Stopped,
+    Parked,
+    Tracking,
+    Slewing,
+    Error,
+    Correcton,
+    Moved,
+}
+
 pub trait Telescope : Device {
+    fn state(&self) -> anyhow::Result<TelescopeState>;
+
     fn is_abort_motion_supported(&self) -> bool;
     fn abort_motion(&self) -> anyhow::Result<()>;
 
@@ -275,6 +293,13 @@ pub trait Telescope : Device {
     fn park(&self) -> anyhow::Result<()>;
     fn unpark(&self) -> anyhow::Result<()>;
 
+    fn is_tracking(&self) -> anyhow::Result<bool>;
+    fn track(&self, enabled: bool) -> anyhow::Result<()>;
+
+    fn revert_motion(&self, reverse_ns: bool, reverse_we: bool) -> anyhow::Result<()>;
+    fn move_(&self, direction: TelescopeMoveDir) -> anyhow::Result<()>;
+
+    fn slew_speed_list(&self) -> anyhow::Result<Vec<(String/*id*/, String/*text*/)>>;
     fn set_slew_speed(&self, speed_id: &str) -> anyhow::Result<()>;
     fn eq_coord(&self) -> anyhow::Result<(f64/*ra*/, f64/*dec*/)>;
     fn goto_and_track(&self, ra: f64, dec: f64) -> anyhow::Result<()>;

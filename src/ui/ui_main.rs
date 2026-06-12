@@ -79,7 +79,7 @@ pub fn init_ui(
     let focuser       = super::ui_focuser      ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let fw_wheel      = super::ui_flt_wheel     ::init_ui(&main_ui.widgets.window, core);
     let guiding       = super::ui_guiding      ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
-    let mount         = super::ui_mount        ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
+    let mount         = super::ui_mount        ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
     let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, core, options, indi);

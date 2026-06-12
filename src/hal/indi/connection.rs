@@ -2300,7 +2300,7 @@ impl Connection {
         Ok(())
     }
 
-    pub fn mount_reverse_motion(
+    pub fn mount_revert_motion(
         &self,
         device_name: &str,
         reverse_ns:  bool,

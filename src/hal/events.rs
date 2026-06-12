@@ -1,13 +1,20 @@
 use std::sync::{Arc, RwLock};
 
-use crate::hal::{CameraShot, DeviceInfo, FocuserState, HalState};
+use crate::hal::{CameraShot, DeviceInfo, FocuserState, HalState, TelescopeState};
 
 #[derive(Clone)]
 pub enum HalEvent {
+    // Common
+    //
     Error(Arc<String>),
     StateChanged(HalState),
+
+    // Devices
+
     DeviceConnected(Arc<DeviceInfo>),
     DeviceDisconnected(Arc<DeviceInfo>),
+
+    // Camera
 
     CameraShotResult {
         device_id: Arc<String>,
@@ -38,6 +45,24 @@ pub enum HalEvent {
     CameraGainCanBeControlled(Arc<String/*camera id*/>),
     CameraConvGainCanBeControlled(Arc<String/*camera id*/>),
     CameraCcdSizeChanged(Arc<String/*camera id*/>),
+
+    // Telescope (mount)
+
+    TelescopeSlewRateListReady(Arc<String/*camera id*/>),
+    TelescopeTrackingChanged{
+        device_id: Arc<String>,
+        tracking:  bool,
+    },
+
+    TelescopeParked(Arc<String/*camera id*/>),
+    TelescopeUnparked(Arc<String/*camera id*/>),
+    TelescopeStateChanged {
+        device_id: Arc<String>,
+        state:     TelescopeState,
+    },
+
+    // Focuser
+
     FocuserAbsValueCanBeControlled{
         device_id: Arc<String>,
         abs_value: f64,
