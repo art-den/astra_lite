@@ -78,7 +78,7 @@ pub fn init_ui(
     let preview       = super::ui_preview      ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let focuser       = super::ui_focuser      ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let fw_wheel      = super::ui_flt_wheel     ::init_ui(&main_ui.widgets.window, core);
-    let guiding       = super::ui_guiding      ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
+    let guiding       = super::ui_guiding      ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
     let mount         = super::ui_mount        ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
     let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);

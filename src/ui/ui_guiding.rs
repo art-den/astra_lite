@@ -3,9 +3,7 @@ use gtk::prelude::*;
 use macros::FromBuilder;
 
 use crate::{
-    core::{core::*, events::*},
-    guiding::external_guider::*,
-    hal::indi, options::*,
+    core::{core::*, events::*}, guiding::external_guider::*, hal::{HalState, events::HalEvent}, options::*
 };
 
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
@@ -15,7 +13,6 @@ pub fn init_ui(
     main_ui: &Rc<MainUi>,
     options: &Arc<RwLock<Options>>,
     core:    &Arc<Core>,
-    indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/guiding.ui"));
     let info_widgets = InfoWidgets::new();
@@ -27,7 +24,6 @@ pub fn init_ui(
         main_ui:       Rc::clone(main_ui),
         options:       Arc::clone(options),
         core:          Arc::clone(core),
-        indi:          Arc::clone(indi),
     });
 
     obj.init_widgets();
@@ -83,7 +79,6 @@ struct GuidingUi {
     window:       gtk::ApplicationWindow,
     options:      Arc<RwLock<Options>>,
     core:         Arc<Core>,
-    indi:         Arc<indi::Connection>,
 }
 
 impl Drop for GuidingUi {
@@ -176,9 +171,9 @@ impl UiModule for GuidingUi {
         }
     }
 
-    fn on_indi_event(&self, event: &indi::Event) {
+    fn on_hal_event(&self, event: &HalEvent) {
         match event {
-            indi::Event::ConnChange(_) => {
+            HalEvent::StateChanged(_) => {
                 self.correct_widgets_props();
             }
             _ => {}
@@ -232,7 +227,7 @@ impl GuidingUi {
             mode_type == ModeType::SingleShot ||
             mode_type == ModeType::LiveView;
         let dither_calibr = mode_type == ModeType::DitherCalibr;
-        let indi_connected = self.indi.state() == indi::ConnState::Connected;
+        let hal_connected = self.core.hal().state() == HalState::Connected;
 
         let disabled = self.widgets.rbtn_no_guiding.is_active();
         let by_main_cam = self.widgets.rbtn_guide_main_cam.is_active();
@@ -243,7 +238,7 @@ impl GuidingUi {
             correct_spinbutton_by_range(&self.widgets.spb_mnt_cal_exp, exp_range, 1, Some(1.0));
         }
 
-        self.widgets.grd.set_sensitive(indi_connected);
+        self.widgets.grd.set_sensitive(hal_connected);
         self.widgets.rbtn_no_guiding.set_sensitive(can_change_mode);
         self.widgets.rbtn_guide_main_cam.set_sensitive(can_change_mode);
         self.widgets.rbtn_guide_ext.set_sensitive(can_change_mode);
