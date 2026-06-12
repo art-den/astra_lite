@@ -132,12 +132,14 @@ impl IndiHalImpl {
         value:       &indi::PropValue,
         state:       indi::PropState
     ) -> anyhow::Result<()> {
-        if indi::Connection::camera_is_heater_str_property(prop_name) {
+        use indi::*;
+
+        if Connection::camera_is_heater_str_property(prop_name) {
             self.event_handlers.send(HalEvent::CameraHeaterCanBeControlled (
                 Arc::clone(device_name)
             ));
         }
-        if indi::Connection::camera_is_conversion_gain_property(prop_name) {
+        if Connection::camera_is_conversion_gain_property(prop_name) {
             self.event_handlers.send(HalEvent::CameraConvGainCanBeControlled (
                 Arc::clone(device_name)
             ));
@@ -168,6 +170,22 @@ impl IndiHalImpl {
                     Arc::clone(device_name)
                 ));
             }
+            ("ABS_FOCUS_POSITION", "FOCUS_ABSOLUTE_POSITION", PropValue::Num(value), PropState::Idle|PropState::Ok) => {
+                self.event_handlers.send(HalEvent::FocuserAbsValueCanBeControlled {
+                    device_id: Arc::clone(device_name),
+                    abs_value: value.value,
+                });
+                self.event_handlers.send(HalEvent::FocuserStateChanged {
+                    device_id: Arc::clone(device_name),
+                    state:     abs_pos_prop_state_to_focuser_state(state),
+                });
+            }
+            ("FOCUS_TEMPERATURE", "TEMPERATURE", PropValue::Num(value), PropState::Idle|PropState::Ok) => {
+                self.event_handlers.send(HalEvent::FocuserTemperatureChanged {
+                    device_id:   Arc::clone(device_name),
+                    temperature: value.value,
+                });
+            }
             _ => {}
         }
         Ok(())
@@ -191,25 +209,25 @@ impl IndiHalImpl {
             (_, _, PropValue::Num(value), _, _)
             if Connection::camera_is_cooler_pwr_property(prop_name, elem_name) => {
                 self.event_handlers.send(HalEvent::CameraCoolerPwrChanged {
-                    cam_id: Arc::clone(device_name),
-                    power:  value.value
+                    device_id: Arc::clone(device_name),
+                    power:     value.value
                 });
             }
             ("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE", PropValue::Num(value), _, _) => {
                 self.event_handlers.send(HalEvent::CameraTimeUntilEndOfExposure {
-                    cam_id: Arc::clone(device_name),
-                    time:   value.value
+                    device_id: Arc::clone(device_name),
+                    time:      value.value
                 });
             }
             ("GUIDER_EXPOSURE", "GUIDER_EXPOSURE_VALUE", PropValue::Num(value), _, _) => {
                 self.event_handlers.send(HalEvent::CameraTimeUntilEndOfExposure {
-                    cam_id: Arc::new(device_name.to_string() + CAM_CCD2_POSTFIX),
-                    time:   value.value
+                    device_id: Arc::new(device_name.to_string() + CAM_CCD2_POSTFIX),
+                    time:      value.value
                 });
             }
             ("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE"|"CCD_TEMPERATURE", PropValue::Num(value), _, _) => {
                 self.event_handlers.send(HalEvent::CameraCcdTempChanged {
-                    cam_id:       Arc::clone(device_name),
+                    device_id:    Arc::clone(device_name),
                     temperature:  value.value
                 });
             }
@@ -218,11 +236,22 @@ impl IndiHalImpl {
                     Arc::clone(device_name)
                 ));
             }
-
-
-            // CameraCcdSizeChanged(Arc<String/*camera id*/>),
-
-
+            ("ABS_FOCUS_POSITION", "FOCUS_ABSOLUTE_POSITION", PropValue::Num(value), _, state) => {
+                self.event_handlers.send(HalEvent::FocuserAbsValueChanged {
+                    device_id: Arc::clone(device_name),
+                    abs_value: value.value,
+                });
+                self.event_handlers.send(HalEvent::FocuserStateChanged {
+                    device_id: Arc::clone(device_name),
+                    state:     abs_pos_prop_state_to_focuser_state(state),
+                });
+            }
+            ("FOCUS_TEMPERATURE", "TEMPERATURE", PropValue::Num(value), _, _) => {
+                self.event_handlers.send(HalEvent::FocuserTemperatureChanged {
+                    device_id:   Arc::clone(device_name),
+                    temperature: value.value,
+                });
+            }
             _ => {}
         }
         Ok(())
@@ -240,8 +269,8 @@ impl IndiHalImpl {
         }
         let camera_shot = IndiCameraShot::new(blob)?;
         self.event_handlers.send(HalEvent::CameraShotResult{
-            cam_id: Arc::new(device_id),
-            shot:   Arc::new(camera_shot),
+            device_id: Arc::new(device_id),
+            shot:      Arc::new(camera_shot),
         });
         Ok(())
     }
@@ -955,7 +984,21 @@ impl Telescope for IndiDevice {
 ///////////////////////////////////////////////////////////////////////////////
 // Focuser
 
+fn abs_pos_prop_state_to_focuser_state(prop_state: indi::PropState) -> FocuserState {
+    match prop_state {
+        indi::PropState::Ok |
+        indi::PropState::Idle  => FocuserState::Stopped,
+        indi::PropState::Alert => FocuserState::Error,
+        indi::PropState::Busy  => FocuserState::Moving,
+    }
+}
+
 impl Focuser for IndiDevice {
+    fn state(&self) -> anyhow::Result<FocuserState> {
+        let prop = self.indi.focuser_get_abs_value_prop(&self.id)?;
+        Ok(abs_pos_prop_state_to_focuser_state(prop.state))
+    }
+
     fn abs_position_range(&self) -> anyhow::Result<RangeInclusive<f64>> {
         let prop = self.indi.focuser_get_abs_value_prop_elem(&self.name)?;
         Ok(prop.min..=prop.max)

@@ -272,8 +272,8 @@ impl Core {
             HalEvent::Error(err) => {
                 self.process_error_str(&err.as_str(), "HAL error");
             }
-            HalEvent::CameraShotResult { cam_id, shot } => {
-                let result = self.process_camera_shot_result(cam_id, shot);
+            HalEvent::CameraShotResult { device_id, shot } => {
+                let result = self.process_camera_shot_result(device_id, shot);
                 self.process_error(result, "process_camera_shot_result");
             }
             HalEvent::CameraIsReadyForCooling(device_id) |

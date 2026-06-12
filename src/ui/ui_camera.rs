@@ -417,14 +417,14 @@ impl UiModule for CameraUi {
                     self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
                 }
             }
-            HalEvent::CameraCoolerPwrChanged { cam_id, power } => {
-                self.show_coolpwr_value(cam_id, *power);
+            HalEvent::CameraCoolerPwrChanged { device_id, power } => {
+                self.show_coolpwr_value(device_id, *power);
             }
             HalEvent::CameraTimeUntilEndOfExposure{..} => {
                 self.update_shot_state();
             }
-            HalEvent::CameraCcdTempChanged { cam_id, temperature } => {
-                self.show_cur_temperature_value(cam_id, *temperature);
+            HalEvent::CameraCcdTempChanged { device_id, temperature } => {
+                self.show_cur_temperature_value(device_id, *temperature);
             }
             HalEvent::CameraCoolerCanBeControlled(camera_id) |
             HalEvent::CameraOffsetCanBeControlled(camera_id) |
@@ -1487,6 +1487,7 @@ impl CameraUi {
             let mut options = self.core.options().write().unwrap();
             let cam_id = options.cam.device_id.clone();
             self.store_options_for_camera(&cam_id, &mut options);
+            drop(options);
             self.update_devices_list();
         }
         self.correct_widgets_props();

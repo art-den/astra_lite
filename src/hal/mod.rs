@@ -294,7 +294,15 @@ pub trait Telescope : Device {
 ///////////////////////////////////////////////////////////////////////////////
 // Focuser
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum FocuserState {
+    Stopped,
+    Moving,
+    Error,
+}
+
 pub trait Focuser : Device {
+    fn state(&self) -> anyhow::Result<FocuserState>;
     fn abs_position_range(&self) -> anyhow::Result<RangeInclusive<f64>>;
     fn abs_position(&self) -> anyhow::Result<f64>;
     fn set_abs_position(&self, value: f64) -> anyhow::Result<()>;

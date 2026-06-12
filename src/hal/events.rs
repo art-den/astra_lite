@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 
-use crate::hal::{CameraShot, DeviceInfo, HalState};
+use crate::hal::{CameraShot, DeviceInfo, FocuserState, HalState};
 
 #[derive(Clone)]
 pub enum HalEvent {
@@ -10,8 +10,8 @@ pub enum HalEvent {
     DeviceDisconnected(Arc<DeviceInfo>),
 
     CameraShotResult {
-        cam_id: Arc<String>,
-        shot:   Arc<dyn CameraShot + Send + Sync>,
+        device_id: Arc<String>,
+        shot:      Arc<dyn CameraShot + Send + Sync>,
     },
     CameraIsReadyToWork(Arc<String/*camera id*/>),
     CameraNeedRestartExposure(Arc<String/*camera id*/>),
@@ -21,16 +21,15 @@ pub enum HalEvent {
     CameraIsReadyForCtrlHeater(Arc<String/*camera id*/>),
     CameraBeginDownloadData(Arc<String/*camera id*/>),
     CameraCoolerPwrChanged {
-        cam_id: Arc<String>,
-        power:  f64,
+        device_id: Arc<String>,
+        power:     f64,
     },
-
     CameraTimeUntilEndOfExposure {
-        cam_id: Arc<String>,
-        time:   f64,
+        device_id: Arc<String>,
+        time:      f64,
     },
     CameraCcdTempChanged {
-        cam_id:      Arc<String>,
+        device_id:    Arc<String>,
         temperature: f64,
     },
     CameraCoolerCanBeControlled(Arc<String/*camera id*/>),
@@ -39,6 +38,22 @@ pub enum HalEvent {
     CameraGainCanBeControlled(Arc<String/*camera id*/>),
     CameraConvGainCanBeControlled(Arc<String/*camera id*/>),
     CameraCcdSizeChanged(Arc<String/*camera id*/>),
+    FocuserAbsValueCanBeControlled{
+        device_id: Arc<String>,
+        abs_value: f64,
+    },
+    FocuserAbsValueChanged{
+        device_id: Arc<String>,
+        abs_value: f64,
+    },
+    FocuserTemperatureChanged{
+        device_id:   Arc<String>,
+        temperature: f64,
+    },
+    FocuserStateChanged {
+        device_id: Arc<String>,
+        state:     FocuserState,
+    },
 }
 
 pub struct HalEventHandlers {

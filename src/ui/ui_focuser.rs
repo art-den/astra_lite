@@ -5,7 +5,7 @@ use macros::FromBuilder;
 
 use crate::{
     core::{core::{Core, ModeType}, events::*, mode_focusing::*},
-    hal::{DeviceType, HalState, indi},
+    hal::{DeviceType, Focuser, FocuserState, HalState, events::HalEvent},
     options::*,
     ui::plots::*,
     utils::math::{cmp_f64, linear_interpolate},
@@ -27,6 +27,7 @@ pub fn init_ui(
         main_ui:         Rc::clone(main_ui),
         window:          window.clone(),
         core:            Arc::clone(core),
+        focuser:         RefCell::new(None),
         excl:            ExclusiveCaller::new(),
         delayed_actions: DelayedActions::new(500),
         focusing_data:   RefCell::new(None),
@@ -104,21 +105,21 @@ struct FocuserUi {
     main_ui:         Rc<MainUi>,
     window:          gtk::ApplicationWindow,
     core:            Arc<Core>,
+    focuser:         RefCell<Option<Arc<dyn Focuser>>>,
     excl:            ExclusiveCaller,
     delayed_actions: DelayedActions<DelayedAction>,
     focusing_data:   RefCell<Option<FocusingResultData>>,
     starting_temp:   Cell<Option<f64>>,
     step:            Cell<i32>,
     step_large:      Cell<i32>,
-    prev_pos_state:  Cell<Option<indi::PropState>>,
+    prev_pos_state:  Cell<Option<FocuserState>>,
 }
 
 #[derive(Hash, Eq, PartialEq)]
 enum DelayedAction {
-    ShowCurFocuserValue,
-    ShowCurFocuserTemperature,
-    UpdateFocPosNew,
-    UpdateFocPos,
+    ShowCurFocuserTemperature(Option<i32>),
+    InitAndShowFocuserValue(Option<i32>),
+    ShowFocuserValue(Option<i32>),
     CorrectWidgetProps
 }
 
@@ -192,53 +193,66 @@ impl UiModule for FocuserUi {
         drop(options);
     }
 
-    fn on_indi_event(&self, event: &indi::Event) {
+    fn on_hal_event(&self, event: &HalEvent) {
         match event {
-            indi::Event::NewDevice(event) => {
-                if event.interface.contains(indi::DriverInterface::FOCUSER) {
+            HalEvent::StateChanged(state) => {
+                if *state == HalState::Disconnected {
                     self.update_devices_list();
-                }
-            }
-            indi::Event::DeviceConnected(event) => {
-                if event.interface.contains(indi::DriverInterface::FOCUSER) {
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
                 }
             }
-            indi::Event::ConnChange(conn_state) => {
-                self.process_indi_conn_state_event(conn_state);
-            }
-            indi::Event::PropChange(event_data) => {
-                match &event_data.change {
-                    indi::PropChange::New { prop_name, elem_name, value, .. } =>
-                        self.process_indi_prop_change(
-                            &event_data.device_name,
-                            prop_name,
-                            elem_name,
-                            true,
-                            None,
-                            None,
-                            value
-                        ),
-                    indi::PropChange::Change{ prop_name, elem_name, value, prev_state, new_state, .. } =>
-                        self.process_indi_prop_change(
-                            &event_data.device_name,
-                            prop_name,
-                            elem_name,
-                            false,
-                            Some(prev_state),
-                            Some(new_state),
-                            value
-                        ),
-                    indi::PropChange::Delete {..} => {}
-                };
-            }
-            indi::Event::DeviceDelete(event) => {
-                if event.interface.contains(indi::DriverInterface::FOCUSER) {
+            HalEvent::DeviceConnected(dev_info) => {
+                if dev_info.type_.contains(DeviceType::FOCUSER) {
                     self.update_devices_list();
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
-                    self.delayed_actions.schedule(DelayedAction::UpdateFocPosNew);
-                    self.delayed_actions.schedule(DelayedAction::ShowCurFocuserValue);
-                    self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature);
+
+                    let options = self.core.options().read().unwrap();
+                    if dev_info.name == options.focuser.device {
+                        self.create_focuser_object(&options.focuser.device);
+                    }
+                }
+            }
+            HalEvent::DeviceDisconnected(dev_info) => {
+                if dev_info.type_.contains(DeviceType::FOCUSER) {
+                    self.update_devices_list();
+                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
+                    self.delayed_actions.schedule(DelayedAction::ShowFocuserValue(None));
+                    self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature(None));
+
+                    let options = self.core.options().read().unwrap();
+                    if dev_info.name == options.focuser.device {
+                        *self.focuser.borrow_mut() = None;
+                    }
+                }
+            }
+            HalEvent::FocuserStateChanged { device_id, .. } => {
+                let options = self.core.options().read().unwrap();
+                if **device_id == options.focuser.device {
+                    self.show_info();
+                }
+            }
+            HalEvent::FocuserAbsValueCanBeControlled { device_id, abs_value } => {
+                let options = self.core.options().read().unwrap();
+                if **device_id == options.focuser.device {
+                    self.delayed_actions.schedule(DelayedAction::InitAndShowFocuserValue(
+                        Some(*abs_value as i32)
+                    ));
+                }
+            }
+            HalEvent::FocuserAbsValueChanged { device_id, abs_value } => {
+                let options = self.core.options().read().unwrap();
+                if **device_id == options.focuser.device {
+                    self.delayed_actions.schedule(DelayedAction::ShowFocuserValue(
+                        Some(*abs_value as i32)
+                    ));
+                }
+            }
+            HalEvent::FocuserTemperatureChanged { device_id, temperature } => {
+                let options = self.core.options().read().unwrap();
+                if **device_id == options.focuser.device {
+                    self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature(
+                        Some((10.0 * *temperature) as i32)
+                    ));
                 }
             }
             _ => {}
@@ -264,7 +278,7 @@ impl UiModule for FocuserUi {
                     }
                     FocuserEvent::StartingTemperature(starting_temp) => {
                         self.starting_temp.set(Some(*starting_temp));
-                        self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature);
+                        self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature(None));
                     }
                 }
             }
@@ -279,49 +293,6 @@ impl UiModule for FocuserUi {
 }
 
 impl FocuserUi {
-    fn process_indi_prop_change(
-        &self,
-        device_name: &str,
-        prop_name:   &str,
-        elem_name:   &str,
-        new_prop:    bool,
-        _prev_state: Option<&indi::PropState>,
-        new_state:   Option<&indi::PropState>,
-        value:       &indi::PropValue,
-    ) {
-        let options = self.core.options().read().unwrap();
-        if device_name != options.focuser.device { return; }
-        drop(options);
-
-        match (prop_name, elem_name, value) {
-            ("ABS_FOCUS_POSITION", ..) => {
-                self.delayed_actions.schedule(
-                    if new_prop { DelayedAction::UpdateFocPosNew }
-                    else        { DelayedAction::UpdateFocPos }
-                );
-                self.delayed_actions.schedule(DelayedAction::ShowCurFocuserValue);
-                self.show_info_impl(new_state);
-            }
-            ("FOCUS_TEMPERATURE", ..) => {
-                self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature);
-            }
-            ("FOCUS_MAX", ..) => {
-                self.delayed_actions.schedule(DelayedAction::UpdateFocPosNew);
-            }
-            _ => {}
-        }
-    }
-
-    fn process_indi_conn_state_event(&self, conn_state: &indi::ConnState) {
-        let update_devices_list =
-            *conn_state == indi::ConnState::Disconnected ||
-            *conn_state == indi::ConnState::Disconnecting;
-        if update_devices_list {
-            self.update_devices_list();
-        }
-        self.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
-    }
-
     fn init_widgets(&self) {
         self.widgets.spb_temp.set_range(0.1, 10.0);
         self.widgets.spb_temp.set_digits(1);
@@ -344,6 +315,12 @@ impl FocuserUi {
         self.widgets.spb_extra_steps.set_increments(25.0, 100.0);
     }
 
+    fn create_focuser_object(&self, device_id: &str) {
+        let hal = self.core.hal();
+        let mut focuser = self.focuser.borrow_mut();
+        *focuser = hal.focuser(device_id).map(|f| f as Arc<_>).ok();
+    }
+
     fn connect_widgets_events(self: &Rc<Self>) {
         connect_action(&self.window, self, "manual_focus",      Self::handler_action_manual_focus);
         connect_action(&self.window, self, "stop_manual_focus", Self::handler_action_stop_manual_focus);
@@ -354,21 +331,21 @@ impl FocuserUi {
             if options.focuser.device == new_device_name.as_str() { return; }
             options.focuser.device = new_device_name.to_string();
             drop(options);
+
+            self_.create_focuser_object(&new_device_name);
+
             self_.core.events().send(Event::FocuserDeviceChanged(new_device_name.to_string()));
-            self_.delayed_actions.schedule(DelayedAction::UpdateFocPosNew);
-            self_.delayed_actions.schedule(DelayedAction::ShowCurFocuserValue);
+            self_.delayed_actions.schedule(DelayedAction::InitAndShowFocuserValue(None));
             self_.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
-            self_.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature);
+            self_.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature(None));
         }));
 
         self.widgets.spb_val.connect_value_changed(clone!(@weak self as self_ => move |sb| {
             self_.excl.exec(|| {
-                let options = self_.core.options().read().unwrap();
-                if options.focuser.device.is_empty() { return; }
-
+                let focuser = self_.focuser.borrow();
+                let Some(focuser) = &*focuser else { return; };
                 exec_and_show_error(Some(&self_.window), || {
-                    let indi = self_.core.indi();
-                    indi.focuser_set_abs_value(&options.focuser.device, sb.value(), true, None)?;
+                    focuser.set_abs_position(sb.value())?;
                     Ok(())
                 });
             });
@@ -419,7 +396,7 @@ impl FocuserUi {
         );
     }
 
-    fn correct_widgets_props_impl(&self, focuser_device: &str, cam_device: &str) {
+    fn correct_widgets_props_impl(&self, cam_device: &str) {
         let mode = self.core.mode();
         let mode_type = mode.active.get_type();
         drop(mode);
@@ -435,8 +412,11 @@ impl FocuserUi {
         let focusing = mode_type == ModeType::Focusing;
         let can_change_mode = waiting || live_view || single_shot;
 
-        let indi = self.core.indi();
-        let device_enabled = indi.is_device_enabled(focuser_device).unwrap_or(false);
+        let device_enabled = self.focuser
+            .borrow()
+            .as_ref()
+            .map(|f| f.is_active().unwrap_or(false))
+            .unwrap_or(false);
 
         self.widgets.grd.set_sensitive(device_enabled);
         self.widgets.spb_temp.set_sensitive(self.widgets.chb_temp.is_active());
@@ -452,28 +432,26 @@ impl FocuserUi {
         ]);
 
         self.main_ui.set_module_panel_visible(self.info_widgets.bx.upcast_ref(), device_enabled);
-        self.show_info(focuser_device);
+        self.show_info();
     }
 
     fn correct_widgets_props(&self) {
         let options = self.core.options().read().unwrap();
-        let focuser_device = options.focuser.device.clone();
         let cam_device = options.cam.device_id.clone();
         drop(options);
-        self.correct_widgets_props_impl(&focuser_device, &cam_device);
+        self.correct_widgets_props_impl(&cam_device);
     }
 
-    fn handler_camera_changed(&self, from: &str, to: &str) {
+    fn handler_camera_changed(&self, prev_device_id: &str, new_device_id: &str) {
         let mut options = self.core.options().write().unwrap();
         self.get_options(&mut options);
-        if !from.is_empty() {
-            self.store_options_for_camera(from, &mut options);
+        if !prev_device_id.is_empty() {
+            self.store_options_for_camera(prev_device_id, &mut options);
         }
-        self.restore_options_for_camera(to, &mut options);
+        self.restore_options_for_camera(new_device_id, &mut options);
         self.show_options(&options);
-        let focuser_device = options.focuser.device.clone();
         drop(options);
-        self.correct_widgets_props_impl(&focuser_device, to);
+        self.correct_widgets_props_impl(new_device_id);
     }
 
     fn store_options_for_camera(
@@ -526,36 +504,40 @@ impl FocuserUi {
         );
     }
 
-    fn update_focuser_position_widget(&self, new_prop: bool) {
-        let options = self.core.options().read().unwrap();
-        let foc_device = options.focuser.device.clone();
-        drop(options);
-
-        let indi = self.core.indi();
-
-        let Ok(prop_elem) = indi.focuser_get_abs_value_prop_elem(&foc_device) else {
-            return;
-        };
-        if new_prop || self.widgets.spb_val.value() == 0.0 {
-            let focus_max = indi.focuser_get_max(&foc_device).ok();
-            self.widgets.spb_val.set_range(0.0, prop_elem.max);
-            self.widgets.spb_val.set_digits(0);
-            let mut step = prop_elem.step.unwrap_or(1.0);
-            let max = focus_max.unwrap_or(prop_elem.max);
-            if step >= max / 100.0 {
-                step = 10.0;
+    fn show_cur_focuser_value(&self, value: Option<i32>, force_configure_widget: bool) {
+        let mut ok = false;
+        let focuser = self.focuser.borrow();
+        if let Some(focuser) = focuser.as_ref() {
+            let abs_position = value.unwrap_or_else(|| focuser.abs_position().unwrap_or(0.0) as i32 );
+            if force_configure_widget || self.widgets.spb_val.value() == 0.0 {
+                println!("Init focuser widget");
+                if let Ok(range) = focuser.abs_position_range() {
+                    self.widgets.spb_val.set_range(*range.start(), *range.end());
+                    self.widgets.spb_val.set_digits(0);
+                    let len = range.end() - range.start();
+                    let step = if len >= 100_000.0 {
+                        100
+                    } else if len >= 10_000.0 {
+                        10
+                    } else {
+                        1
+                    };
+                    let large_step = step * 10;
+                    self.step.set(step);
+                    self.step_large.set(large_step);
+                    self.widgets.spb_val.set_increments(step as f64, large_step as f64);
+                    self.widgets.spb_val.set_tooltip_text(Some(&format!("{} .. {}", range.start(), range.end())));
+                    self.widgets.btn_dec_large.set_tooltip_text(Some(&format!("- {}", large_step)));
+                    self.widgets.btn_dec.set_tooltip_text(Some(&format!("- {}", step)));
+                    self.widgets.btn_inc.set_tooltip_text(Some(&format!("+ {}", step)));
+                    self.widgets.btn_inc_large.set_tooltip_text(Some(&format!("+ {}", large_step)));
+                }
+                self.excl.exec(|| {
+                    self.widgets.spb_val.set_value(abs_position as f64);
+                    ok = true;
+                });
             }
-            let large_step = step * 10.0;
-            self.step.set(step as i32);
-            self.step_large.set(large_step as i32);
-            self.widgets.spb_val.set_increments(step, large_step);
-            self.excl.exec(|| {
-                self.widgets.spb_val.set_value(prop_elem.value);
-            });
-            self.widgets.btn_dec_large.set_tooltip_text(Some(&format!("- {:.0}", large_step)));
-            self.widgets.btn_dec.set_tooltip_text(Some(&format!("- {:.0}", step)));
-            self.widgets.btn_inc.set_tooltip_text(Some(&format!("+ {:.0}", step)));
-            self.widgets.btn_inc_large.set_tooltip_text(Some(&format!("+ {:.0}", large_step)));
+            self.widgets.l_value.set_label(&abs_position.to_string());
         }
     }
 
@@ -567,62 +549,38 @@ impl FocuserUi {
 
     fn handler_delayed_action(&self, action: &DelayedAction) {
         match action {
-            DelayedAction::ShowCurFocuserValue => {
-                self.show_cur_focuser_value();
+            DelayedAction::InitAndShowFocuserValue(value) => {
+                self.show_cur_focuser_value(*value, true);
             }
-            DelayedAction::ShowCurFocuserTemperature => {
-                self.show_focuser_temperature();
+            DelayedAction::ShowFocuserValue(value) => {
+                self.show_cur_focuser_value(*value, false);
+            }
+            DelayedAction::ShowCurFocuserTemperature(value_x10) => {
+                self.show_focuser_temperature(*value_x10);
             }
             DelayedAction::CorrectWidgetProps => {
                 self.correct_widgets_props();
-            }
-            DelayedAction::UpdateFocPosNew |
-            DelayedAction::UpdateFocPos => {
-                self.update_focuser_position_widget(
-                    *action == DelayedAction::UpdateFocPosNew
-                );
+                self.show_info();
             }
         }
     }
 
-    fn show_cur_focuser_value(&self) {
-        let options = self.core.options().read().unwrap();
-        let foc_device = options.focuser.device.clone();
-        drop(options);
-        let indi = self.core.indi();
-        let value_str =
-            if let Ok(prop_elem) = indi.focuser_get_abs_value_prop_elem(&foc_device) {
-                &format!("{:.0}", prop_elem.value)
-            } else {
-                "---"
-            };
-        self.widgets.l_value.set_label(value_str);
-    }
-
-    fn show_focuser_temperature(&self) {
-        let options = self.core.options().read().unwrap();
-        let foc_device = options.focuser.device.clone();
-        drop(options);
-
-        let indi = self.core.indi();
-        let temperature = indi
-            .focuser_get_temperature(&foc_device)
-            .unwrap_or(f64::NAN);
-
+    fn show_focuser_temperature(&self, value_x10: Option<i32>) {
+        let temperature = value_x10
+            .map(|v| v as f64 / 10.0)
+            .unwrap_or_else(|| {
+                let focuser = self.focuser.borrow();
+                let Some(focuser) = &*focuser else { return f64::NAN; };
+                focuser.temperature().unwrap_or(f64::NAN)
+            });
         let temp_str =
-            if !temperature.is_nan() {
-                &format!("{:.1}°", temperature)
-            } else {
-                "---"
-            };
+            if !temperature.is_nan() { &format!("{:.1}°", temperature) } else { "---" };
         self.widgets.l_temp.set_label(temp_str);
 
         let mut diff_str = String::new();
-        if let Some(starting_temp) = self.starting_temp.get() {
-            if !temperature.is_nan() {
-                let diff = temperature - starting_temp;
-                diff_str = format!("({:+.1}°)", diff);
-            }
+        if let Some(starting_temp) = self.starting_temp.get() && !temperature.is_nan() {
+            let diff = temperature - starting_temp;
+            diff_str = format!("({:+.1}°)", diff);
         }
         self.widgets.l_temp_diff.set_label(&diff_str);
     }
@@ -737,51 +695,55 @@ impl FocuserUi {
 
     fn update_focuser_value(&self, offset: i32) {
         self.excl.exec(|| {
-            let indi = self.core.indi();
-            let options = self.core.options().read().unwrap();
-            if options.focuser.device.is_empty() { return; }
             exec_and_show_error(Some(&self.window), || {
-                let mut value = indi
-                    .focuser_get_abs_value_prop_elem(&options.focuser.device)?
-                    .value as i32;
-                value += offset;
-                indi.focuser_set_abs_value(&options.focuser.device, value as f64, true, None)?;
+                let focuser = self.focuser.borrow();
+                let Some(focuser) = &*focuser else { return Ok(()); };
+                let mut value = focuser.abs_position()?;
+                let range = focuser.abs_position_range()?;
+                value += offset as f64;
+                let clamped_value = value.clamp(*range.start(), *range.end());
+                if clamped_value == value {
+                    return Ok(());
+                }
+                focuser.set_abs_position(value)?;
                 self.widgets.spb_val.set_value(value as f64);
                 Ok(())
             });
         });
     }
 
-    fn show_info(&self, focuser_device: &str) {
-        let indi = self.core.indi();
-        if let Ok(prop) = indi.focuser_get_abs_value_prop(focuser_device) {
-            self.show_info_impl(Some(&prop.state));
-        }
-    }
+    fn show_info(&self) {
+        let focuser = self.focuser.borrow();
 
-    fn show_info_impl(&self, prop_state: Option<&indi::PropState>) {
-        enum InfoState { Work, Err }
-        let prop_state = prop_state.copied();
-        if self.prev_pos_state.get() != prop_state {
-            self.prev_pos_state.set(prop_state);
-            let (text, info_state) = match prop_state {
-                Some(indi::PropState::Ok)|
-                Some(indi::PropState::Idle) => ("Stopped", None),
-                Some(indi::PropState::Alert) => ("Error", Some(InfoState::Err)),
-                Some(indi::PropState::Busy) => ("Moving", Some(InfoState::Work)),
-                None => ("Disabled", None),
-            };
+        let mut info_shown = false;
+        if let Some(focuser) = &*focuser {
+            let focuser_state = focuser.state().ok();
+            enum InfoState { Work, Err }
 
-            let mut text = format!("<b>{}</b>", text);
-            match info_state {
-                Some(InfoState::Err) =>
-                    text = format!("<span foreground='{}'>{}</span>", get_err_color_str(), text),
-                Some(InfoState::Work) =>
-                    text = format!("<span foreground='{}'>{}</span>", get_warn_color_str(), text),
-                _ => {},
+            if self.prev_pos_state.get() != focuser_state {
+                self.prev_pos_state.set(focuser_state);
+                let (text, info_state) = match focuser_state {
+                    Some(FocuserState::Stopped) => ("Stopped", None),
+                    Some(FocuserState::Error)   => ("Error", Some(InfoState::Err)),
+                    Some(FocuserState::Moving)  => ("Moving", Some(InfoState::Work)),
+                    None                        => ("Disabled", None),
+                };
+
+                let mut text = format!("<b>{}</b>", text);
+                match info_state {
+                    Some(InfoState::Err) =>
+                        text = format!("<span foreground='{}'>{}</span>", get_err_color_str(), text),
+                    Some(InfoState::Work) =>
+                        text = format!("<span foreground='{}'>{}</span>", get_warn_color_str(), text),
+                    _ => {},
+                }
+
+                self.info_widgets.l_state.set_label(&text);
+                info_shown = true;
             }
-
-            self.info_widgets.l_state.set_label(&text);
+        }
+        if !info_shown {
+            self.info_widgets.l_state.set_label("");
         }
     }
 }
