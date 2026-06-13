@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::{Arc, RwLock}};
+use std::{rc::Rc, sync::Arc};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
@@ -12,7 +12,6 @@ use super::{gtk_utils::{self, *}, module::*, ui_main::*, utils::*};
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,
-    options: &Arc<RwLock<Options>>,
     core:    &Arc<Core>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/polar_align.ui"));
@@ -20,7 +19,6 @@ pub fn init_ui(
         widgets,
         window:          window.clone(),
         main_ui:         Rc::clone(main_ui),
-        options:         Arc::clone(options),
         core:            Arc::clone(core),
         delayed_actions: DelayedActions::new(200),
     });
@@ -75,7 +73,6 @@ struct PolarAlignUi {
     widgets:         Widgets,
     main_ui:         Rc<MainUi>,
     window:          gtk::ApplicationWindow,
-    options:         Arc<RwLock<Options>>,
     core:            Arc<Core>,
     delayed_actions: DelayedActions<DelayedAction>,
 }
@@ -278,7 +275,7 @@ impl PolarAlignUi {
 
         let check_result = PolarAlignMode::check_before_start(
             self.core.hal(),
-            &self.options
+            self.core.options()
         );
 
         match check_result {

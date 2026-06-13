@@ -1,4 +1,4 @@
-use std::{cell::{Cell, RefCell}, collections::HashMap, rc::{Rc, Weak}, sync::{Arc, RwLock}};
+use std::{cell::{Cell, RefCell}, collections::HashMap, rc::{Rc, Weak}, sync::Arc};
 use chrono::{prelude::*, Days, Duration, Months};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
@@ -26,7 +26,6 @@ pub fn init_ui(
     window:  &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,
     core:    &Arc<Core>,
-    options: &Arc<RwLock<Options>>,
 ) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();
     exec_and_show_error(Some(window), || {
@@ -47,7 +46,6 @@ pub fn init_ui(
         widgets,
         ui_options:    RefCell::new(ui_options),
         core:          Arc::clone(core),
-        options:       Arc::clone(options),
         window:        window.clone(),
         main_ui:       Rc::clone(main_ui),
         excl:          ExclusiveCaller::new(),
@@ -286,7 +284,6 @@ struct MapUi {
     widgets:       Widgets,
     ui_options:    RefCell<UiOptions>,
     core:          Arc<Core>,
-    options:       Arc<RwLock<Options>>,
     window:        gtk::ApplicationWindow,
     main_ui:       Rc<MainUi>,
     excl:          ExclusiveCaller,
@@ -611,7 +608,7 @@ impl MapUi {
     }
 
     fn create_observer(&self) -> Observer {
-        let sky_map_options = self.options.read().unwrap().site.clone();
+        let sky_map_options = self.core.options().read().unwrap().site.clone();
         Observer {
             latitude: degree_to_radian(sky_map_options.latitude),
             longitude: degree_to_radian(sky_map_options.longitude),
@@ -651,9 +648,8 @@ impl MapUi {
 
             let cam_frame = if show_ccd && hal_is_connected {
                 || -> Option<CameraFrame> {
-                    let options = self.options.read().unwrap();
-
                     let Some(camera) = self.core.camera() else  { return None; };
+                    let options = self.core.options().read().unwrap();
 
                     let focal_len = options.telescope.real_focal_length();
                     if focal_len <= 0.1 { return None; }

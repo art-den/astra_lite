@@ -1,4 +1,4 @@
-use std::{cell::Cell, rc::Rc, sync::{Arc, RwLock}};
+use std::{cell::Cell, rc::Rc, sync::Arc};
 use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
@@ -15,7 +15,6 @@ use super::{gtk_utils::*, module::*, utils::*};
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,
-    options: &Arc<RwLock<Options>>,
     core:    &Arc<Core>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/mount.ui"));
@@ -27,7 +26,6 @@ pub fn init_ui(
         main_ui:         Rc::clone(main_ui),
         window:          window.clone(),
         excl:            ExclusiveCaller::new(),
-        options:         Arc::clone(options),
         core:            Arc::clone(core),
         delayed_actions: DelayedActions::new(500),
         prev_info_state: Cell::new(None),
@@ -120,7 +118,6 @@ struct MountUi {
     main_ui:         Rc<MainUi>,
     window:          gtk::ApplicationWindow,
     excl:            ExclusiveCaller,
-    options:         Arc<RwLock<Options>>,
     core:            Arc<Core>,
     delayed_actions: DelayedActions<DelayedAction>,
     prev_info_state: Cell<Option<TelescopeState>>,
@@ -278,7 +275,7 @@ impl MountUi {
         self.widgets.cb_list.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let Some(new_device_name) = cb.active_id() else { return; };
-                let Ok(mut options) = self_.options.try_write() else { return; };
+                let Ok(mut options) = self_.core.options().try_write() else { return; };
                 if options.mount.device == new_device_name { return; }
                 options.mount.device = new_device_name.to_string();
                 drop(options);
@@ -399,7 +396,7 @@ impl MountUi {
     }
 
     fn fill_devices_list(&self) {
-        let options = self.options.read().unwrap();
+        let options = self.core.options().read().unwrap();
         let cur_mount = options.mount.device.clone();
         drop(options);
 
@@ -420,7 +417,7 @@ impl MountUi {
             if !cur_mount.is_empty() { Some(cur_mount.as_str()) } else { None },
             connected,
             |id| {
-                let Ok(mut options) = self.options.try_write() else { return; };
+                let Ok(mut options) = self.core.options().try_write() else { return; };
                 options.mount.device = id.to_string();
             }
         );
@@ -428,7 +425,7 @@ impl MountUi {
 
     fn fill_mount_speed_list_widget(&self) {
         let Some(telescope) = self.core.telescope() else { return; };
-        let options = self.options.read().unwrap();
+        let options = self.core.options().read().unwrap();
 
         exec_and_show_error(Some(&self.window), || {
             let list = telescope.slew_speed_list()?;

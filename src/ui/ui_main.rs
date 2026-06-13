@@ -78,11 +78,11 @@ pub fn init_ui(
     let preview       = super::ui_preview      ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let focuser       = super::ui_focuser      ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let fw_wheel      = super::ui_flt_wheel     ::init_ui(&main_ui.widgets.window, core);
-    let guiding       = super::ui_guiding      ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
-    let mount         = super::ui_mount        ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
-    let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
-    let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
-    let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, core, options);
+    let guiding       = super::ui_guiding      ::init_ui(&main_ui.widgets.window, &main_ui, core);
+    let mount         = super::ui_mount        ::init_ui(&main_ui.widgets.window, &main_ui, core);
+    let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, core);
+    let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, core);
+    let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let debug         = super::ui_debug        ::init_ui(options);
 
     let mut modules = main_ui.modules.borrow_mut();
