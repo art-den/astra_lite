@@ -5,7 +5,7 @@ use macros::FromBuilder;
 
 use crate::{
     core::{core::{Core, ModeType}, events::*, mode_focusing::*},
-    hal::{DeviceType, Focuser, FocuserState, HalState, events::HalEvent},
+    hal::{DeviceType, FocuserState, HalState, events::HalEvent},
     options::*,
     ui::plots::*,
     utils::math::{cmp_f64, linear_interpolate},
@@ -27,7 +27,6 @@ pub fn init_ui(
         main_ui:         Rc::clone(main_ui),
         window:          window.clone(),
         core:            Arc::clone(core),
-        focuser:         RefCell::new(None),
         excl:            ExclusiveCaller::new(),
         delayed_actions: DelayedActions::new(500),
         focusing_data:   RefCell::new(None),
@@ -105,7 +104,6 @@ struct FocuserUi {
     main_ui:         Rc<MainUi>,
     window:          gtk::ApplicationWindow,
     core:            Arc<Core>,
-    focuser:         RefCell<Option<Arc<dyn Focuser>>>,
     excl:            ExclusiveCaller,
     delayed_actions: DelayedActions<DelayedAction>,
     focusing_data:   RefCell<Option<FocusingResultData>>,
@@ -205,11 +203,6 @@ impl UiModule for FocuserUi {
                 if dev_info.type_.contains(DeviceType::FOCUSER) {
                     self.update_devices_list();
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
-
-                    let options = self.core.options().read().unwrap();
-                    if dev_info.name == options.focuser.device {
-                        self.create_focuser_object(&options.focuser.device);
-                    }
                 }
             }
             HalEvent::DeviceDisconnected(dev_info) => {
@@ -218,11 +211,6 @@ impl UiModule for FocuserUi {
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
                     self.delayed_actions.schedule(DelayedAction::ShowFocuserValue(None));
                     self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature(None));
-
-                    let options = self.core.options().read().unwrap();
-                    if dev_info.name == options.focuser.device {
-                        *self.focuser.borrow_mut() = None;
-                    }
                 }
             }
             HalEvent::FocuserStateChanged { device_id, .. } => {
@@ -315,12 +303,6 @@ impl FocuserUi {
         self.widgets.spb_extra_steps.set_increments(25.0, 100.0);
     }
 
-    fn create_focuser_object(&self, device_id: &str) {
-        let hal = self.core.hal();
-        let mut focuser = self.focuser.borrow_mut();
-        *focuser = hal.focuser(device_id).map(|f| f as Arc<_>).ok();
-    }
-
     fn connect_widgets_events(self: &Rc<Self>) {
         connect_action(&self.window, self, "manual_focus",      Self::handler_action_manual_focus);
         connect_action(&self.window, self, "stop_manual_focus", Self::handler_action_stop_manual_focus);
@@ -332,9 +314,8 @@ impl FocuserUi {
             options.focuser.device = new_device_name.to_string();
             drop(options);
 
-            self_.create_focuser_object(&new_device_name);
-
             self_.core.events().send(Event::FocuserDeviceChanged(new_device_name.to_string()));
+
             self_.delayed_actions.schedule(DelayedAction::InitAndShowFocuserValue(None));
             self_.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
             self_.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature(None));
@@ -342,8 +323,7 @@ impl FocuserUi {
 
         self.widgets.spb_val.connect_value_changed(clone!(@weak self as self_ => move |sb| {
             self_.excl.exec(|| {
-                let focuser = self_.focuser.borrow();
-                let Some(focuser) = &*focuser else { return; };
+                let Some(focuser) = self_.core.focuser() else { return; };
                 exec_and_show_error(Some(&self_.window), || {
                     focuser.set_abs_position(sb.value())?;
                     Ok(())
@@ -412,10 +392,8 @@ impl FocuserUi {
         let focusing = mode_type == ModeType::Focusing;
         let can_change_mode = waiting || live_view || single_shot;
 
-        let device_enabled = self.focuser
-            .borrow()
-            .as_ref()
-            .map(|f| f.is_active().unwrap_or(false))
+        let device_enabled = self.core.focuser()
+            .and_then(|f| f.is_active().ok())
             .unwrap_or(false);
 
         self.widgets.grd.set_sensitive(device_enabled);
@@ -506,8 +484,7 @@ impl FocuserUi {
 
     fn show_cur_focuser_value(&self, value: Option<i32>, force_configure_widget: bool) {
         let mut ok = false;
-        let focuser = self.focuser.borrow();
-        if let Some(focuser) = focuser.as_ref() {
+        if let Some(focuser) = self.core.focuser() {
             let abs_position = value.unwrap_or_else(|| focuser.abs_position().unwrap_or(0.0) as i32 );
             if force_configure_widget || self.widgets.spb_val.value() == 0.0 {
                 println!("Init focuser widget");
@@ -569,9 +546,9 @@ impl FocuserUi {
         let temperature = value_x10
             .map(|v| v as f64 / 10.0)
             .unwrap_or_else(|| {
-                let focuser = self.focuser.borrow();
-                let Some(focuser) = &*focuser else { return f64::NAN; };
-                focuser.temperature().unwrap_or(f64::NAN)
+                self.core.focuser()
+                    .and_then(|f| f.temperature().ok())
+                    .unwrap_or(f64::NAN)
             });
         let temp_str =
             if !temperature.is_nan() { &format!("{:.1}°", temperature) } else { "---" };
@@ -696,8 +673,7 @@ impl FocuserUi {
     fn update_focuser_value(&self, offset: i32) {
         self.excl.exec(|| {
             exec_and_show_error(Some(&self.window), || {
-                let focuser = self.focuser.borrow();
-                let Some(focuser) = &*focuser else { return Ok(()); };
+                let Some(focuser) = self.core.focuser() else { return Ok(()); };
                 let mut value = focuser.abs_position()?;
                 let range = focuser.abs_position_range()?;
                 value += offset as f64;
@@ -713,10 +689,8 @@ impl FocuserUi {
     }
 
     fn show_info(&self) {
-        let focuser = self.focuser.borrow();
-
         let mut info_shown = false;
-        if let Some(focuser) = &*focuser {
+        if let Some(focuser) = self.core.focuser() {
             let focuser_state = focuser.state().ok();
             enum InfoState { Work, Err }
 

@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 use crate::{
     core::{cam_ctrl::take_shot, consts::*, events::*, frame_processing::*},
-    hal::{Camera, FrameType, Hal, Telescope, indi::value_to_sexagesimal},
+    hal::{Camera, FrameType, Telescope, indi::value_to_sexagesimal},
     image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point},
     options::*,
     plate_solve::*,
@@ -68,21 +68,18 @@ pub struct GotoMode {
 
 impl GotoMode {
     pub fn new(
-        hal:         &Hal,
+        core:        &Core,
         destination: GotoDestination,
-        config:      GotoConfig,
-        options:     &Arc<RwLock<Options>>,
-        cur_frame:   &Arc<ResultImage>,
-        subscribers: &Arc<EventHandlers>,
+        config:      GotoConfig
     ) -> anyhow::Result<Self> {
-        let opts = options.read().unwrap();
-        let telescope = hal.telescope(&opts.mount.device)?;
+        let opts = core.options().read().unwrap();
+        let telescope = core.telescope_or_err()?;
         let (camera, camera_dev, cam_opts, plate_solver) = if config == GotoConfig::GotoPlateSolveAndCorrect {
             let Some(camera_dev) = opts.cam.device.clone() else {
                 anyhow::bail!("Camera is not selected!");
             };
 
-            let camera = hal.camera(&opts.cam.device_id)?;
+            let camera = core.camera_or_err()?;
             let mut cam_opts = opts.cam.clone();
             cam_opts.frame.frame_type = FrameType::Lights;
             cam_opts.frame.exp_main = opts.plate_solver.exposure;
@@ -104,9 +101,9 @@ impl GotoMode {
             state:        State::None,
             eq_coord:     EqCoord::default(),
             ps_opts:      opts.plate_solver.clone(),
-            cur_frame:    Arc::clone(cur_frame),
-            options:      Arc::clone(options),
-            subscribers:  Arc::clone(subscribers),
+            cur_frame:    Arc::clone(core.cur_frame()),
+            options:      Arc::clone(core.options()),
+            subscribers:  Arc::clone(core.events()),
             unpark_ms:    0,
             goto_ms:      0,
             goto_ok_ms:   0,

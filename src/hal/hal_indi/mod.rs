@@ -617,7 +617,7 @@ impl Device for IndiCamera {
     }
 
     fn name(&self) -> &str {
-        &self.device.name()
+        &self.device.id() // self.name is only for internal use for camera impl.
     }
 
     fn is_active(&self) -> anyhow::Result<bool> {

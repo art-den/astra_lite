@@ -1,11 +1,11 @@
 use std::{
-    sync::{Arc, RwLock},
+    sync::Arc,
     collections::VecDeque
 };
 use itertools::{izip, Itertools};
 
 use crate::{
-    core::cam_ctrl::take_shot, hal::{Camera, Focuser, FrameType, Hal}, options::*, utils::math::*
+    core::cam_ctrl::take_shot, hal::{Camera, Focuser, FrameType}, options::*, utils::math::*
 };
 use super::{core::*, events::*, frame_processing::*, utils::*};
 
@@ -101,17 +101,14 @@ enum CalcResult {
 
 impl FocusingMode {
     pub fn new(
-        hal:            &Hal,
-        options:        &Arc<RwLock<Options>>,
-        subscribers:    &Arc<EventHandlers>,
+        core:           &Core,
         next_mode:      Option<Box<dyn Mode + Sync + Send>>,
         prelim_step:    bool,
         error_reaction: FocusingErrorReaction,
     ) -> anyhow::Result<Self> {
-        let opts = options.read().unwrap();
-        let camera = hal.camera(&opts.cam.device_id)?;
-        let focuser = hal.focuser(&opts.focuser.device)?;
-
+        let camera = core.camera_or_err()?;
+        let focuser = core.focuser_or_err()?;
+        let opts = core.options().read().unwrap();
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;
         cam_opts.frame.exp_main = opts.focuser.exposure;
@@ -127,7 +124,7 @@ impl FocusingMode {
         log::debug!("Creating autofocus mode. max_try={}", max_try);
 
         Ok(FocusingMode {
-            subscribers:    Arc::clone(subscribers),
+            subscribers:    Arc::clone(core.events()),
             state:          FocusingState::Undefined,
             f_opts:         opts.focuser.clone(),
             before_pos:     0.0,

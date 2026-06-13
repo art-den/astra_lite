@@ -3,7 +3,7 @@ use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
     core::{core::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}},
-    hal::{Camera, DeviceType, FrameType, HalState, events::HalEvent},
+    hal::{DeviceType, FrameType, HalState, events::HalEvent},
     image::{info::*, raw::CalibrMethods},
     options::*,
 };
@@ -30,7 +30,6 @@ pub fn init_ui(
         main_ui:         Rc::clone(main_ui),
         window:          window.clone(),
         core:            Arc::clone(core),
-        camera:          RefCell::new(None),
         delayed_actions: DelayedActions::new(500),
         fn_utils:        RefCell::new(FileNameUtils::default()),
     });
@@ -271,7 +270,6 @@ struct CameraUi {
     main_ui:         Rc<MainUi>,
     window:          gtk::ApplicationWindow,
     core:            Arc<Core>,
-    camera:          RefCell<Option<Arc<dyn Camera>>>,
     delayed_actions: DelayedActions<DelayedAction>,
     fn_utils:        RefCell<FileNameUtils>,
 }
@@ -391,9 +389,6 @@ impl UiModule for CameraUi {
             HalEvent::DeviceConnected(evt) => {
                 let options = self.core.options().read().unwrap();
                 if evt.id == options.cam.device_id {
-                    let camera = self.core.hal().camera(&options.cam.device_id).ok();
-                    *self.camera.borrow_mut() = camera.map(|cam| cam.clone() as Arc<_>);
-                    drop(options);
                     self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
                 }
             }
@@ -413,7 +408,6 @@ impl UiModule for CameraUi {
                 let options = self.core.options().read().unwrap();
                 if evt.id == options.cam.device_id {
                     drop(options);
-                    *self.camera.borrow_mut() = None;
                     self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
                 }
             }
@@ -567,16 +561,13 @@ impl CameraUi {
 
                 drop(options);
 
-                let camera = self_.core.hal().camera(&cur_id).ok();
-                *self_.camera.borrow_mut() = camera.map(|cam| cam.clone() as Arc<_>);
-
-                self_.correct_widgets_props_impl();
-                self_.correct_frame_quality_widgets_props();
-
                 self_.core.events().send(Event::CameraDeviceChanged {
                     prev_camera_id,
                     new_camera_id: cur_id.to_string(),
                 });
+
+                self_.correct_widgets_props_impl();
+                self_.correct_frame_quality_widgets_props();
             })
         );
 
@@ -1030,7 +1021,7 @@ impl CameraUi {
         let widgets = &self.widgets;
         let hal = self.core.hal();
 
-        let Some(camera) = &*self.camera.borrow() else {
+        let Some(camera) = self.core.camera() else {
             widgets.common.bx_take_shot.set_sensitive(false);
             widgets.ctrl.grid.set_sensitive(false);
             widgets.frame.grid.set_sensitive(false);
@@ -1256,7 +1247,7 @@ impl CameraUi {
     }
 
     fn init_fn_utils(&self) {
-        let Some(camera) = &*self.camera.borrow() else { return; };
+        let Some(camera) = self.core.camera() else { return; };
         let mut fn_utils = self.fn_utils.borrow_mut();
         fn_utils.init(&(camera.clone() as Arc<_>));
     }
@@ -1336,7 +1327,7 @@ impl CameraUi {
         let last_bin = cb_bin.active_id();
         cb_bin.remove_all();
 
-        let Some(camera) = &*self.camera.borrow() else { return; };
+        let Some(camera) = self.core.camera() else { return; };
         let Ok((max_width, max_height)) = camera.ccd_size() else { return; };
         let Ok((max_hor_bin, max_vert_bin)) = camera.max_binning() else { return; };
         let max_bin = usize::min(max_hor_bin, max_vert_bin);
@@ -1376,7 +1367,7 @@ impl CameraUi {
             let cb = &self.widgets.ctrl.cb_heater;
             let last_value = cb.active_id();
             cb.remove_all();
-            let Some(camera) = &*self.camera.borrow() else { return Ok(()); };
+            let Some(camera) = self.core.camera() else { return Ok(()); };
 
             if !camera.is_heater_supported()? { return Ok(()); }
             let items = camera.heater_ctrl_list()?;
@@ -1406,7 +1397,7 @@ impl CameraUi {
             let last_value = cb.active_id();
             cb.remove_all();
 
-            let Some(camera) = &*self.camera.borrow() else { return Ok(()); };
+            let Some(camera) = self.core.camera() else { return Ok(()); };
             if !camera.is_conversion_gain_supported()? { return Ok(()) }
             let Ok(items) = camera.conversion_gain_list() else { return Ok(()); };
             for (id, label) in items {
@@ -1541,7 +1532,7 @@ impl CameraUi {
             return;
         };
         if cur_exposure < 1.0 { return; };
-        let Some(camera) = &*self.camera.borrow() else { return; };
+        let Some(camera) = self.core.camera() else { return; };
         let Ok(remaining_time) = camera.remaining_time() else { return; };
         let progress = ((cur_exposure - remaining_time) / cur_exposure).clamp(0.0, 1.0);
         let text_to_show = format!("{:.0} / {:.0}", cur_exposure - remaining_time, cur_exposure);

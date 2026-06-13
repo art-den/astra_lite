@@ -38,16 +38,10 @@ pub struct PlatesolveMode {
 }
 
 impl PlatesolveMode {
-    pub fn new(
-        hal:         &Arc<Hal>,
-        events:      &Arc<EventHandlers>,
-        options:     &Arc<RwLock<Options>>,
-        cur_frame:   &Arc<ResultImage>,
-        subscribers: &Arc<EventHandlers>,
-    ) -> anyhow::Result<Self> {
-        let opts = options.read().unwrap();
-        let camera = hal.camera(&opts.cam.device_id)?;
-        let mount = hal.telescope(&opts.mount.device)?;
+    pub fn new(core: &Core) -> anyhow::Result<Self> {
+        let camera = core.camera_or_err()?;
+        let mount = core.telescope_or_err()?;
+        let opts = core.options().read().unwrap();
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;
         cam_opts.frame.exp_main = opts.plate_solver.exposure;
@@ -60,11 +54,11 @@ impl PlatesolveMode {
         let plate_solver = PlateSolver::new(opts.plate_solver.solver);
         Ok(Self {
             state:        State::None,
-            hal:          Arc::clone(hal),
-            events:       Arc::clone(events),
-            cur_frame:    Arc::clone(cur_frame),
-            options:      Arc::clone(options),
-            subscribers:  Arc::clone(subscribers),
+            hal:          Arc::clone(core.hal()),
+            events:       Arc::clone(core.events()),
+            cur_frame:    Arc::clone(core.cur_frame()),
+            options:      Arc::clone(core.options()),
+            subscribers:  Arc::clone(core.events()),
             ps_opts:      opts.plate_solver.clone(),
             camera,
             mount,

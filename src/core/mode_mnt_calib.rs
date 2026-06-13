@@ -1,8 +1,8 @@
-use std::{sync::{Arc, RwLock}, f64::consts::PI};
+use std::{sync::Arc, f64::consts::PI};
 use itertools::Itertools;
 use crate::{
     core::cam_ctrl::take_shot,
-    hal::{Camera, FrameType, Hal, Telescope},
+    hal::{Camera, FrameType, Telescope},
     image::{stars::*, stars_offset::*},
     options::*,
     utils::math::*,
@@ -83,14 +83,13 @@ struct CalibrAtempt {
 
 impl MountCalibrMode {
     pub fn new(
-        hal:       &Hal,
-        options:   &Arc<RwLock<Options>>,
+        core:      &Core,
         next_mode: Option<Box<dyn Mode + Sync + Send>>,
     ) -> anyhow::Result<Self> {
-        let opts = options.read().unwrap();
+        let opts = core.options().read().unwrap();
 
-        let camera = hal.camera(&opts.cam.device_id)?;
-        let telescope = hal.telescope(&opts.mount.device)?;
+        let camera = core.camera_or_err()?;
+        let telescope = core.telescope_or_err()?;
 
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;

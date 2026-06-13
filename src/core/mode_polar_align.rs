@@ -236,7 +236,6 @@ pub struct PolarAlignMode {
     telescope:    Arc<dyn Telescope + Send + Sync>,
     state:        State,
     step:         Step,
-    camera_dev:   DeviceAndProp,
     cam_opts:     CamOptions,
     pa_opts:      PloarAlignOptions,
     s_opts:       SiteOptions,
@@ -361,19 +360,10 @@ impl PolarAlignMode {
         Ok(warnings.join("\n"))
     }
 
-    pub fn new(
-        hal:         &Hal,
-        cur_frame:   &Arc<ResultImage>,
-        options:     &Arc<RwLock<Options>>,
-        subscribers: &Arc<EventHandlers>,
-    ) -> anyhow::Result<Self> {
-        let opts = options.read().unwrap();
-        let Some(cam_device) = &opts.cam.device else {
-            anyhow::bail!("Camera is not selected");
-        };
-
-        let camera = hal.camera(&opts.cam.device_id)?;
-        let telescope = hal.telescope(&opts.mount.device)?;
+    pub fn new(core: &Core) -> anyhow::Result<Self> {
+        let camera = core.camera_or_err()?;
+        let telescope = core.telescope_or_err()?;
+        let opts = core.options().read().unwrap();
 
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;
@@ -392,15 +382,14 @@ impl PolarAlignMode {
             step:        Step::Undefined,
             pa_opts:     opts.polar_align.clone(),
             s_opts:      opts.site.clone(),
-            options:     Arc::clone(options),
-            cur_frame:   Arc::clone(cur_frame),
-            subscribers: Arc::clone(subscribers),
+            options:     Arc::clone(core.options()),
+            cur_frame:   Arc::clone(core.cur_frame()),
+            subscribers: Arc::clone(core.events()),
             ps_opts:     opts.plate_solver.clone(),
             alignment:   PolarAlignment::new(),
             image_time:  None,
             initial_crd: None,
             step_cnt:    0,
-            camera_dev:  cam_device.clone(),
             camera,
             telescope,
             cam_opts,
@@ -517,7 +506,7 @@ impl PolarAlignMode {
         drop(options);
 
         let event = PlateSolverEvent {
-            cam_name: self.camera_dev.name.clone(),
+            cam_name: self.camera.name().to_string(),
             result: ps_result.clone(),
             preview: preview.map(Arc::new),
         };

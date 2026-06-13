@@ -3,7 +3,7 @@ use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
     core::{core::{Core, ModeType}, events::*, mode_polar_align::{CustomCommand, PolarAlignMode, PolarAlignmentEvent, State}},
-    hal::indi::{self, degree_to_str_short},
+    hal::{DeviceType, events::HalEvent, indi::{self, degree_to_str_short}},
     options::*,
     sky_math::math::*,
 };
@@ -152,17 +152,17 @@ impl UiModule for PolarAlignUi {
         }
     }
 
-    fn on_indi_event(&self, event: &indi::Event) {
+    fn on_hal_event(&self, event: &HalEvent) {
         match event {
-            indi::Event::ConnChange(_)|
-            indi::Event::DeviceConnected(_)|
-            indi::Event::DeviceDelete(_)|
-            indi::Event::NewDevice(_) => {
-                self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
+            HalEvent::DeviceConnected(info)|
+            HalEvent::DeviceDisconnected(info) => {
+                if info.type_.contains(DeviceType::TELESCOPE) {
+                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
+                }
             }
-            indi::Event::PropChange(change) => {
-                if let indi::PropChange::Change{ prop_name, .. } = &change.change
-                && **prop_name == "TELESCOPE_SLEW_RATE" {
+            HalEvent::TelescopeSlewRateListReady(device_id) => {
+                let options = self.core.options().read().unwrap();
+                if options.mount.device == **device_id {
                     self.delayed_actions.schedule(DelayedAction::UpdateMountSpeedList);
                 }
             }

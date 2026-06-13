@@ -1,8 +1,8 @@
-use std::{collections::VecDeque, sync::{Arc, Mutex, RwLock}};
+use std::{collections::VecDeque, sync::{Arc, Mutex}};
 
 use crate::{
     core::{frame_processing::*, mode_camera::{CameraMode, TackingPicturesMode}, mode_waiting::WaitingMode},
-    hal::{Camera, Hal},
+    hal::Camera,
    options::*
 };
 
@@ -45,15 +45,12 @@ pub struct DarkCreationMode {
 
 impl DarkCreationMode {
     pub fn new(
-        hal:         &Hal,
+        core:        &Core,
         mode:        DarkLibMode,
         calibr_data: &Arc<Mutex<CalibrData>>,
-        options:     &Arc<RwLock<Options>>,
         program:     &[MasterFileCreationProgramItem]
     ) -> anyhow::Result<Self> {
-        let opts = options.read().unwrap();
-        let camera = hal.camera(&opts.cam.device_id)?;
-
+        let camera = core.camera_or_err()?;
         Ok(Self {
             camera,
             mode,

@@ -1,10 +1,10 @@
-use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, RwLock}};
+use std::{cell::Cell, rc::Rc, sync::{Arc, RwLock}};
 use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
     core::{core::{Core, ModeType}, events::*},
-    hal::{DeviceType, HalState, Telescope, TelescopeState, events::HalEvent, indi::{degree_to_str, hour_to_str}},
+    hal::{DeviceType, HalState, TelescopeState, events::HalEvent, indi::{degree_to_str, hour_to_str}},
     options::*,
     ui::ui_main::MainUi,
 };
@@ -29,7 +29,6 @@ pub fn init_ui(
         excl:            ExclusiveCaller::new(),
         options:         Arc::clone(options),
         core:            Arc::clone(core),
-        telescope:       RefCell::new(None),
         delayed_actions: DelayedActions::new(500),
         prev_info_state: Cell::new(None),
         prev_info_ra:    Cell::new(0.0),
@@ -123,7 +122,6 @@ struct MountUi {
     excl:            ExclusiveCaller,
     options:         Arc<RwLock<Options>>,
     core:            Arc<Core>,
-    telescope:       RefCell<Option<Arc<dyn Telescope>>>,
     delayed_actions: DelayedActions<DelayedAction>,
     prev_info_state: Cell<Option<TelescopeState>>,
     prev_info_ra:    Cell<f64>,
@@ -179,26 +177,15 @@ impl UiModule for MountUi {
                 self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
             }
             HalEvent::DeviceConnected(info) => {
-                self.delayed_actions.schedule(DelayedAction::FillDevicesList);
-                self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
                 if info.type_.contains(DeviceType::TELESCOPE) {
-                    let option = self.core.options().read().unwrap();
-                    if option.mount.device == info.name {
-                        let hal = self.core.hal();
-                        *self.telescope.borrow_mut() = hal.telescope(&option.mount.device)
-                            .map(|t| t as Arc<_>)
-                            .ok();
-                    }
+                    self.delayed_actions.schedule(DelayedAction::FillDevicesList);
+                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
                 }
             }
             HalEvent::DeviceDisconnected(info) => {
                 if info.type_.contains(DeviceType::TELESCOPE) {
                     self.delayed_actions.schedule(DelayedAction::FillDevicesList);
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
-                    let option = self.core.options().read().unwrap();
-                    if option.mount.device == info.name {
-                        *self.telescope.borrow_mut() = None;
-                    }
                 }
             }
             HalEvent::TelescopeSlewRateListReady(device_id) => {
@@ -295,24 +282,19 @@ impl MountUi {
                 if options.mount.device == new_device_name { return; }
                 options.mount.device = new_device_name.to_string();
                 drop(options);
-                let hal = self_.core.hal();
-                *self_.telescope.borrow_mut() = hal.telescope(&new_device_name)
-                    .map(|t| t as Arc<_>)
-                    .ok();
-                self_.fill_mount_speed_list_widget();
-                self_.show_cur_mount_state();
-                self_.correct_widgets_props();
                 self_.core.events().send(
                     Event::MountDeviceChanged(new_device_name.to_string())
                 );
+                self_.fill_mount_speed_list_widget();
+                self_.show_cur_mount_state();
+                self_.correct_widgets_props();
             })
         );
 
         self.widgets.chb_tracking.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 self_.excl.exec(|| {
-                    let telescope = self_.telescope.borrow();
-                    let Some(telescope) = &*telescope else { return; };
+                    let Some(telescope) = self_.core.telescope() else { return; };
                     exec_and_show_error(Some(&self_.window), || {
                         telescope.track(chb.is_active())?;
                         Ok(())
@@ -324,8 +306,7 @@ impl MountUi {
         self.widgets.chb_parked.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 self_.excl.exec(|| {
-                    let telescope = self_.telescope.borrow();
-                    let Some(telescope) = &*telescope else { return; };
+                    let Some(telescope) = self_.core.telescope() else { return; };
                     exec_and_show_error(Some(&self_.window), || {
                         if chb.is_active() {
                             telescope.park()?;
@@ -341,8 +322,9 @@ impl MountUi {
     }
 
     fn correct_widgets_props(&self) {
-        let telescope = self.telescope.borrow();
-        let mnt_active = telescope.as_ref().map(|t| t.is_active().unwrap_or(false)).unwrap_or(false);
+        let mnt_active = self.core.telescope()
+            .and_then(|t| t.is_active().ok())
+            .unwrap_or(false);
         let hal_connected = self.core.hal().state() == HalState::Connected;
 
         let mode = self.core.mode();
@@ -373,8 +355,7 @@ impl MountUi {
     }
 
     fn handler_nav_mount_btn_pressed(&self, button: &gtk::Button) {
-        let telescope = self.telescope.borrow();
-        let Some(telescope) = &*telescope else { return; };
+        let Some(telescope) = self.core.telescope() else { return; };
         exec_and_show_error(Some(&self.window), || {
             if button != &self.widgets.btn_stop {
                 let inv_ns = self.widgets.chb_inv_ns.is_active();
@@ -408,8 +389,7 @@ impl MountUi {
     }
 
     fn handler_nav_mount_btn_released(&self, button: &gtk::Button) {
-        let telescope = self.telescope.borrow();
-        let Some(telescope) = &*telescope else { return; };
+        let Some(telescope) = self.core.telescope() else { return; };
         exec_and_show_error(Some(&self.window), || {
             if button != &self.widgets.btn_stop {
                 telescope.abort_motion()?;
@@ -447,8 +427,7 @@ impl MountUi {
     }
 
     fn fill_mount_speed_list_widget(&self) {
-        let telescope = self.telescope.borrow();
-        let Some(telescope) = &*telescope else { return; };
+        let Some(telescope) = self.core.telescope() else { return; };
         let options = self.options.read().unwrap();
 
         exec_and_show_error(Some(&self.window), || {
@@ -481,8 +460,7 @@ impl MountUi {
 
     fn show_cur_mount_state(&self) {
         self.excl.exec(|| {
-            let telescope = self.telescope.borrow();
-            let Some(telescope) = &*telescope else { return; };
+            let Some(telescope) = self.core.telescope() else { return; };
 
             let parked = telescope.is_parked().unwrap_or(false);
             self.show_mount_parked_state(parked);
@@ -507,8 +485,7 @@ impl MountUi {
     }
 
     fn show_info(&self, state: Option<TelescopeState>) {
-        let telescope = self.telescope.borrow();
-        let Some(telescope) = &*telescope else {
+        let Some(telescope) = self.core.telescope() else {
             self.info_widgets.l_pos.set_label("---");
             return;
         };

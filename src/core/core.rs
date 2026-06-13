@@ -6,7 +6,7 @@ use std::{
 use itertools::Itertools;
 
 use crate::{
-    core::cam_ctrl::*, guiding::external_guider::*, hal::{CameraShot, FrameType, Hal, events::HalEvent, indi}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*
+    core::cam_ctrl::*, guiding::external_guider::*, hal::{Camera, CameraShot, DeviceType, Focuser, FrameType, Hal, Telescope, events::HalEvent, indi}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*
 };
 
 use super::{
@@ -98,6 +98,9 @@ impl ModeData {
 
 pub struct Core {
     hal:                Arc<Hal>,
+    camera:             Mutex<Option<Arc<dyn Camera + Send + Sync>>>,
+    telescope:          Mutex<Option<Arc<dyn Telescope + Send + Sync>>>,
+    focuser:            Mutex<Option<Arc<dyn Focuser + Send + Sync>>>,
     indi:               Arc<indi::Connection>,
     options:            Arc<RwLock<Options>>,
     mode:               RwLock<ModeData>,
@@ -131,6 +134,9 @@ impl Core {
 
         let this = Arc::new(Self {
             indi:               Arc::clone(&indi),
+            camera:             Mutex::new(None),
+            telescope:          Mutex::new(None),
+            focuser:            Mutex::new(None),
             options:            Arc::clone(&options),
             mode:               RwLock::new(ModeData::new()),
             cur_frame:          Arc::new(ResultImage::new()),
@@ -152,6 +158,45 @@ impl Core {
 
     pub fn hal(&self) -> &Arc<Hal> {
         &self.hal
+    }
+
+    pub fn camera(&self) -> Option<Arc<dyn Camera + Send + Sync>> {
+        let camera = self.camera.lock().unwrap();
+        camera.as_ref().map(|cam| Arc::clone(cam))
+    }
+
+    pub fn camera_or_err(&self) -> anyhow::Result<Arc<dyn Camera + Send + Sync>> {
+        let camera = self.camera.lock().unwrap();
+        let Some(camera) = camera.as_ref() else {
+            anyhow::bail!("Camera object is None");
+        };
+        Ok(Arc::clone(camera))
+    }
+
+    pub fn telescope(&self) -> Option<Arc<dyn Telescope + Send + Sync>> {
+        let telescope = self.telescope.lock().unwrap();
+        telescope.as_ref().map(|cam| Arc::clone(cam))
+    }
+
+    pub fn telescope_or_err(&self) -> anyhow::Result<Arc<dyn Telescope + Send + Sync>> {
+        let telescope = self.telescope.lock().unwrap();
+        let Some(telescope) = telescope.as_ref() else {
+            anyhow::bail!("Telescope object is None");
+        };
+        Ok(Arc::clone(telescope))
+    }
+
+    pub fn focuser(&self) -> Option<Arc<dyn Focuser + Send + Sync>> {
+        let focuser = self.focuser.lock().unwrap();
+        focuser.as_ref().map(|cam| Arc::clone(cam))
+    }
+
+    pub fn focuser_or_err(&self) -> anyhow::Result<Arc<dyn Focuser + Send + Sync>> {
+        let focuser = self.focuser.lock().unwrap();
+        let Some(focuser) = focuser.as_ref() else {
+            anyhow::bail!("Focuser object is None");
+        };
+        Ok(Arc::clone(focuser))
     }
 
     pub fn indi(&self) -> &Arc<indi::Connection> {
@@ -269,6 +314,31 @@ impl Core {
 
     fn hal_event_handler(self: &Arc<Self>, event: HalEvent) -> anyhow::Result<()> {
         match &event {
+            HalEvent::DeviceConnected(info) => {
+                let options = self.options().read().unwrap();
+                if info.type_.contains(DeviceType::CAMERA) && options.cam.device_id == info.id {
+                    *self.camera.lock().unwrap() = Some(self.hal.camera(&info.id)?);
+                }
+                if info.type_.contains(DeviceType::TELESCOPE) && options.mount.device == info.id {
+                    *self.telescope.lock().unwrap() = Some(self.hal.telescope(&info.id)?);
+                }
+                if info.type_.contains(DeviceType::FOCUSER) && options.focuser.device == info.id {
+                    *self.focuser.lock().unwrap() = Some(self.hal.focuser(&info.id)?);
+                }
+            }
+            HalEvent::DeviceDisconnected(info) => {
+                let options = self.options().read().unwrap();
+                if info.type_.contains(DeviceType::CAMERA) && options.cam.device_id == info.id {
+                    *self.camera.lock().unwrap() = None;
+                }
+                if info.type_.contains(DeviceType::TELESCOPE) && options.mount.device == info.id {
+                    *self.telescope.lock().unwrap() = None;
+                }
+                if info.type_.contains(DeviceType::FOCUSER) && options.focuser.device == info.id {
+                    *self.focuser.lock().unwrap() = None;
+                }
+
+            }
             HalEvent::Error(err) => {
                 self.process_error_str(&err.as_str(), "HAL error");
             }
@@ -413,6 +483,12 @@ impl Core {
             Event::CameraDeviceChanged { new_camera_id, .. } => {
                 self.process_camera_changed(new_camera_id);
             },
+            Event::MountDeviceChanged(new_mount_id) => {
+                *self.telescope.lock().unwrap() = self.hal.telescope(&new_mount_id).ok();
+            }
+            Event::FocuserDeviceChanged(new_focuser_id) => {
+                *self.focuser.lock().unwrap() = self.hal.focuser(&new_focuser_id).ok();
+            }
             Event::TelescopeFocalLenChanged(_)|
             Event::TelescopeBarlowChanged|
             Event::GuiderFocalLenChanged(_) => {
@@ -500,12 +576,11 @@ impl Core {
     }
 
     fn process_camera_changed(self: &Arc<Self>, new_camera_id: &str) {
-        let options = self.options.read().unwrap();
-        if options.cam.device_id != new_camera_id {
-            return;
-        }
+        *self.camera.lock().unwrap() = self.hal.camera(new_camera_id).ok();
 
-        let Ok(camera) = self.hal.camera(new_camera_id) else { return; };
+        let options = self.options.read().unwrap();
+
+        let Some(camera) = self.camera() else { return; };
 
         let res = control_camera_cooling(&camera, &options.cam.ctrl);
         self.process_error(res, "control_camera_cooling");
@@ -708,9 +783,7 @@ impl Core {
 
     pub fn start_focusing(&self) -> anyhow::Result<()> {
         let mode = FocusingMode::new(
-            &self.hal,
-            &self.options,
-            &self.events,
+            self,
             None,
             true,
             FocusingErrorReaction::Fail
@@ -720,11 +793,7 @@ impl Core {
     }
 
     pub fn start_mount_calibr(&self) -> anyhow::Result<()> {
-        let mode = MountCalibrMode::new(
-            &self.hal,
-            &self.options,
-            None
-        )?;
+        let mode = MountCalibrMode::new(self, None)?;
         self.start_new_mode(mode, false, false)?;
         Ok(())
     }
@@ -735,10 +804,9 @@ impl Core {
         program: &[MasterFileCreationProgramItem]
     ) -> anyhow::Result<()> {
         let mode = DarkCreationMode::new(
-            &self.hal,
+            self,
             dark_lib_mode,
             &self.calibr_data,
-            &self.options,
             program
         )?;
         self.start_new_mode(mode, false, false)?;
@@ -746,23 +814,16 @@ impl Core {
     }
 
     pub fn start_goto_coord(
-        &self,
+        self:     &Arc<Self>,
         eq_coord: &EqCoord,
         config:   GotoConfig,
     ) -> anyhow::Result<()> {
-        let mode = GotoMode::new(
-            &self.hal,
-            GotoDestination::Coord(*eq_coord),
-            config,
-            &self.options,
-            &self.cur_frame,
-            &self.events,
-        )?;
+        let mode = GotoMode::new(self, GotoDestination::Coord(*eq_coord), config)?;
         self.start_new_mode(mode, false, false)?;
         Ok(())
     }
 
-    pub fn start_goto_image(&self) -> anyhow::Result<()> {
+    pub fn start_goto_image(self: &Arc<Self>) -> anyhow::Result<()> {
         let image = self.cur_frame.image.read().unwrap();
         if image.is_empty() {
             anyhow::bail!("Image is empty");
@@ -774,40 +835,26 @@ impl Core {
         };
         self.mode.write().unwrap().active.abort()?;
         let mode = GotoMode::new(
-            &self.hal,
+            self,
             GotoDestination::Image{
                 image: Arc::clone(&self.cur_frame.image),
                 info: Arc::clone(&light_frame_info.image),
                 stars: Arc::clone(&light_frame_info.stars)
             },
             GotoConfig::GotoPlateSolveAndCorrect,
-            &self.options,
-            &self.cur_frame,
-            &self.events,
         )?;
         self.start_new_mode(mode, false, false)?;
         Ok(())
     }
 
-    pub fn start_capture_and_platesolve(&self) -> anyhow::Result<()> {
-        let mode = PlatesolveMode::new(
-            &self.hal,
-            &self.events,
-            &self.options,
-            &self.cur_frame,
-            &self.events,
-        )?;
+    pub fn start_capture_and_platesolve(self: &Arc<Self>) -> anyhow::Result<()> {
+        let mode = PlatesolveMode::new(self)?;
         self.start_new_mode(mode, false, false)?;
         Ok(())
     }
 
-    pub fn start_polar_alignment(&self) -> anyhow::Result<()> {
-        let mode = PolarAlignMode::new(
-            &self.hal,
-            &self.cur_frame,
-            &self.options,
-            &self.events,
-        )?;
+    pub fn start_polar_alignment(self: &Arc<Self>) -> anyhow::Result<()> {
+        let mode = PolarAlignMode::new(self)?;
         self.start_new_mode(mode, false, false)?;
         Ok(())
     }

@@ -148,6 +148,8 @@ pub struct TackingPicturesMode {
 
 impl TackingPicturesMode {
     pub fn new(cam_mode: CameraMode, core: &Core) -> anyhow::Result<Self> {
+        let camera = core.camera_or_err()?;
+
         let hal = core.hal();
         let options = core.options();
         let opts = options.read().unwrap();
@@ -165,8 +167,6 @@ impl TackingPicturesMode {
 
         let mut cam_options = opts.cam.clone();
         let qual_options = opts.quality.clone();
-
-        let camera = hal.camera(&cam_options.device_id)?;
         let mount = hal.telescope(&opts.mount.device).ok();
 
         match cam_mode {
@@ -783,14 +783,11 @@ impl TackingPicturesMode {
             // Start next job/mode
             match self.next_job.take() {
                 Some(NextJob::MountCalibration) => {
-                    let options = Arc::clone(&self.options);
-
                     let start_mode_mnt_calibr_fun = move |_core: &Arc<Core>, mode: &mut ModeData| -> anyhow::Result<()> {
                         mode.active.abort()?;
                         let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
                         let mut new_mode = MountCalibrMode::new(
-                            _core.hal(),
-                            &options,
+                            _core,
                             Some(prev_mode)
                         )?;
                         new_mode.start()?;
@@ -812,15 +809,11 @@ impl TackingPicturesMode {
 
                 Some(NextJob::Autofocus) => {
                     // Start autofocus mode
-                    let options = Arc::clone(&self.options);
-                    let events = Arc::clone(&self.events);
                     let start_focusing_fun = move |_core: &Arc<Core>, mode: &mut ModeData| -> anyhow::Result<()> {
                         mode.active.abort()?;
                         let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
                         let mut new_mode = FocusingMode::new(
-                            _core.hal(),
-                            &options,
-                            &events,
+                            _core,
                             Some(prev_mode),
                             false,
                             FocusingErrorReaction::IgnoreAndExit
