@@ -6,7 +6,7 @@ use std::{
 use itertools::Itertools;
 
 use crate::{
-    core::cam_ctrl::*, guiding::external_guider::*, hal::{Camera, CameraShot, DeviceType, Focuser, FrameType, Hal, Telescope, events::HalEvent, indi}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*
+    core::cam_ctrl::*, guiding::external_guider::*, hal::{Camera, CameraShot, DeviceType, Focuser, FrameType, Hal, HalState, Telescope, events::HalEvent, indi}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*
 };
 
 use super::{
@@ -314,6 +314,11 @@ impl Core {
 
     fn hal_event_handler(self: &Arc<Self>, event: HalEvent) -> anyhow::Result<()> {
         match &event {
+            HalEvent::StateChanged(HalState::Disconnected) => {
+                *self.camera.lock().unwrap() = None;
+                *self.telescope.lock().unwrap() = None;
+                *self.focuser.lock().unwrap() = None;
+            }
             HalEvent::DeviceConnected(info) => {
                 let options = self.options().read().unwrap();
                 if info.type_.contains(DeviceType::CAMERA) && options.cam.device_id == info.id {
