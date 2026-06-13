@@ -82,7 +82,7 @@ pub fn init_ui(
     let mount         = super::ui_mount        ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
     let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
     let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
-    let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, core, options, indi);
+    let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, core, options);
     let debug         = super::ui_debug        ::init_ui(options);
 
     let mut modules = main_ui.modules.borrow_mut();

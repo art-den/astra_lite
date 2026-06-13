@@ -4,13 +4,13 @@ use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use crate::{
-    options::*,
     core::{core::*, events::*, mode_goto::GotoConfig},
+    hal::{HalState, indi::{degree_to_str, hour_to_str}},
     image::preview::PreviewRgbData,
-    hal::indi::{self, degree_to_str, hour_to_str},
+    options::*,
     plate_solve::PlateSolveOkResult,
-    utils::io_utils::*,
     sky_math::math::*,
+    utils::io_utils::*,
 };
 use super::{
     gtk_utils::*,
@@ -27,7 +27,6 @@ pub fn init_ui(
     main_ui: &Rc<MainUi>,
     core:    &Arc<Core>,
     options: &Arc<RwLock<Options>>,
-    indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();
     exec_and_show_error(Some(window), || {
@@ -48,7 +47,6 @@ pub fn init_ui(
         widgets,
         ui_options:    RefCell::new(ui_options),
         core:          Arc::clone(core),
-        indi:          Arc::clone(indi),
         options:       Arc::clone(options),
         window:        window.clone(),
         main_ui:       Rc::clone(main_ui),
@@ -288,7 +286,6 @@ struct MapUi {
     widgets:       Widgets,
     ui_options:    RefCell<UiOptions>,
     core:          Arc<Core>,
-    indi:          Arc<indi::Connection>,
     options:       Arc<RwLock<Options>>,
     window:        gtk::ApplicationWindow,
     main_ui:       Rc<MainUi>,
@@ -650,56 +647,46 @@ impl MapUi {
             let paint_config = config.paint.clone();
             drop(config);
 
-            let indi_is_connected = self.indi.state() == indi::ConnState::Connected;
+            let hal_is_connected = self.core.hal().state() == HalState::Connected;
 
-            let cam_frame = if show_ccd && indi_is_connected {
-                || -> anyhow::Result<CameraFrame> {
+            let cam_frame = if show_ccd && hal_is_connected {
+                || -> Option<CameraFrame> {
                     let options = self.options.read().unwrap();
-                    let Some(device) = &options.cam.device else { anyhow::bail!("Camera is not selected"); };
-                    let cam_name = &device.name;
-                    let cam_ccd_prop = &device.prop;
-                    let cam_ccd = indi::CamCcd::from_ccd_prop_name(cam_ccd_prop);
+
+                    let Some(camera) = self.core.camera() else  { return None; };
+
                     let focal_len = options.telescope.real_focal_length();
-                    if focal_len <= 0.1 {
-                        anyhow::bail!("Wrong telescope focal lenght");
-                    }
-                    let (sensor_width, sensor_height) = self.indi.camera_get_max_frame_size(cam_name, cam_ccd)?;
-                    let (pixel_width_um, pixel_height_um) = self.indi.camera_get_pixel_size_um(cam_name, cam_ccd)?;
+                    if focal_len <= 0.1 { return None; }
+                    let (sensor_width, sensor_height) = camera.ccd_size().ok()?;
+                    let (pixel_width_um, pixel_height_um) = camera.pixel_size_um().ok()?;
                     let (width_mm, height_mm) = options.cam.calc_active_zone_mm(
                         sensor_width, sensor_height,
                         pixel_width_um, pixel_height_um
                     );
-                    let mut full_cam_name = cam_name.to_string();
-                    if !cam_ccd_prop.is_empty() {
-                        full_cam_name += ", ";
-                        full_cam_name += cam_ccd_prop;
-                    }
                     let cam_rotation = self.cam_rotation.borrow();
-                    let rot_angle = *cam_rotation.get(&device.name).unwrap_or(&0.0);
+                    let rot_angle = *cam_rotation.get(camera.name()).unwrap_or(&0.0);
                     drop(cam_rotation);
 
-                    Ok(CameraFrame{
-                        name: full_cam_name,
+                    Some(CameraFrame{
+                        name: camera.name().to_string(),
                         horiz_angle: f64::atan2(width_mm, focal_len),
                         vert_angle: f64::atan2(height_mm, focal_len),
                         rot_angle,
                     })
-                } ().ok()
+                } ()
             } else {
                 None
             };
 
-            let telescope_pos = if indi_is_connected {
-                let tele_pos_fun = || -> anyhow::Result<EqCoord> {
-                    let options = self.options.read().unwrap();
-                    let device_name = &options.mount.device;
-                    let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(device_name)?;
-                    Ok(EqCoord {
+            let telescope_pos = if hal_is_connected {
+                || -> Option<EqCoord> {
+                    let Some(telescope) = self.core.telescope() else { return None; };
+                    let (ra, dec) = telescope.eq_coord().ok()?;
+                    Some(EqCoord {
                         ra: hour_to_radian(ra),
                         dec: degree_to_radian(dec),
                     })
-                };
-                tele_pos_fun().ok()
+                } ()
             } else {
                 None
             };
@@ -1210,15 +1197,15 @@ impl MapUi {
             };
             let eq_coord = self.map_widget.widget_crd_to_eq(x, y);
             *self.clicked_crd.borrow_mut() = eq_coord;
-            let indi_is_active = self.indi.state() == indi::ConnState::Connected;
+            let hal_is_active = self.core.hal().state() == HalState::Connected;
             let selected_item = self.selected_item.borrow();
-            let enable_goto = indi_is_active && selected_item.is_some() && !self.goto_started.get();
+            let enable_goto = hal_is_active && selected_item.is_some() && !self.goto_started.get();
             enable_action(&self.window, "sm_goto_selected", enable_goto);
             enable_action(&self.window, "sm_goto_sel_solve", enable_goto);
             enable_action(
                 &self.window,
                 "sm_goto_point",
-                indi_is_active && eq_coord.is_some() && !self.goto_started.get(),
+                hal_is_active && eq_coord.is_some() && !self.goto_started.get(),
             );
             self.widgets.obj.m_widget.set_attach_widget(Some(self.map_widget.get_widget()));
             self.widgets.obj.m_widget.popup_at_pointer(None);
