@@ -4,7 +4,7 @@ use macros::FromBuilder;
 
 use crate::{
     core::{core::{Core, ModeType}, events::*},
-    hal::indi,
+    hal::{DeviceType, HalState, events::HalEvent},
     options::*,
 };
 
@@ -16,7 +16,6 @@ pub fn init_ui(
     main_ui: &Rc<MainUi>,
     options: &Arc<RwLock<Options>>,
     core:    &Arc<Core>,
-    indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/platesolve.ui"));
     let obj = Rc::new(PlateSolveUi {
@@ -25,7 +24,6 @@ pub fn init_ui(
         main_ui:         Rc::clone(main_ui),
         options:         Arc::clone(options),
         core:            Arc::clone(core),
-        indi:            Arc::clone(indi),
         delayed_actions: DelayedActions::new(200),
     });
 
@@ -73,7 +71,6 @@ struct PlateSolveUi {
     window:          gtk::ApplicationWindow,
     options:         Arc<RwLock<Options>>,
     core:            Arc<Core>,
-    indi:            Arc<indi::Connection>,
     delayed_actions: DelayedActions<DelayedAction>,
 }
 
@@ -132,26 +129,23 @@ impl UiModule for PlateSolveUi {
             Event::CameraDeviceChanged{ prev_camera_id, new_camera_id } => {
                 self.handler_camera_changed(prev_camera_id, new_camera_id);
             }
-            Event::MountDeviceChanged(mount_device) => {
-                let options = self.options.read().unwrap();
-                let cam_device = options.cam.device_id.clone();
-                drop(options);
-                self.correct_widgets_props_impl(mount_device, &cam_device);
+            Event::MountDeviceChanged(_) => {
+                self.correct_widgets_props();
             }
             _ => {}
         }
 
     }
 
-    fn on_indi_event(&self, event: &indi::Event) {
+    fn on_hal_event(&self, event: &HalEvent) {
         match event {
-            indi::Event::ConnChange(_)|
-            indi::Event::DeviceConnected(_)|
-            indi::Event::DeviceDelete(_)|
-            indi::Event::NewDevice(_) => {
-                self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
+            HalEvent::DeviceConnected(info)|
+            HalEvent::DeviceDisconnected(info) => {
+                if info.type_.contains(DeviceType::CAMERA) || info.type_.contains(DeviceType::TELESCOPE) {
+                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
+                }
             }
-            _ => {}
+            _ => {},
         }
     }
 }
@@ -184,17 +178,19 @@ impl PlateSolveUi {
         );
     }
 
-    fn correct_widgets_props_impl(&self, mount_device: &str, cam_device: &str) {
-        let hal = self.core.hal();
-        let camera = hal.camera(cam_device).ok();
+    fn correct_widgets_props(&self) {
+        let camera = self.core.camera();
+        let mount = self.core.telescope();
 
-        let mnt_active = self.indi.is_device_enabled(mount_device).unwrap_or(false);
-
-        let cam_active = camera.as_ref()
-            .map(|cam| cam.is_active().ok())
-            .flatten()
+        let cam_active = camera
+            .as_ref()
+            .and_then(|cam| cam.is_active().ok())
             .unwrap_or(false);
-        let indi_connected = self.indi.state() == indi::ConnState::Connected;
+        let mnt_active = mount
+            .and_then(|cam| cam.is_active().ok())
+            .unwrap_or(false);
+
+        let hal_connected = self.core.hal().state() == HalState::Connected;
 
         let mode = self.core.mode();
         let mode_type = mode.active.get_type();
@@ -203,7 +199,7 @@ impl PlateSolveUi {
         let single_shot = mode_type == ModeType::SingleShot;
 
         let plate_solve_sensitive =
-            indi_connected &&
+            hal_connected &&
             mnt_active && cam_active &&
             (waiting || single_shot || live_view);
 
@@ -215,14 +211,6 @@ impl PlateSolveUi {
         self.widgets.grd.set_sensitive(plate_solve_sensitive);
     }
 
-    fn correct_widgets_props(&self) {
-        let options = self.options.read().unwrap();
-        let mount_device = options.mount.device.clone();
-        let cam_device = options.cam.device_id.clone();
-        drop(options);
-        self.correct_widgets_props_impl(&mount_device, &cam_device);
-    }
-
     fn handler_camera_changed(&self, from: &str, to: &str) {
         let mut options = self.options.write().unwrap();
         self.get_options(&mut options);
@@ -231,9 +219,8 @@ impl PlateSolveUi {
         }
         self.restore_options_for_camera(to, &mut options);
         self.show_options(&options);
-        let mount_device = options.mount.device.clone();
         drop(options);
-        self.correct_widgets_props_impl(&mount_device, to);
+        self.correct_widgets_props();
     }
 
     fn store_options_for_camera(

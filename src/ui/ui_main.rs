@@ -5,7 +5,7 @@ use std::{
     process::Command,
     rc::Rc,
     sync::{Arc, RwLock},
-    time::Duration
+    time::Duration,
 };
 
 use gtk::{prelude::*, glib, glib::clone, cairo};
@@ -80,8 +80,8 @@ pub fn init_ui(
     let fw_wheel      = super::ui_flt_wheel     ::init_ui(&main_ui.widgets.window, core);
     let guiding       = super::ui_guiding      ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
     let mount         = super::ui_mount        ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
-    let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
-    let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
+    let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
+    let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, options, core);
     let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, core, options, indi);
     let debug         = super::ui_debug        ::init_ui(options);
 
