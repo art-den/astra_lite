@@ -6,7 +6,7 @@ use macros::FromBuilder;
 
 use crate::{
     core::{core::Core, events::Event},
-    hal::indi,
+    hal::{DeviceType, HalState, events::HalEvent},
     options::Options,
     ui::{gtk_utils, module::*, utils::{DelayedActions, ExclusiveCaller, fill_devices_list_into_combobox}}
 };
@@ -80,28 +80,37 @@ impl UiModule for FltWheelUi {
         options.filter_wheel.device = self.widgets.cb_device.active_id().unwrap_or_default().to_string();
     }
 
-    fn on_indi_event(&self, event: &indi::Event) {
+    fn on_hal_event(&self, event: &HalEvent) {
         match event {
-            indi::Event::PropChange(prop_change) =>
-                self.process_indi_prop_change(prop_change),
+            HalEvent::StateChanged(HalState::Connected|HalState::Disconnected) => {
+                self.delayed_actions.schedule(DelayedAction::UpdateDevicesList);
+            }
+            HalEvent::DeviceConnected(info)|HalEvent::DeviceDisconnected(info) => {
+                if info.type_.contains(DeviceType::FLT_WHELL) {
+                    self.delayed_actions.schedule(DelayedAction::UpdateDevicesList);
+                }
+            }
+            HalEvent::FilterWheelSlotChange { device_id, slot, in_progress } => {
+                let options = self.core.options().read().unwrap();
+                if options.filter_wheel.device == **device_id {
+                    drop(options);
+                    self.excl_caller.exec(|| {
+                        if !*in_progress && *slot >= 0 {
+                            self.widgets.cb_filter.set_active(Some(*slot as _));
+                        }
+                    });
+                    self.widgets.cb_filter.set_sensitive(!in_progress);
+                }
+            }
+            HalEvent::FilterWheelNameChanged(device_id) => {
+                let options = self.core.options().read().unwrap();
+                if options.filter_wheel.device == **device_id {
+                    drop(options);
+                    self.delayed_actions.schedule(DelayedAction::UpdateFilterList);
+                }
+            }
 
-            indi::Event::DeviceConnected(event)
-            if event.interface.contains(indi::DriverInterface::FILTER) =>
-                self.delayed_actions.schedule(DelayedAction::UpdateDevicesList),
-
-            indi::Event::NewDevice(event)
-            if event.interface.contains(indi::DriverInterface::FILTER) =>
-                self.delayed_actions.schedule(DelayedAction::UpdateDevicesList),
-
-            indi::Event::DeviceDelete(event)
-            if event.interface.contains(indi::DriverInterface::FILTER) =>
-                self.delayed_actions.schedule(DelayedAction::UpdateDevicesList),
-
-            indi::Event::ConnChange(indi::ConnState::Connected)|
-            indi::Event::ConnChange(indi::ConnState::Disconnected) =>
-                self.delayed_actions.schedule(DelayedAction::UpdateDevicesList),
-
-            _ => {},
+            _ => {}
         }
     }
 
@@ -136,9 +145,8 @@ impl FltWheelUi {
             let Some(active) = cb.active() else { return; };
             self_.excl_caller.exec(|| {
                 gtk_utils::exec_and_show_error(Some(&self_.window), || {
-                    let indi = self_.core.indi();
-                    let options = self_.core.options().read().unwrap();
-                    indi.filter_set_active(&options.filter_wheel.device, active as _)?;
+                    let filter_wheel = self_.core.filter_wheel_or_err()?;
+                    filter_wheel.set_active(active as _)?;
                     Ok(())
                 });
             });
@@ -146,13 +154,9 @@ impl FltWheelUi {
     }
 
     fn update_filters_list_and_select_active(&self) {
-        let options = self.core.options().read().unwrap();
-        let device_name = options.filter_wheel.device.clone();
-        drop(options);
+        let Some(filter_wheel) = self.core.filter_wheel() else { return; };
 
-        if device_name.is_empty() { return; }
-        let indi = self.core.indi();
-        let Ok((list, active_id)) = indi.filter_get_list_and_active(&*device_name) else { return; };
+        let Ok((list, active_id)) = filter_wheel.list_and_active() else { return; };
         self.widgets.cb_filter.remove_all();
         for filter_name in list {
             self.widgets.cb_filter.append(Some(filter_name.as_str()), filter_name.as_str());
@@ -160,47 +164,6 @@ impl FltWheelUi {
         let new_cb_active = Some(active_id as u32);
         if self.widgets.cb_filter.active() != new_cb_active {
             self.widgets.cb_filter.set_active(new_cb_active);
-        }
-    }
-
-    fn process_indi_prop_change(&self, prop_change: &indi::PropChangeEvent) {
-        let show_slot_from_prop_value = |state: indi::PropState, prop_value: &indi::PropValue| {
-            let state_is_ok = state == indi::PropState::Ok;
-            self.widgets.cb_filter.set_sensitive(state_is_ok);
-            if !state_is_ok { return; }
-            let indi::PropValue::Num(prop_value) = prop_value else { return; };
-            let index = prop_value.value as i32 - prop_value.min as i32;
-            if index >= 0 {
-                self.widgets.cb_filter.set_active(Some(index as _));
-            }
-        };
-
-        match &prop_change.change {
-            indi::PropChange::New { prop_name, value, state, .. }
-            if **prop_name == "FILTER_SLOT" => {
-                self.excl_caller.exec(|| {
-                    show_slot_from_prop_value(*state, value);
-                });
-            }
-
-            indi::PropChange::Change { prop_name, .. }
-            if **prop_name == "FILTER_NAME" => {
-                self.delayed_actions.schedule(DelayedAction::UpdateFilterList);
-            }
-
-            indi::PropChange::Change { prop_name, value, new_state, .. }
-            if **prop_name == "FILTER_SLOT" => {
-                self.excl_caller.exec(|| {
-                    show_slot_from_prop_value(*new_state, value);
-                });
-            }
-
-            indi::PropChange::Delete { prop_name, .. }
-            if **prop_name == "FILTER_NAME" => {
-                self.delayed_actions.schedule(DelayedAction::UpdateFilterList);
-            }
-
-            _ => {}
         }
     }
 
@@ -225,18 +188,16 @@ impl FltWheelUi {
         let cur_focuser = options.filter_wheel.device.clone();
         drop(options);
 
-        let indi = self.core.indi();
-        let list = indi
-            .get_devices_list_by_interface(indi::DriverInterface::FILTER)
-            .iter()
-            .map(|dev| (dev.name.to_string(), dev.name.to_string()))
+        let hal = self.core.hal();
+        let Ok(list) = hal.devices(DeviceType::FLT_WHELL) else { return; };
+        let list = list.iter()
+            .map(|dev| (dev.id.to_string(), dev.name.to_string()))
             .collect::<Vec<_>>();
-
         fill_devices_list_into_combobox(
             &list,
             &self.widgets.cb_device,
             if !cur_focuser.is_empty() { Some(cur_focuser.as_str()) } else { None },
-            indi.state() == indi::ConnState::Connected,
+            hal.state() == HalState::Connected,
             |id| {
                 let mut options = self.core.options().write().unwrap();
                 options.filter_wheel.device = id.to_string();
@@ -245,13 +206,10 @@ impl FltWheelUi {
     }
 
     fn correct_widgets_props(&self) {
-        let options = self.core.options().read().unwrap();
-        let device_name = options.filter_wheel.device.clone();
-        drop(options);
-
-        let indi = self.core.indi();
-        let device_enabled = indi.is_device_enabled(&device_name).unwrap_or_default();
-
-        self.widgets.cb_filter.set_sensitive(device_enabled);
+        let Some(filter_wheel) = self.core.filter_wheel() else {
+            self.widgets.cb_filter.set_sensitive(false);
+            return;
+        };
+        self.widgets.cb_filter.set_sensitive(filter_wheel.is_active().unwrap_or(false));
     }
 }

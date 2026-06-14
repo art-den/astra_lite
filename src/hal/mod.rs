@@ -7,7 +7,7 @@ pub mod hal_ascom_alpaca;
 
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
-use std::{ops:: RangeInclusive, path::Path, sync::{Arc, RwLock, RwLockReadGuard}};
+use std::{ops:: RangeInclusive, path::Path, sync::{Arc, RwLock}};
 
 use crate::hal::{events::{HalEvent, HalEventHandlers}, hal_indi::IndiHalImpl};
 
@@ -334,4 +334,6 @@ pub trait Focuser : Device {
 // Filter wheel
 
 pub trait FilterWheel : Device {
+    fn list_and_active(&self) -> anyhow::Result<(Vec<String>, usize)>;
+    fn set_active(&self, active_elem: usize) -> anyhow::Result<()>;
 }

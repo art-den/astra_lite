@@ -191,11 +191,17 @@ impl IndiHalImpl {
                     temperature: value.value,
                 });
             }
-            ("FILTER_SLOT", "FILTER_SLOT_VALUE", PropValue::Num(value), PropState::Idle|PropState::Ok) => {
-                self.event_handlers.send(HalEvent::FilterWheelSlotChanged {
+            ("FILTER_SLOT", "FILTER_SLOT_VALUE", PropValue::Num(value), _) => {
+                self.event_handlers.send(HalEvent::FilterWheelSlotChange {
                     device_id:   Arc::clone(device_name),
-                    slot:        value.value as i32,
+                    slot:        value.value as i32 - value.min as i32,
+                    in_progress: !matches!(state, PropState::Ok|PropState::Idle),
                 });
+            }
+            ("FILTER_NAME", _, _, _) => {
+                self.event_handlers.send(HalEvent::FilterWheelNameChanged (
+                    Arc::clone(device_name)
+                ));
             }
             _ => {}
         }
@@ -304,11 +310,17 @@ impl IndiHalImpl {
                     temperature: value.value,
                 });
             }
-            ("FILTER_SLOT", "FILTER_SLOT_VALUE", PropValue::Num(value), PropState::Idle|PropState::Ok, _) => {
-                self.event_handlers.send(HalEvent::FilterWheelSlotChanged {
+            ("FILTER_SLOT", "FILTER_SLOT_VALUE", PropValue::Num(value), _, _) => {
+                self.event_handlers.send(HalEvent::FilterWheelSlotChange {
                     device_id:   Arc::clone(device_name),
-                    slot:        value.value as i32,
+                    slot:        value.value as i32 - value.min as i32,
+                    in_progress: !matches!(new_state, PropState::Ok|PropState::Idle)
                 });
+            }
+            ("FILTER_NAME", _, _, _, _) => {
+                self.event_handlers.send(HalEvent::FilterWheelNameChanged (
+                    Arc::clone(device_name)
+                ));
             }
             _ => {}
         }
@@ -1178,5 +1190,14 @@ impl Focuser for IndiDevice {
 // Filter wheel
 
 impl FilterWheel for IndiDevice {
+    fn list_and_active(&self) -> anyhow::Result<(Vec<String>, usize)> {
+        let (indi_list, active) = self.indi.filter_get_list_and_active(&self.name)?;
+        let list = indi_list.iter().map(|text| text.to_string()).collect();
+        Ok((list, active))
+    }
 
+    fn set_active(&self, active_elem: usize) -> anyhow::Result<()> {
+        self.indi.filter_set_active(&self.name, active_elem as _)?;
+        Ok(())
+    }
 }

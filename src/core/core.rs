@@ -349,6 +349,10 @@ impl Core {
                     let mut cur_devices = self.cur_devices.lock().unwrap();
                     cur_devices.focuser = Some(self.hal.focuser(&info.id)?);
                 }
+                if info.type_.contains(DeviceType::FLT_WHELL) && options.filter_wheel.device == info.id {
+                    let mut cur_devices = self.cur_devices.lock().unwrap();
+                    cur_devices.filter_wheel = Some(self.hal.filter_wheel(&info.id)?);
+                }
             }
             HalEvent::DeviceDisconnected(info) => {
                 let options = self.options().read().unwrap();
@@ -363,6 +367,10 @@ impl Core {
                 if info.type_.contains(DeviceType::FOCUSER) && options.focuser.device == info.id {
                     let mut cur_devices = self.cur_devices.lock().unwrap();
                     cur_devices.focuser = None;
+                }
+                if info.type_.contains(DeviceType::FLT_WHELL) && options.filter_wheel.device == info.id {
+                    let mut cur_devices = self.cur_devices.lock().unwrap();
+                    cur_devices.filter_wheel = None;
                 }
             }
             HalEvent::Error(err) => {

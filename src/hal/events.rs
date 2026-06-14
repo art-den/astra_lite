@@ -20,13 +20,13 @@ pub enum HalEvent {
         device_id: Arc<String>,
         shot:      Arc<dyn CameraShot + Send + Sync>,
     },
-    CameraIsReadyToWork(Arc<String/*camera id*/>),
-    CameraNeedRestartExposure(Arc<String/*camera id*/>),
-    CameraNeedInitTelescopeFocalLen(Arc<String/*camera id*/>),
-    CameraIsReadyForCooling(Arc<String/*camera id*/>),
-    CameraIsReadyForCtrlFan(Arc<String/*camera id*/>),
-    CameraIsReadyForCtrlHeater(Arc<String/*camera id*/>),
-    CameraBeginDownloadData(Arc<String/*camera id*/>),
+    CameraIsReadyToWork(Arc<String/*device id*/>),
+    CameraNeedRestartExposure(Arc<String/*device id*/>),
+    CameraNeedInitTelescopeFocalLen(Arc<String/*device id*/>),
+    CameraIsReadyForCooling(Arc<String/*device id*/>),
+    CameraIsReadyForCtrlFan(Arc<String/*device id*/>),
+    CameraIsReadyForCtrlHeater(Arc<String/*device id*/>),
+    CameraBeginDownloadData(Arc<String/*device id*/>),
     CameraCoolerPwrChanged {
         device_id: Arc<String>,
         power:     f64,
@@ -39,23 +39,23 @@ pub enum HalEvent {
         device_id:    Arc<String>,
         temperature: f64,
     },
-    CameraCoolerCanBeControlled(Arc<String/*camera id*/>),
-    CameraHeaterCanBeControlled(Arc<String/*camera id*/>),
-    CameraOffsetCanBeControlled(Arc<String/*camera id*/>),
-    CameraGainCanBeControlled(Arc<String/*camera id*/>),
-    CameraConvGainCanBeControlled(Arc<String/*camera id*/>),
-    CameraCcdSizeChanged(Arc<String/*camera id*/>),
+    CameraCoolerCanBeControlled(Arc<String/*device id*/>),
+    CameraHeaterCanBeControlled(Arc<String/*device id*/>),
+    CameraOffsetCanBeControlled(Arc<String/*device id*/>),
+    CameraGainCanBeControlled(Arc<String/*device id*/>),
+    CameraConvGainCanBeControlled(Arc<String/*device id*/>),
+    CameraCcdSizeChanged(Arc<String/*device id*/>),
 
     // Telescope (mount)
 
-    TelescopeSlewRateListReady(Arc<String/*camera id*/>),
+    TelescopeSlewRateListReady(Arc<String/*device id*/>),
     TelescopeTrackingChanged{
         device_id: Arc<String>,
         tracking:  bool,
     },
 
-    TelescopeParked(Arc<String/*camera id*/>),
-    TelescopeUnparked(Arc<String/*camera id*/>),
+    TelescopeParked(Arc<String/*device id*/>),
+    TelescopeUnparked(Arc<String/*device id*/>),
     TelescopeStateChanged {
         device_id: Arc<String>,
         state:     TelescopeState,
@@ -82,10 +82,13 @@ pub enum HalEvent {
 
     // Filter wheel
 
-    FilterWheelSlotChanged {
-        device_id: Arc<String>,
-        slot:      i32,
+    FilterWheelSlotChange {
+        device_id:   Arc<String>,
+        slot:        i32,
+        in_progress: bool,
     },
+
+    FilterWheelNameChanged(Arc<String/*device id*/>),
 }
 
 pub struct HalEventHandlers {
