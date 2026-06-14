@@ -79,41 +79,6 @@ impl Crop {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
-#[serde(default)]
-pub struct DeviceAndProp {
-    pub name: String,
-    pub prop: String, // CCD1, CCD2... or emprty for any
-}
-
-impl DeviceAndProp {
-    pub const CCD2_POSTFIX: &str = "_CCD2";
-
-    pub fn new(mut text: &str) -> Self {
-        let prop = if text.ends_with(Self::CCD2_POSTFIX) {
-            let new_len = text.len() - Self::CCD2_POSTFIX.len();
-            text = &text[..new_len];
-            "CCD2"
-        } else {
-            "CCD1"
-        };
-
-        Self {
-            name: text.to_string(),
-            prop: prop.to_string(),
-        }
-    }
-
-    pub fn to_string(&self) -> String {
-        let mut result = self.name.clone();
-        if !result.is_empty() && !self.prop.is_empty() && self.prop != "CCD1" {
-            result += "_";
-            result += &self.prop;
-        }
-        result
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct CamCtrlOptions {
@@ -199,7 +164,6 @@ impl FrameOptions {
 #[serde(default)]
 pub struct CamOptions {
     pub device_id: String,
-    pub device:    Option<DeviceAndProp>,
     pub live_view: bool,
     pub ctrl:      CamCtrlOptions,
     pub frame:     FrameOptions,

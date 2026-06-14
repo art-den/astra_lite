@@ -53,7 +53,6 @@ pub struct GotoMode {
     destination:  GotoDestination,
     config:       GotoConfig,
     eq_coord:     EqCoord,
-    camera_dev:   Option<DeviceAndProp>,
     cam_opts:     Option<CamOptions>,
     ps_opts:      PlateSolverOptions,
     cur_frame:    Arc<ResultImage>,
@@ -74,11 +73,7 @@ impl GotoMode {
     ) -> anyhow::Result<Self> {
         let opts = core.options().read().unwrap();
         let telescope = core.telescope_or_err()?;
-        let (camera, camera_dev, cam_opts, plate_solver) = if config == GotoConfig::GotoPlateSolveAndCorrect {
-            let Some(camera_dev) = opts.cam.device.clone() else {
-                anyhow::bail!("Camera is not selected!");
-            };
-
+        let (camera, cam_opts, plate_solver) = if config == GotoConfig::GotoPlateSolveAndCorrect {
             let camera = core.camera_or_err()?;
             let mut cam_opts = opts.cam.clone();
             cam_opts.frame.frame_type = FrameType::Lights;
@@ -91,13 +86,12 @@ impl GotoMode {
             );
             let plate_solver = PlateSolver::new(opts.plate_solver.solver);
 
-            (Some(camera), Some(camera_dev), Some(cam_opts), Some(plate_solver))
+            (Some(camera), Some(cam_opts), Some(plate_solver))
         } else {
-            (None, None, None, None)
+            (None, None, None)
         };
 
         Ok(Self {
-            camera_dev:   camera_dev.clone(),
             state:        State::None,
             eq_coord:     EqCoord::default(),
             ps_opts:      opts.plate_solver.clone(),
@@ -200,8 +194,12 @@ impl GotoMode {
         &mut self,
         action: ProcessPlateSolverResultAction,
     ) -> anyhow::Result<bool> {
-        let plate_solver = self.plate_solver.as_mut().unwrap();
-        let camera_dev = self.camera_dev.as_ref().unwrap();
+        let Some(plate_solver) = self.plate_solver.as_mut() else {
+            anyhow::bail!("self.plate_solver is None");
+        };
+        let Some(camera) = self.camera.as_mut() else {
+            anyhow::bail!("self.camera is None");
+        };
 
         let result = match plate_solver.get_result()? {
             PlateSolveResult::Waiting => return Ok(false),
@@ -218,9 +216,9 @@ impl GotoMode {
         drop(options);
 
         let event = PlateSolverEvent {
-            cam_name: camera_dev.name.clone(),
-            result: result.clone(),
-            preview: preview.map(Arc::new),
+            cam_name: camera.name().to_string(),
+            result:   result.clone(),
+            preview:  preview.map(Arc::new),
         };
         self.subscribers.send(
             Event::PlateSolve(event)

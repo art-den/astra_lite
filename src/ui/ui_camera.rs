@@ -276,7 +276,6 @@ struct CameraUi {
 
 impl UiModule for CameraUi {
     fn show_options(&self, options: &Options) {
-        self.show_common_options(options);
         self.show_frame_options(options);
         self.show_calibr_options(options);
         self.show_ctrl_options(options);
@@ -548,13 +547,10 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
                 let Some(cur_id) = cb.active_id() else { return; };
-                let new_device = DeviceAndProp::new(&cur_id);
-                let old_device = options.cam.device.clone();
                 let prev_camera_id = options.cam.device_id.clone();
-                if old_device.as_ref() == Some(&new_device) {
+                if prev_camera_id == cur_id {
                     return;
                 }
-                options.cam.device = Some(new_device.clone());
                 options.cam.device_id = cur_id.to_string();
 
                 self_.handler_camera_changed(&prev_camera_id, &cur_id, &mut options);
@@ -819,21 +815,6 @@ impl CameraUi {
 
     }
 
-    fn show_common_options(&self, options: &Options) {
-        self.widgets.common.chb_live_view.set_active(options.cam.live_view);
-        let cb_cam_list = &self.widgets.common.cb_cam_list;
-        if let Some(device) = &options.cam.device {
-            let id = device.to_string();
-            cb_cam_list.set_active_id(Some(&id));
-            if cb_cam_list.active_id().map(|v| v.as_str() != id).unwrap_or(true) {
-                cb_cam_list.append(Some(&id), &id);
-                cb_cam_list.set_active_id(Some(&id));
-            }
-        } else {
-            cb_cam_list.set_active_id(None);
-        }
-    }
-
     fn show_frame_options(&self, options: &Options) {
         let frame = &self.widgets.frame;
         frame.cb_mode.set_active_id(options.cam.frame.frame_type.to_active_id());
@@ -896,7 +877,6 @@ impl CameraUi {
 
     pub fn get_common_options(&self, options: &mut Options) {
         options.cam.live_view = self.widgets.common.chb_live_view.is_active();
-        options.cam.device    = self.widgets.common.cb_cam_list.active_id().map(|str| DeviceAndProp::new(&str));
         options.cam.device_id = self.widgets.common.cb_cam_list.active_id().unwrap_or_default().to_string();
     }
 
@@ -1293,7 +1273,7 @@ impl CameraUi {
 
     fn update_devices_list(&self) {
         let options = self.core.options().read().unwrap();
-        let cur_cam_device = options.cam.device.clone();
+        let cur_cam_device = options.cam.device_id.clone();
         drop(options);
 
         let hal = self.core.hal();
@@ -1312,11 +1292,10 @@ impl CameraUi {
         fill_devices_list_into_combobox(
             &cameras_ids_and_names,
             &self.widgets.common.cb_cam_list,
-            cur_cam_device.as_ref().map(|d| d.name.as_str()),
+            if !cur_cam_device.is_empty() { Some(&cur_cam_device) } else { None },
             devices_connected,
             |id| {
                 let Ok(mut options) = self.core.options().try_write() else { return; };
-                options.cam.device = Some(DeviceAndProp::new(id));
                 options.cam.device_id = id.to_string()
             }
         );
@@ -1544,11 +1523,10 @@ impl CameraUi {
     fn get_short_info(&self, for_live_stacking: bool) -> Vec<(String, String, bool)> {
         let mut result = Vec::new();
         let options = self.core.options().read().unwrap();
-        let cam = options.cam.device.as_ref().map(|d| d.to_string()).unwrap_or_default();
         let total_time = options.cam.frame.exposure() * options.raw_frames.frame_cnt as f64;
         let light_frames = options.cam.frame.frame_type == FrameType::Lights;
 
-        result.push(("Camera".to_string(), cam, false));
+        result.push(("Camera".to_string(), options.cam.device_id.clone(), false));
         result.push(("Frames".to_string(), options.cam.frame.frame_type.to_str().to_string(), false));
         result.push(("Exposure".to_string(), format!("{:.4}", options.cam.frame.exposure()), false));
 

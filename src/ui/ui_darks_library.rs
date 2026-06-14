@@ -4,11 +4,7 @@ use itertools::Itertools;
 use macros::FromBuilder;
 use serde::{Deserialize, Serialize};
 use crate::{
-    core::{core::*, events::*, mode_darks_lib::*},
-    image::info::seconds_to_total_time_str,
-    hal::indi,
-    options::*,
-    utils::io_utils::*
+    core::{core::*, events::*, mode_darks_lib::*}, hal::Camera, image::info::seconds_to_total_time_str, options::*, utils::io_utils::*
 };
 
 use super::{gtk_utils::*, module::*};
@@ -174,9 +170,8 @@ impl Default for DefectPixelsOptions {
 impl DefectPixelsOptions {
     fn create_program(
         &self,
-        cam_opts:   &CamOptions,
-        indi:       &indi::Connection,
-        cam_device: &DeviceAndProp
+        cam_opts: &CamOptions,
+        camera:   &Arc<dyn Camera + Send + Sync>,
     ) -> anyhow::Result<Vec<MasterFileCreationProgramItem>> {
         let mut result = Vec::new();
 
@@ -185,7 +180,7 @@ impl DefectPixelsOptions {
         let mut crops = self.crop.get_crops();
         if crops.is_empty() { crops.push(cam_opts.frame.crop); }
 
-        let temperature = if indi.camera_is_temperature_supported(&cam_device.name)? {
+        let temperature = if camera.is_cooler_supported()? {
             if self.temperature_used {
                 Some(self.temperature)
             } else if cam_opts.ctrl.enable_cooler {
@@ -273,14 +268,13 @@ impl Default for MasterDarksOptions {
 impl MasterDarksOptions {
     fn create_program(
         &self,
-        cam_opts:   &CamOptions,
-        indi:       &indi::Connection,
-        cam_device: &DeviceAndProp
+        cam_opts: &CamOptions,
+        camera:   &Arc<dyn Camera + Send + Sync>,
     ) -> anyhow::Result<Vec<MasterFileCreationProgramItem>> {
         let mut result = Vec::new();
 
         let mut temperatures = Vec::new();
-        if indi.camera_is_temperature_supported(&cam_device.name)? {
+        if camera.is_cooler_supported()? {
             if self.temperature.used && !self.temperature.values.is_empty() {
                 for t in &self.temperature.values {
                     temperatures.push(Some(*t));
@@ -382,14 +376,13 @@ impl Default for MasterBiasesOptions {
 impl MasterBiasesOptions {
     fn create_program(
         &self,
-        cam_opts:   &CamOptions,
-        indi:       &indi::Connection,
-        cam_device: &DeviceAndProp
+        cam_opts: &CamOptions,
+        camera:   &Arc<dyn Camera + Send + Sync>,
     ) -> anyhow::Result<Vec<MasterFileCreationProgramItem>> {
         let mut result = Vec::new();
 
         let mut temperatures = Vec::new();
-        if indi.camera_is_temperature_supported(&cam_device.name)? {
+        if camera.is_cooler_supported()? {
             if self.temperature.used && !self.temperature.values.is_empty() {
                 for t in &self.temperature.values {
                     temperatures.push(Some(*t));
@@ -1043,21 +1036,20 @@ impl DarksLibraryUI {
 
     fn show_info(&self) {
         let ui_options = self.ui_options.borrow();
+        let Some(camera) = self.core.camera() else { return; };
         let options = self.core.options().read().unwrap();
-        let Some(cam_device) = &options.cam.device else { return; };
-        let indi = self.core.indi();
 
-        let defect_pixels_program = ui_options.defect_pixels.create_program(&options.cam, indi, cam_device);
+        let defect_pixels_program = ui_options.defect_pixels.create_program(&options.cam, &camera);
         if let Ok(defect_pixels_program) = defect_pixels_program {
             self.show_program_info(&defect_pixels_program, &self.widgets.dp.l_def_info);
         };
 
-        let dark_library_program = ui_options.master_darks.create_program(&options.cam, indi, cam_device);
+        let dark_library_program = ui_options.master_darks.create_program(&options.cam, &camera);
         if let Ok(dark_library_program) = dark_library_program {
             self.show_program_info(&dark_library_program,  &self.widgets.darks.l_dark_info);
         }
 
-        let bias_library_program = ui_options.master_biases.create_program(&options.cam, indi, cam_device);
+        let bias_library_program = ui_options.master_biases.create_program(&options.cam, &camera);
         if let Ok(bias_library_program) = bias_library_program {
             self.show_program_info(&bias_library_program, &self.widgets.biases.l_bias_info);
         }
@@ -1083,9 +1075,7 @@ impl DarksLibraryUI {
 
     fn start(&self, mode: DarkLibMode) {
         exec_and_show_error(Some(&self.window), || {
-            // TODO: read all options
-
-            //self.options.write().unwrap().read_all(&self.builder);
+            let camera = self.core.camera_or_err()?;
 
             self.get_options();
             self.save_options();
@@ -1093,16 +1083,13 @@ impl DarksLibraryUI {
             let options = self.core.options().read().unwrap();
             let ui_options = self.ui_options.borrow();
 
-            let Some(cam_device) = &options.cam.device else { return Ok(()); };
-
-            let indi = self.core.indi();
             let program = match mode {
                 DarkLibMode::DefectPixels =>
-                    ui_options.defect_pixels.create_program(&options.cam, indi, cam_device)?,
+                    ui_options.defect_pixels.create_program(&options.cam, &camera)?,
                 DarkLibMode::MasterDark =>
-                    ui_options.master_darks.create_program(&options.cam, indi, cam_device)?,
+                    ui_options.master_darks.create_program(&options.cam, &camera)?,
                 DarkLibMode::MasterBias =>
-                    ui_options.master_biases.create_program(&options.cam, indi, cam_device)?,
+                    ui_options.master_biases.create_program(&options.cam, &camera)?,
             };
             drop(ui_options);
             drop(options);
