@@ -71,6 +71,7 @@ pub fn init_ui(
     obj.connect_widgets_events();
     obj.connect_guider_events();
     obj.correct_widgets_by_cur_state();
+    obj.connect_indi_events();
 
     if let Some(load_drivers_err) = load_drivers_err {
         obj.add_log_record(
@@ -283,9 +284,6 @@ impl UiModule for HardwareUi {
         }
     }
 
-    fn on_indi_event(&self, event: &indi::Event) {
-        self.process_indi_event(event);
-    }
 
     fn on_event(&self, event: &Event) {
         match event {
@@ -317,6 +315,21 @@ impl HardwareUi {
         self.widgets.telescope.spb_guid_foc_len.set_range(0.0, 1000.0);
         self.widgets.telescope.spb_guid_foc_len.set_digits(0);
         self.widgets.telescope.spb_guid_foc_len.set_increments(1.0, 10.0);
+    }
+
+    fn connect_indi_events(self: &Rc<Self>) {
+        let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
+
+        let sender = main_thread_sender.clone();
+        self.core.indi().connect_event_handler(move |event| {
+            _ = sender.send_blocking(event);
+        });
+
+        glib::spawn_future_local(clone!(@weak self as self_ => async move {
+            while let Ok(event) = main_thread_receiver.recv().await {
+                self_.process_indi_event(&event);
+            }
+        }));
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {

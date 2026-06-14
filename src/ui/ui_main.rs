@@ -12,7 +12,7 @@ use gtk::{prelude::*, glib, glib::clone, cairo};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{core::*, events::*}, hal::{events::HalEvent, indi}, options::*, utils::io_utils::*,
+    core::{core::*, events::*}, hal::events::HalEvent, options::*, utils::io_utils::*,
 };
 use super::{gtk_utils::*, module::*, utils::*};
 
@@ -31,7 +31,6 @@ pub fn init_ui(
     );
 
     let options = core.options();
-    let indi = core.indi();
 
     let builder = gtk::Builder::from_string(include_str!(r"resources/main.ui"));
     let widgets = Widgets::from_builder(&builder);
@@ -52,7 +51,6 @@ pub fn init_ui(
         widgets,
         logs_dir:       logs_dir.to_path_buf(),
         core:           Arc::clone(core),
-        indi:           Arc::clone(indi),
         options:        Arc::clone(options),
         modules:        RefCell::new(UiModules::new()),
         ui_options:     RefCell::new(ui_options),
@@ -229,7 +227,6 @@ pub struct MainUi {
     ui_options:     RefCell<UiOptions>,
     progress:       RefCell<Option<Progress>>,
     core:           Arc<Core>,
-    indi:           Arc<indi::Connection>,
     close_win_flag: Cell<bool>,
     prev_tab_page:  Cell<TabPage>,
     conn_string:    RefCell<String>,
@@ -248,7 +245,6 @@ impl Drop for MainUi {
 
 enum MainThreadEvent {
     Core(Event),
-    Indi(indi::Event),
     Hal(HalEvent),
 }
 
@@ -389,12 +385,7 @@ impl MainUi {
     fn connect_common_events(self: &Rc<Self>) {
         let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
 
-        // INDI
-
-        let sender = main_thread_sender.clone();
-        self.indi.connect_event_handler(move |event| {
-            _ = sender.send_blocking(MainThreadEvent::Indi(event));
-        });
+        // HAL
 
         let sender = main_thread_sender.clone();
         self.core.hal().connect_event_handler(move |event| {
@@ -555,16 +546,10 @@ impl MainUi {
 
     fn process_indi_or_core_event(&self, event: MainThreadEvent) {
         match event {
-            MainThreadEvent::Indi(indi_event) => {
-                let modules = self.modules.borrow();
-                modules.on_indi_event(&indi_event);
-            }
-
             MainThreadEvent::Core(core_event) => {
                 let modules = self.modules.borrow();
                 modules.on_core_event(&core_event);
             }
-
             MainThreadEvent::Hal(hal_event) => {
                 let modules = self.modules.borrow();
                 modules.on_hal_event(&hal_event);
