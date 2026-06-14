@@ -414,6 +414,10 @@ impl Drop for IndiHalImpl {
 }
 
 impl HalImpl for IndiHalImpl {
+    fn features(&self) -> HalFeatures {
+        HalFeatures::BEGIN_DONWLOAD_IMAGE_EVENT
+    }
+
     fn state(&self) -> HalState {
         let indi_state = self.indi.state();
         match indi_state {

@@ -52,6 +52,14 @@ pub enum HalState {
     Error(String),
 }
 
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct HalFeatures: u32 {
+        const BEGIN_DONWLOAD_IMAGE_EVENT = (1 << 0);
+    }
+}
+
+
 pub struct Hal {
     impl_:            RwLock<Option<Arc<dyn HalImpl + Send + Sync + 'static>>>,
     event_subscibers: Arc<HalEventHandlers>,
@@ -88,6 +96,13 @@ impl Hal {
 
     pub fn disconnect_all_subscribers(&self) {
         self.event_subscibers.disconnect_all();
+    }
+
+    pub fn features(&self) -> HalFeatures {
+        let Ok(impl_) = self.get_impl() else {
+            return HalFeatures::empty();
+        };
+        impl_.features()
     }
 
     pub fn state(&self) -> HalState {
@@ -149,6 +164,7 @@ impl Hal {
 }
 
 pub trait HalImpl {
+    fn features(&self) -> HalFeatures;
     fn state(&self) -> HalState;
     fn notify_periodical_timer_tick(&self, timer_period: usize) -> anyhow::Result<()>;
     fn devices(&self, type_filter: DeviceType) -> anyhow::Result<Vec<DeviceInfo>>;

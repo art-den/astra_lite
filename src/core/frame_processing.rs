@@ -206,6 +206,12 @@ pub struct RawFrameInfo {
     pub std_dev:     f32,
 }
 
+impl RawFrameInfo {
+    pub fn quality_is_ok(&self) -> bool {
+        self.ccd_temp_ok
+    }
+}
+
 #[derive(Clone)]
 pub enum FrameProcessResultData {
     ShotProcessingStarted,
@@ -432,7 +438,6 @@ impl FrameProcessing {
                 let raw_std_dev = chan.std_dev;
 
                 drop(raw_hist);
-
 
                 self.notify_frame_result(
                     FrameProcessResultData::HistorgamRaw(Arc::clone(&command.frame.raw_hist)),

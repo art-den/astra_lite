@@ -4,7 +4,7 @@ use crate::{
     TimeLogger,
     core::{cam_ctrl::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode},
     guiding::external_guider::*,
-    hal::{Camera, CameraShot, Focuser, FrameType, Telescope},
+    hal::{Camera, CameraShot, Focuser, FrameType, Hal, HalFeatures, Telescope},
     image::{
         histogram::*,
         raw::{RawImage, RawImageInfo},
@@ -120,30 +120,41 @@ struct Guider {
     external:       Option<Arc<ExternalGuiderCtrl>>, // TODO: remove Option???
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum WhenToStartExposure {
+    AtDownloadImageFromCamera,
+    AtBeginOfProcessing,
+    AtRawFrameInfo,
+    AtLightFrameInfo,
+    AtFrameProcessingEnd,
+}
+
 pub struct TackingPicturesMode {
-    camera:           Arc<dyn Camera + Send + Sync>,
-    cam_mode:         CameraMode,
-    state:            State,
-    mount:            Option<Arc<dyn Telescope + Send + Sync>>,
-    fn_gen:           Arc<Mutex<SeqFileNameGen>>,
-    events:           Arc<EventHandlers>,
-    raw_stacker:      RawStacker,
-    options:          Arc<RwLock<Options>>,
-    next_job:         Option<NextJob>, // after frame processing is finished
-    cam_options:      CamOptions,
-    qual_options:     QualityOptions,
-    guider:           Option<Guider>,
-    ref_stars:        Option<Vec<Point>>,
-    progress:         Option<Progress>,
-    live_stacking:    Option<Arc<LiveStackingData>>,
-    autofocuser:      Option<AutoFocuser>,
-    flags:            Flags,
-    fname_utils:      FileNameUtils,
-    out_file_names:   OutFileNames,
-    camera_offset:    Option<u16>,
-    cam_offset_calc:  Option<CamOffsetCalc>,
-    next_mode:        Option<ModeBox>,
-    exp_for_restart:  Option<f64>,
+    camera:            Arc<dyn Camera + Send + Sync>,
+    hal:               Arc<Hal>,
+    cam_mode:          CameraMode,
+    state:             State,
+    mount:             Option<Arc<dyn Telescope + Send + Sync>>,
+    fn_gen:            Arc<Mutex<SeqFileNameGen>>,
+    events:            Arc<EventHandlers>,
+    raw_stacker:       RawStacker,
+    options:           Arc<RwLock<Options>>,
+    next_job:          Option<NextJob>, // after frame processing is finished
+    cam_options:       CamOptions,
+    qual_options:      QualityOptions,
+    guider:            Option<Guider>,
+    ref_stars:         Option<Vec<Point>>,
+    progress:          Option<Progress>,
+    live_stacking:     Option<Arc<LiveStackingData>>,
+    autofocuser:       Option<AutoFocuser>,
+    flags:             Flags,
+    fname_utils:       FileNameUtils,
+    out_file_names:    OutFileNames,
+    camera_offset:     Option<u16>,
+    cam_offset_calc:   Option<CamOffsetCalc>,
+    next_mode:         Option<ModeBox>,
+    exp_for_restart:   Option<f64>,
+    when_to_start_exp: Option<WhenToStartExposure>,
 }
 
 impl TackingPicturesMode {
@@ -222,20 +233,22 @@ impl TackingPicturesMode {
         }
 
         Ok(Self {
-            state:            State::Common,
-            fn_gen:           Arc::new(Mutex::new(SeqFileNameGen::new())),
-            events:           Arc::clone(core.events()),
-            raw_stacker:      RawStacker::new(),
-            options:          Arc::clone(options),
-            next_job:         None,
-            ref_stars:        None,
-            out_file_names:   OutFileNames::default(),
-            camera_offset:    None,
-            cam_offset_calc:  None,
-            next_mode:        None,
-            flags:            Flags::default(),
-            fname_utils:      FileNameUtils::default(),
-            exp_for_restart:  None,
+            hal:               Arc::clone(hal),
+            state:             State::Common,
+            fn_gen:            Arc::new(Mutex::new(SeqFileNameGen::new())),
+            events:            Arc::clone(core.events()),
+            raw_stacker:       RawStacker::new(),
+            options:           Arc::clone(options),
+            next_job:          None,
+            ref_stars:         None,
+            out_file_names:    OutFileNames::default(),
+            camera_offset:     None,
+            cam_offset_calc:   None,
+            next_mode:         None,
+            flags:             Flags::default(),
+            fname_utils:       FileNameUtils::default(),
+            exp_for_restart:   None,
+            when_to_start_exp: None,
             camera,
             mount,
             cam_mode,
@@ -287,6 +300,46 @@ impl TackingPicturesMode {
             }
             _ => {}
         }
+    }
+
+    fn find_when_to_start_exposure(&mut self) {
+        if self.flags.have_to_slow_down {
+            self.when_to_start_exp = Some(WhenToStartExposure::AtFrameProcessingEnd);
+        } else {
+            let mut when_to_start_exp = match self.cam_mode {
+                CameraMode::SingleShot =>
+                    None,
+
+                CameraMode::LiveView =>
+                    Some(WhenToStartExposure::AtDownloadImageFromCamera),
+
+                CameraMode::SavingRawFrames|
+                CameraMode::LiveStacking =>
+                    if self.qual_options.is_used_for_light_frame() {
+                        Some(WhenToStartExposure::AtLightFrameInfo)
+                    } else if self.qual_options.is_used_for_raw() {
+                        Some(WhenToStartExposure::AtRawFrameInfo)
+                    } else {
+                        Some(WhenToStartExposure::AtDownloadImageFromCamera)
+                    },
+                CameraMode::DefectPixels|
+                CameraMode::MasterDark|
+                CameraMode::MasterBias =>
+                    if self.qual_options.is_used_for_raw() {
+                        Some(WhenToStartExposure::AtRawFrameInfo)
+                    } else {
+                        Some(WhenToStartExposure::AtDownloadImageFromCamera)
+                    },
+            };
+
+            if !self.hal.features().contains(HalFeatures::BEGIN_DONWLOAD_IMAGE_EVENT)
+            && when_to_start_exp == Some(WhenToStartExposure::AtDownloadImageFromCamera) {
+                when_to_start_exp = Some(WhenToStartExposure::AtBeginOfProcessing);
+            }
+
+            self.when_to_start_exp = when_to_start_exp;
+        }
+        dbg!(&self.when_to_start_exp);
     }
 
     fn take_shot_with_options(
@@ -355,6 +408,7 @@ impl TackingPicturesMode {
         }
 
         self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
+        self.find_when_to_start_exposure();
         self.state = State::Common;
         Ok(())
     }
@@ -368,6 +422,7 @@ impl TackingPicturesMode {
         log::info!("Staring preliminary shot exposure ({} s) to clear CCD", frame_opts.exposure());
         self.state = State::FrameToSkip;
         self.take_shot_with_options(frame_opts, false)?;
+        self.find_when_to_start_exposure();
         Ok(())
     }
 
@@ -379,6 +434,7 @@ impl TackingPicturesMode {
         log::info!("Staring bias frame ({} s) before flat auto exposure calculation", frame_opts.exposure());
         self.state = State::BiasCalculationFrame;
         self.take_shot_with_options(frame_opts, false)?;
+        self.find_when_to_start_exposure();
         Ok(())
     }
 
@@ -389,6 +445,7 @@ impl TackingPicturesMode {
         frame_opts.crop = Crop::P50; // faster
         log::info!("Staring flat exposure calc frame ({} s)", frame_opts.exposure());
         self.take_shot_with_options(frame_opts, false)?;
+        self.find_when_to_start_exposure();
         Ok(())
     }
 
@@ -397,6 +454,7 @@ impl TackingPicturesMode {
             let mut frame_opts = self.cam_options.frame.clone();
             if offset_calc.step % 2 == 0 { frame_opts.offset = 0; }
             self.take_shot_with_options(frame_opts, true)?;
+            self.find_when_to_start_exposure();
         }
         Ok(())
     }
@@ -831,9 +889,10 @@ impl TackingPicturesMode {
 
         // Start next exposure
         if self.state == State::Common
-        && self.cam_mode != CameraMode::SingleShot
+        && self.when_to_start_exp == Some(WhenToStartExposure::AtFrameProcessingEnd)
         && !finished {
             self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
+            self.find_when_to_start_exposure();
         }
 
         // Do we have to slow down with period of tacking camera images?
@@ -1092,6 +1151,21 @@ impl TackingPicturesMode {
         if frame_for_raw_stacker && self.flags.use_raw_stacker && raw_info.ccd_temp_ok {
             self.add_raw_image(&raw_info.image)?;
         }
+
+        if self.next_job.is_none()
+        && self.state == State::Common
+        && self.when_to_start_exp == Some(WhenToStartExposure::AtRawFrameInfo) {
+            let have_to_continue_by_progress = self.progress
+                .as_ref()
+                .map(|p| p.cur+1 != p.total)
+                .unwrap_or(true);
+
+            if have_to_continue_by_progress || !raw_info.quality_is_ok() {
+                self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
+                self.find_when_to_start_exposure();
+            }
+        }
+
         Ok(NotifyResult::Empty)
     }
 
@@ -1113,6 +1187,20 @@ impl TackingPicturesMode {
         self.process_light_frame_info_and_dither_by_main_camera(info)?;
 
         self.process_light_frame_info_and_dither_by_ext_guider(info)?;
+
+        if self.next_job.is_none()
+        && self.state == State::Common
+        && self.when_to_start_exp == Some(WhenToStartExposure::AtLightFrameInfo) {
+            let have_to_continue_by_progress = self.progress
+                .as_ref()
+                .map(|p| p.cur+1 != p.total)
+                .unwrap_or(true);
+
+            if have_to_continue_by_progress || !info.quality.is_ok() {
+                self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
+                self.find_when_to_start_exposure();
+            }
+        }
 
         Ok(NotifyResult::Empty)
     }
@@ -1343,6 +1431,7 @@ impl Mode for TackingPicturesMode {
                 frame_opts.exp_flat = cur_exp;
             }
             self.take_shot_with_options(frame_opts, false)?;
+            self.find_when_to_start_exposure();
         }
 
         Ok(true)
@@ -1357,7 +1446,7 @@ impl Mode for TackingPicturesMode {
         }
     }
 
-    fn notify_camera_douwnload_started(&mut self, camera_id: &str) -> anyhow::Result<NotifyResult> {
+    fn notify_camera_download_started(&mut self, camera_id: &str) -> anyhow::Result<NotifyResult> {
         self.flags.next_exp_started = false;
 
         if camera_id != self.camera.id() || self.state == State::FrameToSkip {
@@ -1370,6 +1459,20 @@ impl Mode for TackingPicturesMode {
             self.cam_options.ctrl = options.cam.ctrl.clone();
             self.cam_options.frame = options.cam.frame.clone();
             self.qual_options = options.quality.clone();
+        }
+
+        if self.next_job.is_none()
+        && self.state == State::Common
+        && self.when_to_start_exp == Some(WhenToStartExposure::AtDownloadImageFromCamera) {
+            let have_to_continue_by_progress = self.progress
+                .as_ref()
+                .map(|p| p.cur+1 != p.total)
+                .unwrap_or(true);
+
+            if have_to_continue_by_progress {
+                self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
+                self.find_when_to_start_exposure();
+            }
         }
 
         Ok(NotifyResult::Empty)
@@ -1390,6 +1493,21 @@ impl Mode for TackingPicturesMode {
             self.start_or_continue()?;
             return Ok(NotifyResult::ProgressChanges)
         }
+
+        if self.next_job.is_none()
+        && self.state == State::Common
+        && self.when_to_start_exp == Some(WhenToStartExposure::AtBeginOfProcessing) {
+            let have_to_continue_by_progress = self.progress
+                .as_ref()
+                .map(|p| p.cur+1 != p.total)
+                .unwrap_or(true);
+
+            if have_to_continue_by_progress {
+                self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
+                self.find_when_to_start_exposure();
+            }
+        }
+
         Ok(NotifyResult::Empty)
     }
 
@@ -1472,6 +1590,7 @@ impl Mode for TackingPicturesMode {
                     if *ok_time_ms >= AFTER_MOUNT_MOVE_WAIT_TIME * 1000 {
                         mount.abort_motion()?;
                         self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
+                        self.find_when_to_start_exposure();
                         self.state = State::Common;
                         result = NotifyResult::ProgressChanges;
                     }

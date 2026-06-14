@@ -522,5 +522,4 @@ impl Mode for GotoMode {
             cmd.ref_stars = Some(ref_stars);
         }
     }
-
 }
