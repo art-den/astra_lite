@@ -6,7 +6,7 @@ use std::{
 use itertools::Itertools;
 
 use crate::{
-    core::cam_ctrl::*, guiding::external_guider::*, hal::{Camera, CameraShot, DeviceType, Focuser, FrameType, Hal, HalState, Telescope, events::HalEvent, indi}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*
+    core::cam_ctrl::*, guiding::external_guider::*, hal::{Camera, CameraShot, DeviceType, FilterWheel, Focuser, FrameType, Hal, HalState, Telescope, events::HalEvent, indi}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*
 };
 
 use super::{
@@ -96,11 +96,17 @@ impl ModeData {
     }
 }
 
+#[derive(Default)]
+struct CurDevices {
+    camera:       Option<Arc<dyn Camera + Send + Sync>>,
+    telescope:    Option<Arc<dyn Telescope + Send + Sync>>,
+    focuser:      Option<Arc<dyn Focuser + Send + Sync>>,
+    filter_wheel: Option<Arc<dyn FilterWheel + Send + Sync>>,
+}
+
 pub struct Core {
     hal:                Arc<Hal>,
-    camera:             Mutex<Option<Arc<dyn Camera + Send + Sync>>>,
-    telescope:          Mutex<Option<Arc<dyn Telescope + Send + Sync>>>,
-    focuser:            Mutex<Option<Arc<dyn Focuser + Send + Sync>>>,
+    cur_devices:        Mutex<CurDevices>,
     indi:               Arc<indi::Connection>,
     options:            Arc<RwLock<Options>>,
     mode:               RwLock<ModeData>,
@@ -134,9 +140,7 @@ impl Core {
 
         let this = Arc::new(Self {
             indi:               Arc::clone(&indi),
-            camera:             Mutex::new(None),
-            telescope:          Mutex::new(None),
-            focuser:            Mutex::new(None),
+            cur_devices:        Mutex::new(CurDevices::default()),
             options:            Arc::clone(&options),
             mode:               RwLock::new(ModeData::new()),
             cur_frame:          Arc::new(ResultImage::new()),
@@ -161,42 +165,55 @@ impl Core {
     }
 
     pub fn camera(&self) -> Option<Arc<dyn Camera + Send + Sync>> {
-        let camera = self.camera.lock().unwrap();
-        camera.as_ref().map(|cam| Arc::clone(cam))
+        let cur_devices = self.cur_devices.lock().unwrap();
+        cur_devices.camera.as_ref().map(|cam| Arc::clone(cam))
     }
 
     pub fn camera_or_err(&self) -> anyhow::Result<Arc<dyn Camera + Send + Sync>> {
-        let camera = self.camera.lock().unwrap();
-        let Some(camera) = camera.as_ref() else {
+        let cur_devices = self.cur_devices.lock().unwrap();
+        let Some(camera) = cur_devices.camera.as_ref() else {
             anyhow::bail!("Camera object is None");
         };
         Ok(Arc::clone(camera))
     }
 
     pub fn telescope(&self) -> Option<Arc<dyn Telescope + Send + Sync>> {
-        let telescope = self.telescope.lock().unwrap();
-        telescope.as_ref().map(|cam| Arc::clone(cam))
+        let cur_devices = self.cur_devices.lock().unwrap();
+        cur_devices.telescope.as_ref().map(|cam| Arc::clone(cam))
     }
 
     pub fn telescope_or_err(&self) -> anyhow::Result<Arc<dyn Telescope + Send + Sync>> {
-        let telescope = self.telescope.lock().unwrap();
-        let Some(telescope) = telescope.as_ref() else {
+        let cur_devices = self.cur_devices.lock().unwrap();
+        let Some(telescope) = cur_devices.telescope.as_ref() else {
             anyhow::bail!("Telescope object is None");
         };
         Ok(Arc::clone(telescope))
     }
 
     pub fn focuser(&self) -> Option<Arc<dyn Focuser + Send + Sync>> {
-        let focuser = self.focuser.lock().unwrap();
-        focuser.as_ref().map(|cam| Arc::clone(cam))
+        let cur_devices = self.cur_devices.lock().unwrap();
+        cur_devices.focuser.as_ref().map(|cam| Arc::clone(cam))
     }
 
     pub fn focuser_or_err(&self) -> anyhow::Result<Arc<dyn Focuser + Send + Sync>> {
-        let focuser = self.focuser.lock().unwrap();
-        let Some(focuser) = focuser.as_ref() else {
+        let cur_devices = self.cur_devices.lock().unwrap();
+        let Some(focuser) = cur_devices.focuser.as_ref() else {
             anyhow::bail!("Focuser object is None");
         };
         Ok(Arc::clone(focuser))
+    }
+
+    pub fn filter_wheel(&self) -> Option<Arc<dyn FilterWheel + Send + Sync>> {
+        let cur_devices = self.cur_devices.lock().unwrap();
+        cur_devices.filter_wheel.as_ref().map(|cam| Arc::clone(cam))
+    }
+
+    pub fn filter_wheel_or_err(&self) -> anyhow::Result<Arc<dyn FilterWheel + Send + Sync>> {
+        let cur_devices = self.cur_devices.lock().unwrap();
+        let Some(filter_wheel) = cur_devices.filter_wheel.as_ref() else {
+            anyhow::bail!("Filter wheel object is None");
+        };
+        Ok(Arc::clone(filter_wheel))
     }
 
     pub fn indi(&self) -> &Arc<indi::Connection> {
@@ -306,43 +323,47 @@ impl Core {
         let result = mode.active.notify_periodical_timer_tick(Self::TIMER_PERIOD_MS)?;
         self.apply_notify_result(result, &mut mode)?;
         drop(mode);
-
         self.hal.notify_periodical_timer_tick(Self::TIMER_PERIOD_MS)?;
-
         Ok(())
     }
 
     fn hal_event_handler(self: &Arc<Self>, event: HalEvent) -> anyhow::Result<()> {
         match &event {
             HalEvent::StateChanged(HalState::Disconnected) => {
-                *self.camera.lock().unwrap() = None;
-                *self.telescope.lock().unwrap() = None;
-                *self.focuser.lock().unwrap() = None;
+                let mut cur_devices = self.cur_devices.lock().unwrap();
+                cur_devices.camera = None;
+                cur_devices.telescope = None;
+                cur_devices.focuser = None;
             }
             HalEvent::DeviceConnected(info) => {
                 let options = self.options().read().unwrap();
                 if info.type_.contains(DeviceType::CAMERA) && options.cam.device_id == info.id {
-                    *self.camera.lock().unwrap() = Some(self.hal.camera(&info.id)?);
+                    let mut cur_devices = self.cur_devices.lock().unwrap();
+                    cur_devices.camera = Some(self.hal.camera(&info.id)?);
                 }
                 if info.type_.contains(DeviceType::TELESCOPE) && options.mount.device == info.id {
-                    *self.telescope.lock().unwrap() = Some(self.hal.telescope(&info.id)?);
+                    let mut cur_devices = self.cur_devices.lock().unwrap();
+                    cur_devices.telescope = Some(self.hal.telescope(&info.id)?);
                 }
                 if info.type_.contains(DeviceType::FOCUSER) && options.focuser.device == info.id {
-                    *self.focuser.lock().unwrap() = Some(self.hal.focuser(&info.id)?);
+                    let mut cur_devices = self.cur_devices.lock().unwrap();
+                    cur_devices.focuser = Some(self.hal.focuser(&info.id)?);
                 }
             }
             HalEvent::DeviceDisconnected(info) => {
                 let options = self.options().read().unwrap();
                 if info.type_.contains(DeviceType::CAMERA) && options.cam.device_id == info.id {
-                    *self.camera.lock().unwrap() = None;
+                    let mut cur_devices = self.cur_devices.lock().unwrap();
+                    cur_devices.camera = None;
                 }
                 if info.type_.contains(DeviceType::TELESCOPE) && options.mount.device == info.id {
-                    *self.telescope.lock().unwrap() = None;
+                    let mut cur_devices = self.cur_devices.lock().unwrap();
+                    cur_devices.telescope = None;
                 }
                 if info.type_.contains(DeviceType::FOCUSER) && options.focuser.device == info.id {
-                    *self.focuser.lock().unwrap() = None;
+                    let mut cur_devices = self.cur_devices.lock().unwrap();
+                    cur_devices.focuser = None;
                 }
-
             }
             HalEvent::Error(err) => {
                 self.process_error_str(&err.as_str(), "HAL error");
@@ -486,13 +507,22 @@ impl Core {
     fn event_handler(self: &Arc<Self>, event: Event) {
         match &event {
             Event::CameraDeviceChanged { new_camera_id, .. } => {
-                self.process_camera_changed(new_camera_id);
+                let mut cur_devices = self.cur_devices.lock().unwrap();
+                cur_devices.camera = self.hal.camera(new_camera_id).ok();
+                drop(cur_devices);
+                self.process_camera_changed();
             },
             Event::MountDeviceChanged(new_mount_id) => {
-                *self.telescope.lock().unwrap() = self.hal.telescope(&new_mount_id).ok();
+                let mut cur_devices = self.cur_devices.lock().unwrap();
+                cur_devices.telescope = self.hal.telescope(&new_mount_id).ok();
             }
             Event::FocuserDeviceChanged(new_focuser_id) => {
-                *self.focuser.lock().unwrap() = self.hal.focuser(&new_focuser_id).ok();
+                let mut cur_devices = self.cur_devices.lock().unwrap();
+                cur_devices.focuser = self.hal.focuser(&new_focuser_id).ok();
+            }
+            Event::FltWheelDeviceChanged(new_flt_wheel) => {
+                let mut cur_devices = self.cur_devices.lock().unwrap();
+                cur_devices.filter_wheel = self.hal.filter_wheel(&new_flt_wheel).ok();
             }
             Event::TelescopeFocalLenChanged(_)|
             Event::TelescopeBarlowChanged|
@@ -580,9 +610,7 @@ impl Core {
         Ok(())
     }
 
-    fn process_camera_changed(self: &Arc<Self>, new_camera_id: &str) {
-        *self.camera.lock().unwrap() = self.hal.camera(new_camera_id).ok();
-
+    fn process_camera_changed(self: &Arc<Self>) {
         let options = self.options.read().unwrap();
 
         let Some(camera) = self.camera() else { return; };

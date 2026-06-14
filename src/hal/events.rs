@@ -79,6 +79,13 @@ pub enum HalEvent {
         device_id: Arc<String>,
         state:     FocuserState,
     },
+
+    // Filter wheel
+
+    FilterWheelSlotChanged {
+        device_id: Arc<String>,
+        slot:      i32,
+    },
 }
 
 pub struct HalEventHandlers {

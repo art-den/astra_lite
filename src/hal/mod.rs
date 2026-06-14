@@ -7,16 +7,17 @@ pub mod hal_ascom_alpaca;
 
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
-use std::{ops:: RangeInclusive, path::Path, sync::{Arc, RwLock}};
+use std::{ops:: RangeInclusive, path::Path, sync::{Arc, RwLock, RwLockReadGuard}};
 
 use crate::hal::{events::{HalEvent, HalEventHandlers}, hal_indi::IndiHalImpl};
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     pub struct DeviceType: u32 {
-        const CAMERA =    (1 << 0);
+        const CAMERA    = (1 << 0);
         const TELESCOPE = (1 << 1);
-        const FOCUSER =   (1 << 2);
+        const FOCUSER   = (1 << 2);
+        const FLT_WHELL = (1 << 3);
     }
 }
 
@@ -107,49 +108,43 @@ impl Hal {
         }
     }
 
-    pub fn devices(&self, type_filter: DeviceType) -> anyhow::Result<Vec<DeviceInfo>> {
+    fn get_impl(&self) -> anyhow::Result<Arc<dyn HalImpl + Send + Sync + 'static>> {
         let impl_ = self.impl_.read().unwrap();
         if let Some(impl_) = &*impl_ {
-            impl_.devices(type_filter)
+            return Ok(Arc::clone(impl_));
         } else {
             anyhow::bail!("HAL is not selected!");
         }
+    }
+
+    pub fn devices(&self, type_filter: DeviceType) -> anyhow::Result<Vec<DeviceInfo>> {
+        let impl_ = self.get_impl()?;
+        impl_.devices(type_filter)
     }
 
     pub fn cameras(&self) -> anyhow::Result<Vec<CameraInfo>> {
-        let impl_ = self.impl_.read().unwrap();
-        if let Some(impl_) = &*impl_ {
-            impl_.cameras()
-        } else {
-            anyhow::bail!("HAL is not selected!");
-        }
+        let impl_ = self.get_impl()?;
+        impl_.cameras()
     }
 
     pub fn camera(&self, id: &str) -> anyhow::Result<Arc<dyn Camera + Send + Sync>> {
-        let impl_ = self.impl_.read().unwrap();
-        if let Some(impl_) = &*impl_ {
-            impl_.camera(id)
-        } else {
-            anyhow::bail!("HAL is not selected!");
-        }
+        let impl_ = self.get_impl()?;
+        impl_.camera(id)
     }
 
     pub fn telescope(&self, id: &str) -> anyhow::Result<Arc<dyn Telescope + Send + Sync>> {
-        let impl_ = self.impl_.read().unwrap();
-        if let Some(impl_) = &*impl_ {
-            impl_.telescope(id)
-        } else {
-            anyhow::bail!("HAL is not selected!");
-        }
+        let impl_ = self.get_impl()?;
+        impl_.telescope(id)
     }
 
     pub fn focuser(&self, id: &str) -> anyhow::Result<Arc<dyn Focuser + Send + Sync>> {
-        let impl_ = self.impl_.read().unwrap();
-        if let Some(impl_) = &*impl_ {
-            impl_.focuser(id)
-        } else {
-            anyhow::bail!("HAL is not selected!");
-        }
+        let impl_ = self.get_impl()?;
+        impl_.focuser(id)
+    }
+
+    pub fn filter_wheel(&self, id: &str) -> anyhow::Result<Arc<dyn FilterWheel + Send + Sync>> {
+        let impl_ = self.get_impl()?;
+        impl_.filter_wheel(id)
     }
 }
 
@@ -161,6 +156,7 @@ pub trait HalImpl {
     fn camera(&self, id: &str) -> anyhow::Result<Arc<dyn Camera + Send + Sync>>;
     fn telescope(&self, id: &str) -> anyhow::Result<Arc<dyn Telescope + Send + Sync>>;
     fn focuser(&self, id: &str) -> anyhow::Result<Arc<dyn Focuser + Send + Sync>>;
+    fn filter_wheel(&self, id: &str) -> anyhow::Result<Arc<dyn FilterWheel + Send + Sync>>;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -332,4 +328,10 @@ pub trait Focuser : Device {
     fn abs_position(&self) -> anyhow::Result<f64>;
     fn set_abs_position(&self, value: f64) -> anyhow::Result<()>;
     fn temperature(&self) -> anyhow::Result<f64>;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Filter wheel
+
+pub trait FilterWheel : Device {
 }

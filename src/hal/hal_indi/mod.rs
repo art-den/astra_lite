@@ -191,6 +191,12 @@ impl IndiHalImpl {
                     temperature: value.value,
                 });
             }
+            ("FILTER_SLOT", "FILTER_SLOT_VALUE", PropValue::Num(value), PropState::Idle|PropState::Ok) => {
+                self.event_handlers.send(HalEvent::FilterWheelSlotChanged {
+                    device_id:   Arc::clone(device_name),
+                    slot:        value.value as i32,
+                });
+            }
             _ => {}
         }
         Ok(())
@@ -298,6 +304,12 @@ impl IndiHalImpl {
                     temperature: value.value,
                 });
             }
+            ("FILTER_SLOT", "FILTER_SLOT_VALUE", PropValue::Num(value), PropState::Idle|PropState::Ok, _) => {
+                self.event_handlers.send(HalEvent::FilterWheelSlotChanged {
+                    device_id:   Arc::clone(device_name),
+                    slot:        value.value as i32,
+                });
+            }
             _ => {}
         }
         Ok(())
@@ -356,14 +368,16 @@ impl IndiHalImpl {
     }
 
     fn driver_interface_to_dev_type(drv_interface: indi::DriverInterface) -> DeviceType {
-        let is_ccd       = drv_interface.contains(indi::DriverInterface::CCD);
-        let is_telescope = drv_interface.contains(indi::DriverInterface::TELESCOPE);
-        let is_focuser   = drv_interface.contains(indi::DriverInterface::FOCUSER);
+        let is_ccd          = drv_interface.contains(indi::DriverInterface::CCD);
+        let is_telescope    = drv_interface.contains(indi::DriverInterface::TELESCOPE);
+        let is_focuser      = drv_interface.contains(indi::DriverInterface::FOCUSER);
+        let is_filter_wheel = drv_interface.contains(indi::DriverInterface::FILTER);
 
         let mut device_type = DeviceType::empty();
         device_type.set(DeviceType::CAMERA,    is_ccd);
         device_type.set(DeviceType::TELESCOPE, is_telescope);
         device_type.set(DeviceType::FOCUSER,   is_focuser);
+        device_type.set(DeviceType::FLT_WHELL, is_filter_wheel);
 
         device_type
     }
@@ -488,7 +502,6 @@ impl HalImpl for IndiHalImpl {
             }
         }
         Ok(result)
-
     }
 
     fn camera(&self, id: &str) -> anyhow::Result<Arc<dyn Camera + Send + Sync>> {
@@ -513,6 +526,10 @@ impl HalImpl for IndiHalImpl {
     }
 
     fn focuser(&self, id: &str) -> anyhow::Result<Arc<dyn Focuser + Send + Sync>> {
+        Ok(Arc::new(self.create_indi_device(id)))
+    }
+
+    fn filter_wheel(&self, id: &str) -> anyhow::Result<Arc<dyn FilterWheel + Send + Sync>> {
         Ok(Arc::new(self.create_indi_device(id)))
     }
 }
@@ -1120,7 +1137,6 @@ impl Telescope for IndiDevice {
     }
 }
 
-
 ///////////////////////////////////////////////////////////////////////////////
 // Focuser
 
@@ -1156,4 +1172,11 @@ impl Focuser for IndiDevice {
     fn temperature(&self) -> anyhow::Result<f64> {
         Ok(self.indi.focuser_get_temperature(&self.name)?)
     }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Filter wheel
+
+impl FilterWheel for IndiDevice {
+
 }
