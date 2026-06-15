@@ -313,18 +313,25 @@ impl TackingPicturesMode {
                 CameraMode::LiveView =>
                     Some(WhenToStartExposure::AtDownloadImageFromCamera),
 
-                CameraMode::SavingRawFrames|
-                CameraMode::LiveStacking =>
-                    if self.qual_options.is_used_for_light_frame() {
+                CameraMode::LiveStacking | CameraMode::SavingRawFrames => {
+                    let guiding_enabled = self.guider
+                        .as_ref()
+                        .map(|g| g.options.mode != GuidingMode::Disabled)
+                        .unwrap_or(false);
+                    let focuser_enabled = self.autofocuser
+                        .as_ref()
+                        .map(|f| f.options.is_used())
+                        .unwrap_or(false);
+                    if guiding_enabled || focuser_enabled || self.qual_options.is_used_for_light_frame() {
                         Some(WhenToStartExposure::AtLightFrameInfo)
                     } else if self.qual_options.is_used_for_raw() {
                         Some(WhenToStartExposure::AtRawFrameInfo)
                     } else {
                         Some(WhenToStartExposure::AtDownloadImageFromCamera)
-                    },
-                CameraMode::DefectPixels|
-                CameraMode::MasterDark|
-                CameraMode::MasterBias =>
+                    }
+                },
+
+                CameraMode::DefectPixels | CameraMode::MasterDark | CameraMode::MasterBias =>
                     if self.qual_options.is_used_for_raw() {
                         Some(WhenToStartExposure::AtRawFrameInfo)
                     } else {
