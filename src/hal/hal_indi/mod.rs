@@ -114,96 +114,12 @@ impl IndiHalImpl {
 
         match &prop_change.change {
             PropChange::New { prop_name, elem_name, value, state } => {
-                self.process_new_prop(&prop_change.device_name, prop_name, elem_name, value, *state)?;
+                self.process_prop_change(&prop_change.device_name, prop_name, elem_name, value, *state, true)?;
             }
-            PropChange::Change { value, prop_name, elem_name, prev_state, new_state } => {
-                self.process_prop_change(&prop_change.device_name, prop_name, elem_name, value, *prev_state, *new_state)?;
+            PropChange::Change { value, prop_name, elem_name, new_state, .. } => {
+                self.process_prop_change(&prop_change.device_name, prop_name, elem_name, value, *new_state, false)?;
             }
              _ => {},
-        }
-        Ok(())
-    }
-
-    fn process_new_prop(
-        &self,
-        device_name: &Arc<String>,
-        prop_name:   &str,
-        elem_name:   &str,
-        value:       &indi::PropValue,
-        state:       indi::PropState
-    ) -> anyhow::Result<()> {
-        use indi::*;
-
-        if Connection::camera_is_heater_str_property(prop_name) {
-            self.event_handlers.send(HalEvent::CameraHeaterCanBeControlled (
-                Arc::clone(device_name)
-            ));
-        }
-        if Connection::camera_is_conversion_gain_property(prop_name) {
-            self.event_handlers.send(HalEvent::CameraConvGainCanBeControlled (
-                Arc::clone(device_name)
-            ));
-        }
-        match (prop_name, elem_name, value, state) {
-            ("CCD_EXPOSURE", _, _, _) => {
-                self.event_handlers.send(HalEvent::CameraIsReadyToWork(
-                    Arc::clone(device_name)
-                ));
-            }
-            ("GUIDER_EXPOSURE", _, _, _) => {
-                self.event_handlers.send(HalEvent::CameraIsReadyToWork(
-                    Arc::new(device_name.to_string() + CAM_CCD2_POSTFIX)
-                ));
-            }
-            ("CCD_COOLER", _, _, _) => {
-                self.event_handlers.send(HalEvent::CameraCoolerCanBeControlled(
-                    Arc::clone(device_name)
-                ));
-            }
-            ("CCD_OFFSET", _, _, _) => {
-                self.event_handlers.send(HalEvent::CameraOffsetCanBeControlled(
-                    Arc::clone(device_name)
-                ));
-            }
-            ("CCD_GAIN", _, _, _) => {
-                self.event_handlers.send(HalEvent::CameraGainCanBeControlled(
-                    Arc::clone(device_name)
-                ));
-            }
-            ("TELESCOPE_SLEW_RATE", ..) => {
-                self.event_handlers.send(HalEvent::TelescopeSlewRateListReady(
-                    Arc::clone(device_name)
-                ));
-            }
-            ("ABS_FOCUS_POSITION", "FOCUS_ABSOLUTE_POSITION", PropValue::Num(value), PropState::Idle|PropState::Ok) => {
-                self.event_handlers.send(HalEvent::FocuserAbsValueCanBeControlled {
-                    device_id: Arc::clone(device_name),
-                    abs_value: value.value,
-                });
-                self.event_handlers.send(HalEvent::FocuserStateChanged {
-                    device_id: Arc::clone(device_name),
-                    state:     abs_pos_prop_state_to_focuser_state(state),
-                });
-            }
-            ("FOCUS_TEMPERATURE", "TEMPERATURE", PropValue::Num(value), PropState::Idle|PropState::Ok) => {
-                self.event_handlers.send(HalEvent::FocuserTemperatureChanged {
-                    device_id:   Arc::clone(device_name),
-                    temperature: value.value,
-                });
-            }
-            ("FILTER_SLOT", "FILTER_SLOT_VALUE", PropValue::Num(value), _) => {
-                self.event_handlers.send(HalEvent::FilterWheelSlotChange {
-                    device_id:   Arc::clone(device_name),
-                    slot:        value.value as i32 - value.min as i32,
-                    in_progress: !matches!(state, PropState::Ok|PropState::Idle),
-                });
-            }
-            ("FILTER_NAME", _, _, _) => {
-                self.event_handlers.send(HalEvent::FilterWheelNameChanged (
-                    Arc::clone(device_name)
-                ));
-            }
-            _ => {}
         }
         Ok(())
     }
@@ -214,13 +130,13 @@ impl IndiHalImpl {
         prop_name:   &str,
         elem_name:   &str,
         value:       &indi::PropValue,
-        prev_state:  indi::PropState,
-        new_state:   indi::PropState,
+        state:       indi::PropState,
+        new_prop:    bool,
     ) -> anyhow::Result<()> {
         use indi::*;
 
-        match (prop_name, elem_name, value, prev_state, new_state) {
-            (_, _, PropValue::Blob(blob), _, _) => {
+        match (prop_name, elem_name, value, state, new_prop) {
+            (_, _, PropValue::Blob(blob), _, false) => {
                 self.process_indi_blob_event(blob, device_name, prop_name)?;
             }
             (_, _, PropValue::Num(value), _, _)
@@ -230,13 +146,38 @@ impl IndiHalImpl {
                     power:     value.value
                 });
             }
-            ("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE", PropValue::Num(value), _, _) => {
+            ("CCD_COOLER", _, _, _, true) => {
+                self.event_handlers.send(HalEvent::CameraCoolerCanBeControlled(
+                    Arc::clone(device_name)
+                ));
+            }
+            ("CCD_OFFSET", _, _, _, true) => {
+                self.event_handlers.send(HalEvent::CameraOffsetCanBeControlled(
+                    Arc::clone(device_name)
+                ));
+            }
+            ("CCD_GAIN", _, _, _, true) => {
+                self.event_handlers.send(HalEvent::CameraGainCanBeControlled(
+                    Arc::clone(device_name)
+                ));
+            }
+            ("CCD_EXPOSURE", _, _, _, true) => {
+                self.event_handlers.send(HalEvent::CameraIsReadyToWork(
+                    Arc::clone(device_name)
+                ));
+            }
+            ("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE", PropValue::Num(value), _, false) => {
                 self.event_handlers.send(HalEvent::CameraTimeUntilEndOfExposure {
                     device_id: Arc::clone(device_name),
                     time:      value.value
                 });
             }
-            ("GUIDER_EXPOSURE", "GUIDER_EXPOSURE_VALUE", PropValue::Num(value), _, _) => {
+            ("GUIDER_EXPOSURE", _, _, _, true) => {
+                self.event_handlers.send(HalEvent::CameraIsReadyToWork(
+                    Arc::new(device_name.to_string() + CAM_CCD2_POSTFIX)
+                ));
+            }
+            ("GUIDER_EXPOSURE", "GUIDER_EXPOSURE_VALUE", PropValue::Num(value), _, false) => {
                 self.event_handlers.send(HalEvent::CameraTimeUntilEndOfExposure {
                     device_id: Arc::new(device_name.to_string() + CAM_CCD2_POSTFIX),
                     time:      value.value
@@ -294,7 +235,12 @@ impl IndiHalImpl {
                     state:     telescope_state(&self.indi, device_name).unwrap_or(TelescopeState::Error),
                 });
             }
-            ("ABS_FOCUS_POSITION", "FOCUS_ABSOLUTE_POSITION", PropValue::Num(value), _, state) => {
+            ("TELESCOPE_SLEW_RATE", _, _, _, true) => {
+                self.event_handlers.send(HalEvent::TelescopeSlewRateListReady(
+                    Arc::clone(device_name)
+                ));
+            }
+            ("ABS_FOCUS_POSITION", "FOCUS_ABSOLUTE_POSITION", PropValue::Num(value), state, _) => {
                 self.event_handlers.send(HalEvent::FocuserAbsValueChanged {
                     device_id: Arc::clone(device_name),
                     abs_value: value.value,
@@ -314,7 +260,7 @@ impl IndiHalImpl {
                 self.event_handlers.send(HalEvent::FilterWheelSlotChange {
                     device_id:   Arc::clone(device_name),
                     slot:        value.value as i32 - value.min as i32,
-                    in_progress: !matches!(new_state, PropState::Ok|PropState::Idle)
+                    in_progress: !matches!(state, PropState::Ok|PropState::Idle)
                 });
             }
             ("FILTER_NAME", _, _, _, _) => {
