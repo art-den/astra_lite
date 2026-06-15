@@ -507,6 +507,128 @@ impl TackingPicturesMode {
         Ok(())
     }
 
+    fn process_raw_image(
+        &mut self,
+        raw_info: &RawFrameInfo,
+    ) -> anyhow::Result<NotifyResult> {
+        if self.state != State::Common {
+            return Ok(NotifyResult::Empty);
+        }
+
+        let frame_for_raw_stacker =
+            Self::is_frame_type_for_raw_stacker(raw_info.image.info().frame_type);
+
+        if frame_for_raw_stacker && self.flags.use_raw_stacker && raw_info.ccd_temp_ok {
+            self.add_raw_image(&raw_info.image)?;
+        }
+
+        if self.next_job.is_none()
+        && self.state == State::Common
+        && self.when_to_start_exp == Some(WhenToStartExposure::AtRawFrameInfo) {
+            let have_to_continue_by_progress = self.progress
+                .as_ref()
+                .map(|p| p.cur+1 != p.total)
+                .unwrap_or(true);
+
+            if have_to_continue_by_progress || !raw_info.quality_is_ok() {
+                self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
+                self.find_when_to_start_exposure();
+            }
+        }
+
+        Ok(NotifyResult::Empty)
+    }
+
+    fn add_raw_image(&mut self, raw_image: &RawImage) -> anyhow::Result<()> {
+        if raw_image.info().frame_type == FrameType::Flats {
+            let mut normalized_flat = raw_image.clone();
+            let tmr = TimeLogger::start();
+            let flat_offset = self.camera_offset.unwrap_or_default();
+            if flat_offset != 0 {
+                normalized_flat.set_offset(flat_offset as i32);
+            }
+            normalized_flat.normalize_flat();
+            tmr.log("Normalizing flat");
+            let tmr = TimeLogger::start();
+            self.raw_stacker.add(&normalized_flat, false)?;
+            tmr.log("Adding raw calibration frame");
+        } else {
+            let tmr = TimeLogger::start();
+            self.raw_stacker.add(raw_image, true)?;
+            tmr.log("Adding raw calibration frame");
+        }
+        Ok(())
+    }
+
+    fn save_raw_image(
+        &mut self,
+        camera_shot:    &(dyn CameraShot + Send + Sync + 'static),
+        raw_image_info: &RawImageInfo,
+    ) -> anyhow::Result<()> {
+        let prefix = match raw_image_info.frame_type {
+            FrameType::Lights => "light",
+            FrameType::Flats => "flat",
+            FrameType::Darks => "dark",
+            FrameType::Biases => "bias",
+        };
+        if !self.out_file_names.raw_files_dir.is_dir() {
+            std::fs::create_dir_all(&self.out_file_names.raw_files_dir)
+                .map_err(|e|anyhow::anyhow!(
+                    "Error '{}'\nwhen trying to create directory '{}' for saving RAW frame",
+                    e.to_string(),
+                    self.out_file_names.raw_files_dir.to_str().unwrap_or_default()
+                ))?;
+        }
+        let mut file_ext = camera_shot.file_ext();
+        while file_ext.starts_with('.') { file_ext = &file_ext[1..]; }
+        let fn_mask = format!("{}_${{num}}.{}", prefix, file_ext);
+        let mut fn_gen = self.fn_gen.lock().unwrap();
+        let file_name = fn_gen.generate(&self.out_file_names.raw_files_dir, &fn_mask);
+        drop(fn_gen);
+
+        let tmr = TimeLogger::start();
+        camera_shot.save_to_file(&file_name)?;
+        tmr.log("Saving raw image");
+
+        Ok(())
+    }
+
+    fn process_light_frame_info(
+        &mut self,
+        info: &LightFrameInfoData,
+    ) -> anyhow::Result<NotifyResult> {
+        if self.state != State::Common {
+            return Ok(NotifyResult::Empty);
+        }
+
+        if info.quality.stars_is_ok() && self.ref_stars.is_none() {
+            let ref_stars = info.stars.items.iter().map(|s| Point {x: s.x, y: s.y}).collect();
+            self.ref_stars = Some(ref_stars);
+        }
+
+        self.process_light_frame_info_and_refocus(info)?;
+
+        self.process_light_frame_info_and_dither_by_main_camera(info)?;
+
+        self.process_light_frame_info_and_dither_by_ext_guider(info)?;
+
+        if self.next_job.is_none()
+        && self.state == State::Common
+        && self.when_to_start_exp == Some(WhenToStartExposure::AtLightFrameInfo) {
+            let have_to_continue_by_progress = self.progress
+                .as_ref()
+                .map(|p| p.cur+1 != p.total)
+                .unwrap_or(true);
+
+            if have_to_continue_by_progress || !info.quality.is_ok() {
+                self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
+                self.find_when_to_start_exposure();
+            }
+        }
+
+        Ok(NotifyResult::Empty)
+    }
+
     fn process_light_frame_info_and_refocus(
         &mut self,
         info: &LightFrameInfoData,
@@ -1038,60 +1160,6 @@ impl TackingPicturesMode {
         Ok(result)
     }
 
-    fn add_raw_image(&mut self, raw_image: &RawImage) -> anyhow::Result<()> {
-        if raw_image.info().frame_type == FrameType::Flats {
-            let mut normalized_flat = raw_image.clone();
-            let tmr = TimeLogger::start();
-            let flat_offset = self.camera_offset.unwrap_or_default();
-            if flat_offset != 0 {
-                normalized_flat.set_offset(flat_offset as i32);
-            }
-            normalized_flat.normalize_flat();
-            tmr.log("Normalizing flat");
-            let tmr = TimeLogger::start();
-            self.raw_stacker.add(&normalized_flat, false)?;
-            tmr.log("Adding raw calibration frame");
-        } else {
-            let tmr = TimeLogger::start();
-            self.raw_stacker.add(raw_image, true)?;
-            tmr.log("Adding raw calibration frame");
-        }
-        Ok(())
-    }
-
-    fn save_raw_image(
-        &mut self,
-        camera_shot:    &(dyn CameraShot + Send + Sync + 'static),
-        raw_image_info: &RawImageInfo,
-    ) -> anyhow::Result<()> {
-        let prefix = match raw_image_info.frame_type {
-            FrameType::Lights => "light",
-            FrameType::Flats => "flat",
-            FrameType::Darks => "dark",
-            FrameType::Biases => "bias",
-        };
-        if !self.out_file_names.raw_files_dir.is_dir() {
-            std::fs::create_dir_all(&self.out_file_names.raw_files_dir)
-                .map_err(|e|anyhow::anyhow!(
-                    "Error '{}'\nwhen trying to create directory '{}' for saving RAW frame",
-                    e.to_string(),
-                    self.out_file_names.raw_files_dir.to_str().unwrap_or_default()
-                ))?;
-        }
-        let mut file_ext = camera_shot.file_ext();
-        while file_ext.starts_with('.') { file_ext = &file_ext[1..]; }
-        let fn_mask = format!("{}_${{num}}.{}", prefix, file_ext);
-        let mut fn_gen = self.fn_gen.lock().unwrap();
-        let file_name = fn_gen.generate(&self.out_file_names.raw_files_dir, &fn_mask);
-        drop(fn_gen);
-
-        let tmr = TimeLogger::start();
-        camera_shot.save_to_file(&file_name)?;
-        tmr.log("Saving raw image");
-
-        Ok(())
-    }
-
     fn save_master_file(&mut self) -> anyhow::Result<()> {
         log::debug!("Saving master frame...");
         let raw_image = self.raw_stacker.get()?;
@@ -1135,74 +1203,6 @@ impl TackingPicturesMode {
             frame_type,
             FrameType::Flats| FrameType::Darks | FrameType::Biases
         )
-    }
-
-    fn process_raw_image(
-        &mut self,
-        raw_info: &RawFrameInfo,
-    ) -> anyhow::Result<NotifyResult> {
-        if self.state != State::Common {
-            return Ok(NotifyResult::Empty);
-        }
-
-        let frame_for_raw_stacker =
-            Self::is_frame_type_for_raw_stacker(raw_info.image.info().frame_type);
-
-        if frame_for_raw_stacker && self.flags.use_raw_stacker && raw_info.ccd_temp_ok {
-            self.add_raw_image(&raw_info.image)?;
-        }
-
-        if self.next_job.is_none()
-        && self.state == State::Common
-        && self.when_to_start_exp == Some(WhenToStartExposure::AtRawFrameInfo) {
-            let have_to_continue_by_progress = self.progress
-                .as_ref()
-                .map(|p| p.cur+1 != p.total)
-                .unwrap_or(true);
-
-            if have_to_continue_by_progress || !raw_info.quality_is_ok() {
-                self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
-                self.find_when_to_start_exposure();
-            }
-        }
-
-        Ok(NotifyResult::Empty)
-    }
-
-    fn process_light_frame_info(
-        &mut self,
-        info: &LightFrameInfoData,
-    ) -> anyhow::Result<NotifyResult> {
-        if self.state != State::Common {
-            return Ok(NotifyResult::Empty);
-        }
-
-        if info.quality.stars_is_ok() && self.ref_stars.is_none() {
-            let ref_stars = info.stars.items.iter().map(|s| Point {x: s.x, y: s.y}).collect();
-            self.ref_stars = Some(ref_stars);
-        }
-
-        self.process_light_frame_info_and_refocus(info)?;
-
-        self.process_light_frame_info_and_dither_by_main_camera(info)?;
-
-        self.process_light_frame_info_and_dither_by_ext_guider(info)?;
-
-        if self.next_job.is_none()
-        && self.state == State::Common
-        && self.when_to_start_exp == Some(WhenToStartExposure::AtLightFrameInfo) {
-            let have_to_continue_by_progress = self.progress
-                .as_ref()
-                .map(|p| p.cur+1 != p.total)
-                .unwrap_or(true);
-
-            if have_to_continue_by_progress || !info.quality.is_ok() {
-                self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
-                self.find_when_to_start_exposure();
-            }
-        }
-
-        Ok(NotifyResult::Empty)
     }
 
     fn get_dark_or_bias_creation_short_info(&self) -> String {
