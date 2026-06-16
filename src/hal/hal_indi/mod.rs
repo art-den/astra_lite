@@ -194,46 +194,37 @@ impl IndiHalImpl {
                     Arc::clone(device_name)
                 ));
             }
-            ("TELESCOPE_TRACK_STATE", elem, indi::PropValue::Switch(prop_value), _, _) => {
-                let tracking =
-                    if elem == "TRACK_ON" { *prop_value }
-                    else if elem == "TRACK_OFF" { !*prop_value }
-                    else { return Ok(()); };
+            ("TELESCOPE_TRACK_STATE", "TRACK_ON", indi::PropValue::Switch(true), _, _) => {
                 self.event_handlers.send(HalEvent::TelescopeTrackingChanged {
                     device_id: Arc::clone(device_name),
-                    tracking,
-                });
-                self.event_handlers.send(HalEvent::TelescopeStateChanged {
-                    device_id: Arc::clone(device_name),
-                    state:     telescope_state(&self.indi, device_name).unwrap_or(TelescopeState::Error),
+                    tracking: true,
                 });
             }
+            ("TELESCOPE_TRACK_STATE", "TRACK_OFF", indi::PropValue::Switch(true), _, _) => {
+                self.event_handlers.send(HalEvent::TelescopeTrackingChanged {
+                    device_id: Arc::clone(device_name),
+                    tracking:  false,
+                });
+                self.send_telescope_state_changed_event(device_name);
+            }
+
             ("TELESCOPE_PARK", "PARK", indi::PropValue::Switch(true), _, _) => {
                 self.event_handlers.send(HalEvent::TelescopeParked(
                     Arc::clone(device_name)
                 ));
-                self.event_handlers.send(HalEvent::TelescopeStateChanged {
-                    device_id: Arc::clone(device_name),
-                    state:     telescope_state(&self.indi, device_name).unwrap_or(TelescopeState::Error),
-                });
+                self.send_telescope_state_changed_event(device_name);
             }
             ("TELESCOPE_PARK", "UNPARK", indi::PropValue::Switch(true), _, _) => {
                 self.event_handlers.send(HalEvent::TelescopeUnparked(
                     Arc::clone(device_name)
                 ));
-                self.event_handlers.send(HalEvent::TelescopeStateChanged {
-                    device_id: Arc::clone(device_name),
-                    state:     telescope_state(&self.indi, device_name).unwrap_or(TelescopeState::Error),
-                });
+                self.send_telescope_state_changed_event(device_name);
             }
             ("TELESCOPE_MOTION_NS" | "TELESCOPE_MOTION_WE" |
              "TELESCOPE_TIMED_GUIDE_NS" | "TELESCOPE_TIMED_GUIDE_WE" |
              "EQUATORIAL_EOD_COORD",
              ..) => {
-                self.event_handlers.send(HalEvent::TelescopeStateChanged {
-                    device_id: Arc::clone(device_name),
-                    state:     telescope_state(&self.indi, device_name).unwrap_or(TelescopeState::Error),
-                });
+                 self.send_telescope_state_changed_event(device_name);
             }
             ("TELESCOPE_SLEW_RATE", _, _, _, true) => {
                 self.event_handlers.send(HalEvent::TelescopeSlewRateListReady(
@@ -271,6 +262,13 @@ impl IndiHalImpl {
             _ => {}
         }
         Ok(())
+    }
+
+    fn send_telescope_state_changed_event(&self, device_name: &Arc<String>) {
+        self.event_handlers.send(HalEvent::TelescopeStateChanged {
+            device_id: Arc::clone(device_name),
+            state:     telescope_state(&self.indi, device_name).unwrap_or(TelescopeState::Error),
+        });
     }
 
     fn process_indi_blob_event(
