@@ -71,13 +71,13 @@ impl IndiHalImpl {
                     self.event_handlers.send(HalEvent::StateChanged(hal_state));
                 }
                 indi::Event::NewDevice(evt) => if evt.connected {
-                    self.process_dev_conn_evt(&evt.device_name, evt.interface, evt.connected);
+                    self.process_device_connect_evt(&evt.device_name, evt.interface, evt.connected);
                 }
                 indi::Event::DeviceConnected(evt) => {
-                    self.process_dev_conn_evt(&evt.device_name, evt.interface, evt.connected);
+                    self.process_device_connect_evt(&evt.device_name, evt.interface, evt.connected);
                 }
                 indi::Event::DeviceDelete(evt) => {
-                    self.process_dev_conn_evt(&evt.device_name, evt.interface, false);
+                    self.process_device_connect_evt(&evt.device_name, evt.interface, false);
                 }
                 indi::Event::PropChange(prop_change) => {
                     let mut watchdogs = self.watchdogs.lock().unwrap();
@@ -289,7 +289,7 @@ impl IndiHalImpl {
         Ok(())
     }
 
-    fn process_dev_conn_evt(
+    fn process_device_connect_evt(
         &self,
         device_name: &Arc<String>,
         interface:   indi::DriverInterface,

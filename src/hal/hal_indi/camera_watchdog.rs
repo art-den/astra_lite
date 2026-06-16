@@ -288,8 +288,6 @@ impl CamWatchdog {
     }
 
     pub fn notify_device_deleted(&mut self, device_name: &Arc<String>) {
-        self.delete_ccd(device_name, indi::CamCcd::Main);
-        self.delete_ccd(device_name, indi::CamCcd::Guider);
         self.delete_camera(device_name);
     }
 
