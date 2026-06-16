@@ -1431,7 +1431,7 @@ impl CameraUi {
         let options = self.core.options().read().unwrap();
         if options.cam.device_id == device_id {
             self.widgets.info.l_coolpwr_value.set_label(
-                &format!("Pwr: {}", pwr)
+                &format!("Pwr: {:.1}", pwr)
             );
         }
     }
