@@ -1,9 +1,9 @@
-use std::{rc::Rc, sync::{Arc, RwLock}};
+use std::{rc::Rc, sync::Arc};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
     core::{core::{Core, ModeType}, events::*, mode_polar_align::{CustomCommand, PolarAlignMode, PolarAlignmentEvent, State}},
-    indi::{self, degree_to_str_short},
+    hal::{DeviceType, HalState, events::HalEvent, indi::degree_to_str_short},
     options::*,
     sky_math::math::*,
 };
@@ -12,18 +12,14 @@ use super::{gtk_utils::{self, *}, module::*, ui_main::*, utils::*};
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,
-    options: &Arc<RwLock<Options>>,
     core:    &Arc<Core>,
-    indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/polar_align.ui"));
     let obj = Rc::new(PolarAlignUi {
         widgets,
         window:          window.clone(),
         main_ui:         Rc::clone(main_ui),
-        options:         Arc::clone(options),
         core:            Arc::clone(core),
-        indi:            Arc::clone(indi),
         delayed_actions: DelayedActions::new(200),
     });
 
@@ -77,9 +73,7 @@ struct PolarAlignUi {
     widgets:         Widgets,
     main_ui:         Rc<MainUi>,
     window:          gtk::ApplicationWindow,
-    options:         Arc<RwLock<Options>>,
     core:            Arc<Core>,
-    indi:            Arc<indi::Connection>,
     delayed_actions: DelayedActions<DelayedAction>,
 }
 
@@ -132,18 +126,12 @@ impl UiModule for PolarAlignUi {
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
                 }
             }
-            Event::CameraDeviceChanged{ to, ..} => {
-                let options = self.options.read().unwrap();
-                let mount_device = options.mount.device.clone();
-                drop(options);
-                self.correct_widgets_props_impl(&mount_device, Some(to));
+            Event::CameraDeviceChanged { .. } => {
+                self.correct_widgets_props();
             }
-            Event::MountDeviceChanged(mount_device) => {
-                let options = self.options.read().unwrap();
-                let cam_device = options.cam.device.clone();
-                drop(options);
+            Event::MountDeviceChanged(_) => {
                 self.update_mount_speed_list();
-                self.correct_widgets_props_impl(mount_device, cam_device.as_ref());
+                self.correct_widgets_props();
             }
             Event::PolarAlignment(event) => {
                 self.show_polar_alignment_error(event);
@@ -152,17 +140,17 @@ impl UiModule for PolarAlignUi {
         }
     }
 
-    fn on_indi_event(&self, event: &indi::Event) {
+    fn on_hal_event(&self, event: &HalEvent) {
         match event {
-            indi::Event::ConnChange(_)|
-            indi::Event::DeviceConnected(_)|
-            indi::Event::DeviceDelete(_)|
-            indi::Event::NewDevice(_) => {
-                self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
+            HalEvent::DeviceConnected(info)|
+            HalEvent::DeviceDisconnected(info) => {
+                if info.type_.contains(DeviceType::TELESCOPE) {
+                    self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
+                }
             }
-            indi::Event::PropChange(change) => {
-                if let indi::PropChange::Change{ prop_name, .. } = &change.change
-                && **prop_name == "TELESCOPE_SLEW_RATE" {
+            HalEvent::TelescopeSlewRateListReady(device_id) => {
+                let options = self.core.options().read().unwrap();
+                if options.mount.device == **device_id {
                     self.delayed_actions.schedule(DelayedAction::UpdateMountSpeedList);
                 }
             }
@@ -197,12 +185,12 @@ impl PolarAlignUi {
         );
     }
 
-    fn correct_widgets_props_impl(&self, mount_device: &str, cam_device: Option<&DeviceAndProp>) {
-        let mnt_active = self.indi.is_device_enabled(mount_device).unwrap_or(false);
-        let cam_active = cam_device.as_ref().map(|cam_device|
-            self.indi.is_device_enabled(&cam_device.name).unwrap_or(false)
-        ).unwrap_or(false);
-        let indi_connected = self.indi.state() == indi::ConnState::Connected;
+    fn correct_widgets_props(&self) {
+        let camera = self.core.camera();
+        let mount = self.core.telescope();
+        let cam_active = camera.and_then(|c| c.is_active().ok()).unwrap_or(false);
+        let mnt_active = mount.and_then(|c| c.is_active().ok()).unwrap_or(false);
+        let hal_connected = self.core.hal().state() == HalState::Connected;
 
         let mode = self.core.mode();
         let mode_type = mode.active.get_type();
@@ -214,7 +202,7 @@ impl PolarAlignUi {
 
         let polar_alignment_can_be_started =
             !polar_align &&
-            indi_connected &&
+            hal_connected &&
             mnt_active && cam_active &&
             (waiting || single_shot || live_view);
 
@@ -233,14 +221,6 @@ impl PolarAlignUi {
             ("stop_polar_alignment",    polar_align),
             ("pa_manual_refresh",       allow_refresh && !self.widgets.chb_auto_refresh.is_active()),
         ]);
-    }
-
-    fn correct_widgets_props(&self) {
-        let options = self.options.read().unwrap();
-        let mount_device = options.mount.device.clone();
-        let cam_device = options.cam.device.clone();
-        drop(options);
-        self.correct_widgets_props_impl(&mount_device, cam_device.as_ref());
     }
 
     fn connect_delayed_actions_events(self: &Rc<Self>) {
@@ -263,29 +243,28 @@ impl PolarAlignUi {
     }
 
     fn update_mount_speed_list(&self) {
-        let options = self.options.read().unwrap();
-        let mount_device = options.mount.device.clone();
-
-        let list = self.indi.mount_get_slew_speed_list(&mount_device).unwrap_or_default();
-        self.widgets.cbx_speed.remove_all();
-        if !list.is_empty() {
-            self.widgets.cbx_speed.append(None, "---");
-        }
-        for (id, text) in list {
-            self.widgets.cbx_speed.append(
-                Some(&id),
-                text.as_ref().unwrap_or(&id).as_str()
-            );
-        }
-        if options.polar_align.speed.is_some() {
-            self.widgets.cbx_speed.set_active_id(options.polar_align.speed.as_deref());
-            if self.widgets.cbx_speed.active().is_none() {
-                self.widgets.cbx_speed.append(
-                    options.polar_align.speed.as_deref(),
-                    options.polar_align.speed.as_deref().unwrap_or_default()
-                );
-                self.widgets.cbx_speed.set_active_id(options.polar_align.speed.as_deref());
+        if let Some(mount) = self.core.telescope() {
+            let list = mount.slew_speed_list().unwrap_or_default();
+            self.widgets.cbx_speed.remove_all();
+            if !list.is_empty() {
+                self.widgets.cbx_speed.append(None, "---");
             }
+            for (id, text) in list {
+                self.widgets.cbx_speed.append(Some(&id), &text);
+            }
+            let options = self.core.options().read().unwrap();
+            if options.polar_align.speed.is_some() {
+                self.widgets.cbx_speed.set_active_id(options.polar_align.speed.as_deref());
+                if self.widgets.cbx_speed.active().is_none() {
+                    self.widgets.cbx_speed.append(
+                        options.polar_align.speed.as_deref(),
+                        options.polar_align.speed.as_deref().unwrap_or_default()
+                    );
+                    self.widgets.cbx_speed.set_active_id(options.polar_align.speed.as_deref());
+                }
+            }
+        } else {
+            self.widgets.cbx_speed.remove_all();
         }
     }
 
@@ -295,8 +274,8 @@ impl PolarAlignUi {
         // Check before start mode
 
         let check_result = PolarAlignMode::check_before_start(
-            &self.indi,
-            &self.options
+            self.core.hal(),
+            self.core.options()
         );
 
         match check_result {

@@ -1,12 +1,9 @@
-use std::{path::{Path, PathBuf}, sync::Arc};
+use std::{ops::RangeInclusive, path::{Path, PathBuf}, sync::Arc};
 
 use chrono::{DateTime, Utc};
 
 use crate::{
-    image::raw::*,
-    indi,
-    options::*,
-    sky_math::math::*
+    hal::{Camera, FrameType}, image::raw::*, options::*, sky_math::math::*
 };
 
 pub enum FileNameArg<'a> {
@@ -35,23 +32,19 @@ impl FileNameArg<'_> {
 
 #[derive(Default)]
 pub struct FileNameUtils {
-    device: DeviceAndProp,
+    camera_id: String,
     sensor_width: usize,
     sensor_height: usize,
     cooler_supported: bool,
 }
 
 impl FileNameUtils {
-    pub fn init(&mut self, indi: &Arc<indi::Connection>, device: &DeviceAndProp) {
-        self.device = device.clone();
-        let cam_ccd = indi::CamCcd::from_ccd_prop_name(&device.prop);
-        let (sensor_width, sensor_height) =
-            indi
-                .camera_get_max_frame_size(&device.name, cam_ccd)
-                .unwrap_or((0, 0));
-        self.cooler_supported = indi
-            .camera_is_cooler_supported(&device.name)
-            .unwrap_or(false);
+    pub fn init(&mut self, camera: &Arc<dyn Camera>) {
+        self.camera_id = camera.id().to_string();
+
+        let (sensor_width, sensor_height) = camera.ccd_size().unwrap_or((0, 0));
+        self.cooler_supported = camera.is_cooler_supported().unwrap_or(false);
+
         self.sensor_width = sensor_width;
         self.sensor_height = sensor_height;
     }
@@ -111,7 +104,7 @@ impl FileNameUtils {
         let cam_name = if let FileNameArg::RawInfo{info, ..} = to_calibrate {
             info.camera.clone()
         } else {
-            self.device.to_file_name_part()
+            self.camera_id.clone()
         };
         path.push(dark_library_path);
         path.push(&cam_name);
@@ -135,14 +128,14 @@ impl FileNameUtils {
                     opts.frame.binning.get_ratio() as i32,
                 );
 
-                (file_name, self.device.to_file_name_part())
+                (file_name, &self.camera_id)
             }
             FileNameArg::RawInfo{info, ..} => {
                 let file_name = Self::defect_pixels_file_name_impl(
                     info.width, info.height,
                     info.bin as i32,
                 );
-                (file_name, info.camera.clone())
+                (file_name, &info.camera)
             }
         };
 
@@ -299,7 +292,6 @@ impl FileNameUtils {
 
     fn type_part_of_file_name(frame_type:  FrameType) -> &'static str {
         match frame_type {
-            FrameType::Undef => unreachable!(),
             FrameType::Lights => "light",
             FrameType::Flats => "flat",
             FrameType::Darks => "dark",
@@ -324,22 +316,19 @@ impl FileNameUtils {
     fn bin_to_str(bin: i32) -> String {
         format!("bin{0}x{0}", bin)
     }
-
 }
 
 pub fn gain_to_value(
-    gain:     Gain,
-    cur_gain: f64,
-    camera:   &DeviceAndProp,
-    indi:     &indi::Connection
-) -> anyhow::Result<f64> {
-    let calc_gain = |part| -> anyhow::Result<f64> {
-        let prop = indi.camera_get_gain_prop_value(&camera.name)?;
-        Ok(part * (prop.max - prop.min) + prop.min)
+    gain:       Gain,
+    cur_gain:   f64,
+    gain_range: RangeInclusive<f64>,
+) -> f64 {
+    let calc_gain = |part| -> f64 {
+        part * (gain_range.end() - gain_range.start()) + gain_range.start()
     };
 
     match gain {
-        Gain::Same => Ok(cur_gain),
+        Gain::Same => cur_gain,
         Gain::Min => calc_gain(0.0),
         Gain::P25 => calc_gain(0.25),
         Gain::P50 => calc_gain(0.50),
@@ -349,15 +338,14 @@ pub fn gain_to_value(
 }
 
 pub fn check_telescope_is_at_desired_position(
-    indi:                &indi::Connection,
-    mount_dev:           &str,
-    desired_pos:         &EqCoord,
+    telescope_ra:  f64,
+    telescope_dec: f64,
+    desired_pos:   &EqCoord,
     tolerance_in_degree: f64,
 ) -> anyhow::Result<()> {
-    let (cur_ra, cur_dec) = indi.mount_get_eq_ra_and_dec(mount_dev)?;
     let cur_pos = EqCoord {
-        ra: hour_to_radian(cur_ra),
-        dec: degree_to_radian(cur_dec)
+        ra: hour_to_radian(telescope_ra),
+        dec: degree_to_radian(telescope_dec)
     };
     let diff = EqCoord::angle_between(&cur_pos, desired_pos);
     if radian_to_degree(diff) > tolerance_in_degree {

@@ -1,12 +1,16 @@
-mod sexagesimal;
+mod num_format;
 mod connection;
 mod drivers;
 mod base64;
 mod xml_reader;
 mod xml_helper;
 mod error;
+mod events;
+mod property;
+mod device;
 
-pub use sexagesimal::*;
+pub use num_format::*;
 pub use connection::*;
 pub use drivers::*;
-pub use error::*;
+pub use events::*;
+pub use property::*;

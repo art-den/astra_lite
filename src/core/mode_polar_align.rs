@@ -3,9 +3,9 @@ use std::{any::Any, f64::consts::PI, sync::{Arc, RwLock}};
 use chrono::{NaiveDateTime, Utc};
 
 use crate::{
-    core::{cam_starter::CamStarter, core::*, frame_processing::*},
+    core::{cam_ctrl::take_shot, core::*, frame_processing::*},
+    hal::{Camera, FrameType, Hal, Telescope, indi::degree_to_str},
     image::{image::*, stars::StarItems},
-    indi::{self, degree_to_str},
     options::*,
     plate_solve::*,
     sky_math::{math::*, solar_system::calc_atmospheric_refraction},
@@ -232,18 +232,16 @@ pub enum PolarAlignmentEvent {
 }
 
 pub struct PolarAlignMode {
+    camera:       Arc<dyn Camera + Send + Sync>,
+    telescope:    Arc<dyn Telescope + Send + Sync>,
     state:        State,
     step:         Step,
-    camera:       DeviceAndProp,
-    cam_starter:  Arc<CamStarter>,
-    mount:        String,
     cam_opts:     CamOptions,
     pa_opts:      PloarAlignOptions,
     s_opts:       SiteOptions,
     options:      Arc<RwLock<Options>>,
-    indi:         Arc<indi::Connection>,
     cur_frame:    Arc<ResultImage>,
-    subscribers:  Arc<Events>,
+    subscribers:  Arc<EventHandlers>,
     ps_opts:      PlateSolverOptions,
     plate_solver: PlateSolver,
     alignment:    PolarAlignment,
@@ -254,15 +252,15 @@ pub struct PolarAlignMode {
 
 impl PolarAlignMode {
     pub fn check_before_start(
-        indi:    &Arc<indi::Connection>,
+        hal:     &Arc<Hal>,
         options: &Arc<RwLock<Options>>,
     ) -> anyhow::Result<String> {
         const MIN_ALT: f64 = 10.0 ; // in degrees
 
         let opts = options.read().unwrap();
         let pa_opts = opts.polar_align.clone();
-        let mount_device = opts.mount.device.clone();
         let site_opts = opts.site.clone();
+        let telescope = hal.telescope(&opts.mount.device)?;
         drop(opts);
 
         let mut warnings = Vec::<String>::new();
@@ -274,7 +272,7 @@ impl PolarAlignMode {
             &now
         );
 
-        let (init_ra, init_dec) = indi.mount_get_eq_ra_and_dec(&mount_device)?;
+        let (init_ra, init_dec) = telescope.eq_coord()?;
 
         let angle = match pa_opts.direction {
             PloarAlignDir::East => pa_opts.angle,
@@ -362,66 +360,51 @@ impl PolarAlignMode {
         Ok(warnings.join("\n"))
     }
 
-    pub fn new(
-        indi:        &Arc<indi::Connection>,
-        cam_starter: &Arc<CamStarter>,
-        cur_frame:   &Arc<ResultImage>,
-        options:     &Arc<RwLock<Options>>,
-        subscribers: &Arc<Events>,
-    ) -> anyhow::Result<Self> {
-        let opts = options.read().unwrap();
-        let Some(cam_device) = &opts.cam.device else {
-            anyhow::bail!("Camera is not selected");
-        };
+    pub fn new(core: &Core) -> anyhow::Result<Self> {
+        let camera = core.camera_or_err()?;
+        let telescope = core.telescope_or_err()?;
+        let opts = core.options().read().unwrap();
 
         let mut cam_opts = opts.cam.clone();
-        cam_opts.frame.frame_type = crate::image::raw::FrameType::Lights;
+        cam_opts.frame.frame_type = FrameType::Lights;
         cam_opts.frame.exp_main = opts.plate_solver.exposure;
         cam_opts.frame.binning = opts.plate_solver.bin;
         cam_opts.frame.gain = gain_to_value(
             opts.plate_solver.gain,
             opts.cam.frame.gain,
-            cam_device,
-            indi
-        )?;
+            camera.gain_range()?
+        );
 
         let plate_solver = PlateSolver::new(opts.plate_solver.solver);
 
         Ok(Self{
             state:       State::Undefined,
             step:        Step::Undefined,
-            camera:      cam_device.clone(),
-            cam_starter: Arc::clone(&cam_starter),
-            mount:       opts.mount.device.clone(),
             pa_opts:     opts.polar_align.clone(),
             s_opts:      opts.site.clone(),
-            options:     Arc::clone(options),
-            indi:        Arc::clone(indi),
-            cur_frame:   Arc::clone(cur_frame),
-            subscribers: Arc::clone(subscribers),
+            options:     Arc::clone(core.options()),
+            cur_frame:   Arc::clone(core.cur_frame()),
+            subscribers: Arc::clone(core.events()),
             ps_opts:     opts.plate_solver.clone(),
             alignment:   PolarAlignment::new(),
             image_time:  None,
             initial_crd: None,
             step_cnt:    0,
+            camera,
+            telescope,
             cam_opts,
             plate_solver
         })
     }
 
     fn start_capture(&mut self) -> anyhow::Result<()> {
-        self.cam_starter.take_shot(
-            self.get_type(),
-            &self.camera,
-            &self.cam_opts.frame,
-            &self.cam_opts.ctrl
-        )?;
+        take_shot(&self.camera, &self.cam_opts.frame, &self.cam_opts.ctrl)?;
         self.image_time = Some(Utc::now().naive_utc());
         Ok(())
     }
 
     fn get_platesolver_config(&self) -> anyhow::Result<PlateSolveConfig> {
-        let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
+        let (ra, dec) = self.telescope.eq_coord()?;
         let eq_coord = EqCoord {
             dec: degree_to_radian(dec),
             ra:  hour_to_radian(ra),
@@ -523,11 +506,11 @@ impl PolarAlignMode {
         drop(options);
 
         let event = PlateSolverEvent {
-            cam_name: self.camera.name.clone(),
+            cam_name: self.camera.name().to_string(),
             result: ps_result.clone(),
             preview: preview.map(Arc::new),
         };
-        self.subscribers.notify(Event::PlateSolve(event));
+        self.subscribers.send(Event::PlateSolve(event));
 
         self.alignment.add_measurement(PolarAlignmentMeasure {
             coord:    coord.clone(),
@@ -573,7 +556,7 @@ impl PolarAlignMode {
     }
 
     fn goto_next_pos(&mut self) -> anyhow::Result<()> {
-        let (cur_ra, cur_dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
+        let (cur_ra, cur_dec) = self.telescope.eq_coord()?;
         let cur_ra = hour_to_radian(cur_ra);
         let cur_dec = degree_to_radian(cur_dec);
         let angle = match self.pa_opts.direction {
@@ -589,26 +572,9 @@ impl PolarAlignMode {
 
     fn goto_impl(&mut self, ra: f64, dec: f64) -> anyhow::Result<()> {
         if let Some(slew_speed) = &self.pa_opts.speed {
-            self.indi.mount_set_slew_speed(
-                &self.mount,
-                slew_speed,
-                true,
-                INDI_SET_PROP_TIMEOUT
-            )?;
+            self.telescope.set_slew_speed(slew_speed)?;
         }
-        self.indi.mount_set_after_coord_action(
-            &self.mount,
-            indi::AfterCoordSetAction::Track,
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
-        self.indi.mount_set_eq_coord(
-            &self.mount,
-            radian_to_hour(ra),
-            radian_to_degree(dec),
-            true,
-            None
-        )?;
+        self.telescope.goto_and_track(radian_to_hour(ra), radian_to_degree(dec))?;
         self.state = State::Goto {
             time_ms:         0,
             goto_ok_time_ms: 0,
@@ -621,7 +587,7 @@ impl PolarAlignMode {
         let Some((horiz, total)) = self.alignment.pole_error() else {
             anyhow::bail!("Mount pole is not calculated!");
         };
-        self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Error {
+        self.subscribers.send(Event::PolarAlignment(PolarAlignmentEvent::Error {
             horiz, total, step: self.step_cnt
         }));
         Ok(())
@@ -630,7 +596,7 @@ impl PolarAlignMode {
     fn restart(&mut self) -> anyhow::Result<()> {
         if let Some(initial_crd) = self.initial_crd {
             self.abort()?;
-            self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Empty));
+            self.subscribers.send(Event::PolarAlignment(PolarAlignmentEvent::Empty));
             self.goto_impl(initial_crd.ra, initial_crd.dec)?;
             self.alignment.clear();
             self.step = Step::GotoInitialPos;
@@ -691,8 +657,8 @@ impl Mode for PolarAlignMode {
         }.to_string()
     }
 
-    fn cam_device(&self) -> Option<&DeviceAndProp> {
-        Some(&self.camera)
+    fn camera_id(&self) -> Option<&str> {
+        Some(&self.camera.id())
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
@@ -700,7 +666,7 @@ impl Mode for PolarAlignMode {
     }
 
     fn start(&mut self) -> anyhow::Result<()> {
-        let (ra, dec) = self.indi.mount_get_eq_ra_and_dec(&self.mount)?;
+        let (ra, dec) = self.telescope.eq_coord()?;
 
         self.step_cnt = 0;
 
@@ -709,7 +675,7 @@ impl Mode for PolarAlignMode {
             dec: degree_to_radian(dec),
         });
 
-        self.subscribers.notify(Event::PolarAlignment(PolarAlignmentEvent::Empty));
+        self.subscribers.send(Event::PolarAlignment(PolarAlignmentEvent::Empty));
 
         self.start_capture()?;
         self.state = State::Capture;
@@ -725,13 +691,13 @@ impl Mode for PolarAlignMode {
         match command {
             CustomCommand::Restart => {
                 self.restart()?;
-                self.subscribers.notify(Event::Progress(self.progress(), self.get_type()));
+                self.subscribers.send(Event::Progress(self.progress(), self.get_type()));
                 Ok(None)
             }
 
             CustomCommand::ManualRefresh => {
                 self.manual_refresh()?;
-                self.subscribers.notify(Event::Progress(self.progress(), self.get_type()));
+                self.subscribers.send(Event::Progress(self.progress(), self.get_type()));
                 Ok(None)
             }
 
@@ -742,8 +708,8 @@ impl Mode for PolarAlignMode {
     }
 
     fn abort(&mut self) -> anyhow::Result<()> {
-        _ = self.cam_starter.abort(&self.camera);
-        _ = self.indi.mount_abort_motion(&self.mount);
+        _ = self.camera.abort_exposure();
+        _ = self.telescope.abort_motion();
         self.plate_solver.abort();
         self.state = State::Undefined;
         Ok(())
@@ -776,20 +742,20 @@ impl Mode for PolarAlignMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         match &mut self.state {
             State::PlateSolve => {
                 return self.try_process_plate_solving_result();
             }
 
             State::Goto {goto_ok_time_ms, time_ms, target: goto_pos} => {
-                let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.mount)?;
-                if matches!(crd_prop_state, indi::PropState::Ok|indi::PropState::Idle) {
+                if !self.telescope.is_slewing()? {
                     *goto_ok_time_ms += timer_period_ms;
                     if *goto_ok_time_ms >= AFTER_GOTO_WAIT_TIME * 1000 {
+                        let (cur_ra, cur_dec) = self.telescope.eq_coord()?;
                         check_telescope_is_at_desired_position(
-                            &self.indi,
-                            &self.mount,
+                            cur_ra,
+                            cur_dec,
                             goto_pos,
                             0.5
                         )?;

@@ -184,7 +184,7 @@ pub fn exec_and_show_error(
     let exec_res = fun();
     if let Err(err) = exec_res {
         let message = if cfg!(debug_assertions) {
-            format!("{}\n\nat\n\n{}", err, err.backtrace())
+            format!("{:?}", err)
         } else {
             err.to_string()
         };

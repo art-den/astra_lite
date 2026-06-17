@@ -1,8 +1,6 @@
 use std::{f64::consts::PI, fmt::Debug, ops::{Mul, Sub}};
 use chrono::{Datelike, Timelike, NaiveDateTime, NaiveDate};
-
-use crate::indi::{degree_to_str, hour_to_str};
-
+use crate::hal::indi::{degree_to_str, hour_to_str};
 use super::solar_system::pn_matrix;
 
 #[derive(Clone, Copy, Default)]

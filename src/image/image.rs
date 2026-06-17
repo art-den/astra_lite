@@ -28,6 +28,11 @@ impl<T: Copy + Default> ImageLayer<T> {
         Self { data, width, height, width_1: width as i64 - 1, height_1: height as i64 - 1 }
     }
 
+    pub fn new_mono(data: Vec<T>, width: usize, height: usize) -> Self {
+        assert!(data.len() == width * height);
+        Self { data, width, height, width_1: width as i64 - 1, height_1: height as i64 - 1 }
+    }
+
     fn clear(&mut self) {
         self.data.clear();
         self.data.shrink_to_fit();
@@ -441,7 +446,6 @@ impl Image {
     pub fn set_max_value(&mut self, max_value: u16) {
         self.max_value = max_value;
     }
-
 
     pub fn remove_gradient(&mut self) {
         self.l.remove_gradient();

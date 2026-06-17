@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
-use std::{fs::File, io::{BufReader, BufWriter}, path::Path};
+use std::{fs::File, io::{BufReader, BufWriter}, path::{Path, PathBuf}};
 
 use itertools::{izip, Itertools};
 
-use crate::ui::gtk_utils::*;
+use crate::{hal::{CameraShot, CameraShotType}, ui::gtk_utils::*};
 
 use super::{image::{Image, ImageLayer}, raw::*, simple_fits::{FitsReader, Header, SeekNRead}};
 
@@ -282,4 +282,65 @@ pub fn load_image_using_pixbuf(
     }
 
     Ok(())
+}
+
+pub struct FromFileCameraShot {
+    file_name: PathBuf,
+}
+
+impl FromFileCameraShot {
+    pub fn new(file_name: &Path) -> Self {
+        Self { file_name: file_name.to_path_buf() }
+    }
+}
+
+impl CameraShot for FromFileCameraShot {
+    fn get_type(&self) -> CameraShotType {
+        CameraShotType::ReadyImage
+    }
+
+    fn get_raw(&self) -> anyhow::Result<crate::image::raw::RawImage> {
+        unreachable!()
+    }
+
+    fn get_image(&self, image: &mut crate::image::image::Image) -> anyhow::Result<()> {
+        image.clear();
+
+        let ext = self.file_ext();
+        let ext_cmp = |other| ext.eq_ignore_ascii_case(other);
+
+        let is_fits = ext_cmp("fits") || ext_cmp("fit");
+        let is_tif = ext_cmp("tif") || ext_cmp("tiff");
+        let is_jpeg = ext_cmp("jpg") || ext_cmp("jpeg");
+        let is_png = ext_cmp("png");
+
+        if is_fits {
+            let mut stream = BufReader::new(File::open(&self.file_name)?);
+            let reader = FitsReader::new(&mut stream)?;
+            load_image_from_fits_reader(image, &reader, &mut stream)?;
+        } else if is_tif {
+            load_image_from_tif_file(image, &self.file_name)?;
+        } else if is_jpeg || is_png {
+            load_image_using_pixbuf(image, &self.file_name, 6000)?;
+        } else {
+            anyhow::bail!("Image format with extension {ext} not supported");
+        }
+        Ok(())
+    }
+
+    fn download_time(&self) -> f64 {
+        0.0
+    }
+
+    fn file_ext(&self) -> &str {
+        self.file_name
+            .extension()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or_default()
+    }
+
+    fn save_to_file(&self, _file_name: &Path) -> anyhow::Result<()> {
+        unreachable!()
+    }
 }

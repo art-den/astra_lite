@@ -4,11 +4,7 @@ use gtk::{cairo, glib::{self, clone}, prelude::*, gdk};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{core::*, events::*, frame_processing::*},
-    image::{histogram::*, info::*, io::save_image_to_tif_file, preview::*, raw::{CalibrMethods, FrameType}, stars_offset::Offset},
-    options::*,
-    sky_math::math::radian_to_degree,
-    utils::{io_utils::*, log_utils::*}
+    core::{core::*, events::*, frame_processing::*}, hal::FrameType, image::{histogram::*, info::*, io::save_image_to_tif_file, preview::*, raw::CalibrMethods, stars_offset::Offset}, options::*, sky_math::math::radian_to_degree, utils::{io_utils::*, log_utils::*}
 };
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 
@@ -406,7 +402,6 @@ impl UiModule for PreviewUi {
             }
             _ => {},
         }
-
     }
 }
 
@@ -1175,8 +1170,8 @@ impl PreviewUi {
 
     fn show_frame_processing_result(&self, result: &FrameProcessResult) {
         let options = self.core.options().read().unwrap();
-        if !result.camera.name.is_empty()
-        && options.cam.device.as_ref() != Some(&result.camera) {
+        let is_from_file_image = result.mode_type == ModeType::OpeningImgFile;
+        if !is_from_file_image && options.cam.device_id != result.camera_id {
             return;
         }
         let live_stacking_preview = options.preview.source == PreviewSource::LiveStacking;
@@ -1192,19 +1187,18 @@ impl PreviewUi {
 
         match &result.data {
             FrameProcessResultData::ShotProcessingFinished {
-                processing_time, blob_dl_time, ..
+                camera_shot, processing_time, ..
             } => {
                 let perf_str = format!(
                     "Download time = {:.2}s, img. process time = {:.2}s",
-                    blob_dl_time, processing_time
+                    camera_shot.download_time(), processing_time
                 );
                 self.main_ui.set_perf_string(perf_str);
             }
             FrameProcessResultData::PreviewFrame(img)
-            if is_mode_current(false) => {
+            if is_mode_current(false) || is_from_file_image => {
                 self.show_preview_image(Some(&img.rgb_data), Some(&img.params), None);
                 self.correct_widgets_props();
-
                 show_resolution_info(img.rgb_data.orig_width, img.rgb_data.orig_height);
             }
             FrameProcessResultData::PreviewLiveRes(img)
@@ -1215,12 +1209,12 @@ impl PreviewUi {
                 show_resolution_info(img.rgb_data.orig_width, img.rgb_data.orig_height);
             }
             FrameProcessResultData::HistorgamRaw(_)
-            if is_mode_current(false) => {
+            if is_mode_current(false) || is_from_file_image => {
                 self.repaint_histogram();
                 self.show_histogram_stat();
             }
             FrameProcessResultData::RawFrameInfo(info)
-            if is_mode_current(false) => {
+            if is_mode_current(false) || is_from_file_image => {
                 let image_info = info.image.info();
                 if image_info.frame_type != FrameType::Lights {
                     let history_item = CalibrHistoryItem {
@@ -1268,7 +1262,7 @@ impl PreviewUi {
                 self.set_hist_tab_active(Self::HIST_TAB_LIGHT);
             }
             FrameProcessResultData::FrameInfo
-            if is_mode_current(false) => {
+            if is_mode_current(false) || is_from_file_image => {
                 self.show_image_info();
             }
             FrameProcessResultData::FrameInfoLiveRes

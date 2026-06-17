@@ -1,13 +1,13 @@
 use std::sync::{Arc, RwLock};
 use crate::{
-    core::{cam_starter::CamStarter, consts::*, events::*, frame_processing::*},
+    core::{cam_ctrl::take_shot, consts::*, events::*, frame_processing::*},
+    hal::{Camera, FrameType, Telescope, indi::value_to_sexagesimal},
     image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point},
-    indi,
     options::*,
     plate_solve::*,
-    sky_math::math::*
+    sky_math::math::*,
 };
-use super::{core::*, events::Events, utils::*};
+use super::{core::*, events::EventHandlers, utils::*};
 
 const MAX_MOUNT_UNPARK_TIME: usize = 20; // seconds
 
@@ -41,20 +41,23 @@ pub enum GotoConfig {
     GotoPlateSolveAndCorrect,
 }
 
+enum ProcessPlateSolverResultAction {
+    Sync,
+    SetEqCoord,
+}
+
 pub struct GotoMode {
+    camera:       Option<Arc<dyn Camera + Send + Sync>>,
+    telescope:    Arc<dyn Telescope + Send + Sync>,
     state:        State,
     destination:  GotoDestination,
     config:       GotoConfig,
     eq_coord:     EqCoord,
-    camera:       Option<DeviceAndProp>,
-    cam_starter:  Arc<CamStarter>,
     cam_opts:     Option<CamOptions>,
     ps_opts:      PlateSolverOptions,
-    mount:        String,
-    indi:         Arc<indi::Connection>,
     cur_frame:    Arc<ResultImage>,
     options:      Arc<RwLock<Options>>,
-    subscribers:  Arc<Events>,
+    subscribers:  Arc<EventHandlers>,
     plate_solver: Option<PlateSolver>,
     unpark_ms:    usize,
     goto_ms:      usize,
@@ -64,29 +67,23 @@ pub struct GotoMode {
 
 impl GotoMode {
     pub fn new(
-        indi:        &Arc<indi::Connection>,
-        cam_starter: &Arc<CamStarter>,
+        core:        &Core,
         destination: GotoDestination,
-        config:      GotoConfig,
-        options:     &Arc<RwLock<Options>>,
-        cur_frame:   &Arc<ResultImage>,
-        subscribers: &Arc<Events>,
+        config:      GotoConfig
     ) -> anyhow::Result<Self> {
-        let opts = options.read().unwrap();
+        let opts = core.options().read().unwrap();
+        let telescope = core.telescope_or_err()?;
         let (camera, cam_opts, plate_solver) = if config == GotoConfig::GotoPlateSolveAndCorrect {
-            let Some(camera) = opts.cam.device.clone() else {
-                anyhow::bail!("Camera is not selected!");
-            };
+            let camera = core.camera_or_err()?;
             let mut cam_opts = opts.cam.clone();
-            cam_opts.frame.frame_type = crate::image::raw::FrameType::Lights;
+            cam_opts.frame.frame_type = FrameType::Lights;
             cam_opts.frame.exp_main = opts.plate_solver.exposure;
             cam_opts.frame.binning = opts.plate_solver.bin;
             cam_opts.frame.gain = gain_to_value(
                 opts.plate_solver.gain,
                 opts.cam.frame.gain,
-                &camera,
-                indi
-            )?;
+                camera.gain_range()?
+            );
             let plate_solver = PlateSolver::new(opts.plate_solver.solver);
 
             (Some(camera), Some(cam_opts), Some(plate_solver))
@@ -95,29 +92,27 @@ impl GotoMode {
         };
 
         Ok(Self {
-            state:           State::None,
-            cam_starter:     Arc::clone(&cam_starter),
-            eq_coord:        EqCoord::default(),
-            ps_opts:         opts.plate_solver.clone(),
-            mount:           opts.mount.device.clone(),
-            indi:            Arc::clone(indi),
-            cur_frame:       Arc::clone(cur_frame),
-            options:         Arc::clone(options),
-            subscribers:     Arc::clone(subscribers),
-            unpark_ms:  0,
-            goto_ms:    0,
-            goto_ok_ms: 0,
-            extra_stages:    0,
+            state:        State::None,
+            eq_coord:     EqCoord::default(),
+            ps_opts:      opts.plate_solver.clone(),
+            cur_frame:    Arc::clone(core.cur_frame()),
+            options:      Arc::clone(core.options()),
+            subscribers:  Arc::clone(core.events()),
+            unpark_ms:    0,
+            goto_ms:      0,
+            goto_ok_ms:   0,
+            extra_stages: 0,
             config,
             plate_solver,
             destination,
             camera,
+            telescope,
             cam_opts,
         })
     }
 
     fn start_goto(&mut self) -> anyhow::Result<()> {
-        if self.indi.mount_is_parked(&self.mount)? {
+        if self.telescope.is_parked()? {
             self.start_unpark_telescope()?;
         } else {
             self.start_goto_coord()?;
@@ -128,12 +123,7 @@ impl GotoMode {
 
     fn start_unpark_telescope(&mut self) -> anyhow::Result<()> {
         log::debug!("Unparking mount...");
-        self.indi.mount_set_parked(
-            &self.mount,
-            false,
-            true,
-            None
-        )?;
+        self.telescope.unpark()?;
         self.unpark_ms = 0;
         self.state = State::Unparking;
         Ok(())
@@ -142,22 +132,12 @@ impl GotoMode {
     fn start_goto_coord(&mut self) -> anyhow::Result<()> {
         log::debug!(
             "Goto {}, {} ...",
-            indi::value_to_sexagesimal(self.eq_coord.ra, true, 9),
-            indi::value_to_sexagesimal(self.eq_coord.dec, true, 8)
+            value_to_sexagesimal(self.eq_coord.ra, true, 9),
+            value_to_sexagesimal(self.eq_coord.dec, true, 8)
         );
-        self.indi.mount_set_after_coord_action(
-            &self.mount,
-            indi::AfterCoordSetAction::Track,
-            true,
-            INDI_SET_PROP_TIMEOUT
-        )?;
-
-        self.indi.mount_set_eq_coord(
-            &self.mount,
+        self.telescope.goto_and_track(
             radian_to_hour(self.eq_coord.ra),
-            radian_to_degree(self.eq_coord.dec),
-            true,
-            None
+            radian_to_degree(self.eq_coord.dec)
         )?;
         self.goto_ms = 0;
         self.goto_ok_ms = 0;
@@ -169,12 +149,7 @@ impl GotoMode {
         let camera = self.camera.as_ref().unwrap();
 
         log::debug!("Tacking picture for plate solve with {:?}", &cam_opts.frame);
-        self.cam_starter.take_shot(
-            self.get_type(),
-            camera,
-            &cam_opts.frame,
-            &cam_opts.ctrl
-        )?;
+        take_shot(&camera, &cam_opts.frame, &cam_opts.ctrl)?;
         Ok(())
     }
 
@@ -219,8 +194,12 @@ impl GotoMode {
         &mut self,
         action: ProcessPlateSolverResultAction,
     ) -> anyhow::Result<bool> {
-        let plate_solver = self.plate_solver.as_mut().unwrap();
-        let camera = self.camera.as_ref().unwrap();
+        let Some(plate_solver) = self.plate_solver.as_mut() else {
+            anyhow::bail!("self.plate_solver is None");
+        };
+        let Some(camera) = self.camera.as_mut() else {
+            anyhow::bail!("self.camera is None");
+        };
 
         let result = match plate_solver.get_result()? {
             PlateSolveResult::Waiting => return Ok(false),
@@ -237,29 +216,19 @@ impl GotoMode {
         drop(options);
 
         let event = PlateSolverEvent {
-            cam_name: camera.name.clone(),
-            result: result.clone(),
-            preview: preview.map(Arc::new),
+            cam_name: camera.name().to_string(),
+            result:   result.clone(),
+            preview:  preview.map(Arc::new),
         };
-        self.subscribers.notify(
+        self.subscribers.send(
             Event::PlateSolve(event)
         );
 
         match action {
             ProcessPlateSolverResultAction::Sync => {
-                self.indi.mount_set_after_coord_action(
-                    &self.mount,
-                    indi::AfterCoordSetAction::Sync,
-                    true,
-                    INDI_SET_PROP_TIMEOUT
-                )?;
-
-                self.indi.mount_set_eq_coord(
-                    &self.mount,
+                self.telescope.sync(
                     radian_to_hour(result.crd_now.ra),
-                    radian_to_degree(result.crd_now.dec),
-                    true,
-                    INDI_SET_PROP_TIMEOUT
+                    radian_to_degree(result.crd_now.dec)
                 )?;
             }
             ProcessPlateSolverResultAction::SetEqCoord => {
@@ -281,7 +250,7 @@ impl GotoMode {
             "???".to_string()
         };
 
-        self.subscribers.notify(Event::OverlayMessage {
+        self.subscribers.send(Event::OverlayMessage {
             pos: OverlayMessgagePos::Top,
             text: Arc::new(message)
         });
@@ -347,13 +316,8 @@ impl Mode for GotoMode {
         }
     }
 
-    fn cam_device(&self) -> Option<&DeviceAndProp> {
-        match self.config {
-            GotoConfig::GotoPlateSolveAndCorrect =>
-                self.camera.as_ref(),
-            GotoConfig::OnlyGoto =>
-                None,
-        }
+    fn camera_id(&self) -> Option<&str> {
+        self.camera.as_ref().map(|c| c.id())
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
@@ -405,12 +369,13 @@ impl Mode for GotoMode {
 
     fn abort(&mut self) -> anyhow::Result<()> {
         if let Some(camera) = &self.camera {
-            _ = self.cam_starter.abort(&camera);
+            _ = camera.abort_exposure();
         }
-        _ = self.indi.mount_abort_motion(&self.mount);
+        _ = self.telescope.abort_motion();
+
         self.state = State::None;
 
-        self.subscribers.notify(Event::OverlayMessage {
+        self.subscribers.send(Event::OverlayMessage {
             pos: OverlayMessgagePos::Top,
             text: Arc::new(String::new())
         });
@@ -422,10 +387,10 @@ impl Mode for GotoMode {
         self.cam_opts.as_ref().map(|cam_opts| &cam_opts.frame)
     }
 
-    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         match self.state {
             State::Unparking => {
-                if !self.indi.mount_is_parked(&self.mount)? {
+                if !self.telescope.is_parked()? {
                     self.start_goto_coord()?;
                     self.state = State::Goto;
                     return Ok(NotifyResult::ProgressChanges);
@@ -440,13 +405,13 @@ impl Mode for GotoMode {
             }
 
             State::Goto | State::CorrectMount => {
-                let crd_prop_state = self.indi.mount_get_eq_coord_prop_state(&self.mount)?;
-                if matches!(crd_prop_state, indi::PropState::Ok | indi::PropState::Idle) {
+                if !self.telescope.is_slewing()? {
                     self.goto_ok_ms += timer_period_ms;
                     if self.goto_ok_ms >= AFTER_GOTO_WAIT_TIME * 1000 {
+                        let (cur_ra, cur_dec) = self.telescope.eq_coord()?;
                         check_telescope_is_at_desired_position(
-                            &self.indi,
-                            &self.mount,
+                            cur_ra,
+                            cur_dec,
                             &self.eq_coord,
                             0.5
                         )?;
@@ -557,10 +522,4 @@ impl Mode for GotoMode {
             cmd.ref_stars = Some(ref_stars);
         }
     }
-
-}
-
-enum ProcessPlateSolverResultAction {
-    Sync,
-    SetEqCoord,
 }

@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{prelude::*, BufWriter, Cursor};
 use std::net::TcpStream;
@@ -11,8 +10,8 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use bitflags::bitflags;
 use chrono::prelude::*;
-use itertools::Itertools;
-use super::{sexagesimal::*, xml_reader::*, error::*, xml_helper::*};
+
+use super::{xml_reader::*, error::*, xml_helper::*, events::*, property::*, device::*};
 
 
 #[derive(Clone)]
@@ -39,7 +38,7 @@ enum XmlSenderItem {
     Exit
 }
 
-enum EventSenderEvent {
+pub enum EventSenderEvent {
     Mess(Event),
     Exit,
 }
@@ -61,1145 +60,6 @@ pub enum ConnState {
     Connected,
     Disconnecting,
     Error(String)
-}
-
-#[derive(Clone)]
-pub struct NewDeviceEvent {
-    pub timestamp:   Option<DateTime<Utc>>,
-    pub device_name: Arc<String>,
-    pub connected:   bool,
-    pub interface:   DriverInterface,
-}
-
-#[derive(Clone)]
-pub struct DeviceConnectEvent {
-    pub timestamp:   Option<DateTime<Utc>>,
-    pub device_name: Arc<String>,
-    pub connected:   bool,
-    pub interface:   DriverInterface,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub enum PropChange {
-    New {
-        prop_name: Arc<String>,
-        elem_name: Arc<String>,
-        value:     PropValue,
-        state:     PropState,
-    },
-    Change {
-        prop_name:  Arc<String>,
-        elem_name:  Arc<String>,
-        value:      PropValue,
-        prev_state: PropState,
-        new_state:  PropState,
-    },
-    Delete {
-        prop_name: Arc<String>,
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct PropChangeEvent {
-    pub timestamp:   Option<DateTime<Utc>>,
-    pub device_name: Arc<String>,
-    pub change:      PropChange,
-}
-
-#[derive(Clone)]
-pub struct DeviceDeleteEvent {
-    pub timestamp:   Option<DateTime<Utc>>,
-    pub device_name: Arc<String>,
-    pub interface:   DriverInterface,
-}
-
-#[derive(Clone)]
-pub struct MessageEvent {
-    pub timestamp:   Option<DateTime<Utc>>,
-    pub device_name: Arc<String>,
-    pub text:        Arc<String>,
-}
-
-#[derive(Clone)]
-pub struct BlobStartEvent {
-    pub device_name: Arc<String>,
-    pub prop_name:   Arc<String>,
-    pub elem_name:   Arc<String>,
-    pub format:      Arc<String>,
-    pub len:         Option<usize>,
-    pub shot_id:     Option<u64>,
-
-}
-
-#[derive(Clone)]
-pub enum Event {
-    ConnChange(ConnState),
-    ConnectionLost,
-    NewDevice(NewDeviceEvent),
-    DeviceConnected(DeviceConnectEvent),
-    PropChange(PropChangeEvent),
-    DeviceDelete(DeviceDeleteEvent),
-    Message(MessageEvent),
-    BlobStart(BlobStartEvent),
-}
-
-type EventFun = dyn Fn(Event) + Send + 'static;
-
-#[derive(Hash, Eq, PartialEq, Clone, Copy)]
-pub struct Subscription(u64);
-
-struct Subscriptions {
-    items: HashMap<Subscription, Box<EventFun>>,
-    key:   u64,
-}
-
-impl Subscriptions {
-    fn new() -> Self {
-        Self {
-            items: HashMap::new(),
-            key:   0,
-        }
-    }
-
-    fn inform_all(&self, event: Event) {
-        for fun in self.items.values() {
-            fun(event.clone());
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum NumFormat {
-    Float{ width: Option<u8>, prec: u8 },
-    G,
-    Sexagesimal { zero: bool, width: Option<u8>, frac: u8 },
-    Unrecorgnized,
-}
-
-impl NumFormat {
-    pub fn new_from_indi_format(format_str: &str) -> Self {
-        use once_cell::sync::OnceCell;
-        static FLOAT_RE: OnceCell<regex::Regex> = OnceCell::new();
-        let float_re = FLOAT_RE.get_or_init(|| {
-            regex::Regex::new(r"%(\d*)\.(\d*)[Ff]").unwrap()
-        });
-        if let Some(float_re_res) = float_re.captures(format_str) {
-            let width: Option<u8> = float_re_res[1].parse().ok();
-            let prec: u8 = float_re_res[2].parse().unwrap_or(0);
-            return NumFormat::Float { width, prec };
-        }
-        static G_RE: OnceCell<regex::Regex> = OnceCell::new();
-        let g_re = G_RE.get_or_init(|| {
-            regex::Regex::new(r"%.*[Gg]").unwrap()
-        });
-        if g_re.is_match(format_str) {
-            return NumFormat::G;
-        }
-        static SEX_RE: OnceCell<regex::Regex> = OnceCell::new();
-        let sex_re = SEX_RE.get_or_init(|| {
-            regex::Regex::new(r"%(\d*)\.(\d*)[Mm]").unwrap()
-        });
-        if let Some(sex_re_res) = sex_re.captures(format_str) {
-            let width_str = &sex_re_res[1];
-            let zero = width_str.starts_with("0");
-            let width: Option<u8> = width_str.parse().ok();
-            let frac: u8 = sex_re_res[2].parse().unwrap_or(0);
-            return NumFormat::Sexagesimal { zero, width, frac };
-        }
-        NumFormat::Unrecorgnized
-    }
-
-    pub fn value_to_string(&self, value: f64) -> String {
-        match self {
-            NumFormat::Float { width, prec } =>
-                match width {
-                    Some(width) => format!(
-                        "{:width$.prec$}",
-                        value,
-                        width = *width as usize,
-                        prec = *prec as usize
-                    ),
-                    None => format!(
-                        "{:.prec$}",
-                        value,
-                        prec = *prec as usize
-                    ),
-                }
-            NumFormat::G =>
-                value.to_string(),
-            NumFormat::Sexagesimal { zero, frac, .. } =>
-                value_to_sexagesimal(value, *zero, *frac),
-            NumFormat::Unrecorgnized =>
-                format!("{:.7}", value),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PropState { Idle, Ok, Busy, Alert }
-
-impl PropState {
-    fn from_str(text: &str) -> anyhow::Result<Self> {
-        match text {
-            "Idle"  => Ok(PropState::Idle),
-            "Ok"    => Ok(PropState::Ok),
-            "Busy"  => Ok(PropState::Busy),
-            "Alert" => Ok(PropState::Alert),
-            s       => Err(anyhow::anyhow!("Unknown property state: {}", s)),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub enum PropPermition { RO, WO, RW }
-
-impl PropPermition {
-    fn from_str(text: Option<&str>) -> anyhow::Result<Self> {
-        match text {
-            Some("ro") => Ok(PropPermition::RO),
-            Some("wo") => Ok(PropPermition::WO),
-            Some("rw") => Ok(PropPermition::RW),
-            Some(s)    => Err(anyhow::anyhow!("Unknown property permission: {}", s)),
-            _          => Ok(PropPermition::RO),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum SwitchRule { OneOfMany, AtMostOne, AnyOfMany }
-
-impl SwitchRule {
-    fn from_str(text: &str) -> anyhow::Result<Self> {
-        match text {
-            "OneOfMany" => Ok(SwitchRule::OneOfMany),
-            "AtMostOne" => Ok(SwitchRule::AtMostOne),
-            "AnyOfMany" => Ok(SwitchRule::AnyOfMany),
-            s           => Err(anyhow::anyhow!("Unknown switch rule: {}", s)),
-        }
-    }
-}
-
-pub enum BlobEnable { Never, Also, Only }
-
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub enum CamCcd { Primary, Secondary }
-
-impl CamCcd {
-    pub fn from_ccd_prop_name(name: &str) -> Self {
-        match name {
-            "CCD1"|"" => Self::Primary,
-            "CCD2"    => Self::Secondary,
-            _         => panic!("Wrong CCD property name ({})", name),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub enum PropType {
-    Text,
-    Num,
-    Switch(SwitchRule),
-    Light,
-    Blob
-}
-
-impl PropType {
-    fn to_str(&self) -> &'static str {
-        match self {
-            PropType::Text      => "Text",
-            PropType::Num       => "Num",
-            PropType::Switch(_) => "Switch",
-            PropType::Light     => "Light",
-            PropType::Blob      => "Blob",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct BlobPropValue {
-    pub format:  String,
-    pub data:    Vec<u8>,
-    pub dl_time: f64,
-    pub shot_id: Option<u64>,
-}
-
-impl PartialEq for BlobPropValue {
-    fn eq(&self, other: &Self) -> bool {
-        self.format == other.format &&
-        self.data == other.data
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct NumPropValue {
-    pub value:  f64,
-    pub min:    f64,
-    pub max:    f64,
-    pub step:   Option<f64>,
-    pub format: Arc<String>,
-}
-
-#[derive(Debug, Clone)]
-pub enum PropValue {
-    Text(Arc<String>),
-    Switch(bool),
-    Light(Arc<String>),
-    Blob(Arc<BlobPropValue>),
-    Num(NumPropValue),
-}
-
-impl PartialEq for PropValue {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Text(l0), Self::Text(r0)) =>
-                l0 == r0,
-            (Self::Num(NumPropValue{value: l0, ..}), Self::Num(NumPropValue{value: r0, ..})) => {
-                if l0.is_nan() && r0.is_nan() {
-                    true
-                } else if !l0.is_nan() && r0.is_nan() {
-                    false
-                } else if l0.is_nan() && !r0.is_nan() {
-                    false
-                } else {
-                    l0 == r0
-                }
-            },
-            (Self::Switch(l0), Self::Switch(r0)) =>
-                l0 == r0,
-            (Self::Light(l0), Self::Light(r0)) =>
-                l0 == r0,
-            (Self::Blob(l0), Self::Blob(r0)) =>
-                l0 == r0,
-            _ => false,
-        }
-    }
-}
-
-impl PropValue {
-    pub fn to_i32(&self) -> Result<i32> {
-        match self {
-            Self::Num(NumPropValue{value, ..}) =>
-                Ok(*value as i32),
-                Self::Text(text) =>
-                text.parse()
-                    .map_err(|_| Error::CantConvertPropValue(
-                        text.to_string(),
-                        "Text".into(),
-                        "i32".into()
-                    )),
-                    Self::Switch(value) =>
-                Ok(if *value {1} else {0}),
-                Self::Light(text) => Err(Error::CantConvertPropValue(
-                text.to_string(),
-                "light".into(),
-                "i32".into()
-            )),
-            Self::Blob(_) => Err(Error::CantConvertPropValue(
-                "[blob]".into(),
-                "Blob".into(),
-                "i32".into()
-            )),
-        }
-    }
-
-    pub fn to_f64(&self) -> Result<f64> {
-        match self {
-            Self::Num(NumPropValue{value, ..}) =>
-                Ok(*value),
-            Self::Text(text) =>
-                text.parse()
-                    .map_err(|_| Error::CantConvertPropValue(
-                        text.to_string(),
-                        "Text".into(),
-                        "f64".into()
-                    )),
-            Self::Switch(value) => Err(Error::CantConvertPropValue(
-                value.to_string(),
-                "switch".into(),
-                "f64".into()
-            )),
-            Self::Light(text) => Err(Error::CantConvertPropValue(
-                text.to_string(),
-                "light".into(),
-                "f64".into()
-            )),
-            Self::Blob(_) => Err(Error::CantConvertPropValue(
-                "[blob]".into(),
-                "Blob".into(),
-                "f64".into()
-            )),
-        }
-    }
-
-    pub fn to_bool(&self) -> Result<bool> {
-        match self {
-            Self::Num(NumPropValue{value, ..}) => Err(Error::CantConvertPropValue(
-                value.to_string(),
-                "switch".into(),
-                "f64".into()
-            )),
-            Self::Text(text) =>
-                text.parse()
-                    .map_err(|_| Error::CantConvertPropValue(
-                        text.to_string(),
-                        "Text".into(),
-                        "f64".into()
-                    )),
-            Self::Switch(value) =>
-                Ok(*value),
-            Self::Light(text) => Err(Error::CantConvertPropValue(
-                text.to_string(),
-                "light".into(),
-                "f64".into()
-            )),
-            Self::Blob(_) => Err(Error::CantConvertPropValue(
-                "[blob]".into(),
-                "Blob".into(),
-                "f64".into()
-            )),
-        }
-    }
-
-    pub fn to_string_for_logging(&self) -> String {
-        match self {
-            Self::Blob(blob) =>
-                format!("[BLOB len={}]", blob.data.len()),
-            _ =>
-                format!("{:?}", &self)
-        }
-    }
-
-    pub fn to_string(&self) -> String {
-        match self {
-            Self::Num(NumPropValue{value, format, ..}) => {
-                let num_format = NumFormat::new_from_indi_format(format);
-                num_format.value_to_string(*value)
-            }
-            Self::Text(text) =>
-                text.to_string(),
-            Self::Switch(value) =>
-                value.to_string(),
-            Self::Light(text) =>
-                text.to_string(),
-            Self::Blob(_) =>
-                "[blob]".to_string(),
-        }
-    }
-
-    pub fn to_arc_string(&self) -> Result<Arc<String>> {
-        match self {
-            Self::Text(text) =>
-                Ok(Arc::clone(text)),
-            _ =>
-                Err(Error::Internal("Element type is not text".to_string())),
-        }
-    }
-
-    pub fn type_str(&self) -> &'static str {
-        match self {
-            PropValue::Text(_) => "Text",
-            PropValue::Switch(_) => "Switch",
-            PropValue::Light(_) => "Light",
-            PropValue::Blob(_) => "Blob",
-            PropValue::Num(_) => "Num",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct PropElement {
-    pub name:  Arc<String>,
-    pub label: Option<Arc<String>>,
-    pub value: PropValue,
-}
-
-#[derive(Debug, Clone)]
-pub struct Property {
-    pub device:    Arc<String>,
-    pub name:      Arc<String>,
-    pub type_:     PropType,
-    pub label:     Option<Arc<String>>,
-    pub group:     Option<Arc<String>>,
-    pub permition: PropPermition,
-    pub state:     PropState,
-    pub timeout:   Option<u32>,
-    pub timestamp: Option<DateTime<Utc>>,
-    pub message:   Option<Arc<String>>,
-    pub elements:  Vec<PropElement>,
-    pub change_id: u64,
-}
-
-impl Property {
-    fn new_from_xml(
-        xml:       xmltree::Element,
-        dev_name:  &Arc<String>,
-        prop_name: &str
-    ) -> anyhow::Result<Self> {
-        let mut xml = xml;
-        let type_ = match xml.name.as_str() {
-            "defTextVector" => PropType::Text,
-            "defNumberVector" => PropType::Num,
-            "defSwitchVector" => {
-                let rule = SwitchRule::from_str(xml.attr_str_or_err("rule")?)?;
-                PropType::Switch(rule)
-            },
-            "defBLOBVector" => PropType::Blob,
-            "defLightVector" => PropType::Light,
-            s => anyhow::bail!("Unknown vector: {}", s),
-        };
-
-        let label = xml.attributes.remove("label");
-        let group = xml.attributes.remove("group");
-        let permition = PropPermition::from_str(xml.attr_str_or_err("perm").ok())?;
-
-        let state = PropState::from_str(xml.attr_str_or_err("state")?)?;
-        let timeout = xml.attributes.get("timeout")
-            .map(|to_str| to_str.parse::<u32>().unwrap_or(0));
-        let message = xml.attributes.remove("message");
-        let timestamp = xml.attr_time("timestamp");
-
-        let mut items = Vec::new();
-        for mut child in xml.into_elements(None) {
-            let name = child.attr_string_or_err("name")?;
-            let label = child.attributes.remove("label");
-
-            let value = match child.name.as_str() {
-                "defText" => {
-                    let value = child
-                        .get_text()
-                        .unwrap_or_else(|| Cow::from(""))
-                        .trim()
-                        .to_string();
-                    PropValue::Text(Arc::new(value))
-                },
-                "defNumber" => {
-                    let format = child.attr_string_or_err("format")?;
-                    let min = child.attr_str_or_err("min")?.parse::<f64>()?;
-                    let max = child.attr_str_or_err("max")?.parse::<f64>()?;
-                    let step = child.attributes.get("step").map(|v| v.parse::<f64>().unwrap_or(0.0));
-                    let value = child
-                        .get_text()
-                        .ok_or_else(||anyhow::anyhow!("{} without value", child.name))?
-                        .trim()
-                        .parse::<f64>()?;
-                    PropValue::Num(NumPropValue{ value, min, max, step, format: Arc::new(format) })
-                },
-                "defSwitch" => {
-                    let value = child
-                        .get_text()
-                        .ok_or_else(||anyhow::anyhow!("{} without value", child.name))?
-                        .trim()
-                        .eq_ignore_ascii_case("On");
-                    PropValue::Switch(value)
-                },
-                "defLight" => {
-                    let value = child
-                        .get_text()
-                        .ok_or_else(||anyhow::anyhow!("{} without value", child.name))?
-                        .trim()
-                        .to_string();
-                    PropValue::Light(Arc::new(value))
-                },
-                "defBLOB" => {
-                    let value = BlobPropValue {
-                        format:  String::new(),
-                        data:    Vec::new(),
-                        dl_time: 0.0,
-                        shot_id: None,
-                    };
-                    PropValue::Blob(Arc::new(value))
-                },
-                other =>
-                    anyhow::bail!("Unknown tag `{}`", other),
-            };
-            items.push(PropElement {
-                name: Arc::new(name),
-                label: label.map(Arc::new),
-                value,
-            });
-        }
-        Ok(Property {
-            device: Arc::clone(dev_name),
-            name: Arc::new(prop_name.to_string()),
-            type_,
-            label: label.map(Arc::new),
-            group: group.map(Arc::new),
-            permition,
-            state,
-            timeout,
-            timestamp,
-            message: message.map(Arc::new),
-            elements: items,
-            change_id: 0,
-        })
-    }
-
-    fn update_data_from_xml_and_return_changes(
-        &mut self,
-        xml:             &mut xmltree::Element,
-        mut blobs:       Vec<XmlStreamReaderBlob>,
-        device_name:     &str, // for error message
-        prop_name:       &str, // same
-        shot_ids_by_dev: &ShotIdsByCCD,
-    ) -> anyhow::Result<(bool, Vec<(Arc<String>, PropValue)>)> {
-        let mut changed = false;
-        if let Some(state_str) = xml.attributes.get("state") {
-            let new_state = PropState::from_str(state_str)?;
-            if new_state != self.state {
-                self.state = new_state;
-                changed = true;
-            }
-        }
-        if let Some(timeout_str) = xml.attributes.get("timeout") {
-            let new_timeout = Some(timeout_str.parse()?);
-            if new_timeout != self.timeout {
-                self.timeout = new_timeout;
-                changed = true;
-            }
-        }
-        let message = xml.attributes.remove("message");
-        if self.message.as_deref() != message.as_ref() {
-            self.message = message.map(Arc::new);
-            changed = true;
-        }
-
-        let mut changed_values = Vec::new();
-        self.timestamp = xml.attr_time("timestamp");
-        for child in xml.elements(None) {
-            let elem_name = child.attr_str_or_err("name")?;
-            if let Some(elem) = self.get_elem_mut(elem_name) {
-                let mut elem_changed = false;
-                match &mut elem.value {
-                    PropValue::Text(text_value) => {
-                        let new_value = child
-                            .get_text()
-                            .map(|s| s.into_owned())
-                            .unwrap_or_default();
-                        let new_value = new_value.trim();
-                        if **text_value != new_value {
-                            *text_value = Arc::new(new_value.to_string());
-                            changed = true;
-                            elem_changed = true;
-                        }
-                    },
-                    PropValue::Num(NumPropValue{ value, .. }) => {
-                        let new_value = child
-                            .get_text()
-                            .ok_or_else(||anyhow::anyhow!("{} without value", child.name))?
-                            .trim()
-                            .parse::<f64>()?;
-                        if *value != new_value {
-                            *value = new_value;
-                            changed = true;
-                            elem_changed = true;
-                        }
-                    },
-                    PropValue::Switch(value) => {
-                        let new_value = child
-                            .get_text()
-                            .ok_or_else(||anyhow::anyhow!("{} without value", child.name))?
-                            .trim()
-                            .eq_ignore_ascii_case("On");
-                        if *value != new_value {
-                            *value = new_value;
-                            changed = true;
-                            elem_changed = true;
-                        }
-                    },
-                    PropValue::Light(value) => {
-                        let new_value = child
-                            .get_text()
-                            .ok_or_else(||anyhow::anyhow!("{} without value", child.name))?;
-                        let new_value = new_value.trim();
-                        if **value != new_value {
-                            *value = Arc::new(new_value.to_string());
-                            changed = true;
-                            elem_changed = true;
-                        }
-                    },
-                    PropValue::Blob(blob) => {
-                        if let Some(blob_pos) = blobs.iter_mut().position(|b| b.name == elem_name) {
-                            let new_blob = blobs.remove(blob_pos);
-                            let blob_size: usize = child.attributes
-                                .get("size")
-                                .map(|size_str| size_str.parse())
-                                .transpose()?
-                                .ok_or_else(|| anyhow::anyhow!(
-                                    "`size` attribute of `{}` not found",
-                                    elem.name
-                                ))?;
-                            if blob_size != new_blob.data.len() {
-                                anyhow::bail!(
-                                    "Declared size of blob ({}) is not equal real blob size ({})",
-                                    blob_size, new_blob.data.len()
-                                );
-                            }
-
-                            let key = (device_name.to_string(), CamCcd::from_ccd_prop_name(prop_name));
-                            let shot_ids_by_dev = shot_ids_by_dev.lock().unwrap();
-                            let shot_id = shot_ids_by_dev.get(&key).copied();
-                            drop(shot_ids_by_dev);
-
-                            *blob = Arc::new(BlobPropValue {
-                                format:  new_blob.format,
-                                data:    new_blob.data,
-                                dl_time: new_blob.dl_time,
-                                shot_id
-                            });
-                            changed = true;
-                            elem_changed = true;
-                        }
-                    }
-                };
-
-                if elem_changed {
-                    let changed_elem_value = elem.value.clone();
-                    changed_values.push((Arc::clone(&elem.name), changed_elem_value));
-                }
-            } else {
-                anyhow::bail!(
-                    "Element `{}` of property {} of device `{}` not found",
-                    elem_name, prop_name, device_name
-                );
-            }
-        }
-        Ok((changed, changed_values))
-    }
-
-    fn get_elem(&self, name: &str) -> Option<&PropElement> {
-        self.elements.iter().find(|elem| *elem.name == name)
-    }
-
-    fn get_elem_mut(&mut self, name: &str) -> Option<&mut PropElement> {
-        self.elements.iter_mut().find(|elem| *elem.name == name)
-    }
-
-    fn get_values(&self) -> Vec<(Arc<String>, PropValue)> {
-        self
-            .elements
-            .iter()
-            .map(|v| (Arc::clone(&v.name), v.value.clone()))
-            .collect()
-    }
-}
-
-struct Device {
-    name: Arc<String>,
-    props: Vec<Property>,
-    is_connected: bool,
-    interface: DriverInterface,
-}
-
-impl Device {
-    fn new(name: &Arc<String>) -> Self {
-        Self {
-            name:         Arc::clone(name),
-            props:        Vec::new(),
-            is_connected: false,
-            interface:    DriverInterface::empty(),
-        }
-    }
-
-    fn get_property_opt(&self, prop_name: &str) -> Option<&Property> {
-        self.props
-            .iter()
-            .find(|prop| *prop.name == prop_name)
-    }
-
-    fn get_property_opt_mut(&mut self, prop_name: &str) -> Option<&mut Property> {
-        self.props
-            .iter_mut()
-            .find(|prop| *prop.name == prop_name)
-    }
-
-    fn get_property_element_opt(
-        &self,
-        prop_name: &str,
-        elem_name: &str,
-    ) -> Option<&PropElement> {
-        self
-            .get_property_opt(prop_name)?
-            .get_elem(elem_name)
-    }
-
-    fn get_property_element(
-        &self,
-        prop_name: &str,
-        elem_name: &str,
-    ) -> Result<(&Property, &PropElement)> {
-        let property = self
-            .get_property_opt(prop_name)
-            .ok_or_else(|| Error::PropertyNotExists(self.name.to_string(), prop_name.to_string()))?;
-        let elem = property
-            .get_elem(elem_name)
-            .ok_or_else(|| Error::PropertyElemNotExists(
-                self.name.to_string(),
-                prop_name.to_string(),
-                elem_name.to_string())
-            )?;
-        Ok((property, elem))
-    }
-
-    fn remove_property(&mut self, prop_name: &str) -> Option<Property> {
-        let index = self.props
-            .iter()
-            .position(|prop| *prop.name == prop_name)?;
-        Some(self.props.remove(index))
-    }
-
-    fn get_driver_info(&self) -> Option<DriverInfo> {
-        let iface_elem = self.get_property_element_opt("DRIVER_INFO", "DRIVER_INTERFACE")?;
-        let i32_value = iface_elem.value.to_i32().unwrap_or(0);
-        let interface = DriverInterface::from_bits_truncate(i32_value as u32);
-
-        let exec_elem = self.get_property_element_opt("DRIVER_INFO", "DRIVER_EXEC")?;
-        let driver = exec_elem.value.to_arc_string().ok()?;
-
-        Some(DriverInfo{ interface, driver })
-    }
-}
-
-struct Devices {
-    list:      Vec<Device>,
-    change_id: u64,
-}
-
-impl Devices {
-    fn new() -> Self {
-        Self {
-            list:      Vec::new(),
-            change_id: 1,
-        }
-    }
-
-    fn basic_check_device_and_prop_name(
-        device_name: &str,
-        prop_name:   &str
-    ) -> Result<()> {
-        if device_name.is_empty() {
-            return Err(Error::WrongArgument("Device name is empty".into()));
-        }
-        if prop_name.is_empty() {
-            return Err(Error::WrongArgument("Property name is empty".into()));
-        }
-        Ok(())
-    }
-
-    fn find_by_name_res(&self, device_name: &str) -> Result<&Device> {
-        self.list
-            .iter()
-            .find(|device| *device.name == device_name)
-            .ok_or_else(|| Error::DeviceNotExists(device_name.to_string()))
-    }
-
-    fn find_by_name_opt(&self, device_name: &str) -> Option<&Device> {
-        self.list
-            .iter()
-            .find(|device| *device.name == device_name)
-    }
-
-    fn find_by_name_opt_mut(&mut self, device_name: &str) -> Option<&mut Device> {
-        self.list
-            .iter_mut()
-            .find(|device| *device.name == device_name)
-    }
-
-    fn remove(&mut self, device_name: &str) -> Option<Device> {
-        let index = self.list.iter().position(|device| *device.name == device_name)?;
-        let removed = self.list.remove(index);
-        Some(removed)
-    }
-
-    fn get_names(&self) -> Vec<Arc<String>> {
-        self.list
-            .iter()
-            .map(|device| Arc::clone(&device.name))
-            .collect()
-    }
-
-    fn get_list_iter(&self) -> Box<dyn Iterator<Item = ExportDevice> + '_> {
-        Box::new(self.list
-            .iter()
-            .filter_map(|device|
-                device.get_driver_info().map(|iface| (device, iface))
-            )
-            .map(|(device, di)|
-                ExportDevice {
-                    name:      Arc::clone(&device.name),
-                    interface: di.interface,
-                    driver:    Arc::clone(&di.driver),
-                    connected: device.is_connected,
-                }
-            )
-        )
-    }
-
-    fn get_properties_list(
-        &self,
-        changed_after: Option<u64>,
-    ) -> Vec<Property> {
-        self.list
-            .iter()
-            .flat_map(|device| {
-                device.props.iter().filter_map(|prop| {
-                    if let Some(changed_after) = changed_after {
-                        if prop.change_id <= changed_after {
-                            return None;
-                        }
-                    }
-                    Some(prop.clone())
-                })
-            })
-            .collect()
-    }
-
-    fn property_exists(
-        &self,
-        device_name: &str,
-        prop_name:   &str,
-        elem_name:   Option<&str>
-    ) -> Result<bool> {
-        let device = self.find_by_name_res(device_name)?;
-        if let Some(elem_name) = elem_name {
-            let elem_opt = device.get_property_element_opt(prop_name, elem_name);
-            Ok(elem_opt.is_some())
-        } else {
-            let property_opt = device.get_property_opt(prop_name);
-            Ok(property_opt.is_some())
-        }
-    }
-
-    fn check_property_ok_for_writing<'a>(
-        &self,
-        device_name:     &str,
-        prop_name:       &str,
-        elem_count:      usize,
-        elem_check_type: fn (&PropType) -> bool,
-        elem_get_name:   impl Fn(usize) -> &'a str,
-        req_type_str:    &str,
-    ) -> Result<()> {
-        let device = self.find_by_name_res(device_name)?;
-        let Some(property) = device.get_property_opt(prop_name)
-        else {
-            return Err(Error::PropertyNotExists(
-                device_name.to_string(),
-                prop_name.to_string()
-            ));
-        };
-        if property.permition == PropPermition::RO {
-            return Err(Error::PropertyIsReadOnly(
-                device_name.to_string(),
-                prop_name.to_string(),
-            ));
-        }
-        if !elem_check_type(&property.type_) {
-            return Err(Error::WrongPropertyType(
-                device_name.to_string(),
-                prop_name.to_string(),
-                property.type_.to_str().to_string(),
-                req_type_str.to_string(),
-            ));
-        }
-        for index in 0..elem_count {
-            let elem_name = elem_get_name(index);
-            let elem_exists = property
-                .elements
-                .iter()
-                .any(|element| *element.name == elem_name);
-            if !elem_exists {
-                return Err(Error::PropertyElemNotExists(
-                    device_name.to_string(),
-                    prop_name.to_string(),
-                    elem_name.to_string(),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn mark_property_as_busy(
-        &mut self,
-        device_name:   &str,
-        prop_name:     &str,
-        events_sender: &std::sync::mpsc::Sender<EventSenderEvent>,
-    ) -> Result<()> {
-        let device = self.find_by_name_opt_mut(device_name)
-            .ok_or_else(|| Error::DeviceNotExists(device_name.to_string()))?;
-        let device_name = Arc::clone(&device.name);
-        let property = device
-            .get_property_opt_mut(prop_name)
-            .ok_or_else(|| Error::PropertyNotExists(device_name.to_string(), prop_name.to_string()))?;
-        if property.state == PropState::Busy {
-            return Ok(());
-        }
-        let prev_state = property.state;
-        property.state = PropState::Busy;
-        for elem in &property.elements {
-            let change = PropChange::Change {
-                prop_name: Arc::clone(&property.name),
-                elem_name: Arc::clone(&elem.name),
-                value:     elem.value.clone(),
-                new_state: property.state,
-                prev_state,
-            };
-            let event = PropChangeEvent {
-                timestamp:   Some(Utc::now()),
-                device_name: Arc::clone(&device_name),
-                change
-            };
-            events_sender
-                .send(EventSenderEvent::Mess(Event::PropChange(event)))
-                .map_err(|e| Error::Internal(e.to_string()))?;
-        }
-        Ok(())
-    }
-
-    fn get_switch_property(
-        &self,
-        device_name: &str,
-        prop_name:   &str,
-        elem_name:   &str
-    ) -> Result<bool> {
-        Self::basic_check_device_and_prop_name(device_name, prop_name)?;
-        let device = self.find_by_name_res(device_name)?;
-        let (property, elem_value) = device.get_property_element(prop_name, elem_name)?;
-        if !matches!(property.type_, PropType::Switch(_)) {
-            return Err(Error::WrongPropertyType(
-                device_name.to_string(),
-                prop_name.to_string(),
-                property.type_.to_str().to_string(),
-                "Switch".to_string()
-            ));
-        }
-        if let PropValue::Switch(value) = &elem_value.value {
-            Ok(*value)
-        } else {
-            Err(Error::Internal(format!(
-                "Switch property contains value of other type {:?}",
-                elem_value.value.type_str()
-            )))
-        }
-    }
-
-    pub fn get_num_property(
-        &self,
-        device_name: &str,
-        prop_name:   &str,
-        elem_name:   &str
-    ) -> Result<&NumPropValue> {
-        Self::basic_check_device_and_prop_name(device_name, prop_name)?;
-        let device = self.find_by_name_res(device_name)?;
-        let (property, elem_value) = device.get_property_element(prop_name, elem_name)?;
-        if property.type_ != PropType::Num {
-            return Err(Error::WrongPropertyType(
-                device_name.to_string(),
-                prop_name.to_string(),
-                property.type_.to_str().to_string(),
-                "Num".to_string()
-            ));
-        }
-        if let PropValue::Num(value) = &elem_value.value {
-            Ok(value)
-        } else {
-            Err(Error::Internal(format!(
-                "Num property contains value of other type {:?}",
-                elem_value.value.type_str()
-            )))
-        }
-    }
-
-    pub fn get_text_property(
-        &self,
-        device_name: &str,
-        prop_name:   &str,
-        elem_name:   &str
-    ) -> Result<Arc<String>> {
-        Self::basic_check_device_and_prop_name(device_name, prop_name)?;
-        let device = self.find_by_name_res(device_name)?;
-        let (property, elem_value) = device.get_property_element(prop_name, elem_name)?;
-        if property.type_ != PropType::Text {
-            return Err(Error::WrongPropertyType(
-                device_name.to_string(),
-                prop_name.to_string(),
-                property.type_.to_str().to_string(),
-                "Text".to_string()
-            ));
-        }
-        if let PropValue::Text(value) = &elem_value.value {
-            Ok(Arc::clone(value))
-        } else {
-            Err(Error::Internal(format!(
-                "Num property contains value of other type {:?}",
-                elem_value.value.type_str()
-            )))
-        }
-    }
-
-    fn existing_prop_name_opt<'a>(
-        &self,
-        device:        &Device,
-        prop_and_elem: &[(&'a str, &'a str)]
-    ) -> Option<(&'a str, &'a str)> {
-        for &(prop_name, elem_name) in prop_and_elem {
-            let Some(prop) = device.get_property_opt(prop_name) else {
-                continue;
-            };
-            let elem_exists = prop.elements.iter().any(|e|
-                elem_name.is_empty() || *e.name == elem_name
-            );
-            if elem_exists {
-                return Some((prop_name, elem_name));
-            }
-        }
-        None
-    }
-
-    fn existing_prop_name<'a>(
-        &self,
-        device_name:   &str,
-        prop_and_elem: &[(&'a str, &'a str)]
-    ) -> Result<(&'a str, &'a str)> {
-        let device = self.find_by_name_res(device_name)?;
-        if let Some(result) = self.existing_prop_name_opt(device, prop_and_elem) {
-            Ok(result)
-        } else {
-            let props_list = prop_and_elem
-                .iter()
-                .map(|(elem, name)| format!("{}.{}", elem, name))
-                .join(", ");
-            Err(Error::NoOnePropertyFound(props_list, device_name.to_string()))
-        }
-    }
-
-    fn get_driver_info(&self, device_name: &str) -> Result<DriverInfo> {
-        let device = self.find_by_name_res(device_name)?;
-        device
-            .get_driver_info()
-            .ok_or_else(|| Error::Internal("device.get_interface() returned None".to_string()))
-    }
-
-    fn get_property(
-        &self,
-        device_name: &str,
-        prop_name:   &str,
-    ) -> Result<&Property> {
-        let device = self.find_by_name_res(device_name)?;
-        let Some(property) = device.get_property_opt(prop_name) else {
-            return Err(Error::PropertyNotExists(
-                device_name.to_string(),
-                prop_name.to_string()
-            ));
-        };
-        Ok(property)
-    }
-
-    fn is_device_enabled(&self, device_name: &str) -> Result<bool> {
-        self.get_switch_property(
-            device_name,
-            "CONNECTION",
-            "CONNECT"
-        )
-    }
 }
 
 #[derive(Debug)]
@@ -1269,10 +129,8 @@ pub struct Connection {
     data:            Arc<Mutex<Option<ActiveConnData>>>,
     state:           Arc<Mutex<ConnState>>,
     devices:         Arc<Mutex<Devices>>,
-    subscriptions:   Arc<Mutex<Subscriptions>>,
+    event_handlers:  Arc<EventHandlers>,
     drivers_started: AtomicBool,
-    shot_ids_by_dev: ShotIdsByCCD,
-    last_shot_id:    AtomicU64,
 }
 
 impl Connection {
@@ -1287,39 +145,26 @@ impl Connection {
             devices: Arc::new(Mutex::new(
                 Devices::new()
             )),
-            subscriptions: Arc::new(
-                Mutex::new(Subscriptions::new())
+            event_handlers: Arc::new(
+                EventHandlers::new()
             ),
             drivers_started: AtomicBool::new(false),
-            shot_ids_by_dev: Arc::new(Mutex::new(
-                HashMap::new())
-            ),
-            last_shot_id: AtomicU64::new(0),
         }
     }
 
-    pub fn subscribe_events(
+    pub fn connect_event_handler(
         &self,
         fun: impl Fn(Event) + Send + 'static
-    ) -> Subscription {
-        let mut subscriptions = self.subscriptions.lock().unwrap();
-        subscriptions.key += 1;
-        let subscription = Subscription(subscriptions.key);
-        subscriptions.items.insert(
-            subscription,
-            Box::new(fun)
-        );
-        subscription
+    ) -> EventHandlerId {
+        self.event_handlers.connect(fun)
     }
 
-    pub fn unsubscribe(&self, subscription: Subscription) {
-        let mut subscriptions = self.subscriptions.lock().unwrap();
-        subscriptions.items.remove(&subscription);
+    pub fn disconnect_event_handler(&self, event_handlers: EventHandlerId) {
+        self.event_handlers.disconnect(event_handlers);
     }
 
-    pub fn unsubscribe_all(&self) {
-        let mut subscriptions = self.subscriptions.lock().unwrap();
-        subscriptions.items.clear();
+    pub fn disconnect_all_event_handlers(&self) {
+        self.event_handlers.disconnect_all();
     }
 
     fn start_indi_server(
@@ -1383,7 +228,7 @@ impl Connection {
         Self::set_new_conn_state(
             ConnState::Connecting,
             &mut state,
-            &self.subscriptions.lock().unwrap()
+            &self.event_handlers
         );
         drop(state);
         let settings = settings.clone();
@@ -1401,7 +246,7 @@ impl Connection {
                         Self::set_new_conn_state(
                             ConnState::Error(err.to_string()),
                             &mut self_.state.lock().unwrap(),
-                            &self_.subscriptions.lock().unwrap()
+                            &self_.event_handlers
                         );
                         return;
                     }
@@ -1428,7 +273,7 @@ impl Connection {
                     Self::set_new_conn_state(
                         ConnState::Error(err.to_string()),
                         &mut self_.state.lock().unwrap(),
-                        &self_.subscriptions.lock().unwrap()
+                        &self_.event_handlers
                     );
                     return;
                 },
@@ -1458,7 +303,7 @@ impl Connection {
                 Self::set_new_conn_state(
                     ConnState::Error(format!("Can't connect to {}", addr)),
                     &mut self_.state.lock().unwrap(),
-                    &self_.subscriptions.lock().unwrap()
+                    &self_.event_handlers
                 );
                 return;
             };
@@ -1475,14 +320,14 @@ impl Connection {
                                 if let Event::ConnChange(state) = &event {
                                     if *state == ConnState::Disconnected &&
                                     *self_.state.lock().unwrap() == ConnState::Connected {
-                                        self_.subscriptions.lock().unwrap().inform_all(Event::ConnectionLost);
+                                        self_.event_handlers.send(Event::ConnectionLost);
                                         std::thread::spawn(move || {
                                             _ = self_.disconnect_and_wait();
                                         });
                                         break;
                                     }
                                 }
-                                self_.subscriptions.lock().unwrap().inform_all(event);
+                                self_.event_handlers.send(event);
                             }
                             EventSenderEvent::Exit => break,
                         }
@@ -1505,7 +350,6 @@ impl Connection {
                         &self_.devices,
                         stream,
                         XmlSender { xml_sender },
-                        &self_.shot_ids_by_dev
                     );
                     receiver.main(events_sender_clone);
                     log::info!("Exit read_thread");
@@ -1540,7 +384,7 @@ impl Connection {
 
             self_.drivers_started.store(!settings.remote, Ordering::Relaxed);
 
-            // Read from indiserver's stderr and inform subscribers
+            // Read from indiserver's stderr and inform event handlers
             if let Some(mut indiserver_stderr) = indiserver_stderr {
                 let mut stderr_data = Vec::new();
                 let mut buffer = [0_u8; 256];
@@ -1560,20 +404,20 @@ impl Connection {
     }
 
     fn set_new_conn_state(
-        new_state:    ConnState,
-        state:        &mut ConnState,
-        subscriptons: &Subscriptions
+        new_state:      ConnState,
+        state:          &mut ConnState,
+        event_handlers: &EventHandlers
     ) {
         if new_state == *state { return; }
         *state = new_state;
-        subscriptons.inform_all(Event::ConnChange(state.clone()));
+        event_handlers.send(Event::ConnChange(state.clone()));
     }
 
     pub fn disconnect_and_wait(&self) -> Result<()> {
         Self::set_new_conn_state(
             ConnState::Disconnecting,
             &mut self.state.lock().unwrap(),
-            &self.subscriptions.lock().unwrap()
+            &self.event_handlers
         );
         let mut data = self.data.lock().unwrap();
         if let Some(conn) = data.take() {
@@ -1602,13 +446,13 @@ impl Connection {
             }
 
             // Clear devices properties
-            self.devices.lock().unwrap().list.clear();
+            self.devices.lock().unwrap().clear();
 
             // Setting new "disconnected" state
             Self::set_new_conn_state(
                 ConnState::Disconnected,
                 &mut self.state.lock().unwrap(),
-                &self.subscriptions.lock().unwrap()
+                &self.event_handlers
             );
         } else {
             return Err(Error::WrongSequense("Not connected".into()));
@@ -2316,6 +1160,20 @@ impl Connection {
         prop_name == name && elem_name == elem
     }
 
+    pub fn camera_get_ccd_for_property(
+        prop_name: &str,
+        elem_name: &str,
+    ) -> Option<CamCcd> {
+        match (prop_name, elem_name) {
+            ("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE") =>
+                Some(CamCcd::Main),
+            ("GUIDER_EXPOSURE", "GUIDER_EXPOSURE_VALUE") =>
+                Some(CamCcd::Guider),
+            _ =>
+                None,
+        }
+    }
+
     pub fn camera_get_exposure(
         &self,
         device_name: &str,
@@ -2334,18 +1192,14 @@ impl Connection {
         device_name: &str,
         ccd:         CamCcd,
         exposure:    f64
-    ) -> Result<u64> {
-        let short_id = self.last_shot_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut shot_ids_by_dev = self.shot_ids_by_dev.lock().unwrap();
-        shot_ids_by_dev.insert((device_name.to_string(), ccd), short_id);
-        drop(shot_ids_by_dev);
+    ) -> Result<()> {
         let (prop_name, prop_elem) = Self::exposure_prop_name(ccd);
         self.command_set_num_property(
             device_name,
             prop_name,
             &[(prop_elem, exposure)]
         )?;
-        Ok(short_id)
+        Ok(())
     }
 
     pub fn camera_abort_exposure(
@@ -2354,8 +1208,8 @@ impl Connection {
         ccd:         CamCcd,
     ) -> Result<()> {
         let prop_name = match ccd {
-            CamCcd::Primary   => "CCD_ABORT_EXPOSURE",
-            CamCcd::Secondary => "GUIDER_ABORT_EXPOSURE",
+            CamCcd::Main   => "CCD_ABORT_EXPOSURE",
+            CamCcd::Guider => "GUIDER_ABORT_EXPOSURE",
         };
         self.command_set_switch_property(
             device_name,
@@ -2366,8 +1220,8 @@ impl Connection {
 
     fn exposure_prop_name(ccd: CamCcd) -> (&'static str, &'static str) {
         match ccd {
-            CamCcd::Primary   => ("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE"),
-            CamCcd::Secondary => ("GUIDER_EXPOSURE", "GUIDER_EXPOSURE_VALUE"),
+            CamCcd::Main   => ("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE"),
+            CamCcd::Guider => ("GUIDER_EXPOSURE", "GUIDER_EXPOSURE_VALUE"),
         }
     }
 
@@ -2560,17 +1414,17 @@ impl Connection {
     pub fn camera_get_heater_items(
         &self,
         device_name: &str
-    ) -> Result<Option<Vec<(Arc<String>, Arc<String>)>>> {
+    ) -> Result<Vec<(Arc<String>, Arc<String>)>> {
         let devices = self.devices.lock().unwrap();
         let (prop_name, _) = devices.existing_prop_name(
             device_name,
             PROP_CAM_HEAT_CTRL_LIST
         )?;
         let device = devices.find_by_name_res(device_name)?;
-        let Some(prop) = device.get_property_opt(prop_name) else {
-            return Ok(None);
-        };
-        Ok(Some(prop.elements
+        let prop = device
+            .get_property_opt(prop_name)
+            .ok_or_else(|| Error::PropertyNotExists(device_name.to_string(), prop_name.to_string()))?;
+        Ok(prop.elements
             .iter()
             .map(|e| {
                 let name = Arc::clone(&e.name);
@@ -2578,7 +1432,7 @@ impl Connection {
                 (name, caption)
             })
             .collect()
-        ))
+        )
     }
 
     pub fn camera_set_heater_str(
@@ -2664,7 +1518,7 @@ impl Connection {
     pub fn camera_get_conversion_gain_items(
         &self,
         device_name: &str
-    ) -> Result<Option<Vec<(Arc<String>, Arc<String>)>>> {
+    ) -> Result<Vec<(Arc<String>, Arc<String>)>> {
         let devices = self.devices.lock().unwrap();
         let (prop_name, _) = devices.existing_prop_name(
             device_name,
@@ -2672,9 +1526,9 @@ impl Connection {
         )?;
         let device = devices.find_by_name_res(device_name)?;
         let Some(prop) = device.get_property_opt(prop_name) else {
-            return Ok(None);
+            return Err(Error::PropertyNotExists(device_name.to_string(), prop_name.to_string()));
         };
-        Ok(Some(prop.elements
+        Ok(prop.elements
             .iter()
             .map(|e| {
                 let name = Arc::clone(&e.name);
@@ -2682,7 +1536,7 @@ impl Connection {
                 (name, caption)
             })
             .collect()
-        ))
+        )
     }
 
     pub fn camera_set_conversion_gain_str(
@@ -2992,7 +1846,7 @@ impl Connection {
         }
     }
 
-    pub fn camera_set_frame_size(
+    pub fn camera_set_frame(
         &self,
         device_name: &str,
         cam_ccd:     CamCcd,
@@ -3029,15 +1883,15 @@ impl Connection {
 
     fn ccd_frame_prop_name(cam_ccd: CamCcd) -> &'static str {
         match cam_ccd {
-            CamCcd::Primary => "CCD_FRAME",
-            CamCcd::Secondary => "GUIDER_FRAME",
+            CamCcd::Main => "CCD_FRAME",
+            CamCcd::Guider => "GUIDER_FRAME",
         }
     }
 
     fn ccd_info_prop_name(cam_ccd: CamCcd) -> &'static str {
         match cam_ccd {
-            CamCcd::Primary => "CCD_INFO",
-            CamCcd::Secondary => "GUIDER_INFO",
+            CamCcd::Main => "CCD_INFO",
+            CamCcd::Guider => "GUIDER_INFO",
         }
     }
 
@@ -3167,15 +2021,15 @@ impl Connection {
 
     fn ccd_bin_prop_name(cam_ccd: CamCcd) -> &'static str {
         match cam_ccd {
-            CamCcd::Primary => "CCD_BINNING",
-            CamCcd::Secondary => "GUIDER_BINNING",
+            CamCcd::Main => "CCD_BINNING",
+            CamCcd::Guider => "GUIDER_BINNING",
         }
     }
 
     fn ccd_bin_mode_prop_name(cam_ccd: CamCcd) -> &'static str {
         match cam_ccd {
-            CamCcd::Primary => "CCD_BINNING_MODE",
-            CamCcd::Secondary => "GUIDER_BINNING_MODE",
+            CamCcd::Main => "CCD_BINNING_MODE",
+            CamCcd::Guider => "GUIDER_BINNING_MODE",
         }
     }
 
@@ -3206,8 +2060,8 @@ impl Connection {
 
     fn ccd_frame_type_prop_name(cam_ccd: CamCcd) -> &'static str {
         match cam_ccd {
-            CamCcd::Primary => "CCD_FRAME_TYPE",
-            CamCcd::Secondary => "GUIDER_FRAME_TYPE",
+            CamCcd::Main => "CCD_FRAME_TYPE",
+            CamCcd::Guider => "GUIDER_FRAME_TYPE",
         }
     }
 
@@ -3220,25 +2074,36 @@ impl Connection {
         self.property_exists(device_name, "SCOPE_INFO", None)
     }
 
-    pub fn camera_set_telescope_focal_len(
+    pub fn camera_get_telescope_focal_len_and_aperture(&self, device_name: &str) -> Result<(f64, f64)> {
+        let devices = self.devices.lock().unwrap();
+        let focal_len = devices.get_num_property(device_name, "SCOPE_INFO", "FOCAL_LENGTH")?.value;
+        let aperture = devices.get_num_property(device_name, "SCOPE_INFO", "APERTURE")?.value;
+        Ok((focal_len, aperture))
+    }
+
+    pub fn camera_set_telescope_focal_len_and_aperture(
         &self,
         device_name:  &str,
         focal_length: f64,
+        aperture:     Option<f64>,
         force_set:    bool,
         timeout_ms:   Option<u64>,
     ) -> Result<()> {
-        let aperture = self.get_num_property_value(
+        let mut cur_aperture = self.get_num_property_value(
             device_name,
             "SCOPE_INFO",
             "APERTURE"
         )?;
+        if let Some(aperture) = aperture {
+            cur_aperture = aperture;
+        }
         self.command_set_num_property_and_wait(
             force_set,
             timeout_ms,
             device_name,
             "SCOPE_INFO",
             &[("FOCAL_LENGTH", focal_length),
-              ("APERTURE",     aperture)]
+              ("APERTURE",     cur_aperture)]
         )?;
         Ok(())
     }
@@ -3435,7 +2300,7 @@ impl Connection {
         Ok(())
     }
 
-    pub fn mount_reverse_motion(
+    pub fn mount_revert_motion(
         &self,
         device_name: &str,
         reverse_ns:  bool,
@@ -3593,13 +2458,13 @@ impl Connection {
         Ok(())
     }
 
-    pub fn mount_is_timed_guide_finished(&self, device_name: &str) -> Result<bool> {
+    pub fn mount_is_timed_guiding(&self, device_name: &str) -> Result<bool> {
         let devices = self.devices.lock().unwrap();
         let property_ns = devices.get_property(device_name, "TELESCOPE_TIMED_GUIDE_NS")?;
         let property_we = devices.get_property(device_name, "TELESCOPE_TIMED_GUIDE_WE")?;
         let result =
-            matches!(property_ns.state, PropState::Ok|PropState::Idle) &&
-            matches!(property_we.state, PropState::Ok|PropState::Idle);
+            matches!(property_ns.state, PropState::Busy) &&
+            matches!(property_we.state, PropState::Busy);
         Ok(result)
     }
 
@@ -3901,24 +2766,19 @@ struct XmlReceiver {
     stream:          TcpStream,
     reader:          XmlStreamReader,
     xml_sender:      XmlSender,
-    shot_ids_by_dev: ShotIdsByCCD,
-    active_shot_ids: ShotIdsByCCD,
 }
 
 impl XmlReceiver {
     fn new(
-        conn_state:      &Arc<Mutex<ConnState>>,
-        devices:         &Arc<Mutex<Devices>>,
-        stream:          TcpStream,
-        xml_sender:      XmlSender,
-        shot_ids_by_dev: &ShotIdsByCCD,
+        conn_state: &Arc<Mutex<ConnState>>,
+        devices:    &Arc<Mutex<Devices>>,
+        stream:     TcpStream,
+        xml_sender: XmlSender,
     ) -> Self {
         Self {
-            conn_state:      Arc::clone(conn_state),
-            devices:         Arc::clone(devices),
-            reader:          XmlStreamReader::new(),
-            shot_ids_by_dev: Arc::clone(shot_ids_by_dev),
-            active_shot_ids: Arc::new(Mutex::new(HashMap::new())),
+            conn_state: Arc::clone(conn_state),
+            devices:    Arc::clone(devices),
+            reader:     XmlStreamReader::new(),
             stream,
             xml_sender,
         }
@@ -3992,13 +2852,13 @@ impl XmlReceiver {
         for (name, value) in changed_values {
             if prop_name.as_str() == "CONNECTION"
             && name.as_str() == "CONNECT" {
-                device.is_connected = value.to_bool().unwrap_or(false);
+                device.set_connected(value.to_bool().unwrap_or(false));
             }
 
             if prop_name.as_str() == "DRIVER_INFO"
             && name.as_str() == "DRIVER_INTERFACE" {
                 let flag_bits = value.to_i32().unwrap_or(0);
-                device.interface = DriverInterface::from_bits_truncate(flag_bits as u32);
+                device.set_driver_interface(DriverInterface::from_bits_truncate(flag_bits as u32));
             }
         }
     }
@@ -4021,7 +2881,7 @@ impl XmlReceiver {
             };
             events_sender.send(EventSenderEvent::Mess(Event::PropChange(PropChangeEvent {
                 timestamp,
-                device_name: Arc::clone(&device.name),
+                device_name: Arc::clone(device.name()),
                 change,
             }))).unwrap();
 
@@ -4030,8 +2890,8 @@ impl XmlReceiver {
                 let flag_bits = value.to_i32().unwrap_or(0);
                 let interface = DriverInterface::from_bits_truncate(flag_bits as u32);
                 let event_data = NewDeviceEvent {
-                    device_name: Arc::clone(&device.name),
-                    connected: device.is_connected,
+                    device_name: Arc::clone(device.name()),
+                    connected: device.is_connected(),
                     interface,
                     timestamp,
                 };
@@ -4062,7 +2922,7 @@ impl XmlReceiver {
             };
             events_sender.send(EventSenderEvent::Mess(Event::PropChange(PropChangeEvent {
                 timestamp,
-                device_name: Arc::clone(&device.name),
+                device_name: Arc::clone(device.name()),
                 change,
             }))).unwrap();
 
@@ -4071,8 +2931,8 @@ impl XmlReceiver {
                 let connected = prop_value.to_bool().unwrap_or(false);
 
                 let event_data = DeviceConnectEvent {
-                    device_name: Arc::clone(&device.name),
-                    interface: device.interface,
+                    device_name: Arc::clone(device.name()),
+                    interface: device.driver_interface(),
                     timestamp,
                     connected,
                 };
@@ -4138,23 +2998,12 @@ impl XmlReceiver {
         len:           Option<usize>,
         events_sender: &mpsc::Sender<EventSenderEvent>
     ) {
-        let ccd = CamCcd::from_ccd_prop_name(prop_name);
-        let shot_ids_by_dev = self.shot_ids_by_dev.lock().unwrap();
-        let shot_id = shot_ids_by_dev.get(&(device_name.to_string(), ccd)).copied();
-        drop(shot_ids_by_dev);
-
-        if let Some(shot_id) = shot_id {
-            let mut active_shot_ids = self.active_shot_ids.lock().unwrap();
-            active_shot_ids.insert((device_name.to_string(), ccd), shot_id);
-        }
-
         events_sender.send(EventSenderEvent::Mess(Event::BlobStart(BlobStartEvent {
             device_name: Arc::clone(device_name),
             prop_name:   Arc::clone(prop_name),
             elem_name:   Arc::clone(elem_name),
             format:      Arc::new(format.to_string()),
             len,
-            shot_id
         }))).unwrap();
     }
 
@@ -4173,15 +3022,13 @@ impl XmlReceiver {
             }
             let mut devices = self.devices.lock().unwrap();
 
-            let change_id = devices.change_id;
-            devices.change_id += 1;
+            let change_id = devices.next_change_id();
 
             let device_name = Arc::new(device_name);
             let device = if let Some(device) = devices.find_by_name_opt_mut(&device_name) {
                 device
             } else {
-                devices.list.push(Device::new(&device_name));
-                devices.list.last_mut().unwrap()
+                devices.add(Device::new(&device_name))
             };
             let prop_name = xml_elem.attr_string_or_err("name")?;
             if device.get_property_opt(&prop_name).is_some() {
@@ -4192,14 +3039,14 @@ impl XmlReceiver {
             let timestamp = xml_elem.attr_time("timestamp");
             let mut property = Property::new_from_xml(
                 xml_elem,
-                &device.name,
+                &device.name(),
                 &prop_name
             )?;
             let state = property.state;
             let values = property.get_values();
             property.change_id = change_id;
             let prop_name = Arc::clone(&property.name);
-            device.props.push(property);
+            device.add_property(property);
             self.update_device_info(device, &prop_name, &values);
             self.notify_subcribers_about_new_prop(
                 device,
@@ -4217,12 +3064,11 @@ impl XmlReceiver {
             let prop_name = xml_elem.attr_string_or_err("name")?;
             let timestamp = xml_elem.attr_time("timestamp");
             let mut devices = self.devices.lock().unwrap();
-            devices.change_id += 1;
-            let change_id = devices.change_id;
+            let change_id = devices.next_change_id();
             let Some(device) = devices.find_by_name_opt_mut(&device_name) else {
                 anyhow::bail!(Error::DeviceNotExists(device_name));
             };
-            let device_name = Arc::clone(&device.name);
+            let device_name = Arc::clone(device.name());
             let Some(property) = device.get_property_opt_mut(&prop_name) else {
                 anyhow::bail!(Error::PropertyNotExists(
                     device_name.to_string(),
@@ -4236,7 +3082,6 @@ impl XmlReceiver {
                 blobs,
                 &device_name,
                 &prop_name,
-                &self.active_shot_ids,
             )?;
             if prop_changed {
                 let prop_name = Arc::clone(&property.name);
@@ -4264,7 +3109,7 @@ impl XmlReceiver {
                 let Some(device) = devices.find_by_name_opt_mut(&device_name) else {
                     anyhow::bail!(Error::DeviceNotExists(device_name));
                 };
-                let dev_name_arc = Arc::clone(&device.name);
+                let dev_name_arc = Arc::clone(device.name());
                 let removed_prop = device.remove_property(&prop_name)
                     .ok_or_else(
                         || Error::PropertyNotExists(device_name.clone(), prop_name.clone())
@@ -4282,7 +3127,7 @@ impl XmlReceiver {
                 };
                 self.notify_subcribers_about_device_delete(
                     timestamp,
-                    &removed.name,
+                    removed.name(),
                     events_sender,
                     drv_info.interface
                 );
@@ -4301,7 +3146,6 @@ impl XmlReceiver {
         Ok(())
     }
 }
-
 
 pub type PropsNamePair = (&'static str, &'static str);
 pub type PropsNamePairs = &'static [PropsNamePair];

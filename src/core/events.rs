@@ -1,5 +1,5 @@
 use std::sync::{Arc, RwLock};
-use crate::{guiding::external_guider::ExtGuiderEvent, plate_solve::PlateSolverEvent, DeviceAndProp};
+use crate::{guiding::external_guider::ExtGuiderEvent, plate_solve::PlateSolverEvent};
 use super::{core::ModeType, frame_processing::*, mode_focusing::*, mode_polar_align::PolarAlignmentEvent};
 
 #[derive(Clone)]
@@ -18,8 +18,8 @@ pub enum Event {
     Error(String),
     ModeContinued,
     CameraDeviceChanged{
-        from: Option<DeviceAndProp>,
-        to:   DeviceAndProp
+        prev_camera_id: String,
+        new_camera_id: String,
     },
     MountDeviceChanged(String),
     FocuserDeviceChanged(String),
@@ -39,22 +39,25 @@ pub enum Event {
     TelescopeFocalLenChanged(f64),
     TelescopeBarlowChanged,
     GuiderFocalLenChanged(f64),
+    CameraCoolingOptionsChanged,
+    CameraFanOptionsChanged,
+    CameraHeaterOptionsChanged,
 }
 
-type EventFun = dyn Fn(Event) + Send + Sync + 'static;
+type EventHandlerFun = dyn Fn(Event) + Send + Sync + 'static;
 
-pub struct Events {
-    items: RwLock<Vec<Box<EventFun>>>,
+pub struct EventHandlers {
+    items: RwLock<Vec<Box<EventHandlerFun>>>,
 }
 
-impl Events {
+impl EventHandlers {
     pub fn new() -> Self {
         Self {
             items:RwLock::new(Vec::new()),
         }
     }
 
-    pub fn subscribe(
+    pub fn connect(
         &self,
         fun: impl Fn(Event) + Send + Sync + 'static
     ) {
@@ -62,15 +65,18 @@ impl Events {
         items.push(Box::new(fun));
     }
 
-    pub fn unsubscribe_all(&self) {
-        let mut items = self.items.write().unwrap();
-        items.clear();
-    }
-
-    pub fn notify(&self, event: Event) {
+    pub fn send(&self, event: Event) {
         let items = self.items.read().unwrap();
         for s in &*items {
             s(event.clone());
         }
+    }
+
+    pub fn disconnect_all(&self) {
+        let mut event_handlers = Vec::new();
+        let mut items = self.items.write().unwrap();
+        std::mem::swap(&mut event_handlers, &mut items);
+        drop(items);
+        event_handlers.clear();
     }
 }

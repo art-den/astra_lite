@@ -18,7 +18,7 @@
 mod ui;
 mod utils;
 mod image;
-mod indi;
+mod hal;
 mod guiding;
 mod plate_solve;
 mod core;
@@ -29,10 +29,7 @@ use std::{path::Path, sync::Arc};
 use gtk::{prelude::*, glib, glib::clone};
 use ui::gtk_utils::exec_and_show_error;
 use crate::{
-    utils::io_utils::*,
-    utils::log_utils::*,
-    options::*,
-    core::core::Core,
+    core::core::Core, options::*, utils::{io_utils::*, log_utils::*}
 };
 
 fn main() -> anyhow::Result<()> {
@@ -78,9 +75,11 @@ fn app_activate_handler(app: &gtk::Application) {
 
     // Enable stacktrace in errors in debug builds
 
-    #[cfg(debug_assertions)] {
-        unsafe { std::env::set_var("RUST_BACKTRACE", "1"); }
+    if cfg!(debug_assertions) {
+        unsafe { std::env::set_var("RUST_BACKTRACE", "full"); }
         log::set_max_level(log::LevelFilter::Debug);
+    } else {
+        unsafe { std::env::set_var("RUST_BACKTRACE", "0"); }
     }
 
     // Create core
@@ -117,6 +116,8 @@ fn app_activate_handler(app: &gtk::Application) {
         log::info!("Check options...");
         options.check()?;
 
+        drop(options);
+
         Ok(())
     });
 
@@ -148,6 +149,8 @@ fn app_shutdown_handler(_app: &gtk::Application, core: &Arc<Core>) {
     log::info!("Core stopping...");
     core.stop();
     log::info!("Core stopped");
+
+    dbg!(Arc::strong_count(core));
 }
 
 fn panic_handler(

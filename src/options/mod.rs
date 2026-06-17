@@ -1,7 +1,7 @@
 pub mod indi;
-pub mod camera;
-
 pub use indi::*;
+
+pub mod camera;
 pub use camera::*;
 
 pub mod calibration;

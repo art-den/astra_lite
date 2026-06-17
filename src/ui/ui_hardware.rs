@@ -14,10 +14,10 @@ use macros::FromBuilder;
 use crate::{
     core::{core::Core, events::Event},
     guiding::{external_guider::ExtGuiderType, phd2},
-    indi::{self, sexagesimal_to_value, value_to_sexagesimal},
+    hal::indi::{self, sexagesimal_to_value, value_to_sexagesimal},
     options::*,
 };
-use super::{gtk_utils::*, indi_widget::*, module::*, ui_main::*};
+use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
@@ -41,7 +41,7 @@ pub fn init_ui(
         options.indi.remote = true; // force remote mode if no devices info
     }
 
-    let indi_widget = IndiWidget::new(core.indi());
+    let indi_widget = IndiPanelWidget::new(core.indi());
 
     let widgets = Widgets {
         telescope: TelescopeWidgets  ::from_builder_str(include_str!(r"resources/hw_telescope.ui")),
@@ -71,6 +71,7 @@ pub fn init_ui(
     obj.connect_widgets_events();
     obj.connect_guider_events();
     obj.correct_widgets_by_cur_state();
+    obj.connect_indi_events();
 
     if let Some(load_drivers_err) = load_drivers_err {
         obj.add_log_record(
@@ -181,7 +182,7 @@ struct HardwareUi {
     window:       gtk::ApplicationWindow,
     indi_status:  RefCell<indi::ConnState>,
     indi_drivers: indi::Drivers,
-    indi_widget:  IndiWidget,
+    indi_widget:  IndiPanelWidget,
     is_remote:    Cell<bool>,
 }
 
@@ -271,7 +272,7 @@ impl UiModule for HardwareUi {
         _ = self.core.ext_giuder().phd2_conn().stop();
         log::info!("Done!");
 
-        //self.core.ext_giuder().phd2_conn().discnnect_all_event_handlers();
+        self.core.ext_giuder().phd2_conn().discnnect_all_event_handlers();
     }
 
     fn on_tab_changed(&self, from: TabPage, to: TabPage) {
@@ -283,9 +284,6 @@ impl UiModule for HardwareUi {
         }
     }
 
-    fn on_indi_event(&self, event: &indi::Event) {
-        self.process_indi_event(event);
-    }
 
     fn on_event(&self, event: &Event) {
         match event {
@@ -317,6 +315,21 @@ impl HardwareUi {
         self.widgets.telescope.spb_guid_foc_len.set_range(0.0, 1000.0);
         self.widgets.telescope.spb_guid_foc_len.set_digits(0);
         self.widgets.telescope.spb_guid_foc_len.set_increments(1.0, 10.0);
+    }
+
+    fn connect_indi_events(self: &Rc<Self>) {
+        let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
+
+        let sender = main_thread_sender.clone();
+        self.core.indi().connect_event_handler(move |event| {
+            _ = sender.send_blocking(event);
+        });
+
+        glib::spawn_future_local(clone!(@weak self as self_ => async move {
+            while let Ok(event) = main_thread_receiver.recv().await {
+                self_.process_indi_event(&event);
+            }
+        }));
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
@@ -352,7 +365,7 @@ impl HardwareUi {
                 if f64::abs(options.telescope.focal_len - value) < 0.1 { return; }
                 options.telescope.focal_len = value;
                 drop(options);
-                self_.core.events().notify(Event::TelescopeFocalLenChanged(value));
+                self_.core.events().send(Event::TelescopeFocalLenChanged(value));
             })
         );
 
@@ -361,7 +374,7 @@ impl HardwareUi {
                 let Ok(mut options) = self_.core.options().try_write() else { return; };
                 options.telescope.barlow = sb.value();
                 drop(options);
-                self_.core.events().notify(Event::TelescopeBarlowChanged);
+                self_.core.events().send(Event::TelescopeBarlowChanged);
             })
         );
 
@@ -372,7 +385,7 @@ impl HardwareUi {
                 if f64::abs(options.guiding.foc_len - value) < 0.1 { return; }
                 options.guiding.foc_len = value;
                 drop(options);
-                self_.core.events().notify(Event::GuiderFocalLenChanged(value));
+                self_.core.events().send(Event::GuiderFocalLenChanged(value));
             })
         );
 

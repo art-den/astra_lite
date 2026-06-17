@@ -1,0 +1,355 @@
+#![allow(dead_code)]
+
+pub mod indi;
+pub mod events;
+pub mod hal_indi;
+pub mod hal_ascom_alpaca;
+
+use bitflags::bitflags;
+use serde::{Deserialize, Serialize};
+use std::{ops:: RangeInclusive, path::Path, sync::{Arc, RwLock}};
+
+use crate::hal::{events::{HalEvent, HalEventHandlers}, hal_indi::IndiHalImpl};
+
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct DeviceType: u32 {
+        const CAMERA    = (1 << 0);
+        const TELESCOPE = (1 << 1);
+        const FOCUSER   = (1 << 2);
+        const FLT_WHELL = (1 << 3);
+    }
+}
+
+#[derive(Debug)]
+pub struct DeviceInfo {
+    pub id:    String,
+    pub name:  String,
+    pub type_: DeviceType,
+}
+
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub enum CcdPurpose {
+    MainTelescopeCcd,
+    SecodnaryTelescopeCcd,
+    GuiderCcd,
+    Unknown,
+}
+
+pub struct CameraInfo {
+    pub id:    String,
+    pub name:  String,
+    pub ccd:   CcdPurpose,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum HalState {
+    ImplNotDefined,
+    Connecting,
+    Connected,
+    Disconnecting,
+    Disconnected,
+    Error(String),
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct HalFeatures: u32 {
+        const BEGIN_DONWLOAD_IMAGE_EVENT = (1 << 0);
+    }
+}
+
+
+pub struct Hal {
+    impl_:            RwLock<Option<Arc<dyn HalImpl + Send + Sync + 'static>>>,
+    event_subscibers: Arc<HalEventHandlers>,
+}
+
+impl Hal {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            impl_:            RwLock::new(None),
+            event_subscibers: Arc::new(HalEventHandlers::new()),
+        })
+    }
+
+    pub fn create_indy_impl(&self, indi: &Arc<indi::Connection>) -> Arc<IndiHalImpl> {
+        IndiHalImpl::new(indi, &self.event_subscibers)
+    }
+
+    pub fn set_impl(&self, hal_impl: Arc<dyn HalImpl + Send + Sync + 'static>) {
+        let mut impl_ = self.impl_.write().unwrap();
+        *impl_ = Some(hal_impl);
+    }
+
+    pub fn reset_impl(&self) {
+        let mut impl_mutex = self.impl_.write().unwrap();
+        if let Some(impl_) = impl_mutex.take() {
+            drop(impl_mutex);
+            drop(impl_);
+        }
+    }
+
+    pub fn connect_event_handler(&self, fun: impl Fn(HalEvent) + Send + Sync + 'static) {
+        self.event_subscibers.connect(fun);
+    }
+
+    pub fn disconnect_all_subscribers(&self) {
+        self.event_subscibers.disconnect_all();
+    }
+
+    pub fn features(&self) -> HalFeatures {
+        let Ok(impl_) = self.get_impl() else {
+            return HalFeatures::empty();
+        };
+        impl_.features()
+    }
+
+    pub fn state(&self) -> HalState {
+        let impl_ = self.impl_.read().unwrap();
+        if let Some(impl_) = &*impl_ {
+            impl_.state()
+        } else {
+            HalState::ImplNotDefined
+        }
+    }
+
+    pub fn notify_periodical_timer_tick(&self, timer_period: usize) -> anyhow::Result<()> {
+        let impl_ = self.impl_.read().unwrap();
+        if let Some(impl_) = &*impl_ {
+            impl_.notify_periodical_timer_tick(timer_period)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn get_impl(&self) -> anyhow::Result<Arc<dyn HalImpl + Send + Sync + 'static>> {
+        let impl_ = self.impl_.read().unwrap();
+        if let Some(impl_) = &*impl_ {
+            return Ok(Arc::clone(impl_));
+        } else {
+            anyhow::bail!("HAL is not selected!");
+        }
+    }
+
+    pub fn devices(&self, type_filter: DeviceType) -> anyhow::Result<Vec<DeviceInfo>> {
+        let impl_ = self.get_impl()?;
+        impl_.devices(type_filter)
+    }
+
+    pub fn cameras(&self) -> anyhow::Result<Vec<CameraInfo>> {
+        let impl_ = self.get_impl()?;
+        impl_.cameras()
+    }
+
+    pub fn camera(&self, id: &str) -> anyhow::Result<Arc<dyn Camera + Send + Sync>> {
+        let impl_ = self.get_impl()?;
+        impl_.camera(id)
+    }
+
+    pub fn telescope(&self, id: &str) -> anyhow::Result<Arc<dyn Telescope + Send + Sync>> {
+        let impl_ = self.get_impl()?;
+        impl_.telescope(id)
+    }
+
+    pub fn focuser(&self, id: &str) -> anyhow::Result<Arc<dyn Focuser + Send + Sync>> {
+        let impl_ = self.get_impl()?;
+        impl_.focuser(id)
+    }
+
+    pub fn filter_wheel(&self, id: &str) -> anyhow::Result<Arc<dyn FilterWheel + Send + Sync>> {
+        let impl_ = self.get_impl()?;
+        impl_.filter_wheel(id)
+    }
+}
+
+pub trait HalImpl {
+    fn features(&self) -> HalFeatures;
+    fn state(&self) -> HalState;
+    fn notify_periodical_timer_tick(&self, timer_period: usize) -> anyhow::Result<()>;
+    fn devices(&self, type_filter: DeviceType) -> anyhow::Result<Vec<DeviceInfo>>;
+    fn cameras(&self) -> anyhow::Result<Vec<CameraInfo>>;
+    fn camera(&self, id: &str) -> anyhow::Result<Arc<dyn Camera + Send + Sync>>;
+    fn telescope(&self, id: &str) -> anyhow::Result<Arc<dyn Telescope + Send + Sync>>;
+    fn focuser(&self, id: &str) -> anyhow::Result<Arc<dyn Focuser + Send + Sync>>;
+    fn filter_wheel(&self, id: &str) -> anyhow::Result<Arc<dyn FilterWheel + Send + Sync>>;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Device
+
+pub trait Device {
+    fn id(&self) -> &str;
+    fn name(&self) -> &str;
+    fn is_active(&self) -> anyhow::Result<bool>;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Camera
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy, Default)]
+pub enum FrameType {
+    #[default]
+    Lights,
+    Flats,
+    Darks,
+    Biases,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+pub enum CameraShotType {
+    RawCcdData,
+    ReadyImage,
+}
+
+pub trait CameraShot {
+    fn get_type(&self) -> CameraShotType;
+    fn get_raw(&self) -> anyhow::Result<crate::image::raw::RawImage>;
+    fn get_image(&self, image: &mut crate::image::image::Image) -> anyhow::Result<()>;
+    fn download_time(&self) -> f64;
+    fn file_ext(&self) -> &str;
+    fn save_to_file(&self, file_name: &Path) -> anyhow::Result<()>;
+}
+
+pub trait Camera : Device {
+    fn init_before_shot(&self) -> anyhow::Result<()>;
+
+    // Exposure
+    fn exposure_range(&self) -> anyhow::Result<RangeInclusive<f64>>;
+    fn start_exposure(&self, value: f64) -> anyhow::Result<()>;
+    fn abort_exposure(&self) -> anyhow::Result<()>;
+    fn remaining_time(&self) -> anyhow::Result<f64>;
+
+    // Frame type
+    fn set_frame_type(&self, frame_type: FrameType) -> anyhow::Result<()>;
+
+    // Frame
+    fn pixel_size_um(&self) -> anyhow::Result<(f64, f64)>;
+    fn is_frame_supported(&self) -> anyhow::Result<bool>;
+    fn ccd_size(&self) -> anyhow::Result<(usize, usize)>;
+    fn set_frame(&self, x: usize, y: usize, width: usize, height: usize) -> anyhow::Result<()>;
+
+    // Gain
+    fn is_gain_supported(&self) -> anyhow::Result<bool>;
+    fn gain_range(&self) -> anyhow::Result<RangeInclusive<f64>>;
+    fn set_gain(&self, value: f64) -> anyhow::Result<()>;
+
+    // Offset
+    fn is_offset_supported(&self) -> anyhow::Result<bool>;
+    fn offset_range(&self) -> anyhow::Result<RangeInclusive<f64>>;
+    fn set_offset(&self, value: f64) -> anyhow::Result<()>;
+
+    // Bin
+    fn is_binning_supported(&self) -> anyhow::Result<bool>;
+    fn max_binning(&self) -> anyhow::Result<(usize/*x*/, usize/*y*/)>;
+    fn set_binning(&self, bin_x: usize, bin_y: usize) -> anyhow::Result<()>;
+
+    // Cooler
+    fn is_cooler_supported(&self) -> anyhow::Result<bool>;
+    fn temperature(&self) -> anyhow::Result<f64>;
+    fn temperature_range(&self) -> anyhow::Result<RangeInclusive<f64>>;
+    fn set_temperature(&self, temperature: Option<f64>) -> anyhow::Result<()>;
+
+    // Heater
+    fn is_heater_supported(&self) -> anyhow::Result<bool>;
+    fn heater_ctrl_list(&self) -> anyhow::Result<Vec<(String/*id*/, String/*text*/)>>;
+    fn control_heater(&self, id: &str) -> anyhow::Result<()>;
+
+    // Fan
+    fn is_fan_ctrl_supported(&self) -> anyhow::Result<bool>;
+    fn enable_fan(&self, enable: bool) -> anyhow::Result<()>;
+
+    // Low noise mode
+    fn is_low_noise_supported(&self) -> anyhow::Result<bool>;
+    fn enable_low_noise_mode(&self, enable: bool) -> anyhow::Result<()>;
+
+    // High fullwell mode
+    fn is_high_fullwell_supported(&self) -> anyhow::Result<bool>;
+    fn enable_high_fullwell_mode(&self, enable: bool) -> anyhow::Result<()>;
+
+    // Conversion gain
+    fn is_conversion_gain_supported(&self) -> anyhow::Result<bool>;
+    fn conversion_gain_list(&self) -> anyhow::Result<Vec<(String/*id*/, String/*text*/)>>;
+    fn set_conversion_gain(&self, id: &str) -> anyhow::Result<()>;
+
+    // Telescope
+    fn set_telescope_focal_len(&self, focal_len: f64) -> anyhow::Result<()>;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Telescope (mount)
+
+pub enum TelescopeMoveDir {
+    North, South, West, East,
+    NorthWest, NorthEast, SouthWest, SouthEast,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum TelescopeState {
+    Stopped,
+    Parked,
+    Tracking,
+    Slewing,
+    Error,
+    Correcton,
+    Moved,
+}
+
+pub trait Telescope : Device {
+    fn state(&self) -> anyhow::Result<TelescopeState>;
+
+    fn is_abort_motion_supported(&self) -> bool;
+    fn abort_motion(&self) -> anyhow::Result<()>;
+
+    fn is_parked(&self) -> anyhow::Result<bool>;
+    fn park(&self) -> anyhow::Result<()>;
+    fn unpark(&self) -> anyhow::Result<()>;
+
+    fn is_tracking(&self) -> anyhow::Result<bool>;
+    fn track(&self, enabled: bool) -> anyhow::Result<()>;
+
+    fn revert_motion(&self, reverse_ns: bool, reverse_we: bool) -> anyhow::Result<()>;
+    fn move_(&self, direction: TelescopeMoveDir) -> anyhow::Result<()>;
+
+    fn slew_speed_list(&self) -> anyhow::Result<Vec<(String/*id*/, String/*text*/)>>;
+    fn set_slew_speed(&self, speed_id: &str) -> anyhow::Result<()>;
+    fn eq_coord(&self) -> anyhow::Result<(f64/*ra*/, f64/*dec*/)>;
+    fn goto_and_track(&self, ra: f64, dec: f64) -> anyhow::Result<()>;
+    fn is_slewing(&self) -> anyhow::Result<bool>;
+
+    fn sync(&self, ra: f64, dec: f64) -> anyhow::Result<()>;
+
+    fn is_guide_rate_supported(&self) -> anyhow::Result<bool>;
+    fn guide_rate(&self) -> anyhow::Result<(f64/*ns*/, f64/*we*/)>;
+    fn pulse_max_duration(&self) -> anyhow::Result<(f64/*ns*/, f64/*we*/)>;
+    fn can_set_guide_rate(&self) -> anyhow::Result<bool>;
+    fn set_guide_rate(&self, rate_ns: f64, rate_we: f64) -> anyhow::Result<()>;
+    fn pulse_guide(&self, duration_ns: f64, duration_we: f64) -> anyhow::Result<()>;
+    fn is_pulse_guiding(&self) -> anyhow::Result<bool>;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Focuser
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum FocuserState {
+    Stopped,
+    Moving,
+    Error,
+}
+
+pub trait Focuser : Device {
+    fn state(&self) -> anyhow::Result<FocuserState>;
+    fn abs_position_range(&self) -> anyhow::Result<RangeInclusive<f64>>;
+    fn abs_position(&self) -> anyhow::Result<f64>;
+    fn set_abs_position(&self, value: f64) -> anyhow::Result<()>;
+    fn temperature(&self) -> anyhow::Result<f64>;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Filter wheel
+
+pub trait FilterWheel : Device {
+    fn list_and_active(&self) -> anyhow::Result<(Vec<String>, usize)>;
+    fn set_active(&self, active_elem: usize) -> anyhow::Result<()>;
+}

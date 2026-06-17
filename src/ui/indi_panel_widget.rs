@@ -1,24 +1,26 @@
+// Widget for controlling properties of INDI devices
+
 use std::{sync::Arc, time::Duration, cell::RefCell, rc::Rc};
 use gtk::{prelude::*, glib, glib::clone};
 use itertools::{Itertools, izip};
-use crate::indi;
+use crate::hal::indi;
 
-pub struct IndiWidget {
+pub struct IndiPanelWidget {
     indi:      Arc<indi::Connection>,
-    indi_conn: indi::Subscription,
+    indi_conn: indi::EventHandlerId,
     data:      Rc<RefCell<UiIndiGuiData>>,
     layout:    gtk::Box,
     stack:     gtk::Stack,
 }
 
-impl Drop for IndiWidget {
+impl Drop for IndiPanelWidget {
     fn drop(&mut self) {
-        self.indi.unsubscribe(self.indi_conn);
+        self.indi.disconnect_event_handler(self.indi_conn);
         log::info!("IndiUi dropped");
     }
 }
 
-impl IndiWidget {
+impl IndiPanelWidget {
     const CSS: &'static [u8] = b"
         .indi_on_btn {
             text-decoration: underline;
@@ -38,7 +40,7 @@ impl IndiWidget {
 
         let (sender, receiver) = async_channel::unbounded();
 
-        let indi_conn = indi.subscribe_events(move |evt| {
+        let indi_conn = indi.connect_event_handler(move |evt| {
             sender.send_blocking(evt).unwrap();
         });
 
@@ -181,7 +183,33 @@ impl IndiWidget {
                 return 100;
             };
 
-            indi_devices.sort_by_key(|d| get_device_sort_prio(d.interface));
+            indi_devices.sort_by(|d1, d2| {
+                let pr1 = get_device_sort_prio(d1.interface);
+                let pr2 = get_device_sort_prio(d2.interface);
+                let ord = usize::cmp(&pr2, &pr1);
+                if ord != std::cmp::Ordering::Equal {
+                    return ord;
+                }
+                let d1_is_ccd = d1.interface.contains(indi::DriverInterface::CCD);
+                let d2_is_ccd = d2.interface.contains(indi::DriverInterface::CCD);
+                if d1_is_ccd && d2_is_ccd {
+                    // Sort by phisical frame size
+                    let (psx1, psy1) = indi.camera_get_pixel_size_um(&d1.name, indi::CamCcd::Main).unwrap_or_default();
+                    let (fsx1, fsy1) = indi.camera_get_max_frame_size(&d1.name, indi::CamCcd::Main).unwrap_or_default();
+                    let fx1 = psx1 * fsx1 as f64;
+                    let fh1 = psy1 * fsy1 as f64;
+                    let f1 = f64::max(fx1, fh1);
+
+                    let (psx2, psy2) = indi.camera_get_pixel_size_um(&d2.name, indi::CamCcd::Main).unwrap_or_default();
+                    let (fsx2, fsy2) = indi.camera_get_max_frame_size(&d2.name, indi::CamCcd::Main).unwrap_or_default();
+                    let fx2 = psx2 * fsx2 as f64;
+                    let fh2 = psy2 * fsy2 as f64;
+                    let f2 = f64::max(fx2, fh2);
+                    f64::total_cmp(&f2, &f1)
+                } else {
+                    ord
+                }
+            });
 
             let mut devices_list_changed = false;
 

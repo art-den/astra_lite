@@ -1,11 +1,11 @@
 use std::{
-    sync::{Arc, RwLock},
+    sync::Arc,
     collections::VecDeque
 };
 use itertools::{izip, Itertools};
 
 use crate::{
-    core::cam_starter::CamStarter, indi, options::*, utils::math::*
+    core::cam_ctrl::take_shot, hal::{Camera, Focuser, FrameType}, options::*, utils::math::*
 };
 use super::{core::*, events::*, frame_processing::*, utils::*};
 
@@ -41,11 +41,10 @@ enum Stage {
 }
 
 pub struct FocusingMode {
-    indi:           Arc<indi::Connection>,
-    subscribers:    Arc<Events>,
+    camera:         Arc<dyn Camera + Send + Sync>,
+    focuser:        Arc<dyn Focuser + Send + Sync>,
+    subscribers:    Arc<EventHandlers>,
     state:          FocusingState,
-    camera:         DeviceAndProp,
-    cam_starter:    Arc<CamStarter>,
     f_opts:         FocuserOptions,
     cam_opts:       CamOptions,
     before_pos:     f64,
@@ -102,27 +101,22 @@ enum CalcResult {
 
 impl FocusingMode {
     pub fn new(
-        indi:           &Arc<indi::Connection>,
-        cam_starter:    &Arc<CamStarter>,
-        options:        &Arc<RwLock<Options>>,
-        subscribers:    &Arc<Events>,
+        core:           &Core,
         next_mode:      Option<Box<dyn Mode + Sync + Send>>,
         prelim_step:    bool,
         error_reaction: FocusingErrorReaction,
     ) -> anyhow::Result<Self> {
-        let opts = options.read().unwrap();
-        let Some(cam_device) = &opts.cam.device else {
-            anyhow::bail!("Camera is not selected");
-        };
+        let camera = core.camera_or_err()?;
+        let focuser = core.focuser_or_err()?;
+        let opts = core.options().read().unwrap();
         let mut cam_opts = opts.cam.clone();
-        cam_opts.frame.frame_type = crate::image::raw::FrameType::Lights;
+        cam_opts.frame.frame_type = FrameType::Lights;
         cam_opts.frame.exp_main = opts.focuser.exposure;
         cam_opts.frame.gain = gain_to_value(
             opts.focuser.gain,
             opts.cam.frame.gain,
-            cam_device,
-            indi
-        )?;
+            camera.gain_range()?
+        );
 
         let exposure_u = (cam_opts.frame.exposure() as usize).max(1);
         let max_try = (10 / exposure_u).clamp(1, 3);
@@ -130,9 +124,7 @@ impl FocusingMode {
         log::debug!("Creating autofocus mode. max_try={}", max_try);
 
         Ok(FocusingMode {
-            indi:           Arc::clone(indi),
-            subscribers:    Arc::clone(subscribers),
-            cam_starter:    Arc::clone(&cam_starter),
+            subscribers:    Arc::clone(core.events()),
             state:          FocusingState::Undefined,
             f_opts:         opts.focuser.clone(),
             before_pos:     0.0,
@@ -145,9 +137,10 @@ impl FocusingMode {
             change_cnt:     0,
             desired_focus:  0.0,
             try_cnt:        0,
-            camera:         cam_device.clone(),
             start_temp:     0.0,
             start_time:     None,
+            camera,
+            focuser,
             prelim_step,
             next_mode,
             cam_opts,
@@ -176,7 +169,7 @@ impl FocusingMode {
     }
 
     fn set_new_focus_value(&mut self, value: f64) -> anyhow::Result<()> {
-        self.indi.focuser_set_abs_value(&self.f_opts.device, value, true, None)?;
+        self.focuser.set_abs_position(value)?;
         self.desired_focus = value;
         self.change_time_ms = Some(0);
         self.change_cnt = 0;
@@ -220,12 +213,7 @@ impl FocusingMode {
                 if cur_focus as i64 == desired_focus as i64 {
                     log::debug!("Taking picture for focuser value: {}", desired_focus);
                     self.change_time_ms = None;
-                    self.cam_starter.take_shot(
-                        self.get_type(),
-                        &self.camera,
-                        &self.cam_opts.frame,
-                        &self.cam_opts.ctrl
-                    )?;
+                    take_shot(&self.camera, &self.cam_opts.frame, &self.cam_opts.ctrl)?;
                     self.state = FocusingState::WaitingMeasureFrame(desired_focus);
                 }
             }
@@ -240,12 +228,7 @@ impl FocusingMode {
                 if cur_focus as i64 == desired_focus as i64 {
                     log::debug!("Taking RESULT shot for focuser value: {}", desired_focus);
                     self.change_time_ms = None;
-                    self.cam_starter.take_shot(
-                        self.get_type(),
-                        &self.camera,
-                        &self.cam_opts.frame,
-                        &self.cam_opts.ctrl
-                    )?;
+                    take_shot(&self.camera, &self.cam_opts.frame, &self.cam_opts.ctrl)?;
                     self.state = FocusingState::WaitingResultImg(desired_focus);
                     return Ok(NotifyResult::ProgressChanges);
                 }
@@ -319,12 +302,7 @@ impl FocusingMode {
             result = NotifyResult::ProgressChanges;
             log::info!("Stars on received image are not Ok. Taking another image...");
             self.change_time_ms = None;
-            self.cam_starter.take_shot(
-                self.get_type(),
-                &self.camera,
-                &self.cam_opts.frame,
-                &self.cam_opts.ctrl
-            )?;
+            take_shot(&self.camera, &self.cam_opts.frame, &self.cam_opts.ctrl)?;
         }
         Ok(result)
     }
@@ -361,16 +339,11 @@ impl FocusingMode {
                 coeffs: None,
                 result: None,
             };
-            self.subscribers.notify(Event::Focusing(
+            self.subscribers.send(Event::Focusing(
                 FocuserEvent::Data(event_data)
             ));
         } else {
-            self.cam_starter.take_shot(
-                self.get_type(),
-                &self.camera,
-                &self.cam_opts.frame,
-                &self.cam_opts.ctrl
-            )?;
+            take_shot(&self.camera, &self.cam_opts.frame, &self.cam_opts.ctrl)?;
             return Ok(NotifyResult::ProgressChanges);
         }
 
@@ -388,7 +361,7 @@ impl FocusingMode {
                     coeffs: Some(coeffs.clone()), // TODO: remove clone
                     result: Some(result_pos),
                 };
-                self.subscribers.notify(Event::Focusing(
+                self.subscribers.send(Event::Focusing(
                     FocuserEvent::Data(event_data)
                 ));
                 if self.stage == Stage::Preliminary {
@@ -411,7 +384,7 @@ impl FocusingMode {
                     target_pos: result_pos
                 };
                 let result_event = FocuserEvent::Result { value: result_pos };
-                self.subscribers.notify(Event::Focusing(result_event));
+                self.subscribers.send(Event::Focusing(result_event));
             },
             Ok(CalcResult::Rising(coeffs)) => {
                 log::info!("Results too far from center. Do more measures from left");
@@ -420,7 +393,7 @@ impl FocusingMode {
                     coeffs: Some(coeffs.clone()),
                     result: None,
                 };
-                self.subscribers.notify(Event::Focusing(
+                self.subscribers.send(Event::Focusing(
                     FocuserEvent::Data(event_data)
                 ));
                 let min_sample_pos = self.samples
@@ -439,7 +412,7 @@ impl FocusingMode {
                     coeffs: Some(coeffs.clone()),
                     result: None,
                 };
-                self.subscribers.notify(Event::Focusing(
+                self.subscribers.send(Event::Focusing(
                     FocuserEvent::Data(event_data)
                 ));
                 log::info!("Results too far from center. Do more measures from right");
@@ -494,13 +467,13 @@ impl FocusingMode {
         let duration = self.start_time.unwrap().elapsed();
 
         log::info!(
-            "RESULT focuser shot is finished. Duration = {:.1}s \
+            "RESULT focuser shot is finished. Duration = {:.1}s, \
             Final FWHM = {:.2?}, ovality={:.2?}, focuser change={:.0} -> {:.0}",
             duration.as_secs_f64(), info.stars.info.fwhm, info.stars.info.ovality, self.before_pos, focus_pos
         );
 
         if !self.start_temp.is_nan() {
-            self.subscribers.notify(
+            self.subscribers.send(
                 Event::Focusing(FocuserEvent::StartingTemperature(self.start_temp))
             );
         }
@@ -523,11 +496,12 @@ impl FocusingMode {
                     let value = value.round();
                     log::debug!("Extremum = {:.1}", value);
                     if !allow_more_measures {
-                        let prop_elem = self.indi.focuser_get_abs_value_prop_elem(&self.f_opts.device)?;
-                        if value < prop_elem.min || value > prop_elem.max {
+                        let range = self.focuser.abs_position_range()?;
+
+                        if !range.contains(&value) {
                             anyhow::bail!(
                                 "Result pos {0:.1} out of focuser range ({1:.1}..{2:.1})",
-                                value, prop_elem.min, prop_elem.max
+                                value, *range.start(), *range.end()
                             );
                         }
                         return Ok(CalcResult::Value { value, coeffs });
@@ -654,8 +628,8 @@ impl Mode for FocusingMode {
         }
     }
 
-    fn cam_device(&self) -> Option<&DeviceAndProp> {
-        Some(&self.camera)
+    fn camera_id(&self) -> Option<&str> {
+        Some(&self.camera.id())
     }
 
     fn progress(&self) -> Option<Progress> {
@@ -676,18 +650,11 @@ impl Mode for FocusingMode {
     }
 
     fn start(&mut self) -> anyhow::Result<()> {
-        let cur_pos = self.indi
-            .focuser_get_abs_value_prop_elem(&self.f_opts.device)?.value
-            .round();
-
-        self.start_temp = self.indi
-            .focuser_get_temperature(&self.f_opts.device)
-            .unwrap_or(f64::NAN);
-
+        let cur_pos = self.focuser.abs_position()?.round();
+        self.start_temp = self.focuser.temperature().unwrap_or(f64::NAN);
         self.before_pos = cur_pos;
 
-        self.cam_starter.take_shot(
-            self.get_type(),
+        take_shot(
             &self.camera,
             &self.cam_opts.frame,
             &self.cam_opts.ctrl
@@ -701,8 +668,8 @@ impl Mode for FocusingMode {
     }
 
     fn abort(&mut self) -> anyhow::Result<()> {
-        self.cam_starter.abort(&self.camera)?;
-        self.indi.focuser_set_abs_value(&self.f_opts.device, self.before_pos, true, None)?;
+        self.camera.abort_exposure()?;
+        self.focuser.set_abs_position(self.before_pos)?;
         Ok(())
     }
 
@@ -720,22 +687,7 @@ impl Mode for FocusingMode {
         }
     }
 
-    fn notify_indi_prop_change(
-        &mut self,
-        prop_change: &indi::PropChangeEvent
-    ) -> anyhow::Result<NotifyResult> {
-        if *prop_change.device_name != self.f_opts.device {
-            return Ok(NotifyResult::Empty);
-        }
-        if let indi::PropChange::Change { prop_name, value, .. } = &prop_change.change
-        && **prop_name == "ABS_FOCUS_POSITION" {
-            let cur_focus = value.to_f64()?;
-            return self.check_cur_focus_value(cur_focus);
-        }
-        Ok(NotifyResult::Empty)
-    }
-
-    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         if let Some(change_time_ms) = &mut self.change_time_ms {
             *change_time_ms += timer_period_ms;
             if *change_time_ms > MAX_FOCUS_CHANGE_TIME * 1000 {
@@ -745,11 +697,11 @@ impl Mode for FocusingMode {
                     anyhow::bail!("Can't set new focus value for focuser!");
                 }
                 log::error!("Setting new value {:.0} again. Try = {}", self.desired_focus, self.change_cnt);
-                self.indi.focuser_set_abs_value(&self.f_opts.device, self.desired_focus, true, None)?;
+                self.focuser.set_abs_position(self.desired_focus)?;
                 *change_time_ms = 0;
             }
         }
-        let cur_focus = self.indi.focuser_get_abs_value_prop_elem(&self.f_opts.device)?.value;
+        let cur_focus = self.focuser.abs_position()?;
         self.check_cur_focus_value(cur_focus)
     }
 

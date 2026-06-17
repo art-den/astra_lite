@@ -35,3 +35,13 @@ impl Default for QualityOptions {
         }
     }
 }
+
+impl QualityOptions {
+    pub fn is_used_for_light_frame(&self) -> bool {
+        self.use_max_fwhm || self.use_max_ovality
+    }
+
+    pub fn is_used_for_raw(&self) -> bool {
+        self.check_ccd_temp
+    }
+}

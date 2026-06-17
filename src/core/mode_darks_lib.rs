@@ -1,6 +1,10 @@
-use std::{collections::VecDeque, sync::{Arc, Mutex, RwLock}};
+use std::{collections::VecDeque, sync::{Arc, Mutex}};
 
-use crate::{core::{frame_processing::*, mode_camera::{CameraMode, TackingPicturesMode}, mode_waiting::WaitingMode}, indi::{self}, options::*};
+use crate::{
+    core::{frame_processing::*, mode_camera::{CameraMode, TackingPicturesMode}, mode_waiting::WaitingMode},
+    hal::Camera,
+   options::*
+};
 
 use super::{core::*, events::Progress};
 
@@ -30,11 +34,10 @@ pub struct MasterFileCreationProgramItem {
 }
 
 pub struct DarkCreationMode {
+    camera:      Arc<dyn Camera + Send + Sync>,
     mode:        DarkLibMode,
     calibr_data: Arc<Mutex<CalibrData>>,
-    indi:        Arc<indi::Connection>,
     program:     Vec<MasterFileCreationProgramItem>,
-    device:      DeviceAndProp,
     index:       usize,
     state:       State,
     temperature: VecDeque<f64>,
@@ -42,23 +45,17 @@ pub struct DarkCreationMode {
 
 impl DarkCreationMode {
     pub fn new(
+        core:        &Core,
         mode:        DarkLibMode,
         calibr_data: &Arc<Mutex<CalibrData>>,
-        options:     &Arc<RwLock<Options>>,
-        indi:        &Arc<indi::Connection>,
         program:     &[MasterFileCreationProgramItem]
     ) -> anyhow::Result<Self> {
-        let opts = options.read().unwrap();
-        let Some(cam_device) = &opts.cam.device else {
-            anyhow::bail!("Camera is not selected");
-        };
-
+        let camera = core.camera_or_err()?;
         Ok(Self {
+            camera,
             mode,
             calibr_data: Arc::clone(calibr_data),
-            indi:        Arc::clone(indi),
             program:     program.to_vec(),
-            device:      cam_device.clone(),
             index:       0,
             state:       State::Undefined,
             temperature: VecDeque::new(),
@@ -80,7 +77,6 @@ impl DarkCreationMode {
             let mut new_mode = TackingPicturesMode::new(cam_mode, &core)?;
             new_mode.set_dark_creation_program_item(&program_item);
             new_mode.set_next_mode(Some(prev_mode));
-            core.init_cam_for_mode(&new_mode)?;
             new_mode.start()?;
             mode.active = Box::new(new_mode);
             Ok(())
@@ -132,7 +128,7 @@ impl Mode for DarkCreationMode {
         Ok(())
     }
 
-    fn notify_timer(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         let mut have_to_start = false;
         match self.state {
@@ -143,7 +139,7 @@ impl Mode for DarkCreationMode {
 
                 if let Some(temperature) = item.temperature {
                     self.temperature.clear();
-                    self.indi.camera_set_temperature(&self.device.name, temperature)?;
+                    self.camera.set_temperature(Some(temperature))?;
                     self.state = State::WaitingForTemperature(temperature);
                     result = NotifyResult::ProgressChanges;
                 } else {
@@ -152,9 +148,7 @@ impl Mode for DarkCreationMode {
             }
 
             State::WaitingForTemperature(desired_temperature) => {
-                let temperature = self.indi.camera_get_temperature_prop_value(
-                    &self.device.name
-                )?.value;
+                let temperature = self.camera.temperature()?;
 
                 self.temperature.push_back(temperature);
                 if self.temperature.len() * timer_period_ms > WAIT_TEMERATURE_TIME * 1000 {

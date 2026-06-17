@@ -1,11 +1,9 @@
-use std::{rc::Rc, sync::{Arc, RwLock}};
+use std::{rc::Rc, sync::Arc};
 use gtk::prelude::*;
 use macros::FromBuilder;
 
 use crate::{
-    core::{core::*, events::*},
-    guiding::external_guider::*,
-    indi, options::*,
+    core::{core::*, events::*}, guiding::external_guider::*, hal::{HalState, events::HalEvent}, options::*
 };
 
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
@@ -13,9 +11,7 @@ use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,
-    options: &Arc<RwLock<Options>>,
     core:    &Arc<Core>,
-    indi:    &Arc<indi::Connection>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/guiding.ui"));
     let info_widgets = InfoWidgets::new();
@@ -25,9 +21,7 @@ pub fn init_ui(
         info_widgets,
         window:        window.clone(),
         main_ui:       Rc::clone(main_ui),
-        options:       Arc::clone(options),
         core:          Arc::clone(core),
-        indi:          Arc::clone(indi),
     });
 
     obj.init_widgets();
@@ -81,9 +75,7 @@ struct GuidingUi {
     info_widgets: InfoWidgets,
     main_ui:      Rc<MainUi>,
     window:       gtk::ApplicationWindow,
-    options:      Arc<RwLock<Options>>,
     core:         Arc<Core>,
-    indi:         Arc<indi::Connection>,
 }
 
 impl Drop for GuidingUi {
@@ -155,10 +147,9 @@ impl UiModule for GuidingUi {
     }
 
     fn on_app_closing(&self) {
-        let mut options = self.options.write().unwrap();
-        if let Some(cur_cam_device) = options.cam.device.clone() {
-            self.store_options_for_camera(&cur_cam_device, &mut options);
-        }
+        let mut options = self.core.options().write().unwrap();
+        let cur_cam_device = options.cam.device_id.clone();
+        self.store_options_for_camera(&cur_cam_device, &mut options);
         drop(options);
     }
 
@@ -167,8 +158,8 @@ impl UiModule for GuidingUi {
             Event::ModeChanged => {
                 self.correct_widgets_props();
             }
-            Event::CameraDeviceChanged{ from, to } => {
-                self.handler_camera_changed(from, to);
+            Event::CameraDeviceChanged{ prev_camera_id, new_camera_id } => {
+                self.handler_camera_changed(prev_camera_id, new_camera_id);
             }
             Event::Guider(evt) => {
                 self.process_ext_guider_event(evt);
@@ -177,9 +168,9 @@ impl UiModule for GuidingUi {
         }
     }
 
-    fn on_indi_event(&self, event: &indi::Event) {
+    fn on_hal_event(&self, event: &HalEvent) {
         match event {
-            indi::Event::ConnChange(_) => {
+            HalEvent::StateChanged(_) => {
                 self.correct_widgets_props();
             }
             _ => {}
@@ -224,7 +215,7 @@ impl GuidingUi {
         connect_rbtn(&self.widgets.rbtn_guide_ext);
     }
 
-    fn correct_widgets_props_impl(&self, cam_device: Option<&DeviceAndProp>) {
+    fn correct_widgets_props_impl(&self, cam_device: &str) {
         let mode = self.core.mode();
         let mode_type = mode.active.get_type();
         drop(mode);
@@ -233,19 +224,18 @@ impl GuidingUi {
             mode_type == ModeType::SingleShot ||
             mode_type == ModeType::LiveView;
         let dither_calibr = mode_type == ModeType::DitherCalibr;
-        let indi_connected = self.indi.state() == indi::ConnState::Connected;
+        let hal_connected = self.core.hal().state() == HalState::Connected;
 
         let disabled = self.widgets.rbtn_no_guiding.is_active();
         let by_main_cam = self.widgets.rbtn_guide_main_cam.is_active();
         let by_ext = self.widgets.rbtn_guide_ext.is_active();
 
-        if let Some(cam_device) = cam_device {
-            let cam_ccd = indi::CamCcd::from_ccd_prop_name(&cam_device.prop);
-            let exp_value = self.indi.camera_get_exposure_prop_value(&cam_device.name, cam_ccd);
-            correct_spinbutton_by_cam_prop(&self.widgets.spb_mnt_cal_exp, &exp_value, 1, Some(1.0));
+        if let Ok(camera) = self.core.hal().camera(cam_device) {
+            let exp_range = camera.exposure_range().ok();
+            correct_spinbutton_by_range(&self.widgets.spb_mnt_cal_exp, exp_range, 1, Some(1.0));
         }
 
-        self.widgets.grd.set_sensitive(indi_connected);
+        self.widgets.grd.set_sensitive(hal_connected);
         self.widgets.rbtn_no_guiding.set_sensitive(can_change_mode);
         self.widgets.rbtn_guide_main_cam.set_sensitive(can_change_mode);
         self.widgets.rbtn_guide_ext.set_sensitive(can_change_mode);
@@ -267,42 +257,43 @@ impl GuidingUi {
     }
 
     fn correct_widgets_props(&self) {
-        let options = self.options.read().unwrap();
-        let cam_device = options.cam.device.clone();
+        let options = self.core.options().read().unwrap();
+        let cam_device = options.cam.device_id.clone();
         drop(options);
-        self.correct_widgets_props_impl(cam_device.as_ref());
+        self.correct_widgets_props_impl(&cam_device);
     }
 
-    fn handler_camera_changed(&self, from: &Option<DeviceAndProp>, to: &DeviceAndProp) {
-        let mut options = self.options.write().unwrap();
+    fn handler_camera_changed(&self, from: &str, to: &str) {
+        let mut options = self.core.options().write().unwrap();
         self.get_options(&mut options);
-        if let Some(from) = from {
+        if !from.is_empty() {
             self.store_options_for_camera(from, &mut options);
         }
         self.restore_options_for_camera(to, &mut options);
         self.show_options(&options);
         drop(options);
-        self.correct_widgets_props_impl(Some(to));
+        self.correct_widgets_props_impl(to);
     }
 
     fn store_options_for_camera(
         &self,
-        device:  &DeviceAndProp,
+        device:  &str,
         options: &mut Options
     ) {
-        let key = device.to_file_name_part();
-        let sep_options = options.sep_guiding.entry(key).or_default();
+        if device.is_empty() {
+            return;
+        }
+        let sep_options = options.sep_guiding.entry(device.to_string()).or_default();
         sep_options.exposure = options.guiding.main_cam.calibr_exposure;
         sep_options.gain = options.guiding.main_cam.calibr_gain;
     }
 
     fn restore_options_for_camera(
         &self,
-        device:  &DeviceAndProp,
+        device:  &str,
         options: &mut Options
     ) {
-        let key = device.to_file_name_part();
-        if let Some(sep_options) = options.sep_guiding.get(&key) {
+        if let Some(sep_options) = options.sep_guiding.get(device) {
             options.guiding.main_cam.calibr_exposure = sep_options.exposure;
             options.guiding.main_cam.calibr_gain = sep_options.gain;
         }

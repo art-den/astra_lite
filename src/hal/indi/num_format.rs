@@ -1,3 +1,70 @@
+#[derive(Debug, Clone)]
+pub enum NumFormat {
+    Float{ width: Option<u8>, prec: u8 },
+    G,
+    Sexagesimal { zero: bool, width: Option<u8>, frac: u8 },
+    Unrecorgnized,
+}
+
+impl NumFormat {
+    pub fn new_from_indi_format(format_str: &str) -> Self {
+        use once_cell::sync::OnceCell;
+        static FLOAT_RE: OnceCell<regex::Regex> = OnceCell::new();
+        let float_re = FLOAT_RE.get_or_init(|| {
+            regex::Regex::new(r"%(\d*)\.(\d*)[Ff]").unwrap()
+        });
+        if let Some(float_re_res) = float_re.captures(format_str) {
+            let width: Option<u8> = float_re_res[1].parse().ok();
+            let prec: u8 = float_re_res[2].parse().unwrap_or(0);
+            return NumFormat::Float { width, prec };
+        }
+        static G_RE: OnceCell<regex::Regex> = OnceCell::new();
+        let g_re = G_RE.get_or_init(|| {
+            regex::Regex::new(r"%.*[Gg]").unwrap()
+        });
+        if g_re.is_match(format_str) {
+            return NumFormat::G;
+        }
+        static SEX_RE: OnceCell<regex::Regex> = OnceCell::new();
+        let sex_re = SEX_RE.get_or_init(|| {
+            regex::Regex::new(r"%(\d*)\.(\d*)[Mm]").unwrap()
+        });
+        if let Some(sex_re_res) = sex_re.captures(format_str) {
+            let width_str = &sex_re_res[1];
+            let zero = width_str.starts_with("0");
+            let width: Option<u8> = width_str.parse().ok();
+            let frac: u8 = sex_re_res[2].parse().unwrap_or(0);
+            return NumFormat::Sexagesimal { zero, width, frac };
+        }
+        NumFormat::Unrecorgnized
+    }
+
+    pub fn value_to_string(&self, value: f64) -> String {
+        match self {
+            NumFormat::Float { width, prec } =>
+                match width {
+                    Some(width) => format!(
+                        "{:width$.prec$}",
+                        value,
+                        width = *width as usize,
+                        prec = *prec as usize
+                    ),
+                    None => format!(
+                        "{:.prec$}",
+                        value,
+                        prec = *prec as usize
+                    ),
+                }
+            NumFormat::G =>
+                value.to_string(),
+            NumFormat::Sexagesimal { zero, frac, .. } =>
+                value_to_sexagesimal(value, *zero, *frac),
+            NumFormat::Unrecorgnized =>
+                format!("{:.7}", value),
+        }
+    }
+}
+
 pub fn value_to_sexagesimal_impl(
     value: f64,
     zero: bool,

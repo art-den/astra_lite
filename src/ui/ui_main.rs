@@ -5,14 +5,14 @@ use std::{
     process::Command,
     rc::Rc,
     sync::{Arc, RwLock},
-    time::Duration
+    time::Duration,
 };
 
 use gtk::{prelude::*, glib, glib::clone, cairo};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{core::*, events::*}, indi, options::*, utils::io_utils::*,
+    core::{core::*, events::*}, hal::events::HalEvent, options::*, utils::io_utils::*,
 };
 use super::{gtk_utils::*, module::*, utils::*};
 
@@ -31,7 +31,6 @@ pub fn init_ui(
     );
 
     let options = core.options();
-    let indi = core.indi();
 
     let builder = gtk::Builder::from_string(include_str!(r"resources/main.ui"));
     let widgets = Widgets::from_builder(&builder);
@@ -52,7 +51,6 @@ pub fn init_ui(
         widgets,
         logs_dir:       logs_dir.to_path_buf(),
         core:           Arc::clone(core),
-        indi:           Arc::clone(indi),
         options:        Arc::clone(options),
         modules:        RefCell::new(UiModules::new()),
         ui_options:     RefCell::new(ui_options),
@@ -78,11 +76,11 @@ pub fn init_ui(
     let preview       = super::ui_preview      ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let focuser       = super::ui_focuser      ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let fw_wheel      = super::ui_flt_wheel     ::init_ui(&main_ui.widgets.window, core);
-    let guiding       = super::ui_guiding      ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
-    let mount         = super::ui_mount        ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
-    let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
-    let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, options, core, indi);
-    let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, core, options, indi);
+    let guiding       = super::ui_guiding      ::init_ui(&main_ui.widgets.window, &main_ui, core);
+    let mount         = super::ui_mount        ::init_ui(&main_ui.widgets.window, &main_ui, core);
+    let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, core);
+    let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, core);
+    let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let debug         = super::ui_debug        ::init_ui(options);
 
     let mut modules = main_ui.modules.borrow_mut();
@@ -229,7 +227,6 @@ pub struct MainUi {
     ui_options:     RefCell<UiOptions>,
     progress:       RefCell<Option<Progress>>,
     core:           Arc<Core>,
-    indi:           Arc<indi::Connection>,
     close_win_flag: Cell<bool>,
     prev_tab_page:  Cell<TabPage>,
     conn_string:    RefCell<String>,
@@ -248,7 +245,7 @@ impl Drop for MainUi {
 
 enum MainThreadEvent {
     Core(Event),
-    Indi(indi::Event),
+    Hal(HalEvent),
 }
 
 impl MainUi {
@@ -326,7 +323,7 @@ impl MainUi {
 
     fn connect_state_events(self: &Rc<Self>) {
         let (sender, receiver) = async_channel::unbounded();
-        self.core.events().subscribe(move |event| {
+        self.core.events().connect(move |event| {
             sender.send_blocking(event).unwrap();
         });
 
@@ -362,7 +359,6 @@ impl MainUi {
                 let res = self_.handler_close_window();
                 if res == glib::Propagation::Proceed {
                     gtk::main_iteration_do(true);
-                    self_.get_all_options();
                     *self_.self_.borrow_mut() = None;
                 }
                 res
@@ -389,17 +385,17 @@ impl MainUi {
     fn connect_common_events(self: &Rc<Self>) {
         let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
 
-        // INDI
+        // HAL
 
         let sender = main_thread_sender.clone();
-        self.indi.subscribe_events(move |event| {
-            _ = sender.send_blocking(MainThreadEvent::Indi(event));
+        self.core.hal().connect_event_handler(move |event| {
+            _ = sender.send_blocking(MainThreadEvent::Hal(event));
         });
 
         // Core
 
         let sender = main_thread_sender.clone();
-        self.core.events().subscribe(move |event| {
+        self.core.events().connect(move |event| {
             _ = sender.send_blocking(MainThreadEvent::Core(event));
         });
 
@@ -446,10 +442,7 @@ impl MainUi {
         _ = save_json_to_config::<UiOptions>(&options, MainUi::CONF_FN);
         drop(options);
 
-        if let Ok(mut options) = self.options.try_write() {
-            let modules = self.modules.borrow();
-            modules.get_options(&mut options);
-        }
+        self.get_all_options();
 
         let modules = self.modules.borrow();
         modules.on_app_closing();
@@ -553,14 +546,13 @@ impl MainUi {
 
     fn process_indi_or_core_event(&self, event: MainThreadEvent) {
         match event {
-            MainThreadEvent::Indi(indi_event) => {
-                let modules = self.modules.borrow();
-                modules.on_indi_event(&indi_event);
-            }
-
             MainThreadEvent::Core(core_event) => {
                 let modules = self.modules.borrow();
                 modules.on_core_event(&core_event);
+            }
+            MainThreadEvent::Hal(hal_event) => {
+                let modules = self.modules.borrow();
+                modules.on_hal_event(&hal_event);
             }
         }
     }
@@ -748,9 +740,12 @@ impl MainUi {
     }
 
     pub fn get_all_options(&self) {
-        let mut options = self.options.write().unwrap();
-        let modules = self.modules.borrow();
-        modules.get_options(&mut options);
+        if let Ok(mut options) = self.options.try_write() {
+            let modules = self.modules.borrow();
+            modules.get_options(&mut options);
+        } else {
+            log::error!("Fail to unlock options for changing!");
+        }
     }
 
     pub fn set_module_panel_visible(&self, panel_widget: &gtk::Widget, is_visible: bool) {

@@ -84,7 +84,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkBox">
+      <object class="GtkBox" id="bx_take_shot">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="spacing">5</property>

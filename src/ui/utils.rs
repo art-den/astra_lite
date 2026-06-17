@@ -1,33 +1,33 @@
-use std::{rc::Rc, cell::{RefCell, Cell}, time::Duration, collections::HashMap, hash::Hash};
+use std::{cell::{Cell, RefCell}, collections::HashMap, hash::Hash, ops::RangeInclusive, rc::Rc, time::Duration};
 use gtk::{prelude::*, glib, glib::clone, cairo, gdk};
-use crate::{image::histogram::*, indi};
+use crate::image::histogram::*;
 
-pub fn correct_spinbutton_by_cam_prop(
-    spb:       &gtk::SpinButton,
-    prop_info: &indi::Result<indi::NumPropValue>,
-    digits:    u32,
-    step:      Option<f64>,
-) -> bool {
-    if let Ok(info) = prop_info {
-        spb.set_range(info.min, info.max);
+pub fn correct_spinbutton_by_range(
+    spb:    &gtk::SpinButton,
+    range:  Option<RangeInclusive<f64>>,
+    digits: u32,
+    step:   Option<f64>,
+) {
+    if let Some(range) = range {
+        spb.set_sensitive(true);
+        spb.set_range(*range.start(), *range.end());
         let value = spb.value();
-        if value < info.min {
-            spb.set_value(info.min);
+        if value < *range.start() {
+            spb.set_value(*range.start());
         }
-        if value > info.max {
-            spb.set_value(info.max);
+        if value > *range.end() {
+            spb.set_value(*range.end());
         }
         let desired_step =
-            if      info.max <= 1.0   { 0.1 }
-            else if info.max <= 10.0  { 1.0 }
-            else if info.max <= 100.0 { 10.0 }
-            else                      { 100.0 };
+            if      *range.end() <= 10.0   { 0.1 }
+            else if *range.end() <= 100.0  { 1.0 }
+            else if *range.end() <= 1000.0 { 10.0 }
+            else                           { 100.0 };
         let step = step.unwrap_or(desired_step);
         spb.set_increments(step, 10.0 * step);
         spb.set_digits(digits);
-        true
     } else {
-        false
+        spb.set_sensitive(false);
     }
 }
 
@@ -287,7 +287,7 @@ pub fn draw_progress_bar(
 }
 
 pub fn fill_devices_list_into_combobox(
-    list:       &[String],
+    list:       &[(String/*id*/, String/*text*/)],
     cb:         &gtk::ComboBoxText,
     cur_id:     Option<&str>,
     connected:  bool,
@@ -295,8 +295,8 @@ pub fn fill_devices_list_into_combobox(
 ) -> bool {
     cb.remove_all();
 
-    for item in list {
-        cb.append(Some(item), item);
+    for (id, text) in list {
+        cb.append(Some(id), text);
     }
 
     let mut device_selected_in_cb = false;
@@ -309,7 +309,7 @@ pub fn fill_devices_list_into_combobox(
         }
     } else if !list.is_empty() {
         cb.set_active(Some(0));
-        set_id_fun(list[0].as_str());
+        set_id_fun(list[0].0.as_str());
         device_selected_in_cb = true;
     }
 

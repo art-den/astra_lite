@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use itertools::{izip, Itertools};
 use serde::{Serialize, Deserialize};
 
-use crate::utils::math::square_ls;
+use crate::{hal::FrameType, utils::math::square_ls};
 use super::{image::*, simple_fits::*};
 
 #[derive(Clone)]
@@ -78,48 +78,6 @@ impl CfaType {
             CfaType::RGBG => Some("RGBG"),
             CfaType::GRBG => Some("GRBG"),
             CfaType::RGGB => Some("RGGB"),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy, Default)]
-pub enum FrameType {
-    #[default]
-    Undef,
-    Lights,
-    Flats,
-    Darks,
-    Biases,
-}
-
-impl FrameType {
-    pub fn from_str(text: &str, def: FrameType) -> Self {
-        match text {
-            "Light" => FrameType::Lights,
-            "Flat"  => FrameType::Flats,
-            "Dark"  => FrameType::Darks,
-            "Bias"  => FrameType::Biases,
-            _       => def,
-        }
-    }
-
-    pub fn to_str(&self) -> &'static str {
-        match self {
-            FrameType::Undef  => "Undefined",
-            FrameType::Lights => "Light",
-            FrameType::Flats  => "Flat",
-            FrameType::Darks  => "Dark",
-            FrameType::Biases => "Bias",
-        }
-    }
-
-    pub fn to_readable_str(&self) -> &'static str {
-        match self {
-            FrameType::Lights => "Saving LIGHT frames",
-            FrameType::Flats  => "Saving FLAT frames",
-            FrameType::Darks  => "Saving DARK frames",
-            FrameType::Biases => "Saving BIAS frames",
-            FrameType::Undef  => "Unknows save frames state :("
         }
     }
 }
