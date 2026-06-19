@@ -175,8 +175,6 @@ impl PlatesolveMode {
                     &mut options.guiding.foc_len
                 };
 
-            dbg!(focal_len);
-
             let ok_to_set_new_value = f64::abs(*cur_len - focal_len) >= 2.0;
             if ok_to_set_new_value {
                 log::info!("Correcting options focal len from {:.1} to {:.1}", *cur_len, focal_len);

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::{io::{ErrorKind, Read}, os::unix::net::UnixStream};
 use super::{base64::*, xml_helper::*};
 
