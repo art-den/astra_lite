@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
-use std::io::ErrorKind;
-
+use std::{io::{ErrorKind, Read}, os::unix::net::UnixStream};
 use super::{base64::*, xml_helper::*};
 
 pub struct XmlStreamReaderBlob {
@@ -27,7 +26,7 @@ pub enum XmlStreamReaderResult {
     Disconnected
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 enum XmlStreamReaderState {
     Undefined,
     WaitForTag,
@@ -38,12 +37,16 @@ enum XmlStreamReaderState {
     WaitOneBlobTagEnd,
 }
 
+pub enum XmlStream<'a> {
+    Read(&'a mut dyn std::io::Read),
+    Unix(&'a UnixStream),
+}
+
 pub struct XmlStreamReader {
     state:               XmlStreamReaderState,
+    is_blob_xml:         bool,
     read_buffer:         Vec<u8>,
-    stream_buffer:       Vec<u8>,
     buf_size:            usize,
-    read_len:            usize,
     base64_decoder:      Base64Decoder,
     tag_re:              regex::bytes::Regex,
     tag_end_re:          regex::bytes::Regex,
@@ -57,7 +60,8 @@ pub struct XmlStreamReader {
     blob_format:         String,
     blob_size:           Option<usize>,
     blob_dl_start:       std::time::Instant,
-    blobs:               Vec<XmlStreamReaderBlob>,
+    blobs:               Vec<(Vec<u8>, f64)>,
+    files:               Vec<std::fs::File>,
     xml_text:            String,
 }
 
@@ -65,10 +69,9 @@ impl XmlStreamReader {
     pub fn new() -> Self {
         Self {
             state:               XmlStreamReaderState::Undefined,
+            is_blob_xml:         false,
             read_buffer:         Vec::new(),
-            stream_buffer:       Vec::new(),
             buf_size:            1024*32,
-            read_len:            0,
             base64_decoder:      Base64Decoder::new(0),
             tag_re:              regex::bytes::Regex::new(r"<(\w+)[> /]").unwrap(),
             tag_end_re:          regex::bytes::Regex::new(r".").unwrap(),
@@ -83,6 +86,7 @@ impl XmlStreamReader {
             blob_size:           None,
             blob_dl_start:       std::time::Instant::now(),
             blobs:               Vec::new(),
+            files:               Vec::new(),
             xml_text:            String::new(),
         }
     }
@@ -94,40 +98,43 @@ impl XmlStreamReader {
     pub fn recover_after_error(&mut self) {
         self.read_buffer.clear();
         self.blobs.clear();
+        self.files.clear();
         self.base64_decoder.clear(0);
         self.state = XmlStreamReaderState::WaitForTag;
-        self.read_len = 0;
+    }
+
+    pub fn append_buffer(&mut self, buffer: &[u8]) {
+        self.read_buffer.extend_from_slice(buffer);
     }
 
     pub fn receive_xml(
         &mut self,
-        stream: &mut dyn std::io::Read
+        mut stream: XmlStream,
     ) -> anyhow::Result<XmlStreamReaderResult> {
         loop {
             match self.state {
                 XmlStreamReaderState::Undefined => {
                     self.state = XmlStreamReaderState::WaitForTag;
+                    self.is_blob_xml = false;
                     continue;
                 }
                 XmlStreamReaderState::WaitForTag => {
-                    self.read_buffer.extend_from_slice(&self.stream_buffer[..self.read_len]);
-                    self.read_len = 0;
                     if let Some(re_res) = self.tag_re.captures(&self.read_buffer) {
                         self.xml_text.clear();
                         let tag_name = std::str::from_utf8(re_res.get(1).unwrap().as_bytes())?;
                         let end_tag_re_text = format!(r#"<{0}[^<>]*?/>|</{0}>"#, tag_name);
                         self.tag_end_re = regex::bytes::Regex::new(&end_tag_re_text)?;
                         if tag_name == "setBLOBVector" {
+                            self.is_blob_xml = true;
                             self.state = XmlStreamReaderState::WaitBlobVectorTag;
                         } else {
+                            self.is_blob_xml = false;
                             self.state = XmlStreamReaderState::WaitForTagEnd;
                         }
                         continue;
                     }
                 }
                 XmlStreamReaderState::WaitForTagEnd => {
-                    self.read_buffer.extend_from_slice(&self.stream_buffer[..self.read_len]);
-                    self.read_len = 0;
                     if let Some(re_res) = self.tag_end_re.captures(&self.read_buffer) {
                         let end_pos = re_res.get(0).unwrap().end();
                         let xml_text = std::str::from_utf8(&self.read_buffer[0..end_pos])?;
@@ -135,15 +142,47 @@ impl XmlStreamReader {
                         self.read_buffer.drain(0..end_pos);
                         self.state = XmlStreamReaderState::WaitForTag;
 
+                        let mut blobs = Vec::new();
+                        if self.is_blob_xml {
+                            let xml = xmltree::Element::parse(self.xml_text.as_bytes())?;
+                            for mut xml_elem in xml.into_elements(None) {
+                                let as_file = xml_elem.attr_str("attached") == Some("true");
+                                let (data, dl_time) = if !as_file {
+                                    if self.blobs.is_empty() {
+                                        anyhow::bail!("Internal error: setBLOBVector (attached=false) without blob");
+                                    }
+                                    self.blobs.remove(0)
+                                } else {
+                                    if self.files.is_empty() {
+                                        anyhow::bail!("setBLOBVector (attached=true) without attached fd");
+                                    }
+                                    let mut file = self.files.remove(0);
+                                    let blob_len = xml_elem
+                                        .attr_str_or_err("len")?
+                                        .parse::<usize>()?;
+                                    let timer = std::time::Instant::now();
+                                    let mut data = Vec::new();
+                                    data.resize(blob_len, 0);
+                                    file.read_exact(&mut data)?;
+                                    (data, timer.elapsed().as_secs_f64())
+                                };
+
+                                blobs.push(XmlStreamReaderBlob {
+                                    format: xml_elem.attr_string_or_err("format")?,
+                                    name:   xml_elem.attr_string_or_err("name")?,
+                                    data,
+                                    dl_time,
+                                });
+                            }
+                        }
+
                         return Ok(XmlStreamReaderResult::Xml {
                             xml:   std::mem::take(&mut self.xml_text),
-                            blobs: std::mem::take(&mut self.blobs),
+                            blobs,
                         });
                     }
                 }
                 XmlStreamReaderState::WaitBlobVectorTag => {
-                    self.read_buffer.extend_from_slice(&self.stream_buffer[..self.read_len]);
-                    self.read_len = 0;
                     if let Some(re_res) = self.set_blob_vec_re.captures(&self.read_buffer) {
                         let end_pos = re_res.get(0).unwrap().end();
                         let xml_text = std::str::from_utf8(&self.read_buffer[0..end_pos])?;
@@ -159,27 +198,28 @@ impl XmlStreamReader {
                     }
                 }
                 XmlStreamReaderState::WaitOneBlobTag => {
-                    self.read_buffer.extend_from_slice(&self.stream_buffer[..self.read_len]);
                     if let Some(re_res) = self.one_blob_re.captures(&self.read_buffer) {
-                        self.blob_dl_start = std::time::Instant::now();
                         let end_pos = re_res.get(0).unwrap().end();
+                        self.blob_dl_start = std::time::Instant::now();
                         let xml_text = std::str::from_utf8(&self.read_buffer[0..end_pos])?;
                         self.xml_text.push_str(xml_text);
                         let mut xml_text = xml_text.trim().to_string();
                         self.read_buffer.drain(0..end_pos);
-                        xml_text.push_str(r"</oneBLOB>");
+                        if !xml_text.ends_with("/>") {
+                            xml_text.push_str(r"</oneBLOB>");
+                        }
                         let mut xml_elem = xmltree::Element::parse(xml_text.as_bytes())?;
                         self.blob_elem = xml_elem.attr_string_or_err("name")?;
                         self.blob_format = xml_elem.attr_string_or_err("format")?;
                         let size = xml_elem.attributes.get("size").and_then(|attr| attr.parse::<usize>().ok());
                         let len = xml_elem.attributes.get("len").and_then(|attr| attr.parse::<usize>().ok());
-                        self.blob_size = size.or(len);
-                        self.base64_decoder.clear(usize::min(self.blob_size.unwrap_or_default(), 100_000_000));
-                        self.stream_buffer.clear();
-                        self.stream_buffer.extend_from_slice(&self.read_buffer);
-                        self.read_buffer.clear();
-                        self.read_len = self.stream_buffer.len();
-                        self.state = XmlStreamReaderState::ReadingBlob;
+                        let blob_is_sent_by_fd = xml_elem.attr_str("attached") == Some("true");
+
+                        if !blob_is_sent_by_fd {
+                            self.blob_size = size.or(len);
+                            self.base64_decoder.clear(usize::min(self.blob_size.unwrap_or_default(), 100_000_000));
+                            self.state = XmlStreamReaderState::ReadingBlob;
+                        }
                         return Ok(XmlStreamReaderResult::BlobBegin {
                             device_name: self.blob_device.clone(),
                             prop_name: self.blob_prop.clone(),
@@ -188,15 +228,14 @@ impl XmlStreamReader {
                             len:       self.blob_size,
                         });
                     }
-                    if self.set_blob_vec_end_re.find(&self.read_buffer).is_some() {
+                    if self.set_blob_vec_end_re.captures(&self.read_buffer).is_some() {
                         self.state = XmlStreamReaderState::WaitForTagEnd;
-                        self.read_len = 0;
                         continue;
                     }
                 }
                 XmlStreamReaderState::ReadingBlob => {
                     let mut end_of_blob_found = false;
-                    for &b in &self.stream_buffer[..self.read_len] {
+                    for &b in &self.read_buffer {
                         if b != b'<' {
                             self.base64_decoder.add_byte(b);
                         } else {
@@ -205,27 +244,21 @@ impl XmlStreamReader {
                         }
                     }
                     if end_of_blob_found {
-                        let end_blob_pos = &self.stream_buffer[..self.read_len]
+                        let end_blob_pos = &self.read_buffer
                             .iter()
                             .position(|b| *b == b'<')
                             .unwrap();
                         let blob_dl_time = self.blob_dl_start.elapsed().as_secs_f64();
-                        self.read_buffer.extend_from_slice(&self.stream_buffer[*end_blob_pos..self.read_len]);
+
+                        self.read_buffer.drain(0..*end_blob_pos);
                         self.state = XmlStreamReaderState::WaitOneBlobTagEnd;
-                        let blob = XmlStreamReaderBlob {
-                            format:  self.blob_format.clone(),
-                            name:    self.blob_elem.clone(),
-                            data:    self.base64_decoder.take_result(),
-                            dl_time: blob_dl_time,
-                        };
-                        self.blobs.push(blob);
-                        self.read_len = 0;
+                        self.blobs.push((self.base64_decoder.take_result(), blob_dl_time));
                         continue;
+                    } else {
+                        self.read_buffer.clear();
                     }
                 }
                 XmlStreamReaderState::WaitOneBlobTagEnd => {
-                    self.read_buffer.extend_from_slice(&self.stream_buffer[..self.read_len]);
-                    self.read_len = 0;
                     if let Some(re_res) = self.one_blob_end_re.captures(&self.read_buffer) {
                         let end_pos = re_res.get(0).unwrap().end();
                         let xml_text = std::str::from_utf8(&self.read_buffer[0..end_pos])?;
@@ -237,39 +270,60 @@ impl XmlStreamReader {
                 }
             }
 
-            self.stream_buffer.resize(self.buf_size, 0);
-            let read_res = stream.read(&mut self.stream_buffer);
-            self.read_len = match read_res {
-                Err(e) => match e.kind() {
-                    ErrorKind::Interrupted =>
-                        0,
-                    ErrorKind::NotConnected |
-                    ErrorKind::ConnectionAborted |
-                    ErrorKind::ConnectionReset =>
-                        return Ok(XmlStreamReaderResult::Disconnected),
-                    ErrorKind::TimedOut |
-                    ErrorKind::WouldBlock =>
-                        return Ok(XmlStreamReaderResult::TimeOut),
-                    _ =>
-                        return Err(e.into()),
-                },
-                Ok(0) =>
-                    return Ok(XmlStreamReaderResult::Disconnected),
-                Ok(size) =>
-                    size,
+            let cur_buf_size = self.read_buffer.len();
+            self.read_buffer.resize(cur_buf_size + self.buf_size, 0);
+            let read_res = match &mut stream {
+                XmlStream::Read(stream) => {
+                    stream.read(&mut self.read_buffer[cur_buf_size..])
+                }
+                XmlStream::Unix(stream) => {
+                    use unix_ancillary::UnixStreamExt;
+                    // read data and file descriptors from socket
+                    match stream.recv_fds_into::<42>(&mut self.read_buffer[cur_buf_size..]) {
+                        Ok((size_read, fds)) => {
+                            for fd in fds {
+                                self.files.push(fd.into());
+                            }
+                            Ok(size_read)
+                        }
+                        Err(err) =>
+                            Err(err),
+                    }
+                }
             };
+
+            match read_res {
+                Err(e) => {
+                    self.read_buffer.resize(cur_buf_size, 0);
+                    match e.kind() {
+                        ErrorKind::NotConnected |
+                        ErrorKind::ConnectionAborted |
+                        ErrorKind::ConnectionReset =>
+                            return Ok(XmlStreamReaderResult::Disconnected),
+                        ErrorKind::TimedOut |
+                        ErrorKind::WouldBlock =>
+                            return Ok(XmlStreamReaderResult::TimeOut),
+                        _ =>
+                            return Err(e.into()),
+                    }
+                }
+                Ok(size_read) => {
+                    self.read_buffer.resize(cur_buf_size + size_read, 0);
+                    if size_read == 0 {
+                        return Ok(XmlStreamReaderResult::Disconnected);
+                    }
+                }
+            }
         }
     }
-
 }
-
 
 #[test]
 fn test_reader_eof() {
     let mut reader = XmlStreamReader::new();
     let mut stream = std::io::Cursor::new("");
 
-    let res = reader.receive_xml(&mut stream);
+    let res = reader.receive_xml(XmlStream::Read(&mut stream));
     assert!(matches!(res.unwrap(), XmlStreamReaderResult::Disconnected));
 }
 
@@ -281,13 +335,13 @@ fn test_reader_simple() {
 
         let mut test_simple_xml = |test_xml: &str| {
             let mut stream = std::io::Cursor::new(test_xml);
-            let res = reader.receive_xml(&mut stream);
+            let res = reader.receive_xml(XmlStream::Read(&mut stream));
             let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else {
                 panic!("Not XML");
             };
             assert_eq!(xml, test_xml);
 
-            let res = reader.receive_xml(&mut stream);
+            let res = reader.receive_xml(XmlStream::Read(&mut stream));
             assert!(matches!(res.unwrap(), XmlStreamReaderResult::Disconnected));
         };
 
@@ -303,19 +357,19 @@ fn test_reader_simple() {
             test_xml.push_str(xml2);
             let mut stream = std::io::Cursor::new(test_xml);
 
-            let res = reader.receive_xml(&mut stream);
+            let res = reader.receive_xml(XmlStream::Read(&mut stream));
             let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else {
                 panic!("Not XML");
             };
             assert_eq!(xml, xml1);
 
-            let res = reader.receive_xml(&mut stream);
+            let res = reader.receive_xml(XmlStream::Read(&mut stream));
             let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else {
                 panic!("Not XML");
             };
             assert_eq!(xml, xml2);
 
-            let res = reader.receive_xml(&mut stream);
+            let res = reader.receive_xml(XmlStream::Read(&mut stream));
             assert!(matches!(res.unwrap(), XmlStreamReaderResult::Disconnected));
         };
 
@@ -355,19 +409,19 @@ fn test_reader() {
 
         // xml1
 
-        let res = reader.receive_xml(&mut stream);
+        let res = reader.receive_xml(XmlStream::Read(&mut stream));
         let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else { panic!("Not XML"); };
         assert_eq!(xml.trim(), "<xml1/>");
 
         // xml2
 
-        let res = reader.receive_xml(&mut stream);
+        let res = reader.receive_xml(XmlStream::Read(&mut stream));
         let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else { panic!("Not XML"); };
         assert_eq!(xml.trim(), "<xml2></xml2>");
 
         // Blob-1 start
 
-        let res = reader.receive_xml(&mut stream);
+        let res = reader.receive_xml(XmlStream::Read(&mut stream));
         let XmlStreamReaderResult::BlobBegin { device_name, prop_name, elem_name, format, len } = res.unwrap() else {
             panic!("Not Blob begin");
         };
@@ -379,7 +433,7 @@ fn test_reader() {
 
         // Blob-2 start
 
-        let res = reader.receive_xml(&mut stream);
+        let res = reader.receive_xml(XmlStream::Read(&mut stream));
         let XmlStreamReaderResult::BlobBegin { device_name, prop_name, elem_name, format, len } = res.unwrap() else {
             panic!("Not Blob begin");
         };
@@ -391,7 +445,7 @@ fn test_reader() {
 
         // XML + Blobs
 
-        let res = reader.receive_xml(&mut stream);
+        let res = reader.receive_xml(XmlStream::Read(&mut stream));
         let XmlStreamReaderResult::Xml { blobs, .. } = res.unwrap() else {
             panic!("Not XML");
         };
@@ -405,7 +459,7 @@ fn test_reader() {
 
         // Blob-3 start
 
-        let res = reader.receive_xml(&mut stream);
+        let res = reader.receive_xml(XmlStream::Read(&mut stream));
         let XmlStreamReaderResult::BlobBegin { device_name, prop_name, elem_name, format, len } = res.unwrap() else {
             panic!("Not Blob begin");
         };
@@ -417,7 +471,7 @@ fn test_reader() {
 
         // XML + Blob3
 
-        let res = reader.receive_xml(&mut stream);
+        let res = reader.receive_xml(XmlStream::Read(&mut stream));
         let XmlStreamReaderResult::Xml { blobs, .. } = res.unwrap() else {
             panic!("Not XML");
         };
@@ -428,13 +482,13 @@ fn test_reader() {
 
         // xml3
 
-        let res = reader.receive_xml(&mut stream);
+        let res = reader.receive_xml(XmlStream::Read(&mut stream));
         let XmlStreamReaderResult::Xml { xml, .. } = res.unwrap() else { panic!("Not XML"); };
         assert_eq!(xml.trim(), "<xml3></xml3>");
 
         // End of stream
 
-        let res = reader.receive_xml(&mut stream);
+        let res = reader.receive_xml(XmlStream::Read(&mut stream));
         assert!(matches!(res.unwrap(), XmlStreamReaderResult::Disconnected));
     };
 
