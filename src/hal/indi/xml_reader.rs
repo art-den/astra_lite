@@ -38,7 +38,7 @@ enum XmlStreamReaderState {
 pub enum XmlStream<'a> {
     Read(&'a mut dyn std::io::Read),
     #[cfg(target_os = "linux")]
-    Unix(&'a os::unix::net::UnixStream),
+    Unix(&'a std::os::unix::net::UnixStream),
 }
 
 pub struct XmlStreamReader {

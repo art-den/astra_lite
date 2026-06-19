@@ -48,7 +48,7 @@ pub enum EventSenderEvent {
 enum Stream {
     Tcp(TcpStream),
     #[cfg(target_os = "linux")]
-    Unix(os::unix::net::UnixStream),
+    Unix(std::os::unix::net::UnixStream),
 }
 
 impl Stream {
@@ -295,7 +295,7 @@ impl Connection {
     }
 
     #[cfg(target_os = "linux")]
-    fn create_unix_stream() -> Result<os::unix::net::UnixStream> {
+    fn create_unix_stream() -> Result<std::os::unix::net::UnixStream> {
         use std::os::linux::net::SocketAddrExt;
         use std::os::unix::net::{SocketAddr, UnixStream};
 
