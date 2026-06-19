@@ -3,8 +3,7 @@
 use std::collections::HashMap;
 use std::io::{prelude::*, BufWriter, Cursor};
 use std::net::TcpStream;
-use std::os::linux::net::SocketAddrExt;
-use std::os::unix::net::{SocketAddr, UnixStream};
+
 use std::process::{Command, Child, Stdio};
 use std::sync::{MutexGuard, atomic::*};
 use std::sync::{Mutex, Arc, mpsc};
@@ -48,13 +47,15 @@ pub enum EventSenderEvent {
 #[derive(Debug)]
 enum Stream {
     Tcp(TcpStream),
-    Unix(UnixStream),
+    #[cfg(target_os = "linux")]
+    Unix(os::unix::net::UnixStream),
 }
 
 impl Stream {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
         match self {
             Self::Tcp(stream) => stream.set_read_timeout(timeout),
+            #[cfg(target_os = "linux")]
             Self::Unix(stream) => stream.set_read_timeout(timeout),
         }
     }
@@ -62,6 +63,7 @@ impl Stream {
     fn as_read(&mut self) -> &mut dyn std::io::Read {
         match self {
             Self::Tcp(stream) => stream,
+            #[cfg(target_os = "linux")]
             Self::Unix(stream) => stream,
         }
     }
@@ -69,6 +71,7 @@ impl Stream {
     fn as_write_box(self) -> Box<dyn std::io::Write> {
         match self {
             Self::Tcp(stream) => Box::new(stream),
+            #[cfg(target_os = "linux")]
             Self::Unix(stream) => Box::new(stream),
         }
     }
@@ -76,6 +79,7 @@ impl Stream {
     fn try_clone(&self) -> std::io::Result<Stream> {
         Ok(match self {
             Self::Tcp(stream) => Stream::Tcp(stream.try_clone()?),
+            #[cfg(target_os = "linux")]
             Self::Unix(stream) => Stream::Unix(stream.try_clone()?),
         })
     }
@@ -83,6 +87,7 @@ impl Stream {
     fn shutdown(&self, how: std::net::Shutdown) -> std::io::Result<()> {
         match self {
             Self::Tcp(stream) => stream.shutdown(how),
+            #[cfg(target_os = "linux")]
             Self::Unix(stream) => stream.shutdown(how),
         }
     }
@@ -289,7 +294,11 @@ impl Connection {
         Err(Error::IO(last_conn_try_result.expect("last_conn_try_result")))
     }
 
-    fn create_unix_stream() -> Result<UnixStream> {
+    #[cfg(target_os = "linux")]
+    fn create_unix_stream() -> Result<os::unix::net::UnixStream> {
+        use std::os::linux::net::SocketAddrExt;
+        use std::os::unix::net::{SocketAddr, UnixStream};
+
         let addr = SocketAddr::from_abstract_name("/tmp/indiserver")?;
         // Try to connect INDI server 5 times in 1 second
         let mut last_conn_try_result: Option<std::io::Error> = None;
@@ -304,6 +313,7 @@ impl Connection {
         Err(Error::IO(last_conn_try_result.expect("last_conn_try_result")))
     }
 
+    #[cfg(target_os = "linux")]
     fn create_stream(settings: &ConnSettings) -> Result<Stream> {
         let unix_stream =
             !settings.remote ||
@@ -315,6 +325,11 @@ impl Connection {
             Stream::Tcp(Self::create_tcp_stream(settings)?)
         };
         Ok(result)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn create_stream(settings: &ConnSettings) -> Result<Stream> {
+        Ok(Stream::Tcp(Self::create_tcp_stream(settings)?))
     }
 
     pub fn connect(self: &Arc<Self>, settings: &ConnSettings) -> Result<()> {
@@ -2864,6 +2879,7 @@ impl XmlReceiver {
         loop {
             let stream_for_xml = match &self.stream {
                 Stream::Tcp(_) => XmlStream::Read(self.stream.as_read()),
+                #[cfg(target_os = "linux")]
                 Stream::Unix(unix_stream) => XmlStream::Unix(unix_stream),
             };
             let xml_res = self.reader.receive_xml(stream_for_xml);

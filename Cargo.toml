@@ -33,6 +33,8 @@ rand = "0.10"
 csv = "1.2"
 strsim = "0.11"
 macros = { path = "./macros" }
+
+[target.'cfg(linux)'.build-dependencies]
 unix-ancillary = "0.2"
 
 [target.'cfg(windows)'.build-dependencies]

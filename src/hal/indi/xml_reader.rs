@@ -1,4 +1,4 @@
-use std::{io::{ErrorKind, Read}, os::unix::net::UnixStream};
+use std::{io::{ErrorKind, Read}};
 use super::{base64::*, xml_helper::*};
 
 pub struct XmlStreamReaderBlob {
@@ -37,7 +37,8 @@ enum XmlStreamReaderState {
 
 pub enum XmlStream<'a> {
     Read(&'a mut dyn std::io::Read),
-    Unix(&'a UnixStream),
+    #[cfg(target_os = "linux")]
+    Unix(&'a os::unix::net::UnixStream),
 }
 
 pub struct XmlStreamReader {
@@ -274,6 +275,7 @@ impl XmlStreamReader {
                 XmlStream::Read(stream) => {
                     stream.read(&mut self.read_buffer[cur_buf_size..])
                 }
+                #[cfg(target_os = "linux")]
                 XmlStream::Unix(stream) => {
                     use unix_ancillary::UnixStreamExt;
                     // read data and file descriptors from socket
