@@ -175,6 +175,10 @@ impl XmlStreamReader {
                             }
                         }
 
+                        if !self.blobs.is_empty() {
+                            log::info!("self.blobs is not empty after `setBLOBVector` ends")
+                        }
+
                         return Ok(XmlStreamReaderResult::Xml {
                             xml:   std::mem::take(&mut self.xml_text),
                             blobs,
