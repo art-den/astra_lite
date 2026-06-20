@@ -27,7 +27,10 @@ pub enum PreviewScale {
     P50,
     P33,
     P25,
-    CenterAndCorners
+    P15,
+    P10,
+    P5,
+    CenterAndCorners,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

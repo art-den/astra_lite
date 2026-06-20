@@ -386,6 +386,9 @@
                           <item id="p50" translatable="yes">50%</item>
                           <item id="p33" translatable="yes">33%</item>
                           <item id="p25" translatable="yes">25%</item>
+                          <item id="p15" translatable="yes">15%</item>
+                          <item id="p10" translatable="yes">10%</item>
+                          <item id="p5" translatable="yes">5%</item>
                           <item id="c_and_c" translatable="yes">Corners</item>
                         </items>
                       </object>

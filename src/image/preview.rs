@@ -50,6 +50,12 @@ impl PreviewParams {
                 (orig_width/3, orig_height/3),
             PreviewScale::P25 =>
                 (orig_width/4, orig_height/4),
+            PreviewScale::P15 =>
+                (15*orig_width/100, 15*orig_height/100),
+            PreviewScale::P10 =>
+                (10*orig_width/100, 10*orig_height/100),
+            PreviewScale::P5 =>
+                (5*orig_width/100, 5*orig_height/100),
             PreviewScale::CenterAndCorners => {
                 let min_size = self.pr_area_width.min(self.pr_area_height);
                 let min_size_protected = min_size.max(42);
@@ -82,11 +88,10 @@ impl PreviewParams {
             PreviewScale::P75 => 1,
             PreviewScale::P50 => 2,
             PreviewScale::P33 => 3,
-            PreviewScale::P25 => 4,
+            PreviewScale::P25|PreviewScale::P15|PreviewScale::P10|PreviewScale::P5 => 4,
             PreviewScale::CenterAndCorners => 1,
         }
     }
-
 }
 
 #[derive(Default, Debug)]

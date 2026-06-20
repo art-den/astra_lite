@@ -126,6 +126,9 @@ impl PreviewScale {
             Some("p50")     => PreviewScale::P50,
             Some("p33")     => PreviewScale::P33,
             Some("p25")     => PreviewScale::P25,
+            Some("p15")     => PreviewScale::P15,
+            Some("p10")     => PreviewScale::P10,
+            Some("p5")      => PreviewScale::P5,
             Some("c_and_c") => PreviewScale::CenterAndCorners,
             _               => PreviewScale::FitWindow,
         }
@@ -142,6 +145,9 @@ impl PreviewScale {
             PreviewScale::P50              => Some("p50"),
             PreviewScale::P33              => Some("p33"),
             PreviewScale::P25              => Some("p25"),
+            PreviewScale::P15              => Some("p15"),
+            PreviewScale::P10              => Some("p10"),
+            PreviewScale::P5               => Some("p5"),
             PreviewScale::CenterAndCorners => Some("c_and_c"),
         }
     }
@@ -1039,6 +1045,9 @@ impl PreviewUi {
             (PreviewScale::P75,       width_for_scale(PreviewScale::P75)),
             (PreviewScale::P50,       width_for_scale(PreviewScale::P50)),
             (PreviewScale::P25,       width_for_scale(PreviewScale::P25)),
+            (PreviewScale::P15,       width_for_scale(PreviewScale::P15)),
+            (PreviewScale::P10,       width_for_scale(PreviewScale::P10)),
+            (PreviewScale::P5,        width_for_scale(PreviewScale::P5)),
         ];
 
         scale_and_width.sort_by_key(|(_, width)| *width);
