@@ -346,7 +346,6 @@ impl TackingPicturesMode {
 
             self.when_to_start_exp = when_to_start_exp;
         }
-        dbg!(&self.when_to_start_exp);
     }
 
     fn take_shot_with_options(

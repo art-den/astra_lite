@@ -276,6 +276,7 @@ struct CameraUi {
 
 impl UiModule for CameraUi {
     fn show_options(&self, options: &Options) {
+        self.show_common_options(options);
         self.show_frame_options(options);
         self.show_calibr_options(options);
         self.show_ctrl_options(options);
@@ -812,7 +813,10 @@ impl CameraUi {
                 self_.init_info_widgets();
             })
         );
+    }
 
+    fn show_common_options(&self, options: &Options) {
+        self.widgets.common.chb_live_view.set_active(options.cam.live_view);
     }
 
     fn show_frame_options(&self, options: &Options) {
@@ -875,12 +879,12 @@ impl CameraUi {
         qual.spb_max_temp_diff.set_value(options.quality.max_ccd_temp_diff);
     }
 
-    pub fn get_common_options(&self, options: &mut Options) {
+    fn get_common_options(&self, options: &mut Options) {
         options.cam.live_view = self.widgets.common.chb_live_view.is_active();
         options.cam.device_id = self.widgets.common.cb_cam_list.active_id().unwrap_or_default().to_string();
     }
 
-    pub fn get_ctrl_options(&self, options: &mut Options) {
+    fn get_ctrl_options(&self, options: &mut Options) {
         let ctrl = &self.widgets.ctrl;
         options.cam.ctrl.enable_cooler = ctrl.chb_cooler.is_active();
         options.cam.ctrl.temperature   = ctrl.spb_temp.value();
@@ -889,7 +893,7 @@ impl CameraUi {
         options.cam.ctrl.high_fullwell = ctrl.chb_high_fw.is_active();
     }
 
-    pub fn get_frame_options(&self, options: &mut Options) {
+    fn get_frame_options(&self, options: &mut Options) {
         let frame = &self.widgets.frame;
         options.cam.frame.frame_type   = FrameType::from_active_id(frame.cb_mode.active_id().as_deref());
         options.cam.frame.set_exposure   (frame.spb_exp.value());
@@ -900,7 +904,7 @@ impl CameraUi {
         options.cam.frame.crop         = Crop::from_active_id(frame.cb_crop.active_id().as_deref());
     }
 
-    pub fn get_calibr_options(&self, options: &mut Options) {
+    fn get_calibr_options(&self, options: &mut Options) {
         let calibr = &self.widgets.calibr;
         options.calibr.dark_frame_en     = calibr.chb_dark.is_active();
         options.calibr.flat_frame_en     = calibr.chb_flat.is_active();
@@ -908,7 +912,7 @@ impl CameraUi {
         options.calibr.hot_pixels        = calibr.chb_hot_pixels.is_active();
     }
 
-    pub fn get_raw_options(&self, options: &mut Options) {
+    fn get_raw_options(&self, options: &mut Options) {
         let raw = &self.widgets.raw;
         options.raw_frames.use_cnt       = raw.chb_frames_cnt.is_active();
         options.raw_frames.frame_cnt     = raw.spb_frames_cnt.value() as usize;
@@ -916,7 +920,7 @@ impl CameraUi {
         options.raw_frames.create_master = raw.chb_save_master.is_active();
     }
 
-    pub fn get_live_stacking_options(&self, options: &mut Options) {
+    fn get_live_stacking_options(&self, options: &mut Options) {
         let live = &self.widgets.live_st;
         options.live.save_orig     = live.chb_save_orig.is_active();
         options.live.save_enabled  = live.chb_save_period.is_active();
@@ -925,7 +929,7 @@ impl CameraUi {
         options.live.remove_tracks = live.chb_no_tracks.is_active();
     }
 
-    pub fn get_frame_quality_options(&self, options: &mut Options) {
+    fn get_frame_quality_options(&self, options: &mut Options) {
         let qual = &self.widgets.quality;
         options.quality.use_max_fwhm     = qual.chb_max_fwhm.is_active();
         options.quality.max_fwhm         = qual.spb_max_fwhm.value() as f32;

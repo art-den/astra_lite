@@ -9,6 +9,7 @@ pub trait XmlElementHelper {
     fn elements<'a>(&'a self, tag: Option<&'static str>) -> Box<dyn Iterator<Item = &'a xmltree::Element> + 'a>;
     fn attr_string_or_err(&mut self, attr_name: &str) -> Result<String>;
     fn attr_str_or_err<'a>(&'a self, attr_name: &str) -> Result<&'a str>;
+    fn attr_str<'a>(&'a self, attr_name: &str) -> Option<&'a str>;
     fn attr_time(&self, attr_name: &str) -> Option<DateTime<Utc>>;
     fn text_or_err(&self) -> Result<Cow<'_, str>>;
     fn child_mut_or_err(&mut self, child_name: &str) -> Result<&mut xmltree::Element>;
@@ -66,6 +67,11 @@ impl XmlElementHelper for xmltree::Element {
                 self.name,
                 attr_name
             )))
+    }
+
+    fn attr_str<'a>(&'a self, attr_name: &str) -> Option<&'a str> {
+        self.attributes.get(attr_name)
+            .map(String::as_str)
     }
 
     fn attr_time(&self, attr_name: &str) -> Option<DateTime<Utc>> {

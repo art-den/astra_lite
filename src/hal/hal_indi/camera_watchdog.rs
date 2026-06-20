@@ -63,7 +63,7 @@ impl CcdToToWatch {
             CcdMode::WaitBlob(time_ms) => {
                 *time_ms += timer_period_ms;
                 if *time_ms >= MAX_WAIT_BLOB_TIME * 1000 {
-                    log::info!(
+                    log::error!(
                         "Waiting BLOB of INDI camera {} too long time (> {}) seconds",
                         self.name, MAX_WAIT_BLOB_TIME
                     );

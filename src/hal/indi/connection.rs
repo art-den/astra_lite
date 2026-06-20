@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::io::{prelude::*, BufWriter, Cursor};
 use std::net::TcpStream;
+
 use std::process::{Command, Child, Stdio};
 use std::sync::{MutexGuard, atomic::*};
 use std::sync::{Mutex, Arc, mpsc};
@@ -43,9 +44,58 @@ pub enum EventSenderEvent {
     Exit,
 }
 
+#[derive(Debug)]
+enum Stream {
+    Tcp(TcpStream),
+    #[cfg(target_os = "linux")]
+    Unix(std::os::unix::net::UnixStream),
+}
+
+impl Stream {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        match self {
+            Self::Tcp(stream) => stream.set_read_timeout(timeout),
+            #[cfg(target_os = "linux")]
+            Self::Unix(stream) => stream.set_read_timeout(timeout),
+        }
+    }
+
+    fn as_read(&mut self) -> &mut dyn std::io::Read {
+        match self {
+            Self::Tcp(stream) => stream,
+            #[cfg(target_os = "linux")]
+            Self::Unix(stream) => stream,
+        }
+    }
+
+    fn as_write_box(self) -> Box<dyn std::io::Write> {
+        match self {
+            Self::Tcp(stream) => Box::new(stream),
+            #[cfg(target_os = "linux")]
+            Self::Unix(stream) => Box::new(stream),
+        }
+    }
+
+    fn try_clone(&self) -> std::io::Result<Stream> {
+        Ok(match self {
+            Self::Tcp(stream) => Stream::Tcp(stream.try_clone()?),
+            #[cfg(target_os = "linux")]
+            Self::Unix(stream) => Stream::Unix(stream.try_clone()?),
+        })
+    }
+
+    fn shutdown(&self, how: std::net::Shutdown) -> std::io::Result<()> {
+        match self {
+            Self::Tcp(stream) => stream.shutdown(how),
+            #[cfg(target_os = "linux")]
+            Self::Unix(stream) => stream.shutdown(how),
+        }
+    }
+}
+
 struct ActiveConnData {
     indiserver:     Option<Child>,
-    tcp_stream:     TcpStream,
+    stream:         Stream,
     xml_sender:     XmlSender,
     events_thread:  JoinHandle<()>,
     read_thread:    JoinHandle<()>,
@@ -214,9 +264,75 @@ impl Connection {
         Ok(child)
     }
 
-    pub fn connect(self: &Arc<Self>, settings: &ConnSettings) -> Result<()> {
+    fn create_tcp_stream(settings: &ConnSettings) -> Result<TcpStream> {
         use std::net::ToSocketAddrs;
 
+        let mut addr = if settings.remote {
+            settings.host.clone()
+        } else {
+            "localhost".to_string()
+        };
+        if !addr.contains(":") { addr += ":7624"; }
+
+        // Resolve host into IP addresses
+        let sock_addrs = addr.to_socket_addrs()?;
+
+        // Try to connect INDI server 5 times in 1 second
+        let mut last_conn_try_result: Option<std::io::Error> = None;
+        for addr in sock_addrs {
+            for _ in 0..5 {
+                let conn_try_res = TcpStream::connect_timeout(
+                    &addr,
+                    Duration::from_millis(1000)
+                );
+                match conn_try_res {
+                    Ok(res) => return Ok(res),
+                    Err(err) => last_conn_try_result = Some(err),
+                }
+            }
+        }
+        Err(Error::IO(last_conn_try_result.expect("last_conn_try_result")))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn create_unix_stream() -> Result<std::os::unix::net::UnixStream> {
+        use std::os::linux::net::SocketAddrExt;
+        use std::os::unix::net::{SocketAddr, UnixStream};
+
+        let addr = SocketAddr::from_abstract_name("/tmp/indiserver")?;
+        // Try to connect INDI server 5 times in 1 second
+        let mut last_conn_try_result: Option<std::io::Error> = None;
+        for _ in 0..5 {
+            let conn_try_res = UnixStream::connect_addr(&addr);
+            match conn_try_res {
+                Ok(res) => return Ok(res),
+                Err(err) => last_conn_try_result = Some(err),
+            }
+            std::thread::sleep(Duration::from_millis(1000));
+        }
+        Err(Error::IO(last_conn_try_result.expect("last_conn_try_result")))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn create_stream(settings: &ConnSettings) -> Result<Stream> {
+        let unix_stream =
+            !settings.remote ||
+            settings.host == "localhost" ||
+            settings.host.starts_with("127.");
+        let result = if unix_stream {
+            Stream::Unix(Self::create_unix_stream()?)
+        } else {
+            Stream::Tcp(Self::create_tcp_stream(settings)?)
+        };
+        Ok(result)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn create_stream(settings: &ConnSettings) -> Result<Stream> {
+        Ok(Stream::Tcp(Self::create_tcp_stream(settings)?))
+    }
+
+    pub fn connect(self: &Arc<Self>, settings: &ConnSettings) -> Result<()> {
         let mut state = self.state.lock().unwrap();
         match *state {
             ConnState::Connecting =>
@@ -255,53 +371,14 @@ impl Connection {
                 None
             };
 
-            let mut addr = if settings.remote {
-                settings.host.clone()
-            } else {
-                "localhost".to_string()
-            };
-            if !addr.contains(":") { addr += ":7624"; }
-
-            // Resolve host into IP addresses
-            let sock_addrs = match addr.to_socket_addrs() {
-                Ok(sock_addrs) => sock_addrs,
-                Err(err) => {
-                    if let Some(indiserver) = &mut indiserver {
-                        _ = indiserver.kill();
-                        _ = indiserver.wait();
-                    }
-                    Self::set_new_conn_state(
-                        ConnState::Error(err.to_string()),
-                        &mut self_.state.lock().unwrap(),
-                        &self_.event_handlers
-                    );
-                    return;
-                },
-            };
-
-            // Try to connect INDI server during 3 seconds
-            let mut stream: Option<TcpStream> = None;
-            'outer: for addr in sock_addrs {
-                for _ in 0..3 {
-                    let conn_try_res = TcpStream::connect_timeout(
-                        &addr,
-                        Duration::from_millis(1000)
-                    );
-                    if let Ok(res) = conn_try_res {
-                        stream = Some(res);
-                        break 'outer;
-                    }
-                }
-            }
-
-            // Failed to connect. Stop INDI server and exit
-            let Some(stream) = stream else {
+            let Ok(stream) = Self::create_stream(&settings) else {
+                // Failed to connect. Stop INDI server and exit
                 if let Some(indiserver) = &mut indiserver {
                     _ = indiserver.kill();
                     _ = indiserver.wait();
                 }
                 Self::set_new_conn_state(
-                    ConnState::Error(format!("Can't connect to {}", addr)),
+                    ConnState::Error(format!("Can't connect to {}", settings.host)),
                     &mut self_.state.lock().unwrap(),
                     &self_.event_handlers
                 );
@@ -374,7 +451,7 @@ impl Connection {
             // Assign active connection data
             *self_.data.lock().unwrap() = Some(ActiveConnData{
                 indiserver,
-                tcp_stream: stream,
+                stream,
                 xml_sender: XmlSender { xml_sender },
                 events_thread,
                 read_thread,
@@ -427,7 +504,7 @@ impl Connection {
             conn.xml_sender.send_exit_to_thread();
 
             // Shut down network connection
-            _ = conn.tcp_stream.shutdown(std::net::Shutdown::Both);
+            _ = conn.stream.shutdown(std::net::Shutdown::Both);
 
             // Waiting for xml_sender and xml_reciever threads to terminate
             _ = conn.read_thread.join();
@@ -2581,7 +2658,7 @@ struct XmlSender {
 }
 
 impl XmlSender {
-    fn main(receiver: mpsc::Receiver<XmlSenderItem>, tcp_stream: TcpStream) {
+    fn main(receiver: mpsc::Receiver<XmlSenderItem>, stream: Stream) {
         fn send_xml<T: Write>(
             writer: &mut T,
             xml:    String
@@ -2591,7 +2668,7 @@ impl XmlSender {
             writer.flush()?;
             Ok(())
         }
-        let mut writer = BufWriter::new(tcp_stream);
+        let mut writer = BufWriter::new(stream.as_write_box());
         while let Ok(item) = receiver.recv() {
             match item {
                 XmlSenderItem::Xml(xml) => {
@@ -2690,6 +2767,13 @@ impl XmlSender {
         Ok(())
     }
 
+    fn command_ping_reply(&self, id: &str) -> Result<()> {
+        let xml_text = format!("<pingReply uid=\"{id}\"/>");
+        self.xml_sender.send(XmlSenderItem::Xml(xml_text))
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        Ok(())
+    }
+
     fn command_set_text_property(
         &self,
         device_name: &str,
@@ -2763,7 +2847,7 @@ impl XmlSender {
 struct XmlReceiver {
     conn_state:      Arc<Mutex<ConnState>>,
     devices:         Arc<Mutex<Devices>>,
-    stream:          TcpStream,
+    stream:          Stream,
     reader:          XmlStreamReader,
     xml_sender:      XmlSender,
 }
@@ -2772,7 +2856,7 @@ impl XmlReceiver {
     fn new(
         conn_state: &Arc<Mutex<ConnState>>,
         devices:    &Arc<Mutex<Devices>>,
-        stream:     TcpStream,
+        stream:     Stream,
         xml_sender: XmlSender,
     ) -> Self {
         Self {
@@ -2785,12 +2869,20 @@ impl XmlReceiver {
     }
 
     fn main(&mut self, events_sender: mpsc::Sender<EventSenderEvent>) {
+        let mut buffer = Vec::<u8>::new();
+        buffer.resize(16384, 0);
+
         self.stream.set_read_timeout(Some(Duration::from_millis(1000))).unwrap(); // TODO: check error
 
         self.xml_sender.command_get_properties_impl(None, None).unwrap(); // TODO: check error
 
         loop {
-            let xml_res = self.reader.receive_xml(&mut self.stream);
+            let stream_for_xml = match &self.stream {
+                Stream::Tcp(_) => XmlStream::Read(self.stream.as_read()),
+                #[cfg(target_os = "linux")]
+                Stream::Unix(unix_stream) => XmlStream::Unix(unix_stream),
+            };
+            let xml_res = self.reader.receive_xml(stream_for_xml);
             match xml_res {
                 Ok(XmlStreamReaderResult::BlobBegin {
                     device_name, prop_name, elem_name, format, len
@@ -3011,10 +3103,14 @@ impl XmlReceiver {
         &mut self,
         xml_text:      &str,
         blobs:         Vec<XmlStreamReaderBlob>,
-        events_sender: &mpsc::Sender<EventSenderEvent>
+        events_sender: &mpsc::Sender<EventSenderEvent>,
     ) -> anyhow::Result<()> {
         let mut xml_elem = xmltree::Element::parse(xml_text.as_bytes())?;
-        if xml_elem.name.starts_with("def") { // defXXXXVector
+        if xml_elem.name == "pingRequest" {
+            let uid = xml_elem.attr_str("uid").unwrap_or_default();
+            self.xml_sender.command_ping_reply(uid)?;
+        }
+        else if xml_elem.name.starts_with("def") { // defXXXXVector
             // New property from INDI server
             let device_name = xml_elem.attr_string_or_err("device")?;
             if device_name.is_empty() {

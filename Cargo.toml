@@ -1,6 +1,6 @@
 [package]
 name = "astra_lite"
-version = "0.0.336"
+version = "0.0.339"
 edition = "2024"
 description = "Software for deepsky astrophotography and live stacking"
 repository = "https://github.com/art-den/astra_lite"
@@ -33,6 +33,9 @@ rand = "0.10"
 csv = "1.2"
 strsim = "0.11"
 macros = { path = "./macros" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+unix-ancillary = "0.2"
 
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "1.7"
