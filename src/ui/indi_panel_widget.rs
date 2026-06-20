@@ -180,7 +180,7 @@ impl IndiPanelWidget {
                         return index;
                     }
                 }
-                return 100;
+                100
             };
 
             indi_devices.sort_by(|d1, d2| {
@@ -239,7 +239,7 @@ impl IndiPanelWidget {
                         .visible(true)
                         .use_markup(true)
                         .halign(gtk::Align::Start)
-                        .label(&format!("<span size=\"large\">    <b>{}</b> control panel</span>", *indi_device.name))
+                        .label(format!("<span size=\"large\">    <b>{}</b> control panel</span>", *indi_device.name))
                         .build();
                     let notebook = gtk::Notebook::builder()
                         .visible(true)
@@ -326,7 +326,7 @@ impl IndiPanelWidget {
                         .build();
                     scrollwin.add(&grid);
 
-                    let insert_pos = Self::get_group_insert_index(&indi_group, &ui_device);
+                    let insert_pos = Self::get_group_insert_index(indi_group, ui_device);
                     ui_device.notebook.insert_page(&scrollwin, Some(&tab_label), Some(insert_pos));
                     let new_ui_props_group = UiIndiPropsGroup {
                         name: indi_group.to_string(),

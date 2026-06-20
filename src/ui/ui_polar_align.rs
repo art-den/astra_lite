@@ -209,10 +209,9 @@ impl PolarAlignUi {
         self.widgets.chb_auto_refresh.set_sensitive(!polar_align);
 
         let mut allow_refresh = false;
-        if let Ok(Some(result)) = self.core.exec_mode_custom_command(&CustomCommand::GetState) {
-            if let Some(state) = result.downcast_ref::<State>() {
-                allow_refresh = matches!(&state, State::WaitForManualRefresh);
-            }
+        if let Ok(Some(result)) = self.core.exec_mode_custom_command(&CustomCommand::GetState)
+        && let Some(state) = result.downcast_ref::<State>() {
+            allow_refresh = matches!(&state, State::WaitForManualRefresh);
         }
 
         enable_actions(&self.window, &[

@@ -142,7 +142,7 @@ impl AstrometryPlateSolver {
 
         log::debug!("Running solve-field args={:?}", cmd.get_args());
         let child = cmd.spawn().map_err(|e|
-            anyhow::format_err!("{} when trying to execute {}", e.to_string(), EXECUTABLE_FNAME)
+            anyhow::format_err!("{} when trying to execute {}", e, EXECUTABLE_FNAME)
         )?;
         self.child = Some(child);
         Ok(())

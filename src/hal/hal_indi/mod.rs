@@ -570,11 +570,10 @@ impl CameraShot for IndiCameraShot {
     }
 
     fn save_to_file(&self, file_name: &Path) -> anyhow::Result<()> {
-        std::fs::write(&file_name, self.blob.data.as_slice())
+        std::fs::write(file_name, self.blob.data.as_slice())
             .map_err(|e| anyhow::anyhow!(
                 "Error '{}'\nwhen saving file '{}'",
-                e.to_string(),
-                file_name.to_str().unwrap_or_default()
+                e, file_name.to_str().unwrap_or_default(),
             ))?;
         Ok(())
     }
@@ -594,7 +593,7 @@ impl Device for IndiCamera {
     }
 
     fn name(&self) -> &str {
-        &self.device.id() // self.name is only for internal use for camera impl.
+        self.device.id() // self.name is only for internal use for camera impl.
     }
 
     fn is_active(&self) -> anyhow::Result<bool> {

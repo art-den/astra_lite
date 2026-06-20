@@ -77,11 +77,10 @@ impl ExternalGuiderPhd2 {
                     data.app_state = new_app_state;
                 }
             }
-            if let Event::RpcResult(result) = &event {
-                if let RpcResult::Error { error, .. } = &**result {
-                    // .. error event
-                    evt = Some(ExtGuiderEvent::Error(error.message.clone()));
-                }
+            if let Event::RpcResult(result) = &event
+            && let RpcResult::Error { error, .. } = &**result {
+                // .. error event
+                evt = Some(ExtGuiderEvent::Error(error.message.clone()));
             }
             match event {
                 Event::Connected =>

@@ -149,7 +149,7 @@ impl GotoMode {
         let camera = self.camera.as_ref().unwrap();
 
         log::debug!("Tacking picture for plate solve with {:?}", &cam_opts.frame);
-        take_shot(&camera, &cam_opts.frame, &cam_opts.ctrl)?;
+        take_shot(camera, &cam_opts.frame, &cam_opts.ctrl)?;
         Ok(())
     }
 
@@ -342,13 +342,12 @@ impl Mode for GotoMode {
                     .. PlateSolveConfig::default()
                 };
                 let image = image.read().unwrap();
-                if let Some(raw_info) = &image.raw_info {
-                    if let (Some(dec), Some(ra)) = (raw_info.dec, raw_info.ra) {
-                        config.eq_coord_j2000 = Some(EqCoord {
-                            dec: degree_to_radian(dec),
-                            ra: degree_to_radian(ra),
-                        });
-                    }
+                if let Some(raw_info) = &image.raw_info
+                && let (Some(dec), Some(ra)) = (raw_info.dec, raw_info.ra) {
+                    config.eq_coord_j2000 = Some(EqCoord {
+                        dec: degree_to_radian(dec),
+                        ra: degree_to_radian(ra),
+                    });
                 }
                 let plate_solver_input = if plate_solver.support_stars_as_input() {
                     &PlateSolverInData::Stars{

@@ -296,7 +296,7 @@ impl Mode for MountCalibrMode {
     }
 
     fn camera_id(&self) -> Option<&str> {
-        Some(&self.camera.id())
+        Some(self.camera.id())
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {
@@ -352,7 +352,7 @@ impl Mode for MountCalibrMode {
                     }
                 }
             }
-            State::WaitForOrigCoords(ok_time_ms) => {
+            State::WaitForOrigCoords(ok_time_ms) =>
                 if !self.telescope.is_slewing()? {
                     *ok_time_ms += timer_period_ms;
                     if *ok_time_ms >= AFTER_GOTO_WAIT_TIME {
@@ -361,7 +361,6 @@ impl Mode for MountCalibrMode {
                         };
                     }
                 }
-            }
             _ => {}
         }
         Ok(result)

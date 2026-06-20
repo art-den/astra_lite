@@ -616,7 +616,7 @@ impl Connection {
                     let read = match buffered_stream.read(&mut byte) {
                         Ok(read) => read,
                         Err(err) => {
-                            log::debug!("PHD2 read_stream.read returned {}", err.to_string());
+                            log::debug!("PHD2 read_stream.read returned {}", err);
                             break;
                         }
                     };
@@ -628,7 +628,7 @@ impl Connection {
                         };
                         let res = Self::process_incoming_json(&event_handlers, js_str);
                         if let Err(err) = res {
-                            log::error!("Error during processing PHD2 json: {}, js_str={}", err.to_string(), js_str);
+                            log::error!("Error during processing PHD2 json: {}, js_str={}", err, js_str);
                         }
                         buffer.clear();
                     }

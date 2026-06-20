@@ -126,7 +126,7 @@ impl Hal {
     fn get_impl(&self) -> anyhow::Result<Arc<dyn HalImpl + Send + Sync + 'static>> {
         let impl_ = self.impl_.read().unwrap();
         if let Some(impl_) = &*impl_ {
-            return Ok(Arc::clone(impl_));
+            Ok(Arc::clone(impl_))
         } else {
             anyhow::bail!("HAL is not selected!");
         }

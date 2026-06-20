@@ -394,15 +394,14 @@ impl Connection {
                     while let Ok(event) = events_receiver.recv() {
                         match event {
                             EventSenderEvent::Mess(event) => {
-                                if let Event::ConnChange(state) = &event {
-                                    if *state == ConnState::Disconnected &&
-                                    *self_.state.lock().unwrap() == ConnState::Connected {
-                                        self_.event_handlers.send(Event::ConnectionLost);
-                                        std::thread::spawn(move || {
-                                            _ = self_.disconnect_and_wait();
-                                        });
-                                        break;
-                                    }
+                                if let Event::ConnChange(state) = &event
+                                && *state == ConnState::Disconnected
+                                && *self_.state.lock().unwrap() == ConnState::Connected {
+                                    self_.event_handlers.send(Event::ConnectionLost);
+                                    std::thread::spawn(move || {
+                                        _ = self_.disconnect_and_wait();
+                                    });
+                                    break;
                                 }
                                 self_.event_handlers.send(event);
                             }
@@ -2869,9 +2868,6 @@ impl XmlReceiver {
     }
 
     fn main(&mut self, events_sender: mpsc::Sender<EventSenderEvent>) {
-        let mut buffer = Vec::<u8>::new();
-        buffer.resize(16384, 0);
-
         self.stream.set_read_timeout(Some(Duration::from_millis(1000))).unwrap(); // TODO: check error
 
         self.xml_sender.command_get_properties_impl(None, None).unwrap(); // TODO: check error
@@ -2929,7 +2925,7 @@ impl XmlReceiver {
                 }
                 Err(err) => {
                     self.reader.recover_after_error();
-                    log::error!("indi_api: {}", err.to_string());
+                    log::error!("indi_api: {}", err);
                 },
             }
         }
@@ -2938,16 +2934,16 @@ impl XmlReceiver {
     fn update_device_info(
         &self,
         device:         &mut Device,
-        prop_name:      &String,
+        prop_name:      &str,
         changed_values: &Vec<(Arc<String>, PropValue)>
     ) {
         for (name, value) in changed_values {
-            if prop_name.as_str() == "CONNECTION"
+            if prop_name == "CONNECTION"
             && name.as_str() == "CONNECT" {
                 device.set_connected(value.to_bool().unwrap_or(false));
             }
 
-            if prop_name.as_str() == "DRIVER_INFO"
+            if prop_name == "DRIVER_INFO"
             && name.as_str() == "DRIVER_INTERFACE" {
                 let flag_bits = value.to_i32().unwrap_or(0);
                 device.set_driver_interface(DriverInterface::from_bits_truncate(flag_bits as u32));
@@ -3135,7 +3131,7 @@ impl XmlReceiver {
             let timestamp = xml_elem.attr_time("timestamp");
             let mut property = Property::new_from_xml(
                 xml_elem,
-                &device.name(),
+                device.name(),
                 &prop_name
             )?;
             let state = property.state;

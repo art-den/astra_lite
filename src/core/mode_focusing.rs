@@ -430,7 +430,7 @@ impl FocusingMode {
             Err(error) => {
                 log::error!(
                     "Position calculation failed with errror {}",
-                    error.to_string()
+                    error
                 );
 
                 match self.error_reaction {
@@ -490,39 +490,37 @@ impl FocusingMode {
         let coeffs = Self::calc_quadratic_coeffs(&self.samples, 2);
         log::debug!("coeffs = {:?}", coeffs);
 
-        if let Some(coeffs) = coeffs {
-            if coeffs.a2 > 0.0 {
-                if let Some(value) = parabola_extremum(&coeffs) {
-                    let value = value.round();
-                    log::debug!("Extremum = {:.1}", value);
-                    if !allow_more_measures {
-                        let range = self.focuser.abs_position_range()?;
+        if let Some(coeffs) = coeffs
+        && coeffs.a2 > 0.0
+        && let Some(value) = parabola_extremum(&coeffs) {
+            let value = value.round();
+            log::debug!("Extremum = {:.1}", value);
+            if !allow_more_measures {
+                let range = self.focuser.abs_position_range()?;
 
-                        if !range.contains(&value) {
-                            anyhow::bail!(
-                                "Result pos {0:.1} out of focuser range ({1:.1}..{2:.1})",
-                                value, *range.start(), *range.end()
-                            );
-                        }
-                        return Ok(CalcResult::Value { value, coeffs });
-                    }
-                    let min_sample_pos = self.samples
-                        .iter()
-                        .map(|v|v.position)
-                        .min_by(cmp_f64)
-                        .unwrap_or_default();
-                    let max_sample_pos = self.samples
-                        .iter()
-                        .map(|v|v.position)
-                        .max_by(cmp_f64)
-                        .unwrap_or_default();
-                    let min_acceptable = min_sample_pos + (max_sample_pos-min_sample_pos) * 0.20;
-                    let max_acceptable = min_sample_pos + (max_sample_pos-min_sample_pos) * 0.80;
-                    log::debug!("Min/Max acceptable focus extremums = {:.1}/{:.1}", min_acceptable, max_acceptable);
-                    if min_acceptable <= value && value <= max_acceptable {
-                        return Ok(CalcResult::Value { value, coeffs });
-                    }
+                if !range.contains(&value) {
+                    anyhow::bail!(
+                        "Result pos {0:.1} out of focuser range ({1:.1}..{2:.1})",
+                        value, *range.start(), *range.end()
+                    );
                 }
+                return Ok(CalcResult::Value { value, coeffs });
+            }
+            let min_sample_pos = self.samples
+                .iter()
+                .map(|v|v.position)
+                .min_by(cmp_f64)
+                .unwrap_or_default();
+            let max_sample_pos = self.samples
+                .iter()
+                .map(|v|v.position)
+                .max_by(cmp_f64)
+                .unwrap_or_default();
+            let min_acceptable = min_sample_pos + (max_sample_pos-min_sample_pos) * 0.20;
+            let max_acceptable = min_sample_pos + (max_sample_pos-min_sample_pos) * 0.80;
+            log::debug!("Min/Max acceptable focus extremums = {:.1}/{:.1}", min_acceptable, max_acceptable);
+            if min_acceptable <= value && value <= max_acceptable {
+                return Ok(CalcResult::Value { value, coeffs });
             }
         }
 
@@ -558,13 +556,11 @@ impl FocusingMode {
             let mut best_index = None;
             for idx_to_skip in [0, len-1] {
                 if let Some((new_coeff, new_err))
-                = Self::calc_quadratic_coeffs_and_err(&samples, Some(idx_to_skip)) {
-                    if new_err < err {
-                        err = new_err;
-                        coeff = new_coeff;
-                        best_index = Some(idx_to_skip);
-                        continue;
-                    }
+                = Self::calc_quadratic_coeffs_and_err(&samples, Some(idx_to_skip)) && new_err < err {
+                    err = new_err;
+                    coeff = new_coeff;
+                    best_index = Some(idx_to_skip);
+                    continue;
                 }
             }
 
@@ -629,7 +625,7 @@ impl Mode for FocusingMode {
     }
 
     fn camera_id(&self) -> Option<&str> {
-        Some(&self.camera.id())
+        Some(self.camera.id())
     }
 
     fn progress(&self) -> Option<Progress> {

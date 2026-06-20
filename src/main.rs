@@ -13,6 +13,10 @@
     clippy::type_complexity,
     clippy::collapsible_else_if,
     clippy::manual_range_contains,
+    clippy::collapsible_match,
+    clippy::enum_variant_names,
+    clippy::large_enum_variant,
+    clippy::manual_checked_ops,
 )]
 
 mod ui;
@@ -184,7 +188,7 @@ fn panic_handler(
 
     log::error!(
         "Panic stacktrace: {}",
-        std::backtrace::Backtrace::force_capture().to_string()
+        std::backtrace::Backtrace::force_capture()
     );
 
     let message_caption = format!(

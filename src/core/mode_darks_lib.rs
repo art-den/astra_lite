@@ -74,14 +74,14 @@ impl DarkCreationMode {
         let start_focusing_fun = move |core: &Arc<Core>, mode: &mut ModeData| -> anyhow::Result<()> {
             mode.active.abort()?;
             let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
-            let mut new_mode = TackingPicturesMode::new(cam_mode, &core)?;
+            let mut new_mode = TackingPicturesMode::new(cam_mode, core)?;
             new_mode.set_dark_creation_program_item(&program_item);
             new_mode.set_next_mode(Some(prev_mode));
             new_mode.start()?;
             mode.active = Box::new(new_mode);
             Ok(())
         };
-        return NotifyResult::Exec(Box::new(start_focusing_fun))
+        NotifyResult::Exec(Box::new(start_focusing_fun))
     }
 
 }

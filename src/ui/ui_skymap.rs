@@ -648,7 +648,7 @@ impl MapUi {
 
             let cam_frame = if show_ccd && hal_is_connected {
                 || -> Option<CameraFrame> {
-                    let Some(camera) = self.core.camera() else  { return None; };
+                    let camera = self.core.camera()?;
                     let options = self.core.options().read().unwrap();
 
                     let focal_len = options.telescope.real_focal_length();
@@ -676,7 +676,7 @@ impl MapUi {
 
             let telescope_pos = if hal_is_connected {
                 || -> Option<EqCoord> {
-                    let Some(telescope) = self.core.telescope() else { return None; };
+                    let telescope = self.core.telescope()?;
                     let (ra, dec) = telescope.eq_coord().ok()?;
                     Some(EqCoord {
                         ra: hour_to_radian(ra),

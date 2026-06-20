@@ -68,7 +68,7 @@ pub trait Mode {
     fn notify_periodical_timer_tick(&mut self, _timer_period_ms: usize) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn custom_command(&mut self, _args: &dyn Any) -> anyhow::Result<Option<Box<dyn Any>>> { Ok(None) }
     fn notify_processing_queue_overflow(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn stop_live_view_before_this_mode(&self) -> bool { return true; }
+    fn stop_live_view_before_this_mode(&self) -> bool { true }
 }
 
 pub enum NotifyResult {
@@ -166,7 +166,7 @@ impl Core {
 
     pub fn camera(&self) -> Option<Arc<dyn Camera + Send + Sync>> {
         let cur_devices = self.cur_devices.lock().unwrap();
-        cur_devices.camera.as_ref().map(|cam| Arc::clone(cam))
+        cur_devices.camera.as_ref().map(Arc::clone)
     }
 
     pub fn camera_or_err(&self) -> anyhow::Result<Arc<dyn Camera + Send + Sync>> {
@@ -179,7 +179,7 @@ impl Core {
 
     pub fn telescope(&self) -> Option<Arc<dyn Telescope + Send + Sync>> {
         let cur_devices = self.cur_devices.lock().unwrap();
-        cur_devices.telescope.as_ref().map(|cam| Arc::clone(cam))
+        cur_devices.telescope.as_ref().map(Arc::clone)
     }
 
     pub fn telescope_or_err(&self) -> anyhow::Result<Arc<dyn Telescope + Send + Sync>> {
@@ -192,7 +192,7 @@ impl Core {
 
     pub fn focuser(&self) -> Option<Arc<dyn Focuser + Send + Sync>> {
         let cur_devices = self.cur_devices.lock().unwrap();
-        cur_devices.focuser.as_ref().map(|cam| Arc::clone(cam))
+        cur_devices.focuser.as_ref().map(Arc::clone)
     }
 
     pub fn focuser_or_err(&self) -> anyhow::Result<Arc<dyn Focuser + Send + Sync>> {
@@ -205,7 +205,7 @@ impl Core {
 
     pub fn filter_wheel(&self) -> Option<Arc<dyn FilterWheel + Send + Sync>> {
         let cur_devices = self.cur_devices.lock().unwrap();
-        cur_devices.filter_wheel.as_ref().map(|cam| Arc::clone(cam))
+        cur_devices.filter_wheel.as_ref().map(Arc::clone)
     }
 
     pub fn filter_wheel_or_err(&self) -> anyhow::Result<Arc<dyn FilterWheel + Send + Sync>> {
@@ -506,7 +506,7 @@ impl Core {
         });
 
         // Frame processing events
-        let self_ = Arc::clone(&self);
+        let self_ = Arc::clone(self);
         self.frame_processing.connect_result_fun(
             move |res| self_.frame_process_result_handler(res)
         );
@@ -522,15 +522,15 @@ impl Core {
             },
             Event::MountDeviceChanged(new_mount_id) => {
                 let mut cur_devices = self.cur_devices.lock().unwrap();
-                cur_devices.telescope = self.hal.telescope(&new_mount_id).ok();
+                cur_devices.telescope = self.hal.telescope(new_mount_id).ok();
             }
             Event::FocuserDeviceChanged(new_focuser_id) => {
                 let mut cur_devices = self.cur_devices.lock().unwrap();
-                cur_devices.focuser = self.hal.focuser(&new_focuser_id).ok();
+                cur_devices.focuser = self.hal.focuser(new_focuser_id).ok();
             }
             Event::FltWheelDeviceChanged(new_flt_wheel) => {
                 let mut cur_devices = self.cur_devices.lock().unwrap();
-                cur_devices.filter_wheel = self.hal.filter_wheel(&new_flt_wheel).ok();
+                cur_devices.filter_wheel = self.hal.filter_wheel(new_flt_wheel).ok();
             }
             Event::TelescopeFocalLenChanged(_)|
             Event::TelescopeBarlowChanged|
@@ -579,13 +579,13 @@ impl Core {
                     .map(|d| &d.driver)
             }
 
-            [ get_driver(&options.indi.mount,     &telescopes),
-              get_driver(&options.indi.camera,    &cameras),
-              get_driver(&options.indi.guid_cam,  &cameras),
-              get_driver(&options.indi.focuser,   &focusers),
-              get_driver(&options.indi.flt_wheel, &filter_wheels),
-              get_driver(&options.indi.aux1,      &aux),
-              get_driver(&options.indi.aux1,      &aux),
+            [ get_driver(&options.indi.mount,     telescopes),
+              get_driver(&options.indi.camera,    cameras),
+              get_driver(&options.indi.guid_cam,  cameras),
+              get_driver(&options.indi.focuser,   focusers),
+              get_driver(&options.indi.flt_wheel, filter_wheels),
+              get_driver(&options.indi.aux1,      aux),
+              get_driver(&options.indi.aux1,      aux),
             ].iter()
                 .filter_map(|v| *v)
                 .cloned()
@@ -635,7 +635,7 @@ impl Core {
 
     fn init_focal_len_for_cameras(self: &Arc<Self>) {
         let options = self.options.read().unwrap();
-        let res = set_focal_len_for_cameras(&self.hal(), &options);
+        let res = set_focal_len_for_cameras(self.hal(), &options);
         self.process_error(res, "set_focal_len_for_cameras");
     }
 
@@ -799,25 +799,25 @@ impl Core {
     }
 
     pub fn start_single_shot(&self) -> anyhow::Result<()> {
-        let mode = TackingPicturesMode::new(CameraMode::SingleShot, &self)?;
+        let mode = TackingPicturesMode::new(CameraMode::SingleShot, self)?;
         self.start_new_mode(mode, false, true)?;
         Ok(())
     }
 
     pub fn start_live_view(&self) -> anyhow::Result<()> {
-        let mode = TackingPicturesMode::new(CameraMode::LiveView, &self)?;
+        let mode = TackingPicturesMode::new(CameraMode::LiveView, self)?;
         self.start_new_mode(mode, false, true)?;
         Ok(())
     }
 
     pub fn start_saving_raw_frames(&self) -> anyhow::Result<()> {
-        let mode = TackingPicturesMode::new(CameraMode::SavingRawFrames, &self)?;
+        let mode = TackingPicturesMode::new(CameraMode::SavingRawFrames, self)?;
         self.start_new_mode(mode, true, true)?;
         Ok(())
     }
 
     pub fn start_live_stacking(&self) -> anyhow::Result<()> {
-        let mode = TackingPicturesMode::new(CameraMode::LiveStacking, &self)?;
+        let mode = TackingPicturesMode::new(CameraMode::LiveStacking, self)?;
         self.start_new_mode(mode, true, true)?;
         Ok(())
     }

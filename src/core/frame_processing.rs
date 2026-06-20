@@ -392,13 +392,12 @@ impl FrameProcessing {
 
                 // Check is frame CCD temperature is good
 
-                if let (Some(qo), Some(ctrl_o)) = (&command.quality_options, &command.cam_ctrl_opts) {
-                    if ctrl_o.enable_cooler && qo.check_ccd_temp {
-                        if let Some(ccd_temp) = info.ccd_temp {
-                            let diff = f64::abs(ccd_temp - ctrl_o.temperature);
-                            quality.ccd_temp_ok = diff <= qo.max_ccd_temp_diff;
-                        }
-                    }
+                if let Some(qo) = &command.quality_options
+                && let Some(ctrl_o) = &command.cam_ctrl_opts
+                && ctrl_o.enable_cooler && qo.check_ccd_temp
+                && let Some(ccd_temp) = info.ccd_temp {
+                    let diff = f64::abs(ccd_temp - ctrl_o.temperature);
+                    quality.ccd_temp_ok = diff <= qo.max_ccd_temp_diff;
                 }
 
                 let is_monochrome_img =
@@ -667,12 +666,12 @@ impl FrameProcessing {
             // Stars quality
 
             if let Some(qo) = &command.quality_options {
-                if qo.use_max_fwhm { if let Some(fwhm) = stars_info.fwhm {
+                if qo.use_max_fwhm && let Some(fwhm) = stars_info.fwhm {
                     quality.fwhm_is_ok = fwhm < qo.max_fwhm;
-                }}
-                if qo.use_max_ovality { if let Some(ovality) = stars_info.ovality {
+                }
+                if qo.use_max_ovality && let Some(ovality) = stars_info.ovality {
                     quality.ovality_is_ok = ovality < qo.max_ovality;
-                }}
+                }
             }
 
             // Light frame information
@@ -903,8 +902,7 @@ impl FrameProcessing {
                             std::fs::create_dir_all(&file_path)
                                 .map_err(|e|anyhow::anyhow!(
                                     "Error '{}'\nwhen trying to create directory '{}' for saving result live stack image",
-                                    e.to_string(),
-                                    file_path.to_str().unwrap_or_default()
+                                    e, file_path.to_str().unwrap_or_default(),
                                 ))?;
                         }
                         let file_path = file_path.join(format!("Live_{}.tif", now_time_str));
@@ -980,7 +978,7 @@ impl FrameProcessing {
 
         if calibr.defect_pixels_fname != defect_pixel_file {
             calibr.defect_pixels = None;
-            if let Some(file_name) = &defect_pixel_file { if file_name.is_file() {
+            if let Some(file_name) = &defect_pixel_file && file_name.is_file() {
                 let mut defect_pixels = BadPixels::default();
                 log::info!(
                     "Loading defect pixels file {} ...",
@@ -989,7 +987,7 @@ impl FrameProcessing {
                 defect_pixels.load_from_file(file_name)?;
                 calibr.defect_pixels = Some(defect_pixels);
                 reload_flat = true;
-            }}
+            }
             calibr.defect_pixels_fname = defect_pixel_file.clone();
         }
 
@@ -997,7 +995,7 @@ impl FrameProcessing {
 
         if calibr.subtract_fname != subtrack_fname {
             calibr.subtract_image = None;
-            if let Some(file_name) = &subtrack_fname { if file_name.is_file() {
+            if let Some(file_name) = &subtrack_fname && file_name.is_file() {
                 log::info!(
                     "Loading master dark file {} ...",
                     file_name.to_str().unwrap_or_default()
@@ -1006,8 +1004,7 @@ impl FrameProcessing {
                 let subtract_image = load_raw_image_from_fits_file(file_name)
                     .map_err(|e| anyhow::anyhow!(
                         "Error '{}'\nwhen reading master dark '{}'",
-                        e.to_string(),
-                        file_name.to_str().unwrap_or_default()
+                        e, file_name.to_str().unwrap_or_default(),
                     ))?;
                 tmr.log("loading master dark from file");
 
@@ -1021,7 +1018,7 @@ impl FrameProcessing {
                 }
 
                 calibr.subtract_image = Some(subtract_image);
-            }}
+            }
             calibr.subtract_fname = subtrack_fname.clone();
         }
 
@@ -1034,8 +1031,7 @@ impl FrameProcessing {
                 let mut master_flat = load_raw_image_from_fits_file(file_name)
                     .map_err(|e| anyhow::anyhow!(
                         "Error '{}'\nreading master flat '{}'",
-                        e.to_string(),
-                        file_name.to_str().unwrap_or_default()
+                        e, file_name.to_str().unwrap_or_default(),
                     ))?;
                 tmr.log("loading master flat from file");
                 if let Some(defect_pixels) = &calibr.defect_pixels {
@@ -1062,8 +1058,7 @@ impl FrameProcessing {
             raw_image.subtract_dark_or_bias(dark_image)
                 .map_err(|err| anyhow::anyhow!(
                     "Error {}\nwhen trying to subtract image {}",
-                    err.to_string(),
-                    file_name.to_str().unwrap_or_default()
+                    err, file_name.to_str().unwrap_or_default(),
                 ))?;
             tmr.log("subtracting master dark");
             calibr_methods.set(subtrack_method, true);
@@ -1076,8 +1071,7 @@ impl FrameProcessing {
             raw_image.apply_flat(flat_image)
                 .map_err(|err| anyhow::anyhow!(
                     "Error {}\nwher trying to apply flat image {}",
-                    err.to_string(),
-                    file_name.to_str().unwrap_or_default()
+                    err, file_name.to_str().unwrap_or_default(),
                 ))?;
 
             tmr.log("applying master flat");

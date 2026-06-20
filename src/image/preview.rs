@@ -166,10 +166,9 @@ pub fn get_preview_rgb_data(
         &wb
     );
 
-    if let (Some(stars), true) = (stars, params.stars) {
-        if params.scale != PreviewScale::CenterAndCorners {
-            show_stars(stars, &mut bytes, image.width(), reduct_ratio);
-        }
+    if params.stars && let Some(stars) = stars
+    && params.scale != PreviewScale::CenterAndCorners {
+        show_stars(stars, &mut bytes, image.width(), reduct_ratio);
     }
 
     Some(PreviewRgbData {

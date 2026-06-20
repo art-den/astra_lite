@@ -121,10 +121,9 @@ impl Drivers {
         let mut result = Drivers { groups: Vec::new() };
         for file in files {
             let xml_text = std::fs::read(file.path())?;
-            if let Ok(xml_elem) = xmltree::Element::parse(&xml_text[..]) {
-                if xml_elem.name == "driversList" {
-                    result.append_file_data(xml_elem)?;
-                }
+            if let Ok(xml_elem) = xmltree::Element::parse(&xml_text[..])
+            && xml_elem.name == "driversList" {
+                result.append_file_data(xml_elem)?;
             }
         }
         result.sort_group_items();

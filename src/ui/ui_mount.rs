@@ -509,17 +509,16 @@ impl MountUi {
             self.info_widgets.l_state.set_label(&text);
         }
 
-        if let Ok((ra, dec)) = telescope.eq_coord() {
-            if ra != self.prev_info_ra.get() || dec != self.prev_info_dec.get() {
-                self.prev_info_ra.set(ra);
-                self.prev_info_dec.set(dec);
-                let text = format!(
-                    "{} {}",
-                    hour_to_str(ra),
-                    degree_to_str(dec)
-                );
-                self.info_widgets.l_pos.set_label(&text);
-            }
+        if let Ok((ra, dec)) = telescope.eq_coord()
+        && (ra != self.prev_info_ra.get() || dec != self.prev_info_dec.get()) {
+            self.prev_info_ra.set(ra);
+            self.prev_info_dec.set(dec);
+            let text = format!(
+                "{} {}",
+                hour_to_str(ra),
+                degree_to_str(dec)
+            );
+            self.info_widgets.l_pos.set_label(&text);
         }
     }
 }

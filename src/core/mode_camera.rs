@@ -476,7 +476,7 @@ impl TackingPicturesMode {
             let mut path = PathBuf::new();
             if matches!(self.cam_mode, CameraMode::MasterDark|CameraMode::MasterBias) {
                 path.push(&options.calibr.dark_library_path);
-                path.push(self.camera.id().to_string());
+                path.push(self.camera.id());
             } else {
                 path.push(&options.raw_frames.out_path);
             }
@@ -581,8 +581,7 @@ impl TackingPicturesMode {
             std::fs::create_dir_all(&self.out_file_names.raw_files_dir)
                 .map_err(|e|anyhow::anyhow!(
                     "Error '{}'\nwhen trying to create directory '{}' for saving RAW frame",
-                    e.to_string(),
-                    self.out_file_names.raw_files_dir.to_str().unwrap_or_default()
+                    e, self.out_file_names.raw_files_dir.to_str().unwrap_or_default()
                 ))?;
         }
         let mut file_ext = camera_shot.file_ext();
@@ -647,10 +646,8 @@ impl TackingPicturesMode {
         }
 
         // push fwhm
-        if let Some(fwhm) = info.stars.info.fwhm {
-            if info.quality.ovality_is_ok {
-                autofocuser.fwhm.push(fwhm);
-            }
+        if let Some(fwhm) = info.stars.info.fwhm && info.quality.ovality_is_ok {
+            autofocuser.fwhm.push(fwhm);
         }
 
         // Update exposure sum
@@ -690,8 +687,7 @@ impl TackingPicturesMode {
         // When temperature changed
         if autofocuser.options.on_temp_change
         && autofocuser.options.max_temp_change > 0.0
-        && autofocuser.start_temp.is_some() {
-            let first = autofocuser.start_temp.unwrap();
+        && let Some(first) = autofocuser.start_temp {
             let last = temperature;
             let delta = last - first;
             if delta.abs() >= autofocuser.options.max_temp_change {
@@ -816,12 +812,11 @@ impl TackingPicturesMode {
         }
 
         // Move mount position
-        if let (Some((offset_x, offset_y)), Some(mnt_calibr)) = (move_offset, &guider_data.mnt_calibr) {
-            if mnt_calibr.is_ok() && self.next_job.is_none() {
-                if let Some((ra_pulse, dec_pulse)) = mnt_calibr.calc(offset_x, offset_y) {
-                    self.next_job = Some(NextJob::InternalDithering { ra_pulse, dec_pulse });
-                }
-            }
+        if let Some((offset_x, offset_y)) = move_offset
+        && let Some(mnt_calibr) = &guider_data.mnt_calibr
+        && mnt_calibr.is_ok() && self.next_job.is_none()
+        && let Some((ra_pulse, dec_pulse)) = mnt_calibr.calc(offset_x, offset_y) {
+            self.next_job = Some(NextJob::InternalDithering { ra_pulse, dec_pulse });
         }
 
         Ok(())
@@ -908,13 +903,12 @@ impl TackingPicturesMode {
             });
         }
 
-        if let (State::CameraOffsetCalculation, Some(offset_calc))
-        = (&self.state, &mut self.cam_offset_calc) {
-            if offset_calc.step == Self::MAX_OFFSET_CALC_STEPS {
-                // continue after camera offset calculation for flats
-                self.start_or_continue()?;
-                return Ok(NotifyResult::ProgressChanges);
-            }
+        if let State::CameraOffsetCalculation = &self.state
+        && let Some(offset_calc) = &mut self.cam_offset_calc
+        && offset_calc.step == Self::MAX_OFFSET_CALC_STEPS {
+            // continue after camera offset calculation for flats
+            self.start_or_continue()?;
+            return Ok(NotifyResult::ProgressChanges);
         }
 
         let mut result = NotifyResult::Empty;
@@ -1171,11 +1165,9 @@ impl TackingPicturesMode {
         let raw_image = self.raw_stacker.get()?;
         self.raw_stacker.clear();
 
-        if let Some(parent) = self.out_file_names.master_fname.parent() {
-            if !parent.is_dir() {
-                log::debug!("Creating directory {} ...", parent.to_str().unwrap_or_default());
-                std::fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = self.out_file_names.master_fname.parent() && !parent.is_dir() {
+            log::debug!("Creating directory {} ...", parent.to_str().unwrap_or_default());
+            std::fs::create_dir_all(parent)?;
         }
 
         raw_image.save_to_fits_file(&self.out_file_names.master_fname)?;
@@ -1189,11 +1181,10 @@ impl TackingPicturesMode {
         let raw_image = self.raw_stacker.get()?;
         self.raw_stacker.clear();
 
-        if let Some(parent) = self.out_file_names.defect_pixels_fname.parent() {
-            if !parent.is_dir() {
-                log::debug!("Creating directory {} ...", parent.to_str().unwrap_or_default());
-                std::fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = self.out_file_names.defect_pixels_fname.parent()
+        && !parent.is_dir() {
+            log::debug!("Creating directory {} ...", parent.to_str().unwrap_or_default());
+            std::fs::create_dir_all(parent)?;
         }
 
         let defect_pixels = raw_image.find_hot_pixels_in_master_dark();
@@ -1254,7 +1245,7 @@ impl Mode for TackingPicturesMode {
     }
 
     fn camera_id(&self) -> Option<&str> {
-        Some(&self.camera.id())
+        Some(self.camera.id())
     }
 
     fn progress_string(&self) -> String {
@@ -1298,19 +1289,13 @@ impl Mode for TackingPicturesMode {
         if matches!(self.cam_mode, CameraMode::SavingRawFrames|CameraMode::LiveStacking)
         && self.cam_options.frame.frame_type == FrameType::Lights
         && self.state == State::Common {
-            if let Some(autofocuser) = &self.autofocuser {
-                if autofocuser.options.on_fwhm_change
-                || autofocuser.options.on_temp_change
-                || autofocuser.options.periodically {
-                    extra_modes.push("F");
-                }
+            if let Some(autofocuser) = &self.autofocuser && autofocuser.options.is_used() {
+                extra_modes.push("F");
             }
-            if let Some(guider) = &self.guider {
-                if guider.options.is_used() {
-                    extra_modes.push("G");
-                    if guider.options.dith_period != 0 {
-                        extra_modes.push("D");
-                    }
+            if let Some(guider) = &self.guider && guider.options.is_used() {
+                extra_modes.push("G");
+                if guider.options.dith_period != 0 {
+                    extra_modes.push("D");
                 }
             }
         }
@@ -1611,26 +1596,25 @@ impl Mode for TackingPicturesMode {
         &mut self,
         event: ExtGuiderEvent
     ) -> anyhow::Result<NotifyResult> {
-        if let Some(guider) = &self.guider {
-            if guider.options.mode == GuidingMode::External
-            && self.state == State::ExternalDithering {
-                match event {
-                    ExtGuiderEvent::DitheringFinished => {
-                        self.flags.skip_frame_done = false;
-                        self.start_or_continue()?;
-                        return Ok(NotifyResult::ProgressChanges);
-                    }
-                    ExtGuiderEvent::DitheringFinishedWithErr(err) => {
-                        log::error!("Dithering finished with error: {}", err);
-                        // continue any way
-                        self.flags.skip_frame_done = false;
-                        self.start_or_continue()?;
-                        return Ok(NotifyResult::ProgressChanges);
-                    }
-                    ExtGuiderEvent::Error(error) =>
-                        return Err(anyhow::anyhow!("External guider error: {}", error)),
-                    _ => {}
+        if let Some(guider) = &self.guider
+        && guider.options.mode == GuidingMode::External
+        && self.state == State::ExternalDithering {
+            match event {
+                ExtGuiderEvent::DitheringFinished => {
+                    self.flags.skip_frame_done = false;
+                    self.start_or_continue()?;
+                    return Ok(NotifyResult::ProgressChanges);
                 }
+                ExtGuiderEvent::DitheringFinishedWithErr(err) => {
+                    log::error!("Dithering finished with error: {}", err);
+                    // continue any way
+                    self.flags.skip_frame_done = false;
+                    self.start_or_continue()?;
+                    return Ok(NotifyResult::ProgressChanges);
+                }
+                ExtGuiderEvent::Error(error) =>
+                    return Err(anyhow::anyhow!("External guider error: {}", error)),
+                _ => {}
             }
         }
         Ok(NotifyResult::Empty)

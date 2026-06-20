@@ -103,11 +103,10 @@ pub fn control_camera_heater(
     options: &CamCtrlOptions
 ) -> anyhow::Result<()> {
 
-    if camera.is_heater_supported()? {
-        if let Some(heater_str) = &options.heater_str {
-            log::info!("Setting camera heater = {}", heater_str);
-            camera.control_heater(heater_str)?;
-        }
+    if camera.is_heater_supported()?
+    && let Some(heater_str) = &options.heater_str {
+        log::info!("Setting camera heater = {}", heater_str);
+        camera.control_heater(heater_str)?;
     }
     Ok(())
 }
@@ -137,7 +136,7 @@ pub fn restart_camera_exposure(
             frame_opts
         };
 
-    take_shot(&camera, mode_cam_opts, ctrl_opts)?;
+    take_shot(camera, mode_cam_opts, ctrl_opts)?;
 
     log::info!("Exposure of camera {} restarted!", camera.id());
     Ok(())

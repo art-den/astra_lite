@@ -160,8 +160,7 @@ impl XmlStreamReader {
                                         .attr_str_or_err("len")?
                                         .parse::<usize>()?;
                                     let timer = std::time::Instant::now();
-                                    let mut data = Vec::new();
-                                    data.resize(blob_len, 0);
+                                    let mut data = vec![0; blob_len];
                                     file.read_exact(&mut data)?;
                                     (data, timer.elapsed().as_secs_f64())
                                 };

@@ -141,7 +141,7 @@ impl FileNameUtils {
 
         let mut path = PathBuf::new();
         path.push(dark_library_path);
-        path.push(&camera);
+        path.push(camera);
         path.push(&defect_pixels_file_name);
         path
     }

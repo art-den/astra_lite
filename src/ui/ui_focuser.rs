@@ -682,7 +682,7 @@ impl FocuserUi {
                     return Ok(());
                 }
                 focuser.set_abs_position(value)?;
-                self.widgets.spb_val.set_value(value as f64);
+                self.widgets.spb_val.set_value(value);
                 Ok(())
             });
         });

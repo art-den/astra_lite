@@ -320,7 +320,7 @@ impl SkymapWidget {
             layout:      &pango_layout,
         });
         if let Err(e) = res {
-            log::error!("Error while painting map: {}", e.to_string());
+            log::error!("Error while painting map: {}", e);
         }
 
         let paint_time = timer.elapsed().as_secs_f64();

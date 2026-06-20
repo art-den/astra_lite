@@ -1134,7 +1134,7 @@ impl PreviewUi {
     fn handler_action_save_image_linear(&self) {
         exec_and_show_error(Some(&self.window), || {
             let options = self.core.options().read().unwrap();
-            let preview_source = options.preview.source.clone();
+            let preview_source = options.preview.source;
             drop(options);
             let ask_to_select_name = |fn_prefix: &str| -> Option<PathBuf> {
                 let def_file_name = format!(

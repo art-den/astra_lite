@@ -658,7 +658,7 @@ impl Mode for PolarAlignMode {
     }
 
     fn camera_id(&self) -> Option<&str> {
-        Some(&self.camera.id())
+        Some(self.camera.id())
     }
 
     fn get_cur_exposure(&self) -> Option<f64> {

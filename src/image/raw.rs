@@ -601,11 +601,10 @@ impl RawImage {
                     for dx in -range..=range {
                         let x = *px + dx;
                         if self.cfa_get(x, y) == bad_pixel_color
-                        && !pixels_to_fix.contains(&(x, y)) {
-                            if let Some(v) = self.get(x, y) {
-                                sum += v as u32;
-                                cnt += 1;
-                            }
+                        && !pixels_to_fix.contains(&(x, y))
+                        && let Some(v) = self.get(x, y) {
+                            sum += v as u32;
+                            cnt += 1;
                         }
                     }
                 }
@@ -977,11 +976,10 @@ impl RawImage {
                 let sy = y + dy;
                 for dx in -1..=1 {
                     let sx = x + dx;
-                    if self.cfa_get(sx, sy) == Some(color) {
-                        if let Some(v) = self.get(sx, sy) {
-                            sum += v as usize;
-                            cnt += 1;
-                        }
+                    if self.cfa_get(sx, sy) == Some(color)
+                    && let Some(v) = self.get(sx, sy) {
+                        sum += v as usize;
+                        cnt += 1;
                     }
                 }
             }

@@ -267,14 +267,14 @@ impl Stars {
     pub fn get_nearest(&self, crd: &EqCoord, max_mag: f32) -> Option<(NamedStar, f64)> {
         let max_mag = ObjMagnitude::new(max_mag);
 
-        let nearest = self.zones.iter()
-            .flat_map(|(_, zone)| &zone.stars)
+        let nearest = self.zones.values()
+            .flat_map(|zone| &zone.stars)
             .filter(|star| star.data.mag < max_mag)
             .map(|star| (star, EqCoord::angle_between(&star.data.crd.to_eq(), crd)))
             .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(angle1, angle2));
 
-        let nearest_named = self.zones.iter()
-            .flat_map(|(_, zone)| &zone.nstars)
+        let nearest_named = self.zones.values()
+            .flat_map(|zone| &zone.nstars)
             .filter(|star| star.data.mag < max_mag)
             .map(|star| (star, EqCoord::angle_between(&star.data.crd.to_eq(), crd)))
             .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(angle1, angle2));
@@ -310,7 +310,7 @@ impl Stars {
 
     fn find(&self, text_lc: &str, mode: SearchMode) -> Vec<SkymapObject> {
         let mut result = Vec::new();
-        for star in self.zones.iter().flat_map(|(_, zone)| &zone.nstars) {
+        for star in self.zones.values().flat_map(|zone| &zone.nstars) {
             let found = match mode {
                 SearchMode::Eq =>
                     star.name_lc == text_lc || star.bayer_lc == text_lc,
