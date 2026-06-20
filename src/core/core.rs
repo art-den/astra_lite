@@ -53,21 +53,21 @@ pub trait Mode {
     fn get_cur_exposure(&self) -> Option<f64> { None }
     fn can_be_stopped(&self) -> bool { true }
     fn can_be_continued_after_stop(&self) -> bool { false }
-    fn start(&mut self) -> anyhow::Result<()> { Ok(()) }
-    fn abort(&mut self) -> anyhow::Result<()> { Ok(()) }
-    fn continue_work(&mut self) -> anyhow::Result<()> { Ok(()) }
+    fn start(&mut self) -> eyre::Result<()> { Ok(()) }
+    fn abort(&mut self) -> eyre::Result<()> { Ok(()) }
+    fn continue_work(&mut self) -> eyre::Result<()> { Ok(()) }
     fn frame_options_to_restart_exposure(&self) -> Option<&FrameOptions> { None }
-    fn restart_cam_exposure(&mut self) -> anyhow::Result<bool> { Ok(false) }
+    fn restart_cam_exposure(&mut self) -> eyre::Result<bool> { Ok(false) }
     fn take_next_mode(&mut self) -> Option<ModeBox> { None }
     fn set_or_correct_value(&mut self, _value: &mut dyn Any) {}
     fn complete_img_process_params(&self, _cmd: &mut FrameProcessCommandData) {}
-    fn notify_camera_download_started(&mut self, _camera_id: &str) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_before_frame_processing_start(&mut self, _camera_shot: &Arc<dyn CameraShot + Send + Sync>, _should_be_processed: &mut bool) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_periodical_timer_tick(&mut self, _timer_period_ms: usize) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn custom_command(&mut self, _args: &dyn Any) -> anyhow::Result<Option<Box<dyn Any>>> { Ok(None) }
-    fn notify_processing_queue_overflow(&mut self) -> anyhow::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_camera_download_started(&mut self, _camera_id: &str) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_before_frame_processing_start(&mut self, _camera_shot: &Arc<dyn CameraShot + Send + Sync>, _should_be_processed: &mut bool) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_periodical_timer_tick(&mut self, _timer_period_ms: usize) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn custom_command(&mut self, _args: &dyn Any) -> eyre::Result<Option<Box<dyn Any>>> { Ok(None) }
+    fn notify_processing_queue_overflow(&mut self) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn stop_live_view_before_this_mode(&self) -> bool { true }
 }
 
@@ -75,7 +75,7 @@ pub enum NotifyResult {
     Empty,
     ProgressChanges,
     Finished { next_mode: Option<ModeBox> },
-    Exec(Box<dyn FnOnce(&Arc<Core>, &mut ModeData)-> anyhow::Result<()> + 'static + Send + Sync>),
+    Exec(Box<dyn FnOnce(&Arc<Core>, &mut ModeData)-> eyre::Result<()> + 'static + Send + Sync>),
 }
 
 pub struct ModeData {
@@ -169,10 +169,10 @@ impl Core {
         cur_devices.camera.as_ref().map(Arc::clone)
     }
 
-    pub fn camera_or_err(&self) -> anyhow::Result<Arc<dyn Camera + Send + Sync>> {
+    pub fn camera_or_err(&self) -> eyre::Result<Arc<dyn Camera + Send + Sync>> {
         let cur_devices = self.cur_devices.lock().unwrap();
         let Some(camera) = cur_devices.camera.as_ref() else {
-            anyhow::bail!("Camera object is None");
+            eyre::bail!("Camera object is None");
         };
         Ok(Arc::clone(camera))
     }
@@ -182,10 +182,10 @@ impl Core {
         cur_devices.telescope.as_ref().map(Arc::clone)
     }
 
-    pub fn telescope_or_err(&self) -> anyhow::Result<Arc<dyn Telescope + Send + Sync>> {
+    pub fn telescope_or_err(&self) -> eyre::Result<Arc<dyn Telescope + Send + Sync>> {
         let cur_devices = self.cur_devices.lock().unwrap();
         let Some(telescope) = cur_devices.telescope.as_ref() else {
-            anyhow::bail!("Telescope object is None");
+            eyre::bail!("Telescope object is None");
         };
         Ok(Arc::clone(telescope))
     }
@@ -195,10 +195,10 @@ impl Core {
         cur_devices.focuser.as_ref().map(Arc::clone)
     }
 
-    pub fn focuser_or_err(&self) -> anyhow::Result<Arc<dyn Focuser + Send + Sync>> {
+    pub fn focuser_or_err(&self) -> eyre::Result<Arc<dyn Focuser + Send + Sync>> {
         let cur_devices = self.cur_devices.lock().unwrap();
         let Some(focuser) = cur_devices.focuser.as_ref() else {
-            anyhow::bail!("Focuser object is None");
+            eyre::bail!("Focuser object is None");
         };
         Ok(Arc::clone(focuser))
     }
@@ -208,10 +208,10 @@ impl Core {
         cur_devices.filter_wheel.as_ref().map(Arc::clone)
     }
 
-    pub fn filter_wheel_or_err(&self) -> anyhow::Result<Arc<dyn FilterWheel + Send + Sync>> {
+    pub fn filter_wheel_or_err(&self) -> eyre::Result<Arc<dyn FilterWheel + Send + Sync>> {
         let cur_devices = self.cur_devices.lock().unwrap();
         let Some(filter_wheel) = cur_devices.filter_wheel.as_ref() else {
-            anyhow::bail!("Filter wheel object is None");
+            eyre::bail!("Filter wheel object is None");
         };
         Ok(Arc::clone(filter_wheel))
     }
@@ -259,7 +259,7 @@ impl Core {
         let self_ = Arc::clone(self);
         self.ext_guider.set_events_handler(Box::new(move |event| {
             log::info!("External guider event = {:?}", event);
-            let result = || -> anyhow::Result<()> {
+            let result = || -> eyre::Result<()> {
                 let mut mode = self_.mode.write().unwrap();
                 let res = mode.active.notify_guider_event(event.clone())?;
                 self_.apply_notify_result(res, &mut mode)?;
@@ -270,7 +270,7 @@ impl Core {
         }));
     }
 
-    pub fn stop_img_process_thread(&self) -> anyhow::Result<()> {
+    pub fn stop_img_process_thread(&self) -> eyre::Result<()> {
         self.frame_processing.add_to_queue(FrameProcessCommand::Stop)?;
         Ok(())
     }
@@ -289,7 +289,7 @@ impl Core {
 
     fn process_error(
         self:    &Arc<Self>,
-        result:  anyhow::Result<()>,
+        result:  eyre::Result<()>,
         context: &str,
     ) {
         let Err(err) = result else { return; };
@@ -318,7 +318,7 @@ impl Core {
         });
     }
 
-    fn timer_event_handler(self: &Arc<Self>) -> anyhow::Result<()> {
+    fn timer_event_handler(self: &Arc<Self>) -> eyre::Result<()> {
         let mut mode = self.mode.write().unwrap();
         let result = mode.active.notify_periodical_timer_tick(Self::TIMER_PERIOD_MS)?;
         self.apply_notify_result(result, &mut mode)?;
@@ -327,7 +327,7 @@ impl Core {
         Ok(())
     }
 
-    fn hal_event_handler(self: &Arc<Self>, event: HalEvent) -> anyhow::Result<()> {
+    fn hal_event_handler(self: &Arc<Self>, event: HalEvent) -> eyre::Result<()> {
         match &event {
             HalEvent::StateChanged(HalState::Disconnected) => {
                 let mut cur_devices = self.cur_devices.lock().unwrap();
@@ -427,7 +427,7 @@ impl Core {
         self:        &Arc<Self>,
         camera_id:   &str,
         camera_shot: &Arc<dyn CameraShot + Send + Sync>
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let mut mode = self.mode.write().unwrap();
 
         if Some(camera_id) != mode.active.camera_id() {
@@ -560,7 +560,7 @@ impl Core {
     pub fn connect_indi(
         self:         &Arc<Self>,
         indi_drivers: &indi::Drivers
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let options = self.options.read().unwrap();
         let drivers = if !options.indi.remote {
             let telescopes    = indi_drivers.get_group_by_name("Telescopes")?;
@@ -596,7 +596,7 @@ impl Core {
         };
 
         if !options.indi.remote && drivers.is_empty() {
-            anyhow::bail!("No devices selected");
+            eyre::bail!("No devices selected");
         }
 
         log::info!(
@@ -650,7 +650,7 @@ impl Core {
                     if mode.active.get_type() != res.mode_type {
                         return;
                     }
-                    let result = || -> anyhow::Result<()> {
+                    let result = || -> eyre::Result<()> {
                         let res = mode.active.notify_about_frame_processing_result(&res)?;
                         self.apply_notify_result(res, &mut mode)?;
                         Ok(())
@@ -665,7 +665,7 @@ impl Core {
 
             CommandResult::QueueOverflow => {
                 let mut mode = self.mode.write().unwrap();
-                let result = || -> anyhow::Result<()> {
+                let result = || -> eyre::Result<()> {
                     let res = mode.active.notify_processing_queue_overflow()?;
                     self.apply_notify_result(res, &mut mode)?;
                     Ok(())
@@ -684,7 +684,7 @@ impl Core {
     pub fn exec_mode_custom_command(
         self: &Arc<Self>,
         args: &dyn std::any::Any
-    ) -> anyhow::Result<Option<Box<dyn Any>>> {
+    ) -> eyre::Result<Option<Box<dyn Any>>> {
         let mut mode = self.mode.write().unwrap();
         mode.active.custom_command(args)
     }
@@ -694,7 +694,7 @@ impl Core {
         new_mode:            impl Mode + Send + Sync + 'static,
         reset_aborted_mode:  bool,
         reset_finished_mode: bool,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let mut mode = self.mode.write().unwrap();
 
         let have_to_abort_mode =
@@ -734,7 +734,7 @@ impl Core {
         Ok(())
     }
 
-    pub fn open_image_from_file(self: &Arc<Self>, file_name: &Path) -> anyhow::Result<()> {
+    pub fn open_image_from_file(self: &Arc<Self>, file_name: &Path) -> eyre::Result<()> {
         let new_stop_flag = Arc::new(AtomicBool::new(false));
         *self.img_proc_stop_flag.lock().unwrap() = Arc::clone(&new_stop_flag);
 
@@ -772,13 +772,13 @@ impl Core {
         Ok(())
     }
 
-    pub fn check_before_saving_raw_or_live_stacking(&self) -> anyhow::Result<()> {
+    pub fn check_before_saving_raw_or_live_stacking(&self) -> eyre::Result<()> {
         let options = self.options.read().unwrap();
         if options.cam.frame.frame_type == FrameType::Lights {
             match options.guiding.mode {
                 GuidingMode::MainCamera => {
                     if !self.indi.is_device_enabled(&options.mount.device).unwrap_or(false) {
-                        anyhow::bail!(
+                        eyre::bail!(
                             "Guiding by main camera is selected but \
                             mound device is not selected or connected!"
                         );
@@ -786,7 +786,7 @@ impl Core {
                 }
                 GuidingMode::External => {
                     if !self.ext_guider.is_connected() {
-                        anyhow::bail!(
+                        eyre::bail!(
                             "Guiding by external software is selected but \
                             no external software is connected!"
                         );
@@ -798,31 +798,31 @@ impl Core {
         Ok(())
     }
 
-    pub fn start_single_shot(&self) -> anyhow::Result<()> {
+    pub fn start_single_shot(&self) -> eyre::Result<()> {
         let mode = TackingPicturesMode::new(CameraMode::SingleShot, self)?;
         self.start_new_mode(mode, false, true)?;
         Ok(())
     }
 
-    pub fn start_live_view(&self) -> anyhow::Result<()> {
+    pub fn start_live_view(&self) -> eyre::Result<()> {
         let mode = TackingPicturesMode::new(CameraMode::LiveView, self)?;
         self.start_new_mode(mode, false, true)?;
         Ok(())
     }
 
-    pub fn start_saving_raw_frames(&self) -> anyhow::Result<()> {
+    pub fn start_saving_raw_frames(&self) -> eyre::Result<()> {
         let mode = TackingPicturesMode::new(CameraMode::SavingRawFrames, self)?;
         self.start_new_mode(mode, true, true)?;
         Ok(())
     }
 
-    pub fn start_live_stacking(&self) -> anyhow::Result<()> {
+    pub fn start_live_stacking(&self) -> eyre::Result<()> {
         let mode = TackingPicturesMode::new(CameraMode::LiveStacking, self)?;
         self.start_new_mode(mode, true, true)?;
         Ok(())
     }
 
-    pub fn start_focusing(&self) -> anyhow::Result<()> {
+    pub fn start_focusing(&self) -> eyre::Result<()> {
         let mode = FocusingMode::new(
             self,
             None,
@@ -833,7 +833,7 @@ impl Core {
         Ok(())
     }
 
-    pub fn start_mount_calibr(&self) -> anyhow::Result<()> {
+    pub fn start_mount_calibr(&self) -> eyre::Result<()> {
         let mode = MountCalibrMode::new(self, None)?;
         self.start_new_mode(mode, false, false)?;
         Ok(())
@@ -843,7 +843,7 @@ impl Core {
         &self,
         dark_lib_mode: DarkLibMode,
         program: &[MasterFileCreationProgramItem]
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let mode = DarkCreationMode::new(
             self,
             dark_lib_mode,
@@ -858,21 +858,21 @@ impl Core {
         self:     &Arc<Self>,
         eq_coord: &EqCoord,
         config:   GotoConfig,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let mode = GotoMode::new(self, GotoDestination::Coord(*eq_coord), config)?;
         self.start_new_mode(mode, false, false)?;
         Ok(())
     }
 
-    pub fn start_goto_image(self: &Arc<Self>) -> anyhow::Result<()> {
+    pub fn start_goto_image(self: &Arc<Self>) -> eyre::Result<()> {
         let image = self.cur_frame.image.read().unwrap();
         if image.is_empty() {
-            anyhow::bail!("Image is empty");
+            eyre::bail!("Image is empty");
         }
         drop(image);
         let image_info = self.cur_frame.info.read().unwrap();
         let ResultImageInfo::LightInfo(light_frame_info) = &*image_info else {
-            anyhow::bail!("Image is not light frame");
+            eyre::bail!("Image is not light frame");
         };
         self.mode.write().unwrap().active.abort()?;
         let mode = GotoMode::new(
@@ -888,13 +888,13 @@ impl Core {
         Ok(())
     }
 
-    pub fn start_capture_and_platesolve(self: &Arc<Self>) -> anyhow::Result<()> {
+    pub fn start_capture_and_platesolve(self: &Arc<Self>) -> eyre::Result<()> {
         let mode = PlatesolveMode::new(self)?;
         self.start_new_mode(mode, false, false)?;
         Ok(())
     }
 
-    pub fn start_polar_alignment(self: &Arc<Self>) -> anyhow::Result<()> {
+    pub fn start_polar_alignment(self: &Arc<Self>) -> eyre::Result<()> {
         let mode = PolarAlignMode::new(self)?;
         self.start_new_mode(mode, false, false)?;
         Ok(())
@@ -928,10 +928,10 @@ impl Core {
         self.events.send(Event::ModeChanged);
     }
 
-    pub fn continue_prev_mode(&self) -> anyhow::Result<()> {
+    pub fn continue_prev_mode(&self) -> eyre::Result<()> {
         let mut mode = self.mode.write().unwrap();
         let Some(perv_mode) = mode.aborted.take() else {
-            anyhow::bail!("Aborted state is empty");
+            eyre::bail!("Aborted state is empty");
         };
         mode.active = perv_mode;
         mode.active.continue_work()?;
@@ -948,7 +948,7 @@ impl Core {
         self:   &Arc<Self>,
         result: NotifyResult,
         mode:   &mut ModeData,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let mut mode_changed = false;
         let mut finished_progress_and_type = None;
         match result {

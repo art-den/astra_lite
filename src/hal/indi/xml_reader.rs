@@ -109,7 +109,7 @@ impl XmlStreamReader {
     pub fn receive_xml(
         &mut self,
         mut stream: XmlStream,
-    ) -> anyhow::Result<XmlStreamReaderResult> {
+    ) -> eyre::Result<XmlStreamReaderResult> {
         loop {
             match self.state {
                 XmlStreamReaderState::Undefined => {
@@ -148,12 +148,12 @@ impl XmlStreamReader {
                                 let as_file = xml_elem.attr_str("attached") == Some("true");
                                 let (data, dl_time) = if !as_file {
                                     if self.blobs.is_empty() {
-                                        anyhow::bail!("Internal error: setBLOBVector (attached=false) without blob");
+                                        eyre::bail!("Internal error: setBLOBVector (attached=false) without blob");
                                     }
                                     self.blobs.remove(0)
                                 } else {
                                     if self.files.is_empty() {
-                                        anyhow::bail!("setBLOBVector (attached=true) without attached fd");
+                                        eyre::bail!("setBLOBVector (attached=true) without attached fd");
                                     }
                                     let mut file = self.files.remove(0);
                                     let blob_len = xml_elem

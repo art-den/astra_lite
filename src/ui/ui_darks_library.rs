@@ -172,7 +172,7 @@ impl DefectPixelsOptions {
         &self,
         cam_opts: &CamOptions,
         camera:   &Arc<dyn Camera + Send + Sync>,
-    ) -> anyhow::Result<Vec<MasterFileCreationProgramItem>> {
+    ) -> eyre::Result<Vec<MasterFileCreationProgramItem>> {
         let mut result = Vec::new();
 
         let mut binnings = self.binning.get_binnings();
@@ -270,7 +270,7 @@ impl MasterDarksOptions {
         &self,
         cam_opts: &CamOptions,
         camera:   &Arc<dyn Camera + Send + Sync>,
-    ) -> anyhow::Result<Vec<MasterFileCreationProgramItem>> {
+    ) -> eyre::Result<Vec<MasterFileCreationProgramItem>> {
         let mut result = Vec::new();
 
         let mut temperatures = Vec::new();
@@ -378,7 +378,7 @@ impl MasterBiasesOptions {
         &self,
         cam_opts: &CamOptions,
         camera:   &Arc<dyn Camera + Send + Sync>,
-    ) -> anyhow::Result<Vec<MasterFileCreationProgramItem>> {
+    ) -> eyre::Result<Vec<MasterFileCreationProgramItem>> {
         let mut result = Vec::new();
 
         let mut temperatures = Vec::new();

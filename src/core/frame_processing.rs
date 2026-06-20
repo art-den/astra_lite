@@ -322,7 +322,7 @@ impl FrameProcessing {
         *result_fun = Some(Box::new(fun));
     }
 
-    pub fn add_to_queue(&self, cmd: FrameProcessCommand) -> anyhow::Result<()> {
+    pub fn add_to_queue(&self, cmd: FrameProcessCommand) -> eyre::Result<()> {
         self.sender.send(cmd)?;
         Ok(())
     }
@@ -341,7 +341,7 @@ impl FrameProcessing {
         }));
     }
 
-    fn process_command(&self, command: FrameProcessCommandData) -> anyhow::Result<()> {
+    fn process_command(&self, command: FrameProcessCommandData) -> eyre::Result<()> {
         if command.stop_flag.load(Ordering::Relaxed) {
             log::debug!("Command stopped");
             return Ok(());
@@ -900,7 +900,7 @@ impl FrameProcessing {
                             .join("Result");
                         if !file_path.exists() {
                             std::fs::create_dir_all(&file_path)
-                                .map_err(|e|anyhow::anyhow!(
+                                .map_err(|e|eyre::eyre!(
                                     "Error '{}'\nwhen trying to create directory '{}' for saving result live stack image",
                                     e, file_path.to_str().unwrap_or_default(),
                                 ))?;
@@ -940,7 +940,7 @@ impl FrameProcessing {
         params:    &Option<CalibrParams>,
         raw_image: &mut RawImage,
         calibr:    &mut CalibrData,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let Some(params) = params else { return Ok(()); };
 
         let image_info = raw_image.info();
@@ -1002,7 +1002,7 @@ impl FrameProcessing {
                 );
                 let tmr = TimeLogger::start();
                 let subtract_image = load_raw_image_from_fits_file(file_name)
-                    .map_err(|e| anyhow::anyhow!(
+                    .map_err(|e| eyre::eyre!(
                         "Error '{}'\nwhen reading master dark '{}'",
                         e, file_name.to_str().unwrap_or_default(),
                     ))?;
@@ -1029,7 +1029,7 @@ impl FrameProcessing {
             if let Some(file_name) = &params.flat_fname {
                 let tmr = TimeLogger::start();
                 let mut master_flat = load_raw_image_from_fits_file(file_name)
-                    .map_err(|e| anyhow::anyhow!(
+                    .map_err(|e| eyre::eyre!(
                         "Error '{}'\nreading master flat '{}'",
                         e, file_name.to_str().unwrap_or_default(),
                     ))?;
@@ -1056,7 +1056,7 @@ impl FrameProcessing {
         if let (Some(file_name), Some(dark_image)) = (&subtrack_fname, &calibr.subtract_image) {
             let tmr = TimeLogger::start();
             raw_image.subtract_dark_or_bias(dark_image)
-                .map_err(|err| anyhow::anyhow!(
+                .map_err(|err| eyre::eyre!(
                     "Error {}\nwhen trying to subtract image {}",
                     err, file_name.to_str().unwrap_or_default(),
                 ))?;
@@ -1069,7 +1069,7 @@ impl FrameProcessing {
         if let (Some(file_name), Some(flat_image)) = (&params.flat_fname, &calibr.master_flat) {
             let tmr = TimeLogger::start();
             raw_image.apply_flat(flat_image)
-                .map_err(|err| anyhow::anyhow!(
+                .map_err(|err| eyre::eyre!(
                     "Error {}\nwher trying to apply flat image {}",
                     err, file_name.to_str().unwrap_or_default(),
                 ))?;

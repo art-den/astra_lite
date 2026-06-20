@@ -220,7 +220,7 @@ impl Connection {
     fn start_indi_server(
         exe:     &str,
         drivers: &[String],
-    ) -> anyhow::Result<Child> {
+    ) -> eyre::Result<Child> {
         // Start indiserver process
         let mut child = Command::new(exe)
             .args(drivers)
@@ -250,13 +250,13 @@ impl Connection {
                     if let Some(space_pos) = err_text.find(" ") {
                         err_text = &err_text[space_pos..];
                     }
-                    anyhow::bail!(
+                    eyre::bail!(
                         "Process `{}` terminated with code `{}` and text `{}`",
                         exe, status.code().unwrap_or(0), err_text
                     );
                 }
             }
-            anyhow::bail!(
+            eyre::bail!(
                 "Process `{}` terminated with code `{}`",
                 exe, status.code().unwrap_or(0)
             );
@@ -3100,7 +3100,7 @@ impl XmlReceiver {
         xml_text:      &str,
         blobs:         Vec<XmlStreamReaderBlob>,
         events_sender: &mpsc::Sender<EventSenderEvent>,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let mut xml_elem = xmltree::Element::parse(xml_text.as_bytes())?;
         if xml_elem.name == "pingRequest" {
             let uid = xml_elem.attr_str("uid").unwrap_or_default();
@@ -3110,7 +3110,7 @@ impl XmlReceiver {
             // New property from INDI server
             let device_name = xml_elem.attr_string_or_err("device")?;
             if device_name.is_empty() {
-                anyhow::bail!("Empty device name");
+                eyre::bail!("Empty device name");
             }
             let mut devices = self.devices.lock().unwrap();
 
@@ -3158,11 +3158,11 @@ impl XmlReceiver {
             let mut devices = self.devices.lock().unwrap();
             let change_id = devices.next_change_id();
             let Some(device) = devices.find_by_name_opt_mut(&device_name) else {
-                anyhow::bail!(Error::DeviceNotExists(device_name));
+                eyre::bail!(Error::DeviceNotExists(device_name));
             };
             let device_name = Arc::clone(device.name());
             let Some(property) = device.get_property_opt_mut(&prop_name) else {
-                anyhow::bail!(Error::PropertyNotExists(
+                eyre::bail!(Error::PropertyNotExists(
                     device_name.to_string(),
                     prop_name
                 ));
@@ -3199,7 +3199,7 @@ impl XmlReceiver {
             let mut devices = self.devices.lock().unwrap();
             if let Some(prop_name) = xml_elem.attributes.remove("name") {
                 let Some(device) = devices.find_by_name_opt_mut(&device_name) else {
-                    anyhow::bail!(Error::DeviceNotExists(device_name));
+                    eyre::bail!(Error::DeviceNotExists(device_name));
                 };
                 let dev_name_arc = Arc::clone(device.name());
                 let removed_prop = device.remove_property(&prop_name)
@@ -3215,7 +3215,7 @@ impl XmlReceiver {
             } else {
                 let drv_info = devices.get_driver_info(&device_name)?;
                 let Some(removed) = devices.remove(&device_name) else {
-                    anyhow::bail!(Error::DeviceNotExists(device_name));
+                    eyre::bail!(Error::DeviceNotExists(device_name));
                 };
                 self.notify_subcribers_about_device_delete(
                     timestamp,

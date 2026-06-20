@@ -6,7 +6,7 @@ pub fn take_shot(
     camera:    &Arc<dyn Camera + Send + Sync>,
     frame:     &FrameOptions,
     cam_ctrl:  &CamCtrlOptions,
-) -> anyhow::Result<u64> {
+) -> eyre::Result<u64> {
     // Initialization before start
 
     camera.init_before_shot()?;
@@ -74,7 +74,7 @@ pub fn take_shot(
 pub fn control_camera_cooling(
     camera:  &Arc<dyn Camera + Send + Sync>,
     options: &CamCtrlOptions
-) -> anyhow::Result<()> {
+) -> eyre::Result<()> {
     if camera.is_cooler_supported()? {
         if options.enable_cooler {
             log::info!("Setting camera temperature = {}", options.temperature);
@@ -89,7 +89,7 @@ pub fn control_camera_cooling(
 pub fn control_camera_fan(
     camera:  &Arc<dyn Camera + Send + Sync>,
     options: &CamCtrlOptions,
-) -> anyhow::Result<()> {
+) -> eyre::Result<()> {
     if camera.is_fan_ctrl_supported()? {
         let fan_enabled = options.enable_fan || options.enable_cooler;
         log::info!("Setting camera fan = {}", fan_enabled);
@@ -101,7 +101,7 @@ pub fn control_camera_fan(
 pub fn control_camera_heater(
     camera:  &Arc<dyn Camera + Send + Sync>,
     options: &CamCtrlOptions
-) -> anyhow::Result<()> {
+) -> eyre::Result<()> {
 
     if camera.is_heater_supported()?
     && let Some(heater_str) = &options.heater_str {
@@ -116,7 +116,7 @@ pub fn restart_camera_exposure(
     mode:   &mut ModeData,
     frame_opts:  &FrameOptions,
     ctrl_opts:   &CamCtrlOptions,
-) -> anyhow::Result<()> {
+) -> eyre::Result<()> {
     log::info!("Begin restart exposure of camera {}...", camera.id());
 
     // Try to restart exposure by current mode
@@ -142,7 +142,7 @@ pub fn restart_camera_exposure(
     Ok(())
 }
 
-pub fn set_focal_len_for_cameras(hal: &Hal, options: &Options) -> anyhow::Result<()> {
+pub fn set_focal_len_for_cameras(hal: &Hal, options: &Options) -> eyre::Result<()> {
     let cameras = hal.cameras()?;
     for cam_info in cameras {
         if cam_info.ccd == CcdPurpose::Unknown {

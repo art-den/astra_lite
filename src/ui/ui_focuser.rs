@@ -566,7 +566,7 @@ impl FocuserUi {
         &self,
         da:  &gtk::DrawingArea,
         ctx: &gdk::cairo::Context
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let focusing_data = self.focusing_data.borrow();
         let Some(ref fd) = *focusing_data else {
             return Ok(());

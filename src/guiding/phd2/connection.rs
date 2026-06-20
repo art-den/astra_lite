@@ -558,12 +558,12 @@ impl Connection {
         debug_assert!(removed);
     }
 
-    pub fn work(&self, host: &str, port: u16) -> anyhow::Result<()> {
+    pub fn work(&self, host: &str, port: u16) -> eyre::Result<()> {
         log::debug!("Phd2Conn::work");
 
         let mut self_main_thread = self.main_thread.lock().unwrap();
         if self_main_thread.is_some() {
-            anyhow::bail!("Already working");
+            eyre::bail!("Already working");
         }
 
         self.exit_flag.store(false, Ordering::Relaxed);
@@ -651,7 +651,7 @@ impl Connection {
         Ok(())
     }
 
-    pub fn stop(&self) -> anyhow::Result<()> {
+    pub fn stop(&self) -> eyre::Result<()> {
         log::debug!("Phd2Conn::stop");
 
         // Set stop flag to true
@@ -669,7 +669,7 @@ impl Connection {
         if let Some(main_thread) = self_main_thread.take() {
             _ = main_thread.join();
         } else {
-            anyhow::bail!("Not working");
+            eyre::bail!("Not working");
         }
         drop(self_main_thread);
 
@@ -684,7 +684,7 @@ impl Connection {
         self.cmd_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    pub fn method_pause(&self, pause: bool, full: bool) -> anyhow::Result<()> {
+    pub fn method_pause(&self, pause: bool, full: bool) -> eyre::Result<()> {
         let full_flag = if full { "full" } else { "" };
         let cmd = Method {
             method: "set_paused",
@@ -700,7 +700,7 @@ impl Connection {
         pixels:  f64,
         ra_only: bool,
         settle:  &Settle,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         #[derive(Serialize)]
         struct Params {
             amount: f64,
@@ -725,7 +725,7 @@ impl Connection {
         &self,
         settle:      &Settle,
         recalibrate: Option<bool>
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         // TODO: add "ROI" field
         #[derive(Serialize)]
         struct Params {
@@ -751,7 +751,7 @@ impl Connection {
         }
     }
 
-    fn process_incoming_json(event_handlers: &EventHandlers, js_str: &str)  -> anyhow::Result<()> {
+    fn process_incoming_json(event_handlers: &EventHandlers, js_str: &str)  -> eyre::Result<()> {
         // First try to parce as IncomingObject
         if let Ok(js_obj) = serde_json::from_str::<IncomingObject>(js_str) {
             Self::notify_event(event_handlers, Event::Object(Arc::new(js_obj)));
@@ -765,7 +765,7 @@ impl Connection {
         Ok(())
     }
 
-    fn send_command_str(&self, command: &str) -> anyhow::Result<()> {
+    fn send_command_str(&self, command: &str) -> eyre::Result<()> {
         log::debug!("Phd2Conn::send_command, command = {}", command);
         let mut self_send_stream = self.write_tcp_stream.lock().unwrap();
         if let Some(send_stream) = &mut *self_send_stream {
@@ -774,7 +774,7 @@ impl Connection {
             send_stream.flush()?;
             Ok(())
         } else {
-            anyhow::bail!("Is not connected to PHD2 now");
+            eyre::bail!("Is not connected to PHD2 now");
         }
     }
 }

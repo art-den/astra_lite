@@ -105,7 +105,7 @@ impl FocusingMode {
         next_mode:      Option<Box<dyn Mode + Sync + Send>>,
         prelim_step:    bool,
         error_reaction: FocusingErrorReaction,
-    ) -> anyhow::Result<Self> {
+    ) -> eyre::Result<Self> {
         let camera = core.camera_or_err()?;
         let focuser = core.focuser_or_err()?;
         let opts = core.options().read().unwrap();
@@ -153,7 +153,7 @@ impl FocusingMode {
         &mut self,
         middle_pos: f64,
         stage:      Stage
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         log::info!("Start autofocus stage {:?} for central focuser value {}", stage, middle_pos);
         self.samples.clear();
         self.to_go.clear();
@@ -168,7 +168,7 @@ impl FocusingMode {
         Ok(())
     }
 
-    fn set_new_focus_value(&mut self, value: f64) -> anyhow::Result<()> {
+    fn set_new_focus_value(&mut self, value: f64) -> eyre::Result<()> {
         self.focuser.set_abs_position(value)?;
         self.desired_focus = value;
         self.change_time_ms = Some(0);
@@ -179,7 +179,7 @@ impl FocusingMode {
     fn start_sample(
         &mut self,
         anti_backlash: bool
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let Some(pos) = self.to_go.pop_front() else {
             return Ok(());
         };
@@ -200,7 +200,7 @@ impl FocusingMode {
         Ok(())
     }
 
-    fn check_cur_focus_value(&mut self, cur_focus: f64) -> anyhow::Result<NotifyResult> {
+    fn check_cur_focus_value(&mut self, cur_focus: f64) -> eyre::Result<NotifyResult> {
         match self.state {
             FocusingState::WaitingPositionAntiBacklash { anti_backlash_pos, target_pos } => {
                 if cur_focus as i64 == anti_backlash_pos as i64 {
@@ -241,7 +241,7 @@ impl FocusingMode {
     fn process_img_info_when_waiting_first_img(
         &mut self,
         info: &LightFrameInfoData
-    ) -> anyhow::Result<NotifyResult> {
+    ) -> eyre::Result<NotifyResult> {
         log::info!(
             "First image before autofocus. FWHM={:.2?}, ovality={:.2?}, initial focus={:.0}",
             info.stars.info.fwhm, info.stars.info.ovality, self.before_pos
@@ -257,7 +257,7 @@ impl FocusingMode {
         &mut self,
         info:      &LightFrameInfoData,
         focus_pos: f64,
-    ) -> anyhow::Result<NotifyResult> {
+    ) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
 
         log::debug!(
@@ -307,7 +307,7 @@ impl FocusingMode {
         Ok(result)
     }
 
-    fn add_measure(&mut self, stars_hfd: f32, focus_pos: f64) -> anyhow::Result<NotifyResult> {
+    fn add_measure(&mut self, stars_hfd: f32, focus_pos: f64) -> eyre::Result<NotifyResult> {
         self.one_pos_hfd.push(stars_hfd);
 
         log::debug!(
@@ -350,7 +350,7 @@ impl FocusingMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn calculate_and_process_result(&mut self) -> anyhow::Result<()> {
+    fn calculate_and_process_result(&mut self) -> eyre::Result<()> {
         let calc_result = self.calc_result(self.stage == Stage::Preliminary);
         log::debug!("Autofocus result = {:?}", calc_result);
 
@@ -450,7 +450,7 @@ impl FocusingMode {
                     }
                     FocusingErrorReaction::Fail => {
                         // fail with error
-                        anyhow::bail!(error);
+                        eyre::bail!(error);
                     }
                 }
             }
@@ -463,7 +463,7 @@ impl FocusingMode {
         &mut self,
         info:      &LightFrameInfoData,
         focus_pos: f64
-    ) -> anyhow::Result<NotifyResult> {
+    ) -> eyre::Result<NotifyResult> {
         let duration = self.start_time.unwrap().elapsed();
 
         log::info!(
@@ -483,9 +483,9 @@ impl FocusingMode {
         })
     }
 
-    fn calc_result(&self, allow_more_measures: bool) -> anyhow::Result<CalcResult> {
+    fn calc_result(&self, allow_more_measures: bool) -> eyre::Result<CalcResult> {
         if self.samples.is_empty() {
-            anyhow::bail!("No samples for position calculation!");
+            eyre::bail!("No samples for position calculation!");
         }
         let coeffs = Self::calc_quadratic_coeffs(&self.samples, 2);
         log::debug!("coeffs = {:?}", coeffs);
@@ -499,7 +499,7 @@ impl FocusingMode {
                 let range = self.focuser.abs_position_range()?;
 
                 if !range.contains(&value) {
-                    anyhow::bail!(
+                    eyre::bail!(
                         "Result pos {0:.1} out of focuser range ({1:.1}..{2:.1})",
                         value, *range.start(), *range.end()
                     );
@@ -527,7 +527,7 @@ impl FocusingMode {
         if allow_more_measures {
             let (x, y) = Self::samples_to_x_y(&self.samples, None);
             let linear_coeffs = linear_regression(&x, &y)
-                .ok_or_else(|| anyhow::anyhow!("Can't find focus linear coefficients"))?;
+                .ok_or_else(|| eyre::eyre!("Can't find focus linear coefficients"))?;
             let (a, b) = linear_coeffs;
             if a > 0.0 {
                 return Ok(CalcResult::Rising(QuadraticCoeffs { a2: 0.0, a1: a, a0: b }));
@@ -536,7 +536,7 @@ impl FocusingMode {
             }
         }
 
-        anyhow::bail!("Can't calculate focuser result");
+        eyre::bail!("Can't calculate focuser result");
     }
 
     fn calc_quadratic_coeffs(
@@ -645,7 +645,7 @@ impl Mode for FocusingMode {
         false
     }
 
-    fn start(&mut self) -> anyhow::Result<()> {
+    fn start(&mut self) -> eyre::Result<()> {
         let cur_pos = self.focuser.abs_position()?.round();
         self.start_temp = self.focuser.temperature().unwrap_or(f64::NAN);
         self.before_pos = cur_pos;
@@ -663,7 +663,7 @@ impl Mode for FocusingMode {
         Ok(())
     }
 
-    fn abort(&mut self) -> anyhow::Result<()> {
+    fn abort(&mut self) -> eyre::Result<()> {
         self.camera.abort_exposure()?;
         self.focuser.set_abs_position(self.before_pos)?;
         Ok(())
@@ -683,14 +683,14 @@ impl Mode for FocusingMode {
         }
     }
 
-    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         if let Some(change_time_ms) = &mut self.change_time_ms {
             *change_time_ms += timer_period_ms;
             if *change_time_ms > MAX_FOCUS_CHANGE_TIME * 1000 {
                 self.change_cnt += 1;
                 log::error!("Time out waiting new focus value!");
                 if self.change_cnt > MAX_FOCUS_TRY_SET_CNT {
-                    anyhow::bail!("Can't set new focus value for focuser!");
+                    eyre::bail!("Can't set new focus value for focuser!");
                 }
                 log::error!("Setting new value {:.0} again. Try = {}", self.desired_focus, self.change_cnt);
                 self.focuser.set_abs_position(self.desired_focus)?;
@@ -704,7 +704,7 @@ impl Mode for FocusingMode {
     fn notify_about_frame_processing_result(
         &mut self,
         fp_result: &FrameProcessResult
-    ) -> anyhow::Result<NotifyResult> {
+    ) -> eyre::Result<NotifyResult> {
         match &fp_result.data {
             FrameProcessResultData::LightFrameInfo(info) =>
                 match self.state {

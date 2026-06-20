@@ -173,7 +173,7 @@ impl SkyMapPainter {
         }
     }
 
-    pub fn paint(&mut self, args: PaintArgs) -> anyhow::Result<()> {
+    pub fn paint(&mut self, args: PaintArgs) -> eyre::Result<()> {
         let eq_sphere_cvt = EqToSphereCvt::new(
             args.observer.longitude,
             args.observer.latitude,
@@ -341,7 +341,7 @@ impl SkyMapPainter {
         sky_map: &SkyMap,
         ctx:     &PaintCtx,
         mode:    PainterMode,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         if mode == PainterMode::Names {
             let mut font = ctx.layout.font_description().unwrap();
             font.set_size(ctx.screen.font_size() as _);
@@ -394,7 +394,7 @@ impl SkyMapPainter {
         &mut self,
         dso_object: &DsoItem,
         ctx:        &PaintCtx,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let maj_axis = dso_object.maj_axis.unwrap_or_default();
         let min_axis = dso_object.min_axis.unwrap_or(maj_axis);
         let maj_axis = arcmin_to_radian(maj_axis as f64);
@@ -456,7 +456,7 @@ impl SkyMapPainter {
         &mut self,
         sky_map: &SkyMap,
         ctx:     &PaintCtx,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let constellations = sky_map.constellations();
 
         // Find current constellation (at screen center)
@@ -495,7 +495,7 @@ impl SkyMapPainter {
         &mut self,
         sky_map: &SkyMap,
         ctx:     &PaintCtx,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let constellations = sky_map.constellations();
         for (id, constellation) in constellations {
             for polyline in &constellation.lines {
@@ -513,7 +513,7 @@ impl SkyMapPainter {
         &mut self,
         sky_map: &SkyMap,
         ctx:     &PaintCtx,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let mut font = ctx.layout.font_description().unwrap();
         font.set_size((2.0 * ctx.screen.font_size()) as _);
         ctx.layout.set_font_description(Some(&font));
@@ -543,7 +543,7 @@ impl SkyMapPainter {
         options:   &StarPainterParams,
         ctx:       &PaintCtx,
         mode:      PainterMode,
-    ) -> anyhow::Result<bool> {
+    ) -> eyre::Result<bool> {
         let star_painter = StarPainter {
             mode,
             star: star_data,
@@ -561,7 +561,7 @@ impl SkyMapPainter {
         params:  &StarPainterParams,
         ctx:     &PaintCtx,
         mode:    PainterMode,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         if mode == PainterMode::Names {
             let mut font = ctx.layout.font_description().unwrap();
             font.set_size(ctx.screen.font_size() as _);
@@ -610,7 +610,7 @@ impl SkyMapPainter {
         Ok(())
     }
 
-    fn paint_eq_grid(&mut self, ctx: &PaintCtx, text: bool) -> anyhow::Result<()> {
+    fn paint_eq_grid(&mut self, ctx: &PaintCtx, text: bool) -> eyre::Result<()> {
         if !text {
             ctx.cairo.set_line_width(1.0);
             ctx.cairo.set_antialias(ctx.config.get_antialias());
@@ -667,7 +667,7 @@ impl SkyMapPainter {
         Ok(())
     }
 
-    fn paint_ground(&mut self, ctx: &PaintCtx) -> anyhow::Result<()> {
+    fn paint_ground(&mut self, ctx: &PaintCtx) -> eyre::Result<()> {
         let mut font = ctx.layout.font_description().unwrap();
         font.set_size((WORD_SIZE_FONT_SIZE * ctx.screen.font_size()) as _);
         ctx.layout.set_font_description(Some(&font));
@@ -690,7 +690,7 @@ impl SkyMapPainter {
         Ok(())
     }
 
-    fn paint_horizon_glow(&mut self, ctx: &PaintCtx) -> anyhow::Result<()> {
+    fn paint_horizon_glow(&mut self, ctx: &PaintCtx) -> eyre::Result<()> {
         const STEP: i32 = 2;
         let angle = degree_to_radian(ctx.config.horizon_glow.angle);
 
@@ -717,7 +717,7 @@ impl SkyMapPainter {
         &mut self,
         selection: &Option<SkymapObject>,
         ctx:       &PaintCtx,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let Some(selection) = selection else { return Ok(()); };
         let size = 12.0 * ctx.screen.dpmm_x();
         let thickness = 1.0 * ctx.screen.dpmm_x();
@@ -731,7 +731,7 @@ impl SkyMapPainter {
         &mut self,
         tele_pos:   &Option<EqCoord>,
         ctx:        &PaintCtx,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let Some(telescope_pos) = tele_pos else { return Ok(()); };
         let painter = TelescopePosPainter {
             crd: *telescope_pos,
@@ -770,7 +770,7 @@ impl SkyMapPainter {
         &mut self,
         cam_frame: &Option<CameraFrame>,
         ctx:       &PaintCtx,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         if let Some(cam_frame) = cam_frame {
             let center_crd = ctx.view_point.crd.to_sphere_pt();
             let center_crd = ctx.eq_sphere_cvt.sphere_to_eq(&center_crd);
@@ -793,7 +793,7 @@ impl SkyMapPainter {
         &mut self,
         ps_image: &Option<PlateSolvedImage>,
         ctx:      &PaintCtx,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let Some(ps_image) = ps_image else { return Ok(()); };
         let coords = Self::calc_rect_coords(
             &ps_image.coord,
@@ -839,7 +839,7 @@ trait Item {
     fn has_to_convert_to_now_epoch(&self) -> bool;
     fn points_count(&self) -> usize;
     fn point_crd(&self, index: usize) -> PainterCrd;
-    fn paint(&self, _ctx: &PaintCtx, _points: &[Point2D]) -> anyhow::Result<()> { Ok(()) }
+    fn paint(&self, _ctx: &PaintCtx, _points: &[Point2D]) -> eyre::Result<()> { Ok(()) }
 }
 
 struct ItemPainter {
@@ -860,7 +860,7 @@ impl ItemPainter {
         obj:         &dyn Item,
         ctx:         &PaintCtx,
         under_horiz: bool,
-    ) -> anyhow::Result<bool> {
+    ) -> eyre::Result<bool> {
         let points_count = obj.points_count();
         let use_now_epoch = obj.has_to_convert_to_now_epoch();
 
@@ -962,7 +962,7 @@ impl Item for DsoNamePainter<'_> {
         })
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         let crd = &points[0];
         let mut y = crd.y;
         ctx.cairo.set_source_rgba(1.0, 1.0, 1.0, 0.7);
@@ -1008,7 +1008,7 @@ impl Item for DsoEllipse {
         PainterCrd::Eq(self.points[index])
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         ctx.cairo.move_to(points[0].x, points[0].y);
         for pt in &points[1..] {
             ctx.cairo.line_to(pt.x, pt.y);
@@ -1074,7 +1074,7 @@ impl Item for Outline {
         })
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         ctx.cairo.move_to(points[0].x, points[0].y);
         for pt in &points[1..] {
             ctx.cairo.line_to(pt.x, pt.y);
@@ -1172,7 +1172,7 @@ impl StarPainter<'_> {
         unreachable!()
     }
 
-    fn paint_object(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint_object(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         let star_mag = self.star.mag.get();
         let (light, light_with_gamma) = self.calc_light(star_mag);
         if light_with_gamma < 0.1 { return Ok(()); }
@@ -1208,14 +1208,14 @@ impl StarPainter<'_> {
         Ok(())
     }
 
-    fn paint_name(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint_name(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         if self.name.is_empty() && self.bayer.is_empty() { return Ok(()); }
         let star_mag = self.star.mag.get();
         let (light, light_with_gamma) = self.calc_light(star_mag);
         let (r, g, b) = Self::get_rgb_for_star_bv(self.star.bv.get());
         let diam = self.calc_diam(light);
         let mut pt = points[0];
-        let mut paint_text = |text, light_with_gamma| -> anyhow::Result<()> {
+        let mut paint_text = |text, light_with_gamma| -> eyre::Result<()> {
             let mut light_with_gamma = light_with_gamma;
             if light_with_gamma < 0.5 { return Ok(()); }
             light_with_gamma -= 0.5;
@@ -1266,7 +1266,7 @@ impl Item for StarPainter<'_> {
         })
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         match self.mode {
             PainterMode::Objects =>
                 self.paint_object(ctx, points),
@@ -1328,7 +1328,7 @@ impl Item for EqGridItem {
         }
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         if !self.text {
             let mut first = true;
             for pt in points {
@@ -1347,7 +1347,7 @@ impl Item for EqGridItem {
             let screen_bottom = scr_rect.bottom_line();
             for (pt1, pt2) in points.iter().tuple_windows() {
                 let line = Line2D { pt1: *pt1, pt2: *pt2 };
-                let paint_text = |mut x, y, adjust_right| -> anyhow::Result<()> {
+                let paint_text = |mut x, y, adjust_right| -> eyre::Result<()> {
                     let text = match  self.tp {
                         EqGridItemType::Ra => format!("{:.0}h", radian_to_hour(self.ra1)),
                         EqGridItemType::Dec => format!("{:.0}°", radian_to_degree(self.dec1)),
@@ -1404,7 +1404,7 @@ impl Item for Ground<'_> {
         })
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         let ground_around = self.view_point.crd.alt >= 0.0;
         if ground_around {
             const LAYER: f64 = 100.0;
@@ -1468,7 +1468,7 @@ impl Item for WorldSide<'_> {
         })
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         ctx.layout.set_text(self.text);
         let (width, height) = ctx.layout.pixel_size();
         ctx.cairo.move_to(
@@ -1500,7 +1500,7 @@ impl Item for HorizonGlowItem {
         PainterCrd::Horiz(self.coords[index])
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         let top_pt_x = 0.5 * (points[0].x + points[1].x);
         let top_pt_y = 0.5 * (points[0].y + points[1].y);
         let bottom_pt_x = 0.5 * (points[2].x + points[3].x);
@@ -1577,7 +1577,7 @@ impl Item for TelescopePosPainter {
         PainterCrd::Eq(self.crd)
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         let pt = &points[0];
         let line_size = 40.0 * ctx.screen.dpmm_x();
         ctx.cairo.set_line_width(1.0);
@@ -1614,7 +1614,7 @@ impl Item for SelectionPainter {
         PainterCrd::Eq(self.crd)
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         let pt = &points[0];
         ctx.cairo.set_antialias(ctx.config.get_antialias());
         ctx.cairo.set_source_rgb(1.0, 0.0, 1.0);
@@ -1648,7 +1648,7 @@ struct CameraFramePainter<'a> {
         PainterCrd::Eq(self.coords[index])
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         ctx.cairo.move_to(points[0].x, points[0].y);
         for pt in &points[1..] {
             ctx.cairo.line_to(pt.x, pt.y);
@@ -1676,7 +1676,7 @@ fn paint_text_under_line(
     pt1:    &Point2D,
     pt2:    &Point2D,
     text:   &str
-) -> anyhow::Result<()> {
+) -> eyre::Result<()> {
     let dx = pt2.x - pt1.x;
     let dy = pt2.y - pt1.y;
     let len = f64::sqrt(dx * dx + dy * dy);
@@ -1715,7 +1715,7 @@ impl Item for PlateSolvedImagePainter<'_> {
         PainterCrd::Eq(self.coords[index])
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         let mut persp_pnt = self.persp_pnt.borrow_mut();
         persp_pnt.paint(
             ctx.cairo,
@@ -1779,7 +1779,7 @@ impl<'a> Item for PolygonIsAtScreenCenterTestObject<'a> {
         }
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         let screen_center = [ctx.screen.center_x, ctx.screen.center_y];
         let mut tmp_buffer = self.tmp_buffer.borrow_mut();
         tmp_buffer.clear();
@@ -1810,7 +1810,7 @@ impl<'a> Item for ConstLinesPainter<'a> {
         PainterCrd::Eq(self.polyline[index])
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         ctx.cairo.move_to(points[0].x, points[0].y);
         for pt in &points[1..] {
             ctx.cairo.line_to(pt.x, pt.y);
@@ -1851,7 +1851,7 @@ impl<'a> Item for ConstNamePainter<'a> {
         PainterCrd::Eq(EqCoord { dec: self.dec, ra: self.ra })
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         ctx.layout.set_text(self.name);
         let (width, height) = ctx.layout.pixel_size();
         ctx.cairo.move_to(
@@ -1887,7 +1887,7 @@ impl<'a> Item for ConstBoundsPainter<'a> {
         PainterCrd::Eq(self.polygon[index])
     }
 
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> anyhow::Result<()> {
+    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
         ctx.cairo.move_to(points[0].x, points[0].y);
         for pt in &points[1..] {
             ctx.cairo.line_to(pt.x, pt.y);

@@ -85,7 +85,7 @@ impl MountCalibrMode {
     pub fn new(
         core:      &Core,
         next_mode: Option<Box<dyn Mode + Sync + Send>>,
-    ) -> anyhow::Result<Self> {
+    ) -> eyre::Result<Self> {
         let opts = core.options().read().unwrap();
 
         let camera = core.camera_or_err()?;
@@ -120,7 +120,7 @@ impl MountCalibrMode {
         })
     }
 
-    fn start_for_axis(&mut self, axis: Axis) -> anyhow::Result<()> {
+    fn start_for_axis(&mut self, axis: Axis) -> eyre::Result<()> {
         take_shot(
             &self.camera,
             &self.cam_opts.frame,
@@ -145,7 +145,7 @@ impl MountCalibrMode {
         Ok(())
     }
 
-    fn process_axis_results(&mut self) -> anyhow::Result<()> {
+    fn process_axis_results(&mut self) -> eyre::Result<()> {
         #[derive(Debug)]
         struct AttemptRes {move_x: f64, move_y: f64, dist: f64}
         let mut result = Vec::new();
@@ -216,7 +216,7 @@ impl MountCalibrMode {
     fn process_light_frame_info(
         &mut self,
         info: &LightFrameInfoData,
-    ) -> anyhow::Result<NotifyResult> {
+    ) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         if info.quality.fwhm_is_ok && info.quality.ovality_is_ok {
             if self.image_width == 0 || self.image_height == 0 {
@@ -282,7 +282,7 @@ impl Mode for MountCalibrMode {
         }
     }
 
-    fn abort(&mut self) -> anyhow::Result<()> {
+    fn abort(&mut self) -> eyre::Result<()> {
         self.telescope.goto_and_track(self.start_ra, self.start_dec)?;
         Ok(())
     }
@@ -310,7 +310,7 @@ impl Mode for MountCalibrMode {
         })
     }
 
-    fn start(&mut self) -> anyhow::Result<()> {
+    fn start(&mut self) -> eyre::Result<()> {
         let (ra, dec) = self.telescope.eq_coord()?;
         self.start_dec = dec;
         self.start_ra = ra;
@@ -321,7 +321,7 @@ impl Mode for MountCalibrMode {
     fn notify_about_frame_processing_result(
         &mut self,
         fp_result: &FrameProcessResult
-    ) -> anyhow::Result<NotifyResult> {
+    ) -> eyre::Result<NotifyResult> {
         match &fp_result.data {
             FrameProcessResultData::LightFrameInfo(info) =>
                 self.process_light_frame_info(info),
@@ -331,7 +331,7 @@ impl Mode for MountCalibrMode {
         }
     }
 
-    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         match &mut self.state {
             State::WaitForSlew(ok_time_ms) => {

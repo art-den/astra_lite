@@ -400,7 +400,7 @@ impl ImageStacker {
 
     }
 
-    pub fn save_to_tiff(&self, file_name: &Path) -> anyhow::Result<()> {
+    pub fn save_to_tiff(&self, file_name: &Path) -> eyre::Result<()> {
         use tiff::encoder::*;
         let mut file = BufWriter::new(File::create(file_name)?);
         let mut decoder = TiffEncoder::new(&mut file)?;

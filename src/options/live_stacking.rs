@@ -27,7 +27,7 @@ impl Default for LiveStackingOptions {
 }
 
 impl LiveStackingOptions {
-    pub fn check(&mut self) -> anyhow::Result<()> {
+    pub fn check(&mut self) -> eyre::Result<()> {
         if self.out_dir.as_os_str().is_empty() {
             let mut save_path = dirs::home_dir().unwrap();
             save_path.push(DIRECTORY);

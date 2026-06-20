@@ -916,7 +916,7 @@ impl HardwareUi {
         exec_and_show_error(Some(&self.window), || {
             let indi = self.core.indi();
             if indi.state() != indi::ConnState::Connected {
-                anyhow::bail!("INDI is not connected!");
+                eyre::bail!("INDI is not connected!");
             }
             let devices = indi.get_devices_list_by_interface(
                 indi::DriverInterface::GPS |
@@ -934,7 +934,7 @@ impl HardwareUi {
                 .collect();
 
             if result.is_empty() {
-                anyhow::bail!("No GPS or geographic data found!");
+                eyre::bail!("No GPS or geographic data found!");
             }
 
             if result.len() == 1 {

@@ -114,7 +114,7 @@ impl Hal {
         }
     }
 
-    pub fn notify_periodical_timer_tick(&self, timer_period: usize) -> anyhow::Result<()> {
+    pub fn notify_periodical_timer_tick(&self, timer_period: usize) -> eyre::Result<()> {
         let impl_ = self.impl_.read().unwrap();
         if let Some(impl_) = &*impl_ {
             impl_.notify_periodical_timer_tick(timer_period)
@@ -123,41 +123,41 @@ impl Hal {
         }
     }
 
-    fn get_impl(&self) -> anyhow::Result<Arc<dyn HalImpl + Send + Sync + 'static>> {
+    fn get_impl(&self) -> eyre::Result<Arc<dyn HalImpl + Send + Sync + 'static>> {
         let impl_ = self.impl_.read().unwrap();
         if let Some(impl_) = &*impl_ {
             Ok(Arc::clone(impl_))
         } else {
-            anyhow::bail!("HAL is not selected!");
+            eyre::bail!("HAL is not selected!");
         }
     }
 
-    pub fn devices(&self, type_filter: DeviceType) -> anyhow::Result<Vec<DeviceInfo>> {
+    pub fn devices(&self, type_filter: DeviceType) -> eyre::Result<Vec<DeviceInfo>> {
         let impl_ = self.get_impl()?;
         impl_.devices(type_filter)
     }
 
-    pub fn cameras(&self) -> anyhow::Result<Vec<CameraInfo>> {
+    pub fn cameras(&self) -> eyre::Result<Vec<CameraInfo>> {
         let impl_ = self.get_impl()?;
         impl_.cameras()
     }
 
-    pub fn camera(&self, id: &str) -> anyhow::Result<Arc<dyn Camera + Send + Sync>> {
+    pub fn camera(&self, id: &str) -> eyre::Result<Arc<dyn Camera + Send + Sync>> {
         let impl_ = self.get_impl()?;
         impl_.camera(id)
     }
 
-    pub fn telescope(&self, id: &str) -> anyhow::Result<Arc<dyn Telescope + Send + Sync>> {
+    pub fn telescope(&self, id: &str) -> eyre::Result<Arc<dyn Telescope + Send + Sync>> {
         let impl_ = self.get_impl()?;
         impl_.telescope(id)
     }
 
-    pub fn focuser(&self, id: &str) -> anyhow::Result<Arc<dyn Focuser + Send + Sync>> {
+    pub fn focuser(&self, id: &str) -> eyre::Result<Arc<dyn Focuser + Send + Sync>> {
         let impl_ = self.get_impl()?;
         impl_.focuser(id)
     }
 
-    pub fn filter_wheel(&self, id: &str) -> anyhow::Result<Arc<dyn FilterWheel + Send + Sync>> {
+    pub fn filter_wheel(&self, id: &str) -> eyre::Result<Arc<dyn FilterWheel + Send + Sync>> {
         let impl_ = self.get_impl()?;
         impl_.filter_wheel(id)
     }
@@ -166,13 +166,13 @@ impl Hal {
 pub trait HalImpl {
     fn features(&self) -> HalFeatures;
     fn state(&self) -> HalState;
-    fn notify_periodical_timer_tick(&self, timer_period: usize) -> anyhow::Result<()>;
-    fn devices(&self, type_filter: DeviceType) -> anyhow::Result<Vec<DeviceInfo>>;
-    fn cameras(&self) -> anyhow::Result<Vec<CameraInfo>>;
-    fn camera(&self, id: &str) -> anyhow::Result<Arc<dyn Camera + Send + Sync>>;
-    fn telescope(&self, id: &str) -> anyhow::Result<Arc<dyn Telescope + Send + Sync>>;
-    fn focuser(&self, id: &str) -> anyhow::Result<Arc<dyn Focuser + Send + Sync>>;
-    fn filter_wheel(&self, id: &str) -> anyhow::Result<Arc<dyn FilterWheel + Send + Sync>>;
+    fn notify_periodical_timer_tick(&self, timer_period: usize) -> eyre::Result<()>;
+    fn devices(&self, type_filter: DeviceType) -> eyre::Result<Vec<DeviceInfo>>;
+    fn cameras(&self) -> eyre::Result<Vec<CameraInfo>>;
+    fn camera(&self, id: &str) -> eyre::Result<Arc<dyn Camera + Send + Sync>>;
+    fn telescope(&self, id: &str) -> eyre::Result<Arc<dyn Telescope + Send + Sync>>;
+    fn focuser(&self, id: &str) -> eyre::Result<Arc<dyn Focuser + Send + Sync>>;
+    fn filter_wheel(&self, id: &str) -> eyre::Result<Arc<dyn FilterWheel + Send + Sync>>;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -181,7 +181,7 @@ pub trait HalImpl {
 pub trait Device {
     fn id(&self) -> &str;
     fn name(&self) -> &str;
-    fn is_active(&self) -> anyhow::Result<bool>;
+    fn is_active(&self) -> eyre::Result<bool>;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -204,76 +204,76 @@ pub enum CameraShotType {
 
 pub trait CameraShot {
     fn get_type(&self) -> CameraShotType;
-    fn get_raw(&self) -> anyhow::Result<crate::image::raw::RawImage>;
-    fn get_image(&self, image: &mut crate::image::image::Image) -> anyhow::Result<()>;
+    fn get_raw(&self) -> eyre::Result<crate::image::raw::RawImage>;
+    fn get_image(&self, image: &mut crate::image::image::Image) -> eyre::Result<()>;
     fn download_time(&self) -> f64;
     fn file_ext(&self) -> &str;
-    fn save_to_file(&self, file_name: &Path) -> anyhow::Result<()>;
+    fn save_to_file(&self, file_name: &Path) -> eyre::Result<()>;
 }
 
 pub trait Camera : Device {
-    fn init_before_shot(&self) -> anyhow::Result<()>;
+    fn init_before_shot(&self) -> eyre::Result<()>;
 
     // Exposure
-    fn exposure_range(&self) -> anyhow::Result<RangeInclusive<f64>>;
-    fn start_exposure(&self, value: f64) -> anyhow::Result<()>;
-    fn abort_exposure(&self) -> anyhow::Result<()>;
-    fn remaining_time(&self) -> anyhow::Result<f64>;
+    fn exposure_range(&self) -> eyre::Result<RangeInclusive<f64>>;
+    fn start_exposure(&self, value: f64) -> eyre::Result<()>;
+    fn abort_exposure(&self) -> eyre::Result<()>;
+    fn remaining_time(&self) -> eyre::Result<f64>;
 
     // Frame type
-    fn set_frame_type(&self, frame_type: FrameType) -> anyhow::Result<()>;
+    fn set_frame_type(&self, frame_type: FrameType) -> eyre::Result<()>;
 
     // Frame
-    fn pixel_size_um(&self) -> anyhow::Result<(f64, f64)>;
-    fn is_frame_supported(&self) -> anyhow::Result<bool>;
-    fn ccd_size(&self) -> anyhow::Result<(usize, usize)>;
-    fn set_frame(&self, x: usize, y: usize, width: usize, height: usize) -> anyhow::Result<()>;
+    fn pixel_size_um(&self) -> eyre::Result<(f64, f64)>;
+    fn is_frame_supported(&self) -> eyre::Result<bool>;
+    fn ccd_size(&self) -> eyre::Result<(usize, usize)>;
+    fn set_frame(&self, x: usize, y: usize, width: usize, height: usize) -> eyre::Result<()>;
 
     // Gain
-    fn is_gain_supported(&self) -> anyhow::Result<bool>;
-    fn gain_range(&self) -> anyhow::Result<RangeInclusive<f64>>;
-    fn set_gain(&self, value: f64) -> anyhow::Result<()>;
+    fn is_gain_supported(&self) -> eyre::Result<bool>;
+    fn gain_range(&self) -> eyre::Result<RangeInclusive<f64>>;
+    fn set_gain(&self, value: f64) -> eyre::Result<()>;
 
     // Offset
-    fn is_offset_supported(&self) -> anyhow::Result<bool>;
-    fn offset_range(&self) -> anyhow::Result<RangeInclusive<f64>>;
-    fn set_offset(&self, value: f64) -> anyhow::Result<()>;
+    fn is_offset_supported(&self) -> eyre::Result<bool>;
+    fn offset_range(&self) -> eyre::Result<RangeInclusive<f64>>;
+    fn set_offset(&self, value: f64) -> eyre::Result<()>;
 
     // Bin
-    fn is_binning_supported(&self) -> anyhow::Result<bool>;
-    fn max_binning(&self) -> anyhow::Result<(usize/*x*/, usize/*y*/)>;
-    fn set_binning(&self, bin_x: usize, bin_y: usize) -> anyhow::Result<()>;
+    fn is_binning_supported(&self) -> eyre::Result<bool>;
+    fn max_binning(&self) -> eyre::Result<(usize/*x*/, usize/*y*/)>;
+    fn set_binning(&self, bin_x: usize, bin_y: usize) -> eyre::Result<()>;
 
     // Cooler
-    fn is_cooler_supported(&self) -> anyhow::Result<bool>;
-    fn temperature(&self) -> anyhow::Result<f64>;
-    fn temperature_range(&self) -> anyhow::Result<RangeInclusive<f64>>;
-    fn set_temperature(&self, temperature: Option<f64>) -> anyhow::Result<()>;
+    fn is_cooler_supported(&self) -> eyre::Result<bool>;
+    fn temperature(&self) -> eyre::Result<f64>;
+    fn temperature_range(&self) -> eyre::Result<RangeInclusive<f64>>;
+    fn set_temperature(&self, temperature: Option<f64>) -> eyre::Result<()>;
 
     // Heater
-    fn is_heater_supported(&self) -> anyhow::Result<bool>;
-    fn heater_ctrl_list(&self) -> anyhow::Result<Vec<(String/*id*/, String/*text*/)>>;
-    fn control_heater(&self, id: &str) -> anyhow::Result<()>;
+    fn is_heater_supported(&self) -> eyre::Result<bool>;
+    fn heater_ctrl_list(&self) -> eyre::Result<Vec<(String/*id*/, String/*text*/)>>;
+    fn control_heater(&self, id: &str) -> eyre::Result<()>;
 
     // Fan
-    fn is_fan_ctrl_supported(&self) -> anyhow::Result<bool>;
-    fn enable_fan(&self, enable: bool) -> anyhow::Result<()>;
+    fn is_fan_ctrl_supported(&self) -> eyre::Result<bool>;
+    fn enable_fan(&self, enable: bool) -> eyre::Result<()>;
 
     // Low noise mode
-    fn is_low_noise_supported(&self) -> anyhow::Result<bool>;
-    fn enable_low_noise_mode(&self, enable: bool) -> anyhow::Result<()>;
+    fn is_low_noise_supported(&self) -> eyre::Result<bool>;
+    fn enable_low_noise_mode(&self, enable: bool) -> eyre::Result<()>;
 
     // High fullwell mode
-    fn is_high_fullwell_supported(&self) -> anyhow::Result<bool>;
-    fn enable_high_fullwell_mode(&self, enable: bool) -> anyhow::Result<()>;
+    fn is_high_fullwell_supported(&self) -> eyre::Result<bool>;
+    fn enable_high_fullwell_mode(&self, enable: bool) -> eyre::Result<()>;
 
     // Conversion gain
-    fn is_conversion_gain_supported(&self) -> anyhow::Result<bool>;
-    fn conversion_gain_list(&self) -> anyhow::Result<Vec<(String/*id*/, String/*text*/)>>;
-    fn set_conversion_gain(&self, id: &str) -> anyhow::Result<()>;
+    fn is_conversion_gain_supported(&self) -> eyre::Result<bool>;
+    fn conversion_gain_list(&self) -> eyre::Result<Vec<(String/*id*/, String/*text*/)>>;
+    fn set_conversion_gain(&self, id: &str) -> eyre::Result<()>;
 
     // Telescope
-    fn set_telescope_focal_len(&self, focal_len: f64) -> anyhow::Result<()>;
+    fn set_telescope_focal_len(&self, focal_len: f64) -> eyre::Result<()>;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -296,36 +296,36 @@ pub enum TelescopeState {
 }
 
 pub trait Telescope : Device {
-    fn state(&self) -> anyhow::Result<TelescopeState>;
+    fn state(&self) -> eyre::Result<TelescopeState>;
 
     fn is_abort_motion_supported(&self) -> bool;
-    fn abort_motion(&self) -> anyhow::Result<()>;
+    fn abort_motion(&self) -> eyre::Result<()>;
 
-    fn is_parked(&self) -> anyhow::Result<bool>;
-    fn park(&self) -> anyhow::Result<()>;
-    fn unpark(&self) -> anyhow::Result<()>;
+    fn is_parked(&self) -> eyre::Result<bool>;
+    fn park(&self) -> eyre::Result<()>;
+    fn unpark(&self) -> eyre::Result<()>;
 
-    fn is_tracking(&self) -> anyhow::Result<bool>;
-    fn track(&self, enabled: bool) -> anyhow::Result<()>;
+    fn is_tracking(&self) -> eyre::Result<bool>;
+    fn track(&self, enabled: bool) -> eyre::Result<()>;
 
-    fn revert_motion(&self, reverse_ns: bool, reverse_we: bool) -> anyhow::Result<()>;
-    fn move_(&self, direction: TelescopeMoveDir) -> anyhow::Result<()>;
+    fn revert_motion(&self, reverse_ns: bool, reverse_we: bool) -> eyre::Result<()>;
+    fn move_(&self, direction: TelescopeMoveDir) -> eyre::Result<()>;
 
-    fn slew_speed_list(&self) -> anyhow::Result<Vec<(String/*id*/, String/*text*/)>>;
-    fn set_slew_speed(&self, speed_id: &str) -> anyhow::Result<()>;
-    fn eq_coord(&self) -> anyhow::Result<(f64/*ra*/, f64/*dec*/)>;
-    fn goto_and_track(&self, ra: f64, dec: f64) -> anyhow::Result<()>;
-    fn is_slewing(&self) -> anyhow::Result<bool>;
+    fn slew_speed_list(&self) -> eyre::Result<Vec<(String/*id*/, String/*text*/)>>;
+    fn set_slew_speed(&self, speed_id: &str) -> eyre::Result<()>;
+    fn eq_coord(&self) -> eyre::Result<(f64/*ra*/, f64/*dec*/)>;
+    fn goto_and_track(&self, ra: f64, dec: f64) -> eyre::Result<()>;
+    fn is_slewing(&self) -> eyre::Result<bool>;
 
-    fn sync(&self, ra: f64, dec: f64) -> anyhow::Result<()>;
+    fn sync(&self, ra: f64, dec: f64) -> eyre::Result<()>;
 
-    fn is_guide_rate_supported(&self) -> anyhow::Result<bool>;
-    fn guide_rate(&self) -> anyhow::Result<(f64/*ns*/, f64/*we*/)>;
-    fn pulse_max_duration(&self) -> anyhow::Result<(f64/*ns*/, f64/*we*/)>;
-    fn can_set_guide_rate(&self) -> anyhow::Result<bool>;
-    fn set_guide_rate(&self, rate_ns: f64, rate_we: f64) -> anyhow::Result<()>;
-    fn pulse_guide(&self, duration_ns: f64, duration_we: f64) -> anyhow::Result<()>;
-    fn is_pulse_guiding(&self) -> anyhow::Result<bool>;
+    fn is_guide_rate_supported(&self) -> eyre::Result<bool>;
+    fn guide_rate(&self) -> eyre::Result<(f64/*ns*/, f64/*we*/)>;
+    fn pulse_max_duration(&self) -> eyre::Result<(f64/*ns*/, f64/*we*/)>;
+    fn can_set_guide_rate(&self) -> eyre::Result<bool>;
+    fn set_guide_rate(&self, rate_ns: f64, rate_we: f64) -> eyre::Result<()>;
+    fn pulse_guide(&self, duration_ns: f64, duration_we: f64) -> eyre::Result<()>;
+    fn is_pulse_guiding(&self) -> eyre::Result<bool>;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -339,17 +339,17 @@ pub enum FocuserState {
 }
 
 pub trait Focuser : Device {
-    fn state(&self) -> anyhow::Result<FocuserState>;
-    fn abs_position_range(&self) -> anyhow::Result<RangeInclusive<f64>>;
-    fn abs_position(&self) -> anyhow::Result<f64>;
-    fn set_abs_position(&self, value: f64) -> anyhow::Result<()>;
-    fn temperature(&self) -> anyhow::Result<f64>;
+    fn state(&self) -> eyre::Result<FocuserState>;
+    fn abs_position_range(&self) -> eyre::Result<RangeInclusive<f64>>;
+    fn abs_position(&self) -> eyre::Result<f64>;
+    fn set_abs_position(&self, value: f64) -> eyre::Result<()>;
+    fn temperature(&self) -> eyre::Result<f64>;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 // Filter wheel
 
 pub trait FilterWheel : Device {
-    fn list_and_active(&self) -> anyhow::Result<(Vec<String>, usize)>;
-    fn set_active(&self, active_elem: usize) -> anyhow::Result<()>;
+    fn list_and_active(&self) -> eyre::Result<(Vec<String>, usize)>;
+    fn set_active(&self, active_elem: usize) -> eyre::Result<()>;
 }

@@ -30,7 +30,7 @@ impl CcdToToWatch {
         prev_state: indi::PropState,
         new_state:  indi::PropState,
         value:      f64
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let is_ready =
             prev_state == indi::PropState::Busy &&
             new_state == indi::PropState::Ok;
@@ -45,7 +45,7 @@ impl CcdToToWatch {
         Ok(())
     }
 
-    fn notify_exposure_new_prop(&mut self) -> anyhow::Result<()> {
+    fn notify_exposure_new_prop(&mut self) -> eyre::Result<()> {
         if matches!(self.mode, CcdMode::WaitExposureProp(_)) {
             self.mode = CcdMode::WaitAfterRestart(0);
         }
@@ -57,7 +57,7 @@ impl CcdToToWatch {
         timer_period_ms: usize,
         indi:            &Arc<indi::Connection>,
         events:          &Arc<HalEventHandlers>,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         match &mut self.mode {
             CcdMode::Waiting => {}
             CcdMode::WaitBlob(time_ms) => {
@@ -85,7 +85,7 @@ impl CcdToToWatch {
                 *time_ms += timer_period_ms;
                 if *time_ms >= WAIT_EXPOSURE_TIME * 1000 {
                     self.mode = CcdMode::Waiting;
-                    anyhow::bail!("Waiting camera restart too long time (>{}s)!", WAIT_EXPOSURE_TIME);
+                    eyre::bail!("Waiting camera restart too long time (>{}s)!", WAIT_EXPOSURE_TIME);
                 }
             }
 
@@ -119,7 +119,7 @@ struct CameraToInit {
 }
 
 impl CameraToInit {
-    fn notify_new_indi_prop(&mut self, prop_name: &str, elem_name: &str) -> anyhow::Result<()> {
+    fn notify_new_indi_prop(&mut self, prop_name: &str, elem_name: &str) -> eyre::Result<()> {
         let is_temperature_property =
             indi::Connection::camera_is_temperature_property(prop_name, elem_name);
         let is_fan_str_property =
@@ -162,7 +162,7 @@ impl CameraToInit {
         timer_period_ms: usize,
         indi:            &Arc<indi::Connection>,
         events:          &Arc<HalEventHandlers>,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         if let Some(init_timer_ms) = &mut self.init_timer {
             *init_timer_ms += timer_period_ms;
             if *init_timer_ms >= INIT_DELAY * 1000 {
@@ -196,7 +196,7 @@ impl CameraToInit {
         Ok(())
     }
 
-    fn select_maximum_resolution(&self, indi: &Arc<indi::Connection>) -> anyhow::Result<()> {
+    fn select_maximum_resolution(&self, indi: &Arc<indi::Connection>) -> eyre::Result<()> {
         if self.name.contains(" Simulator") { // don't do it for simulators
             return Ok(());
         }
@@ -231,7 +231,7 @@ impl CamWatchdog {
         self.ccd_list.clear();
     }
 
-    pub fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<()> {
+    pub fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<()> {
         if self.indi.state() != indi::ConnState::Connected {
             return Ok(());
         }
@@ -311,7 +311,7 @@ impl CamWatchdog {
         self.init_list.remove(existing_pos);
     }
 
-    fn notify_indi_prop_change_for_ccd(&mut self, prop_change: &indi::PropChangeEvent) -> anyhow::Result<()> {
+    fn notify_indi_prop_change_for_ccd(&mut self, prop_change: &indi::PropChangeEvent) -> eyre::Result<()> {
         if let indi::PropChange::Change { prop_name, elem_name, prev_state, new_state, value } = &prop_change.change {
             let cam_ccd = indi::Connection::camera_get_ccd_for_property(prop_name, elem_name);
             if let Some(cam_ccd) = cam_ccd {
@@ -339,7 +339,7 @@ impl CamWatchdog {
         Ok(())
     }
 
-    fn notify_indi_prop_change_for_camera(&mut self, prop_change: &indi::PropChangeEvent) -> anyhow::Result<()> {
+    fn notify_indi_prop_change_for_camera(&mut self, prop_change: &indi::PropChangeEvent) -> eyre::Result<()> {
         if let indi::PropChange::New { prop_name, elem_name, .. } = &prop_change.change {
             let item = self.init_list.iter_mut().find(|item| *item.name == *prop_change.device_name);
 
@@ -350,7 +350,7 @@ impl CamWatchdog {
         Ok(())
     }
 
-    pub fn notify_indi_prop_change(&mut self, prop_change: &indi::PropChangeEvent) -> anyhow::Result<()> {
+    pub fn notify_indi_prop_change(&mut self, prop_change: &indi::PropChangeEvent) -> eyre::Result<()> {
         self.notify_indi_prop_change_for_ccd(prop_change)?;
         self.notify_indi_prop_change_for_camera(prop_change)?;
 

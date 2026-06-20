@@ -11,7 +11,6 @@ build = "build.rs"
 gtk = "0.18"
 pangocairo = "0.18"
 async-channel = "2.0"
-anyhow = { version = "1.0", features = ["backtrace"] }
 eyre = "0.6"
 bitstream-io="1.5"
 itertools = "0.10"

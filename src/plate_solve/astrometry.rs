@@ -67,9 +67,9 @@ impl Drop for AstrometryPlateSolver {
 }
 
 impl AstrometryPlateSolver {
-    fn exec_solve_field(&mut self) -> anyhow::Result<()> {
+    fn exec_solve_field(&mut self) -> eyre::Result<()> {
         let Some(file_name) = self.file_name.clone() else {
-            anyhow::bail!("Calling exec_solve_field before saving image!");
+            eyre::bail!("Calling exec_solve_field before saving image!");
         };
         use std::process::*;
         let mut cmd = Command::new(EXECUTABLE_FNAME);
@@ -142,7 +142,7 @@ impl AstrometryPlateSolver {
 
         log::debug!("Running solve-field args={:?}", cmd.get_args());
         let child = cmd.spawn().map_err(|e|
-            anyhow::format_err!("{} when trying to execute {}", e, EXECUTABLE_FNAME)
+            eyre::format_err!("{} when trying to execute {}", e, EXECUTABLE_FNAME)
         )?;
         self.child = Some(child);
         Ok(())
@@ -151,7 +151,7 @@ impl AstrometryPlateSolver {
     fn save_image_file(
         &mut self,
         image: &Image,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         self.clear_prev_resources();
         let layer = if !image.l.is_empty() { &image.l } else { &image.g };
         let file_name = format!("astralite_platesolve_{}.tif", rand::random::<u64>());
@@ -168,7 +168,7 @@ impl AstrometryPlateSolver {
         stars:      &StarItems,
         img_width:  usize,
         img_height: usize,
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         self.clear_prev_resources();
 
         // save stars into fits file
@@ -217,7 +217,7 @@ impl AstrometryPlateSolver {
         }
     }
 
-    fn get_result_impl(&mut self) -> anyhow::Result<PlateSolveResult> {
+    fn get_result_impl(&mut self) -> eyre::Result<PlateSolveResult> {
         if let Some(child) = &mut self.child {
             let exit_status = match child.try_wait() {
                 Ok(Some(status)) => status,
@@ -307,7 +307,7 @@ impl AstrometryPlateSolver {
                 let mut str_output = String::new();
                 _ = output.read_to_string(&mut str_output);
 
-                return Err(anyhow::format_err!(
+                return Err(eyre::format_err!(
                     "solve-field exited with code {}\n\n{}",
                     exit_status.code().unwrap_or_default(),
                     str_output
@@ -315,7 +315,7 @@ impl AstrometryPlateSolver {
             }
         }
 
-        anyhow::bail!("Not started!");
+        eyre::bail!("Not started!");
     }
 }
 
@@ -328,9 +328,9 @@ impl PlateSolverIface for AstrometryPlateSolver {
         &mut self,
         data:   &PlateSolverInData,
         config: &PlateSolveConfig
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         if self.child.is_some() {
-            anyhow::bail!("AstrometryPlateSolver already started");
+            eyre::bail!("AstrometryPlateSolver already started");
         }
         self.config = config.clone();
         self.radius_try = RadiusTry::First;
@@ -348,7 +348,7 @@ impl PlateSolverIface for AstrometryPlateSolver {
         self.clear_prev_resources();
     }
 
-    fn get_result(&mut self) -> anyhow::Result<PlateSolveResult> {
+    fn get_result(&mut self) -> eyre::Result<PlateSolveResult> {
         let result = self.get_result_impl();
 
         // Try to restart platesolver

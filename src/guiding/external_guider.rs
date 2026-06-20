@@ -33,12 +33,12 @@ pub enum ExtGuiderState {
 pub trait ExternalGuider {
     fn get_type(&self) -> ExtGuiderType;
     fn state(&self) -> ExtGuiderState;
-    fn connect(&self) -> anyhow::Result<()>;
+    fn connect(&self) -> eyre::Result<()>;
     fn is_connected(&self) -> bool;
-    fn start_guiding(&self) -> anyhow::Result<()>;
-    fn pause_guiding(&self, pause: bool) -> anyhow::Result<()>;
-    fn start_dithering(&self, pixels: i32) -> anyhow::Result<()>;
-    fn disconnect(&self) -> anyhow::Result<()>;
+    fn start_guiding(&self) -> eyre::Result<()>;
+    fn pause_guiding(&self, pause: bool) -> eyre::Result<()>;
+    fn start_dithering(&self, pixels: i32) -> eyre::Result<()>;
+    fn disconnect(&self) -> eyre::Result<()>;
     fn connect_events_handler(&self, handler: ExtGuiderEventFn);
 }
 
@@ -74,7 +74,7 @@ impl ExternalGuiderCtrl {
         ext_guider.as_ref().map(|g| g.state())
     }
 
-    pub fn create_and_connect(self: &Arc<Self>, guider: ExtGuiderType) -> anyhow::Result<()> {
+    pub fn create_and_connect(self: &Arc<Self>, guider: ExtGuiderType) -> eyre::Result<()> {
         let mut ext_guider = self.ext_guider.lock().unwrap();
 
         // Disconect previous one
@@ -113,12 +113,12 @@ impl ExternalGuiderCtrl {
         Ok(())
     }
 
-    pub fn disconnect(&self) -> anyhow::Result<()> {
+    pub fn disconnect(&self) -> eyre::Result<()> {
         let mut ext_guider = self.ext_guider.lock().unwrap();
         if let Some(guider) = ext_guider.take() {
             guider.disconnect()?;
         } else {
-            return Err(anyhow::anyhow!("Not connected"));
+            return Err(eyre::eyre!("Not connected"));
         }
         Ok(())
     }
@@ -132,19 +132,19 @@ impl ExternalGuiderCtrl {
         }
     }
 
-    pub fn start_dithering(&self, pixels: i32) -> anyhow::Result<()> {
+    pub fn start_dithering(&self, pixels: i32) -> eyre::Result<()> {
         let ext_guider = self.ext_guider.lock().unwrap();
         let Some(ext_guider) = &*ext_guider else {
-            anyhow::bail!("External guider is not created");
+            eyre::bail!("External guider is not created");
         };
         ext_guider.start_dithering(pixels)?;
         Ok(())
     }
 
-    pub fn start_guiding(&self) -> anyhow::Result<()> {
+    pub fn start_guiding(&self) -> eyre::Result<()> {
         let ext_guider = self.ext_guider.lock().unwrap();
         let Some(ext_guider) = &*ext_guider else {
-            anyhow::bail!("External guider is not created");
+            eyre::bail!("External guider is not created");
         };
         ext_guider.start_guiding()?;
         Ok(())

@@ -64,7 +64,7 @@ impl StartDialog {
         Rc::new(Self { widgets })
     }
 
-    pub fn exec(self: &Rc<Self>, on_apply: impl Fn() -> anyhow::Result<()> + 'static) {
+    pub fn exec(self: &Rc<Self>, on_apply: impl Fn() -> eyre::Result<()> + 'static) {
         self.widgets.dialog.connect_response(clone!(@strong self as self_ => move |dlg, resp| {
             match resp {
                 gtk::ResponseType::Ok => {

@@ -18,7 +18,7 @@ pub fn paint_altitude_by_time(
     dt_local: NaiveDateTime,
     observer: &Observer,
     crd:      &Option<EqCoord>,
-) -> anyhow::Result<()> {
+) -> eyre::Result<()> {
     let (_, dpmm_y) = get_widget_dpmm(area)
         .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
     let sc = area.style_context();
@@ -52,7 +52,7 @@ pub fn paint_altitude_by_time(
     cr.fill()?;
 
     let mut x = 3.0;
-    let mut draw_legend = |text, (r, g, b)| -> anyhow::Result<()> {
+    let mut draw_legend = |text, (r, g, b)| -> eyre::Result<()> {
         cr.rectangle(x, 0.5 * (legend_height-legend_rect_size), legend_rect_size, legend_rect_size);
         cr.set_source_rgb(0.5, 0.5, 0.5);
         cr.stroke_preserve()?;

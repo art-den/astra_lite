@@ -119,7 +119,7 @@ impl ExternalGuider for ExternalGuiderPhd2 {
         data.state
     }
 
-    fn connect(&self) -> anyhow::Result<()> {
+    fn connect(&self) -> eyre::Result<()> {
         self.phd2.work("127.0.0.1", 4400)?;
         Ok(())
     }
@@ -128,24 +128,24 @@ impl ExternalGuider for ExternalGuiderPhd2 {
         self.phd2.is_connected()
     }
 
-    fn start_guiding(&self) -> anyhow::Result<()> {
+    fn start_guiding(&self) -> eyre::Result<()> {
         let settle = Settle::default(); // TODO: take settle from options
         self.phd2.method_guide(&settle, None)?;
         Ok(())
     }
 
-    fn pause_guiding(&self, _pause: bool) -> anyhow::Result<()> {
+    fn pause_guiding(&self, _pause: bool) -> eyre::Result<()> {
         self.phd2.method_pause(true, true)?;
         Ok(())
     }
 
-    fn start_dithering(&self, pixels: i32) -> anyhow::Result<()> {
+    fn start_dithering(&self, pixels: i32) -> eyre::Result<()> {
         let settle = Settle::default(); // TODO: take settle from options
         self.phd2.method_dither(pixels as f64, false, &settle)?;
         Ok(())
     }
 
-    fn disconnect(&self) -> anyhow::Result<()> {
+    fn disconnect(&self) -> eyre::Result<()> {
         self.phd2.stop()?;
         Ok(())
     }

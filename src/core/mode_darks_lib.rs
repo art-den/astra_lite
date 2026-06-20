@@ -49,7 +49,7 @@ impl DarkCreationMode {
         mode:        DarkLibMode,
         calibr_data: &Arc<Mutex<CalibrData>>,
         program:     &[MasterFileCreationProgramItem]
-    ) -> anyhow::Result<Self> {
+    ) -> eyre::Result<Self> {
         let camera = core.camera_or_err()?;
         Ok(Self {
             camera,
@@ -71,7 +71,7 @@ impl DarkCreationMode {
         program_item: MasterFileCreationProgramItem,
         cam_mode:     CameraMode,
     ) -> NotifyResult {
-        let start_focusing_fun = move |core: &Arc<Core>, mode: &mut ModeData| -> anyhow::Result<()> {
+        let start_focusing_fun = move |core: &Arc<Core>, mode: &mut ModeData| -> eyre::Result<()> {
             mode.active.abort()?;
             let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
             let mut new_mode = TackingPicturesMode::new(cam_mode, core)?;
@@ -122,13 +122,13 @@ impl Mode for DarkCreationMode {
         })
     }
 
-    fn start(&mut self) -> anyhow::Result<()> {
+    fn start(&mut self) -> eyre::Result<()> {
         self.state = State::Undefined;
         self.clear_calibr_data();
         Ok(())
     }
 
-    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         let mut have_to_start = false;
         match self.state {

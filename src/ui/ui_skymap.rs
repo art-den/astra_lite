@@ -750,7 +750,7 @@ impl MapUi {
         });
     }
 
-    fn check_data_loaded_impl(&self) -> anyhow::Result<()> {
+    fn check_data_loaded_impl(&self) -> eyre::Result<()> {
         let mut skymap = self.skymap_data.borrow_mut();
         if skymap.is_some() {
             return Ok(());
@@ -760,11 +760,11 @@ impl MapUi {
         let cur_exe = std::env::current_exe()?;
 
         let cur_path = cur_exe.parent()
-            .ok_or_else(|| anyhow::anyhow!("Error getting cur_exe.parent()"))?;
+            .ok_or_else(|| eyre::eyre!("Error getting cur_exe.parent()"))?;
         let skymap_data_path = cur_path.join("data");
 
         let skymap_local_data_path = dirs::data_local_dir()
-            .ok_or_else(|| anyhow::anyhow!("dirs::data_local_dir"))?
+            .ok_or_else(|| eyre::eyre!("dirs::data_local_dir"))?
             .join(env!("CARGO_PKG_NAME"))
             .join("data");
 
@@ -818,7 +818,7 @@ impl MapUi {
 
         let weak_self = self.weak_self_.borrow();
         let Some(self_) = weak_self.upgrade() else {
-            return Err(anyhow::anyhow!("self.weak_self_ is empty"));
+            return Err(eyre::eyre!("self.weak_self_ is empty"));
         };
         glib::spawn_future_local(clone!(@weak self_ => async move {
             while let Ok(skymaps_with_stars_res) = stars_receiver.recv().await {
@@ -1171,7 +1171,7 @@ impl MapUi {
         &self,
         area: &gtk::DrawingArea,
         cr:   &cairo::Context
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let user_time = self.user_time.borrow();
         let cur_dt = user_time.time(false);
         let cur_dt_local = user_time.time(true);

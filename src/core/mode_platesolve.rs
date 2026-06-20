@@ -38,7 +38,7 @@ pub struct PlatesolveMode {
 }
 
 impl PlatesolveMode {
-    pub fn new(core: &Core) -> anyhow::Result<Self> {
+    pub fn new(core: &Core) -> eyre::Result<Self> {
         let camera = core.camera_or_err()?;
         let mount = core.telescope_or_err()?;
         let opts = core.options().read().unwrap();
@@ -67,7 +67,7 @@ impl PlatesolveMode {
         })
     }
 
-    fn get_platesolver_config(&self) -> anyhow::Result<PlateSolveConfig> {
+    fn get_platesolver_config(&self) -> eyre::Result<PlateSolveConfig> {
         let (ra, dec) = self.mount.eq_coord()?;
         let eq_coord = EqCoord {
             dec: degree_to_radian(dec),
@@ -82,7 +82,7 @@ impl PlatesolveMode {
         Ok(config)
     }
 
-    fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> anyhow::Result<()> {
+    fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> eyre::Result<()> {
         let image = image.read().unwrap();
         let config = self.get_platesolver_config()?;
         self.plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
@@ -95,18 +95,18 @@ impl PlatesolveMode {
         stars:      &StarItems,
         img_width:  usize,
         img_height: usize
-    ) -> anyhow::Result<()> {
+    ) -> eyre::Result<()> {
         let config = self.get_platesolver_config()?;
         let stars_arg = PlateSolverInData::Stars{ stars, img_width, img_height };
         self.plate_solver.start(&stars_arg, &config)?;
         Ok(())
     }
 
-    fn try_process_plate_solving_result(&mut self) -> anyhow::Result<bool> {
+    fn try_process_plate_solving_result(&mut self) -> eyre::Result<bool> {
         let result = match self.plate_solver.get_result()? {
             PlateSolveResult::Waiting => return Ok(false),
             PlateSolveResult::Done(result) => result,
-            PlateSolveResult::Failed => anyhow::bail!("Can't platesolve image")
+            PlateSolveResult::Failed => eyre::bail!("Can't platesolve image")
         };
 
         result.print_to_log();
@@ -138,7 +138,7 @@ impl PlatesolveMode {
         Ok(true)
     }
 
-    fn calc_focal_len(&self, ps_result: &PlateSolveOkResult) -> anyhow::Result<()> {
+    fn calc_focal_len(&self, ps_result: &PlateSolveOkResult) -> eyre::Result<()> {
         let mut options = self.options.write().unwrap();
         if !options.telescope.from_platesolve { return Ok(()); }
 
@@ -227,14 +227,14 @@ impl Mode for PlatesolveMode {
         Some(self.cam_opts.frame.exp_main)
     }
 
-    fn start(&mut self) -> anyhow::Result<()> {
+    fn start(&mut self) -> eyre::Result<()> {
         log::debug!("Tacking picture for plate solve with {:?}", &self.cam_opts.frame);
         take_shot(&self.camera, &self.cam_opts.frame, &self.cam_opts.ctrl)?;
         self.state = State::Capturing;
         Ok(())
     }
 
-    fn abort(&mut self) -> anyhow::Result<()> {
+    fn abort(&mut self) -> eyre::Result<()> {
         _ = self.camera.abort_exposure();
         _ = self.mount.abort_motion();
         self.state = State::None;
@@ -248,7 +248,7 @@ impl Mode for PlatesolveMode {
     fn notify_about_frame_processing_result(
         &mut self,
         fp_result: &FrameProcessResult
-    ) -> anyhow::Result<NotifyResult> {
+    ) -> eyre::Result<NotifyResult> {
         let xy_supported = self.plate_solver.support_stars_as_input();
         match (&self.state, &fp_result.data, xy_supported) {
             (State::Capturing, FrameProcessResultData::Image(image), false) => {
@@ -267,7 +267,7 @@ impl Mode for PlatesolveMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn notify_periodical_timer_tick(&mut self, _timer_period_ms: usize) -> anyhow::Result<NotifyResult> {
+    fn notify_periodical_timer_tick(&mut self, _timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         match self.state {
             State::PlateSolve => {
                 let ok = self.try_process_plate_solving_result()?;
