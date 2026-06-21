@@ -41,8 +41,8 @@ impl BadPixels {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CfaType { None, BGGR, RGBG, GRBG, RGGB }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CfaType { #[default] None, BGGR, RGBG, GRBG, RGGB }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CfaColor { None, R, G, B }
@@ -83,7 +83,7 @@ impl CfaType {
 }
 
 bitflags! {
-    #[derive(Serialize, Deserialize, Clone, Copy)]
+    #[derive(Clone, Copy, Default)]
     pub struct CalibrMethods: u32 {
         const BY_DARK           = 1;
         const BY_BIAS           = 2;
@@ -93,7 +93,7 @@ bitflags! {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Clone, Default)]
 pub struct RawImageInfo {
     pub time:           Option<DateTime<Utc>>,
     pub width:          usize,

@@ -1,22 +1,26 @@
 use std::ops::RangeInclusive;
+use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::AtomicBool;
 
+use ascom_alpaca as aa;
+
 use bitflags::bitflags;
+use itertools::izip;
 
 use crate::hal::{
-    Camera, CameraInfo, CcdPurpose, Device, DeviceInfo, DeviceType, FilterWheel, Focuser, FrameType,
-    HalFeatures, HalImpl, HalState, Telescope,
+    Camera, CameraInfo, CameraShot, CameraShotType, CcdPurpose, Device, DeviceInfo, DeviceType, FilterWheel, Focuser, FrameType, HalFeatures, HalImpl, HalState, Telescope
 };
 use crate::hal::events::{HalEvent, HalEventHandlers};
+use crate::image::raw::{RawImage, RawImageInfo};
 
 ///////////////////////////////////////////////////////////////////////////////
 // AscomAlpacaHalImpl
 
 struct AscomAlpacaHalData {
     async_runtime:  Arc<tokio::runtime::Runtime>,
-    client:         ascom_alpaca::Client,
-    aa_devices:     Vec<ascom_alpaca::api::TypedDevice>,
+    client:         aa::Client,
+    aa_devices:     Vec<aa::api::TypedDevice>,
     devices:        Vec<DeviceInfo>,
     cameras:        Vec<Arc<AscomAlpacaCamera>>,
 }
@@ -36,7 +40,7 @@ impl AscomAlpacaHalImpl {
 
     fn connect_impl(&self, address: &str) -> eyre::Result<()> {
         let async_runtime = Arc::new(tokio::runtime::Runtime::new()?);
-        let client = ascom_alpaca::Client::new(address)?;
+        let client = aa::Client::new(address)?;
 
         let aa_devices = async_runtime.block_on(async {
             let list = client.get_devices().await?.collect::<Vec<_>>();
@@ -47,13 +51,13 @@ impl AscomAlpacaHalImpl {
             .iter()
             .map(|typed_device| {
                 let (id, name, dev_type) = match typed_device {
-                    ascom_alpaca::api::TypedDevice::Camera(dev) =>
+                    aa::api::TypedDevice::Camera(dev) =>
                         (dev.unique_id(), dev.static_name(), DeviceType::CAMERA),
-                    ascom_alpaca::api::TypedDevice::Telescope(dev) =>
+                    aa::api::TypedDevice::Telescope(dev) =>
                         (dev.unique_id(), dev.static_name(), DeviceType::TELESCOPE),
-                    ascom_alpaca::api::TypedDevice::Focuser(dev) =>
+                    aa::api::TypedDevice::Focuser(dev) =>
                         (dev.unique_id(), dev.static_name(), DeviceType::FOCUSER),
-                    ascom_alpaca::api::TypedDevice::FilterWheel(dev) =>
+                    aa::api::TypedDevice::FilterWheel(dev) =>
                         (dev.unique_id(), dev.static_name(), DeviceType::FLT_WHELL),
                 };
                 DeviceInfo {
@@ -67,19 +71,20 @@ impl AscomAlpacaHalImpl {
         let cameras = aa_devices
             .iter()
             .filter_map(|typed_device| {
-                if let ascom_alpaca::api::TypedDevice::Camera(dev) = typed_device {
+                if let aa::api::TypedDevice::Camera(dev) = typed_device {
                     Some(dev)
                 } else {
                     None
                 }
             })
-            .filter_map(|device| {
-                Self::create_camera_from_aa_device(
-                    device,
+            .filter_map(|aa_device| {
+                AscomAlpacaCamera::from_aa_device(
+                    aa_device,
                     &async_runtime,
                     &self.event_handlers
                 ).ok()
             })
+            .map(Arc::new)
             .collect();
 
         let data = AscomAlpacaHalData {
@@ -149,51 +154,16 @@ impl AscomAlpacaHalImpl {
         }
     }
 
-    fn create_camera_from_aa_device(
-        aa_camera:      &Arc<dyn ascom_alpaca::api::Camera>,
-        async_runtime:  &Arc<tokio::runtime::Runtime>,
-        event_handlers: &Arc<HalEventHandlers>
-
-    ) -> eyre::Result<Arc<AscomAlpacaCamera>> {
-
-        let mut camera_flags = CameraFlags::empty();
-
-        async_runtime.block_on(async {
-            let max_bin_x = aa_camera.max_bin_x().await?;
-            let max_bin_y = aa_camera.max_bin_y().await?;
-            let bin_supported = u8::min(max_bin_x, max_bin_y) > 1;
-            let cooler_supported = aa_camera.can_set_ccd_temperature().await?;
-            let can_stop_exposure = aa_camera.can_stop_exposure().await?;
-
-            camera_flags.set(CameraFlags::FRAME_SUPPORTED, true);
-            camera_flags.set(CameraFlags::GAIN_SUPPORTED, true);
-            camera_flags.set(CameraFlags::OFFSET_SUPPORTED, true);
-            camera_flags.set(CameraFlags::BIN_SUPPORTED, bin_supported);
-            camera_flags.set(CameraFlags::COOLER_SUPPORTED, cooler_supported);
-            camera_flags.set(CameraFlags::CAN_STOP_EXP, can_stop_exposure);
-            eyre::Ok(())
-        })?;
-
-         Ok(Arc::new(AscomAlpacaCamera {
-            flags:          camera_flags,
-            camera:         Arc::clone(aa_camera),
-            event_handlers: Arc::clone(event_handlers),
-            async_runtime:  Arc::clone(async_runtime),
-            light_frame:    AtomicBool::new(true),
-            exp_data:       Mutex::new(None),
-        }))
-    }
-
-    fn typed_device_to_device(typed_devive: &ascom_alpaca::api::TypedDevice) -> Arc<dyn ascom_alpaca::api::Device> {
+    fn typed_device_to_device(typed_devive: &aa::api::TypedDevice) -> Arc<dyn aa::api::Device> {
         match typed_devive {
-            ascom_alpaca::api::TypedDevice::Camera(dev) =>
-                Arc::clone(dev) as Arc<dyn ascom_alpaca::api::Device>,
-            ascom_alpaca::api::TypedDevice::Telescope(dev) =>
-                Arc::clone(dev) as Arc<dyn ascom_alpaca::api::Device>,
-            ascom_alpaca::api::TypedDevice::Focuser(dev) =>
-                Arc::clone(dev) as Arc<dyn ascom_alpaca::api::Device>,
-            ascom_alpaca::api::TypedDevice::FilterWheel(dev) =>
-                Arc::clone(dev) as Arc<dyn ascom_alpaca::api::Device>,
+            aa::api::TypedDevice::Camera(dev) =>
+                Arc::clone(dev) as Arc<dyn aa::api::Device>,
+            aa::api::TypedDevice::Telescope(dev) =>
+                Arc::clone(dev) as Arc<dyn aa::api::Device>,
+            aa::api::TypedDevice::Focuser(dev) =>
+                Arc::clone(dev) as Arc<dyn aa::api::Device>,
+            aa::api::TypedDevice::FilterWheel(dev) =>
+                Arc::clone(dev) as Arc<dyn aa::api::Device>,
         }
     }
 }
@@ -293,6 +263,59 @@ impl HalImpl for AscomAlpacaHalImpl {
     }
 }
 
+//////////////////////////////////////////////////////////////////////////////
+// CameraShot
+
+struct AscomAlpacaCameraShot {
+    array:   aa::api::camera::ImageArray,
+    dl_time: f64,
+}
+
+impl CameraShot for AscomAlpacaCameraShot {
+    fn get_type(&self) -> CameraShotType {
+        let (_, _, layers) = self.array.dim();
+        if layers == 1 {
+            CameraShotType::RawCcdData
+        } else {
+            CameraShotType::ReadyImage
+        }
+    }
+
+    fn get_raw(&self) -> eyre::Result<RawImage> {
+        assert!(self.get_type() == CameraShotType::RawCcdData);
+        let raw_2d_arr = self.array.index_axis(ndarray::Axis(2), 0);
+        let (width, height) = raw_2d_arr.dim();
+        let data_len = width * height;
+        let mut data = vec![0; data_len];
+        for (src, dst) in izip!(raw_2d_arr, &mut data) {
+            *dst = (*src).clamp(0, u16::MAX as i32) as u16;
+        }
+        let mut info = RawImageInfo::default();
+        info.width = width;
+        info.height = height;
+        info.max_value = u16::MAX;
+        let cfa_arrary = info.cfa.get_array();
+        Ok(RawImage::new(info, data, cfa_arrary))
+    }
+
+    fn get_image(&self, image: &mut crate::image::image::Image) -> eyre::Result<()> {
+        todo!()
+    }
+
+    fn download_time(&self) -> f64 {
+        self.dl_time
+    }
+
+    fn file_ext(&self) -> &str {
+        "fits"
+    }
+
+    fn save_to_file(&self, file_name: &Path) -> eyre::Result<()> {
+        Ok(())
+    }
+
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // Camera
 
@@ -304,49 +327,177 @@ bitflags! {
         const BIN_SUPPORTED    = (1 << 2);
         const COOLER_SUPPORTED = (1 << 3);
         const CAN_STOP_EXP     = (1 << 4);
+        const CAN_GET_COOL_PWR = (1 << 5);
     }
 }
 
 struct ExposureData {
-    duration: f64,
+    duration:   f64,
     start_time: std::time::Instant,
 }
 
+#[derive(Default)]
+struct PrevData {
+    temperature: Option<f64>,
+    cool_pwr:    Option<f64>,
+}
+
 struct AscomAlpacaCamera {
-    camera:         Arc<dyn ascom_alpaca::api::Camera>,
+    camera:         Arc<dyn aa::api::Camera>,
+    device_id:      Arc<String>,
     async_runtime:  Arc<tokio::runtime::Runtime>,
     event_handlers: Arc<HalEventHandlers>,
     light_frame:    AtomicBool,
     exp_data:       Mutex<Option<ExposureData>>,
     flags:          CameraFlags,
+    exp_range:      RangeInclusive<f64>,
+    gain_range:     RangeInclusive<f64>,
+    offset_range:   RangeInclusive<f64>,
+    pixel_size_x:   f64,
+    pixel_size_y:   f64,
+    ccd_size_x:     usize,
+    ccd_size_y:     usize,
+    max_bin_x:      usize,
+    max_bin_y:      usize,
+    prev_data:      Mutex<PrevData>,
 }
 
 impl AscomAlpacaCamera {
+    fn from_aa_device(
+        aa_camera:      &Arc<dyn aa::api::Camera>,
+        async_runtime:  &Arc<tokio::runtime::Runtime>,
+        event_handlers: &Arc<HalEventHandlers>
+    ) -> eyre::Result<Self> {
+        let mut camera_flags = CameraFlags::empty();
+        let result = async_runtime.block_on(async {
+            let max_bin_x = aa_camera.max_bin_x().await?;
+            let max_bin_y = aa_camera.max_bin_y().await?;
+            let bin_supported = u8::min(max_bin_x, max_bin_y) > 1;
+            let cooler_supported = aa_camera.can_set_ccd_temperature().await?;
+            let can_stop_exposure = aa_camera.can_stop_exposure().await?;
+            let can_get_cooler_power = aa_camera.can_get_cooler_power().await.unwrap_or(false);
+            let exp_range = aa_camera.exposure_range().await?;
+            let pixel_size_x = aa_camera.pixel_size_x().await?;
+            let pixel_size_y = aa_camera.pixel_size_y().await?;
+            let ccd_size_x = aa_camera.camera_x_size().await? as usize;
+            let ccd_size_y = aa_camera.camera_y_size().await? as usize;
+            let min_gain = aa_camera.gain_min().await? as f64;
+            let max_gain = aa_camera.gain_max().await? as f64;
+            let min_offset = aa_camera.offset_min().await? as f64;
+            let max_offset = aa_camera.offset_max().await? as f64;
+            let max_bin_x = aa_camera.max_bin_x().await? as usize;
+            let max_bin_y = aa_camera.max_bin_y().await? as usize;
+
+            camera_flags.set(CameraFlags::FRAME_SUPPORTED, true);
+            camera_flags.set(CameraFlags::GAIN_SUPPORTED, true);
+            camera_flags.set(CameraFlags::OFFSET_SUPPORTED, true);
+            camera_flags.set(CameraFlags::BIN_SUPPORTED, bin_supported);
+            camera_flags.set(CameraFlags::COOLER_SUPPORTED, cooler_supported);
+            camera_flags.set(CameraFlags::CAN_STOP_EXP, can_stop_exposure);
+            camera_flags.set(CameraFlags::CAN_GET_COOL_PWR, can_get_cooler_power);
+
+            eyre::Ok(Self {
+                device_id:      Arc::new(aa_camera.unique_id().to_string()),
+                camera:         Arc::clone(aa_camera),
+                event_handlers: Arc::clone(event_handlers),
+                async_runtime:  Arc::clone(async_runtime),
+                light_frame:    AtomicBool::new(true),
+                exp_data:       Mutex::new(None),
+                flags:          camera_flags,
+                exp_range:      exp_range.start().as_secs_f64() ..= exp_range.end().as_secs_f64(),
+                gain_range:     min_gain ..= max_gain,
+                offset_range:   min_offset ..= max_offset,
+                prev_data:      Mutex::new(PrevData::default()),
+                pixel_size_x,
+                pixel_size_y,
+                ccd_size_x,
+                ccd_size_y,
+                max_bin_x,
+                max_bin_y,
+            })
+        })?;
+        Ok(result)
+    }
+
     fn notify_periodical_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
-        let mut exp_data_mutex = self.exp_data.lock().unwrap();
+        let exp_data_mutex = self.exp_data.lock().unwrap();
+        let is_exposure_now = exp_data_mutex.is_some();
         if let Some(exp_data) = &*exp_data_mutex {
             let eplased = exp_data.start_time.elapsed().as_secs_f64();
             let remaining = exp_data.duration - eplased;
             self.event_handlers.send(HalEvent::CameraTimeUntilEndOfExposure {
-                device_id: Arc::new(self.camera.unique_id().to_string()),
+                device_id: Arc::clone(&self.device_id),
                 time:      remaining.clamp(0.0, exp_data.duration)
             });
+            drop(exp_data_mutex);
 
             let image_ready_result = self.async_runtime.block_on(async {
                 self.camera.image_ready().await
             });
+
             match image_ready_result {
                 Ok(ready) => {
                     if ready {
-                        *exp_data_mutex = None;
+                        *self.exp_data.lock().unwrap() = None;
+                        self.get_image_from_camera_and_send_event()?;
                     }
                 }
                 Err(err) => {
-                    *exp_data_mutex = None;
+                    *self.exp_data.lock().unwrap() = None;
                     eyre::bail!("Error during wait of end of exposure: {}", err);
                 }
             }
         }
+
+        if !is_exposure_now {
+            self.async_runtime.block_on(async {
+                let mut prev_data = self.prev_data.lock().unwrap();
+
+                // Check for CCD temparature change
+                let temperature = self.camera.ccd_temperature().await.ok();
+                if prev_data.temperature != temperature && let Some(temperature) = temperature {
+                    self.event_handlers.send(HalEvent::CameraCcdTempChanged {
+                        device_id: Arc::clone(&self.device_id),
+                        temperature
+                    });
+                };
+                prev_data.temperature = temperature;
+
+                // Check for cooling power change
+                if self.flags.contains(CameraFlags::CAN_GET_COOL_PWR) {
+                    let cool_pwr = self.camera.cooler_power().await.ok();
+                    if prev_data.cool_pwr != cool_pwr && let Some(cool_pwr) = cool_pwr {
+                        self.event_handlers.send(HalEvent::CameraCoolerPwrChanged {
+                            device_id: Arc::clone(&self.device_id),
+                            power:     cool_pwr,
+                        });
+                    }
+                    prev_data.cool_pwr = cool_pwr;
+                }
+
+                eyre::Ok(())
+            })?;
+        }
+
+        Ok(())
+    }
+
+    fn get_image_from_camera_and_send_event(&self) -> eyre::Result<()> {
+        self.event_handlers.send(HalEvent::CameraBeginDownloadData(
+            Arc::clone(&self.device_id)
+        ));
+
+        let timer = std::time::Instant::now();
+        let array = self.async_runtime.block_on(async {
+            self.camera.image_array().await
+        })?;
+        let dl_time = timer.elapsed().as_secs_f64();
+        let camera_shot = AscomAlpacaCameraShot { array, dl_time };
+
+        self.event_handlers.send(HalEvent::CameraShotResult{
+            device_id: Arc::clone(&self.device_id),
+            shot:      Arc::new(camera_shot),
+        });
 
         Ok(())
     }
@@ -380,10 +531,7 @@ impl Camera for AscomAlpacaCamera {
     // Exposure
 
     fn exposure_range(&self) -> eyre::Result<RangeInclusive<f64>> {
-        Ok(self.async_runtime.block_on(async {
-            let range = self.camera.exposure_range().await?;
-            eyre::Ok(range.start().as_secs_f64() ..= range.end().as_secs_f64())
-        })?)
+        Ok(self.exp_range.clone())
     }
 
     fn start_exposure(&self, duration: f64) -> eyre::Result<()> {
@@ -433,11 +581,7 @@ impl Camera for AscomAlpacaCamera {
     // Frame
 
     fn pixel_size_um(&self) -> eyre::Result<(f64, f64)> {
-        self.async_runtime.block_on(async {
-            let pixel_size_x = self.camera.pixel_size_x().await?;
-            let pixel_size_y = self.camera.pixel_size_y().await?;
-            eyre::Ok((pixel_size_x, pixel_size_y))
-        })
+        Ok((self.pixel_size_x, self.pixel_size_y))
     }
 
     fn is_frame_supported(&self) -> eyre::Result<bool> {
@@ -445,11 +589,7 @@ impl Camera for AscomAlpacaCamera {
     }
 
     fn ccd_size(&self) -> eyre::Result<(usize, usize)> {
-        self.async_runtime.block_on(async {
-            let ccd_size_x = self.camera.camera_x_size().await? as usize;
-            let ccd_size_y = self.camera.camera_y_size().await? as usize;
-            eyre::Ok((ccd_size_x, ccd_size_y))
-        })
+        Ok((self.ccd_size_x, self.ccd_size_y))
     }
 
     fn set_frame(&self, x: usize, y: usize, width: usize, height: usize) -> eyre::Result<()> {
@@ -469,11 +609,7 @@ impl Camera for AscomAlpacaCamera {
     }
 
     fn gain_range(&self) -> eyre::Result<RangeInclusive<f64>> {
-        self.async_runtime.block_on(async {
-            let min_gain = self.camera.gain_min().await? as f64;
-            let max_gain = self.camera.gain_max().await? as f64;
-            eyre::Ok(min_gain ..= max_gain)
-        })
+        Ok(self.gain_range.clone())
     }
 
     fn set_gain(&self, value: f64) -> eyre::Result<()> {
@@ -490,11 +626,7 @@ impl Camera for AscomAlpacaCamera {
     }
 
     fn offset_range(&self) -> eyre::Result<RangeInclusive<f64>> {
-        self.async_runtime.block_on(async {
-            let min_offset = self.camera.offset_min().await? as f64;
-            let max_offset = self.camera.offset_max().await? as f64;
-            eyre::Ok(min_offset ..= max_offset)
-        })
+        Ok(self.offset_range.clone())
     }
 
     fn set_offset(&self, value: f64) -> eyre::Result<()> {
@@ -511,11 +643,7 @@ impl Camera for AscomAlpacaCamera {
     }
 
     fn max_binning(&self) -> eyre::Result<(usize/*x*/, usize/*y*/)> {
-        self.async_runtime.block_on(async {
-            let max_bin_x = self.camera.max_bin_x().await? as usize;
-            let max_bin_y = self.camera.max_bin_y().await? as usize;
-            eyre::Ok((max_bin_x, max_bin_y))
-        })
+        Ok((self.max_bin_x, self.max_bin_y))
     }
 
     fn set_binning(&self, bin_x: usize, bin_y: usize) -> eyre::Result<()> {

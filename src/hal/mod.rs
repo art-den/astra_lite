@@ -207,6 +207,7 @@ pub enum CameraShotType {
     ReadyImage,
 }
 
+/// Interface to extract data from camera shot
 pub trait CameraShot {
     fn get_type(&self) -> CameraShotType;
     fn get_raw(&self) -> eyre::Result<crate::image::raw::RawImage>;

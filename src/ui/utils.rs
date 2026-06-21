@@ -161,6 +161,9 @@ pub fn draw_histogram(
         .filter_map(|v| v.map(|v| v.count))
         .max()
         .unwrap_or(0);
+    if max_count == 0 {
+        return Ok(());
+    }
 
     let total_max_v = hist_chans.iter()
         .filter_map(|v| v.map(|v| (v.count, v.freq.iter().max())))
