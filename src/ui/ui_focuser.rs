@@ -37,7 +37,6 @@ pub fn init_ui(
     });
 
     obj.init_widgets();
-    obj.update_devices_list();
 
     obj.connect_widgets_events();
     obj.connect_delayed_actions_events();

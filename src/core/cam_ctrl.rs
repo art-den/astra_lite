@@ -102,7 +102,6 @@ pub fn control_camera_heater(
     camera:  &Arc<dyn Camera + Send + Sync>,
     options: &CamCtrlOptions
 ) -> eyre::Result<()> {
-
     if camera.is_heater_supported()?
     && let Some(heater_str) = &options.heater_str {
         log::info!("Setting camera heater = {}", heater_str);

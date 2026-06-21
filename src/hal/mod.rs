@@ -9,7 +9,7 @@ use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use std::{ops:: RangeInclusive, path::Path, sync::{Arc, RwLock}};
 
-use crate::hal::{events::{HalEvent, HalEventHandlers}, hal_indi::IndiHalImpl};
+use crate::hal::{events::{HalEvent, HalEventHandlers}, hal_ascom_alpaca::AscomAlpacaHalImpl, hal_indi::IndiHalImpl};
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
@@ -21,7 +21,7 @@ bitflags! {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DeviceInfo {
     pub id:    String,
     pub name:  String,
@@ -61,20 +61,24 @@ bitflags! {
 
 
 pub struct Hal {
-    impl_:            RwLock<Option<Arc<dyn HalImpl + Send + Sync + 'static>>>,
-    event_subscibers: Arc<HalEventHandlers>,
+    impl_:          RwLock<Option<Arc<dyn HalImpl + Send + Sync + 'static>>>,
+    event_handlers: Arc<HalEventHandlers>,
 }
 
 impl Hal {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            impl_:            RwLock::new(None),
-            event_subscibers: Arc::new(HalEventHandlers::new()),
+            impl_:          RwLock::new(None),
+            event_handlers: Arc::new(HalEventHandlers::new()),
         })
     }
 
-    pub fn create_indy_impl(&self, indi: &Arc<indi::Connection>) -> Arc<IndiHalImpl> {
-        IndiHalImpl::new(indi, &self.event_subscibers)
+    pub fn create_indy_impl(&self) -> Arc<IndiHalImpl> {
+        IndiHalImpl::new(&self.event_handlers)
+    }
+
+    pub fn create_ascom_alpaca_impl(&self) -> Arc<AscomAlpacaHalImpl> {
+        AscomAlpacaHalImpl::new(&self.event_handlers)
     }
 
     pub fn set_impl(&self, hal_impl: Arc<dyn HalImpl + Send + Sync + 'static>) {
@@ -91,11 +95,11 @@ impl Hal {
     }
 
     pub fn connect_event_handler(&self, fun: impl Fn(HalEvent) + Send + Sync + 'static) {
-        self.event_subscibers.connect(fun);
+        self.event_handlers.connect(fun);
     }
 
     pub fn disconnect_all_subscribers(&self) {
-        self.event_subscibers.disconnect_all();
+        self.event_handlers.disconnect_all();
     }
 
     pub fn features(&self) -> HalFeatures {
@@ -166,6 +170,7 @@ impl Hal {
 pub trait HalImpl {
     fn features(&self) -> HalFeatures;
     fn state(&self) -> HalState;
+    fn disconnect(&self) -> eyre::Result<()>;
     fn notify_periodical_timer_tick(&self, timer_period: usize) -> eyre::Result<()>;
     fn devices(&self, type_filter: DeviceType) -> eyre::Result<Vec<DeviceInfo>>;
     fn cameras(&self) -> eyre::Result<Vec<CameraInfo>>;
@@ -216,9 +221,9 @@ pub trait Camera : Device {
 
     // Exposure
     fn exposure_range(&self) -> eyre::Result<RangeInclusive<f64>>;
-    fn start_exposure(&self, value: f64) -> eyre::Result<()>;
+    fn start_exposure(&self, duration: f64) -> eyre::Result<()>;
     fn abort_exposure(&self) -> eyre::Result<()>;
-    fn remaining_time(&self) -> eyre::Result<f64>;
+    fn remaining_time(&self) -> Option<f64>;
 
     // Frame type
     fn set_frame_type(&self, frame_type: FrameType) -> eyre::Result<()>;

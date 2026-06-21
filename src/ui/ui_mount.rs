@@ -35,7 +35,6 @@ pub fn init_ui(
 
     obj.init_widgets();
     obj.connect_widgets_events();
-    obj.fill_devices_list();
 
     obj.delayed_actions.set_event_handler(
         clone!(@weak obj => move |action| {

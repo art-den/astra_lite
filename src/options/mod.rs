@@ -1,3 +1,6 @@
+pub mod ascom_alpaca;
+pub use ascom_alpaca::*;
+
 pub mod indi;
 pub use indi::*;
 
@@ -61,6 +64,7 @@ pub enum Gain {
 #[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(default)]
 pub struct Options {
+    pub ascom_alpaca: AscomAlpacaOptions,
     pub indi:         IndiOptions,
     pub cam:          CamOptions,
     pub sep_cam:      HashMap<String, SeparatedCamOptions>,

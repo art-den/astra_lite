@@ -396,6 +396,7 @@ impl UiModule for CameraUi {
                 let options = self.core.options().read().unwrap();
                  self.delayed_actions.schedule(DelayedAction::UpdateCamList);
                 if options.cam.device_id == **camera_id {
+                    self.delayed_actions.schedule(DelayedAction::UpdateResolutionList);
                     self.delayed_actions.schedule_ex(
                         DelayedAction::StartLiveView,
                         // 4000 ms pause to start live view from camera
@@ -558,11 +559,14 @@ impl CameraUi {
 
                 drop(options);
 
-                self_.core.events().send(Event::CameraDeviceChanged {
-                    prev_camera_id,
-                    new_camera_id: cur_id.to_string(),
-                });
+                self_.core.change_camera(&prev_camera_id, &cur_id);
 
+                // Change some lists for new camera
+                // TODO: as reaction on Event::CameraDeviceChanged
+                let Ok(options) = self_.core.options().try_read() else { return; };
+                self_.update_resolution_list_impl(&options);
+                self_.fill_heater_items_list_impl(&options);
+                self_.fill_conv_gain_items_list_impl(&options);
                 self_.correct_widgets_props_impl();
                 self_.correct_frame_quality_widgets_props();
             })
@@ -1192,12 +1196,6 @@ impl CameraUi {
 
         self.store_options_for_camera(from_id, options);
 
-        // Change some lists for new camera
-
-        self.update_resolution_list_impl(options);
-        self.fill_heater_items_list_impl(options);
-        self.fill_conv_gain_items_list_impl(options);
-
         // Restore some options for specific camera
 
         self.restore_options_for_camera(to_id, options);
@@ -1516,7 +1514,7 @@ impl CameraUi {
         };
         if cur_exposure < 1.0 { return; };
         let Some(camera) = self.core.camera() else { return; };
-        let Ok(remaining_time) = camera.remaining_time() else { return; };
+        let Some(remaining_time) = camera.remaining_time() else { return; };
         let progress = ((cur_exposure - remaining_time) / cur_exposure).clamp(0.0, 1.0);
         let text_to_show = format!("{:.0} / {:.0}", cur_exposure - remaining_time, cur_exposure);
         exec_and_show_error(Some(&self.window), || {

@@ -1,7 +1,16 @@
 use std::{io::Cursor, ops::RangeInclusive, sync::{Arc, Mutex}};
-
-use crate::{hal::{events::*, hal_indi::{camera_watchdog::CamWatchdog, dev_watchdog::DevicesWatchdog}, indi::EventHandlerId, *}, image::{io::{find_color_image_hdu_in_fits, find_mono_image_hdu_in_fits, load_raw_image_from_fits_reader}, simple_fits::FitsReader}};
-
+use itertools::Itertools;
+use crate::{
+    hal::{
+        events::*, hal_indi::{camera_watchdog::CamWatchdog, dev_watchdog::DevicesWatchdog},
+        indi::{ConnSettings, EventHandlerId},
+        *,
+    },
+    image::{
+        io::{find_color_image_hdu_in_fits, find_mono_image_hdu_in_fits, load_raw_image_from_fits_reader},
+        simple_fits::FitsReader,
+    },
+};
 use super::{indi, HalImpl, Camera, DeviceInfo, DeviceType};
 
 pub const CAM_CCD2_POSTFIX: &str = "_CCD2";
@@ -11,7 +20,7 @@ mod dev_watchdog;
 mod camera_watchdog;
 
 struct Watchdogs {
-    camera: CamWatchdog,
+    camera:  CamWatchdog,
     devices: DevicesWatchdog,
 }
 
@@ -20,26 +29,41 @@ struct Watchdogs {
 
 pub struct IndiHalImpl {
     indi:            Arc<indi::Connection>,
+    conn_settings:   Mutex<indi::ConnSettings>,
     event_handlers:  Arc<HalEventHandlers>,
     indi_evt_subscr: Mutex<Option<EventHandlerId>>,
     watchdogs:       Mutex<Watchdogs>,
+    indi_drivers:    indi::Drivers,
 }
 
 impl IndiHalImpl {
-    pub fn new(
-        indi:              &Arc<indi::Connection>,
-        event_subscribers: &Arc<HalEventHandlers>
-    ) -> Arc<Self> {
+    pub fn new(event_handlers: &Arc<HalEventHandlers>) -> Arc<Self> {
+        let (drivers, _) =
+            if cfg!(target_os = "windows") {
+                (indi::Drivers::new_empty(), None)
+            } else {
+                match indi::Drivers::new() {
+                    Ok(drivers) =>
+                        (drivers, None),
+                    Err(err) =>
+                        (indi::Drivers::new_empty(), Some(err.to_string())),
+                }
+            };
+
+        let indi = Arc::new(indi::Connection::new());
+
         let watchdogs = Watchdogs {
-            camera:  CamWatchdog::new(indi, event_subscribers),
-            devices: DevicesWatchdog::new(indi),
+            camera:  CamWatchdog::new(&indi, event_handlers),
+            devices: DevicesWatchdog::new(&indi),
         };
 
         let result = Arc::new(Self {
-            indi:            Arc::clone(indi),
-            event_handlers:  Arc::clone(event_subscribers),
+            indi:            Arc::clone(&indi),
+            conn_settings:   Mutex::new(ConnSettings::default()),
+            event_handlers:  Arc::clone(event_handlers),
             indi_evt_subscr: Mutex::new(None),
             watchdogs:       Mutex::new(watchdogs),
+            indi_drivers:    drivers,
         });
 
         let self_ = Arc::clone(&result);
@@ -49,6 +73,84 @@ impl IndiHalImpl {
 
         *result.indi_evt_subscr.lock().unwrap() = Some(indi_evt_subscr);
         result
+    }
+
+    pub fn indi(&self) -> &Arc<indi::Connection> {
+        &self.indi
+    }
+
+    pub fn drivers(&self) -> &indi::Drivers {
+        &self.indi_drivers
+    }
+
+    pub fn connect(
+        &self,
+        remote:       bool,
+        address:      &str,
+        mount_id:     &Option<String>,
+        camera_id:    &Option<String>,
+        guid_cam_id:  &Option<String>,
+        focuser_id:   &Option<String>,
+        flt_wheel_id: &Option<String>,
+        aux1_id:      &Option<String>,
+        aux2_id:      &Option<String>,
+
+    ) -> eyre::Result<()> {
+        let drivers = if !remote {
+            let telescopes    = self.indi_drivers.get_group_by_name("Telescopes")?;
+            let cameras       = self.indi_drivers.get_group_by_name("CCDs")?;
+            let focusers      = self.indi_drivers.get_group_by_name("Focusers")?;
+            let filter_wheels = self.indi_drivers.get_group_by_name("Filter Wheels")?;
+            let aux           = self.indi_drivers.get_group_by_name("Auxiliary")?;
+
+            fn get_driver<'a>(
+                device_name: &Option<String>,
+                group:       &'a indi::DriverGroup
+            ) -> Option<&'a String> {
+                device_name
+                    .as_ref()
+                    .and_then(|name| group.get_item_by_device_name(name))
+                    .map(|d| &d.driver)
+            }
+
+            [ get_driver(mount_id,     telescopes),
+              get_driver(camera_id,    cameras),
+              get_driver(guid_cam_id,  cameras),
+              get_driver(focuser_id,   focusers),
+              get_driver(flt_wheel_id, filter_wheels),
+              get_driver(aux1_id,      aux),
+              get_driver(aux2_id,      aux),
+            ].into_iter()
+                .filter_map(|v| v)
+                .cloned()
+                .unique()
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
+        if !remote && drivers.is_empty() {
+            eyre::bail!("No devices selected");
+        }
+
+        log::info!(
+            "Connecting to INDI, remote={}, address={}, drivers='{}' ...",
+            remote,
+            address,
+            drivers.iter().join(",")
+        );
+
+        let conn_settings = indi::ConnSettings {
+            drivers,
+            remote: remote,
+            host:   address.to_string(),
+            .. Default::default()
+        };
+
+        self.indi.connect(&conn_settings)?;
+        Ok(())
+
+        //*self.conn_settings.lock().unwrap() = conn_settings.clone();
     }
 
     fn indi_event_handler(self: &Arc<Self>, event: indi::Event) {
@@ -373,6 +475,11 @@ impl HalImpl for IndiHalImpl {
         }
     }
 
+    fn disconnect(&self) -> eyre::Result<()> {
+        self.indi.disconnect_and_wait()?;
+        Ok(())
+    }
+
     fn notify_periodical_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
         let mut watchdogs = self.watchdogs.lock().unwrap();
         watchdogs.camera.notify_periodical_timer_tick(timer_period_ms)?;
@@ -664,8 +771,8 @@ impl Camera for IndiCamera {
         Ok(())
     }
 
-    fn remaining_time(&self) -> eyre::Result<f64> {
-        Ok(self.device.indi.camera_get_exposure(&self.device.name, self.ccd)?)
+    fn remaining_time(&self) -> Option<f64> {
+        self.device.indi.camera_get_exposure(&self.device.name, self.ccd).ok()
     }
 
     // Frame type
