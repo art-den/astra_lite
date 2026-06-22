@@ -14,7 +14,7 @@ use macros::FromBuilder;
 use crate::{
     core::{core::Core, events::Event},
     guiding::{external_guider::ExtGuiderType, phd2},
-    hal::{HalImpl, indi::{self, sexagesimal_to_value, value_to_sexagesimal}},
+    hal::{HalImpl, HalState, events::HalEvent, indi::{self, sexagesimal_to_value, value_to_sexagesimal}},
     options::*,
 };
 use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
@@ -48,7 +48,8 @@ pub fn init_ui(
 
     let obj = Rc::new(HardwareUi {
         core:         Arc::clone(core),
-        indi_status:  RefCell::new(indi::ConnState::Disconnected),
+        indi_state:   RefCell::new(HalState::Disconnected),
+        aa_state:     RefCell::new(HalState::Disconnected),
         is_remote:    Cell::new(false),
         main_ui:      Rc::clone(main_ui),
         window:       window.clone(),
@@ -67,18 +68,18 @@ pub fn init_ui(
     obj
 }
 
-impl indi::ConnState {
+impl HalState {
     fn to_str(&self, short: bool) -> Cow<'_, str> {
         match self {
-            indi::ConnState::Disconnected =>
+            HalState::Disconnected | HalState::ImplNotDefined =>
                 Cow::from("Disconnected"),
-            indi::ConnState::Connecting =>
+            HalState::Connecting =>
                 Cow::from("Connecting..."),
-            indi::ConnState::Connected =>
+            HalState::Connected =>
                 Cow::from("Connected"),
-            indi::ConnState::Disconnecting =>
+            HalState::Disconnecting =>
                 Cow::from("Disconnecting..."),
-            indi::ConnState::Error(text) =>
+            HalState::Error(text) =>
                 if short { Cow::from("Connection error") }
                 else { Cow::from(format!("Error: {}", text)) },
         }
@@ -171,7 +172,8 @@ struct HardwareUi {
     main_ui:      Rc<MainUi>,
     core:         Arc<Core>,
     window:       gtk::ApplicationWindow,
-    indi_status:  RefCell<indi::ConnState>,
+    indi_state:   RefCell<HalState>,
+    aa_state:     RefCell<HalState>,
     indi_widget:  IndiPanelWidget,
     is_remote:    Cell<bool>,
 }
@@ -296,6 +298,22 @@ impl UiModule for HardwareUi {
                 self.widgets.telescope.spb_guid_foc_len.set_value(*focal_len);
             }
             _ => {},
+        }
+    }
+
+    fn on_hal_event(&self, event: &HalEvent) {
+        match event {
+            HalEvent::StateChanged(state) => {
+                if let HalState::Error(err) = &state {
+                    self.add_log_record(&Some(Utc::now()), "", &err)
+                }
+                *self.indi_state.borrow_mut() = self.core.indi_hal().state().clone();
+                *self.aa_state.borrow_mut() = self.core.aa_hal().state().clone();
+
+                self.correct_widgets_by_cur_state();
+                self.update_window_title();
+            }
+            _ => {}
         }
     }
 }
@@ -476,14 +494,6 @@ impl HardwareUi {
             indi::Event::ConnectionLost => {
                 show_error_message(Some(&self.window), "INDI server", "Lost connection to INDI server ;-(");
             },
-            indi::Event::ConnChange(conn_state) => {
-                if let indi::ConnState::Error(_) = &conn_state {
-                    self.add_log_record(&Some(Utc::now()), "", &conn_state.to_str(false))
-                }
-                *self.indi_status.borrow_mut() = conn_state.clone();
-                self.correct_widgets_by_cur_state();
-                self.update_window_title();
-            }
             indi::Event::PropChange(event) => {
                 match &event.change {
                     indi::PropChange::New {prop_name, elem_name, value, state} => {
@@ -578,29 +588,25 @@ impl HardwareUi {
     }
 
     fn correct_widgets_by_cur_state(&self) {
-        let status = self.indi_status.borrow();
-        let (conn_en, disconn_en) = match *status {
-            indi::ConnState::Disconnected  => (true,  false),
-            indi::ConnState::Connecting    => (false, true),
-            indi::ConnState::Disconnecting => (false, false),
-            indi::ConnState::Connected     => (false, true),
-            indi::ConnState::Error(_)      => (true,  false),
-        };
-        let connected = *status == indi::ConnState::Connected;
-        let disconnected = matches!(
-            *status,
-            indi::ConnState::Disconnected|
-            indi::ConnState::Error(_)
-        );
+        let indi_state = self.indi_state.borrow();
+        let aa_state = self.aa_state.borrow();
+
+        let conn_en = |hal_state: &HalState| matches!(hal_state, HalState::Disconnected|HalState::ImplNotDefined|HalState::Error(_));
+        let disconn_en = |hal_state: &HalState| matches!(hal_state, HalState::Connected);
+
+        let indi_connected = *indi_state == HalState::Connected;
+        let indi_disconnected = matches!(*indi_state, HalState::Disconnected|HalState::Error(_));
         let phd2_working = self.core.ext_giuder().phd2_conn().is_working();
         enable_actions(&self.window, &[
-            ("conn_indi",    conn_en),
-            ("disconn_indi", disconn_en),
+            ("conn_indi",    conn_en(&*indi_state)),
+            ("disconn_indi", disconn_en(&*indi_state)),
+            ("conn_aa",      conn_en(&*aa_state)),
+            ("disconn_aa",   disconn_en(&*aa_state)),
             ("conn_phd2",    !phd2_working),
             ("disconn_phd2", phd2_working),
         ]);
 
-        self.widgets.conn_stat.lbl_indi.set_label(&status.to_str(false));
+        self.widgets.conn_stat.lbl_indi.set_label(&indi_state.to_str(false));
 
         let remote = self.widgets.indi_drv.chb_remote.is_active();
 
@@ -613,17 +619,17 @@ impl HardwareUi {
         self.widgets.indi_drv.btn_conn_indi.set_label(conn_cap);
         self.widgets.indi_drv.btn_diconn_indi.set_label(disconn_cap);
 
-        let mnt_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_mount_drivers);
-        let cam_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_camera_drivers);
-        let guid_cam_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_guid_cam_drivers);
-        let foc_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_focuser_drivers);
-        let flt_wheel_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_flt_wheel_drivers);
-        let aux1_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_aux1_drivers);
-        let aux2_sensitive = !remote && disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_aux2_drivers);
+        let mnt_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_mount_drivers);
+        let cam_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_camera_drivers);
+        let guid_cam_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_guid_cam_drivers);
+        let foc_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_focuser_drivers);
+        let flt_wheel_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_flt_wheel_drivers);
+        let aux1_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_aux1_drivers);
+        let aux2_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_aux2_drivers);
 
         let indi_drivers = self.core.indi_hal().drivers();
 
-        self.widgets.indi_drv.chb_remote.set_sensitive(!indi_drivers.groups.is_empty() && disconnected);
+        self.widgets.indi_drv.chb_remote.set_sensitive(!indi_drivers.groups.is_empty() && indi_disconnected);
         self.widgets.indi_drv.l_mount_drivers.set_sensitive(mnt_sensitive);
         self.widgets.indi_drv.cb_mount_drivers.set_sensitive(mnt_sensitive);
         self.widgets.indi_drv.l_camera_drivers.set_sensitive(cam_sensitive);
@@ -640,13 +646,13 @@ impl HardwareUi {
         self.widgets.indi_drv.cb_aux2_drivers.set_sensitive(aux2_sensitive);
 
 
-        self.widgets.indi_drv.e_remote_addr.set_sensitive(remote && disconnected);
+        self.widgets.indi_drv.e_remote_addr.set_sensitive(remote && indi_disconnected);
 
         enable_actions(&self.window, &[
-            ("enable_all_devs",   connected && remote),
-            ("disable_all_devs",  connected && remote),
-            ("save_devs_options", connected),
-            ("load_devs_options", connected),
+            ("enable_all_devs",   indi_connected && remote),
+            ("disable_all_devs",  indi_connected && remote),
+            ("save_devs_options", indi_connected),
+            ("load_devs_options", indi_connected),
         ]);
     }
 
@@ -895,24 +901,38 @@ impl HardwareUi {
 
     fn update_window_title(&self) {
         let options = self.core.options().read().unwrap();
-        let status = self.indi_status.borrow();
-        let dev_list = [
-            ("mnt",     &options.indi.mount),
-            ("cam.",    &options.indi.camera),
-            ("guid.",   &options.indi.guid_cam),
-            ("focus.",  &options.indi.focuser),
-            ("f.wheel", &options.indi.flt_wheel),
-        ].iter()
-            .filter_map(|(str, v)| v.as_deref().map(|v| (str, v))) // skip None at v
-            .filter(|(_, v)| !v.is_empty()) // skip empty driver name
-            .map(|(str, v)| format!("{}: {}", str, v))
-            .join(", ");
+        let indi_state = self.indi_state.borrow();
+        let aa_state = self.aa_state.borrow();
 
-        drop(options);
-        self.main_ui.set_dev_list_and_conn_status(
-            dev_list,
-            status.to_str(true).to_string()
-        );
+        if !matches!(*indi_state, HalState::Disconnected|HalState::ImplNotDefined) {
+            let dev_list = [
+                ("mnt",     &options.indi.mount),
+                ("cam.",    &options.indi.camera),
+                ("guid.",   &options.indi.guid_cam),
+                ("focus.",  &options.indi.focuser),
+                ("f.wheel", &options.indi.flt_wheel),
+            ].iter()
+                .filter_map(|(str, v)| v.as_deref().map(|v| (str, v))) // skip None at v
+                .filter(|(_, v)| !v.is_empty()) // skip empty driver name
+                .map(|(str, v)| format!("{}: {}", str, v))
+                .join(", ");
+
+            drop(options);
+            self.main_ui.set_dev_list_and_conn_status(
+                dev_list,
+                indi_state.to_str(true).to_string()
+            );
+        } else if !matches!(*aa_state, HalState::Disconnected|HalState::ImplNotDefined) {
+            self.main_ui.set_dev_list_and_conn_status(
+                "ASCOM Alpaca".to_string(),
+                aa_state.to_str(true).to_string()
+            );
+        } else {
+            self.main_ui.set_dev_list_and_conn_status(
+                String::new(),
+                "Disconnected".to_string()
+            );
+        }
     }
 
     fn handler_action_enable_all_devices(&self) {
