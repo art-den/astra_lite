@@ -9,10 +9,11 @@ use bitflags::bitflags;
 use itertools::izip;
 
 use crate::hal::{
-    Camera, CameraInfo, CameraShot, CameraShotType, CcdPurpose, Device, DeviceInfo, DeviceType, FilterWheel, Focuser, FrameType, HalFeatures, HalImpl, HalState, Telescope
+    Camera, CameraInfo, CameraShot, CameraShotType, CcdPurpose, Device, DeviceInfo, DeviceType,
+    FilterWheel, Focuser, FrameType, HalFeatures, HalImpl, HalState, Telescope,
 };
 use crate::hal::events::{HalEvent, HalEventHandlers};
-use crate::image::raw::{RawImage, RawImageInfo};
+use crate::image::raw::{CfaType, RawImage, RawImageInfo};
 
 ///////////////////////////////////////////////////////////////////////////////
 // AscomAlpacaHalImpl
@@ -267,8 +268,12 @@ impl HalImpl for AscomAlpacaHalImpl {
 // CameraShot
 
 struct AscomAlpacaCameraShot {
-    array:   aa::api::camera::ImageArray,
-    dl_time: f64,
+    array:        aa::api::camera::ImageArray,
+    sensor_type:  aa::api::camera::SensorType,
+    bayer_offset: Option<[u8; 2]>,
+    start:        [u32; 2],
+    max_adu:      u32,
+    dl_time:      f64,
 }
 
 impl CameraShot for AscomAlpacaCameraShot {
@@ -285,15 +290,39 @@ impl CameraShot for AscomAlpacaCameraShot {
         assert!(self.get_type() == CameraShotType::RawCcdData);
         let raw_2d_arr = self.array.index_axis(ndarray::Axis(2), 0);
         let (width, height) = raw_2d_arr.dim();
-        let data_len = width * height;
-        let mut data = vec![0; data_len];
-        for (src, dst) in izip!(raw_2d_arr, &mut data) {
-            *dst = (*src).clamp(0, u16::MAX as i32) as u16;
-        }
+
+        let cfa_type = match self.sensor_type {
+            aa::api::camera::SensorType::Monochrome =>
+                CfaType::None,
+            aa::api::camera::SensorType::RGGB if let Some(bayer_offset) = self.bayer_offset => {
+                let bayer_offset_x = (self.start[0] + bayer_offset[0] as u32) % 2;
+                let bayer_offset_y = (self.start[0] + bayer_offset[0] as u32) % 2;
+                match (bayer_offset_x, bayer_offset_y) {
+                    (0, 0) => CfaType::RGGB,
+                    (1, 0) => CfaType::GRBG,
+                    (0, 1) => CfaType::GBRG,
+                    (1, 1) => CfaType::BGGR,
+                    _ => unreachable!(),
+                }
+            }
+            _ => eyre::bail!("Sensor type {:?} not supported", self.sensor_type),
+        };
+
         let mut info = RawImageInfo::default();
         info.width = width;
         info.height = height;
-        info.max_value = u16::MAX;
+        info.cfa = cfa_type;
+        info.max_value = self.max_adu as _;
+
+        let data_len = width * height;
+        let mut data = vec![0; data_len];
+
+        for row in 0..height {
+            for (src, dst) in izip!(raw_2d_arr.column(row), &mut data[row * width..]) {
+                *dst = (*src).clamp(0, u16::MAX as i32) as u16;
+            }
+        }
+
         let cfa_arrary = info.cfa.get_array();
         Ok(RawImage::new(info, data, cfa_arrary))
     }
@@ -307,7 +336,11 @@ impl CameraShot for AscomAlpacaCameraShot {
     }
 
     fn file_ext(&self) -> &str {
-        "fits"
+        match self.get_type() {
+            CameraShotType::RawCcdData => "fits",
+            CameraShotType::ReadyImage => "tif",
+        }
+
     }
 
     fn save_to_file(&self, file_name: &Path) -> eyre::Result<()> {
@@ -328,7 +361,7 @@ bitflags! {
         const COOLER_SUPPORTED  = (1 << 4);
         const CAN_STOP_EXP      = (1 << 5);
         const CAN_GET_COOL_PWR  = (1 << 6);
-        const CAN_GET_CCD_TEMP = (1 << 7);
+        const CAN_GET_CCD_TEMP  = (1 << 7);
     }
 }
 
@@ -361,6 +394,9 @@ struct AscomAlpacaCamera {
     max_bin_x:      usize,
     max_bin_y:      usize,
     prev_data:      Mutex<PrevData>,
+    bayer_offset:   Option<[u8; 2]>,
+    sensor_type:    aa::api::camera::SensorType,
+    max_adu:        u32,
 }
 
 impl AscomAlpacaCamera {
@@ -389,6 +425,10 @@ impl AscomAlpacaCamera {
             let offset_supported = aa_camera.offset().await.is_ok();
             let min_offset = aa_camera.offset_min().await.unwrap_or(0) as f64;
             let max_offset = aa_camera.offset_max().await.unwrap_or(65535) as f64;
+            let sensor_type = aa_camera.sensor_type().await.unwrap_or(aa::api::camera::SensorType::Monochrome);
+            let bayer_offset = aa_camera.bayer_offset().await.ok();
+            //let max_adu = aa_camera.max_adu().await.unwrap_or(u16::MAX as _);
+            let max_adu = u16::MAX as _;
 
             camera_flags.set(CameraFlags::FRAME_SUPPORTED, true);
             camera_flags.set(CameraFlags::GAIN_SUPPORTED, gain_supported);
@@ -417,6 +457,9 @@ impl AscomAlpacaCamera {
                 ccd_size_y,
                 max_bin_x,
                 max_bin_y,
+                sensor_type,
+                bayer_offset,
+                max_adu,
             })
         })?;
         Ok(result)
@@ -493,11 +536,20 @@ impl AscomAlpacaCamera {
         ));
 
         let timer = std::time::Instant::now();
-        let array = self.async_runtime.block_on(async {
-            self.camera.image_array().await
+        let (array, start) = self.async_runtime.block_on(async {
+            let array = self.camera.image_array().await?;
+            let start = self.camera.start().await?;
+            eyre::Ok((array, start))
         })?;
         let dl_time = timer.elapsed().as_secs_f64();
-        let camera_shot = AscomAlpacaCameraShot { array, dl_time };
+        let camera_shot = AscomAlpacaCameraShot {
+            sensor_type: self.sensor_type,
+            bayer_offset: self.bayer_offset,
+            max_adu: self.max_adu,
+            start,
+            array,
+            dl_time,
+        };
 
         self.event_handlers.send(HalEvent::CameraShotResult{
             device_id: Arc::clone(&self.device_id),
@@ -527,7 +579,7 @@ impl Device for AscomAlpacaCamera {
 impl Camera for AscomAlpacaCamera {
     fn init_before_shot(&self) -> eyre::Result<()> {
         self.async_runtime.block_on(async {
-            self.camera.connected().await?;
+            self.camera.set_connected(true).await?;
             eyre::Ok(())
         })?;
         Ok(())
@@ -600,7 +652,7 @@ impl Camera for AscomAlpacaCamera {
     fn set_frame(&self, x: usize, y: usize, width: usize, height: usize) -> eyre::Result<()> {
         self.async_runtime.block_on(async {
             self.camera.set_start_x(x as u32).await?;
-            self.camera.set_start_x(y as u32).await?;
+            self.camera.set_start_y(y as u32).await?;
             self.camera.set_num_x(width as u32).await?;
             self.camera.set_num_y(height as u32).await?;
             eyre::Ok(())
