@@ -246,7 +246,7 @@ impl Core {
     }
 
     #[cfg(windows)]
-    pub fn aa_hal(&self) -> &Arc<AscomAlpacaHalImpl> {
+    pub fn aa_hal(&self) -> &Arc<crate::hal::hal_ascom_alpaca::AscomAlpacaHalImpl> {
         &self.aa_hal
     }
 

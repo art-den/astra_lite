@@ -81,7 +81,7 @@ impl Hal {
 
     #[cfg(windows)]
     pub fn create_ascom_alpaca_impl(&self) -> Arc<hal_ascom_alpaca::AscomAlpacaHalImpl> {
-        AscomAlpacaHalImpl::new(&self.event_handlers)
+        super::hal::hal_ascom_alpaca::AscomAlpacaHalImpl::new(&self.event_handlers)
     }
 
     pub fn set_impl(&self, hal_impl: Arc<dyn HalImpl + Send + Sync + 'static>) {

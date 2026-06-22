@@ -321,13 +321,14 @@ impl CameraShot for AscomAlpacaCameraShot {
 
 bitflags! {
     struct CameraFlags: u32 {
-        const FRAME_SUPPORTED  = (1 << 0);
-        const GAIN_SUPPORTED   = (1 << 1);
-        const OFFSET_SUPPORTED = (1 << 1);
-        const BIN_SUPPORTED    = (1 << 2);
-        const COOLER_SUPPORTED = (1 << 3);
-        const CAN_STOP_EXP     = (1 << 4);
-        const CAN_GET_COOL_PWR = (1 << 5);
+        const FRAME_SUPPORTED   = (1 << 0);
+        const GAIN_SUPPORTED    = (1 << 1);
+        const OFFSET_SUPPORTED  = (1 << 2);
+        const BIN_SUPPORTED     = (1 << 3);
+        const COOLER_SUPPORTED  = (1 << 4);
+        const CAN_STOP_EXP      = (1 << 5);
+        const CAN_GET_COOL_PWR  = (1 << 6);
+        const CAN_GET_CCD_TEMP = (1 << 7);
     }
 }
 
@@ -374,6 +375,7 @@ impl AscomAlpacaCamera {
             let max_bin_y = aa_camera.max_bin_y().await.unwrap_or(1) as usize;
             let bin_supported = usize::min(max_bin_x, max_bin_y) > 1;
             let cooler_supported = aa_camera.can_set_ccd_temperature().await.unwrap_or(false);
+            let can_read_ccd_temp = aa_camera.ccd_temperature().await.is_ok();
             let can_stop_exposure = aa_camera.can_stop_exposure().await.unwrap_or(false);
             let can_get_cooler_power = aa_camera.can_get_cooler_power().await.unwrap_or(false);
             let exp_range = aa_camera.exposure_range().await?;
@@ -395,6 +397,7 @@ impl AscomAlpacaCamera {
             camera_flags.set(CameraFlags::COOLER_SUPPORTED, cooler_supported);
             camera_flags.set(CameraFlags::CAN_STOP_EXP, can_stop_exposure);
             camera_flags.set(CameraFlags::CAN_GET_COOL_PWR, can_get_cooler_power);
+            camera_flags.set(CameraFlags::CAN_GET_CCD_TEMP, can_read_ccd_temp);
 
             eyre::Ok(Self {
                 device_id:      Arc::new(aa_camera.unique_id().to_string()),
@@ -454,14 +457,16 @@ impl AscomAlpacaCamera {
                 let mut prev_data = self.prev_data.lock().unwrap();
 
                 // Check for CCD temparature change
-                let temperature = self.camera.ccd_temperature().await.ok();
-                if prev_data.temperature != temperature && let Some(temperature) = temperature {
-                    self.event_handlers.send(HalEvent::CameraCcdTempChanged {
-                        device_id: Arc::clone(&self.device_id),
-                        temperature
-                    });
-                };
-                prev_data.temperature = temperature;
+                if self.flags.contains(CameraFlags::CAN_GET_CCD_TEMP) {
+                    let temperature = self.camera.ccd_temperature().await.ok();
+                    if prev_data.temperature != temperature && let Some(temperature) = temperature {
+                        self.event_handlers.send(HalEvent::CameraCcdTempChanged {
+                            device_id: Arc::clone(&self.device_id),
+                            temperature
+                        });
+                    }
+                    prev_data.temperature = temperature;
+                }
 
                 // Check for cooling power change
                 if self.flags.contains(CameraFlags::CAN_GET_COOL_PWR) {
