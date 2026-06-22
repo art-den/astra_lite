@@ -7,7 +7,7 @@ use std::{
 use crate::{
     core::cam_ctrl::*,
     guiding::external_guider::*,
-    hal::{*, events::HalEvent, hal_ascom_alpaca::AscomAlpacaHalImpl, hal_indi::IndiHalImpl},
+    hal::{*, events::HalEvent, hal_indi::IndiHalImpl},
     image::io::FromFileCameraShot,
     options::*,
     sky_math::math::EqCoord,
@@ -113,7 +113,6 @@ pub struct Core {
     hal:                Arc<Hal>,
     cur_devices:        Mutex<CurDevices>,
     indi_hal:           Arc<IndiHalImpl>,
-    aa_hal:             Arc<AscomAlpacaHalImpl>,
     options:            Arc<RwLock<Options>>,
     mode:               RwLock<ModeData>,
     events:             Arc<EventHandlers>,
@@ -124,6 +123,8 @@ pub struct Core {
     img_proc_stop_flag: Mutex<Arc<AtomicBool>>, // stop flag for last command
     frame_processing:   Arc<FrameProcessing>,
     ext_guider:         Arc<ExternalGuiderCtrl>,
+    #[cfg(windows)]
+    aa_hal:             Arc<hal_ascom_alpaca::AscomAlpacaHalImpl>,
 }
 
 impl Drop for Core {
@@ -137,13 +138,11 @@ impl Core {
         let hal = Hal::new();
         let events = Arc::new(EventHandlers::new());
         let options = Arc::new(RwLock::new(Options::default()));
-        //let indi = Arc::new(indi::Connection::new());
 
         let indi_hal = hal.create_indy_impl();
-        //hal.set_impl(hal_impl);
 
+        #[cfg(windows)]
         let aa_hal = hal.create_ascom_alpaca_impl();
-        //hal.set_impl();
 
         let frame_processing = FrameProcessing::new();
 
@@ -158,10 +157,11 @@ impl Core {
             img_proc_stop_flag: Mutex::new(Arc::new(AtomicBool::new(false))),
             ext_guider:         ExternalGuiderCtrl::new(),
             indi_hal,
-            aa_hal,
             hal,
             frame_processing,
             events,
+            #[cfg(windows)]
+            aa_hal,
         });
 
         this.set_ext_guider_events_handler();
@@ -245,6 +245,7 @@ impl Core {
         &self.indi_hal
     }
 
+    #[cfg(windows)]
     pub fn aa_hal(&self) -> &Arc<AscomAlpacaHalImpl> {
         &self.aa_hal
     }

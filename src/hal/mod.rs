@@ -3,13 +3,15 @@
 pub mod indi;
 pub mod events;
 pub mod hal_indi;
+
+#[cfg(windows)]
 pub mod hal_ascom_alpaca;
 
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use std::{ops:: RangeInclusive, path::Path, sync::{Arc, RwLock}};
 
-use crate::hal::{events::{HalEvent, HalEventHandlers}, hal_ascom_alpaca::AscomAlpacaHalImpl, hal_indi::IndiHalImpl};
+use crate::hal::{events::{HalEvent, HalEventHandlers}, hal_indi::IndiHalImpl};
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
@@ -77,7 +79,8 @@ impl Hal {
         IndiHalImpl::new(&self.event_handlers)
     }
 
-    pub fn create_ascom_alpaca_impl(&self) -> Arc<AscomAlpacaHalImpl> {
+    #[cfg(windows)]
+    pub fn create_ascom_alpaca_impl(&self) -> Arc<hal_ascom_alpaca::AscomAlpacaHalImpl> {
         AscomAlpacaHalImpl::new(&self.event_handlers)
     }
 

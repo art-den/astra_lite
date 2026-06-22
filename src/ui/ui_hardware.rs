@@ -223,6 +223,7 @@ impl UiModule for HardwareUi {
                 tab:    TabPage::Hardware,
                 flags:  PanelFlags::EXPANDED,
             },
+            #[cfg(windows)]
             Panel {
                 str_id: "ascom_alpaca",
                 name:   "ASCOM Alpaca".to_string(),
@@ -308,7 +309,10 @@ impl UiModule for HardwareUi {
                     self.add_log_record(&Some(Utc::now()), "", &err)
                 }
                 *self.indi_state.borrow_mut() = self.core.indi_hal().state().clone();
-                *self.aa_state.borrow_mut() = self.core.aa_hal().state().clone();
+
+                #[cfg(windows)] {
+                    *self.aa_state.borrow_mut() = self.core.aa_hal().state().clone();
+                }
 
                 self.correct_widgets_by_cur_state();
                 self.update_window_title();
@@ -352,8 +356,6 @@ impl HardwareUi {
         connect_action   (&self.window, self, "help_save_indi",        HardwareUi::handler_action_help_save_indi);
         connect_action   (&self.window, self, "conn_indi",             HardwareUi::handler_action_conn_indi);
         connect_action   (&self.window, self, "disconn_indi",          HardwareUi::handler_action_disconn_indi);
-        connect_action   (&self.window, self, "conn_aa",               HardwareUi::handler_action_conn_aa);
-        connect_action   (&self.window, self, "disconn_aa",            HardwareUi::handler_action_disconn_aa);
         connect_action   (&self.window, self, "conn_phd2",             HardwareUi::handler_action_conn_phd2);
         connect_action   (&self.window, self, "disconn_phd2",          HardwareUi::handler_action_disconn_phd2);
         connect_action   (&self.window, self, "clear_hw_log",          HardwareUi::handler_action_clear_hw_log);
@@ -362,6 +364,10 @@ impl HardwareUi {
         connect_action   (&self.window, self, "save_devs_options",     HardwareUi::handler_action_save_devices_options);
         connect_action   (&self.window, self, "load_devs_options",     HardwareUi::handler_action_load_devices_options);
         connect_action_rc(&self.window, self, "get_site_from_devices", HardwareUi::handler_action_get_site_from_devices);
+        #[cfg(windows)] {
+            connect_action(&self.window, self, "conn_aa",    HardwareUi::handler_action_conn_aa);
+            connect_action(&self.window, self, "disconn_aa", HardwareUi::handler_action_disconn_aa);
+        }
 
         self.widgets.indi_drv.chb_remote.connect_active_notify(
             clone!(@weak self as self_ => move |_| {
@@ -600,10 +606,14 @@ impl HardwareUi {
         enable_actions(&self.window, &[
             ("conn_indi",    conn_en(&*indi_state)),
             ("disconn_indi", disconn_en(&*indi_state)),
-            ("conn_aa",      conn_en(&*aa_state)),
-            ("disconn_aa",   disconn_en(&*aa_state)),
             ("conn_phd2",    !phd2_working),
             ("disconn_phd2", phd2_working),
+        ]);
+
+        #[cfg(windows)]
+        enable_actions(&self.window, &[
+            ("conn_aa",    conn_en(&*aa_state)),
+            ("disconn_aa", disconn_en(&*aa_state)),
         ]);
 
         self.widgets.conn_stat.lbl_indi.set_label(&indi_state.to_str(false));
@@ -693,6 +703,7 @@ impl HardwareUi {
         });
     }
 
+    #[cfg(windows)]
     fn handler_action_conn_aa(&self) {
         self.read_options_from_widgets();
         exec_and_show_error(Some(&self.window), || {
@@ -704,6 +715,7 @@ impl HardwareUi {
         });
     }
 
+    #[cfg(windows)]
     fn handler_action_disconn_aa(&self) {
         exec_and_show_error(Some(&self.window), || {
             let aa_hal = self.core.aa_hal();
