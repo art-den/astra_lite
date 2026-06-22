@@ -323,7 +323,11 @@ impl Core {
         context: &str,
     ) {
         let Err(err) = result else { return; };
-        self.process_error_str(&err, context);
+        if cfg!(debug_assertions) {
+            self.process_error_str(&format!("{:?}", err), context);
+        } else {
+            self.process_error_str(&err, context);
+        }
     }
 
     fn process_error_str(self: &Arc<Self>, error_text: &impl Display, context: &str) {

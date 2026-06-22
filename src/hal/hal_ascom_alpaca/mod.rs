@@ -370,9 +370,9 @@ impl AscomAlpacaCamera {
     ) -> eyre::Result<Self> {
         let mut camera_flags = CameraFlags::empty();
         let result = async_runtime.block_on(async {
-            let max_bin_x = aa_camera.max_bin_x().await?;
-            let max_bin_y = aa_camera.max_bin_y().await?;
-            let bin_supported = u8::min(max_bin_x, max_bin_y) > 1;
+            let max_bin_x = aa_camera.max_bin_x().await? as usize;
+            let max_bin_y = aa_camera.max_bin_y().await? as usize;
+            let bin_supported = usize::min(max_bin_x, max_bin_y) > 1;
             let cooler_supported = aa_camera.can_set_ccd_temperature().await?;
             let can_stop_exposure = aa_camera.can_stop_exposure().await?;
             let can_get_cooler_power = aa_camera.can_get_cooler_power().await.unwrap_or(false);
@@ -381,16 +381,16 @@ impl AscomAlpacaCamera {
             let pixel_size_y = aa_camera.pixel_size_y().await?;
             let ccd_size_x = aa_camera.camera_x_size().await? as usize;
             let ccd_size_y = aa_camera.camera_y_size().await? as usize;
-            let min_gain = aa_camera.gain_min().await? as f64;
-            let max_gain = aa_camera.gain_max().await? as f64;
-            let min_offset = aa_camera.offset_min().await? as f64;
-            let max_offset = aa_camera.offset_max().await? as f64;
-            let max_bin_x = aa_camera.max_bin_x().await? as usize;
-            let max_bin_y = aa_camera.max_bin_y().await? as usize;
+            let min_gain = aa_camera.gain_min().await.unwrap_or(0) as f64;
+            let max_gain = aa_camera.gain_max().await.unwrap_or(100_000) as f64;
+            let min_offset = aa_camera.offset_min().await.unwrap_or(0) as f64;
+            let max_offset = aa_camera.offset_max().await.unwrap_or(65535) as f64;
+            let offset_supported = aa_camera.offset().await.is_ok();
+            let gain_supported = aa_camera.gain().await.is_ok();
 
             camera_flags.set(CameraFlags::FRAME_SUPPORTED, true);
-            camera_flags.set(CameraFlags::GAIN_SUPPORTED, true);
-            camera_flags.set(CameraFlags::OFFSET_SUPPORTED, true);
+            camera_flags.set(CameraFlags::GAIN_SUPPORTED, gain_supported);
+            camera_flags.set(CameraFlags::OFFSET_SUPPORTED, offset_supported);
             camera_flags.set(CameraFlags::BIN_SUPPORTED, bin_supported);
             camera_flags.set(CameraFlags::COOLER_SUPPORTED, cooler_supported);
             camera_flags.set(CameraFlags::CAN_STOP_EXP, can_stop_exposure);
@@ -631,6 +631,7 @@ impl Camera for AscomAlpacaCamera {
 
     fn set_offset(&self, value: f64) -> eyre::Result<()> {
         self.async_runtime.block_on(async {
+            dbg!(value);
             self.camera.set_offset(value as i32).await?;
             eyre::Ok(())
         })
