@@ -30,6 +30,12 @@ pub fn take_shot(
         camera.enable_high_fullwell_mode(cam_ctrl.high_fullwell)?;
     }
 
+    // Binning
+
+    if camera.is_binning_supported()? {
+        camera.set_binning(frame.binning.get_ratio(), frame.binning.get_ratio())?;
+    }
+
     // Frame type
 
     camera.set_frame_type(frame.frame_type)?;
@@ -44,12 +50,6 @@ pub fn take_shot(
             (width - crop_width) / 2, (height - crop_height) / 2,
             crop_width, crop_height
         )?;
-    }
-
-    // Binning
-
-    if camera.is_binning_supported()? {
-        camera.set_binning(frame.binning.get_ratio(), frame.binning.get_ratio())?;
     }
 
     // Gain
