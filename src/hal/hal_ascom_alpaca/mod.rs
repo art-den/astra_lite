@@ -15,7 +15,6 @@ use crate::hal::{
 };
 use crate::hal::events::{HalEvent, HalEventHandlers};
 use crate::image::raw::{CfaType, RawImage, RawImageInfo};
-use crate::options::telescope;
 
 ///////////////////////////////////////////////////////////////////////////////
 // AscomAlpacaHalImpl
@@ -500,7 +499,6 @@ impl AscomAlpacaCamera {
             match image_ready_result {
                 Ok(ready) => {
                     if ready {
-                        *self.exp_data.lock().unwrap() = None;
                         self.get_image_from_camera_and_send_event()?;
                     }
                 }
@@ -552,11 +550,16 @@ impl AscomAlpacaCamera {
         ));
 
         let timer = std::time::Instant::now();
-        let (array, start) = self.async_runtime.block_on(async {
+        let array_n_start = self.async_runtime.block_on(async {
             let array = self.camera.image_array().await?;
             let start = self.camera.start().await?;
             eyre::Ok((array, start))
-        })?;
+        });
+
+        *self.exp_data.lock().unwrap() = None;
+
+        let (array, start) = array_n_start?;
+
         let dl_time = timer.elapsed().as_secs_f64();
         let camera_shot = AscomAlpacaCameraShot {
             sensor_type: self.sensor_type,
@@ -608,17 +611,20 @@ impl Camera for AscomAlpacaCamera {
     }
 
     fn start_exposure(&self, duration: f64) -> eyre::Result<()> {
-        self.async_runtime.block_on(async {
-            let duration = std::time::Duration::from_secs_f64(duration);
-            let is_light_frame = self.light_frame.load(std::sync::atomic::Ordering::Relaxed);
-            self.camera.start_exposure(duration, is_light_frame).await?;
-            eyre::Ok(())
-        })?;
         *self.exp_data.lock().unwrap() = Some(ExposureData{
             duration,
             start_time: std::time::Instant::now(),
         });
-        Ok(())
+        let result = self.async_runtime.block_on(async {
+            let duration = std::time::Duration::from_secs_f64(duration);
+            let is_light_frame = self.light_frame.load(std::sync::atomic::Ordering::Relaxed);
+            self.camera.start_exposure(duration, is_light_frame).await?;
+            eyre::Ok(())
+        });
+        if result.is_err() {
+            *self.exp_data.lock().unwrap() = None;
+        }
+        result
     }
 
     fn abort_exposure(&self) -> eyre::Result<()> {
