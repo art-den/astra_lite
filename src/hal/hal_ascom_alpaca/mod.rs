@@ -9,11 +9,13 @@ use bitflags::bitflags;
 use itertools::izip;
 
 use crate::hal::{
-    Camera, CameraInfo, CameraShot, CameraShotType, CcdPurpose, Device, DeviceInfo, DeviceType,
-    FilterWheel, Focuser, FrameType, HalFeatures, HalImpl, HalState, Telescope,
+    Camera, CameraInfo, CameraShot, CameraShotType, CcdPurpose, Device, DeviceInfo,
+    DeviceType, FilterWheel, Focuser, FrameType, HalFeatures, HalImpl, HalState,
+    Telescope, TelescopeMoveDir, TelescopeState,
 };
 use crate::hal::events::{HalEvent, HalEventHandlers};
 use crate::image::raw::{CfaType, RawImage, RawImageInfo};
+use crate::options::telescope;
 
 ///////////////////////////////////////////////////////////////////////////////
 // AscomAlpacaHalImpl
@@ -24,6 +26,7 @@ struct AscomAlpacaHalData {
     aa_devices:     Vec<aa::api::TypedDevice>,
     devices:        Vec<DeviceInfo>,
     cameras:        Vec<Arc<AscomAlpacaCamera>>,
+    telescopes:     Vec<Arc<AscomAlpacaTelescope>>,
 }
 
 pub struct AscomAlpacaHalImpl {
@@ -72,21 +75,25 @@ impl AscomAlpacaHalImpl {
         let cameras = aa_devices
             .iter()
             .filter_map(|typed_device| {
-                if let aa::api::TypedDevice::Camera(dev) = typed_device {
-                    Some(dev)
-                } else {
-                    None
-                }
+                if let aa::api::TypedDevice::Camera(dev) = typed_device { Some(dev) } else { None }
             })
             .filter_map(|aa_device| {
-                AscomAlpacaCamera::from_aa_device(
-                    aa_device,
-                    &async_runtime,
-                    &self.event_handlers
-                ).ok()
+                AscomAlpacaCamera::from_aa_device(aa_device, &async_runtime, &self.event_handlers).ok()
             })
             .map(Arc::new)
             .collect();
+
+        let telescopes = aa_devices
+            .iter()
+            .filter_map(|typed_device| {
+                if let aa::api::TypedDevice::Telescope(dev) = typed_device { Some(dev) } else { None }
+            })
+            .filter_map(|aa_device| {
+                AscomAlpacaTelescope::from_aa_device(aa_device, &async_runtime, &self.event_handlers).ok()
+            })
+            .map(Arc::new)
+            .collect();
+
 
         let data = AscomAlpacaHalData {
             client,
@@ -94,6 +101,7 @@ impl AscomAlpacaHalImpl {
             devices,
             async_runtime,
             cameras,
+            telescopes,
         };
 
         *self.data.write().unwrap() = Some(Arc::new(data));
@@ -210,8 +218,10 @@ impl HalImpl for AscomAlpacaHalImpl {
             for camera in &data.cameras {
                 camera.notify_periodical_timer_tick(timer_period)?;
             }
+            for telescope in &data.telescopes {
+                telescope.notify_periodical_timer_tick(timer_period)?;
+            }
         }
-
         Ok(())
     }
 
@@ -245,14 +255,21 @@ impl HalImpl for AscomAlpacaHalImpl {
         data.cameras
             .iter()
             .find(|camera| {
-                camera.camera.unique_id() == id
+                *camera.device_id == id
             })
             .map(|camera| Arc::clone(camera) as Arc<dyn Camera + Send + Sync>)
             .ok_or_else(|| eyre::eyre!("Camera with id {id} not fount"))
     }
 
-    fn telescope(&self, _id: &str) -> eyre::Result<Arc<dyn Telescope + Send + Sync>> {
-        eyre::bail!("Not supported yet");
+    fn telescope(&self, id: &str) -> eyre::Result<Arc<dyn Telescope + Send + Sync>> {
+        let data = self.data()?;
+        data.telescopes
+            .iter()
+            .find(|telescope| {
+                *telescope.device_id == id
+            })
+            .map(|camera| Arc::clone(camera) as Arc<dyn Telescope + Send + Sync>)
+            .ok_or_else(|| eyre::eyre!("Telescope with id {id} not fount"))
     }
 
     fn focuser(&self, _id: &str) -> eyre::Result<Arc<dyn Focuser + Send + Sync>> {
@@ -327,7 +344,7 @@ impl CameraShot for AscomAlpacaCameraShot {
         Ok(RawImage::new(info, data, cfa_arrary))
     }
 
-    fn get_image(&self, image: &mut crate::image::image::Image) -> eyre::Result<()> {
+    fn get_image(&self, _image: &mut crate::image::image::Image) -> eyre::Result<()> {
         todo!()
     }
 
@@ -340,10 +357,9 @@ impl CameraShot for AscomAlpacaCameraShot {
             CameraShotType::RawCcdData => "fits",
             CameraShotType::ReadyImage => "tif",
         }
-
     }
 
-    fn save_to_file(&self, file_name: &Path) -> eyre::Result<()> {
+    fn save_to_file(&self, _file_name: &Path) -> eyre::Result<()> {
         Ok(())
     }
 
@@ -371,7 +387,7 @@ struct ExposureData {
 }
 
 #[derive(Default)]
-struct PrevData {
+struct CameraPrevData {
     temperature: Option<f64>,
     cool_pwr:    Option<f64>,
 }
@@ -393,7 +409,7 @@ struct AscomAlpacaCamera {
     ccd_size_y:     usize,
     max_bin_x:      usize,
     max_bin_y:      usize,
-    prev_data:      Mutex<PrevData>,
+    prev_data:      Mutex<CameraPrevData>,
     bayer_offset:   Option<[u8; 2]>,
     sensor_type:    aa::api::camera::SensorType,
     max_adu:        u32,
@@ -450,7 +466,7 @@ impl AscomAlpacaCamera {
                 exp_range:      exp_range.start().as_secs_f64() ..= exp_range.end().as_secs_f64(),
                 gain_range:     min_gain ..= max_gain,
                 offset_range:   min_offset ..= max_offset,
-                prev_data:      Mutex::new(PrevData::default()),
+                prev_data:      Mutex::new(CameraPrevData::default()),
                 pixel_size_x,
                 pixel_size_y,
                 ccd_size_x,
@@ -804,5 +820,145 @@ impl Camera for AscomAlpacaCamera {
     fn set_telescope_focal_len(&self, _focal_len: f64) -> eyre::Result<()> {
         // do nothing
         Ok(())
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+// Telescope (mount)
+
+struct AscomAlpacaTelescope {
+    device:         Arc<dyn aa::api::Telescope>,
+    device_id:      Arc<String>,
+    async_runtime:  Arc<tokio::runtime::Runtime>,
+    event_handlers: Arc<HalEventHandlers>,
+}
+
+impl AscomAlpacaTelescope {
+    fn from_aa_device(
+        aa_telescope:   &Arc<dyn aa::api::Telescope>,
+        async_runtime:  &Arc<tokio::runtime::Runtime>,
+        event_handlers: &Arc<HalEventHandlers>
+    ) -> eyre::Result<Self> {
+        Ok(Self {
+            device_id:      Arc::new(aa_telescope.unique_id().to_string()),
+            device:         Arc::clone(aa_telescope),
+            event_handlers: Arc::clone(event_handlers),
+            async_runtime:  Arc::clone(async_runtime),
+        })
+    }
+
+    fn notify_periodical_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+        Ok(())
+    }
+}
+
+impl Device for AscomAlpacaTelescope {
+    fn id(&self) -> &str {
+        self.device.unique_id()
+    }
+
+    fn name(&self) -> &str {
+        self.device.static_name()
+    }
+
+    fn is_active(&self) -> eyre::Result<bool> {
+        Ok(self.async_runtime.block_on(async {
+            self.device.connected().await
+        })?)
+    }
+}
+
+impl Telescope for AscomAlpacaTelescope {
+    fn state(&self) -> eyre::Result<TelescopeState> {
+        unimplemented!()
+    }
+
+    fn is_abort_motion_supported(&self) -> bool {
+        unimplemented!()
+    }
+
+    fn abort_motion(&self) -> eyre::Result<()> {
+        unimplemented!()
+    }
+
+    fn is_parked(&self) -> eyre::Result<bool> {
+        unimplemented!()
+    }
+
+    fn park(&self) -> eyre::Result<()> {
+        unimplemented!()
+    }
+
+    fn unpark(&self) -> eyre::Result<()> {
+        unimplemented!()
+    }
+
+    fn is_tracking(&self) -> eyre::Result<bool> {
+        unimplemented!()
+    }
+
+    fn track(&self, _enabled: bool) -> eyre::Result<()> {
+        unimplemented!()
+    }
+
+    fn revert_motion(&self, _reverse_ns: bool, _reverse_we: bool) -> eyre::Result<()> {
+        unimplemented!()
+    }
+
+    fn move_(&self, _direction: TelescopeMoveDir) -> eyre::Result<()> {
+        unimplemented!()
+    }
+
+    fn slew_speed_list(&self) -> eyre::Result<Vec<(String/*id*/, String/*text*/)>> {
+        unimplemented!()
+    }
+
+    fn set_slew_speed(&self, _speed_id: &str) -> eyre::Result<()> {
+        unimplemented!()
+    }
+
+    fn eq_coord(&self) -> eyre::Result<(f64/*ra*/, f64/*dec*/)> {
+        unimplemented!()
+    }
+
+    fn goto_and_track(&self, _ra: f64, _dec: f64) -> eyre::Result<()> {
+        unimplemented!()
+    }
+
+    fn is_slewing(&self) -> eyre::Result<bool> {
+        unimplemented!()
+    }
+
+    fn sync(&self, _ra: f64, _dec: f64) -> eyre::Result<()> {
+        unimplemented!()
+    }
+
+    fn is_guide_rate_supported(&self) -> eyre::Result<bool> {
+        unimplemented!()
+    }
+
+    fn guide_rate(&self) -> eyre::Result<(f64/*ns*/, f64/*we*/)> {
+        unimplemented!()
+    }
+
+    fn pulse_max_duration(&self) -> eyre::Result<(f64/*ns*/, f64/*we*/)> {
+        unimplemented!()
+    }
+
+    fn can_set_guide_rate(&self) -> eyre::Result<bool> {
+        unimplemented!()
+    }
+
+    fn set_guide_rate(&self, _rate_ns: f64, _rate_we: f64) -> eyre::Result<()> {
+        unimplemented!()
+    }
+
+    fn pulse_guide(&self, _duration_ns: f64, _duration_we: f64) -> eyre::Result<()> {
+        unimplemented!()
+    }
+
+    fn is_pulse_guiding(&self) -> eyre::Result<bool> {
+        unimplemented!()
     }
 }
