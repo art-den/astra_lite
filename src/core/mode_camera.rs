@@ -339,7 +339,7 @@ impl TackingPicturesMode {
                     },
             };
 
-            if !self.hal.features().contains(HalFeatures::BEGIN_DONWLOAD_IMAGE_EVENT)
+            if !self.hal.features().contains(HalFeatures::CAN_START_EXP_AT_DOWNLOAD_BEGIN)
             && when_to_start_exp == Some(WhenToStartExposure::AtDownloadImageFromCamera) {
                 when_to_start_exp = Some(WhenToStartExposure::AtBeginOfProcessing);
             }

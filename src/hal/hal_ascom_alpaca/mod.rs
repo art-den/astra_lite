@@ -589,6 +589,10 @@ impl Device for AscomAlpacaCamera {
     }
 
     fn is_active(&self) -> eyre::Result<bool> {
+        let exposure_in_progress = self.exp_data.lock().unwrap().is_some();
+        if exposure_in_progress {
+            return Ok(true);
+        }
         Ok(self.async_runtime.block_on(async {
             self.camera.connected().await
         })?)
@@ -598,7 +602,6 @@ impl Device for AscomAlpacaCamera {
 impl Camera for AscomAlpacaCamera {
     fn init_before_shot(&self) -> eyre::Result<()> {
         self.async_runtime.block_on(async {
-            self.camera.set_connected(true).await?;
             eyre::Ok(())
         })?;
         Ok(())
@@ -635,6 +638,9 @@ impl Camera for AscomAlpacaCamera {
             self.camera.stop_exposure().await?;
             eyre::Ok(())
         })?;
+
+        *self.exp_data.lock().unwrap() = None;
+
         Ok(())
     }
 

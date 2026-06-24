@@ -461,7 +461,7 @@ impl Drop for IndiHalImpl {
 
 impl HalImpl for IndiHalImpl {
     fn features(&self) -> HalFeatures {
-        HalFeatures::BEGIN_DONWLOAD_IMAGE_EVENT
+        HalFeatures::CAN_START_EXP_AT_DOWNLOAD_BEGIN
     }
 
     fn state(&self) -> HalState {

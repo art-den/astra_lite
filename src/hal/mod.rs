@@ -57,7 +57,7 @@ pub enum HalState {
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     pub struct HalFeatures: u32 {
-        const BEGIN_DONWLOAD_IMAGE_EVENT = (1 << 0);
+        const CAN_START_EXP_AT_DOWNLOAD_BEGIN = (1 << 0);
     }
 }
 
