@@ -16,6 +16,8 @@ use crate::hal::{
 use crate::hal::events::{HalEvent, HalEventHandlers};
 use crate::image::raw::{CfaType, RawImage, RawImageInfo};
 
+const SIDERAL_RATE_DEG_PER_SEC: f64 = 360.0 / (23.0 * 60.0 * 60.0 + 56.0 * 60.0 + 4.09);
+
 ///////////////////////////////////////////////////////////////////////////////
 // AscomAlpacaHalImpl
 
@@ -143,21 +145,25 @@ impl AscomAlpacaHalImpl {
                 self.event_handlers.send(
                     HalEvent::DeviceConnected(Arc::new(device.clone()))
                 );
-                if device.type_.contains(DeviceType::CAMERA) {
-                    let cam_id = Arc::new(device.id.clone());
-                    self.event_handlers.send(
-                        HalEvent::CameraIsReadyToWork(Arc::clone(&cam_id))
-                    );
-                    self.event_handlers.send(
-                        HalEvent::CameraIsReadyForCooling(Arc::clone(&cam_id))
-                    );
-                    self.event_handlers.send(
-                        HalEvent::CameraOffsetCanBeControlled(Arc::clone(&cam_id))
-                    );
-                    self.event_handlers.send(
-                        HalEvent::CameraGainCanBeControlled(Arc::clone(&cam_id))
-                    );
-                }
+            }
+            for camera in &data.cameras {
+                self.event_handlers.send(
+                    HalEvent::CameraIsReadyToWork(Arc::clone(&camera.device_id))
+                );
+                self.event_handlers.send(
+                    HalEvent::CameraIsReadyForCooling(Arc::clone(&camera.device_id))
+                );
+                self.event_handlers.send(
+                    HalEvent::CameraOffsetCanBeControlled(Arc::clone(&camera.device_id))
+                );
+                self.event_handlers.send(
+                    HalEvent::CameraGainCanBeControlled(Arc::clone(&camera.device_id))
+                );
+            }
+            for telescope in &data.telescopes {
+                self.event_handlers.send(
+                    HalEvent::TelescopeSlewRateListReady(Arc::clone(&telescope.device_id))
+                );
             }
         }
     }
@@ -839,11 +845,49 @@ impl Camera for AscomAlpacaCamera {
 ///////////////////////////////////////////////////////////////////////////////
 // Telescope (mount)
 
+bitflags! {
+    struct TeleasopeFlags: u32 {
+        const GUIDE_RATE_SUPPORTED = (1 << 0);
+        const CAN_SET_GUIDE_RATE   = (1 << 1);
+    }
+}
+
+struct TelescopeData {
+    ns_reverted: bool,
+    we_reverted: bool,
+    axis_rate: f64, // deg. in second
+    prev_state: Option<TelescopeState>,
+    prev_tracking: Option<bool>,
+    prev_parked: Option<bool>,
+}
+
+impl Default for TelescopeData {
+    fn default() -> Self {
+        Self {
+            ns_reverted:   false,
+            we_reverted:   false,
+            axis_rate:     1.0,
+            prev_state:    None,
+            prev_tracking: None,
+            prev_parked:   None,
+        }
+    }
+}
+
+struct StateInternal {
+    state:       TelescopeState,
+    is_tracking: bool,
+    is_parked:   bool,
+}
+
 struct AscomAlpacaTelescope {
     device:         Arc<dyn aa::api::Telescope>,
     device_id:      Arc<String>,
     async_runtime:  Arc<tokio::runtime::Runtime>,
     event_handlers: Arc<HalEventHandlers>,
+    move_rates:     Vec<(String, f64)>,
+    flags:          TeleasopeFlags,
+    data:           Mutex<TelescopeData>,
 }
 
 impl AscomAlpacaTelescope {
@@ -852,16 +896,118 @@ impl AscomAlpacaTelescope {
         async_runtime:  &Arc<tokio::runtime::Runtime>,
         event_handlers: &Arc<HalEventHandlers>
     ) -> eyre::Result<Self> {
-        Ok(Self {
-            device_id:      Arc::new(aa_telescope.unique_id().to_string()),
-            device:         Arc::clone(aa_telescope),
-            event_handlers: Arc::clone(event_handlers),
-            async_runtime:  Arc::clone(async_runtime),
-        })
+
+        let result = async_runtime.block_on(async {
+            let move_prim_axis_rates = aa_telescope.axis_rates(aa::api::telescope::TelescopeAxis::Primary)
+                .await
+                .unwrap_or_default();
+            let move_sec_axis_rates = aa_telescope.axis_rates(aa::api::telescope::TelescopeAxis::Secondary)
+                .await
+                .unwrap_or_default();
+
+            dbg!(&move_prim_axis_rates, &move_sec_axis_rates);
+
+            let prim_max_rate = move_prim_axis_rates.iter()
+                .map(|range| range.end())
+                .max_by(|x, y| f64::partial_cmp(x, y).unwrap_or(std::cmp::Ordering::Equal))
+                .copied()
+                .unwrap_or(SIDERAL_RATE_DEG_PER_SEC);
+            let sec_max_rate = move_sec_axis_rates.iter()
+                .map(|range| range.end())
+                .max_by(|x, y| f64::partial_cmp(x, y).unwrap_or(std::cmp::Ordering::Equal))
+                .copied()
+                .unwrap_or(SIDERAL_RATE_DEG_PER_SEC);
+            let max_rate = f64::min(prim_max_rate, sec_max_rate);
+
+
+
+            let mut move_rates = Vec::new();
+            for rate in [1, 5, 10, 25, 50, 100, 250, 500, 1000] {
+                let rate_is_deg_in_sec = SIDERAL_RATE_DEG_PER_SEC * rate as f64;
+                if rate_is_deg_in_sec >= 0.5 * max_rate {
+                    break;
+                }
+                move_rates.push((format!("x{rate}"), rate_is_deg_in_sec));
+            }
+            move_rates.push(("1/2 Max".to_string(), 0.5 * max_rate));
+            move_rates.push(("Max".to_string(), max_rate));
+
+            let guide_rate_supported = aa_telescope.guide_rates_ra_dec().await.is_ok();
+            let can_set_guide_rate = aa_telescope.can_set_guide_rates().await.unwrap_or(false);
+            let mut flags = TeleasopeFlags::empty();
+            flags.set(TeleasopeFlags::GUIDE_RATE_SUPPORTED, guide_rate_supported);
+            flags.set(TeleasopeFlags::CAN_SET_GUIDE_RATE, can_set_guide_rate);
+
+            eyre::Ok(Self {
+                device_id:      Arc::new(aa_telescope.unique_id().to_string()),
+                device:         Arc::clone(aa_telescope),
+                event_handlers: Arc::clone(event_handlers),
+                async_runtime:  Arc::clone(async_runtime),
+                move_rates:     move_rates,
+                data:           Mutex::new(TelescopeData::default()),
+                flags,
+            })
+        })?;
+
+        Ok(result)
     }
 
     fn notify_periodical_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+        let Ok(state) = self.state_internal() else { return Ok(()); };
+        let mut data = self.data.lock().unwrap();
+        let state_changed = data.prev_state != Some(state.state);
+        let tracking_changed = data.prev_tracking != Some(state.is_tracking);
+        let parked_changed = data.prev_parked != Some(state.is_parked);
+        data.prev_state = Some(state.state);
+        data.prev_tracking = Some(state.is_tracking);
+        data.prev_parked = Some(state.is_parked);
+        drop(data);
+
+        if state_changed {
+            self.event_handlers.send(HalEvent::TelescopeStateChanged {
+                device_id: Arc::clone(&self.device_id),
+                state:     state.state,
+            });
+        }
+        if tracking_changed {
+            self.event_handlers.send(HalEvent::TelescopeTrackingChanged {
+                device_id: Arc::clone(&self.device_id),
+                tracking:  state.is_tracking,
+            });
+        }
+        if parked_changed {
+            self.event_handlers.send(
+                if state.is_parked {
+                    HalEvent::TelescopeParked(Arc::clone(&self.device_id))
+                } else {
+                    HalEvent::TelescopeUnparked(Arc::clone(&self.device_id))
+                }
+            );
+        }
         Ok(())
+    }
+
+    fn state_internal(&self) -> eyre::Result<StateInternal> {
+        self.async_runtime.block_on(async {
+            let is_tracking = self.device.tracking().await?;
+            let is_parked = self.device.at_park().await?;
+            let is_slewing = self.device.slewing().await?;
+            let is_pulse_guiding = self.device.is_pulse_guiding().await?;
+            let state = if is_parked {
+                TelescopeState::Parked
+            } else if is_pulse_guiding {
+                TelescopeState::Correcton
+            } else if is_slewing {
+                TelescopeState::Slewing
+            } else if is_tracking {
+                TelescopeState::Tracking
+            } else {
+                TelescopeState::Stopped
+            };
+            eyre::Ok(StateInternal {
+                state, is_tracking, is_parked
+            })
+        })
     }
 }
 
@@ -883,94 +1029,228 @@ impl Device for AscomAlpacaTelescope {
 
 impl Telescope for AscomAlpacaTelescope {
     fn state(&self) -> eyre::Result<TelescopeState> {
-        unimplemented!()
+        Ok(self.state_internal()?.state)
     }
 
     fn is_abort_motion_supported(&self) -> bool {
-        unimplemented!()
+        true
     }
 
     fn abort_motion(&self) -> eyre::Result<()> {
-        unimplemented!()
+        self.async_runtime.block_on(async {
+            _ = self.device.abort_slew().await;
+            _ = self.device.move_axis(aa::api::telescope::TelescopeAxis::Primary, 0.0).await;
+            _ = self.device.move_axis(aa::api::telescope::TelescopeAxis::Secondary, 0.0).await;
+            _ = self.device.move_axis(aa::api::telescope::TelescopeAxis::Tertiary, 0.0).await;
+            eyre::Ok(())
+        })
     }
 
     fn is_parked(&self) -> eyre::Result<bool> {
-        unimplemented!()
+        Ok(self.async_runtime.block_on(async {
+            self.device.at_park().await
+        })?)
     }
 
     fn park(&self) -> eyre::Result<()> {
-        unimplemented!()
+        self.async_runtime.block_on(async {
+            self.device.park().await?;
+            eyre::Ok(())
+        })
     }
 
     fn unpark(&self) -> eyre::Result<()> {
-        unimplemented!()
+        self.async_runtime.block_on(async {
+            self.device.unpark().await?;
+            eyre::Ok(())
+        })
     }
 
     fn is_tracking(&self) -> eyre::Result<bool> {
-        unimplemented!()
+        Ok(self.async_runtime.block_on(async {
+            self.device.tracking().await
+        })?)
     }
 
-    fn track(&self, _enabled: bool) -> eyre::Result<()> {
-        unimplemented!()
+    fn track(&self, enabled: bool) -> eyre::Result<()> {
+        self.async_runtime.block_on(async {
+            self.device.set_tracking(enabled).await?;
+            eyre::Ok(())
+        })
     }
 
-    fn revert_motion(&self, _reverse_ns: bool, _reverse_we: bool) -> eyre::Result<()> {
-        unimplemented!()
+    fn revert_motion(&self, reverse_ns: bool, reverse_we: bool) -> eyre::Result<()> {
+        let mut data = self.data.lock().unwrap();
+        data.ns_reverted = reverse_ns;
+        data.we_reverted = reverse_we;
+        Ok(())
     }
 
-    fn move_(&self, _direction: TelescopeMoveDir) -> eyre::Result<()> {
-        unimplemented!()
+    fn move_(&self, direction: TelescopeMoveDir) -> eyre::Result<()> {
+        use aa::api::telescope::TelescopeAxis;
+
+        let data = self.data.lock().unwrap();
+        let axis_rate = data.axis_rate;
+        let ns_reverted = data.ns_reverted;
+        let we_reverted = data.we_reverted;
+        drop(data);
+
+        let move_prim_axis = async |mut rate: f64| -> eyre::Result<()> {
+            if we_reverted {
+                rate = -rate;
+            }
+            self.device.move_axis(TelescopeAxis::Primary, rate).await?;
+            Ok(())
+        };
+
+        let move_sec_axis = async |mut rate: f64| -> eyre::Result<()> {
+            if ns_reverted {
+                rate = -rate;
+            }
+            self.device.move_axis(TelescopeAxis::Secondary, rate).await?;
+            Ok(())
+        };
+
+        self.async_runtime.block_on(async {
+            match direction {
+                TelescopeMoveDir::North => {
+                    move_sec_axis(axis_rate).await?;
+                }
+                TelescopeMoveDir::South => {
+                    move_sec_axis(-axis_rate).await?;
+                }
+                TelescopeMoveDir::West => {
+                    move_prim_axis(axis_rate).await?;
+                }
+                TelescopeMoveDir::East => {
+                    move_prim_axis(-axis_rate).await?;
+                }
+                TelescopeMoveDir::NorthWest => {
+                    move_sec_axis(axis_rate).await?;
+                    move_prim_axis(axis_rate).await?;
+                }
+                TelescopeMoveDir::NorthEast => {
+                    move_sec_axis(axis_rate).await?;
+                    move_prim_axis(-axis_rate).await?;
+                }
+                TelescopeMoveDir::SouthWest => {
+                    move_sec_axis(-axis_rate).await?;
+                    move_prim_axis(axis_rate).await?;
+                }
+                TelescopeMoveDir::SouthEast => {
+                    move_sec_axis(-axis_rate).await?;
+                    move_prim_axis(-axis_rate).await?;
+                }
+            }
+            eyre::Ok(())
+        })
     }
 
     fn slew_speed_list(&self) -> eyre::Result<Vec<(String/*id*/, String/*text*/)>> {
-        unimplemented!()
+        let list = self.move_rates
+            .iter()
+            .map(|(name, _)| (name.to_string(), name.to_string()))
+            .collect();
+        Ok(list)
     }
 
-    fn set_slew_speed(&self, _speed_id: &str) -> eyre::Result<()> {
-        unimplemented!()
+    fn set_slew_speed(&self, speed_id: &str) -> eyre::Result<()> {
+        let item = self.move_rates
+            .iter()
+            .find(|(name, _)| name == speed_id);
+        if let Some((_, rate)) = item {
+            let mut data = self.data.lock().unwrap();
+            data.axis_rate = *rate;
+        };
+        Ok(())
     }
 
     fn eq_coord(&self) -> eyre::Result<(f64/*ra*/, f64/*dec*/)> {
-        unimplemented!()
+        self.async_runtime.block_on(async {
+            let ra = self.device.right_ascension().await?;
+            let dec = self.device.declination().await?;
+            eyre::Ok((ra, dec))
+        })
     }
 
-    fn goto_and_track(&self, _ra: f64, _dec: f64) -> eyre::Result<()> {
-        unimplemented!()
+    fn goto_and_track(&self, ra: f64, dec: f64) -> eyre::Result<()> {
+        self.async_runtime.block_on(async {
+            self.device.slew_to_coordinates_async(ra, dec).await?;
+            eyre::Ok(())
+        })
     }
 
     fn is_slewing(&self) -> eyre::Result<bool> {
-        unimplemented!()
+        Ok(self.async_runtime.block_on(async {
+            self.device.slewing().await
+        })?)
     }
 
-    fn sync(&self, _ra: f64, _dec: f64) -> eyre::Result<()> {
-        unimplemented!()
+    fn sync(&self, ra: f64, dec: f64) -> eyre::Result<()> {
+        self.async_runtime.block_on(async {
+            self.device.sync_to_coordinates(ra, dec).await?;
+            eyre::Ok(())
+        })
     }
 
     fn is_guide_rate_supported(&self) -> eyre::Result<bool> {
-        unimplemented!()
+        Ok(self.flags.contains(TeleasopeFlags::GUIDE_RATE_SUPPORTED))
     }
 
     fn guide_rate(&self) -> eyre::Result<(f64/*ns*/, f64/*we*/)> {
-        unimplemented!()
+        let rates = self.async_runtime.block_on(async {
+            self.device.guide_rates_ra_dec().await
+        })?;
+        Ok((
+            rates.right_ascension / SIDERAL_RATE_DEG_PER_SEC,
+            rates.declination / SIDERAL_RATE_DEG_PER_SEC,
+        ))
     }
 
     fn pulse_max_duration(&self) -> eyre::Result<(f64/*ns*/, f64/*we*/)> {
-        unimplemented!()
+        Ok((3000.0, 3000.0))
     }
 
     fn can_set_guide_rate(&self) -> eyre::Result<bool> {
-        unimplemented!()
+        Ok(self.flags.contains(TeleasopeFlags::CAN_SET_GUIDE_RATE))
     }
 
-    fn set_guide_rate(&self, _rate_ns: f64, _rate_we: f64) -> eyre::Result<()> {
-        unimplemented!()
+    fn set_guide_rate(&self, rate_ns: f64, rate_we: f64) -> eyre::Result<()> {
+        self.async_runtime.block_on(async {
+            let crd = aa::api::telescope::RaDec {
+                right_ascension: rate_we * SIDERAL_RATE_DEG_PER_SEC,
+                declination:     rate_ns * SIDERAL_RATE_DEG_PER_SEC,
+            };
+            self.device.set_guide_rates_ra_dec(crd).await?;
+            eyre::Ok(())
+        })
     }
 
-    fn pulse_guide(&self, _duration_ns: f64, _duration_we: f64) -> eyre::Result<()> {
-        unimplemented!()
+    fn pulse_guide(&self, duration_ns: f64, duration_we: f64) -> eyre::Result<()> {
+        self.async_runtime.block_on(async {
+            if duration_ns < 0.0 {
+                let duration = std::time::Duration::from_millis(duration_ns.abs() as _);
+                self.device.pulse_guide(aa::api::telescope::GuideDirection::North, duration).await?;
+            }
+            if duration_ns > 0.0 {
+                let duration = std::time::Duration::from_millis(duration_ns.abs() as _);
+                self.device.pulse_guide(aa::api::telescope::GuideDirection::South, duration).await?;
+            }
+            if duration_we < 0.0 {
+                let duration = std::time::Duration::from_millis(duration_we.abs() as _);
+                self.device.pulse_guide(aa::api::telescope::GuideDirection::West, duration).await?;
+            }
+            if duration_we > 0.0 {
+                let duration = std::time::Duration::from_millis(duration_we.abs() as _);
+                self.device.pulse_guide(aa::api::telescope::GuideDirection::East, duration).await?;
+            }
+            eyre::Ok(())
+        })
     }
 
     fn is_pulse_guiding(&self) -> eyre::Result<bool> {
-        unimplemented!()
+        Ok(self.async_runtime.block_on(async {
+            self.device.is_pulse_guiding().await
+        })?)
     }
 }

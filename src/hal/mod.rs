@@ -293,8 +293,9 @@ pub enum TelescopeMoveDir {
     NorthWest, NorthEast, SouthWest, SouthEast,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, Default)]
 pub enum TelescopeState {
+    #[default]
     Stopped,
     Parked,
     Tracking,
