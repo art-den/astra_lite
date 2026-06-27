@@ -482,7 +482,6 @@ impl FocuserUi {
         if let Some(focuser) = self.core.focuser() {
             let abs_position = value.unwrap_or_else(|| focuser.abs_position().unwrap_or(0.0) as i32 );
             if force_configure_widget || self.widgets.spb_val.value() == 0.0 {
-                println!("Init focuser widget");
                 if let Ok(range) = focuser.abs_position_range() {
                     self.widgets.spb_val.set_range(*range.start(), *range.end());
                     self.widgets.spb_val.set_digits(0);
