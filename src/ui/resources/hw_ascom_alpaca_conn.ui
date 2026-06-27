@@ -13,12 +13,10 @@
         <property name="can-focus">False</property>
         <property name="spacing">5</property>
         <child>
-          <object class="GtkCheckButton" id="chb_remote">
-            <property name="label" translatable="yes">Connect remote</property>
+          <object class="GtkLabel">
             <property name="visible">True</property>
-            <property name="can-focus">True</property>
-            <property name="receives-default">False</property>
-            <property name="draw-indicator">True</property>
+            <property name="can-focus">False</property>
+            <property name="label" translatable="yes">Address:</property>
           </object>
           <packing>
             <property name="expand">False</property>
@@ -32,14 +30,14 @@
             <property name="can-focus">True</property>
           </object>
           <packing>
-            <property name="expand">False</property>
+            <property name="expand">True</property>
             <property name="fill">True</property>
             <property name="position">1</property>
           </packing>
         </child>
       </object>
       <packing>
-        <property name="expand">False</property>
+        <property name="expand">True</property>
         <property name="fill">True</property>
         <property name="position">0</property>
       </packing>

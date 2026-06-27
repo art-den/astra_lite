@@ -140,9 +140,8 @@ struct IndiCtrlWidgets {
 
 #[derive(FromBuilder)]
 struct AscomAlpacaDrvWidgets {
-    bx:         gtk::Box,
-    chb_remote: gtk::CheckButton,
-    e_addr:     gtk::Entry,
+    bx:     gtk::Box,
+    e_addr: gtk::Entry,
 }
 
 #[derive(FromBuilder)]
@@ -186,13 +185,13 @@ impl Drop for HardwareUi {
 
 impl UiModule for HardwareUi {
     fn show_options(&self, options: &Options) {
-        self.show_indi_options(options);
+        self.show_connection_options(options);
         self.show_telescope_options(options);
         self.show_site_options(options);
     }
 
     fn get_options(&self, options: &mut Options) {
-        self.get_indi_options(options);
+        self.get_conn_options(options);
         self.get_telescope_options(options);
         self.get_site_options(options);
     }
@@ -448,9 +447,10 @@ impl HardwareUi {
         }));
     }
 
-    fn show_indi_options(&self, options: &Options) {
+    fn show_connection_options(&self, options: &Options) {
         self.widgets.indi_drv.chb_remote.set_active(options.indi.remote);
         self.widgets.indi_drv.e_remote_addr.set_text(&options.indi.address);
+        self.widgets.aa_drv.e_addr.set_text(&options.ascom_alpaca.address);
     }
 
     fn show_telescope_options(&self, options: &Options) {
@@ -465,16 +465,17 @@ impl HardwareUi {
         self.widgets.site.e_long.set_text(&value_to_sexagesimal(options.site.longitude, true, 6));
     }
 
-    fn get_indi_options(&self, options: &mut Options) {
-        options.indi.mount     = self.widgets.indi_drv.cb_mount_drivers.active_id().map(|s| s.to_string());
-        options.indi.camera    = self.widgets.indi_drv.cb_camera_drivers.active_id().map(|s| s.to_string());
-        options.indi.guid_cam  = self.widgets.indi_drv.cb_guid_cam_drivers.active_id().map(|s| s.to_string());
-        options.indi.focuser   = self.widgets.indi_drv.cb_focuser_drivers.active_id().map(|s| s.to_string());
-        options.indi.flt_wheel = self.widgets.indi_drv.cb_flt_wheel_drivers.active_id().map(|s| s.to_string());
-        options.indi.aux1      = self.widgets.indi_drv.cb_aux1_drivers.active_id().map(|s| s.to_string());
-        options.indi.aux2      = self.widgets.indi_drv.cb_aux2_drivers.active_id().map(|s| s.to_string());
-        options.indi.remote    = self.widgets.indi_drv.chb_remote.is_active();
-        options.indi.address   = self.widgets.indi_drv.e_remote_addr.text().into();
+    fn get_conn_options(&self, options: &mut Options) {
+        options.indi.mount           = self.widgets.indi_drv.cb_mount_drivers.active_id().map(|s| s.to_string());
+        options.indi.camera          = self.widgets.indi_drv.cb_camera_drivers.active_id().map(|s| s.to_string());
+        options.indi.guid_cam        = self.widgets.indi_drv.cb_guid_cam_drivers.active_id().map(|s| s.to_string());
+        options.indi.focuser         = self.widgets.indi_drv.cb_focuser_drivers.active_id().map(|s| s.to_string());
+        options.indi.flt_wheel       = self.widgets.indi_drv.cb_flt_wheel_drivers.active_id().map(|s| s.to_string());
+        options.indi.aux1            = self.widgets.indi_drv.cb_aux1_drivers.active_id().map(|s| s.to_string());
+        options.indi.aux2            = self.widgets.indi_drv.cb_aux2_drivers.active_id().map(|s| s.to_string());
+        options.indi.remote          = self.widgets.indi_drv.chb_remote.is_active();
+        options.indi.address         = self.widgets.indi_drv.e_remote_addr.text().into();
+        options.ascom_alpaca.address = self.widgets.aa_drv.e_addr.text().into();
     }
 
     fn get_telescope_options(&self, options: &mut Options) {
@@ -792,8 +793,8 @@ impl HardwareUi {
 
     fn read_options_from_widgets(&self) {
         let mut options = self.core.options().write().unwrap();
-        self.get_indi_options(&mut options);
-        self.get_indi_options(&mut options);
+        self.get_conn_options(&mut options);
+        self.get_conn_options(&mut options);
         self.get_telescope_options(&mut options);
     }
 

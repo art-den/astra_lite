@@ -395,8 +395,6 @@ impl FocuserUi {
             .and_then(|f| f.is_active().ok())
             .unwrap_or(false);
 
-        dbg!(device_enabled);
-
         self.widgets.grd.set_sensitive(device_enabled);
         self.widgets.spb_temp.set_sensitive(self.widgets.chb_temp.is_active());
         self.widgets.cb_fwhm.set_sensitive(self.widgets.chb_fwhm.is_active());
