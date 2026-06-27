@@ -24,7 +24,7 @@ pub fn init_ui(
     main_ui: &Rc<MainUi>,
     core:    &Arc<Core>,
 ) -> Rc<dyn UiModule> {
-    let indi_hal = core.indi_hal();
+    let indi_hal = core.hal().indi_impl();
     let drivers = indi_hal.drivers();
 
     if drivers.groups.is_empty() {
@@ -264,7 +264,7 @@ impl UiModule for HardwareUi {
 
     fn on_app_closing(&self) {
         if !self.is_remote.get() {
-            let indi = self.core.indi_hal().indi();
+            let indi = self.core.hal().indi_impl().indi();
             _ = indi.command_enable_all_devices(false, true, Some(2000));
         }
 
@@ -307,10 +307,10 @@ impl UiModule for HardwareUi {
                 if let HalState::Error(err) = &state {
                     self.add_log_record(&Some(Utc::now()), "", &err)
                 }
-                *self.indi_state.borrow_mut() = self.core.indi_hal().state().clone();
+                *self.indi_state.borrow_mut() = self.core.hal().indi_impl().state().clone();
 
                 #[cfg(windows)] {
-                    *self.aa_state.borrow_mut() = self.core.aa_hal().state().clone();
+                    *self.aa_state.borrow_mut() = self.core.hal().ascom_alpaca_impl().state().clone();
                 }
 
                 self.correct_widgets_by_cur_state();
@@ -340,7 +340,7 @@ impl HardwareUi {
         let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
 
         let sender = main_thread_sender.clone();
-        self.core.indi_hal().indi().connect_event_handler(move |event| {
+        self.core.hal().indi_impl().indi().connect_event_handler(move |event| {
             _ = sender.send_blocking(event);
         });
 
@@ -638,7 +638,7 @@ impl HardwareUi {
         let aux1_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_aux1_drivers);
         let aux2_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_aux2_drivers);
 
-        let indi_drivers = self.core.indi_hal().drivers();
+        let indi_drivers = self.core.hal().indi_impl().drivers();
 
         self.widgets.indi_drv.chb_remote.set_sensitive(!indi_drivers.groups.is_empty() && indi_disconnected);
         self.widgets.indi_drv.l_mount_drivers.set_sensitive(mnt_sensitive);
@@ -670,8 +670,7 @@ impl HardwareUi {
     fn handler_action_conn_indi(&self) {
         self.read_options_from_widgets();
         exec_and_show_error(Some(&self.window), || {
-            let indi_hal = self.core.indi_hal();
-            self.core.set_hal_impl(Arc::clone(&indi_hal) as Arc<dyn HalImpl + Send + Sync>);
+            let indi_hal = self.core.hal().indi_impl();
             let options = self.core.options().read().unwrap();
             indi_hal.connect(
                 options.indi.remote,
@@ -691,7 +690,7 @@ impl HardwareUi {
 
     fn handler_action_disconn_indi(&self) {
         exec_and_show_error(Some(&self.window), || {
-            let indi = self.core.indi_hal().indi();
+            let indi = self.core.hal().indi_impl().indi();
             if !self.is_remote.get() {
                 log::info!("Disabling all INDI devices before disconnect...");
                 indi.command_enable_all_devices(false, true, Some(2000))?;
@@ -708,8 +707,7 @@ impl HardwareUi {
     fn handler_action_conn_aa(&self) {
         self.read_options_from_widgets();
         exec_and_show_error(Some(&self.window), || {
-            let aa_hal = self.core.aa_hal();
-            self.core.set_hal_impl(Arc::clone(&aa_hal) as Arc<dyn HalImpl + Send + Sync>);
+            let aa_hal = self.core.hal().ascom_alpaca_impl();
             let options = self.core.options().read().unwrap();
             aa_hal.connect(&options.ascom_alpaca.address)?;
             Ok(())
@@ -719,7 +717,7 @@ impl HardwareUi {
     #[cfg(windows)]
     fn handler_action_disconn_aa(&self) {
         exec_and_show_error(Some(&self.window), || {
-            let aa_hal = self.core.aa_hal();
+            let aa_hal = self.core.hal().ascom_alpaca_impl();
             aa_hal.disconnect()?;
             Ok(())
         });
@@ -749,7 +747,7 @@ impl HardwareUi {
             group_name: &str,
             active:     &Option<String>
         ) {
-            let indi_drivers = data.core.indi_hal().drivers();
+            let indi_drivers = data.core.hal().indi_impl().drivers();
             let Ok(group) = indi_drivers.get_group_by_name(group_name) else { return; };
             let model = gtk::TreeStore::new(&[String::static_type(), String::static_type()]);
             let mut manufacturer_nodes = HashMap::<&str, gtk::TreeIter>::new();
@@ -890,7 +888,7 @@ impl HardwareUi {
         fc.close();
         if resp == gtk::ResponseType::Accept {
             exec_and_show_error(Some(&self.window), || {
-                let indi = self.core.indi_hal().indi();
+                let indi = self.core.hal().indi_impl().indi();
                 let (_, all_props) = indi.get_properties_list(None);
                 let file_name = fc.file().expect("File name").path().unwrap().with_extension("txt");
                 let mut file = BufWriter::new(File::create(file_name)?);
@@ -966,7 +964,7 @@ impl HardwareUi {
 
     fn set_switch_property_for_all_device(&self, prop_name: &str, elem_name: &str) {
         exec_and_show_error(Some(&self.window), || {
-            let indi = self.core.indi_hal().indi();
+            let indi = self.core.hal().indi_impl().indi();
             let devices = indi.get_devices_list();
             for device in devices {
                 indi.command_set_switch_property(
@@ -981,7 +979,7 @@ impl HardwareUi {
 
     fn handler_action_get_site_from_devices(self: &Rc<Self>) {
         exec_and_show_error(Some(&self.window), || {
-            let indi = self.core.indi_hal().indi();
+            let indi = self.core.hal().indi_impl().indi();
             if indi.state() != indi::ConnState::Connected {
                 eyre::bail!("INDI is not connected!");
             }

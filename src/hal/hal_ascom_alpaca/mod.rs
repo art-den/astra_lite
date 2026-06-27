@@ -9,9 +9,9 @@ use bitflags::bitflags;
 use itertools::izip;
 
 use crate::hal::{
-    Camera, CameraInfo, CameraShot, CameraShotType, CcdPurpose, Device, DeviceInfo, DeviceType,
-    FilterWheel, Focuser, FocuserState, FrameType, HalFeatures, HalImpl, HalState, Telescope,
-    TelescopeMoveDir, TelescopeState,
+    Camera, CameraInfo, CameraShot, CameraShotType, CcdPurpose, CameraFeatures,
+    Device, DeviceInfo, DeviceType, FilterWheel, Focuser, FocuserState, FrameType,
+    HalImpl, HalState, Telescope, TelescopeMoveDir, TelescopeState,
 };
 use crate::hal::events::{HalEvent, HalEventHandlers};
 use crate::image::raw::{CfaType, RawImage, RawImageInfo};
@@ -144,6 +144,11 @@ impl AscomAlpacaHalImpl {
         }
     }
 
+    fn data_opt(&self) -> Option<Arc<AscomAlpacaHalData>> {
+        self.data.read().unwrap().clone()
+    }
+
+
     pub fn connect(&self, address: &str) -> eyre::Result<()> {
         if self.state() == HalState::Connected {
             self.disconnect()?;
@@ -223,10 +228,6 @@ impl AscomAlpacaHalImpl {
 }
 
 impl HalImpl for AscomAlpacaHalImpl {
-    fn features(&self) -> HalFeatures {
-        HalFeatures::empty()
-    }
-
     fn state(&self) -> HalState {
         let data = self.data.read().unwrap();
         if data.is_some() {
@@ -301,40 +302,36 @@ impl HalImpl for AscomAlpacaHalImpl {
         Ok(result)
     }
 
-    fn camera(&self, id: &str) -> eyre::Result<Arc<dyn Camera + Send + Sync>> {
-        let data = self.data()?;
+    fn camera(&self, id: &str) -> Option<Arc<dyn Camera + Send + Sync>> {
+        let data = self.data_opt()?;
         data.cameras
             .iter()
             .find(|device| *device.device_id == id)
             .map(|device| Arc::clone(device) as Arc<dyn Camera + Send + Sync>)
-            .ok_or_else(|| eyre::eyre!("Camera with id={id} not found"))
     }
 
-    fn telescope(&self, id: &str) -> eyre::Result<Arc<dyn Telescope + Send + Sync>> {
-        let data = self.data()?;
+    fn telescope(&self, id: &str) -> Option<Arc<dyn Telescope + Send + Sync>> {
+        let data = self.data_opt()?;
         data.telescopes
             .iter()
             .find(|device| *device.device_id == id)
             .map(|device| Arc::clone(device) as Arc<dyn Telescope + Send + Sync>)
-            .ok_or_else(|| eyre::eyre!("Telescope with id={id} not found"))
     }
 
-    fn focuser(&self, id: &str) -> eyre::Result<Arc<dyn Focuser + Send + Sync>> {
-        let data = self.data()?;
+    fn focuser(&self, id: &str) -> Option<Arc<dyn Focuser + Send + Sync>> {
+        let data = self.data_opt()?;
         data.focusers
             .iter()
             .find(|device| *device.device_id == id)
             .map(|device| Arc::clone(device) as Arc<dyn Focuser + Send + Sync>)
-            .ok_or_else(|| eyre::eyre!("Focuser with id={id} not found"))
     }
 
-    fn filter_wheel(&self, id: &str) -> eyre::Result<Arc<dyn FilterWheel + Send + Sync>> {
-        let data = self.data()?;
+    fn filter_wheel(&self, id: &str) -> Option<Arc<dyn FilterWheel + Send + Sync>> {
+        let data = self.data_opt()?;
         data.filter_wheels
             .iter()
             .find(|device| *device.device_id == id)
             .map(|device| Arc::clone(device) as Arc<dyn FilterWheel + Send + Sync>)
-            .ok_or_else(|| eyre::eyre!("Filter wheel with id={id} not found"))
     }
 }
 
@@ -658,6 +655,10 @@ impl Device for AscomAlpacaCamera {
 }
 
 impl Camera for AscomAlpacaCamera {
+    fn features(&self) -> CameraFeatures {
+        CameraFeatures::empty()
+    }
+
     fn init_before_shot(&self) -> eyre::Result<()> {
         self.async_runtime.block_on(async {
             eyre::Ok(())

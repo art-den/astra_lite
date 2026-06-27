@@ -1007,7 +1007,6 @@ impl CameraUi {
 
     fn correct_widgets_props_impl(&self) {
         let widgets = &self.widgets;
-        let hal = self.core.hal();
 
         let Some(camera) = self.core.camera() else {
             widgets.common.bx_take_shot.set_sensitive(false);
@@ -1104,18 +1103,14 @@ impl CameraUi {
         self.widgets.raw.btn_start.set_label(save_raw_btn_cap);
 
         let cam_active = camera.is_active().unwrap_or(false);
-        let devices_connected = hal.state() == HalState::Connected;
 
         let can_change_cam_opts = !saving_frames && !live_active;
         let can_change_mode = waiting || single_shot || liveview_active;
         let can_change_frame_opts = waiting || liveview_active;
         let can_change_live_stacking_opts = waiting || liveview_active;
         let can_change_cal_ops = !liveview_active;
-        let cam_sensitive =
-            devices_connected &&
-            cam_active;
 
-        self.main_ui.set_module_panel_visible(self.widgets.info.bx.upcast_ref(), cam_sensitive);
+        self.main_ui.set_module_panel_visible(self.widgets.info.bx.upcast_ref(), cam_active);
 
         enable_actions(&self.window, &[
             ("take_shot",              exposure_supported && !single_shot && waiting),
@@ -1131,11 +1126,11 @@ impl CameraUi {
             ("load_image",             waiting),
         ]);
 
-        widgets.common.l_cam_list   .set_sensitive(waiting && devices_connected);
-        widgets.common.cb_cam_list  .set_sensitive(waiting && devices_connected);
+        widgets.common.l_cam_list   .set_sensitive(waiting);
+        widgets.common.cb_cam_list  .set_sensitive(waiting);
         widgets.common.chb_live_view.set_sensitive((exposure_supported && liveview_active) || can_change_mode);
 
-        widgets.ctrl.grid         .set_sensitive(cam_sensitive);
+        widgets.ctrl.grid         .set_sensitive(cam_active);
         widgets.ctrl.chb_fan      .set_visible(fan_supported);
         widgets.ctrl.l_heater     .set_visible(heater_supported);
         widgets.ctrl.cb_heater    .set_visible(heater_supported);
@@ -1146,12 +1141,12 @@ impl CameraUi {
         widgets.ctrl.chb_fan      .set_sensitive(!cooler_active);
         widgets.ctrl.chb_cooler   .set_sensitive(temp_supported && can_change_cam_opts);
         widgets.ctrl.spb_temp     .set_sensitive(cooler_active && temp_supported && can_change_cam_opts);
-        widgets.ctrl.chb_low_noise.set_sensitive(devices_connected && can_change_cam_opts);
-        widgets.ctrl.l_conv_gain  .set_sensitive(devices_connected && can_change_cam_opts);
-        widgets.ctrl.cb_conv_gain .set_sensitive(devices_connected && can_change_cam_opts);
-        widgets.ctrl.chb_high_fw  .set_sensitive(devices_connected && can_change_cam_opts);
+        widgets.ctrl.chb_low_noise.set_sensitive(cam_active && can_change_cam_opts);
+        widgets.ctrl.l_conv_gain  .set_sensitive(cam_active && can_change_cam_opts);
+        widgets.ctrl.cb_conv_gain .set_sensitive(cam_active && can_change_cam_opts);
+        widgets.ctrl.chb_high_fw  .set_sensitive(cam_active && can_change_cam_opts);
 
-        widgets.frame.grid        .set_sensitive(cam_sensitive);
+        widgets.frame.grid        .set_sensitive(cam_active);
         widgets.frame.cb_mode     .set_sensitive(can_change_frame_opts);
         widgets.frame.chb_auto_exp.set_sensitive(exposure_supported && can_change_frame_opts && frame_mode_is_flat);
         widgets.frame.spb_exp     .set_sensitive(exposure_supported && can_change_frame_opts);
@@ -1160,23 +1155,23 @@ impl CameraUi {
         widgets.frame.spb_offset  .set_sensitive(offset_supported && can_change_frame_opts);
         widgets.frame.cb_bin      .set_sensitive(binning_supported && can_change_frame_opts);
 
-        widgets.calibr.grid    .set_sensitive(cam_sensitive);
+        widgets.calibr.grid    .set_sensitive(cam_active);
         widgets.calibr.chb_dark.set_sensitive(can_change_cal_ops);
         widgets.calibr.chb_flat.set_sensitive(can_change_cal_ops);
         widgets.calibr.fch_flat.set_sensitive(can_change_cal_ops);
 
-        widgets.raw.grid           .set_sensitive(cam_sensitive);
+        widgets.raw.grid           .set_sensitive(cam_active);
         widgets.raw.chb_save_master.set_sensitive(can_change_cal_ops && (frame_mode_is_flat || frame_mode_is_dark) && !saving_frames);
         widgets.raw.chb_frames_cnt .set_sensitive(!saving_frames && can_change_mode);
         widgets.raw.spb_frames_cnt .set_sensitive(!saving_frames && can_change_mode);
 
-        widgets.live_st.grid           .set_sensitive(cam_sensitive);
+        widgets.live_st.grid           .set_sensitive(cam_active);
         widgets.live_st.chb_save_period.set_sensitive(can_change_live_stacking_opts);
         widgets.live_st.spb_save_period.set_sensitive(can_change_live_stacking_opts);
         widgets.live_st.chb_save_orig  .set_sensitive(can_change_live_stacking_opts);
         widgets.live_st.fch_path       .set_sensitive(can_change_live_stacking_opts);
 
-        widgets.quality.bx.set_sensitive(cam_sensitive);
+        widgets.quality.bx.set_sensitive(cam_active);
     }
 
     // TODO: must be called from event handler also
@@ -1289,13 +1284,10 @@ impl CameraUi {
             .map(|d| (d.id, d.name))
             .collect();
 
-        let devices_connected = hal.state() == HalState::Connected;
-
         fill_devices_list_into_combobox(
             &cameras_ids_and_names,
             &self.widgets.common.cb_cam_list,
             if !cur_cam_device.is_empty() { Some(&cur_cam_device) } else { None },
-            devices_connected,
             |id| {
                 let Ok(mut options) = self.core.options().try_write() else { return; };
                 options.cam.device_id = id.to_string()
@@ -1439,7 +1431,8 @@ impl CameraUi {
     }
 
     fn handler_live_view_changed(&self) {
-        if self.core.hal().state() != HalState::Connected {
+        let camera_active = self.core.camera().and_then(|c| c.is_active().ok()).unwrap_or(false);
+        if !camera_active {
             return;
         }
         if self.core.options().read().unwrap().cam.live_view {

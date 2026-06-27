@@ -151,7 +151,7 @@ impl Devices {
             .ok_or_else(|| Error::DeviceNotExists(device_name.to_string()))
     }
 
-    fn find_by_name_opt(&self, device_name: &str) -> Option<&Device> {
+    pub fn find_by_name_opt(&self, device_name: &str) -> Option<&Device> {
         self.list
             .iter()
             .find(|device| *device.name == device_name)

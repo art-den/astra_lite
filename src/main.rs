@@ -94,7 +94,7 @@ fn app_activate_handler(app: &gtk::Application) {
 
     // Register panic handler
 
-    let indi_for_panic = Arc::clone(core.indi_hal().indi());
+    let indi_for_panic = Arc::clone(core.hal().indi_impl().indi());
     if cfg!(not(debug_assertions)) {
         std::panic::set_hook({
             let logs_dir = logs_dir.clone();

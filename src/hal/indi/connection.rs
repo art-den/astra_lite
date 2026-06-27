@@ -545,6 +545,11 @@ impl Connection {
         devices.get_list_iter().collect()
     }
 
+    pub fn device_exists(&self, device_name: &str) -> bool {
+        let devices = self.devices.lock().unwrap();
+        devices.find_by_name_opt(device_name).is_some()
+    }
+
     pub fn get_devices_list_by_interface(&self, iface: DriverInterface) -> Vec<ExportDevice> {
         let devices = self.devices.lock().unwrap();
         devices

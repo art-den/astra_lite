@@ -3,7 +3,7 @@ use gtk::prelude::*;
 use macros::FromBuilder;
 
 use crate::{
-    core::{core::*, events::*}, guiding::external_guider::*, hal::{HalState, events::HalEvent}, options::*
+    core::{core::*, events::*}, guiding::external_guider::*, hal::events::HalEvent, options::*
 };
 
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
@@ -224,7 +224,6 @@ impl GuidingUi {
             mode_type == ModeType::SingleShot ||
             mode_type == ModeType::LiveView;
         let dither_calibr = mode_type == ModeType::DitherCalibr;
-        let hal_connected = self.core.hal().state() == HalState::Connected;
 
         let disabled = self.widgets.rbtn_no_guiding.is_active();
         let by_main_cam = self.widgets.rbtn_guide_main_cam.is_active();
@@ -235,7 +234,7 @@ impl GuidingUi {
             correct_spinbutton_by_range(&self.widgets.spb_mnt_cal_exp, exp_range, 1, Some(1.0));
         }
 
-        self.widgets.grd.set_sensitive(hal_connected);
+        self.widgets.grd.set_sensitive(true);
         self.widgets.rbtn_no_guiding.set_sensitive(can_change_mode);
         self.widgets.rbtn_guide_main_cam.set_sensitive(can_change_mode);
         self.widgets.rbtn_guide_ext.set_sensitive(can_change_mode);

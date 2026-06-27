@@ -321,7 +321,6 @@ impl MountUi {
         let mnt_active = self.core.telescope()
             .and_then(|t| t.is_active().ok())
             .unwrap_or(false);
-        let hal_connected = self.core.hal().state() == HalState::Connected;
 
         let mode = self.core.mode();
         let mode_type = mode.active.get_type();
@@ -330,7 +329,6 @@ impl MountUi {
         let single_shot = mode_type == ModeType::SingleShot;
 
         let mount_ctrl_sensitive =
-            hal_connected &&
             mnt_active &&
             (waiting || single_shot || live_view);
 
@@ -399,8 +397,7 @@ impl MountUi {
         let cur_mount = options.mount.device.clone();
         drop(options);
 
-        let hal = self.core.hal();
-        let Ok(mounts) = hal.devices(DeviceType::TELESCOPE) else {
+        let Ok(mounts) = self.core.hal().devices(DeviceType::TELESCOPE) else {
             return;
         };
 
@@ -409,12 +406,10 @@ impl MountUi {
             .map(|dev| (dev.id, dev.name))
             .collect::<Vec<_>>();
 
-        let connected = hal.state() == HalState::Connected;
         fill_devices_list_into_combobox(
             &mounts_ids_and_names,
             &self.widgets.cb_list,
             if !cur_mount.is_empty() { Some(cur_mount.as_str()) } else { None },
-            connected,
             |id| {
                 let Ok(mut options) = self.core.options().try_write() else { return; };
                 options.mount.device = id.to_string();

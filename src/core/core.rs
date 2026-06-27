@@ -7,7 +7,7 @@ use std::{
 use crate::{
     core::cam_ctrl::*,
     guiding::external_guider::*,
-    hal::{*, events::HalEvent, hal_indi::IndiHalImpl},
+    hal::{*, events::HalEvent},
     image::io::FromFileCameraShot,
     options::*,
     sky_math::math::EqCoord,
@@ -112,7 +112,6 @@ struct CurDevices {
 pub struct Core {
     hal:                Arc<Hal>,
     cur_devices:        Mutex<CurDevices>,
-    indi_hal:           Arc<IndiHalImpl>,
     options:            Arc<RwLock<Options>>,
     mode:               RwLock<ModeData>,
     events:             Arc<EventHandlers>,
@@ -123,8 +122,6 @@ pub struct Core {
     img_proc_stop_flag: Mutex<Arc<AtomicBool>>, // stop flag for last command
     frame_processing:   Arc<FrameProcessing>,
     ext_guider:         Arc<ExternalGuiderCtrl>,
-    #[cfg(windows)]
-    aa_hal:             Arc<hal_ascom_alpaca::AscomAlpacaHalImpl>,
 }
 
 impl Drop for Core {
@@ -139,11 +136,6 @@ impl Core {
         let events = Arc::new(EventHandlers::new());
         let options = Arc::new(RwLock::new(Options::default()));
 
-        let indi_hal = hal.create_indy_impl();
-
-        #[cfg(windows)]
-        let aa_hal = hal.create_ascom_alpaca_impl();
-
         let frame_processing = FrameProcessing::new();
 
         let this = Arc::new(Self {
@@ -156,12 +148,9 @@ impl Core {
             timer:              Arc::new(Timer::new()),
             img_proc_stop_flag: Mutex::new(Arc::new(AtomicBool::new(false))),
             ext_guider:         ExternalGuiderCtrl::new(),
-            indi_hal,
             hal,
             frame_processing,
             events,
-            #[cfg(windows)]
-            aa_hal,
         });
 
         this.set_ext_guider_events_handler();
@@ -172,10 +161,6 @@ impl Core {
 
     pub fn hal(&self) -> &Arc<Hal> {
         &self.hal
-    }
-
-    pub fn set_hal_impl(&self, hal_impl: Arc<dyn HalImpl + Send + Sync>) {
-        self.hal.set_impl(hal_impl);
     }
 
     pub fn camera(&self) -> Option<Arc<dyn Camera + Send + Sync>> {
@@ -241,15 +226,6 @@ impl Core {
         Ok(Arc::clone(filter_wheel))
     }
 
-    pub fn indi_hal(&self) -> &Arc<IndiHalImpl> {
-        &self.indi_hal
-    }
-
-    #[cfg(windows)]
-    pub fn aa_hal(&self) -> &Arc<crate::hal::hal_ascom_alpaca::AscomAlpacaHalImpl> {
-        &self.aa_hal
-    }
-
     pub fn options(&self) -> &Arc<RwLock<Options>> {
         &self.options
     }
@@ -272,13 +248,13 @@ impl Core {
         log::info!("Done");
 
         log::info!("Disconnecting from INDI...");
-        self.indi_hal.indi().disconnect_all_event_handlers(); // TODO: move into hal
-        _ = self.indi_hal.indi().disconnect_and_wait(); // TODO: move into hal
+        let indi_hal = self.hal.indi_impl();
+        indi_hal.indi().disconnect_all_event_handlers(); // TODO: move into hal
+        _ = indi_hal.indi().disconnect_and_wait(); // TODO: move into hal
         log::info!("Done!");
 
         log::info!("Stopping HAL...");
         self.hal.disconnect_all_subscribers();
-        self.hal.reset_impl();
         log::info!("Done!");
     }
 

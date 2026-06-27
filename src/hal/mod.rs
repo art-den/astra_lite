@@ -9,9 +9,12 @@ pub mod hal_ascom_alpaca;
 
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
-use std::{ops:: RangeInclusive, path::Path, sync::{Arc, RwLock}};
+use std::{ops:: RangeInclusive, path::Path, sync::Arc};
 
 use crate::hal::{events::{HalEvent, HalEventHandlers}, hal_indi::IndiHalImpl};
+
+#[cfg(windows)]
+use super::hal::hal_ascom_alpaca::AscomAlpacaHalImpl;
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
@@ -54,47 +57,43 @@ pub enum HalState {
     Error(String),
 }
 
-bitflags! {
-    #[derive(Debug, Clone, Copy)]
-    pub struct HalFeatures: u32 {
-        const CAN_START_EXP_AT_DOWNLOAD_BEGIN = (1 << 0);
-    }
-}
-
-
 pub struct Hal {
-    impl_:          RwLock<Option<Arc<dyn HalImpl + Send + Sync + 'static>>>,
+    list:           Vec<Arc<dyn HalImpl + Send + Sync + 'static>>,
+    indi:           Arc<IndiHalImpl>,
+    #[cfg(windows)]
+    ascom_alpaca:   Arc<AscomAlpacaHalImpl>,
     event_handlers: Arc<HalEventHandlers>,
 }
 
 impl Hal {
     pub fn new() -> Arc<Self> {
+        let event_handlers = Arc::new(HalEventHandlers::new());
+        let indi = IndiHalImpl::new(&event_handlers);
+
+        let mut list: Vec<Arc<dyn HalImpl + Send + Sync + 'static>> = Vec::new();
+        list.push(Arc::clone(&indi) as Arc<_>);
+
+        #[cfg(windows)]
+        let ascom_alpaca = AscomAlpacaHalImpl::new(&event_handlers);
+        #[cfg(windows)]
+        list.push(Arc::clone(&ascom_alpaca) as Arc<_>);
+
         Arc::new(Self {
-            impl_:          RwLock::new(None),
-            event_handlers: Arc::new(HalEventHandlers::new()),
+            #[cfg(windows)]
+            ascom_alpaca,
+            indi,
+            list,
+            event_handlers
         })
     }
 
-    pub fn create_indy_impl(&self) -> Arc<IndiHalImpl> {
-        IndiHalImpl::new(&self.event_handlers)
+    pub fn indi_impl(&self) -> &Arc<IndiHalImpl> {
+        &self.indi
     }
 
     #[cfg(windows)]
-    pub fn create_ascom_alpaca_impl(&self) -> Arc<hal_ascom_alpaca::AscomAlpacaHalImpl> {
-        super::hal::hal_ascom_alpaca::AscomAlpacaHalImpl::new(&self.event_handlers)
-    }
-
-    pub fn set_impl(&self, hal_impl: Arc<dyn HalImpl + Send + Sync + 'static>) {
-        let mut impl_ = self.impl_.write().unwrap();
-        *impl_ = Some(hal_impl);
-    }
-
-    pub fn reset_impl(&self) {
-        let mut impl_mutex = self.impl_.write().unwrap();
-        if let Some(impl_) = impl_mutex.take() {
-            drop(impl_mutex);
-            drop(impl_);
-        }
+    pub fn ascom_alpaca_impl(&self) -> &Arc<AscomAlpacaHalImpl> {
+        &self.ascom_alpaca
     }
 
     pub fn connect_event_handler(&self, fun: impl Fn(HalEvent) + Send + Sync + 'static) {
@@ -105,82 +104,90 @@ impl Hal {
         self.event_handlers.disconnect_all();
     }
 
-    pub fn features(&self) -> HalFeatures {
-        let Ok(impl_) = self.get_impl() else {
-            return HalFeatures::empty();
-        };
-        impl_.features()
-    }
-
-    pub fn state(&self) -> HalState {
-        let impl_ = self.impl_.read().unwrap();
-        if let Some(impl_) = &*impl_ {
-            impl_.state()
-        } else {
-            HalState::ImplNotDefined
-        }
-    }
-
     pub fn notify_periodical_timer_tick(&self, timer_period: usize) -> eyre::Result<()> {
-        let impl_ = self.impl_.read().unwrap();
-        if let Some(impl_) = &*impl_ {
-            impl_.notify_periodical_timer_tick(timer_period)
-        } else {
-            Ok(())
+        for impl_ in &self.list {
+            impl_.notify_periodical_timer_tick(timer_period)?;
         }
-    }
-
-    fn get_impl(&self) -> eyre::Result<Arc<dyn HalImpl + Send + Sync + 'static>> {
-        let impl_ = self.impl_.read().unwrap();
-        if let Some(impl_) = &*impl_ {
-            Ok(Arc::clone(impl_))
-        } else {
-            eyre::bail!("HAL is not selected!");
-        }
+        Ok(())
     }
 
     pub fn devices(&self, type_filter: DeviceType) -> eyre::Result<Vec<DeviceInfo>> {
-        let impl_ = self.get_impl()?;
-        impl_.devices(type_filter)
+        let result = self.list
+            .iter()
+            .filter_map(|hal| hal.devices(type_filter).ok())
+            .flatten()
+            .collect();
+        Ok(result)
     }
 
     pub fn cameras(&self) -> eyre::Result<Vec<CameraInfo>> {
-        let impl_ = self.get_impl()?;
-        impl_.cameras()
+        let result = self.list
+            .iter()
+            .filter_map(|hal| hal.cameras().ok())
+            .flatten()
+            .collect();
+        Ok(result)
     }
 
     pub fn camera(&self, id: &str) -> eyre::Result<Arc<dyn Camera + Send + Sync>> {
-        let impl_ = self.get_impl()?;
-        impl_.camera(id)
+        let camera = self.list
+            .iter()
+            .filter_map(|hal| hal.camera(id))
+            .next();
+        if let Some(camera) = camera {
+            return Ok(camera);
+        } else {
+            eyre::bail!("Camera with id={id} not found");
+        }
     }
 
     pub fn telescope(&self, id: &str) -> eyre::Result<Arc<dyn Telescope + Send + Sync>> {
-        let impl_ = self.get_impl()?;
-        impl_.telescope(id)
+        let telescope = self.list
+            .iter()
+            .filter_map(|hal| hal.telescope(id))
+            .next();
+        if let Some(telescope) = telescope {
+            return Ok(telescope);
+        } else {
+            eyre::bail!("Telescope with id={id} not found");
+        }
     }
 
     pub fn focuser(&self, id: &str) -> eyre::Result<Arc<dyn Focuser + Send + Sync>> {
-        let impl_ = self.get_impl()?;
-        impl_.focuser(id)
+        let focuser = self.list
+            .iter()
+            .filter_map(|hal| hal.focuser(id))
+            .next();
+        if let Some(focuser) = focuser {
+            return Ok(focuser);
+        } else {
+            eyre::bail!("Focuser with id={id} not found");
+        }
     }
 
     pub fn filter_wheel(&self, id: &str) -> eyre::Result<Arc<dyn FilterWheel + Send + Sync>> {
-        let impl_ = self.get_impl()?;
-        impl_.filter_wheel(id)
+        let filter_wheel = self.list
+            .iter()
+            .filter_map(|hal| hal.filter_wheel(id))
+            .next();
+        if let Some(filter_wheel) = filter_wheel {
+            return Ok(filter_wheel);
+        } else {
+            eyre::bail!("Filther wheel with id={id} not found");
+        }
     }
 }
 
 pub trait HalImpl {
-    fn features(&self) -> HalFeatures;
     fn state(&self) -> HalState;
     fn disconnect(&self) -> eyre::Result<()>;
     fn notify_periodical_timer_tick(&self, timer_period: usize) -> eyre::Result<()>;
     fn devices(&self, type_filter: DeviceType) -> eyre::Result<Vec<DeviceInfo>>;
     fn cameras(&self) -> eyre::Result<Vec<CameraInfo>>;
-    fn camera(&self, id: &str) -> eyre::Result<Arc<dyn Camera + Send + Sync>>;
-    fn telescope(&self, id: &str) -> eyre::Result<Arc<dyn Telescope + Send + Sync>>;
-    fn focuser(&self, id: &str) -> eyre::Result<Arc<dyn Focuser + Send + Sync>>;
-    fn filter_wheel(&self, id: &str) -> eyre::Result<Arc<dyn FilterWheel + Send + Sync>>;
+    fn camera(&self, id: &str) -> Option<Arc<dyn Camera + Send + Sync>>;
+    fn telescope(&self, id: &str) -> Option<Arc<dyn Telescope + Send + Sync>>;
+    fn focuser(&self, id: &str) -> Option<Arc<dyn Focuser + Send + Sync>>;
+    fn filter_wheel(&self, id: &str) -> Option<Arc<dyn FilterWheel + Send + Sync>>;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -210,6 +217,13 @@ pub enum CameraShotType {
     ReadyImage,
 }
 
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct CameraFeatures: u32 {
+        const CAN_START_EXP_AT_DOWNLOAD_BEGIN = (1 << 0);
+    }
+}
+
 /// Interface to extract data from camera shot
 pub trait CameraShot {
     fn get_type(&self) -> CameraShotType;
@@ -221,6 +235,7 @@ pub trait CameraShot {
 }
 
 pub trait Camera : Device {
+    fn features(&self) -> CameraFeatures;
     fn init_before_shot(&self) -> eyre::Result<()>;
 
     // Exposure

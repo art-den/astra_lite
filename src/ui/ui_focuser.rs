@@ -460,20 +460,16 @@ impl FocuserUi {
         let cur_focuser = options.focuser.device.clone();
         drop(options);
 
-        let hal = self.core.hal();
-        let Ok(focusers) = hal.devices(DeviceType::FOCUSER) else { return; };
+        let Ok(focusers) = self.core.hal().devices(DeviceType::FOCUSER) else { return; };
         let focusers_ids_and_names = focusers
             .into_iter()
             .map(|dev| (dev.id, dev.name))
             .collect::<Vec<_>>();
 
-        let devices_connected = hal.state() == HalState::Connected;
-
         fill_devices_list_into_combobox(
             &focusers_ids_and_names,
             &self.widgets.cb_list,
             if !cur_focuser.is_empty() { Some(cur_focuser.as_str()) } else { None },
-            devices_connected,
             |id| {
                 let mut options = self.core.options().write().unwrap();
                 options.focuser.device = id.to_string();

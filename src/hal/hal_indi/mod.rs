@@ -466,10 +466,6 @@ impl Drop for IndiHalImpl {
 }
 
 impl HalImpl for IndiHalImpl {
-    fn features(&self) -> HalFeatures {
-        HalFeatures::CAN_START_EXP_AT_DOWNLOAD_BEGIN
-    }
-
     fn state(&self) -> HalState {
         let indi_state = self.indi.state();
         match indi_state {
@@ -577,7 +573,7 @@ impl HalImpl for IndiHalImpl {
         Ok(result)
     }
 
-    fn camera(&self, id: &str) -> eyre::Result<Arc<dyn Camera + Send + Sync>> {
+    fn camera(&self, id: &str) -> Option<Arc<dyn Camera + Send + Sync>> {
         let mut ccd = indi::CamCcd::Main;
         let mut name = id;
         if id.ends_with(CAM_CCD2_POSTFIX) {
@@ -585,25 +581,37 @@ impl HalImpl for IndiHalImpl {
             name = &id[..new_len];
             ccd = indi::CamCcd::Guider;
         }
+        if !self.indi.device_exists(id) {
+            return None;
+        }
         let device = IndiDevice {
             id:   id.to_string(),
             name: name.to_string(),
             indi: Arc::clone(&self.indi),
         };
         let camera = IndiCamera { device, ccd };
-        Ok(Arc::new(camera))
+        Some(Arc::new(camera))
     }
 
-    fn telescope(&self, id: &str) -> eyre::Result<Arc<dyn Telescope + Send + Sync>> {
-        Ok(Arc::new(self.create_indi_device(id)))
+    fn telescope(&self, id: &str) -> Option<Arc<dyn Telescope + Send + Sync>> {
+        if !self.indi.device_exists(id) {
+            return None;
+        }
+        Some(Arc::new(self.create_indi_device(id)))
     }
 
-    fn focuser(&self, id: &str) -> eyre::Result<Arc<dyn Focuser + Send + Sync>> {
-        Ok(Arc::new(self.create_indi_device(id)))
+    fn focuser(&self, id: &str) -> Option<Arc<dyn Focuser + Send + Sync>> {
+        if !self.indi.device_exists(id) {
+            return None;
+        }
+        Some(Arc::new(self.create_indi_device(id)))
     }
 
-    fn filter_wheel(&self, id: &str) -> eyre::Result<Arc<dyn FilterWheel + Send + Sync>> {
-        Ok(Arc::new(self.create_indi_device(id)))
+    fn filter_wheel(&self, id: &str) -> Option<Arc<dyn FilterWheel + Send + Sync>> {
+        if !self.indi.device_exists(id) {
+            return None;
+        }
+        Some(Arc::new(self.create_indi_device(id)))
     }
 }
 
@@ -716,6 +724,10 @@ impl Device for IndiCamera {
 
 impl Camera for IndiCamera {
     // Common
+
+    fn features(&self) -> CameraFeatures {
+        CameraFeatures::CAN_START_EXP_AT_DOWNLOAD_BEGIN
+    }
 
     fn init_before_shot(&self) -> eyre::Result<()> {
         // Enable blob
