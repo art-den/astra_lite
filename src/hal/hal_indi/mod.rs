@@ -350,10 +350,16 @@ impl IndiHalImpl {
                 });
             }
             ("FILTER_SLOT", "FILTER_SLOT_VALUE", PropValue::Num(value), _, _) => {
+                let in_progress = !matches!(state, PropState::Ok|PropState::Idle);
+                let slot = if in_progress {
+                    Some(value.value as i32 - value.min as i32)
+                } else {
+                    None
+                };
+
                 self.event_handlers.send(HalEvent::FilterWheelSlotChange {
-                    device_id:   Arc::clone(device_name),
-                    slot:        value.value as i32 - value.min as i32,
-                    in_progress: !matches!(state, PropState::Ok|PropState::Idle)
+                    device_id: Arc::clone(device_name),
+                    slot
                 });
             }
             ("FILTER_NAME", _, _, _, _) => {

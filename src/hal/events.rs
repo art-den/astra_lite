@@ -83,9 +83,8 @@ pub enum HalEvent {
     // Filter wheel
 
     FilterWheelSlotChange {
-        device_id:   Arc<String>,
-        slot:        i32,
-        in_progress: bool,
+        device_id: Arc<String>,
+        slot:      Option<i32>,
     },
 
     FilterWheelNameChanged(Arc<String/*device id*/>),

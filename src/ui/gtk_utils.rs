@@ -188,6 +188,7 @@ pub fn exec_and_show_error(
         } else {
             err.to_string()
         };
+        log::error!("Error in exec_and_show_error: {:?}", err);
         show_error_message(window, "Error", &message);
         return false;
     }

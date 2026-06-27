@@ -29,6 +29,7 @@ struct AscomAlpacaHalData {
     cameras:        Vec<Arc<AscomAlpacaCamera>>,
     telescopes:     Vec<Arc<AscomAlpacaTelescope>>,
     focusers:       Vec<Arc<AscomAlpacaFocuser>>,
+    filter_wheels:  Vec<Arc<AscomAlpacaFilterWheel>>,
 }
 
 pub struct AscomAlpacaHalImpl {
@@ -107,6 +108,17 @@ impl AscomAlpacaHalImpl {
             .map(Arc::new)
             .collect();
 
+        let filter_wheels = aa_devices
+            .iter()
+            .filter_map(|typed_device| {
+                if let aa::api::TypedDevice::FilterWheel(dev) = typed_device { Some(dev) } else { None }
+            })
+            .filter_map(|aa_device| {
+                AscomAlpacaFilterWheel::new(aa_device, &async_runtime, &self.event_handlers).ok()
+            })
+            .map(Arc::new)
+            .collect();
+
         let data = AscomAlpacaHalData {
             client,
             aa_devices,
@@ -115,6 +127,7 @@ impl AscomAlpacaHalImpl {
             cameras,
             telescopes,
             focusers,
+            filter_wheels,
         };
 
         *self.data.write().unwrap() = Some(Arc::new(data));
@@ -187,6 +200,11 @@ impl AscomAlpacaHalImpl {
                     );
                 }
             }
+            for filter_wheel in &data.filter_wheels {
+                self.event_handlers.send(
+                    HalEvent::FilterWheelNameChanged(Arc::clone(&filter_wheel.device_id))
+                );
+            }
         }
     }
 
@@ -251,6 +269,9 @@ impl HalImpl for AscomAlpacaHalImpl {
             for focuser in &data.focusers {
                 focuser.notify_periodical_timer_tick(timer_period)?;
             }
+            for filter_wheel in &data.filter_wheels {
+                filter_wheel.notify_periodical_timer_tick(timer_period)?;
+            }
         }
         Ok(())
     }
@@ -307,8 +328,13 @@ impl HalImpl for AscomAlpacaHalImpl {
             .ok_or_else(|| eyre::eyre!("Focuser with id={id} not found"))
     }
 
-    fn filter_wheel(&self, _id: &str) -> eyre::Result<Arc<dyn FilterWheel + Send + Sync>> {
-        eyre::bail!("Not supported yet");
+    fn filter_wheel(&self, id: &str) -> eyre::Result<Arc<dyn FilterWheel + Send + Sync>> {
+        let data = self.data()?;
+        data.filter_wheels
+            .iter()
+            .find(|device| *device.device_id == id)
+            .map(|device| Arc::clone(device) as Arc<dyn FilterWheel + Send + Sync>)
+            .ok_or_else(|| eyre::eyre!("Filter wheel with id={id} not found"))
     }
 }
 
@@ -930,8 +956,6 @@ impl AscomAlpacaTelescope {
                 .await
                 .unwrap_or_default();
 
-            dbg!(&move_prim_axis_rates, &move_sec_axis_rates);
-
             let prim_max_rate = move_prim_axis_rates.iter()
                 .map(|range| range.end())
                 .max_by(|x, y| f64::partial_cmp(x, y).unwrap_or(std::cmp::Ordering::Equal))
@@ -943,8 +967,6 @@ impl AscomAlpacaTelescope {
                 .copied()
                 .unwrap_or(SIDERAL_RATE_DEG_PER_SEC);
             let max_rate = f64::min(prim_max_rate, sec_max_rate);
-
-
 
             let mut move_rates = Vec::new();
             for rate in [1, 5, 10, 25, 50, 100, 250, 500, 1000] {
@@ -1406,5 +1428,100 @@ impl Focuser for AscomAlpacaFocuser {
         Ok(self.async_runtime.block_on(async {
             self.device.temperature().await
         })?)
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+// Filter wheel
+
+#[derive(Default)]
+struct FilterWheelData {
+    prev_pos: Option<usize>,
+}
+
+struct AscomAlpacaFilterWheel {
+    device:         Arc<dyn aa::api::FilterWheel>,
+    device_id:      Arc<String>,
+    async_runtime:  Arc<tokio::runtime::Runtime>,
+    event_handlers: Arc<HalEventHandlers>,
+    data:           Mutex<FilterWheelData>,
+}
+
+impl AscomAlpacaFilterWheel {
+    fn new(
+        aa_filterwheel: &Arc<dyn aa::api::FilterWheel>,
+        async_runtime:  &Arc<tokio::runtime::Runtime>,
+        event_handlers: &Arc<HalEventHandlers>
+    ) -> eyre::Result<Self> {
+        let result = async_runtime.block_on(async {
+            eyre::Ok(Self {
+                device:         Arc::clone(aa_filterwheel),
+                device_id:      Arc::new(aa_filterwheel.unique_id().to_string()),
+                async_runtime:  Arc::clone(&async_runtime),
+                event_handlers: Arc::clone(&event_handlers),
+                data:           Mutex::new(FilterWheelData::default()),
+            })
+        })?;
+        Ok(result)
+    }
+
+    fn notify_periodical_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+        self.async_runtime.block_on(async {
+            let pos = self.device.position().await.unwrap_or_default();
+            let mut data = self.data.lock().unwrap();
+            let pos_changed = data.prev_pos != pos;
+            data.prev_pos = pos;
+            drop(data);
+            if pos_changed {
+                self.event_handlers.send(HalEvent::FilterWheelSlotChange {
+                    device_id: Arc::clone(&self.device_id),
+                    slot:      pos.map(|v| v as i32),
+                });
+            }
+            eyre::Ok(())
+        })
+    }
+}
+
+impl Device for AscomAlpacaFilterWheel {
+    fn id(&self) -> &str {
+        self.device.unique_id()
+    }
+
+    fn name(&self) -> &str {
+        self.device.static_name()
+    }
+
+    fn is_active(&self) -> eyre::Result<bool> {
+        Ok(self.async_runtime.block_on(async {
+            self.device.connected().await
+        })?)
+    }
+}
+
+impl FilterWheel for AscomAlpacaFilterWheel {
+    fn list_and_active(&self) -> eyre::Result<(Vec<String>, usize)> {
+        Ok(self.async_runtime.block_on(async {
+            let names = self.device.names().await?;
+            let pos = self.device.position()
+                .await?
+                .ok_or_else(|| eyre::eyre!("Position is not acessible now"))?;
+            eyre::Ok((names, pos))
+        })?)
+    }
+
+    fn set_active(&self, active_elem: usize) -> eyre::Result<()> {
+        self.async_runtime.block_on(async {
+            if self.device.position().await.unwrap_or_default() == Some(active_elem) {
+                return eyre::Ok(());
+            }
+            self.device.set_position(active_elem).await?;
+            self.event_handlers.send(HalEvent::FilterWheelSlotChange {
+                device_id: Arc::clone(&self.device_id),
+                slot:      None,
+            });
+            eyre::Ok(())
+        })
     }
 }
