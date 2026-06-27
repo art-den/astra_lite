@@ -1000,7 +1000,13 @@ impl AscomAlpacaTelescope {
     }
 
     fn notify_periodical_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
-        let Ok(state) = self.state_internal() else { return Ok(()); };
+        let state = if let Ok(state) = self.state_internal() {
+            state
+        } else {
+            StateInternal {
+                state: TelescopeState::Error, is_parked: false, is_tracking: false,
+            }
+        };
         let mut data = self.data.lock().unwrap();
         let state_changed = data.prev_state != Some(state.state);
         let tracking_changed = data.prev_tracking != Some(state.is_tracking);
