@@ -106,8 +106,8 @@ impl FocusingMode {
         prelim_step:    bool,
         error_reaction: FocusingErrorReaction,
     ) -> eyre::Result<Self> {
-        let camera = core.camera_or_err()?;
-        let focuser = core.focuser_or_err()?;
+        let camera = core.cur_devices.camera_or_err()?;
+        let focuser = core.cur_devices.focuser_or_err()?;
         let opts = core.options().read().unwrap();
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;

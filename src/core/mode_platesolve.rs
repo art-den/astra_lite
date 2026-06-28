@@ -39,8 +39,8 @@ pub struct PlatesolveMode {
 
 impl PlatesolveMode {
     pub fn new(core: &Core) -> eyre::Result<Self> {
-        let camera = core.camera_or_err()?;
-        let mount = core.telescope_or_err()?;
+        let camera = core.cur_devices.camera_or_err()?;
+        let mount = core.cur_devices.telescope_or_err()?;
         let opts = core.options().read().unwrap();
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;

@@ -8,6 +8,7 @@ pub mod mode_goto;
 pub mod mode_polar_align;
 pub mod utils;
 pub mod cam_ctrl;
+pub mod cur_devices;
 
 mod mode_waiting;
 mod mode_camera;

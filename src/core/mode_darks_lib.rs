@@ -50,7 +50,7 @@ impl DarkCreationMode {
         calibr_data: &Arc<Mutex<CalibrData>>,
         program:     &[MasterFileCreationProgramItem]
     ) -> eyre::Result<Self> {
-        let camera = core.camera_or_err()?;
+        let camera = core.cur_devices.camera_or_err()?;
         Ok(Self {
             camera,
             mode,

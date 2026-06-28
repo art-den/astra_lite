@@ -279,14 +279,14 @@ impl MountUi {
         self.widgets.cb_list.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| { self_.excl.exec(|| {
                 let Some(new_device_name) = cb.active_id() else { return; };
-                self_.core.change_telescope(&new_device_name);
+                self_.core.cur_devices.change_telescope(&new_device_name);
             });})
         );
 
         self.widgets.chb_tracking.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 self_.excl.exec(|| {
-                    let Some(telescope) = self_.core.telescope() else { return; };
+                    let Some(telescope) = self_.core.cur_devices.telescope() else { return; };
                     exec_and_show_error(Some(&self_.window), || {
                         telescope.track(chb.is_active())?;
                         Ok(())
@@ -298,7 +298,7 @@ impl MountUi {
         self.widgets.chb_parked.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 self_.excl.exec(|| {
-                    let Some(telescope) = self_.core.telescope() else { return; };
+                    let Some(telescope) = self_.core.cur_devices.telescope() else { return; };
                     exec_and_show_error(Some(&self_.window), || {
                         if chb.is_active() {
                             telescope.park()?;
@@ -314,7 +314,7 @@ impl MountUi {
     }
 
     fn correct_widgets_props(&self) {
-        let mnt_active = self.core.telescope()
+        let mnt_active = self.core.cur_devices.telescope()
             .and_then(|t| t.is_active().ok())
             .unwrap_or(false);
 
@@ -345,7 +345,7 @@ impl MountUi {
     }
 
     fn handler_nav_mount_btn_pressed(&self, button: &gtk::Button) {
-        let Some(telescope) = self.core.telescope() else { return; };
+        let Some(telescope) = self.core.cur_devices.telescope() else { return; };
         exec_and_show_error(Some(&self.window), || {
             if button != &self.widgets.btn_stop {
                 let inv_ns = self.widgets.chb_inv_ns.is_active();
@@ -379,7 +379,7 @@ impl MountUi {
     }
 
     fn handler_nav_mount_btn_released(&self, button: &gtk::Button) {
-        let Some(telescope) = self.core.telescope() else { return; };
+        let Some(telescope) = self.core.cur_devices.telescope() else { return; };
         exec_and_show_error(Some(&self.window), || {
             if button != &self.widgets.btn_stop {
                 telescope.abort_motion()?;
@@ -414,7 +414,7 @@ impl MountUi {
     }
 
     fn fill_mount_speed_list_widget(&self) {
-        let Some(telescope) = self.core.telescope() else { return; };
+        let Some(telescope) = self.core.cur_devices.telescope() else { return; };
         let options = self.core.options().read().unwrap();
 
         exec_and_show_error(Some(&self.window), || {
@@ -447,7 +447,7 @@ impl MountUi {
 
     fn show_cur_mount_state(&self) {
         self.excl.exec(|| {
-            let Some(telescope) = self.core.telescope() else { return; };
+            let Some(telescope) = self.core.cur_devices.telescope() else { return; };
 
             let parked = telescope.is_parked().unwrap_or(false);
             self.show_mount_parked_state(parked);
@@ -472,7 +472,7 @@ impl MountUi {
     }
 
     fn show_info(&self, state: Option<TelescopeState>) {
-        let Some(telescope) = self.core.telescope() else {
+        let Some(telescope) = self.core.cur_devices.telescope() else {
             self.info_widgets.l_pos.set_label("---");
             return;
         };

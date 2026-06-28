@@ -1036,7 +1036,7 @@ impl DarksLibraryUI {
 
     fn show_info(&self) {
         let ui_options = self.ui_options.borrow();
-        let Some(camera) = self.core.camera() else { return; };
+        let Some(camera) = self.core.cur_devices.camera() else { return; };
         let options = self.core.options().read().unwrap();
 
         let defect_pixels_program = ui_options.defect_pixels.create_program(&options.cam, &camera);
@@ -1075,7 +1075,7 @@ impl DarksLibraryUI {
 
     fn start(&self, mode: DarkLibMode) {
         exec_and_show_error(Some(&self.window), || {
-            let camera = self.core.camera_or_err()?;
+            let camera = self.core.cur_devices.camera_or_err()?;
 
             self.get_options();
             self.save_options();

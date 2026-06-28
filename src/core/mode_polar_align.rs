@@ -361,8 +361,8 @@ impl PolarAlignMode {
     }
 
     pub fn new(core: &Core) -> eyre::Result<Self> {
-        let camera = core.camera_or_err()?;
-        let telescope = core.telescope_or_err()?;
+        let camera = core.cur_devices.camera_or_err()?;
+        let telescope = core.cur_devices.telescope_or_err()?;
         let opts = core.options().read().unwrap();
 
         let mut cam_opts = opts.cam.clone();

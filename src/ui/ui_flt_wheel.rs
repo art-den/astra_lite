@@ -139,7 +139,7 @@ impl FltWheelUi {
         self.widgets.cb_device.connect_active_notify(clone!(@weak self as self_ => move |cb| {
             let Some(new_device_name) = cb.active_id() else { return; };
             self_.excl_caller.exec(|| {
-                self_.core.change_filter_wheel(&new_device_name);
+                self_.core.cur_devices.change_filter_wheel(&new_device_name);
             });
         }));
 
@@ -147,7 +147,7 @@ impl FltWheelUi {
             let Some(active) = cb.active() else { return; };
             self_.excl_caller.exec(|| {
                 gtk_utils::exec_and_show_error(Some(&self_.window), || {
-                    let filter_wheel = self_.core.filter_wheel_or_err()?;
+                    let filter_wheel = self_.core.cur_devices.filter_wheel_or_err()?;
                     filter_wheel.set_active(active as _)?;
                     Ok(())
                 });
@@ -156,7 +156,7 @@ impl FltWheelUi {
     }
 
     fn update_filters_list_and_select_active(&self) {
-        let Some(filter_wheel) = self.core.filter_wheel() else { return; };
+        let Some(filter_wheel) = self.core.cur_devices.filter_wheel() else { return; };
 
         let Ok((list, active_id)) = filter_wheel.list_and_active() else { return; };
         self.widgets.cb_filter.remove_all();
@@ -206,7 +206,7 @@ impl FltWheelUi {
     }
 
     fn correct_widgets_props(&self) {
-        let Some(filter_wheel) = self.core.filter_wheel() else {
+        let Some(filter_wheel) = self.core.cur_devices.filter_wheel() else {
             self.widgets.cb_filter.set_sensitive(false);
             return;
         };

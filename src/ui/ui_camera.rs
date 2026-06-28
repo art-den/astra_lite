@@ -560,7 +560,7 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let Some(cur_id) = cb.active_id() else { return; };
                 self_.excl.exec(|| {
-                    self_.core.change_camera(&cur_id);
+                    self_.core.cur_devices.change_camera(&cur_id);
                 });
             })
         );
@@ -1001,7 +1001,7 @@ impl CameraUi {
     fn correct_widgets_props_impl(&self) {
         let widgets = &self.widgets;
 
-        let Some(camera) = self.core.camera() else {
+        let Some(camera) = self.core.cur_devices.camera() else {
             widgets.common.bx_take_shot.set_sensitive(false);
             widgets.ctrl.grid.set_sensitive(false);
             widgets.frame.grid.set_sensitive(false);
@@ -1217,7 +1217,7 @@ impl CameraUi {
     }
 
     fn init_fn_utils(&self) {
-        let Some(camera) = self.core.camera() else { return; };
+        let Some(camera) = self.core.cur_devices.camera() else { return; };
         let mut fn_utils = self.fn_utils.borrow_mut();
         fn_utils.init(&(camera.clone() as Arc<_>));
     }
@@ -1293,7 +1293,7 @@ impl CameraUi {
         let last_bin = cb_bin.active_id();
         cb_bin.remove_all();
 
-        let Some(camera) = self.core.camera() else { return; };
+        let Some(camera) = self.core.cur_devices.camera() else { return; };
         let Ok((max_width, max_height)) = camera.ccd_size() else { return; };
         let Ok((max_hor_bin, max_vert_bin)) = camera.max_binning() else { return; };
         let max_bin = usize::min(max_hor_bin, max_vert_bin);
@@ -1333,7 +1333,7 @@ impl CameraUi {
             let cb = &self.widgets.ctrl.cb_heater;
             let last_value = cb.active_id();
             cb.remove_all();
-            let Some(camera) = self.core.camera() else { return Ok(()); };
+            let Some(camera) = self.core.cur_devices.camera() else { return Ok(()); };
 
             if !camera.is_heater_supported()? { return Ok(()); }
             let items = camera.heater_ctrl_list()?;
@@ -1363,7 +1363,7 @@ impl CameraUi {
             let last_value = cb.active_id();
             cb.remove_all();
 
-            let Some(camera) = self.core.camera() else { return Ok(()); };
+            let Some(camera) = self.core.cur_devices.camera() else { return Ok(()); };
             if !camera.is_conversion_gain_supported()? { return Ok(()) }
             let Ok(items) = camera.conversion_gain_list() else { return Ok(()); };
             for (id, label) in items {
@@ -1424,7 +1424,9 @@ impl CameraUi {
     }
 
     fn handler_live_view_changed(&self) {
-        let camera_active = self.core.camera().and_then(|c| c.is_active().ok()).unwrap_or(false);
+        let camera_active = self.core.cur_devices.camera()
+            .and_then(|c| c.is_active().ok())
+            .unwrap_or(false);
         if !camera_active {
             return;
         }
@@ -1499,7 +1501,7 @@ impl CameraUi {
             return;
         };
         if cur_exposure < 1.0 { return; };
-        let Some(camera) = self.core.camera() else { return; };
+        let Some(camera) = self.core.cur_devices.camera() else { return; };
         let Some(remaining_time) = camera.remaining_time() else { return; };
         let progress = ((cur_exposure - remaining_time) / cur_exposure).clamp(0.0, 1.0);
         let text_to_show = format!("{:.0} / {:.0}", cur_exposure - remaining_time, cur_exposure);

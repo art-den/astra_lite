@@ -314,13 +314,13 @@ impl FocuserUi {
         self.widgets.cb_list.connect_active_notify(clone!(@weak self as self_ => move |cb| {
             let Some(new_device_name) = cb.active_id() else { return; };
             self_.excl.exec(|| {
-                self_.core.change_focuser(&new_device_name);
+                self_.core.cur_devices.change_focuser(&new_device_name);
             });
         }));
 
         self.widgets.spb_val.connect_value_changed(clone!(@weak self as self_ => move |sb| {
             self_.excl.exec(|| {
-                let Some(focuser) = self_.core.focuser() else { return; };
+                let Some(focuser) = self_.core.cur_devices.focuser() else { return; };
                 exec_and_show_error(Some(&self_.window), || {
                     focuser.set_abs_position(sb.value())?;
                     Ok(())
@@ -389,7 +389,7 @@ impl FocuserUi {
         let focusing = mode_type == ModeType::Focusing;
         let can_change_mode = waiting || live_view || single_shot;
 
-        let device_enabled = self.core.focuser()
+        let device_enabled = self.core.cur_devices.focuser()
             .and_then(|f| f.is_active().ok())
             .unwrap_or(false);
 
@@ -477,7 +477,7 @@ impl FocuserUi {
 
     fn show_cur_focuser_value(&self, value: Option<i32>, force_configure_widget: bool) {
         let mut ok = false;
-        if let Some(focuser) = self.core.focuser() {
+        if let Some(focuser) = self.core.cur_devices.focuser() {
             let abs_position = value.unwrap_or_else(|| focuser.abs_position().unwrap_or(0.0) as i32 );
             if force_configure_widget || self.widgets.spb_val.value() == 0.0 {
                 if let Ok(range) = focuser.abs_position_range() {
@@ -538,7 +538,7 @@ impl FocuserUi {
         let temperature = value_x10
             .map(|v| v as f64 / 10.0)
             .unwrap_or_else(|| {
-                self.core.focuser()
+                self.core.cur_devices.focuser()
                     .and_then(|f| f.temperature().ok())
                     .unwrap_or(f64::NAN)
             });
@@ -665,7 +665,7 @@ impl FocuserUi {
     fn update_focuser_value(&self, offset: i32) {
         self.excl.exec(|| {
             exec_and_show_error(Some(&self.window), || {
-                let Some(focuser) = self.core.focuser() else { return Ok(()); };
+                let Some(focuser) = self.core.cur_devices.focuser() else { return Ok(()); };
                 let mut value = focuser.abs_position()?;
                 let range = focuser.abs_position_range()?;
                 value += offset as f64;
@@ -682,7 +682,7 @@ impl FocuserUi {
 
     fn show_info(&self) {
         let mut info_shown = false;
-        if let Some(focuser) = self.core.focuser() {
+        if let Some(focuser) = self.core.cur_devices.focuser() {
             let focuser_state = focuser.state().ok();
             enum InfoState { Work, Err }
 

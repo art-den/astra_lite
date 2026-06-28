@@ -176,8 +176,8 @@ impl PlateSolveUi {
     }
 
     fn correct_widgets_props(&self) {
-        let camera = self.core.camera();
-        let mount = self.core.telescope();
+        let camera = self.core.cur_devices.camera();
+        let mount = self.core.cur_devices.telescope();
 
         let cam_active = camera
             .as_ref()

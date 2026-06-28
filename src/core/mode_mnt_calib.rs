@@ -88,8 +88,8 @@ impl MountCalibrMode {
     ) -> eyre::Result<Self> {
         let opts = core.options().read().unwrap();
 
-        let camera = core.camera_or_err()?;
-        let telescope = core.telescope_or_err()?;
+        let camera = core.cur_devices.camera_or_err()?;
+        let telescope = core.cur_devices.telescope_or_err()?;
 
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;

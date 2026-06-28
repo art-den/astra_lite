@@ -186,8 +186,8 @@ impl PolarAlignUi {
     }
 
     fn correct_widgets_props(&self) {
-        let camera = self.core.camera();
-        let mount = self.core.telescope();
+        let camera = self.core.cur_devices.camera();
+        let mount = self.core.cur_devices.telescope();
         let cam_active = camera.and_then(|c| c.is_active().ok()).unwrap_or(false);
         let mnt_active = mount.and_then(|c| c.is_active().ok()).unwrap_or(false);
 
@@ -240,7 +240,7 @@ impl PolarAlignUi {
     }
 
     fn update_mount_speed_list(&self) {
-        if let Some(mount) = self.core.telescope() {
+        if let Some(mount) = self.core.cur_devices.telescope() {
             let list = mount.slew_speed_list().unwrap_or_default();
             self.widgets.cbx_speed.remove_all();
             if !list.is_empty() {

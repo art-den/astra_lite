@@ -153,7 +153,7 @@ pub struct TackingPicturesMode {
 
 impl TackingPicturesMode {
     pub fn new(cam_mode: CameraMode, core: &Core) -> eyre::Result<Self> {
-        let camera = core.camera_or_err()?;
+        let camera = core.cur_devices.camera_or_err()?;
 
         let hal = core.hal();
         let options = core.options();
