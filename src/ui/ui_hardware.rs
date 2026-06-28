@@ -12,10 +12,7 @@ use itertools::Itertools;
 use chrono::prelude::*;
 use macros::FromBuilder;
 use crate::{
-    core::{core::Core, events::Event},
-    guiding::{external_guider::ExtGuiderType, phd2},
-    hal::{HalImpl, HalState, events::HalEvent, indi::{self, sexagesimal_to_value, value_to_sexagesimal}},
-    options::*,
+    core::{core::Core, events::Event}, guiding::{external_guider::ExtGuiderType, phd2}, hal::{DeviceType, HalImpl, HalState, events::HalEvent, indi::{self, sexagesimal_to_value, value_to_sexagesimal}}, options::*,
 };
 use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
 
@@ -983,48 +980,41 @@ impl HardwareUi {
 
     fn handler_action_get_site_from_devices(self: &Rc<Self>) {
         exec_and_show_error(Some(&self.window), || {
-            let indi = self.core.hal.indi_impl().indi();
-            if indi.state() != indi::ConnState::Connected {
-                eyre::bail!("INDI is not connected!");
-            }
-            let devices = indi.get_devices_list_by_interface(
-                indi::DriverInterface::GPS |
-                indi::DriverInterface::TELESCOPE
-            );
+            let devices = self.core.hal.devices(DeviceType::TELESCOPE)?;
 
             let result: Vec<_> = devices
                 .iter()
-                .filter_map(|dev|
-                    indi.get_geo_lat_long_elev(&dev.name)
-                        .ok()
-                        .map(|(lat,long,_)| (dev, lat, long))
-                )
-                .filter(|(_, lat,long)| *lat != 0.0 && *long != 0.0)
+                .filter_map(|dev| {
+                    let telescope = self.core.hal.telescope(&dev.id).ok()?;
+                    let site = telescope.site().ok()?;
+                    Some((telescope, site))
+                })
+                .filter(|(_, site)| site.latitude != 0.0 && site.longitude != 0.0)
                 .collect();
 
             if result.is_empty() {
-                eyre::bail!("No GPS or geographic data found!");
+                eyre::bail!("No geographic data found in connected devices!");
             }
 
             if result.len() == 1 {
-                let (_, latitude, longitude) = result[0];
-                self.widgets.site.e_lat.set_text(&indi::value_to_sexagesimal(latitude, true, 6));
-                self.widgets.site.e_long.set_text(&indi::value_to_sexagesimal(longitude, true, 6));
+                let (_, first_site) = &result[0];
+                self.widgets.site.e_lat.set_text(&indi::value_to_sexagesimal(first_site.latitude, true, 6));
+                self.widgets.site.e_long.set_text(&indi::value_to_sexagesimal(first_site.longitude, true, 6));
             } else {
                 let menu = gtk::Menu::new();
-                for (dev, lat, long) in result {
+                for (telescope, site) in result {
                     let mi_text = format!(
                         "{} {} ({})",
-                        indi::value_to_sexagesimal(lat, true, 6),
-                        indi::value_to_sexagesimal(long, true, 6),
-                        dev.name
+                        indi::value_to_sexagesimal(site.latitude, true, 6),
+                        indi::value_to_sexagesimal(site.longitude, true, 6),
+                        telescope.name()
                     );
                     let menu_item = gtk::MenuItem::builder().label(mi_text).build();
                     menu.append(&menu_item);
                     menu_item.connect_activate(
                         clone!(@weak self as self_ => move |_| {
-                            self_.widgets.site.e_lat.set_text(&indi::value_to_sexagesimal(lat, true, 6));
-                            self_.widgets.site.e_long.set_text(&indi::value_to_sexagesimal(long, true, 6));
+                            self_.widgets.site.e_lat.set_text(&indi::value_to_sexagesimal(site.latitude, true, 6));
+                            self_.widgets.site.e_long.set_text(&indi::value_to_sexagesimal(site.longitude, true, 6));
                         })
                     );
                 }

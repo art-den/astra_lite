@@ -1060,6 +1060,11 @@ fn telescope_state(
 }
 
 impl Telescope for IndiDevice {
+    fn site(&self) -> eyre::Result<TelescopeSite> {
+        let (latitude, longitude, elevation) = self.indi.get_geo_lat_long_elev(&self.name)?;
+        Ok(TelescopeSite { latitude, longitude, elevation })
+    }
+
     fn state(&self) -> eyre::Result<TelescopeState> {
         telescope_state(&self.indi, &self.name)
     }

@@ -320,8 +320,15 @@ pub enum TelescopeState {
     Moved,
 }
 
+pub struct TelescopeSite {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub elevation: f64,
+}
+
 pub trait Telescope : Device {
     fn state(&self) -> eyre::Result<TelescopeState>;
+    fn site(&self) -> eyre::Result<TelescopeSite>;
 
     fn is_abort_motion_supported(&self) -> bool;
     fn abort_motion(&self) -> eyre::Result<()>;
