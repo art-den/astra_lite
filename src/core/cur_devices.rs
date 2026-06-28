@@ -101,6 +101,7 @@ impl CurDevices {
         let mut data = self.data.lock().unwrap();
         data.camera = self.hal.camera(new_camera_id).ok();
         drop(data);
+
         self.events.send(Event::CameraDeviceChanged {
             prev_camera_id: prev_camera_id.to_string(),
             new_camera_id:  new_camera_id.to_string(),
@@ -129,6 +130,7 @@ impl CurDevices {
         let mut data = self.data.lock().unwrap();
         data.telescope = self.hal.telescope(new_telescope_id).ok();
         drop(data);
+
         self.events.send(
             Event::MountDeviceChanged(new_telescope_id.to_string())
         );
@@ -152,6 +154,11 @@ impl CurDevices {
         if options.focuser.device == new_focuser_id { return; }
         options.focuser.device = new_focuser_id.to_string();
         drop(options);
+
+        let mut data = self.data.lock().unwrap();
+        data.focuser = self.hal.focuser(new_focuser_id).ok();
+        drop(data);
+
         self.events.send(
             Event::FocuserDeviceChanged(new_focuser_id.to_string())
         );
@@ -180,6 +187,8 @@ impl CurDevices {
         data.filter_wheel = self.hal.filter_wheel(new_filter_wheel_id).ok();
         drop(data);
 
-        self.events.send(Event::FltWheelDeviceChanged(new_filter_wheel_id.to_string()));
+        self.events.send(
+            Event::FltWheelDeviceChanged(new_filter_wheel_id.to_string())
+        );
     }
 }
