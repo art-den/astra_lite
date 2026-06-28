@@ -86,7 +86,7 @@ impl MountCalibrMode {
         core:      &Core,
         next_mode: Option<Box<dyn Mode + Sync + Send>>,
     ) -> eyre::Result<Self> {
-        let opts = core.options().read().unwrap();
+        let opts = core.options.read().unwrap();
 
         let camera = core.cur_devices.camera_or_err()?;
         let telescope = core.cur_devices.telescope_or_err()?;

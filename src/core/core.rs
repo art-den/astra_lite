@@ -1,11 +1,15 @@
 use std::{
-    any::Any, fmt::Display, path::Path, sync::{
-        Arc, Mutex, RwLock, RwLockReadGuard, atomic::AtomicBool
-    }
+    any::Any, fmt::Display, path::Path,
+    sync::{Arc, Mutex, RwLock, RwLockReadGuard, atomic::AtomicBool},
 };
 
 use crate::{
-    core::{cam_ctrl::*, cur_devices::CurDevices}, guiding::external_guider::*, hal::{events::HalEvent, *}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*,
+    core::{cam_ctrl::*, cur_devices::CurDevices},
+    guiding::external_guider::*,
+    hal::{events::HalEvent, *},
+    image::io::FromFileCameraShot,
+    options::*,
+    sky_math::math::EqCoord, utils::timer::*,
 };
 
 use super::{
@@ -96,18 +100,20 @@ impl ModeData {
 }
 
 pub struct Core {
-    hal:                Arc<Hal>,
     pub cur_devices:    Arc<CurDevices>,
-    options:            Arc<RwLock<Options>>,
+    pub hal:            Arc<Hal>,
+    pub events:         Arc<EventHandlers>,
+    pub options:        Arc<RwLock<Options>>,
+    pub cur_frame:      Arc<ResultImage>,
+    pub live_stacking:  Arc<LiveStackingData>,
+    pub ext_guider:     Arc<ExternalGuiderCtrl>,
+
     mode:               RwLock<ModeData>,
-    events:             Arc<EventHandlers>,
-    cur_frame:          Arc<ResultImage>,
     calibr_data:        Arc<Mutex<CalibrData>>,
-    live_stacking:      Arc<LiveStackingData>,
     timer:              Arc<Timer>,
     img_proc_stop_flag: Mutex<Arc<AtomicBool>>, // stop flag for last command
     frame_processing:   Arc<FrameProcessing>,
-    ext_guider:         Arc<ExternalGuiderCtrl>,
+
 }
 
 impl Drop for Core {
@@ -147,18 +153,6 @@ impl Core {
         this
     }
 
-    pub fn hal(&self) -> &Arc<Hal> {
-        &self.hal
-    }
-
-    pub fn options(&self) -> &Arc<RwLock<Options>> {
-        &self.options
-    }
-
-    pub fn events(&self) -> &Arc<EventHandlers> {
-        &self.events
-    }
-
     pub fn stop(self: &Arc<Self>) {
         self.timer.clear();
         self.ext_guider.disconnect_events_handler();
@@ -183,10 +177,6 @@ impl Core {
         log::info!("Done!");
     }
 
-    pub fn ext_giuder(&self) -> &Arc<ExternalGuiderCtrl> {
-        &self.ext_guider
-    }
-
     fn set_ext_guider_events_handler(self: &Arc<Self>) {
         let self_ = Arc::clone(self);
         self.ext_guider.set_events_handler(Box::new(move |event| {
@@ -209,14 +199,6 @@ impl Core {
 
     pub fn mode(&self) -> RwLockReadGuard<'_, ModeData> {
         self.mode.read().unwrap()
-    }
-
-    pub fn cur_frame(&self) -> &Arc<ResultImage> {
-        &self.cur_frame
-    }
-
-    pub fn live_stacking(&self) -> &Arc<LiveStackingData> {
-        &self.live_stacking
     }
 
     fn process_error(
@@ -275,7 +257,7 @@ impl Core {
             HalEvent::CameraIsReadyForCooling(device_id) |
             HalEvent::CameraIsReadyForCtrlFan(device_id) |
             HalEvent::CameraIsReadyForCtrlHeater(device_id) => {
-                let options = self.options().read().unwrap();
+                let options = self.options.read().unwrap();
                 if options.cam.device_id == **device_id {
                     let Ok(camera) = self.hal.camera(&options.cam.device_id) else { return Ok(()); };
                     match &event {
@@ -295,7 +277,7 @@ impl Core {
                 self.apply_notify_result(res, &mut mode)?;
             }
             HalEvent::CameraNeedRestartExposure(camera_id) => {
-                let options = self.options().read().unwrap();
+                let options = self.options.read().unwrap();
                 if options.cam.device_id == **camera_id {
                     let Ok(camera) = self.hal.camera(&options.cam.device_id) else { return Ok(()); };
                     let mut mode = self.mode.write().unwrap();
@@ -451,7 +433,7 @@ impl Core {
 
     fn init_focal_len_for_cameras(self: &Arc<Self>) {
         let options = self.options.read().unwrap();
-        let res = set_focal_len_for_cameras(self.hal(), &options);
+        let res = set_focal_len_for_cameras(&self.hal, &options);
         self.process_error(res, "set_focal_len_for_cameras");
     }
 

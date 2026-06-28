@@ -204,31 +204,31 @@ impl UiModule for MountUi {
                 }
             }
             HalEvent::TelescopeSlewRateListReady(device_id) => {
-                let option = self.core.options().read().unwrap();
+                let option = self.core.options.read().unwrap();
                 if option.mount.device == **device_id {
                     self.delayed_actions.schedule(DelayedAction::FillMountSpdList);
                 }
             }
             HalEvent::TelescopeStateChanged { device_id, state } => {
-                let option = self.core.options().read().unwrap();
+                let option = self.core.options.read().unwrap();
                 if option.mount.device == **device_id {
                     self.show_info(Some(*state));
                 }
             }
             HalEvent::TelescopeTrackingChanged { device_id, tracking } => {
-                let option = self.core.options().read().unwrap();
+                let option = self.core.options.read().unwrap();
                 if option.mount.device == **device_id {
                     self.show_mount_tracking_state(*tracking);
                 }
             }
             HalEvent::TelescopeParked(device_id) => {
-                let option = self.core.options().read().unwrap();
+                let option = self.core.options.read().unwrap();
                 if option.mount.device == **device_id {
                     self.show_mount_parked_state(true);
                 }
             }
             HalEvent::TelescopeUnparked(device_id) => {
-                let option = self.core.options().read().unwrap();
+                let option = self.core.options.read().unwrap();
                 if option.mount.device == **device_id {
                     self.show_mount_parked_state(false);
                 }
@@ -389,11 +389,11 @@ impl MountUi {
     }
 
     fn fill_devices_list(&self) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         let cur_mount = options.mount.device.clone();
         drop(options);
 
-        let Ok(mounts) = self.core.hal().devices(DeviceType::TELESCOPE) else {
+        let Ok(mounts) = self.core.hal.devices(DeviceType::TELESCOPE) else {
             return;
         };
 
@@ -407,7 +407,7 @@ impl MountUi {
             &self.widgets.cb_list,
             if !cur_mount.is_empty() { Some(cur_mount.as_str()) } else { None },
             |id| {
-                let Ok(mut options) = self.core.options().try_write() else { return; };
+                let Ok(mut options) = self.core.options.try_write() else { return; };
                 options.mount.device = id.to_string();
             }
         );
@@ -415,7 +415,7 @@ impl MountUi {
 
     fn fill_mount_speed_list_widget(&self) {
         let Some(telescope) = self.core.cur_devices.telescope() else { return; };
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
 
         exec_and_show_error(Some(&self.window), || {
             let list = telescope.slew_speed_list()?;

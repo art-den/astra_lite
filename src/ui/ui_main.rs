@@ -30,8 +30,6 @@ pub fn init_ui(
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 
-    let options = core.options();
-
     let builder = gtk::Builder::from_string(include_str!(r"resources/main.ui"));
     let widgets = Widgets::from_builder(&builder);
 
@@ -51,7 +49,7 @@ pub fn init_ui(
         widgets,
         logs_dir:       logs_dir.to_path_buf(),
         core:           Arc::clone(core),
-        options:        Arc::clone(options),
+        options:        Arc::clone(&core.options),
         modules:        RefCell::new(UiModules::new()),
         ui_options:     RefCell::new(ui_options),
         progress:       RefCell::new(None),
@@ -81,7 +79,7 @@ pub fn init_ui(
     let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, core);
-    let debug         = super::ui_debug        ::init_ui(options);
+    let debug         = super::ui_debug        ::init_ui(&core.options);
 
     let mut modules = main_ui.modules.borrow_mut();
     modules.add(hardware);
@@ -323,7 +321,7 @@ impl MainUi {
 
     fn connect_state_events(self: &Rc<Self>) {
         let (sender, receiver) = async_channel::unbounded();
-        self.core.events().connect(move |event| {
+        self.core.events.connect(move |event| {
             sender.send_blocking(event).unwrap();
         });
 
@@ -388,14 +386,14 @@ impl MainUi {
         // HAL
 
         let sender = main_thread_sender.clone();
-        self.core.hal().connect_event_handler(move |event| {
+        self.core.hal.connect_event_handler(move |event| {
             _ = sender.send_blocking(MainThreadEvent::Hal(event));
         });
 
         // Core
 
         let sender = main_thread_sender.clone();
-        self.core.events().connect(move |event| {
+        self.core.events.connect(move |event| {
             _ = sender.send_blocking(MainThreadEvent::Core(event));
         });
 

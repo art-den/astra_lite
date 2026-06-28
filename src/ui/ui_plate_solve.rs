@@ -112,7 +112,7 @@ impl UiModule for PlateSolveUi {
     }
 
     fn on_app_closing(&self) {
-        let mut options = self.core.options().write().unwrap();
+        let mut options = self.core.options.write().unwrap();
         let cur_cam_device = options.cam.device_id.to_string();
         self.store_options_for_camera(&cur_cam_device, &mut options);
         drop(options);
@@ -206,7 +206,7 @@ impl PlateSolveUi {
     }
 
     fn handler_camera_changed(&self, from: &str, to: &str) {
-        let mut options = self.core.options().write().unwrap();
+        let mut options = self.core.options.write().unwrap();
         self.get_options(&mut options);
         if !from.is_empty() {
             self.store_options_for_camera(from, &mut options);

@@ -184,7 +184,7 @@ impl UiModule for FocuserUi {
     }
 
     fn on_app_closing(&self) {
-        let mut options = self.core.options().write().unwrap();
+        let mut options = self.core.options.write().unwrap();
         let cur_cam_device = options.cam.device_id.clone();
         self.store_options_for_camera(&cur_cam_device, &mut options);
         drop(options);
@@ -250,13 +250,13 @@ impl UiModule for FocuserUi {
                 }
             }
             HalEvent::FocuserStateChanged { device_id, .. } => {
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                 if **device_id == options.focuser.device {
                     self.show_info();
                 }
             }
             HalEvent::FocuserAbsValueCanBeControlled { device_id, abs_value } => {
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                 if **device_id == options.focuser.device {
                     self.delayed_actions.schedule(DelayedAction::InitAndShowFocuserValue(
                         Some(*abs_value as i32)
@@ -264,7 +264,7 @@ impl UiModule for FocuserUi {
                 }
             }
             HalEvent::FocuserAbsValueChanged { device_id, abs_value } => {
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                 if **device_id == options.focuser.device {
                     self.delayed_actions.schedule(DelayedAction::ShowFocuserValue(
                         Some(*abs_value as i32)
@@ -272,7 +272,7 @@ impl UiModule for FocuserUi {
                 }
             }
             HalEvent::FocuserTemperatureChanged { device_id, temperature } => {
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                 if **device_id == options.focuser.device {
                     self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature(
                         Some((10.0 * *temperature) as i32)
@@ -378,7 +378,7 @@ impl FocuserUi {
         let mode_type = mode.active.get_type();
         drop(mode);
 
-        if let Ok(camera) = self.core.hal().camera(cam_device) {
+        if let Ok(camera) = self.core.hal.camera(cam_device) {
             let exp_range = camera.exposure_range().ok();
             correct_spinbutton_by_range(&self.widgets.spb_exp, exp_range, 1, Some(1.0));
         }
@@ -411,14 +411,14 @@ impl FocuserUi {
     }
 
     fn correct_widgets_props(&self) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         let cam_device = options.cam.device_id.clone();
         drop(options);
         self.correct_widgets_props_impl(&cam_device);
     }
 
     fn handler_camera_changed(&self, prev_device_id: &str, new_device_id: &str) {
-        let mut options = self.core.options().write().unwrap();
+        let mut options = self.core.options.write().unwrap();
         self.get_options(&mut options);
         if !prev_device_id.is_empty() {
             self.store_options_for_camera(prev_device_id, &mut options);
@@ -454,11 +454,11 @@ impl FocuserUi {
     }
 
     fn update_devices_list(&self) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         let cur_focuser = options.focuser.device.clone();
         drop(options);
 
-        let Ok(focusers) = self.core.hal().devices(DeviceType::FOCUSER) else { return; };
+        let Ok(focusers) = self.core.hal.devices(DeviceType::FOCUSER) else { return; };
         let focusers_ids_and_names = focusers
             .into_iter()
             .map(|dev| (dev.id, dev.name))
@@ -469,7 +469,7 @@ impl FocuserUi {
             &self.widgets.cb_list,
             if !cur_focuser.is_empty() { Some(cur_focuser.as_str()) } else { None },
             |id| {
-                let mut options = self.core.options().write().unwrap();
+                let mut options = self.core.options.write().unwrap();
                 options.focuser.device = id.to_string();
             }
         );

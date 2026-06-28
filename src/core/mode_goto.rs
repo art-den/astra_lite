@@ -71,7 +71,7 @@ impl GotoMode {
         destination: GotoDestination,
         config:      GotoConfig
     ) -> eyre::Result<Self> {
-        let opts = core.options().read().unwrap();
+        let opts = core.options.read().unwrap();
         let telescope = core.cur_devices.telescope_or_err()?;
         let (camera, cam_opts, plate_solver) = if config == GotoConfig::GotoPlateSolveAndCorrect {
             let camera = core.cur_devices.camera_or_err()?;
@@ -95,9 +95,9 @@ impl GotoMode {
             state:        State::None,
             eq_coord:     EqCoord::default(),
             ps_opts:      opts.plate_solver.clone(),
-            cur_frame:    Arc::clone(core.cur_frame()),
-            options:      Arc::clone(core.options()),
-            subscribers:  Arc::clone(core.events()),
+            cur_frame:    Arc::clone(&core.cur_frame),
+            options:      Arc::clone(&core.options),
+            subscribers:  Arc::clone(&core.events),
             unpark_ms:    0,
             goto_ms:      0,
             goto_ok_ms:   0,

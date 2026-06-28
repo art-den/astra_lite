@@ -94,7 +94,7 @@ fn app_activate_handler(app: &gtk::Application) {
 
     // Register panic handler
 
-    let indi_for_panic = Arc::clone(core.hal().indi_impl().indi());
+    let indi_for_panic = Arc::clone(core.hal.indi_impl().indi());
     if cfg!(not(debug_assertions)) {
         std::panic::set_hook({
             let logs_dir = logs_dir.clone();
@@ -115,7 +115,7 @@ fn app_activate_handler(app: &gtk::Application) {
 
     exec_and_show_error(None::<&gtk::Window>, || {
         log::info!("Loading options...");
-        let mut options = core.options().write().unwrap();
+        let mut options = core.options.write().unwrap();
         load_json_from_config_file::<Options>(&mut options, "options")?;
 
         log::info!("Check options...");
@@ -144,7 +144,7 @@ fn app_shutdown_handler(_app: &gtk::Application, core: &Arc<Core>) {
     // Save options
 
     log::info!("Saving options...");
-    let options = core.options().read().unwrap();
+    let options = core.options.read().unwrap();
     _ = save_json_to_config::<Options>(&options, "options");
     drop(options);
     log::info!("Options saved");

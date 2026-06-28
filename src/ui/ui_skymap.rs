@@ -608,7 +608,7 @@ impl MapUi {
     }
 
     fn create_observer(&self) -> Observer {
-        let sky_map_options = self.core.options().read().unwrap().site.clone();
+        let sky_map_options = self.core.options.read().unwrap().site.clone();
         Observer {
             latitude: degree_to_radian(sky_map_options.latitude),
             longitude: degree_to_radian(sky_map_options.longitude),
@@ -648,7 +648,7 @@ impl MapUi {
                 || -> Option<CameraFrame> {
                     let camera = self.core.cur_devices.camera()?;
                     if !camera.is_active().unwrap_or(false) { return None; }
-                    let options = self.core.options().read().unwrap();
+                    let options = self.core.options.read().unwrap();
                     let focal_len = options.telescope.real_focal_length();
                     if focal_len <= 0.1 { return None; }
                     let (sensor_width, sensor_height) = camera.ccd_size().ok()?;

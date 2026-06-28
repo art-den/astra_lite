@@ -377,7 +377,7 @@ impl UiModule for CameraUi {
 
         // Stores current camera options for current camera
 
-        let mut options = self.core.options().write().unwrap();
+        let mut options = self.core.options.write().unwrap();
         let cam_id = options.cam.device_id.clone();
         self.store_options_for_camera(&cam_id, &mut options);
         drop(options);
@@ -389,7 +389,7 @@ impl UiModule for CameraUi {
                 self.correct_widgets_props();
             }
             Event::ModeContinued => {
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                 self.show_frame_options(&options);
             }
             Event::FrameProcessing(result) => {
@@ -404,7 +404,7 @@ impl UiModule for CameraUi {
                         self.widgets.common.cb_cam_list.set_active_id(Some(new_camera_id));
                     });
                 }
-                let mut options = self.core.options().write().unwrap();
+                let mut options = self.core.options.write().unwrap();
                 self.handler_camera_changed(prev_camera_id, new_camera_id, &mut options);
                 self.update_resolution_list_impl(&options);
                 self.fill_heater_items_list_impl(&options);
@@ -422,13 +422,13 @@ impl UiModule for CameraUi {
                 self.process_hal_state_event(state);
             }
             HalEvent::DeviceConnected(evt) => {
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                 if evt.id == options.cam.device_id {
                     self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
                 }
             }
             HalEvent::CameraIsReadyToWork(camera_id) => {
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                  self.delayed_actions.schedule(DelayedAction::UpdateCamList);
                 if options.cam.device_id == **camera_id {
                     self.delayed_actions.schedule(DelayedAction::UpdateResolutionList);
@@ -441,7 +441,7 @@ impl UiModule for CameraUi {
                 }
             }
             HalEvent::DeviceDisconnected(evt) => {
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                 if evt.id == options.cam.device_id {
                     drop(options);
                     self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
@@ -459,25 +459,25 @@ impl UiModule for CameraUi {
             HalEvent::CameraCoolerCanBeControlled(camera_id) |
             HalEvent::CameraOffsetCanBeControlled(camera_id) |
             HalEvent::CameraGainCanBeControlled(camera_id) => {
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                 if options.cam.device_id == **camera_id {
                     self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
                 }
             }
             HalEvent::CameraHeaterCanBeControlled(camera_id) => {
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                 if options.cam.device_id == **camera_id {
                     self.delayed_actions.schedule(DelayedAction::FillHeaterItems);
                 }
             }
             HalEvent::CameraConvGainCanBeControlled(camera_id) => {
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                 if options.cam.device_id == **camera_id {
                     self.delayed_actions.schedule(DelayedAction::FillConvGainItems);
                 }
             }
             HalEvent::CameraCcdSizeChanged(camera_id) => {
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                 if options.cam.device_id == **camera_id {
                     self.delayed_actions.schedule(DelayedAction::UpdateResolutionList);
                 }
@@ -567,7 +567,7 @@ impl CameraUi {
 
         self.widgets.common.chb_live_view.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.cam.live_view = chb.is_active();
                 drop(options);
                 self_.handler_live_view_changed();
@@ -576,70 +576,70 @@ impl CameraUi {
 
         self.widgets.ctrl.chb_cooler.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.cam.ctrl.enable_cooler = chb.is_active();
                 self_.show_calibr_file_for_frame(&options);
                 drop(options);
                 self_.correct_widgets_props();
-                self_.core.events().send(Event::CameraCoolingOptionsChanged);
+                self_.core.events.send(Event::CameraCoolingOptionsChanged);
             })
         );
 
         self.widgets.ctrl.spb_temp.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.cam.ctrl.temperature = spb.value();
                 self_.show_calibr_file_for_frame(&options);
                 drop(options);
                 self_.correct_widgets_props();
-                self_.core.events().send(Event::CameraCoolingOptionsChanged);
+                self_.core.events.send(Event::CameraCoolingOptionsChanged);
             })
         );
 
         self.widgets.ctrl.cb_heater.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.cam.ctrl.heater_str = cb.active_id().map(|id| id.to_string());
                 drop(options);
                 self_.correct_widgets_props();
-                self_.core.events().send(Event::CameraFanOptionsChanged);
+                self_.core.events.send(Event::CameraFanOptionsChanged);
             })
         );
 
         self.widgets.ctrl.chb_fan.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.cam.ctrl.enable_fan = chb.is_active();
                 drop(options);
                 self_.correct_widgets_props();
-                self_.core.events().send(Event::CameraHeaterOptionsChanged);
+                self_.core.events.send(Event::CameraHeaterOptionsChanged);
             })
         );
 
         self.widgets.ctrl.cb_conv_gain.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.cam.ctrl.conv_gain_str = cb.active_id().map(|id| id.to_string());
             })
         );
 
         self.widgets.ctrl.chb_low_noise.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.cam.ctrl.low_noise = chb.is_active();
             })
         );
 
         self.widgets.ctrl.chb_high_fw.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.cam.ctrl.high_fullwell = chb.is_active();
             })
         );
 
         self.widgets.frame.cb_mode.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 let frame_type = FrameType::from_active_id(cb.active_id().as_deref());
                 options.cam.frame.frame_type = frame_type;
                 self_.widgets.frame.spb_exp.set_value(options.cam.frame.exposure());
@@ -652,7 +652,7 @@ impl CameraUi {
 
         self.widgets.frame.spb_exp.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.cam.frame.set_exposure(sb.value());
                 self_.show_calibr_file_for_frame(&options);
                 drop(options);
@@ -662,7 +662,7 @@ impl CameraUi {
 
         self.widgets.frame.spb_gain.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.cam.frame.gain = sb.value();
                 self_.show_calibr_file_for_frame(&options);
             })
@@ -670,7 +670,7 @@ impl CameraUi {
 
         self.widgets.frame.spb_offset.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.cam.frame.offset = sb.value() as i32;
                 self_.show_calibr_file_for_frame(&options);
             })
@@ -678,7 +678,7 @@ impl CameraUi {
 
         self.widgets.frame.cb_bin.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 let binning = Binning::from_active_id(cb.active_id().as_deref());
                 options.cam.frame.binning = binning;
                 self_.show_calibr_file_for_frame(&options);
@@ -687,7 +687,7 @@ impl CameraUi {
 
         self.widgets.frame.cb_crop.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 let crop = Crop::from_active_id(cb.active_id().as_deref());
                 options.cam.frame.crop = crop;
                 self_.show_calibr_file_for_frame(&options);
@@ -695,7 +695,7 @@ impl CameraUi {
         );
 
         self.widgets.raw.spb_frames_cnt.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.core.options().try_write() else { return; };
+            let Ok(mut options) = self_.core.options.try_write() else { return; };
             options.raw_frames.frame_cnt = sb.value() as usize;
             drop(options);
             self_.show_total_raw_time();
@@ -703,7 +703,7 @@ impl CameraUi {
 
         self.widgets.quality.chb_max_fwhm.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.quality.use_max_fwhm = chb.is_active();
                 drop(options);
                 self_.correct_frame_quality_widgets_props();
@@ -712,14 +712,14 @@ impl CameraUi {
 
         self.widgets.quality.spb_max_fwhm.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.quality.max_fwhm = sb.value() as f32;
             })
         );
 
         self.widgets.quality.chb_max_oval.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.quality.use_max_ovality = chb.is_active();
                 self_.correct_frame_quality_widgets_props();
             })
@@ -727,21 +727,21 @@ impl CameraUi {
 
         self.widgets.quality.spb_max_oval.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.quality.max_ovality = sb.value() as f32;
             })
         );
 
         self.widgets.quality.chb_ignore_3px_stars.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.quality.ignore_3px_stars = chb.is_active();
             })
         );
 
         self.widgets.quality.cbx_stars_sens.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.quality.star_recgn_sens = StarRecognSensivity::from_active_id(
                     cb.active_id().as_deref()
                 )
@@ -750,7 +750,7 @@ impl CameraUi {
 
         self.widgets.quality.chb_max_temp_diff.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.quality.check_ccd_temp = chb.is_active();
                 self_.correct_frame_quality_widgets_props();
             })
@@ -758,14 +758,14 @@ impl CameraUi {
 
         self.widgets.quality.spb_max_temp_diff.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.quality.max_ccd_temp_diff = sb.value();
             })
         );
 
         self.widgets.calibr.chb_dark.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.calibr.dark_frame_en = chb.is_active();
                 self_.show_calibr_file_for_frame(&options);
             })
@@ -773,7 +773,7 @@ impl CameraUi {
 
         self.widgets.calibr.chb_flat.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.calibr.flat_frame_en = chb.is_active();
                 self_.show_calibr_file_for_frame(&options);
             })
@@ -781,7 +781,7 @@ impl CameraUi {
 
         self.widgets.calibr.fch_flat.connect_file_set(
             clone!(@weak self as self_ => move |fch| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.calibr.flat_frame_fname = fch.filename().unwrap_or_default();
                 self_.show_calibr_file_for_frame(&options);
             })
@@ -790,7 +790,7 @@ impl CameraUi {
         self.widgets.calibr.chb_hot_pixels.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 self_.widgets.calibr.l_hot_px_warn.set_visible(chb.is_active());
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.calibr.hot_pixels = chb.is_active();
                 drop(options);
             })
@@ -799,7 +799,7 @@ impl CameraUi {
         self.widgets.live_st.chb_no_tracks.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 self_.widgets.live_st.l_no_tracks.set_visible(chb.is_active());
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.live.remove_tracks = chb.is_active();
                 drop(options);
             })
@@ -973,7 +973,7 @@ impl CameraUi {
                 self.correct_widgets_props();
             }
             DelayedAction::StartLiveView => {
-                let live_view_flag = self.core.options().read().unwrap().cam.live_view;
+                let live_view_flag = self.core.options.read().unwrap().cam.live_view;
                 let mode = self.core.mode().active.get_type();
                 if live_view_flag && mode == ModeType::Waiting {
                     self.start_live_view();
@@ -984,7 +984,7 @@ impl CameraUi {
             }
             DelayedAction::UpdateResolutionList => {
                 self.update_resolution_list();
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                 self.init_fn_utils();
                 self.show_calibr_file_for_frame(&options);
                 drop(options);
@@ -1262,13 +1262,11 @@ impl CameraUi {
     }
 
     fn update_devices_list(&self) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         let cur_cam_device = options.cam.device_id.clone();
         drop(options);
 
-        let hal = self.core.hal();
-
-        let Ok(cameras) = hal.devices(DeviceType::CAMERA) else {
+        let Ok(cameras) = self.core.hal.devices(DeviceType::CAMERA) else {
             return;
         };
 
@@ -1282,7 +1280,7 @@ impl CameraUi {
             &self.widgets.common.cb_cam_list,
             if !cur_cam_device.is_empty() { Some(&cur_cam_device) } else { None },
             |id| {
-                let Ok(mut options) = self.core.options().try_write() else { return; };
+                let Ok(mut options) = self.core.options.try_write() else { return; };
                 options.cam.device_id = id.to_string()
             }
         );
@@ -1319,12 +1317,12 @@ impl CameraUi {
     }
 
     fn update_resolution_list(&self) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         self.update_resolution_list_impl(&options);
     }
 
     fn fill_heater_items_list(&self) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         self.fill_heater_items_list_impl(&options);
     }
 
@@ -1353,7 +1351,7 @@ impl CameraUi {
     }
 
     fn fill_conv_gain_items_list(&self) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         self.fill_conv_gain_items_list_impl(&options);
     }
 
@@ -1406,7 +1404,7 @@ impl CameraUi {
         device_id: &str,
         temparature: f64
     ) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         if options.cam.device_id == device_id {
             self.widgets.info.l_temp_value.set_label(
                 &format!("T: {:.1}°C", temparature)
@@ -1415,7 +1413,7 @@ impl CameraUi {
     }
 
     fn show_coolpwr_value(&self, device_id: &str, pwr: f64) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         if options.cam.device_id == device_id {
             self.widgets.info.l_coolpwr_value.set_label(
                 &format!("Pwr: {:.1}", pwr)
@@ -1430,7 +1428,7 @@ impl CameraUi {
         if !camera_active {
             return;
         }
-        if self.core.options().read().unwrap().cam.live_view {
+        if self.core.options.read().unwrap().cam.live_view {
             self.main_ui.get_all_options();
             self.start_live_view();
         } else {
@@ -1444,7 +1442,7 @@ impl CameraUi {
             *state == HalState::Disconnected;
 
         if disconnect_event {
-            let mut options = self.core.options().write().unwrap();
+            let mut options = self.core.options.write().unwrap();
             let cam_id = options.cam.device_id.clone();
             self.store_options_for_camera(&cam_id, &mut options);
             drop(options);
@@ -1512,7 +1510,7 @@ impl CameraUi {
 
     fn get_short_info(&self, for_live_stacking: bool) -> Vec<(String, String, bool)> {
         let mut result = Vec::new();
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         let total_time = options.cam.frame.exposure() * options.raw_frames.frame_cnt as f64;
         let light_frames = options.cam.frame.frame_type == FrameType::Lights;
 
@@ -1664,7 +1662,7 @@ impl CameraUi {
     }
 
     fn show_total_raw_time(&self) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         self.show_total_raw_time_impl(&options);
     }
 

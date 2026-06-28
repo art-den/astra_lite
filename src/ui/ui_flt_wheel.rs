@@ -111,7 +111,7 @@ impl UiModule for FltWheelUi {
                 }
             }
             HalEvent::FilterWheelSlotChange { device_id, slot } => {
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                 if options.filter_wheel.device == **device_id {
                     drop(options);
                     if let Some(slot) = slot && *slot >= 0 {
@@ -123,7 +123,7 @@ impl UiModule for FltWheelUi {
                 }
             }
             HalEvent::FilterWheelNameChanged(device_id) => {
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                 if options.filter_wheel.device == **device_id {
                     drop(options);
                     self.delayed_actions.schedule(DelayedAction::UpdateFilterList);
@@ -186,11 +186,11 @@ impl FltWheelUi {
     }
 
     fn update_devices_list(&self) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         let cur_focuser = options.filter_wheel.device.clone();
         drop(options);
 
-        let Ok(list) = self.core.hal().devices(DeviceType::FLT_WHELL) else { return; };
+        let Ok(list) = self.core.hal.devices(DeviceType::FLT_WHELL) else { return; };
         let list = list.iter()
             .map(|dev| (dev.id.to_string(), dev.name.to_string()))
             .collect::<Vec<_>>();
@@ -199,7 +199,7 @@ impl FltWheelUi {
             &self.widgets.cb_device,
             if !cur_focuser.is_empty() { Some(cur_focuser.as_str()) } else { None },
             |id| {
-                let mut options = self.core.options().write().unwrap();
+                let mut options = self.core.options.write().unwrap();
                 options.filter_wheel.device = id.to_string();
             }
         );

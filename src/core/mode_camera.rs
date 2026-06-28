@@ -155,9 +155,7 @@ impl TackingPicturesMode {
     pub fn new(cam_mode: CameraMode, core: &Core) -> eyre::Result<Self> {
         let camera = core.cur_devices.camera_or_err()?;
 
-        let hal = core.hal();
-        let options = core.options();
-        let opts = options.read().unwrap();
+        let opts = core.options.read().unwrap();
 
         let progress = match cam_mode {
             CameraMode::SavingRawFrames => {
@@ -172,7 +170,7 @@ impl TackingPicturesMode {
 
         let mut cam_options = opts.cam.clone();
         let qual_options = opts.quality.clone();
-        let mount = hal.telescope(&opts.mount.device).ok();
+        let mount = core.hal.telescope(&opts.mount.device).ok();
 
         match cam_mode {
             CameraMode::LiveStacking =>
@@ -198,15 +196,15 @@ impl TackingPicturesMode {
                 options:        opts.guiding.clone(),
                 dither_exp_sum: 0.0,
                 simple:         None,
-                external:       Some(Arc::clone(core.ext_giuder())),
+                external:       Some(Arc::clone(&core.ext_guider)),
             })
         } else {
             None
         };
 
-        let autofocuser = if working_with_light_frames {
+        let autofocuser = if working_with_light_frames && opts.focuser.is_used() {
             Some(AutoFocuser {
-                device:     hal.focuser(&opts.focuser.device)?,
+                device:     core.cur_devices.focuser().ok_or_else(|| eyre::eyre!("Focuser not found"))?,
                 options:    opts.focuser.clone(),
                 exp_sum:    0.0,
                 start_temp: None,
@@ -217,21 +215,21 @@ impl TackingPicturesMode {
         };
 
         let live_stacking = if cam_mode == CameraMode::LiveStacking {
-            Some(Arc::clone(core.live_stacking()))
+            Some(Arc::clone(&core.live_stacking))
         } else {
             None
         };
 
         if matches!(cam_mode, CameraMode::LiveStacking|CameraMode::SavingRawFrames) {
-            core.live_stacking().clear();
+            core.live_stacking.clear();
         }
 
         Ok(Self {
             state:             State::Common,
             fn_gen:            Arc::new(Mutex::new(SeqFileNameGen::new())),
-            events:            Arc::clone(core.events()),
+            events:            Arc::clone(&core.events),
             raw_stacker:       RawStacker::new(),
-            options:           Arc::clone(options),
+            options:           Arc::clone(&core.options),
             next_job:          None,
             ref_stars:         None,
             out_file_names:    OutFileNames::default(),

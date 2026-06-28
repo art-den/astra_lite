@@ -962,7 +962,7 @@ impl DarksLibraryUI {
 
     fn connect_core_events(self: &Rc<Self>) {
         let (sender, receiver) = async_channel::unbounded();
-        self.core.events().connect(move |evt| {
+        self.core.events.connect(move |evt| {
             sender.send_blocking(evt).unwrap();
         });
         glib::spawn_future_local(clone!(@weak self as self_ => async move {
@@ -1037,7 +1037,7 @@ impl DarksLibraryUI {
     fn show_info(&self) {
         let ui_options = self.ui_options.borrow();
         let Some(camera) = self.core.cur_devices.camera() else { return; };
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
 
         let defect_pixels_program = ui_options.defect_pixels.create_program(&options.cam, &camera);
         if let Ok(defect_pixels_program) = defect_pixels_program {
@@ -1080,7 +1080,7 @@ impl DarksLibraryUI {
             self.get_options();
             self.save_options();
 
-            let options = self.core.options().read().unwrap();
+            let options = self.core.options.read().unwrap();
             let ui_options = self.ui_options.borrow();
 
             let program = match mode {
@@ -1132,7 +1132,7 @@ impl DarksLibraryUI {
     }
 
     fn handler_action_open_dark_lib_folder(&self) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         let lib_path = &options.calibr.dark_library_path.to_str().unwrap_or_default();
         let uri = "file:///".to_string() + lib_path;
         drop(options);

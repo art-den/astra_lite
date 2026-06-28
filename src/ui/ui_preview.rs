@@ -366,7 +366,7 @@ impl UiModule for PreviewUi {
     }
 
     fn on_full_screen(&self, full_screen: bool) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         let preview_scale = options.preview.scale;
         drop(options);
 
@@ -486,7 +486,7 @@ impl PreviewUi {
 
         self.widgets.ctrl.cb_src.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 let source = PreviewSource::from_active_id(cb.active_id().as_deref());
                 options.preview.source = source;
                 drop(options);
@@ -499,7 +499,7 @@ impl PreviewUi {
 
         self.widgets.image.sw_img.connect_size_allocate(
             clone!(@weak self as self_ => move |_, rect| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.preview.widget_width = rect.width() as usize;
                 options.preview.widget_height = rect.height() as usize;
             })
@@ -507,7 +507,7 @@ impl PreviewUi {
 
         self.widgets.ctrl.cb_scale.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 let scale = PreviewScale::from_active_id(cb.active_id().as_deref());
                 options.preview.scale = scale;
                 drop(options);
@@ -517,7 +517,7 @@ impl PreviewUi {
 
         self.widgets.ctrl.cb_color.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 let color = PreviewColorMode::from_active_id(cb.active_id().as_deref());
                 options.preview.color = color;
                 drop(options);
@@ -527,7 +527,7 @@ impl PreviewUi {
 
         self.widgets.ctrl.scl_dark.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.preview.dark_lvl = scl.value();
                 drop(options);
                 self_.create_and_show_preview_image(None);
@@ -536,7 +536,7 @@ impl PreviewUi {
 
         self.widgets.ctrl.scl_highlight.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.preview.light_lvl = scl.value();
                 drop(options);
                 self_.create_and_show_preview_image(None);
@@ -545,7 +545,7 @@ impl PreviewUi {
 
         self.widgets.ctrl.scl_gamma.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.preview.gamma = scl.value();
                 drop(options);
                 self_.create_and_show_preview_image(None);
@@ -554,7 +554,7 @@ impl PreviewUi {
 
         self.widgets.ctrl.chb_rem_grad.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.preview.remove_grad = chb.is_active();
                 drop(options);
                 self_.create_and_show_preview_image(None);
@@ -574,7 +574,7 @@ impl PreviewUi {
 
         self.widgets.ctrl.chb_wb_auto.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.preview.wb_auto = chb.is_active();
                 drop(options);
                 self_.create_and_show_preview_image(None);
@@ -583,7 +583,7 @@ impl PreviewUi {
 
         self.widgets.ctrl.scl_wb_red.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.preview.wb_red = scl.value();
                 drop(options);
                 self_.create_and_show_preview_image(None);
@@ -592,7 +592,7 @@ impl PreviewUi {
 
         self.widgets.ctrl.scl_wb_green.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.preview.wb_green = scl.value();
                 drop(options);
                 self_.create_and_show_preview_image(None);
@@ -601,7 +601,7 @@ impl PreviewUi {
 
         self.widgets.ctrl.scl_wb_blue.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
+                let Ok(mut options) = self_.core.options.try_write() else { return; };
                 options.preview.wb_blue = scl.value();
                 drop(options);
                 self_.create_and_show_preview_image(None);
@@ -609,7 +609,7 @@ impl PreviewUi {
         );
 
         self.widgets.ctrl.chb_stars.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            let Ok(mut options) = self_.core.options().try_write() else { return; };
+            let Ok(mut options) = self_.core.options.try_write() else { return; };
             options.preview.stars = chb.is_active();
             drop(options);
             self_.create_and_show_preview_image(None);
@@ -758,10 +758,10 @@ impl PreviewUi {
             update_info_panel_vis(true, false, false);
         };
 
-        let source = self.core.options().read().unwrap().preview.source;
+        let source = self.core.options.read().unwrap().preview.source;
         match source {
             PreviewSource::OrigFrame => {
-                let info = self.core.cur_frame().info.read().unwrap();
+                let info = self.core.cur_frame.info.read().unwrap();
                 match &*info {
                     ResultImageInfo::LightInfo(info) => {
                         show_light_info(&info.stars, &info.image);
@@ -798,7 +798,7 @@ impl PreviewUi {
                 }
             }
             PreviewSource::LiveStacking => {
-                let ls_info = self.core.live_stacking().info.read().unwrap();
+                let ls_info = self.core.live_stacking.info.read().unwrap();
                 if let Some(ls_info) = &*ls_info {
                     show_light_info(&ls_info.stars, &ls_info.image);
                 } else {
@@ -835,13 +835,13 @@ impl PreviewUi {
     }
 
     fn create_and_show_preview_image(&self, keep_center: Option<(f64, f64)>) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         let preview_params = options.preview.preview_params();
         let (image, hist, stars) = match options.preview.source {
             PreviewSource::OrigFrame =>
-                (&*self.core.cur_frame().image, &self.core.cur_frame().img_hist, Some(&self.core.cur_frame().stars)),
+                (&*self.core.cur_frame.image, &self.core.cur_frame.img_hist, Some(&self.core.cur_frame.stars)),
             PreviewSource::LiveStacking =>
-                (&self.core.live_stacking().image, &self.core.live_stacking().hist, None),
+                (&self.core.live_stacking.image, &self.core.live_stacking.hist, None),
         };
         drop(options);
         let image = image.read().unwrap();
@@ -867,7 +867,7 @@ impl PreviewUi {
         src_params:  Option<&PreviewParams>,
         keep_center: Option<(f64, f64)>,
     ) {
-        let preview_options = self.core.options().read().unwrap().preview.clone();
+        let preview_options = self.core.options.read().unwrap().preview.clone();
         let pp = preview_options.preview_params();
         if src_params.is_some() && src_params != Some(&pp) {
             self.create_and_show_preview_image(None);
@@ -1025,7 +1025,7 @@ impl PreviewUi {
         );
         let Some((image_x, image_y)) = image_coords else { return; };
 
-        let Ok(mut options) = self.core.options().try_write() else {
+        let Ok(mut options) = self.core.options.try_write() else {
             return;
         };
 
@@ -1086,12 +1086,12 @@ impl PreviewUi {
 
     fn handler_action_save_image_preview(&self) {
         exec_and_show_error(Some(&self.window), || {
-            let options = self.core.options().read().unwrap();
+            let options = self.core.options.read().unwrap();
             let (image, hist, fn_prefix) = match options.preview.source {
                 PreviewSource::OrigFrame =>
-                    (&*self.core.cur_frame().image, &self.core.cur_frame().img_hist, "preview"),
+                    (&*self.core.cur_frame.image, &self.core.cur_frame.img_hist, "preview"),
                 PreviewSource::LiveStacking =>
-                    (&self.core.live_stacking().image, &self.core.live_stacking().hist, "live"),
+                    (&self.core.live_stacking.image, &self.core.live_stacking.hist, "live"),
             };
             if image.read().unwrap().is_empty() { return Ok(()); }
             let mut preview_options = options.preview.clone();
@@ -1133,7 +1133,7 @@ impl PreviewUi {
 
     fn handler_action_save_image_linear(&self) {
         exec_and_show_error(Some(&self.window), || {
-            let options = self.core.options().read().unwrap();
+            let options = self.core.options.read().unwrap();
             let preview_source = options.preview.source;
             drop(options);
             let ask_to_select_name = |fn_prefix: &str| -> Option<PathBuf> {
@@ -1152,7 +1152,7 @@ impl PreviewUi {
             };
             match preview_source {
                 PreviewSource::OrigFrame => {
-                    let image = &self.core.cur_frame().image;
+                    let image = &self.core.cur_frame.image;
                     if image.read().unwrap().is_empty() {
                         return Ok(());
                     }
@@ -1163,7 +1163,7 @@ impl PreviewUi {
                     save_image_to_tif_file(&image, &file_name)?;
                 }
                 PreviewSource::LiveStacking => {
-                    let stacker = &self.core.live_stacking().stacker;
+                    let stacker = &self.core.live_stacking.stacker;
                     if stacker.read().unwrap().is_empty() {
                         return Ok(());
                     }
@@ -1178,7 +1178,7 @@ impl PreviewUi {
     }
 
     fn show_frame_processing_result(&self, result: &FrameProcessResult) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         let is_from_file_image = result.mode_type == ModeType::OpeningImgFile;
         if !is_from_file_image && options.cam.device_id != result.camera_id {
             return;
@@ -1283,12 +1283,12 @@ impl PreviewUi {
     }
 
     fn show_histogram_stat(&self) {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         let hist = match options.preview.source {
             PreviewSource::OrigFrame =>
-                self.core.cur_frame().raw_hist.read().unwrap(),
+                self.core.cur_frame.raw_hist.read().unwrap(),
             PreviewSource::LiveStacking =>
-                self.core.live_stacking().hist.read().unwrap(),
+                self.core.live_stacking.hist.read().unwrap(),
         };
         drop(options);
         let ui_options = self.ui_options.borrow();
@@ -1360,12 +1360,12 @@ impl PreviewUi {
         area: &gtk::DrawingArea,
         cr:   &cairo::Context
     ) ->eyre::Result<()> {
-        let options = self.core.options().read().unwrap();
+        let options = self.core.options.read().unwrap();
         let hist = match options.preview.source {
             PreviewSource::OrigFrame =>
-                self.core.cur_frame().raw_hist.read().unwrap(),
+                self.core.cur_frame.raw_hist.read().unwrap(),
             PreviewSource::LiveStacking =>
-                self.core.live_stacking().hist.read().unwrap(),
+                self.core.live_stacking.hist.read().unwrap(),
         };
         drop(options);
 

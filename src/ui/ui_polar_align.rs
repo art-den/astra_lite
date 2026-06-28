@@ -149,7 +149,7 @@ impl UiModule for PolarAlignUi {
                 }
             }
             HalEvent::TelescopeSlewRateListReady(device_id) => {
-                let options = self.core.options().read().unwrap();
+                let options = self.core.options.read().unwrap();
                 if options.mount.device == **device_id {
                     self.delayed_actions.schedule(DelayedAction::UpdateMountSpeedList);
                 }
@@ -249,7 +249,7 @@ impl PolarAlignUi {
             for (id, text) in list {
                 self.widgets.cbx_speed.append(Some(&id), &text);
             }
-            let options = self.core.options().read().unwrap();
+            let options = self.core.options.read().unwrap();
             if options.polar_align.speed.is_some() {
                 self.widgets.cbx_speed.set_active_id(options.polar_align.speed.as_deref());
                 if self.widgets.cbx_speed.active().is_none() {
@@ -271,8 +271,8 @@ impl PolarAlignUi {
         // Check before start mode
 
         let check_result = PolarAlignMode::check_before_start(
-            self.core.hal(),
-            self.core.options()
+            &self.core.hal,
+            &self.core.options
         );
 
         match check_result {
