@@ -446,15 +446,13 @@ impl MountUi {
     }
 
     fn show_cur_mount_state(&self) {
-        self.excl.exec(|| {
-            let Some(telescope) = self.core.cur_devices.telescope() else { return; };
+        let Some(telescope) = self.core.cur_devices.telescope() else { return; };
 
-            let parked = telescope.is_parked().unwrap_or(false);
-            self.show_mount_parked_state(parked);
+        let parked = telescope.is_parked().unwrap_or(false);
+        self.show_mount_parked_state(parked);
 
-            let tracking = telescope.is_parked().unwrap_or(false);
-            self.show_mount_tracking_state(tracking);
-        });
+        let tracking = telescope.is_tracking().unwrap_or(false);
+        self.show_mount_tracking_state(tracking);
     }
 
     fn handler_delayed_action(&self, action: &DelayedAction) {
