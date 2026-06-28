@@ -1,7 +1,6 @@
 use std::ops::RangeInclusive;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
-use std::sync::atomic::AtomicBool;
 
 use ascom_alpaca as aa;
 
