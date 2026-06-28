@@ -343,6 +343,7 @@ struct AscomAlpacaCameraShot {
     start:        [u32; 2],
     max_adu:      u32,
     dl_time:      f64,
+    frame_type:   Option<FrameType>,
 }
 
 impl CameraShot for AscomAlpacaCameraShot {
@@ -382,6 +383,7 @@ impl CameraShot for AscomAlpacaCameraShot {
         info.height = height;
         info.cfa = cfa_type;
         info.max_value = self.max_adu as _;
+        info.frame_type = self.frame_type.unwrap_or(FrameType::Lights);
 
         let data_len = width * height;
         let mut data = vec![0; data_len];
@@ -438,9 +440,10 @@ struct ExposureData {
 }
 
 #[derive(Default)]
-struct CameraPrevData {
-    temperature: Option<f64>,
-    cool_pwr:    Option<f64>,
+struct CameraDynData {
+    prev_temperature: Option<f64>,
+    prev_cool_pwr:    Option<f64>,
+    frame_type:       Option<FrameType>,
 }
 
 struct AscomAlpacaCamera {
@@ -448,7 +451,6 @@ struct AscomAlpacaCamera {
     device_id:      Arc<String>,
     async_runtime:  Arc<tokio::runtime::Runtime>,
     event_handlers: Arc<HalEventHandlers>,
-    light_frame:    AtomicBool,
     exp_data:       Mutex<Option<ExposureData>>,
     flags:          CameraFlags,
     exp_range:      RangeInclusive<f64>,
@@ -460,7 +462,7 @@ struct AscomAlpacaCamera {
     ccd_size_y:     usize,
     max_bin_x:      usize,
     max_bin_y:      usize,
-    prev_data:      Mutex<CameraPrevData>,
+    dyn_data:       Mutex<CameraDynData>,
     bayer_offset:   Option<[u8; 2]>,
     sensor_type:    aa::api::camera::SensorType,
     max_adu:        u32,
@@ -512,13 +514,12 @@ impl AscomAlpacaCamera {
                 device:         Arc::clone(aa_camera),
                 event_handlers: Arc::clone(event_handlers),
                 async_runtime:  Arc::clone(async_runtime),
-                light_frame:    AtomicBool::new(true),
                 exp_data:       Mutex::new(None),
                 flags:          camera_flags,
                 exp_range:      exp_range.start().as_secs_f64() ..= exp_range.end().as_secs_f64(),
                 gain_range:     min_gain ..= max_gain,
                 offset_range:   min_offset ..= max_offset,
-                prev_data:      Mutex::new(CameraPrevData::default()),
+                dyn_data:       Mutex::new(CameraDynData::default()),
                 pixel_size_x,
                 pixel_size_y,
                 ccd_size_x,
@@ -564,30 +565,30 @@ impl AscomAlpacaCamera {
 
         if !is_exposure_now {
             self.async_runtime.block_on(async {
-                let mut prev_data = self.prev_data.lock().unwrap();
+                let mut data = self.dyn_data.lock().unwrap();
 
                 // Check for CCD temparature change
                 if self.flags.contains(CameraFlags::CAN_GET_CCD_TEMP) {
                     let temperature = self.device.ccd_temperature().await.ok();
-                    if prev_data.temperature != temperature && let Some(temperature) = temperature {
+                    if data.prev_temperature != temperature && let Some(temperature) = temperature {
                         self.event_handlers.send(HalEvent::CameraCcdTempChanged {
                             device_id: Arc::clone(&self.device_id),
                             temperature
                         });
                     }
-                    prev_data.temperature = temperature;
+                    data.prev_temperature = temperature;
                 }
 
                 // Check for cooling power change
                 if self.flags.contains(CameraFlags::CAN_GET_COOL_PWR) {
                     let cool_pwr = self.device.cooler_power().await.ok();
-                    if prev_data.cool_pwr != cool_pwr && let Some(cool_pwr) = cool_pwr {
+                    if data.prev_cool_pwr != cool_pwr && let Some(cool_pwr) = cool_pwr {
                         self.event_handlers.send(HalEvent::CameraCoolerPwrChanged {
                             device_id: Arc::clone(&self.device_id),
                             power:     cool_pwr,
                         });
                     }
-                    prev_data.cool_pwr = cool_pwr;
+                    data.prev_cool_pwr = cool_pwr;
                 }
 
                 eyre::Ok(())
@@ -614,6 +615,11 @@ impl AscomAlpacaCamera {
         let (array, start) = array_n_start?;
 
         let dl_time = timer.elapsed().as_secs_f64();
+
+        let data = self.dyn_data.lock().unwrap();
+        let frame_type = data.frame_type;
+        drop(data);
+
         let camera_shot = AscomAlpacaCameraShot {
             sensor_type: self.sensor_type,
             bayer_offset: self.bayer_offset,
@@ -621,6 +627,7 @@ impl AscomAlpacaCamera {
             start,
             array,
             dl_time,
+            frame_type,
         };
 
         self.event_handlers.send(HalEvent::CameraShotResult{
@@ -677,8 +684,8 @@ impl Camera for AscomAlpacaCamera {
         });
         let result = self.async_runtime.block_on(async {
             let duration = std::time::Duration::from_secs_f64(duration);
-            let is_light_frame = self.light_frame.load(std::sync::atomic::Ordering::Relaxed);
-            self.device.start_exposure(duration, is_light_frame).await?;
+            let frame_type = self.dyn_data.lock().unwrap().frame_type.unwrap_or(FrameType::Lights);
+            self.device.start_exposure(duration, frame_type == FrameType::Lights).await?;
             eyre::Ok(())
         });
         if result.is_err() {
@@ -715,8 +722,7 @@ impl Camera for AscomAlpacaCamera {
     // Frame type
 
     fn set_frame_type(&self, frame_type: FrameType) -> eyre::Result<()> {
-        let light_frame = frame_type == FrameType::Lights;
-        self.light_frame.store(light_frame, std::sync::atomic::Ordering::Relaxed);
+        self.dyn_data.lock().unwrap().frame_type = Some(frame_type);
         Ok(())
     }
 
