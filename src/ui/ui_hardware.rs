@@ -311,7 +311,7 @@ impl UiModule for HardwareUi {
                 *self.indi_state.borrow_mut() = self.core.hal.indi_impl().state().clone();
 
                 #[cfg(windows)] {
-                    *self.aa_state.borrow_mut() = self.core.hal().ascom_alpaca_impl().state().clone();
+                    *self.aa_state.borrow_mut() = self.core.hal.ascom_alpaca_impl().state().clone();
                 }
 
                 self.correct_widgets_by_cur_state();
@@ -708,7 +708,7 @@ impl HardwareUi {
     fn handler_action_conn_aa(&self) {
         self.read_options_from_widgets();
         exec_and_show_error(Some(&self.window), || {
-            let aa_hal = self.core.hal().ascom_alpaca_impl();
+            let aa_hal = self.core.hal.ascom_alpaca_impl();
             let options = self.core.options.read().unwrap();
             aa_hal.connect(&options.ascom_alpaca.address)?;
             Ok(())
@@ -718,7 +718,7 @@ impl HardwareUi {
     #[cfg(windows)]
     fn handler_action_disconn_aa(&self) {
         exec_and_show_error(Some(&self.window), || {
-            let aa_hal = self.core.hal().ascom_alpaca_impl();
+            let aa_hal = self.core.hal.ascom_alpaca_impl();
             aa_hal.disconnect()?;
             Ok(())
         });

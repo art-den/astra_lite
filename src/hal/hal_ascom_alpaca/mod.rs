@@ -9,9 +9,7 @@ use bitflags::bitflags;
 use itertools::izip;
 
 use crate::hal::{
-    Camera, CameraInfo, CameraShot, CameraShotType, CcdPurpose, CameraFeatures,
-    Device, DeviceInfo, DeviceType, FilterWheel, Focuser, FocuserState, FrameType,
-    HalImpl, HalState, Telescope, TelescopeMoveDir, TelescopeState,
+    Camera, CameraFeatures, CameraInfo, CameraShot, CameraShotType, CcdPurpose, Device, DeviceInfo, DeviceType, FilterWheel, Focuser, FocuserState, FrameType, HalImpl, HalState, Telescope, TelescopeMoveDir, TelescopeSite, TelescopeState,
 };
 use crate::hal::events::{HalEvent, HalEventHandlers};
 use crate::image::raw::{CfaType, RawImage, RawImageInfo};
@@ -1084,6 +1082,15 @@ impl Device for AscomAlpacaTelescope {
 impl Telescope for AscomAlpacaTelescope {
     fn state(&self) -> eyre::Result<TelescopeState> {
         Ok(self.state_internal()?.state)
+    }
+
+    fn site(&self) -> eyre::Result<TelescopeSite> {
+        self.async_runtime.block_on(async {
+            let latitude = self.device.site_latitude().await?;
+            let longitude = self.device.site_longitude().await?;
+            let elevation = self.device.site_elevation().await?;
+            eyre::Ok(TelescopeSite { latitude, longitude, elevation })
+        })
     }
 
     fn is_abort_motion_supported(&self) -> bool {
