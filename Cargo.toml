@@ -1,6 +1,6 @@
 [package]
 name = "astra_lite"
-version = "0.0.340"
+version = "0.0.341"
 edition = "2024"
 description = "Software for deepsky astrophotography and live stacking"
 repository = "https://github.com/art-den/astra_lite"
@@ -35,6 +35,12 @@ macros = { path = "./macros" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 unix-ancillary = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+#ascom-alpaca = { version = "1.0.0-beta.10", features = ["client", "camera", "telescope", "focuser", "filter_wheel"] }
+ascom-alpaca = { git = "https://github.com/ivonnyssen/ascom-alpaca-rs.git", branch = "fix/image-array-alignment", features = ["client", "camera", "telescope", "focuser", "filter_wheel"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net"]}
+ndarray = "0.17"
 
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "1.7"

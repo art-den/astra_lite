@@ -3,10 +3,15 @@ use std::{
         Arc, Mutex, RwLock, RwLockReadGuard, atomic::AtomicBool
     }
 };
-use itertools::Itertools;
 
 use crate::{
-    core::cam_ctrl::*, guiding::external_guider::*, hal::{Camera, CameraShot, DeviceType, FilterWheel, Focuser, FrameType, Hal, HalState, Telescope, events::HalEvent, indi}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*
+    core::cam_ctrl::*,
+    guiding::external_guider::*,
+    hal::{*, events::HalEvent},
+    image::io::FromFileCameraShot,
+    options::*,
+    sky_math::math::EqCoord,
+    utils::timer::*,
 };
 
 use super::{
@@ -107,7 +112,6 @@ struct CurDevices {
 pub struct Core {
     hal:                Arc<Hal>,
     cur_devices:        Mutex<CurDevices>,
-    indi:               Arc<indi::Connection>,
     options:            Arc<RwLock<Options>>,
     mode:               RwLock<ModeData>,
     events:             Arc<EventHandlers>,
@@ -131,15 +135,10 @@ impl Core {
         let hal = Hal::new();
         let events = Arc::new(EventHandlers::new());
         let options = Arc::new(RwLock::new(Options::default()));
-        let indi = Arc::new(indi::Connection::new());
-
-        let hal_impl = hal.create_indy_impl(&indi);
-        hal.set_impl(hal_impl);
 
         let frame_processing = FrameProcessing::new();
 
         let this = Arc::new(Self {
-            indi:               Arc::clone(&indi),
             cur_devices:        Mutex::new(CurDevices::default()),
             options:            Arc::clone(&options),
             mode:               RwLock::new(ModeData::new()),
@@ -175,6 +174,17 @@ impl Core {
             eyre::bail!("Camera object is None");
         };
         Ok(Arc::clone(camera))
+    }
+
+    pub fn change_camera(self: &Arc<Self>, prev_camera_id: &str, new_camera_id: &str) {
+        let mut cur_devices = self.cur_devices.lock().unwrap();
+        cur_devices.camera = self.hal.camera(new_camera_id).ok();
+        drop(cur_devices);
+        self.process_camera_changed();
+        self.events.send(Event::CameraDeviceChanged {
+            prev_camera_id: prev_camera_id.to_string(),
+            new_camera_id:  new_camera_id.to_string(),
+        });
     }
 
     pub fn telescope(&self) -> Option<Arc<dyn Telescope + Send + Sync>> {
@@ -216,10 +226,6 @@ impl Core {
         Ok(Arc::clone(filter_wheel))
     }
 
-    pub fn indi(&self) -> &Arc<indi::Connection> {
-        &self.indi
-    }
-
     pub fn options(&self) -> &Arc<RwLock<Options>> {
         &self.options
     }
@@ -238,16 +244,17 @@ impl Core {
 
         log::info!("Unsubscribing all...");
         self.events.disconnect_all();
-        self.indi.disconnect_all_event_handlers();
+
         log::info!("Done");
 
         log::info!("Disconnecting from INDI...");
-        _ = self.indi.disconnect_and_wait();
+        let indi_hal = self.hal.indi_impl();
+        indi_hal.indi().disconnect_all_event_handlers(); // TODO: move into hal
+        _ = indi_hal.indi().disconnect_and_wait(); // TODO: move into hal
         log::info!("Done!");
 
         log::info!("Stopping HAL...");
         self.hal.disconnect_all_subscribers();
-        self.hal.reset_impl();
         log::info!("Done!");
     }
 
@@ -293,7 +300,11 @@ impl Core {
         context: &str,
     ) {
         let Err(err) = result else { return; };
-        self.process_error_str(&err, context);
+        if cfg!(debug_assertions) {
+            self.process_error_str(&format!("{:?}", err), context);
+        } else {
+            self.process_error_str(&err, context);
+        }
     }
 
     fn process_error_str(self: &Arc<Self>, error_text: &impl Display, context: &str) {
@@ -514,12 +525,6 @@ impl Core {
 
     fn event_handler(self: &Arc<Self>, event: Event) {
         match &event {
-            Event::CameraDeviceChanged { new_camera_id, .. } => {
-                let mut cur_devices = self.cur_devices.lock().unwrap();
-                cur_devices.camera = self.hal.camera(new_camera_id).ok();
-                drop(cur_devices);
-                self.process_camera_changed();
-            },
             Event::MountDeviceChanged(new_mount_id) => {
                 let mut cur_devices = self.cur_devices.lock().unwrap();
                 cur_devices.telescope = self.hal.telescope(new_mount_id).ok();
@@ -555,67 +560,6 @@ impl Core {
             }
             _ => {},
         }
-    }
-
-    pub fn connect_indi(
-        self:         &Arc<Self>,
-        indi_drivers: &indi::Drivers
-    ) -> eyre::Result<()> {
-        let options = self.options.read().unwrap();
-        let drivers = if !options.indi.remote {
-            let telescopes    = indi_drivers.get_group_by_name("Telescopes")?;
-            let cameras       = indi_drivers.get_group_by_name("CCDs")?;
-            let focusers      = indi_drivers.get_group_by_name("Focusers")?;
-            let filter_wheels = indi_drivers.get_group_by_name("Filter Wheels")?;
-            let aux           = indi_drivers.get_group_by_name("Auxiliary")?;
-
-            fn get_driver<'a>(
-                device_name: &Option<String>,
-                group:       &'a indi::DriverGroup
-            ) -> Option<&'a String> {
-                device_name
-                    .as_ref()
-                    .and_then(|name| group.get_item_by_device_name(name))
-                    .map(|d| &d.driver)
-            }
-
-            [ get_driver(&options.indi.mount,     telescopes),
-              get_driver(&options.indi.camera,    cameras),
-              get_driver(&options.indi.guid_cam,  cameras),
-              get_driver(&options.indi.focuser,   focusers),
-              get_driver(&options.indi.flt_wheel, filter_wheels),
-              get_driver(&options.indi.aux1,      aux),
-              get_driver(&options.indi.aux1,      aux),
-            ].iter()
-                .filter_map(|v| *v)
-                .cloned()
-                .unique()
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-
-        if !options.indi.remote && drivers.is_empty() {
-            eyre::bail!("No devices selected");
-        }
-
-        log::info!(
-            "Connecting to INDI, remote={}, address={}, drivers='{}' ...",
-            options.indi.remote,
-            options.indi.address,
-            drivers.iter().join(",")
-        );
-
-        let conn_settings = indi::ConnSettings {
-            drivers,
-            remote: options.indi.remote,
-            host:   options.indi.address.clone(),
-            .. Default::default()
-        };
-
-        drop(options);
-        self.indi.connect(&conn_settings)?;
-        Ok(())
     }
 
     fn process_camera_changed(self: &Arc<Self>) {
@@ -777,7 +721,8 @@ impl Core {
         if options.cam.frame.frame_type == FrameType::Lights {
             match options.guiding.mode {
                 GuidingMode::MainCamera => {
-                    if !self.indi.is_device_enabled(&options.mount.device).unwrap_or(false) {
+                    let cur_devices = self.cur_devices.lock().unwrap();
+                    if cur_devices.telescope.is_none() {
                         eyre::bail!(
                             "Guiding by main camera is selected but \
                             mound device is not selected or connected!"

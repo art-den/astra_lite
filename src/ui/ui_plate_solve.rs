@@ -4,7 +4,7 @@ use macros::FromBuilder;
 
 use crate::{
     core::{core::{Core, ModeType}, events::*},
-    hal::{DeviceType, HalState, events::HalEvent},
+    hal::{DeviceType, events::HalEvent},
     options::*,
 };
 
@@ -187,8 +187,6 @@ impl PlateSolveUi {
             .and_then(|cam| cam.is_active().ok())
             .unwrap_or(false);
 
-        let hal_connected = self.core.hal().state() == HalState::Connected;
-
         let mode = self.core.mode();
         let mode_type = mode.active.get_type();
         let waiting = mode_type == ModeType::Waiting;
@@ -196,7 +194,6 @@ impl PlateSolveUi {
         let single_shot = mode_type == ModeType::SingleShot;
 
         let plate_solve_sensitive =
-            hal_connected &&
             mnt_active && cam_active &&
             (waiting || single_shot || live_view);
 

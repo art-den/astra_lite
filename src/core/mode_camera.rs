@@ -4,13 +4,8 @@ use crate::{
     TimeLogger,
     core::{cam_ctrl::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode},
     guiding::external_guider::*,
-    hal::{Camera, CameraShot, Focuser, FrameType, Hal, HalFeatures, Telescope},
-    image::{
-        histogram::*,
-        raw::{RawImage, RawImageInfo},
-        raw_stacker::RawStacker,
-        stars_offset::*,
-    },
+    hal::{Camera, CameraFeatures, CameraShot, Focuser, FrameType, Telescope},
+    image::{histogram::*, raw::{RawImage, RawImageInfo}, raw_stacker::RawStacker, stars_offset::*},
     options::*,
     utils::io_utils::*,
 };
@@ -131,7 +126,6 @@ enum WhenToStartExposure {
 
 pub struct TackingPicturesMode {
     camera:            Arc<dyn Camera + Send + Sync>,
-    hal:               Arc<Hal>,
     cam_mode:          CameraMode,
     state:             State,
     mount:             Option<Arc<dyn Telescope + Send + Sync>>,
@@ -233,7 +227,6 @@ impl TackingPicturesMode {
         }
 
         Ok(Self {
-            hal:               Arc::clone(hal),
             state:             State::Common,
             fn_gen:            Arc::new(Mutex::new(SeqFileNameGen::new())),
             events:            Arc::clone(core.events()),
@@ -339,7 +332,7 @@ impl TackingPicturesMode {
                     },
             };
 
-            if !self.hal.features().contains(HalFeatures::BEGIN_DONWLOAD_IMAGE_EVENT)
+            if !self.camera.features().contains(CameraFeatures::CAN_START_EXP_AT_DOWNLOAD_BEGIN)
             && when_to_start_exp == Some(WhenToStartExposure::AtDownloadImageFromCamera) {
                 when_to_start_exp = Some(WhenToStartExposure::AtBeginOfProcessing);
             }

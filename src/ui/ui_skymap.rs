@@ -5,7 +5,7 @@ use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use crate::{
     core::{core::*, events::*, mode_goto::GotoConfig},
-    hal::{HalState, indi::{degree_to_str, hour_to_str}},
+    hal::{indi::{degree_to_str, hour_to_str}},
     image::preview::PreviewRgbData,
     options::*,
     plate_solve::PlateSolveOkResult,
@@ -644,13 +644,11 @@ impl MapUi {
             let paint_config = config.paint.clone();
             drop(config);
 
-            let hal_is_connected = self.core.hal().state() == HalState::Connected;
-
-            let cam_frame = if show_ccd && hal_is_connected {
+            let cam_frame = if show_ccd {
                 || -> Option<CameraFrame> {
                     let camera = self.core.camera()?;
+                    if !camera.is_active().unwrap_or(false) { return None; }
                     let options = self.core.options().read().unwrap();
-
                     let focal_len = options.telescope.real_focal_length();
                     if focal_len <= 0.1 { return None; }
                     let (sensor_width, sensor_height) = camera.ccd_size().ok()?;
@@ -674,18 +672,14 @@ impl MapUi {
                 None
             };
 
-            let telescope_pos = if hal_is_connected {
-                || -> Option<EqCoord> {
-                    let telescope = self.core.telescope()?;
-                    let (ra, dec) = telescope.eq_coord().ok()?;
-                    Some(EqCoord {
-                        ra: hour_to_radian(ra),
-                        dec: degree_to_radian(dec),
-                    })
-                } ()
-            } else {
-                None
-            };
+            let telescope_pos = || -> Option<EqCoord> {
+                let telescope = self.core.telescope()?;
+                let (ra, dec) = telescope.eq_coord().ok()?;
+                Some(EqCoord {
+                    ra: hour_to_radian(ra),
+                    dec: degree_to_radian(dec),
+                })
+            } ();
 
             let ps_img = self.ps_img.borrow();
             let ps_result = self.ps_result.borrow();
@@ -1193,15 +1187,14 @@ impl MapUi {
             };
             let eq_coord = self.map_widget.widget_crd_to_eq(x, y);
             *self.clicked_crd.borrow_mut() = eq_coord;
-            let hal_is_active = self.core.hal().state() == HalState::Connected;
             let selected_item = self.selected_item.borrow();
-            let enable_goto = hal_is_active && selected_item.is_some() && !self.goto_started.get();
+            let enable_goto = selected_item.is_some() && !self.goto_started.get();
             enable_action(&self.window, "sm_goto_selected", enable_goto);
             enable_action(&self.window, "sm_goto_sel_solve", enable_goto);
             enable_action(
                 &self.window,
                 "sm_goto_point",
-                hal_is_active && eq_coord.is_some() && !self.goto_started.get(),
+                eq_coord.is_some() && !self.goto_started.get(),
             );
             self.widgets.obj.m_widget.set_attach_widget(Some(self.map_widget.get_widget()));
             self.widgets.obj.m_widget.popup_at_pointer(None);

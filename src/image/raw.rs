@@ -41,8 +41,8 @@ impl BadPixels {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CfaType { None, BGGR, RGBG, GRBG, RGGB }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CfaType { #[default] None, BGGR, GRBG, RGGB, GBRG }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CfaColor { None, R, G, B }
@@ -54,9 +54,9 @@ impl CfaType {
         use CfaColor::*;
         match self {
             CfaType::BGGR => &[&[B, G], &[G, R]],
-            CfaType::RGBG => &[&[R, G], &[G, B]],
             CfaType::GRBG => &[&[G, R], &[B, G]],
             CfaType::RGGB => &[&[R, G], &[G, B]],
+            CfaType::GBRG => &[&[G, B], &[R, G]],
             CfaType::None => &[&[None, None]],
         }
     }
@@ -64,9 +64,9 @@ impl CfaType {
     pub fn from_str(cfa_str: &str) -> Self {
         match cfa_str {
             "BGGR" => CfaType::BGGR,
-            "RGBG" => CfaType::RGBG,
             "GRBG" => CfaType::GRBG,
             "RGGB" => CfaType::RGGB,
+            "GBRG" => CfaType::GBRG,
             _      => CfaType::None,
         }
     }
@@ -75,15 +75,15 @@ impl CfaType {
         match self {
             CfaType::None => None,
             CfaType::BGGR => Some("BGGR"),
-            CfaType::RGBG => Some("RGBG"),
             CfaType::GRBG => Some("GRBG"),
             CfaType::RGGB => Some("RGGB"),
+            CfaType::GBRG => Some("GBRG"),
         }
     }
 }
 
 bitflags! {
-    #[derive(Serialize, Deserialize, Clone, Copy)]
+    #[derive(Clone, Copy, Default)]
     pub struct CalibrMethods: u32 {
         const BY_DARK           = 1;
         const BY_BIAS           = 2;
@@ -93,7 +93,7 @@ bitflags! {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Clone, Default)]
 pub struct RawImageInfo {
     pub time:           Option<DateTime<Utc>>,
     pub width:          usize,

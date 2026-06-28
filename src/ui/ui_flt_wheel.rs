@@ -77,7 +77,10 @@ impl UiModule for FltWheelUi {
     fn show_options(&self, _options: &Options) {}
 
     fn get_options(&self, options: &mut Options) {
-        options.filter_wheel.device = self.widgets.cb_device.active_id().unwrap_or_default().to_string();
+        options.filter_wheel.device = self.widgets.cb_device
+            .active_id()
+            .unwrap_or_default()
+            .to_string();
     }
 
     fn on_hal_event(&self, event: &HalEvent) {
@@ -90,16 +93,16 @@ impl UiModule for FltWheelUi {
                     self.delayed_actions.schedule(DelayedAction::UpdateDevicesList);
                 }
             }
-            HalEvent::FilterWheelSlotChange { device_id, slot, in_progress } => {
+            HalEvent::FilterWheelSlotChange { device_id, slot } => {
                 let options = self.core.options().read().unwrap();
                 if options.filter_wheel.device == **device_id {
                     drop(options);
-                    self.excl_caller.exec(|| {
-                        if !*in_progress && *slot >= 0 {
+                    if let Some(slot) = slot && *slot >= 0 {
+                        self.excl_caller.exec(|| {
                             self.widgets.cb_filter.set_active(Some(*slot as _));
-                        }
-                    });
-                    self.widgets.cb_filter.set_sensitive(!in_progress);
+                        });
+                    }
+                    self.widgets.cb_filter.set_sensitive(slot.is_some());
                 }
             }
             HalEvent::FilterWheelNameChanged(device_id) => {
@@ -109,7 +112,6 @@ impl UiModule for FltWheelUi {
                     self.delayed_actions.schedule(DelayedAction::UpdateFilterList);
                 }
             }
-
             _ => {}
         }
     }
@@ -188,8 +190,7 @@ impl FltWheelUi {
         let cur_focuser = options.filter_wheel.device.clone();
         drop(options);
 
-        let hal = self.core.hal();
-        let Ok(list) = hal.devices(DeviceType::FLT_WHELL) else { return; };
+        let Ok(list) = self.core.hal().devices(DeviceType::FLT_WHELL) else { return; };
         let list = list.iter()
             .map(|dev| (dev.id.to_string(), dev.name.to_string()))
             .collect::<Vec<_>>();
@@ -197,7 +198,6 @@ impl FltWheelUi {
             &list,
             &self.widgets.cb_device,
             if !cur_focuser.is_empty() { Some(cur_focuser.as_str()) } else { None },
-            hal.state() == HalState::Connected,
             |id| {
                 let mut options = self.core.options().write().unwrap();
                 options.filter_wheel.device = id.to_string();

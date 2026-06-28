@@ -3,7 +3,7 @@ use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
     core::{core::{Core, ModeType}, events::*, mode_polar_align::{CustomCommand, PolarAlignMode, PolarAlignmentEvent, State}},
-    hal::{DeviceType, HalState, events::HalEvent, indi::degree_to_str_short},
+    hal::{DeviceType, events::HalEvent, indi::degree_to_str_short},
     options::*,
     sky_math::math::*,
 };
@@ -190,7 +190,6 @@ impl PolarAlignUi {
         let mount = self.core.telescope();
         let cam_active = camera.and_then(|c| c.is_active().ok()).unwrap_or(false);
         let mnt_active = mount.and_then(|c| c.is_active().ok()).unwrap_or(false);
-        let hal_connected = self.core.hal().state() == HalState::Connected;
 
         let mode = self.core.mode();
         let mode_type = mode.active.get_type();
@@ -202,7 +201,6 @@ impl PolarAlignUi {
 
         let polar_alignment_can_be_started =
             !polar_align &&
-            hal_connected &&
             mnt_active && cam_active &&
             (waiting || single_shot || live_view);
 

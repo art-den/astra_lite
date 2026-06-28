@@ -161,6 +161,9 @@ pub fn draw_histogram(
         .filter_map(|v| v.map(|v| v.count))
         .max()
         .unwrap_or(0);
+    if max_count == 0 {
+        return Ok(());
+    }
 
     let total_max_v = hist_chans.iter()
         .filter_map(|v| v.map(|v| (v.count, v.freq.iter().max())))
@@ -290,7 +293,6 @@ pub fn fill_devices_list_into_combobox(
     list:       &[(String/*id*/, String/*text*/)],
     cb:         &gtk::ComboBoxText,
     cur_id:     Option<&str>,
-    connected:  bool,
     set_id_fun: impl Fn(&str)
 ) -> bool {
     cb.remove_all();
@@ -313,7 +315,7 @@ pub fn fill_devices_list_into_combobox(
         device_selected_in_cb = true;
     }
 
-    cb.set_sensitive(!list.is_empty() && connected);
+    cb.set_sensitive(!list.is_empty());
 
     device_selected_in_cb
 }
