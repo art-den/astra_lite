@@ -190,6 +190,43 @@ impl UiModule for FocuserUi {
         drop(options);
     }
 
+    fn on_event(&self, event: &Event) {
+        match event {
+            Event::ModeChanged => {
+                self.correct_widgets_props();
+            }
+            Event::CameraDeviceChanged{prev_camera_id, new_camera_id} => {
+                self.handler_camera_changed(prev_camera_id, new_camera_id);
+            }
+            Event::Focusing(fevent) => {
+                match fevent {
+                    FocuserEvent::Data(fdata) => {
+                        *self.focusing_data.borrow_mut() = Some(fdata.clone());
+                        self.widgets.da_auto.queue_draw();
+                    }
+                    FocuserEvent::Result { value } => {
+                        self.update_focuser_position_after_focusing(*value);
+                    }
+                    FocuserEvent::StartingTemperature(starting_temp) => {
+                        self.starting_temp.set(Some(*starting_temp));
+                        self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature(None));
+                    }
+                }
+            }
+            Event::FocuserDeviceChanged(new_device_name) => {
+                if self.widgets.cb_list.active_id().as_deref() != Some(new_device_name.as_str()) {
+                    self.excl.exec(|| {
+                        self.widgets.cb_list.set_active_id(Some(new_device_name.as_str()));
+                    });
+                }
+                self.delayed_actions.schedule(DelayedAction::InitAndShowFocuserValue(None));
+                self.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
+                self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature(None));
+            }
+            _ => {}
+        }
+    }
+
     fn on_hal_event(&self, event: &HalEvent) {
         match event {
             HalEvent::StateChanged(state) => {
@@ -245,38 +282,6 @@ impl UiModule for FocuserUi {
             _ => {}
         }
     }
-
-    fn on_event(&self, event: &Event) {
-        match event {
-            Event::ModeChanged => {
-                self.correct_widgets_props();
-            }
-            Event::CameraDeviceChanged{prev_camera_id, new_camera_id} => {
-                self.handler_camera_changed(prev_camera_id, new_camera_id);
-            }
-            Event::Focusing(fevent) => {
-                match fevent {
-                    FocuserEvent::Data(fdata) => {
-                        *self.focusing_data.borrow_mut() = Some(fdata.clone());
-                        self.widgets.da_auto.queue_draw();
-                    }
-                    FocuserEvent::Result { value } => {
-                        self.update_focuser_position_after_focusing(*value);
-                    }
-                    FocuserEvent::StartingTemperature(starting_temp) => {
-                        self.starting_temp.set(Some(*starting_temp));
-                        self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature(None));
-                    }
-                }
-            }
-            Event::FocuserDeviceChanged(new_device_name) => {
-                if self.widgets.cb_list.active_id().as_deref() != Some(new_device_name.as_str()) {
-                    self.widgets.cb_list.set_active_id(Some(new_device_name.as_str()));
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 impl FocuserUi {
@@ -308,16 +313,9 @@ impl FocuserUi {
 
         self.widgets.cb_list.connect_active_notify(clone!(@weak self as self_ => move |cb| {
             let Some(new_device_name) = cb.active_id() else { return; };
-            let Ok(mut options) = self_.core.options().try_write() else { return; };
-            if options.focuser.device == new_device_name.as_str() { return; }
-            options.focuser.device = new_device_name.to_string();
-            drop(options);
-
-            self_.core.events().send(Event::FocuserDeviceChanged(new_device_name.to_string()));
-
-            self_.delayed_actions.schedule(DelayedAction::InitAndShowFocuserValue(None));
-            self_.delayed_actions.schedule(DelayedAction::CorrectWidgetProps);
-            self_.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature(None));
+            self_.excl.exec(|| {
+                self_.core.change_focuser(&new_device_name);
+            });
         }));
 
         self.widgets.spb_val.connect_value_changed(clone!(@weak self as self_ => move |sb| {

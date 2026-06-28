@@ -29,6 +29,7 @@ pub fn init_ui(
         widgets,
         main_ui:         Rc::clone(main_ui),
         window:          window.clone(),
+        excl:            ExclusiveCaller::new(),
         core:            Arc::clone(core),
         delayed_actions: DelayedActions::new(500),
         fn_utils:        RefCell::new(FileNameUtils::default()),
@@ -269,6 +270,7 @@ struct CameraUi {
     widgets:         Widgets,
     main_ui:         Rc<MainUi>,
     window:          gtk::ApplicationWindow,
+    excl:            ExclusiveCaller,
     core:            Arc<Core>,
     delayed_actions: DelayedActions<DelayedAction>,
     fn_utils:        RefCell<FileNameUtils>,
@@ -381,6 +383,39 @@ impl UiModule for CameraUi {
         drop(options);
     }
 
+    fn on_event(&self, event: &Event) {
+        match event {
+            Event::ModeChanged => {
+                self.correct_widgets_props();
+            }
+            Event::ModeContinued => {
+                let options = self.core.options().read().unwrap();
+                self.show_frame_options(&options);
+            }
+            Event::FrameProcessing(result) => {
+                self.show_frame_processing_result(result);
+            }
+            Event::FlatExposureCalculated(exp_value) => {
+                self.widgets.frame.spb_exp.set_value(*exp_value);
+            }
+            Event::CameraDeviceChanged { new_camera_id, prev_camera_id } => {
+                if self.widgets.common.cb_cam_list.active_id().as_deref() != Some(new_camera_id) {
+                    self.excl.exec(|| {
+                        self.widgets.common.cb_cam_list.set_active_id(Some(new_camera_id));
+                    });
+                }
+                let mut options = self.core.options().write().unwrap();
+                self.handler_camera_changed(prev_camera_id, new_camera_id, &mut options);
+                self.update_resolution_list_impl(&options);
+                self.fill_heater_items_list_impl(&options);
+                self.fill_conv_gain_items_list_impl(&options);
+                self.correct_widgets_props_impl();
+                self.correct_frame_quality_widgets_props();
+            }
+            _ => {},
+        }
+    }
+
     fn on_hal_event(&self, event: &HalEvent) {
         match event {
             HalEvent::StateChanged(state) => {
@@ -445,30 +480,6 @@ impl UiModule for CameraUi {
                 let options = self.core.options().read().unwrap();
                 if options.cam.device_id == **camera_id {
                     self.delayed_actions.schedule(DelayedAction::UpdateResolutionList);
-                }
-            }
-            _ => {},
-        }
-    }
-
-    fn on_event(&self, event: &Event) {
-        match event {
-            Event::ModeChanged => {
-                self.correct_widgets_props();
-            }
-            Event::ModeContinued => {
-                let options = self.core.options().read().unwrap();
-                self.show_frame_options(&options);
-            }
-            Event::FrameProcessing(result) => {
-                self.show_frame_processing_result(result);
-            }
-            Event::FlatExposureCalculated(exp_value) => {
-                self.widgets.frame.spb_exp.set_value(*exp_value);
-            }
-            Event::CameraDeviceChanged { new_camera_id, .. } => {
-                if self.widgets.common.cb_cam_list.active_id().as_deref() != Some(new_camera_id) {
-                    self.widgets.common.cb_cam_list.set_active_id(Some(new_camera_id));
                 }
             }
             _ => {},
@@ -547,28 +558,10 @@ impl CameraUi {
 
         self.widgets.common.cb_cam_list.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
                 let Some(cur_id) = cb.active_id() else { return; };
-                let prev_camera_id = options.cam.device_id.clone();
-                if prev_camera_id == cur_id {
-                    return;
-                }
-                options.cam.device_id = cur_id.to_string();
-
-                self_.handler_camera_changed(&prev_camera_id, &cur_id, &mut options);
-
-                drop(options);
-
-                self_.core.change_camera(&prev_camera_id, &cur_id);
-
-                // Change some lists for new camera
-                // TODO: as reaction on Event::CameraDeviceChanged
-                let Ok(options) = self_.core.options().try_read() else { return; };
-                self_.update_resolution_list_impl(&options);
-                self_.fill_heater_items_list_impl(&options);
-                self_.fill_conv_gain_items_list_impl(&options);
-                self_.correct_widgets_props_impl();
-                self_.correct_frame_quality_widgets_props();
+                self_.excl.exec(|| {
+                    self_.core.change_camera(&cur_id);
+                });
             })
         );
 

@@ -83,6 +83,23 @@ impl UiModule for FltWheelUi {
             .to_string();
     }
 
+    fn on_event(&self, event: &Event) {
+        match event {
+            Event::FltWheelDeviceChanged(new_device_name) => {
+                if self.widgets.cb_device.active_id().as_deref() != Some(new_device_name.as_str()) {
+                    self.excl_caller.exec(|| {
+                        self.widgets.cb_device.set_active_id(Some(new_device_name.as_str()));
+                    });
+                }
+                self.excl_caller.exec(|| {
+                    self.update_filters_list_and_select_active();
+                });
+                self.correct_widgets_props();
+            }
+            _ => {},
+        }
+    }
+
     fn on_hal_event(&self, event: &HalEvent) {
         match event {
             HalEvent::StateChanged(HalState::Connected|HalState::Disconnected) => {
@@ -115,32 +132,15 @@ impl UiModule for FltWheelUi {
             _ => {}
         }
     }
-
-    fn on_event(&self, event: &Event) {
-        match event {
-            Event::FltWheelDeviceChanged(new_device_name) => {
-                if self.widgets.cb_device.active_id().as_deref() != Some(new_device_name.as_str()) {
-                    self.widgets.cb_device.set_active_id(Some(new_device_name.as_str()));
-                }
-            }
-            _ => {},
-        }
-    }
 }
 
 impl FltWheelUi {
     fn connect_widgets_events(self: &Rc<Self>) {
         self.widgets.cb_device.connect_active_notify(clone!(@weak self as self_ => move |cb| {
             let Some(new_device_name) = cb.active_id() else { return; };
-            let Ok(mut options) = self_.core.options().try_write() else { return; };
-            if options.filter_wheel.device == new_device_name { return; }
-            options.filter_wheel.device = new_device_name.to_string();
-            drop(options);
-            self_.core.events().send(Event::FltWheelDeviceChanged(new_device_name.to_string()));
             self_.excl_caller.exec(|| {
-                self_.update_filters_list_and_select_active();
+                self_.core.change_filter_wheel(&new_device_name);
             });
-            self_.correct_widgets_props();
         }));
 
         self.widgets.cb_filter.connect_active_notify(clone!(@weak self as self_ => move |cb| {

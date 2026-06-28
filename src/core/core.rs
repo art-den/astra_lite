@@ -176,7 +176,13 @@ impl Core {
         Ok(Arc::clone(camera))
     }
 
-    pub fn change_camera(self: &Arc<Self>, prev_camera_id: &str, new_camera_id: &str) {
+    pub fn change_camera(self: &Arc<Self>, new_camera_id: &str) {
+        let mut options = self.options.write().unwrap();
+        let prev_camera_id = options.cam.device_id.clone();
+        if prev_camera_id == new_camera_id { return; }
+        options.cam.device_id = new_camera_id.to_string();
+        drop(options);
+
         let mut cur_devices = self.cur_devices.lock().unwrap();
         cur_devices.camera = self.hal.camera(new_camera_id).ok();
         drop(cur_devices);
@@ -200,6 +206,20 @@ impl Core {
         Ok(Arc::clone(telescope))
     }
 
+    pub fn change_telescope(&self, new_telescope_id: &str) {
+        let mut options = self.options.write().unwrap();
+        if options.mount.device == new_telescope_id { return; }
+        options.mount.device = new_telescope_id.to_string();
+        drop(options);
+
+        let mut cur_devices = self.cur_devices.lock().unwrap();
+        cur_devices.telescope = self.hal.telescope(new_telescope_id).ok();
+        drop(cur_devices);
+        self.events().send(
+            Event::MountDeviceChanged(new_telescope_id.to_string())
+        );
+    }
+
     pub fn focuser(&self) -> Option<Arc<dyn Focuser + Send + Sync>> {
         let cur_devices = self.cur_devices.lock().unwrap();
         cur_devices.focuser.as_ref().map(Arc::clone)
@@ -213,6 +233,16 @@ impl Core {
         Ok(Arc::clone(focuser))
     }
 
+    pub fn change_focuser(&self, new_focuser_id: &str) {
+        let mut options = self.options.write().unwrap();
+        if options.focuser.device == new_focuser_id { return; }
+        options.focuser.device = new_focuser_id.to_string();
+        drop(options);
+        self.events.send(
+            Event::FocuserDeviceChanged(new_focuser_id.to_string())
+        );
+    }
+
     pub fn filter_wheel(&self) -> Option<Arc<dyn FilterWheel + Send + Sync>> {
         let cur_devices = self.cur_devices.lock().unwrap();
         cur_devices.filter_wheel.as_ref().map(Arc::clone)
@@ -224,6 +254,15 @@ impl Core {
             eyre::bail!("Filter wheel object is None");
         };
         Ok(Arc::clone(filter_wheel))
+    }
+
+    pub fn change_filter_wheel(&self, new_filter_wheel_id: &str) {
+        let mut options = self.options.write().unwrap();
+        if options.filter_wheel.device == new_filter_wheel_id { return; }
+        options.filter_wheel.device = new_filter_wheel_id.to_string();
+        drop(options);
+        self.events.send(Event::FltWheelDeviceChanged(new_filter_wheel_id.to_string()));
+
     }
 
     pub fn options(&self) -> &Arc<RwLock<Options>> {

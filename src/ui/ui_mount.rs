@@ -167,6 +167,25 @@ impl UiModule for MountUi {
         self.correct_widgets_props();
     }
 
+    fn on_event(&self, event: &Event) {
+        match event {
+            Event::ModeChanged => {
+                self.correct_widgets_props();
+            }
+            Event::MountDeviceChanged(new_device_name) => {
+                if self.widgets.cb_list.active_id().as_deref() != Some(new_device_name.as_str()) {
+                    self.excl.exec(|| {
+                        self.widgets.cb_list.set_active_id(Some(new_device_name.as_str()));
+                    });
+                }
+                self.fill_mount_speed_list_widget();
+                self.show_cur_mount_state();
+                self.correct_widgets_props();
+            }
+            _ => {}
+        }
+    }
+
     fn on_hal_event(&self, event: &HalEvent) {
         match event {
             HalEvent::StateChanged(HalState::Connected|HalState::Disconnected) => {
@@ -217,20 +236,6 @@ impl UiModule for MountUi {
             _ => {}
         }
     }
-
-    fn on_event(&self, event: &Event) {
-        match event {
-            Event::ModeChanged => {
-                self.correct_widgets_props();
-            }
-            Event::MountDeviceChanged(new_device_name) => {
-                if self.widgets.cb_list.active_id().as_deref() != Some(new_device_name.as_str()) {
-                    self.widgets.cb_list.set_active_id(Some(new_device_name.as_str()));
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 impl MountUi {
@@ -272,19 +277,10 @@ impl MountUi {
         }
 
         self.widgets.cb_list.connect_active_id_notify(
-            clone!(@weak self as self_ => move |cb| {
+            clone!(@weak self as self_ => move |cb| { self_.excl.exec(|| {
                 let Some(new_device_name) = cb.active_id() else { return; };
-                let Ok(mut options) = self_.core.options().try_write() else { return; };
-                if options.mount.device == new_device_name { return; }
-                options.mount.device = new_device_name.to_string();
-                drop(options);
-                self_.core.events().send(
-                    Event::MountDeviceChanged(new_device_name.to_string())
-                );
-                self_.fill_mount_speed_list_widget();
-                self_.show_cur_mount_state();
-                self_.correct_widgets_props();
-            })
+                self_.core.change_telescope(&new_device_name);
+            });})
         );
 
         self.widgets.chb_tracking.connect_active_notify(
