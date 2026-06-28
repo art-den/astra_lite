@@ -581,7 +581,7 @@ impl HalImpl for IndiHalImpl {
             name = &id[..new_len];
             ccd = indi::CamCcd::Guider;
         }
-        if !self.indi.device_exists(id) {
+        if !self.indi.device_exists(name) {
             return None;
         }
         let device = IndiDevice {
