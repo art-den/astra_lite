@@ -351,7 +351,7 @@ impl IndiHalImpl {
             }
             ("FILTER_SLOT", "FILTER_SLOT_VALUE", PropValue::Num(value), _, _) => {
                 let in_progress = !matches!(state, PropState::Ok|PropState::Idle);
-                let slot = if in_progress {
+                let slot = if !in_progress {
                     Some(value.value as i32 - value.min as i32)
                 } else {
                     None
