@@ -197,6 +197,11 @@ impl UiModule for HardwareUi {
     }
 
     fn panels(&self) -> Vec<Panel> {
+        let aa_drv_panel_flags = if cfg!(windows) {
+            PanelFlags::empty()
+        } else {
+            PanelFlags::INVISIBLE
+        };
         vec![
             Panel {
                 str_id: "telescope",
@@ -222,14 +227,13 @@ impl UiModule for HardwareUi {
                 tab:    TabPage::Hardware,
                 flags:  PanelFlags::EXPANDED,
             },
-            #[cfg(windows)]
             Panel {
                 str_id: "ascom_alpaca",
                 name:   "ASCOM Alpaca".to_string(),
                 widget: self.widgets.aa_drv.bx.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    TabPage::Hardware,
-                flags:  PanelFlags::empty(),
+                flags:  aa_drv_panel_flags,
             },
             Panel {
                 str_id: "ext_soft",
@@ -596,7 +600,6 @@ impl HardwareUi {
 
     fn correct_widgets_by_cur_state(&self) {
         let indi_state = self.indi_state.borrow();
-        let aa_state = self.aa_state.borrow();
 
         let conn_en = |hal_state: &HalState| matches!(hal_state, HalState::Disconnected|HalState::ImplNotDefined|HalState::Error(_));
         let disconn_en = |hal_state: &HalState| matches!(hal_state, HalState::Connected);
@@ -611,11 +614,13 @@ impl HardwareUi {
             ("disconn_phd2", phd2_working),
         ]);
 
-        #[cfg(windows)]
-        enable_actions(&self.window, &[
-            ("conn_aa",    conn_en(&*aa_state)),
-            ("disconn_aa", disconn_en(&*aa_state)),
-        ]);
+        #[cfg(windows)] {
+            let aa_state = self.aa_state.borrow();
+            enable_actions(&self.window, &[
+                ("conn_aa",    conn_en(&*aa_state)),
+                ("disconn_aa", disconn_en(&*aa_state)),
+            ]);
+        }
 
         self.widgets.conn_stat.lbl_indi.set_label(&indi_state.to_str(false));
 
@@ -655,7 +660,6 @@ impl HardwareUi {
         self.widgets.indi_drv.cb_aux1_drivers.set_sensitive(aux1_sensitive);
         self.widgets.indi_drv.l_aux2_drivers.set_sensitive(aux2_sensitive);
         self.widgets.indi_drv.cb_aux2_drivers.set_sensitive(aux2_sensitive);
-
 
         self.widgets.indi_drv.e_remote_addr.set_sensitive(remote && indi_disconnected);
 
