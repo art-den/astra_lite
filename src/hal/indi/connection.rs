@@ -2326,7 +2326,7 @@ impl Connection {
         self.command_set_switch_property(
             device_name,
             "TELESCOPE_MOTION_NS",
-            &[("MOTION_NORTH", true)]
+            &[("MOTION_NORTH", true), ("MOTION_SOUTH", false)]
         )
     }
 
@@ -2334,7 +2334,7 @@ impl Connection {
         self.command_set_switch_property(
             device_name,
             "TELESCOPE_MOTION_NS",
-            &[("MOTION_SOUTH", true)]
+            &[("MOTION_NORTH", false), ("MOTION_SOUTH", true)]
         )
     }
 
@@ -2342,7 +2342,7 @@ impl Connection {
         self.command_set_switch_property(
             device_name,
             "TELESCOPE_MOTION_WE",
-            &[("MOTION_WEST", true)]
+            &[("MOTION_WEST", true), ("MOTION_EAST", false)]
         )
     }
 
@@ -2350,7 +2350,7 @@ impl Connection {
         self.command_set_switch_property(
             device_name,
             "TELESCOPE_MOTION_WE",
-            &[("MOTION_EAST", true)]
+            &[("MOTION_WEST", false), ("MOTION_EAST", true)]
         )
     }
 
@@ -2361,24 +2361,6 @@ impl Connection {
         let moving_west = devices.get_switch_property(device_name, "TELESCOPE_MOTION_WE", "MOTION_WEST")?;
         let moving_east = devices.get_switch_property(device_name, "TELESCOPE_MOTION_WE", "MOTION_EAST")?;
         Ok(moving_north || moving_south || moving_west || moving_east)
-    }
-
-    pub fn mount_stop_move(&self, device_name: &str) -> Result<()> {
-        self.command_set_switch_property(
-            device_name,
-            "TELESCOPE_MOTION_NS", &[
-            ("MOTION_NORTH", false),
-            ("MOTION_SOUTH", false),
-        ])?;
-
-        self.command_set_switch_property(
-            device_name,
-            "TELESCOPE_MOTION_WE", &[
-            ("MOTION_WEST", false),
-            ("MOTION_EAST", false)
-        ])?;
-
-        Ok(())
     }
 
     pub fn mount_revert_motion(

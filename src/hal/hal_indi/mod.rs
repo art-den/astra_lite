@@ -1070,7 +1070,6 @@ impl Telescope for IndiDevice {
 
     fn abort_motion(&self) -> eyre::Result<()> {
         self.indi.mount_abort_motion(&self.name)?;
-        self.indi.mount_stop_move(&self.name)?;
         Ok(())
     }
 
