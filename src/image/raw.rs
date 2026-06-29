@@ -163,7 +163,18 @@ impl RawImageInfo {
         }
     }
 
-    pub fn seve_to_fits_header(&self, hdu : &mut Header) {
+    pub fn save_to_fits_header(&self, hdu: &mut Header) {
+        let (bzero, bitpix) = self.bzero_and_bitpix_for_fit_file();
+
+        hdu.set_bool("SIMPLE", true);
+        hdu.set_i64("BITPIX", bitpix as i64);
+        hdu.set_i64("NAXIS", 2);
+        hdu.set_i64("NAXIS1", self.width as i64);
+        hdu.set_i64("NAXIS2", self.height as i64);
+        hdu.set_bool("EXTEND", true);
+        if bzero != 0 {
+            hdu.set_i64("BZERO", bzero as i64);
+        }
         hdu.set_f64("EXPTIME",  self.exposure);
         if let Some(integr_exp) = self.integr_time {
             hdu.set_f64("TOTALEXP", integr_exp);
@@ -180,6 +191,14 @@ impl RawImageInfo {
         }
         if let Some(ccd_temp) = self.ccd_temp {
             hdu.set_f64("CCD-TEMP", ccd_temp);
+        }
+    }
+
+    fn bzero_and_bitpix_for_fit_file(&self) -> (u16, i8) {
+        if self.max_value > 255 {
+            (32768_u16, 16)
+        } else {
+            (0_u16, 8)
         }
     }
 }
@@ -212,8 +231,11 @@ impl RawImage {
         let mut file = File::create(file_name)?;
         let writer = FitsWriter::new();
         let mut hdu = Header::new_2d(self.info.width, self.info.height);
-        self.info.seve_to_fits_header(&mut hdu);
-        writer.write_header_and_data_u16(&mut file, &hdu, &self.data)?;
+        self.info.save_to_fits_header(&mut hdu);
+        let (bzero, bitpix) = self.info.bzero_and_bitpix_for_fit_file();
+        writer.write_header(&mut file, &hdu)?;
+        writer.write_data(bitpix, bzero, &mut file, &self.data)?;
+
         Ok(())
     }
 

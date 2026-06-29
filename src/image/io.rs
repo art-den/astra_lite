@@ -284,6 +284,8 @@ pub fn load_image_using_pixbuf(
     Ok(())
 }
 
+
+
 pub struct FromFileCameraShot {
     file_name: PathBuf,
 }

@@ -199,8 +199,7 @@ impl AstrometryPlateSolver {
             FitsTableCol { name: "Y", type_: "1D", unit: "pix" },
             FitsTableCol { name: "FLUX", type_: "1D", unit: "unknown" },
         ];
-        let bintable_header = Header::new();
-        fits_writer.write_header_and_bintable_f64(&mut file, &bintable_header, &cols, &data)?;
+        fits_writer.write_header_and_bintable_f64(&mut file, &cols, &data)?;
         drop(file);
         self.file_name = Some(temp_file.clone());
         self.mode = Mode::Stars {img_width, img_height};

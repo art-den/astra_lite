@@ -1,17 +1,17 @@
+use std::io::{BufWriter, Write};
 use std::ops::RangeInclusive;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
+use std::fs::File;
 
 use ascom_alpaca as aa;
-
 use bitflags::bitflags;
 use itertools::izip;
 
-use crate::hal::{
-    Camera, CameraFeatures, CameraInfo, CameraShot, CameraShotType, CcdPurpose, Device, DeviceInfo, DeviceType, FilterWheel, Focuser, FocuserState, FrameType, HalImpl, HalState, Telescope, TelescopeMoveDir, TelescopeSite, TelescopeState,
-};
+use crate::hal::*;
 use crate::hal::events::{HalEvent, HalEventHandlers};
 use crate::image::raw::{CfaType, RawImage, RawImageInfo};
+use crate::image::simple_fits::{FitsWriter, Header};
 
 const SIDERAL_RATE_DEG_PER_SEC: f64 = 360.0 / (23.0 * 60.0 * 60.0 + 56.0 * 60.0 + 4.09);
 
@@ -336,13 +336,88 @@ impl HalImpl for AscomAlpacaHalImpl {
 // CameraShot
 
 struct AscomAlpacaCameraShot {
-    array:        aa::api::camera::ImageArray,
-    sensor_type:  aa::api::camera::SensorType,
-    bayer_offset: Option<[u8; 2]>,
-    start:        [u32; 2],
-    max_adu:      u32,
-    dl_time:      f64,
-    frame_type:   Option<FrameType>,
+    array:          aa::api::camera::ImageArray,
+    sensor_type:    aa::api::camera::SensorType,
+    dl_time:        f64,
+    raw_image_info: RawImageInfo,
+}
+
+impl AscomAlpacaCameraShot {
+    fn new(
+        async_runtime: &tokio::runtime::Runtime,
+        aa_camera:     &Arc<dyn aa::api::Camera>,
+        bayer_offset:  Option<[u8; 2]>,
+        sensor_type:   aa::api::camera::SensorType,
+        max_adu:       u32,
+        frame_type:    Option<FrameType>,
+        exposure:      f64,
+    ) -> eyre::Result<Self> {
+        async_runtime.block_on(async {
+            let timer = std::time::Instant::now();
+            let array = aa_camera.image_array().await?;
+            let start = aa_camera.start().await?;
+            let dl_time = timer.elapsed().as_secs_f64();
+
+            let raw_2d_arr = array.index_axis(ndarray::Axis(2), 0);
+            let (width, height) = raw_2d_arr.dim();
+
+            let cfa_type = match sensor_type {
+                aa::api::camera::SensorType::Monochrome =>
+                    CfaType::None,
+                aa::api::camera::SensorType::RGGB if let Some(bayer_offset) = bayer_offset => {
+                    let bayer_offset_x = (start[0] + bayer_offset[0] as u32) % 2;
+                    let bayer_offset_y = (start[0] + bayer_offset[0] as u32) % 2;
+                    match (bayer_offset_x, bayer_offset_y) {
+                        (0, 0) => CfaType::RGGB,
+                        (1, 0) => CfaType::GRBG,
+                        (0, 1) => CfaType::GBRG,
+                        (1, 1) => CfaType::BGGR,
+                        _ => unreachable!(),
+                    }
+                }
+                _ => eyre::bail!("Sensor type {:?} not supported", sensor_type),
+            };
+
+            let mut image_info = RawImageInfo::default();
+            image_info.width = width;
+            image_info.height = height;
+            image_info.cfa = cfa_type;
+            image_info.max_value = max_adu as _;
+            image_info.frame_type = frame_type.unwrap_or(FrameType::Lights);
+            image_info.camera = aa_camera.static_name().to_string();
+            image_info.gain = aa_camera.gain().await.unwrap_or(0) as _;
+            image_info.offset = aa_camera.offset().await.unwrap_or(0);
+            image_info.exposure = exposure;
+            image_info.bin = aa_camera.bin_x().await.unwrap_or(0);
+            image_info.ccd_temp = aa_camera.ccd_temperature().await.ok();
+
+            Ok(Self { array, sensor_type, dl_time, raw_image_info: image_info })
+        })
+    }
+
+    fn save_raw_file(&self, file_name: &Path) -> eyre::Result<()> {
+        let raw_2d_arr = self.array.index_axis(ndarray::Axis(2), 0);
+        let info = &self.raw_image_info;
+
+        let mut file = BufWriter::new(File::create(file_name)?);
+        let writer = FitsWriter::new();
+        let mut hdu = Header::new_2d(info.width, info.height);
+        info.save_to_fits_header(&mut hdu);
+        writer.write_header(&mut file, &hdu)?;
+
+        for row in 0..info.height {
+            for src in raw_2d_arr.column(row) {
+                let value = (*src).clamp(0, u16::MAX as i32) as u16;
+                file.write(&value.to_be_bytes())?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn save_image(&self, _file_name: &Path) -> eyre::Result<()> {
+        todo!()
+    }
 }
 
 impl CameraShot for AscomAlpacaCameraShot {
@@ -358,31 +433,8 @@ impl CameraShot for AscomAlpacaCameraShot {
     fn get_raw(&self) -> eyre::Result<RawImage> {
         assert!(self.get_type() == CameraShotType::RawCcdData);
         let raw_2d_arr = self.array.index_axis(ndarray::Axis(2), 0);
+
         let (width, height) = raw_2d_arr.dim();
-
-        let cfa_type = match self.sensor_type {
-            aa::api::camera::SensorType::Monochrome =>
-                CfaType::None,
-            aa::api::camera::SensorType::RGGB if let Some(bayer_offset) = self.bayer_offset => {
-                let bayer_offset_x = (self.start[0] + bayer_offset[0] as u32) % 2;
-                let bayer_offset_y = (self.start[0] + bayer_offset[0] as u32) % 2;
-                match (bayer_offset_x, bayer_offset_y) {
-                    (0, 0) => CfaType::RGGB,
-                    (1, 0) => CfaType::GRBG,
-                    (0, 1) => CfaType::GBRG,
-                    (1, 1) => CfaType::BGGR,
-                    _ => unreachable!(),
-                }
-            }
-            _ => eyre::bail!("Sensor type {:?} not supported", self.sensor_type),
-        };
-
-        let mut info = RawImageInfo::default();
-        info.width = width;
-        info.height = height;
-        info.cfa = cfa_type;
-        info.max_value = self.max_adu as _;
-        info.frame_type = self.frame_type.unwrap_or(FrameType::Lights);
 
         let data_len = width * height;
         let mut data = vec![0; data_len];
@@ -393,8 +445,8 @@ impl CameraShot for AscomAlpacaCameraShot {
             }
         }
 
-        let cfa_arrary = info.cfa.get_array();
-        Ok(RawImage::new(info, data, cfa_arrary))
+        let cfa_arrary = self.raw_image_info.cfa.get_array();
+        Ok(RawImage::new(self.raw_image_info.clone(), data, cfa_arrary))
     }
 
     fn get_image(&self, _image: &mut crate::image::image::Image) -> eyre::Result<()> {
@@ -412,8 +464,13 @@ impl CameraShot for AscomAlpacaCameraShot {
         }
     }
 
-    fn save_to_file(&self, _file_name: &Path) -> eyre::Result<()> {
-        Ok(())
+    fn save_to_file(&self, file_name: &Path) -> eyre::Result<()> {
+        match self.get_type() {
+            CameraShotType::RawCcdData =>
+                self.save_raw_file(file_name),
+            CameraShotType::ReadyImage =>
+                self.save_image(file_name),
+        }
     }
 }
 
@@ -443,6 +500,7 @@ struct CameraDynData {
     prev_temperature: Option<f64>,
     prev_cool_pwr:    Option<f64>,
     frame_type:       Option<FrameType>,
+    exposure:         f64,
 }
 
 struct AscomAlpacaCamera {
@@ -602,36 +660,26 @@ impl AscomAlpacaCamera {
             Arc::clone(&self.device_id)
         ));
 
-        let timer = std::time::Instant::now();
-        let array_n_start = self.async_runtime.block_on(async {
-            let array = self.device.image_array().await?;
-            let start = self.device.start().await?;
-            eyre::Ok((array, start))
-        });
+        let data = self.dyn_data.lock().unwrap();
+        let frame_type = data.frame_type;
+        let exposure = data.exposure;
+        drop(data);
+
+        let camera_shot = AscomAlpacaCameraShot::new(
+            &self.async_runtime,
+            &self.device,
+            self.bayer_offset,
+            self.sensor_type,
+            self.max_adu,
+            frame_type,
+            exposure,
+        );
 
         *self.exp_data.lock().unwrap() = None;
 
-        let (array, start) = array_n_start?;
-
-        let dl_time = timer.elapsed().as_secs_f64();
-
-        let data = self.dyn_data.lock().unwrap();
-        let frame_type = data.frame_type;
-        drop(data);
-
-        let camera_shot = AscomAlpacaCameraShot {
-            sensor_type: self.sensor_type,
-            bayer_offset: self.bayer_offset,
-            max_adu: self.max_adu,
-            start,
-            array,
-            dl_time,
-            frame_type,
-        };
-
         self.event_handlers.send(HalEvent::CameraShotResult{
             device_id: Arc::clone(&self.device_id),
-            shot:      Arc::new(camera_shot),
+            shot:      Arc::new(camera_shot?),
         });
 
         Ok(())
@@ -690,6 +738,7 @@ impl Camera for AscomAlpacaCamera {
         if result.is_err() {
             *self.exp_data.lock().unwrap() = None;
         }
+        self.dyn_data.lock().unwrap().exposure = duration;
         result
     }
 

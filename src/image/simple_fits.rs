@@ -274,47 +274,7 @@ impl FitsWriter {
         Self {}
     }
 
-    pub fn write_header_and_data_u16(
-        &self,
-        stream: &mut dyn SeekNWrite,
-        hdu: &Header,
-        data: &[u16],
-    ) -> Result<()> {
-        assert!(!data.is_empty());
-        const U16_BZERO: u16 = 32768;
-        let mut full_hdr = Header::new();
-        let max_value = data.iter().max().copied().unwrap_or(0);
-        let bzero = if max_value > 255 {
-            full_hdr.bitpix = 16;
-            U16_BZERO
-        } else {
-            full_hdr.bitpix = 8;
-            0_u16
-        };
-
-        full_hdr.set_bool("SIMPLE", true);
-        full_hdr.set_i64("BITPIX", full_hdr.bitpix as i64);
-        full_hdr.set_i64("NAXIS",  hdu.dims.len() as i64);
-        for (idx, dim) in hdu.dims.iter().enumerate() {
-            let name = format!("NAXIS{}", idx+1);
-            full_hdr.set_i64(&name, *dim as i64);
-        }
-        full_hdr.set_bool("EXTEND", true);
-
-        if bzero != 0 {
-            full_hdr.set_i64("BZERO", bzero as i64);
-        }
-
-        for value in &hdu.values {
-            full_hdr.values.push(value.clone());
-        }
-
-        self.write_header(stream, &full_hdr)?;
-        self.write_data(full_hdr.bitpix, bzero, stream, data)?;
-        Ok(())
-    }
-
-    pub fn write_header(&self, stream: &mut dyn SeekNWrite, hdu: &Header) -> Result<()> {
+    pub fn write_header(&self, stream: &mut dyn Write, hdu: &Header) -> Result<()> {
         for item in &hdu.values {
             let mut line = format!("{:8}= ", item.name);
             if item.value.starts_with("'") {
@@ -337,11 +297,11 @@ impl FitsWriter {
         Ok(())
     }
 
-    fn write_data(
+    pub fn write_data(
         &self,
         bitpix: i8,
         bzero:  u16,
-        stream: &mut dyn SeekNWrite,
+        stream: &mut dyn Write,
         data:   &[u16],
     ) -> Result<()> {
         if !matches!(bitpix, 8|16) {
@@ -379,7 +339,6 @@ impl FitsWriter {
     pub fn write_header_and_bintable_f64(
         &self,
         stream: &mut dyn SeekNWrite,
-        hdu: &Header,
         cols: &[FitsTableCol],
         data: &[f64],
     ) -> Result<()> {
@@ -404,10 +363,6 @@ impl FitsWriter {
         for (idx, col) in cols.iter().enumerate() {
             let unit_fld = format!("TUNIT{}", idx + 1);
             full_hdr.set_str(&unit_fld, col.unit);
-        }
-
-        for value in &hdu.values {
-            full_hdr.values.push(value.clone());
         }
 
         self.write_header(stream, &full_hdr)?;
