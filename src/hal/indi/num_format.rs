@@ -213,5 +213,41 @@ fn test_sexagesimal_to_value() {
     assert!(sexagesimal_to_value("-10:30.3").unwrap() == -10.505);
     assert!(sexagesimal_to_value("10:30:00").unwrap() == 10.5);
     assert!(sexagesimal_to_value("10:30:30").unwrap() == 10.508333333333333);
-    // TODO: more tests
+}
+
+#[test]
+fn test_value_to_sexagesimal() {
+    // Tests for frac=3
+    assert_eq!(value_to_sexagesimal(1.0, false, 3), "1:00");
+    assert_eq!(value_to_sexagesimal(-1.0, false, 3), "-1:00");
+    assert_eq!(value_to_sexagesimal(10.5, false, 3), "10:30");
+    assert_eq!(value_to_sexagesimal(-10.5, false, 3), "-10:30");
+    assert_eq!(value_to_sexagesimal(10.5, true, 3), "10:30");
+
+    // Tests for frac=5
+    assert_eq!(value_to_sexagesimal(10.5, false, 5), "10:30.0");
+    assert_eq!(value_to_sexagesimal(10.505, false, 5), "10:30.3");
+    assert_eq!(value_to_sexagesimal(-10.505, false, 5), "-10:30.3");
+
+    // Tests for frac=6
+    assert_eq!(value_to_sexagesimal(10.5, false, 6), "10:30:00");
+    assert_eq!(value_to_sexagesimal(10.508333333333333, false, 6), "10:30:30");
+    assert_eq!(value_to_sexagesimal(-10.508333333333333, false, 6), "-10:30:30");
+
+    // Tests for frac=8
+    assert_eq!(value_to_sexagesimal(10.5, false, 8), "10:30:00.0");
+    assert_eq!(value_to_sexagesimal(10.508333333333333, false, 8), "10:30:30.0");
+
+    // Tests for frac=9
+    assert_eq!(value_to_sexagesimal(10.5, false, 9), "10:30:00.00");
+    assert_eq!(value_to_sexagesimal(10.508333333333333, false, 9), "10:30:30.00");
+
+    // Tests with zero values
+    assert_eq!(value_to_sexagesimal(0.0, false, 3), "0:00");
+    assert_eq!(value_to_sexagesimal(0.0, true, 3), "00:00");
+    assert_eq!(value_to_sexagesimal(0.5, false, 9), "0:30:00.00");
+
+    // Tests for rounding
+    assert_eq!(value_to_sexagesimal(10.508333333333333, false, 6), "10:30:30");
+    assert_eq!(value_to_sexagesimal(10.508333333333333, false, 5), "10:30.5");
 }
