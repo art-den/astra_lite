@@ -408,7 +408,7 @@ impl AscomAlpacaCameraShot {
         for row in 0..info.height {
             for src in raw_2d_arr.column(row) {
                 let value = (*src).clamp(0, u16::MAX as i32) as u16;
-                file.write(&value.to_be_bytes())?;
+                file.write_all(&value.to_be_bytes())?;
             }
         }
 
