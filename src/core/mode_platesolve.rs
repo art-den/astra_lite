@@ -159,7 +159,7 @@ impl PlatesolveMode {
 
         if pixel_size_x == pixel_size_y {
             let frame_horiz_size = (frame_width * bin_ratio) as f64 * pixel_size_x * 0.000_001;
-            let is_telescope_ccd = matches!(cam_purpose, CcdPurpose::MainTelescopeCcd|CcdPurpose::SecodnaryTelescopeCcd);
+            let is_telescope_ccd = matches!(cam_purpose, CcdPurpose::MainTelescopeCcd|CcdPurpose::SecondaryTelescopeCcd);
             let mut focal_len = 1000.0/*mm*/ * frame_horiz_size / (2.0 * f64::tan(0.5 * ps_result.width));
             if is_telescope_ccd && options.telescope.barlow > 0.0 {
                 focal_len /= options.telescope.barlow;

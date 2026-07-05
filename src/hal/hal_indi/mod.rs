@@ -441,7 +441,7 @@ impl IndiHalImpl {
         device_type.set(DeviceType::CAMERA,    is_ccd);
         device_type.set(DeviceType::TELESCOPE, is_telescope);
         device_type.set(DeviceType::FOCUSER,   is_focuser);
-        device_type.set(DeviceType::FLT_WHELL, is_filter_wheel);
+        device_type.set(DeviceType::FLT_WHEEL, is_filter_wheel);
 
         device_type
     }
@@ -559,7 +559,7 @@ impl HalImpl for IndiHalImpl {
 
             if self.indi.property_exists(&camera.device.name, "CCD2", None).unwrap_or(false) {
                 let purpose = if idx == 0 {
-                    CcdPurpose::SecodnaryTelescopeCcd
+                    CcdPurpose::SecondaryTelescopeCcd
                 } else {
                     CcdPurpose::Unknown
                 };

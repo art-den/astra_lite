@@ -22,7 +22,7 @@ bitflags! {
         const CAMERA    = (1 << 0);
         const TELESCOPE = (1 << 1);
         const FOCUSER   = (1 << 2);
-        const FLT_WHELL = (1 << 3);
+        const FLT_WHEEL = (1 << 3);
     }
 }
 
@@ -36,7 +36,7 @@ pub struct DeviceInfo {
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum CcdPurpose {
     MainTelescopeCcd,
-    SecodnaryTelescopeCcd,
+    SecondaryTelescopeCcd,
     GuiderCcd,
     Unknown,
 }

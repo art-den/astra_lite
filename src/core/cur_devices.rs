@@ -49,7 +49,7 @@ impl CurDevices {
                     let mut data = self.data.lock().unwrap();
                     data.focuser = Some(self.hal.focuser(&info.id)?);
                 }
-                if info.type_.contains(DeviceType::FLT_WHELL) && options.filter_wheel.device == info.id {
+                if info.type_.contains(DeviceType::FLT_WHEEL) && options.filter_wheel.device == info.id {
                     let mut data = self.data.lock().unwrap();
                     data.filter_wheel = Some(self.hal.filter_wheel(&info.id)?);
                 }
@@ -68,7 +68,7 @@ impl CurDevices {
                     let mut data = self.data.lock().unwrap();
                     data.focuser = None;
                 }
-                if info.type_.contains(DeviceType::FLT_WHELL) && options.filter_wheel.device == info.id {
+                if info.type_.contains(DeviceType::FLT_WHEEL) && options.filter_wheel.device == info.id {
                     let mut data = self.data.lock().unwrap();
                     data.filter_wheel = None;
                 }

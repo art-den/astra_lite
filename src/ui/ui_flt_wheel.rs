@@ -106,7 +106,7 @@ impl UiModule for FltWheelUi {
                 self.delayed_actions.schedule(DelayedAction::UpdateDevicesList);
             }
             HalEvent::DeviceConnected(info)|HalEvent::DeviceDisconnected(info) => {
-                if info.type_.contains(DeviceType::FLT_WHELL) {
+                if info.type_.contains(DeviceType::FLT_WHEEL) {
                     self.delayed_actions.schedule(DelayedAction::UpdateDevicesList);
                 }
             }
@@ -190,7 +190,7 @@ impl FltWheelUi {
         let cur_focuser = options.filter_wheel.device.clone();
         drop(options);
 
-        let Ok(list) = self.core.hal.devices(DeviceType::FLT_WHELL) else { return; };
+        let Ok(list) = self.core.hal.devices(DeviceType::FLT_WHEEL) else { return; };
         let list = list.iter()
             .map(|dev| (dev.id.to_string(), dev.name.to_string()))
             .collect::<Vec<_>>();

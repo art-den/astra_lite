@@ -62,7 +62,7 @@ impl AscomAlpacaHalImpl {
                     aa::api::TypedDevice::Focuser(dev) =>
                         (dev.unique_id(), dev.static_name(), DeviceType::FOCUSER),
                     aa::api::TypedDevice::FilterWheel(dev) =>
-                        (dev.unique_id(), dev.static_name(), DeviceType::FLT_WHELL),
+                        (dev.unique_id(), dev.static_name(), DeviceType::FLT_WHEEL),
                 };
                 DeviceInfo {
                     id:    id.to_string(),
