@@ -173,13 +173,16 @@ fn panic_handler(
             None
         };
 
-    eprintln!("{}", payload_str.unwrap_or_default());
-    eprintln!("{}", panic_info.location().map(|loc| loc.to_string()).unwrap_or_default());
+    let payload = payload_str.unwrap_or_default();
+    let location = panic_info.location().map(|loc| loc.to_string()).unwrap_or_default();
+
+    eprintln!("{payload}");
+    eprintln!("{location}");
 
     log::error!("(╯°□°）╯︵ ┻━┻ PANIC OCCURRED");
 
     if let Some(payload) = &payload_str {
-        log::error!("Panic paiload: {}", payload);
+        log::error!("Panic payload: {}", payload);
         eprintln!("PANIC: {}", payload);
     }
 
@@ -200,9 +203,7 @@ fn panic_handler(
     );
 
     let message_text = format!(
-        "{}\n\nat {}\n\n\nLook logs at\n{}",
-        payload_str.unwrap_or_default(),
-        panic_info.location().map(|loc| loc.to_string()).unwrap_or_default(),
+        "{payload}\n\nat {location}\n\n\nLook logs at\n{}",
         logs_dir.to_str().unwrap_or_default()
     );
 
