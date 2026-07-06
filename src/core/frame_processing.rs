@@ -111,7 +111,7 @@ pub struct CalibrParams {
     pub flat_fname:    Option<PathBuf>,
     pub ccd_temp:      Option<f64>,
 
-    /// search and remove hot pixles
+    /// search and remove hot pixels
     pub sar_hot_pixs:  bool,
 }
 
