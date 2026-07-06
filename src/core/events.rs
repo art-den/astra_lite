@@ -47,7 +47,7 @@ pub enum Event {
 type EventHandlerFun = dyn Fn(Event) + Send + Sync + 'static;
 
 pub struct EventHandlers {
-    items: RwLock<Vec<Box<EventHandlerFun>>>,
+    items: RwLock<Vec<Arc<EventHandlerFun>>>,
 }
 
 impl EventHandlers {
@@ -62,21 +62,32 @@ impl EventHandlers {
         fun: impl Fn(Event) + Send + Sync + 'static
     ) {
         let mut items = self.items.write().unwrap();
-        items.push(Box::new(fun));
+        items.push(Arc::new(fun));
     }
 
     pub fn send(&self, event: Event) {
-        let items = self.items.read().unwrap();
-        for s in &*items {
-            s(event.clone());
+        // Copy handlers while holding the lock, then release it before executing
+        // This prevents deadlocks if handlers try to access the event system
+        let handlers = {
+            let items = self.items.read().unwrap();
+            items.clone()
+        };
+        
+        // Execute handlers without holding the lock
+        for handler in handlers.iter() {
+            handler(event.clone());
         }
     }
 
+    /// Disconnects all handlers.
     pub fn disconnect_all(&self) {
         let mut event_handlers = Vec::new();
         let mut items = self.items.write().unwrap();
+        // Uses swap to release the lock before cleanup, preventing potential deadlocks
+        // if handlers themselves try to access the event system during drop.
         std::mem::swap(&mut event_handlers, &mut items);
         drop(items);
+        // We explicitly clear `event_handlers` to make it clearer
         event_handlers.clear();
     }
 }
