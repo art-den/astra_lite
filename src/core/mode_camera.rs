@@ -72,7 +72,6 @@ struct Flags {
     save_master_file:    bool,
     save_defect_pixels:  bool,
     flat_exp_calculated: bool,
-    is_last_frame:       bool,
     next_exp_started:    bool,
     queue_overflowed:    bool,
     have_to_slow_down:   bool,
@@ -1333,7 +1332,7 @@ impl Mode for TackingPicturesMode {
         self.correct_options_before_start();
         self.update_options_copies();
 
-        self.flags.is_last_frame = false;
+
 
         let options = self.options.read().unwrap();
         self.flags.save_raw_files = match self.cam_mode {
@@ -1563,9 +1562,8 @@ impl Mode for TackingPicturesMode {
 
     fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
-        match &mut self.state {
-            State::InternalMountCorrection(ok_time_ms) => {
-                let mount = self.mount.as_ref().unwrap();
+        match (&mut self.state, &self.mount) {
+            (State::InternalMountCorrection(ok_time_ms), Some(mount)) => {
                 let guide_pulse_finished = !mount.is_pulse_guiding()?;
                 if guide_pulse_finished {
                     *ok_time_ms += timer_period_ms;
