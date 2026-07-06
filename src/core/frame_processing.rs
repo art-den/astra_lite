@@ -1070,7 +1070,7 @@ impl FrameProcessing {
             let tmr = TimeLogger::start();
             raw_image.apply_flat(flat_image)
                 .map_err(|err| eyre::eyre!(
-                    "Error {}\nwher trying to apply flat image {}",
+                    "Error {}\nwhen trying to apply flat image {}",
                     err, file_name.to_str().unwrap_or_default(),
                 ))?;
 
