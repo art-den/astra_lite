@@ -728,10 +728,10 @@ impl Core {
 
     pub fn continue_prev_mode(&self) -> eyre::Result<()> {
         let mut mode = self.mode.write().unwrap();
-        let Some(perv_mode) = mode.aborted.take() else {
+        let Some(prev_mode) = mode.aborted.take() else {
             eyre::bail!("Aborted state is empty");
         };
-        mode.active = perv_mode;
+        mode.active = prev_mode;
         mode.active.continue_work()?;
         let progress = mode.active.progress();
         let mode_type = mode.active.get_type();

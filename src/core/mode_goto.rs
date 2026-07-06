@@ -251,7 +251,7 @@ impl GotoMode {
         };
 
         self.subscribers.send(Event::OverlayMessage {
-            pos: OverlayMessgagePos::Top,
+            pos: OverlayMessagePos::Top,
             text: Arc::new(message)
         });
     }
@@ -375,7 +375,7 @@ impl Mode for GotoMode {
         self.state = State::None;
 
         self.subscribers.send(Event::OverlayMessage {
-            pos: OverlayMessgagePos::Top,
+            pos: OverlayMessagePos::Top,
             text: Arc::new(String::new())
         });
 

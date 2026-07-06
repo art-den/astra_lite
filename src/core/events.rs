@@ -9,7 +9,7 @@ pub struct Progress {
 }
 
 #[derive(Clone)]
-pub enum OverlayMessgagePos {
+pub enum OverlayMessagePos {
     Top,
 }
 
@@ -31,7 +31,7 @@ pub enum Event {
     PlateSolve(PlateSolverEvent),
     PolarAlignment(PolarAlignmentEvent),
     OverlayMessage {
-        pos:  OverlayMessgagePos,
+        pos:  OverlayMessagePos,
         text: Arc<String>,
     },
     Guider(ExtGuiderEvent),

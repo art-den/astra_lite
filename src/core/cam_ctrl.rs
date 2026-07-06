@@ -111,10 +111,10 @@ pub fn control_camera_heater(
 }
 
 pub fn restart_camera_exposure(
-    camera: &Arc<dyn Camera + Send + Sync>,
-    mode:   &mut ModeData,
-    frame_opts:  &FrameOptions,
-    ctrl_opts:   &CamCtrlOptions,
+    camera:     &Arc<dyn Camera + Send + Sync>,
+    mode:       &mut ModeData,
+    frame_opts: &FrameOptions,
+    ctrl_opts:  &CamCtrlOptions,
 ) -> eyre::Result<()> {
     log::info!("Begin restart exposure of camera {}...", camera.id());
 
@@ -128,12 +128,9 @@ pub fn restart_camera_exposure(
     // Mode not restarted the camera exposure. Do it itself
     _ = camera.abort_exposure();
 
-    let mode_cam_opts =
-        if let Some(frame_opts) = mode.active.frame_options_to_restart_exposure() {
-            frame_opts
-        } else {
-            frame_opts
-        };
+    let mode_cam_opts = mode.active
+        .frame_options_to_restart_exposure()
+        .unwrap_or(frame_opts);
 
     take_shot(camera, mode_cam_opts, ctrl_opts)?;
 

@@ -713,9 +713,9 @@ impl PreviewUi {
         self.widgets.ctrl.scl_wb_blue.set_sensitive(rgb_enabled);
     }
 
-    fn show_overlay_message(&self, pos: &OverlayMessgagePos, text: &str) {
+    fn show_overlay_message(&self, pos: &OverlayMessagePos, text: &str) {
         match pos {
-            OverlayMessgagePos::Top => {
+            OverlayMessagePos::Top => {
                 self.widgets.image.l_overlay_top.set_text(text);
             }
         }
