@@ -661,7 +661,7 @@ impl CommonStarsImage {
         const ANGLE_CNT: usize = 32;
         let center_x = (self.image.width() / 2) as f64;
         let center_y = (self.image.height() / 2) as f64;
-        let size = (usize::min(self.image.width(), self.image.height()) * self.k) as i32;
+        let size = usize::max(self.image.width(), self.image.height()) as i32;
         let mut widths = Vec::new();
         for i in 0..ANGLE_CNT {
             let angle = PI * (i as f64) / (ANGLE_CNT as f64);
