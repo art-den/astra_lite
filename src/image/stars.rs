@@ -425,14 +425,14 @@ impl StarsFinder {
 
         // remove not overexposured stars larger then
         // 2 * median value of not overexposured stars area
-        let mut not_oberexposured_areas: Vec<_> = stars
+        let mut not_overexposured_areas: Vec<_> = stars
             .iter()
             .filter(|s| !s.overexposured)
             .map(|s| s.points.len())
             .collect();
 
-        if !not_oberexposured_areas.is_empty() {
-            let med = median(&mut not_oberexposured_areas);
+        if !not_overexposured_areas.is_empty() {
+            let med = median(&mut not_overexposured_areas);
             let border = med * 2;
             stars.retain(|s| s.overexposured || s.points.len() < border);
         }
