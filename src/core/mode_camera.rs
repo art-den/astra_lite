@@ -5,7 +5,7 @@ use crate::{
     core::{cam_ctrl::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode},
     guiding::external_guider::*,
     hal::{Camera, CameraFeatures, CameraShot, Focuser, FrameType, Telescope},
-    image::{histogram::*, raw::{RawImage, RawImageInfo}, raw_stacker::RawStacker, stars_offset::*},
+    image::{histogram::*, io::save_raw_image_to_fits_file, raw::{RawImage, RawImageInfo}, raw_stacker::RawStacker, stars_offset::*},
     options::*,
     utils::io_utils::*,
 };
@@ -1160,7 +1160,7 @@ impl TackingPicturesMode {
             std::fs::create_dir_all(parent)?;
         }
 
-        raw_image.save_to_fits_file(&self.out_file_names.master_fname)?;
+        save_raw_image_to_fits_file(&raw_image, &self.out_file_names.master_fname)?;
 
         log::debug!("Master frame saved!");
         Ok(())

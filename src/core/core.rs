@@ -533,11 +533,10 @@ impl Core {
     }
 
     pub fn open_image_from_file(self: &Arc<Self>, file_name: &Path) -> eyre::Result<()> {
+        let img_source = FromFileCameraShot::new(file_name)?;
         let new_stop_flag = Arc::new(AtomicBool::new(false));
         *self.img_proc_stop_flag.lock().unwrap() = Arc::clone(&new_stop_flag);
-
         let options = self.options.read().unwrap();
-
         let calibr_params = Some(CalibrParams {
             extract_dark:  options.calibr.dark_frame_en,
             dark_lib_path: options.calibr.dark_library_path.clone(),
@@ -545,11 +544,10 @@ impl Core {
             sar_hot_pixs:  options.calibr.hot_pixels,
             ccd_temp:      None,
         });
-
         let command = FrameProcessCommandData {
             mode_type:       ModeType::OpeningImgFile,
             camera_id:       String::new(),
-            img_source:      Arc::new(FromFileCameraShot::new(file_name)),
+            img_source:      Arc::new(img_source),
             flags:           FrameProcessCommandFlags::empty(),
             frame:           Arc::clone(&self.cur_frame),
             stop_flag:       new_stop_flag,
@@ -562,11 +560,9 @@ impl Core {
             live_stacking:   None,
             calibr_params,
         };
-
         self.frame_processing.add_to_queue(
             FrameProcessCommand::ProcessImage(command)
         )?;
-
         Ok(())
     }
 

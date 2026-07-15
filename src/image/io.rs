@@ -6,7 +6,7 @@ use itertools::{izip, Itertools};
 
 use crate::{hal::{CameraShot, CameraShotType}, ui::gtk_utils::*};
 
-use super::{image::{Image, ImageLayer}, raw::*, simple_fits::{FitsReader, Header, SeekNRead}};
+use super::{image::{Image, ImageLayer}, raw::*, simple_fits::{FitsReader, FitsWriter, Header, SeekNRead}};
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -41,6 +41,22 @@ pub fn load_raw_image_from_fits_file(file_name: &Path) -> eyre::Result<RawImage>
     let file = File::open(file_name)?;
     let mut reader = BufReader::with_capacity(1024*1024, file);
     load_raw_image_from_fits_stream(&mut reader)
+}
+
+pub fn save_raw_image_to_fits_file(
+    raw_image: &RawImage,
+    file_name: &Path
+) -> eyre::Result<()> {
+    let mut file = File::create(file_name)?;
+    let writer = FitsWriter::new();
+    let info = raw_image.info();
+    let mut hdu = Header::new_2d(info.width, info.height);
+    raw_image.info().save_to_fits_header(&mut hdu);
+    let (bzero, bitpix) = info.bzero_and_bitpix_for_fit_file();
+    writer.write_header(&mut file, &hdu)?;
+    writer.write_data(bitpix, bzero, &mut file, &raw_image.as_slice())?;
+
+    Ok(())
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -292,16 +308,13 @@ pub struct FromFileCameraShot {
 }
 
 impl FromFileCameraShot {
-    pub fn new(file_name: &Path) -> Self {
+    pub fn new(file_name: &Path) -> eyre::Result<Self> {
         let ext = file_name.extension().unwrap_or_default().to_str().unwrap_or_default();
         let is_fits = ext.eq_ignore_ascii_case("fits") || ext.eq_ignore_ascii_case("fit");
         let image_type = if is_fits {
-            let try_find_mono_image_hdu_in_fits = || -> eyre::Result<bool> {
-                let mut stream = BufReader::new(File::open(file_name)?);
-                let reader = FitsReader::new(&mut stream)?;
-                Ok(find_mono_image_hdu_in_fits(&reader).is_some())
-            };
-            let contain_mono_hdu = try_find_mono_image_hdu_in_fits().unwrap_or(false);
+            let mut stream = BufReader::new(File::open(file_name)?);
+            let reader = FitsReader::new(&mut stream)?;
+            let contain_mono_hdu = find_mono_image_hdu_in_fits(&reader).is_some();
             if contain_mono_hdu {
                 CameraShotType::RawCcdData
             } else {
@@ -310,7 +323,7 @@ impl FromFileCameraShot {
         } else {
             CameraShotType::ReadyImage
         };
-        Self { file_name: file_name.to_path_buf(), image_type }
+        Ok(Self { file_name: file_name.to_path_buf(), image_type })
     }
 }
 

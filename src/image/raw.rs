@@ -194,7 +194,7 @@ impl RawImageInfo {
         }
     }
 
-    fn bzero_and_bitpix_for_fit_file(&self) -> (u16, i8) {
+    pub fn bzero_and_bitpix_for_fit_file(&self) -> (u16, i8) {
         if self.max_value > 255 {
             (32768_u16, 16)
         } else {
@@ -225,18 +225,6 @@ impl RawImage {
         data:    Vec<u16>,
         cfa_arr: &'static CfaArray) -> Self {
         Self { info, data, cfa_arr }
-    }
-
-    pub fn save_to_fits_file(&self, file_name: &Path) -> eyre::Result<()> {
-        let mut file = File::create(file_name)?;
-        let writer = FitsWriter::new();
-        let mut hdu = Header::new_2d(self.info.width, self.info.height);
-        self.info.save_to_fits_header(&mut hdu);
-        let (bzero, bitpix) = self.info.bzero_and_bitpix_for_fit_file();
-        writer.write_header(&mut file, &hdu)?;
-        writer.write_data(bitpix, bzero, &mut file, &self.data)?;
-
-        Ok(())
     }
 
     pub fn as_slice(&self) -> &[u16] {
