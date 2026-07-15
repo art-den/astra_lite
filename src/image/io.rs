@@ -288,39 +288,49 @@ pub fn load_image_using_pixbuf(
 
 pub struct FromFileCameraShot {
     file_name: PathBuf,
+    image_type: CameraShotType,
 }
 
 impl FromFileCameraShot {
     pub fn new(file_name: &Path) -> Self {
-        Self { file_name: file_name.to_path_buf() }
+        let ext = file_name.extension().unwrap_or_default().to_str().unwrap_or_default();
+        let is_fits = ext.eq_ignore_ascii_case("fits") || ext.eq_ignore_ascii_case("fit");
+        let image_type = if is_fits {
+            let try_find_mono_image_hdu_in_fits = || -> eyre::Result<bool> {
+                let mut stream = BufReader::new(File::open(file_name)?);
+                let reader = FitsReader::new(&mut stream)?;
+                Ok(find_mono_image_hdu_in_fits(&reader).is_some())
+            };
+            let contain_mono_hdu = try_find_mono_image_hdu_in_fits().unwrap_or(false);
+            if contain_mono_hdu {
+                CameraShotType::RawCcdData
+            } else {
+                CameraShotType::ReadyImage
+            }
+        } else {
+            CameraShotType::ReadyImage
+        };
+        Self { file_name: file_name.to_path_buf(), image_type }
     }
 }
 
 impl CameraShot for FromFileCameraShot {
     fn get_type(&self) -> CameraShotType {
-        CameraShotType::ReadyImage
+        self.image_type
     }
 
     fn get_raw(&self) -> eyre::Result<crate::image::raw::RawImage> {
-        unreachable!()
+        load_raw_image_from_fits_file(&self.file_name)
     }
 
     fn get_image(&self, image: &mut crate::image::image::Image) -> eyre::Result<()> {
         image.clear();
-
         let ext = self.file_ext();
         let ext_cmp = |other| ext.eq_ignore_ascii_case(other);
-
-        let is_fits = ext_cmp("fits") || ext_cmp("fit");
         let is_tif = ext_cmp("tif") || ext_cmp("tiff");
         let is_jpeg = ext_cmp("jpg") || ext_cmp("jpeg");
         let is_png = ext_cmp("png");
-
-        if is_fits {
-            let mut stream = BufReader::new(File::open(&self.file_name)?);
-            let reader = FitsReader::new(&mut stream)?;
-            load_image_from_fits_reader(image, &reader, &mut stream)?;
-        } else if is_tif {
+        if is_tif {
             load_image_from_tif_file(image, &self.file_name)?;
         } else if is_jpeg || is_png {
             load_image_using_pixbuf(image, &self.file_name, 6000)?;

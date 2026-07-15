@@ -46,7 +46,7 @@ ndarray = "0.17"
 embed-resource = "1.7"
 
 [profile.dev]
-opt-level = 0
+opt-level = 1
 panic = "abort"
 
 [profile.release]
