@@ -84,7 +84,7 @@ impl Header {
     }
 
     pub fn set_str(&mut self, key: &str, value: &str) {
-        self.set_value_impl(key, format!("'{:<8}'", value));
+        self.set_value_impl(key, format!("'{:<18}'", value));
     }
 
     pub fn bitpix(&self) -> i8 {

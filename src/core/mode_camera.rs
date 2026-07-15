@@ -5,7 +5,7 @@ use crate::{
     core::{cam_ctrl::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode},
     guiding::external_guider::*,
     hal::{Camera, CameraFeatures, CameraShot, Focuser, FrameType, Telescope},
-    image::{histogram::*, io::save_raw_image_to_fits_file, raw::{RawImage, RawImageInfo}, raw_stacker::RawStacker, stars_offset::*},
+    image::{histogram::*, io::save_raw_image_to_fits_file, raw::{RawImage, RawImageInfo}, raw_stacker::*, stars_offset::*},
     options::*,
     utils::io_utils::*,
 };
@@ -223,11 +223,17 @@ impl TackingPicturesMode {
             core.live_stacking.clear();
         }
 
+        let raw_stacker_mode = if cam_options.frame.frame_type == FrameType::Flats {
+            RawStackerMode::Average
+        } else {
+            RawStackerMode::AverageOfMedians
+        };
+
         Ok(Self {
             state:             State::Common,
             fn_gen:            Arc::new(Mutex::new(SeqFileNameGen::new())),
             events:            Arc::clone(&core.events),
-            raw_stacker:       RawStacker::new(),
+            raw_stacker:       RawStacker::new(raw_stacker_mode),
             options:           Arc::clone(&core.options),
             next_job:          None,
             ref_stars:         None,
@@ -546,11 +552,11 @@ impl TackingPicturesMode {
             normalized_flat.normalize_flat();
             tmr.log("Normalizing flat");
             let tmr = TimeLogger::start();
-            self.raw_stacker.add(&normalized_flat, false)?;
+            self.raw_stacker.add(&normalized_flat)?;
             tmr.log("Adding raw calibration frame");
         } else {
             let tmr = TimeLogger::start();
-            self.raw_stacker.add(raw_image, true)?;
+            self.raw_stacker.add(raw_image)?;
             tmr.log("Adding raw calibration frame");
         }
         Ok(())

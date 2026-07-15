@@ -4,22 +4,29 @@ use crate::utils::math::median5;
 
 use super::raw::*;
 
+pub enum RawStackerMode {
+    Average,
+    AverageOfMedians,
+}
+
 pub struct RawStacker {
+    mode:       RawStackerMode,
     data:       Vec<u32>,
     images:     Vec<RawImage>,
     info:       Option<RawImageInfo>,
-    counter:    u32,
+    divisor:    u32, // divisor for values from `data`
     zero_sum:   i32,
     integr_exp: f64,
 }
 
 impl RawStacker {
-    pub fn new() -> Self {
+    pub fn new(mode: RawStackerMode) -> Self {
         Self {
+            mode,
             data:       Vec::new(),
             images:     Vec::new(),
             info:       None,
-            counter:    0,
+            divisor:    0,
             zero_sum:   0,
             integr_exp: 0.0,
         }
@@ -31,16 +38,12 @@ impl RawStacker {
         self.images.clear();
         self.images.shrink_to_fit();
         self.info = None;
-        self.counter = 0;
+        self.divisor = 0;
         self.zero_sum = 0;
         self.integr_exp = 0.0;
     }
 
-    pub fn add(
-        &mut self,
-        raw:        &RawImage,
-        use_median: bool
-    ) -> eyre::Result<()> {
+    pub fn add(&mut self, raw: &RawImage) -> eyre::Result<()> {
         let raw_info = raw.info();
         if let Some(info) = &self.info {
             if info.width != raw_info.width
@@ -62,34 +65,37 @@ impl RawStacker {
             }
         } else {
             self.info = Some(raw_info.clone());
-            self.counter = 0;
+            self.divisor = 0;
             self.zero_sum = 0;
             self.data.resize(raw.as_slice().len(), 0);
         }
-        if use_median {
-            if self.images.len() == 4 {
-                let raw1 = self.images[0].as_slice();
-                let raw2 = self.images[1].as_slice();
-                let raw3 = self.images[2].as_slice();
-                let raw4 = self.images[3].as_slice();
-
-                for (s1, s2, s3, s4, s5, d)
-                in izip!(raw1, raw2, raw3, raw4, raw.as_slice(), &mut self.data) {
-                    *d += median5(*s1, *s2, *s3, *s4, *s5) as u32;
+        match self.mode {
+            RawStackerMode::Average => {
+                for (s, d) in izip!(raw.as_slice(), &mut self.data) {
+                    *d += *s as u32;
                 }
-                self.counter += 1;
+                self.divisor += 1;
                 self.zero_sum += raw_info.offset;
-                self.images.clear();
-                self.images.shrink_to_fit();
-            } else  {
-                self.images.push(raw.clone());
             }
-        } else {
-            for (s, d) in izip!(raw.as_slice(), &mut self.data) {
-                *d += *s as u32;
+            RawStackerMode::AverageOfMedians => {
+                if self.images.len() == 4 {
+                    let raw1 = self.images[0].as_slice();
+                    let raw2 = self.images[1].as_slice();
+                    let raw3 = self.images[2].as_slice();
+                    let raw4 = self.images[3].as_slice();
+
+                    for (d, s1, s2, s3, s4, s5)
+                    in izip!(&mut self.data, raw1, raw2, raw3, raw4, raw.as_slice()) {
+                        *d += median5(*s1, *s2, *s3, *s4, *s5) as u32;
+                    }
+                    self.divisor += 1;
+                    self.zero_sum += raw_info.offset;
+                    self.images.clear();
+                    self.images.shrink_to_fit();
+                } else  {
+                    self.images.push(raw.clone());
+                }
             }
-            self.counter += 1;
-            self.zero_sum += raw_info.offset;
         }
         self.integr_exp += raw_info.exposure;
         Ok(())
@@ -97,17 +103,17 @@ impl RawStacker {
 
     pub fn get(&mut self) -> eyre::Result<RawImage> {
         let Some(info) = &self.info else {
-            eyre::bail!("Raw added is empty");
+            eyre::bail!("No raw images added");
         };
 
         let cfa_arr = info.cfa.get_array();
         let mut info = info.clone();
-        let counter2 = self.counter/2;
-        info.offset = (self.zero_sum + counter2 as i32) / self.counter as i32;
+        let divisor2 = self.divisor/2;
+        info.offset = (self.zero_sum + divisor2 as i32) / self.divisor as i32;
         info.integr_time = Some(self.integr_exp);
 
-        if self.counter == 0 && !self.images.is_empty() {
-            // Median is used but less then 3 images are added.
+        if self.divisor == 0 && !self.images.is_empty() {
+            // Median mode is active but fewer than 5 images have been added.
             // Just use mean
             let mut iterators: Vec<_> = self.images
                 .iter()
@@ -137,7 +143,7 @@ impl RawStacker {
         } else {
             let data: Vec<_> = self.data
                 .iter()
-                .map(|v| ((*v + counter2) / self.counter) as u16)
+                .map(|v| ((*v + divisor2) / self.divisor) as u16)
                 .collect();
             Ok(RawImage::new(info, data, cfa_arr))
         }
