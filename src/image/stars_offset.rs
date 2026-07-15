@@ -71,7 +71,7 @@ fn try_calculate(
     let ref_triangles = generate_triangles(ref_points, max_points_cnt, min_triangle_len, triangulate);
     let triangles = generate_triangles(points, max_points_cnt, min_triangle_len, triangulate);
 
-    // Search similar trinagles
+    // Search similar triangles
     let max_err2 = max_err*max_err;
     let mut similar_triangles = Vec::new();
     for ref_triangle in &ref_triangles {
@@ -135,7 +135,7 @@ fn try_calculate(
         for (angle, ..) in &similar_triangles { angle_values.push(*angle); }
         let angle = angles_mean(angle_values.iter().copied());
 
-        // Caluclate x and y offset for similar_triangles and median values
+        // Calculate x and y offset for similar_triangles and median values
         let center_x = (image_width - 1.0) / 2.0;
         let center_y = (image_height - 1.0) / 2.0;
         x_values.clear();
@@ -151,7 +151,7 @@ fn try_calculate(
         }
         let x_median_pos = x_values.len() / 2;
         let x_median = *x_values.select_nth_unstable_by(x_median_pos, cmp_f64).1;
-        let y_median_pos = x_values.len() / 2;
+        let y_median_pos = y_values.len() / 2;
         let y_median = *y_values.select_nth_unstable_by(y_median_pos, cmp_f64).1;
 
         // filter similar_triangles by median x and y offset
@@ -234,7 +234,7 @@ fn generate_triangles(
     points:           &[Point],
     max_points_cnt:   usize,
     min_triangle_len: f64,
-    _triangulate:     bool // TODO: add trinagulation!!!
+    _triangulate:     bool // TODO: add triangulation!!!
 ) -> Vec<Triangle<'_>> {
     fn add_triangles<'a>(
         result:       &mut Vec<Triangle<'a>>,
