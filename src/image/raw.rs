@@ -540,7 +540,7 @@ impl RawImage {
                                     for my in -1 ..= 1 { for mx in -1 ..= 1 {
                                         if my == 0 && mx == 0 { continue; }
                                         let test_x = x as isize + mx * offset;
-                                        let test_y = x as isize + my * offset;
+                                        let test_y = y as isize + my * offset;
                                         if let Some(v) = self.get(test_x, test_y) {
                                             sum += v as u32;
                                             cnt += 1;
