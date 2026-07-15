@@ -199,7 +199,7 @@ impl Triangle<'_> {
         let diff1 = self.edge_lens[0] - other.edge_lens[0];
         let diff2 = self.edge_lens[1] - other.edge_lens[1];
         let diff3 = self.edge_lens[2] - other.edge_lens[2];
-        diff1 * diff1 + diff2 * diff2 * diff3 * diff3
+        diff1 * diff1 + diff2 * diff2 + diff3 * diff3
     }
 
     fn angle_between(&self, other: &Triangle) -> f64 {
