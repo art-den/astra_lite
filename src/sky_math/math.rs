@@ -205,7 +205,7 @@ impl Point3D {
     pub fn angle(pt1: &Self, pt2: &Self) -> Option<f64> {
         let len1 = pt1.length();
         let len2 = pt2.length();
-        if len1 != 0.0 || len2 != 0.0 {
+        if len1 != 0.0 && len2 != 0.0 {
             let scalar_prod = (pt1.x * pt2.x + pt1.y * pt2.y + pt1.z * pt2.z) / (len1 * len2);
             let scalar_prod = scalar_prod.clamp(-1.0, 1.0);
             Some(f64::acos(scalar_prod))
@@ -375,13 +375,13 @@ fn test_calc_julian_day() {
 }
 
 pub fn calc_julian_time(dt: &NaiveDateTime) -> f64 {
-    let julain_day = calc_julian_day(&dt.date()) as f64;
+    let julian_day = calc_julian_day(&dt.date()) as f64;
     let hour = dt.hour() as f64;
     let min = dt.minute() as f64;
     let mut sec = dt.second() as f64;
     let msecs = (dt.nanosecond() / 1_000_000) as f64;
     sec += msecs / 1000.0;
-    julain_day + (hour - 12.0) / 24.0 + min / 1440.0 + sec / 86400.0
+    julian_day + (hour - 12.0) / 24.0 + min / 1440.0 + sec / 86400.0
 }
 
 pub fn calc_julian_centuries(dt: &NaiveDateTime) -> f64 {

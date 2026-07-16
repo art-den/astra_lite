@@ -128,6 +128,7 @@ impl<T: Copy + Default> ImageLayer<T> {
 impl ImageLayer<u16> {
     pub fn calc_noise(&self) -> f32 {
         let mut diffs = Vec::with_capacity(self.data.len()/10);
+        // To roughly estimate the noise level, you can skip every 7th tuple of 10 pixels
         for (v1, v2, v3, v4, v5, m, v6, v7, v8, v9, v10)
         in self.data.iter().tuples().step_by(7) {
             let aver = (

@@ -64,7 +64,6 @@ pub enum PlateSolveResult {
 
 pub struct PlateSolver {
     solver: Box<dyn PlateSolverIface + Sync + Send + 'static>,
-    config: PlateSolveConfig,
 }
 
 pub enum PlateSolverInData<'a> {
@@ -82,10 +81,7 @@ impl PlateSolver {
             PlateSolverType::Astrometry =>
                 Box::new(AstrometryPlateSolver::new()),
         };
-        Self {
-            solver,
-            config: PlateSolveConfig::default(),
-        }
+        Self { solver }
     }
 
     pub fn support_stars_as_input(&self) -> bool {
@@ -126,7 +122,6 @@ impl PlateSolver {
             }
         }
 
-        self.config = config.clone();
         self.solver.start(data, config)?;
         Ok(())
     }
@@ -154,8 +149,7 @@ trait PlateSolverIface {
 
 #[derive(Clone)]
 pub struct PlateSolverEvent {
-    pub cam_name:  String,
-    pub result:    PlateSolveOkResult,
-    pub preview:   Option<Arc<PreviewRgbData>>,
-
+    pub cam_name: String,
+    pub result:   PlateSolveOkResult,
+    pub preview:  Option<Arc<PreviewRgbData>>,
 }

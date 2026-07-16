@@ -8,7 +8,7 @@
 - `src/hal` - Hardware Abstraction Layer — INDI and ASCOM Alpaca for connecting telescopes, cameras, focusers.
 - `src/image` - Image working: raw RAW, FITS, stacking, histograms, stars.
 - `src/options` - Serializable settings (JSON) for all components.
-- `src/plate_solve` - Common API fpr platesolving. Implemetation for local Astrometry.net
+- `src/plate_solve` - Common API for platesolving. Implementation for local Astrometry.net
 - `src/sky_math` - Sky math: coordinates, Solar system.
 - `src/ui` - GTK interface: device panels, preview, sky map, dialogs.
 - `src/ui/resources` - GTK ui-files, images
