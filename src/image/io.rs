@@ -175,9 +175,9 @@ pub fn save_image_to_tif_file(image: &Image, file_name: &Path) -> eyre::Result<(
     } else if image.is_color() {
         use tiff::encoder::*;
         let mut file = BufWriter::new(File::create(file_name)?);
-        let mut decoder = TiffEncoder::new(&mut file)?;
+        let mut encoder = TiffEncoder::new(&mut file)?;
 
-        let mut tiff = decoder.new_image::<colortype::RGB16>(
+        let mut tiff = encoder.new_image::<colortype::RGB16>(
             image.width() as u32,
             image.height() as u32
         )?;

@@ -5,7 +5,7 @@ use crate::{
     core::{cam_ctrl::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode},
     guiding::external_guider::*,
     hal::{Camera, CameraFeatures, CameraShot, Focuser, FrameType, Telescope},
-    image::{histogram::*, io::save_raw_image_to_fits_file, raw::{RawImage, RawImageInfo}, raw_stacker::*, stars_offset::*},
+    image::{histogram::*, image_stacker::ImageStackingMode, io::save_raw_image_to_fits_file, raw::{RawImage, RawImageInfo}, raw_stacker::*, stars_offset::*},
     options::*,
     utils::io_utils::*,
 };
@@ -220,7 +220,12 @@ impl TackingPicturesMode {
         };
 
         if matches!(cam_mode, CameraMode::LiveStacking|CameraMode::SavingRawFrames) {
-            core.live_stacking.clear();
+            let image_stacker_mode = if opts.live.remove_tracks {
+                ImageStackingMode::AverageOfSlidingMedians
+            } else {
+                ImageStackingMode::Average
+            };
+            core.live_stacking.prepare_for_work(image_stacker_mode);
         }
 
         let raw_stacker_mode = if cam_options.frame.frame_type == FrameType::Flats {

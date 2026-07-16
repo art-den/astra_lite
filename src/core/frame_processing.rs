@@ -6,7 +6,7 @@ use bitflags::bitflags;
 use crate::{
     core::{core::ModeType, utils::{FileNameArg, FileNameUtils}}, hal::{CameraShot, CameraShotType, FrameType},
     image::{
-        histogram::*, image::*, image_stacker::ImageStacker, info::*,
+        histogram::*, image::*, image_stacker::*, info::*,
         io::*, preview::*, raw::*,
         stars::{StarItems, Stars, StarsFinder, StarsInfo}, stars_offset::*,
     },
@@ -155,8 +155,8 @@ impl LiveStackingData {
         }
     }
 
-    pub fn clear(&self) {
-        self.stacker.write().unwrap().clear();
+    pub fn prepare_for_work(&self, mode: ImageStackingMode) {
+        self.stacker.write().unwrap().prepare_for_work(mode);
         self.image.write().unwrap().clear();
         self.hist.write().unwrap().clear();
         *self.info.write().unwrap() = None;
@@ -754,7 +754,6 @@ impl FrameProcessing {
                     -offset.y,
                     -offset.angle,
                     exposure,
-                    live_stacking.options.remove_tracks
                 );
                 tmr.log("ImageStacker::add");
                 drop(stacker);

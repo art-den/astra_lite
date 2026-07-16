@@ -84,25 +84,31 @@ impl ImageStackerChan {
     }
 }
 
+pub enum ImageStackingMode {
+    Average,
+    AverageOfSlidingMedians,
+}
+
 pub struct ImageStacker {
-    r: ImageStackerChan,
-    g: ImageStackerChan,
-    b: ImageStackerChan,
-    l: ImageStackerChan,
-    cnt: Vec<u16>,
-    tmp_idx: usize,
-    width: usize,
-    height: usize,
-    max_value: u16,
-    total_exp: f64,
+    mode:       Option<ImageStackingMode>,
+    r:          ImageStackerChan,
+    g:          ImageStackerChan,
+    b:          ImageStackerChan,
+    l:          ImageStackerChan,
+    cnt:        Vec<u16>,
+    tmp_idx:    usize,
+    width:      usize,
+    height:     usize,
+    max_value:  u16,
+    total_exp:  f64,
     frames_cnt: u32,
-    no_tracks: bool,
-    raw_info: Option<RawImageInfo>,
+    raw_info:   Option<RawImageInfo>,
 }
 
 impl ImageStacker {
     pub fn new() -> Self {
         Self {
+            mode: None,
             r: ImageStackerChan::default(),
             g: ImageStackerChan::default(),
             b: ImageStackerChan::default(),
@@ -114,7 +120,6 @@ impl ImageStacker {
             max_value: 0,
             total_exp: 0.0,
             frames_cnt: 0,
-            no_tracks: false,
             raw_info: None,
         }
     }
@@ -127,7 +132,18 @@ impl ImageStacker {
         self.cnt.is_empty()
     }
 
-    pub fn clear(&mut self) {
+    fn is_color(&self) -> bool {
+        !self.r.data.is_empty() &&
+        !self.g.data.is_empty() &&
+        !self.b.data.is_empty()
+    }
+
+    fn is_monochrome(&self) -> bool {
+        !self.l.data.is_empty()
+    }
+
+    pub fn prepare_for_work(&mut self, mode: ImageStackingMode) {
+        self.mode = Some(mode);
         self.l.clear();
         self.r.clear();
         self.g.clear();
@@ -144,15 +160,18 @@ impl ImageStacker {
 
     pub fn add(
         &mut self,
-        image:     &Image,
-        hist:      &Histogram,
-        transl_x:  f64,
-        transl_y:  f64,
-        angle:     f64,
-        exposure:  f64,
-        no_tracks: bool,
+        image:    &Image,
+        hist:     &Histogram,
+        transl_x: f64,
+        transl_y: f64,
+        angle:    f64,
+        exposure: f64,
     ) {
-        debug_assert!(!image.is_empty());
+        assert!(!image.is_empty());
+        let is_color_image = image.is_color(); // image.r, image.g, image.b are not empty
+        let is_monochrome_image = image.is_monochrome(); // image.l is not empty
+        assert!(is_color_image ^ is_monochrome_image); // The image can be either color or monochrome
+
         if self.is_empty() {
             let data_len = image.width() * image.height();
             if image.is_color() {
@@ -166,13 +185,23 @@ impl ImageStacker {
             self.width = image.width();
             self.height = image.height();
             self.max_value = image.max_value();
-            self.no_tracks = no_tracks;
-            self.raw_info = image.raw_info.clone();
-        }
-        if !self.no_tracks {
-            self.add_simple(image, transl_x, transl_y, angle);
+            self.raw_info = image.raw_info.clone(); // We only need one raw_info from the first frame
         } else {
-            self.add_no_tracks(image, hist, transl_x, transl_y, angle);
+            assert_eq!(self.width, image.width());
+            assert_eq!(self.height, image.height());
+            assert_eq!(self.max_value, image.max_value());
+        }
+
+        assert_eq!(self.is_color(), is_color_image);
+        assert_eq!(self.is_monochrome(), is_monochrome_image);
+
+
+        match self.mode {
+            Some(ImageStackingMode::Average) =>
+                self.add_simple(image, transl_x, transl_y, angle),
+            Some(ImageStackingMode::AverageOfSlidingMedians) =>
+                self.add_no_tracks(image, hist, transl_x, transl_y, angle),
+            _ => panic!("self.mode is not initialized"),
         }
         self.total_exp += exposure;
         self.frames_cnt += 1;
@@ -185,20 +214,24 @@ impl ImageStacker {
         transl_y: f64,
         angle:    f64,
     ) {
-        Self::add_layer(&mut self.r, &mut self.cnt, &image.r, transl_x, transl_y, angle, false);
-        Self::add_layer(&mut self.g, &mut self.cnt, &image.g, transl_x, transl_y, angle, false);
-        Self::add_layer(&mut self.b, &mut self.cnt, &image.b, transl_x, transl_y, angle, true);
-        Self::add_layer(&mut self.l, &mut self.cnt, &image.l, transl_x, transl_y, angle, true);
+        if self.is_color() {
+            Self::add_layer(&mut self.r, None,                &image.r, transl_x, transl_y, angle);
+            Self::add_layer(&mut self.g, None,                &image.g, transl_x, transl_y, angle);
+            Self::add_layer(&mut self.b, Some(&mut self.cnt), &image.b, transl_x, transl_y, angle);
+        } else if self.is_monochrome() {
+            Self::add_layer(&mut self.l, Some(&mut self.cnt), &image.l, transl_x, transl_y, angle);
+        } else {
+            unreachable!();
+        }
     }
 
     fn add_layer(
         dst:        &mut ImageStackerChan,
-        cnt:        &mut [u16],
+        cnt:        Option<&mut [u16]>,
         src:        &ImageLayer<u16>,
         transl_x:   f64,
         transl_y:   f64,
         angle:      f64,
-        update_cnt: bool
     ) {
         if src.is_empty() {
             return;
@@ -222,25 +255,46 @@ impl ImageStacker {
         let transl_x = crd_to_i64(transl_x);
         let transl_y = crd_to_i64(transl_y);
 
-        dst.data.par_chunks_exact_mut(src.width())
-            .zip(cnt.par_chunks_exact_mut(src.width()))
-            .enumerate()
-            .for_each(|(y, (dst_row, cnt_row))| {
-                let y = y as i64 * CRD_DIV - transl_y;
-                let dy = y - center_y;
-                let mut x = -transl_x;
-                for (dst_v, cnt_v) in dst_row.iter_mut().zip(cnt_row) {
-                    let dx = x - center_x;
-                    let rot_x = center_x + (dx * cos_a - dy * sin_a) / K;
-                    let rot_y = center_y + (dy * cos_a + dx * sin_a) / K;
-                    let src_v = src.get_crd_i64(rot_x, rot_y);
-                    if let Some(v) = src_v {
-                        *dst_v += v as i32;
-                        if update_cnt { *cnt_v += 1; }
+        if let Some(cnt) = cnt {
+            dst.data.par_chunks_exact_mut(src.width())
+                .zip(cnt.par_chunks_exact_mut(src.width()))
+                .enumerate()
+                .for_each(|(y, (dst_row, cnt_row))| {
+                    let y = y as i64 * CRD_DIV - transl_y;
+                    let dy = y - center_y;
+                    let mut x = -transl_x;
+                    for (dst_v, cnt_v) in dst_row.iter_mut().zip(cnt_row) {
+                        let dx = x - center_x;
+                        let rot_x = center_x + (dx * cos_a - dy * sin_a) / K;
+                        let rot_y = center_y + (dy * cos_a + dx * sin_a) / K;
+                        let src_v = src.get_crd_i64(rot_x, rot_y);
+                        if let Some(v) = src_v {
+                            *dst_v += v as i32;
+                            *cnt_v += 1;
+                        }
+                        x += CRD_DIV;
                     }
-                    x += CRD_DIV;
-                }
-            });
+                });
+        } else {
+            dst.data.par_chunks_exact_mut(src.width())
+                .enumerate()
+                .for_each(|(y, dst_row)| {
+                    let y = y as i64 * CRD_DIV - transl_y;
+                    let dy = y - center_y;
+                    let mut x = -transl_x;
+                    for dst_v in dst_row {
+                        let dx = x - center_x;
+                        let rot_x = center_x + (dx * cos_a - dy * sin_a) / K;
+                        let rot_y = center_y + (dy * cos_a + dx * sin_a) / K;
+                        let src_v = src.get_crd_i64(rot_x, rot_y);
+                        if let Some(v) = src_v {
+                            *dst_v += v as i32;
+                        }
+                        x += CRD_DIV;
+                    }
+                });
+
+        }
     }
 
     pub fn add_no_tracks(
@@ -251,25 +305,41 @@ impl ImageStacker {
         transl_y: f64,
         angle:    f64,
     ) {
-        let background_r = hist.r.as_ref().map(|chan| chan.median()).unwrap_or(0);
-        let background_g = hist.g.as_ref().map(|chan| chan.median()).unwrap_or(0);
-        let background_b = hist.b.as_ref().map(|chan| chan.median()).unwrap_or(0);
-        let background_l = hist.l.as_ref().map(|chan| chan.median()).unwrap_or(0);
+        // Each frame is rotated and stored in a circular buffer of 5 slots.
+        // Once full, a median over the 5 slots is accumulated into the output
+        // on every subsequent frame. This O(1) approach rejects outliers
+        // (satellites etc) without maintaining a sorted window — important
+        // for low-power devices.
+
 
         let idx = self.tmp_idx % 5;
 
-        Self::rotate_image(idx, &mut self.r, &image.r, background_r, transl_x, transl_y, angle);
-        Self::rotate_image(idx, &mut self.g, &image.g, background_g, transl_x, transl_y, angle);
-        Self::rotate_image(idx, &mut self.b, &image.b, background_b, transl_x, transl_y, angle);
-        Self::rotate_image(idx, &mut self.l, &image.l, background_l, transl_x, transl_y, angle);
+        if self.is_color() {
+            let background_r = hist.r.as_ref().map(|chan| chan.median()).unwrap_or(0);
+            let background_g = hist.g.as_ref().map(|chan| chan.median()).unwrap_or(0);
+            let background_b = hist.b.as_ref().map(|chan| chan.median()).unwrap_or(0);
+            Self::rotate_image(idx, &mut self.r, &image.r, background_r, transl_x, transl_y, angle);
+            Self::rotate_image(idx, &mut self.g, &image.g, background_g, transl_x, transl_y, angle);
+            Self::rotate_image(idx, &mut self.b, &image.b, background_b, transl_x, transl_y, angle);
+        } else if self.is_monochrome() {
+            let background_l = hist.l.as_ref().map(|chan| chan.median()).unwrap_or(0);
+            Self::rotate_image(idx, &mut self.l, &image.l, background_l, transl_x, transl_y, angle);
+        } else {
+            unreachable!();
+        }
 
         self.tmp_idx += 1;
 
         if self.tmp_idx >= 5 {
-            Self::add_median(&mut self.r, &mut self.cnt, false);
-            Self::add_median(&mut self.g, &mut self.cnt, false);
-            Self::add_median(&mut self.b, &mut self.cnt, true);
-            Self::add_median(&mut self.l, &mut self.cnt, true);
+            if self.is_color() {
+                Self::add_median(&mut self.r, &mut self.cnt, false);
+                Self::add_median(&mut self.g, &mut self.cnt, false);
+                Self::add_median(&mut self.b, &mut self.cnt, true);
+            } else if self.is_monochrome() {
+                Self::add_median(&mut self.l, &mut self.cnt, true);
+            } else {
+                unreachable!();
+            }
         }
     }
 
