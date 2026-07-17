@@ -3,7 +3,7 @@ use itertools::Itertools;
 use crate::{
     hal::{
         events::*, hal_indi::{camera_watchdog::CamWatchdog, dev_watchdog::DevicesWatchdog},
-        indi::{ConnSettings, EventHandlerId},
+        indi::EventHandlerId,
         *,
     },
     image::{
@@ -29,7 +29,6 @@ struct Watchdogs {
 
 pub struct IndiHalImpl {
     indi:            Arc<indi::Connection>,
-    conn_settings:   Mutex<indi::ConnSettings>,
     event_handlers:  Arc<HalEventHandlers>,
     indi_evt_subscr: Mutex<Option<EventHandlerId>>,
     watchdogs:       Mutex<Watchdogs>,
@@ -59,7 +58,6 @@ impl IndiHalImpl {
 
         let result = Arc::new(Self {
             indi:            Arc::clone(&indi),
-            conn_settings:   Mutex::new(ConnSettings::default()),
             event_handlers:  Arc::clone(event_handlers),
             indi_evt_subscr: Mutex::new(None),
             watchdogs:       Mutex::new(watchdogs),
@@ -149,8 +147,6 @@ impl IndiHalImpl {
 
         self.indi.connect(&conn_settings)?;
         Ok(())
-
-        //*self.conn_settings.lock().unwrap() = conn_settings.clone();
     }
 
     fn indi_event_handler(self: &Arc<Self>, event: indi::Event) {

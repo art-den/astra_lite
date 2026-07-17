@@ -2936,7 +2936,8 @@ impl XmlReceiver {
 
     fn notify_subscribers_about_new_prop(
         &self,
-        device:         &mut Device,
+        device_name:    &Arc<String>,
+        is_connected:   bool,
         timestamp:      Option<DateTime<Utc>>,
         prop_name:      &Arc<String>,
         state:          PropState,
@@ -2952,7 +2953,7 @@ impl XmlReceiver {
             };
             events_sender.send(EventSenderEvent::Mess(Event::PropChange(PropChangeEvent {
                 timestamp,
-                device_name: Arc::clone(device.name()),
+                device_name: Arc::clone(device_name),
                 change,
             }))).unwrap();
 
@@ -2961,8 +2962,8 @@ impl XmlReceiver {
                 let flag_bits = value.to_i32().unwrap_or(0);
                 let interface = DriverInterface::from_bits_truncate(flag_bits as u32);
                 let event_data = NewDeviceEvent {
-                    device_name: Arc::clone(device.name()),
-                    connected: device.is_connected(),
+                    device_name: Arc::clone(device_name),
+                    connected: is_connected,
                     interface,
                     timestamp,
                 };
@@ -3123,16 +3124,18 @@ impl XmlReceiver {
             let prop_name = Arc::clone(&property.name);
             device.add_property(property);
             self.update_device_info(device, &prop_name, &values);
+            let device_name = Arc::clone(device.name());
+            let is_connected = device.is_connected();
+            drop(devices);
             self.notify_subscribers_about_new_prop(
-                device,
+                &device_name,
+                is_connected,
                 timestamp,
                 &prop_name,
                 state,
                 values,
                 events_sender,
             );
-
-            drop(devices);
         } else if xml_elem.name.starts_with("set") { // setXXXXVector
             // Changed property data from INDI server
             let device_name = xml_elem.attr_string_or_err("device")?;
