@@ -123,7 +123,7 @@ enum WhenToStartExposure {
     AtFrameProcessingEnd,
 }
 
-pub struct TackingPicturesMode {
+pub struct TakingPicturesMode {
     camera:            Arc<dyn Camera + Send + Sync>,
     cam_mode:          CameraMode,
     state:             State,
@@ -150,7 +150,7 @@ pub struct TackingPicturesMode {
     when_to_start_exp: Option<WhenToStartExposure>,
 }
 
-impl TackingPicturesMode {
+impl TakingPicturesMode {
     pub fn new(cam_mode: CameraMode, core: &Core) -> eyre::Result<Self> {
         let camera = core.cur_devices.camera_or_err()?;
 
@@ -1232,7 +1232,7 @@ impl TackingPicturesMode {
     }
 }
 
-impl Mode for TackingPicturesMode {
+impl Mode for TakingPicturesMode {
     fn get_type(&self) -> ModeType {
         match self.cam_mode {
             CameraMode::SingleShot      => ModeType::SingleShot,

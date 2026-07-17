@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, sync::{Arc, Mutex}};
 
 use crate::{
-    core::{frame_processing::*, mode_camera::{CameraMode, TackingPicturesMode}, mode_waiting::WaitingMode},
+    core::{frame_processing::*, mode_camera::{CameraMode, TakingPicturesMode}, mode_waiting::WaitingMode},
     hal::Camera,
    options::*
 };
@@ -74,7 +74,7 @@ impl DarkCreationMode {
         let start_focusing_fun = move |core: &Arc<Core>, mode: &mut ModeData| -> eyre::Result<()> {
             mode.active.abort()?;
             let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
-            let mut new_mode = TackingPicturesMode::new(cam_mode, core)?;
+            let mut new_mode = TakingPicturesMode::new(cam_mode, core)?;
             new_mode.set_dark_creation_program_item(&program_item);
             new_mode.set_next_mode(Some(prev_mode));
             new_mode.start()?;

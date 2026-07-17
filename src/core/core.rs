@@ -593,25 +593,25 @@ impl Core {
     }
 
     pub fn start_single_shot(&self) -> eyre::Result<()> {
-        let mode = TackingPicturesMode::new(CameraMode::SingleShot, self)?;
+        let mode = TakingPicturesMode::new(CameraMode::SingleShot, self)?;
         self.start_new_mode(mode, false, true)?;
         Ok(())
     }
 
     pub fn start_live_view(&self) -> eyre::Result<()> {
-        let mode = TackingPicturesMode::new(CameraMode::LiveView, self)?;
+        let mode = TakingPicturesMode::new(CameraMode::LiveView, self)?;
         self.start_new_mode(mode, false, true)?;
         Ok(())
     }
 
     pub fn start_saving_raw_frames(&self) -> eyre::Result<()> {
-        let mode = TackingPicturesMode::new(CameraMode::SavingRawFrames, self)?;
+        let mode = TakingPicturesMode::new(CameraMode::SavingRawFrames, self)?;
         self.start_new_mode(mode, true, true)?;
         Ok(())
     }
 
     pub fn start_live_stacking(&self) -> eyre::Result<()> {
-        let mode = TackingPicturesMode::new(CameraMode::LiveStacking, self)?;
+        let mode = TakingPicturesMode::new(CameraMode::LiveStacking, self)?;
         self.start_new_mode(mode, true, true)?;
         Ok(())
     }

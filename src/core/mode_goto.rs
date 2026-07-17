@@ -20,7 +20,7 @@ enum State {
     TackingPicture,
     PlateSolving,
     CorrectMount,
-    TackingFinalPicture,
+    TakingFinalPicture,
     FinalPlateSolving,
     Finished,
     Checking,
@@ -276,7 +276,7 @@ impl Mode for GotoMode {
                 "Plate solving".to_string(),
             State::CorrectMount =>
                 "Mount correction".to_string(),
-            State::TackingFinalPicture =>
+            State::TakingFinalPicture =>
                 "Tacking final picture".to_string(),
             State::FinalPlateSolving =>
                 "Final plate solving".to_string(),
@@ -300,7 +300,7 @@ impl Mode for GotoMode {
             State::TackingPicture => 1,
             State::PlateSolving => 2,
             State::CorrectMount => 3,
-            State::TackingFinalPicture => 4,
+            State::TakingFinalPicture => 4,
             State::FinalPlateSolving => 5,
             State::Finished|State::Checking => 6,
         };
@@ -422,7 +422,7 @@ impl Mode for GotoMode {
                             self.state = State::TackingPicture;
                         } else {
                             self.start_take_picture()?;
-                            self.state = State::TackingFinalPicture;
+                            self.state = State::TakingFinalPicture;
                         }
                         return Ok(NotifyResult::ProgressChanges);
                     }
@@ -493,12 +493,12 @@ impl Mode for GotoMode {
                 self.state = State::PlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
             }
-            (State::TackingFinalPicture, FrameProcessResultData::Image(image), false) => {
+            (State::TakingFinalPicture, FrameProcessResultData::Image(image), false) => {
                 self.plate_solve_image(image)?;
                 self.state = State::FinalPlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
             }
-            (State::TackingFinalPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
+            (State::TakingFinalPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
                 self.plate_solve_stars(&info.stars.items, info.image.width, info.image.height)?;
                 self.state = State::FinalPlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
