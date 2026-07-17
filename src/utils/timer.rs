@@ -7,7 +7,7 @@ pub struct Timer {
 }
 
 struct TimerCommand {
-    fun:       Option<Box<dyn Fn() + Sync + Send + 'static>>,
+    fun:       Option<Arc<dyn Fn() + Sync + Send + 'static>>,
     time:      std::time::Instant,
     period_ms: u32,
     periodic:  bool,
@@ -51,7 +51,7 @@ impl Timer {
     ) {
         let mut commands = self.commands.lock().unwrap();
         let command = TimerCommand {
-            fun: Some(Box::new(fun)),
+            fun: Some(Arc::new(fun)),
             time: std::time::Instant::now(),
             period_ms,
             periodic,
@@ -69,21 +69,28 @@ impl Timer {
         exit_flag: &AtomicBool
     ) {
         while !exit_flag.load(Ordering::Relaxed) {
-            let mut commands = commands.lock().unwrap();
-            for cmd in &mut *commands {
-                if cmd.time.elapsed().as_millis() as u32 >= cmd.period_ms {
-                    if let Some(fun) = &mut cmd.fun {
-                        fun();
-                    }
-                    if cmd.periodic {
-                        cmd.time = std::time::Instant::now();
-                    } else {
-                        cmd.fun = None;
+            let mut to_execute = Vec::new();
+            {
+                let mut commands = commands.lock().unwrap();
+                for cmd in commands.iter_mut() {
+                    if cmd.time.elapsed().as_millis() as u32 >= cmd.period_ms {
+                        if let Some(f) = &cmd.fun {
+                            to_execute.push(Arc::clone(f));
+                            if cmd.periodic {
+                                cmd.time = std::time::Instant::now();
+                            } else {
+                                cmd.fun = None;
+                            }
+                        }
                     }
                 }
+                commands.retain(|cmd| cmd.fun.is_some());
             }
-            commands.retain(|cmd| cmd.fun.is_some());
-            drop(commands);
+            
+            for f in to_execute {
+                f();
+            }
+
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
     }
