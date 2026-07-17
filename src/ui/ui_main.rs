@@ -108,9 +108,8 @@ pub fn init_ui(
     main_ui.connect_delete_event();
     main_ui.connect_close_after_finish_work();
     main_ui.connect_widgets_events();
-    main_ui.connect_common_events();
+    main_ui.connect_hal_and_core_events();
     main_ui.correct_widgets_props();
-    main_ui.connect_state_events();
     main_ui.update_window_title();
 
     disable_scroll_for_common_widgets(main_ui.widgets.window.upcast_ref());
@@ -319,37 +318,6 @@ impl MainUi {
         connect_action(&self.widgets.window, self, "open_logs_folder", MainUi::handler_action_open_logs_folder);
     }
 
-    fn connect_state_events(self: &Rc<Self>) {
-        let (sender, receiver) = async_channel::unbounded();
-        self.core.events.connect(move |event| {
-            sender.send_blocking(event).unwrap();
-        });
-
-        glib::spawn_future_local(clone! (@weak self as self_ => async move {
-            while let Ok(event) = receiver.recv().await {
-                match event {
-                    Event::Error(err) => {
-                        show_error_message(
-                            Some(&self_.widgets.window),
-                            "Core error",
-                            &err
-                        );
-                    }
-                    Event::ModeChanged => {
-                        self_.correct_widgets_props();
-                        self_.show_mode_caption();
-                    },
-                    Event::Progress(progress, _) => {
-                        *self_.progress.borrow_mut() = progress;
-                        self_.widgets.da_progress.queue_draw();
-                        self_.show_mode_caption();
-                    },
-                    _ => {},
-                }
-            }
-        }));
-    }
-
     fn connect_delete_event(self: &Rc<Self>) {
         self.widgets.window.connect_delete_event(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
@@ -380,7 +348,7 @@ impl MainUi {
         ));
     }
 
-    fn connect_common_events(self: &Rc<Self>) {
+    fn connect_hal_and_core_events(self: &Rc<Self>) {
         let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
 
         // HAL
@@ -400,7 +368,14 @@ impl MainUi {
         glib::spawn_future_local(clone!(@weak self as self_ => async move {
             while let Ok(event) = main_thread_receiver.recv().await {
                 if self_.closed.get() { return; }
-                self_.process_indi_or_core_event(event);
+                match event {
+                    MainThreadEvent::Core(core_event) => {
+                        self_.process_core_event(&core_event);
+                    }
+                    MainThreadEvent::Hal(hal_event) => {
+                        self_.process_hal_event(&hal_event);
+                    }
+                }
             }
         }));
     }
@@ -542,17 +517,35 @@ impl MainUi {
         }
     }
 
-    fn process_indi_or_core_event(&self, event: MainThreadEvent) {
-        match event {
-            MainThreadEvent::Core(core_event) => {
-                let modules = self.modules.borrow();
-                modules.on_core_event(&core_event);
+    fn process_core_event(&self, core_event: &Event) {
+        let modules = self.modules.borrow();
+        modules.on_core_event(&core_event);
+        drop(modules);
+
+        match core_event {
+            Event::Error(err) => {
+                show_error_message(
+                    Some(&self.widgets.window),
+                    "Core error",
+                    &err
+                );
             }
-            MainThreadEvent::Hal(hal_event) => {
-                let modules = self.modules.borrow();
-                modules.on_hal_event(&hal_event);
-            }
+            Event::ModeChanged => {
+                self.correct_widgets_props();
+                self.show_mode_caption();
+            },
+            Event::Progress(progress, _) => {
+                *self.progress.borrow_mut() = progress.clone();
+                self.widgets.da_progress.queue_draw();
+                self.show_mode_caption();
+            },
+            _ => {},
         }
+    }
+
+    fn process_hal_event(&self, hal_event: &HalEvent) {
+        let modules = self.modules.borrow();
+        modules.on_hal_event(&hal_event);
     }
 
     fn apply_options(&self) {
