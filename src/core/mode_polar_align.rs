@@ -237,7 +237,7 @@ pub struct PolarAlignMode {
     state:        State,
     step:         Step,
     cam_opts:     CamOptions,
-    pa_opts:      PloarAlignOptions,
+    pa_opts:      PolarAlignOptions,
     s_opts:       SiteOptions,
     options:      Arc<RwLock<Options>>,
     cur_frame:    Arc<ResultImage>,
@@ -275,8 +275,8 @@ impl PolarAlignMode {
         let (init_ra, init_dec) = telescope.eq_coord()?;
 
         let angle = match pa_opts.direction {
-            PloarAlignDir::East => pa_opts.angle,
-            PloarAlignDir::West => -pa_opts.angle,
+            PolarAlignDir::East => pa_opts.angle,
+            PolarAlignDir::West => -pa_opts.angle,
         };
 
         // 1st point
@@ -560,8 +560,8 @@ impl PolarAlignMode {
         let cur_ra = hour_to_radian(cur_ra);
         let cur_dec = degree_to_radian(cur_dec);
         let angle = match self.pa_opts.direction {
-            PloarAlignDir::East => self.pa_opts.angle,
-            PloarAlignDir::West => -self.pa_opts.angle,
+            PolarAlignDir::East => self.pa_opts.angle,
+            PolarAlignDir::West => -self.pa_opts.angle,
         };
         let mut new_ra = cur_ra + degree_to_radian(0.5 * angle);
         while new_ra < 0.0 { new_ra += 2.0 * PI; }

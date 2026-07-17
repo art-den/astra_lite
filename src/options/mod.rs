@@ -82,7 +82,7 @@ pub struct Options {
     pub site:         SiteOptions,
     pub guiding:      GuidingOptions,
     pub sep_guiding:  HashMap<String, SeparatedGuidingOptions>,
-    pub polar_align:  PloarAlignOptions,
+    pub polar_align:  PolarAlignOptions,
     pub filter_wheel: FilterWheelOptions,
 }
 

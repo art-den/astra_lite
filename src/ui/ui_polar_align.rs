@@ -37,7 +37,7 @@ enum DelayedAction {
     UpdateMountSpeedList,
 }
 
-impl PloarAlignDir {
+impl PolarAlignDir {
     pub fn from_active_id(active_id: Option<&str>) -> Option<Self> {
         match active_id {
             Some("east") => Some(Self::East),
@@ -96,9 +96,9 @@ impl UiModule for PolarAlignUi {
         options.polar_align.speed        = self.widgets.cbx_speed.active_id().map(|s| s.to_string());
         options.polar_align.auto_refresh = self.widgets.chb_auto_refresh.is_active();
 
-        options.polar_align.direction = PloarAlignDir::from_active_id(
+        options.polar_align.direction = PolarAlignDir::from_active_id(
             self.widgets.cbx_dir.active_id().as_deref()
-        ).unwrap_or(PloarAlignDir::West);
+        ).unwrap_or(PolarAlignDir::West);
     }
 
     fn panels(&self) -> Vec<Panel> {
