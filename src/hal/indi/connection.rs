@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
 use std::io::{prelude::*, BufWriter, Cursor};
 use std::net::TcpStream;
 
@@ -171,9 +170,6 @@ pub enum AfterCoordSetAction {
     Slew,
     Sync,
 }
-
-// TODO: use Cow in key
-type ShotIdsByCCD = Arc<Mutex<HashMap<(String, CamCcd), u64>>>;
 
 pub struct Connection {
     data:            Arc<Mutex<Option<ActiveConnData>>>,
