@@ -157,7 +157,7 @@ impl PropValue {
                     )),
                     Self::Switch(value) =>
                 Ok(if *value {1} else {0}),
-                Self::Light(text) => Err(Error::CantConvertPropValue(
+            Self::Light(text) => Err(Error::CantConvertPropValue(
                 text.to_string(),
                 "light".into(),
                 "i32".into()
@@ -211,19 +211,19 @@ impl PropValue {
                     .map_err(|_| Error::CantConvertPropValue(
                         text.to_string(),
                         "Text".into(),
-                        "f64".into()
+                        "bool".into()
                     )),
             Self::Switch(value) =>
                 Ok(*value),
             Self::Light(text) => Err(Error::CantConvertPropValue(
                 text.to_string(),
                 "light".into(),
-                "f64".into()
+                "bool".into()
             )),
             Self::Blob(_) => Err(Error::CantConvertPropValue(
                 "[blob]".into(),
                 "Blob".into(),
-                "f64".into()
+                "bool".into()
             )),
         }
     }
