@@ -8,7 +8,7 @@ const WAIT_EXPOSURE_TIME: usize = 10; // in seconds
 const MAX_SWITCHING_ON_TIME: usize = 5; // in seconds after exposure property apeared
 const INIT_DELAY: usize = 2; // is seconds
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum CcdMode {
     Waiting,
     WaitBlob(usize),
@@ -98,6 +98,10 @@ impl CcdToWatch {
             }
         }
         Ok(())
+    }
+
+    fn can_be_deleted(&self) -> bool {
+        self.mode == CcdMode::Waiting
     }
 }
 
@@ -289,12 +293,17 @@ impl CamWatchdog {
 
     pub fn notify_device_deleted(&mut self, device_name: &Arc<String>) {
         self.delete_camera(device_name);
+        self.delete_ccd(device_name, indi::CamCcd::Main);
+        self.delete_ccd(device_name, indi::CamCcd::Guider);
     }
 
     fn delete_ccd(&mut self, device_name: &Arc<String>, ccd: indi::CamCcd) {
         let existing_pos = self.ccd_list
             .iter()
-            .position(|item| item.ccd == ccd && *item.name == **device_name);
+            .position(|item|
+                item.can_be_deleted() &&
+                item.ccd == ccd && *item.name == **device_name
+            );
         let Some(existing_pos) = existing_pos else {
             return;
         };

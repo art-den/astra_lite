@@ -209,19 +209,6 @@ impl AscomAlpacaHalImpl {
             }
         }
     }
-
-    fn typed_device_to_device(typed_devive: &aa::api::TypedDevice) -> Arc<dyn aa::api::Device> {
-        match typed_devive {
-            aa::api::TypedDevice::Camera(dev) =>
-                Arc::clone(dev) as Arc<dyn aa::api::Device>,
-            aa::api::TypedDevice::Telescope(dev) =>
-                Arc::clone(dev) as Arc<dyn aa::api::Device>,
-            aa::api::TypedDevice::Focuser(dev) =>
-                Arc::clone(dev) as Arc<dyn aa::api::Device>,
-            aa::api::TypedDevice::FilterWheel(dev) =>
-                Arc::clone(dev) as Arc<dyn aa::api::Device>,
-        }
-    }
 }
 
 impl HalImpl for AscomAlpacaHalImpl {
