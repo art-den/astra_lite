@@ -487,7 +487,7 @@ impl MountUi {
                 TelescopeState::Tracking  => ("Tracking", Some(get_ok_color_str())),
                 TelescopeState::Slewing   => ("Slewing", Some(get_warn_color_str())),
                 TelescopeState::Error     => ("Error", Some(get_err_color_str())),
-                TelescopeState::Correcton => ("Correction", Some(get_warn_color_str())),
+                TelescopeState::Correction => ("Correction", Some(get_warn_color_str())),
                 TelescopeState::Moved     => ("Moved", Some(get_warn_color_str())),
             };
             let mut text = format!("<b>{}</b>", text);

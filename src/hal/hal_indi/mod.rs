@@ -522,7 +522,7 @@ impl HalImpl for IndiHalImpl {
             sensor_width: isize,
         }
 
-        let mut all_cemeras: Vec<_> = self.indi.get_devices_list_by_interface(indi::DriverInterface::CCD)
+        let mut all_cameras: Vec<_> = self.indi.get_devices_list_by_interface(indi::DriverInterface::CCD)
             .iter()
             .filter_map(|d| {
                 let fun = || -> eyre::Result<SensorSize> {
@@ -537,15 +537,15 @@ impl HalImpl for IndiHalImpl {
             })
             .collect();
 
-        all_cemeras.sort_by_key(|ss| -ss.sensor_width);
-        let all_cemeras_len = all_cemeras.len();
+        all_cameras.sort_by_key(|ss| -ss.sensor_width);
+        let all_cameras_len = all_cameras.len();
 
         let mut result = Vec::new();
 
-        for (idx, camera) in all_cemeras.into_iter().enumerate() {
+        for (idx, camera) in all_cameras.into_iter().enumerate() {
             let purpose = if idx == 0 || *camera.device.name == "CCD Simulator" {
                 CcdPurpose::MainTelescopeCcd
-            } else if (idx == 1 && all_cemeras_len == 2) || *camera.device.name == "Guide Simulator" {
+            } else if (idx == 1 && all_cameras_len == 2) || *camera.device.name == "Guide Simulator" {
                 CcdPurpose::GuiderCcd
             } else {
                 CcdPurpose::Unknown
@@ -1011,7 +1011,7 @@ impl Camera for IndiCamera {
 
     fn set_telescope_focal_len(&self, focal_len: f64) -> eyre::Result<()> {
         let (foc_len, aperture) = self.device.indi.camera_get_telescope_focal_len_and_aperture(&self.device.name)?;
-        let apertute_to_set = if aperture < 0.01 {
+        let aperture_to_set = if aperture < 0.01 {
             Some(0.2 * foc_len)
         } else {
             None
@@ -1019,7 +1019,7 @@ impl Camera for IndiCamera {
         self.device.indi.camera_set_telescope_focal_len_and_aperture(
             &self.device.name,
             focal_len,
-            apertute_to_set,
+            aperture_to_set,
             true,
             Some(SET_PROP_TIME_OUT)
         )?;
@@ -1048,7 +1048,7 @@ fn telescope_state(
     } else if is_moved {
         TelescopeState::Moved
     } else if is_correction {
-        TelescopeState::Correcton
+        TelescopeState::Correction
     } else if is_tracking {
         TelescopeState::Tracking
     } else if is_slewing {
@@ -1204,7 +1204,7 @@ impl Telescope for IndiDevice {
 
     fn can_set_guide_rate(&self) -> eyre::Result<bool> {
         let prop_data = self.indi.mount_get_guide_rate_prop_data(&self.name)?;
-        Ok(prop_data.permition != indi::PropPermition::RO)
+        Ok(prop_data.permission != indi::PropPermission::RO)
     }
 
     fn set_guide_rate(&self, rate_ns: f64, rate_we: f64) -> eyre::Result<()> {

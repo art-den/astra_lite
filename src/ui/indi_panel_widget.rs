@@ -556,7 +556,7 @@ impl IndiPanelWidget {
             grid.attach(&elem_label, 1, *next_row, 1, 1);
             widgets.push(elem_label.into());
 
-            let ro = property.permition == indi::PropPermition::RO;
+            let ro = property.permission == indi::PropPermission::RO;
             let entry = gtk::Entry::builder()
                 .editable(!ro)
                 .visible(true)
@@ -580,7 +580,7 @@ impl IndiPanelWidget {
             });
             *next_row += 1;
         }
-        if property.permition != indi::PropPermition::RO {
+        if property.permission != indi::PropPermission::RO {
             let set_button = gtk::Button::builder()
                 .visible(true)
                 .label("Set")
@@ -639,7 +639,7 @@ impl IndiPanelWidget {
                 .build();
             grid.attach(&elem_label, 1, *next_row, 1, 1);
             widgets.push(elem_label.into());
-            let cur_value = if property.permition != indi::PropPermition::WO {
+            let cur_value = if property.permission != indi::PropPermission::WO {
                 let entry = gtk::Entry::builder()
                     .editable(false)
                     .can_focus(false)
@@ -652,7 +652,7 @@ impl IndiPanelWidget {
             } else {
                 None
             };
-            if property.permition != indi::PropPermition::RO {
+            if property.permission != indi::PropPermission::RO {
                 let spin = gtk::SpinButton::builder()
                     .visible(true)
                     .build();
@@ -709,7 +709,7 @@ impl IndiPanelWidget {
             });
             *next_row += 1;
         }
-        if property.permition != indi::PropPermition::RO {
+        if property.permission != indi::PropPermission::RO {
             let set_button = gtk::Button::builder()
                 .visible(true)
                 .label("Set")
@@ -888,11 +888,11 @@ impl IndiPanelWidget {
     ) {
         match &indi_prop.type_ {
             indi::PropType::Text =>
-                if indi_prop.permition != indi::PropPermition::WO {
+                if indi_prop.permission != indi::PropPermission::WO {
                     Self::show_text_property_values(ui_prop, indi_prop)
                 },
             indi::PropType::Num =>
-                if indi_prop.permition != indi::PropPermition::WO {
+                if indi_prop.permission != indi::PropPermission::WO {
                     Self::show_num_property_values(ui_prop, indi_prop)
                 },
             indi::PropType::Switch(rule) =>

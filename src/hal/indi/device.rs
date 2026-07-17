@@ -244,7 +244,7 @@ impl Devices {
                 prop_name.to_string()
             ));
         };
-        if property.permition == PropPermition::RO {
+        if property.permission == PropPermission::RO {
             return Err(Error::PropertyIsReadOnly(
                 device_name.to_string(),
                 prop_name.to_string(),
@@ -387,7 +387,7 @@ impl Devices {
             Ok(Arc::clone(value))
         } else {
             Err(Error::Internal(format!(
-                "Num property contains value of other type {:?}",
+                "Text property contains value of other type {:?}",
                 elem_value.value.type_str()
             )))
         }
@@ -425,7 +425,7 @@ impl Devices {
                 .iter()
                 .map(|(elem, name)| format!("{}.{}", elem, name))
                 .join(", ");
-            Err(Error::NoOnePropertyFound(props_list, device_name.to_string()))
+            Err(Error::NoPropertyFound(props_list, device_name.to_string()))
         }
     }
 

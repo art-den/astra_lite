@@ -85,7 +85,7 @@ impl XmlElementHelper for xmltree::Element {
         self
             .get_text()
             .ok_or_else(||Error::Xml(format!(
-                "`{}` dosn't contain text",
+                "`{}` doesn't contain text",
                 self.name
             )))
     }

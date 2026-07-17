@@ -249,7 +249,7 @@ impl XmlStreamReader {
                         let end_blob_pos = &self.read_buffer
                             .iter()
                             .position(|b| *b == b'<')
-                            .unwrap();
+                            .unwrap(); // safe as end_of_blob_found == true, so '<' is in self.read_buffer
                         let blob_dl_time = self.blob_dl_start.elapsed().as_secs_f64();
 
                         self.read_buffer.drain(0..*end_blob_pos);

@@ -15,8 +15,8 @@ pub enum Error {
     #[error("Property `{1}` of device `{0}` not found")]
     PropertyNotExists(String, String),
 
-    #[error("No one of properties {0} found of device `{1}`")]
-    NoOnePropertyFound(String, String),
+    #[error("None of properties `{0}` found on device `{1}`")]
+    NoPropertyFound(String, String),
 
     #[error("Property `{1}` of device `{0}` is read only")]
     PropertyIsReadOnly(String, String),
@@ -30,8 +30,8 @@ pub enum Error {
     #[error("{0}")]
     WrongArgument(String),
 
-    #[error("Wrong sequense: {0}")]
-    WrongSequense(String),
+    #[error("Wrong sequence: {0}")]
+    WrongSequence(String),
 
     #[error("Can't convert property value {0} of type {1} into type {2}")]
     CantConvertPropValue(String, String, String),

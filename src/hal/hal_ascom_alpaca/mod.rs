@@ -1102,7 +1102,7 @@ impl AscomAlpacaTelescope {
             let state = if is_parked {
                 TelescopeState::Parked
             } else if is_pulse_guiding {
-                TelescopeState::Correcton
+                TelescopeState::Correction
             } else if is_slewing {
                 TelescopeState::Slewing
             } else if is_tracking {

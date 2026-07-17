@@ -316,7 +316,7 @@ pub enum TelescopeState {
     Tracking,
     Slewing,
     Error,
-    Correcton,
+    Correction,
     Moved,
 }
 

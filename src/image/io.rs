@@ -249,7 +249,7 @@ pub fn load_image_using_pixbuf(
     let has_alpha = pixbuf.has_alpha();
     let bytes = pixbuf
         .pixel_bytes()
-        .ok_or_else(|| eyre::eyre!("pixbuf dosn't contain pixel_bytes()"))?;
+        .ok_or_else(|| eyre::eyre!("pixbuf doesn't contain pixel_bytes()"))?;
 
     let width = pixbuf.width() as usize;
     let height = pixbuf.height() as usize;

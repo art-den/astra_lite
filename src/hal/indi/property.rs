@@ -20,16 +20,16 @@ impl PropState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub enum PropPermition { RO, WO, RW }
+pub enum PropPermission { RO, WO, RW }
 
-impl PropPermition {
+impl PropPermission {
     fn from_str(text: Option<&str>) -> eyre::Result<Self> {
         match text {
-            Some("ro") => Ok(PropPermition::RO),
-            Some("wo") => Ok(PropPermition::WO),
-            Some("rw") => Ok(PropPermition::RW),
+            Some("ro") => Ok(PropPermission::RO),
+            Some("wo") => Ok(PropPermission::WO),
+            Some("rw") => Ok(PropPermission::RW),
             Some(s)    => Err(eyre::eyre!("Unknown property permission: {}", s)),
-            _          => Ok(PropPermition::RO),
+            _          => Ok(PropPermission::RO),
         }
     }
 }
@@ -203,8 +203,8 @@ impl PropValue {
         match self {
             Self::Num(NumPropValue{value, ..}) => Err(Error::CantConvertPropValue(
                 value.to_string(),
-                "switch".into(),
-                "f64".into()
+                "Num".into(),
+                "bool".into()
             )),
             Self::Text(text) =>
                 text.parse()
@@ -288,7 +288,7 @@ pub struct Property {
     pub type_:     PropType,
     pub label:     Option<Arc<String>>,
     pub group:     Option<Arc<String>>,
-    pub permition: PropPermition,
+    pub permission: PropPermission,
     pub state:     PropState,
     pub timeout:   Option<u32>,
     pub timestamp: Option<DateTime<Utc>>,
@@ -318,7 +318,7 @@ impl Property {
 
         let label = xml.attributes.remove("label");
         let group = xml.attributes.remove("group");
-        let permition = PropPermition::from_str(xml.attr_str_or_err("perm").ok())?;
+        let permission = PropPermission::from_str(xml.attr_str_or_err("perm").ok())?;
 
         let state = PropState::from_str(xml.attr_str_or_err("state")?)?;
         let timeout = xml.attributes.get("timeout")
@@ -391,7 +391,7 @@ impl Property {
             type_,
             label: label.map(Arc::new),
             group: group.map(Arc::new),
-            permition,
+            permission,
             state,
             timeout,
             timestamp,

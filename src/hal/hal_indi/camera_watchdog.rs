@@ -17,14 +17,14 @@ enum CcdMode {
     WaitAfterRestart(usize),
 }
 
-struct CcdToToWatch {
+struct CcdToWatch {
     device_id:   Arc<String>,
     name:        Arc<String>,
     ccd:         indi::CamCcd,
     mode:        CcdMode,
 }
 
-impl CcdToToWatch {
+impl CcdToWatch {
     fn notify_exposure_prop_changed(
         &mut self,
         prev_state: indi::PropState,
@@ -212,7 +212,7 @@ impl CameraToInit {
 pub struct CamWatchdog {
     indi:      Arc<indi::Connection>,
     events:    Arc<HalEventHandlers>,
-    ccd_list:  Vec<CcdToToWatch>,
+    ccd_list:  Vec<CcdToWatch>,
     init_list: Vec<CameraToInit>,
 }
 
@@ -265,7 +265,7 @@ impl CamWatchdog {
             device_id += "_CCD2";
         }
 
-        self.ccd_list.push(CcdToToWatch {
+        self.ccd_list.push(CcdToWatch {
             device_id: Arc::new(device_id),
             name:      Arc::clone(device_name),
             mode:      CcdMode::Waiting,

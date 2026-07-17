@@ -336,9 +336,9 @@ impl Connection {
         let mut state = self.state.lock().unwrap();
         match *state {
             ConnState::Connecting =>
-                return Err(Error::WrongSequense("Already connecting".to_string())),
+                return Err(Error::WrongSequence("Already connecting".to_string())),
             ConnState::Connected =>
-                return Err(Error::WrongSequense("Already connected".to_string())),
+                return Err(Error::WrongSequence("Already connected".to_string())),
             _ => {},
         }
         Self::set_new_conn_state(
@@ -531,7 +531,7 @@ impl Connection {
                 &self.event_handlers
             );
         } else {
-            return Err(Error::WrongSequense("Not connected".into()));
+            return Err(Error::WrongSequence("Not connected".into()));
         }
         Ok(())
     }
@@ -633,7 +633,7 @@ impl Connection {
         if let Some(ref conn_data) = *self.data.lock().unwrap() {
             fun(conn_data)
         } else {
-            Err(Error::WrongSequense("Not connected".into()))
+            Err(Error::WrongSequence("Not connected".into()))
         }
     }
 
@@ -1053,7 +1053,7 @@ impl Connection {
         Ok(property.value)
     }
 
-    pub fn device_get_any_of_swicth_props(
+    pub fn device_get_any_of_switch_props(
         &self,
         device_name: &str,
         props:       PropsNamePairs,
@@ -1072,7 +1072,7 @@ impl Connection {
 
     // Crash device
 
-    pub fn device_is_simu_chash_supported(
+    pub fn device_is_simu_crash_supported(
         &self,
         device_name: &str,
     ) -> Result<bool> {
@@ -1923,7 +1923,7 @@ impl Connection {
         match res {
             Err(e @ Error::DeviceNotExists(_)) => Err(e),
             Err(_) => Ok(false),
-            Ok(s) => Ok(s.permition != PropPermition::RO),
+            Ok(s) => Ok(s.permission != PropPermission::RO),
         }
     }
 
@@ -2010,8 +2010,8 @@ impl Connection {
         &self,
         device_name:    &str,
         cam_ccd:        CamCcd,
-        horiz_binnging: usize,
-        vert_binnging:  usize,
+        horiz_binning: usize,
+        vert_binning:  usize,
         force_set:      bool,
         timeout_ms:     Option<u64>,
     ) -> Result<()> {
@@ -2020,8 +2020,8 @@ impl Connection {
             timeout_ms,
             device_name,
             Self::ccd_bin_prop_name(cam_ccd), &[
-            ("HOR_BIN", horiz_binnging as f64),
-            ("VER_BIN", vert_binnging as f64),
+            ("HOR_BIN", horiz_binning as f64),
+            ("VER_BIN", vert_binning as f64),
         ])
     }
 
@@ -2083,11 +2083,11 @@ impl Connection {
         &self,
         device_name: &str,
     ) -> Result<Option<BinningMode>> {
-        let is_add_mode = self.device_get_any_of_swicth_props(
+        let is_add_mode = self.device_get_any_of_switch_props(
             device_name,
             PROP_CAM_BIN_ADD
         )?;
-        let is_avg_mode = self.device_get_any_of_swicth_props(
+        let is_avg_mode = self.device_get_any_of_switch_props(
             device_name,
             PROP_CAM_BIN_AVG
         )?;
@@ -2873,7 +2873,7 @@ impl XmlReceiver {
                     let device_name = Arc::new(device_name);
                     let prop_name = Arc::new(prop_name);
                     let elem_name = Arc::new(elem_name);
-                    self.notify_subcribers_about_blob_start(
+                    self.notify_subscribers_about_blob_start(
                         &device_name,
                         &prop_name,
                         &elem_name,
@@ -2938,7 +2938,7 @@ impl XmlReceiver {
         }
     }
 
-    fn notify_subcribers_about_new_prop(
+    fn notify_subscribers_about_new_prop(
         &self,
         device:         &mut Device,
         timestamp:      Option<DateTime<Utc>>,
@@ -2977,7 +2977,7 @@ impl XmlReceiver {
         }
     }
 
-    fn notify_subcribers_about_prop_change(
+    fn notify_subscribers_about_prop_change(
         &self,
         timestamp:      Option<DateTime<Utc>>,
         device:         &mut Device,
@@ -3019,7 +3019,7 @@ impl XmlReceiver {
         }
     }
 
-    fn notify_subcribers_about_prop_delete(
+    fn notify_subscribers_about_prop_delete(
         &self,
         time:          Option<DateTime<Utc>>,
         device_name:   &Arc<String>,
@@ -3036,7 +3036,7 @@ impl XmlReceiver {
         }))).unwrap();
     }
 
-    fn notify_subcribers_about_device_delete(
+    fn notify_subscribers_about_device_delete(
         &self,
         time:          Option<DateTime<Utc>>,
         device_name:   &Arc<String>,
@@ -3050,7 +3050,7 @@ impl XmlReceiver {
         }))).unwrap();
     }
 
-    fn notify_subcribers_about_message(
+    fn notify_subscribers_about_message(
         &self,
         timestamp:     Option<DateTime<Utc>>,
         device_name:   &Arc<String>,
@@ -3064,7 +3064,7 @@ impl XmlReceiver {
         }))).unwrap();
     }
 
-    fn notify_subcribers_about_blob_start(
+    fn notify_subscribers_about_blob_start(
         &self,
         device_name:   &Arc<String>,
         prop_name:     &Arc<String>,
@@ -3127,7 +3127,7 @@ impl XmlReceiver {
             let prop_name = Arc::clone(&property.name);
             device.add_property(property);
             self.update_device_info(device, &prop_name, &values);
-            self.notify_subcribers_about_new_prop(
+            self.notify_subscribers_about_new_prop(
                 device,
                 timestamp,
                 &prop_name,
@@ -3169,7 +3169,7 @@ impl XmlReceiver {
                     values = property.get_values();
                 }
                 self.update_device_info(device, &prop_name, &values);
-                self.notify_subcribers_about_prop_change(
+                self.notify_subscribers_about_prop_change(
                     timestamp,
                     device,
                     &prop_name,
@@ -3193,7 +3193,7 @@ impl XmlReceiver {
                     .ok_or_else(
                         || Error::PropertyNotExists(device_name.clone(), prop_name.clone())
                     )?;
-                self.notify_subcribers_about_prop_delete(
+                self.notify_subscribers_about_prop_delete(
                     timestamp,
                     &dev_name_arc,
                     &removed_prop.name,
@@ -3204,7 +3204,7 @@ impl XmlReceiver {
                 let Some(removed) = devices.remove(&device_name) else {
                     eyre::bail!(Error::DeviceNotExists(device_name));
                 };
-                self.notify_subcribers_about_device_delete(
+                self.notify_subscribers_about_device_delete(
                     timestamp,
                     removed.name(),
                     events_sender,
@@ -3218,7 +3218,7 @@ impl XmlReceiver {
             let timestamp = xml_elem.attr_time("timestamp");
             let device = Arc::new(device);
             let message = Arc::new(message);
-            self.notify_subcribers_about_message(timestamp, &device, &message, events_sender);
+            self.notify_subscribers_about_message(timestamp, &device, &message, events_sender);
         } else if !matches!(xml_elem.name.as_str(), "newTextVector"|"newNumberVector"|"newSwitchVector"|"newBLOBVector") {
             log::error!("Unknown tag: {}, xml=\n{}", xml_elem.name, xml_text);
         }
