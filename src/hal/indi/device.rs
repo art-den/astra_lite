@@ -202,10 +202,12 @@ impl Devices {
             .flat_map(|device| {
                 device.props.iter().filter_map(|prop| {
                     if let Some(changed_after) = changed_after
-                    && prop.change_id <= changed_after {
-                        return None;
+                    && prop.change_id > changed_after {
+                        Some(prop.clone())
+                    } else {
+                        None
                     }
-                    Some(prop.clone())
+
                 })
             })
             .collect()
