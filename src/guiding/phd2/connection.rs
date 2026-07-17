@@ -540,7 +540,7 @@ impl Connection {
         EventHandlerId(next_id)
     }
 
-    pub fn discnnect_all_event_handlers(&self) {
+    pub fn disconnect_all_event_handlers(&self) {
         // The trick because code in event_handler's `Drop` can call `self.event_handlers`
         let mut event_handlers = HashMap::new();
         std::mem::swap(&mut event_handlers, &mut *self.event_handlers.write().unwrap());
@@ -552,7 +552,7 @@ impl Connection {
         read_tcp_stream.is_some()
     }
 
-    pub fn diconnect_event_handler(&self, handler_id: &EventHandlerId) {
+    pub fn disconnect_event_handler(&self, handler_id: &EventHandlerId) {
         let mut event_handlers = self.event_handlers.write().unwrap();
         let removed = event_handlers.remove(handler_id).is_some();
         debug_assert!(removed);

@@ -156,7 +156,7 @@ impl Core {
     pub fn stop(self: &Arc<Self>) {
         self.timer.clear();
         self.ext_guider.disconnect_events_handler();
-        self.ext_guider.phd2_conn().discnnect_all_event_handlers();
+        self.ext_guider.phd2_conn().disconnect_all_event_handlers();
 
         self.abort_active_mode();
         *self.mode.write().unwrap() = ModeData::new();

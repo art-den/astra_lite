@@ -273,7 +273,7 @@ impl UiModule for HardwareUi {
         _ = self.core.ext_guider.phd2_conn().stop();
         log::info!("Done!");
 
-        self.core.ext_guider.phd2_conn().discnnect_all_event_handlers();
+        self.core.ext_guider.phd2_conn().disconnect_all_event_handlers();
     }
 
     fn on_tab_changed(&self, from: TabPage, to: TabPage) {

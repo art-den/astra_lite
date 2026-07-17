@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use super::{connection::*, super::external_guider::*};
 
 struct Data {
-    evt_handlers:   Vec<ExtGuiderEventFn>,
+    evt_handlers:   Vec<Arc<ExtGuiderEventFn>>,
     phd2_evt_hndlr: Option<EventHandlerId>,
     app_state:      AppState,
     state:          ExtGuiderState,
@@ -31,9 +31,8 @@ impl ExternalGuiderPhd2 {
     }
 
     fn connect_events(self: &Arc<Self>) {
-        let mut data = self.data.lock().unwrap();
         let self_ = Arc::clone(self);
-        data.phd2_evt_hndlr = Some(self.phd2.connect_event_handler(move |event| {
+        let hndlr_id = self.phd2.connect_event_handler(move |event| {
             // Check for new phd2 application state
 
             let mut evt = None;
@@ -91,12 +90,17 @@ impl ExternalGuiderPhd2 {
             }
 
             if let Some(evt) = evt {
-                let data = self_.data.lock().unwrap();
-                for hndlr in &data.evt_handlers {
+                let handlers = {
+                    let data = self_.data.lock().unwrap();
+                    data.evt_handlers.clone()
+                };
+                for hndlr in handlers {
                     hndlr(evt.clone());
                 }
             }
-        }));
+        });
+
+        self.data.lock().unwrap().phd2_evt_hndlr = Some(hndlr_id);
     }
 }
 
@@ -104,7 +108,7 @@ impl Drop for ExternalGuiderPhd2 {
     fn drop(&mut self) {
         let mut data = self.data.lock().unwrap();
         if let Some(phd2_evt_hndlr) = data.phd2_evt_hndlr.take() {
-            self.phd2.diconnect_event_handler(&phd2_evt_hndlr);
+            self.phd2.disconnect_event_handler(&phd2_evt_hndlr);
         }
     }
 }
@@ -152,6 +156,6 @@ impl ExternalGuider for ExternalGuiderPhd2 {
 
     fn connect_events_handler(&self, handler: ExtGuiderEventFn) {
         let mut data = self.data.lock().unwrap();
-        data.evt_handlers.push(handler);
+        data.evt_handlers.push(Arc::from(handler));
     }
 }
