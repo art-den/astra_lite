@@ -3,7 +3,7 @@ pub enum NumFormat {
     Float{ width: Option<u8>, prec: u8 },
     G,
     Sexagesimal { zero: bool, width: Option<u8>, frac: u8 },
-    Unrecorgnized,
+    Unrecognized,
 }
 
 impl NumFormat {
@@ -36,7 +36,7 @@ impl NumFormat {
             let frac: u8 = sex_re_res[2].parse().unwrap_or(0);
             return NumFormat::Sexagesimal { zero, width, frac };
         }
-        NumFormat::Unrecorgnized
+        NumFormat::Unrecognized
     }
 
     pub fn value_to_string(&self, value: f64) -> String {
@@ -59,7 +59,7 @@ impl NumFormat {
                 value.to_string(),
             NumFormat::Sexagesimal { zero, frac, .. } =>
                 value_to_sexagesimal(value, *zero, *frac),
-            NumFormat::Unrecorgnized =>
+            NumFormat::Unrecognized =>
                 format!("{:.7}", value),
         }
     }
