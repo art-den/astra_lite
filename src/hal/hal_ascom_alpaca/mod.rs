@@ -366,7 +366,7 @@ impl AscomAlpacaCameraShot {
                     CfaType::None,
                 aa::api::camera::SensorType::RGGB if let Some(bayer_offset) = bayer_offset => {
                     let bayer_offset_x = (start[0] + bayer_offset[0] as u32) % 2;
-                    let bayer_offset_y = (start[0] + bayer_offset[0] as u32) % 2;
+                    let bayer_offset_y = (start[1] + bayer_offset[1] as u32) % 2;
                     match (bayer_offset_x, bayer_offset_y) {
                         (0, 0) => CfaType::RGGB,
                         (1, 0) => CfaType::GRBG,
@@ -951,7 +951,7 @@ impl Camera for AscomAlpacaCamera {
 // Telescope (mount)
 
 bitflags! {
-    struct TeleasopeFlags: u32 {
+    struct TelescopeFlags: u32 {
         const GUIDE_RATE_SUPPORTED = (1 << 0);
         const CAN_SET_GUIDE_RATE   = (1 << 1);
     }
@@ -991,7 +991,7 @@ struct AscomAlpacaTelescope {
     async_runtime:  Arc<tokio::runtime::Runtime>,
     event_handlers: Arc<HalEventHandlers>,
     move_rates:     Vec<(String, f64)>,
-    flags:          TeleasopeFlags,
+    flags:          TelescopeFlags,
     data:           Mutex<TelescopeData>,
 }
 
@@ -1034,9 +1034,9 @@ impl AscomAlpacaTelescope {
 
             let guide_rate_supported = aa_telescope.guide_rates_ra_dec().await.is_ok();
             let can_set_guide_rate = aa_telescope.can_set_guide_rates().await.unwrap_or(false);
-            let mut flags = TeleasopeFlags::empty();
-            flags.set(TeleasopeFlags::GUIDE_RATE_SUPPORTED, guide_rate_supported);
-            flags.set(TeleasopeFlags::CAN_SET_GUIDE_RATE, can_set_guide_rate);
+            let mut flags = TelescopeFlags::empty();
+            flags.set(TelescopeFlags::GUIDE_RATE_SUPPORTED, guide_rate_supported);
+            flags.set(TelescopeFlags::CAN_SET_GUIDE_RATE, can_set_guide_rate);
 
             eyre::Ok(Self {
                 device_id:      Arc::new(aa_telescope.unique_id().to_string()),
@@ -1309,7 +1309,7 @@ impl Telescope for AscomAlpacaTelescope {
     }
 
     fn is_guide_rate_supported(&self) -> eyre::Result<bool> {
-        Ok(self.flags.contains(TeleasopeFlags::GUIDE_RATE_SUPPORTED))
+        Ok(self.flags.contains(TelescopeFlags::GUIDE_RATE_SUPPORTED))
     }
 
     fn guide_rate(&self) -> eyre::Result<(f64/*ns*/, f64/*we*/)> {
@@ -1327,7 +1327,7 @@ impl Telescope for AscomAlpacaTelescope {
     }
 
     fn can_set_guide_rate(&self) -> eyre::Result<bool> {
-        Ok(self.flags.contains(TeleasopeFlags::CAN_SET_GUIDE_RATE))
+        Ok(self.flags.contains(TelescopeFlags::CAN_SET_GUIDE_RATE))
     }
 
     fn set_guide_rate(&self, rate_ns: f64, rate_we: f64) -> eyre::Result<()> {
@@ -1574,7 +1574,7 @@ impl FilterWheel for AscomAlpacaFilterWheel {
             let names = self.device.names().await?;
             let pos = self.device.position()
                 .await?
-                .ok_or_else(|| eyre::eyre!("Position is not acessible now"))?;
+                .ok_or_else(|| eyre::eyre!("Position is not accessible now"))?;
             eyre::Ok((names, pos))
         })?)
     }
