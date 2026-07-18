@@ -1512,7 +1512,7 @@ impl Mode for TakingPicturesMode {
             FrameProcessResultData::LightFrameInfo(info) =>
                 self.process_light_frame_info(info),
 
-            FrameProcessResultData::HistorgamRaw(histogram) =>
+            FrameProcessResultData::HistogramRaw(histogram) =>
                 self.process_raw_histogram(histogram),
 
             FrameProcessResultData::ShotProcessingFinished {

@@ -429,7 +429,7 @@ impl FocusingMode {
 
             Err(error) => {
                 log::error!(
-                    "Position calculation failed with errror {}",
+                    "Position calculation failed with error {}",
                     error
                 );
 

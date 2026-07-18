@@ -1217,7 +1217,7 @@ impl PreviewUi {
 
                 show_resolution_info(img.rgb_data.orig_width, img.rgb_data.orig_height);
             }
-            FrameProcessResultData::HistorgamRaw(_)
+            FrameProcessResultData::HistogramRaw(_)
             if is_mode_current(false) || is_from_file_image => {
                 self.repaint_histogram();
                 self.show_histogram_stat();

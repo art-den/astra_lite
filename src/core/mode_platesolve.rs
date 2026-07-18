@@ -31,7 +31,6 @@ pub struct PlatesolveMode {
     events:       Arc<EventHandlers>,
     cur_frame:    Arc<ResultImage>,
     options:      Arc<RwLock<Options>>,
-    subscribers:  Arc<EventHandlers>,
     cam_opts:     CamOptions,
     ps_opts:      PlateSolverOptions,
     plate_solver: PlateSolver,
@@ -53,13 +52,12 @@ impl PlatesolveMode {
         );
         let plate_solver = PlateSolver::new(opts.plate_solver.solver);
         Ok(Self {
-            state:        State::None,
-            hal:          Arc::clone(&core.hal),
-            events:       Arc::clone(&core.events),
-            cur_frame:    Arc::clone(&core.cur_frame),
-            options:      Arc::clone(&core.options),
-            subscribers:  Arc::clone(&core.events),
-            ps_opts:      opts.plate_solver.clone(),
+            state:     State::None,
+            hal:       Arc::clone(&core.hal),
+            events:    Arc::clone(&core.events),
+            cur_frame: Arc::clone(&core.cur_frame),
+            options:   Arc::clone(&core.options),
+            ps_opts:   opts.plate_solver.clone(),
             camera,
             mount,
             plate_solver,
@@ -125,7 +123,7 @@ impl PlatesolveMode {
             result:    result.clone(),
             preview:   preview.map(Arc::new),
         };
-        self.subscribers.send(
+        self.events.send(
             Event::PlateSolve(event)
         );
 

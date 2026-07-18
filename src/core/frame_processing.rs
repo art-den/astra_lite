@@ -111,7 +111,7 @@ pub struct CalibrParams {
     pub flat_fname:    Option<PathBuf>,
     pub ccd_temp:      Option<f64>,
 
-    /// search and remove hot pixels
+    /// Search And Remove hot pixels
     pub sar_hot_pixs:  bool,
 }
 
@@ -216,7 +216,7 @@ impl RawFrameInfo {
 pub enum FrameProcessResultData {
     ShotProcessingStarted,
     RawFrameInfo(RawFrameInfo),
-    HistorgamRaw(Arc<RwLock<Histogram>>),
+    HistogramRaw(Arc<RwLock<Histogram>>),
     Image(Arc<RwLock<Image>>),
     PreviewFrame(Arc<Preview8BitImgData>),
     PreviewLiveRes(Arc<Preview8BitImgData>),
@@ -439,7 +439,7 @@ impl FrameProcessing {
                 drop(raw_hist);
 
                 self.notify_frame_result(
-                    FrameProcessResultData::HistorgamRaw(Arc::clone(&command.frame.raw_hist)),
+                    FrameProcessResultData::HistogramRaw(Arc::clone(&command.frame.raw_hist)),
                     &command,
                 );
 
@@ -592,7 +592,7 @@ impl FrameProcessing {
         if command.img_source.get_type() == CameraShotType::ReadyImage {
             *command.frame.raw_hist.write().unwrap() = hist.clone();
             self.notify_frame_result(
-                FrameProcessResultData::HistorgamRaw(Arc::clone(&command.frame.raw_hist)),
+                FrameProcessResultData::HistogramRaw(Arc::clone(&command.frame.raw_hist)),
                 &command,
             );
         }

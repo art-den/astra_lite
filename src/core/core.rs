@@ -574,7 +574,7 @@ impl Core {
                     if self.cur_devices.telescope().is_none() {
                         eyre::bail!(
                             "Guiding by main camera is selected but \
-                            mound device is not selected or connected!"
+                            mount device is not selected or connected!"
                         );
                     }
                 }

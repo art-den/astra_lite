@@ -163,8 +163,12 @@ impl Mode for DarkCreationMode {
                         .max_by(f64::total_cmp)
                         .unwrap_or_default();
 
-                    if desired_temperature - min_temperature < 1.0
-                    && max_temperature - desired_temperature < 1.0 {
+                    let average_temperature = self.temperature.iter().sum::<f64>() / self.temperature.len() as f64;
+
+                    let temperature_drift = max_temperature - min_temperature;
+
+                    if temperature_drift < 2.0
+                    && f64::abs(average_temperature - desired_temperature) < 1.0 {
                         have_to_start = true;
                     }
                 }

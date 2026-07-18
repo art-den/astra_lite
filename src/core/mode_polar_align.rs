@@ -190,8 +190,6 @@ impl PolarAlignment {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-const AFTER_GOTO_WAIT_TIME: usize = 3; // seconds
-
 pub enum CustomCommand {
     Restart,
     ManualRefresh,
