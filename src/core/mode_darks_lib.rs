@@ -8,7 +8,7 @@ use crate::{
 
 use super::{core::*, events::Progress};
 
-const WAIT_TEMERATURE_TIME: usize = 20; // seconds
+const WAIT_TEMPERATURE_TIME: usize = 20; // seconds
 
 enum State {
     Undefined,
@@ -151,7 +151,7 @@ impl Mode for DarkCreationMode {
                 let temperature = self.camera.temperature()?;
 
                 self.temperature.push_back(temperature);
-                if self.temperature.len() * timer_period_ms > WAIT_TEMERATURE_TIME * 1000 {
+                if self.temperature.len() * timer_period_ms > WAIT_TEMPERATURE_TIME * 1000 {
                     self.temperature.pop_front();
 
                     let min_temperature = self.temperature.iter()
@@ -179,22 +179,22 @@ impl Mode for DarkCreationMode {
 
         if have_to_start {
             self.state = State::WaitingForDarkCreation;
-            let prorgam_item = self.program[self.index].clone();
+            let program_item = self.program[self.index].clone();
 
             result = match self.mode {
                 DarkLibMode::DefectPixels =>
                     Self::create_notify_result_for_starting_mode(
-                        prorgam_item,
+                        program_item,
                         CameraMode::DefectPixels
                     ),
                 DarkLibMode::MasterDark =>
                     Self::create_notify_result_for_starting_mode(
-                        prorgam_item,
+                        program_item,
                         CameraMode::MasterDark
                     ),
                 DarkLibMode::MasterBias =>
                     Self::create_notify_result_for_starting_mode(
-                        prorgam_item,
+                        program_item,
                         CameraMode::MasterBias
                     ),
             };

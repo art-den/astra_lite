@@ -349,7 +349,7 @@ pub fn check_telescope_is_at_desired_position(
     };
     let diff = EqCoord::angle_between(&cur_pos, desired_pos);
     if radian_to_degree(diff) > tolerance_in_degree {
-        eyre::bail!("Tepescope position is too far from desired one");
+        eyre::bail!("Telescope position is too far from desired one");
     }
     Ok(())
 }

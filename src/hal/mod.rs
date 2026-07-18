@@ -104,9 +104,9 @@ impl Hal {
         self.event_handlers.disconnect_all();
     }
 
-    pub fn notify_periodical_timer_tick(&self, timer_period: usize) -> eyre::Result<()> {
+    pub fn notify_periodical_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
         for impl_ in &self.list {
-            impl_.notify_periodical_timer_tick(timer_period)?;
+            impl_.notify_periodical_timer_tick(timer_period_ms)?;
         }
         Ok(())
     }
@@ -173,7 +173,7 @@ impl Hal {
         if let Some(filter_wheel) = filter_wheel {
             return Ok(filter_wheel);
         } else {
-            eyre::bail!("Filther wheel with id={id} not found");
+            eyre::bail!("Filter wheel with id={id} not found");
         }
     }
 }
@@ -181,7 +181,7 @@ impl Hal {
 pub trait HalImpl {
     fn state(&self) -> HalState;
     fn disconnect(&self) -> eyre::Result<()>;
-    fn notify_periodical_timer_tick(&self, timer_period: usize) -> eyre::Result<()>;
+    fn notify_periodical_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()>;
     fn devices(&self, type_filter: DeviceType) -> eyre::Result<Vec<DeviceInfo>>;
     fn cameras(&self) -> eyre::Result<Vec<CameraInfo>>;
     fn camera(&self, id: &str) -> Option<Arc<dyn Camera + Send + Sync>>;

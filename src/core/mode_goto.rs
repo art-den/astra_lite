@@ -17,7 +17,7 @@ enum State {
     ImagePlateSolving,
     Unparking,
     Goto,
-    TackingPicture,
+    TakingPicture,
     PlateSolving,
     CorrectMount,
     TakingFinalPicture,
@@ -148,7 +148,7 @@ impl GotoMode {
         let cam_opts = self.cam_opts.as_ref().unwrap();
         let camera = self.camera.as_ref().unwrap();
 
-        log::debug!("Tacking picture for plate solve with {:?}", &cam_opts.frame);
+        log::debug!("Taking picture for plate solve with {:?}", &cam_opts.frame);
         take_shot(camera, &cam_opts.frame, &cam_opts.ctrl)?;
         Ok(())
     }
@@ -270,14 +270,14 @@ impl Mode for GotoMode {
                 "Unpark mount".to_string(),
             State::Goto =>
                 "Goto coordinate".to_string(),
-            State::TackingPicture =>
-                "Tacking picture".to_string(),
+            State::TakingPicture =>
+                "Taking picture".to_string(),
             State::PlateSolving =>
                 "Plate solving".to_string(),
             State::CorrectMount =>
                 "Mount correction".to_string(),
             State::TakingFinalPicture =>
-                "Tacking final picture".to_string(),
+                "Taking final picture".to_string(),
             State::FinalPlateSolving =>
                 "Final plate solving".to_string(),
             State::None|State::Finished =>
@@ -297,7 +297,7 @@ impl Mode for GotoMode {
             State::ImagePlateSolving => -1,
             State::Unparking => 0,
             State::Goto => 0,
-            State::TackingPicture => 1,
+            State::TakingPicture => 1,
             State::PlateSolving => 2,
             State::CorrectMount => 3,
             State::TakingFinalPicture => 4,
@@ -419,7 +419,7 @@ impl Mode for GotoMode {
                                 return Ok(NotifyResult::Finished { next_mode: None });
                             }
                             self.start_take_picture()?;
-                            self.state = State::TackingPicture;
+                            self.state = State::TakingPicture;
                         } else {
                             self.start_take_picture()?;
                             self.state = State::TakingFinalPicture;
@@ -483,12 +483,12 @@ impl Mode for GotoMode {
         let plate_solver = self.plate_solver.as_mut().unwrap();
         let xy_supported = plate_solver.support_stars_as_input();
         match (&self.state, &fp_result.data, xy_supported) {
-            (State::TackingPicture, FrameProcessResultData::Image(image), false) => {
+            (State::TakingPicture, FrameProcessResultData::Image(image), false) => {
                 self.plate_solve_image(image)?;
                 self.state = State::PlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
             }
-            (State::TackingPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
+            (State::TakingPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
                 self.plate_solve_stars(&info.stars.items, info.image.width, info.image.height)?;
                 self.state = State::PlateSolving;
                 return Ok(NotifyResult::ProgressChanges);

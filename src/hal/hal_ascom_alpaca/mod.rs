@@ -243,19 +243,19 @@ impl HalImpl for AscomAlpacaHalImpl {
         Ok(())
     }
 
-    fn notify_periodical_timer_tick(&self, timer_period: usize) -> eyre::Result<()> {
+    fn notify_periodical_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
         if let Ok(data) = self.data() {
             for camera in &data.cameras {
-                camera.notify_periodical_timer_tick(timer_period)?;
+                camera.notify_periodical_timer_tick(timer_period_ms)?;
             }
             for telescope in &data.telescopes {
-                telescope.notify_periodical_timer_tick(timer_period)?;
+                telescope.notify_periodical_timer_tick(timer_period_ms)?;
             }
             for focuser in &data.focusers {
-                focuser.notify_periodical_timer_tick(timer_period)?;
+                focuser.notify_periodical_timer_tick(timer_period_ms)?;
             }
             for filter_wheel in &data.filter_wheels {
-                filter_wheel.notify_periodical_timer_tick(timer_period)?;
+                filter_wheel.notify_periodical_timer_tick(timer_period_ms)?;
             }
         }
         Ok(())
@@ -1304,8 +1304,8 @@ impl Telescope for AscomAlpacaTelescope {
             self.device.guide_rates_ra_dec().await
         })?;
         Ok((
-            rates.right_ascension / SIDERAL_RATE_DEG_PER_SEC,
             rates.declination / SIDERAL_RATE_DEG_PER_SEC,
+            rates.right_ascension / SIDERAL_RATE_DEG_PER_SEC,
         ))
     }
 

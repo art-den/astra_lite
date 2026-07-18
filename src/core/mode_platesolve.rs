@@ -228,7 +228,7 @@ impl Mode for PlatesolveMode {
     }
 
     fn start(&mut self) -> eyre::Result<()> {
-        log::debug!("Tacking picture for plate solve with {:?}", &self.cam_opts.frame);
+        log::debug!("Taking picture for plate solve with {:?}", &self.cam_opts.frame);
         take_shot(&self.camera, &self.cam_opts.frame, &self.cam_opts.ctrl)?;
         self.state = State::Capturing;
         Ok(())

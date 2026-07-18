@@ -426,7 +426,7 @@ impl TakingPicturesMode {
         if frame_opts.exposure() > MAX_EXP {
             frame_opts.set_exposure(MAX_EXP);
         }
-        log::info!("Staring preliminary shot exposure ({} s) to clear CCD", frame_opts.exposure());
+        log::info!("Starting preliminary shot exposure ({} s) to clear CCD", frame_opts.exposure());
         self.state = State::FrameToSkip;
         self.take_shot_with_options(frame_opts, false)?;
         self.find_when_to_start_exposure();
@@ -438,7 +438,7 @@ impl TakingPicturesMode {
         frame_opts.exp_bias = 1e-10;
         frame_opts.frame_type = FrameType::Biases;
         frame_opts.crop = Crop::P50; // faster
-        log::info!("Staring bias frame ({} s) before flat auto exposure calculation", frame_opts.exposure());
+        log::info!("Starting bias frame ({} s) before flat auto exposure calculation", frame_opts.exposure());
         self.state = State::BiasCalculationFrame;
         self.take_shot_with_options(frame_opts, false)?;
         self.find_when_to_start_exposure();
@@ -450,7 +450,7 @@ impl TakingPicturesMode {
         frame_opts.exp_flat = exp;
         frame_opts.frame_type = FrameType::Flats;
         frame_opts.crop = Crop::P50; // faster
-        log::info!("Staring flat exposure calc frame ({} s)", frame_opts.exposure());
+        log::info!("Starting flat exposure calc frame ({} s)", frame_opts.exposure());
         self.take_shot_with_options(frame_opts, false)?;
         self.find_when_to_start_exposure();
         Ok(())
@@ -1018,7 +1018,7 @@ impl TakingPicturesMode {
             self.find_when_to_start_exposure();
         }
 
-        // Do we have to slow down with period of tacking camera images?
+        // Do we have to slow down with period of taking camera images?
         if self.flags.queue_overflowed {
             self.flags.queue_overflowed = false;
             self.flags.have_to_slow_down = true;
@@ -1342,8 +1342,6 @@ impl Mode for TakingPicturesMode {
     fn start(&mut self) -> eyre::Result<()> {
         self.correct_options_before_start();
         self.update_options_copies();
-
-
 
         let options = self.options.read().unwrap();
         self.flags.save_raw_files = match self.cam_mode {
