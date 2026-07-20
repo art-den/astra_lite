@@ -164,7 +164,7 @@ impl RawImageInfo {
     }
 
     pub fn save_to_fits_header(&self, hdu: &mut Header) {
-        let (bzero, bitpix) = self.bzero_and_bitpix_for_fit_file();
+        let (bzero, bitpix) = self.bzero_and_bitpix_for_fits_file();
 
         hdu.set_bool("SIMPLE", true);
         hdu.set_i64("BITPIX", bitpix as i64);
@@ -194,7 +194,7 @@ impl RawImageInfo {
         }
     }
 
-    pub fn bzero_and_bitpix_for_fit_file(&self) -> (u16, i8) {
+    pub fn bzero_and_bitpix_for_fits_file(&self) -> (u16, i8) {
         if self.max_value > 255 {
             (32768_u16, 16)
         } else {
@@ -397,8 +397,8 @@ impl RawImage {
             self,
             3,
             |v, _x, _y, v1, v2, v3, v4, v5, v6| {
-                let aver = v1 as i32 + v2 as i32 + v3 as i32 + v4 as i32 + v5 as i32 + v6 as i32;
-                let diff = (v as i32) * 6 - aver;
+                let avg = v1 as i32 + v2 as i32 + v3 as i32 + v4 as i32 + v5 as i32 + v6 as i32;
+                let diff = (v as i32) * 6 - avg;
                 if diff > 0 {
                     diffs.push(diff)
                 }
@@ -412,8 +412,8 @@ impl RawImage {
             self,
             1,
             |v, x, y, v1, v2, v3, v4, v5, v6| {
-                let aver = v1 as i32 + v2 as i32 + v3 as i32 + v4 as i32 + v5 as i32 + v6 as i32;
-                let diff = (v as i32) * 6 - aver;
+                let avg = v1 as i32 + v2 as i32 + v3 as i32 + v4 as i32 + v5 as i32 + v6 as i32;
+                let diff = (v as i32) * 6 - avg;
                 if diff > border {
                     tmp_result.insert((x, y));
                     hits += 1;
@@ -446,8 +446,8 @@ impl RawImage {
             self,
             3,
             |v, _x, _y, v1, v2, v3, v4, v5, v6| {
-                let aver = v1 as i32 + v2 as i32 + v3 as i32 + v4 as i32 + v5 as i32 + v6 as i32;
-                let diff = (v as i32) * 6 - aver;
+                let avg = v1 as i32 + v2 as i32 + v3 as i32 + v4 as i32 + v5 as i32 + v6 as i32;
+                let diff = (v as i32) * 6 - avg;
                 if diff > 0 {
                     diffs.push(diff)
                 }
@@ -461,8 +461,8 @@ impl RawImage {
             self,
             1,
             |v, x, y, v1, v2, v3, v4, v5, v6| {
-                let aver = v1 as i32 + v2 as i32 + v3 as i32 + v4 as i32 + v5 as i32 + v6 as i32;
-                let diff = (v as i32) * 6 - aver;
+                let avg = v1 as i32 + v2 as i32 + v3 as i32 + v4 as i32 + v5 as i32 + v6 as i32;
+                let diff = (v as i32) * 6 - avg;
                 if diff > border {
                     tmp_result.insert((x, y));
                     hits += 1;
@@ -502,8 +502,8 @@ impl RawImage {
                         .tuple_windows()
                         .filter_map(move |(v1, v2, v3)| {
                             if v2 > v1 && v2 > v3 {
-                                let aver = ((*v1 as u32 + *v3 as u32) / 2) as u16;
-                                Some(*v2 - aver)
+                                let avg = ((*v1 as u32 + *v3 as u32) / 2) as u16;
+                                Some(*v2 - avg)
                             } else {
                                 None
                             }
@@ -547,8 +547,8 @@ impl RawImage {
                                         }
                                     }}
                                     if cnt != 0 {
-                                        let aver = sum / cnt;
-                                        min = min.min(aver as u16);
+                                        let avg = sum / cnt;
+                                        min = min.min(avg as u16);
                                     }
                                 }
                                 let diff1 = *p as i32 - *v1 as i32;
@@ -832,9 +832,9 @@ impl RawImage {
                 }
                 if !values.is_empty() {
                     let sum: u64 = values.iter().map(|v| *v as u64).sum();
-                    let aver = sum as f64 / values.len() as f64;
+                    let avg = sum as f64 / values.len() as f64;
                     for v in &values {
-                        let diff = *v as f64 - aver;
+                        let diff = *v as f64 - avg;
                         diffs.push(diff * diff);
                     }
                 }

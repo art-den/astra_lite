@@ -47,13 +47,13 @@ impl LightFrameInfo {
 
         let tmr = TimeLogger::start();
         let noise = mono_layer.calc_noise();
-        tmr.log("calc image noise");
+        tmr.log("calculating image noise");
 
         // Background
 
         let tmr = TimeLogger::start();
         let background = mono_layer.calc_background(mt) as i32;
-        tmr.log("calc image background");
+        tmr.log("calculating image background");
 
         Self {
             width: image.width(),
@@ -71,7 +71,7 @@ impl LightFrameInfo {
 
 #[derive(Clone)]
 pub struct FlatInfoChan {
-    pub aver: f32,
+    pub avg: f32,
     pub max: u16,
 }
 
@@ -89,7 +89,7 @@ impl FlatImageInfo {
         let calc = |chan: Option<&HistogramChan>| -> Option<FlatInfoChan> {
             chan
                 .map(|c| { FlatInfoChan {
-                    aver: c.mean,
+                    avg: c.mean,
                     max:  c.get_nth_element(95 * c.count / 100),
                 }})
         };
@@ -105,7 +105,7 @@ impl FlatImageInfo {
 
 pub struct RawImageStat {
     pub max_value: u16,
-    pub aver: f32,
+    pub avg: f32,
     pub median: u16,
     pub std_dev: f32,
 }
@@ -115,7 +115,7 @@ impl RawImageStat {
         let h = hist.l.as_ref().unwrap();
         Self {
             max_value: hist.max,
-            aver: h.mean,
+            avg: h.mean,
             median: h.median(),
             std_dev: h.std_dev,
         }

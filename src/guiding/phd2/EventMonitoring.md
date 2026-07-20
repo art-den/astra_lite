@@ -30,7 +30,7 @@ All messages contain the following attributes in common:
 | Attribute | Type | Description |
 |:----------|:-----|:------------|
 |`Event`    | string | the name of the event |
-| `Timestamp` | number | the timesamp of the event in seconds from the epoch, including fractional seconds |
+| `Timestamp` | number | the timestamp of the event in seconds from the epoch, including fractional seconds |
 | `Host`    | string | the hostname of the machine running PHD |
 | `Inst`    | number | the PHD instance number (1-based) |
 
@@ -47,7 +47,7 @@ Describes the PHD and message protocol versions.
 | `PHDVersion` | string | the PHD version number |
 | `PHDSubver` | string | the PHD sub-version number |
 | `MsgVersion` | number | the version number of the event message protocol. The current version is 1. We will bump this number if the message protocol changes. |
-| `OverlapSupport` | boolean | true if PHD support receiving RPC order while previous order has not been completed (default for latest version) |
+| `OverlapSupport` | boolean | true if PHD supports receiving RPC order while previous order has not been completed (default for latest version) |
 
 Example
 ```

@@ -108,7 +108,7 @@ impl Default for CamCtrlOptions {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct FrameOptions {
-    pub auto_exp:   bool, // only for flats
+    pub auto_exp:   bool, // only for flat frames
     pub exp_main:   f64,
     pub exp_bias:   f64,
     pub exp_flat:   f64,

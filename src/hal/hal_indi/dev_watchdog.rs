@@ -4,7 +4,7 @@ use crate::hal::indi;
 
 const DEVICE_WAIT_BEFORE_CONNECT_TIME: usize = 1; // in seconds
 const DEVICE_WAIT_BEFORE_LOAD_OPTS_TIME: usize = 2; // in seconds
-const DEVICE_WAIT_CHECK_CUR_DEV_TIME: usize = 3; // in seconds after last device appeared
+const DEVICE_WAIT_CHECK_CUR_DEV_TIME: usize = 3; // in seconds after the last device appeared
 
 struct DeviceIsWaitingForAction {
     name: String,
@@ -90,7 +90,7 @@ impl DevicesWatchdog {
         }
     }
 
-    pub fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<()> {
+    pub fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<()> {
         for dev in &mut self.not_connected_yet {
             dev.wait_time_ms += timer_period_ms;
         }

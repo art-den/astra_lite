@@ -68,7 +68,7 @@ pub trait Mode {
     fn notify_before_frame_processing_start(&mut self, _camera_shot: &Arc<dyn CameraShot + Send + Sync>, _should_be_processed: &mut bool) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_periodical_timer_tick(&mut self, _timer_period_ms: usize) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_periodic_timer_tick(&mut self, _timer_period_ms: usize) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn custom_command(&mut self, _args: &dyn Any) -> eyre::Result<Option<Box<dyn Any>>> { Ok(None) }
     fn notify_processing_queue_overflow(&mut self) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn stop_live_view_before_this_mode(&self) -> bool { true }
@@ -223,7 +223,7 @@ impl Core {
 
         log::info!("Inform about error...");
         self.events.send(Event::Error(error_text.to_string()));
-        log::info!("Error has informed!");
+        log::info!("Error notification sent");
     }
 
     const TIMER_PERIOD_MS: usize = 250;
@@ -238,10 +238,10 @@ impl Core {
 
     fn timer_event_handler(self: &Arc<Self>) -> eyre::Result<()> {
         let mut mode = self.mode.write().unwrap();
-        let result = mode.active.notify_periodical_timer_tick(Self::TIMER_PERIOD_MS)?;
+        let result = mode.active.notify_periodic_timer_tick(Self::TIMER_PERIOD_MS)?;
         self.apply_notify_result(result, &mut mode)?;
         drop(mode);
-        self.hal.notify_periodical_timer_tick(Self::TIMER_PERIOD_MS)?;
+        self.hal.notify_periodic_timer_tick(Self::TIMER_PERIOD_MS)?;
         Ok(())
     }
 
@@ -328,10 +328,10 @@ impl Core {
             };
 
             let calibr_params = Some(CalibrParams {
-                extract_dark:  options.calibr.dark_frame_en,
-                dark_lib_path: options.calibr.dark_library_path.clone(),
-                flat_fname:    None,
-                sar_hot_pixs:  options.calibr.hot_pixels,
+                extract_dark:   options.calibr.dark_frame_en,
+                dark_lib_path:  options.calibr.dark_library_path.clone(),
+                flat_fname:     None,
+                sar_hot_pixels: options.calibr.hot_pixels,
                 ccd_temp
             });
 
@@ -499,12 +499,12 @@ impl Core {
             new_mode.stop_live_view_before_this_mode() ||
             mode.active.get_type() != ModeType::LiveView;
 
-        // abort previous mode
+        // Abort previous mode
         if have_to_abort_mode {
             mode.active.abort()?;
         }
 
-        // move mode.active to mode.previous
+        // Move mode.active to mode.previous
         mode.previous = Some(std::mem::replace(
             &mut mode.active,
             Box::new(WaitingMode)
@@ -525,7 +525,7 @@ impl Core {
 
         drop(mode);
 
-        // Inform about progress and and mode change
+        // Inform about progress and mode change
         self.events.send(Event::Progress(progress, mode_type));
         self.events.send(Event::ModeChanged);
 
@@ -540,9 +540,9 @@ impl Core {
         let calibr_params = Some(CalibrParams {
             extract_dark:  options.calibr.dark_frame_en,
             dark_lib_path: options.calibr.dark_library_path.clone(),
-            flat_fname:    None,
-            sar_hot_pixs:  options.calibr.hot_pixels,
-            ccd_temp:      None,
+            flat_fname:     None,
+            sar_hot_pixels: options.calibr.hot_pixels,
+            ccd_temp:       None,
         });
         let command = FrameProcessCommandData {
             mode_type:       ModeType::OpeningImgFile,
@@ -666,7 +666,7 @@ impl Core {
         drop(image);
         let image_info = self.cur_frame.info.read().unwrap();
         let ResultImageInfo::LightInfo(light_frame_info) = &*image_info else {
-            eyre::bail!("Image is not light frame");
+            eyre::bail!("Image is not a light frame");
         };
         self.mode.write().unwrap().active.abort()?;
         let mode = GotoMode::new(

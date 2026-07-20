@@ -175,7 +175,7 @@ impl XmlStreamReader {
                         }
 
                         if !self.blobs.is_empty() {
-                            log::info!("self.blobs is not empty after `setBLOBVector` ends")
+                            log::info!("self.blobs is not empty after `setBLOBVector` ended")
                         }
 
                         return Ok(XmlStreamReaderResult::Xml {
@@ -281,7 +281,7 @@ impl XmlStreamReader {
                 #[cfg(target_os = "linux")]
                 XmlStream::Unix(stream) => {
                     use unix_ancillary::UnixStreamExt;
-                    // read data and file descriptors from socket
+                    // read data and file descriptors from the socket
                     match stream.recv_fds_into::<42>(&mut self.read_buffer[cur_buf_size..]) {
                         Ok((size_read, fds)) => {
                             for fd in fds {

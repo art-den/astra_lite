@@ -61,7 +61,7 @@ impl RawStacker {
                 eyre::bail!("Frame type of images differ");
             }
             if self.data.len() != raw.as_slice().len() {
-                eyre::bail!("Internal error: self.data.len() != raw.data.len()");
+                eyre::bail!("Internal error: self.data.len() != raw.as_slice().len()");
             }
         } else {
             self.info = Some(raw_info.clone());

@@ -15,7 +15,7 @@ struct TimerCommand {
 
 impl Drop for Timer {
     fn drop(&mut self) {
-        log::info!("Stopping ThreadTimer thread...");
+        log::info!("Stopping Timer thread...");
         self.exit_flag.store(true, Ordering::Relaxed);
         if let Some(thread) = self.thread.take() {
             _ = thread.join();
@@ -86,7 +86,7 @@ impl Timer {
                 }
                 commands.retain(|cmd| cmd.fun.is_some());
             }
-            
+
             for f in to_execute {
                 f();
             }

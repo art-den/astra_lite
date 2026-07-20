@@ -9,7 +9,7 @@ pub mod hal_ascom_alpaca;
 
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
-use std::{ops:: RangeInclusive, path::Path, sync::Arc};
+use std::{ops::RangeInclusive, path::Path, sync::Arc};
 
 use crate::hal::{events::{HalEvent, HalEventHandlers}, hal_indi::IndiHalImpl};
 
@@ -104,9 +104,9 @@ impl Hal {
         self.event_handlers.disconnect_all();
     }
 
-    pub fn notify_periodical_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
+    pub fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
         for impl_ in &self.list {
-            impl_.notify_periodical_timer_tick(timer_period_ms)?;
+            impl_.notify_periodic_timer_tick(timer_period_ms)?;
         }
         Ok(())
     }
@@ -181,7 +181,7 @@ impl Hal {
 pub trait HalImpl {
     fn state(&self) -> HalState;
     fn disconnect(&self) -> eyre::Result<()>;
-    fn notify_periodical_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()>;
+    fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()>;
     fn devices(&self, type_filter: DeviceType) -> eyre::Result<Vec<DeviceInfo>>;
     fn cameras(&self) -> eyre::Result<Vec<CameraInfo>>;
     fn camera(&self, id: &str) -> Option<Arc<dyn Camera + Send + Sync>>;

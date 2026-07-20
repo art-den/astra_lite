@@ -147,12 +147,12 @@ impl Crop {
     }
 }
 
-impl StarRecognSensivity {
+impl StarRecognSensitivity {
     pub fn from_active_id(active_id: Option<&str>) -> Self {
         match active_id {
             Some("low")    => Self::Low,
             Some("normal") => Self::Normal,
-            Some("High")   => Self::High,
+            Some("high")   => Self::High,
             _              => Self::Normal,
         }
     }
@@ -353,7 +353,7 @@ impl UiModule for CameraUi {
             },
             Panel {
                 str_id: "cam_quality",
-                name:   "Frames quality".to_string(),
+                name:   "Frame quality".to_string(),
                 widget: self.widgets.quality.bx.clone().upcast(),
                 pos:    PanelPosition::Left,
                 tab:    TabPage::Main,
@@ -375,7 +375,7 @@ impl UiModule for CameraUi {
 
         self.core.abort_active_mode();
 
-        // Stores current camera options for current camera
+        // Stores current options for current camera
 
         let mut options = self.core.options.write().unwrap();
         let cam_id = options.cam.device_id.clone();
@@ -434,7 +434,7 @@ impl UiModule for CameraUi {
                     self.delayed_actions.schedule(DelayedAction::UpdateResolutionList);
                     self.delayed_actions.schedule_ex(
                         DelayedAction::StartLiveView,
-                        // 4000 ms pause to start live view from camera
+                        // 4000 ms pause after camera connection before starting live view
                         // after connecting to INDI server
                         4000
                     );
@@ -742,7 +742,7 @@ impl CameraUi {
         self.widgets.quality.cbx_stars_sens.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let Ok(mut options) = self_.core.options.try_write() else { return; };
-                options.quality.star_recgn_sens = StarRecognSensivity::from_active_id(
+                options.quality.star_recogn_sens = StarRecognSensitivity::from_active_id(
                     cb.active_id().as_deref()
                 )
             })
@@ -871,7 +871,7 @@ impl CameraUi {
         qual.chb_max_oval.set_active(options.quality.use_max_ovality);
         qual.spb_max_oval.set_value(options.quality.max_ovality as f64);
         qual.chb_ignore_3px_stars.set_active(options.quality.ignore_3px_stars);
-        qual.cbx_stars_sens.set_active_id(options.quality.star_recgn_sens.to_active_id());
+        qual.cbx_stars_sens.set_active_id(options.quality.star_recogn_sens.to_active_id());
         qual.chb_max_temp_diff.set_active(options.quality.check_ccd_temp);
         qual.spb_max_temp_diff.set_value(options.quality.max_ccd_temp_diff);
     }
@@ -933,7 +933,7 @@ impl CameraUi {
         options.quality.use_max_ovality  = qual.chb_max_oval.is_active();
         options.quality.max_ovality      = qual.spb_max_oval.value() as f32;
         options.quality.ignore_3px_stars = qual.chb_ignore_3px_stars.is_active();
-        options.quality.star_recgn_sens  = StarRecognSensivity::from_active_id(
+        options.quality.star_recogn_sens  = StarRecognSensitivity::from_active_id(
             qual.cbx_stars_sens.active_id().as_deref()
         );
         options.quality.check_ccd_temp = qual.chb_max_temp_diff.is_active();
@@ -1088,10 +1088,10 @@ impl CameraUi {
         drop(mode);
 
         let save_raw_btn_cap = match frame_mode {
-            FrameType::Lights => "Start save\nLIGHTs",
-            FrameType::Darks  => "Start save\nDARKs",
-            FrameType::Biases => "Start save\nBIASes",
-            FrameType::Flats  => "Start save\nFLATs",
+            FrameType::Lights => "Start save\nLIGHTS",
+            FrameType::Darks  => "Start save\nDARKS",
+            FrameType::Biases => "Start save\nBIASES",
+            FrameType::Flats  => "Start save\nFLATS",
         };
         self.widgets.raw.btn_start.set_label(save_raw_btn_cap);
 
@@ -1198,7 +1198,7 @@ impl CameraUi {
 
         self.show_total_raw_time_impl(options);
 
-        // Init fn_utils and show calibtarion files
+        // Init fn_utils and show calibration files
 
         self.init_fn_utils();
         self.show_calibr_file_for_frame(options);
@@ -1231,14 +1231,14 @@ impl CameraUi {
                 &to_calibrate,
                 &options.calibr.dark_library_path
             );
-            let (subtrack_fname, subtrack_method) = fn_utils.get_subtrack_master_fname(
+            let (subtract_fname, subtract_method) = fn_utils.get_subtract_master_fname(
                 &to_calibrate,
                 &options.calibr.dark_library_path
             );
-            if options.calibr.dark_frame_en && subtrack_fname.is_file() {
-                if subtrack_method.contains(CalibrMethods::BY_DARK) {
+            if options.calibr.dark_frame_en && subtract_fname.is_file() {
+                if subtract_method.contains(CalibrMethods::BY_DARK) {
                     result_str += "Dark";
-                } else if subtrack_method.contains(CalibrMethods::BY_BIAS) {
+                } else if subtract_method.contains(CalibrMethods::BY_BIAS) {
                     result_str += "Bias";
                 }
             }
@@ -1402,12 +1402,12 @@ impl CameraUi {
     fn show_cur_temperature_value(
         &self,
         device_id: &str,
-        temparature: f64
+        temperature: f64
     ) {
         let options = self.core.options.read().unwrap();
         if options.cam.device_id == device_id {
             self.widgets.info.l_temp_value.set_label(
-                &format!("T: {:.1}°C", temparature)
+                &format!("T: {:.1}°C", temperature)
             );
         }
     }

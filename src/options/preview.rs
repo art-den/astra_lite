@@ -51,7 +51,7 @@ pub struct PreviewOptions {
     #[serde(skip_serializing)]
     pub color:       PreviewColorMode,
 
-    // fields for PreviewOptions::preview_params
+    // fields used for PreviewOptions::preview_params
     #[serde(skip_serializing)] pub widget_width: usize,
     #[serde(skip_serializing)] pub widget_height: usize,
 }

@@ -249,7 +249,7 @@
           </packing>
         </child>
         <child>
-          <object class="GtkButton" id="btn_diconn_indi">
+          <object class="GtkButton" id="btn_disconn_indi">
             <property name="label" translatable="yes">Disconnect INDI</property>
             <property name="visible">True</property>
             <property name="can-focus">True</property>

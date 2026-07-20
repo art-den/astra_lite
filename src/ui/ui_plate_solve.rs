@@ -98,7 +98,7 @@ impl UiModule for PlateSolveUi {
 
     fn panels(&self) -> Vec<Panel> {
         vec![Panel {
-            str_id: "platesolving",
+            str_id: "plate_solving",
             name:   "Plate solving".to_string(),
             widget: self.widgets.grd.clone().upcast(),
             pos:    PanelPosition::Right,

@@ -101,9 +101,9 @@ impl Mode for DarkCreationMode {
     fn progress_string(&self) -> String {
         match (&self.state, &self.mode) {
             (State::WaitingForTemperature(value), _) =>
-                format!("Waiting temperature ({:.1}°С) stabilization...", value),
+                format!("Waiting for temperature ({:.1}°C) to stabilize...", value),
             (_, DarkLibMode::DefectPixels) =>
-                "Creating defect pixels files...".to_string(),
+                "Creating defect pixel files...".to_string(),
             (_, DarkLibMode::MasterDark) =>
                 "Creating master dark files...".to_string(),
             (_, DarkLibMode::MasterBias) =>
@@ -128,7 +128,7 @@ impl Mode for DarkCreationMode {
         Ok(())
     }
 
-    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
+    fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         let mut have_to_start = false;
         match self.state {

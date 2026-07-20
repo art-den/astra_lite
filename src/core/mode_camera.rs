@@ -323,7 +323,7 @@ impl TakingPicturesMode {
                         .as_ref()
                         .map(|f| f.options.is_used())
                         .unwrap_or(false);
-                    if guiding_enabled || focuser_enabled || self.qual_options.is_used_for_light_frame() {
+                    if guiding_enabled || focuser_enabled || self.qual_options.is_used_for_light_frames() {
                         Some(WhenToStartExposure::AtLightFrameInfo)
                     } else if self.qual_options.is_used_for_raw() {
                         Some(WhenToStartExposure::AtRawFrameInfo)
@@ -374,7 +374,7 @@ impl TakingPicturesMode {
 
     fn start_or_continue(&mut self) -> eyre::Result<()> {
         if !self.flags.skip_frame_done && self.need_skip_first_frame() {
-            // First frame must be skiped
+            // First frame must be skipped
             // for saving frames and live stacking mode
             self.start_first_shot_that_will_be_skipped()?;
             return Ok(());
@@ -394,7 +394,7 @@ impl TakingPicturesMode {
         && self.camera_offset.is_none()
         && self.flags.save_master_file {
             let options = self.options.read().unwrap();
-            let (subtract_file_name, _) = self.fname_utils.get_subtrack_master_fname(
+            let (subtract_file_name, _) = self.fname_utils.get_subtract_master_fname(
                 &FileNameArg::Options(&self.cam_options),
                 &options.calibr.dark_library_path
             );
@@ -795,7 +795,7 @@ impl TakingPicturesMode {
             offset_y -= guider_data.dither_y;
             let diff_dist = f64::sqrt(offset_x * offset_x + offset_y * offset_y);
             log::debug!(
-                "offset_x = {:.1}px, offset_y ={:.1}px, diff_dist = {:.1}px",
+                "offset_x = {:.1}px, offset_y = {:.1}px, diff_dist = {:.1}px",
                 offset_x, offset_y, diff_dist
             );
             if diff_dist > guider.options.main_cam.max_error || dithering_flag {
@@ -1018,7 +1018,7 @@ impl TakingPicturesMode {
             self.find_when_to_start_exposure();
         }
 
-        // Do we have to slow down with period of taking camera images?
+        // Do we need to slow down the interval between taking camera images?
         if self.flags.queue_overflowed {
             self.flags.queue_overflowed = false;
             self.flags.have_to_slow_down = true;
@@ -1101,15 +1101,15 @@ impl TakingPicturesMode {
                         *cur_exp /= 1.4;
                     }
                     if *cur_exp < *min_exp {
-                        eyre::bail!("Minimal exposure ({}) reached!", *min_exp);
+                        eyre::bail!("Minimum exposure ({}) reached!", *min_exp);
                     }
                     if *cur_exp > *max_exp {
-                        eyre::bail!("Maximal exposure ({}) reached!", *max_exp);
+                        eyre::bail!("Maximum exposure ({}) reached!", *max_exp);
                     }
                     *count += 1;
                     const MAX_TRY: usize = 20;
                     if *count >= MAX_TRY {
-                        eyre::bail!("Maximal tries ({}) reached!", MAX_TRY);
+                        eyre::bail!("Maximum tries ({}) reached!", MAX_TRY);
                     }
                     let exp = *cur_exp;
                     self.start_flat_exp_calc_frame(exp)?;
@@ -1118,6 +1118,7 @@ impl TakingPicturesMode {
             }
 
             State::CameraOffsetCalculation
+            // Rough calculation of camera's ADC real bias
             if let Some(offset_calc) = &mut self.cam_offset_calc => {
                 let hist = hist.read().unwrap();
                 let chan = if hist.g.is_some() { &hist.g } else { &hist.l };
@@ -1206,7 +1207,7 @@ impl TakingPicturesMode {
     fn get_dark_or_bias_creation_short_info(&self) -> String {
         let mut result = String::new();
         if self.cam_options.ctrl.enable_cooler {
-            result += &format!("{:.1}°С ", self.cam_options.ctrl.temperature);
+            result += &format!("{:.1}°C ", self.cam_options.ctrl.temperature);
         }
         result += &format!(
             "{}s g:{:.0} offs:{}",
@@ -1270,7 +1271,7 @@ impl Mode for TakingPicturesMode {
                 self.cam_options.frame.frame_type.to_readable_str().to_string(),
             (_, CameraMode::DefectPixels) =>
                 format!(
-                    "Creating defective pixels files ({})",
+                    "Creating defect pixel files ({})",
                     self.get_defect_pixels_creation_short_info()
                 ),
             (_, CameraMode::MasterDark) =>
@@ -1390,7 +1391,7 @@ impl Mode for TakingPicturesMode {
 
     fn abort(&mut self) -> eyre::Result<()> {
         self.camera.abort_exposure()?;
-        self.flags.skip_frame_done = false; // will skip first frame when continue
+        self.flags.skip_frame_done = false; // will skip first frame when continuing
         Ok(())
     }
 
@@ -1569,7 +1570,7 @@ impl Mode for TakingPicturesMode {
         }
     }
 
-    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
+    fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         match (&mut self.state, &self.mount) {
             (State::InternalMountCorrection(ok_time_ms), Some(mount)) => {

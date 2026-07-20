@@ -60,7 +60,7 @@ pub fn init_ui(
         perf_string:    RefCell::new(String::new()),
         expanders:      RefCell::new(Vec::new()),
         closed:         Cell::new(false),
-        self_:          RefCell::new(None), // used to drop MainData in window's delete_event
+        self_:          RefCell::new(None), // used to drop MainUi in window's delete_event
     });
 
     *main_ui.self_.borrow_mut() = Some(Rc::clone(&main_ui));
@@ -73,7 +73,7 @@ pub fn init_ui(
     let darks_library = super::ui_darks_library::init_ui(&main_ui.widgets.window, core);
     let preview       = super::ui_preview      ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let focuser       = super::ui_focuser      ::init_ui(&main_ui.widgets.window, &main_ui, core);
-    let fw_wheel      = super::ui_flt_wheel     ::init_ui(&main_ui.widgets.window, core);
+    let fw_wheel      = super::ui_flt_wheel    ::init_ui(&main_ui.widgets.window, core);
     let guiding       = super::ui_guiding      ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let mount         = super::ui_mount        ::init_ui(&main_ui.widgets.window, &main_ui, core);
     let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, core);
@@ -276,21 +276,21 @@ impl MainUi {
 
         self.widgets.mi_normal_log_mode.connect_activate(move |mi| {
             if mi.is_active() {
-                log::info!("Setting verbose log::LevelFilter::Info level");
+                log::info!("Setting log::LevelFilter::Info level");
                 log::set_max_level(log::LevelFilter::Info);
             }
         });
 
         self.widgets.mi_verbose_log_mode.connect_activate(move |mi| {
             if mi.is_active() {
-                log::info!("Setting verbose log::LevelFilter::Debug level");
+                log::info!("Setting log::LevelFilter::Debug level");
                 log::set_max_level(log::LevelFilter::Debug);
             }
         });
 
         self.widgets.mi_max_log_mode.connect_activate(move |mi| {
             if mi.is_active() {
-                log::info!("Setting verbose log::LevelFilter::Trace level");
+                log::info!("Setting log::LevelFilter::Trace level");
                 log::set_max_level(log::LevelFilter::Trace);
             }
         });
@@ -423,7 +423,7 @@ impl MainUi {
 
         self.modules.borrow_mut().clear();
 
-        // Allow to delete Rc<Self>
+        // Allow deletion of Rc<Self>
         *self.self_.borrow_mut() = None;
 
         glib::Propagation::Proceed
@@ -735,7 +735,7 @@ impl MainUi {
             let modules = self.modules.borrow();
             modules.get_options(&mut options);
         } else {
-            log::error!("Fail to unlock options for changing!");
+            log::error!("Failed to unlock options for modification!");
         }
     }
 

@@ -204,7 +204,7 @@ impl FocusingMode {
         match self.state {
             FocusingState::WaitingPositionAntiBacklash { anti_backlash_pos, target_pos } => {
                 if cur_focus as i64 == anti_backlash_pos as i64 {
-                    log::debug!("Setting focuser value after anti backlash move: {}", target_pos);
+                    log::debug!("Setting focuser value after anti-backlash move: {}", target_pos);
                     self.set_new_focus_value(target_pos)?;
                     self.state = FocusingState::WaitingPosition(target_pos);
                 }
@@ -300,7 +300,7 @@ impl FocusingMode {
             }
         } else if !info_is_ok {
             result = NotifyResult::ProgressChanges;
-            log::info!("Stars on received image are not Ok. Taking another image...");
+            log::info!("Stars on the received image are not Ok. Taking another image...");
             self.change_time_ms = None;
             take_shot(&self.camera, &self.cam_opts.frame, &self.cam_opts.ctrl)?;
         }
@@ -375,7 +375,7 @@ impl FocusingMode {
                 let anti_backlash_pos = result_pos - self.f_opts.anti_backlash_steps as f64;
                 let anti_backlash_pos = anti_backlash_pos.max(0.0).round();
                 log::debug!(
-                    "Set RESULT focuser value (anti backlash pos={:.1}, pos={:.1})",
+                    "Set RESULT focuser value (anti-backlash pos={:.1}, pos={:.1})",
                     anti_backlash_pos, result_pos
                 );
                 self.set_new_focus_value(anti_backlash_pos)?;
@@ -387,7 +387,7 @@ impl FocusingMode {
                 self.subscribers.send(Event::Focusing(result_event));
             },
             Ok(CalcResult::Rising(coeffs)) => {
-                log::info!("Results too far from center. Do more measures from left");
+                log::info!("Results too far from center. Take more measures from left");
                 let event_data = FocusingResultData {
                     samples: self.samples.clone(),
                     coeffs: Some(coeffs.clone()),
@@ -415,7 +415,7 @@ impl FocusingMode {
                 self.subscribers.send(Event::Focusing(
                     FocuserEvent::Data(event_data)
                 ));
-                log::info!("Results too far from center. Do more measures from right");
+                log::info!("Results too far from center. Take more measures from right");
                 let max_sample_pos = self.samples
                     .iter()
                     .map(|v|v.position)
@@ -439,7 +439,7 @@ impl FocusingMode {
                         let anti_backlash_pos = self.before_pos - self.f_opts.anti_backlash_steps as f64;
                         let anti_backlash_pos = anti_backlash_pos.max(0.0).round();
                         log::debug!(
-                            "Set PREVIOUS focuser value (anti backlash pos={:.1}, pos={:.1})",
+                            "Set PREVIOUS focuser value (anti-backlash pos={:.1}, pos={:.1})",
                             anti_backlash_pos, self.before_pos
                         );
                         self.set_new_focus_value(anti_backlash_pos)?;
@@ -518,7 +518,7 @@ impl FocusingMode {
                 .unwrap_or_default();
             let min_acceptable = min_sample_pos + (max_sample_pos-min_sample_pos) * 0.20;
             let max_acceptable = min_sample_pos + (max_sample_pos-min_sample_pos) * 0.80;
-            log::debug!("Min/Max acceptable focus extremums = {:.1}/{:.1}", min_acceptable, max_acceptable);
+            log::debug!("Min/Max acceptable focus extrema = {:.1}/{:.1}", min_acceptable, max_acceptable);
             if min_acceptable <= value && value <= max_acceptable {
                 return Ok(CalcResult::Value { value, coeffs });
             }
@@ -683,12 +683,12 @@ impl Mode for FocusingMode {
         }
     }
 
-    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
+    fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         if let Some(change_time_ms) = &mut self.change_time_ms {
             *change_time_ms += timer_period_ms;
             if *change_time_ms > MAX_FOCUS_CHANGE_TIME * 1000 {
                 self.change_cnt += 1;
-                log::error!("Time out waiting new focus value!");
+                log::error!("Timeout waiting new focus value!");
                 if self.change_cnt > MAX_FOCUS_TRY_SET_CNT {
                     eyre::bail!("Can't set new focus value for focuser!");
                 }

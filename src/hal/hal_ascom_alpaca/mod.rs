@@ -243,19 +243,19 @@ impl HalImpl for AscomAlpacaHalImpl {
         Ok(())
     }
 
-    fn notify_periodical_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
+    fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
         if let Ok(data) = self.data() {
             for camera in &data.cameras {
-                camera.notify_periodical_timer_tick(timer_period_ms)?;
+                camera.notify_periodic_timer_tick(timer_period_ms)?;
             }
             for telescope in &data.telescopes {
-                telescope.notify_periodical_timer_tick(timer_period_ms)?;
+                telescope.notify_periodic_timer_tick(timer_period_ms)?;
             }
             for focuser in &data.focusers {
-                focuser.notify_periodical_timer_tick(timer_period_ms)?;
+                focuser.notify_periodic_timer_tick(timer_period_ms)?;
             }
             for filter_wheel in &data.filter_wheels {
-                filter_wheel.notify_periodical_timer_tick(timer_period_ms)?;
+                filter_wheel.notify_periodic_timer_tick(timer_period_ms)?;
             }
         }
         Ok(())
@@ -432,8 +432,8 @@ impl CameraShot for AscomAlpacaCameraShot {
             }
         }
 
-        let cfa_arrary = self.raw_image_info.cfa.get_array();
-        Ok(RawImage::new(self.raw_image_info.clone(), data, cfa_arrary))
+        let cfa_array = self.raw_image_info.cfa.get_array();
+        Ok(RawImage::new(self.raw_image_info.clone(), data, cfa_array))
     }
 
     fn get_image(&self, _image: &mut crate::image::image::Image) -> eyre::Result<()> {
@@ -578,12 +578,12 @@ impl AscomAlpacaCamera {
         Ok(result)
     }
 
-    fn notify_periodical_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+    fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
         let exp_data_mutex = self.exp_data.lock().unwrap();
         let is_exposure_now = exp_data_mutex.is_some();
         if let Some(exp_data) = &*exp_data_mutex {
-            let eplased = exp_data.start_time.elapsed().as_secs_f64();
-            let remaining = exp_data.duration - eplased;
+            let elapsed = exp_data.start_time.elapsed().as_secs_f64();
+            let remaining = exp_data.duration - elapsed;
             self.event_handlers.send(HalEvent::CameraTimeUntilEndOfExposure {
                 device_id: Arc::clone(&self.device_id),
                 time:      remaining.clamp(0.0, exp_data.duration)
@@ -602,7 +602,7 @@ impl AscomAlpacaCamera {
                 }
                 Err(err) => {
                     *self.exp_data.lock().unwrap() = None;
-                    eyre::bail!("Error during wait of end of exposure: {}", err);
+                    eyre::bail!("Error waiting for end of exposure: {}", err);
                 }
             }
         }
@@ -611,7 +611,7 @@ impl AscomAlpacaCamera {
             self.async_runtime.block_on(async {
                 let mut data = self.dyn_data.lock().unwrap();
 
-                // Check for CCD temparature change
+                // Check for CCD temperature change
                 if self.flags.contains(CameraFlags::CAN_GET_CCD_TEMP) {
                     let temperature = self.device.ccd_temperature().await.ok();
                     if data.prev_temperature != temperature && let Some(temperature) = temperature {
@@ -746,8 +746,8 @@ impl Camera for AscomAlpacaCamera {
     fn remaining_time(&self) -> Option<f64> {
         let exp_data = self.exp_data.lock().unwrap();
         if let Some(exp_data) = &*exp_data {
-            let eplased = exp_data.start_time.elapsed().as_secs_f64();
-            let remaining = exp_data.duration - eplased;
+            let elapsed = exp_data.start_time.elapsed().as_secs_f64();
+            let remaining = exp_data.duration - elapsed;
             Some(remaining.clamp(0.0, exp_data.duration))
         } else {
             None
@@ -947,7 +947,7 @@ bitflags! {
 struct TelescopeData {
     ns_reverted: bool,
     we_reverted: bool,
-    axis_rate: f64, // deg. in second
+    axis_rate: f64, // degrees per second
     prev_state: Option<TelescopeState>,
     prev_tracking: Option<bool>,
     prev_parked: Option<bool>,
@@ -1039,7 +1039,7 @@ impl AscomAlpacaTelescope {
         Ok(result)
     }
 
-    fn notify_periodical_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+    fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
         let state = if let Ok(state) = self.state_internal() {
             state
         } else {
@@ -1396,7 +1396,7 @@ impl AscomAlpacaFocuser {
         Ok(result)
     }
 
-    fn notify_periodical_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+    fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
         self.async_runtime.block_on(async {
             let state = self.state_impl().await;
             let pos = self.device.position().await.unwrap_or(-1);
@@ -1521,7 +1521,7 @@ impl AscomAlpacaFilterWheel {
         Ok(result)
     }
 
-    fn notify_periodical_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+    fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
         self.async_runtime.block_on(async {
             let pos = self.device.position().await.unwrap_or_default();
             let mut data = self.data.lock().unwrap();

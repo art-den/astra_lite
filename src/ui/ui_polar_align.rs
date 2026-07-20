@@ -268,7 +268,7 @@ impl PolarAlignUi {
     fn handler_action_start_polar_align(&self) {
         self.main_ui.get_all_options();
 
-        // Check before start mode
+        // Pre-start mode check
 
         let check_result = PolarAlignMode::check_before_start(
             &self.core.hal,

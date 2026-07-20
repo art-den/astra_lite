@@ -141,7 +141,7 @@ impl SkymapWidget {
         self.evt_box.connect_motion_notify_event(
             clone!(@weak self as self_ => @default-return glib::Propagation::Stop,
             move |_, event| {
-                self_.hanler_motion_notify(event)
+                self_.handler_motion_notify(event)
             }
         ));
 
@@ -262,7 +262,7 @@ impl SkymapWidget {
         }
     }
 
-    fn hanler_motion_notify(&self, event: &gdk::EventMotion) -> glib::Propagation {
+    fn handler_motion_notify(&self, event: &gdk::EventMotion) -> glib::Propagation {
         let Some((x, y)) = event.coords() else {
             return glib::Propagation::Proceed;
         };
@@ -367,7 +367,7 @@ impl SkymapWidget {
             return;
         };
 
-        // Correct start coord for shotter path from start_coord to coord
+        // Correct start coord for shorter path from start_coord to coord
         while start_coord.ra - coord.ra > PI {
             start_coord.ra -= 2.0 * PI;
         }

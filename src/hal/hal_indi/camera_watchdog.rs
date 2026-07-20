@@ -5,8 +5,8 @@ use crate::hal::{events::{HalEvent, HalEventHandlers}, indi};
 const MAX_WAIT_BLOB_TIME: usize = 30; // in seconds
 const MAX_SHUTDOWN_TIME: usize = 2; // in seconds
 const WAIT_EXPOSURE_TIME: usize = 10; // in seconds
-const MAX_SWITCHING_ON_TIME: usize = 5; // in seconds after exposure property apeared
-const INIT_DELAY: usize = 2; // is seconds
+const MAX_SWITCHING_ON_TIME: usize = 5; // in seconds after exposure property appeared
+const INIT_DELAY: usize = 2; // in seconds
 
 #[derive(Debug, PartialEq)]
 enum CcdMode {
@@ -52,7 +52,7 @@ impl CcdToWatch {
         Ok(())
     }
 
-    fn notify_periodical_timer_tick(
+    fn notify_periodic_timer_tick(
         &mut self,
         timer_period_ms: usize,
         indi:            &Arc<indi::Connection>,
@@ -64,7 +64,7 @@ impl CcdToWatch {
                 *time_ms += timer_period_ms;
                 if *time_ms >= MAX_WAIT_BLOB_TIME * 1000 {
                     log::error!(
-                        "Waiting BLOB of INDI camera {} too long time (> {}) seconds",
+                        "Waiting for BLOB of INDI camera {} too long (> {}) seconds",
                         self.name, MAX_WAIT_BLOB_TIME
                     );
                     log::info!("Shutdown INDI camera {} ...", self.name);
@@ -75,7 +75,7 @@ impl CcdToWatch {
             CcdMode::Shutdown(time_ms) => {
                 *time_ms += timer_period_ms;
                 if *time_ms >= MAX_SHUTDOWN_TIME * 1000 {
-                    log::info!("Switching-on camera {} ...", self.name);
+                    log::info!("Switching on camera {} ...", self.name);
                     indi.command_enable_device(&self.name, true, true, None)?;
                     self.mode = CcdMode::WaitExposureProp(0);
                 }
@@ -85,7 +85,7 @@ impl CcdToWatch {
                 *time_ms += timer_period_ms;
                 if *time_ms >= WAIT_EXPOSURE_TIME * 1000 {
                     self.mode = CcdMode::Waiting;
-                    eyre::bail!("Waiting camera restart too long time (>{}s)!", WAIT_EXPOSURE_TIME);
+                    eyre::bail!("Waiting camera restart too long (>{}s)!", WAIT_EXPOSURE_TIME);
                 }
             }
 
@@ -161,7 +161,7 @@ impl CameraToInit {
         Ok(())
     }
 
-    fn notify_periodical_timer_tick(
+    fn notify_periodic_timer_tick(
         &mut self,
         timer_period_ms: usize,
         indi:            &Arc<indi::Connection>,
@@ -235,17 +235,17 @@ impl CamWatchdog {
         self.ccd_list.clear();
     }
 
-    pub fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<()> {
+    pub fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<()> {
         if self.indi.state() != indi::ConnState::Connected {
             return Ok(());
         }
 
         for camera in &mut self.init_list {
-            camera.notify_periodical_timer_tick(timer_period_ms, &self.indi, &self.events)?;
+            camera.notify_periodic_timer_tick(timer_period_ms, &self.indi, &self.events)?;
         }
 
         for camera in &mut self.ccd_list {
-            camera.notify_periodical_timer_tick(timer_period_ms, &self.indi, &self.events)?;
+            camera.notify_periodic_timer_tick(timer_period_ms, &self.indi, &self.events)?;
         }
 
         Ok(())

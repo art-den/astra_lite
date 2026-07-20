@@ -78,17 +78,17 @@ pub fn paint_altitude_by_time(
     let data_height = height - legend_height;
 
     const PAST_HOUR: i64 = -12;
-    const FUTU_HOUR: i64 = 12;
+    const FUTURE_HOUR: i64 = 12;
     const STEPS: i64 = 4;
 
     // Background (with sun and moon)
 
-    let sun_alt_theshold = degree_to_radian(-18.0);
+    let sun_alt_threshold = degree_to_radian(-18.0);
     let sun_bg = gdk::cairo::LinearGradient::new(0.0, 0.0, width, 0.0);
     let moon_bg = gdk::cairo::LinearGradient::new(0.0, 0.0, width, 0.0);
     let mut max_moon_phase = None;
     for x in 0..=area.allocated_width() {
-        let hour_diff = linear_interpolate(x as f64, 0.0, width, PAST_HOUR as f64, FUTU_HOUR as f64);
+        let hour_diff = linear_interpolate(x as f64, 0.0, width, PAST_HOUR as f64, FUTURE_HOUR as f64);
         let pt_diff = chrono::Duration::seconds((60.0 * 60.0 * hour_diff) as i64);
         let pt_time = dt.checked_add_signed(pt_diff).unwrap_or(dt);
 
@@ -100,7 +100,7 @@ pub fn paint_altitude_by_time(
         let moon_crd = mini_moon(julian_centuries);
         let moon_h_crd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&moon_crd));
 
-        let (sun_r, sun_g, sun_b) = if sun_h_crd.alt < sun_alt_theshold {
+        let (sun_r, sun_g, sun_b) = if sun_h_crd.alt < sun_alt_threshold {
             night_color
         } else if sun_h_crd.alt < 0.0 {
             twilight_color
@@ -133,7 +133,7 @@ pub fn paint_altitude_by_time(
     let mut max_alt = None;
     let mut min_alt = None;
     if let Some(crd) = crd {
-        for i in STEPS*PAST_HOUR..=STEPS*FUTU_HOUR {
+        for i in STEPS*PAST_HOUR..=STEPS*FUTURE_HOUR {
             let hour_diff = chrono::Duration::minutes(60 * i / STEPS);
             let pt_time = dt.checked_add_signed(hour_diff).unwrap_or(dt);
             let cvt = EqToSphereCvt::new(observer.longitude, observer.latitude, &pt_time);
@@ -141,7 +141,7 @@ pub fn paint_altitude_by_time(
             let julian_centuries = calc_julian_centuries(&pt_time);
             let sun_crd = mini_sun(julian_centuries);
             let sun_h_crd = HorizCoord::from_sphere_pt(&cvt.eq_to_sphere(&sun_crd));
-            if sun_h_crd.alt < sun_alt_theshold {
+            if sun_h_crd.alt < sun_alt_threshold {
                 max_alt = max_alt
                     .map(|v| f64::max(v, horiz_crd.alt))
                     .or(Some(horiz_crd.alt));
@@ -152,7 +152,7 @@ pub fn paint_altitude_by_time(
             let x = linear_interpolate(
                 i as f64,
                 (STEPS*PAST_HOUR) as f64,
-                (STEPS*FUTU_HOUR) as f64,
+                (STEPS*FUTURE_HOUR) as f64,
                 0.0,
                 width
             );
@@ -165,11 +165,11 @@ pub fn paint_altitude_by_time(
     cr.set_source_rgba(0.0, 1.0, 0.0, 0.6);
     cr.stroke()?;
 
-    // hours scale
+    // Hour scale
 
     let mut prev_hour = 0;
     for x in 0..=area.allocated_width() {
-        let hour_diff = linear_interpolate(x as f64, 0.0, width, PAST_HOUR as f64, FUTU_HOUR as f64);
+        let hour_diff = linear_interpolate(x as f64, 0.0, width, PAST_HOUR as f64, FUTURE_HOUR as f64);
         let pt_diff = chrono::Duration::seconds((60.0 * 60.0 * hour_diff) as i64);
         let pt_time = dt_local.checked_add_signed(pt_diff).unwrap_or(dt_local);
         let hour = pt_time.hour();
@@ -199,7 +199,7 @@ pub fn paint_altitude_by_time(
     let mut text = String::new();
     if let (Some(max_alt), Some(min_alt)) = (max_alt, min_alt) {
         text += &format!(
-            "Altutude: {:.1}..{:.1}°",
+            "Altitude: {:.1}..{:.1}°",
             radian_to_degree(min_alt),
             radian_to_degree(max_alt)
         );
@@ -224,7 +224,7 @@ pub fn paint_altitude_by_time(
     cr.set_line_width(f64::max(0.3 * dpmm_y, 1.0));
     cr.stroke()?;
 
-    // line at center
+    // Line at center
 
     cr.set_dash(&[3.0, 3.0], 1.0);
     cr.set_line_width(2.0);

@@ -124,7 +124,7 @@ struct IndiDrvWidgets {
     chb_remote:           gtk::CheckButton,
     e_remote_addr:        gtk::Entry,
     btn_conn_indi:        gtk::Button,
-    btn_diconn_indi:      gtk::Button,
+    btn_disconn_indi:     gtk::Button,
 }
 
 #[derive(FromBuilder)]
@@ -630,7 +630,7 @@ impl HardwareUi {
         };
 
         self.widgets.indi_drv.btn_conn_indi.set_label(conn_cap);
-        self.widgets.indi_drv.btn_diconn_indi.set_label(disconn_cap);
+        self.widgets.indi_drv.btn_disconn_indi.set_label(disconn_cap);
 
         let mnt_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_mount_drivers);
         let cam_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_camera_drivers);
@@ -669,7 +669,7 @@ impl HardwareUi {
     }
 
     fn handler_action_conn_indi(&self) {
-        self.read_options_from_widgets();
+        self.sync_options_from_widgets();
         exec_and_show_error(Some(&self.window), || {
             let indi_hal = self.core.hal.indi_impl();
             let options = self.core.options.read().unwrap();
@@ -706,7 +706,7 @@ impl HardwareUi {
 
     #[cfg(windows)]
     fn handler_action_conn_aa(&self) {
-        self.read_options_from_widgets();
+        self.sync_options_from_widgets();
         exec_and_show_error(Some(&self.window), || {
             let aa_hal = self.core.hal.ascom_alpaca_impl();
             let options = self.core.options.read().unwrap();
@@ -726,7 +726,7 @@ impl HardwareUi {
 
     fn handler_action_conn_phd2(&self) {
         exec_and_show_error(Some(&self.window), || {
-            self.read_options_from_widgets();
+            self.sync_options_from_widgets();
             self.core.ext_guider.create_and_connect(ExtGuiderType::Phd2)?;
             self.correct_widgets_by_cur_state();
             Ok(())
@@ -790,11 +790,9 @@ impl HardwareUi {
         fill_cb_list(self, &self.widgets.indi_drv.cb_aux2_drivers,      "Auxiliary",     &options.indi.aux2);
     }
 
-    fn read_options_from_widgets(&self) {
+    fn sync_options_from_widgets(&self) {
         let mut options = self.core.options.write().unwrap();
-        self.get_conn_options(&mut options);
-        self.get_conn_options(&mut options);
-        self.get_telescope_options(&mut options);
+        self.get_options(&mut options);
     }
 
     fn add_log_record(

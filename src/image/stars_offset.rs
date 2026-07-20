@@ -102,7 +102,7 @@ fn try_calculate(
     for _iteration in 0..10 {
         let start_iteration_count = similar_triangles.len();
 
-        // Build histogram by angles with 1° precision
+        // Build histogram of angles with 1° precision
         angle_hist.clear();
         for (angle, ..) in &similar_triangles {
             let mut i16_angle = (180.0 * angle / PI).round() as i16;
@@ -135,7 +135,7 @@ fn try_calculate(
         for (angle, ..) in &similar_triangles { angle_values.push(*angle); }
         let angle = angles_mean(angle_values.iter().copied());
 
-        // Calculate x and y offset for similar_triangles and median values
+        // Calculate x and y offsets for similar_triangles and median values
         let center_x = (image_width - 1.0) / 2.0;
         let center_y = (image_height - 1.0) / 2.0;
         x_values.clear();
@@ -154,7 +154,7 @@ fn try_calculate(
         let y_median_pos = y_values.len() / 2;
         let y_median = *y_values.select_nth_unstable_by(y_median_pos, cmp_f64).1;
 
-        // filter similar_triangles by median x and y offset
+        // Filter similar_triangles by median x and y offsets
         let min_x_offs = x_median - max_err/2.0;
         let max_x_offs = x_median + max_err/2.0;
         let min_y_offs = y_median - max_err/2.0;
@@ -177,14 +177,14 @@ fn try_calculate(
     for (angle, ..) in &similar_triangles {
         angle_values.push(*angle);
     }
-    let aver_angle = angles_mean(angle_values.iter().copied());
-    let aver_x_offs = similar_triangles.iter().map(|(_, _, _, x_offs, _)| *x_offs).sum::<f64>() / count;
-    let aver_y_offs = similar_triangles.iter().map(|(_, _, _, _, y_offs)| *y_offs).sum::<f64>() / count;
+    let avg_angle = angles_mean(angle_values.iter().copied());
+    let avg_x_offs = similar_triangles.iter().map(|(_, _, _, x_offs, _)| *x_offs).sum::<f64>() / count;
+    let avg_y_offs = similar_triangles.iter().map(|(_, _, _, _, y_offs)| *y_offs).sum::<f64>() / count;
 
     Some(Offset {
-        angle: aver_angle,
-        x: aver_x_offs,
-        y: aver_y_offs,
+        angle: avg_angle,
+        x: avg_x_offs,
+        y: avg_y_offs,
     })
 }
 

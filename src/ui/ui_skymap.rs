@@ -126,7 +126,7 @@ impl Default for UiOptions {
 
 enum UserTime {
     Paused(NaiveDateTime),
-    Active(i64/* diff in seconds with now */),
+    Active(i64/* diff in seconds from now */),
 }
 
 impl Default for UserTime {
@@ -387,7 +387,7 @@ impl UiModule for MapUi {
             return;
         }
 
-        // Change time in widget if second is changed
+        // Change time in widget if the current second has changed
         self.update_date_time_widgets(false);
 
         // Update map 2 times per second
@@ -437,10 +437,10 @@ impl MapUi {
         self.widgets.top.scl_max_dso_mag.set_range(0.0, 20.0);
         self.widgets.top.scl_max_dso_mag.set_increments(0.5, 2.0);
 
-        let (dpimm_x, _) = get_widget_dpmm(&self.window)
+        let (dpmm_x, _) = get_widget_dpmm(&self.window)
             .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
 
-        self.widgets.top.scl_max_dso_mag.set_width_request((40.0 * dpimm_x) as i32);
+        self.widgets.top.scl_max_dso_mag.set_width_request((40.0 * dpmm_x) as i32);
 
         self.set_alt_graph_height();
     }
@@ -758,7 +758,7 @@ impl MapUi {
         let skymap_data_path = cur_path.join("data");
 
         let skymap_local_data_path = dirs::data_local_dir()
-            .ok_or_else(|| eyre::eyre!("dirs::data_local_dir"))?
+            .ok_or_else(|| eyre::eyre!("Could not find local data directory"))?
             .join(env!("CARGO_PKG_NAME"))
             .join("data");
 

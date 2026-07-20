@@ -5,8 +5,8 @@ use super::solar_system::pn_matrix;
 
 #[derive(Clone, Copy, Default)]
 pub struct EqCoord {
-    pub dec: f64, // in radian
-    pub ra:  f64, // in radian
+    pub dec: f64, // in radians
+    pub ra:  f64, // in radians
 }
 
 impl EqCoord {
@@ -227,7 +227,7 @@ impl Mul<&Matrix33> for &Point3D {
     }
 }
 
-// Cross_product
+// Cross product
 impl Mul<&Point3D> for &Point3D {
     type Output = Point3D;
 

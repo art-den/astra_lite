@@ -125,9 +125,9 @@ impl AstrometryPlateSolver {
                 _ => {},
             }
         }
-        let time_out = if blind { self.config.blind_time_out } else { self.config.time_out };
+        let timeout = if blind { self.config.blind_timeout } else { self.config.timeout };
 
-        cmd.arg("--cpulimit").arg(time_out.to_string());
+        cmd.arg("--cpulimit").arg(timeout.to_string());
 
         if let Mode::Stars { img_width, img_height } = &self.mode {
             cmd.arg("--width").arg(img_width.to_string());
@@ -171,7 +171,7 @@ impl AstrometryPlateSolver {
     ) -> eyre::Result<()> {
         self.clear_prev_resources();
 
-        // save stars into fits file
+        // save stars into FITS file
 
         const MAX_STARS_COUNT: usize = 500;
 
@@ -284,7 +284,7 @@ impl AstrometryPlateSolver {
                     dec: result_dec.unwrap_or_default(),
                 };
 
-                // convert plate solving coordinate from j2000 to now
+                // convert plate solving coordinates from J2000 to now
                 let j2000 = j2000_time();
                 let time = Utc::now().naive_utc();
                 let epoch_cvt = EpochCvt::new(&j2000, &time);

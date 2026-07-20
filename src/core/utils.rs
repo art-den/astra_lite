@@ -173,7 +173,7 @@ impl FileNameUtils {
         )
     }
 
-    pub fn get_subtrack_master_fname(
+    pub fn get_subtract_master_fname(
         self:          &FileNameUtils,
         to_calibrate:  &FileNameArg,
         dark_lib_path: &Path

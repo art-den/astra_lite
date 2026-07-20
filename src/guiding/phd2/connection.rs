@@ -34,7 +34,7 @@ pub enum IncomingObject {
         msg_version: i32,
 
         #[serde(rename = "OverlapSupport")]
-        /// true if PHD support receiving RPC order while previous order has not been
+        /// true if PHD supports receiving RPC order while previous order has not been
         /// completed (default for latest version)
         overlap: bool,
     },
@@ -233,7 +233,7 @@ pub enum IncomingObject {
         error: Option<String>,
 
         #[serde(rename = "TotalFrames")]
-        /// the number of camera frames while settling
+        /// the number of camera frames captured while settling
         total_frames: usize,
 
         #[serde(rename = "DroppedFrames")]
@@ -264,7 +264,7 @@ pub enum IncomingObject {
 
         #[serde(rename = "AvgDist")]
         /// a smoothed average of the guide distance in pixels
-        /// (equivalent to value returned by socket server MSG\_REQDIST)
+        /// (equivalent to value returned by socket server MSG_REQDIST)
         avg_dist: f64,
 
         #[serde(rename = "ErrorCode")]
@@ -358,7 +358,7 @@ pub enum IncomingObject {
 
         #[serde(rename = "AvgDist")]
         /// a smoothed average of the guide distance in pixels
-        /// (equivalent to value returned by socket server MSG\_REQDIST
+        /// (equivalent to value returned by socket server MSG_REQDIST)
         avg_dist: f64,
 
         #[serde(rename = "RALimited")]
@@ -432,7 +432,7 @@ pub enum IncomingObject {
 /// All messages contain the following attributes in common
 pub struct EventCommonData {
     #[serde(rename = "Timestamp")]
-    /// the timesamp of the event in seconds from the epoch, including fractional seconds
+    /// the timestamp of the event in seconds from the epoch, including fractional seconds
     timestamp: f64,
 
     #[serde(rename = "Host")]
@@ -541,7 +541,7 @@ impl Connection {
     }
 
     pub fn disconnect_all_event_handlers(&self) {
-        // The trick because code in event_handler's `Drop` can call `self.event_handlers`
+        // Swap + clear to avoid deadlocks in event_handlers's destructors
         let mut event_handlers = HashMap::new();
         std::mem::swap(&mut event_handlers, &mut *self.event_handlers.write().unwrap());
         event_handlers.clear();
@@ -608,7 +608,7 @@ impl Connection {
                 *self_send_stream.lock().unwrap() = Some(BufWriter::new(send_stream));
                 *read_tmp_stream.lock().unwrap() = Some(read_stream.try_clone().unwrap()); // ??? too dangerous
 
-                // Reading PHD2's jsons
+                // Reading PHD2's JSON messages
                 let mut buffer = Vec::new();
                 let mut buffered_stream = BufReader::new(read_stream);
                 loop {
@@ -752,13 +752,13 @@ impl Connection {
     }
 
     fn process_incoming_json(event_handlers: &EventHandlers, js_str: &str)  -> eyre::Result<()> {
-        // First try to parce as IncomingObject
+        // First try to parse as IncomingObject
         if let Ok(js_obj) = serde_json::from_str::<IncomingObject>(js_str) {
             Self::notify_event(event_handlers, Event::Object(Arc::new(js_obj)));
             return Ok(());
         }
 
-        // If failed, parce as RpcResult
+        // If failed, parse as RpcResult
         let jsonrpc: RpcResult = serde_json::from_str(js_str)?;
         Self::notify_event(event_handlers, Event::RpcResult(Arc::new(jsonrpc)));
 
@@ -774,7 +774,7 @@ impl Connection {
             send_stream.flush()?;
             Ok(())
         } else {
-            eyre::bail!("Is not connected to PHD2 now");
+            eyre::bail!("Not connected to PHD2 now");
         }
     }
 }

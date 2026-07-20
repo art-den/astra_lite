@@ -271,7 +271,7 @@
               </packing>
             </child>
             <child>
-              <object class="GtkLabel" id="l_wb_censor">
+              <object class="GtkLabel" id="l_wb_sensor">
                 <property name="visible">True</property>
                 <property name="can-focus">False</property>
                 <property name="opacity">0.50196078431372548</property>
@@ -935,7 +935,7 @@ Useful when the object is not large and is in the center of the image.</property
                               <object class="GtkLabel" id="l_flat_r">
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
-                                <property name="label" translatable="yes">R aver/max:</property>
+                                <property name="label" translatable="yes">R avg/max:</property>
                                 <attributes>
                                   <attribute name="weight" value="bold"/>
                                   <attribute name="foreground" value="#e0e01b1b2424"/>
@@ -965,7 +965,7 @@ Useful when the object is not large and is in the center of the image.</property
                               <object class="GtkLabel" id="l_flat_g">
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
-                                <property name="label" translatable="yes">G aver/max:</property>
+                                <property name="label" translatable="yes">G avg/max:</property>
                                 <attributes>
                                   <attribute name="weight" value="bold"/>
                                   <attribute name="foreground" value="#3333d1d17a7a"/>
@@ -1025,7 +1025,7 @@ Useful when the object is not large and is in the center of the image.</property
                               <object class="GtkLabel" id="l_flat_l">
                                 <property name="visible">True</property>
                                 <property name="can-focus">False</property>
-                                <property name="label" translatable="yes">L aver/max:</property>
+                                <property name="label" translatable="yes">L avg/max:</property>
                               </object>
                               <packing>
                                 <property name="expand">False</property>

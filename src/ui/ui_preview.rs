@@ -205,7 +205,7 @@ struct ControlWidgets {
     scl_gamma:     gtk::Scale,
     scl_highlight: gtk::Scale,
     chb_wb_auto:   gtk::CheckButton,
-    l_wb_censor:   gtk::Label,
+    l_wb_sensor:   gtk::Label,
     l_wb_red:      gtk::Label,
     scl_wb_red:    gtk::Scale,
     l_wb_green:    gtk::Label,
@@ -412,19 +412,19 @@ impl UiModule for PreviewUi {
 }
 
 impl PreviewUi {
-    const CONF_FN: &'static str = "ui_prevuew";
+    const CONF_FN: &'static str = "ui_preview";
 
     fn init_widgets(&self) {
-        self.widgets.ctrl.l_wb_censor.set_label("");
+        self.widgets.ctrl.l_wb_sensor.set_label("");
 
         self.widgets.ctrl.scl_dark.set_range(0.0, 1.0);
         self.widgets.ctrl.scl_dark.set_increments(0.1, 0.5);
         self.widgets.ctrl.scl_dark.set_round_digits(1);
         self.widgets.ctrl.scl_dark.set_digits(1);
 
-        let (dpimm_x, _) = get_widget_dpmm(&self.window)
+        let (dpmm_x, _) = get_widget_dpmm(&self.window)
             .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
-        self.widgets.ctrl.scl_dark.set_width_request((40.0 * dpimm_x) as i32);
+        self.widgets.ctrl.scl_dark.set_width_request((40.0 * dpmm_x) as i32);
 
         self.widgets.ctrl.scl_highlight.set_range(0.0, 1.0);
         self.widgets.ctrl.scl_highlight.set_increments(0.1, 0.5);
@@ -749,7 +749,7 @@ impl PreviewUi {
                 None        => self.widgets.info.e_ovality.set_text(""),
             }
             let stars_cnt = stars.items.len();
-            let overexp_stars = stars.items.iter().filter(|s| s.overexposured).count();
+            let overexp_stars = stars.items.iter().filter(|s| s.overexposed).count();
             self.widgets.info.e_stars.set_text(&format!("{} ({})", stars_cnt, overexp_stars));
             let bg = 100_f64 * image.background as f64 / image.max_value as f64;
             self.widgets.info.e_background.set_text(&format!("{:.2}%", bg));
@@ -772,12 +772,12 @@ impl PreviewUi {
                         self.show_flat_info();
                     },
                     ResultImageInfo::RawInfo(info) => {
-                        let aver_text = format!(
+                        let avg_text = format!(
                             "{:.1} ({:.1}%)",
-                            info.aver,
-                            100.0 * info.aver / info.max_value as f32
+                            info.avg,
+                            100.0 * info.avg / info.max_value as f32
                         );
-                        self.widgets.info.e_aver.set_text(&aver_text);
+                        self.widgets.info.e_aver.set_text(&avg_text);
                         let median_text = format!(
                             "{} ({:.1}%)",
                             info.median,
@@ -816,11 +816,11 @@ impl PreviewUi {
             if let Some(item) = item {
                 let text =
                     if ui_options.flat_percents {
-                        let percent_aver = 100.0 * item.aver / info.max_value as f32;
+                        let percent_aver = 100.0 * item.avg / info.max_value as f32;
                         let percent_max = 100.0 * item.max as f64 / info.max_value as f64;
                         format!("{:.1}% / {:.1}%", percent_aver, percent_max)
                     } else {
-                        format!("{:.1} / {}", item.aver, item.max)
+                        format!("{:.1} / {}", item.avg, item.max)
                     };
                 entry.set_text(&text);
             }
@@ -892,9 +892,9 @@ impl PreviewUi {
             tmr.log("Pixbuf::from_bytes");
 
             if !rgb_bytes.sensor_name.is_empty() {
-                self.widgets.ctrl.l_wb_censor.set_label(format!("({})", rgb_bytes.sensor_name).as_str());
+                self.widgets.ctrl.l_wb_sensor.set_label(format!("({})", rgb_bytes.sensor_name).as_str());
             } else {
-                self.widgets.ctrl.l_wb_censor.set_label("");
+                self.widgets.ctrl.l_wb_sensor.set_label("");
             }
 
             let (mut img_width, mut img_height) = pp.get_preview_img_size(
@@ -982,7 +982,7 @@ impl PreviewUi {
 
             is_color_image = rgb_bytes.is_color_image;
 
-            // New adjustment on scrolled window will be assiged in Gtk.Widget.size-allocalte event handler
+            // New adjustment on scrolled window will be assigned in Gtk.Widget.size-allocate event handler
             // (search self.widgets.image.img_preview.connect_size_allocate here)
         } else {
             self.widgets.image.img_preview.clear();
@@ -1104,8 +1104,8 @@ impl PreviewUi {
             );
             let Some(file_name) = select_file_name_to_save(
                 &self.window,
-                "Enter file name to save preview image as jpeg",
-                "Jpeg images", "*.jpg",
+                "Enter file name to save preview image as JPEG",
+                "JPEG images", "*.jpg",
                 "jpg",
                 &def_file_name,
             ) else {
@@ -1115,7 +1115,7 @@ impl PreviewUi {
             let hist = hist.read().unwrap();
             let preview_params = preview_options.preview_params();
             let rgb_data = get_preview_rgb_data(&image, &hist, &preview_params, None);
-            let Some(rgb_data) = rgb_data else { eyre::bail!("wrong RGB fata"); };
+            let Some(rgb_data) = rgb_data else { eyre::bail!("wrong RGB data"); };
             let bytes = glib::Bytes::from_owned(rgb_data.bytes);
             let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
                 &bytes,
@@ -1144,8 +1144,8 @@ impl PreviewUi {
                 );
                 select_file_name_to_save(
                     &self.window,
-                    "Enter file name to save preview image as tiff",
-                    "Tiff images", "*.tif",
+                    "Enter file name to save preview image as TIFF",
+                    "TIFF images", "*.tif",
                     "tif",
                     &def_file_name,
                 )

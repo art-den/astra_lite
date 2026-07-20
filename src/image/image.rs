@@ -128,10 +128,10 @@ impl<T: Copy + Default> ImageLayer<T> {
 impl ImageLayer<u16> {
     pub fn calc_noise(&self) -> f32 {
         let mut diffs = Vec::with_capacity(self.data.len()/10);
-        // To roughly estimate the noise level, you can skip every 7th tuple of 10 pixels
+        // To roughly estimate the noise level, we can take every 7th tuple of 10 pixels
         for (v1, v2, v3, v4, v5, m, v6, v7, v8, v9, v10)
         in self.data.iter().tuples().step_by(7) {
-            let aver = (
+            let avg = (
                 *v1 as u32 + *v2 as u32 +
                 *v3 as u32 + *v4 as u32 +
                 *v5 as u32 + *v6 as u32 +
@@ -139,7 +139,7 @@ impl ImageLayer<u16> {
                 *v9 as u32 + *v10 as u32 + 5
             ) / 10;
             let m = *m as u32;
-            let diff = u32::abs_diff(m, aver);
+            let diff = u32::abs_diff(m, avg);
             diffs.push(diff as u16);
         }
         let max_pos = 80 * diffs.len() / 100; // 80%
@@ -493,12 +493,12 @@ fn calc_gradient(source: &dyn GradientCalcSource) -> Option<Plane> {
         cell_data.select_nth_unstable(bound2);
         cell_data[..bound2].select_nth_unstable(bound1);
         let middle = &cell_data[bound1..bound2];
-        let aver = middle.iter().map(|v| *v as f64).sum::<f64>() / middle.len() as f64;
+        let avg = middle.iter().map(|v| *v as f64).sum::<f64>() / middle.len() as f64;
 
         points.push(Point3D {
             x: x as f64,
             y: y as f64,
-            z: aver,
+            z: avg,
         });
     };
     let mut add_corner_cell = |x, y| {

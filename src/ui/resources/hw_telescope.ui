@@ -13,7 +13,7 @@
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="halign">start</property>
-        <property name="label" translatable="yes">Telescope focal len (mm):</property>
+        <property name="label" translatable="yes">Telescope focal length (mm):</property>
       </object>
       <packing>
         <property name="left-attach">0</property>
@@ -59,7 +59,7 @@
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="halign">start</property>
-        <property name="label" translatable="yes">Guider focal len (mm):</property>
+        <property name="label" translatable="yes">Guider focal length (mm):</property>
       </object>
       <packing>
         <property name="left-attach">0</property>
@@ -78,7 +78,7 @@
     </child>
     <child>
       <object class="GtkCheckButton" id="chb_corr_foc_len">
-        <property name="label" translatable="yes">Correct focal len after plate solving</property>
+        <property name="label" translatable="yes">Correct focal length after plate solving</property>
         <property name="visible">True</property>
         <property name="can-focus">True</property>
         <property name="receives-default">False</property>

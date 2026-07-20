@@ -9,7 +9,7 @@ pub fn mini_moon(t: f64) -> EqCoord {
     const P2:     f64 = 2.0 * PI;
     const ARC:    f64 = 206264.8062;
     const COSEPS: f64 = 0.91748;
-    const SINEPS: f64 = 0.39778; // cos/sin(obliquity ecliptic)
+    const SINEPS: f64 = 0.39778; // cos/sin(obliquity of the ecliptic)
 
     let l0 = f64::fract(0.606433 + 1336.855225 * t); // mean longitude Moon (in rev)
     let l = P2 * f64::fract(0.374897 + 1325.552410 * t); // mean anomaly of the Moon
@@ -136,7 +136,7 @@ pub fn mini_sun(t: f64) -> EqCoord {
 
 fn cos360(x: f64) -> f64 {
     const RAD: f64 = 0.0174532925199433;
-     f64::cos(x * RAD)
+    f64::cos(x * RAD)
 }
 
 fn sin360(x: f64) -> f64 {
@@ -179,7 +179,7 @@ fn nut_equ(t: f64, x: &mut f64, y: &mut f64, z: &mut f64) {
     let ls = P2 * f64::fract(0.993133 + 99.997306 * t); // mean anomaly Sun
     let d = P2 * f64::fract(0.827362 + 1236.853087 * t); // diff. longitude Moon-Sun
     let f = P2 * f64::fract(0.259089 + 1342.227826 * t); // mean argument of latitude
-    let n = P2 * f64::fract(0.347346 - 5.372447 * t); // longit. ascending node
+    let n = P2 * f64::fract(0.347346 - 5.372447 * t); // longitude of ascending node
     let eps = 0.4090928 - 2.2696E-4 * t; // obliquity of the ecliptic
     let dpsi = (
         -17.200 * f64::sin(n)
@@ -212,6 +212,7 @@ pub fn pn_matrix(t0: f64, t: f64) -> Matrix33 {
     m
 }
 
+/// Calculation of atmospheric refraction depending on the angle to the horizon
 pub fn calc_atmospheric_refraction(alt: f64) -> f64 {
     const MIN_ALT: f64 = 3.0; // in degrees
     let c = 0.5 * PI - f64::max(alt, MIN_ALT * PI / 180.0);

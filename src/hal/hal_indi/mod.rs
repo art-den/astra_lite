@@ -14,7 +14,7 @@ use crate::{
 use super::{indi, HalImpl, Camera, DeviceInfo, DeviceType};
 
 pub const CAM_CCD2_POSTFIX: &str = "_CCD2";
-pub const SET_PROP_TIME_OUT: u64 = 2000; // ms
+pub const SET_PROP_TIMEOUT: u64 = 2000; // ms
 
 mod dev_watchdog;
 mod camera_watchdog;
@@ -478,10 +478,10 @@ impl HalImpl for IndiHalImpl {
         Ok(())
     }
 
-    fn notify_periodical_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
+    fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
         let mut watchdogs = self.watchdogs.lock().unwrap();
-        watchdogs.camera.notify_periodical_timer_tick(timer_period_ms)?;
-        watchdogs.devices.notify_periodical_timer_tick(timer_period_ms)?;
+        watchdogs.camera.notify_periodic_timer_tick(timer_period_ms)?;
+        watchdogs.devices.notify_periodic_timer_tick(timer_period_ms)?;
         drop(watchdogs);
 
         Ok(())
@@ -653,7 +653,7 @@ impl IndiCameraShot {
         } else if is_color_image {
             CameraShotType::ReadyImage
         } else {
-            eyre::bail!("Can't find out type of image");
+            eyre::bail!("Cannot determine image type");
         };
         Ok(Self {
             blob: Arc::clone(blob),
@@ -710,7 +710,7 @@ impl Device for IndiCamera {
     }
 
     fn name(&self) -> &str {
-        self.device.id() // self.name is only for internal use for camera impl.
+        self.device.id() // self.name is used internally by the camera implementation.
     }
 
     fn is_active(&self) -> eyre::Result<bool> {
@@ -736,7 +736,7 @@ impl Camera for IndiCamera {
         // Disable fast toggle
 
         if self.device.indi.camera_is_fast_toggle_supported(&self.device.name).unwrap_or(false) {
-            self.device.indi.camera_enable_fast_toggle(&self.device.name, false, false, Some(SET_PROP_TIME_OUT))?;
+            self.device.indi.camera_enable_fast_toggle(&self.device.name, false, false, Some(SET_PROP_TIMEOUT))?;
         }
 
         // Polling period
@@ -745,13 +745,13 @@ impl Camera for IndiCamera {
             self.device.indi.device_set_polling_period(&self.device.name, 500, false, None)?;
         }
 
-        // Make binning mode is alwais AVG (if camera supports it)
+        // Make binning mode always AVG (if camera supports it)
 
         if self.device.indi.camera_is_binning_mode_supported(&self.device.name, self.ccd)? {
             _ = self.device.indi.camera_set_binning_mode(
                 &self.device.name,
                 indi::BinningMode::Avg,
-                false, Some(SET_PROP_TIME_OUT)
+                false, Some(SET_PROP_TIMEOUT)
             );
         }
 
@@ -802,7 +802,7 @@ impl Camera for IndiCamera {
         self.device.indi.camera_set_frame_type(
             &self.device.name, self.ccd,
             frame_type,
-            true, Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIMEOUT)
         )?;
         Ok(())
     }
@@ -825,7 +825,7 @@ impl Camera for IndiCamera {
         self.device.indi.camera_set_frame(
             &self.device.name, self.ccd,
             x, y, width, height,
-            true, Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIMEOUT)
         )?;
         Ok(())
     }
@@ -842,7 +842,7 @@ impl Camera for IndiCamera {
     }
 
     fn set_gain(&self, value: f64) -> eyre::Result<()> {
-        self.device.indi.camera_set_gain(&self.device.name, value, true, Some(SET_PROP_TIME_OUT))?;
+        self.device.indi.camera_set_gain(&self.device.name, value, true, Some(SET_PROP_TIMEOUT))?;
         Ok(())
     }
 
@@ -867,7 +867,7 @@ impl Camera for IndiCamera {
         // Due to a bug in INDI
         self.device.indi.camera_set_offset(&self.device.name, next_offset, false, None)?;
 
-        self.device.indi.camera_set_offset(&self.device.name, value, true, Some(SET_PROP_TIME_OUT))?;
+        self.device.indi.camera_set_offset(&self.device.name, value, true, Some(SET_PROP_TIMEOUT))?;
         Ok(())
     }
 
@@ -886,7 +886,7 @@ impl Camera for IndiCamera {
         self.device.indi.camera_set_binning(
             &self.device.name, self.ccd,
             bin_x, bin_y,
-            true, Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIMEOUT)
         )?;
         Ok(())
     }
@@ -913,7 +913,7 @@ impl Camera for IndiCamera {
         self.device.indi.camera_enable_cooler(
             &self.device.name,
             temperature.is_some(),
-            true, Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIMEOUT)
         )?;
         Ok(())
     }
@@ -934,7 +934,7 @@ impl Camera for IndiCamera {
         self.device.indi.camera_set_heater_str(
             &self.device.name,
             id,
-            true, Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIMEOUT)
         )?;
         Ok(())
     }
@@ -949,7 +949,7 @@ impl Camera for IndiCamera {
         self.device.indi.camera_control_fan(
             &self.device.name,
             enable,
-            true, Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIMEOUT)
         )?;
         Ok(())
     }
@@ -964,7 +964,7 @@ impl Camera for IndiCamera {
         self.device.indi.camera_set_low_noise(
             &self.device.name,
             enable,
-            true, Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIMEOUT)
         )?;
         Ok(())
     }
@@ -979,7 +979,7 @@ impl Camera for IndiCamera {
         self.device.indi.camera_set_high_fullwell(
             &self.device.name,
             enable,
-            true, Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIMEOUT)
         )?;
         Ok(())
     }
@@ -1000,7 +1000,7 @@ impl Camera for IndiCamera {
         self.device.indi.camera_set_conversion_gain_str(
             &self.device.name,
             id,
-            true, Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIMEOUT)
         )?;
         Ok(())
     }
@@ -1017,7 +1017,7 @@ impl Camera for IndiCamera {
             focal_len,
             aperture_to_set,
             true,
-            Some(SET_PROP_TIME_OUT)
+            Some(SET_PROP_TIMEOUT)
         )?;
         Ok(())
     }
@@ -1101,7 +1101,7 @@ impl Telescope for IndiDevice {
         self.indi.mount_revert_motion(
             &self.name,
             reverse_ns, reverse_we,
-            true, Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIMEOUT)
         )?;
         Ok(())
     }
@@ -1152,7 +1152,7 @@ impl Telescope for IndiDevice {
         self.indi.mount_set_slew_speed(
             &self.name,
             speed_id,
-            true, Some(SET_PROP_TIME_OUT),
+            true, Some(SET_PROP_TIMEOUT),
         )?;
         Ok(())
     }
@@ -1165,7 +1165,7 @@ impl Telescope for IndiDevice {
         self.indi.mount_set_after_coord_action(
             &self.name,
             indi::AfterCoordSetAction::Track,
-            true, Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIMEOUT)
         )?;
         self.indi.mount_set_eq_coord(&self.name, ra, dec, true, None)?;
         Ok(())
@@ -1180,7 +1180,7 @@ impl Telescope for IndiDevice {
         self.indi.mount_set_after_coord_action(
             &self.name,
             indi::AfterCoordSetAction::Sync,
-            true, Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIMEOUT)
         )?;
         self.indi.mount_set_eq_coord(&self.name, ra, dec, true, None)?;
         Ok(())
@@ -1207,7 +1207,7 @@ impl Telescope for IndiDevice {
         self.indi.mount_set_guide_rate(
             &self.name,
             rate_ns, rate_we,
-            true, Some(SET_PROP_TIME_OUT)
+            true, Some(SET_PROP_TIMEOUT)
         )?;
         Ok(())
     }

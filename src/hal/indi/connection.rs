@@ -223,7 +223,7 @@ impl Connection {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()?;
-        // Wait 1 seconds and check is it alive
+        // Wait 1 second and check if it's alive
         std::thread::sleep(Duration::from_millis(1000));
         if let Ok(Some(status)) = child.try_wait() {
             // kill zombie
@@ -381,7 +381,7 @@ impl Connection {
                 return;
             };
 
-            // Subrscibers event thread for XML receiver
+            // Subscribers event thread for XML receiver
             let (events_sender, events_receiver) = mpsc::channel();
             let events_thread = {
                 let self_ = Arc::clone(&self_);
@@ -463,7 +463,7 @@ impl Connection {
                 while let Ok(read) = indiserver_stderr.read(&mut buffer) {
                     stderr_data.extend_from_slice(&buffer[..read]);
                     if read == 0 { break; }
-                    // TODO: parce error text and inform subscribers
+                    // TODO: parse error text and inform subscribers
                 }
             }
         });
@@ -501,7 +501,7 @@ impl Connection {
             // Shut down network connection
             _ = conn.stream.shutdown(std::net::Shutdown::Both);
 
-            // Waiting for xml_sender and xml_reciever threads to terminate
+            // Waiting for xml_sender and xml_receiver threads to terminate
             _ = conn.read_thread.join();
             _ = conn.write_thread.join();
 
@@ -520,7 +520,7 @@ impl Connection {
             // Clear devices properties
             self.devices.lock().unwrap().clear();
 
-            // Setting new "disconnected" state
+            // Set new "disconnected" state
             Self::set_new_conn_state(
                 ConnState::Disconnected,
                 &mut self.state.lock().unwrap(),
@@ -875,8 +875,8 @@ impl Connection {
         if value1 == value2 {
             return true;
         }
-        let aver = (value1.abs() + value2.abs()) / 2.0;
-        let min_diff = aver / 1e6;
+        let avg = (value1.abs() + value2.abs()) / 2.0;
+        let min_diff = avg / 1e6;
         f64::abs(value1 - value2) < min_diff
     }
 
@@ -3108,7 +3108,7 @@ impl XmlReceiver {
             };
             let prop_name = xml_elem.attr_string_or_err("name")?;
             if device.get_property_opt(&prop_name).is_some() {
-                // simple ignore if INDI server sends defXXXXVector command
+                // simply ignore if INDI server sends defXXXXVector command
                 // for already existing property
                 return Ok(());
             }

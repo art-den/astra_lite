@@ -23,7 +23,7 @@ pub enum Event {
     },
     MountDeviceChanged(String),
     FocuserDeviceChanged(String),
-    FltWheelDeviceChanged(String),
+    FilterWheelDeviceChanged(String),
     ModeChanged,
     Progress(Option<Progress>, ModeType),
     FrameProcessing(FrameProcessResult),
@@ -72,7 +72,7 @@ impl EventHandlers {
             let items = self.items.read().unwrap();
             items.clone()
         };
-        
+
         // Execute handlers without holding the lock
         for handler in handlers.iter() {
             handler(event.clone());
@@ -83,11 +83,9 @@ impl EventHandlers {
     pub fn disconnect_all(&self) {
         let mut event_handlers = Vec::new();
         let mut items = self.items.write().unwrap();
-        // Uses swap to release the lock before cleanup, preventing potential deadlocks
-        // if handlers themselves try to access the event system during drop.
+        // Swaps the handlers out, then drops the lock
         std::mem::swap(&mut event_handlers, &mut items);
         drop(items);
-        // We explicitly clear `event_handlers` to make it clearer
         event_handlers.clear();
     }
 }

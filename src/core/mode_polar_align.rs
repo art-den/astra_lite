@@ -136,7 +136,7 @@ impl PolarAlignment {
             time_from_third_point
         );
 
-        // How we do rotate mount to go from target point to last point
+        // Simulate how the mount rotates from target point to the last point
         let changes = coordinate_descent(
             vec![0.0, 0.0],
             PI / (360.0 * 60.0 * 60.0),
@@ -253,7 +253,7 @@ impl PolarAlignMode {
         hal:     &Arc<Hal>,
         options: &Arc<RwLock<Options>>,
     ) -> eyre::Result<String> {
-        const MIN_ALT: f64 = 10.0 ; // in degrees
+        const MIN_ALT: f64 = 10.0; // in degrees
 
         let opts = options.read().unwrap();
         let pa_opts = opts.polar_align.clone();
@@ -299,7 +299,7 @@ impl PolarAlignMode {
 
         if init_alt_degree < MIN_ALT {
             warnings.push(format!(
-                "Altitude is less then {}°. \
+                "Altitude is less than {}°. \
                 Atmospheric refraction can increase the error",
                 MIN_ALT
             ));
@@ -345,14 +345,14 @@ impl PolarAlignMode {
 
         if final_alt_degree < MIN_ALT {
             warnings.push(format!(
-                "Final altitude is less then {}°. \
+                "Final altitude is less than {}°. \
                 Atmospheric refraction can increase the error",
                 MIN_ALT
             ));
         }
 
         if init_horiz_crd.az.is_sign_positive() != final_horiz_crd.az.is_sign_positive() {
-            eyre::bail!("Telescope will cross meridian!");
+            eyre::bail!("Telescope will cross the meridian!");
         }
 
         Ok(warnings.join("\n"))
@@ -408,8 +408,8 @@ impl PolarAlignMode {
             ra:  hour_to_radian(ra),
         };
         let mut config = PlateSolveConfig {
-            time_out:       self.ps_opts.timeout,
-            blind_time_out: self.ps_opts.blind_timeout,
+            timeout:       self.ps_opts.timeout,
+            blind_timeout: self.ps_opts.blind_timeout,
             eq_coord:       Some(eq_coord),
             .. PlateSolveConfig::default()
         };
@@ -420,7 +420,7 @@ impl PolarAlignMode {
         Ok(config)
     }
 
-    // Returns Ok(true) on silent error
+    // Returns Ok(false) on silent error
     fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> eyre::Result<bool> {
         let image = image.read().unwrap();
         let config = self.get_platesolver_config()?;
@@ -465,7 +465,7 @@ impl PolarAlignMode {
             PlateSolveResult::Waiting => return Ok(NotifyResult::Empty),
             PlateSolveResult::Done(result) => result,
             PlateSolveResult::Failed => {
-                self.process_platesolver_fail("Can't platesolve image")?;
+                self.process_platesolver_fail("Can't plate solve the image")?;
                 return Ok(NotifyResult::Empty);
             }
         };
@@ -483,12 +483,12 @@ impl PolarAlignMode {
 
         let coord = cvt.eq_to_sphere(&ps_result.crd_now);
 
-        // correct atmospheric refraction
+        // Correct atmospheric refraction
         let mut horiz = HorizCoord::from_sphere_pt(&coord);
         horiz.alt += calc_atmospheric_refraction(horiz.alt);
         let mut coord = horiz.to_sphere_pt();
 
-        // Add polar alignment error only in debug mode
+        // Add simulated polar alignment error (debug only)
         if cfg!(debug_assertions) {
             let options = self.options.read().unwrap();
             let az_err = degree_to_radian(options.polar_align.sim_az_err);
@@ -497,7 +497,7 @@ impl PolarAlignMode {
             coord.rotate_over_x(az_err);
         }
 
-        // Image for preview in map
+        // Image for preview on the map
 
         let options = self.options.read().unwrap();
         let preview = self.cur_frame.create_preview_for_platesolve_image(&options.preview);
@@ -640,15 +640,15 @@ impl Mode for PolarAlignMode {
         match (&self.step, &self.state) {
             (Step::GotoInitialPos, _        ) => "Goto initial position",
             (Step::First,  State::Capture   ) => "1st capture",
-            (Step::First,  State::PlateSolve) => "1st platesolve",
+            (Step::First,  State::PlateSolve) => "1st plate solve",
             (Step::First,  State::Goto{..}  ) => "1st goto",
             (Step::Second, State::Capture   ) => "2nd capture",
-            (Step::Second, State::PlateSolve) => "2nd platesolve",
+            (Step::Second, State::PlateSolve) => "2nd plate solve",
             (Step::Second, State::Goto{..}  ) => "2nd goto",
             (Step::Third,  State::Capture   ) => "3rd capture",
-            (Step::Third,  State::PlateSolve) => "3rd platesolve",
+            (Step::Third,  State::PlateSolve) => "3rd plate solve",
             (Step::Corr,   State::Capture   ) => "Capture",
-            (Step::Corr,   State::PlateSolve) => "Platesolve",
+            (Step::Corr,   State::PlateSolve) => "PlateSolve",
             (_, State::WaitForManualRefresh ) => "Wait for manual refresh",
 
             _ => "",
@@ -740,7 +740,7 @@ impl Mode for PolarAlignMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
+    fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         match &mut self.state {
             State::PlateSolve => {
                 return self.try_process_plate_solving_result();
@@ -784,7 +784,7 @@ impl Mode for PolarAlignMode {
 
                 *time_ms += timer_period_ms;
                 if *time_ms > MAX_GOTO_TIME * 1000 {
-                    eyre::bail!("Telescope is moving too long time (> {}s)", MAX_GOTO_TIME);
+                    eyre::bail!("Telescope has been moving for too long (> {}s)", MAX_GOTO_TIME);
                 }
             }
 

@@ -115,8 +115,7 @@ impl HalEventHandlers {
 
     /// Disconnects all handlers.
     pub fn disconnect_all(&self) {
-        // Uses swap to release the lock before cleanup, preventing potential deadlocks
-        // if handlers themselves try to access the event system during drop.
+        // Swaps the handlers out, then drops the lock
         let mut event_handlers = Vec::new();
         let mut funs = self.items.write().unwrap();
         std::mem::swap(&mut event_handlers, &mut funs);

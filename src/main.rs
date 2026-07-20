@@ -48,7 +48,7 @@ fn main() -> eyre::Result<()> {
 }
 
 fn app_activate_handler(app: &gtk::Application) {
-    // Check application already started
+    // Check if application is already running
 
     if let Some(window) = app.active_window() {
         log::info!("Launched twice. Activating main window...");
@@ -56,7 +56,7 @@ fn app_activate_handler(app: &gtk::Application) {
         return;
     }
 
-    // Init logger and write log record about start
+    // Init logger and log startup
 
     let Ok(mut logs_dir) = get_app_dir() else {
         eprintln!("Can't get app dir!");
@@ -66,7 +66,7 @@ fn app_activate_handler(app: &gtk::Application) {
     cleanup_old_logs(&logs_dir, 14/*days*/);
     let start_log_res = start_logger(&logs_dir);
     if let Err(start_log_res) = start_log_res {
-        eprintln!("Fail to start logger: {}!", start_log_res);
+        eprintln!("Failed to start logger: {}!", start_log_res);
         return;
     }
     log::set_max_level(log::LevelFilter::Info);
@@ -78,7 +78,7 @@ fn app_activate_handler(app: &gtk::Application) {
         env!("CARGO_PKG_VERSION")
     );
 
-    // Enable stacktrace in errors in debug builds
+    // Enable stack trace in errors in debug builds
 
     if cfg!(debug_assertions) {
         unsafe { std::env::set_var("RUST_BACKTRACE", "full"); }
@@ -118,7 +118,7 @@ fn app_activate_handler(app: &gtk::Application) {
         let mut options = core.options.write().unwrap();
         load_json_from_config_file::<Options>(&mut options, "options")?;
 
-        log::info!("Check options...");
+        log::info!("Checking options...");
         options.check()?;
 
         drop(options);
@@ -131,7 +131,7 @@ fn app_activate_handler(app: &gtk::Application) {
     log::info!("Building UI...");
     ui::ui_main::init_ui(app, &core, &logs_dir);
 
-    // Connect shutdoun signal
+    // Connect shutdown signal
 
     app.connect_shutdown(clone!(@weak core => move |app| {
         app_shutdown_handler(app, &core);
@@ -149,7 +149,7 @@ fn app_shutdown_handler(_app: &gtk::Application, core: &Arc<Core>) {
     drop(options);
     log::info!("Options saved");
 
-    // Stopping core
+    // Stop core
 
     log::info!("Core stopping...");
     core.stop();

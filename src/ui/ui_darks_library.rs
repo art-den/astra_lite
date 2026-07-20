@@ -716,7 +716,7 @@ impl DarksLibraryUI {
         dark_w.chb_min_count.set_active(dark_o.min_count_en);
         dark_w.spb_min_count.set_value(dark_o.min_count as f64);
 
-        // Biases libray
+        // Biases library
 
         let bias_w = &widgets.biases;
         let bias_o = &ui_options.master_biases;
@@ -825,7 +825,7 @@ impl DarksLibraryUI {
         dark_o.min_count_en = dark_w.chb_min_count.is_active();
         dark_o.min_count = dark_w.spb_min_count.value().max(1.0).round() as usize;
 
-        // Biases libray
+        // Biases library
 
         let bias_w = &widgets.biases;
         let bias_o = &mut ui_options.master_biases;
@@ -847,7 +847,7 @@ impl DarksLibraryUI {
         bias_o.crop.crop33 = bias_w.chb_bias_crop33.is_active();
         bias_o.crop.crop25 = bias_w.chb_bias_crop25.is_active();
 
-        // make frames count is multiple of 3
+        // Make sure the the frame count is a multiple of 5
 
         ui_options.defect_pixels.frames_count = multiple_of_5(ui_options.defect_pixels.frames_count);
         ui_options.master_darks.frames_count = multiple_of_5(ui_options.master_darks.frames_count);
@@ -951,13 +951,13 @@ impl DarksLibraryUI {
         connect_checkbtn(&bias.chb_bias_crop33);
         connect_checkbtn(&bias.chb_bias_crop25);
 
-        connect_action(&self.window, self, "open_dark_lib_folder",   Self::handler_action_open_dark_lib_folder);
-        connect_action(&self.window, self, "create_def_pixls_files", Self::handler_action_create_def_pixls_files);
-        connect_action(&self.window, self, "stop_def_pxls_files",    Self::handler_action_stop_def_pxls_files);
-        connect_action(&self.window, self, "create_dark_files",      Self::handler_action_create_dark_files);
-        connect_action(&self.window, self, "stop_dark_files",        Self::handler_action_stop_dark_files);
-        connect_action(&self.window, self, "create_bias_files",      Self::handler_action_create_bias_files);
-        connect_action(&self.window, self, "stop_bias_files",        Self::handler_action_stop_bias_files);
+        connect_action(&self.window, self, "open_dark_lib_folder",             Self::handler_action_open_dark_lib_folder);
+        connect_action(&self.window, self, "create_defect_pixel_files",        Self::handler_action_create_defect_pixels_files);
+        connect_action(&self.window, self, "stop_creating_defect_pixel_files", Self::handler_action_stop_creating_defect_pixels_files);
+        connect_action(&self.window, self, "create_dark_files",                Self::handler_action_create_dark_files);
+        connect_action(&self.window, self, "stop_dark_files",                  Self::handler_action_stop_dark_files);
+        connect_action(&self.window, self, "create_bias_files",                Self::handler_action_create_bias_files);
+        connect_action(&self.window, self, "stop_bias_files",                  Self::handler_action_stop_bias_files);
     }
 
     fn connect_core_events(self: &Rc<Self>) {
@@ -1025,12 +1025,12 @@ impl DarksLibraryUI {
         bias.prb_bias.set_sensitive(saving_master_biases);
 
         enable_actions(&self.window, &[
-            ("create_def_pixls_files", is_waiting || is_live_view),
-            ("stop_def_pxls_files",    saving_defect_pixels),
-            ("create_dark_files",      is_waiting || is_live_view),
-            ("stop_dark_files",        saving_master_darks),
-            ("create_bias_files",      is_waiting || is_live_view),
-            ("stop_bias_files",        saving_master_biases),
+            ("create_defect_pixel_files",        is_waiting || is_live_view),
+            ("stop_creating_defect_pixel_files", saving_defect_pixels),
+            ("create_dark_files",                is_waiting || is_live_view),
+            ("stop_dark_files",                  saving_master_darks),
+            ("create_bias_files",                is_waiting || is_live_view),
+            ("stop_bias_files",                  saving_master_biases),
         ]);
     }
 
@@ -1143,11 +1143,11 @@ impl DarksLibraryUI {
         );
     }
 
-    fn handler_action_create_def_pixls_files(&self) {
+    fn handler_action_create_defect_pixels_files(&self) {
         self.start(DarkLibMode::DefectPixels);
     }
 
-    fn handler_action_stop_def_pxls_files(&self) {
+    fn handler_action_stop_creating_defect_pixels_files(&self) {
         self.core.abort_active_mode();
     }
 

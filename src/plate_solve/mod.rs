@@ -15,8 +15,8 @@ mod astrometry;
 pub struct PlateSolveConfig {
     pub eq_coord:       Option<EqCoord>,
     pub eq_coord_j2000: Option<EqCoord>,
-    pub time_out:       u32, // in seconds
-    pub blind_time_out: u32, // in seconds
+    pub timeout:       u32, // in seconds
+    pub blind_timeout: u32, // in seconds
     pub allow_blind:    bool,
 }
 
@@ -25,8 +25,8 @@ impl Default for PlateSolveConfig {
         Self {
             eq_coord:       None,
             eq_coord_j2000: None,
-            time_out:       10,
-            blind_time_out: 30,
+            timeout:       10,
+            blind_timeout: 30,
             allow_blind:    true
         }
     }
@@ -101,22 +101,22 @@ impl PlateSolver {
             }
             PlateSolverInData::Stars { stars, .. } => {
                 if stars.is_empty() {
-                    eyre::bail!("No stars for platesolving!");
+                    eyre::bail!("No stars for plate solving!");
                 }
             }
         }
 
-        log::debug!("Starting platesolve with config={:?} ...", config);
+        log::debug!("Starting plate solve with config={:?} ...", config);
         match data {
             PlateSolverInData::Image(image) => {
                 log::debug!(
-                    "Platesolve source is image (height={}, width={})",
+                    "PlateSolve source is image (height={}, width={})",
                     image.width(), image.height()
                 );
             }
             PlateSolverInData::Stars { stars, img_width, img_height } => {
                 log::debug!(
-                    "Platesolve source is stars (count={}, img_width={}, img_height={})",
+                    "PlateSolve source is stars (count={}, img_width={}, img_height={})",
                     stars.len(), img_width, img_height
                 );
             }

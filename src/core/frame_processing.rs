@@ -106,13 +106,11 @@ impl ResultImage {
 
 #[derive(Default, Debug)]
 pub struct CalibrParams {
-    pub extract_dark:  bool,
-    pub dark_lib_path: PathBuf,
-    pub flat_fname:    Option<PathBuf>,
-    pub ccd_temp:      Option<f64>,
-
-    /// Search And Remove hot pixels
-    pub sar_hot_pixs:  bool,
+    pub extract_dark:    bool,
+    pub dark_lib_path:   PathBuf,
+    pub flat_fname:      Option<PathBuf>,
+    pub ccd_temp:        Option<f64>,
+    pub sar_hot_pixels:  bool, // "sar" means Search And Remove (hot pixels)
 }
 
 #[derive(Default)]
@@ -390,7 +388,7 @@ impl FrameProcessing {
                     return Ok(());
                 }
 
-                // Check is frame CCD temperature is good
+                // Check if frame CCD temperature is good
 
                 if let Some(qo) = &command.quality_options
                 && let Some(ctrl_o) = &command.cam_ctrl_opts
@@ -608,7 +606,7 @@ impl FrameProcessing {
 
         let frame_stars = if is_light_frame {
             let stars_recgn_send = command.quality_options
-                .as_ref().map(|qo| qo.star_recgn_sens)
+                .as_ref().map(|qo| qo.star_recogn_sens)
                 .unwrap_or_default();
 
             let mono_layer = if image.is_color() { &image.g } else { &image.l };
@@ -725,7 +723,7 @@ impl FrameProcessing {
                 quality: quality.clone(),
             });
 
-            // Send message about light frame calculated
+            // Send message about calculated light frame
 
             self.notify_frame_result(
                 FrameProcessResultData::LightFrameInfo(Arc::clone(&info)),
@@ -799,7 +797,7 @@ impl FrameProcessing {
                     &command,
                 );
 
-                // stars on live stacking image
+                // Stars on live stacking image
 
                 let ls_mono_layer = if res_image.is_color() {
                     &res_image.g
@@ -813,7 +811,7 @@ impl FrameProcessing {
                     .unwrap_or(false);
 
                 let stars_recgn_send = command.quality_options
-                    .as_ref().map(|qo| qo.star_recgn_sens)
+                    .as_ref().map(|qo| qo.star_recogn_sens)
                     .unwrap_or_default();
 
                 let mut stars_finder = StarsFinder::new();
@@ -830,7 +828,7 @@ impl FrameProcessing {
                 let tmr = TimeLogger::start();
                 let mut live_stacking_info = LightFrameInfo::from_image(&res_image, true);
                 live_stacking_info.exposure = stacker.total_exposure();
-                tmr.log("LightImageInfo::from_image for livestacking");
+                tmr.log("LightImageInfo::from_image for live stacking");
 
                 if command.stop_flag.load(Ordering::Relaxed) {
                     log::debug!("Command stopped");
@@ -854,7 +852,7 @@ impl FrameProcessing {
                     &command,
                 );
 
-                // Convert into preview RGB bytes
+                // Convert to RGB bytes for preview
 
                 if !command.view_options.orig_frame_in_ls {
                     let tmr = TimeLogger::start();
@@ -884,7 +882,7 @@ impl FrameProcessing {
                     }
                 }
 
-                // save result image
+                // Save result image
 
                 if live_stacking.options.save_enabled {
                     let save_res_interv = live_stacking.options.save_minutes as f64 * 60.0;
@@ -900,7 +898,7 @@ impl FrameProcessing {
                         if !file_path.exists() {
                             std::fs::create_dir_all(&file_path)
                                 .map_err(|e|eyre::eyre!(
-                                    "Error '{}'\nwhen trying to create directory '{}' for saving result live stack image",
+                                    "Error '{}'\nwhen trying to create directory '{}' for saving live stacking result image",
                                     e, file_path.to_str().unwrap_or_default(),
                                 ))?;
                         }
@@ -947,7 +945,7 @@ impl FrameProcessing {
         let mut calibr_methods = CalibrMethods::empty();
 
         let fn_utils = FileNameUtils::default();
-        let (defect_pixel_file, subtrack_fname, subtrack_method) =
+        let (defect_pixel_file, subtract_fname, subtract_method) =
             if params.extract_dark {
                 let calibr_filename_data = FileNameArg::RawInfo{
                     info:     image_info,
@@ -957,11 +955,11 @@ impl FrameProcessing {
                     &calibr_filename_data,
                     &params.dark_lib_path
                 );
-                let (subtrack_fname, subtrack_method) = fn_utils.get_subtrack_master_fname(
+                let (subtract_fname, subtract_method) = fn_utils.get_subtract_master_fname(
                     &calibr_filename_data,
                     &params.dark_lib_path
                 );
-                (Some(defect_pixel_file), Some(subtrack_fname), subtrack_method)
+                (Some(defect_pixel_file), Some(subtract_fname), subtract_method)
             } else {
                 (None, None, CalibrMethods::empty())
             };
@@ -992,22 +990,22 @@ impl FrameProcessing {
 
         // Load master dark or bias file
 
-        if calibr.subtract_fname != subtrack_fname {
+        if calibr.subtract_fname != subtract_fname {
             calibr.subtract_image = None;
-            if let Some(file_name) = &subtrack_fname && file_name.is_file() {
+            if let Some(file_name) = &subtract_fname && file_name.is_file() {
                 log::info!(
-                    "Loading master dark file {} ...",
+                    "Loading master file for subtraction {} ...",
                     file_name.to_str().unwrap_or_default()
                 );
                 let tmr = TimeLogger::start();
                 let subtract_image = load_raw_image_from_fits_file(file_name)
                     .map_err(|e| eyre::eyre!(
-                        "Error '{}'\nwhen reading master dark '{}'",
+                        "Error '{}'\nwhen loading file '{}'",
                         e, file_name.to_str().unwrap_or_default(),
                     ))?;
-                tmr.log("loading master dark from file");
+                tmr.log("loading master file for subtraction");
 
-                if subtrack_method.contains(CalibrMethods::BY_DARK)
+                if subtract_method.contains(CalibrMethods::BY_DARK)
                 && calibr.defect_pixels.is_none() {
                     let tmr = TimeLogger::start();
                     let defect_pixels = subtract_image.find_hot_pixels_in_master_dark();
@@ -1018,7 +1016,7 @@ impl FrameProcessing {
 
                 calibr.subtract_image = Some(subtract_image);
             }
-            calibr.subtract_fname = subtrack_fname.clone();
+            calibr.subtract_fname = subtract_fname.clone();
         }
 
         // Load master flat file
@@ -1040,7 +1038,7 @@ impl FrameProcessing {
                 }
                 let tmr = TimeLogger::start();
                 master_flat.filter_flat();
-                tmr.log("filter master flat");
+                tmr.log("filtering master flat");
                 log::info!(
                     "Loaded master flat file {}",
                     file_name.to_str().unwrap_or_default()
@@ -1052,7 +1050,7 @@ impl FrameProcessing {
 
         // Apply master dark or bias image
 
-        if let (Some(file_name), Some(dark_image)) = (&subtrack_fname, &calibr.subtract_image) {
+        if let (Some(file_name), Some(dark_image)) = (&subtract_fname, &calibr.subtract_image) {
             let tmr = TimeLogger::start();
             raw_image.subtract_dark_or_bias(dark_image)
                 .map_err(|err| eyre::eyre!(
@@ -1060,7 +1058,7 @@ impl FrameProcessing {
                     err, file_name.to_str().unwrap_or_default(),
                 ))?;
             tmr.log("subtracting master dark");
-            calibr_methods.set(subtrack_method, true);
+            calibr_methods.set(subtract_method, true);
         }
 
         // Apply master flat image
@@ -1091,7 +1089,7 @@ impl FrameProcessing {
         // Search and remove hot pixels if there is no calibration data
 
         if !is_flat_file
-        && params.sar_hot_pixs
+        && params.sar_hot_pixels
         && calibr.defect_pixels.is_none() {
             let tmr = TimeLogger::start();
             let hot_pixels = raw_image.find_hot_pixels_in_light();

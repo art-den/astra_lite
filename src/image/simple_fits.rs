@@ -79,8 +79,8 @@ impl Header {
     }
 
     pub fn set_bool(&mut self, key: &str, value: bool) {
-        let values_str = if value { "T" } else { "F" };
-        self.set_value_impl(key, values_str.to_string());
+        let value_str = if value { "T" } else { "F" };
+        self.set_value_impl(key, value_str.to_string());
     }
 
     pub fn set_str(&mut self, key: &str, value: &str) {

@@ -157,9 +157,9 @@ impl GotoMode {
         let plate_solver = self.plate_solver.as_mut().unwrap();
         let image = image.read().unwrap();
         let config = PlateSolveConfig {
-            eq_coord:       Some(self.eq_coord),
-            time_out:       self.ps_opts.timeout,
-            blind_time_out: self.ps_opts.blind_timeout,
+            eq_coord:      Some(self.eq_coord),
+            timeout:       self.ps_opts.timeout,
+            blind_timeout: self.ps_opts.blind_timeout,
             .. PlateSolveConfig::default()
         };
 
@@ -177,8 +177,8 @@ impl GotoMode {
         let plate_solver = self.plate_solver.as_mut().unwrap();
         let config = PlateSolveConfig {
             eq_coord:       Some(self.eq_coord),
-            time_out:       self.ps_opts.timeout,
-            blind_time_out: self.ps_opts.blind_timeout,
+            timeout:       self.ps_opts.timeout,
+            blind_timeout: self.ps_opts.blind_timeout,
             .. PlateSolveConfig::default()
         };
         let stars_arg = PlateSolverInData::Stars{
@@ -204,12 +204,12 @@ impl GotoMode {
         let result = match plate_solver.get_result()? {
             PlateSolveResult::Waiting => return Ok(false),
             PlateSolveResult::Done(result) => result,
-            PlateSolveResult::Failed => eyre::bail!("Can't platesolve image")
+            PlateSolveResult::Failed => eyre::bail!("Can't plate solve the image")
         };
 
         result.print_to_log();
 
-        // Image for preview in map
+        // Image for preview on the map
 
         let options = self.options.read().unwrap();
         let preview = self.cur_frame.create_preview_for_platesolve_image(&options.preview);
@@ -281,7 +281,7 @@ impl Mode for GotoMode {
             State::FinalPlateSolving =>
                 "Final plate solving".to_string(),
             State::None|State::Finished =>
-                "Goto and platesolve".to_string(),
+                "Goto and plate solving".to_string(),
             State::Checking =>
                 "Checking position".to_string(),
         }
@@ -337,8 +337,8 @@ impl Mode for GotoMode {
                 let plate_solver = self.plate_solver.as_mut().unwrap();
                 self.extra_stages = 1;
                 let mut config = PlateSolveConfig {
-                    time_out:       self.ps_opts.timeout,
-                    blind_time_out: self.ps_opts.blind_timeout,
+                    timeout:       self.ps_opts.timeout,
+                    blind_timeout: self.ps_opts.blind_timeout,
                     .. PlateSolveConfig::default()
                 };
                 let image = image.read().unwrap();
@@ -386,7 +386,7 @@ impl Mode for GotoMode {
         self.cam_opts.as_ref().map(|cam_opts| &cam_opts.frame)
     }
 
-    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
+    fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         match self.state {
             State::Unparking => {
                 if !self.telescope.is_parked()? {
@@ -397,7 +397,7 @@ impl Mode for GotoMode {
                 self.unpark_ms += timer_period_ms;
                 if self.unpark_ms > MAX_MOUNT_UNPARK_TIME * 1000 {
                     eyre::bail!(
-                        "Mount unpark time out (> {} seconds)!",
+                        "Mount unpark timeout (> {} seconds)!",
                         MAX_MOUNT_UNPARK_TIME
                     );
                 }
@@ -429,7 +429,7 @@ impl Mode for GotoMode {
                 } else {
                     self.goto_ms += timer_period_ms;
                     if self.goto_ms > MAX_GOTO_TIME * 1000 {
-                        eyre::bail!("Telescope is moving too long time (> {}s)", MAX_GOTO_TIME);
+                        eyre::bail!("Telescope has been moving for too long (> {}s)", MAX_GOTO_TIME);
                     }
                 }
             }
@@ -439,7 +439,7 @@ impl Mode for GotoMode {
                     ProcessPlateSolverResultAction::SetEqCoord
                 )?;
                 if ok {
-                    self.plate_solver.as_mut().unwrap().reset(); // reset optimization gotten from image
+                    self.plate_solver.as_mut().unwrap().reset(); // reset optimization obtained from image
                     self.start_goto()?;
                     return Ok(NotifyResult::ProgressChanges)
                 }

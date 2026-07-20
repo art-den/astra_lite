@@ -84,7 +84,7 @@ if no master dark defined</property>
         <property name="visible">True</property>
         <property name="can-focus">True</property>
         <property name="receives-default">False</property>
-        <property name="tooltip-text" translatable="yes">Search and remove hot pixels from light frame. 
+        <property name="tooltip-text" translatable="yes">Search and remove hot pixels from light frame.
 Is not using darks or defect pixel files.
 Сan consider a very small star as a dead pixel and delete it</property>
         <property name="halign">start</property>
@@ -102,7 +102,7 @@ Is not using darks or defect pixel files.
         <property name="halign">start</property>
         <property name="margin-left">20</property>
         <property name="margin-start">20</property>
-        <property name="label" translatable="yes">&lt;b&gt;Warning!&lt;/b&gt; Can "eat" your small stars. Better use "Subtrack master DARK frame"</property>
+        <property name="label" translatable="yes">&lt;b&gt;Warning!&lt;/b&gt; Can "eat" your small stars. Better use "Subtract master DARK frame"</property>
         <property name="use-markup">True</property>
         <property name="wrap">True</property>
       </object>

@@ -23,13 +23,13 @@ pub fn load_raw_image_from_fits_reader(
     stream: &mut impl SeekNRead
 ) -> eyre::Result<RawImage> {
     let Some(image_hdu) = find_mono_image_hdu_in_fits(reader) else {
-        eyre::bail!("No RAW image found in fits data");
+        eyre::bail!("No RAW image found in FITS data");
     };
     let info = RawImageInfo::new_from_fits_header(image_hdu);
     let mut data = vec![0; image_hdu.data_len()];
     FitsReader::read_data(image_hdu, stream, 0, &mut data)?;
-    let cfa_arrary = info.cfa.get_array();
-    Ok(RawImage::new(info, data, cfa_arrary))
+    let cfa_array = info.cfa.get_array();
+    Ok(RawImage::new(info, data, cfa_array))
 }
 
 pub fn load_raw_image_from_fits_stream(stream: &mut impl SeekNRead) -> eyre::Result<RawImage> {
@@ -52,7 +52,7 @@ pub fn save_raw_image_to_fits_file(
     let info = raw_image.info();
     let mut hdu = Header::new_2d(info.width, info.height);
     raw_image.info().save_to_fits_header(&mut hdu);
-    let (bzero, bitpix) = info.bzero_and_bitpix_for_fit_file();
+    let (bzero, bitpix) = info.bzero_and_bitpix_for_fits_file();
     writer.write_header(&mut file, &hdu)?;
     writer.write_data(bitpix, bzero, &mut file, &raw_image.as_slice())?;
 
@@ -234,7 +234,7 @@ pub fn load_image_from_fits_reader(
         FitsReader::read_data(hdu, stream,     one_color_bytes_len, image.g.as_slice_mut())?;
         FitsReader::read_data(hdu, stream, 2 * one_color_bytes_len, image.b.as_slice_mut())?;
     } else {
-        eyre::bail!("No image found in fits");
+        eyre::bail!("No image found in FITS");
     }
     Ok(())
 }
@@ -314,8 +314,8 @@ impl FromFileCameraShot {
         let image_type = if is_fits {
             let mut stream = BufReader::new(File::open(file_name)?);
             let reader = FitsReader::new(&mut stream)?;
-            let contain_mono_hdu = find_mono_image_hdu_in_fits(&reader).is_some();
-            if contain_mono_hdu {
+            let has_mono_hdu = find_mono_image_hdu_in_fits(&reader).is_some();
+            if has_mono_hdu {
                 CameraShotType::RawCcdData
             } else {
                 CameraShotType::ReadyImage

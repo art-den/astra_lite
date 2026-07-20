@@ -126,7 +126,7 @@ pub fn enable_action(
     if let Some(action) = action_map.lookup_action(action) {
         let sa = action
             .downcast::<gio::SimpleAction>()
-            .expect("Is not gio::SimpleAction");
+            .expect("Not a gio::SimpleAction");
         if sa.is_enabled() != enabled {
             sa.set_enabled(enabled);
         }

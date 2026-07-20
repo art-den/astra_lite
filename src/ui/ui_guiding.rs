@@ -33,7 +33,7 @@ pub fn init_ui(
 #[derive(FromBuilder)]
 struct Widgets {
     grd:                 gtk::Grid,
-    cb_dith_perod:       gtk::ComboBoxText,
+    cb_dith_period:       gtk::ComboBoxText,
     rbtn_no_guiding:     gtk::RadioButton,
     rbtn_guide_main_cam: gtk::RadioButton,
     spb_dith_dist:       gtk::SpinButton,
@@ -80,7 +80,7 @@ struct GuidingUi {
 
 impl Drop for GuidingUi {
     fn drop(&mut self) {
-        log::info!("DitheringUi dropped");
+        log::info!("GuidingUi dropped");
     }
 }
 
@@ -94,7 +94,7 @@ impl UiModule for GuidingUi {
             GuidingMode::External =>
                 self.widgets.rbtn_guide_ext.set_active(true),
         }
-        self.widgets.cb_dith_perod    .set_active_id(Some(options.guiding.dith_period.to_string().as_str()));
+        self.widgets.cb_dith_period    .set_active_id(Some(options.guiding.dith_period.to_string().as_str()));
         self.widgets.spb_ext_dith_dist.set_value    (options.guiding.ext_guider.dith_dist as f64);
         self.widgets.spb_guid_max_err .set_value    (options.guiding.main_cam.max_error);
         self.widgets.spb_dith_dist    .set_value    (options.guiding.main_cam.dith_dist as f64);
@@ -112,7 +112,7 @@ impl UiModule for GuidingUi {
                 GuidingMode::Disabled
             };
 
-        options.guiding.dith_period              = self.widgets.cb_dith_perod.active_id().and_then(|v| v.parse().ok()).unwrap_or(0);
+        options.guiding.dith_period              = self.widgets.cb_dith_period.active_id().and_then(|v| v.parse().ok()).unwrap_or(0);
         options.guiding.ext_guider.dith_dist     = self.widgets.spb_ext_dith_dist.value() as i32;
 
         options.guiding.main_cam.dith_dist       = self.widgets.spb_dith_dist.value() as i32;
@@ -238,7 +238,7 @@ impl GuidingUi {
         self.widgets.rbtn_no_guiding.set_sensitive(can_change_mode);
         self.widgets.rbtn_guide_main_cam.set_sensitive(can_change_mode);
         self.widgets.rbtn_guide_ext.set_sensitive(can_change_mode);
-        self.widgets.cb_dith_perod.set_sensitive(!disabled && can_change_mode);
+        self.widgets.cb_dith_period.set_sensitive(!disabled && can_change_mode);
         self.widgets.spb_dith_dist.set_sensitive(by_main_cam && can_change_mode);
         self.widgets.spb_guid_max_err.set_sensitive(by_main_cam && can_change_mode);
         self.widgets.spb_mnt_cal_exp.set_sensitive(by_main_cam && can_change_mode);

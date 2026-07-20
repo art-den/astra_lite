@@ -308,7 +308,7 @@ impl ImageStacker {
         // Each frame is rotated and stored in a circular buffer of 5 slots.
         // Once full, a median over the 5 slots is accumulated into the output
         // on every subsequent frame. This O(1) approach rejects outliers
-        // (satellites etc) without maintaining a sorted window — important
+        // (satellites, etc.) without maintaining a sorted window — important
         // for low-power devices.
 
 

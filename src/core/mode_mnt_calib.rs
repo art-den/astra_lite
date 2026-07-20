@@ -52,7 +52,7 @@ pub struct MountCalibrMode {
     start_dec:         f64,
     start_ra:          f64,
     attempt_num:       usize,
-    attempts:          Vec<CalibrAtempt>,
+    attempts:          Vec<CalibrAttempt>,
     image_width:       usize,
     image_height:      usize,
     move_period:       f64,
@@ -77,7 +77,7 @@ enum State {
     WaitForOrigCoords(usize /* ok time in ms */),
 }
 
-struct CalibrAtempt {
+struct CalibrAttempt {
     stars: StarItems,
 }
 
@@ -228,7 +228,7 @@ impl MountCalibrMode {
                     let cam_size_mm = min_size * min_pix_size / 1000.0;
                     let camera_angle = f64::atan2(cam_size_mm, self.telescope_opts.real_focal_length());
                     let sky_angle_in_seconds = 2.0 * PI / (60.0 * 60.0 * 24.0);
-                    // time when point went all camera matrix on sky rotation speed = DITHER_CALIBR_SPEED
+                    // The time it takes for a point to travel the entire CCD matrix along the short side
                     let cam_time = camera_angle / (sky_angle_in_seconds * self.calibr_speed);
                     let total_time = cam_time * 0.333; // 1/3 of matrix
                     self.move_period = total_time / (DITHER_CALIBR_ATTEMPTS_CNT - 1) as f64;
@@ -239,7 +239,7 @@ impl MountCalibrMode {
                     self.move_period = 1.0;
                 }
             }
-            self.attempts.push(CalibrAtempt {
+            self.attempts.push(CalibrAttempt {
                 stars: Vec::clone(&info.stars.items),
             });
             self.attempt_num += 1;
@@ -331,7 +331,7 @@ impl Mode for MountCalibrMode {
         }
     }
 
-    fn notify_periodical_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
+    fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         match &mut self.state {
             State::WaitForSlew(ok_time_ms) => {

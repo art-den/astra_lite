@@ -77,7 +77,7 @@ impl ExternalGuiderCtrl {
     pub fn create_and_connect(self: &Arc<Self>, guider: ExtGuiderType) -> eyre::Result<()> {
         let mut ext_guider = self.ext_guider.lock().unwrap();
 
-        // Disconect previous one
+        // Disconnect previous one
 
         if let Some(ext_guider) = &mut *ext_guider {
             ext_guider.disconnect()?;

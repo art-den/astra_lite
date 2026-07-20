@@ -16,7 +16,7 @@ pub struct IndiPanelWidget {
 impl Drop for IndiPanelWidget {
     fn drop(&mut self) {
         self.indi.disconnect_event_handler(self.indi_conn);
-        log::info!("IndiUi dropped");
+        log::info!("IndiPanelWidget dropped");
     }
 }
 
@@ -137,10 +137,10 @@ impl IndiPanelWidget {
         if data.filter_text_lc == text { return; }
         data.filter_text_lc = text.to_string();
         drop(data);
-        self.update_props_visiblity();
+        self.update_props_visibility();
     }
 
-    fn update_props_visiblity(&self) {
+    fn update_props_visibility(&self) {
         let data = self.data.borrow();
         for device in &data.devices {
             for group in &device.groups {
@@ -193,7 +193,7 @@ impl IndiPanelWidget {
                 let d1_is_ccd = d1.interface.contains(indi::DriverInterface::CCD);
                 let d2_is_ccd = d2.interface.contains(indi::DriverInterface::CCD);
                 if d1_is_ccd && d2_is_ccd {
-                    // Sort by phisical frame size
+                    // Sort by physical frame size
                     let (psx1, psy1) = indi.camera_get_pixel_size_um(&d1.name, indi::CamCcd::Main).unwrap_or_default();
                     let (fsx1, fsy1) = indi.camera_get_max_frame_size(&d1.name, indi::CamCcd::Main).unwrap_or_default();
                     let fx1 = psx1 * fsx1 as f64;
@@ -216,7 +216,7 @@ impl IndiPanelWidget {
             if indi_devices.len() != data.devices.len() {
                 devices_list_changed = true;
             } else {
-                // Devices order changed?
+                // Device order changed?
                 for (indi_device, ui_device) in izip!(&indi_devices, &data.devices) {
                     if *indi_device.name != ui_device.name
                     || get_device_sort_prio(indi_device.interface) != get_device_sort_prio(ui_device.interface) {
@@ -309,7 +309,7 @@ impl IndiPanelWidget {
             .collect();
 
         if update_list {
-            // add properties groups into notebook
+            // add property groups into notebook
             for indi_group in indi_groups.iter().copied() {
                 if !ui_device.groups.iter().any(|g| g.name == *indi_group) {
                     let tab_label = gtk::Label::builder().label(indi_group).build();
@@ -339,7 +339,7 @@ impl IndiPanelWidget {
                 }
             }
 
-            // remove properties groups from notebook
+            // remove property groups from notebook
             for ui_group in &ui_device.groups {
                 if !indi_groups.iter().any(|g| **g == ui_group.name) {
                     let Some(page_num) = ui_device.notebook.page_num(&ui_group.scrollwin) else {
@@ -355,7 +355,7 @@ impl IndiPanelWidget {
             );
         }
 
-        // build device properties group UI
+        // Build device property groups UI
         for indi_group in indi_groups {
             let ui_group = ui_device.groups.iter_mut().find(|g| g.name == *indi_group).unwrap();
             Self::show_device_prop_group(indi, &ui_device.name, ui_group, indi_props, update_list);
@@ -473,7 +473,7 @@ impl IndiPanelWidget {
             );
         }
 
-        // Update properties values
+        // Update property values
         for indi_prop in indi_group_props {
             let ui_prop = ui_group.props.iter_mut().find(|p| p.name == *indi_prop.name).unwrap();
             if indi_prop.change_id != ui_prop.change_id {
@@ -775,7 +775,7 @@ impl IndiPanelWidget {
                         btn.set_sensitive(false);
                     }
                 });
-                UiIndiPropElemData::Switch(UiIndiPropSwithElem::Button(button))
+                UiIndiPropElemData::Switch(UiIndiPropSwitchElem::Button(button))
             } else {
                 let button = gtk::CheckButton::builder()
                     .label(label_text)
@@ -790,7 +790,7 @@ impl IndiPanelWidget {
                         &[(&elem_name, btn.is_active())]
                     );
                 });
-                UiIndiPropElemData::Switch(UiIndiPropSwithElem::Check(button))
+                UiIndiPropElemData::Switch(UiIndiPropSwitchElem::Check(button))
             };
             result.push(UiIndiPropElem{
                 name: elem.name.clone(),
@@ -942,7 +942,7 @@ impl IndiPanelWidget {
             let UiIndiPropElemData::Switch(switch_data) = &ui_elem.data else { continue; };
             let indi::PropValue::Switch(value) = &indi_elem.value else { continue; };
             match &switch_data {
-                UiIndiPropSwithElem::Button(button) => {
+                UiIndiPropSwitchElem::Button(button) => {
                     if *value {
                         button.style_context().add_class("indi_on_btn");
                     } else {
@@ -957,7 +957,7 @@ impl IndiPanelWidget {
                         button.set_sensitive(true);
                     }
                 }
-                UiIndiPropSwithElem::Check(check) => {
+                UiIndiPropSwitchElem::Check(check) => {
                     check.set_sensitive(false);
                     check.set_active(*value);
                     check.set_sensitive(true);
@@ -1059,7 +1059,7 @@ impl UiIndiPropElem {
 enum UiIndiPropElemData {
     Text(UiIndiPropTextElem),
     Num(UiIndiPropNumElem),
-    Switch(UiIndiPropSwithElem),
+    Switch(UiIndiPropSwitchElem),
     Blob(UiIndiPropBlobElem),
     Light(UiIndiPropLightElem),
 }
@@ -1072,7 +1072,7 @@ struct UiIndiPropNumElem {
     cur_value: Option<gtk::Entry>,
 }
 
-enum UiIndiPropSwithElem {
+enum UiIndiPropSwitchElem {
     Button(gtk::ToggleButton),
     Check(gtk::CheckButton),
 }

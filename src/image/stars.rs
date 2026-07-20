@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, f64::consts::PI, sync::Mutex};
 use itertools::{izip, Itertools};
-use crate::{options::StarRecognSensivity, utils::math::*, TimeLogger};
+use crate::{options::StarRecognSensitivity, utils::math::*, TimeLogger};
 use super::{image::ImageLayer, raw::RawImageInfo, utils::*};
 
 const MAX_STAR_DIAM: usize = 32;
@@ -13,11 +13,11 @@ pub struct Star {
     pub x:             f64,
     pub y:             f64,
     pub background:    u16,
-    pub max_value:     u16,
-    pub brightness:    u32,
-    pub overexposured: bool,
-    pub width:         usize,
-    pub height:        usize,
+    pub max_value:   u16,
+    pub brightness:  u32,
+    pub overexposed: bool,
+    pub width:       usize,
+    pub height:      usize,
     pub points:        Vec<(usize, usize)>,
 }
 
@@ -52,7 +52,7 @@ impl StarsFinder {
         &mut self,
         image:            &ImageLayer<u16>,
         raw_info:         &Option<RawImageInfo>,
-        sensitivity:      StarRecognSensivity,
+        sensitivity:      StarRecognSensitivity,
         ignore_3px_stars: bool,
         mt:               bool,
     ) -> Stars {
@@ -69,11 +69,11 @@ impl StarsFinder {
         log::debug!("Stars detection threshold = {}", threshold);
 
         let tm = TimeLogger::start();
-        let extremums = Self::find_extremums(image, &mut threshold, mt);
+        let extrema = Self::find_extremums(image, &mut threshold, mt);
         tm.log("StarsFinder::find_extremums");
-        log::debug!("Stars extremums.len() = {}", extremums.len());
+        log::debug!("Stars extrema.len() = {}", extrema.len());
 
-        let star_centers = Self::find_possible_stars_centers(&extremums);
+        let star_centers = Self::find_possible_stars_centers(&extrema);
         let tm = TimeLogger::start();
         tm.log("StarsFinder::find_possible_stars_centers");
         log::debug!("Stars star_centers.len() = {}", star_centers.len());
@@ -110,7 +110,7 @@ impl StarsFinder {
 
     fn calc_threshold_for_stars_detection(
         image:       &ImageLayer<u16>,
-        sensitivity: StarRecognSensivity,
+        sensitivity: StarRecognSensitivity,
     ) -> u16 {
         let mut diffs = Vec::new();
         for (y, row) in image.as_slice().chunks_exact(image.width()).enumerate() {
@@ -135,9 +135,9 @@ impl StarsFinder {
         let diff = 0.5 * f64::sqrt(m as _);
 
         let k = match sensitivity {
-            StarRecognSensivity::Low    => 30.0,
-            StarRecognSensivity::Normal => 15.0,
-            StarRecognSensivity::High   => 9.0,
+            StarRecognSensitivity::Low    => 30.0,
+            StarRecognSensitivity::Normal => 15.0,
+            StarRecognSensitivity::High   => 9.0,
         };
 
         let result = (k * diff) as i32;
@@ -214,12 +214,12 @@ impl StarsFinder {
                 });
             }
 
-            // if too much stars (noise detected as stars),
+            // if too many stars (noise detected as stars),
             // increase threshold and repeat
 
-            let mut extremums = extremums_mutex.lock().unwrap();
-            if extremums.len() >= MAX_EXTREMUMS_CNT {
-                extremums.clear();
+            let mut extrema = extremums_mutex.lock().unwrap();
+            if extrema.len() >= MAX_EXTREMUMS_CNT {
+                extrema.clear();
                 let new_threshold =  3 * (*threshold as u32 + 1) / 2;
                 if new_threshold > u16::MAX as u32 {
                     break;
@@ -234,19 +234,19 @@ impl StarsFinder {
     }
 
     fn find_possible_stars_centers(
-        extremums: &HashMap<(isize, isize), u16>,
+        extrema: &HashMap<(isize, isize), u16>,
     ) -> Vec<(isize, isize, u16)> {
         let mut processed_points = HashSet::<(isize, isize)>::new();
         let mut cluster_filler = FloodFiller::new();
         let mut cluster = Vec::new();
         let mut possible_star_centers = Vec::new();
 
-        for crd in extremums.keys() {
+        for crd in extrema.keys() {
             if processed_points.contains(crd) { continue; }
             let (x, y) = crd;
             cluster.clear();
             cluster_filler.fill(*x, *y, |x, y| -> FillPtSetResult {
-                if let Some(existing) = extremums.get(&(x, y)) {
+                if let Some(existing) = extrema.get(&(x, y)) {
                     if processed_points.contains(&(x, y)) {
                         return FillPtSetResult::Miss
                     }
@@ -327,7 +327,7 @@ impl StarsFinder {
 
                         // near other star
                         if all_star_coords.contains(&(x, y))
-                        // too much star points
+                        // too many star points
                         || star_points.len() > MAX_STARS_POINTS_CNT {
                             return FillPtSetResult::Error;
                         }
@@ -391,7 +391,7 @@ impl StarsFinder {
                 let height = 3 * isize::max(y-min_y+1, max_y-y+1);
                 let center_x = x_summ / crd_cnt;
                 let center_y = y_summ / crd_cnt;
-                let overexposured = self.check_is_star_overexposured(
+                let overexposed = self.check_is_star_overexposed(
                     &star_points,
                     center_x.round() as isize,
                     center_y.round() as isize,
@@ -416,25 +416,25 @@ impl StarsFinder {
                     width: width as usize,
                     height: height as usize,
                     points,
-                    overexposured,
+                    overexposed: overexposed,
                 });
             }
         }
 
         stars.sort_by_key(|star| -(star.brightness as i32));
 
-        // remove not overexposured stars larger then
-        // 2 * median value of not overexposured stars area
-        let mut not_overexposured_areas: Vec<_> = stars
+        // remove non-overexposed stars larger than
+        // 2 * median value of non-verexposed stars area
+        let mut not_overexposed_areas: Vec<_> = stars
             .iter()
-            .filter(|s| !s.overexposured)
+            .filter(|s| !s.overexposed)
             .map(|s| s.points.len())
             .collect();
 
-        if !not_overexposured_areas.is_empty() {
-            let med = median(&mut not_overexposured_areas);
+        if !not_overexposed_areas.is_empty() {
+            let med = median(&mut not_overexposed_areas);
             let border = med * 2;
-            stars.retain(|s| s.overexposured || s.points.len() < border);
+            stars.retain(|s| s.overexposed || s.points.len() < border);
         }
 
         if stars.len() > MAX_STARS_CNT {
@@ -464,7 +464,7 @@ impl StarsFinder {
         real_perimeter < 3.0 * possible_perimeter
     }
 
-    fn check_is_star_overexposured(
+    fn check_is_star_overexposed(
         &mut self,
         star_points: &HashMap<(isize, isize), u16>,
         center_x:    isize,
@@ -475,7 +475,7 @@ impl StarsFinder {
         max_y:       isize,
         bg:          u16,
     ) -> bool {
-        fn is_overexposured_values(values: &[u16], bg: u16) -> bool {
+        fn is_overexposed_values(values: &[u16], bg: u16) -> bool {
             let points_count = values.len();
             if points_count < 4 {
                 return false;
@@ -495,7 +495,7 @@ impl StarsFinder {
                 self.overexp_buffer.push(*v);
             }
         }
-        if !is_overexposured_values(&self.overexp_buffer, bg) {
+        if !is_overexposed_values(&self.overexp_buffer, bg) {
             return false;
         }
 
@@ -507,7 +507,7 @@ impl StarsFinder {
                 self.overexp_buffer.push(*v);
             }
         }
-        is_overexposured_values(&self.overexp_buffer, bg)
+        is_overexposed_values(&self.overexp_buffer, bg)
     }
 
     fn calc_common_star_image(
@@ -517,7 +517,7 @@ impl StarsFinder {
     ) -> Option<CommonStarsImage>{
         let stars_for_image: Vec<_> =
             stars.iter()
-                .filter(move |s| { !s.overexposured })
+                .filter(move |s| { !s.overexposed })
                 .map(|s| (s, (s.max_value - s.background) as i32))
                 .filter(|(_, r)| *r > 0)
                 .collect();
@@ -525,7 +525,7 @@ impl StarsFinder {
             return None;
         }
 
-        // Lets prefer stars from center of image
+        // Prefer stars near the center of the image
 
         const MIN_STARS_CNT_FOR_STAR_IMAGE: usize = 50;
         let img_size = (usize::min(image.width(), image.height()) / 2) as f64;
@@ -557,18 +557,18 @@ impl StarsFinder {
 
         // Size of image
 
-        let aver_width = filtered_stars
+        let avg_width = filtered_stars
             .iter()
             .map(|(s, _)| s.width)
             .sum::<usize>() / stars_count;
-        let aver_height = filtered_stars
+        let avg_height = filtered_stars
             .iter()
             .map(|(s, _)| s.height)
             .sum::<usize>() / stars_count;
-        let mut result_width = usize::min(aver_width, MAX_STAR_DIAM) * k;
+        let mut result_width = usize::min(avg_width, MAX_STAR_DIAM) * k;
         if result_width.is_multiple_of(2) { result_width += 1; }
         let result_width2 = (result_width / 2) as isize;
-        let mut result_height = usize::min(aver_height, MAX_STAR_DIAM) * k;
+        let mut result_height = usize::min(avg_height, MAX_STAR_DIAM) * k;
         if result_height.is_multiple_of(2) { result_height += 1; }
         let result_height2 = (result_height / 2) as isize;
 

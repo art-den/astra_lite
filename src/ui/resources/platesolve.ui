@@ -10,7 +10,7 @@
     <property name="column-spacing">5</property>
     <child>
       <object class="GtkButton">
-        <property name="label" translatable="yes">Capture, Platesolve and Sync</property>
+        <property name="label" translatable="yes">Capture, PlateSolve and Sync</property>
         <property name="visible">True</property>
         <property name="can-focus">True</property>
         <property name="receives-default">True</property>
@@ -145,7 +145,7 @@
     </child>
     <child>
       <object class="GtkButton">
-        <property name="label" translatable="yes">Platesolve current image and goto</property>
+        <property name="label" translatable="yes">PlateSolve current image and goto</property>
         <property name="visible">True</property>
         <property name="can-focus">True</property>
         <property name="receives-default">True</property>

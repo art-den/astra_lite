@@ -72,8 +72,8 @@ impl PlatesolveMode {
             ra:  hour_to_radian(ra),
         };
         let config = PlateSolveConfig {
-            time_out:       self.ps_opts.timeout,
-            blind_time_out: self.ps_opts.blind_timeout,
+            timeout:       self.ps_opts.timeout,
+            blind_timeout: self.ps_opts.blind_timeout,
             eq_coord:       Some(eq_coord),
             .. PlateSolveConfig::default()
         };
@@ -104,12 +104,12 @@ impl PlatesolveMode {
         let result = match self.plate_solver.get_result()? {
             PlateSolveResult::Waiting => return Ok(false),
             PlateSolveResult::Done(result) => result,
-            PlateSolveResult::Failed => eyre::bail!("Can't platesolve image")
+            PlateSolveResult::Failed => eyre::bail!("Can't plate solve the image")
         };
 
         result.print_to_log();
 
-        // Image for preview in map
+        // Image for preview on the map
         let options = self.options.read().unwrap();
         let preview = self.cur_frame.create_preview_for_platesolve_image(&options.preview);
         drop(options);
@@ -117,7 +117,7 @@ impl PlatesolveMode {
         // Calculate and correct focal length in options
         self.calc_focal_len(&result)?;
 
-        // Send event about platesolve result
+        // Send event with platesolve result
         let event = PlateSolverEvent {
             cam_name:  self.camera.id().to_string(),
             result:    result.clone(),
@@ -175,7 +175,7 @@ impl PlatesolveMode {
 
             let ok_to_set_new_value = f64::abs(*cur_len - focal_len) >= 2.0;
             if ok_to_set_new_value {
-                log::info!("Correcting options focal len from {:.1} to {:.1}", *cur_len, focal_len);
+                log::info!("Correcting options focal length from {:.1} to {:.1}", *cur_len, focal_len);
                 *cur_len = focal_len;
             }
             drop(options);
@@ -265,7 +265,7 @@ impl Mode for PlatesolveMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn notify_periodical_timer_tick(&mut self, _timer_period_ms: usize) -> eyre::Result<NotifyResult> {
+    fn notify_periodic_timer_tick(&mut self, _timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         match self.state {
             State::PlateSolve => {
                 let ok = self.try_process_plate_solving_result()?;

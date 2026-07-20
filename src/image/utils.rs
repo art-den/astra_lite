@@ -35,7 +35,7 @@ impl FloodFiller {
 
         let mut error_flag = false;
         while let Some((pt_x, pt_y)) = self.visited.pop_front() {
-            let mut check_neibour = |x, y| {
+            let mut check_neighbour = |x, y| {
                 let result = try_set_filled(x, y);
                 if result == FillPtSetResult::Error {
                     error_flag = true;
@@ -46,7 +46,7 @@ impl FloodFiller {
             for dx in -1..=1 {
                 for dy in -1..=1 {
                     if dx == 0 && dy == 0 { continue; }
-                    check_neibour(pt_x + dx, pt_y + dy);
+                    check_neighbour(pt_x + dx, pt_y + dy);
                 }
             }
             if error_flag { return false; }

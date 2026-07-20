@@ -85,7 +85,7 @@ impl UiModule for FltWheelUi {
 
     fn on_event(&self, event: &Event) {
         match event {
-            Event::FltWheelDeviceChanged(new_device_name) => {
+            Event::FilterWheelDeviceChanged(new_device_name) => {
                 if self.widgets.cb_device.active_id().as_deref() != Some(new_device_name.as_str()) {
                     self.excl_caller.exec(|| {
                         self.widgets.cb_device.set_active_id(Some(new_device_name.as_str()));
@@ -187,7 +187,7 @@ impl FltWheelUi {
 
     fn update_devices_list(&self) {
         let options = self.core.options.read().unwrap();
-        let cur_focuser = options.filter_wheel.device.clone();
+        let cur_filter_wheel = options.filter_wheel.device.clone();
         drop(options);
 
         let Ok(list) = self.core.hal.devices(DeviceType::FLT_WHEEL) else { return; };
@@ -197,7 +197,7 @@ impl FltWheelUi {
         fill_devices_list_into_combobox(
             &list,
             &self.widgets.cb_device,
-            if !cur_focuser.is_empty() { Some(cur_focuser.as_str()) } else { None },
+            if !cur_filter_wheel.is_empty() { Some(cur_filter_wheel.as_str()) } else { None },
             |id| {
                 let mut options = self.core.options.write().unwrap();
                 options.filter_wheel.device = id.to_string();

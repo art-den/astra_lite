@@ -218,8 +218,8 @@ impl SkyMapPainter {
         }
 
         if let Some(sky_map) = args.sky_map {
-            // Current constellations bounds
-            //
+            // Current constellation bounds
+
             if args.config.filter.contains(ItemsToShow::CONSTS) {
                 self.paint_constellation_bounds(sky_map, &ctx)?;
             }
@@ -229,12 +229,12 @@ impl SkyMapPainter {
             self.paint_dso_items(sky_map, &ctx, PainterMode::Objects)?;
 
             // Constellations
-            //
+
             if args.config.filter.contains(ItemsToShow::CONSTS) {
                 self.paint_constellations_lines(sky_map, &ctx)?;
             }
 
-            // Stars objects
+            // Star objects
 
             let star_painter_params = self.get_star_painter_params(&ctx);
             if args.config.filter.contains(ItemsToShow::STARS) {
@@ -258,7 +258,7 @@ impl SkyMapPainter {
 
             self.paint_dso_items(sky_map, &ctx, PainterMode::Names)?;
 
-            // Stars names
+            // Star names
 
             if args.config.filter.contains(ItemsToShow::STARS) {
                 self.paint_stars(
@@ -360,18 +360,18 @@ impl SkyMapPainter {
 
             match mode {
                 PainterMode::Objects => {
-                    let test_visiblity = PointVisibilityTestObject {
+                    let test_visibility = PointVisibilityTestObject {
                         coord: dso_object.crd.to_eq(),
                         use_now_epoch: true
                     };
 
                     let is_visible_on_screen = self.item_painter.paint(
-                        &test_visiblity,
+                        &test_visibility,
                         ctx,
                         false,
                     )?;
 
-                    // Paint ellipse of object
+                    // Paint ellipse around object
                     if is_visible_on_screen {
                         self.paint_dso_ellipse(dso_object, ctx)?;
                     }
@@ -522,11 +522,11 @@ impl SkyMapPainter {
         for (id, constellation) in constellations {
             let all_ra = constellation.lines.iter().flat_map(|l| l.iter().map(|pt| pt.ra));
             let all_dec = constellation.lines.iter().flat_map(|l| l.iter().map(|pt| pt.dec));
-            let aver_ra = angles_mean(all_ra);
-            let aver_dec = angles_mean(all_dec);
+            let avg_ra = angles_mean(all_ra);
+            let avg_dec = angles_mean(all_dec);
             let painter = ConstNamePainter {
-                ra: aver_ra,
-                dec: aver_dec,
+                ra: avg_ra,
+                dec: avg_dec,
                 name: &constellation.name,
                 is_current: Some(*id) == self.cur_cont_id,
             };
@@ -912,7 +912,7 @@ impl ItemPainter {
             self.points_screen.push(pt_s);
         }
 
-        // check if 2d lines is crossing by screen boundaries
+        // check if 2D lines cross screen boundaries
         if !obj_is_visible && self.points_screen.len() >= 2 {
             let top_line = scr_tolerance.top_line();
             let bottom_line = scr_tolerance.bottom_line();
@@ -942,7 +942,7 @@ impl ItemPainter {
     }
 }
 
-// Paint DSP item
+// Paint DSO item
 
 struct DsoNamePainter<'a>(&'a DsoItem);
 
@@ -1141,14 +1141,14 @@ impl StarPainter<'_> {
 
         const RED:    RgbTuple = (1.0, 0.4,  0.4);
         const ORANGE: RgbTuple = (1.0, 0.9,  0.6);
-        const WELLOW: RgbTuple = (1.0, 1.0,  0.7);
+        const YELLOW: RgbTuple = (1.0, 1.0,  0.7);
         const WHITE:  RgbTuple = (0.9, 0.9,  0.9);
         const BLUE:   RgbTuple = (0.4, 0.66, 1.0);
 
         const TABLE: &[(f32, RgbTuple)] = &[
             (BLUE_V, BLUE),
             (0.0,    WHITE),
-            (0.65,   WELLOW),
+            (0.65,   YELLOW),
             (1.6,    ORANGE),
             (RED_V,  RED),
         ];
@@ -1743,7 +1743,7 @@ impl Item for PlateSolvedImagePainter<'_> {
         let pt2 = &points[1];
         let local_time: DateTime<Local> = DateTime::from(self.time);
         let text = format!(
-            "Plate solve {}",
+            "Plate solved {}",
             local_time.format("%Y-%m-%d %H:%M:%S")
         );
         paint_text_under_line(ctx.cairo, ctx.layout, pt1, pt2, &text)?;

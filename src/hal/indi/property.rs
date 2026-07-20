@@ -159,7 +159,7 @@ impl PropValue {
                 Ok(if *value {1} else {0}),
             Self::Light(text) => Err(Error::CantConvertPropValue(
                 text.to_string(),
-                "light".into(),
+                "Light".into(),
                 "i32".into()
             )),
             Self::Blob(_) => Err(Error::CantConvertPropValue(
@@ -183,12 +183,12 @@ impl PropValue {
                     )),
             Self::Switch(value) => Err(Error::CantConvertPropValue(
                 value.to_string(),
-                "switch".into(),
+                "Switch".into(),
                 "f64".into()
             )),
             Self::Light(text) => Err(Error::CantConvertPropValue(
                 text.to_string(),
-                "light".into(),
+                "Light".into(),
                 "f64".into()
             )),
             Self::Blob(_) => Err(Error::CantConvertPropValue(
@@ -217,7 +217,7 @@ impl PropValue {
                 Ok(*value),
             Self::Light(text) => Err(Error::CantConvertPropValue(
                 text.to_string(),
-                "light".into(),
+                "Light".into(),
                 "bool".into()
             )),
             Self::Blob(_) => Err(Error::CantConvertPropValue(
@@ -496,7 +496,7 @@ impl Property {
                                 ))?;
                             if blob_size != new_blob.data.len() {
                                 eyre::bail!(
-                                    "Declared size of blob ({}) is not equal real blob size ({})",
+                                    "Declared blob size ({}) does not match the actual size ({})",
                                     blob_size, new_blob.data.len()
                                 );
                             }

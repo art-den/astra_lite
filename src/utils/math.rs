@@ -47,10 +47,17 @@ fn test_median4() {
     }
 }
 
-pub fn median5<T: core::cmp::Ord + Copy>(a: T, b: T, c: T, d: T, e: T) -> T {
-    let f = T::max(T::min(a, b), T::min(c, d));
-    let g = T::min(T::max(a, b), T::max(c, d));
-    median3(e, f, g)
+pub fn median5<T: Ord + Copy>(a: T, b: T, c: T, d: T, e: T) -> T {
+    let lo1 = T::min(a, b);
+    let hi1 = T::max(a, b);
+    let lo2 = T::min(c, d);
+    let hi2 = T::max(c, d);
+    let s_lo = T::max(lo1, lo2);
+    let s_hi = T::min(hi1, hi2);
+    let e_lo = T::min(e, s_lo);
+    let e_hi = T::max(e, s_lo);
+    let h = T::min(s_hi, e_hi);
+    T::max(e_lo, h)
 }
 
 #[test]

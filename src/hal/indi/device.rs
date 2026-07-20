@@ -435,7 +435,7 @@ impl Devices {
         let device = self.find_by_name_res(device_name)?;
         device
             .get_driver_info()
-            .ok_or_else(|| Error::Internal("device.get_interface() returned None".to_string()))
+            .ok_or_else(|| Error::Internal("device.get_driver_info() returned None".to_string()))
     }
 
     pub fn get_property(

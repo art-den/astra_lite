@@ -116,7 +116,7 @@ pub fn restart_camera_exposure(
     frame_opts: &FrameOptions,
     ctrl_opts:  &CamCtrlOptions,
 ) -> eyre::Result<()> {
-    log::info!("Begin restart exposure of camera {}...", camera.id());
+    log::info!("Restarting camera exposure {}...", camera.id());
 
     // Try to restart exposure by current mode
     let restarted_by_mode = mode.active.restart_cam_exposure()?;
@@ -125,7 +125,8 @@ pub fn restart_camera_exposure(
         return Ok(());
     }
 
-    // Mode not restarted the camera exposure. Do it itself
+    // Mode did not restart the camera exposure. Do it manually
+
     _ = camera.abort_exposure();
 
     let mode_cam_opts = mode.active

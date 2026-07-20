@@ -24,7 +24,7 @@
       </packing>
     </child>
     <child>
-      <object class="GtkComboBoxText" id="cb_dith_perod">
+      <object class="GtkComboBoxText" id="cb_dith_period">
         <property name="visible">True</property>
         <property name="can-focus">False</property>
         <property name="hexpand">True</property>

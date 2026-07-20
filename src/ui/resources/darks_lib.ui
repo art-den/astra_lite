@@ -553,7 +553,7 @@ pixels files</property>
                     <property name="visible">True</property>
                     <property name="can-focus">True</property>
                     <property name="receives-default">True</property>
-                    <property name="action-name">win.create_def_pixls_files</property>
+                    <property name="action-name">win.create_defect_pixel_files</property>
                     <style>
                       <class name="greenbutton"/>
                     </style>
@@ -570,7 +570,7 @@ pixels files</property>
                     <property name="visible">True</property>
                     <property name="can-focus">True</property>
                     <property name="receives-default">True</property>
-                    <property name="action-name">win.stop_def_pxls_files</property>
+                    <property name="action-name">win.stop_creating_defect_pixel_files</property>
                     <style>
                       <class name="redbutton"/>
                     </style>

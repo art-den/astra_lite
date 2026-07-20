@@ -126,7 +126,7 @@ pub struct PreviewRgbData {
     pub orig_height:    usize,
     pub bytes:          SharedBytes,
     pub is_color_image: bool,   // originally color
-    pub sensor_name:    String, // censor for auto WB
+    pub sensor_name:    String, // sensor for auto WB
 }
 
 pub fn get_preview_rgb_data(
@@ -149,14 +149,14 @@ pub fn get_preview_rgb_data(
     );
     log::debug!("preview levels = {:?}", levels);
 
-    let (wb, censor) = get_wb_and_sensor(
+    let (wb, sensor) = get_wb_and_sensor(
         &params.wb,
         image.raw_info
             .as_ref()
             .map(|info| info.camera.as_str())
             .unwrap_or_default()
     );
-    log::debug!("preview wb and sensor = {:?} {}", wb, censor);
+    log::debug!("preview wb and sensor = {:?} {}", wb, sensor);
 
     let (mut bytes, width, height) = to_grb_bytes(
         image,
@@ -178,7 +178,7 @@ pub fn get_preview_rgb_data(
         orig_width:     image.width(),
         orig_height:    image.height(),
         is_color_image: image.is_color(),
-        sensor_name:    censor,
+        sensor_name:    sensor,
     })
 }
 
@@ -187,7 +187,7 @@ fn show_stars(stars: &StarItems, bytes: &mut [u8], width: usize, reduct_ratio: u
     let good_color = (0, 255, 0);
     let bad_color = (255, 32, 32);
     for star in stars {
-        let (r, g, b) = if !star.overexposured { good_color } else { bad_color };
+        let (r, g, b) = if !star.overexposed { good_color } else { bad_color };
         for (x, y) in &star.points {
             let x = *x / reduct_ratio;
             let y = *y / reduct_ratio;
@@ -328,13 +328,13 @@ fn to_grb_bytes(
         }
     };
 
-    let (width, heigth) = if params.scale == PreviewScale::CenterAndCorners {
+    let (width, height) = if params.scale == PreviewScale::CenterAndCorners {
         (result_width, result_height)
     } else {
         (image.width()/reduct_ratio, image.height()/reduct_ratio)
     };
 
-    (rgb_bytes, width, heigth)
+    (rgb_bytes, width, height)
 }
 
 fn create_gamma_table(min_value: f64, max_value: f64, gamma: f64, k: f64) -> Vec<u8> {

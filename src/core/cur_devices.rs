@@ -188,7 +188,7 @@ impl CurDevices {
         drop(data);
 
         self.events.send(
-            Event::FltWheelDeviceChanged(new_filter_wheel_id.to_string())
+            Event::FilterWheelDeviceChanged(new_filter_wheel_id.to_string())
         );
     }
 }

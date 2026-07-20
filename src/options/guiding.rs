@@ -49,7 +49,7 @@ impl Default for ExtGuiderOptions {
 pub struct GuidingOptions {
     pub mode:        GuidingMode,
     pub foc_len:     f64,  // mm
-    pub dith_period: u32,  // in minutes, 0 - do not dither
+    pub dith_period: u32,  // in minutes, 0 to disable dithering
     pub main_cam:    MainCamGuidingOptions,
     pub ext_guider:  ExtGuiderOptions,
 }

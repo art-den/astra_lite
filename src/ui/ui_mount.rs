@@ -239,7 +239,7 @@ impl UiModule for MountUi {
 }
 
 impl MountUi {
-    fn get_nav_bittons(&self) -> [&gtk::Button; 9] {
+    fn get_nav_buttons(&self) -> [&gtk::Button; 9] {
         [
             &self.widgets.btn_left_top,
             &self.widgets.btn_top,
@@ -257,7 +257,7 @@ impl MountUi {
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
-        for btn in self.get_nav_bittons() {
+        for btn in self.get_nav_buttons() {
             btn.connect_button_press_event(clone!(
                 @weak self as self_ => @default-return glib::Propagation::Proceed,
                 move |btn, eb| {
@@ -336,7 +336,7 @@ impl MountUi {
         self.widgets.chb_inv_ns.set_sensitive(move_enabled);
         self.widgets.chb_inv_we.set_sensitive(move_enabled);
 
-        for btn in self.get_nav_bittons() {
+        for btn in self.get_nav_buttons() {
             btn.set_sensitive(move_enabled);
         }
 

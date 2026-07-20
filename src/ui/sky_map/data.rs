@@ -65,7 +65,7 @@ impl ObjEqCoord {
 
 impl Debug for ObjEqCoord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ObjCoord")
+        f.debug_struct("ObjEqCoord")
             .field("ra", &self.ra())
             .field("dec", &self.dec())
             .finish()
@@ -829,7 +829,7 @@ impl SkyMap {
         let mut header_buf = [0_u8; 15];
         buffer.read_exact(&mut header_buf)?;
         if &header_buf != b"astralite-stars" {
-            eyre::bail!("Not a astralite stars file");
+            eyre::bail!("Not an astralite stars file");
         }
 
         // file version
@@ -1009,7 +1009,7 @@ impl SkyMap {
             return result;
         }
         let mut uniq_names = HashSet::new();
-        let mut apdate_result = |items: Vec<SkymapObject>| {
+        let mut update_result = |items: Vec<SkymapObject>| {
             for item in items {
                 let names = item.names().join("|");
                 if uniq_names.contains(&names) { continue; }
@@ -1018,17 +1018,17 @@ impl SkyMap {
             }
         };
 
-        apdate_result(self.find_const(&text_lc, SearchMode::Eq));
-        apdate_result(self.find(&text_lc, SearchMode::Eq));
-        apdate_result(self.stars.find(&text_lc, SearchMode::Eq));
+        update_result(self.find_const(&text_lc, SearchMode::Eq));
+        update_result(self.find(&text_lc, SearchMode::Eq));
+        update_result(self.stars.find(&text_lc, SearchMode::Eq));
 
-        apdate_result(self.find_const(&text_lc, SearchMode::StartWith));
-        apdate_result(self.find(&text_lc, SearchMode::StartWith));
-        apdate_result(self.stars.find(&text_lc, SearchMode::StartWith));
+        update_result(self.find_const(&text_lc, SearchMode::StartWith));
+        update_result(self.find(&text_lc, SearchMode::StartWith));
+        update_result(self.stars.find(&text_lc, SearchMode::StartWith));
 
-        apdate_result(self.find_const(&text_lc, SearchMode::Contains));
-        apdate_result(self.find(&text_lc, SearchMode::Contains));
-        apdate_result(self.stars.find(&text_lc, SearchMode::Contains));
+        update_result(self.find_const(&text_lc, SearchMode::Contains));
+        update_result(self.find(&text_lc, SearchMode::Contains));
+        update_result(self.stars.find(&text_lc, SearchMode::Contains));
 
         result
     }
@@ -1083,17 +1083,17 @@ impl SkyMap {
             if found {
                 let all_ra = constellation.lines.iter().flat_map(|l| l.iter().map(|pt| pt.ra));
                 let all_dec = constellation.lines.iter().flat_map(|l| l.iter().map(|pt| pt.dec));
-                let mut aver_ra = angles_mean(all_ra);
-                let aver_dec = angles_mean(all_dec);
+                let mut avg_ra = angles_mean(all_ra);
+                let avg_dec = angles_mean(all_dec);
 
-                if aver_ra < 0.0 {
-                    aver_ra += 2.0 * PI;
+                if avg_ra < 0.0 {
+                    avg_ra += 2.0 * PI;
                 }
 
                 result.push(SkymapObject::Dso(DsoItem {
                     obj_type: SkyItemType::Constellation,
                     names:    vec![DsoName::from_str(&constellation.name)],
-                    crd:      ObjEqCoord::new(aver_ra, aver_dec),
+                    crd:      ObjEqCoord::new(avg_ra, avg_dec),
                     cnst_id:  *id,
                     ..Default::default()
                 }));
