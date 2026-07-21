@@ -195,19 +195,22 @@ impl Devices {
 
     pub fn get_properties_list(
         &self,
-        changed_after: Option<u64>,
+        changed_after: Option<u64>, // if None return all properties
     ) -> Vec<Property> {
         self.list
             .iter()
             .flat_map(|device| {
                 device.props.iter().filter_map(|prop| {
-                    if let Some(changed_after) = changed_after
-                    && prop.change_id > changed_after {
-                        Some(prop.clone())
+                    if let Some(changed_after) = changed_after {
+                        if prop.change_id > changed_after {
+                            // We have to return only properties with prop.change_id > changed_after
+                            Some(prop.clone())
+                        } else {
+                            None
+                        }
                     } else {
-                        None
+                        Some(prop.clone())
                     }
-
                 })
             })
             .collect()
