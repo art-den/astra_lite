@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, f64::consts::PI, sync::Mutex};
 use itertools::{izip, Itertools};
-use crate::{options::StarRecognSensitivity, utils::math::*, TimeLogger};
+use crate::{options::StarRecognSensitivity, utils::{math::*, log_utils::TimeLogger}};
 use super::{image::ImageLayer, raw::RawImageInfo, utils::*};
 
 const MAX_STAR_DIAM: usize = 32;

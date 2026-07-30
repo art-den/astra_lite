@@ -3,7 +3,7 @@ use std::sync::Arc;
 use itertools::{izip, Itertools};
 
 use crate::{
-    utils::math::linear_interpolate, PreviewColorMode, PreviewScale
+    utils::math::linear_interpolate, options::preview::{PreviewColorMode, PreviewScale}
 };
 
 use super::{cam_db::*, histogram::Histogram, image::{Image, ImageLayer}, stars::StarItems};

@@ -1,13 +1,12 @@
 use std::{any::Any, path::PathBuf, sync::{Arc, Mutex, RwLock}};
 use chrono::Utc;
 use crate::{
-    TimeLogger,
     core::{cam_ctrl::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode},
     guiding::external_guider::*,
     hal::{Camera, CameraFeatures, CameraShot, Focuser, FrameType, Telescope},
     image::{histogram::*, image_stacker::ImageStackingMode, io::save_raw_image_to_fits_file, raw::{RawImage, RawImageInfo}, raw_stacker::*, stars_offset::*},
     options::*,
-    utils::io_utils::*,
+    utils::{io_utils::*, log_utils::TimeLogger}
 };
 
 use super::{

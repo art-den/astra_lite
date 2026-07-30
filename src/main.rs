@@ -1,39 +1,7 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
-#![allow(
-    clippy::too_many_arguments,
-    clippy::upper_case_acronyms,
-    clippy::uninlined_format_args,
-    clippy::wrong_self_convention,
-    clippy::inherent_to_string,
-    clippy::single_match,
-    clippy::manual_div_ceil,
-    clippy::if_same_then_else,
-    clippy::module_inception,
-    clippy::manual_map,
-    clippy::type_complexity,
-    clippy::collapsible_else_if,
-    clippy::manual_range_contains,
-    clippy::collapsible_match,
-    clippy::enum_variant_names,
-    clippy::large_enum_variant,
-    clippy::manual_checked_ops,
-)]
-
-mod ui;
-mod utils;
-mod image;
-mod hal;
-mod guiding;
-mod plate_solve;
-mod core;
-mod sky_math;
-mod options;
-
 use std::{path::Path, sync::Arc};
 use gtk::{prelude::*, glib, glib::clone};
-use ui::gtk_utils::exec_and_show_error;
-use crate::{
+use astra_lite::{ui, ui::gtk_utils::exec_and_show_error};
+use astra_lite::{
     core::core::Core, options::*, utils::{io_utils::*, log_utils::*}
 };
 
