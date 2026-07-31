@@ -165,4 +165,7 @@ fn saving_raw_frames() {
         ModeType::Waiting,
         "core should be in WaitingMode after SavingRawFrames completes"
     );
+
+    // Cleanup: remove temporary output directory
+    std::fs::remove_dir_all(&out_dir).expect("removing temp output dir");
 }

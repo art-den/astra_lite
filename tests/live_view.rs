@@ -8,6 +8,9 @@ const EXPOSURE_SECS: f64 = 1.0;
 /// Duration (in seconds) the LiveView test runs before being stopped.
 const LIVE_VIEW_DURATION_SECS: u64 = 5;
 
+/// Max seconds of silence before the watchdog panics.
+const WATCHDOG_TIMEOUT_SECS: i64 = 5;
+
 /// Runs a continuous capture in LiveView mode, then stops it after a timeout.
 /// Verifies that at least one frame was processed during the session.
 /// Run with `cargo test -- --nocapture` to see event output.
@@ -35,6 +38,7 @@ fn live_view() {
     #[derive(Default)]
     struct State {
         finished_count: usize,    // number of ShotProcessingFinished events received
+        time_since_no_events: i64, // silence watchdog timer
     }
 
     let shared_state = Arc::new(Mutex::new(State::default()));
@@ -47,11 +51,14 @@ fn live_view() {
             if let Event::FrameProcessing(FrameProcessResult { data, .. }) = &event {
                 match data {
                     FrameProcessResultData::ShotProcessingStarted => {
+                        let mut state = shared_state.lock().unwrap();
+                        state.time_since_no_events = 0;
                         println!("FrameProcessResultData::ShotProcessingStarted");
                     }
 
                     FrameProcessResultData::ShotProcessingFinished { frame_is_ok, .. } => {
                         let mut state = shared_state.lock().unwrap();
+                        state.time_since_no_events = 0;
                         if *frame_is_ok {
                             state.finished_count += 1;
                             println!(
@@ -70,8 +77,28 @@ fn live_view() {
         }
     });
 
-    // LiveView runs continuously — stop it after a fixed timeout.
-    std::thread::sleep(Duration::from_secs(LIVE_VIEW_DURATION_SECS));
+    let mut time_passed = 0_i64; // in seconds
+
+    // LiveView runs continuously — stop it after collecting enough frames or a timeout.
+    // The watchdog panics if no FrameProcessing event arrives for 5+ seconds,
+    // protecting the test from hanging on a stuck camera or server.
+    loop {
+        std::thread::sleep(Duration::from_secs(1));
+
+        let mut state = shared_state.lock().unwrap();
+
+        // Stop if we have enough frames or the time limit has been reached.
+        time_passed += 1;
+        if state.finished_count >= 2 && time_passed >= WATCHDOG_TIMEOUT_SECS {
+            drop(state);
+            break;
+        }
+
+        state.time_since_no_events += 1;
+        if state.time_since_no_events >= WATCHDOG_TIMEOUT_SECS {
+            panic!("No events in the last 5 seconds — camera or server may be unresponsive");
+        }
+    }
 
     // Stop the core to terminate the LiveView mode.
     core.stop();
