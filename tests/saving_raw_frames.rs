@@ -153,6 +153,12 @@ fn saving_raw_frames() {
         EXPECTED_FRAME_COUNT, entries.len()
     );
 
+    // Verify the current image is not empty
+    assert!(
+        !core.cur_frame.image.read().unwrap().is_empty(),
+        "current frame image must not be empty"
+    );
+
     // Verify the core has returned to WaitingMode
     assert_eq!(
         core.mode().active.get_type(),
