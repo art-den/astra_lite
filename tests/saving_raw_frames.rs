@@ -2,6 +2,9 @@ use std::{sync::{Arc, Mutex}, time::Duration};
 
 use astra_lite::{core::{core::*, events::*, frame_processing::{FrameProcessResult, FrameProcessResultData}}, hal::{DeviceType, FrameType, HalImpl}};
 
+/// Exposure time per frame in seconds.
+const EXPOSURE_SECS: f64 = 1.0;
+
 /// Number of frames to capture and verify in the test.
 const EXPECTED_FRAME_COUNT: usize = 5;
 
@@ -31,7 +34,7 @@ fn saving_raw_frames() {
 
     // Configure 1-second exposure, Lights frame type, and 5-frame sequence
     let mut opts = core.options.write().unwrap();
-    opts.cam.frame.set_exposure(1.0);
+    opts.cam.frame.set_exposure(EXPOSURE_SECS);
     opts.cam.frame.frame_type = FrameType::Lights;
     opts.raw_frames.use_cnt = true;
     opts.raw_frames.frame_cnt = EXPECTED_FRAME_COUNT;

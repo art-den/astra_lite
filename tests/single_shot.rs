@@ -2,6 +2,9 @@ use std::{sync::{Arc, Mutex}, time::Duration};
 
 use astra_lite::{core::{core::*, events::*, frame_processing::{FrameProcessResult, FrameProcessResultData}}, hal::{DeviceType, HalImpl}};
 
+/// Exposure time per frame in seconds.
+const EXPOSURE_SECS: f64 = 1.0;
+
 /// Runs a single-shot capture
 /// Run with `cargo test -- --nocapture` to see event output.
 #[test]
@@ -20,8 +23,8 @@ fn single_shot() {
     core.cur_devices.change_camera(&all_cameras[0].id);
     drop(all_cameras);
 
-    // Configure 2-second exposure and start single-shot mode
-    core.options.write().unwrap().cam.frame.set_exposure(2.0);
+    // Configure exposure and start single-shot mode
+    core.options.write().unwrap().cam.frame.set_exposure(EXPOSURE_SECS);
     core.start_single_shot().unwrap();
 
     // Shared state for the event handler

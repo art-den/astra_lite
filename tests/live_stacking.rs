@@ -2,10 +2,13 @@ use std::{sync::{Arc, Mutex}, time::Duration};
 
 use astra_lite::{core::{core::*, events::*, frame_processing::{FrameProcessResult, FrameProcessResultData}}, hal::{DeviceType, HalImpl}};
 
+/// Exposure time per frame in seconds.
+const EXPOSURE_SECS: f64 = 1.0;
+
 /// Number of frames to capture and verify in the test.
 const EXPECTED_FRAME_COUNT: usize = 5;
 
-/// Runs a multi-frame capture in LiveStacking mode (5 frames, 2 s exposure default).
+/// Runs a multi-frame capture in LiveStacking mode (5 frames, 1 s exposure).
 /// Run with `cargo test -- --nocapture` to see event output.
 #[test]
 fn live_stacking() {
@@ -31,7 +34,7 @@ fn live_stacking() {
 
     // Configure 5-frame live stacking sequence with original frame saving.
     let mut opts = core.options.write().unwrap();
-    opts.cam.frame.set_exposure(2.0);
+    opts.cam.frame.set_exposure(EXPOSURE_SECS);
     opts.live.use_cnt = true;
     opts.live.frame_cnt = EXPECTED_FRAME_COUNT;
     opts.live.save_orig = true;
@@ -98,7 +101,7 @@ fn live_stacking() {
     });
 
     // Wait for all frames to be processed and the mode to switch, with a safety watchdog.
-    // 5 frames × 2 s exposure + processing overhead ≈ 15–25 s; watchdog triggers at 30 s of silence.
+    // 5 frames × 1 s exposure + processing overhead ≈ 10–15 s; watchdog triggers at 20 s of silence.
     loop {
         std::thread::sleep(Duration::from_secs(1));
 
@@ -109,9 +112,9 @@ fn live_stacking() {
         }
 
         state.time_since_no_events += 1;
-        if state.time_since_no_events >= 30 {
+        if state.time_since_no_events >= 20 {
             panic!(
-                "No events in the last 30 seconds — camera or server may be unresponsive \
+                "No events in the last 20 seconds — camera or server may be unresponsive \
                  (finished {}/{})",
                 state.finished_count, EXPECTED_FRAME_COUNT
             );
