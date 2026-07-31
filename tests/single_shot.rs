@@ -32,7 +32,7 @@ fn single_shot() {
     #[derive(Default)]
     struct State {
         finished_flag: bool, // completion flag
-        time_since_no_events: i64, // silence watchdog timer
+        idle_seconds: i64,         // silence watchdog timer
         mode_changed: bool, // ensures the core actually switched out of SingleShot into WaitingMode after the shot.
     }
 
@@ -48,7 +48,7 @@ fn single_shot() {
                     // Reset watchdog — a frame processing cycle has just started
                     FrameProcessResultData::ShotProcessingStarted => {
                         let mut state = shared_state.lock().unwrap();
-                        state.time_since_no_events = 0;
+                        state.idle_seconds = 0;
                         println!("FrameProcessResultData::ShotProcessingStarted");
                     }
 
@@ -56,7 +56,7 @@ fn single_shot() {
                     // `frame_is_ok` is true when CCD temp, FWHM, ovality and offset are within configured limits.
                     FrameProcessResultData::ShotProcessingFinished {frame_is_ok, ..} => {
                         let mut state = shared_state.lock().unwrap();
-                        state.time_since_no_events = 0;
+                        state.idle_seconds = 0;
                         state.finished_flag = true;
                         println!("FrameProcessResultData::ShotProcessingFinished");
                         assert!(frame_is_ok, "captured frame quality check failed");
@@ -69,7 +69,7 @@ fn single_shot() {
             if let Event::ModeChanged = &event {
                 println!("Event::ModeChanged");
                 let mut state = shared_state.lock().unwrap();
-                state.time_since_no_events = 0;
+                state.idle_seconds = 0;
                 state.mode_changed = true;
             }
         }
@@ -87,8 +87,8 @@ fn single_shot() {
             break;
         }
 
-        state.time_since_no_events += 1;
-        if state.time_since_no_events >= 5 {
+        state.idle_seconds += 1;
+        if state.idle_seconds >= 5 {
             panic!("No events in the last 5 seconds — camera or server may be unresponsive");
         }
     }

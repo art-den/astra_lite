@@ -8,6 +8,9 @@ const EXPOSURE_SECS: f64 = 1.0;
 /// Number of frames to capture and verify in the test.
 const EXPECTED_FRAME_COUNT: usize = 5;
 
+/// Watchdog timeout in seconds — panic if no events received within this period.
+const EVENT_TIMEOUT_SECS: i64 = 20;
+
 /// Runs a multi-frame capture in SavingRawFrames mode (5 frames × 1 s exposure).
 /// Run with `cargo test -- --nocapture` to see event output.
 #[test]
@@ -50,7 +53,7 @@ fn saving_raw_frames() {
     #[derive(Default)]
     struct State {
         finished_count: usize,      // number of ShotProcessingFinished events received
-        time_since_no_events: i64,  // silence watchdog timer
+        idle_seconds: i64,          // silence watchdog timer
         mode_changed: bool,         // ensures the core switched out of SavingRawFrames
     }
 
@@ -67,14 +70,14 @@ fn saving_raw_frames() {
                     // Reset watchdog — a frame processing cycle has just started
                     FrameProcessResultData::ShotProcessingStarted => {
                         let mut state = shared_state.lock().unwrap();
-                        state.time_since_no_events = 0;
+                        state.idle_seconds = 0;
                         println!("FrameProcessResultData::ShotProcessingStarted");
                     }
 
                     // Cycle completed — count successful frames.
                     FrameProcessResultData::ShotProcessingFinished { frame_is_ok, .. } => {
                         let mut state = shared_state.lock().unwrap();
-                        state.time_since_no_events = 0;
+                        state.idle_seconds = 0;
                         if *frame_is_ok {
                             state.finished_count += 1;
                             println!(
@@ -96,7 +99,7 @@ fn saving_raw_frames() {
             if let Event::ModeChanged = &event {
                 println!("Event::ModeChanged");
                 let mut state = shared_state.lock().unwrap();
-                state.time_since_no_events = 0;
+                state.idle_seconds = 0;
                 state.mode_changed = true;
             }
         }
@@ -113,10 +116,10 @@ fn saving_raw_frames() {
             break;
         }
 
-        state.time_since_no_events += 1;
-        if state.time_since_no_events >= 20 {
+        state.idle_seconds += 1;
+        if state.idle_seconds >= EVENT_TIMEOUT_SECS {
             panic!(
-                "No events in the last 20 seconds — camera or server may be unresponsive \
+                "No events in the last {EVENT_TIMEOUT_SECS} seconds — camera or server may be unresponsive \
                  (finished {}/{})",
                 state.finished_count, EXPECTED_FRAME_COUNT
             );
@@ -214,7 +217,7 @@ fn saving_raw_frames_with_abort_and_resume() {
     #[derive(Default)]
     struct State {
         finished_count: usize,
-        time_since_no_events: i64,
+        idle_seconds: i64,
         mode_changed: bool,
         mode_continued: bool,
     }
@@ -228,13 +231,13 @@ fn saving_raw_frames_with_abort_and_resume() {
                 match data {
                     FrameProcessResultData::ShotProcessingStarted => {
                         let mut state = shared_state.lock().unwrap();
-                        state.time_since_no_events = 0;
+                        state.idle_seconds = 0;
                         println!("FrameProcessResultData::ShotProcessingStarted");
                     }
 
                     FrameProcessResultData::ShotProcessingFinished { frame_is_ok, .. } => {
                         let mut state = shared_state.lock().unwrap();
-                        state.time_since_no_events = 0;
+                        state.idle_seconds = 0;
                         if *frame_is_ok {
                             state.finished_count += 1;
                             println!(
@@ -255,14 +258,14 @@ fn saving_raw_frames_with_abort_and_resume() {
             if let Event::ModeChanged = &event {
                 println!("Event::ModeChanged");
                 let mut state = shared_state.lock().unwrap();
-                state.time_since_no_events = 0;
+                state.idle_seconds = 0;
                 state.mode_changed = true;
             }
 
             if let Event::ModeContinued = &event {
                 println!("Event::ModeContinued");
                 let mut state = shared_state.lock().unwrap();
-                state.time_since_no_events = 0;
+                state.idle_seconds = 0;
                 state.mode_continued = true;
             }
         }
@@ -280,10 +283,10 @@ fn saving_raw_frames_with_abort_and_resume() {
             break;
         }
 
-        state.time_since_no_events += 1;
-        if state.time_since_no_events >= 20 {
+        state.idle_seconds += 1;
+        if state.idle_seconds >= EVENT_TIMEOUT_SECS {
             panic!(
-                "No events in the last 20 seconds — abort phase stalled (finished {}/{})",
+                "No events in the last {EVENT_TIMEOUT_SECS} seconds — abort phase stalled (finished {}/{})",
                 state.finished_count, EXPECTED_FRAME_COUNT
             );
         }
@@ -301,7 +304,7 @@ fn saving_raw_frames_with_abort_and_resume() {
         let mut state = shared_state.lock().unwrap();
         state.mode_continued = false;
         state.mode_changed = false;
-        state.time_since_no_events = 0;
+        state.idle_seconds = 0;
     }
 
     println!("Resuming capture…");
@@ -315,10 +318,10 @@ fn saving_raw_frames_with_abort_and_resume() {
             break;
         }
 
-        state.time_since_no_events += 1;
-        if state.time_since_no_events >= 20 {
+        state.idle_seconds += 1;
+        if state.idle_seconds >= EVENT_TIMEOUT_SECS {
             panic!(
-                "No events in the last 20 seconds — resume phase stalled (finished {}/{})",
+                "No events in the last {EVENT_TIMEOUT_SECS} seconds — resume phase stalled (finished {}/{})",
                 state.finished_count, EXPECTED_FRAME_COUNT
             );
         }

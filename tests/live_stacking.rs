@@ -49,7 +49,7 @@ fn live_stacking() {
     #[derive(Default)]
     struct State {
         finished_count: usize,      // number of ShotProcessingFinished events received
-        time_since_no_events: i64,  // silence watchdog timer
+        idle_seconds: i64,          // silence watchdog timer
         mode_changed: bool,         // ensures the core switched out of LiveStacking
     }
 
@@ -66,14 +66,14 @@ fn live_stacking() {
                     // Reset watchdog — a frame processing cycle has just started
                     FrameProcessResultData::ShotProcessingStarted => {
                         let mut state = shared_state.lock().unwrap();
-                        state.time_since_no_events = 0;
+                        state.idle_seconds = 0;
                         println!("FrameProcessResultData::ShotProcessingStarted");
                     }
 
                     // Cycle completed — count successful frames.
                     FrameProcessResultData::ShotProcessingFinished { frame_is_ok, .. } => {
                         let mut state = shared_state.lock().unwrap();
-                        state.time_since_no_events = 0;
+                        state.idle_seconds = 0;
                         if *frame_is_ok {
                             state.finished_count += 1;
                             println!(
@@ -95,7 +95,7 @@ fn live_stacking() {
             if let Event::ModeChanged = &event {
                 println!("Event::ModeChanged");
                 let mut state = shared_state.lock().unwrap();
-                state.time_since_no_events = 0;
+                state.idle_seconds = 0;
                 state.mode_changed = true;
             }
         }
@@ -112,8 +112,8 @@ fn live_stacking() {
             break;
         }
 
-        state.time_since_no_events += 1;
-        if state.time_since_no_events >= 20 {
+        state.idle_seconds += 1;
+        if state.idle_seconds >= 20 {
             panic!(
                 "No events in the last 20 seconds — camera or server may be unresponsive \
                  (finished {}/{})",

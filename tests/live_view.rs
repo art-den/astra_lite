@@ -39,7 +39,7 @@ fn live_view() {
     #[derive(Default)]
     struct State {
         finished_count: usize,    // number of ShotProcessingFinished events received
-        time_since_no_events: i64, // silence watchdog timer
+        idle_seconds: i64,         // silence watchdog timer
     }
 
     let shared_state = Arc::new(Mutex::new(State::default()));
@@ -53,13 +53,13 @@ fn live_view() {
                 match data {
                     FrameProcessResultData::ShotProcessingStarted => {
                         let mut state = shared_state.lock().unwrap();
-                        state.time_since_no_events = 0;
+                        state.idle_seconds = 0;
                         println!("FrameProcessResultData::ShotProcessingStarted");
                     }
 
                     FrameProcessResultData::ShotProcessingFinished { frame_is_ok, .. } => {
                         let mut state = shared_state.lock().unwrap();
-                        state.time_since_no_events = 0;
+                        state.idle_seconds = 0;
                         if *frame_is_ok {
                             state.finished_count += 1;
                             println!(
@@ -94,8 +94,8 @@ fn live_view() {
             break;
         }
 
-        state.time_since_no_events += 1;
-        if state.time_since_no_events >= WATCHDOG_TIMEOUT_SECS {
+        state.idle_seconds += 1;
+        if state.idle_seconds >= WATCHDOG_TIMEOUT_SECS {
             panic!("No events in the last 5 seconds — camera or server may be unresponsive");
         }
     }
