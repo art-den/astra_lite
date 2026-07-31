@@ -163,6 +163,13 @@ impl TakingPicturesMode {
                     None
                 }
             },
+            CameraMode::LiveStacking => {
+                if opts.live.use_cnt && opts.live.frame_cnt != 0 {
+                    Some(Progress { cur: 0, total: opts.live.frame_cnt })
+                } else {
+                    None
+                }
+            },
             _ => None,
         };
 

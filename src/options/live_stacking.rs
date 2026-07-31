@@ -12,6 +12,8 @@ pub struct LiveStackingOptions {
     pub save_enabled:  bool,
     pub out_dir:       PathBuf,
     pub remove_tracks: bool,
+    pub use_cnt:       bool,
+    pub frame_cnt:     usize,
 }
 
 impl Default for LiveStackingOptions {
@@ -22,6 +24,8 @@ impl Default for LiveStackingOptions {
             save_enabled:  true,
             out_dir:       PathBuf::new(),
             remove_tracks: false,
+            use_cnt:       false,
+            frame_cnt:     100,
         }
     }
 }

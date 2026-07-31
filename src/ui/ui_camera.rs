@@ -237,6 +237,8 @@ struct LiveStWidgets {
     chb_save_period: gtk::CheckButton,
     spb_save_period: gtk::SpinButton,
     chb_save_orig:   gtk::CheckButton,
+    chb_frames_cnt:  gtk::CheckButton,
+    spb_frames_cnt:  gtk::SpinButton,
     chb_no_tracks:   gtk::CheckButton,
     l_no_tracks:     gtk::Label,
     fch_path:        gtk::FileChooserButton,
@@ -516,6 +518,10 @@ impl CameraUi {
         self.widgets.live_st.spb_save_period.set_range(1.0, 60.0);
         self.widgets.live_st.spb_save_period.set_digits(0);
         self.widgets.live_st.spb_save_period.set_increments(1.0, 10.0);
+
+        self.widgets.live_st.spb_frames_cnt.set_range(1.0, 100_000.0);
+        self.widgets.live_st.spb_frames_cnt.set_digits(0);
+        self.widgets.live_st.spb_frames_cnt.set_increments(10.0, 100.0);
     }
 
     fn init_frame_quality_widgets(&self) {
@@ -805,6 +811,12 @@ impl CameraUi {
             })
         );
 
+        self.widgets.live_st.spb_frames_cnt.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            let Ok(mut options) = self_.core.options.try_write() else { return; };
+            options.live.frame_cnt = sb.value() as usize;
+            drop(options);
+        }));
+
         self.widgets.info.bx.connect_screen_changed(
             clone!(@weak self as self_ =>  move |_, _| {
                 self_.init_info_widgets();
@@ -862,6 +874,8 @@ impl CameraUi {
         live.spb_save_period.set_value(options.live.save_minutes as f64);
         live.fch_path.set_filename(&options.live.out_dir);
         live.chb_no_tracks.set_active(options.live.remove_tracks);
+        live.chb_frames_cnt.set_active(options.live.use_cnt);
+        live.spb_frames_cnt.set_value(options.live.frame_cnt as f64);
     }
 
     fn show_frame_quality_options(&self, options: &Options) {
@@ -924,6 +938,8 @@ impl CameraUi {
         options.live.save_minutes  = live.spb_save_period.value() as usize;
         options.live.out_dir       = live.fch_path.filename().unwrap_or_default();
         options.live.remove_tracks = live.chb_no_tracks.is_active();
+        options.live.use_cnt       = live.chb_frames_cnt.is_active();
+        options.live.frame_cnt     = live.spb_frames_cnt.value() as usize;
     }
 
     fn get_frame_quality_options(&self, options: &mut Options) {
@@ -1162,6 +1178,8 @@ impl CameraUi {
         widgets.live_st.chb_save_period.set_sensitive(can_change_live_stacking_opts);
         widgets.live_st.spb_save_period.set_sensitive(can_change_live_stacking_opts);
         widgets.live_st.chb_save_orig  .set_sensitive(can_change_live_stacking_opts);
+        widgets.live_st.chb_frames_cnt .set_sensitive(can_change_live_stacking_opts);
+        widgets.live_st.spb_frames_cnt .set_sensitive(can_change_live_stacking_opts);
         widgets.live_st.fch_path       .set_sensitive(can_change_live_stacking_opts);
 
         widgets.quality.bx.set_sensitive(cam_active);
@@ -1522,6 +1540,11 @@ impl CameraUi {
             result.push(("Frames count".to_string(), format!("{}", options.raw_frames.frame_cnt), false));
             result.push(("Total time".to_string(), format!("~{}", seconds_to_total_time_str(total_time, true)), false));
         } else {
+            if options.live.use_cnt {
+                let ls_total_time = options.cam.frame.exposure() * options.live.frame_cnt as f64;
+                result.push(("Frames count".to_string(), format!("{}", options.live.frame_cnt), false));
+                result.push(("Total time".to_string(), format!("~{}", seconds_to_total_time_str(ls_total_time, true)), false));
+            }
             if options.live.save_enabled {
                 result.push(("Save every".to_string(), format!("{} minutes", options.live.save_minutes), false));
             }
