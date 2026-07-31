@@ -88,4 +88,11 @@ fn single_shot() {
             panic!("No events in the last 5 seconds — camera or server may be unresponsive");
         }
     }
+
+    // Verify the core has returned to WaitingMode
+    assert_eq!(
+        core.mode().active.get_type(),
+        ModeType::Waiting,
+        "core should be in WaitingMode after SingleShot completes"
+    );
 }
