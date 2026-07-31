@@ -15,6 +15,7 @@ const WATCHDOG_TIMEOUT_SECS: i64 = 5;
 /// Verifies that at least one frame was processed during the session.
 /// Run with `cargo test -- --nocapture` to see event output.
 #[test]
+#[serial_test::serial]
 fn live_view() {
     // Create system core and connect to ASCOM Alpaca server
     let core = Core::new();
@@ -90,7 +91,6 @@ fn live_view() {
         // Stop if we have enough frames or the time limit has been reached.
         time_passed += 1;
         if state.finished_count >= 2 && time_passed >= WATCHDOG_TIMEOUT_SECS {
-            drop(state);
             break;
         }
 

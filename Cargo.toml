@@ -33,6 +33,9 @@ csv = "1.2"
 strsim = "0.11"
 macros = { path = "./macros" }
 
+[dev-dependencies]
+serial_test = "3"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 unix-ancillary = "0.2"
 

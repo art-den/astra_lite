@@ -8,6 +8,7 @@ const EXPOSURE_SECS: f64 = 1.0;
 /// Runs a single-shot capture
 /// Run with `cargo test -- --nocapture` to see event output.
 #[test]
+#[serial_test::serial]
 fn single_shot() {
     // Create system core and connect to ASCOM Alpaca server
     let core = Core::new();

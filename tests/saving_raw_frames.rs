@@ -11,6 +11,7 @@ const EXPECTED_FRAME_COUNT: usize = 5;
 /// Runs a multi-frame capture in SavingRawFrames mode (5 frames × 1 s exposure).
 /// Run with `cargo test -- --nocapture` to see event output.
 #[test]
+#[serial_test::serial]
 fn saving_raw_frames() {
     // Create system core and connect to ASCOM Alpaca server
     let core = Core::new();
