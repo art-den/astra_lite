@@ -1,6 +1,6 @@
-use std::{sync::{Arc, Mutex}, time::Duration};
+use std::{path::Path, sync::{Arc, Mutex}, time::Duration};
 
-use astra_lite::{core::{core::*, events::*, frame_processing::{FrameProcessResult, FrameProcessResultData}}, hal::{DeviceType, FrameType, HalImpl}};
+use astra_lite::{core::{core::*, events::*, frame_processing::{FrameProcessResult, FrameProcessResultData}}, hal::{DeviceType, FrameType, HalImpl}, image::io::load_raw_image_from_fits_file};
 
 /// Exposure time per frame in seconds.
 const EXPOSURE_SECS: f64 = 1.0;
@@ -10,6 +10,53 @@ const EXPECTED_FRAME_COUNT: usize = 5;
 
 /// Watchdog timeout in seconds — panic if no events received within this period.
 const EVENT_TIMEOUT_SECS: i64 = 20;
+
+/// Validates a single FITS frame file by reading it back and checking its contents.
+fn validate_fits_frame(
+    file_path: &Path,
+    expected_frame_type: FrameType,
+    expected_exposure: f64,
+) {
+    let raw = load_raw_image_from_fits_file(file_path)
+        .unwrap_or_else(|e| panic!("failed to load FITS file '{}': {}", file_path.display(), e));
+    let info = raw.info();
+
+    // Dimensions must be non-zero
+    assert!(
+        info.width > 0 && info.height > 0,
+        "file '{}': image dimensions are zero ({}x{})",
+        file_path.display(),
+        info.width,
+        info.height
+    );
+
+    // Exposure must match
+    assert!((info.exposure - expected_exposure).abs() < 0.01,
+        "file '{}': expected EXPTIME {} but got {}",
+        file_path.display(),
+        expected_exposure,
+        info.exposure
+    );
+
+    // Frame type must match
+    assert_eq!(
+        info.frame_type, expected_frame_type,
+        "file '{}': expected FRAME {:?} but got {:?}",
+        file_path.display(),
+        expected_frame_type,
+        info.frame_type
+    );
+
+    // Pixel data must not be all zeros
+    let data = raw.as_slice();
+    assert!(!data.is_empty(), "file '{}': pixel data is empty", file_path.display());
+    let mean: f64 = data.iter().map(|&v| v as f64).sum::<f64>() / data.len() as f64;
+    assert!(mean > 0.0,
+        "file '{}': all pixels are zero (mean = {})",
+        file_path.display(),
+        mean
+    );
+}
 
 /// Runs a multi-frame capture in SavingRawFrames mode (5 frames × 1 s exposure).
 /// Run with `cargo test -- --nocapture` to see event output.
@@ -133,8 +180,9 @@ fn saving_raw_frames() {
         "expected {} finished frames, got {}",
         EXPECTED_FRAME_COUNT, state.finished_count
     );
+    drop(state);
 
-    // Verify all raw frame files exist on disk
+    // Verify all raw frame files on disk
     let entries: Vec<_> = std::fs::read_dir(&out_dir)
         .expect("reading temp output dir")
         .filter_map(|e| e.ok())
@@ -156,6 +204,10 @@ fn saving_raw_frames() {
         "expected {} FITS files on disk, got {}",
         EXPECTED_FRAME_COUNT, entries.len()
     );
+
+    for entry in &entries {
+        validate_fits_frame(entry, FrameType::Lights, EXPOSURE_SECS);
+    }
 
     // Verify the current image is not empty
     assert!(
@@ -316,7 +368,10 @@ fn saving_raw_frames_with_master() {
         "fit",
         "master file must have .fit extension"
     );
+    let master_path = state.master_file_name.clone();
     drop(state);
+
+    validate_fits_frame(&master_path, FrameType::Darks, EXPOSURE_SECS);
 
     // Verify raw frame files also exist on disk
     let entries: Vec<_> = std::fs::read_dir(&out_dir)
@@ -333,14 +388,19 @@ fn saving_raw_frames_with_master() {
             }
         })
         .filter(|p| p.extension().map_or(false, |ext| ext == "fit" || ext == "fits"))
+        .filter(|p| p != &master_path)
         .collect();
 
-    // Expect raw frames + 1 master file
+    // Expect raw frames only (master validated separately)
     assert_eq!(
-        entries.len(), EXPECTED_FRAME_COUNT + 1,
-        "expected {} FITS files on disk ({} raw + 1 master), got {}",
-        EXPECTED_FRAME_COUNT + 1, EXPECTED_FRAME_COUNT, entries.len()
+        entries.len(), EXPECTED_FRAME_COUNT,
+        "expected {} FITS files on disk ({} raw), got {}",
+        EXPECTED_FRAME_COUNT, EXPECTED_FRAME_COUNT, entries.len()
     );
+
+    for entry in &entries {
+        validate_fits_frame(entry, FrameType::Darks, EXPOSURE_SECS);
+    }
 
     // Verify the current image is not empty
     assert!(
@@ -523,8 +583,9 @@ fn saving_raw_frames_with_abort_and_resume() {
         state.mode_continued,
         "ModeContinued event was not received after resume"
     );
+    drop(state);
 
-    // Verify all raw frame files exist on disk
+    // Verify all raw frame files on disk
     let entries: Vec<_> = std::fs::read_dir(&out_dir)
         .expect("reading temp output dir")
         .filter_map(|e| e.ok())
@@ -546,6 +607,10 @@ fn saving_raw_frames_with_abort_and_resume() {
         "expected {} FITS files on disk, got {}",
         EXPECTED_FRAME_COUNT, entries.len()
     );
+
+    for entry in &entries {
+        validate_fits_frame(entry, FrameType::Lights, EXPOSURE_SECS);
+    }
 
     // Verify the current image is not empty
     assert!(
