@@ -10,6 +10,7 @@
 - sar (SAR) - Search and Replace (for hot pixles)
 - recogn - Recognition (for stars on image)
 - sens - Sensivity
+- mt = Multi Threading
 
 ## Architecture (Modules)
 - `src/core` - System core: working modes, frame processing, events, camera control.
