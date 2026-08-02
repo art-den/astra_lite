@@ -1,6 +1,6 @@
-use std::{collections::{HashMap, HashSet}, f64::consts::PI, sync::Mutex};
+use std::{collections::{HashMap, HashSet}, f64::consts::PI};
 use itertools::{izip, Itertools};
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use crate::{options::StarRecognSensitivity, utils::{math::*, log_utils::TimeLogger}};
 use super::{image::ImageLayer, raw::RawImageInfo, utils::*};
 
