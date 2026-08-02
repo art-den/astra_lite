@@ -1,5 +1,6 @@
 use std::{collections::{HashMap, HashSet}, f64::consts::PI, sync::Mutex};
 use itertools::{izip, Itertools};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use crate::{options::StarRecognSensitivity, utils::{math::*, log_utils::TimeLogger}};
 use super::{image::ImageLayer, raw::RawImageInfo, utils::*};
 
@@ -147,90 +148,114 @@ impl StarsFinder {
         result as _
     }
 
-    fn find_extremums(
+    fn find_extremums_try(
         image:     &ImageLayer<u16>,
-        threshold: &mut u16,
+        threshold: u16,
+        max_size:  usize,
         mt:        bool,
     ) -> HashMap<(isize, isize), u16> {
-        let extremums_mutex = Mutex::new(HashMap::new());
-        const MAX_EXTREMUMS_CNT: usize = 10 * MAX_STARS_CNT;
-        loop {
-            let find_possible_stars_in_rows = |y1: usize, y2: usize| {
-                let mut filtered = vec![0; image.width()];
-                let mut too_much_possible_stars = false;
-                for y in y1..y2 {
-                    if y < MAX_STAR_DIAM/2 || y > image.height()-MAX_STAR_DIAM/2 {
-                        continue;
-                    }
-                    let row = image.row(y);
-                    for (r, f) in izip!(row.chunks(2*MAX_STAR_DIAM+1), filtered.chunks_mut(2*MAX_STAR_DIAM+1)) {
+        let process_rows = |image: &ImageLayer<u16>, threshold: u16, y1: usize, y2: usize| -> HashMap<(isize, isize), u16> {
+            let mut result = HashMap::new();
+            let mut filtered = vec![0; image.width()];
+            for y in y1..y2 {
+                if result.len() >= max_size {
+                    break;
+                }
+
+                if y < MAX_STAR_DIAM/2 || y > image.height()-MAX_STAR_DIAM/2 {
+                    continue;
+                }
+                let row = image.row(y);
+
+                const MEDIAN_FILTER_CHUNK_SIZE: usize = 9 * 8;
+                for (r, f) in izip!(
+                    row.chunks(MEDIAN_FILTER_CHUNK_SIZE),
+                    filtered.chunks_mut(MEDIAN_FILTER_CHUNK_SIZE)
+                ) {
+                    if r.len() == MEDIAN_FILTER_CHUNK_SIZE {
+                        let m = median9(
+                            r[4],  r[12], r[20],
+                            r[28], r[36], r[44],
+                            r[52], r[60], r[68]
+                        );
+                        f.fill(m);
+                    } else {
                         f.copy_from_slice(r);
                         let m = median(f);
                         f.fill(m);
                     }
+                }
 
-                    const FILTERED_OFFSET: usize = 5;
-                    //       0   1   2   3   4  >5<  6   7   8   9   10
-                    for (i, (l1, l2, l3, l4, s1, s2, s3, r1, r2, r3, r4), f)
-                    in izip!(FILTERED_OFFSET.., row.iter().tuple_windows(), &filtered[FILTERED_OFFSET..]) {
-                        let l = median4_u16(*l1, *l2, *l3, *l4);
-                        let s = median3(*s1, *s2, *s3);
-                        let r = median4_u16(*r1, *r2, *r3, *r4);
-                        if l > s || r > s { continue; }
-                        if s > *f && (s - *f) > *threshold {
-                            let star_x = i as isize;
-                            let star_y = y as isize;
-                            if star_x < (MAX_STAR_DIAM/2) as isize
-                            || star_y < (MAX_STAR_DIAM/2) as isize
-                            || star_x > (image.width() - MAX_STAR_DIAM/2) as isize
-                            || star_y > (image.height() - MAX_STAR_DIAM/2) as isize {
-                                continue; // skip points near image border
-                            }
-                            let mut possible_stars = extremums_mutex.lock().unwrap();
-                            possible_stars.insert((star_x, star_y), s);
-                            if possible_stars.len() >= MAX_EXTREMUMS_CNT {
-                                too_much_possible_stars = true;
-                                break;
-                            }
-                        }
+                const FILTERED_OFFSET: usize = 5;
+                //       0   1   2   3   4  >5<  6   7   8   9   10
+                for (i, (l1, l2, l3, l4, s1, s2, s3, r1, r2, r3, r4), f)
+                in izip!(FILTERED_OFFSET.., row.iter().tuple_windows(), &filtered[FILTERED_OFFSET..]) {
+                    let star_x = i as isize;
+                    let star_y = y as isize;
+                    if star_x < (MAX_STAR_DIAM/2) as isize
+                    || star_y < (MAX_STAR_DIAM/2) as isize
+                    || star_x > (image.width() - MAX_STAR_DIAM/2) as isize
+                    || star_y > (image.height() - MAX_STAR_DIAM/2) as isize {
+                        continue; // skip points near image border
                     }
-                    if too_much_possible_stars {
+
+                    let s = median3(*s1, *s2, *s3);
+                    if s < *f || (s - *f) < threshold { continue; }
+                    let l = median4_u16(*l1, *l2, *l3, *l4);
+                    if l >= s { continue; }
+                    let r = median4_u16(*r1, *r2, *r3, *r4);
+                    if r >= s { continue; }
+
+                    result.insert((star_x, star_y), s);
+                    if result.len() >= max_size {
                         break;
                     }
                 }
-            };
+            }
+            result
+        };
 
-            if !mt {
-                find_possible_stars_in_rows(0, image.height());
-            } else {
-                let max_threads = rayon::current_num_threads().max(1);
-                let image_height = image.height();
-                rayon::scope(|s| {
-                    for t in 0..max_threads {
-                        let y1 = t * image_height / max_threads;
-                        let y2 = (t + 1) * image_height / max_threads;
-                        s.spawn(move |_| { find_possible_stars_in_rows(y1, y2); });
-                    }
-                });
+        if !mt {
+            process_rows(image, threshold, 0, image.height())
+        } else {
+            let image_height = image.height();
+            let results: HashMap<(isize, isize), u16> = (0..image_height)
+                .into_par_iter()
+                .map(|y| process_rows(image, threshold, y, y+1))
+                .flatten()
+                .collect();
+            results
+        }
+    }
+
+    pub fn find_extremums(
+        image:     &ImageLayer<u16>,
+        threshold: &mut u16,
+        mt:        bool,
+    ) -> HashMap<(isize, isize), u16> {
+        const MAX_EXTREMUMS_CNT: usize = 10 * MAX_STARS_CNT;
+
+        loop {
+            let current_result = Self::find_extremums_try(
+                image,
+                *threshold,
+                MAX_EXTREMUMS_CNT,
+                mt
+            );
+
+            if current_result.len() < MAX_EXTREMUMS_CNT {
+                break current_result;
             }
 
-            // if too many stars (noise detected as stars),
+            // if too many points (noise detected as stars),
             // increase threshold and repeat
 
-            let mut extrema = extremums_mutex.lock().unwrap();
-            if extrema.len() >= MAX_EXTREMUMS_CNT {
-                extrema.clear();
-                let new_threshold =  3 * (*threshold as u32 + 1) / 2;
-                if new_threshold > u16::MAX as u32 {
-                    break;
-                }
-                *threshold = new_threshold as u16;
-                continue;
+            let new_threshold =  3 * (*threshold as u32 + 1) / 2;
+            if new_threshold > u16::MAX as u32 {
+                break current_result;
             }
-            break;
+            *threshold = new_threshold as u16;
         }
-
-        extremums_mutex.into_inner().unwrap()
     }
 
     fn find_possible_stars_centers(

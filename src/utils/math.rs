@@ -68,6 +68,96 @@ fn test_median5() {
     }
 }
 
+pub fn median7<T: Ord>(mut v1: T, mut v2: T, mut v3: T, mut v4: T, mut v5: T, mut v6: T, mut v7: T) -> T {
+    use std::mem::swap;
+    if v1 > v2 { swap(&mut v1, &mut v2); }
+    if v3 > v4 { swap(&mut v3, &mut v4); }
+    if v5 > v6 { swap(&mut v5, &mut v6); }
+    if v1 > v3 { swap(&mut v1, &mut v3); }
+    if v1 > v5 { swap(&mut v1, &mut v5); }
+    if v3 > v5 { swap(&mut v3, &mut v5); }
+    if v2 > v4 { swap(&mut v2, &mut v4); }
+    if v2 > v6 { swap(&mut v2, &mut v6); }
+    if v4 > v6 { swap(&mut v4, &mut v6); }
+    if v2 > v4 { swap(&mut v2, &mut v4); }
+    if v3 > v5 { swap(&mut v3, &mut v5); }
+    if v2 > v3 { swap(&mut v2, &mut v3); }
+    if v4 > v5 { swap(&mut v4, &mut v5); }
+    if v3 > v4 { swap(&mut v3, &mut v4); }
+    if v3 > v7 { swap(&mut v3, &mut v7); }
+    if v4 > v7 { swap(&mut v4, &mut v7); }
+    v4
+}
+
+#[test]
+fn test_median7() {
+    for p in [1, 2, 3, 4, 5, 6, 7].iter().permutations(7) {
+        let m = median7(*p[0], *p[1], *p[2], *p[3], *p[4], *p[5], *p[6]);
+        assert_eq!(m, 4);
+    }
+}
+
+
+/// Median of 9 values
+#[inline(always)]
+pub fn median9<T: Ord + Copy>(
+    mut a0: T, mut a1: T, mut a2: T,
+    mut a3: T, mut a4: T, mut a5: T,
+    mut a6: T, mut a7: T, mut a8: T,
+) -> T {
+    // Layer 1
+    if a3 < a0 { let t = a0; a0 = a3; a3 = t; }
+    if a7 < a1 { let t = a1; a1 = a7; a7 = t; }
+    if a5 < a2 { let t = a2; a2 = a5; a5 = t; }
+    if a8 < a4 { let t = a4; a4 = a8; a8 = t; }
+    // Layer 2
+    if a7 < a0 { let t = a0; a0 = a7; a7 = t; }
+    if a4 < a2 { let t = a2; a2 = a4; a4 = t; }
+    if a8 < a3 { let t = a3; a3 = a8; a8 = t; }
+    if a6 < a5 { let t = a5; a5 = a6; a6 = t; }
+    // Layer 3
+    if a2 < a0 { a2 = a0; }
+    if a3 < a1 { let t = a1; a1 = a3; a3 = t; }
+    if a5 < a4 { let t = a4; a4 = a5; a5 = t; }
+    if a8 < a7 { a7 = a8; }
+    // Layer 4
+    if a4 < a1 { a4 = a1; }
+    if a6 < a3 { a3 = a6; }
+    if a7 < a5 { a5 = a7; }
+    // Layer 5
+    if a4 < a2 { let t = a2; a2 = a4; a4 = t; }
+    if a5 < a3 { let t = a3; a3 = a5; a5 = t; }
+    // Layer 6
+    if a3 < a2 { a3 = a2; }
+    if a5 < a4 { a4 = a5; }
+    // Layer 7
+    if a4 < a3 { a4 = a3; }
+
+    a4
+}
+
+#[test]
+fn test_median9() {
+    // All permutations of 1..=9 must yield 5
+    for p in [1_i32, 2, 3, 4, 5, 6, 7, 8, 9].iter().permutations(9) {
+        let m = median9(*p[0], *p[1], *p[2], *p[3], *p[4], *p[5], *p[6], *p[7], *p[8]);
+        assert_eq!(m, 5);
+    }
+}
+
+#[test]
+fn test_median9_duplicates() {
+    assert_eq!(median9(7_i32, 7, 7, 7, 7, 7, 7, 7, 7), 7);
+    assert_eq!(median9(1_i32, 1, 1, 1, 1, 5, 9, 9, 9), 1);
+    assert_eq!(median9(0_i32, 0, 0, 5, 5, 5, 9, 9, 9), 5);
+}
+
+#[test]
+fn test_median9_ordered() {
+    assert_eq!(median9(1_i32, 2, 3, 4, 5, 6, 7, 8, 9), 5);
+    assert_eq!(median9(9_i32, 8, 7, 6, 5, 4, 3, 2, 1), 5);
+}
+
 pub fn median<T: core::cmp::Ord + Copy>(values: &mut [T]) -> T {
     let pos = values.len() / 2;
     *values.select_nth_unstable(pos).1
