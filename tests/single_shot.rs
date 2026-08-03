@@ -10,17 +10,40 @@ const EXPOSURE_SECS: f64 = 1.0;
 #[test]
 #[serial_test::serial]
 fn single_shot() {
-    // Create system core and connect to ASCOM Alpaca server
+    // Create system core
     let core = Core::new();
-    let aa_hal = core.hal.ascom_alpaca_impl();
-    let options = core.options.read().unwrap();
-    aa_hal.connect(&options.ascom_alpaca.address).expect("connecting");
-    drop(options);
-    std::thread::sleep(Duration::from_secs(1));
+    let mut options = core.options.write().unwrap();
+
+    #[cfg(target_os = "linux")]
+    {
+        options.indi.address = "localhost".to_string();
+        options.indi.remote = true;
+        let indi_hal = core.hal.indi_impl();
+        indi_hal.connect(
+            options.indi.remote,
+            &options.indi.address,
+            &None, &None, &None, &None, &None, &None, &None, // All None because a remote connection is used.
+        ).expect("connecting to INDI");
+        drop(options);
+        std::thread::sleep(Duration::from_secs(4)); // Waiting at least 4 sec to be sure all devices are initialized
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let aa_hal = core.hal.ascom_alpaca_impl();
+        aa_hal.connect(&options.ascom_alpaca.address).expect("connecting to ASCOM Alpaca");
+        std::thread::sleep(Duration::from_secs(1));
+        drop(options);
+    }
 
     // Select the only connected camera and make it active in Core
-    let all_cameras = aa_hal.devices(DeviceType::CAMERA).expect("requesting camera list");
-    assert_eq!(all_cameras.len(), 1, "exactly one camera must be connected");
+    #[cfg(target_os = "linux")]
+    let hal_impl = core.hal.indi_impl();
+    #[cfg(target_os = "windows")]
+    let hal_impl = core.hal.ascom_alpaca_impl();
+
+    let all_cameras = hal_impl.devices(DeviceType::CAMERA).expect("requesting camera list");
+    assert!(all_cameras.len() > 0, "At least one camera must be connected");
     core.cur_devices.change_camera(&all_cameras[0].id);
     drop(all_cameras);
 

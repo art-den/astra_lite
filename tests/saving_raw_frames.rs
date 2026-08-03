@@ -11,6 +11,43 @@ const EXPECTED_FRAME_COUNT: usize = 5;
 /// Watchdog timeout in seconds — panic if no events received within this period.
 const EVENT_TIMEOUT_SECS: i64 = 20;
 
+/// Connects to the HAL server and selects the first available camera.
+fn connect_hal(core: &Core) {
+    let mut options = core.options.write().unwrap();
+
+    #[cfg(target_os = "linux")]
+    {
+        options.indi.address = "localhost".to_string();
+        options.indi.remote = true;
+        let indi_hal = core.hal.indi_impl();
+        indi_hal.connect(
+            options.indi.remote,
+            &options.indi.address,
+            &None, &None, &None, &None, &None, &None, &None, // All None because a remote connection is used.
+        ).expect("connecting to INDI");
+        drop(options);
+        std::thread::sleep(Duration::from_secs(4)); // Waiting at least 4 sec to be sure all devices are initialized
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let aa_hal = core.hal.ascom_alpaca_impl();
+        aa_hal.connect(&options.ascom_alpaca.address).expect("connecting to ASCOM Alpaca");
+        std::thread::sleep(Duration::from_secs(1));
+        drop(options);
+    }
+
+    #[cfg(target_os = "linux")]
+    let hal_impl = core.hal.indi_impl();
+    #[cfg(target_os = "windows")]
+    let hal_impl = core.hal.ascom_alpaca_impl();
+
+    let all_cameras = hal_impl.devices(DeviceType::CAMERA).expect("requesting camera list");
+    assert!(all_cameras.len() > 0, "At least one camera must be connected");
+    core.cur_devices.change_camera(&all_cameras[0].id);
+    drop(all_cameras);
+}
+
 /// Validates a single FITS frame file by reading it back and checking its contents.
 fn validate_fits_frame(
     file_path: &Path,
@@ -63,19 +100,8 @@ fn validate_fits_frame(
 #[test]
 #[serial_test::serial]
 fn saving_raw_frames() {
-    // Create system core and connect to ASCOM Alpaca server
     let core = Core::new();
-    let aa_hal = core.hal.ascom_alpaca_impl();
-    let options = core.options.read().unwrap();
-    aa_hal.connect(&options.ascom_alpaca.address).expect("connecting");
-    drop(options);
-    std::thread::sleep(Duration::from_secs(1));
-
-    // Select the only connected camera and make it active in Core
-    let all_cameras = aa_hal.devices(DeviceType::CAMERA).expect("requesting camera list");
-    assert_eq!(all_cameras.len(), 1, "exactly one camera must be connected");
-    core.cur_devices.change_camera(&all_cameras[0].id);
-    drop(all_cameras);
+    connect_hal(&core);
 
     // Prepare a unique temporary output directory for raw frames
     let random_suffix = format!("{:x}", rand::random::<u32>());
@@ -231,19 +257,8 @@ fn saving_raw_frames() {
 #[test]
 #[serial_test::serial]
 fn saving_raw_frames_with_master() {
-    // Create system core and connect to ASCOM Alpaca server
     let core = Core::new();
-    let aa_hal = core.hal.ascom_alpaca_impl();
-    let options = core.options.read().unwrap();
-    aa_hal.connect(&options.ascom_alpaca.address).expect("connecting");
-    drop(options);
-    std::thread::sleep(Duration::from_secs(1));
-
-    // Select the only connected camera and make it active in Core
-    let all_cameras = aa_hal.devices(DeviceType::CAMERA).expect("requesting camera list");
-    assert_eq!(all_cameras.len(), 1, "exactly one camera must be connected");
-    core.cur_devices.change_camera(&all_cameras[0].id);
-    drop(all_cameras);
+    connect_hal(&core);
 
     // Prepare a unique temporary output directory for raw frames
     let random_suffix = format!("{:x}", rand::random::<u32>());
@@ -426,19 +441,8 @@ fn saving_raw_frames_with_master() {
 fn saving_raw_frames_with_abort_and_resume() {
     const ABORT_AFTER_FRAMES: usize = 3;
 
-    // Create system core and connect to ASCOM Alpaca server
     let core = Core::new();
-    let aa_hal = core.hal.ascom_alpaca_impl();
-    let options = core.options.read().unwrap();
-    aa_hal.connect(&options.ascom_alpaca.address).expect("connecting");
-    drop(options);
-    std::thread::sleep(Duration::from_secs(1));
-
-    // Select the only connected camera and make it active in Core
-    let all_cameras = aa_hal.devices(DeviceType::CAMERA).expect("requesting camera list");
-    assert_eq!(all_cameras.len(), 1, "exactly one camera must be connected");
-    core.cur_devices.change_camera(&all_cameras[0].id);
-    drop(all_cameras);
+    connect_hal(&core);
 
     // Prepare a unique temporary output directory for raw frames
     let random_suffix = format!("{:x}", rand::random::<u32>());
