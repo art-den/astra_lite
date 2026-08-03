@@ -26,7 +26,7 @@ fn connect_hal(core: &Core) {
             &None, &None, &None, &None, &None, &None, &None, // All None because a remote connection is used.
         ).expect("connecting to INDI");
         drop(options);
-        std::thread::sleep(Duration::from_secs(4)); // Waiting at least 4 sec to be sure all devices are initialized
+        std::thread::sleep(Duration::from_secs(5)); // Waiting at least 5 sec to be sure all devices are initialized
     }
 
     #[cfg(target_os = "windows")]

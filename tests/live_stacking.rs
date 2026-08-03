@@ -75,7 +75,7 @@ fn live_stacking() {
             &None, &None, &None, &None, &None, &None, &None, // All None because a remote connection is used.
         ).expect("connecting to INDI");
         drop(options);
-        std::thread::sleep(Duration::from_secs(4)); // Waiting at least 4 sec to be sure all devices are initialized
+        std::thread::sleep(Duration::from_secs(5)); // Waiting at least 5 sec to be sure all devices are initialized
     }
 
     #[cfg(target_os = "windows")]
@@ -93,9 +93,20 @@ fn live_stacking() {
     let hal_impl = core.hal.ascom_alpaca_impl();
 
     let all_cameras = hal_impl.devices(DeviceType::CAMERA).expect("requesting camera list");
-    assert!(all_cameras.len() > 0, "At least one camera must be connected");
-    core.cur_devices.change_camera(&all_cameras[0].id);
+    let simulator_camera = all_cameras.iter().find(|c| c.id == "CCD Simulator").expect("CCD simulator");
+    println!("Camera = {}", simulator_camera.id);
+    core.cur_devices.change_camera(&simulator_camera.id);
     drop(all_cameras);
+
+    if let Some(camera) = core.cur_devices.camera() {
+        if camera.is_gain_supported().unwrap() {
+            // Set maximum gain for camera to get more stars on image.
+            // If there are not enough stars in the image,
+            // then the calculation of the shift between frames will not work.
+            let gain_range = camera.gain_range().unwrap();
+            core.options.write().unwrap().cam.frame.gain = *gain_range.end() as f64;
+        }
+    }
 
     // Prepare a unique temporary output directory for original frames
     let random_suffix = format!("{:x}", rand::random::<u32>());
@@ -135,22 +146,31 @@ fn live_stacking() {
                 match data {
                     // Reset watchdog — a frame processing cycle has just started
                     FrameProcessResultData::ShotProcessingStarted => {
+                        println!("FrameProcessResultData::ShotProcessingStarted");
                         let mut state = shared_state.lock().unwrap();
                         state.idle_seconds = 0;
-                        println!("FrameProcessResultData::ShotProcessingStarted");
+                    }
+
+                    FrameProcessResultData::LightFrameInfo(data) => {
+                        println!("FrameProcessResultData::LightFrameInfo");
+                        println!("data.stars.items.len()={}", data.stars.items.len());
+                        assert!(data.quality.ccd_temp_ok);
+                        assert!(data.quality.fwhm_is_ok);
+                        assert!(data.quality.ovality_is_ok);
+                        assert!(data.quality.offset_is_ok);
                     }
 
                     // Cycle completed — count successful frames.
                     FrameProcessResultData::ShotProcessingFinished { frame_is_ok, .. } => {
                         let mut state = shared_state.lock().unwrap();
+                        println!(
+                            "FrameProcessResultData::ShotProcessingFinished (ok, #{}/{})",
+                            state.finished_count,
+                            EXPECTED_FRAME_COUNT
+                        );
                         state.idle_seconds = 0;
                         if *frame_is_ok {
                             state.finished_count += 1;
-                            println!(
-                                "FrameProcessResultData::ShotProcessingFinished (ok, #{}/{})",
-                                state.finished_count,
-                                EXPECTED_FRAME_COUNT
-                            );
                         } else {
                             println!("FrameProcessResultData::ShotProcessingFinished (bad frame)");
                         }
