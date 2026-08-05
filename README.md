@@ -1,6 +1,6 @@
 # AstraLite
 AstraLite is software for deepsky astrophotography and live stacking
-on low power PCs (like rapsberry Pi or Orange Pi)
+on low power PCs (like raspberry Pi or Orange Pi)
 
 ```diff
 ! The program is under active development !
@@ -28,11 +28,11 @@ https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-ast
 
 
 # Requirements
-| Condition                        | Requiriments for 12 MP sensors | Requiriments for 24 MP sensors |
+| Condition                        | Requirements for 12 MP sensors | Requirements for 24 MP sensors |
 |----------------------------------|--------------------------------|--------------------------------|
 | Astrophotography only            | >= 2 CPU cores, >= 1 GB of RAM | >= 2 CPU cores, >= 2 GB of RAM |
-| Live staking                     | >= 2 CPU cores, >= 1 GB of RAM | >= 4 CPU cores, >= 2 GB of RAM |
-| Live staking with tracks removal | >= 2 CPU cores, >= 2 GB of RAM | >= 4 CPU cores, >= 4 GB of RAM |
+| Live stacking                    | >= 2 CPU cores, >= 1 GB of RAM | >= 4 CPU cores, >= 2 GB of RAM |
+| Live stacking with tracks removal | >= 2 CPU cores, >= 2 GB of RAM | >= 4 CPU cores, >= 4 GB of RAM |
 
 **>= 4 CPU cores, >= 4 GB of RAM** is enough for most cases
 
@@ -92,7 +92,7 @@ To build optimized binaries for your current platform, just type
 ```
 cargo build --release
 ```
-# Building and creating deb-packages for arm64, armhf and x64_86 platforms
+# Building and creating deb-packages for arm64, armhf and x86_64 platforms
 ## Prerequisites
 * Install podman or docker (I prefer podman):
 ```
