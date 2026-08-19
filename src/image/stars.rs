@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, f64::consts::PI};
+use std::{collections::{HashMap, HashSet}, f64::consts::PI, sync::atomic::{AtomicUsize, Ordering}};
 use itertools::{izip, Itertools};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use crate::{options::StarRecognSensitivity, utils::{math::*, log_utils::TimeLogger}};
@@ -154,11 +154,12 @@ impl StarsFinder {
         max_size:  usize,
         mt:        bool,
     ) -> HashMap<(isize, isize), u16> {
-        let process_rows = |image: &ImageLayer<u16>, threshold: u16, y1: usize, y2: usize| -> HashMap<(isize, isize), u16> {
-            let mut result = HashMap::new();
+        let process_rows =
+            |image: &ImageLayer<u16>, threshold: u16, y1: usize, y2: usize,
+             out: &mut Vec<((isize, isize), u16)>, cnt: &AtomicUsize| {
             let mut filtered = vec![0; image.width()];
             for y in y1..y2 {
-                if result.len() >= max_size {
+                if cnt.load(Ordering::Relaxed) >= max_size {
                     break;
                 }
 
@@ -206,26 +207,38 @@ impl StarsFinder {
                     let r = median4_u16(*r1, *r2, *r3, *r4);
                     if r >= s { continue; }
 
-                    result.insert((star_x, star_y), s);
-                    if result.len() >= max_size {
+                    if cnt.fetch_add(1, Ordering::Relaxed) >= max_size {
                         break;
                     }
+                    out.push(((star_x, star_y), s));
                 }
             }
-            result
         };
 
-        if !mt {
-            process_rows(image, threshold, 0, image.height())
+        let counter = AtomicUsize::new(0);
+        let image_height = image.height();
+        let results: Vec<((isize, isize), u16)> = if !mt {
+            let mut out = Vec::new();
+            process_rows(image, threshold, 0, image_height, &mut out, &counter);
+            out
         } else {
-            let image_height = image.height();
-            let results: HashMap<(isize, isize), u16> = (0..image_height)
+            let num_threads = rayon::current_num_threads();
+            let chunk = ((image_height + num_threads - 1) / num_threads).max(1);
+            let num_chunks = (image_height + chunk - 1) / chunk;
+            (0..num_chunks)
                 .into_par_iter()
-                .map(|y| process_rows(image, threshold, y, y+1))
+                .map(|i| {
+                    let start = i * chunk;
+                    let end = (start + chunk).min(image_height);
+                    let mut out = Vec::new();
+                    process_rows(image, threshold, start, end, &mut out, &counter);
+                    out
+                })
                 .flatten()
-                .collect();
-            results
-        }
+                .collect()
+        };
+
+        results.into_iter().collect()
     }
 
     pub fn find_extremums(
