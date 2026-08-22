@@ -175,7 +175,7 @@ pub enum FrameProcessResultData {
     ShotProcessingStarted,
     RawFrameInfo(RawFrameInfo),
     RawHistogramReady,
-    ImageReady(Arc<RwLock<Image>>),
+    ImageReady,
     PreviewFrame(Arc<Preview8BitImgData>),
     PreviewLiveRes(Arc<Preview8BitImgData>),
     LightFrameInfo(Arc<LightFrameInfoData>),
@@ -530,7 +530,7 @@ impl FrameProcessing {
         }
 
         self.notify_frame_result(
-            FrameProcessResultData::ImageReady(Arc::clone(&command.frame.image)),
+            FrameProcessResultData::ImageReady,
             &command,
         );
 

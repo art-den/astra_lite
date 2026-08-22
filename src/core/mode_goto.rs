@@ -148,9 +148,9 @@ impl GotoMode {
         Ok(())
     }
 
-    fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> eyre::Result<()> {
+    fn plate_solve_image(&mut self) -> eyre::Result<()> {
         let plate_solver = self.plate_solver.as_mut().unwrap();
-        let image = image.read().unwrap();
+        let image = self.cur_frame.image.read().unwrap();
         let config = PlateSolveConfig {
             eq_coord:      Some(self.eq_coord),
             timeout:       self.ps_opts.timeout,
@@ -478,8 +478,8 @@ impl Mode for GotoMode {
         let plate_solver = self.plate_solver.as_mut().unwrap();
         let xy_supported = plate_solver.support_stars_as_input();
         match (&self.state, &fp_result.data, xy_supported) {
-            (State::TakingPicture, FrameProcessResultData::ImageReady(image), false) => {
-                self.plate_solve_image(image)?;
+            (State::TakingPicture, FrameProcessResultData::ImageReady, false) => {
+                self.plate_solve_image()?;
                 self.state = State::PlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
             }
@@ -488,8 +488,8 @@ impl Mode for GotoMode {
                 self.state = State::PlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
             }
-            (State::TakingFinalPicture, FrameProcessResultData::ImageReady(image), false) => {
-                self.plate_solve_image(image)?;
+            (State::TakingFinalPicture, FrameProcessResultData::ImageReady, false) => {
+                self.plate_solve_image()?;
                 self.state = State::FinalPlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
             }

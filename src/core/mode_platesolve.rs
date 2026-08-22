@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use crate::{
     core::{
         cam_ctrl::take_shot, core::*, frame_processing::*, preview_image::ResultImage,
-    }, hal::{Camera, CcdPurpose, FrameType, Hal, Telescope}, image::{image::*, stars::StarItems}, options::*, plate_solve::*, sky_math::math::*,
+    }, hal::{Camera, CcdPurpose, FrameType, Hal, Telescope}, image::stars::StarItems, options::*, plate_solve::*, sky_math::math::*,
 };
 
 use super::{events::*, utils::gain_to_value};
@@ -73,8 +73,8 @@ impl PlatesolveMode {
         Ok(config)
     }
 
-    fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> eyre::Result<()> {
-        let image = image.read().unwrap();
+    fn plate_solve_image(&mut self) -> eyre::Result<()> {
+        let image = self.cur_frame.image.read().unwrap();
         let config = self.get_platesolver_config()?;
         self.plate_solver.start(&PlateSolverInData::Image(&image), &config)?;
         drop(image);
@@ -242,8 +242,8 @@ impl Mode for PlatesolveMode {
     ) -> eyre::Result<NotifyResult> {
         let xy_supported = self.plate_solver.support_stars_as_input();
         match (&self.state, &fp_result.data, xy_supported) {
-            (State::Capturing, FrameProcessResultData::ImageReady(image), false) => {
-                self.plate_solve_image(image)?;
+            (State::Capturing, FrameProcessResultData::ImageReady, false) => {
+                self.plate_solve_image()?;
                 self.state = State::PlateSolve;
                 return Ok(NotifyResult::ProgressChanges);
             }

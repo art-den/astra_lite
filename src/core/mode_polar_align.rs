@@ -3,7 +3,7 @@ use std::{any::Any, f64::consts::PI, sync::{Arc, RwLock}};
 use chrono::{NaiveDateTime, Utc};
 
 use crate::{
-    core::{cam_ctrl::take_shot, core::*, frame_processing::*, preview_image::ResultImage}, hal::{Camera, FrameType, Hal, Telescope, indi::degree_to_str}, image::{image::*, stars::StarItems}, options::*, plate_solve::*, sky_math::{math::*, solar_system::calc_atmospheric_refraction},
+    core::{cam_ctrl::take_shot, core::*, frame_processing::*, preview_image::ResultImage}, hal::{Camera, FrameType, Hal, Telescope, indi::degree_to_str}, image::stars::StarItems, options::*, plate_solve::*, sky_math::{math::*, solar_system::calc_atmospheric_refraction},
 };
 
 use super::{consts::*, events::*, utils::{check_telescope_is_at_desired_position, gain_to_value}};
@@ -416,10 +416,11 @@ impl PolarAlignMode {
     }
 
     // Returns Ok(false) on silent error
-    fn plate_solve_image(&mut self, image: &Arc<RwLock<Image>>) -> eyre::Result<bool> {
-        let image = image.read().unwrap();
+    fn plate_solve_image(&mut self) -> eyre::Result<bool> {
         let config = self.get_platesolver_config()?;
+        let image = self.cur_frame.image.read().unwrap();
         let start_result = self.plate_solver.start(&PlateSolverInData::Image(&image), &config);
+        drop(image);
         if let Err(err) = start_result {
             self.process_platesolver_fail(err.to_string().as_str())?;
             return Ok(false);
@@ -718,8 +719,8 @@ impl Mode for PolarAlignMode {
     ) -> eyre::Result<NotifyResult> {
         let stars_supported = self.plate_solver.support_stars_as_input();
         match (&self.state, &fp_result.data, stars_supported) {
-            (State::Capture, FrameProcessResultData::ImageReady(image), false) => {
-                let ok = self.plate_solve_image(image)?;
+            (State::Capture, FrameProcessResultData::ImageReady, false) => {
+                let ok = self.plate_solve_image()?;
                 if !ok { return Ok(NotifyResult::Empty); }
                 self.state = State::PlateSolve;
                 return Ok(NotifyResult::ProgressChanges);

@@ -143,10 +143,6 @@ struct State {
     light_background: Option<i32>,
     /// Background percent from LightFrameInfo.
     light_bg_percent: Option<f32>,
-    /// Demosaic'd image dimensions.
-    image_width: Option<usize>,
-    image_height: Option<usize>,
-    is_color: Option<bool>,
     /// Preview RGB data length.
     preview_rgb_len: Option<usize>,
     preview_width: Option<u32>,
@@ -223,14 +219,9 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
                         );
                     }
 
-                    FrameProcessResultData::ImageReady(image) => {
+                    FrameProcessResultData::ImageReady => {
                         state.events_received.push("Image".to_string());
                         state.image_count += 1;
-                        let img = image.read().unwrap();
-                        state.image_width = Some(img.width());
-                        state.image_height = Some(img.height());
-                        state.is_color = Some(img.is_color());
-                        drop(img);
                         println!("  Event: Image");
                     }
 
@@ -450,21 +441,23 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
         bg_pct
     );
 
-    // --- Image dimensions ---
+    // --- Image dimensions (read from the core's current frame) ---
 
-    let img_w = state.image_width.expect("image_width should be set");
-    let img_h = state.image_height.expect("image_height should be set");
+    let cur_image = core.cur_frame.image.read().unwrap();
+    let img_w = cur_image.width();
+    let img_h = cur_image.height();
     println!("Image dimensions: {} x {}", img_w, img_h);
     assert_eq!(img_w, IMG_WIDTH, "image width mismatch");
     assert_eq!(img_h, IMG_HEIGHT, "image height mismatch");
 
     // Verify color/mono matches the CFA type used.
     assert_eq!(
-        state.is_color.expect("is_color should be set"),
+        cur_image.is_color(),
         expected_is_color,
         "is_color mismatch: expected {}",
         expected_is_color
     );
+    drop(cur_image);
 
     // --- Preview size ---
 
