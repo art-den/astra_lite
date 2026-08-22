@@ -205,7 +205,7 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
                         println!("  Event: ShotProcessingStarted");
                     }
 
-                    FrameProcessResultData::HistogramRaw(_) => {
+                    FrameProcessResultData::RawHistogramReady => {
                         state.events_received.push("HistogramRaw".to_string());
                         state.histogram_raw_count += 1;
                         println!("  Event: HistogramRaw");
@@ -223,7 +223,7 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
                         );
                     }
 
-                    FrameProcessResultData::Image(image) => {
+                    FrameProcessResultData::ImageReady(image) => {
                         state.events_received.push("Image".to_string());
                         state.image_count += 1;
                         let img = image.read().unwrap();

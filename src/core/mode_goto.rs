@@ -1,11 +1,6 @@
 use std::sync::{Arc, RwLock};
 use crate::{
-    core::{cam_ctrl::take_shot, consts::*, events::*, frame_processing::*},
-    hal::{Camera, FrameType, Telescope, indi::value_to_sexagesimal},
-    image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point},
-    options::*,
-    plate_solve::*,
-    sky_math::math::*,
+    core::{cam_ctrl::take_shot, consts::*, events::*, frame_processing::*, preview_image::ResultImage}, hal::{Camera, FrameType, Telescope, indi::value_to_sexagesimal}, image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point}, options::*, plate_solve::*, sky_math::math::*,
 };
 use super::{core::*, events::EventHandlers, utils::*};
 
@@ -483,7 +478,7 @@ impl Mode for GotoMode {
         let plate_solver = self.plate_solver.as_mut().unwrap();
         let xy_supported = plate_solver.support_stars_as_input();
         match (&self.state, &fp_result.data, xy_supported) {
-            (State::TakingPicture, FrameProcessResultData::Image(image), false) => {
+            (State::TakingPicture, FrameProcessResultData::ImageReady(image), false) => {
                 self.plate_solve_image(image)?;
                 self.state = State::PlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
@@ -493,7 +488,7 @@ impl Mode for GotoMode {
                 self.state = State::PlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
             }
-            (State::TakingFinalPicture, FrameProcessResultData::Image(image), false) => {
+            (State::TakingFinalPicture, FrameProcessResultData::ImageReady(image), false) => {
                 self.plate_solve_image(image)?;
                 self.state = State::FinalPlateSolving;
                 return Ok(NotifyResult::ProgressChanges);

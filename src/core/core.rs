@@ -4,12 +4,7 @@ use std::{
 };
 
 use crate::{
-    core::{cam_ctrl::*, cur_devices::CurDevices},
-    guiding::external_guider::*,
-    hal::{events::HalEvent, *},
-    image::io::FromFileCameraShot,
-    options::*,
-    sky_math::math::EqCoord, utils::timer::*,
+    core::{cam_ctrl::*, cur_devices::CurDevices, preview_image::{ResultImage, ResultImageInfo}}, guiding::external_guider::*, hal::{events::HalEvent, *}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*,
 };
 
 use super::{

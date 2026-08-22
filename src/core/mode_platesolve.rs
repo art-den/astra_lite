@@ -2,15 +2,8 @@ use std::sync::{Arc, RwLock};
 
 use crate::{
     core::{
-        cam_ctrl::take_shot,
-        core::*,
-        frame_processing::*,
-    },
-    hal::{Camera, CcdPurpose, FrameType, Hal, Telescope},
-    image::{image::*, stars::StarItems},
-    options::*,
-    plate_solve::*,
-    sky_math::math::*,
+        cam_ctrl::take_shot, core::*, frame_processing::*, preview_image::ResultImage,
+    }, hal::{Camera, CcdPurpose, FrameType, Hal, Telescope}, image::{image::*, stars::StarItems}, options::*, plate_solve::*, sky_math::math::*,
 };
 
 use super::{events::*, utils::gain_to_value};
@@ -249,7 +242,7 @@ impl Mode for PlatesolveMode {
     ) -> eyre::Result<NotifyResult> {
         let xy_supported = self.plate_solver.support_stars_as_input();
         match (&self.state, &fp_result.data, xy_supported) {
-            (State::Capturing, FrameProcessResultData::Image(image), false) => {
+            (State::Capturing, FrameProcessResultData::ImageReady(image), false) => {
                 self.plate_solve_image(image)?;
                 self.state = State::PlateSolve;
                 return Ok(NotifyResult::ProgressChanges);

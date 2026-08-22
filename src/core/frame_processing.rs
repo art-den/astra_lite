@@ -4,14 +4,11 @@ use chrono::{DateTime, Local};
 use bitflags::bitflags;
 
 use crate::{
-    core::{core::ModeType, utils::{FileNameArg, FileNameUtils}}, hal::{CameraShot, CameraShotType, FrameType},
-    image::{
+    core::{core::ModeType, preview_image::{ResultImage, ResultImageInfo}, utils::{FileNameArg, FileNameUtils}}, hal::{CameraShot, CameraShotType, FrameType}, image::{
         histogram::*, image::*, image_stacker::*, info::*,
         io::*, preview::*, raw::*,
         stars::{StarItems, Stars, StarsFinder, StarsInfo}, stars_offset::*,
-    },
-    options::*,
-    utils::log_utils::*,
+    }, options::*, utils::log_utils::*,
 };
 
 #[derive(Default)]
@@ -65,43 +62,6 @@ pub struct LightFrameInfoData {
 pub struct LiveStackingInfo {
     pub image: Arc<LightFrameInfo>,
     pub stars: Arc<StarsInfoData>,
-}
-
-pub enum ResultImageInfo {
-    None,
-    LightInfo(Arc<LightFrameInfoData>),
-    FlatInfo(FlatImageInfo),
-    RawInfo(RawImageStat),
-}
-
-pub struct ResultImage {
-    pub image:    Arc<RwLock<Image>>,
-    pub raw_hist: Arc<RwLock<Histogram>>,
-    pub img_hist: RwLock<Histogram>,
-    pub info:     RwLock<ResultImageInfo>,
-    pub stars:    RwLock<Option<Arc<StarItems>>>,
-}
-
-impl ResultImage {
-    pub fn new() -> Self {
-        Self {
-            image:    Arc::new(RwLock::new(Image::new_empty())),
-            raw_hist: Arc::new(RwLock::new(Histogram::new())),
-            img_hist: RwLock::new(Histogram::new()),
-            info:     RwLock::new(ResultImageInfo::None),
-            stars:    RwLock::new(None),
-        }
-    }
-
-    pub fn create_preview_for_platesolve_image(&self, po: &PreviewOptions) -> Option<PreviewRgbData> {
-        let image = self.image.read().unwrap();
-        let hist = self.img_hist.read().unwrap();
-        let mut pp = po.preview_params();
-        pp.pr_area_height = 1500;
-        pp.pr_area_width = 1500;
-        pp.scale = PreviewScale::FitWindow;
-        get_preview_rgb_data(&image, &hist, &pp, None)
-    }
 }
 
 #[derive(Default, Debug)]
@@ -214,8 +174,8 @@ impl RawFrameInfo {
 pub enum FrameProcessResultData {
     ShotProcessingStarted,
     RawFrameInfo(RawFrameInfo),
-    HistogramRaw(Arc<RwLock<Histogram>>),
-    Image(Arc<RwLock<Image>>),
+    RawHistogramReady,
+    ImageReady(Arc<RwLock<Image>>),
     PreviewFrame(Arc<Preview8BitImgData>),
     PreviewLiveRes(Arc<Preview8BitImgData>),
     LightFrameInfo(Arc<LightFrameInfoData>),
@@ -437,7 +397,7 @@ impl FrameProcessing {
                 drop(raw_hist);
 
                 self.notify_frame_result(
-                    FrameProcessResultData::HistogramRaw(Arc::clone(&command.frame.raw_hist)),
+                    FrameProcessResultData::RawHistogramReady,
                     &command,
                 );
 
@@ -570,7 +530,7 @@ impl FrameProcessing {
         }
 
         self.notify_frame_result(
-            FrameProcessResultData::Image(Arc::clone(&command.frame.image)),
+            FrameProcessResultData::ImageReady(Arc::clone(&command.frame.image)),
             &command,
         );
 
@@ -590,7 +550,7 @@ impl FrameProcessing {
         if command.img_source.get_type() == CameraShotType::ReadyImage {
             *command.frame.raw_hist.write().unwrap() = hist.clone();
             self.notify_frame_result(
-                FrameProcessResultData::HistogramRaw(Arc::clone(&command.frame.raw_hist)),
+                FrameProcessResultData::RawHistogramReady,
                 &command,
             );
         }

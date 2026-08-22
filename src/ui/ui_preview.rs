@@ -4,7 +4,7 @@ use gtk::{cairo, glib::{self, clone}, prelude::*, gdk};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{core::*, events::*, frame_processing::*}, hal::FrameType, image::{histogram::*, info::*, io::save_image_to_tif_file, preview::*, raw::CalibrMethods, stars_offset::Offset}, options::*, sky_math::math::radian_to_degree, utils::{io_utils::*, log_utils::*}
+    core::{core::*, events::*, frame_processing::*, preview_image::ResultImageInfo}, hal::FrameType, image::{histogram::*, info::*, io::save_image_to_tif_file, preview::*, raw::CalibrMethods, stars_offset::Offset}, options::*, sky_math::math::radian_to_degree, utils::{io_utils::*, log_utils::*}
 };
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 
@@ -1217,7 +1217,7 @@ impl PreviewUi {
 
                 show_resolution_info(img.rgb_data.orig_width, img.rgb_data.orig_height);
             }
-            FrameProcessResultData::HistogramRaw(_)
+            FrameProcessResultData::RawHistogramReady
             if is_mode_current(false) || is_from_file_image => {
                 self.repaint_histogram();
                 self.show_histogram_stat();

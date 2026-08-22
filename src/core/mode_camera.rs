@@ -131,6 +131,7 @@ pub struct TakingPicturesMode {
     events:            Arc<EventHandlers>,
     raw_stacker:       RawStacker,
     options:           Arc<RwLock<Options>>,
+    raw_histogram:     Arc<RwLock<Histogram>>,
     next_job:          Option<NextJob>, // after frame processing is finished
     cam_options:       CamOptions,
     qual_options:      QualityOptions,
@@ -246,6 +247,7 @@ impl TakingPicturesMode {
             events:            Arc::clone(&core.events),
             raw_stacker:       RawStacker::new(raw_stacker_mode),
             options:           Arc::clone(&core.options),
+            raw_histogram:     Arc::clone(&core.cur_frame.raw_hist),
             next_job:          None,
             ref_stars:         None,
             out_file_names:    OutFileNames::default(),
@@ -1035,14 +1037,11 @@ impl TakingPicturesMode {
 
     const MAX_OFFSET_CALC_STEPS: usize = 8;
 
-    fn process_raw_histogram(
-        &mut self,
-        hist: &Arc<RwLock<Histogram>>
-    ) -> eyre::Result<NotifyResult> {
+    fn process_raw_histogram(&mut self) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
 
         let get_median_from_histogram = |min: bool| ->u16 {
-            let hist = hist.read().unwrap();
+            let hist = self.raw_histogram.read().unwrap();
             let mut channels = Vec::new();
             if let Some(chan) = &hist.l {
                 channels.push(chan.median());
@@ -1126,7 +1125,7 @@ impl TakingPicturesMode {
             State::CameraOffsetCalculation
             // Rough calculation of camera's ADC real bias
             if let Some(offset_calc) = &mut self.cam_offset_calc => {
-                let hist = hist.read().unwrap();
+                let hist = self.raw_histogram.read().unwrap();
                 let chan = if hist.g.is_some() { &hist.g } else { &hist.l };
                 if let Some(chan) = chan {
                     if offset_calc.step % 2 == 0 {
@@ -1135,6 +1134,7 @@ impl TakingPicturesMode {
                         offset_calc.high_values.push((chan.median(), chan.std_dev));
                     }
                 }
+                drop(hist);
 
                 offset_calc.step += 1;
                 if offset_calc.step != Self::MAX_OFFSET_CALC_STEPS {
@@ -1519,9 +1519,8 @@ impl Mode for TakingPicturesMode {
             FrameProcessResultData::LightFrameInfo(info) =>
                 self.process_light_frame_info(info),
 
-            FrameProcessResultData::HistogramRaw(histogram) =>
-                self.process_raw_histogram(histogram),
-
+            FrameProcessResultData::RawHistogramReady =>
+                self.process_raw_histogram(),
             FrameProcessResultData::ShotProcessingFinished {
                 frame_is_ok, camera_shot, raw_image_info, ..
             } =>

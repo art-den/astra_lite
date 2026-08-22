@@ -3,12 +3,7 @@ use std::{any::Any, f64::consts::PI, sync::{Arc, RwLock}};
 use chrono::{NaiveDateTime, Utc};
 
 use crate::{
-    core::{cam_ctrl::take_shot, core::*, frame_processing::*},
-    hal::{Camera, FrameType, Hal, Telescope, indi::degree_to_str},
-    image::{image::*, stars::StarItems},
-    options::*,
-    plate_solve::*,
-    sky_math::{math::*, solar_system::calc_atmospheric_refraction},
+    core::{cam_ctrl::take_shot, core::*, frame_processing::*, preview_image::ResultImage}, hal::{Camera, FrameType, Hal, Telescope, indi::degree_to_str}, image::{image::*, stars::StarItems}, options::*, plate_solve::*, sky_math::{math::*, solar_system::calc_atmospheric_refraction},
 };
 
 use super::{consts::*, events::*, utils::{check_telescope_is_at_desired_position, gain_to_value}};
@@ -723,7 +718,7 @@ impl Mode for PolarAlignMode {
     ) -> eyre::Result<NotifyResult> {
         let stars_supported = self.plate_solver.support_stars_as_input();
         match (&self.state, &fp_result.data, stars_supported) {
-            (State::Capture, FrameProcessResultData::Image(image), false) => {
+            (State::Capture, FrameProcessResultData::ImageReady(image), false) => {
                 let ok = self.plate_solve_image(image)?;
                 if !ok { return Ok(NotifyResult::Empty); }
                 self.state = State::PlateSolve;
