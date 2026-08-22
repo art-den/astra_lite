@@ -82,13 +82,13 @@ pub enum Event {
     BlobStart(BlobStartEvent),
 }
 
-pub type EventFun = dyn Fn(Event) + Send + 'static;
+pub type EventFun = dyn Fn(Event) + Send + Sync + 'static;
 
-#[derive(Hash, Eq, PartialEq, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct EventHandlerId(u64);
 
 pub struct EventHandlers {
-    items: Mutex<HashMap<EventHandlerId, Box<EventFun>>>,
+    items: Mutex<HashMap<u64, Arc<EventFun>>>,
     key:   AtomicU64,
 }
 
@@ -101,23 +101,34 @@ impl EventHandlers {
     }
 
     pub fn send(&self, event: Event) {
-        let items = self.items.lock().unwrap();
-        for fun in items.values() {
+        // Copy handlers while holding the lock, then release it before executing.
+        // This prevents deadlocks if handlers try to access the event system.
+        let handlers = {
+            let items = self.items.lock().unwrap();
+            items.clone()
+        };
+
+        // Execute handlers without holding the lock
+        for fun in handlers.values() {
             fun(event.clone());
         }
     }
 
-    pub fn connect(&self, fun: impl Fn(Event) + Send + 'static) -> EventHandlerId {
-        let key = self.key.fetch_add(1, std::sync::atomic::Ordering::Release);
-        let subscription = EventHandlerId(key);
+    pub fn connect(&self, fun: impl Fn(Event) + Send + Sync + 'static) -> EventHandlerId {
+        let key = self.key.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut items = self.items.lock().unwrap();
-        items.insert(subscription, Box::new(fun));
-        subscription
+        items.insert(key, Arc::new(fun));
+        EventHandlerId(key)
     }
 
-    pub fn disconnect(&self, subscription: EventHandlerId) {
-        let mut items = self.items.lock().unwrap();
-        items.remove(&subscription);
+    pub fn disconnect(&self, EventHandlerId(subscription): EventHandlerId) {
+        let removed = {
+            let mut items = self.items.lock().unwrap();
+            items.remove(&subscription)
+        };
+        // Drop the handler outside the lock: its Drop may re-enter
+        // the event system (e.g. call disconnect again)
+        drop(removed);
     }
 
     pub fn disconnect_all(&self) {

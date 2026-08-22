@@ -11,7 +11,7 @@ use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use std::{ops::RangeInclusive, path::Path, sync::Arc};
 
-use crate::hal::{events::{HalEvent, HalEventHandlers}, hal_indi::IndiHalImpl};
+use crate::hal::{events::{EventHandlerId, HalEvent, HalEventHandlers}, hal_indi::IndiHalImpl};
 
 #[cfg(windows)]
 use super::hal::hal_ascom_alpaca::AscomAlpacaHalImpl;
@@ -96,8 +96,15 @@ impl Hal {
         &self.ascom_alpaca
     }
 
-    pub fn connect_event_handler(&self, fun: impl Fn(HalEvent) + Send + Sync + 'static) {
-        self.event_handlers.connect(fun);
+    pub fn connect_event_handler(
+        &self,
+        fun: impl Fn(HalEvent) + Send + Sync + 'static
+    ) -> EventHandlerId {
+        self.event_handlers.connect(fun)
+    }
+
+    pub fn disconnect_event_handler(&self, id: EventHandlerId) {
+        self.event_handlers.disconnect(id);
     }
 
     pub fn disconnect_all_subscribers(&self) {

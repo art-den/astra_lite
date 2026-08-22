@@ -200,7 +200,7 @@ impl Connection {
 
     pub fn connect_event_handler(
         &self,
-        fun: impl Fn(Event) + Send + 'static
+        fun: impl Fn(Event) + Send + Sync + 'static
     ) -> EventHandlerId {
         self.event_handlers.connect(fun)
     }

@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::{collections::HashMap, sync::{Arc, RwLock, atomic::AtomicU64}};
 use crate::{guiding::external_guider::ExtGuiderEvent, plate_solve::PlateSolverEvent};
 use super::{core::ModeType, frame_processing::*, mode_focusing::*, mode_polar_align::PolarAlignmentEvent};
 
@@ -46,23 +46,29 @@ pub enum Event {
 
 type EventHandlerFun = dyn Fn(Event) + Send + Sync + 'static;
 
+pub struct EventHandlerId(u64);
+
 pub struct EventHandlers {
-    items: RwLock<Vec<Arc<EventHandlerFun>>>,
+    items: RwLock<HashMap<u64, Arc<EventHandlerFun>>>,
+    next_id: AtomicU64,
 }
 
 impl EventHandlers {
     pub fn new() -> Self {
         Self {
-            items:RwLock::new(Vec::new()),
+            items:   RwLock::new(HashMap::new()),
+            next_id: AtomicU64::new(0),
         }
     }
 
     pub fn connect(
         &self,
         fun: impl Fn(Event) + Send + Sync + 'static
-    ) {
+    ) -> EventHandlerId {
+        let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut items = self.items.write().unwrap();
-        items.push(Arc::new(fun));
+        items.insert(id, Arc::new(fun));
+        EventHandlerId(id)
     }
 
     pub fn send(&self, event: Event) {
@@ -74,14 +80,24 @@ impl EventHandlers {
         };
 
         // Execute handlers without holding the lock
-        for handler in handlers.iter() {
+        for handler in handlers.values() {
             handler(event.clone());
         }
     }
 
+    pub fn disconnect(&self, EventHandlerId(id): EventHandlerId) {
+        let removed = {
+            let mut items = self.items.write().unwrap();
+            items.remove(&id)
+        };
+        // Drop the handler outside the lock: its Drop may re-enter
+        // the event system (e.g. call disconnect again)
+        drop(removed);
+    }
+
     /// Disconnects all handlers.
     pub fn disconnect_all(&self) {
-        let mut event_handlers = Vec::new();
+        let mut event_handlers = HashMap::new();
         let mut items = self.items.write().unwrap();
         // Swaps the handlers out, then drops the lock
         std::mem::swap(&mut event_handlers, &mut items);
