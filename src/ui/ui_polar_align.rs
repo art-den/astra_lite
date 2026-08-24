@@ -191,9 +191,9 @@ impl PolarAlignUi {
         let cam_active = camera.and_then(|c| c.is_active().ok()).unwrap_or(false);
         let mnt_active = mount.and_then(|c| c.is_active().ok()).unwrap_or(false);
 
-        let mode = self.engine.mode();
-        let mode_kind = mode.active.kind();
-        drop(mode);
+        let modes = self.engine.modes();
+        let mode_kind = modes.active.kind();
+        drop(modes);
         let waiting = mode_kind == ModeKind::Waiting;
         let live_view = mode_kind == ModeKind::LiveView;
         let single_shot = mode_kind == ModeKind::SingleShot;

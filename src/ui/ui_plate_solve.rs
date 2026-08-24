@@ -187,8 +187,8 @@ impl PlateSolveUi {
             .and_then(|cam| cam.is_active().ok())
             .unwrap_or(false);
 
-        let mode = self.engine.mode();
-        let mode_kind = mode.active.kind();
+        let modes = self.engine.modes();
+        let mode_kind = modes.active.kind();
         let waiting = mode_kind == ModeKind::Waiting;
         let live_view = mode_kind == ModeKind::LiveView;
         let single_shot = mode_kind == ModeKind::SingleShot;

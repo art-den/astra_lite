@@ -71,7 +71,7 @@ impl DarkCreationMode {
         program_item: MasterFileCreationProgramItem,
         cam_mode:     CameraMode,
     ) -> NotifyResult {
-        let start_focusing_fun = move |engine: &Arc<Engine>, mode: &mut ModeState| -> eyre::Result<()> {
+        let start_focusing_fun = move |engine: &Arc<Engine>, mode: &mut EngineModes| -> eyre::Result<()> {
             mode.active.abort()?;
             let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
             let mut new_mode = TakingPicturesMode::new(cam_mode, engine)?;

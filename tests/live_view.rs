@@ -143,7 +143,7 @@ fn live_view() {
 
     // Verify the core has returned to WaitingMode after being stopped.
     assert_eq!(
-        engine.mode().active.kind(),
+        engine.modes().active.kind(),
         ModeKind::Waiting,
         "core should be in WaitingMode after LiveView is stopped"
     );

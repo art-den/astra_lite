@@ -990,7 +990,7 @@ impl CameraUi {
             }
             DelayedAction::StartLiveView => {
                 let live_view_flag = self.engine.options.read().unwrap().cam.live_view;
-                let mode_kind = self.engine.mode().active.kind();
+                let mode_kind = self.engine.modes().active.kind();
                 if live_view_flag && mode_kind == ModeKind::Waiting {
                     self.start_live_view();
                 }
@@ -1086,22 +1086,22 @@ impl CameraUi {
         let frame_mode_is_flat = frame_mode == FrameType::Flats;
         let frame_mode_is_dark = frame_mode == FrameType::Darks;
 
-        let mode = self.engine.mode();
-        let mode_kind = mode.active.kind();
+        let modes = self.engine.modes();
+        let mode_kind = modes.active.kind();
         let waiting = mode_kind == ModeKind::Waiting;
         let single_shot = mode_kind == ModeKind::SingleShot;
         let liveview_active = mode_kind == ModeKind::LiveView;
         let saving_frames = mode_kind == ModeKind::SavingRawFrames;
-        let saving_frames_paused = mode.aborted
+        let saving_frames_paused = modes.aborted
             .as_ref()
             .map(|mode| mode.kind() == ModeKind::SavingRawFrames)
             .unwrap_or(false);
         let live_active = mode_kind == ModeKind::LiveStacking;
-        let livestacking_paused = mode.aborted
+        let livestacking_paused = modes.aborted
             .as_ref()
             .map(|mode| mode.kind() == ModeKind::LiveStacking)
             .unwrap_or(false);
-        drop(mode);
+        drop(modes);
 
         let save_raw_btn_cap = match frame_mode {
             FrameType::Lights => "Start save\nLIGHTS",
@@ -1512,8 +1512,8 @@ impl CameraUi {
         area: &gtk::DrawingArea,
         cr:   &cairo::Context
     ) {
-        let mode = self.engine.mode();
-        let Some(cur_exposure) = mode.active.get_cur_exposure() else {
+        let modes = self.engine.modes();
+        let Some(cur_exposure) = modes.active.get_cur_exposure() else {
             return;
         };
         if cur_exposure < 1.0 { return; };

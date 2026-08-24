@@ -261,7 +261,7 @@ fn live_stacking() {
 
     // Verify the core has returned to WaitingMode
     assert_eq!(
-        engine.mode().active.kind(),
+        engine.modes().active.kind(),
         ModeKind::Waiting,
         "core should be in WaitingMode after LiveStacking completes"
     );

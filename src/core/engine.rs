@@ -73,17 +73,17 @@ pub enum NotifyResult {
     Empty,
     ProgressChanges,
     Finished { next_mode: Option<ModeBox> },
-    Exec(Box<dyn FnOnce(&Arc<Engine>, &mut ModeState)-> eyre::Result<()> + 'static + Send + Sync>),
+    Exec(Box<dyn FnOnce(&Arc<Engine>, &mut EngineModes)-> eyre::Result<()> + 'static + Send + Sync>),
 }
 
-pub struct ModeState {
+pub struct EngineModes {
     pub active:   ModeBox,
     pub finished: Option<ModeBox>,
     pub aborted:  Option<ModeBox>,
     previous:     Option<ModeBox>,
 }
 
-impl ModeState {
+impl EngineModes {
     fn new() -> Self {
         Self {
             active:   Box::new(WaitingMode),
@@ -103,7 +103,7 @@ pub struct Engine {
     pub live_stacking:  Arc<LiveStackingData>,
     pub ext_guider:     Arc<ExternalGuiderCtrl>,
 
-    mode:               RwLock<ModeState>,
+    modes:              RwLock<EngineModes>,
     calibr_data:        Arc<Mutex<CalibrData>>,
     timer:              Arc<Timer>,
     img_proc_stop_flag: Mutex<Arc<AtomicBool>>, // stop flag for last command
@@ -129,7 +129,7 @@ impl Engine {
 
         let this = Arc::new(Self {
             options:            Arc::clone(&options),
-            mode:               RwLock::new(ModeState::new()),
+            modes:              RwLock::new(EngineModes::new()),
             cur_frame:          Arc::new(ResultImage::new()),
             calibr_data:        Arc::new(Mutex::new(CalibrData::default())),
             live_stacking:      Arc::new(LiveStackingData::new()),
@@ -154,7 +154,7 @@ impl Engine {
         self.ext_guider.phd2_conn().disconnect_all_event_handlers();
 
         self.abort_active_mode();
-        *self.mode.write().unwrap() = ModeState::new();
+        *self.modes.write().unwrap() = EngineModes::new();
 
         log::info!("Unsubscribing all...");
         self.events.disconnect_all();
@@ -177,9 +177,9 @@ impl Engine {
         self.ext_guider.set_events_handler(Box::new(move |event| {
             log::info!("External guider event = {:?}", event);
             let result = || -> eyre::Result<()> {
-                let mut mode = self_.mode.write().unwrap();
-                let res = mode.active.notify_guider_event(event.clone())?;
-                self_.apply_notify_result(res, &mut mode)?;
+                let mut modes = self_.modes.write().unwrap();
+                let res = modes.active.notify_guider_event(event.clone())?;
+                self_.apply_notify_result(res, &mut modes)?;
                 Ok(())
             } ();
             self_.events.send(Event::Guider(event));
@@ -192,8 +192,8 @@ impl Engine {
         Ok(())
     }
 
-    pub fn mode(&self) -> RwLockReadGuard<'_, ModeState> {
-        self.mode.read().unwrap()
+    pub fn modes(&self) -> RwLockReadGuard<'_, EngineModes> {
+        self.modes.read().unwrap()
     }
 
     fn process_error(
@@ -232,7 +232,7 @@ impl Engine {
     }
 
     fn timer_event_handler(self: &Arc<Self>) -> eyre::Result<()> {
-        let mut mode = self.mode.write().unwrap();
+        let mut mode = self.modes.write().unwrap();
         let result = mode.active.notify_periodic_timer_tick(Self::TIMER_PERIOD_MS)?;
         self.apply_notify_result(result, &mut mode)?;
         drop(mode);
@@ -267,7 +267,7 @@ impl Engine {
                 }
             }
             HalEvent::CameraBeginDownloadData(camera_id) => {
-                let mut mode = self.mode.write().unwrap();
+                let mut mode = self.modes.write().unwrap();
                 let res = mode.active.notify_camera_download_started(camera_id)?;
                 self.apply_notify_result(res, &mut mode)?;
             }
@@ -275,7 +275,7 @@ impl Engine {
                 let options = self.options.read().unwrap();
                 if options.cam.device_id == **camera_id {
                     let Ok(camera) = self.hal.camera(&options.cam.device_id) else { return Ok(()); };
-                    let mut mode = self.mode.write().unwrap();
+                    let mut mode = self.modes.write().unwrap();
                     restart_camera_exposure(
                         &camera,
                         &mut mode,
@@ -297,7 +297,7 @@ impl Engine {
         camera_id:   &str,
         camera_shot: &Arc<dyn CameraShot + Send + Sync>
     ) -> eyre::Result<()> {
-        let mut mode = self.mode.write().unwrap();
+        let mut mode = self.modes.write().unwrap();
 
         if Some(camera_id) != mode.active.camera_id() {
             return Ok(());
@@ -436,7 +436,7 @@ impl Engine {
         match res {
             CommandResult::Result(res) => {
                 if res.mode_kind != ModeKind::OpeningImgFile  {
-                    let mut mode = self.mode.write().unwrap();
+                    let mut mode = self.modes.write().unwrap();
                     if Some(res.camera_id.as_str()) != mode.active.camera_id() {
                         return;
                     }
@@ -457,7 +457,7 @@ impl Engine {
             }
 
             CommandResult::QueueOverflow => {
-                let mut mode = self.mode.write().unwrap();
+                let mut mode = self.modes.write().unwrap();
                 let result = || -> eyre::Result<()> {
                     let res = mode.active.notify_processing_queue_overflow()?;
                     self.apply_notify_result(res, &mut mode)?;
@@ -478,7 +478,7 @@ impl Engine {
         self: &Arc<Self>,
         args: &dyn std::any::Any
     ) -> eyre::Result<Option<Box<dyn Any>>> {
-        let mut mode = self.mode.write().unwrap();
+        let mut mode = self.modes.write().unwrap();
         mode.active.custom_command(args)
     }
 
@@ -488,7 +488,7 @@ impl Engine {
         reset_aborted_mode:  bool,
         reset_finished_mode: bool,
     ) -> eyre::Result<()> {
-        let mut mode = self.mode.write().unwrap();
+        let mut mode = self.modes.write().unwrap();
 
         let have_to_abort_mode =
             new_mode.stop_live_view_before_this_mode() ||
@@ -663,7 +663,7 @@ impl Engine {
         let ResultImageInfo::LightInfo(light_frame_info) = &*image_info else {
             eyre::bail!("Image is not a light frame");
         };
-        self.mode.write().unwrap().active.abort()?;
+        self.modes.write().unwrap().active.abort()?;
         let mode = GotoMode::new(
             self,
             GotoDestination::Image{
@@ -690,7 +690,7 @@ impl Engine {
     }
 
     pub fn abort_active_mode(&self) {
-        let mut mode = self.mode.write().unwrap();
+        let mut mode = self.modes.write().unwrap();
 
         if mode.active.kind() == ModeKind::Waiting {
             return;
@@ -718,7 +718,7 @@ impl Engine {
     }
 
     pub fn continue_aborted_mode(&self) -> eyre::Result<()> {
-        let mut mode = self.mode.write().unwrap();
+        let mut mode = self.modes.write().unwrap();
         let Some(aborted_mode) = mode.aborted.take() else {
             eyre::bail!("Aborted state is empty");
         };
@@ -736,7 +736,7 @@ impl Engine {
     fn apply_notify_result(
         self:   &Arc<Self>,
         result: NotifyResult,
-        mode:   &mut ModeState,
+        mode:   &mut EngineModes,
     ) -> eyre::Result<()> {
         let mut mode_changed = false;
         let mut finished_progress_and_type = None;

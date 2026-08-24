@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{core::engine::ModeState, hal::{Camera, CcdPurpose, Hal}, options::{CamCtrlOptions, FrameOptions, Options}};
+use crate::{core::engine::EngineModes, hal::{Camera, CcdPurpose, Hal}, options::{CamCtrlOptions, FrameOptions, Options}};
 
 pub fn take_shot(
     camera:    &Arc<dyn Camera + Send + Sync>,
@@ -112,7 +112,7 @@ pub fn control_camera_heater(
 
 pub fn restart_camera_exposure(
     camera:     &Arc<dyn Camera + Send + Sync>,
-    mode:       &mut ModeState,
+    mode:       &mut EngineModes,
     frame_opts: &FrameOptions,
     ctrl_opts:  &CamCtrlOptions,
 ) -> eyre::Result<()> {

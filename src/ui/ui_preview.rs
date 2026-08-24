@@ -1674,7 +1674,7 @@ impl PreviewUi {
     }
 
     fn correct_preview_source(&self) {
-        let mode_kind = self.engine.mode().active.kind();
+        let mode_kind = self.engine.modes().active.kind();
         let cb_preview_src_aid = match mode_kind {
             ModeKind::LiveStacking => "live",
             ModeKind::Waiting      => return,

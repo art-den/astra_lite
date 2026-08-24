@@ -623,7 +623,7 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
 
     // Verify core is still in WaitingMode (OpeningImgFile does not switch modes).
     assert_eq!(
-        engine.mode().active.kind(),
+        engine.modes().active.kind(),
         ModeKind::Waiting,
         "core should remain in WaitingMode after opening an image file"
     );

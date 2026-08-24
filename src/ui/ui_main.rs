@@ -381,7 +381,7 @@ impl MainUi {
     }
 
     fn handler_close_window(self: &Rc<Self>) -> glib::Propagation {
-        if self.engine.mode().active.kind() != ModeKind::Waiting {
+        if self.engine.modes().active.kind() != ModeKind::Waiting {
             let dialog = gtk::MessageDialog::builder()
                 .transient_for(&self.widgets.window)
                 .title("Operation is in progress")
@@ -624,26 +624,26 @@ impl MainUi {
     }
 
     fn correct_widgets_props(&self) {
-        let mode = self.engine.mode();
-        let can_be_continued = mode.aborted
+        let modes = self.engine.modes();
+        let can_be_continued = modes.aborted
             .as_ref()
             .map(|m| m.can_be_continued_after_stop())
             .unwrap_or(false);
         enable_actions(&self.widgets.window, &[
-            ("stop",     mode.active.can_be_stopped()),
+            ("stop",     modes.active.can_be_stopped()),
             ("continue", can_be_continued),
         ]);
     }
 
     fn show_mode_caption(&self) {
-        let mode = self.engine.mode();
-        let is_cur_mode_active = mode.active.kind() != ModeKind::Waiting;
+        let modes = self.engine.modes();
+        let is_cur_mode_active = modes.active.kind() != ModeKind::Waiting;
         let mut caption = String::new();
-        if let (false, Some(finished)) = (is_cur_mode_active, &mode.finished) {
+        if let (false, Some(finished)) = (is_cur_mode_active, &modes.finished) {
             caption += &(finished.progress_string() + " (finished)");
         } else {
-            caption += &mode.active.progress_string();
-            if let Some(aborted) = &mode.aborted {
+            caption += &modes.active.progress_string();
+            if let Some(aborted) = &modes.aborted {
                 caption += " + ";
                 caption += &aborted.progress_string();
                 caption += " (aborted)";

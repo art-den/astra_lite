@@ -973,7 +973,7 @@ impl DarksLibraryUI {
     }
 
     fn correct_widgets_enable_state(&self) {
-        let mode_kind = self.engine.mode().active.kind();
+        let mode_kind = self.engine.modes().active.kind();
         let is_waiting = mode_kind == ModeKind::Waiting;
         let is_live_view = mode_kind == ModeKind::LiveView;
         let saving_defect_pixels =

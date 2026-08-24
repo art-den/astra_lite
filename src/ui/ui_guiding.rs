@@ -216,9 +216,9 @@ impl GuidingUi {
     }
 
     fn correct_widgets_props_impl(&self, cam_device: &str) {
-        let mode = self.engine.mode();
-        let mode_kind = mode.active.kind();
-        drop(mode);
+        let modes = self.engine.modes();
+        let mode_kind = modes.active.kind();
+        drop(modes);
         let can_change_mode =
             mode_kind == ModeKind::Waiting ||
             mode_kind == ModeKind::SingleShot ||

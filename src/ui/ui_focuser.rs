@@ -374,9 +374,9 @@ impl FocuserUi {
     }
 
     fn correct_widgets_props_impl(&self, cam_device: &str) {
-        let mode = self.engine.mode();
-        let mode_kind = mode.active.kind();
-        drop(mode);
+        let modes = self.engine.modes();
+        let mode_kind = modes.active.kind();
+        drop(modes);
 
         if let Ok(camera) = self.engine.hal.camera(cam_device) {
             let exp_range = camera.exposure_range().ok();

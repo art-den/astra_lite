@@ -972,7 +972,7 @@ impl TakingPicturesMode {
             // Start next job/mode
             match self.next_job.take() {
                 Some(NextJob::MountCalibration) => {
-                    let start_mode_mnt_calibr_fun = move |_engine: &Arc<Engine>, mode: &mut ModeState| -> eyre::Result<()> {
+                    let start_mode_mnt_calibr_fun = move |_engine: &Arc<Engine>, mode: &mut EngineModes| -> eyre::Result<()> {
                         mode.active.abort()?;
                         let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
                         let mut new_mode = MountCalibrMode::new(
@@ -998,7 +998,7 @@ impl TakingPicturesMode {
 
                 Some(NextJob::Autofocus) => {
                     // Start autofocus mode
-                    let start_focusing_fun = move |_engine: &Arc<Engine>, mode: &mut ModeState| -> eyre::Result<()> {
+                    let start_focusing_fun = move |_engine: &Arc<Engine>, mode: &mut EngineModes| -> eyre::Result<()> {
                         mode.active.abort()?;
                         let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
                         let mut new_mode = FocusingMode::new(
