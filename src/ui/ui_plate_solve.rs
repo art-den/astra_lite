@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{core::{Core, ModeKind}, events::*},
+    core::{engine::{Core, ModeKind}, events::*},
     hal::{DeviceType, events::HalEvent},
     options::*,
 };

@@ -4,7 +4,7 @@ use chrono::{DateTime, Local};
 use bitflags::bitflags;
 
 use crate::{
-    core::{core::ModeKind, preview_image::{ResultImage, ResultImageInfo}, utils::{FileNameArg, FileNameUtils}}, hal::{CameraShot, CameraShotType, FrameType}, image::{
+    core::{engine::ModeKind, preview_image::{ResultImage, ResultImageInfo}, utils::{FileNameArg, FileNameUtils}}, hal::{CameraShot, CameraShotType, FrameType}, image::{
         histogram::*, image::*, image_stacker::*, info::*,
         io::*, preview::*, raw::*,
         stars::{StarItems, Stars, StarsFinder, StarsInfo}, stars_offset::*,

@@ -12,7 +12,7 @@ use gtk::{prelude::*, glib, glib::clone, cairo};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{core::*, events::*}, hal::events::HalEvent, options::*, utils::io_utils::*,
+    core::{engine::*, events::*}, hal::events::HalEvent, options::*, utils::io_utils::*,
 };
 use super::{gtk_utils::*, module::*, utils::*};
 

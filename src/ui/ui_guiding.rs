@@ -3,7 +3,7 @@ use gtk::prelude::*;
 use macros::FromBuilder;
 
 use crate::{
-    core::{core::*, events::*}, guiding::external_guider::*, hal::events::HalEvent, options::*
+    core::{engine::*, events::*}, guiding::external_guider::*, hal::events::HalEvent, options::*
 };
 
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};

@@ -6,7 +6,7 @@ use std::{
 
 use astra_lite::{
     core::{
-        core::{Core, ModeKind},
+        engine::{Core, ModeKind},
         events::Event,
         frame_processing::{FrameProcessResult, FrameProcessResultData},
     },

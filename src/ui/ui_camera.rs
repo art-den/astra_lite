@@ -2,7 +2,7 @@ use std::{rc::Rc, sync::Arc, cell::RefCell};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{core::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}},
+    core::{engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}},
     hal::{DeviceType, FrameType, HalState, events::HalEvent},
     image::{info::*, raw::CalibrMethods},
     options::*,

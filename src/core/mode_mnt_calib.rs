@@ -7,7 +7,7 @@ use crate::{
     options::*,
     utils::math::*,
 };
-use super::{consts::*, core::*, events::*, frame_processing::*, utils::*};
+use super::{consts::*, engine::*, events::*, frame_processing::*, utils::*};
 
 const DITHER_CALIBR_ATTEMPTS_CNT: usize = 11;
 

@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{core::{Core, ModeKind}, events::*},
+    core::{engine::{Core, ModeKind}, events::*},
     hal::{DeviceType, HalState, TelescopeState, events::HalEvent, indi::{degree_to_str, hour_to_str}},
     options::*,
     ui::ui_main::MainUi,

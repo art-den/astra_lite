@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 use crate::{
     core::{cam_ctrl::take_shot, consts::*, events::*, frame_processing::*, preview_image::ResultImage}, hal::{Camera, FrameType, Telescope, indi::value_to_sexagesimal}, image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point}, options::*, plate_solve::*, sky_math::math::*,
 };
-use super::{core::*, events::EventHandlers, utils::*};
+use super::{engine::*, events::EventHandlers, utils::*};
 
 const MAX_MOUNT_UNPARK_TIME: usize = 20; // seconds
 

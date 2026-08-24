@@ -1,6 +1,6 @@
 use std::{path::Path, sync::{Arc, Mutex}, time::Duration};
 
-use astra_lite::{core::{core::*, events::*, frame_processing::{FrameProcessResult, FrameProcessResultData}}, hal::{DeviceType, FrameType, HalImpl}, image::io::load_raw_image_from_fits_file};
+use astra_lite::{core::{engine::*, events::*, frame_processing::{FrameProcessResult, FrameProcessResultData}}, hal::{DeviceType, FrameType, HalImpl}, image::io::load_raw_image_from_fits_file};
 
 /// Exposure time per frame in seconds.
 const EXPOSURE_SECS: f64 = 1.0;

@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::{
     core::{
-        cam_ctrl::take_shot, core::*, frame_processing::*, preview_image::ResultImage,
+        cam_ctrl::take_shot, engine::*, frame_processing::*, preview_image::ResultImage,
     }, hal::{Camera, CcdPurpose, FrameType, Hal, Telescope}, image::stars::StarItems, options::*, plate_solve::*, sky_math::math::*,
 };
 

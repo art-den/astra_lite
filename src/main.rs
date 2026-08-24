@@ -2,7 +2,7 @@ use std::{path::Path, sync::Arc};
 use gtk::{prelude::*, glib, glib::clone};
 use astra_lite::{ui, ui::gtk_utils::exec_and_show_error};
 use astra_lite::{
-    core::core::Core, options::*, utils::{io_utils::*, log_utils::*}
+    core::engine::Core, options::*, utils::{io_utils::*, log_utils::*}
 };
 
 fn main() -> eyre::Result<()> {

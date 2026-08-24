@@ -5,7 +5,7 @@ use gtk::{prelude::*, glib, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{core::Core, events::Event},
+    core::{engine::Core, events::Event},
     hal::{DeviceType, HalState, events::HalEvent},
     options::Options,
     ui::{gtk_utils, module::*, utils::{DelayedActions, ExclusiveCaller, fill_devices_list_into_combobox}}

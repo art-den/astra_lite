@@ -6,7 +6,7 @@ use crate::{
    options::*
 };
 
-use super::{core::*, events::Progress};
+use super::{engine::*, events::Progress};
 
 const WAIT_TEMPERATURE_TIME: usize = 20; // seconds
 

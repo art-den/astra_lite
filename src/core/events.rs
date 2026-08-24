@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::{Arc, RwLock, atomic::AtomicU64}};
 use crate::{guiding::external_guider::ExtGuiderEvent, plate_solve::PlateSolverEvent};
-use super::{core::ModeKind, frame_processing::*, mode_focusing::*, mode_polar_align::PolarAlignmentEvent};
+use super::{engine::ModeKind, frame_processing::*, mode_focusing::*, mode_polar_align::PolarAlignmentEvent};
 
 #[derive(Clone)]
 pub struct Progress {

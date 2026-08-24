@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{core::core::ModeData, hal::{Camera, CcdPurpose, Hal}, options::{CamCtrlOptions, FrameOptions, Options}};
+use crate::{core::engine::ModeData, hal::{Camera, CcdPurpose, Hal}, options::{CamCtrlOptions, FrameOptions, Options}};
 
 pub fn take_shot(
     camera:    &Arc<dyn Camera + Send + Sync>,

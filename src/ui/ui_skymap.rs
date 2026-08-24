@@ -4,7 +4,7 @@ use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use crate::{
-    core::{core::*, events::*, mode_goto::GotoConfig},
+    core::{engine::*, events::*, mode_goto::GotoConfig},
     hal::{indi::{degree_to_str, hour_to_str}},
     image::preview::PreviewRgbData,
     options::*,

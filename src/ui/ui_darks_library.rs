@@ -4,7 +4,7 @@ use itertools::Itertools;
 use macros::FromBuilder;
 use serde::{Deserialize, Serialize};
 use crate::{
-    core::{core::*, events::*, mode_darks_lib::*}, hal::Camera, image::info::seconds_to_total_time_str, options::*, utils::io_utils::*
+    core::{engine::*, events::*, mode_darks_lib::*}, hal::Camera, image::info::seconds_to_total_time_str, options::*, utils::io_utils::*
 };
 
 use super::{gtk_utils::*, module::*};

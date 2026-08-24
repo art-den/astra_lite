@@ -1,6 +1,6 @@
 pub mod frame_processing;
 pub mod events;
-pub mod core;
+pub mod engine;
 pub mod mode_focusing;
 pub mod consts;
 pub mod mode_darks_lib;
