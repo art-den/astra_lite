@@ -73,23 +73,23 @@ pub enum NotifyResult {
     Empty,
     ProgressChanges,
     Finished { next_mode: Option<ModeBox> },
-    Exec(Box<dyn FnOnce(&Arc<Engine>, &mut ModeData)-> eyre::Result<()> + 'static + Send + Sync>),
+    Exec(Box<dyn FnOnce(&Arc<Engine>, &mut ModeState)-> eyre::Result<()> + 'static + Send + Sync>),
 }
 
-pub struct ModeData {
+pub struct ModeState {
     pub active:   ModeBox,
     pub finished: Option<ModeBox>,
     pub aborted:  Option<ModeBox>,
     previous:     Option<ModeBox>,
 }
 
-impl ModeData {
+impl ModeState {
     fn new() -> Self {
         Self {
-            active:    Box::new(WaitingMode),
-            finished:  None,
-            aborted:   None,
-            previous:  None,
+            active:   Box::new(WaitingMode),
+            finished: None,
+            aborted:  None,
+            previous: None,
         }
     }
 }
@@ -103,7 +103,7 @@ pub struct Engine {
     pub live_stacking:  Arc<LiveStackingData>,
     pub ext_guider:     Arc<ExternalGuiderCtrl>,
 
-    mode:               RwLock<ModeData>,
+    mode:               RwLock<ModeState>,
     calibr_data:        Arc<Mutex<CalibrData>>,
     timer:              Arc<Timer>,
     img_proc_stop_flag: Mutex<Arc<AtomicBool>>, // stop flag for last command
@@ -129,7 +129,7 @@ impl Engine {
 
         let this = Arc::new(Self {
             options:            Arc::clone(&options),
-            mode:               RwLock::new(ModeData::new()),
+            mode:               RwLock::new(ModeState::new()),
             cur_frame:          Arc::new(ResultImage::new()),
             calibr_data:        Arc::new(Mutex::new(CalibrData::default())),
             live_stacking:      Arc::new(LiveStackingData::new()),
@@ -154,7 +154,7 @@ impl Engine {
         self.ext_guider.phd2_conn().disconnect_all_event_handlers();
 
         self.abort_active_mode();
-        *self.mode.write().unwrap() = ModeData::new();
+        *self.mode.write().unwrap() = ModeState::new();
 
         log::info!("Unsubscribing all...");
         self.events.disconnect_all();
@@ -192,7 +192,7 @@ impl Engine {
         Ok(())
     }
 
-    pub fn mode(&self) -> RwLockReadGuard<'_, ModeData> {
+    pub fn mode(&self) -> RwLockReadGuard<'_, ModeState> {
         self.mode.read().unwrap()
     }
 
@@ -736,7 +736,7 @@ impl Engine {
     fn apply_notify_result(
         self:   &Arc<Self>,
         result: NotifyResult,
-        mode:   &mut ModeData,
+        mode:   &mut ModeState,
     ) -> eyre::Result<()> {
         let mut mode_changed = false;
         let mut finished_progress_and_type = None;
