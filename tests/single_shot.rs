@@ -10,15 +10,15 @@ const EXPOSURE_SECS: f64 = 1.0;
 #[test]
 #[serial_test::serial]
 fn single_shot() {
-    // Create system core
-    let core = Core::new();
-    let mut options = core.options.write().unwrap();
+    // Create system engine
+    let engine = Engine::new();
+    let mut options = engine.options.write().unwrap();
 
     #[cfg(target_os = "linux")]
     {
         options.indi.address = "localhost".to_string();
         options.indi.remote = true;
-        let indi_hal = core.hal.indi_impl();
+        let indi_hal = engine.hal.indi_impl();
         indi_hal.connect(
             options.indi.remote,
             &options.indi.address,
@@ -38,18 +38,18 @@ fn single_shot() {
 
     // Select the only connected camera and make it active in Core
     #[cfg(target_os = "linux")]
-    let hal_impl = core.hal.indi_impl();
+    let hal_impl = engine.hal.indi_impl();
     #[cfg(target_os = "windows")]
     let hal_impl = core.hal.ascom_alpaca_impl();
 
     let all_cameras = hal_impl.devices(DeviceType::CAMERA).expect("requesting camera list");
     assert!(all_cameras.len() > 0, "At least one camera must be connected");
-    core.cur_devices.change_camera(&all_cameras[0].id);
+    engine.cur_devices.change_camera(&all_cameras[0].id);
     drop(all_cameras);
 
     // Configure exposure and start single-shot mode
-    core.options.write().unwrap().cam.frame.set_exposure(EXPOSURE_SECS);
-    core.start_single_shot().unwrap();
+    engine.options.write().unwrap().cam.frame.set_exposure(EXPOSURE_SECS);
+    engine.start_single_shot().unwrap();
 
     // Shared state for the event handler
     #[derive(Default)]
@@ -63,7 +63,7 @@ fn single_shot() {
 
     // Subscribe to frame processing events from Core.
     // The pipeline emits: ShotProcessingStarted -> RawFrameInfo -> Image -> PreviewFrame -> ShotProcessingFinished.
-    core.events.connect({
+    engine.events.connect({
         let shared_state = Arc::clone(&shared_state);
         move |event| {
             if let Event::FrameProcessing(FrameProcessResult {data, ..}) = &event {
@@ -118,13 +118,13 @@ fn single_shot() {
 
     // Verify the current image is not empty
     assert!(
-        !core.cur_frame.image.read().unwrap().is_empty(),
+        !engine.cur_frame.image.read().unwrap().is_empty(),
         "current frame image must not be empty"
     );
 
     // Verify the core has returned to WaitingMode
     assert_eq!(
-        core.mode().active.kind(),
+        engine.mode().active.kind(),
         ModeKind::Waiting,
         "core should be in WaitingMode after SingleShot completes"
     );

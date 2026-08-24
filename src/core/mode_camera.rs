@@ -151,10 +151,10 @@ pub struct TakingPicturesMode {
 }
 
 impl TakingPicturesMode {
-    pub fn new(cam_mode: CameraMode, core: &Core) -> eyre::Result<Self> {
-        let camera = core.cur_devices.camera_or_err()?;
+    pub fn new(cam_mode: CameraMode, engine: &Engine) -> eyre::Result<Self> {
+        let camera = engine.cur_devices.camera_or_err()?;
 
-        let opts = core.options.read().unwrap();
+        let opts = engine.options.read().unwrap();
 
         let progress = match cam_mode {
             CameraMode::SavingRawFrames => {
@@ -176,7 +176,7 @@ impl TakingPicturesMode {
 
         let mut cam_options = opts.cam.clone();
         let qual_options = opts.quality.clone();
-        let mount = core.hal.telescope(&opts.mount.device).ok();
+        let mount = engine.hal.telescope(&opts.mount.device).ok();
 
         match cam_mode {
             CameraMode::LiveStacking =>
@@ -202,7 +202,7 @@ impl TakingPicturesMode {
                 options:        opts.guiding.clone(),
                 dither_exp_sum: 0.0,
                 simple:         None,
-                external:       Some(Arc::clone(&core.ext_guider)),
+                external:       Some(Arc::clone(&engine.ext_guider)),
             })
         } else {
             None
@@ -210,7 +210,7 @@ impl TakingPicturesMode {
 
         let autofocuser = if working_with_light_frames && opts.focuser.is_used() {
             Some(AutoFocuser {
-                device:     core.cur_devices.focuser().ok_or_else(|| eyre::eyre!("Focuser not found"))?,
+                device:     engine.cur_devices.focuser().ok_or_else(|| eyre::eyre!("Focuser not found"))?,
                 options:    opts.focuser.clone(),
                 exp_sum:    0.0,
                 start_temp: None,
@@ -221,7 +221,7 @@ impl TakingPicturesMode {
         };
 
         let live_stacking = if cam_mode == CameraMode::LiveStacking {
-            Some(Arc::clone(&core.live_stacking))
+            Some(Arc::clone(&engine.live_stacking))
         } else {
             None
         };
@@ -232,7 +232,7 @@ impl TakingPicturesMode {
             } else {
                 ImageStackingMode::Average
             };
-            core.live_stacking.prepare_for_work(image_stacker_mode);
+            engine.live_stacking.prepare_for_work(image_stacker_mode);
         }
 
         let raw_stacker_mode = if cam_options.frame.frame_type == FrameType::Flats {
@@ -244,10 +244,10 @@ impl TakingPicturesMode {
         Ok(Self {
             state:             State::Common,
             fn_gen:            Arc::new(Mutex::new(SeqFileNameGen::new())),
-            events:            Arc::clone(&core.events),
+            events:            Arc::clone(&engine.events),
             raw_stacker:       RawStacker::new(raw_stacker_mode),
-            options:           Arc::clone(&core.options),
-            raw_histogram:     Arc::clone(&core.cur_frame.raw_hist),
+            options:           Arc::clone(&engine.options),
+            raw_histogram:     Arc::clone(&engine.cur_frame.raw_hist),
             next_job:          None,
             ref_stars:         None,
             out_file_names:    OutFileNames::default(),
@@ -972,11 +972,11 @@ impl TakingPicturesMode {
             // Start next job/mode
             match self.next_job.take() {
                 Some(NextJob::MountCalibration) => {
-                    let start_mode_mnt_calibr_fun = move |_core: &Arc<Core>, mode: &mut ModeData| -> eyre::Result<()> {
+                    let start_mode_mnt_calibr_fun = move |_engine: &Arc<Engine>, mode: &mut ModeData| -> eyre::Result<()> {
                         mode.active.abort()?;
                         let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
                         let mut new_mode = MountCalibrMode::new(
-                            _core,
+                            _engine,
                             Some(prev_mode)
                         )?;
                         new_mode.start()?;
@@ -998,11 +998,11 @@ impl TakingPicturesMode {
 
                 Some(NextJob::Autofocus) => {
                     // Start autofocus mode
-                    let start_focusing_fun = move |_core: &Arc<Core>, mode: &mut ModeData| -> eyre::Result<()> {
+                    let start_focusing_fun = move |_engine: &Arc<Engine>, mode: &mut ModeData| -> eyre::Result<()> {
                         mode.active.abort()?;
                         let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
                         let mut new_mode = FocusingMode::new(
-                            _core,
+                            _engine,
                             Some(prev_mode),
                             false,
                             FocusingErrorReaction::IgnoreAndExit

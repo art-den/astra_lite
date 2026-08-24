@@ -83,13 +83,13 @@ struct CalibrAttempt {
 
 impl MountCalibrMode {
     pub fn new(
-        core:      &Core,
+        engine:    &Engine,
         next_mode: Option<Box<dyn Mode + Sync + Send>>,
     ) -> eyre::Result<Self> {
-        let opts = core.options.read().unwrap();
+        let opts = engine.options.read().unwrap();
 
-        let camera = core.cur_devices.camera_or_err()?;
-        let telescope = core.cur_devices.telescope_or_err()?;
+        let camera = engine.cur_devices.camera_or_err()?;
+        let telescope = engine.cur_devices.telescope_or_err()?;
 
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;

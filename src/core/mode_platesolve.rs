@@ -30,10 +30,10 @@ pub struct PlatesolveMode {
 }
 
 impl PlatesolveMode {
-    pub fn new(core: &Core) -> eyre::Result<Self> {
-        let camera = core.cur_devices.camera_or_err()?;
-        let mount = core.cur_devices.telescope_or_err()?;
-        let opts = core.options.read().unwrap();
+    pub fn new(engine: &Engine) -> eyre::Result<Self> {
+        let camera = engine.cur_devices.camera_or_err()?;
+        let mount = engine.cur_devices.telescope_or_err()?;
+        let opts = engine.options.read().unwrap();
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;
         cam_opts.frame.exp_main = opts.plate_solver.exposure;
@@ -46,10 +46,10 @@ impl PlatesolveMode {
         let plate_solver = PlateSolver::new(opts.plate_solver.solver);
         Ok(Self {
             state:     State::None,
-            hal:       Arc::clone(&core.hal),
-            events:    Arc::clone(&core.events),
-            cur_frame: Arc::clone(&core.cur_frame),
-            options:   Arc::clone(&core.options),
+            hal:       Arc::clone(&engine.hal),
+            events:    Arc::clone(&engine.events),
+            cur_frame: Arc::clone(&engine.cur_frame),
+            options:   Arc::clone(&engine.options),
             ps_opts:   opts.plate_solver.clone(),
             camera,
             mount,

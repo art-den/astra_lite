@@ -25,7 +25,7 @@ use super::sky_map::{data::Observer, widget::SkymapWidget};
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,
-    core:    &Arc<Core>,
+    engine:  &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();
     exec_and_show_error(Some(window), || {
@@ -45,7 +45,7 @@ pub fn init_ui(
     let obj = Rc::new(MapUi {
         widgets,
         ui_options:    RefCell::new(ui_options),
-        core:          Arc::clone(core),
+        engine:        Arc::clone(engine),
         window:        window.clone(),
         main_ui:       Rc::clone(main_ui),
         excl:          ExclusiveCaller::new(),
@@ -283,7 +283,7 @@ struct Widgets {
 struct MapUi {
     widgets:       Widgets,
     ui_options:    RefCell<UiOptions>,
-    core:          Arc<Core>,
+    engine:        Arc<Engine>,
     window:        gtk::ApplicationWindow,
     main_ui:       Rc<MainUi>,
     excl:          ExclusiveCaller,
@@ -608,7 +608,7 @@ impl MapUi {
     }
 
     fn create_observer(&self) -> Observer {
-        let sky_map_options = self.core.options.read().unwrap().site.clone();
+        let sky_map_options = self.engine.options.read().unwrap().site.clone();
         Observer {
             latitude: degree_to_radian(sky_map_options.latitude),
             longitude: degree_to_radian(sky_map_options.longitude),
@@ -646,9 +646,9 @@ impl MapUi {
 
             let cam_frame = if show_ccd {
                 || -> Option<CameraFrame> {
-                    let camera = self.core.cur_devices.camera()?;
+                    let camera = self.engine.cur_devices.camera()?;
                     if !camera.is_active().unwrap_or(false) { return None; }
-                    let options = self.core.options.read().unwrap();
+                    let options = self.engine.options.read().unwrap();
                     let focal_len = options.telescope.real_focal_length();
                     if focal_len <= 0.1 { return None; }
                     let (sensor_width, sensor_height) = camera.ccd_size().ok()?;
@@ -673,7 +673,7 @@ impl MapUi {
             };
 
             let telescope_pos = || -> Option<EqCoord> {
-                let telescope = self.core.cur_devices.telescope()?;
+                let telescope = self.engine.cur_devices.telescope()?;
                 let (ra, dec) = telescope.eq_coord().ok()?;
                 Some(EqCoord {
                     ra: hour_to_radian(ra),
@@ -1243,7 +1243,7 @@ impl MapUi {
             GotoConfig::GotoPlateSolveAndCorrect
         };
         exec_and_show_error(Some(&self.window), || {
-            self.core.start_goto_coord(coord, config)?;
+            self.engine.start_goto_coord(coord, config)?;
             Ok(())
         });
     }

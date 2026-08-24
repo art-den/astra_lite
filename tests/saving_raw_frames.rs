@@ -12,14 +12,14 @@ const EXPECTED_FRAME_COUNT: usize = 5;
 const EVENT_TIMEOUT_SECS: i64 = 20;
 
 /// Connects to the HAL server and selects the first available camera.
-fn connect_hal(core: &Core) {
-    let mut options = core.options.write().unwrap();
+fn connect_hal(engine: &Engine) {
+    let mut options = engine.options.write().unwrap();
 
     #[cfg(target_os = "linux")]
     {
         options.indi.address = "localhost".to_string();
         options.indi.remote = true;
-        let indi_hal = core.hal.indi_impl();
+        let indi_hal = engine.hal.indi_impl();
         indi_hal.connect(
             options.indi.remote,
             &options.indi.address,
@@ -31,20 +31,20 @@ fn connect_hal(core: &Core) {
 
     #[cfg(target_os = "windows")]
     {
-        let aa_hal = core.hal.ascom_alpaca_impl();
+        let aa_hal = engine.hal.ascom_alpaca_impl();
         aa_hal.connect(&options.ascom_alpaca.address).expect("connecting to ASCOM Alpaca");
         std::thread::sleep(Duration::from_secs(1));
         drop(options);
     }
 
     #[cfg(target_os = "linux")]
-    let hal_impl = core.hal.indi_impl();
+    let hal_impl = engine.hal.indi_impl();
     #[cfg(target_os = "windows")]
-    let hal_impl = core.hal.ascom_alpaca_impl();
+    let hal_impl = engine.hal.ascom_alpaca_impl();
 
     let all_cameras = hal_impl.devices(DeviceType::CAMERA).expect("requesting camera list");
     assert!(all_cameras.len() > 0, "At least one camera must be connected");
-    core.cur_devices.change_camera(&all_cameras[0].id);
+    engine.cur_devices.change_camera(&all_cameras[0].id);
     drop(all_cameras);
 }
 
@@ -100,8 +100,8 @@ fn validate_fits_frame(
 #[test]
 #[serial_test::serial]
 fn saving_raw_frames() {
-    let core = Core::new();
-    connect_hal(&core);
+    let engine = Engine::new();
+    connect_hal(&engine);
 
     // Prepare a unique temporary output directory for raw frames
     let random_suffix = format!("{:x}", rand::random::<u32>());
@@ -110,7 +110,7 @@ fn saving_raw_frames() {
     std::fs::create_dir_all(&out_dir).expect("creating temp output dir");
 
     // Configure 1-second exposure, Lights frame type, and 5-frame sequence
-    let mut opts = core.options.write().unwrap();
+    let mut opts = engine.options.write().unwrap();
     opts.cam.frame.set_exposure(EXPOSURE_SECS);
     opts.cam.frame.frame_type = FrameType::Lights;
     opts.raw_frames.use_cnt = true;
@@ -119,8 +119,8 @@ fn saving_raw_frames() {
     opts.raw_frames.create_master = false;  // skip master creation for the test
     drop(opts);
 
-    core.check_before_saving_raw_or_live_stacking().unwrap();
-    core.start_saving_raw_frames().unwrap();
+    engine.check_before_saving_raw_or_live_stacking().unwrap();
+    engine.start_saving_raw_frames().unwrap();
 
     // Shared state for the event handler
     #[derive(Default)]
@@ -135,7 +135,7 @@ fn saving_raw_frames() {
     // Subscribe to frame processing events from Core.
     // The pipeline emits: ShotProcessingStarted -> RawFrameInfo -> Image -> PreviewFrame -> ShotProcessingFinished.
     // For SavingRawFrames this cycle repeats `frame_cnt` times.
-    core.events.connect({
+    engine.events.connect({
         let shared_state = Arc::clone(&shared_state);
         move |event| {
             if let Event::FrameProcessing(FrameProcessResult { data, .. }) = &event {
@@ -237,13 +237,13 @@ fn saving_raw_frames() {
 
     // Verify the current image is not empty
     assert!(
-        !core.cur_frame.image.read().unwrap().is_empty(),
+        !engine.cur_frame.image.read().unwrap().is_empty(),
         "current frame image must not be empty"
     );
 
     // Verify the core has returned to WaitingMode
     assert_eq!(
-        core.mode().active.kind(),
+        engine.mode().active.kind(),
         ModeKind::Waiting,
         "core should be in WaitingMode after SavingRawFrames completes"
     );
@@ -257,8 +257,8 @@ fn saving_raw_frames() {
 #[test]
 #[serial_test::serial]
 fn saving_raw_frames_with_master() {
-    let core = Core::new();
-    connect_hal(&core);
+    let engine = Engine::new();
+    connect_hal(&engine);
 
     // Prepare a unique temporary output directory for raw frames
     let random_suffix = format!("{:x}", rand::random::<u32>());
@@ -267,7 +267,7 @@ fn saving_raw_frames_with_master() {
     std::fs::create_dir_all(&out_dir).expect("creating temp output dir");
 
     // Configure 1-second exposure, Darks frame type, and 5-frame sequence
-    let mut opts = core.options.write().unwrap();
+    let mut opts = engine.options.write().unwrap();
     opts.cam.frame.set_exposure(EXPOSURE_SECS);
     opts.cam.frame.frame_type = FrameType::Darks;
     opts.raw_frames.use_cnt = true;
@@ -276,8 +276,8 @@ fn saving_raw_frames_with_master() {
     opts.raw_frames.create_master = true;
     drop(opts);
 
-    core.check_before_saving_raw_or_live_stacking().unwrap();
-    core.start_saving_raw_frames().unwrap();
+    engine.check_before_saving_raw_or_live_stacking().unwrap();
+    engine.start_saving_raw_frames().unwrap();
 
     #[derive(Default)]
     struct State {
@@ -290,7 +290,7 @@ fn saving_raw_frames_with_master() {
 
     let shared_state = Arc::new(Mutex::new(State::default()));
 
-    core.events.connect({
+    engine.events.connect({
         let shared_state = Arc::clone(&shared_state);
         move |event| {
             if let Event::FrameProcessing(FrameProcessResult { data, .. }) = &event {
@@ -419,13 +419,13 @@ fn saving_raw_frames_with_master() {
 
     // Verify the current image is not empty
     assert!(
-        !core.cur_frame.image.read().unwrap().is_empty(),
+        !engine.cur_frame.image.read().unwrap().is_empty(),
         "current frame image must not be empty"
     );
 
     // Verify the core has returned to WaitingMode
     assert_eq!(
-        core.mode().active.kind(),
+        engine.mode().active.kind(),
         ModeKind::Waiting,
         "core should be in WaitingMode after SavingRawFrames completes"
     );
@@ -441,8 +441,8 @@ fn saving_raw_frames_with_master() {
 fn saving_raw_frames_with_abort_and_resume() {
     const ABORT_AFTER_FRAMES: usize = 3;
 
-    let core = Core::new();
-    connect_hal(&core);
+    let engine = Engine::new();
+    connect_hal(&engine);
 
     // Prepare a unique temporary output directory for raw frames
     let random_suffix = format!("{:x}", rand::random::<u32>());
@@ -451,7 +451,7 @@ fn saving_raw_frames_with_abort_and_resume() {
     std::fs::create_dir_all(&out_dir).expect("creating temp output dir");
 
     // Configure 1-second exposure, Lights frame type, and 5-frame sequence
-    let mut opts = core.options.write().unwrap();
+    let mut opts = engine.options.write().unwrap();
     opts.cam.frame.set_exposure(EXPOSURE_SECS);
     opts.cam.frame.frame_type = FrameType::Lights;
     opts.raw_frames.use_cnt = true;
@@ -460,8 +460,8 @@ fn saving_raw_frames_with_abort_and_resume() {
     opts.raw_frames.create_master = false;
     drop(opts);
 
-    core.check_before_saving_raw_or_live_stacking().unwrap();
-    core.start_saving_raw_frames().unwrap();
+    engine.check_before_saving_raw_or_live_stacking().unwrap();
+    engine.start_saving_raw_frames().unwrap();
 
     #[derive(Default)]
     struct State {
@@ -473,7 +473,7 @@ fn saving_raw_frames_with_abort_and_resume() {
 
     let shared_state = Arc::new(Mutex::new(State::default()));
 
-    core.events.connect({
+    engine.events.connect({
         let shared_state = Arc::clone(&shared_state);
         move |event| {
             if let Event::FrameProcessing(FrameProcessResult { data, .. }) = &event {
@@ -528,7 +528,7 @@ fn saving_raw_frames_with_abort_and_resume() {
         if state.finished_count >= ABORT_AFTER_FRAMES {
             drop(state);
             println!("Aborting after {} frames…", ABORT_AFTER_FRAMES);
-            core.abort_active_mode();
+            engine.abort_active_mode();
             break;
         }
 
@@ -543,7 +543,7 @@ fn saving_raw_frames_with_abort_and_resume() {
 
     // Verify core has returned to WaitingMode
     assert_eq!(
-        core.mode().active.kind(),
+        engine.mode().active.kind(),
         ModeKind::Waiting,
         "core should be in WaitingMode after abort"
     );
@@ -557,7 +557,7 @@ fn saving_raw_frames_with_abort_and_resume() {
     }
 
     println!("Resuming capture…");
-    core.continue_prev_mode().expect("resuming previous mode");
+    engine.continue_prev_mode().expect("resuming previous mode");
 
     loop {
         std::thread::sleep(Duration::from_secs(1));
@@ -618,13 +618,13 @@ fn saving_raw_frames_with_abort_and_resume() {
 
     // Verify the current image is not empty
     assert!(
-        !core.cur_frame.image.read().unwrap().is_empty(),
+        !engine.cur_frame.image.read().unwrap().is_empty(),
         "current frame image must not be empty"
     );
 
     // Verify the core has returned to WaitingMode
     assert_eq!(
-        core.mode().active.kind(),
+        engine.mode().active.kind(),
         ModeKind::Waiting,
         "core should be in WaitingMode after SavingRawFrames completes"
     );

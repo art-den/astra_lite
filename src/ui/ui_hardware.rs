@@ -12,20 +12,20 @@ use itertools::Itertools;
 use chrono::prelude::*;
 use macros::FromBuilder;
 use crate::{
-    core::{engine::Core, events::Event}, guiding::{external_guider::ExtGuiderType, phd2}, hal::{DeviceType, HalImpl, HalState, events::HalEvent, indi::{self, sexagesimal_to_value, value_to_sexagesimal}}, options::*,
+    core::{engine::Engine, events::Event}, guiding::{external_guider::ExtGuiderType, phd2}, hal::{DeviceType, HalImpl, HalState, events::HalEvent, indi::{self, sexagesimal_to_value, value_to_sexagesimal}}, options::*,
 };
 use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
 
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,
-    core:    &Arc<Core>,
+    engine:  &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
-    let indi_hal = core.hal.indi_impl();
+    let indi_hal = engine.hal.indi_impl();
     let drivers = indi_hal.drivers();
 
     if drivers.groups.is_empty() {
-        let mut options = core.options.write().unwrap();
+        let mut options = engine.options.write().unwrap();
         options.indi.remote = true; // force remote mode if no devices info
     }
 
@@ -44,7 +44,7 @@ pub fn init_ui(
     widgets.indi_ctrl.bx_devices_ctrl.add(indi_widget.widget());
 
     let obj = Rc::new(HardwareUi {
-        core:         Arc::clone(core),
+        engine:       Arc::clone(engine),
         indi_state:   RefCell::new(HalState::Disconnected),
         aa_state:     RefCell::new(HalState::Disconnected),
         is_remote:    Cell::new(false),
@@ -166,7 +166,7 @@ struct Widgets {
 struct HardwareUi {
     widgets:      Widgets,
     main_ui:      Rc<MainUi>,
-    core:         Arc<Core>,
+    engine:       Arc<Engine>,
     window:       gtk::ApplicationWindow,
     indi_state:   RefCell<HalState>,
     aa_state:     RefCell<HalState>,
@@ -265,21 +265,21 @@ impl UiModule for HardwareUi {
 
     fn on_app_closing(&self) {
         if !self.is_remote.get() {
-            let indi = self.core.hal.indi_impl().indi();
+            let indi = self.engine.hal.indi_impl().indi();
             _ = indi.command_enable_all_devices(false, true, Some(2000));
         }
 
         log::info!("Stop connection to PHD2...");
-        _ = self.core.ext_guider.phd2_conn().stop();
+        _ = self.engine.ext_guider.phd2_conn().stop();
         log::info!("Done!");
 
-        self.core.ext_guider.phd2_conn().disconnect_all_event_handlers();
+        self.engine.ext_guider.phd2_conn().disconnect_all_event_handlers();
     }
 
     fn on_tab_changed(&self, from: TabPage, to: TabPage) {
         self.indi_widget.set_enabled(to == TabPage::Hardware);
         if from == TabPage::Hardware {
-            let mut options = self.core.options.write().unwrap();
+            let mut options = self.engine.options.write().unwrap();
             self.get_telescope_options(&mut options);
             self.get_site_options(&mut options);
         }
@@ -308,7 +308,7 @@ impl UiModule for HardwareUi {
                 if let HalState::Error(err) = &state {
                     self.add_log_record(&Some(Utc::now()), "", &err)
                 }
-                *self.indi_state.borrow_mut() = self.core.hal.indi_impl().state().clone();
+                *self.indi_state.borrow_mut() = self.engine.hal.indi_impl().state().clone();
 
                 #[cfg(windows)] {
                     *self.aa_state.borrow_mut() = self.core.hal.ascom_alpaca_impl().state().clone();
@@ -341,7 +341,7 @@ impl HardwareUi {
         let (main_thread_sender, main_thread_receiver) = async_channel::unbounded();
 
         let sender = main_thread_sender.clone();
-        self.core.hal.indi_impl().indi().connect_event_handler(move |event| {
+        self.engine.hal.indi_impl().indi().connect_event_handler(move |event| {
             _ = sender.send_blocking(event);
         });
 
@@ -384,32 +384,32 @@ impl HardwareUi {
 
         self.widgets.telescope.spb_foc_len.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.core.options.try_write() else { return; };
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 let value = sb.value();
                 if f64::abs(options.telescope.focal_len - value) < 0.1 { return; }
                 options.telescope.focal_len = value;
                 drop(options);
-                self_.core.events.send(Event::TelescopeFocalLenChanged(value));
+                self_.engine.events.send(Event::TelescopeFocalLenChanged(value));
             })
         );
 
         self.widgets.telescope.spb_barlow.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.core.options.try_write() else { return; };
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 options.telescope.barlow = sb.value();
                 drop(options);
-                self_.core.events.send(Event::TelescopeBarlowChanged);
+                self_.engine.events.send(Event::TelescopeBarlowChanged);
             })
         );
 
         self.widgets.telescope.spb_guid_foc_len.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.core.options.try_write() else { return; };
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 let value = sb.value();
                 if f64::abs(options.guiding.foc_len - value) < 0.1 { return; }
                 options.guiding.foc_len = value;
                 drop(options);
-                self_.core.events.send(Event::GuiderFocalLenChanged(value));
+                self_.engine.events.send(Event::GuiderFocalLenChanged(value));
             })
         );
 
@@ -433,7 +433,7 @@ impl HardwareUi {
 
         // Connect PHD2 events
         let sender_clone = sender.clone();
-        self.core.ext_guider.phd2_conn().connect_event_handler(move |event| {
+        self.engine.ext_guider.phd2_conn().connect_event_handler(move |event| {
             sender_clone.send_blocking(HardwareEvent::Phd2(event)).unwrap();
         });
 
@@ -603,7 +603,7 @@ impl HardwareUi {
 
         let indi_connected = *indi_state == HalState::Connected;
         let indi_disconnected = matches!(*indi_state, HalState::Disconnected|HalState::Error(_));
-        let phd2_working = self.core.ext_guider.phd2_conn().is_working();
+        let phd2_working = self.engine.ext_guider.phd2_conn().is_working();
         enable_actions(&self.window, &[
             ("conn_indi",    conn_en(&*indi_state)),
             ("disconn_indi", disconn_en(&*indi_state)),
@@ -640,7 +640,7 @@ impl HardwareUi {
         let aux1_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_aux1_drivers);
         let aux2_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_aux2_drivers);
 
-        let indi_drivers = self.core.hal.indi_impl().drivers();
+        let indi_drivers = self.engine.hal.indi_impl().drivers();
 
         self.widgets.indi_drv.chb_remote.set_sensitive(!indi_drivers.groups.is_empty() && indi_disconnected);
         self.widgets.indi_drv.l_mount_drivers.set_sensitive(mnt_sensitive);
@@ -671,8 +671,8 @@ impl HardwareUi {
     fn handler_action_conn_indi(&self) {
         self.sync_options_from_widgets();
         exec_and_show_error(Some(&self.window), || {
-            let indi_hal = self.core.hal.indi_impl();
-            let options = self.core.options.read().unwrap();
+            let indi_hal = self.engine.hal.indi_impl();
+            let options = self.engine.options.read().unwrap();
             indi_hal.connect(
                 options.indi.remote,
                 &options.indi.address,
@@ -691,7 +691,7 @@ impl HardwareUi {
 
     fn handler_action_disconn_indi(&self) {
         exec_and_show_error(Some(&self.window), || {
-            let indi = self.core.hal.indi_impl().indi();
+            let indi = self.engine.hal.indi_impl().indi();
             if !self.is_remote.get() {
                 log::info!("Disabling all INDI devices before disconnect...");
                 indi.command_enable_all_devices(false, true, Some(2000))?;
@@ -727,7 +727,7 @@ impl HardwareUi {
     fn handler_action_conn_phd2(&self) {
         exec_and_show_error(Some(&self.window), || {
             self.sync_options_from_widgets();
-            self.core.ext_guider.create_and_connect(ExtGuiderType::Phd2)?;
+            self.engine.ext_guider.create_and_connect(ExtGuiderType::Phd2)?;
             self.correct_widgets_by_cur_state();
             Ok(())
         });
@@ -735,7 +735,7 @@ impl HardwareUi {
 
     fn handler_action_disconn_phd2(&self) {
         exec_and_show_error(Some(&self.window), || {
-            self.core.ext_guider.disconnect()?;
+            self.engine.ext_guider.disconnect()?;
             self.correct_widgets_by_cur_state();
             Ok(())
         });
@@ -748,7 +748,7 @@ impl HardwareUi {
             group_name: &str,
             active:     &Option<String>
         ) {
-            let indi_drivers = data.core.hal.indi_impl().drivers();
+            let indi_drivers = data.engine.hal.indi_impl().drivers();
             let Ok(group) = indi_drivers.get_group_by_name(group_name) else { return; };
             let model = gtk::TreeStore::new(&[String::static_type(), String::static_type()]);
             let mut manufacturer_nodes = HashMap::<&str, gtk::TreeIter>::new();
@@ -780,7 +780,7 @@ impl HardwareUi {
             cb.set_active_iter(active_iter.as_ref());
         }
 
-        let options = self.core.options.read().unwrap();
+        let options = self.engine.options.read().unwrap();
         fill_cb_list(self, &self.widgets.indi_drv.cb_mount_drivers,     "Telescopes",    &options.indi.mount);
         fill_cb_list(self, &self.widgets.indi_drv.cb_camera_drivers,    "CCDs",          &options.indi.camera);
         fill_cb_list(self, &self.widgets.indi_drv.cb_guid_cam_drivers,  "CCDs",          &options.indi.guid_cam);
@@ -791,7 +791,7 @@ impl HardwareUi {
     }
 
     fn sync_options_from_widgets(&self) {
-        let mut options = self.core.options.write().unwrap();
+        let mut options = self.engine.options.write().unwrap();
         self.get_options(&mut options);
     }
 
@@ -887,7 +887,7 @@ impl HardwareUi {
         fc.close();
         if resp == gtk::ResponseType::Accept {
             exec_and_show_error(Some(&self.window), || {
-                let indi = self.core.hal.indi_impl().indi();
+                let indi = self.engine.hal.indi_impl().indi();
                 let (_, all_props) = indi.get_properties_list(None);
                 let file_name = fc.file().expect("File name").path().unwrap().with_extension("txt");
                 let mut file = BufWriter::new(File::create(file_name)?);
@@ -910,7 +910,7 @@ impl HardwareUi {
     }
 
     fn update_window_title(&self) {
-        let options = self.core.options.read().unwrap();
+        let options = self.engine.options.read().unwrap();
         let indi_state = self.indi_state.borrow();
         let aa_state = self.aa_state.borrow();
 
@@ -963,7 +963,7 @@ impl HardwareUi {
 
     fn set_switch_property_for_all_device(&self, prop_name: &str, elem_name: &str) {
         exec_and_show_error(Some(&self.window), || {
-            let indi = self.core.hal.indi_impl().indi();
+            let indi = self.engine.hal.indi_impl().indi();
             let devices = indi.get_devices_list();
             for device in devices {
                 indi.command_set_switch_property(
@@ -978,12 +978,12 @@ impl HardwareUi {
 
     fn handler_action_get_site_from_devices(self: &Rc<Self>) {
         exec_and_show_error(Some(&self.window), || {
-            let devices = self.core.hal.devices(DeviceType::TELESCOPE)?;
+            let devices = self.engine.hal.devices(DeviceType::TELESCOPE)?;
 
             let result: Vec<_> = devices
                 .iter()
                 .filter_map(|dev| {
-                    let telescope = self.core.hal.telescope(&dev.id).ok()?;
+                    let telescope = self.engine.hal.telescope(&dev.id).ok()?;
                     let site = telescope.site().ok()?;
                     Some((telescope, site))
                 })

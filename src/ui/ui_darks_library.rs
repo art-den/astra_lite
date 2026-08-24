@@ -11,7 +11,7 @@ use super::{gtk_utils::*, module::*};
 
 pub fn init_ui(
     window: &gtk::ApplicationWindow,
-    core:   &Arc<Core>,
+    engine:   &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();
     exec_and_show_error(Some(window), || {
@@ -31,7 +31,7 @@ pub fn init_ui(
     let obj = Rc::new(DarksLibraryUI {
         widgets,
         window:     window.clone(),
-        core:       Arc::clone(core),
+        engine:     Arc::clone(engine),
         ui_options: RefCell::new(ui_options),
     });
 
@@ -557,7 +557,7 @@ struct Widgets {
 pub struct DarksLibraryUI {
     widgets:    Widgets,
     window:     gtk::ApplicationWindow,
-    core:       Arc<Core>,
+    engine:     Arc<Engine>,
     ui_options: RefCell<UiOptions>,
 }
 
@@ -962,7 +962,7 @@ impl DarksLibraryUI {
 
     fn connect_core_events(self: &Rc<Self>) {
         let (sender, receiver) = async_channel::unbounded();
-        self.core.events.connect(move |evt| {
+        self.engine.events.connect(move |evt| {
             sender.send_blocking(evt).unwrap();
         });
         glib::spawn_future_local(clone!(@weak self as self_ => async move {
@@ -973,7 +973,7 @@ impl DarksLibraryUI {
     }
 
     fn correct_widgets_enable_state(&self) {
-        let mode_kind = self.core.mode().active.kind();
+        let mode_kind = self.engine.mode().active.kind();
         let is_waiting = mode_kind == ModeKind::Waiting;
         let is_live_view = mode_kind == ModeKind::LiveView;
         let saving_defect_pixels =
@@ -1036,8 +1036,8 @@ impl DarksLibraryUI {
 
     fn show_info(&self) {
         let ui_options = self.ui_options.borrow();
-        let Some(camera) = self.core.cur_devices.camera() else { return; };
-        let options = self.core.options.read().unwrap();
+        let Some(camera) = self.engine.cur_devices.camera() else { return; };
+        let options = self.engine.options.read().unwrap();
 
         let defect_pixels_program = ui_options.defect_pixels.create_program(&options.cam, &camera);
         if let Ok(defect_pixels_program) = defect_pixels_program {
@@ -1075,12 +1075,12 @@ impl DarksLibraryUI {
 
     fn start(&self, mode: DarkLibMode) {
         exec_and_show_error(Some(&self.window), || {
-            let camera = self.core.cur_devices.camera_or_err()?;
+            let camera = self.engine.cur_devices.camera_or_err()?;
 
             self.get_options();
             self.save_options();
 
-            let options = self.core.options.read().unwrap();
+            let options = self.engine.options.read().unwrap();
             let ui_options = self.ui_options.borrow();
 
             let program = match mode {
@@ -1094,7 +1094,7 @@ impl DarksLibraryUI {
             drop(ui_options);
             drop(options);
 
-            self.core.start_creating_dark_library(mode, &program)?;
+            self.engine.start_creating_dark_library(mode, &program)?;
             Ok(())
         });
     }
@@ -1132,7 +1132,7 @@ impl DarksLibraryUI {
     }
 
     fn handler_action_open_dark_lib_folder(&self) {
-        let options = self.core.options.read().unwrap();
+        let options = self.engine.options.read().unwrap();
         let lib_path = &options.calibr.dark_library_path.to_str().unwrap_or_default();
         let uri = "file:///".to_string() + lib_path;
         drop(options);
@@ -1148,7 +1148,7 @@ impl DarksLibraryUI {
     }
 
     fn handler_action_stop_creating_defect_pixels_files(&self) {
-        self.core.abort_active_mode();
+        self.engine.abort_active_mode();
     }
 
     fn handler_action_create_dark_files(&self) {
@@ -1156,7 +1156,7 @@ impl DarksLibraryUI {
     }
 
     fn handler_action_stop_dark_files(&self) {
-        self.core.abort_active_mode();
+        self.engine.abort_active_mode();
     }
 
     fn handler_action_create_bias_files(&self) {
@@ -1164,6 +1164,6 @@ impl DarksLibraryUI {
     }
 
     fn handler_action_stop_bias_files(&self) {
-        self.core.abort_active_mode();
+        self.engine.abort_active_mode();
     }
 }

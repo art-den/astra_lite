@@ -6,7 +6,7 @@ use std::{
 
 use astra_lite::{
     core::{
-        engine::{Core, ModeKind},
+        engine::{Engine, ModeKind},
         events::Event,
         frame_processing::{FrameProcessResult, FrameProcessResultData},
     },
@@ -176,7 +176,7 @@ fn temp_fits_path() -> PathBuf {
 /// Runs the full frame-processing test with the given CFA type.
 fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
     // Create system core (no camera required).
-    let core = Core::new();
+    let engine = Engine::new();
 
     // Write synthetic FITS to disk.
     let fits_path = temp_fits_path();
@@ -188,7 +188,7 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
     let shared_state = Arc::new(Mutex::new(State::default()));
 
     // Subscribe to frame-processing events.
-    core.events.connect({
+    engine.events.connect({
         let shared_state = Arc::clone(&shared_state);
         move |event| {
             if let Event::FrameProcessing(FrameProcessResult { data, .. }) = &event {
@@ -319,7 +319,7 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
     println!("Opening synthetic FITS: {:?}", fits_path);
 
     // Trigger frame processing.
-    core
+    engine
         .open_image_from_file(&fits_path)
         .expect("failed to open image from file");
 
@@ -443,7 +443,7 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
 
     // --- Image dimensions (read from the core's current frame) ---
 
-    let cur_image = core.cur_frame.image.read().unwrap();
+    let cur_image = engine.cur_frame.image.read().unwrap();
     let img_w = cur_image.width();
     let img_h = cur_image.height();
     println!("Image dimensions: {} x {}", img_w, img_h);
@@ -617,19 +617,19 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
 
     // Verify core.cur_frame.image is not empty.
     assert!(
-        !core.cur_frame.image.read().unwrap().is_empty(),
+        !engine.cur_frame.image.read().unwrap().is_empty(),
         "core.cur_frame.image must not be empty after processing"
     );
 
     // Verify core is still in WaitingMode (OpeningImgFile does not switch modes).
     assert_eq!(
-        core.mode().active.kind(),
+        engine.mode().active.kind(),
         ModeKind::Waiting,
         "core should remain in WaitingMode after opening an image file"
     );
 
     // Cleanup.
-    core.stop();
+    engine.stop();
 }
 
 /// Tests the full frame-processing pipeline with a color Bayer (RGGB) RAW image.

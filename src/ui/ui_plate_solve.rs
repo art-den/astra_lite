@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{engine::{Core, ModeKind}, events::*},
+    core::{engine::{Engine, ModeKind}, events::*},
     hal::{DeviceType, events::HalEvent},
     options::*,
 };
@@ -14,14 +14,14 @@ use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,
-    core:    &Arc<Core>,
+    engine:  &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/platesolve.ui"));
     let obj = Rc::new(PlateSolveUi {
         widgets,
         window:          window.clone(),
         main_ui:         Rc::clone(main_ui),
-        core:            Arc::clone(core),
+        engine:          Arc::clone(engine),
         delayed_actions: DelayedActions::new(200),
     });
 
@@ -67,7 +67,7 @@ struct PlateSolveUi {
     widgets:         Widgets,
     main_ui:         Rc<MainUi>,
     window:          gtk::ApplicationWindow,
-    core:            Arc<Core>,
+    engine:          Arc<Engine>,
     delayed_actions: DelayedActions<DelayedAction>,
 }
 
@@ -112,7 +112,7 @@ impl UiModule for PlateSolveUi {
     }
 
     fn on_app_closing(&self) {
-        let mut options = self.core.options.write().unwrap();
+        let mut options = self.engine.options.write().unwrap();
         let cur_cam_device = options.cam.device_id.to_string();
         self.store_options_for_camera(&cur_cam_device, &mut options);
         drop(options);
@@ -176,8 +176,8 @@ impl PlateSolveUi {
     }
 
     fn correct_widgets_props(&self) {
-        let camera = self.core.cur_devices.camera();
-        let mount = self.core.cur_devices.telescope();
+        let camera = self.engine.cur_devices.camera();
+        let mount = self.engine.cur_devices.telescope();
 
         let cam_active = camera
             .as_ref()
@@ -187,7 +187,7 @@ impl PlateSolveUi {
             .and_then(|cam| cam.is_active().ok())
             .unwrap_or(false);
 
-        let mode = self.core.mode();
+        let mode = self.engine.mode();
         let mode_kind = mode.active.kind();
         let waiting = mode_kind == ModeKind::Waiting;
         let live_view = mode_kind == ModeKind::LiveView;
@@ -206,7 +206,7 @@ impl PlateSolveUi {
     }
 
     fn handler_camera_changed(&self, from: &str, to: &str) {
-        let mut options = self.core.options.write().unwrap();
+        let mut options = self.engine.options.write().unwrap();
         self.get_options(&mut options);
         if !from.is_empty() {
             self.store_options_for_camera(from, &mut options);
@@ -255,7 +255,7 @@ impl PlateSolveUi {
         self.main_ui.get_all_options();
 
         exec_and_show_error(Some(&self.window), || {
-            self.core.start_capture_and_platesolve()?;
+            self.engine.start_capture_and_platesolve()?;
             Ok(())
         });
     }
@@ -264,7 +264,7 @@ impl PlateSolveUi {
         self.main_ui.get_all_options();
 
         exec_and_show_error(Some(&self.window), || {
-            self.core.start_goto_image()?;
+            self.engine.start_goto_image()?;
             Ok(())
         });
     }

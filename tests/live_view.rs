@@ -17,15 +17,15 @@ const WATCHDOG_TIMEOUT_SECS: i64 = 5;
 #[test]
 #[serial_test::serial]
 fn live_view() {
-    // Create system core
-    let core = Core::new();
-    let mut options = core.options.write().unwrap();
+    // Create system engine
+    let engine = Engine::new();
+    let mut options = engine.options.write().unwrap();
 
     #[cfg(target_os = "linux")]
     {
         options.indi.address = "localhost".to_string();
         options.indi.remote = true;
-        let indi_hal = core.hal.indi_impl();
+        let indi_hal = engine.hal.indi_impl();
         indi_hal.connect(
             options.indi.remote,
             &options.indi.address,
@@ -45,18 +45,18 @@ fn live_view() {
 
     // Select the only connected camera and make it active in Core
     #[cfg(target_os = "linux")]
-    let hal_impl = core.hal.indi_impl();
+    let hal_impl = engine.hal.indi_impl();
     #[cfg(target_os = "windows")]
     let hal_impl = core.hal.ascom_alpaca_impl();
 
     let all_cameras = hal_impl.devices(DeviceType::CAMERA).expect("requesting camera list");
     assert!(all_cameras.len() > 0, "At least one camera must be connected");
-    core.cur_devices.change_camera(&all_cameras[0].id);
+    engine.cur_devices.change_camera(&all_cameras[0].id);
     drop(all_cameras);
 
     // Configure exposure for LiveView and start the mode
-    core.options.write().unwrap().cam.frame.set_exposure(EXPOSURE_SECS);
-    core.start_live_view().unwrap();
+    engine.options.write().unwrap().cam.frame.set_exposure(EXPOSURE_SECS);
+    engine.start_live_view().unwrap();
 
     // Shared state for the event handler
     #[derive(Default)]
@@ -69,7 +69,7 @@ fn live_view() {
 
     // Subscribe to frame processing events from Core.
     // LiveView continuously emits: ShotProcessingStarted -> ... -> ShotProcessingFinished.
-    core.events.connect({
+    engine.events.connect({
         let shared_state = Arc::clone(&shared_state);
         move |event| {
             if let Event::FrameProcessing(FrameProcessResult { data, .. }) = &event {
@@ -124,7 +124,7 @@ fn live_view() {
     }
 
     // Stop the core to terminate the LiveView mode.
-    core.stop();
+    engine.stop();
 
     // Verify that at least one frame was processed during the session.
     let state = shared_state.lock().unwrap();
@@ -137,13 +137,13 @@ fn live_view() {
 
     // Verify the current image is not empty.
     assert!(
-        !core.cur_frame.image.read().unwrap().is_empty(),
+        !engine.cur_frame.image.read().unwrap().is_empty(),
         "current frame image must not be empty"
     );
 
     // Verify the core has returned to WaitingMode after being stopped.
     assert_eq!(
-        core.mode().active.kind(),
+        engine.mode().active.kind(),
         ModeKind::Waiting,
         "core should be in WaitingMode after LiveView is stopped"
     );

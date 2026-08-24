@@ -2,7 +2,7 @@ use std::{path::Path, sync::Arc};
 use gtk::{prelude::*, glib, glib::clone};
 use astra_lite::{ui, ui::gtk_utils::exec_and_show_error};
 use astra_lite::{
-    core::engine::Core, options::*, utils::{io_utils::*, log_utils::*}
+    core::engine::Engine, options::*, utils::{io_utils::*, log_utils::*}
 };
 
 fn main() -> eyre::Result<()> {
@@ -58,11 +58,11 @@ fn app_activate_handler(app: &gtk::Application) {
     // Create core
 
     log::info!("Creating core...");
-    let core = Core::new();
+    let engine = Engine::new();
 
     // Register panic handler
 
-    let indi_for_panic = Arc::clone(core.hal.indi_impl().indi());
+    let indi_for_panic = Arc::clone(engine.hal.indi_impl().indi());
     if cfg!(not(debug_assertions)) {
         std::panic::set_hook({
             let logs_dir = logs_dir.clone();
@@ -83,7 +83,7 @@ fn app_activate_handler(app: &gtk::Application) {
 
     exec_and_show_error(None::<&gtk::Window>, || {
         log::info!("Loading options...");
-        let mut options = core.options.write().unwrap();
+        let mut options = engine.options.write().unwrap();
         load_json_from_config_file::<Options>(&mut options, "options")?;
 
         log::info!("Checking options...");
@@ -97,22 +97,22 @@ fn app_activate_handler(app: &gtk::Application) {
     // Create UI
 
     log::info!("Building UI...");
-    ui::ui_main::init_ui(app, &core, &logs_dir);
+    ui::ui_main::init_ui(app, &engine, &logs_dir);
 
     // Connect shutdown signal
 
-    app.connect_shutdown(clone!(@weak core => move |app| {
-        app_shutdown_handler(app, &core);
+    app.connect_shutdown(clone!(@weak engine => move |app| {
+        app_shutdown_handler(app, &engine);
     }));
 }
 
-fn app_shutdown_handler(_app: &gtk::Application, core: &Arc<Core>) {
+fn app_shutdown_handler(_app: &gtk::Application, engine: &Arc<Engine>) {
     log::info!("Application shutdown signal");
 
     // Save options
 
     log::info!("Saving options...");
-    let options = core.options.read().unwrap();
+    let options = engine.options.read().unwrap();
     _ = save_json_to_config::<Options>(&options, "options");
     drop(options);
     log::info!("Options saved");
@@ -120,10 +120,10 @@ fn app_shutdown_handler(_app: &gtk::Application, core: &Arc<Core>) {
     // Stop core
 
     log::info!("Core stopping...");
-    core.stop();
+    engine.stop();
     log::info!("Core stopped");
 
-    dbg!(Arc::strong_count(core));
+    dbg!(Arc::strong_count(engine));
 }
 
 fn panic_handler(

@@ -73,7 +73,7 @@ pub enum NotifyResult {
     Empty,
     ProgressChanges,
     Finished { next_mode: Option<ModeBox> },
-    Exec(Box<dyn FnOnce(&Arc<Core>, &mut ModeData)-> eyre::Result<()> + 'static + Send + Sync>),
+    Exec(Box<dyn FnOnce(&Arc<Engine>, &mut ModeData)-> eyre::Result<()> + 'static + Send + Sync>),
 }
 
 pub struct ModeData {
@@ -94,7 +94,7 @@ impl ModeData {
     }
 }
 
-pub struct Core {
+pub struct Engine {
     pub cur_devices:    Arc<CurDevices>,
     pub hal:            Arc<Hal>,
     pub events:         Arc<EventHandlers>,
@@ -111,13 +111,13 @@ pub struct Core {
 
 }
 
-impl Drop for Core {
+impl Drop for Engine {
     fn drop(&mut self) {
         log::info!("Core dropped");
     }
 }
 
-impl Core {
+impl Engine {
     pub fn new() -> Arc<Self> {
         let hal = Hal::new();
         let events = Arc::new(EventHandlers::new());

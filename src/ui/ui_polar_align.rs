@@ -2,7 +2,7 @@ use std::{rc::Rc, sync::Arc};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{engine::{Core, ModeKind}, events::*, mode_polar_align::{CustomCommand, PolarAlignMode, PolarAlignmentEvent, State}},
+    core::{engine::{Engine, ModeKind}, events::*, mode_polar_align::{CustomCommand, PolarAlignMode, PolarAlignmentEvent, State}},
     hal::{DeviceType, events::HalEvent, indi::degree_to_str_short},
     options::*,
     sky_math::math::*,
@@ -12,14 +12,14 @@ use super::{gtk_utils::{self, *}, module::*, ui_main::*, utils::*};
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,
-    core:    &Arc<Core>,
+    engine:  &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/polar_align.ui"));
     let obj = Rc::new(PolarAlignUi {
         widgets,
         window:          window.clone(),
         main_ui:         Rc::clone(main_ui),
-        core:            Arc::clone(core),
+        engine:          Arc::clone(engine),
         delayed_actions: DelayedActions::new(200),
     });
 
@@ -73,7 +73,7 @@ struct PolarAlignUi {
     widgets:         Widgets,
     main_ui:         Rc<MainUi>,
     window:          gtk::ApplicationWindow,
-    core:            Arc<Core>,
+    engine:          Arc<Engine>,
     delayed_actions: DelayedActions<DelayedAction>,
 }
 
@@ -149,7 +149,7 @@ impl UiModule for PolarAlignUi {
                 }
             }
             HalEvent::TelescopeSlewRateListReady(device_id) => {
-                let options = self.core.options.read().unwrap();
+                let options = self.engine.options.read().unwrap();
                 if options.mount.device == **device_id {
                     self.delayed_actions.schedule(DelayedAction::UpdateMountSpeedList);
                 }
@@ -186,12 +186,12 @@ impl PolarAlignUi {
     }
 
     fn correct_widgets_props(&self) {
-        let camera = self.core.cur_devices.camera();
-        let mount = self.core.cur_devices.telescope();
+        let camera = self.engine.cur_devices.camera();
+        let mount = self.engine.cur_devices.telescope();
         let cam_active = camera.and_then(|c| c.is_active().ok()).unwrap_or(false);
         let mnt_active = mount.and_then(|c| c.is_active().ok()).unwrap_or(false);
 
-        let mode = self.core.mode();
+        let mode = self.engine.mode();
         let mode_kind = mode.active.kind();
         drop(mode);
         let waiting = mode_kind == ModeKind::Waiting;
@@ -207,7 +207,7 @@ impl PolarAlignUi {
         self.widgets.chb_auto_refresh.set_sensitive(!polar_align);
 
         let mut allow_refresh = false;
-        if let Ok(Some(result)) = self.core.exec_mode_custom_command(&CustomCommand::GetState)
+        if let Ok(Some(result)) = self.engine.exec_mode_custom_command(&CustomCommand::GetState)
         && let Some(state) = result.downcast_ref::<State>() {
             allow_refresh = matches!(&state, State::WaitForManualRefresh);
         }
@@ -240,7 +240,7 @@ impl PolarAlignUi {
     }
 
     fn update_mount_speed_list(&self) {
-        if let Some(mount) = self.core.cur_devices.telescope() {
+        if let Some(mount) = self.engine.cur_devices.telescope() {
             let list = mount.slew_speed_list().unwrap_or_default();
             self.widgets.cbx_speed.remove_all();
             if !list.is_empty() {
@@ -249,7 +249,7 @@ impl PolarAlignUi {
             for (id, text) in list {
                 self.widgets.cbx_speed.append(Some(&id), &text);
             }
-            let options = self.core.options.read().unwrap();
+            let options = self.engine.options.read().unwrap();
             if options.polar_align.speed.is_some() {
                 self.widgets.cbx_speed.set_active_id(options.polar_align.speed.as_deref());
                 if self.widgets.cbx_speed.active().is_none() {
@@ -271,8 +271,8 @@ impl PolarAlignUi {
         // Pre-start mode check
 
         let check_result = PolarAlignMode::check_before_start(
-            &self.core.hal,
-            &self.core.options
+            &self.engine.hal,
+            &self.engine.options
         );
 
         match check_result {
@@ -308,7 +308,7 @@ impl PolarAlignUi {
         // Start mode
 
         exec_and_show_error(Some(&self.window), || {
-            self.core.start_polar_alignment()?;
+            self.engine.start_polar_alignment()?;
             Ok(())
         });
     }
@@ -316,18 +316,18 @@ impl PolarAlignUi {
     fn handler_action_restart_polar_align(&self) {
         self.main_ui.get_all_options();
         exec_and_show_error(Some(&self.window), || {
-            self.core.exec_mode_custom_command(&CustomCommand::Restart)?;
+            self.engine.exec_mode_custom_command(&CustomCommand::Restart)?;
             Ok(())
         });
     }
 
     fn handler_action_stop_polar_align(&self) {
-        self.core.abort_active_mode();
+        self.engine.abort_active_mode();
     }
 
     fn handler_action_manual_refresh(&self) {
         gtk_utils::exec_and_show_error(Some(&self.window), || {
-            self.core.exec_mode_custom_command(&CustomCommand::ManualRefresh)?;
+            self.engine.exec_mode_custom_command(&CustomCommand::ManualRefresh)?;
             Ok(())
         });
     }

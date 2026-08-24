@@ -60,15 +60,15 @@ fn validate_fits_frame(
 #[test]
 #[serial_test::serial]
 fn live_stacking() {
-    // Create system core
-    let core = Core::new();
-    let mut options = core.options.write().unwrap();
+    // Create system engine
+    let engine = Engine::new();
+    let mut options = engine.options.write().unwrap();
 
     #[cfg(target_os = "linux")]
     {
         options.indi.address = "localhost".to_string();
         options.indi.remote = true;
-        let indi_hal = core.hal.indi_impl();
+        let indi_hal = engine.hal.indi_impl();
         indi_hal.connect(
             options.indi.remote,
             &options.indi.address,
@@ -88,23 +88,23 @@ fn live_stacking() {
 
     // Select the only connected camera and make it active in Core
     #[cfg(target_os = "linux")]
-    let hal_impl = core.hal.indi_impl();
+    let hal_impl = engine.hal.indi_impl();
     #[cfg(target_os = "windows")]
     let hal_impl = core.hal.ascom_alpaca_impl();
 
     let all_cameras = hal_impl.devices(DeviceType::CAMERA).expect("requesting camera list");
     let simulator_camera = all_cameras.iter().find(|c| c.id == "CCD Simulator").expect("CCD simulator");
     println!("Camera = {}", simulator_camera.id);
-    core.cur_devices.change_camera(&simulator_camera.id);
+    engine.cur_devices.change_camera(&simulator_camera.id);
     drop(all_cameras);
 
-    if let Some(camera) = core.cur_devices.camera() {
+    if let Some(camera) = engine.cur_devices.camera() {
         if camera.is_gain_supported().unwrap() {
             // Set maximum gain for camera to get more stars on image.
             // If there are not enough stars in the image,
             // then the calculation of the shift between frames will not work.
             let gain_range = camera.gain_range().unwrap();
-            core.options.write().unwrap().cam.frame.gain = *gain_range.end() as f64;
+            engine.options.write().unwrap().cam.frame.gain = *gain_range.end() as f64;
         }
     }
 
@@ -115,7 +115,7 @@ fn live_stacking() {
     std::fs::create_dir_all(&out_dir).expect("creating temp output dir");
 
     // Configure 5-frame live stacking sequence with original frame saving.
-    let mut opts = core.options.write().unwrap();
+    let mut opts = engine.options.write().unwrap();
     opts.cam.frame.set_exposure(EXPOSURE_SECS);
     opts.live.use_cnt = true;
     opts.live.frame_cnt = EXPECTED_FRAME_COUNT;
@@ -123,8 +123,8 @@ fn live_stacking() {
     opts.raw_frames.out_path = out_dir.clone();
     drop(opts);
 
-    core.check_before_saving_raw_or_live_stacking().unwrap();
-    core.start_live_stacking().unwrap();
+    engine.check_before_saving_raw_or_live_stacking().unwrap();
+    engine.start_live_stacking().unwrap();
 
     // Shared state for the event handler
     #[derive(Default)]
@@ -139,7 +139,7 @@ fn live_stacking() {
     // Subscribe to frame processing events from Core.
     // The pipeline emits: ShotProcessingStarted -> RawFrameInfo -> Image -> PreviewFrame -> ShotProcessingFinished.
     // For LiveStacking this cycle repeats `frame_cnt` times.
-    core.events.connect({
+    engine.events.connect({
         let shared_state = Arc::clone(&shared_state);
         move |event| {
             if let Event::FrameProcessing(FrameProcessResult { data, .. }) = &event {
@@ -249,19 +249,19 @@ fn live_stacking() {
 
     // Verify the live stacking result image is not empty
     assert!(
-        !core.live_stacking.image.read().unwrap().is_empty(),
+        !engine.live_stacking.image.read().unwrap().is_empty(),
         "live stacking result image must not be empty"
     );
 
     // Verify the current image is not empty
     assert!(
-        !core.cur_frame.image.read().unwrap().is_empty(),
+        !engine.cur_frame.image.read().unwrap().is_empty(),
         "current frame image must not be empty"
     );
 
     // Verify the core has returned to WaitingMode
     assert_eq!(
-        core.mode().active.kind(),
+        engine.mode().active.kind(),
         ModeKind::Waiting,
         "core should be in WaitingMode after LiveStacking completes"
     );

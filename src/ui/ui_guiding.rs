@@ -11,7 +11,7 @@ use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,
-    core:    &Arc<Core>,
+    engine:  &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/guiding.ui"));
     let info_widgets = InfoWidgets::new();
@@ -21,7 +21,7 @@ pub fn init_ui(
         info_widgets,
         window:        window.clone(),
         main_ui:       Rc::clone(main_ui),
-        core:          Arc::clone(core),
+        engine:        Arc::clone(engine),
     });
 
     obj.init_widgets();
@@ -75,7 +75,7 @@ struct GuidingUi {
     info_widgets: InfoWidgets,
     main_ui:      Rc<MainUi>,
     window:       gtk::ApplicationWindow,
-    core:         Arc<Core>,
+    engine:       Arc<Engine>,
 }
 
 impl Drop for GuidingUi {
@@ -147,7 +147,7 @@ impl UiModule for GuidingUi {
     }
 
     fn on_app_closing(&self) {
-        let mut options = self.core.options.write().unwrap();
+        let mut options = self.engine.options.write().unwrap();
         let cur_cam_device = options.cam.device_id.clone();
         self.store_options_for_camera(&cur_cam_device, &mut options);
         drop(options);
@@ -216,7 +216,7 @@ impl GuidingUi {
     }
 
     fn correct_widgets_props_impl(&self, cam_device: &str) {
-        let mode = self.core.mode();
+        let mode = self.engine.mode();
         let mode_kind = mode.active.kind();
         drop(mode);
         let can_change_mode =
@@ -229,7 +229,7 @@ impl GuidingUi {
         let by_main_cam = self.widgets.rbtn_guide_main_cam.is_active();
         let by_ext = self.widgets.rbtn_guide_ext.is_active();
 
-        if let Ok(camera) = self.core.hal.camera(cam_device) {
+        if let Ok(camera) = self.engine.hal.camera(cam_device) {
             let exp_range = camera.exposure_range().ok();
             correct_spinbutton_by_range(&self.widgets.spb_mnt_cal_exp, exp_range, 1, Some(1.0));
         }
@@ -256,14 +256,14 @@ impl GuidingUi {
     }
 
     fn correct_widgets_props(&self) {
-        let options = self.core.options.read().unwrap();
+        let options = self.engine.options.read().unwrap();
         let cam_device = options.cam.device_id.clone();
         drop(options);
         self.correct_widgets_props_impl(&cam_device);
     }
 
     fn handler_camera_changed(&self, from: &str, to: &str) {
-        let mut options = self.core.options.write().unwrap();
+        let mut options = self.engine.options.write().unwrap();
         self.get_options(&mut options);
         if !from.is_empty() {
             self.store_options_for_camera(from, &mut options);
@@ -302,13 +302,13 @@ impl GuidingUi {
         self.main_ui.get_all_options();
 
         exec_and_show_error(Some(&self.window), || {
-            self.core.start_mount_calibr()?;
+            self.engine.start_mount_calibr()?;
             Ok(())
         });
     }
 
     fn handler_action_stop_dither_calibr(&self) {
-        self.core.abort_active_mode();
+        self.engine.abort_active_mode();
     }
 
     fn process_ext_guider_event(&self, evt: &ExtGuiderEvent) {
@@ -320,7 +320,7 @@ impl GuidingUi {
             ExtGuiderEvent::DitheringFinishedWithErr(err) =>
                 self.show_ext_guider_error(err),
             ExtGuiderEvent::Connected => {
-                if let Some(state) = self.core.ext_guider.state() {
+                if let Some(state) = self.engine.ext_guider.state() {
                     self.show_ext_guider_state(&state);
                 }
             }

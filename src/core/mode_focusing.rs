@@ -101,14 +101,14 @@ enum CalcResult {
 
 impl FocusingMode {
     pub fn new(
-        core:           &Core,
+        engine:         &Engine,
         next_mode:      Option<Box<dyn Mode + Sync + Send>>,
         prelim_step:    bool,
         error_reaction: FocusingErrorReaction,
     ) -> eyre::Result<Self> {
-        let camera = core.cur_devices.camera_or_err()?;
-        let focuser = core.cur_devices.focuser_or_err()?;
-        let opts = core.options.read().unwrap();
+        let camera = engine.cur_devices.camera_or_err()?;
+        let focuser = engine.cur_devices.focuser_or_err()?;
+        let opts = engine.options.read().unwrap();
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;
         cam_opts.frame.exp_main = opts.focuser.exposure;
@@ -124,7 +124,7 @@ impl FocusingMode {
         log::debug!("Creating autofocus mode. max_try={}", max_try);
 
         Ok(FocusingMode {
-            subscribers:    Arc::clone(&core.events),
+            subscribers:    Arc::clone(&engine.events),
             state:          FocusingState::Undefined,
             f_opts:         opts.focuser.clone(),
             before_pos:     0.0,

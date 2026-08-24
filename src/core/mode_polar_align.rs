@@ -353,10 +353,10 @@ impl PolarAlignMode {
         Ok(warnings.join("\n"))
     }
 
-    pub fn new(core: &Core) -> eyre::Result<Self> {
-        let camera = core.cur_devices.camera_or_err()?;
-        let telescope = core.cur_devices.telescope_or_err()?;
-        let opts = core.options.read().unwrap();
+    pub fn new(engine: &Engine) -> eyre::Result<Self> {
+        let camera = engine.cur_devices.camera_or_err()?;
+        let telescope = engine.cur_devices.telescope_or_err()?;
+        let opts = engine.options.read().unwrap();
 
         let mut cam_opts = opts.cam.clone();
         cam_opts.frame.frame_type = FrameType::Lights;
@@ -375,9 +375,9 @@ impl PolarAlignMode {
             step:        Step::Undefined,
             pa_opts:     opts.polar_align.clone(),
             s_opts:      opts.site.clone(),
-            options:     Arc::clone(&core.options),
-            cur_frame:   Arc::clone(&core.cur_frame),
-            subscribers: Arc::clone(&core.events),
+            options:     Arc::clone(&engine.options),
+            cur_frame:   Arc::clone(&engine.cur_frame),
+            subscribers: Arc::clone(&engine.events),
             ps_opts:     opts.plate_solver.clone(),
             alignment:   PolarAlignment::new(),
             image_time:  None,

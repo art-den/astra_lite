@@ -62,14 +62,14 @@ pub struct GotoMode {
 
 impl GotoMode {
     pub fn new(
-        core:        &Core,
+        engine:      &Engine,
         destination: GotoDestination,
         config:      GotoConfig
     ) -> eyre::Result<Self> {
-        let opts = core.options.read().unwrap();
-        let telescope = core.cur_devices.telescope_or_err()?;
+        let opts = engine.options.read().unwrap();
+        let telescope = engine.cur_devices.telescope_or_err()?;
         let (camera, cam_opts, plate_solver) = if config == GotoConfig::GotoPlateSolveAndCorrect {
-            let camera = core.cur_devices.camera_or_err()?;
+            let camera = engine.cur_devices.camera_or_err()?;
             let mut cam_opts = opts.cam.clone();
             cam_opts.frame.frame_type = FrameType::Lights;
             cam_opts.frame.exp_main = opts.plate_solver.exposure;
@@ -90,9 +90,9 @@ impl GotoMode {
             state:        State::None,
             eq_coord:     EqCoord::default(),
             ps_opts:      opts.plate_solver.clone(),
-            cur_frame:    Arc::clone(&core.cur_frame),
-            options:      Arc::clone(&core.options),
-            subscribers:  Arc::clone(&core.events),
+            cur_frame:    Arc::clone(&engine.cur_frame),
+            options:      Arc::clone(&engine.options),
+            subscribers:  Arc::clone(&engine.events),
             unpark_ms:    0,
             goto_ms:      0,
             goto_ok_ms:   0,

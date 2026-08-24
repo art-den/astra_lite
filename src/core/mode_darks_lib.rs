@@ -45,12 +45,12 @@ pub struct DarkCreationMode {
 
 impl DarkCreationMode {
     pub fn new(
-        core:        &Core,
+        engine:      &Engine,
         mode:        DarkLibMode,
         calibr_data: &Arc<Mutex<CalibrData>>,
         program:     &[MasterFileCreationProgramItem]
     ) -> eyre::Result<Self> {
-        let camera = core.cur_devices.camera_or_err()?;
+        let camera = engine.cur_devices.camera_or_err()?;
         Ok(Self {
             camera,
             mode,
@@ -71,10 +71,10 @@ impl DarkCreationMode {
         program_item: MasterFileCreationProgramItem,
         cam_mode:     CameraMode,
     ) -> NotifyResult {
-        let start_focusing_fun = move |core: &Arc<Core>, mode: &mut ModeData| -> eyre::Result<()> {
+        let start_focusing_fun = move |engine: &Arc<Engine>, mode: &mut ModeData| -> eyre::Result<()> {
             mode.active.abort()?;
             let prev_mode = std::mem::replace(&mut mode.active, Box::new(WaitingMode));
-            let mut new_mode = TakingPicturesMode::new(cam_mode, core)?;
+            let mut new_mode = TakingPicturesMode::new(cam_mode, engine)?;
             new_mode.set_dark_creation_program_item(&program_item);
             new_mode.set_next_mode(Some(prev_mode));
             new_mode.start()?;

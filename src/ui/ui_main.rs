@@ -19,7 +19,7 @@ use super::{gtk_utils::*, module::*, utils::*};
 
 pub fn init_ui(
     app:      &gtk::Application,
-    core:     &Arc<Core>,
+    engine:   &Arc<Engine>,
     logs_dir: &Path
 ) {
     let css_provider = gtk::CssProvider::new();
@@ -48,8 +48,8 @@ pub fn init_ui(
     let main_ui = Rc::new(MainUi {
         widgets,
         logs_dir:       logs_dir.to_path_buf(),
-        core:           Arc::clone(core),
-        options:        Arc::clone(&core.options),
+        engine:         Arc::clone(engine),
+        options:        Arc::clone(&engine.options),
         modules:        RefCell::new(UiModules::new()),
         ui_options:     RefCell::new(ui_options),
         progress:       RefCell::new(None),
@@ -68,18 +68,18 @@ pub fn init_ui(
     main_ui.apply_options();
     main_ui.apply_theme();
 
-    let hardware      = super::ui_hardware     ::init_ui(&main_ui.widgets.window, &main_ui, core);
-    let camera        = super::ui_camera       ::init_ui(&main_ui.widgets.window, &main_ui, core);
-    let darks_library = super::ui_darks_library::init_ui(&main_ui.widgets.window, core);
-    let preview       = super::ui_preview      ::init_ui(&main_ui.widgets.window, &main_ui, core);
-    let focuser       = super::ui_focuser      ::init_ui(&main_ui.widgets.window, &main_ui, core);
-    let fw_wheel      = super::ui_flt_wheel    ::init_ui(&main_ui.widgets.window, core);
-    let guiding       = super::ui_guiding      ::init_ui(&main_ui.widgets.window, &main_ui, core);
-    let mount         = super::ui_mount        ::init_ui(&main_ui.widgets.window, &main_ui, core);
-    let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, core);
-    let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, core);
-    let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, core);
-    let debug         = super::ui_debug        ::init_ui(&core.options);
+    let hardware      = super::ui_hardware     ::init_ui(&main_ui.widgets.window, &main_ui, engine);
+    let camera        = super::ui_camera       ::init_ui(&main_ui.widgets.window, &main_ui, engine);
+    let darks_library = super::ui_darks_library::init_ui(&main_ui.widgets.window, engine);
+    let preview       = super::ui_preview      ::init_ui(&main_ui.widgets.window, &main_ui, engine);
+    let focuser       = super::ui_focuser      ::init_ui(&main_ui.widgets.window, &main_ui, engine);
+    let fw_wheel      = super::ui_flt_wheel    ::init_ui(&main_ui.widgets.window, engine);
+    let guiding       = super::ui_guiding      ::init_ui(&main_ui.widgets.window, &main_ui, engine);
+    let mount         = super::ui_mount        ::init_ui(&main_ui.widgets.window, &main_ui, engine);
+    let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, engine);
+    let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, engine);
+    let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, engine);
+    let debug         = super::ui_debug        ::init_ui(&engine.options);
 
     let mut modules = main_ui.modules.borrow_mut();
     modules.add(hardware);
@@ -223,7 +223,7 @@ pub struct MainUi {
     modules:        RefCell<UiModules>,
     ui_options:     RefCell<UiOptions>,
     progress:       RefCell<Option<Progress>>,
-    core:           Arc<Core>,
+    engine:         Arc<Engine>,
     close_win_flag: Cell<bool>,
     prev_tab_page:  Cell<TabPage>,
     conn_string:    RefCell<String>,
@@ -354,14 +354,14 @@ impl MainUi {
         // HAL
 
         let sender = main_thread_sender.clone();
-        self.core.hal.connect_event_handler(move |event| {
+        self.engine.hal.connect_event_handler(move |event| {
             _ = sender.send_blocking(MainThreadEvent::Hal(event));
         });
 
         // Core
 
         let sender = main_thread_sender.clone();
-        self.core.events.connect(move |event| {
+        self.engine.events.connect(move |event| {
             _ = sender.send_blocking(MainThreadEvent::Core(event));
         });
 
@@ -381,7 +381,7 @@ impl MainUi {
     }
 
     fn handler_close_window(self: &Rc<Self>) -> glib::Propagation {
-        if self.core.mode().active.kind() != ModeKind::Waiting {
+        if self.engine.mode().active.kind() != ModeKind::Waiting {
             let dialog = gtk::MessageDialog::builder()
                 .transient_for(&self.widgets.window)
                 .title("Operation is in progress")
@@ -399,7 +399,7 @@ impl MainUi {
             dialog.connect_response(clone!(@weak self as self_ =>
                 move |dlg, response| {
                 if response == gtk::ResponseType::Yes {
-                    self_.core.abort_active_mode();
+                    self_.engine.abort_active_mode();
                     self_.close_win_flag.set(true);
                 }
                 dlg.close();
@@ -624,7 +624,7 @@ impl MainUi {
     }
 
     fn correct_widgets_props(&self) {
-        let mode = self.core.mode();
+        let mode = self.engine.mode();
         let can_be_continued = mode.aborted
             .as_ref()
             .map(|m| m.can_be_continued_after_stop())
@@ -636,7 +636,7 @@ impl MainUi {
     }
 
     fn show_mode_caption(&self) {
-        let mode = self.core.mode();
+        let mode = self.engine.mode();
         let is_cur_mode_active = mode.active.kind() != ModeKind::Waiting;
         let mut caption = String::new();
         if let (false, Some(finished)) = (is_cur_mode_active, &mode.finished) {
@@ -653,12 +653,12 @@ impl MainUi {
     }
 
     fn handler_action_stop(&self) {
-        self.core.abort_active_mode();
+        self.engine.abort_active_mode();
     }
 
     fn handler_action_continue(&self) {
         exec_and_show_error(Some(&self.widgets.window), || {
-            self.core.continue_prev_mode()?;
+            self.engine.continue_prev_mode()?;
             Ok(())
         });
     }

@@ -5,7 +5,7 @@ use gtk::{prelude::*, glib, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{engine::Core, events::Event},
+    core::{engine::Engine, events::Event},
     hal::{DeviceType, HalState, events::HalEvent},
     options::Options,
     ui::{gtk_utils, module::*, utils::{DelayedActions, ExclusiveCaller, fill_devices_list_into_combobox}}
@@ -13,7 +13,7 @@ use crate::{
 
 pub fn init_ui(
     window: &gtk::ApplicationWindow,
-    core:   &Arc<Core>,
+    engine: &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/flt_wheel.ui"));
     let obj = Rc::new(FltWheelUi {
@@ -21,7 +21,7 @@ pub fn init_ui(
         excl_caller:     ExclusiveCaller::new(),
         window:          window.clone(),
         delayed_actions: DelayedActions::new(250),
-        core:            Arc::clone(core),
+        engine:          Arc::clone(engine),
     });
     obj.delayed_actions.set_event_handler(
         clone!(@weak obj => move |action| {
@@ -38,7 +38,7 @@ struct FltWheelUi {
     excl_caller:     ExclusiveCaller,
     window:          gtk::ApplicationWindow,
     delayed_actions: DelayedActions<DelayedAction>,
-    core:            Arc<Core>,
+    engine:          Arc<Engine>,
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -111,7 +111,7 @@ impl UiModule for FltWheelUi {
                 }
             }
             HalEvent::FilterWheelSlotChange { device_id, slot } => {
-                let options = self.core.options.read().unwrap();
+                let options = self.engine.options.read().unwrap();
                 if options.filter_wheel.device == **device_id {
                     drop(options);
                     if let Some(slot) = slot && *slot >= 0 {
@@ -123,7 +123,7 @@ impl UiModule for FltWheelUi {
                 }
             }
             HalEvent::FilterWheelNameChanged(device_id) => {
-                let options = self.core.options.read().unwrap();
+                let options = self.engine.options.read().unwrap();
                 if options.filter_wheel.device == **device_id {
                     drop(options);
                     self.delayed_actions.schedule(DelayedAction::UpdateFilterList);
@@ -139,7 +139,7 @@ impl FltWheelUi {
         self.widgets.cb_device.connect_active_notify(clone!(@weak self as self_ => move |cb| {
             let Some(new_device_name) = cb.active_id() else { return; };
             self_.excl_caller.exec(|| {
-                self_.core.cur_devices.change_filter_wheel(&new_device_name);
+                self_.engine.cur_devices.change_filter_wheel(&new_device_name);
             });
         }));
 
@@ -147,7 +147,7 @@ impl FltWheelUi {
             let Some(active) = cb.active() else { return; };
             self_.excl_caller.exec(|| {
                 gtk_utils::exec_and_show_error(Some(&self_.window), || {
-                    let filter_wheel = self_.core.cur_devices.filter_wheel_or_err()?;
+                    let filter_wheel = self_.engine.cur_devices.filter_wheel_or_err()?;
                     filter_wheel.set_active(active as _)?;
                     Ok(())
                 });
@@ -156,7 +156,7 @@ impl FltWheelUi {
     }
 
     fn update_filters_list_and_select_active(&self) {
-        let Some(filter_wheel) = self.core.cur_devices.filter_wheel() else { return; };
+        let Some(filter_wheel) = self.engine.cur_devices.filter_wheel() else { return; };
 
         let Ok((list, active_id)) = filter_wheel.list_and_active() else { return; };
         self.widgets.cb_filter.remove_all();
@@ -186,11 +186,11 @@ impl FltWheelUi {
     }
 
     fn update_devices_list(&self) {
-        let options = self.core.options.read().unwrap();
+        let options = self.engine.options.read().unwrap();
         let cur_filter_wheel = options.filter_wheel.device.clone();
         drop(options);
 
-        let Ok(list) = self.core.hal.devices(DeviceType::FLT_WHEEL) else { return; };
+        let Ok(list) = self.engine.hal.devices(DeviceType::FLT_WHEEL) else { return; };
         let list = list.iter()
             .map(|dev| (dev.id.to_string(), dev.name.to_string()))
             .collect::<Vec<_>>();
@@ -199,14 +199,14 @@ impl FltWheelUi {
             &self.widgets.cb_device,
             if !cur_filter_wheel.is_empty() { Some(cur_filter_wheel.as_str()) } else { None },
             |id| {
-                let mut options = self.core.options.write().unwrap();
+                let mut options = self.engine.options.write().unwrap();
                 options.filter_wheel.device = id.to_string();
             }
         );
     }
 
     fn correct_widgets_props(&self) {
-        let Some(filter_wheel) = self.core.cur_devices.filter_wheel() else {
+        let Some(filter_wheel) = self.engine.cur_devices.filter_wheel() else {
             self.widgets.cb_filter.set_sensitive(false);
             return;
         };
