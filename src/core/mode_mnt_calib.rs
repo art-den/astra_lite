@@ -267,8 +267,8 @@ impl MountCalibrMode {
 }
 
 impl Mode for MountCalibrMode {
-    fn get_type(&self) -> ModeType {
-        ModeType::DitherCalibr
+    fn kind(&self) -> ModeKind {
+        ModeKind::DitherCalibr
     }
 
     fn progress_string(&self) -> String {

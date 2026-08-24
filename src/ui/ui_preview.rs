@@ -84,7 +84,7 @@ impl Default for UiOptions {
 }
 
 struct LightHistoryItem {
-    mode_type:      ModeType,
+    mode_type:      ModeKind,
     time:           Option<DateTime<Utc>>,
     ccd_temp:       Option<f32>,
     bad_ccd_temp:   bool,
@@ -104,7 +104,7 @@ struct LightHistoryItem {
 
 struct CalibrHistoryItem {
     time:           Option<DateTime<Utc>>,
-    mode_type:      ModeType,
+    mode_type:      ModeKind,
     frame_type:     FrameType,
     ccd_temp:       Option<f32>,
     bad_ccd_temp:   bool,
@@ -1179,7 +1179,7 @@ impl PreviewUi {
 
     fn show_frame_processing_result(&self, result: &FrameProcessResult) {
         let options = self.core.options.read().unwrap();
-        let is_from_file_image = result.mode_type == ModeType::OpeningImgFile;
+        let is_from_file_image = result.mode_kind == ModeKind::OpeningImgFile;
         if !is_from_file_image && options.cam.device_id != result.camera_id {
             return;
         }
@@ -1228,7 +1228,7 @@ impl PreviewUi {
                 if image_info.frame_type != FrameType::Lights {
                     let history_item = CalibrHistoryItem {
                         time:           image_info.time,
-                        mode_type:      result.mode_type,
+                        mode_type:      result.mode_kind,
                         frame_type:     image_info.frame_type,
                         ccd_temp:       image_info.ccd_temp.map(|v| v as f32),
                         bad_ccd_temp:   !info.ccd_temp_ok,
@@ -1249,7 +1249,7 @@ impl PreviewUi {
             }
             FrameProcessResultData::LightFrameInfo(info) => {
                 let history_item = LightHistoryItem {
-                    mode_type:      result.mode_type,
+                    mode_type:      result.mode_kind,
                     time:           info.raw.as_ref().and_then(|raw| raw.time),
                     ccd_temp:       info.raw.as_ref().and_then(|raw| raw.ccd_temp.map(|v| v as f32)),
                     bad_ccd_temp:   !info.quality.ccd_temp_ok,
@@ -1398,21 +1398,21 @@ impl PreviewUi {
         self.widgets.history.nb_hist.set_current_page(Some(tab_index));
     }
 
-    fn mode_type_to_history_str(mode_type: ModeType) -> &'static str {
+    fn mode_type_to_history_str(mode_type: ModeKind) -> &'static str {
         match mode_type {
-            ModeType::OpeningImgFile    => "File",
-            ModeType::SingleShot        => "S",
-            ModeType::LiveView          => "LV",
-            ModeType::SavingRawFrames   => "RAW",
-            ModeType::LiveStacking      => "LS",
-            ModeType::Focusing          => "F",
-            ModeType::DitherCalibr      => "MC",
-            ModeType::Goto|
-            ModeType::CapturePlatesolve => "PS",
-            ModeType::DefectPixels      => "Pix",
-            ModeType::MasterDark|
-            ModeType::MasterBias        => "Master",
-            ModeType::PolarAlignment    => "PA",
+            ModeKind::OpeningImgFile    => "File",
+            ModeKind::SingleShot        => "S",
+            ModeKind::LiveView          => "LV",
+            ModeKind::SavingRawFrames   => "RAW",
+            ModeKind::LiveStacking      => "LS",
+            ModeKind::Focusing          => "F",
+            ModeKind::DitherCalibr      => "MC",
+            ModeKind::Goto|
+            ModeKind::CapturePlatesolve => "PS",
+            ModeKind::DefectPixels      => "Pix",
+            ModeKind::MasterDark|
+            ModeKind::MasterBias        => "Master",
+            ModeKind::PolarAlignment    => "PA",
             _                           => "???",
         }
     }
@@ -1674,10 +1674,10 @@ impl PreviewUi {
     }
 
     fn correct_preview_source(&self) {
-        let mode_type = self.core.mode().active.get_type();
-        let cb_preview_src_aid = match mode_type {
-            ModeType::LiveStacking => "live",
-            ModeType::Waiting      => return,
+        let mode_kind = self.core.mode().active.kind();
+        let cb_preview_src_aid = match mode_kind {
+            ModeKind::LiveStacking => "live",
+            ModeKind::Waiting      => return,
             _                      => "frame",
         };
         if self.widgets.ctrl.cb_src.active_id().as_deref() != Some(cb_preview_src_aid) {

@@ -381,7 +381,7 @@ impl MainUi {
     }
 
     fn handler_close_window(self: &Rc<Self>) -> glib::Propagation {
-        if self.core.mode().active.get_type() != ModeType::Waiting {
+        if self.core.mode().active.kind() != ModeKind::Waiting {
             let dialog = gtk::MessageDialog::builder()
                 .transient_for(&self.widgets.window)
                 .title("Operation is in progress")
@@ -637,7 +637,7 @@ impl MainUi {
 
     fn show_mode_caption(&self) {
         let mode = self.core.mode();
-        let is_cur_mode_active = mode.active.get_type() != ModeType::Waiting;
+        let is_cur_mode_active = mode.active.kind() != ModeKind::Waiting;
         let mut caption = String::new();
         if let (false, Some(finished)) = (is_cur_mode_active, &mode.finished) {
             caption += &(finished.progress_string() + " (finished)");

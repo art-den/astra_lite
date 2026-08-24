@@ -609,8 +609,8 @@ impl PolarAlignMode {
 }
 
 impl Mode for PolarAlignMode {
-    fn get_type(&self) -> ModeType {
-        ModeType::PolarAlignment
+    fn kind(&self) -> ModeKind {
+        ModeKind::PolarAlignment
     }
 
     fn progress(&self) -> Option<Progress> {
@@ -685,13 +685,13 @@ impl Mode for PolarAlignMode {
         match command {
             CustomCommand::Restart => {
                 self.restart()?;
-                self.subscribers.send(Event::Progress(self.progress(), self.get_type()));
+                self.subscribers.send(Event::Progress(self.progress(), self.kind()));
                 Ok(None)
             }
 
             CustomCommand::ManualRefresh => {
                 self.manual_refresh()?;
-                self.subscribers.send(Event::Progress(self.progress(), self.get_type()));
+                self.subscribers.send(Event::Progress(self.progress(), self.kind()));
                 Ok(None)
             }
 

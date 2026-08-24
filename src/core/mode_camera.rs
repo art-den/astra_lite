@@ -954,7 +954,7 @@ impl TakingPicturesMode {
 
                 let event_data = FrameProcessResult {
                     camera_id: self.camera.id().to_string(),
-                    mode_type: self.get_type(),
+                    mode_kind: self.kind(),
                     data:      result,
                 };
 
@@ -1240,15 +1240,15 @@ impl TakingPicturesMode {
 }
 
 impl Mode for TakingPicturesMode {
-    fn get_type(&self) -> ModeType {
+    fn kind(&self) -> ModeKind {
         match self.cam_mode {
-            CameraMode::SingleShot      => ModeType::SingleShot,
-            CameraMode::LiveView        => ModeType::LiveView,
-            CameraMode::SavingRawFrames => ModeType::SavingRawFrames,
-            CameraMode::LiveStacking    => ModeType::LiveStacking,
-            CameraMode::DefectPixels    => ModeType::DefectPixels,
-            CameraMode::MasterDark      => ModeType::MasterDark,
-            CameraMode::MasterBias      => ModeType::MasterBias,
+            CameraMode::SingleShot      => ModeKind::SingleShot,
+            CameraMode::LiveView        => ModeKind::LiveView,
+            CameraMode::SavingRawFrames => ModeKind::SavingRawFrames,
+            CameraMode::LiveStacking    => ModeKind::LiveStacking,
+            CameraMode::DefectPixels    => ModeKind::DefectPixels,
+            CameraMode::MasterDark      => ModeKind::MasterDark,
+            CameraMode::MasterBias      => ModeKind::MasterBias,
         }
     }
 

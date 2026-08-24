@@ -973,18 +973,18 @@ impl DarksLibraryUI {
     }
 
     fn correct_widgets_enable_state(&self) {
-        let mode = self.core.mode().active.get_type();
-        let is_waiting = mode == ModeType::Waiting;
-        let is_live_view = mode == ModeType::LiveView;
+        let mode_kind = self.core.mode().active.kind();
+        let is_waiting = mode_kind == ModeKind::Waiting;
+        let is_live_view = mode_kind == ModeKind::LiveView;
         let saving_defect_pixels =
-            mode == ModeType::DefectPixels ||
-            mode == ModeType::CreatingDefectPixels;
+            mode_kind == ModeKind::DefectPixels ||
+            mode_kind == ModeKind::CreatingDefectPixels;
         let saving_master_darks =
-            mode == ModeType::MasterDark ||
-            mode == ModeType::CreatingMasterDarks;
+            mode_kind == ModeKind::MasterDark ||
+            mode_kind == ModeKind::CreatingMasterDarks;
         let saving_master_biases =
-            mode == ModeType::MasterBias ||
-            mode == ModeType::CreatingMasterBiases;
+            mode_kind == ModeKind::MasterBias ||
+            mode_kind == ModeKind::CreatingMasterBiases;
 
         //self.widgets.common.fch_dark_library.set_sensitive(true);
 
@@ -1108,17 +1108,17 @@ impl DarksLibraryUI {
         };
 
         match event {
-            Event::Progress(Some(progress), ModeType::CreatingDefectPixels) => {
+            Event::Progress(Some(progress), ModeKind::CreatingDefectPixels) => {
                 show_progress(&self.widgets.dp.prb_def, progress.cur, progress.total);
                 self.correct_widgets_enable_state();
             }
 
-            Event::Progress(Some(progress), ModeType::CreatingMasterDarks) => {
+            Event::Progress(Some(progress), ModeKind::CreatingMasterDarks) => {
                 show_progress(&self.widgets.darks.prb_dark, progress.cur, progress.total);
                 self.correct_widgets_enable_state();
             }
 
-            Event::Progress(Some(progress), ModeType::CreatingMasterBiases) => {
+            Event::Progress(Some(progress), ModeKind::CreatingMasterBiases) => {
                 show_progress(&self.widgets.biases.prb_bias, progress.cur, progress.total);
                 self.correct_widgets_enable_state();
             }

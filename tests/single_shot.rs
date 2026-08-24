@@ -124,8 +124,8 @@ fn single_shot() {
 
     // Verify the core has returned to WaitingMode
     assert_eq!(
-        core.mode().active.get_type(),
-        ModeType::Waiting,
+        core.mode().active.kind(),
+        ModeKind::Waiting,
         "core should be in WaitingMode after SingleShot completes"
     );
 }

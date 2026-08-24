@@ -21,7 +21,7 @@ use super::{
 };
 
 #[derive(PartialEq, Copy, Clone, Debug)]
-pub enum ModeType {
+pub enum ModeKind {
     Waiting,
     OpeningImgFile,
     SingleShot,
@@ -44,7 +44,7 @@ pub enum ModeType {
 pub type ModeBox = Box<dyn Mode + Send + Sync>;
 
 pub trait Mode {
-    fn get_type(&self) -> ModeType;
+    fn kind(&self) -> ModeKind;
     fn progress_string(&self) -> String;
     fn camera_id(&self) -> Option<&str> { None }
     fn progress(&self) -> Option<Progress> { None }
@@ -334,7 +334,7 @@ impl Core {
             *self.img_proc_stop_flag.lock().unwrap() = Arc::clone(&new_stop_flag);
 
             FrameProcessCommandData {
-                mode_type:       mode.active.get_type(),
+                mode_kind:       mode.active.kind(),
                 camera_id:       camera_id.to_string(),
                 img_source:      Arc::clone(camera_shot),
                 flags:           FrameProcessCommandFlags::empty(),
@@ -435,12 +435,12 @@ impl Core {
     fn frame_process_result_handler(self: &Arc<Self>, res: CommandResult) {
         match res {
             CommandResult::Result(res) => {
-                if res.mode_type != ModeType::OpeningImgFile  {
+                if res.mode_kind != ModeKind::OpeningImgFile  {
                     let mut mode = self.mode.write().unwrap();
                     if Some(res.camera_id.as_str()) != mode.active.camera_id() {
                         return;
                     }
-                    if mode.active.get_type() != res.mode_type {
+                    if mode.active.kind() != res.mode_kind {
                         return;
                     }
                     let result = || -> eyre::Result<()> {
@@ -492,7 +492,7 @@ impl Core {
 
         let have_to_abort_mode =
             new_mode.stop_live_view_before_this_mode() ||
-            mode.active.get_type() != ModeType::LiveView;
+            mode.active.kind() != ModeKind::LiveView;
 
         // Abort previous mode
         if have_to_abort_mode {
@@ -516,12 +516,12 @@ impl Core {
         mode.active.start()?;
 
         let progress = mode.active.progress();
-        let mode_type = mode.active.get_type();
+        let mode_kind = mode.active.kind();
 
         drop(mode);
 
         // Inform about progress and mode change
-        self.events.send(Event::Progress(progress, mode_type));
+        self.events.send(Event::Progress(progress, mode_kind));
         self.events.send(Event::ModeChanged);
 
         Ok(())
@@ -540,7 +540,7 @@ impl Core {
             ccd_temp:       None,
         });
         let command = FrameProcessCommandData {
-            mode_type:       ModeType::OpeningImgFile,
+            mode_kind:       ModeKind::OpeningImgFile,
             camera_id:       String::new(),
             img_source:      Arc::new(img_source),
             flags:           FrameProcessCommandFlags::empty(),
@@ -692,7 +692,7 @@ impl Core {
     pub fn abort_active_mode(&self) {
         let mut mode = self.mode.write().unwrap();
 
-        if mode.active.get_type() == ModeType::Waiting {
+        if mode.active.kind() == ModeKind::Waiting {
             return;
         }
 
@@ -725,10 +725,10 @@ impl Core {
         mode.active = prev_mode;
         mode.active.continue_work()?;
         let progress = mode.active.progress();
-        let mode_type = mode.active.get_type();
+        let mode_kind = mode.active.kind();
         drop(mode);
         self.events.send(Event::ModeContinued);
-        self.events.send(Event::Progress(progress, mode_type));
+        self.events.send(Event::Progress(progress, mode_kind));
         self.events.send(Event::ModeChanged);
         Ok(())
     }
@@ -751,7 +751,7 @@ impl Core {
                 if next_is_none {
                     finished_progress_and_type = Some((
                         mode.active.progress(),
-                        mode.active.get_type()
+                        mode.active.kind()
                     ));
                 }
                 if let Some(next_mode) = next_mode {
@@ -791,7 +791,7 @@ impl Core {
         } else {
             self.events.send(Event::Progress(
                 mode.active.progress(),
-                mode.active.get_type(),
+                mode.active.kind(),
             ));
         }
 

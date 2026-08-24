@@ -87,14 +87,14 @@ impl DarkCreationMode {
 }
 
 impl Mode for DarkCreationMode {
-    fn get_type(&self) -> ModeType {
+    fn kind(&self) -> ModeKind {
         match self.mode {
             DarkLibMode::DefectPixels =>
-                ModeType::CreatingDefectPixels,
+                ModeKind::CreatingDefectPixels,
             DarkLibMode::MasterDark =>
-                ModeType::CreatingMasterDarks,
+                ModeKind::CreatingMasterDarks,
             DarkLibMode::MasterBias =>
-                ModeType::CreatingMasterBiases,
+                ModeKind::CreatingMasterBiases,
         }
     }
 

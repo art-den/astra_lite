@@ -609,8 +609,8 @@ impl FocusingMode {
 }
 
 impl Mode for FocusingMode {
-    fn get_type(&self) -> ModeType {
-        ModeType::Focusing
+    fn kind(&self) -> ModeKind {
+        ModeKind::Focusing
     }
 
     fn progress_string(&self) -> String {

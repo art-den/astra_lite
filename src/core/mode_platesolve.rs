@@ -185,8 +185,8 @@ impl PlatesolveMode {
 }
 
 impl Mode for PlatesolveMode {
-    fn get_type(&self) -> ModeType {
-        ModeType::CapturePlatesolve
+    fn kind(&self) -> ModeKind {
+        ModeKind::CapturePlatesolve
     }
 
     fn progress_string(&self) -> String {

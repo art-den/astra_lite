@@ -4,7 +4,7 @@ use chrono::{DateTime, Local};
 use bitflags::bitflags;
 
 use crate::{
-    core::{core::ModeType, preview_image::{ResultImage, ResultImageInfo}, utils::{FileNameArg, FileNameUtils}}, hal::{CameraShot, CameraShotType, FrameType}, image::{
+    core::{core::ModeKind, preview_image::{ResultImage, ResultImageInfo}, utils::{FileNameArg, FileNameUtils}}, hal::{CameraShot, CameraShotType, FrameType}, image::{
         histogram::*, image::*, image_stacker::*, info::*,
         io::*, preview::*, raw::*,
         stars::{StarItems, Stars, StarsFinder, StarsInfo}, stars_offset::*,
@@ -134,7 +134,7 @@ bitflags! {
 }
 
 pub struct FrameProcessCommandData {
-    pub mode_type:       ModeType,
+    pub mode_kind:       ModeKind,
     pub camera_id:       String,
     pub img_source:      Arc<dyn CameraShot + Send + Sync>,
     pub flags:           FrameProcessCommandFlags,
@@ -197,7 +197,7 @@ pub enum FrameProcessResultData {
 #[derive(Clone)]
 pub struct FrameProcessResult {
     pub camera_id: String,
-    pub mode_type: ModeType,
+    pub mode_kind: ModeKind,
     pub data:      FrameProcessResultData,
 }
 
@@ -294,7 +294,7 @@ impl FrameProcessing {
     fn notify_frame_result(&self, result: FrameProcessResultData, command: &FrameProcessCommandData) {
         self.notify_cmd_result(CommandResult::Result(FrameProcessResult {
             camera_id: command.camera_id.clone(),
-            mode_type: command.mode_type,
+            mode_kind: command.mode_kind,
             data:      result
         }));
     }
@@ -516,7 +516,7 @@ impl FrameProcessing {
 
         if is_light_frame
         && (command.view_options.remove_gradient
-        || command.mode_type == ModeType::LiveStacking) {
+        || command.mode_kind == ModeKind::LiveStacking) {
             let tmr = TimeLogger::start();
             image.remove_gradient();
             tmr.log("remove gradient from light frame");

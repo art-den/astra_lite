@@ -253,8 +253,8 @@ impl GotoMode {
 }
 
 impl Mode for GotoMode {
-    fn get_type(&self) -> ModeType {
-        ModeType::Goto
+    fn kind(&self) -> ModeKind {
+        ModeKind::Goto
     }
 
     fn progress_string(&self) -> String {

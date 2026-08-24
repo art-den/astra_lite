@@ -217,13 +217,13 @@ impl GuidingUi {
 
     fn correct_widgets_props_impl(&self, cam_device: &str) {
         let mode = self.core.mode();
-        let mode_type = mode.active.get_type();
+        let mode_kind = mode.active.kind();
         drop(mode);
         let can_change_mode =
-            mode_type == ModeType::Waiting ||
-            mode_type == ModeType::SingleShot ||
-            mode_type == ModeType::LiveView;
-        let dither_calibr = mode_type == ModeType::DitherCalibr;
+            mode_kind == ModeKind::Waiting ||
+            mode_kind == ModeKind::SingleShot ||
+            mode_kind == ModeKind::LiveView;
+        let dither_calibr = mode_kind == ModeKind::DitherCalibr;
 
         let disabled = self.widgets.rbtn_no_guiding.is_active();
         let by_main_cam = self.widgets.rbtn_guide_main_cam.is_active();

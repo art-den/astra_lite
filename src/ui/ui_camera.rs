@@ -990,8 +990,8 @@ impl CameraUi {
             }
             DelayedAction::StartLiveView => {
                 let live_view_flag = self.core.options.read().unwrap().cam.live_view;
-                let mode = self.core.mode().active.get_type();
-                if live_view_flag && mode == ModeType::Waiting {
+                let mode_kind = self.core.mode().active.kind();
+                if live_view_flag && mode_kind == ModeKind::Waiting {
                     self.start_live_view();
                 }
             }
@@ -1087,19 +1087,19 @@ impl CameraUi {
         let frame_mode_is_dark = frame_mode == FrameType::Darks;
 
         let mode = self.core.mode();
-        let mode_type = mode.active.get_type();
-        let waiting = mode_type == ModeType::Waiting;
-        let single_shot = mode_type == ModeType::SingleShot;
-        let liveview_active = mode_type == ModeType::LiveView;
-        let saving_frames = mode_type == ModeType::SavingRawFrames;
+        let mode_kind = mode.active.kind();
+        let waiting = mode_kind == ModeKind::Waiting;
+        let single_shot = mode_kind == ModeKind::SingleShot;
+        let liveview_active = mode_kind == ModeKind::LiveView;
+        let saving_frames = mode_kind == ModeKind::SavingRawFrames;
         let saving_frames_paused = mode.aborted
             .as_ref()
-            .map(|mode| mode.get_type() == ModeType::SavingRawFrames)
+            .map(|mode| mode.kind() == ModeKind::SavingRawFrames)
             .unwrap_or(false);
-        let live_active = mode_type == ModeType::LiveStacking;
+        let live_active = mode_kind == ModeKind::LiveStacking;
         let livestacking_paused = mode.aborted
             .as_ref()
-            .map(|mode| mode.get_type() == ModeType::LiveStacking)
+            .map(|mode| mode.kind() == ModeKind::LiveStacking)
             .unwrap_or(false);
         drop(mode);
 

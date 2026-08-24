@@ -2,7 +2,7 @@ use std::{rc::Rc, sync::Arc};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{core::{Core, ModeType}, events::*, mode_polar_align::{CustomCommand, PolarAlignMode, PolarAlignmentEvent, State}},
+    core::{core::{Core, ModeKind}, events::*, mode_polar_align::{CustomCommand, PolarAlignMode, PolarAlignmentEvent, State}},
     hal::{DeviceType, events::HalEvent, indi::degree_to_str_short},
     options::*,
     sky_math::math::*,
@@ -122,7 +122,7 @@ impl UiModule for PolarAlignUi {
                 self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
             }
             Event::Progress(_, mode) => {
-                if *mode == ModeType::PolarAlignment {
+                if *mode == ModeKind::PolarAlignment {
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
                 }
             }
@@ -192,12 +192,12 @@ impl PolarAlignUi {
         let mnt_active = mount.and_then(|c| c.is_active().ok()).unwrap_or(false);
 
         let mode = self.core.mode();
-        let mode_type = mode.active.get_type();
+        let mode_kind = mode.active.kind();
         drop(mode);
-        let waiting = mode_type == ModeType::Waiting;
-        let live_view = mode_type == ModeType::LiveView;
-        let single_shot = mode_type == ModeType::SingleShot;
-        let polar_align = mode_type == ModeType::PolarAlignment;
+        let waiting = mode_kind == ModeKind::Waiting;
+        let live_view = mode_kind == ModeKind::LiveView;
+        let single_shot = mode_kind == ModeKind::SingleShot;
+        let polar_align = mode_kind == ModeKind::PolarAlignment;
 
         let polar_alignment_can_be_started =
             !polar_align &&

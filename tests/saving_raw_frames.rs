@@ -243,8 +243,8 @@ fn saving_raw_frames() {
 
     // Verify the core has returned to WaitingMode
     assert_eq!(
-        core.mode().active.get_type(),
-        ModeType::Waiting,
+        core.mode().active.kind(),
+        ModeKind::Waiting,
         "core should be in WaitingMode after SavingRawFrames completes"
     );
 
@@ -425,8 +425,8 @@ fn saving_raw_frames_with_master() {
 
     // Verify the core has returned to WaitingMode
     assert_eq!(
-        core.mode().active.get_type(),
-        ModeType::Waiting,
+        core.mode().active.kind(),
+        ModeKind::Waiting,
         "core should be in WaitingMode after SavingRawFrames completes"
     );
 
@@ -543,8 +543,8 @@ fn saving_raw_frames_with_abort_and_resume() {
 
     // Verify core has returned to WaitingMode
     assert_eq!(
-        core.mode().active.get_type(),
-        ModeType::Waiting,
+        core.mode().active.kind(),
+        ModeKind::Waiting,
         "core should be in WaitingMode after abort"
     );
 
@@ -624,8 +624,8 @@ fn saving_raw_frames_with_abort_and_resume() {
 
     // Verify the core has returned to WaitingMode
     assert_eq!(
-        core.mode().active.get_type(),
-        ModeType::Waiting,
+        core.mode().active.kind(),
+        ModeKind::Waiting,
         "core should be in WaitingMode after SavingRawFrames completes"
     );
 

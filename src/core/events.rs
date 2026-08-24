@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::{Arc, RwLock, atomic::AtomicU64}};
 use crate::{guiding::external_guider::ExtGuiderEvent, plate_solve::PlateSolverEvent};
-use super::{core::ModeType, frame_processing::*, mode_focusing::*, mode_polar_align::PolarAlignmentEvent};
+use super::{core::ModeKind, frame_processing::*, mode_focusing::*, mode_polar_align::PolarAlignmentEvent};
 
 #[derive(Clone)]
 pub struct Progress {
@@ -25,7 +25,7 @@ pub enum Event {
     FocuserDeviceChanged(String),
     FilterWheelDeviceChanged(String),
     ModeChanged,
-    Progress(Option<Progress>, ModeType),
+    Progress(Option<Progress>, ModeKind),
     FrameProcessing(FrameProcessResult),
     Focusing(FocuserEvent),
     PlateSolve(PlateSolverEvent),

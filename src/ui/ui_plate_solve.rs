@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{core::{Core, ModeType}, events::*},
+    core::{core::{Core, ModeKind}, events::*},
     hal::{DeviceType, events::HalEvent},
     options::*,
 };
@@ -188,10 +188,10 @@ impl PlateSolveUi {
             .unwrap_or(false);
 
         let mode = self.core.mode();
-        let mode_type = mode.active.get_type();
-        let waiting = mode_type == ModeType::Waiting;
-        let live_view = mode_type == ModeType::LiveView;
-        let single_shot = mode_type == ModeType::SingleShot;
+        let mode_kind = mode.active.kind();
+        let waiting = mode_kind == ModeKind::Waiting;
+        let live_view = mode_kind == ModeKind::LiveView;
+        let single_shot = mode_kind == ModeKind::SingleShot;
 
         let plate_solve_sensitive =
             mnt_active && cam_active &&

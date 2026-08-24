@@ -4,7 +4,7 @@ use gtk::{glib, gdk, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{core::{Core, ModeType}, events::*, mode_focusing::*},
+    core::{core::{Core, ModeKind}, events::*, mode_focusing::*},
     hal::{DeviceType, FocuserState, HalState, events::HalEvent},
     options::*,
     ui::plots::*,
@@ -375,7 +375,7 @@ impl FocuserUi {
 
     fn correct_widgets_props_impl(&self, cam_device: &str) {
         let mode = self.core.mode();
-        let mode_type = mode.active.get_type();
+        let mode_kind = mode.active.kind();
         drop(mode);
 
         if let Ok(camera) = self.core.hal.camera(cam_device) {
@@ -383,10 +383,10 @@ impl FocuserUi {
             correct_spinbutton_by_range(&self.widgets.spb_exp, exp_range, 1, Some(1.0));
         }
 
-        let waiting = mode_type == ModeType::Waiting;
-        let live_view = mode_type == ModeType::LiveView;
-        let single_shot = mode_type == ModeType::SingleShot;
-        let focusing = mode_type == ModeType::Focusing;
+        let waiting = mode_kind == ModeKind::Waiting;
+        let live_view = mode_kind == ModeKind::LiveView;
+        let single_shot = mode_kind == ModeKind::SingleShot;
+        let focusing = mode_kind == ModeKind::Focusing;
         let can_change_mode = waiting || live_view || single_shot;
 
         let device_enabled = self.core.cur_devices.focuser()

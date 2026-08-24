@@ -6,7 +6,7 @@ use std::{
 
 use astra_lite::{
     core::{
-        core::{Core, ModeType},
+        core::{Core, ModeKind},
         events::Event,
         frame_processing::{FrameProcessResult, FrameProcessResultData},
     },
@@ -623,8 +623,8 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
 
     // Verify core is still in WaitingMode (OpeningImgFile does not switch modes).
     assert_eq!(
-        core.mode().active.get_type(),
-        ModeType::Waiting,
+        core.mode().active.kind(),
+        ModeKind::Waiting,
         "core should remain in WaitingMode after opening an image file"
     );
 
