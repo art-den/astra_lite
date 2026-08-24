@@ -1498,7 +1498,7 @@ impl CameraUi {
         self.main_ui.get_all_options();
         exec_and_show_error(Some(&self.window), || {
             self.engine.check_before_saving_raw_or_live_stacking()?;
-            self.engine.continue_prev_mode()?;
+            self.engine.continue_aborted_mode()?;
             Ok(())
         });
     }
@@ -1662,7 +1662,7 @@ impl CameraUi {
         self.main_ui.get_all_options();
         exec_and_show_error(Some(&self.window), || {
             self.engine.check_before_saving_raw_or_live_stacking()?;
-            self.engine.continue_prev_mode()?;
+            self.engine.continue_aborted_mode()?;
             Ok(())
         });
     }

@@ -658,7 +658,7 @@ impl MainUi {
 
     fn handler_action_continue(&self) {
         exec_and_show_error(Some(&self.widgets.window), || {
-            self.engine.continue_prev_mode()?;
+            self.engine.continue_aborted_mode()?;
             Ok(())
         });
     }

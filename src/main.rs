@@ -57,7 +57,7 @@ fn app_activate_handler(app: &gtk::Application) {
 
     // Create core
 
-    log::info!("Creating core...");
+    log::info!("Creating engine...");
     let engine = Engine::new();
 
     // Register panic handler

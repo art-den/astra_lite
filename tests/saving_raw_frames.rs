@@ -557,7 +557,7 @@ fn saving_raw_frames_with_abort_and_resume() {
     }
 
     println!("Resuming capture…");
-    engine.continue_prev_mode().expect("resuming previous mode");
+    engine.continue_aborted_mode().expect("resuming previous mode");
 
     loop {
         std::thread::sleep(Duration::from_secs(1));

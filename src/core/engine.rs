@@ -113,7 +113,7 @@ pub struct Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        log::info!("Core dropped");
+        log::info!("Engine dropped");
     }
 }
 
@@ -717,12 +717,12 @@ impl Engine {
         self.events.send(Event::ModeChanged);
     }
 
-    pub fn continue_prev_mode(&self) -> eyre::Result<()> {
+    pub fn continue_aborted_mode(&self) -> eyre::Result<()> {
         let mut mode = self.mode.write().unwrap();
-        let Some(prev_mode) = mode.aborted.take() else {
+        let Some(aborted_mode) = mode.aborted.take() else {
             eyre::bail!("Aborted state is empty");
         };
-        mode.active = prev_mode;
+        mode.active = aborted_mode;
         mode.active.continue_work()?;
         let progress = mode.active.progress();
         let mode_kind = mode.active.kind();
