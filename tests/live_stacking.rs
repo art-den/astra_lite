@@ -143,7 +143,7 @@ fn live_stacking() {
         let shared_state = Arc::clone(&shared_state);
         move |event| {
             if let Event::FrameProcessing(FrameProcessNotification { event, .. }) = &event {
-                match data {
+                match event {
                     // Reset watchdog — a frame processing cycle has just started
                     FrameProcessEvent::ShotProcessingStarted => {
                         println!("FrameProcessResultData::ShotProcessingStarted");

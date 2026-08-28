@@ -67,7 +67,7 @@ fn single_shot() {
         let shared_state = Arc::clone(&shared_state);
         move |event| {
             if let Event::FrameProcessing(FrameProcessNotification {event, ..}) = &event {
-                match data {
+                match event {
                     // Reset watchdog — a frame processing cycle has just started
                     FrameProcessEvent::ShotProcessingStarted => {
                         let mut state = shared_state.lock().unwrap();
@@ -82,7 +82,7 @@ fn single_shot() {
                         state.idle_seconds = 0;
                         state.finished_flag = true;
                         println!("FrameProcessResultData::ShotProcessingFinished");
-                        assert!(frame_is_ok, "captured frame quality check failed");
+                        assert!(*frame_is_ok, "captured frame quality check failed");
                     }
                     _ => {},
                 }

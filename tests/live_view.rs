@@ -73,7 +73,7 @@ fn live_view() {
         let shared_state = Arc::clone(&shared_state);
         move |event| {
             if let Event::FrameProcessing(FrameProcessNotification { event, .. }) = &event {
-                match data {
+                match event {
                     FrameProcessEvent::ShotProcessingStarted => {
                         let mut state = shared_state.lock().unwrap();
                         state.idle_seconds = 0;

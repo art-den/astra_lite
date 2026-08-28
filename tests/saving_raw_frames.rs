@@ -139,7 +139,7 @@ fn saving_raw_frames() {
         let shared_state = Arc::clone(&shared_state);
         move |event| {
             if let Event::FrameProcessing(FrameProcessNotification { event, .. }) = &event {
-                match data {
+                match event {
                     // Reset watchdog — a frame processing cycle has just started
                     FrameProcessEvent::ShotProcessingStarted => {
                         let mut state = shared_state.lock().unwrap();
@@ -294,7 +294,7 @@ fn saving_raw_frames_with_master() {
         let shared_state = Arc::clone(&shared_state);
         move |event| {
             if let Event::FrameProcessing(FrameProcessNotification { event, .. }) = &event {
-                match data {
+                match event {
                     FrameProcessEvent::ShotProcessingStarted => {
                         let mut state = shared_state.lock().unwrap();
                         state.idle_seconds = 0;
@@ -477,7 +477,7 @@ fn saving_raw_frames_with_abort_and_resume() {
         let shared_state = Arc::clone(&shared_state);
         move |event| {
             if let Event::FrameProcessing(FrameProcessNotification { event, .. }) = &event {
-                match data {
+                match event {
                     FrameProcessEvent::ShotProcessingStarted => {
                         let mut state = shared_state.lock().unwrap();
                         state.idle_seconds = 0;
