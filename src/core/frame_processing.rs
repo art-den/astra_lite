@@ -82,7 +82,7 @@ pub struct ProcessImageParams {
     pub ref_stars:       Option<Vec<Point>>,
     pub calibr_params:   Option<CalibrParams>,
     pub calibr_data:     Arc<Mutex<RawCalibration>>,
-    pub view_options:    PreviewParams,
+    pub preview_params:  PreviewParams,
     pub frame_options:   FrameOptions,
     pub cam_ctrl_opts:   Option<CamCtrlOptions>,
     pub quality_options: Option<QualityOptions>,
@@ -453,7 +453,7 @@ impl FrameProcessing {
         // Remove gradient from light frame
 
         if is_light_frame
-        && (command.view_options.remove_gradient
+        && (command.preview_params.remove_gradient
         || command.mode_kind == ModeKind::LiveStacking) {
             let tmr = TimeLogger::start();
             image.remove_gradient();
@@ -532,7 +532,7 @@ impl FrameProcessing {
         let rgb_data = get_preview_rgb_data(
             &image,
             &hist,
-            &command.view_options,
+            &command.preview_params,
             if is_light_frame { Some(&frame_stars.items)} else { None },
         );
         tmr.log("get_rgb_bytes_from_preview_image");
@@ -545,7 +545,7 @@ impl FrameProcessing {
         if let Some(rgb_data) = rgb_data {
             let preview_data = Arc::new(PreviewImage {
                 rgb_data,
-                params: command.view_options.clone(),
+                params: command.preview_params.clone(),
             });
             self.notify_frame_result(
                 FrameProcessEvent::PreviewOrigFrame(preview_data),
@@ -660,7 +660,7 @@ impl FrameProcessing {
                 stacker.copy_to_image(&mut res_image);
                 tmr.log("ImageStacker::copy_to_image");
 
-                if command.view_options.remove_gradient {
+                if command.preview_params.remove_gradient {
                     let tmr = TimeLogger::start();
                     res_image.remove_gradient();
                     tmr.log("remove gradient from live stacking result");
@@ -742,12 +742,12 @@ impl FrameProcessing {
 
                 // Convert to RGB bytes for preview
 
-                if !command.view_options.orig_frame_in_ls {
+                if !command.preview_params.orig_frame_in_ls {
                     let tmr = TimeLogger::start();
                     let rgb_data = get_preview_rgb_data(
                         &res_image,
                         &hist,
-                        &command.view_options,
+                        &command.preview_params,
                         Some(&ls_light_frame_info.stars.items),
                     );
                     tmr.log("get_rgb_bytes_from_preview_image");
@@ -760,7 +760,7 @@ impl FrameProcessing {
                     if let Some(rgb_data) = rgb_data {
                         let preview_data = Arc::new(PreviewImage {
                             rgb_data,
-                            params: command.view_options.clone(),
+                            params: command.preview_params.clone(),
                         });
 
                         self.notify_frame_result(
