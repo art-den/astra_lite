@@ -1,6 +1,6 @@
 use std::{path::Path, sync::{Arc, Mutex}, time::Duration};
 
-use astra_lite::{core::{engine::*, events::*, frame_processing::{FrameProcessResult, FrameProcessResultData}}, hal::{DeviceType, FrameType, HalImpl}, image::io::load_raw_image_from_fits_file};
+use astra_lite::{core::{engine::*, events::*, frame_processing::{FrameProcessNotification, FrameProcessEvent}}, hal::{DeviceType, FrameType, HalImpl}, image::io::load_raw_image_from_fits_file};
 
 /// Exposure time per frame in seconds.
 const EXPOSURE_SECS: f64 = 1.0;
@@ -142,16 +142,16 @@ fn live_stacking() {
     engine.events.connect({
         let shared_state = Arc::clone(&shared_state);
         move |event| {
-            if let Event::FrameProcessing(FrameProcessResult { data, .. }) = &event {
+            if let Event::FrameProcessing(FrameProcessNotification { event, .. }) = &event {
                 match data {
                     // Reset watchdog — a frame processing cycle has just started
-                    FrameProcessResultData::ShotProcessingStarted => {
+                    FrameProcessEvent::ShotProcessingStarted => {
                         println!("FrameProcessResultData::ShotProcessingStarted");
                         let mut state = shared_state.lock().unwrap();
                         state.idle_seconds = 0;
                     }
 
-                    FrameProcessResultData::LightFrameInfo(data) => {
+                    FrameProcessEvent::LightFrameReady(data) => {
                         println!("FrameProcessResultData::LightFrameInfo");
                         println!("data.stars.items.len()={}", data.stars.items.len());
                         assert!(data.quality.ccd_temp_ok);
@@ -161,7 +161,7 @@ fn live_stacking() {
                     }
 
                     // Cycle completed — count successful frames.
-                    FrameProcessResultData::ShotProcessingFinished { frame_is_ok, .. } => {
+                    FrameProcessEvent::ShotProcessingFinished { frame_is_ok, .. } => {
                         let mut state = shared_state.lock().unwrap();
                         println!(
                             "FrameProcessResultData::ShotProcessingFinished (ok, #{}/{})",
@@ -255,7 +255,7 @@ fn live_stacking() {
 
     // Verify the current image is not empty
     assert!(
-        !engine.cur_frame.image.read().unwrap().is_empty(),
+        !engine.preview.image.read().unwrap().is_empty(),
         "current frame image must not be empty"
     );
 

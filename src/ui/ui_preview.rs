@@ -4,7 +4,7 @@ use gtk::{cairo, glib::{self, clone}, prelude::*, gdk};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{engine::*, events::*, frame_processing::*, preview_image::ResultImageInfo}, hal::FrameType, image::{histogram::*, info::*, io::save_image_to_tif_file, preview::*, raw::CalibrMethods, stars_offset::Offset}, options::*, sky_math::math::radian_to_degree, utils::{io_utils::*, log_utils::*}
+    core::{engine::*, events::*, frame_processing::*, preview::ResultImageInfo}, hal::FrameType, image::{histogram::*, info::*, io::save_image_to_tif_file, preview::*, raw::CalibrMethods, stars::Stars, stars_offset::Offset}, options::*, sky_math::math::radian_to_degree, utils::{io_utils::*, log_utils::*}
 };
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 
@@ -728,7 +728,7 @@ impl PreviewUi {
             self.widgets.info.bx_raw_info.set_visible(is_raw_info);
         };
 
-        let show_light_info = |stars: &StarsInfoData, image: &LightFrameInfo| {
+        let show_light_info = |stars: &Stars, image: &LightFrameInfo| {
             self.widgets.info.e_info_exp.set_text(&seconds_to_total_time_str(image.exposure, true));
 
             let mut fwhm_hfd_str = String::new();
@@ -761,7 +761,7 @@ impl PreviewUi {
         let source = self.engine.options.read().unwrap().preview.source;
         match source {
             PreviewSource::OrigFrame => {
-                let info = self.engine.cur_frame.info.read().unwrap();
+                let info = self.engine.preview.info.read().unwrap();
                 match &*info {
                     ResultImageInfo::LightInfo(info) => {
                         show_light_info(&info.stars, &info.image);
@@ -838,22 +838,31 @@ impl PreviewUi {
         let options = self.engine.options.read().unwrap();
         let preview_params = options.preview.preview_params();
         let (image, hist, stars) = match options.preview.source {
-            PreviewSource::OrigFrame =>
-                (&*self.engine.cur_frame.image, &self.engine.cur_frame.img_hist, Some(&self.engine.cur_frame.stars)),
-            PreviewSource::LiveStacking =>
-                (&self.engine.live_stacking.image, &self.engine.live_stacking.hist, None),
+            PreviewSource::OrigFrame => {
+                let frame_info = self.engine.preview.info.read().unwrap();
+                let stars = if let ResultImageInfo::LightInfo(light_info) = &*frame_info {
+                    Some(Arc::clone(&light_info.stars))
+                } else {
+                    None
+                };
+
+                (&*self.engine.preview.image, &self.engine.preview.img_hist, stars)
+            }
+            PreviewSource::LiveStacking => {
+                let info = self.engine.live_stacking.info.read().unwrap();
+                let stars = info.as_ref().map(|info| Arc::clone(&info.stars));
+                (&self.engine.live_stacking.image, &self.engine.live_stacking.hist, stars)
+            }
         };
         drop(options);
         let image = image.read().unwrap();
         let hist = hist.read().unwrap();
-        let stars = stars.as_ref().map(|s| s.read().unwrap());
         let rgb_bytes = get_preview_rgb_data(
             &image,
             &hist,
             &preview_params,
-            stars.as_ref().and_then(|s| s.as_ref().map(|s| &**s))
+            stars.as_ref().map(|s| &s.items)
         );
-        drop(stars);
         drop(hist);
         drop(image);
 
@@ -1089,7 +1098,7 @@ impl PreviewUi {
             let options = self.engine.options.read().unwrap();
             let (image, hist, fn_prefix) = match options.preview.source {
                 PreviewSource::OrigFrame =>
-                    (&*self.engine.cur_frame.image, &self.engine.cur_frame.img_hist, "preview"),
+                    (&*self.engine.preview.image, &self.engine.preview.img_hist, "preview"),
                 PreviewSource::LiveStacking =>
                     (&self.engine.live_stacking.image, &self.engine.live_stacking.hist, "live"),
             };
@@ -1152,7 +1161,7 @@ impl PreviewUi {
             };
             match preview_source {
                 PreviewSource::OrigFrame => {
-                    let image = &self.engine.cur_frame.image;
+                    let image = &self.engine.preview.image;
                     if image.read().unwrap().is_empty() {
                         return Ok(());
                     }
@@ -1177,7 +1186,7 @@ impl PreviewUi {
         });
     }
 
-    fn show_frame_processing_result(&self, result: &FrameProcessResult) {
+    fn show_frame_processing_result(&self, result: &FrameProcessNotification) {
         let options = self.engine.options.read().unwrap();
         let is_from_file_image = result.mode_kind == ModeKind::OpeningImgFile;
         if !is_from_file_image && options.cam.device_id != result.camera_id {
@@ -1194,8 +1203,8 @@ impl PreviewUi {
             live_result == live_stacking_preview
         };
 
-        match &result.data {
-            FrameProcessResultData::ShotProcessingFinished {
+        match &result.event {
+            FrameProcessEvent::ShotProcessingFinished {
                 camera_shot, processing_time, ..
             } => {
                 let perf_str = format!(
@@ -1204,25 +1213,25 @@ impl PreviewUi {
                 );
                 self.main_ui.set_perf_string(perf_str);
             }
-            FrameProcessResultData::PreviewFrame(img)
+            FrameProcessEvent::PreviewOrigFrame(img)
             if is_mode_current(false) || is_from_file_image => {
                 self.show_preview_image(Some(&img.rgb_data), Some(&img.params), None);
                 self.correct_widgets_props();
                 show_resolution_info(img.rgb_data.orig_width, img.rgb_data.orig_height);
             }
-            FrameProcessResultData::PreviewLiveRes(img)
+            FrameProcessEvent::PreviewLiveStacking(img)
             if is_mode_current(true) => {
                 self.show_preview_image(Some(&img.rgb_data), Some(&img.params), None);
                 self.correct_widgets_props();
 
                 show_resolution_info(img.rgb_data.orig_width, img.rgb_data.orig_height);
             }
-            FrameProcessResultData::RawHistogramReady
+            FrameProcessEvent::RawHistogramReady
             if is_mode_current(false) || is_from_file_image => {
                 self.repaint_histogram();
                 self.show_histogram_stat();
             }
-            FrameProcessResultData::RawFrameInfo(info)
+            FrameProcessEvent::RawFrameReady(info)
             if is_mode_current(false) || is_from_file_image => {
                 let image_info = info.image.info();
                 if image_info.frame_type != FrameType::Lights {
@@ -1242,12 +1251,12 @@ impl PreviewUi {
                     self.set_hist_tab_active(Self::HIST_TAB_CALIBR);
                 }
             }
-            FrameProcessResultData::HistogramLiveRes
+            FrameProcessEvent::LiveStackingHistogramReady
             if is_mode_current(true) => {
                 self.repaint_histogram();
                 self.show_histogram_stat();
             }
-            FrameProcessResultData::LightFrameInfo(info) => {
+            FrameProcessEvent::LightFrameReady(info) => {
                 let history_item = LightHistoryItem {
                     mode_type:      result.mode_kind,
                     time:           info.raw.as_ref().and_then(|raw| raw.time),
@@ -1270,11 +1279,11 @@ impl PreviewUi {
                 self.update_light_history_table();
                 self.set_hist_tab_active(Self::HIST_TAB_LIGHT);
             }
-            FrameProcessResultData::FrameInfo
+            FrameProcessEvent::OrigFrameInfoReady
             if is_mode_current(false) || is_from_file_image => {
                 self.show_image_info();
             }
-            FrameProcessResultData::FrameInfoLiveRes
+            FrameProcessEvent::LiveStackingInfoReady
             if is_mode_current(true) => {
                 self.show_image_info();
             }
@@ -1286,7 +1295,7 @@ impl PreviewUi {
         let options = self.engine.options.read().unwrap();
         let hist = match options.preview.source {
             PreviewSource::OrigFrame =>
-                self.engine.cur_frame.raw_hist.read().unwrap(),
+                self.engine.preview.raw_hist.read().unwrap(),
             PreviewSource::LiveStacking =>
                 self.engine.live_stacking.hist.read().unwrap(),
         };
@@ -1363,7 +1372,7 @@ impl PreviewUi {
         let options = self.engine.options.read().unwrap();
         let hist = match options.preview.source {
             PreviewSource::OrigFrame =>
-                self.engine.cur_frame.raw_hist.read().unwrap(),
+                self.engine.preview.raw_hist.read().unwrap(),
             PreviewSource::LiveStacking =>
                 self.engine.live_stacking.hist.read().unwrap(),
         };

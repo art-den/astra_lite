@@ -36,7 +36,7 @@ pub struct MasterFileCreationProgramItem {
 pub struct DarkCreationMode {
     camera:      Arc<dyn Camera + Send + Sync>,
     mode:        DarkLibMode,
-    calibr_data: Arc<Mutex<CalibrData>>,
+    calibr_data: Arc<Mutex<CalibrCache>>,
     program:     Vec<MasterFileCreationProgramItem>,
     index:       usize,
     state:       State,
@@ -47,7 +47,7 @@ impl DarkCreationMode {
     pub fn new(
         engine:      &Engine,
         mode:        DarkLibMode,
-        calibr_data: &Arc<Mutex<CalibrData>>,
+        calibr_data: &Arc<Mutex<CalibrCache>>,
         program:     &[MasterFileCreationProgramItem]
     ) -> eyre::Result<Self> {
         let camera = engine.cur_devices.camera_or_err()?;

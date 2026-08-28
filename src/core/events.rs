@@ -26,7 +26,7 @@ pub enum Event {
     FilterWheelDeviceChanged(String),
     ModeChanged,
     Progress(Option<Progress>, ModeKind),
-    FrameProcessing(FrameProcessResult),
+    FrameProcessing(FrameProcessNotification),
     Focusing(FocuserEvent),
     PlateSolve(PlateSolverEvent),
     PolarAlignment(PolarAlignmentEvent),

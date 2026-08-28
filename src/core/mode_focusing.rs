@@ -240,7 +240,7 @@ impl FocusingMode {
 
     fn process_img_info_when_waiting_first_img(
         &mut self,
-        info: &LightFrameInfoData
+        info: &LightFrameResult
     ) -> eyre::Result<NotifyResult> {
         log::info!(
             "First image before autofocus. FWHM={:.2?}, ovality={:.2?}, initial focus={:.0}",
@@ -255,7 +255,7 @@ impl FocusingMode {
 
     fn process_img_info_when_waiting_measure(
         &mut self,
-        info:      &LightFrameInfoData,
+        info:      &LightFrameResult,
         focus_pos: f64,
     ) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
@@ -461,7 +461,7 @@ impl FocusingMode {
 
     fn process_img_info_when_waiting_result_img(
         &mut self,
-        info:      &LightFrameInfoData,
+        info:      &LightFrameResult,
         focus_pos: f64
     ) -> eyre::Result<NotifyResult> {
         let duration = self.start_time.unwrap().elapsed();
@@ -677,7 +677,7 @@ impl Mode for FocusingMode {
         self.next_mode.take()
     }
 
-    fn complete_img_process_params(&self, cmd: &mut FrameProcessCommandData) {
+    fn complete_img_process_params(&self, cmd: &mut ProcessImageParams) {
         if let Some(quality_options) = &mut cmd.quality_options {
             quality_options.use_max_fwhm = false;
         }
@@ -703,10 +703,10 @@ impl Mode for FocusingMode {
 
     fn notify_about_frame_processing_result(
         &mut self,
-        fp_result: &FrameProcessResult
+        fp_result: &FrameProcessNotification
     ) -> eyre::Result<NotifyResult> {
-        match &fp_result.data {
-            FrameProcessResultData::LightFrameInfo(info) =>
+        match &fp_result.event {
+            FrameProcessEvent::LightFrameReady(info) =>
                 match self.state {
                     FocusingState::WaitingFirstImage =>
                         return self.process_img_info_when_waiting_first_img(info),

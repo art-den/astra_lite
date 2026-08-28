@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    core::{cam_ctrl::*, cur_devices::CurDevices, preview_image::{ResultImage, ResultImageInfo}}, guiding::external_guider::*, hal::{events::HalEvent, *}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*,
+    core::{cam_ctrl::*, cur_devices::CurDevices, live_stacking::LiveStacking, preview::{Preview, ResultImageInfo}}, guiding::external_guider::*, hal::{events::HalEvent, *}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*,
 };
 
 use super::{
@@ -58,10 +58,10 @@ pub trait Mode {
     fn restart_cam_exposure(&mut self) -> eyre::Result<bool> { Ok(false) }
     fn take_next_mode(&mut self) -> Option<ModeBox> { None }
     fn set_or_correct_value(&mut self, _value: &mut dyn Any) {}
-    fn complete_img_process_params(&self, _cmd: &mut FrameProcessCommandData) {}
+    fn complete_img_process_params(&self, _cmd: &mut ProcessImageParams) {}
     fn notify_camera_download_started(&mut self, _camera_id: &str) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_before_frame_processing_start(&mut self, _camera_shot: &Arc<dyn CameraShot + Send + Sync>, _should_be_processed: &mut bool) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessResult) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessNotification) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_periodic_timer_tick(&mut self, _timer_period_ms: usize) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn custom_command(&mut self, _args: &dyn Any) -> eyre::Result<Option<Box<dyn Any>>> { Ok(None) }
@@ -99,12 +99,12 @@ pub struct Engine {
     pub hal:            Arc<Hal>,
     pub events:         Arc<EventHandlers>,
     pub options:        Arc<RwLock<Options>>,
-    pub cur_frame:      Arc<ResultImage>,
-    pub live_stacking:  Arc<LiveStackingData>,
+    pub preview:        Arc<Preview>,
+    pub live_stacking:  Arc<LiveStacking>,
     pub ext_guider:     Arc<ExternalGuiderCtrl>,
 
     modes:              RwLock<EngineModes>,
-    calibr_data:        Arc<Mutex<CalibrData>>,
+    calibr_data:        Arc<Mutex<CalibrCache>>,
     timer:              Arc<Timer>,
     img_proc_stop_flag: Mutex<Arc<AtomicBool>>, // stop flag for last command
     frame_processing:   Arc<FrameProcessing>,
@@ -130,9 +130,9 @@ impl Engine {
         let this = Arc::new(Self {
             options:            Arc::clone(&options),
             modes:              RwLock::new(EngineModes::new()),
-            cur_frame:          Arc::new(ResultImage::new()),
-            calibr_data:        Arc::new(Mutex::new(CalibrData::default())),
-            live_stacking:      Arc::new(LiveStackingData::new()),
+            calibr_data:        Arc::new(Mutex::new(CalibrCache::default())),
+            preview:            Arc::new(Preview::new()),
+            live_stacking:      Arc::new(LiveStacking::new()),
             timer:              Arc::new(Timer::new()),
             img_proc_stop_flag: Mutex::new(Arc::new(AtomicBool::new(false))),
             ext_guider:         ExternalGuiderCtrl::new(),
@@ -333,12 +333,12 @@ impl Engine {
             let new_stop_flag = Arc::new(AtomicBool::new(false));
             *self.img_proc_stop_flag.lock().unwrap() = Arc::clone(&new_stop_flag);
 
-            FrameProcessCommandData {
+            ProcessImageParams {
                 mode_kind:       mode.active.kind(),
                 camera_id:       camera_id.to_string(),
                 img_source:      Arc::clone(camera_shot),
                 flags:           FrameProcessCommandFlags::empty(),
-                frame:           Arc::clone(&self.cur_frame),
+                preview:           Arc::clone(&self.preview),
                 stop_flag:       new_stop_flag,
                 ref_stars:       None,
                 calibr_data:     Arc::clone(&self.calibr_data),
@@ -432,9 +432,9 @@ impl Engine {
         self.process_error(res, "set_focal_len_for_cameras");
     }
 
-    fn frame_process_result_handler(self: &Arc<Self>, res: CommandResult) {
+    fn frame_process_result_handler(self: &Arc<Self>, res: FrameProcessingReply) {
         match res {
-            CommandResult::Result(res) => {
+            FrameProcessingReply::Result(res) => {
                 if res.mode_kind != ModeKind::OpeningImgFile  {
                     let mut mode = self.modes.write().unwrap();
                     if Some(res.camera_id.as_str()) != mode.active.camera_id() {
@@ -456,7 +456,7 @@ impl Engine {
                 );
             }
 
-            CommandResult::QueueOverflow => {
+            FrameProcessingReply::QueueOverflow => {
                 let mut mode = self.modes.write().unwrap();
                 let result = || -> eyre::Result<()> {
                     let res = mode.active.notify_processing_queue_overflow()?;
@@ -467,7 +467,7 @@ impl Engine {
                 self.process_error(result, "Core::apply_change_result");
 
             }
-            CommandResult::Error(error_str) => {
+            FrameProcessingReply::Error(error_str) => {
                 self.abort_active_mode();
                 self.events.send(Event::Error(error_str));
             }
@@ -539,12 +539,12 @@ impl Engine {
             sar_hot_pixels: options.calibr.hot_pixels,
             ccd_temp:       None,
         });
-        let command = FrameProcessCommandData {
+        let command = ProcessImageParams {
             mode_kind:       ModeKind::OpeningImgFile,
             camera_id:       String::new(),
             img_source:      Arc::new(img_source),
             flags:           FrameProcessCommandFlags::empty(),
-            frame:           Arc::clone(&self.cur_frame),
+            preview:         Arc::clone(&self.preview),
             stop_flag:       new_stop_flag,
             ref_stars:       None,
             calibr_data:     Arc::clone(&self.calibr_data),
@@ -654,12 +654,12 @@ impl Engine {
     }
 
     pub fn start_goto_image(self: &Arc<Self>) -> eyre::Result<()> {
-        let image = self.cur_frame.image.read().unwrap();
+        let image = self.preview.image.read().unwrap();
         if image.is_empty() {
             eyre::bail!("Image is empty");
         }
         drop(image);
-        let image_info = self.cur_frame.info.read().unwrap();
+        let image_info = self.preview.info.read().unwrap();
         let ResultImageInfo::LightInfo(light_frame_info) = &*image_info else {
             eyre::bail!("Image is not a light frame");
         };
@@ -667,7 +667,7 @@ impl Engine {
         let mode = GotoMode::new(
             self,
             GotoDestination::Image{
-                image: Arc::clone(&self.cur_frame.image),
+                image: Arc::clone(&self.preview.image),
                 info: Arc::clone(&light_frame_info.image),
                 stars: Arc::clone(&light_frame_info.stars)
             },

@@ -1,6 +1,6 @@
 use std::{path::Path, sync::{Arc, Mutex}, time::Duration};
 
-use astra_lite::{core::{engine::*, events::*, frame_processing::{FrameProcessResult, FrameProcessResultData}}, hal::{DeviceType, FrameType, HalImpl}, image::io::load_raw_image_from_fits_file};
+use astra_lite::{core::{engine::*, events::*, frame_processing::{FrameProcessNotification, FrameProcessEvent}}, hal::{DeviceType, FrameType, HalImpl}, image::io::load_raw_image_from_fits_file};
 
 /// Exposure time per frame in seconds.
 const EXPOSURE_SECS: f64 = 1.0;
@@ -138,17 +138,17 @@ fn saving_raw_frames() {
     engine.events.connect({
         let shared_state = Arc::clone(&shared_state);
         move |event| {
-            if let Event::FrameProcessing(FrameProcessResult { data, .. }) = &event {
+            if let Event::FrameProcessing(FrameProcessNotification { event, .. }) = &event {
                 match data {
                     // Reset watchdog — a frame processing cycle has just started
-                    FrameProcessResultData::ShotProcessingStarted => {
+                    FrameProcessEvent::ShotProcessingStarted => {
                         let mut state = shared_state.lock().unwrap();
                         state.idle_seconds = 0;
                         println!("FrameProcessResultData::ShotProcessingStarted");
                     }
 
                     // Cycle completed — count successful frames.
-                    FrameProcessResultData::ShotProcessingFinished { frame_is_ok, .. } => {
+                    FrameProcessEvent::ShotProcessingFinished { frame_is_ok, .. } => {
                         let mut state = shared_state.lock().unwrap();
                         state.idle_seconds = 0;
                         if *frame_is_ok {
@@ -237,7 +237,7 @@ fn saving_raw_frames() {
 
     // Verify the current image is not empty
     assert!(
-        !engine.cur_frame.image.read().unwrap().is_empty(),
+        !engine.preview.image.read().unwrap().is_empty(),
         "current frame image must not be empty"
     );
 
@@ -293,15 +293,15 @@ fn saving_raw_frames_with_master() {
     engine.events.connect({
         let shared_state = Arc::clone(&shared_state);
         move |event| {
-            if let Event::FrameProcessing(FrameProcessResult { data, .. }) = &event {
+            if let Event::FrameProcessing(FrameProcessNotification { event, .. }) = &event {
                 match data {
-                    FrameProcessResultData::ShotProcessingStarted => {
+                    FrameProcessEvent::ShotProcessingStarted => {
                         let mut state = shared_state.lock().unwrap();
                         state.idle_seconds = 0;
                         println!("FrameProcessResultData::ShotProcessingStarted");
                     }
 
-                    FrameProcessResultData::ShotProcessingFinished { frame_is_ok, .. } => {
+                    FrameProcessEvent::ShotProcessingFinished { frame_is_ok, .. } => {
                         let mut state = shared_state.lock().unwrap();
                         state.idle_seconds = 0;
                         if *frame_is_ok {
@@ -317,7 +317,7 @@ fn saving_raw_frames_with_master() {
                         assert!(*frame_is_ok, "captured frame quality check failed");
                     }
 
-                    FrameProcessResultData::MasterSaved { frame_type, file_name } => {
+                    FrameProcessEvent::MasterSaved { frame_type, file_name } => {
                         let mut state = shared_state.lock().unwrap();
                         state.idle_seconds = 0;
                         state.master_saved = true;
@@ -419,7 +419,7 @@ fn saving_raw_frames_with_master() {
 
     // Verify the current image is not empty
     assert!(
-        !engine.cur_frame.image.read().unwrap().is_empty(),
+        !engine.preview.image.read().unwrap().is_empty(),
         "current frame image must not be empty"
     );
 
@@ -476,15 +476,15 @@ fn saving_raw_frames_with_abort_and_resume() {
     engine.events.connect({
         let shared_state = Arc::clone(&shared_state);
         move |event| {
-            if let Event::FrameProcessing(FrameProcessResult { data, .. }) = &event {
+            if let Event::FrameProcessing(FrameProcessNotification { event, .. }) = &event {
                 match data {
-                    FrameProcessResultData::ShotProcessingStarted => {
+                    FrameProcessEvent::ShotProcessingStarted => {
                         let mut state = shared_state.lock().unwrap();
                         state.idle_seconds = 0;
                         println!("FrameProcessResultData::ShotProcessingStarted");
                     }
 
-                    FrameProcessResultData::ShotProcessingFinished { frame_is_ok, .. } => {
+                    FrameProcessEvent::ShotProcessingFinished { frame_is_ok, .. } => {
                         let mut state = shared_state.lock().unwrap();
                         state.idle_seconds = 0;
                         if *frame_is_ok {
@@ -618,7 +618,7 @@ fn saving_raw_frames_with_abort_and_resume() {
 
     // Verify the current image is not empty
     assert!(
-        !engine.cur_frame.image.read().unwrap().is_empty(),
+        !engine.preview.image.read().unwrap().is_empty(),
         "current frame image must not be empty"
     );
 

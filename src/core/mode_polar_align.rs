@@ -3,7 +3,7 @@ use std::{any::Any, f64::consts::PI, sync::{Arc, RwLock}};
 use chrono::{NaiveDateTime, Utc};
 
 use crate::{
-    core::{cam_ctrl::take_shot, engine::*, frame_processing::*, preview_image::ResultImage}, hal::{Camera, FrameType, Hal, Telescope, indi::degree_to_str}, image::stars::StarItems, options::*, plate_solve::*, sky_math::{math::*, solar_system::calc_atmospheric_refraction},
+    core::{cam_ctrl::take_shot, engine::*, frame_processing::*, preview::Preview}, hal::{Camera, FrameType, Hal, Telescope, indi::degree_to_str}, image::stars::StarItems, options::*, plate_solve::*, sky_math::{math::*, solar_system::calc_atmospheric_refraction},
 };
 
 use super::{consts::*, events::*, utils::{check_telescope_is_at_desired_position, gain_to_value}};
@@ -233,7 +233,7 @@ pub struct PolarAlignMode {
     pa_opts:      PolarAlignOptions,
     s_opts:       SiteOptions,
     options:      Arc<RwLock<Options>>,
-    cur_frame:    Arc<ResultImage>,
+    cur_frame:    Arc<Preview>,
     subscribers:  Arc<EventHandlers>,
     ps_opts:      PlateSolverOptions,
     plate_solver: PlateSolver,
@@ -376,7 +376,7 @@ impl PolarAlignMode {
             pa_opts:     opts.polar_align.clone(),
             s_opts:      opts.site.clone(),
             options:     Arc::clone(&engine.options),
-            cur_frame:   Arc::clone(&engine.cur_frame),
+            cur_frame:   Arc::clone(&engine.preview),
             subscribers: Arc::clone(&engine.events),
             ps_opts:     opts.plate_solver.clone(),
             alignment:   PolarAlignment::new(),
@@ -715,17 +715,17 @@ impl Mode for PolarAlignMode {
 
     fn notify_about_frame_processing_result(
         &mut self,
-        fp_result: &FrameProcessResult
+        fp_result: &FrameProcessNotification
     ) -> eyre::Result<NotifyResult> {
         let stars_supported = self.plate_solver.support_stars_as_input();
-        match (&self.state, &fp_result.data, stars_supported) {
-            (State::Capture, FrameProcessResultData::ImageReady, false) => {
+        match (&self.state, &fp_result.event, stars_supported) {
+            (State::Capture, FrameProcessEvent::ImageReady, false) => {
                 let ok = self.plate_solve_image()?;
                 if !ok { return Ok(NotifyResult::Empty); }
                 self.state = State::PlateSolve;
                 return Ok(NotifyResult::ProgressChanges);
             }
-            (State::Capture, FrameProcessResultData::LightFrameInfo(info), true) => {
+            (State::Capture, FrameProcessEvent::LightFrameReady(info), true) => {
                 let ok = self.plate_solve_stars(&info.stars.items, info.image.width, info.image.height)?;
                 if !ok { return Ok(NotifyResult::Empty); }
                 self.state = State::PlateSolve;

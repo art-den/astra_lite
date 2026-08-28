@@ -1,31 +1,55 @@
-use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, sync::{mpsc, RwLock, Mutex}, path::*};
+use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, sync::{mpsc, Mutex}, path::*};
 
 use chrono::{DateTime, Local};
 use bitflags::bitflags;
 
 use crate::{
-    core::{engine::ModeKind, preview_image::{ResultImage, ResultImageInfo}, utils::{FileNameArg, FileNameUtils}}, hal::{CameraShot, CameraShotType, FrameType}, image::{
-        histogram::*, image::*, image_stacker::*, info::*,
+    core::{engine::ModeKind, live_stacking::{LiveStackedImageInfo, LiveStacking}, preview::{Preview, ResultImageInfo}, utils::{FileNameArg, FileNameUtils}}, hal::{CameraShot, CameraShotType, FrameType}, image::{
+        histogram::*, info::*,
         io::*, preview::*, raw::*,
-        stars::{StarItems, Stars, StarsFinder, StarsInfo}, stars_offset::*,
+        stars::{Stars, StarsFinder}, stars_offset::*,
     }, options::*, utils::log_utils::*,
 };
 
+#[derive(Default, Debug)]
+pub struct CalibrParams {
+    pub extract_dark:    bool,
+    pub dark_lib_path:   PathBuf,
+    pub flat_fname:      Option<PathBuf>,
+    pub ccd_temp:        Option<f64>,
+    pub sar_hot_pixels:  bool, // "sar" means Search And Remove (hot pixels)
+}
+
 #[derive(Default)]
-pub struct StarsInfoData {
-    pub items: Arc<StarItems>,
-    pub info:  Arc<StarsInfo>,
+pub struct CalibrCache {
+    subtract_image:      Option<RawImage>,
+    subtract_fname:      Option<PathBuf>,
+    master_flat:         Option<RawImage>,
+    master_flat_fname:   Option<PathBuf>,
+    defect_pixels:       Option<BadPixels>,
+    defect_pixels_fname: Option<PathBuf>,
+}
+
+impl CalibrCache {
+    pub fn clear(&mut self) {
+        self.subtract_image = None;
+        self.subtract_fname = None;
+        self.master_flat = None;
+        self.master_flat_fname = None;
+        self.defect_pixels = None;
+        self.defect_pixels_fname = None;
+    }
 }
 
 #[derive(Clone)]
-pub struct LightFrameQualInfoData {
+pub struct FrameQuality {
     pub ccd_temp_ok:   bool,
     pub offset_is_ok:  bool,
     pub fwhm_is_ok:    bool,
     pub ovality_is_ok: bool,
 }
 
-impl Default for LightFrameQualInfoData {
+impl Default for FrameQuality {
     fn default() -> Self {
         Self {
             ccd_temp_ok:   true,
@@ -36,7 +60,7 @@ impl Default for LightFrameQualInfoData {
     }
 }
 
-impl LightFrameQualInfoData {
+impl FrameQuality {
     pub fn is_ok(&self) -> bool {
         self.ccd_temp_ok &&
         self.offset_is_ok &&
@@ -50,80 +74,16 @@ impl LightFrameQualInfoData {
     }
 }
 
-pub struct LightFrameInfoData {
+pub struct LightFrameResult {
     pub raw:     Option<RawImageInfo>,
     pub image:   Arc<LightFrameInfo>,
-    pub stars:   Arc<StarsInfoData>,
+    pub stars:   Arc<Stars>,
     pub offset:  Option<Offset>,
-    pub quality: LightFrameQualInfoData,
+    pub quality: FrameQuality,
 }
 
-#[derive(Clone)]
-pub struct LiveStackingInfo {
-    pub image: Arc<LightFrameInfo>,
-    pub stars: Arc<StarsInfoData>,
-}
-
-#[derive(Default, Debug)]
-pub struct CalibrParams {
-    pub extract_dark:    bool,
-    pub dark_lib_path:   PathBuf,
-    pub flat_fname:      Option<PathBuf>,
-    pub ccd_temp:        Option<f64>,
-    pub sar_hot_pixels:  bool, // "sar" means Search And Remove (hot pixels)
-}
-
-#[derive(Default)]
-pub struct CalibrData {
-    subtract_image:      Option<RawImage>,
-    subtract_fname:      Option<PathBuf>,
-    master_flat:         Option<RawImage>,
-    master_flat_fname:   Option<PathBuf>,
-    defect_pixels:       Option<BadPixels>,
-    defect_pixels_fname: Option<PathBuf>,
-}
-
-impl CalibrData {
-    pub fn clear(&mut self) {
-        self.subtract_image = None;
-        self.subtract_fname = None;
-        self.master_flat = None;
-        self.master_flat_fname = None;
-        self.defect_pixels = None;
-        self.defect_pixels_fname = None;
-    }
-}
-
-pub struct LiveStackingData {
-    pub stacker:  RwLock<ImageStacker>,
-    pub image:    RwLock<Image>,
-    pub hist:     RwLock<Histogram>,
-    pub info:     RwLock<Option<LiveStackingInfo>>,
-    pub time_cnt: Mutex<f64>,
-}
-
-impl LiveStackingData {
-    pub fn new() -> Self {
-        Self {
-            stacker:  RwLock::new(ImageStacker::new()),
-            image:    RwLock::new(Image::new_empty()),
-            hist:     RwLock::new(Histogram::new()),
-            info:     RwLock::new(None),
-            time_cnt: Mutex::new(0.0),
-        }
-    }
-
-    pub fn prepare_for_work(&self, mode: ImageStackingMode) {
-        self.stacker.write().unwrap().prepare_for_work(mode);
-        self.image.write().unwrap().clear();
-        self.hist.write().unwrap().clear();
-        *self.info.write().unwrap() = None;
-        *self.time_cnt.lock().unwrap() = 0.0;
-    }
-}
-
-pub struct LiveStackingParams {
-    pub data:    Arc<LiveStackingData>,
+pub struct LiveStackingCtx {
+    pub data:    Arc<LiveStacking>,
     pub options: LiveStackingOptions,
 }
 
@@ -133,30 +93,30 @@ bitflags! {
     }
 }
 
-pub struct FrameProcessCommandData {
+pub struct ProcessImageParams {
     pub mode_kind:       ModeKind,
     pub camera_id:       String,
     pub img_source:      Arc<dyn CameraShot + Send + Sync>,
     pub flags:           FrameProcessCommandFlags,
-    pub frame:           Arc<ResultImage>,
+    pub preview:         Arc<Preview>,
     pub stop_flag:       Arc<AtomicBool>,
     pub ref_stars:       Option<Vec<Point>>,
     pub calibr_params:   Option<CalibrParams>,
-    pub calibr_data:     Arc<Mutex<CalibrData>>,
+    pub calibr_data:     Arc<Mutex<CalibrCache>>,
     pub view_options:    PreviewParams,
     pub frame_options:   FrameOptions,
     pub cam_ctrl_opts:   Option<CamCtrlOptions>,
     pub quality_options: Option<QualityOptions>,
-    pub live_stacking:   Option<LiveStackingParams>,
+    pub live_stacking:   Option<LiveStackingCtx>,
 }
 
-pub struct Preview8BitImgData {
+pub struct PreviewImage {
     pub rgb_data: PreviewRgbData,
     pub params:   PreviewParams,
 }
 
 #[derive(Clone)]
-pub struct RawFrameInfo {
+pub struct RawFrameResult {
     pub image:       Arc<RawImage>,
     pub ccd_temp_ok: bool,
     pub mean:        f32,
@@ -164,24 +124,24 @@ pub struct RawFrameInfo {
     pub std_dev:     f32,
 }
 
-impl RawFrameInfo {
+impl RawFrameResult {
     pub fn quality_is_ok(&self) -> bool {
         self.ccd_temp_ok
     }
 }
 
 #[derive(Clone)]
-pub enum FrameProcessResultData {
+pub enum FrameProcessEvent {
     ShotProcessingStarted,
-    RawFrameInfo(RawFrameInfo),
+    RawFrameReady(RawFrameResult),
     RawHistogramReady,
     ImageReady,
-    PreviewFrame(Arc<Preview8BitImgData>),
-    PreviewLiveRes(Arc<Preview8BitImgData>),
-    LightFrameInfo(Arc<LightFrameInfoData>),
-    FrameInfo,
-    FrameInfoLiveRes,
-    HistogramLiveRes,
+    PreviewOrigFrame(Arc<PreviewImage>),
+    PreviewLiveStacking(Arc<PreviewImage>),
+    LightFrameReady(Arc<LightFrameResult>),
+    OrigFrameInfoReady,
+    LiveStackingInfoReady,
+    LiveStackingHistogramReady,
     MasterSaved {
         frame_type: FrameType,
         file_name: PathBuf
@@ -195,23 +155,23 @@ pub enum FrameProcessResultData {
 }
 
 #[derive(Clone)]
-pub struct FrameProcessResult {
+pub struct FrameProcessNotification {
     pub camera_id: String,
     pub mode_kind: ModeKind,
-    pub data:      FrameProcessResultData,
+    pub event:     FrameProcessEvent,
 }
 
 #[derive(Clone)]
-pub enum CommandResult {
-    Result(FrameProcessResult),
+pub enum FrameProcessingReply {
+    Result(FrameProcessNotification),
     Error(String),
     QueueOverflow,
 }
 
-pub type ResultFun = Box<dyn Fn(CommandResult) + Send + 'static>;
+pub type ResultFun = Box<dyn Fn(FrameProcessingReply) + Send + 'static>;
 
 pub enum FrameProcessCommand {
-    ProcessImage(FrameProcessCommandData),
+    ProcessImage(ProcessImageParams),
     Stop
 }
 
@@ -255,7 +215,7 @@ impl FrameProcessing {
                 let queue_is_overflowed = commands.len() >= 3;
                 if queue_is_overflowed {
                     let Some(self_) = weak_this.upgrade() else { break 'outer; };
-                    self_.notify_cmd_result(CommandResult::QueueOverflow);
+                    self_.notify_cmd_result(FrameProcessingReply::QueueOverflow);
                 }
 
                 for cmd in commands {
@@ -263,7 +223,7 @@ impl FrameProcessing {
                         let Some(self_) = weak_this.upgrade() else { break 'outer; };
                         let process_cmd_res = self_.process_command(cmd);
                         if let Err(err) = process_cmd_res {
-                            self_.notify_cmd_result(CommandResult::Error(err.to_string()));
+                            self_.notify_cmd_result(FrameProcessingReply::Error(err.to_string()));
                         }
                     }
                 }
@@ -275,7 +235,7 @@ impl FrameProcessing {
         this
     }
 
-    pub fn connect_result_fun(&self, fun: impl Fn(CommandResult) + Send + 'static) {
+    pub fn connect_result_fun(&self, fun: impl Fn(FrameProcessingReply) + Send + 'static) {
         let mut result_fun = self.result_fun.lock().unwrap();
         *result_fun = Some(Box::new(fun));
     }
@@ -285,21 +245,21 @@ impl FrameProcessing {
         Ok(())
     }
 
-    fn notify_cmd_result(&self, result: CommandResult) {
+    fn notify_cmd_result(&self, result: FrameProcessingReply) {
         let result_fun_mutex = self.result_fun.lock().unwrap();
         let result_fun = result_fun_mutex.as_ref().expect("FrameProcessing::result_fun");
         result_fun(result);
     }
 
-    fn notify_frame_result(&self, result: FrameProcessResultData, command: &FrameProcessCommandData) {
-        self.notify_cmd_result(CommandResult::Result(FrameProcessResult {
+    fn notify_frame_result(&self, result: FrameProcessEvent, command: &ProcessImageParams) {
+        self.notify_cmd_result(FrameProcessingReply::Result(FrameProcessNotification {
             camera_id: command.camera_id.clone(),
             mode_kind: command.mode_kind,
-            data:      result
+            event:     result
         }));
     }
 
-    fn process_command(&self, command: FrameProcessCommandData) -> eyre::Result<()> {
+    fn process_command(&self, command: ProcessImageParams) -> eyre::Result<()> {
         if command.stop_flag.load(Ordering::Relaxed) {
             log::debug!("Command stopped");
             return Ok(());
@@ -308,7 +268,7 @@ impl FrameProcessing {
         let total_tmr = TimeLogger::start();
 
         self.notify_frame_result(
-            FrameProcessResultData::ShotProcessingStarted,
+            FrameProcessEvent::ShotProcessingStarted,
             &command,
         );
 
@@ -318,7 +278,7 @@ impl FrameProcessing {
         let mut raw_info = None;
         let mut raw_noise = None;
 
-        let mut quality = LightFrameQualInfoData::default();
+        let mut quality = FrameQuality::default();
 
         let mut image = match command.img_source.get_type() {
             crate::hal::CameraShotType::RawCcdData => {
@@ -364,7 +324,7 @@ impl FrameProcessing {
 
                 // Raw histogram (before applying calibration data)
 
-                let mut raw_hist = command.frame.raw_hist.write().unwrap();
+                let mut raw_hist = command.preview.raw_hist.write().unwrap();
                 let tmr = TimeLogger::start();
                 raw_hist.from_raw_image(
                     &raw_image,
@@ -397,7 +357,7 @@ impl FrameProcessing {
                 drop(raw_hist);
 
                 self.notify_frame_result(
-                    FrameProcessResultData::RawHistogramReady,
+                    FrameProcessEvent::RawHistogramReady,
                     &command,
                 );
 
@@ -419,7 +379,7 @@ impl FrameProcessing {
 
                 let raw_image = Arc::new(raw_image);
 
-                let raw_frame_info = RawFrameInfo {
+                let raw_frame_info = RawFrameResult {
                     image:       Arc::clone(&raw_image),
                     ccd_temp_ok: quality.ccd_temp_ok,
                     mean:        raw_mean as f32,
@@ -427,7 +387,7 @@ impl FrameProcessing {
                     std_dev:     raw_std_dev as f32,
                 };
                 self.notify_frame_result(
-                    FrameProcessResultData::RawFrameInfo(raw_frame_info),
+                    FrameProcessEvent::RawFrameReady(raw_frame_info),
                     &command,
                 );
 
@@ -455,22 +415,22 @@ impl FrameProcessing {
 
                 match frame_type {
                     FrameType::Flats => {
-                        let hist = command.frame.raw_hist.read().unwrap();
-                        *command.frame.info.write().unwrap() = ResultImageInfo::FlatInfo(
+                        let hist = command.preview.raw_hist.read().unwrap();
+                        *command.preview.info.write().unwrap() = ResultImageInfo::FlatInfo(
                             FlatImageInfo::from_histogram(&hist)
                         );
                         self.notify_frame_result(
-                            FrameProcessResultData::FrameInfo,
+                            FrameProcessEvent::OrigFrameInfoReady,
                             &command,
                         );
                     },
                     FrameType::Darks | FrameType::Biases => {
-                        let hist = command.frame.raw_hist.read().unwrap();
-                        *command.frame.info.write().unwrap() = ResultImageInfo::RawInfo(
+                        let hist = command.preview.raw_hist.read().unwrap();
+                        *command.preview.info.write().unwrap() = ResultImageInfo::RawInfo(
                             RawImageStat::from_histogram(&hist)
                         );
                         self.notify_frame_result(
-                            FrameProcessResultData::FrameInfo,
+                            FrameProcessEvent::OrigFrameInfoReady,
                             &command,
                         );
                     },
@@ -485,7 +445,7 @@ impl FrameProcessing {
 
                 // Demosaic
 
-                let mut image = command.frame.image.write().unwrap();
+                let mut image = command.preview.image.write().unwrap();
 
                 let tmr = TimeLogger::start();
                 if !is_monochrome_img {
@@ -506,7 +466,7 @@ impl FrameProcessing {
             }
 
             crate::hal::CameraShotType::ReadyImage => {
-                let mut image = command.frame.image.write().unwrap();
+                let mut image = command.preview.image.write().unwrap();
                 command.img_source.get_image(&mut image)?;
                 image
             }
@@ -530,7 +490,7 @@ impl FrameProcessing {
         }
 
         self.notify_frame_result(
-            FrameProcessResultData::ImageReady,
+            FrameProcessEvent::ImageReady,
             &command,
         );
 
@@ -541,16 +501,16 @@ impl FrameProcessing {
 
         // Result image histogram
 
-        let image = command.frame.image.read().unwrap();
-        let mut hist = command.frame.img_hist.write().unwrap();
+        let image = command.preview.image.read().unwrap();
+        let mut hist = command.preview.img_hist.write().unwrap();
         let tmr = TimeLogger::start();
         hist.from_image(&image);
         tmr.log("histogram for result image");
 
         if command.img_source.get_type() == CameraShotType::ReadyImage {
-            *command.frame.raw_hist.write().unwrap() = hist.clone();
+            *command.preview.raw_hist.write().unwrap() = hist.clone();
             self.notify_frame_result(
-                FrameProcessResultData::RawHistogramReady,
+                FrameProcessEvent::RawHistogramReady,
                 &command,
             );
         }
@@ -589,7 +549,7 @@ impl FrameProcessing {
 
         // Preview image RGB bytes
 
-        let hist = command.frame.img_hist.read().unwrap();
+        let hist = command.preview.img_hist.read().unwrap();
         let tmr = TimeLogger::start();
         let rgb_data = get_preview_rgb_data(
             &image,
@@ -605,29 +565,26 @@ impl FrameProcessing {
         }
 
         if let Some(rgb_data) = rgb_data {
-            let preview_data = Arc::new(Preview8BitImgData {
+            let preview_data = Arc::new(PreviewImage {
                 rgb_data,
                 params: command.view_options.clone(),
             });
             self.notify_frame_result(
-                FrameProcessResultData::PreviewFrame(preview_data),
+                FrameProcessEvent::PreviewOrigFrame(preview_data),
                 &command,
             );
         }
 
         if frame_type == FrameType::Lights {
-            let stars_items = Arc::new(frame_stars.items);
-            let stars_info = Arc::new(frame_stars.info);
-
-            *command.frame.stars.write().unwrap() = Some(Arc::clone(&stars_items));
+            let stars = Arc::new(frame_stars);
 
             // Stars quality
 
             if let Some(qo) = &command.quality_options {
-                if qo.use_max_fwhm && let Some(fwhm) = stars_info.fwhm {
+                if qo.use_max_fwhm && let Some(fwhm) = stars.info.fwhm {
                     quality.fwhm_is_ok = fwhm < qo.max_fwhm;
                 }
-                if qo.use_max_ovality && let Some(ovality) = stars_info.ovality {
+                if qo.use_max_ovality && let Some(ovality) = stars.info.ovality {
                     quality.ovality_is_ok = ovality < qo.max_ovality;
                 }
             }
@@ -656,7 +613,7 @@ impl FrameProcessing {
             let stars_offset =
                 if let (Some(stars_for_offset), true) = (&command.ref_stars, quality.stars_is_ok()) {
                     let tmr = TimeLogger::start();
-                    let cur_stars_points: Vec<_> = stars_items.iter()
+                    let cur_stars_points: Vec<_> = stars.items.iter()
                         .map(|star| Point {x: star.x, y: star.y })
                         .collect();
                     let image_offset = Offset::calculate(
@@ -672,13 +629,10 @@ impl FrameProcessing {
                     None
                 };
 
-            let info = Arc::new(LightFrameInfoData {
+            let info = Arc::new(LightFrameResult {
                 raw: raw_info.clone(),
                 image: Arc::new(info),
-                stars: Arc::new(StarsInfoData {
-                    items: stars_items,
-                    info: stars_info,
-                }),
+                stars: Arc::clone(&stars),
                 offset: stars_offset,
                 quality: quality.clone(),
             });
@@ -686,15 +640,15 @@ impl FrameProcessing {
             // Send message about calculated light frame
 
             self.notify_frame_result(
-                FrameProcessResultData::LightFrameInfo(Arc::clone(&info)),
+                FrameProcessEvent::LightFrameReady(Arc::clone(&info)),
                 &command,
             );
 
             // Send message about light frame info stored
 
-            *command.frame.info.write().unwrap() = ResultImageInfo::LightInfo(Arc::clone(&info));
+            *command.preview.info.write().unwrap() = ResultImageInfo::LightInfo(Arc::clone(&info));
             self.notify_frame_result(
-                FrameProcessResultData::FrameInfo,
+                FrameProcessEvent::OrigFrameInfoReady,
                 &command,
             );
 
@@ -753,7 +707,7 @@ impl FrameProcessing {
 
                 let hist = live_stacking.data.hist.read().unwrap();
                 self.notify_frame_result(
-                    FrameProcessResultData::HistogramLiveRes,
+                    FrameProcessEvent::LiveStackingHistogramReady,
                     &command,
                 );
 
@@ -795,20 +749,16 @@ impl FrameProcessing {
                     return Ok(());
                 }
 
-                let ls_light_frame_info = LiveStackingInfo {
+                let ls_light_frame_info = LiveStackedImageInfo {
                     image: Arc::new(live_stacking_info),
-                    stars: Arc::new(StarsInfoData {
-                        items: Arc::new(ls_stars.items),
-                        info: Arc::new(ls_stars.info),
-                    }),
+                    stars: Arc::new(ls_stars),
                 };
-
 
                 //let ls_light_frame_info = Arc::new(ls_light_frame_info);
 
                 *live_stacking.data.info.write().unwrap() = Some(ls_light_frame_info.clone());
                 self.notify_frame_result(
-                    FrameProcessResultData::FrameInfoLiveRes,
+                    FrameProcessEvent::LiveStackingInfoReady,
                     &command,
                 );
 
@@ -830,13 +780,13 @@ impl FrameProcessing {
                     }
 
                     if let Some(rgb_data) = rgb_data {
-                        let preview_data = Arc::new(Preview8BitImgData {
+                        let preview_data = Arc::new(PreviewImage {
                             rgb_data,
                             params: command.view_options.clone(),
                         });
 
                         self.notify_frame_result(
-                            FrameProcessResultData::PreviewLiveRes(preview_data),
+                            FrameProcessEvent::PreviewLiveStacking(preview_data),
                             &command,
                         );
                     }
@@ -869,8 +819,6 @@ impl FrameProcessing {
                     }
                 }
             }
-        } else {
-            *command.frame.stars.write().unwrap() = None;
         };
 
         if command.stop_flag.load(Ordering::Relaxed) {
@@ -881,7 +829,7 @@ impl FrameProcessing {
         let process_time = total_tmr.log("TOTAL PREVIEW");
 
         if let Some(raw_info) = raw_info {
-            let result = FrameProcessResultData::ShotProcessingFinished{
+            let result = FrameProcessEvent::ShotProcessingFinished{
                 raw_image_info:  Arc::new(raw_info),
                 frame_is_ok:     quality.is_ok(),
                 camera_shot:     Arc::clone(&command.img_source),
@@ -896,7 +844,7 @@ impl FrameProcessing {
     fn apply_calibr_data_and_remove_hot_pixels(
         params:    &Option<CalibrParams>,
         raw_image: &mut RawImage,
-        calibr:    &mut CalibrData,
+        calibr:    &mut CalibrCache,
     ) -> eyre::Result<()> {
         let Some(params) = params else { return Ok(()); };
 

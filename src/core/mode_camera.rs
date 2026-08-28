@@ -1,12 +1,7 @@
 use std::{any::Any, path::PathBuf, sync::{Arc, Mutex, RwLock}};
 use chrono::Utc;
 use crate::{
-    core::{cam_ctrl::take_shot, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode},
-    guiding::external_guider::*,
-    hal::{Camera, CameraFeatures, CameraShot, Focuser, FrameType, Telescope},
-    image::{histogram::*, image_stacker::ImageStackingMode, io::save_raw_image_to_fits_file, raw::{RawImage, RawImageInfo}, raw_stacker::*, stars_offset::*},
-    options::*,
-    utils::{io_utils::*, log_utils::TimeLogger}
+    core::{cam_ctrl::take_shot, live_stacking::LiveStacking, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode}, guiding::external_guider::*, hal::{Camera, CameraFeatures, CameraShot, Focuser, FrameType, Telescope}, image::{histogram::*, image_stacker::ImageStackingMode, io::save_raw_image_to_fits_file, raw::{RawImage, RawImageInfo}, raw_stacker::*, stars_offset::*}, options::*, utils::{io_utils::*, log_utils::TimeLogger}
 };
 
 use super::{
@@ -138,7 +133,7 @@ pub struct TakingPicturesMode {
     guider:            Option<Guider>,
     ref_stars:         Option<Vec<Point>>,
     progress:          Option<Progress>,
-    live_stacking:     Option<Arc<LiveStackingData>>,
+    live_stacking:     Option<Arc<LiveStacking>>,
     autofocuser:       Option<AutoFocuser>,
     flags:             Flags,
     fname_utils:       FileNameUtils,
@@ -247,7 +242,7 @@ impl TakingPicturesMode {
             events:            Arc::clone(&engine.events),
             raw_stacker:       RawStacker::new(raw_stacker_mode),
             options:           Arc::clone(&engine.options),
-            raw_histogram:     Arc::clone(&engine.cur_frame.raw_hist),
+            raw_histogram:     Arc::clone(&engine.preview.raw_hist),
             next_job:          None,
             ref_stars:         None,
             out_file_names:    OutFileNames::default(),
@@ -524,7 +519,7 @@ impl TakingPicturesMode {
 
     fn process_raw_image(
         &mut self,
-        raw_info: &RawFrameInfo,
+        raw_info: &RawFrameResult,
     ) -> eyre::Result<NotifyResult> {
         if self.state != State::Common {
             return Ok(NotifyResult::Empty);
@@ -609,7 +604,7 @@ impl TakingPicturesMode {
 
     fn process_light_frame_info(
         &mut self,
-        info: &LightFrameInfoData,
+        info: &LightFrameResult,
     ) -> eyre::Result<NotifyResult> {
         if self.state != State::Common {
             return Ok(NotifyResult::Empty);
@@ -645,7 +640,7 @@ impl TakingPicturesMode {
 
     fn process_light_frame_info_and_refocus(
         &mut self,
-        info: &LightFrameInfoData,
+        info: &LightFrameResult,
     ) -> eyre::Result<()> {
         let Some(autofocuser) = &mut self.autofocuser else {
             return Ok(());
@@ -748,7 +743,7 @@ impl TakingPicturesMode {
 
     fn process_light_frame_info_and_dither_by_main_camera(
         &mut self,
-        info: &LightFrameInfoData,
+        info: &LightFrameResult,
     ) -> eyre::Result<()> {
         if !info.quality.is_ok() {
             return Ok(());
@@ -858,7 +853,7 @@ impl TakingPicturesMode {
 
     fn process_light_frame_info_and_dither_by_ext_guider(
         &mut self,
-        info: &LightFrameInfoData,
+        info: &LightFrameResult,
     ) -> eyre::Result<()> {
         if !info.quality.is_ok() {
             return Ok(());
@@ -947,15 +942,15 @@ impl TakingPicturesMode {
                 self.save_master_file()?;
 
                 // TODO: do separated event?
-                let result = FrameProcessResultData::MasterSaved {
+                let result = FrameProcessEvent::MasterSaved {
                     frame_type: raw_image_info.frame_type,
                     file_name: self.out_file_names.master_fname.clone()
                 };
 
-                let event_data = FrameProcessResult {
+                let event_data = FrameProcessNotification {
                     camera_id: self.camera.id().to_string(),
                     mode_kind: self.kind(),
-                    data:      result,
+                    event:     result,
                 };
 
                 self.events.send(Event::FrameProcessing(event_data));
@@ -1510,18 +1505,18 @@ impl Mode for TakingPicturesMode {
 
     fn notify_about_frame_processing_result(
         &mut self,
-        fp_result: &FrameProcessResult
+        fp_result: &FrameProcessNotification
     ) -> eyre::Result<NotifyResult> {
-        match &fp_result.data {
-            FrameProcessResultData::RawFrameInfo(raw_info) =>
+        match &fp_result.event {
+            FrameProcessEvent::RawFrameReady(raw_info) =>
                 self.process_raw_image(raw_info),
 
-            FrameProcessResultData::LightFrameInfo(info) =>
+            FrameProcessEvent::LightFrameReady(info) =>
                 self.process_light_frame_info(info),
 
-            FrameProcessResultData::RawHistogramReady =>
+            FrameProcessEvent::RawHistogramReady =>
                 self.process_raw_histogram(),
-            FrameProcessResultData::ShotProcessingFinished {
+            FrameProcessEvent::ShotProcessingFinished {
                 frame_is_ok, camera_shot, raw_image_info, ..
             } =>
                 self.process_frame_processing_finished_event(
@@ -1535,7 +1530,7 @@ impl Mode for TakingPicturesMode {
         }
     }
 
-    fn complete_img_process_params(&self, cmd: &mut FrameProcessCommandData) {
+    fn complete_img_process_params(&self, cmd: &mut ProcessImageParams) {
         cmd.cam_ctrl_opts = Some(self.cam_options.ctrl.clone());
 
         let options = self.options.read().unwrap();
@@ -1555,7 +1550,7 @@ impl Mode for TakingPicturesMode {
                 }
             },
             CameraMode::LiveStacking => {
-                cmd.live_stacking = Some(LiveStackingParams {
+                cmd.live_stacking = Some(LiveStackingCtx {
                     data:    Arc::clone(self.live_stacking.as_ref().unwrap()),
                     options: options.live.clone(),
                 });

@@ -11,15 +11,15 @@ const MAX_STARS_CNT_FOR_STAR_IMAGE: usize = 100;
 
 #[derive(Clone, Default)]
 pub struct Star {
-    pub x:             f64,
-    pub y:             f64,
-    pub background:    u16,
+    pub x:           f64,
+    pub y:           f64,
+    pub background:  u16,
     pub max_value:   u16,
     pub brightness:  u32,
     pub overexposed: bool,
     pub width:       usize,
     pub height:      usize,
-    pub points:        Vec<(usize, usize)>,
+    pub points:      Vec<(usize, usize)>,
 }
 
 pub type StarItems = Vec<Star>;

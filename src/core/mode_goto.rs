@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 use crate::{
-    core::{cam_ctrl::take_shot, consts::*, events::*, frame_processing::*, preview_image::ResultImage}, hal::{Camera, FrameType, Telescope, indi::value_to_sexagesimal}, image::{image::Image, info::LightFrameInfo, stars::StarItems, stars_offset::Point}, options::*, plate_solve::*, sky_math::math::*,
+    core::{cam_ctrl::take_shot, consts::*, events::*, frame_processing::*, preview::Preview}, hal::{Camera, FrameType, Telescope, indi::value_to_sexagesimal}, image::{image::Image, info::LightFrameInfo, stars::{StarItems, Stars}, stars_offset::Point}, options::*, plate_solve::*, sky_math::math::*,
 };
 use super::{engine::*, events::EventHandlers, utils::*};
 
@@ -25,7 +25,7 @@ pub enum GotoDestination {
     Image{
         image: Arc<RwLock<Image>>,
         info:  Arc<LightFrameInfo>,
-        stars: Arc<StarsInfoData>,
+        stars: Arc<Stars>,
     },
     Coord(EqCoord)
 }
@@ -50,7 +50,7 @@ pub struct GotoMode {
     eq_coord:     EqCoord,
     cam_opts:     Option<CamOptions>,
     ps_opts:      PlateSolverOptions,
-    cur_frame:    Arc<ResultImage>,
+    cur_frame:    Arc<Preview>,
     options:      Arc<RwLock<Options>>,
     subscribers:  Arc<EventHandlers>,
     plate_solver: Option<PlateSolver>,
@@ -90,7 +90,7 @@ impl GotoMode {
             state:        State::None,
             eq_coord:     EqCoord::default(),
             ps_opts:      opts.plate_solver.clone(),
-            cur_frame:    Arc::clone(&engine.cur_frame),
+            cur_frame:    Arc::clone(&engine.preview),
             options:      Arc::clone(&engine.options),
             subscribers:  Arc::clone(&engine.events),
             unpark_ms:    0,
@@ -233,7 +233,7 @@ impl GotoMode {
         Ok(true)
     }
 
-    fn show_overlay_message(&self, info: &LightFrameInfoData) {
+    fn show_overlay_message(&self, info: &LightFrameResult) {
         let message = if let Some(offset) = &info.offset {
             format!(
                 "Offset x={:.1}, y={:.1}\nRotation = {:.2}°",
@@ -473,32 +473,32 @@ impl Mode for GotoMode {
 
     fn notify_about_frame_processing_result(
         &mut self,
-        fp_result:  &FrameProcessResult
+        fp_result:  &FrameProcessNotification
     ) -> eyre::Result<NotifyResult> {
         let plate_solver = self.plate_solver.as_mut().unwrap();
         let xy_supported = plate_solver.support_stars_as_input();
-        match (&self.state, &fp_result.data, xy_supported) {
-            (State::TakingPicture, FrameProcessResultData::ImageReady, false) => {
+        match (&self.state, &fp_result.event, xy_supported) {
+            (State::TakingPicture, FrameProcessEvent::ImageReady, false) => {
                 self.plate_solve_image()?;
                 self.state = State::PlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
             }
-            (State::TakingPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
+            (State::TakingPicture, FrameProcessEvent::LightFrameReady(info), true) => {
                 self.plate_solve_stars(&info.stars.items, info.image.width, info.image.height)?;
                 self.state = State::PlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
             }
-            (State::TakingFinalPicture, FrameProcessResultData::ImageReady, false) => {
+            (State::TakingFinalPicture, FrameProcessEvent::ImageReady, false) => {
                 self.plate_solve_image()?;
                 self.state = State::FinalPlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
             }
-            (State::TakingFinalPicture, FrameProcessResultData::LightFrameInfo(info), true) => {
+            (State::TakingFinalPicture, FrameProcessEvent::LightFrameReady(info), true) => {
                 self.plate_solve_stars(&info.stars.items, info.image.width, info.image.height)?;
                 self.state = State::FinalPlateSolving;
                 return Ok(NotifyResult::ProgressChanges);
             }
-            (State::Checking, FrameProcessResultData::LightFrameInfo(info), true) => {
+            (State::Checking, FrameProcessEvent::LightFrameReady(info), true) => {
                 self.show_overlay_message(info);
                 self.start_take_picture()?;
                 return Ok(NotifyResult::ProgressChanges);
@@ -510,7 +510,7 @@ impl Mode for GotoMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn complete_img_process_params(&self, cmd: &mut FrameProcessCommandData) {
+    fn complete_img_process_params(&self, cmd: &mut ProcessImageParams) {
         if let GotoDestination::Image { stars, .. } = &self.destination {
             let ref_stars = stars.items.iter().map(|s| Point { x: s.x, y: s.y }).collect();
             cmd.ref_stars = Some(ref_stars);

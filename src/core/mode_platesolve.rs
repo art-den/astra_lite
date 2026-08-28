@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::{
     core::{
-        cam_ctrl::take_shot, engine::*, frame_processing::*, preview_image::ResultImage,
+        cam_ctrl::take_shot, engine::*, frame_processing::*, preview::Preview,
     }, hal::{Camera, CcdPurpose, FrameType, Hal, Telescope}, image::stars::StarItems, options::*, plate_solve::*, sky_math::math::*,
 };
 
@@ -22,7 +22,7 @@ pub struct PlatesolveMode {
     mount:        Arc<dyn Telescope + Send + Sync>,
     hal:          Arc<Hal>,
     events:       Arc<EventHandlers>,
-    cur_frame:    Arc<ResultImage>,
+    cur_frame:    Arc<Preview>,
     options:      Arc<RwLock<Options>>,
     cam_opts:     CamOptions,
     ps_opts:      PlateSolverOptions,
@@ -48,7 +48,7 @@ impl PlatesolveMode {
             state:     State::None,
             hal:       Arc::clone(&engine.hal),
             events:    Arc::clone(&engine.events),
-            cur_frame: Arc::clone(&engine.cur_frame),
+            cur_frame: Arc::clone(&engine.preview),
             options:   Arc::clone(&engine.options),
             ps_opts:   opts.plate_solver.clone(),
             camera,
@@ -238,16 +238,16 @@ impl Mode for PlatesolveMode {
 
     fn notify_about_frame_processing_result(
         &mut self,
-        fp_result: &FrameProcessResult
+        fp_result: &FrameProcessNotification
     ) -> eyre::Result<NotifyResult> {
         let xy_supported = self.plate_solver.support_stars_as_input();
-        match (&self.state, &fp_result.data, xy_supported) {
-            (State::Capturing, FrameProcessResultData::ImageReady, false) => {
+        match (&self.state, &fp_result.event, xy_supported) {
+            (State::Capturing, FrameProcessEvent::ImageReady, false) => {
                 self.plate_solve_image()?;
                 self.state = State::PlateSolve;
                 return Ok(NotifyResult::ProgressChanges);
             }
-            (State::Capturing, FrameProcessResultData::LightFrameInfo(info), true) => {
+            (State::Capturing, FrameProcessEvent::LightFrameReady(info), true) => {
                 self.plate_solve_stars(&info.stars.items, info.image.width, info.image.height)?;
                 self.state = State::PlateSolve;
                 return Ok(NotifyResult::ProgressChanges);

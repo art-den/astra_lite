@@ -215,7 +215,7 @@ impl MountCalibrMode {
 
     fn process_light_frame_info(
         &mut self,
-        info: &LightFrameInfoData,
+        info: &LightFrameResult,
     ) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         if info.quality.fwhm_is_ok && info.quality.ovality_is_ok {
@@ -320,10 +320,10 @@ impl Mode for MountCalibrMode {
 
     fn notify_about_frame_processing_result(
         &mut self,
-        fp_result: &FrameProcessResult
+        fp_result: &FrameProcessNotification
     ) -> eyre::Result<NotifyResult> {
-        match &fp_result.data {
-            FrameProcessResultData::LightFrameInfo(info) =>
+        match &fp_result.event {
+            FrameProcessEvent::LightFrameReady(info) =>
                 self.process_light_frame_info(info),
 
             _ =>

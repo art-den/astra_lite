@@ -1689,9 +1689,9 @@ impl CameraUi {
         self.show_total_raw_time_impl(&options);
     }
 
-    fn show_frame_processing_result(&self, result: &FrameProcessResult) {
-        match &result.data {
-            FrameProcessResultData::MasterSaved { frame_type: FrameType::Flats, file_name } => {
+    fn show_frame_processing_result(&self, result: &FrameProcessNotification) {
+        match &result.event {
+            FrameProcessEvent::MasterSaved { frame_type: FrameType::Flats, file_name } => {
                 self.widgets.calibr.fch_flat.set_filename(file_name);
             }
             _ => {}

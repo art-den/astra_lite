@@ -8,7 +8,7 @@ use astra_lite::{
     core::{
         engine::{Engine, ModeKind},
         events::Event,
-        frame_processing::{FrameProcessResult, FrameProcessResultData},
+        frame_processing::{FrameProcessNotification, FrameProcessEvent},
     },
     hal::FrameType,
     image::{
@@ -191,23 +191,23 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
     engine.events.connect({
         let shared_state = Arc::clone(&shared_state);
         move |event| {
-            if let Event::FrameProcessing(FrameProcessResult { data, .. }) = &event {
+            if let Event::FrameProcessing(FrameProcessNotification { event: data, .. }) = &event {
                 let mut state = shared_state.lock().unwrap();
                 state.idle_seconds = 0;
 
                 match data {
-                    FrameProcessResultData::ShotProcessingStarted => {
+                    FrameProcessEvent::ShotProcessingStarted => {
                         state.events_received.push("ShotProcessingStarted".to_string());
                         println!("  Event: ShotProcessingStarted");
                     }
 
-                    FrameProcessResultData::RawHistogramReady => {
+                    FrameProcessEvent::RawHistogramReady => {
                         state.events_received.push("HistogramRaw".to_string());
                         state.histogram_raw_count += 1;
                         println!("  Event: HistogramRaw");
                     }
 
-                    FrameProcessResultData::RawFrameInfo(info) => {
+                    FrameProcessEvent::RawFrameReady(info) => {
                         state.events_received.push("RawFrameInfo".to_string());
                         state.raw_frame_info_count += 1;
                         state.raw_median = Some(info.median);
@@ -219,13 +219,13 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
                         );
                     }
 
-                    FrameProcessResultData::ImageReady => {
+                    FrameProcessEvent::ImageReady => {
                         state.events_received.push("Image".to_string());
                         state.image_count += 1;
                         println!("  Event: Image");
                     }
 
-                    FrameProcessResultData::PreviewFrame(preview) => {
+                    FrameProcessEvent::PreviewOrigFrame(preview) => {
                         state.events_received.push("PreviewFrame".to_string());
                         state.preview_frame_count += 1;
                         state.preview_rgb_len = Some(preview.rgb_data.bytes.as_ref().len());
@@ -234,7 +234,7 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
                         println!("  Event: PreviewFrame");
                     }
 
-                    FrameProcessResultData::LightFrameInfo(info) => {
+                    FrameProcessEvent::LightFrameReady(info) => {
                         state.events_received.push("LightFrameInfo".to_string());
                         state.light_frame_info_count += 1;
                         state.fwhm = info.stars.info.fwhm;
@@ -259,13 +259,13 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
                         );
                     }
 
-                    FrameProcessResultData::FrameInfo => {
+                    FrameProcessEvent::OrigFrameInfoReady => {
                         state.events_received.push("FrameInfo".to_string());
                         state.frame_info_count += 1;
                         println!("  Event: FrameInfo");
                     }
 
-                    FrameProcessResultData::ShotProcessingFinished {
+                    FrameProcessEvent::ShotProcessingFinished {
                         frame_is_ok,
                         processing_time,
                         raw_image_info,
@@ -303,10 +303,10 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
 
                     other => {
                         let name = match other {
-                            FrameProcessResultData::PreviewLiveRes(_) => "PreviewLiveRes",
-                            FrameProcessResultData::FrameInfoLiveRes => "FrameInfoLiveRes",
-                            FrameProcessResultData::HistogramLiveRes => "HistogramLiveRes",
-                            FrameProcessResultData::MasterSaved { .. } => "MasterSaved",
+                            FrameProcessEvent::PreviewLiveStacking(_) => "PreviewLiveRes",
+                            FrameProcessEvent::LiveStackingInfoReady => "FrameInfoLiveRes",
+                            FrameProcessEvent::LiveStackingHistogramReady => "HistogramLiveRes",
+                            FrameProcessEvent::MasterSaved { .. } => "MasterSaved",
                             _ => "Unknown",
                         };
                         println!("  Event: {}", name);
@@ -443,7 +443,7 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
 
     // --- Image dimensions (read from the core's current frame) ---
 
-    let cur_image = engine.cur_frame.image.read().unwrap();
+    let cur_image = engine.preview.image.read().unwrap();
     let img_w = cur_image.width();
     let img_h = cur_image.height();
     println!("Image dimensions: {} x {}", img_w, img_h);
@@ -617,7 +617,7 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
 
     // Verify core.cur_frame.image is not empty.
     assert!(
-        !engine.cur_frame.image.read().unwrap().is_empty(),
+        !engine.preview.image.read().unwrap().is_empty(),
         "core.cur_frame.image must not be empty after processing"
     );
 

@@ -1,31 +1,38 @@
 use std::sync::{Arc, RwLock};
 
-use crate::{core::frame_processing::LightFrameInfoData, image::{histogram::Histogram, image::Image, info::{FlatImageInfo, RawImageStat}, preview::{PreviewRgbData, get_preview_rgb_data}, stars::StarItems}, options::{PreviewOptions, PreviewScale}};
+use crate::{
+    core::frame_processing::LightFrameResult,
+    image::{
+        histogram::Histogram,
+        image::Image,
+        info::{FlatImageInfo, RawImageStat},
+        preview::{PreviewRgbData, get_preview_rgb_data},
+    },
+    options::{PreviewOptions, PreviewScale},
+};
 
 
 pub enum ResultImageInfo {
     None,
-    LightInfo(Arc<LightFrameInfoData>),
+    LightInfo(Arc<LightFrameResult>),
     FlatInfo(FlatImageInfo),
     RawInfo(RawImageStat),
 }
 
-pub struct ResultImage {
+pub struct Preview {
     pub image:    Arc<RwLock<Image>>,
     pub raw_hist: Arc<RwLock<Histogram>>,
     pub img_hist: RwLock<Histogram>,
     pub info:     RwLock<ResultImageInfo>,
-    pub stars:    RwLock<Option<Arc<StarItems>>>,
 }
 
-impl ResultImage {
+impl Preview {
     pub fn new() -> Self {
         Self {
             image:    Arc::new(RwLock::new(Image::new_empty())),
             raw_hist: Arc::new(RwLock::new(Histogram::new())),
             img_hist: RwLock::new(Histogram::new()),
             info:     RwLock::new(ResultImageInfo::None),
-            stars:    RwLock::new(None),
         }
     }
 
