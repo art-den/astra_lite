@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    core::{cam_ctrl::*, cur_devices::CurDevices, live_stacking::LiveStacking, preview::{Preview, ResultImageInfo}, raw_calibration::RawCalibration}, guiding::external_guider::*, hal::{events::HalEvent, *}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*,
+    core::{cam_ctrl::*, cur_devices::CurDevices, live_stacking::LiveStacking, preview::{Preview, ResultImageInfo}, raw_calibration::{CalibrParams, RawCalibration}}, guiding::external_guider::*, hal::{events::HalEvent, *}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*,
 };
 
 use super::{
