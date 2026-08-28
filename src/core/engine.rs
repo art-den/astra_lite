@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    core::{cam_ctrl::*, cur_devices::CurDevices, live_stacking::LiveStacking, preview::{Preview, ResultImageInfo}}, guiding::external_guider::*, hal::{events::HalEvent, *}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*,
+    core::{cam_ctrl::*, cur_devices::CurDevices, live_stacking::LiveStacking, preview::{Preview, ResultImageInfo}, raw_calibration::RawCalibration}, guiding::external_guider::*, hal::{events::HalEvent, *}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*,
 };
 
 use super::{
@@ -104,7 +104,7 @@ pub struct Engine {
     pub ext_guider:     Arc<ExternalGuiderCtrl>,
 
     modes:              RwLock<EngineModes>,
-    calibr_data:        Arc<Mutex<CalibrCache>>,
+    raw_calibration:    Arc<Mutex<RawCalibration>>,
     timer:              Arc<Timer>,
     img_proc_stop_flag: Mutex<Arc<AtomicBool>>, // stop flag for last command
     frame_processing:   Arc<FrameProcessing>,
@@ -130,7 +130,7 @@ impl Engine {
         let this = Arc::new(Self {
             options:            Arc::clone(&options),
             modes:              RwLock::new(EngineModes::new()),
-            calibr_data:        Arc::new(Mutex::new(CalibrCache::default())),
+            raw_calibration:    Arc::new(Mutex::new(RawCalibration::default())),
             preview:            Arc::new(Preview::new()),
             live_stacking:      Arc::new(LiveStacking::new()),
             timer:              Arc::new(Timer::new()),
@@ -341,7 +341,7 @@ impl Engine {
                 preview:           Arc::clone(&self.preview),
                 stop_flag:       new_stop_flag,
                 ref_stars:       None,
-                calibr_data:     Arc::clone(&self.calibr_data),
+                calibr_data:     Arc::clone(&self.raw_calibration),
                 view_options:    options.preview.preview_params(),
                 frame_options:   options.cam.frame.clone(),
                 quality_options: Some(options.quality.clone()),
@@ -547,7 +547,7 @@ impl Engine {
             preview:         Arc::clone(&self.preview),
             stop_flag:       new_stop_flag,
             ref_stars:       None,
-            calibr_data:     Arc::clone(&self.calibr_data),
+            calibr_data:     Arc::clone(&self.raw_calibration),
             view_options:    options.preview.preview_params(),
             frame_options:   options.cam.frame.clone(),
             quality_options: None,
@@ -636,7 +636,7 @@ impl Engine {
         let mode = DarkCreationMode::new(
             self,
             dark_lib_mode,
-            &self.calibr_data,
+            &self.raw_calibration,
             program
         )?;
         self.start_new_mode(mode, false, false)?;

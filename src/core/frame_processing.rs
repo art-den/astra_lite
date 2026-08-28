@@ -4,7 +4,7 @@ use chrono::{DateTime, Local};
 use bitflags::bitflags;
 
 use crate::{
-    core::{engine::ModeKind, live_stacking::{LiveStackedImageInfo, LiveStacking}, preview::{Preview, ResultImageInfo}, utils::{FileNameArg, FileNameUtils}}, hal::{CameraShot, CameraShotType, FrameType}, image::{
+    core::{engine::ModeKind, live_stacking::{LiveStackedImageInfo, LiveStacking}, preview::{Preview, ResultImageInfo}, raw_calibration::RawCalibration, utils::{FileNameArg, FileNameUtils}}, hal::{CameraShot, CameraShotType, FrameType}, image::{
         histogram::*, info::*,
         io::*, preview::*, raw::*,
         stars::{Stars, StarsFinder}, stars_offset::*,
@@ -18,27 +18,6 @@ pub struct CalibrParams {
     pub flat_fname:      Option<PathBuf>,
     pub ccd_temp:        Option<f64>,
     pub sar_hot_pixels:  bool, // "sar" means Search And Remove (hot pixels)
-}
-
-#[derive(Default)]
-pub struct CalibrCache {
-    subtract_image:      Option<RawImage>,
-    subtract_fname:      Option<PathBuf>,
-    master_flat:         Option<RawImage>,
-    master_flat_fname:   Option<PathBuf>,
-    defect_pixels:       Option<BadPixels>,
-    defect_pixels_fname: Option<PathBuf>,
-}
-
-impl CalibrCache {
-    pub fn clear(&mut self) {
-        self.subtract_image = None;
-        self.subtract_fname = None;
-        self.master_flat = None;
-        self.master_flat_fname = None;
-        self.defect_pixels = None;
-        self.defect_pixels_fname = None;
-    }
 }
 
 #[derive(Clone)]
@@ -102,7 +81,7 @@ pub struct ProcessImageParams {
     pub stop_flag:       Arc<AtomicBool>,
     pub ref_stars:       Option<Vec<Point>>,
     pub calibr_params:   Option<CalibrParams>,
-    pub calibr_data:     Arc<Mutex<CalibrCache>>,
+    pub calibr_data:     Arc<Mutex<RawCalibration>>,
     pub view_options:    PreviewParams,
     pub frame_options:   FrameOptions,
     pub cam_ctrl_opts:   Option<CamCtrlOptions>,
@@ -844,7 +823,7 @@ impl FrameProcessing {
     fn apply_calibr_data_and_remove_hot_pixels(
         params:    &Option<CalibrParams>,
         raw_image: &mut RawImage,
-        calibr:    &mut CalibrCache,
+        calibr:    &mut RawCalibration,
     ) -> eyre::Result<()> {
         let Some(params) = params else { return Ok(()); };
 

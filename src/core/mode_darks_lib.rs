@@ -1,9 +1,7 @@
 use std::{collections::VecDeque, sync::{Arc, Mutex}};
 
 use crate::{
-    core::{frame_processing::*, mode_camera::{CameraMode, TakingPicturesMode}, mode_waiting::WaitingMode},
-    hal::Camera,
-   options::*
+    core::{ mode_camera::{CameraMode, TakingPicturesMode}, mode_waiting::WaitingMode, raw_calibration::RawCalibration}, hal::Camera, options::*
 };
 
 use super::{engine::*, events::Progress};
@@ -36,7 +34,7 @@ pub struct MasterFileCreationProgramItem {
 pub struct DarkCreationMode {
     camera:      Arc<dyn Camera + Send + Sync>,
     mode:        DarkLibMode,
-    calibr_data: Arc<Mutex<CalibrCache>>,
+    calibr_data: Arc<Mutex<RawCalibration>>,
     program:     Vec<MasterFileCreationProgramItem>,
     index:       usize,
     state:       State,
@@ -47,14 +45,14 @@ impl DarkCreationMode {
     pub fn new(
         engine:      &Engine,
         mode:        DarkLibMode,
-        calibr_data: &Arc<Mutex<CalibrCache>>,
+        raw_calibr:  &Arc<Mutex<RawCalibration>>,
         program:     &[MasterFileCreationProgramItem]
     ) -> eyre::Result<Self> {
         let camera = engine.cur_devices.camera_or_err()?;
         Ok(Self {
             camera,
             mode,
-            calibr_data: Arc::clone(calibr_data),
+            calibr_data: Arc::clone(raw_calibr),
             program:     program.to_vec(),
             index:       0,
             state:       State::Undefined,
