@@ -2,7 +2,6 @@ use std::{io::Read, path::PathBuf, time::Instant};
 use chrono::Utc;
 use crate::{
     image::{image::Image, io::save_image_layer_to_tif_file, simple_fits::*},
-    sky_math::math::*
 };
 use super::*;
 
