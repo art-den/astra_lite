@@ -3,3 +3,4 @@ pub mod log_utils;
 pub mod math;
 pub mod timer;
 pub mod compression;
+pub mod serde_hash;
