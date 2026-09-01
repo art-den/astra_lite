@@ -42,6 +42,7 @@ pub enum Event {
     CameraCoolingOptionsChanged,
     CameraFanOptionsChanged,
     CameraHeaterOptionsChanged,
+    NeedRefreshOptionsView,
 }
 
 type EventHandlerFun = dyn Fn(Event) + Send + Sync + 'static;

@@ -539,6 +539,9 @@ impl MainUi {
                 self.widgets.da_progress.queue_draw();
                 self.show_mode_caption();
             },
+            Event::NeedRefreshOptionsView => {
+                self.show_all_options();
+            }
             _ => {},
         }
     }
