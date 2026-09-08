@@ -126,7 +126,7 @@ impl UiModule for PolarAlignUi {
                     self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
                 }
             }
-            Event::CameraDeviceChanged { .. } => {
+            Event::CameraDeviceChanged(_) => {
                 self.correct_widgets_props();
             }
             Event::MountDeviceChanged(_) => {

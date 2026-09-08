@@ -111,20 +111,16 @@ impl UiModule for PlateSolveUi {
         self.correct_widgets_props();
     }
 
-    fn on_app_closing(&self) {
-        let mut options = self.engine.options.write().unwrap();
-        let cur_cam_device = options.cam.device_id.to_string();
-        self.store_options_for_camera(&cur_cam_device, &mut options);
-        drop(options);
-    }
-
     fn on_event(&self, event: &Event) {
         match event {
             Event::ModeChanged => {
                 self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
             }
-            Event::CameraDeviceChanged{ prev_camera_id, new_camera_id } => {
-                self.handler_camera_changed(prev_camera_id, new_camera_id);
+            Event::CameraDeviceChanged(_) => {
+                let options = self.engine.options.read().unwrap();
+                self.show_options(&options);
+                drop(options);
+                self.correct_widgets_props();
             }
             Event::MountDeviceChanged(_) => {
                 self.correct_widgets_props();
@@ -165,6 +161,27 @@ impl PlateSolveUi {
     fn connect_widgets_events(self: &Rc<Self>) {
         connect_action_rc(&self.window, self, "capture_platesolve",   Self::handler_action_capture_platesolve);
         connect_action   (&self.window, self, "plate_solve_and_goto", Self::handler_action_plate_solve_and_goto);
+
+        self.widgets.spb_exp.connect_value_changed(
+            clone!(@weak self as self_ => move |sb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.plate_solver.exposure = sb.value();
+            })
+        );
+
+        self.widgets.cbx_gain.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.plate_solver.gain = Gain::from_active_id(cb.active_id().as_deref());
+            })
+        );
+
+        self.widgets.cbx_bin.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.plate_solver.bin = Binning::from_active_id(cb.active_id().as_deref());
+            })
+        );
     }
 
     fn connect_delayed_actions_events(self: &Rc<Self>) {
@@ -203,44 +220,6 @@ impl PlateSolveUi {
         }
 
         self.widgets.grd.set_sensitive(plate_solve_sensitive);
-    }
-
-    fn handler_camera_changed(&self, from: &str, to: &str) {
-        let mut options = self.engine.options.write().unwrap();
-        self.get_options(&mut options);
-        if !from.is_empty() {
-            self.store_options_for_camera(from, &mut options);
-        }
-        self.restore_options_for_camera(to, &mut options);
-        self.show_options(&options);
-        drop(options);
-        self.correct_widgets_props();
-    }
-
-    fn store_options_for_camera(
-        &self,
-        device:  &str,
-        options: &mut Options
-    ) {
-        if device.is_empty() {
-            return;
-        }
-        let sep_options = options.sep_ps.entry(device.to_string()).or_default();
-        sep_options.exposure = options.plate_solver.exposure;
-        sep_options.gain = options.plate_solver.gain;
-        sep_options.bin = options.plate_solver.bin;
-    }
-
-    fn restore_options_for_camera(
-        &self,
-        device:  &str,
-        options: &mut Options
-    ) {
-        if let Some(sep_options) = options.sep_ps.get(device) {
-            options.plate_solver.exposure = sep_options.exposure;
-            options.plate_solver.gain = sep_options.gain;
-            options.plate_solver.bin = sep_options.bin;
-        }
     }
 
     fn handler_delayed_action(&self, action: &DelayedAction) {

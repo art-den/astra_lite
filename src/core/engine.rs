@@ -383,7 +383,7 @@ impl Engine {
 
     fn event_handler(self: &Arc<Self>, event: Event) {
         match &event {
-            Event::CameraDeviceChanged {..} => {
+            Event::CameraDeviceChanged(_) => {
                 self.process_camera_changed();
             }
             Event::TelescopeFocalLenChanged(_)|
@@ -412,9 +412,9 @@ impl Engine {
     }
 
     fn process_camera_changed(self: &Arc<Self>) {
-        let options = self.options.read().unwrap();
-
         let Some(camera) = self.cur_devices.camera() else { return; };
+
+        let options = self.options.read().unwrap();
 
         let res = control_camera_cooling(&camera, &options.cam.ctrl);
         self.process_error(res, "control_camera_cooling");

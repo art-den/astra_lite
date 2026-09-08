@@ -94,7 +94,35 @@ impl CurDevices {
     pub fn change_camera(self: &Arc<Self>, new_camera_id: &str) {
         let mut options = self.options.write().unwrap();
         let prev_camera_id = options.cam.device_id.clone();
-        if prev_camera_id == new_camera_id { return; }
+        {
+            if prev_camera_id == new_camera_id { return; }
+            let options = &mut *options; // To To pacify borrow checker
+
+            // Store previous camera options
+            Self::store_separated_options_for_specific_camera(options, &prev_camera_id);
+
+            // Restore options for new camera
+
+            if let Some(sep_options) = options.sep_cam.get(new_camera_id) {
+                options.cam.frame = sep_options.frame.clone();
+                options.cam.ctrl = sep_options.ctrl.clone();
+                options.calibr = sep_options.calibr.clone();
+            }
+            if let Some(sep_options) = options.sep_focuser.get(new_camera_id) {
+                options.focuser.exposure = sep_options.exposure;
+                options.focuser.gain = sep_options.gain;
+            }
+            if let Some(sep_options) = options.sep_guiding.get(new_camera_id) {
+                options.guiding.main_cam.calibr_exposure = sep_options.exposure;
+                options.guiding.main_cam.calibr_gain = sep_options.gain;
+            }
+            if let Some(sep_options) = options.sep_ps.get(new_camera_id) {
+                options.plate_solver.exposure = sep_options.exposure;
+                options.plate_solver.gain = sep_options.gain;
+                options.plate_solver.bin = sep_options.bin;
+            }
+        }
+
         options.cam.device_id = new_camera_id.to_string();
         drop(options);
 
@@ -102,10 +130,33 @@ impl CurDevices {
         data.camera = self.hal.camera(new_camera_id).ok();
         drop(data);
 
-        self.events.send(Event::CameraDeviceChanged {
-            prev_camera_id: prev_camera_id.to_string(),
-            new_camera_id:  new_camera_id.to_string(),
-        });
+        self.events.send(Event::CameraDeviceChanged(
+            new_camera_id.to_string()
+        ));
+    }
+
+    pub fn store_separated_options_for_specific_camera(options: &mut Options, camera_id: &str) {
+        if camera_id.is_empty() {
+            return;
+        }
+
+        let cam_options = options.sep_cam.entry(camera_id.to_string()).or_default();
+        cam_options.frame = options.cam.frame.clone();
+        cam_options.ctrl = options.cam.ctrl.clone();
+        cam_options.calibr = options.calibr.clone();
+
+        let foc_options = options.sep_focuser.entry(camera_id.to_string()).or_default();
+        foc_options.exposure = options.focuser.exposure;
+        foc_options.gain = options.focuser.gain;
+
+        let guid_options = options.sep_guiding.entry(camera_id.to_string()).or_default();
+        guid_options.exposure = options.guiding.main_cam.calibr_exposure;
+        guid_options.gain = options.guiding.main_cam.calibr_gain;
+
+        let ps_options = options.sep_ps.entry(camera_id.to_string()).or_default();
+        ps_options.exposure = options.plate_solver.exposure;
+        ps_options.gain = options.plate_solver.gain;
+        ps_options.bin = options.plate_solver.bin;
     }
 
     pub fn telescope(&self) -> Option<Arc<dyn Telescope + Send + Sync>> {

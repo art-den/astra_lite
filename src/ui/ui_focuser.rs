@@ -183,20 +183,16 @@ impl UiModule for FocuserUi {
         self.correct_widgets_props();
     }
 
-    fn on_app_closing(&self) {
-        let mut options = self.engine.options.write().unwrap();
-        let cur_cam_device = options.cam.device_id.clone();
-        self.store_options_for_camera(&cur_cam_device, &mut options);
-        drop(options);
-    }
-
     fn on_event(&self, event: &Event) {
         match event {
             Event::ModeChanged => {
                 self.correct_widgets_props();
             }
-            Event::CameraDeviceChanged{prev_camera_id, new_camera_id} => {
-                self.handler_camera_changed(prev_camera_id, new_camera_id);
+            Event::CameraDeviceChanged(_) => {
+                let options = self.engine.options.read().unwrap();
+                self.show_options(&options);
+                drop(options);
+                self.correct_widgets_props();
             }
             Event::Focusing(fevent) => {
                 match fevent {
@@ -328,6 +324,16 @@ impl FocuserUi {
             });
         }));
 
+        self.widgets.spb_exp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.focuser.exposure = sb.value();
+        }));
+
+        self.widgets.cbx_gain.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.focuser.gain = Gain::from_active_id(cb.active_id().as_deref());
+        }));
+
         self.widgets.btn_dec_large.connect_clicked(clone!(@weak self as self_ => move |_| {
             self_.update_focuser_value(-self_.step_large.get());
         }));
@@ -373,12 +379,12 @@ impl FocuserUi {
         );
     }
 
-    fn correct_widgets_props_impl(&self, cam_device: &str) {
+    fn correct_widgets_props(&self) {
         let modes = self.engine.modes();
         let mode_kind = modes.active.kind();
         drop(modes);
 
-        if let Ok(camera) = self.engine.hal.camera(cam_device) {
+        if let Ok(camera) = self.engine.cur_devices.camera_or_err() {
             let exp_range = camera.exposure_range().ok();
             correct_spinbutton_by_range(&self.widgets.spb_exp, exp_range, 1, Some(1.0));
         }
@@ -408,49 +414,6 @@ impl FocuserUi {
 
         self.main_ui.set_module_panel_visible(self.info_widgets.bx.upcast_ref(), device_enabled);
         self.show_info();
-    }
-
-    fn correct_widgets_props(&self) {
-        let options = self.engine.options.read().unwrap();
-        let cam_device = options.cam.device_id.clone();
-        drop(options);
-        self.correct_widgets_props_impl(&cam_device);
-    }
-
-    fn handler_camera_changed(&self, prev_device_id: &str, new_device_id: &str) {
-        let mut options = self.engine.options.write().unwrap();
-        self.get_options(&mut options);
-        if !prev_device_id.is_empty() {
-            self.store_options_for_camera(prev_device_id, &mut options);
-        }
-        self.restore_options_for_camera(new_device_id, &mut options);
-        self.show_options(&options);
-        drop(options);
-        self.correct_widgets_props_impl(new_device_id);
-    }
-
-    fn store_options_for_camera(
-        &self,
-        device:  &str,
-        options: &mut Options
-    ) {
-        if device.is_empty() {
-            return;
-        }
-        let sep_options = options.sep_focuser.entry(device.to_string()).or_default();
-        sep_options.exposure = options.focuser.exposure;
-        sep_options.gain = options.focuser.gain;
-    }
-
-    fn restore_options_for_camera(
-        &self,
-        device:  &str,
-        options: &mut Options
-    ) {
-        if let Some(sep_options) = options.sep_focuser.get(device) {
-            options.focuser.exposure = sep_options.exposure;
-            options.focuser.gain = sep_options.gain;
-        }
     }
 
     fn update_devices_list(&self) {

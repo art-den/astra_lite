@@ -2,10 +2,7 @@ use std::{rc::Rc, sync::Arc, cell::RefCell};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}},
-    hal::{DeviceType, FrameType, HalState, events::HalEvent},
-    image::{info::*, raw::CalibrMethods},
-    options::*,
+    core::{cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*,
 };
 use super::{gtk_utils::*, module::*, ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
@@ -381,7 +378,7 @@ impl UiModule for CameraUi {
 
         let mut options = self.engine.options.write().unwrap();
         let cam_id = options.cam.device_id.clone();
-        self.store_options_for_camera(&cam_id, &mut options);
+        CurDevices::store_separated_options_for_specific_camera(&mut options, &cam_id);
         drop(options);
     }
 
@@ -400,17 +397,33 @@ impl UiModule for CameraUi {
             Event::FlatExposureCalculated(exp_value) => {
                 self.widgets.frame.spb_exp.set_value(*exp_value);
             }
-            Event::CameraDeviceChanged { new_camera_id, prev_camera_id } => {
+            Event::CameraDeviceChanged(new_camera_id) => {
                 if self.widgets.common.cb_cam_list.active_id().as_deref() != Some(new_camera_id) {
                     self.excl.exec(|| {
                         self.widgets.common.cb_cam_list.set_active_id(Some(new_camera_id));
                     });
                 }
-                let mut options = self.engine.options.write().unwrap();
-                self.handler_camera_changed(prev_camera_id, new_camera_id, &mut options);
+                let options = self.engine.options.read().unwrap();
+
+                // Show some options for specific camera
+                self.show_frame_options(&options);
+                self.show_ctrl_options(&options);
+                self.show_calibr_options(&options);
+
+                // Show new total time
+
+                self.show_total_raw_time_impl(&options);
+
+                // Init fn_utils and show calibration files
+
+                self.init_fn_utils();
+                self.show_calibr_file_for_frame(&options);
+
                 self.update_resolution_list_impl(&options);
                 self.fill_heater_items_list_impl(&options);
                 self.fill_conv_gain_items_list_impl(&options);
+                drop(options);
+
                 self.correct_widgets_props_impl();
                 self.correct_frame_quality_widgets_props();
             }
@@ -679,6 +692,13 @@ impl CameraUi {
                 options.cam.frame.frame_type = frame_type;
                 drop(options);
                 self_.engine.events.send(Event::CameraFrameTypeChanged);
+            })
+        );
+
+        self.widgets.frame.chb_auto_exp.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.cam.frame.auto_exp = chb.is_active();
             })
         );
 
@@ -991,32 +1011,6 @@ impl CameraUi {
         options.quality.max_ccd_temp_diff = qual.spb_max_temp_diff.value();
     }
 
-    fn store_options_for_camera(
-        &self,
-        device_id: &str,
-        options:   &mut Options
-    ) {
-        if device_id.is_empty() {
-            return;
-        }
-        let sep_options = options.sep_cam.entry(device_id.to_string()).or_default();
-        sep_options.frame = options.cam.frame.clone();
-        sep_options.ctrl = options.cam.ctrl.clone();
-        sep_options.calibr = options.calibr.clone();
-    }
-
-    fn restore_options_for_camera(
-        &self,
-        device_id: &str,
-        options: &mut Options
-    ) {
-        if let Some(sep_options) = options.sep_cam.get(device_id) {
-            options.cam.frame = sep_options.frame.clone();
-            options.cam.ctrl = sep_options.ctrl.clone();
-            options.calibr = sep_options.calibr.clone();
-        }
-    }
-
     fn handler_delayed_action(&self, action: &DelayedAction) {
         match action {
             DelayedAction::UpdateCamList => {
@@ -1218,43 +1212,6 @@ impl CameraUi {
         widgets.live_st.fch_path       .set_sensitive(can_change_live_stacking_opts);
 
         widgets.quality.bx.set_sensitive(cam_active);
-    }
-
-    // TODO: must be called from event handler also
-    fn handler_camera_changed(
-        &self,
-        from_id: &str,
-        to_id:   &str,
-        options: &mut Options,
-    ) {
-        // Read options from widgets
-
-        self.get_frame_options(options);
-        self.get_ctrl_options(options);
-        self.get_calibr_options(options);
-
-        // Store previous camera options
-
-        self.store_options_for_camera(from_id, options);
-
-        // Restore some options for specific camera
-
-        self.restore_options_for_camera(to_id, options);
-
-        // Show some options for specific camera
-
-        self.show_frame_options(options);
-        self.show_ctrl_options(options);
-        self.show_calibr_options(options);
-
-        // Show new total time
-
-        self.show_total_raw_time_impl(options);
-
-        // Init fn_utils and show calibration files
-
-        self.init_fn_utils();
-        self.show_calibr_file_for_frame(options);
     }
 
     fn correct_widgets_props(&self) {
@@ -1495,10 +1452,6 @@ impl CameraUi {
             *state == HalState::Disconnected;
 
         if disconnect_event {
-            let mut options = self.engine.options.write().unwrap();
-            let cam_id = options.cam.device_id.clone();
-            self.store_options_for_camera(&cam_id, &mut options);
-            drop(options);
             self.update_devices_list();
         }
         self.correct_widgets_props();

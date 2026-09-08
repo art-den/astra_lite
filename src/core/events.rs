@@ -17,10 +17,7 @@ pub enum OverlayMessagePos {
 pub enum Event {
     Error(String),
     ModeContinued,
-    CameraDeviceChanged{
-        prev_camera_id: String,
-        new_camera_id: String,
-    },
+    CameraDeviceChanged(String),
     MountDeviceChanged(String),
     FocuserDeviceChanged(String),
     FilterWheelDeviceChanged(String),

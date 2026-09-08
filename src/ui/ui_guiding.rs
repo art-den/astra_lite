@@ -146,20 +146,16 @@ impl UiModule for GuidingUi {
         self.correct_widgets_props();
     }
 
-    fn on_app_closing(&self) {
-        let mut options = self.engine.options.write().unwrap();
-        let cur_cam_device = options.cam.device_id.clone();
-        self.store_options_for_camera(&cur_cam_device, &mut options);
-        drop(options);
-    }
-
     fn on_event(&self, event: &Event) {
         match event {
             Event::ModeChanged => {
                 self.correct_widgets_props();
             }
-            Event::CameraDeviceChanged{ prev_camera_id, new_camera_id } => {
-                self.handler_camera_changed(prev_camera_id, new_camera_id);
+            Event::CameraDeviceChanged(_) => {
+                let options = self.engine.options.read().unwrap();
+                self.show_options(&options);
+                drop(options);
+                self.correct_widgets_props_impl();
             }
             Event::Guider(evt) => {
                 self.process_ext_guider_event(evt);
@@ -213,9 +209,21 @@ impl GuidingUi {
         connect_rbtn(&self.widgets.rbtn_no_guiding);
         connect_rbtn(&self.widgets.rbtn_guide_main_cam);
         connect_rbtn(&self.widgets.rbtn_guide_ext);
+
+        let self_ = Rc::clone(self);
+        self.widgets.spb_mnt_cal_exp.connect_value_changed(move |sb| {
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.guiding.main_cam.calibr_exposure = sb.value();
+        });
+
+        let self_ = Rc::clone(self);
+        self.widgets.cbx_mnt_cal_gain.connect_active_id_notify(move |cb| {
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.guiding.main_cam.calibr_gain = Gain::from_active_id(cb.active_id().as_deref());
+        });
     }
 
-    fn correct_widgets_props_impl(&self, cam_device: &str) {
+    fn correct_widgets_props_impl(&self) {
         let modes = self.engine.modes();
         let mode_kind = modes.active.kind();
         drop(modes);
@@ -229,7 +237,7 @@ impl GuidingUi {
         let by_main_cam = self.widgets.rbtn_guide_main_cam.is_active();
         let by_ext = self.widgets.rbtn_guide_ext.is_active();
 
-        if let Ok(camera) = self.engine.hal.camera(cam_device) {
+        if let Ok(camera) = self.engine.cur_devices.camera_or_err() {
             let exp_range = camera.exposure_range().ok();
             correct_spinbutton_by_range(&self.widgets.spb_mnt_cal_exp, exp_range, 1, Some(1.0));
         }
@@ -256,46 +264,7 @@ impl GuidingUi {
     }
 
     fn correct_widgets_props(&self) {
-        let options = self.engine.options.read().unwrap();
-        let cam_device = options.cam.device_id.clone();
-        drop(options);
-        self.correct_widgets_props_impl(&cam_device);
-    }
-
-    fn handler_camera_changed(&self, from: &str, to: &str) {
-        let mut options = self.engine.options.write().unwrap();
-        self.get_options(&mut options);
-        if !from.is_empty() {
-            self.store_options_for_camera(from, &mut options);
-        }
-        self.restore_options_for_camera(to, &mut options);
-        self.show_options(&options);
-        drop(options);
-        self.correct_widgets_props_impl(to);
-    }
-
-    fn store_options_for_camera(
-        &self,
-        device:  &str,
-        options: &mut Options
-    ) {
-        if device.is_empty() {
-            return;
-        }
-        let sep_options = options.sep_guiding.entry(device.to_string()).or_default();
-        sep_options.exposure = options.guiding.main_cam.calibr_exposure;
-        sep_options.gain = options.guiding.main_cam.calibr_gain;
-    }
-
-    fn restore_options_for_camera(
-        &self,
-        device:  &str,
-        options: &mut Options
-    ) {
-        if let Some(sep_options) = options.sep_guiding.get(device) {
-            options.guiding.main_cam.calibr_exposure = sep_options.exposure;
-            options.guiding.main_cam.calibr_gain = sep_options.gain;
-        }
+        self.correct_widgets_props_impl();
     }
 
     fn handler_action_start_dither_calibr(&self) {
