@@ -42,6 +42,9 @@ pub enum Event {
     CameraCoolingOptionsChanged,
     CameraFanOptionsChanged,
     CameraHeaterOptionsChanged,
+    CameraFrameTypeChanged,
+    CameraExposureChanged,
+    CameraFrameOptionsChanged,
     NeedRefreshOptionsView,
 }
 

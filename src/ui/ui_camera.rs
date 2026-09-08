@@ -414,6 +414,35 @@ impl UiModule for CameraUi {
                 self.correct_widgets_props_impl();
                 self.correct_frame_quality_widgets_props();
             }
+            Event::CameraCoolingOptionsChanged => {
+                let options = self.engine.options.read().unwrap();
+                self.show_calibr_file_for_frame(&options);
+                drop(options);
+                self.correct_widgets_props();
+            }
+            Event::CameraFanOptionsChanged |
+            Event::CameraHeaterOptionsChanged => {
+                self.correct_widgets_props();
+            }
+            Event::CameraFrameTypeChanged => {
+                let options = self.engine.options.read().unwrap();
+                self.show_calibr_file_for_frame(&options);
+                let exposure = options.cam.frame.exposure();
+                drop(options);
+                self.widgets.frame.spb_exp.set_value(exposure);
+                self.correct_widgets_props();
+                self.show_total_raw_time();
+            }
+            Event::CameraExposureChanged => {
+                let options = self.engine.options.read().unwrap();
+                self.show_calibr_file_for_frame(&options);
+                drop(options);
+                self.show_total_raw_time();
+            }
+            Event::CameraFrameOptionsChanged => {
+                let options = self.engine.options.read().unwrap();
+                self.show_calibr_file_for_frame(&options);
+            }
             _ => {},
         }
     }
@@ -583,10 +612,9 @@ impl CameraUi {
         self.widgets.ctrl.chb_cooler.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                if options.cam.ctrl.enable_cooler == chb.is_active() { return; }
                 options.cam.ctrl.enable_cooler = chb.is_active();
-                self_.show_calibr_file_for_frame(&options);
                 drop(options);
-                self_.correct_widgets_props();
                 self_.engine.events.send(Event::CameraCoolingOptionsChanged);
             })
         );
@@ -594,10 +622,9 @@ impl CameraUi {
         self.widgets.ctrl.spb_temp.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                if options.cam.ctrl.temperature == spb.value() { return; }
                 options.cam.ctrl.temperature = spb.value();
-                self_.show_calibr_file_for_frame(&options);
                 drop(options);
-                self_.correct_widgets_props();
                 self_.engine.events.send(Event::CameraCoolingOptionsChanged);
             })
         );
@@ -605,20 +632,21 @@ impl CameraUi {
         self.widgets.ctrl.cb_heater.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.cam.ctrl.heater_str = cb.active_id().map(|id| id.to_string());
+                let heater_str = cb.active_id().map(|id| id.to_string());
+                if options.cam.ctrl.heater_str == heater_str { return; }
+                options.cam.ctrl.heater_str = heater_str;
                 drop(options);
-                self_.correct_widgets_props();
-                self_.engine.events.send(Event::CameraFanOptionsChanged);
+                self_.engine.events.send(Event::CameraHeaterOptionsChanged);
             })
         );
 
         self.widgets.ctrl.chb_fan.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                if options.cam.ctrl.enable_fan == chb.is_active() { return; }
                 options.cam.ctrl.enable_fan = chb.is_active();
                 drop(options);
-                self_.correct_widgets_props();
-                self_.engine.events.send(Event::CameraHeaterOptionsChanged);
+                self_.engine.events.send(Event::CameraFanOptionsChanged);
             })
         );
 
@@ -647,38 +675,41 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 let frame_type = FrameType::from_active_id(cb.active_id().as_deref());
+                if options.cam.frame.frame_type == frame_type { return; }
                 options.cam.frame.frame_type = frame_type;
-                self_.widgets.frame.spb_exp.set_value(options.cam.frame.exposure());
-                self_.show_calibr_file_for_frame(&options);
                 drop(options);
-                self_.correct_widgets_props();
-                self_.show_total_raw_time();
+                self_.engine.events.send(Event::CameraFrameTypeChanged);
             })
         );
 
         self.widgets.frame.spb_exp.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                if options.cam.frame.exposure() == sb.value() { return; }
                 options.cam.frame.set_exposure(sb.value());
-                self_.show_calibr_file_for_frame(&options);
                 drop(options);
-                self_.show_total_raw_time();
+                self_.engine.events.send(Event::CameraExposureChanged);
             })
         );
 
         self.widgets.frame.spb_gain.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                if options.cam.frame.gain == sb.value() { return; }
                 options.cam.frame.gain = sb.value();
-                self_.show_calibr_file_for_frame(&options);
+                drop(options);
+                self_.engine.events.send(Event::CameraFrameOptionsChanged);
             })
         );
 
         self.widgets.frame.spb_offset.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.cam.frame.offset = sb.value() as i32;
-                self_.show_calibr_file_for_frame(&options);
+                let offset = sb.value() as i32;
+                if options.cam.frame.offset == offset { return; }
+                options.cam.frame.offset = offset;
+                drop(options);
+                self_.engine.events.send(Event::CameraFrameOptionsChanged);
             })
         );
 
@@ -686,8 +717,10 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 let binning = Binning::from_active_id(cb.active_id().as_deref());
+                if options.cam.frame.binning == binning { return; }
                 options.cam.frame.binning = binning;
-                self_.show_calibr_file_for_frame(&options);
+                drop(options);
+                self_.engine.events.send(Event::CameraFrameOptionsChanged);
             })
         );
 
@@ -695,8 +728,10 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 let crop = Crop::from_active_id(cb.active_id().as_deref());
+                if options.cam.frame.crop == crop { return; }
                 options.cam.frame.crop = crop;
-                self_.show_calibr_file_for_frame(&options);
+                drop(options);
+                self_.engine.events.send(Event::CameraFrameOptionsChanged);
             })
         );
 
