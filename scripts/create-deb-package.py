@@ -1,6 +1,8 @@
-import os, configparser, re, shutil, subprocess, argparse
+# ruff: noqa: I001, UP031
+# pyright: reportAny=none, reportExplicitAny=none, reportUnusedCallResult=none, reportOptionalMemberAccess=none
+
+import os, configparser, re, shutil, subprocess, argparse, sys
 from pathlib import Path
-from distutils.dir_util import copy_tree
 
 parser = argparse.ArgumentParser(
                     prog='create-deb-package.py',
@@ -20,6 +22,8 @@ if args.bin != None:
     bin_file = args.bin
 else:
     bin_file = os.path.join(this_path, "..", "target", "release", bin)
+if not os.path.isfile(bin_file):
+    sys.exit("Binary not found: %s. Build it first with `cargo build --release` or pass --bin." % bin_file)
 dist_dir = os.path.join(this_path, "..", "dist")
 cargo_toml = os.path.join(this_path, "..", "Cargo.toml")
 os.makedirs(dist_dir, exist_ok=True)
@@ -32,7 +36,9 @@ config.read(cargo_toml)
 package_name = config['package']['name'].replace('"', '').replace("_", "")
 package_vers = config['package']['version'].replace('"', '')
 description = config['package']['description'].replace('"', '')
-vers_re = re.match('(\d+)\.(\d+)\.(\d+)', package_vers)
+vers_re = re.match(r'(\d+)\.(\d+)\.(\d+)', package_vers)
+if vers_re is None:
+    sys.exit("Invalid version in Cargo.toml: %s" % package_vers)
 package_vers = vers_re.group(1) + '.' + vers_re.group(2) + '-' + vers_re.group(3)
 bin_dir='opt/'+package_name
 
@@ -57,7 +63,7 @@ full_bin_dir = os.path.join(package_dir, bin_dir)
 os.makedirs(full_bin_dir, exist_ok=True)
 shutil.copy(bin_file, full_bin_dir)
 shutil.copy(icon_file, full_bin_dir)
-copy_tree(mapdata_in_dir, os.path.join(full_bin_dir, "data"))
+shutil.copytree(mapdata_in_dir, os.path.join(full_bin_dir, "data"), dirs_exist_ok=True)
 
 # Desktop entry
 
