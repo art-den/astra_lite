@@ -58,6 +58,9 @@ pub struct GotoMode {
     goto_ms:      usize,
     goto_ok_ms:   usize,
     extra_stages: usize,
+    /// Size of the destination image captured at construction: the destination
+    /// image is shared with the preview, which this mode's own shots overwrite.
+    ref_img_size: Option<(usize, usize)>,
 }
 
 impl GotoMode {
@@ -86,6 +89,14 @@ impl GotoMode {
             (None, None, None)
         };
 
+        let ref_img_size = match &destination {
+            GotoDestination::Image { image, .. } => {
+                let img = image.read().unwrap();
+                Some((img.width(), img.height()))
+            },
+            GotoDestination::Coord(_) => None,
+        };
+
         Ok(Self {
             state:        State::None,
             eq_coord:     EqCoord::default(),
@@ -97,6 +108,7 @@ impl GotoMode {
             goto_ms:      0,
             goto_ok_ms:   0,
             extra_stages: 0,
+            ref_img_size,
             config,
             plate_solver,
             destination,
@@ -234,11 +246,15 @@ impl GotoMode {
     }
 
     fn show_overlay_message(&self, info: &LightFrameResult) {
-        let message = if let Some(offset) = &info.offset {
+        let message = if let (Some(offset), Some((ref_w, ref_h))) = (&info.offset, self.ref_img_size) {
+            // The offset is calculated in the pixels of the current (binned)
+            // frame; show it in the pixels of the original image
+            let sx = ref_w as f64 / info.image.width  as f64;
+            let sy = ref_h as f64 / info.image.height as f64;
             format!(
                 "Offset x={:.1}, y={:.1}\nRotation = {:.2}°",
-                offset.x,
-                offset.y,
+                offset.x * sx,
+                offset.y * sy,
                 radian_to_degree(offset.angle),
             )
         } else {
@@ -511,9 +527,12 @@ impl Mode for GotoMode {
     }
 
     fn complete_img_process_params(&self, cmd: &mut ProcessImageParams) {
-        if let GotoDestination::Image { stars, .. } = &self.destination {
-            let ref_stars = stars.items.iter().map(|s| Point { x: s.x, y: s.y }).collect();
-            cmd.ref_stars = Some(ref_stars);
+        if let GotoDestination::Image { stars, .. } = &self.destination
+        && let Some(ref_img_size) = self.ref_img_size {
+            cmd.ref_stars = Some(RefStars {
+                stars:  stars.items.iter().map(|s| Point { x: s.x, y: s.y }).collect(),
+                size:   ref_img_size,
+            });
         }
     }
 }

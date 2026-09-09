@@ -153,6 +153,7 @@ fn run_goto_image_flow(engine: &Arc<Engine>, match_plate_solver_binning: bool) {
     struct State {
         plate_solves:   usize,
         checking_frame: Option<Arc<LightFrameResult>>,
+        overlay_text:   Option<Arc<String>>,
         last_event:     Instant,
         error:          Option<String>,
     }
@@ -160,6 +161,7 @@ fn run_goto_image_flow(engine: &Arc<Engine>, match_plate_solver_binning: bool) {
     let shared = Arc::new(Mutex::new(State {
         plate_solves:   0,
         checking_frame: None,
+        overlay_text:   None,
         last_event:     Instant::now(),
         error:          None,
     }));
@@ -183,6 +185,10 @@ fn run_goto_image_flow(engine: &Arc<Engine>, match_plate_solver_binning: bool) {
             && state.checking_frame.is_none() {
                 println!("  Checking frame received");
                 state.checking_frame = Some(Arc::clone(info));
+            }
+
+            if let Event::OverlayMessage { text, .. } = &event {
+                state.overlay_text = Some(Arc::clone(text));
             }
 
             if let Event::Error(msg) = &event {
@@ -288,6 +294,26 @@ fn run_goto_image_flow(engine: &Arc<Engine>, match_plate_solver_binning: bool) {
         checking.image.width, checking.image.height, checking.stars.items.len()
     );
 
+    // The Checking overlay shows the offset in the pixels of the original
+    // image (the event may arrive slightly after the frame result).
+    let start = Instant::now();
+    let overlay = loop {
+        let overlay = shared.lock().unwrap().overlay_text.clone();
+        if overlay.is_some() {
+            break overlay.unwrap();
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "no overlay message received from the Checking state"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    println!("Overlay message: {}", overlay.replace('\n', " | "));
+    assert!(
+        overlay.starts_with("Offset x="),
+        "overlay shows '{overlay}' instead of the offset"
+    );
+
     // The Checking state loops forever; abort the mode before asserting, so
     // the camera is stopped even if the assertion below panics.
     engine.abort_active_mode();
@@ -307,16 +333,14 @@ fn run_goto_image_flow(engine: &Arc<Engine>, match_plate_solver_binning: bool) {
     );
 }
 
-/// The user's scenario as-is: the plate solver uses its own (default Bin2)
-/// binning, which may differ from the camera binning of the reference shot.
+/// The user's scenario: the reference shot is taken at the camera binning
+/// (Orig, bin 1) while the GotoMode plate solve photos use the plate solver
+/// binning (Bin2 by default). The Checking comparison must still compute the
+/// offset, accounting for the different pixel scales.
 ///
-/// Currently FAILS: the Checking frame is binned differently from the
-/// reference image, the pixel scales differ and Offset::calculate returns
-/// None — the overlay shows "???". This test documents the bug and will
-/// validate the fix (e.g. scale normalization before the offset calculation).
-/// Run explicitly with `cargo test --test goto_image_offset -- --ignored --nocapture`.
+/// Fails while the offset calculation ignores the image scale (the overlay
+/// shows "???").
 #[test]
-#[ignore = "documents the ??? offset bug: plate-solver binning != camera binning"]
 #[serial_test::serial]
 fn goto_image_offset() {
     let engine = setup_engine();
@@ -326,8 +350,7 @@ fn goto_image_offset() {
 /// Diagnostic variant: the plate solver binning is forced to the camera
 /// binning, so both images have the same pixel scale.
 ///
-/// Expected to PASS: proves the star comparison mechanism itself works and
-/// that the binning (scale) mismatch is the root cause of "???".
+/// Expected to PASS in any case (regression check for the equal-scale path).
 #[test]
 #[serial_test::serial]
 fn goto_image_offset_matched_binning() {

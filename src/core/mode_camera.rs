@@ -131,7 +131,7 @@ pub struct TakingPicturesMode {
     cam_options:       CamOptions,
     qual_options:      QualityOptions,
     guider:            Option<Guider>,
-    ref_stars:         Option<Vec<Point>>,
+    ref_stars:         Option<RefStars>,
     progress:          Option<Progress>,
     live_stacking:     Option<Arc<LiveStacking>>,
     autofocuser:       Option<AutoFocuser>,
@@ -611,8 +611,10 @@ impl TakingPicturesMode {
         }
 
         if info.quality.stars_is_ok() && self.ref_stars.is_none() {
-            let ref_stars = info.stars.items.iter().map(|s| Point {x: s.x, y: s.y}).collect();
-            self.ref_stars = Some(ref_stars);
+            self.ref_stars = Some(RefStars {
+                stars:  info.stars.items.iter().map(|s| Point {x: s.x, y: s.y}).collect(),
+                size:   (info.image.width, info.image.height),
+            });
         }
 
         self.process_light_frame_info_and_refocus(info)?;

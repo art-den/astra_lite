@@ -72,6 +72,15 @@ bitflags! {
     }
 }
 
+/// Reference stars for the offset calculation, with the size (width, height)
+/// of the image they were detected on, used to scale them to the current
+/// image's pixel scale (the images may have different binnings).
+#[derive(Clone)]
+pub struct RefStars {
+    pub stars: Vec<Point>,
+    pub size:  (usize, usize),
+}
+
 pub struct ProcessImageParams {
     pub mode_kind:       ModeKind,
     pub camera_id:       String,
@@ -79,7 +88,7 @@ pub struct ProcessImageParams {
     pub flags:           FrameProcessCommandFlags,
     pub preview:         Arc<Preview>,
     pub stop_flag:       Arc<AtomicBool>,
-    pub ref_stars:       Option<Vec<Point>>,
+    pub ref_stars:       Option<RefStars>,
     pub calibr_params:   Option<CalibrParams>,
     pub calibr_data:     Arc<Mutex<RawCalibration>>,
     pub preview_params:  PreviewParams,
@@ -589,13 +598,20 @@ impl FrameProcessing {
             // Offset by previous stars
 
             let stars_offset =
-                if let (Some(stars_for_offset), true) = (&command.ref_stars, quality.stars_is_ok()) {
+                if let (Some(ref_stars), true) = (&command.ref_stars, quality.stars_is_ok()) {
                     let tmr = TimeLogger::start();
+                    // Scale the reference stars to the current image's pixel scale
+                    let (ref_w, ref_h) = ref_stars.size;
+                    let sx = image.width()  as f64 / ref_w as f64;
+                    let sy = image.height() as f64 / ref_h as f64;
+                    let ref_points: Vec<Point> = ref_stars.stars.iter()
+                        .map(|p| Point { x: p.x * sx, y: p.y * sy })
+                        .collect();
                     let cur_stars_points: Vec<_> = stars.items.iter()
                         .map(|star| Point {x: star.x, y: star.y })
                         .collect();
                     let image_offset = Offset::calculate(
-                        stars_for_offset,
+                        &ref_points,
                         &cur_stars_points,
                         image.width() as f64,
                         image.height() as f64
