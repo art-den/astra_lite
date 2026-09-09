@@ -670,9 +670,6 @@ impl SkyMap {
     pub fn merge_other_skymaps(&mut self, other: &Self) {
         self.objects.extend_from_slice(&other.objects);
         self.outlines.extend_from_slice(&other.outlines);
-        for (id, constellation) in &other.constellations {
-            self.constellations.entry(*id).or_insert_with(|| constellation.clone());
-        }
         self.constellations = other.constellations.clone();
 
         for (key, star_zone) in &other.stars.zones {

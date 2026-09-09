@@ -186,7 +186,7 @@ impl IndiPanelWidget {
             indi_devices.sort_by(|d1, d2| {
                 let pr1 = get_device_sort_prio(d1.interface);
                 let pr2 = get_device_sort_prio(d2.interface);
-                let ord = usize::cmp(&pr2, &pr1);
+                let ord = usize::cmp(&pr1, &pr2);
                 if ord != std::cmp::Ordering::Equal {
                     return ord;
                 }
