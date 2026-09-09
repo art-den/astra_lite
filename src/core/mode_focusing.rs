@@ -184,6 +184,7 @@ impl FocusingMode {
             return Ok(());
         };
         log::debug!("Setting focuser value={:.1}, anti_backlash={}", pos, anti_backlash);
+        self.one_pos_hfd.clear();
         if anti_backlash {
             let anti_backlash_pos = pos - self.f_opts.anti_backlash_steps as f64;
             let anti_backlash_pos = anti_backlash_pos.max(0.0);
@@ -331,7 +332,6 @@ impl FocusingMode {
             };
             self.samples.push(sample);
             self.samples.sort_by(|s1, s2| cmp_f64(&s1.position, &s2.position));
-            self.one_pos_hfd.clear();
 
             log::debug!("Samples count = {}", self.samples.len());
             let event_data = FocusingResultData {
