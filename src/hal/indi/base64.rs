@@ -44,7 +44,7 @@ impl Base64Decoder {
             match extra_len {
                 1 => self.result.extend_from_slice(&bytes[1..=2]),
                 2 => self.result.extend_from_slice(&bytes[1..=1]),
-                _ => unreachable!(),
+                _ => log::error!("Wrong base64"),
             }
         }
         std::mem::take(&mut self.result)
