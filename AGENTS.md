@@ -24,3 +24,6 @@
 - `src/ui/resources` - GTK ui-files, images
 - `src/ui/sky_map` - Sky map widget
 - `src/utils` - Utilities: IO, logging, math, timers, compression
+
+## Panic
+The program terminates on any panic. (`panic = "abort"` in `Cargo.toml`)
