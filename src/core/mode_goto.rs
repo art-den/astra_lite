@@ -18,7 +18,7 @@ enum State {
     TakingFinalPicture,
     FinalPlateSolving,
     Finished,
-    Checking,
+    Checking, // <- This mode never ends. The user interrupts it manually.
 }
 
 pub enum GotoDestination {

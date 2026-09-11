@@ -355,7 +355,7 @@ impl Mode for MountCalibrMode {
             State::WaitForOrigCoords(ok_time_ms) =>
                 if !self.telescope.is_slewing()? {
                     *ok_time_ms += timer_period_ms;
-                    if *ok_time_ms >= AFTER_GOTO_WAIT_TIME {
+                    if *ok_time_ms >= AFTER_GOTO_WAIT_TIME * 1000 {
                         result = NotifyResult::Finished {
                             next_mode: self.next_mode.take()
                         };

@@ -722,6 +722,7 @@ impl Engine {
         let Some(aborted_mode) = mode.aborted.take() else {
             eyre::bail!("Aborted state is empty");
         };
+        _ = mode.active.abort();
         mode.active = aborted_mode;
         mode.active.continue_work()?;
         let progress = mode.active.progress();
