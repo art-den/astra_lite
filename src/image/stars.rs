@@ -56,7 +56,7 @@ impl StarsFinder {
         sensitivity:      StarRecognSensitivity,
         ignore_3px_stars: bool,
         mt:               bool,
-    ) -> Stars {
+    ) -> eyre::Result<Stars> {
         log::debug!(
             "StarsFinder::find_stars_and_get_info ignore_3px_stars={}, mt={}",
             ignore_3px_stars, mt
@@ -65,7 +65,7 @@ impl StarsFinder {
         let tm_total = TimeLogger::start();
 
         let tm = TimeLogger::start();
-        let mut threshold = Self::calc_threshold_for_stars_detection(image, sensitivity);
+        let mut threshold = Self::calc_threshold_for_stars_detection(image, sensitivity)?;
         tm.log("StarsFinder::calc_threshold_for_stars_detection");
         log::debug!("Stars detection threshold = {}", threshold);
 
@@ -106,13 +106,13 @@ impl StarsFinder {
 
         tm_total.log("StarsFinder TOTAL");
 
-        Stars { items: stars, info }
+        Ok(Stars { items: stars, info })
     }
 
     fn calc_threshold_for_stars_detection(
         image:       &ImageLayer<u16>,
         sensitivity: StarRecognSensitivity,
-    ) -> u16 {
+    ) -> eyre::Result<u16> {
         let mut diffs = Vec::new();
         for (y, row) in image.as_slice().chunks_exact(image.width()).enumerate() {
             let start = y & 0xF;
@@ -132,6 +132,10 @@ impl StarsFinder {
             }
         }
 
+        if diffs.is_empty() {
+            eyre::bail!("Image is too small for stars detection");
+        }
+
         let m = median(&mut diffs);
         let diff = 0.5 * f64::sqrt(m as _);
 
@@ -145,7 +149,7 @@ impl StarsFinder {
         let result = i32::max(result, 1);
         let result = i32::min(result, u16::MAX as _);
 
-        result as _
+        Ok(result as _)
     }
 
     fn find_extremums_try(
@@ -755,5 +759,19 @@ impl CommonStarsImage {
         let result = 2.0 * f64::atan2(r, focal_len_m);
 
         Some(result as f32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calc_threshold_narrow_image() {
+        // Image width < MAX_STAR_DIAM: no 32-pixel chunks, so `diffs` stays empty
+        // and `median` panics on the empty slice.
+        let image = ImageLayer::new_with_size(16, 100);
+        let bad_res = StarsFinder::calc_threshold_for_stars_detection(&image, StarRecognSensitivity::Normal);
+        assert!(bad_res.is_err());
     }
 }

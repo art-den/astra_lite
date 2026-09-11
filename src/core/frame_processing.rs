@@ -523,13 +523,20 @@ impl FrameProcessing {
                 .map(|opts| opts.ignore_3px_stars)
                 .unwrap_or(false);
 
-            stars_finder.find_stars_and_get_info(
+            let stars = stars_finder.find_stars_and_get_info(
                 mono_layer,
                 &image.raw_info,
                 stars_recgn_send,
                 ignore_3px_stars,
                 true
-            )
+            );
+            match stars {
+                Ok(stars) => stars,
+                Err(err) => {
+                    log::warn!("{}", err);
+                    Stars::default()
+                }
+            }
         } else {
             Stars::default()
         };
@@ -729,7 +736,7 @@ impl FrameProcessing {
                     stars_recgn_send,
                     ignore_3px_stars,
                     true
-                );
+                ).unwrap_or_else(|_| Stars::default());
 
                 // Live stacking image info
 
