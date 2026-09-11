@@ -694,7 +694,10 @@ impl RawImage {
         let zero = self.info.offset as i64;
         let flat_zero = flat.info.offset as i64;
         self.data.par_iter_mut().zip(flat.data.par_iter()).for_each(|(s, f)| {
-            let flat_value = *f as i64 - flat_zero;
+            let mut flat_value = *f as i64 - flat_zero;
+            if flat_value == 0 {
+                flat_value = 1;
+            }
             let mut value = *s as i64;
             value -= zero;
             value = value * u16::MAX as i64 / flat_value;
@@ -706,7 +709,7 @@ impl RawImage {
         Ok(())
     }
 
-    pub fn normalize_flat(&mut self) {
+    pub fn normalize_flat(&mut self) -> eyre::Result<()> {
         let mut l_values = Vec::new();
         let mut r_values = Vec::new();
         let mut g_values = Vec::new();
@@ -750,6 +753,9 @@ impl RawImage {
                     CfaColor::G => g_max,
                     CfaColor::B => b_max,
                 };
+                if max == 0 {
+                    eyre::bail!("Not valid flat image");
+                }
                 let val = *v as i64 - zero;
                 let normalized: i64 = (u16::MAX as i64 * val) / max;
                 let normalized = normalized.max(0).min(u16::MAX as i64);
@@ -757,6 +763,7 @@ impl RawImage {
             }
         }
         self.info.offset = 0;
+        Ok(())
     }
 
     pub fn filter_flat(&mut self) {

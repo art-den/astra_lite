@@ -557,7 +557,7 @@ impl TakingPicturesMode {
             if flat_offset != 0 {
                 normalized_flat.set_offset(flat_offset as i32);
             }
-            normalized_flat.normalize_flat();
+            normalized_flat.normalize_flat()?;
             tmr.log("Normalizing flat");
             let tmr = TimeLogger::start();
             self.raw_stacker.add(&normalized_flat)?;
