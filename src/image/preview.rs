@@ -168,7 +168,13 @@ pub fn get_preview_rgb_data(
 
     if params.stars && let Some(stars) = stars
     && params.scale != PreviewScale::CenterAndCorners {
-        show_stars(&*stars, &mut bytes, image.width(), reduct_ratio);
+        show_stars(
+            &*stars,
+            &mut bytes,
+            image.width(),
+            image.height(),
+            reduct_ratio
+        );
     }
 
     Some(PreviewRgbData {
@@ -182,8 +188,15 @@ pub fn get_preview_rgb_data(
     })
 }
 
-fn show_stars(stars: &StarItems, bytes: &mut [u8], width: usize, reduct_ratio: usize) {
+fn show_stars(
+    stars: &StarItems,
+    bytes: &mut [u8],
+    width: usize,
+    height: usize,
+    reduct_ratio: usize
+) {
     let width = width / reduct_ratio;
+    let height = height / reduct_ratio;
     let good_color = (0, 255, 0);
     let bad_color = (255, 32, 32);
     for star in stars {
@@ -191,6 +204,7 @@ fn show_stars(stars: &StarItems, bytes: &mut [u8], width: usize, reduct_ratio: u
         for (x, y) in &star.points {
             let x = *x / reduct_ratio;
             let y = *y / reduct_ratio;
+            if x >= width || y >= height { continue; }
             let offset = 3 * (y * width + x);
             bytes[offset] = r;
             bytes[offset+1] = g;
