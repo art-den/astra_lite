@@ -304,7 +304,7 @@ impl AstrometryPlateSolver {
                 let mut output = child.stderr.take().unwrap();
                 let mut str_output = String::new();
                 _ = output.read_to_string(&mut str_output);
-
+                self.child = None;
                 return Err(eyre::format_err!(
                     "solve-field exited with code {}\n\n{}",
                     exit_status.code().unwrap_or_default(),
