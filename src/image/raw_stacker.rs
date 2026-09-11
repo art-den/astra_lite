@@ -16,6 +16,7 @@ pub struct RawStacker {
     info:       Option<RawImageInfo>,
     divisor:    u32, // divisor for values from `data`
     zero_sum:   i32,
+    zero_div:   u32,
     integr_exp: f64,
 }
 
@@ -28,6 +29,7 @@ impl RawStacker {
             info:       None,
             divisor:    0,
             zero_sum:   0,
+            zero_div:   0,
             integr_exp: 0.0,
         }
     }
@@ -40,6 +42,7 @@ impl RawStacker {
         self.info = None;
         self.divisor = 0;
         self.zero_sum = 0;
+        self.zero_div = 0;
         self.integr_exp = 0.0;
     }
 
@@ -67,15 +70,17 @@ impl RawStacker {
             self.info = Some(raw_info.clone());
             self.divisor = 0;
             self.zero_sum = 0;
+            self.zero_div = 0;
             self.data.resize(raw.as_slice().len(), 0);
         }
+        self.zero_sum += raw_info.offset;
+        self.zero_div += 1;
         match self.mode {
             RawStackerMode::Average => {
                 for (s, d) in izip!(raw.as_slice(), &mut self.data) {
                     *d += *s as u32;
                 }
                 self.divisor += 1;
-                self.zero_sum += raw_info.offset;
             }
             RawStackerMode::AverageOfMedians => {
                 if self.images.len() == 4 {
@@ -89,7 +94,6 @@ impl RawStacker {
                         *d += median5(*s1, *s2, *s3, *s4, *s5) as u32;
                     }
                     self.divisor += 1;
-                    self.zero_sum += raw_info.offset;
                     self.images.clear();
                     self.images.shrink_to_fit();
                 } else  {
@@ -109,7 +113,8 @@ impl RawStacker {
         let cfa_arr = info.cfa.get_array();
         let mut info = info.clone();
         let divisor2 = self.divisor/2;
-        info.offset = (self.zero_sum + divisor2 as i32) / self.divisor as i32;
+
+        info.offset = self.zero_sum as i32 / self.zero_div as i32;
         info.integr_time = Some(self.integr_exp);
 
         if self.divisor == 0 && !self.images.is_empty() {
