@@ -183,6 +183,10 @@ impl MountCalibrMode {
             result.remove(0);
         }
 
+        if result.is_empty() {
+            eyre::bail!("There is too little data to calculate the result.");
+        }
+
         let x_sum: f64 = result.iter().map(|r| r.move_x).sum();
         let y_sum: f64 = result.iter().map(|r| r.move_y).sum();
         let cnt = result.len() as f64;
