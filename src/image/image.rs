@@ -154,9 +154,9 @@ impl ImageLayer<u16> {
 
     pub fn calc_background(&self, mt: bool) -> u16 {
         let sum: u64 = if mt {
-            self.data.iter().map(|v| *v as u64).sum()
-        } else {
             self.data.par_iter().map(|v| *v as u64).sum()
+        } else {
+            self.data.iter().map(|v| *v as u64).sum()
         };
         (sum / self.data.len() as u64) as u16
     }
