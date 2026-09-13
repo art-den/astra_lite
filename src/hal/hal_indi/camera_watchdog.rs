@@ -264,10 +264,11 @@ impl CamWatchdog {
         if existing.is_some() {
             return;
         }
-        let mut device_id = device_name.to_string();
-        if ccd == indi::CamCcd::Guider {
-            device_id += "_CCD2";
-        }
+        let device_id = if ccd == indi::CamCcd::Guider {
+            super::ccd2_id(device_name)
+        } else {
+            device_name.to_string()
+        };
 
         self.ccd_list.push(CcdToWatch {
             device_id: Arc::new(device_id),
@@ -284,7 +285,7 @@ impl CamWatchdog {
         }
         self.init_list.push(CameraToInit {
             device_id1:  Arc::clone(device_name),
-            device_id2:  Arc::new(device_name.to_string() + "_CCD2"),
+            device_id2:  Arc::new(super::ccd2_id(device_name)),
             name:        Arc::clone(device_name),
             init_flags:  CameraInitFlags::default(),
             init_timer:  None,

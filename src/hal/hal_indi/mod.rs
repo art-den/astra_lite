@@ -16,6 +16,12 @@ use super::{indi, HalImpl, Camera, DeviceInfo, DeviceType};
 pub const CAM_CCD2_POSTFIX: &str = "_CCD2";
 pub const SET_PROP_TIMEOUT: u64 = 2000; // ms
 
+/// Returns the logical INDI id that addresses the secondary ("CCD2") sensor of
+/// the camera with the given device name (e.g. "MYCAM" -> "MYCAM_CCD2").
+fn ccd2_id(device_name: &str) -> String {
+    device_name.to_string() + CAM_CCD2_POSTFIX
+}
+
 mod dev_watchdog;
 mod camera_watchdog;
 
@@ -185,10 +191,11 @@ impl IndiHalImpl {
                     self.process_indi_prop_change_event(&prop_change)?;
                 }
                 indi::Event::BlobStart(blob_start) => {
-                    let mut device_id = blob_start.device_name.to_string();
-                    if *blob_start.elem_name == "CCD2" {
-                        device_id += CAM_CCD2_POSTFIX;
-                    }
+                    let device_id = if *blob_start.elem_name == "CCD2" {
+                        ccd2_id(&blob_start.device_name)
+                    } else {
+                        blob_start.device_name.to_string()
+                    };
                     self.event_handlers.send(HalEvent::CameraBeginDownloadData(
                         Arc::new(device_id)
                     ));
@@ -272,12 +279,12 @@ impl IndiHalImpl {
             }
             ("GUIDER_EXPOSURE", _, _, _, true) => {
                 self.event_handlers.send(HalEvent::CameraIsReadyToWork(
-                    Arc::new(device_name.to_string() + CAM_CCD2_POSTFIX)
+                    Arc::new(ccd2_id(device_name))
                 ));
             }
             ("GUIDER_EXPOSURE", "GUIDER_EXPOSURE_VALUE", PropValue::Num(value), _, false) => {
                 self.event_handlers.send(HalEvent::CameraTimeUntilEndOfExposure {
-                    device_id: Arc::new(device_name.to_string() + CAM_CCD2_POSTFIX),
+                    device_id: Arc::new(ccd2_id(device_name)),
                     time:      value.value
                 });
             }
@@ -381,10 +388,11 @@ impl IndiHalImpl {
         device_name: &str,
         device_prop: &str,
     ) -> eyre::Result<()> {
-        let mut device_id = device_name.to_string();
-        if device_prop == "CCD2" {
-            device_id += CAM_CCD2_POSTFIX;
-        }
+        let device_id = if device_prop == "CCD2" {
+            ccd2_id(device_name)
+        } else {
+            device_name.to_string()
+        };
         let camera_shot = IndiCameraShot::new(blob)?;
         self.event_handlers.send(HalEvent::CameraShotResult{
             device_id: Arc::new(device_id),
@@ -414,17 +422,32 @@ impl IndiHalImpl {
             drop(watchdogs);
         }
 
-        let device_info = DeviceInfo {
-            id:    device_name.to_string(),
-            name:  device_name.to_string(),
-            type_: device_type,
+        let make_event = |id: String, name: String| -> HalEvent {
+            let device_info = DeviceInfo {
+                id,
+                name,
+                type_: device_type,
+            };
+            if connected {
+                HalEvent::DeviceConnected(Arc::new(device_info))
+            } else {
+                HalEvent::DeviceDisconnected(Arc::new(device_info))
+            }
         };
-        let event_to_send = if connected {
-            HalEvent::DeviceConnected(Arc::new(device_info))
-        } else {
-            HalEvent::DeviceDisconnected(Arc::new(device_info))
-        };
-        self.event_handlers.send(event_to_send);
+
+        self.event_handlers.send(make_event(
+            device_name.to_string(),
+            device_name.to_string(),
+        ));
+
+        // Any INDI camera may be addressed by the "<name>_CCD2" id (see
+        // `devices`/`cameras`). Emit connect/disconnect events for that id
+        // too, so a selected _CCD2 camera is populated on connect and cleared
+        // on disconnect.
+        if interface.contains(indi::DriverInterface::CCD) {
+            let ccd2 = ccd2_id(device_name);
+            self.event_handlers.send(make_event(ccd2.clone(), ccd2));
+        }
     }
 
     fn driver_interface_to_dev_type(drv_interface: indi::DriverInterface) -> DeviceType {
@@ -501,9 +524,10 @@ impl HalImpl for IndiHalImpl {
                 });
                 let ccd2_prop_exists = self.indi.property_exists(&device.name, "CCD2", None).unwrap_or(false);
                 if device_type.contains(DeviceType::CAMERA) && ccd2_prop_exists {
+                    let ccd2 = ccd2_id(&device.name);
                     result.push(DeviceInfo{
-                        id: device.name.to_string() + CAM_CCD2_POSTFIX,
-                        name: device.name.to_string() + CAM_CCD2_POSTFIX,
+                        id:   ccd2.clone(),
+                        name: ccd2,
                         type_: device_type,
                     });
                 }
@@ -561,7 +585,7 @@ impl HalImpl for IndiHalImpl {
                 };
                 result.push(CameraInfo {
                     name: camera.device.name.to_string(),
-                    id:   camera.device.name.to_string()+CAM_CCD2_POSTFIX,
+                    id:   ccd2_id(&camera.device.name),
                     ccd:  purpose,
                 });
             }
@@ -1271,5 +1295,16 @@ impl FilterWheel for IndiDevice {
     fn set_active(&self, active_elem: usize) -> eyre::Result<()> {
         self.indi.filter_set_active(&self.name, active_elem as _)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ccd2_id() {
+        assert_eq!(ccd2_id("MYCAM"), "MYCAM_CCD2");
+        assert_eq!(ccd2_id("CCD Simulator"), "CCD Simulator_CCD2");
     }
 }
