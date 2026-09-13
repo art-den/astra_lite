@@ -252,19 +252,25 @@ impl Engine {
             HalEvent::CameraIsReadyForCooling(device_id) |
             HalEvent::CameraIsReadyForCtrlFan(device_id) |
             HalEvent::CameraIsReadyForCtrlHeater(device_id) => {
-                let options = self.options.read().unwrap();
-                if options.cam.device_id == **device_id {
-                    let Ok(camera) = self.hal.camera(&options.cam.device_id) else { return Ok(()); };
-                    match &event {
-                        HalEvent::CameraIsReadyForCooling(_) =>
-                            control_camera_cooling(&camera, &options.cam.ctrl)?,
-                        HalEvent::CameraIsReadyForCtrlFan(_) =>
-                            control_camera_fan(&camera, &options.cam.ctrl)?,
-                        HalEvent::CameraIsReadyForCtrlHeater(_) =>
-                            control_camera_heater(&camera, &options.cam.ctrl)?,
-                        _ => unreachable!()
-                    };
-                }
+                // Drop the options read guard before the blocking HAL calls below
+                let cam_ctrl = {
+                    let options = self.options.read().unwrap();
+                    if options.cam.device_id == **device_id {
+                        options.cam.ctrl.clone()
+                    } else {
+                        return Ok(());
+                    }
+                };
+                let Ok(camera) = self.hal.camera(device_id.as_str()) else { return Ok(()); };
+                match &event {
+                    HalEvent::CameraIsReadyForCooling(_) =>
+                        control_camera_cooling(&camera, &cam_ctrl)?,
+                    HalEvent::CameraIsReadyForCtrlFan(_) =>
+                        control_camera_fan(&camera, &cam_ctrl)?,
+                    HalEvent::CameraIsReadyForCtrlHeater(_) =>
+                        control_camera_heater(&camera, &cam_ctrl)?,
+                    _ => unreachable!()
+                };
             }
             HalEvent::CameraBeginDownloadData(camera_id) => {
                 let mut mode = self.modes.write().unwrap();
@@ -272,17 +278,25 @@ impl Engine {
                 self.apply_notify_result(res, &mut mode)?;
             }
             HalEvent::CameraNeedRestartExposure(camera_id) => {
-                let options = self.options.read().unwrap();
-                if options.cam.device_id == **camera_id {
-                    let Ok(camera) = self.hal.camera(&options.cam.device_id) else { return Ok(()); };
-                    let mut mode = self.modes.write().unwrap();
-                    restart_camera_exposure(
-                        &camera,
-                        &mut mode,
-                        &options.cam.frame,
-                        &options.cam.ctrl,
-                    )?;
-                }
+                // Keep the options critical section short and drop the read guard
+                // before taking modes.write() to keep the global lock order
+                // (modes -> options) and avoid a deadlock with the UI thread
+                let (frame_opts, ctrl_opts) = {
+                    let options = self.options.read().unwrap();
+                    if options.cam.device_id == **camera_id {
+                        (options.cam.frame.clone(), options.cam.ctrl.clone())
+                    } else {
+                        return Ok(());
+                    }
+                };
+                let Ok(camera) = self.hal.camera(camera_id.as_str()) else { return Ok(()); };
+                let mut mode = self.modes.write().unwrap();
+                restart_camera_exposure(
+                    &camera,
+                    &mut mode,
+                    &frame_opts,
+                    &ctrl_opts,
+                )?;
             }
             HalEvent::CameraNeedInitTelescopeFocalLen(_camera_id) => {
                 self.init_focal_len_for_cameras();
