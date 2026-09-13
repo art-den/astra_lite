@@ -8,7 +8,7 @@ use astra_lite::{
 // Option used to launch a separate instance that only shows the panic dialog
 const PANIC_DIALOG_OPT: &str = "show-panic-dialog";
 
-fn main() -> eyre::Result<()> {
+fn main() {
     // The panic-dialog instance must not use GApplication:
     // - with the main app id, GApplication would forward the command line
     //   via D-Bus to the running primary instance (the one that is about
@@ -27,7 +27,7 @@ fn main() -> eyre::Result<()> {
             show_panic_dialog(&file_path);
             let _ = std::fs::remove_file(&file_path);
         }
-        return Ok(());
+        return;
     }
 
     let application = gtk::Application::new(
@@ -36,7 +36,6 @@ fn main() -> eyre::Result<()> {
     );
     application.connect_activate(app_activate_handler);
     application.run();
-    Ok(())
 }
 
 fn show_panic_dialog(file_path: &str) {
