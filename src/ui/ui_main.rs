@@ -2,7 +2,6 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     path::{Path, PathBuf},
-    process::Command,
     rc::Rc,
     sync::{Arc, RwLock},
     time::Duration,
@@ -678,15 +677,7 @@ impl MainUi {
 
     fn handler_action_open_logs_folder(&self) {
         exec_and_show_error(Some(&self.widgets.window), || {
-            if cfg!(target_os = "windows") {
-                Command::new("explorer")
-                    .args([&self.logs_dir])
-                    .spawn()?;
-            } else {
-                let uri = glib::filename_to_uri(&self.logs_dir, None)?;
-                gtk::show_uri_on_window(gtk::Window::NONE, &uri, 0)?;
-            }
-            Ok(())
+            open_logs_folder(&self.logs_dir)
         });
     }
 

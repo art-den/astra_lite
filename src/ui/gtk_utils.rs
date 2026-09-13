@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use core::panic;
-use std::{path::PathBuf, rc::Rc};
+use std::{path::{Path, PathBuf}, process::Command, rc::Rc};
 use gtk::{prelude::*, gio, glib, glib::clone, gdk};
 
 pub fn set_dialog_default_button<T: IsA<gtk::Dialog>>(dialog: &T) {
@@ -202,6 +202,18 @@ pub fn show_message_if_result_is_error<T>(
     if let Err(err) = result {
         show_error_message(window, "Error", &err.to_string());
     }
+}
+
+pub fn open_logs_folder(logs_dir: &Path) -> eyre::Result<()> {
+    if cfg!(target_os = "windows") {
+        Command::new("explorer")
+            .args([logs_dir])
+            .spawn()?;
+    } else {
+        let uri = glib::filename_to_uri(logs_dir, None)?;
+        gtk::show_uri_on_window(gtk::Window::NONE, &uri, 0)?;
+    }
+    Ok(())
 }
 
 pub fn get_model_row_count(model: &gtk::TreeModel) -> usize {

@@ -1,11 +1,35 @@
 use std::{path::Path, sync::Arc};
 use gtk::{prelude::*, glib, glib::clone};
-use astra_lite::{ui, ui::gtk_utils::exec_and_show_error};
+use astra_lite::{ui, ui::gtk_utils::{exec_and_show_error, open_logs_folder}};
 use astra_lite::{
     core::engine::Engine, options::*, utils::{io_utils::*, log_utils::*}
 };
 
+// Option used to launch a separate instance that only shows the panic dialog
+const PANIC_DIALOG_OPT: &str = "show-panic-dialog";
+
 fn main() -> eyre::Result<()> {
+    // The panic-dialog instance must not use GApplication:
+    // - with the main app id, GApplication would forward the command line
+    //   via D-Bus to the running primary instance (the one that is about
+    //   to abort), so the dialog would never be shown;
+    // - with a unique app id, "activate" would be emitted and the whole
+    //   app (engine, UI) would start in the dialog process; the
+    //   HANDLES_COMMAND_LINE flag does not help either: in this GLib
+    //   version "activate" is not emitted after the command-line handler
+    //   returns, so run() exits right away without starting the app.
+
+    let mut args = std::env::args();
+    let _ = args.next(); // program name
+    let flag = format!("--{PANIC_DIALOG_OPT}");
+    if args.next().as_deref() == Some(flag.as_str()) {
+        if let Some(file_path) = args.next() {
+            show_panic_dialog(&file_path);
+            let _ = std::fs::remove_file(&file_path);
+        }
+        return Ok(());
+    }
+
     let application = gtk::Application::new(
         Some(&format!("com.github.art-den.{}", env!("CARGO_PKG_NAME"))),
         Default::default(),
@@ -14,6 +38,52 @@ fn main() -> eyre::Result<()> {
     application.run();
     Ok(())
 }
+
+fn show_panic_dialog(file_path: &str) {
+    if gtk::init().is_err() {
+        eprintln!("Can't show panic dialog: failed to init GTK");
+        return;
+    }
+    let message_text = std::fs::read_to_string(file_path).unwrap_or_default();
+
+    let dialog = gtk::MessageDialog::builder()
+        .message_type(gtk::MessageType::Error)
+        .buttons(gtk::ButtonsType::Ok)
+        .text(format!(
+            "{} {} ver {} crashed ;-(",
+            env!("CARGO_PKG_NAME"),
+            std::env::consts::ARCH,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .secondary_text(message_text)
+        .build();
+
+    const OPEN_LOGS_RESPONSE: u16 = 1;
+    // The same logs dir the main app uses
+
+    let logs_dir = get_app_dir().ok().map(|mut d| { d.push("logs"); d });
+    if logs_dir.is_some() {
+        dialog.add_button(
+            "Open logs folder",
+            gtk::ResponseType::Other(OPEN_LOGS_RESPONSE),
+        );
+    }
+
+    loop {
+        match dialog.run() {
+            gtk::ResponseType::Ok | gtk::ResponseType::Cancel | gtk::ResponseType::Close => break,
+            gtk::ResponseType::Other(id) if id == OPEN_LOGS_RESPONSE => {
+                if let Some(dir) = &logs_dir {
+                    if let Err(e) = open_logs_folder(dir) {
+                        eprintln!("Can't open logs folder: {}", e);
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+}
+
 
 fn app_activate_handler(app: &gtk::Application) {
     // Check if application is already running
@@ -163,17 +233,36 @@ fn panic_handler(
         std::backtrace::Backtrace::force_capture()
     );
 
-    let message_caption = format!(
-        "{} {} ver {} crashed ;-(",
-        env!("CARGO_PKG_NAME"),
-        std::env::consts::ARCH,
-        env!("CARGO_PKG_VERSION")
-    );
+    // Write the error text to a temp file and launch a separate instance of
+    // this application to show the dialog. Showing a GTK dialog from the
+    // panicking thread (usually a worker thread) is unsafe, so it is done
+    // in a dedicated process.
 
-    let message_text = format!(
-        "{payload}\n\nat {location}\n\n\nLook logs at\n{}",
-        logs_dir.to_str().unwrap_or_default()
-    );
+    match std::env::current_exe() {
+        Ok(exe) => {
+            let tmp_file = std::env::temp_dir().join(format!(
+                "{}_panic_{}.txt",
+                env!("CARGO_PKG_NAME"),
+                std::process::id()
+            ));
+            let message_text = format!(
+                "{payload}\n\nat {location}\n\n\nLook logs at\n{}",
+                logs_dir.to_str().unwrap_or_default()
+            );
+            if std::fs::write(&tmp_file, message_text).is_ok() {
+                if let Err(e) = std::process::Command::new(exe)
+                    .arg(format!("--{PANIC_DIALOG_OPT}"))
+                    .arg(&tmp_file)
+                    .spawn()
+                {
+                    log::error!("Failed to spawn panic dialog process: {}", e);
+                }
+            } else {
+                log::error!("Failed to write panic info file: {}", tmp_file.display());
+            }
+        }
+        Err(e) => log::error!("Failed to get current exe path: {}", e),
+    }
 
     if stop_indi_servers && cfg!(target_os = "linux") {
         log::info!("Stop INDI server...");
@@ -182,8 +271,6 @@ fn panic_handler(
             .spawn();
         log::info!("Done!");
     }
-
-    _ = msgbox::create(&message_caption, &message_text, msgbox::IconType::Error);
 
     def_panic_handler(panic_info);
 }
