@@ -62,10 +62,10 @@ fn validate_fits_frame(
 fn live_stacking() {
     // Create system engine
     let engine = Engine::new();
-    let mut options = engine.options.write().unwrap();
 
     #[cfg(target_os = "linux")]
     {
+        let mut options = engine.options.write().unwrap();
         options.indi.address = "localhost".to_string();
         options.indi.remote = true;
         let indi_hal = engine.hal.indi_impl();
@@ -80,7 +80,8 @@ fn live_stacking() {
 
     #[cfg(target_os = "windows")]
     {
-        let aa_hal = core.hal.ascom_alpaca_impl();
+        let options = engine.options.write().unwrap();
+        let aa_hal = engine.hal.ascom_alpaca_impl();
         aa_hal.connect(&options.ascom_alpaca.address).expect("connecting to ASCOM Alpaca");
         std::thread::sleep(Duration::from_secs(1));
         drop(options);
@@ -90,7 +91,7 @@ fn live_stacking() {
     #[cfg(target_os = "linux")]
     let hal_impl = engine.hal.indi_impl();
     #[cfg(target_os = "windows")]
-    let hal_impl = core.hal.ascom_alpaca_impl();
+    let hal_impl = engine.hal.ascom_alpaca_impl();
 
     let all_cameras = hal_impl.devices(DeviceType::CAMERA).expect("requesting camera list");
     let simulator_camera = all_cameras.iter().find(|c| c.id == "CCD Simulator").expect("CCD simulator");

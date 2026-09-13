@@ -13,10 +13,9 @@ const EVENT_TIMEOUT_SECS: i64 = 20;
 
 /// Connects to the HAL server and selects the first available camera.
 fn connect_hal(engine: &Engine) {
-    let mut options = engine.options.write().unwrap();
-
     #[cfg(target_os = "linux")]
     {
+        let mut options = engine.options.write().unwrap();
         options.indi.address = "localhost".to_string();
         options.indi.remote = true;
         let indi_hal = engine.hal.indi_impl();
@@ -31,6 +30,7 @@ fn connect_hal(engine: &Engine) {
 
     #[cfg(target_os = "windows")]
     {
+        let options = engine.options.write().unwrap();
         let aa_hal = engine.hal.ascom_alpaca_impl();
         aa_hal.connect(&options.ascom_alpaca.address).expect("connecting to ASCOM Alpaca");
         std::thread::sleep(Duration::from_secs(1));

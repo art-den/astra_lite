@@ -71,7 +71,7 @@ fn setup_engine() -> Arc<Engine> {
 
     #[cfg(target_os = "windows")]
     {
-        let mut options = engine.options.write().unwrap();
+        let options = engine.options.write().unwrap();
         let aa_hal = engine.hal.ascom_alpaca_impl();
         aa_hal.connect(&options.ascom_alpaca.address).expect("connecting to ASCOM Alpaca");
         drop(options);

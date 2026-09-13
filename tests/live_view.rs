@@ -19,10 +19,10 @@ const WATCHDOG_TIMEOUT_SECS: i64 = 5;
 fn live_view() {
     // Create system engine
     let engine = Engine::new();
-    let mut options = engine.options.write().unwrap();
 
     #[cfg(target_os = "linux")]
     {
+        let mut options = engine.options.write().unwrap();
         options.indi.address = "localhost".to_string();
         options.indi.remote = true;
         let indi_hal = engine.hal.indi_impl();
@@ -37,7 +37,8 @@ fn live_view() {
 
     #[cfg(target_os = "windows")]
     {
-        let aa_hal = core.hal.ascom_alpaca_impl();
+        let options = engine.options.write().unwrap();
+        let aa_hal = engine.hal.ascom_alpaca_impl();
         aa_hal.connect(&options.ascom_alpaca.address).expect("connecting to ASCOM Alpaca");
         drop(options);
         std::thread::sleep(Duration::from_secs(1));
@@ -47,7 +48,7 @@ fn live_view() {
     #[cfg(target_os = "linux")]
     let hal_impl = engine.hal.indi_impl();
     #[cfg(target_os = "windows")]
-    let hal_impl = core.hal.ascom_alpaca_impl();
+    let hal_impl = engine.hal.ascom_alpaca_impl();
 
     let all_cameras = hal_impl.devices(DeviceType::CAMERA).expect("requesting camera list");
     assert!(!all_cameras.is_empty(), "At least one camera must be connected");
