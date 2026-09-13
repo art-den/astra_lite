@@ -498,7 +498,7 @@ impl Engine {
 
     fn start_new_mode(
         &self,
-        new_mode:            impl Mode + Send + Sync + 'static,
+        mut new_mode:        impl Mode + Send + Sync + 'static,
         reset_aborted_mode:  bool,
         reset_finished_mode: bool,
     ) -> eyre::Result<()> {
@@ -513,6 +513,16 @@ impl Engine {
             mode.active.abort()?;
         }
 
+        if reset_aborted_mode {
+            mode.aborted = None;
+        }
+        if reset_finished_mode {
+            mode.finished = None;
+        }
+
+        // Start new mode
+        new_mode.start()?;
+
         // Move mode.active to mode.previous
         mode.previous = Some(std::mem::replace(
             &mut mode.active,
@@ -520,15 +530,6 @@ impl Engine {
         ));
 
         mode.active = Box::new(new_mode);
-        if reset_aborted_mode {
-            mode.aborted = None;
-        }
-        if reset_finished_mode {
-            mode.finished = None;
-        }
-        // Start new mode
-        mode.active.start()?;
-
         let progress = mode.active.progress();
         let mode_kind = mode.active.kind();
 
