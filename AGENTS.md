@@ -1,8 +1,10 @@
 ## About
+
 - This is software for deepsky astrophotography and live stacking on low power PCs (like rapsberry Pi or Orange Pi). It also works on PCs. More information is in `README.md`.
 - Written in Rust. Sources is in `src` folder, procedural macro is in `macros` folder.
 
 ## Abbreviations and acronyms
+
 - FITS - Flexible Image Transport System format. Used to store/transfer astronomical data.
 - HDU (hdu) - Header Data Unit (The internal structure of a FITS file).
 - flt - filter (wheel).
@@ -13,6 +15,7 @@
 - mt = Multi Threading
 
 ## Architecture (Modules)
+
 - `src/core` - System core: working modes, frame processing, events, camera control.
 - `src/guiding` - API for external auto-guiding software (PHD2).
 - `src/hal` - Hardware Abstraction Layer — INDI and ASCOM Alpaca for connecting telescopes, cameras, focusers.
@@ -26,4 +29,10 @@
 - `src/utils` - Utilities: IO, logging, math, timers, compression
 
 ## Panic
+
 The program terminates on any panic. (`panic = "abort"` in `Cargo.toml`)
+
+## GIT usage
+
+- One commit should contain only one task
+- Commit comments should be as short as possible
