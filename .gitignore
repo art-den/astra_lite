@@ -1,10 +1,10 @@
 /.vscode
 /.zed
-/target
+target
 /target_cross
 /dist
 /*.sh
-/Cargo.lock
+Cargo.lock
 /.svn
 *.exe
 *.bat
