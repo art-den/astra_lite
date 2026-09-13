@@ -1,5 +1,3 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
 #![allow(
     clippy::too_many_arguments,
     clippy::upper_case_acronyms,

@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::{path::Path, sync::Arc};
 use gtk::{prelude::*, glib, glib::clone};
 use astra_lite::{ui, ui::gtk_utils::{exec_and_show_error, open_logs_folder}};
