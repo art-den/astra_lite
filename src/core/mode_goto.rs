@@ -155,7 +155,7 @@ impl GotoMode {
         let cam_opts = self.cam_opts.as_ref().unwrap();
         let camera = self.camera.as_ref().unwrap();
 
-        log::debug!("Taking picture for plate solve with {:?}", &cam_opts.frame);
+        log::debug!("Taking picture for plate solve with {:?}", cam_opts.frame);
         take_shot(camera, &cam_opts.frame, &cam_opts.ctrl)?;
         Ok(())
     }

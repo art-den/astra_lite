@@ -73,10 +73,9 @@ fn show_panic_dialog(file_path: &str) {
         match dialog.run() {
             gtk::ResponseType::Ok | gtk::ResponseType::Cancel | gtk::ResponseType::Close => break,
             gtk::ResponseType::Other(id) if id == OPEN_LOGS_RESPONSE => {
-                if let Some(dir) = &logs_dir {
-                    if let Err(e) = open_logs_folder(dir) {
-                        eprintln!("Can't open logs folder: {}", e);
-                    }
+                if let Some(dir) = &logs_dir
+                    && let Err(e) = open_logs_folder(dir) {
+                    eprintln!("Can't open logs folder: {}", e);
                 }
             }
             _ => break,
@@ -205,10 +204,8 @@ fn panic_handler(
     let payload_str =
         if let Some(msg) = panic_info.payload().downcast_ref::<&'static str>() {
             Some(*msg)
-        } else if let Some(msg) = panic_info.payload().downcast_ref::<String>() {
-            Some(msg.as_str())
         } else {
-            None
+            panic_info.payload().downcast_ref::<String>().map(|msg| msg.as_str())
         };
 
     let payload = payload_str.unwrap_or_default();

@@ -50,7 +50,7 @@ fn live_view() {
     let hal_impl = core.hal.ascom_alpaca_impl();
 
     let all_cameras = hal_impl.devices(DeviceType::CAMERA).expect("requesting camera list");
-    assert!(all_cameras.len() > 0, "At least one camera must be connected");
+    assert!(!all_cameras.is_empty(), "At least one camera must be connected");
     engine.cur_devices.change_camera(&all_cameras[0].id);
     drop(all_cameras);
 

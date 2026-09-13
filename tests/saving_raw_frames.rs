@@ -43,7 +43,7 @@ fn connect_hal(engine: &Engine) {
     let hal_impl = engine.hal.ascom_alpaca_impl();
 
     let all_cameras = hal_impl.devices(DeviceType::CAMERA).expect("requesting camera list");
-    assert!(all_cameras.len() > 0, "At least one camera must be connected");
+    assert!(!all_cameras.is_empty(), "At least one camera must be connected");
     engine.cur_devices.change_camera(&all_cameras[0].id);
     drop(all_cameras);
 }
@@ -222,7 +222,7 @@ fn saving_raw_frames() {
                 vec![path]
             }
         })
-        .filter(|p| p.extension().map_or(false, |ext| ext == "fits"))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "fits"))
         .collect();
 
     assert_eq!(
@@ -402,7 +402,7 @@ fn saving_raw_frames_with_master() {
                 vec![path]
             }
         })
-        .filter(|p| p.extension().map_or(false, |ext| ext == "fit" || ext == "fits"))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "fit" || ext == "fits"))
         .filter(|p| p != &master_path)
         .collect();
 
@@ -603,7 +603,7 @@ fn saving_raw_frames_with_abort_and_resume() {
                 vec![path]
             }
         })
-        .filter(|p| p.extension().map_or(false, |ext| ext == "fits"))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "fits"))
         .collect();
 
     assert_eq!(

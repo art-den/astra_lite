@@ -98,14 +98,13 @@ fn live_stacking() {
     engine.cur_devices.change_camera(&simulator_camera.id);
     drop(all_cameras);
 
-    if let Some(camera) = engine.cur_devices.camera() {
-        if camera.is_gain_supported().unwrap() {
-            // Set maximum gain for camera to get more stars on image.
-            // If there are not enough stars in the image,
-            // then the calculation of the shift between frames will not work.
-            let gain_range = camera.gain_range().unwrap();
-            engine.options.write().unwrap().cam.frame.gain = *gain_range.end() as f64;
-        }
+    if let Some(camera) = engine.cur_devices.camera()
+        && camera.is_gain_supported().unwrap() {
+        // Set maximum gain for camera to get more stars on image.
+        // If there are not enough stars in the image,
+        // then the calculation of the shift between frames will not work.
+        let gain_range = camera.gain_range().unwrap();
+        engine.options.write().unwrap().cam.frame.gain = *gain_range.end();
     }
 
     // Prepare a unique temporary output directory for original frames
@@ -234,7 +233,7 @@ fn live_stacking() {
                 vec![path]
             }
         })
-        .filter(|p| p.extension().map_or(false, |ext| ext == "fits"))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "fits"))
         .collect();
 
     assert_eq!(

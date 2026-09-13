@@ -306,7 +306,7 @@ impl UiModule for HardwareUi {
         match event {
             HalEvent::StateChanged(state) => {
                 if let HalState::Error(err) = &state {
-                    self.add_log_record(&Some(Utc::now()), "", &err)
+                    self.add_log_record(&Some(Utc::now()), "", err)
                 }
                 *self.indi_state.borrow_mut() = self.engine.hal.indi_impl().state().clone();
 
@@ -555,7 +555,7 @@ impl HardwareUi {
                 };
             }
             indi::Event::DeviceDelete(event) => {
-                log::debug!("(-) {:20}", &event.device_name);
+                log::debug!("(-) {:20}", event.device_name);
             }
             indi::Event::Message(message) => {
                 log::debug!("indi: device={}, text={}", message.device_name, message.text);
@@ -605,8 +605,8 @@ impl HardwareUi {
         let indi_disconnected = matches!(*indi_state, HalState::Disconnected|HalState::Error(_));
         let phd2_working = self.engine.ext_guider.phd2_conn().is_working();
         enable_actions(&self.window, &[
-            ("conn_indi",    conn_en(&*indi_state)),
-            ("disconn_indi", disconn_en(&*indi_state)),
+            ("conn_indi",    conn_en(&indi_state)),
+            ("disconn_indi", disconn_en(&indi_state)),
             ("conn_phd2",    !phd2_working),
             ("disconn_phd2", phd2_working),
         ]);

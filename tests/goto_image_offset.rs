@@ -299,8 +299,8 @@ fn run_goto_image_flow(engine: &Arc<Engine>, match_plate_solver_binning: bool) {
     let start = Instant::now();
     let overlay = loop {
         let overlay = shared.lock().unwrap().overlay_text.clone();
-        if overlay.is_some() {
-            break overlay.unwrap();
+        if let Some(overlay) = overlay {
+            break overlay;
         }
         assert!(
             start.elapsed() < Duration::from_secs(10),

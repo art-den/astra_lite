@@ -114,7 +114,7 @@ impl RawStacker {
         let mut info = info.clone();
         let divisor2 = self.divisor/2;
 
-        info.offset = self.zero_sum as i32 / self.zero_div as i32;
+        info.offset = self.zero_sum / self.zero_div as i32;
         info.integr_time = Some(self.integr_exp);
 
         if self.divisor == 0 && !self.images.is_empty() {

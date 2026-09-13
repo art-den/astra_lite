@@ -233,7 +233,7 @@ impl PropValue {
             Self::Blob(blob) =>
                 format!("[BLOB len={}]", blob.data.len()),
             _ =>
-                format!("{:?}", &self)
+                format!("{:?}", self)
         }
     }
 

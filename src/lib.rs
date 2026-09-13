@@ -18,6 +18,7 @@
     clippy::enum_variant_names,
     clippy::large_enum_variant,
     clippy::manual_checked_ops,
+    clippy::new_without_default,
 )]
 
 pub mod ui;

@@ -518,7 +518,7 @@ impl MainUi {
 
     fn process_core_event(&self, core_event: &Event) {
         let modules = self.modules.borrow();
-        modules.on_core_event(&core_event);
+        modules.on_core_event(core_event);
         drop(modules);
 
         match core_event {
@@ -526,7 +526,7 @@ impl MainUi {
                 show_error_message(
                     Some(&self.widgets.window),
                     "Core error",
-                    &err
+                    err
                 );
             }
             Event::ModeChanged => {
@@ -547,7 +547,7 @@ impl MainUi {
 
     fn process_hal_event(&self, hal_event: &HalEvent) {
         let modules = self.modules.borrow();
-        modules.on_hal_event(&hal_event);
+        modules.on_hal_event(hal_event);
     }
 
     fn apply_options(&self) {

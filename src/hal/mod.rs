@@ -70,8 +70,10 @@ impl Hal {
         let event_handlers = Arc::new(HalEventHandlers::new());
         let indi = IndiHalImpl::new(&event_handlers);
 
-        let mut list: Vec<Arc<dyn HalImpl + Send + Sync + 'static>> = Vec::new();
-        list.push(Arc::clone(&indi) as Arc<_>);
+        // `mut` is needed only on Windows, where an extra entry is pushed
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut list: Vec<Arc<dyn HalImpl + Send + Sync + 'static>> =
+            vec![Arc::clone(&indi) as Arc<_>];
 
         #[cfg(windows)]
         let ascom_alpaca = AscomAlpacaHalImpl::new(&event_handlers);
@@ -142,7 +144,7 @@ impl Hal {
             .filter_map(|hal| hal.camera(id))
             .next();
         if let Some(camera) = camera {
-            return Ok(camera);
+            Ok(camera)
         } else {
             eyre::bail!("Camera with id={id} not found");
         }
@@ -154,7 +156,7 @@ impl Hal {
             .filter_map(|hal| hal.telescope(id))
             .next();
         if let Some(telescope) = telescope {
-            return Ok(telescope);
+            Ok(telescope)
         } else {
             eyre::bail!("Telescope with id={id} not found");
         }
@@ -166,7 +168,7 @@ impl Hal {
             .filter_map(|hal| hal.focuser(id))
             .next();
         if let Some(focuser) = focuser {
-            return Ok(focuser);
+            Ok(focuser)
         } else {
             eyre::bail!("Focuser with id={id} not found");
         }
@@ -178,7 +180,7 @@ impl Hal {
             .filter_map(|hal| hal.filter_wheel(id))
             .next();
         if let Some(filter_wheel) = filter_wheel {
-            return Ok(filter_wheel);
+            Ok(filter_wheel)
         } else {
             eyre::bail!("Filter wheel with id={id} not found");
         }

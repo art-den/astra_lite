@@ -73,14 +73,13 @@ impl Timer {
             {
                 let mut commands = commands.lock().unwrap();
                 for cmd in commands.iter_mut() {
-                    if cmd.time.elapsed().as_millis() as u32 >= cmd.period_ms {
-                        if let Some(f) = &cmd.fun {
-                            to_execute.push(Arc::clone(f));
-                            if cmd.periodic {
-                                cmd.time = std::time::Instant::now();
-                            } else {
-                                cmd.fun = None;
-                            }
+                    if cmd.time.elapsed().as_millis() as u32 >= cmd.period_ms
+                        && let Some(f) = &cmd.fun {
+                        to_execute.push(Arc::clone(f));
+                        if cmd.periodic {
+                            cmd.time = std::time::Instant::now();
+                        } else {
+                            cmd.fun = None;
                         }
                     }
                 }

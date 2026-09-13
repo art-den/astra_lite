@@ -188,7 +188,7 @@ impl ValuesDecompressor {
         self.values_ptr = 0;
         let header = reader.read::<u32>(3)?;
         if header == HEADER_ZEROS {
-            for v in &mut self.values { *v = self.prev_value; }
+            self.values.fill(self.prev_value);
             return Ok(());
         }
         if header == HEADER_NO_COMPR {

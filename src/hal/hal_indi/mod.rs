@@ -119,7 +119,7 @@ impl IndiHalImpl {
               get_driver(aux1_id,      aux),
               get_driver(aux2_id,      aux),
             ].into_iter()
-                .filter_map(|v| v)
+                .flatten()
                 .cloned()
                 .unique()
                 .collect::<Vec<_>>()
@@ -140,7 +140,7 @@ impl IndiHalImpl {
 
         let conn_settings = indi::ConnSettings {
             drivers,
-            remote: remote,
+            remote,
             host:   address.to_string(),
             .. Default::default()
         };

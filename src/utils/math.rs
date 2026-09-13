@@ -105,28 +105,29 @@ pub fn median9<T: Ord + Copy>(
     mut a3: T, mut a4: T, mut a5: T,
     mut a6: T, mut a7: T, mut a8: T,
 ) -> T {
+    use std::mem::swap;
     // Layer 1
-    if a3 < a0 { let t = a0; a0 = a3; a3 = t; }
-    if a7 < a1 { let t = a1; a1 = a7; a7 = t; }
-    if a5 < a2 { let t = a2; a2 = a5; a5 = t; }
-    if a8 < a4 { let t = a4; a4 = a8; a8 = t; }
+    if a3 < a0 { swap(&mut a0, &mut a3); }
+    if a7 < a1 { swap(&mut a1, &mut a7); }
+    if a5 < a2 { swap(&mut a2, &mut a5); }
+    if a8 < a4 { swap(&mut a4, &mut a8); }
     // Layer 2
-    if a7 < a0 { let t = a0; a0 = a7; a7 = t; }
-    if a4 < a2 { let t = a2; a2 = a4; a4 = t; }
-    if a8 < a3 { let t = a3; a3 = a8; a8 = t; }
-    if a6 < a5 { let t = a5; a5 = a6; a6 = t; }
+    if a7 < a0 { swap(&mut a0, &mut a7); }
+    if a4 < a2 { swap(&mut a2, &mut a4); }
+    if a8 < a3 { swap(&mut a3, &mut a8); }
+    if a6 < a5 { swap(&mut a5, &mut a6); }
     // Layer 3
     if a2 < a0 { a2 = a0; }
-    if a3 < a1 { let t = a1; a1 = a3; a3 = t; }
-    if a5 < a4 { let t = a4; a4 = a5; a5 = t; }
+    if a3 < a1 { swap(&mut a1, &mut a3); }
+    if a5 < a4 { swap(&mut a4, &mut a5); }
     if a8 < a7 { a7 = a8; }
     // Layer 4
     if a4 < a1 { a4 = a1; }
     if a6 < a3 { a3 = a6; }
     if a7 < a5 { a5 = a7; }
     // Layer 5
-    if a4 < a2 { let t = a2; a2 = a4; a4 = t; }
-    if a5 < a3 { let t = a3; a3 = a5; a5 = t; }
+    if a4 < a2 { swap(&mut a2, &mut a4); }
+    if a5 < a3 { swap(&mut a3, &mut a5); }
     // Layer 6
     if a3 < a2 { a3 = a2; }
     if a5 < a4 { a4 = a5; }

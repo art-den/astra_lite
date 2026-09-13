@@ -54,7 +54,7 @@ pub fn save_raw_image_to_fits_file(
     raw_image.info().save_to_fits_header(&mut hdu);
     let (bzero, bitpix) = info.bzero_and_bitpix_for_fits_file();
     writer.write_header(&mut file, &hdu)?;
-    writer.write_data(bitpix, bzero, &mut file, &raw_image.as_slice())?;
+    writer.write_data(bitpix, bzero, &mut file, raw_image.as_slice())?;
 
     Ok(())
 }

@@ -116,7 +116,7 @@ impl StarsFinder {
         let mut diffs = Vec::new();
         for (y, row) in image.as_slice().chunks_exact(image.width()).enumerate() {
             let start = y & 0xF;
-            for area in row[start..].chunks_exact(MAX_STAR_DIAM) {
+            for area in row[start..].as_chunks::<MAX_STAR_DIAM>().0 {
                 let Some(&[b1, b2, b3, b4, b5]) = area.first_chunk::<5>() else { continue; };
                 let Some(&[e1, e2, e3, e4, e5]) = area.last_chunk::<5>() else { continue; };
                 let area_middle = area.len() / 2;
@@ -458,7 +458,7 @@ impl StarsFinder {
                     width: width as usize,
                     height: height as usize,
                     points,
-                    overexposed: overexposed,
+                    overexposed,
                 });
             }
         }

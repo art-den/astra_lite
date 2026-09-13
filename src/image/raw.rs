@@ -61,16 +61,6 @@ impl CfaType {
         }
     }
 
-    pub fn from_str(cfa_str: &str) -> Self {
-        match cfa_str {
-            "BGGR" => CfaType::BGGR,
-            "GRBG" => CfaType::GRBG,
-            "RGGB" => CfaType::RGGB,
-            "GBRG" => CfaType::GBRG,
-            _      => CfaType::None,
-        }
-    }
-
     fn to_str(&self) -> Option<&'static str> {
         match self {
             CfaType::None => None,
@@ -78,6 +68,20 @@ impl CfaType {
             CfaType::GRBG => Some("GRBG"),
             CfaType::RGGB => Some("RGGB"),
             CfaType::GBRG => Some("GBRG"),
+        }
+    }
+}
+
+impl std::str::FromStr for CfaType {
+    type Err = ();
+
+    fn from_str(cfa_str: &str) -> std::result::Result<Self, Self::Err> {
+        match cfa_str {
+            "BGGR" => Ok(CfaType::BGGR),
+            "GRBG" => Ok(CfaType::GRBG),
+            "RGGB" => Ok(CfaType::RGGB),
+            "GBRG" => Ok(CfaType::GBRG),
+            _      => Err(()),
         }
     }
 }
@@ -142,7 +146,8 @@ impl RawImageInfo {
         } else {
             u16::MAX
         };
-        let cfa = CfaType::from_str(bayer);
+        use std::str::FromStr;
+        let cfa = CfaType::from_str(bayer).unwrap_or_default();
         let frame_type = FrameType::from_str(
             frame_str.unwrap_or_default(),
             FrameType::Lights

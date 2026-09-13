@@ -206,7 +206,7 @@ impl CameraToInit {
         }
 
         if indi.camera_is_resolution_supported(&self.name).unwrap_or(false) {
-            log::info!("Setting maximum CCD resolution for camera {}", &self.name);
+            log::info!("Setting maximum CCD resolution for camera {}", self.name);
             indi.camera_select_max_resolution(&self.name, true, None)?;
         }
         Ok(())
