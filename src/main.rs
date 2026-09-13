@@ -133,6 +133,9 @@ fn app_activate_handler(app: &gtk::Application) {
 
     let indi_for_panic = Arc::clone(engine.hal.indi_impl().indi());
     if cfg!(not(debug_assertions)) {
+        // The panic hook is only needed in a release build.
+        // In a debug build, the debugger will automatically stop
+        // at the point where the panic occurred.
         std::panic::set_hook({
             let logs_dir = logs_dir.clone();
             let indi = Arc::clone(&indi_for_panic);
