@@ -183,7 +183,7 @@ impl Engine {
                 Ok(())
             } ();
             self_.events.send(Event::Guider(event));
-            self_.process_error(result, "Core::connect_ext_guider_events");
+            self_.process_error(result, "Engine::connect_ext_guider_events");
         }));
     }
 
@@ -227,7 +227,7 @@ impl Engine {
         let self_ = Arc::clone(self);
         self.timer.exec(Self::TIMER_PERIOD_MS as _, true, move || {
             let result = self_.timer_event_handler();
-            self_.process_error(result, "Core::connect_events (timer closure)");
+            self_.process_error(result, "Engine::connect_events (timer closure)");
         });
     }
 
@@ -463,7 +463,7 @@ impl Engine {
                         Ok(())
                     } ();
                     drop(mode);
-                    self.process_error(result, "Core::apply_change_result");
+                    self.process_error(result, "Engine::apply_change_result");
                 }
                 self.events.send(
                     Event::FrameProcessing(res.clone())
@@ -478,7 +478,7 @@ impl Engine {
                     Ok(())
                 } ();
                 drop(mode);
-                self.process_error(result, "Core::apply_change_result");
+                self.process_error(result, "Engine::apply_change_result");
 
             }
             FrameProcessingReply::Error(error_str) => {
