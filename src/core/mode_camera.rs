@@ -1082,7 +1082,7 @@ impl TakingPicturesMode {
                 let desired_min = *bias + 20/*%*/ * MAX_VALUE / 100;
                 let desired_max = *bias + 30/*%*/ * MAX_VALUE / 100;
                 let desired_max = desired_max.clamp(0, MAX_VALUE);
-                if desired_min < median && median < desired_max {
+                if desired_min <= median && median <= desired_max {
                     let mut options = self.options.write().unwrap();
                     options.cam.frame.exp_flat = *cur_exp;
                     drop(options);
@@ -1092,14 +1092,14 @@ impl TakingPicturesMode {
                     self.start_or_continue()?;
                     result = NotifyResult::ProgressChanges;
                 } else {
-                    if median > 80/*%*/ * MAX_VALUE / 100 {
-                        *cur_exp /= 2.5;
-                    } else if (median - *bias) < (20/*%*/ * MAX_VALUE / 100) {
+                    if median < desired_min/4 {
                         *cur_exp *= 2.5;
-                    }
-                    else if median < desired_min {
+                    } else if median < desired_min {
                         *cur_exp *= 1.4;
-                    } else {
+                    }
+                    if median > (desired_max + 3 * MAX_VALUE) / 4 {
+                        *cur_exp /= 2.5;
+                    } else if median > desired_max {
                         *cur_exp /= 1.4;
                     }
                     if *cur_exp < *min_exp {
