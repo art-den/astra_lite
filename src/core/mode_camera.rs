@@ -1063,7 +1063,7 @@ impl TakingPicturesMode {
         match &mut self.state {
             State::BiasCalculationFrame => {
                 let bias = get_median_from_histogram(true) as i32;
-                let cur_exp: f64 = 0.1;
+                let cur_exp = self.options.read().unwrap().cam.frame.exposure();
                 let exp_range = self.camera.exposure_range()?;
                 let cur_exp = cur_exp.clamp(*exp_range.start(), *exp_range.end());
                 self.state = State::CalculatingFlatExp {
