@@ -6,7 +6,7 @@ pub fn take_shot(
     camera:    &Arc<dyn Camera + Send + Sync>,
     frame:     &FrameOptions,
     cam_ctrl:  &CamCtrlOptions,
-) -> eyre::Result<u64> {
+) -> eyre::Result<()> {
     // Initialization before start
 
     camera.init_before_shot()?;
@@ -68,7 +68,7 @@ pub fn take_shot(
 
     camera.start_exposure(frame.exposure())?;
 
-    Ok(0)
+    Ok(())
 }
 
 pub fn control_camera_cooling(
