@@ -678,7 +678,6 @@ impl Engine {
         let ResultImageInfo::LightInfo(light_frame_info) = &*image_info else {
             eyre::bail!("Image is not a light frame");
         };
-        self.modes.write().unwrap().active.abort()?;
         let mode = GotoMode::new(
             self,
             GotoDestination::Image{
