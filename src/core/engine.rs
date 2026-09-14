@@ -511,6 +511,7 @@ impl Engine {
         // Abort previous mode
         if have_to_abort_mode {
             mode.active.abort()?;
+            self.img_proc_stop_flag.lock().unwrap().store(true, std::sync::atomic::Ordering::Relaxed);
         }
 
         if reset_aborted_mode {
@@ -737,6 +738,7 @@ impl Engine {
             eyre::bail!("Aborted state is empty");
         };
         _ = mode.active.abort();
+        self.img_proc_stop_flag.lock().unwrap().store(true, std::sync::atomic::Ordering::Relaxed);
         mode.active = aborted_mode;
         mode.active.continue_work()?;
         let progress = mode.active.progress();
