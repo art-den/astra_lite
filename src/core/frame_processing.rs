@@ -174,7 +174,7 @@ impl FrameProcessing {
         let this = Arc::new(FrameProcessing{ sender, result_fun: Mutex::new(None) });
         let weak_this = Arc::downgrade(&this);
         std::thread::spawn(move || {
-            log::info!("process_blob_thread_fun started");
+            log::info!("Thread in FrameProcessing::new started");
             'outer:
             while let Ok(cmd) = receiver.recv() {
                 if matches!(cmd, FrameProcessCommand::Stop) { break 'outer; }
@@ -217,7 +217,7 @@ impl FrameProcessing {
                 }
             }
 
-            log::info!("process_blob_thread_fun finished");
+            log::info!("Thread in FrameProcessing::new finished");
         });
 
         this
