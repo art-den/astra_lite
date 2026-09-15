@@ -19,16 +19,23 @@ pub struct CurDevices {
 }
 
 impl CurDevices {
-    pub fn new(options: &Arc<RwLock<Options>>, hal: &Arc<Hal>, events: &Arc<EventHandlers>) -> Arc::<Self> {
+    pub fn new(
+        options: &Arc<RwLock<Options>>,
+        hal:     &Arc<Hal>,
+        events:  &Arc<EventHandlers>
+    ) -> Arc::<Self> {
         let result = Arc::new(Self {
-            data:     Mutex::new(CurDevicesData::default()),
-            hal:      Arc::clone(hal),
-            options:  Arc::clone(options),
-            events:   Arc::clone(events),
+            data:    Mutex::new(CurDevicesData::default()),
+            hal:     Arc::clone(hal),
+            options: Arc::clone(options),
+            events:  Arc::clone(events),
         });
 
-        let self_ = Arc::clone(&result);
-        hal.connect_event_handler(move |event| _ = self_.hal_event_handler(event));
+        let self_ = Arc::downgrade(&result);
+        hal.connect_event_handler(move |event| {
+            let Some(self_) = self_.upgrade() else { return; };
+            _ = self_.hal_event_handler(event);
+        });
 
         result
     }
