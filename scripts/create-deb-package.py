@@ -1,7 +1,7 @@
 # ruff: noqa: I001, UP031
 # pyright: reportAny=none, reportExplicitAny=none, reportUnusedCallResult=none, reportOptionalMemberAccess=none
 
-import os, configparser, re, shutil, subprocess, argparse, sys
+import os, tomllib, re, shutil, subprocess, argparse, sys
 from pathlib import Path
 
 parser = argparse.ArgumentParser(
@@ -31,11 +31,11 @@ mapdata_in_dir = os.path.join(this_path, "..", "map_data")
 
 # Package name and version from Cargo.toml
 
-config = configparser.ConfigParser()
-config.read(cargo_toml)
-package_name = config['package']['name'].replace('"', '').replace("_", "")
-package_vers = config['package']['version'].replace('"', '')
-description = config['package']['description'].replace('"', '')
+with open(cargo_toml, 'rb') as f:
+    cargo = tomllib.load(f)
+package_name = cargo['package']['name'].replace("_", "")
+package_vers = cargo['package']['version']
+description = cargo['package']['description']
 vers_re = re.match(r'(\d+)\.(\d+)\.(\d+)', package_vers)
 if vers_re is None:
     sys.exit("Invalid version in Cargo.toml: %s" % package_vers)
