@@ -5,6 +5,10 @@ pre-build = [
     "dpkg --add-architecture $CROSS_DEB_ARCH",
     "apt-get update",
     "DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get -y install tzdata",
+    # satisfies 'python3 | qemu-user | qemu-user-static' dep of libglib2.0-dev:
+    # arm64, otherwise apt installs python3:arm64 whose postinst cannot run
+    # the foreign binary in the x86_64 container
+    "apt-get install -y -qq qemu-user:$CROSS_DEB_ARCH",
     "apt-get install -y libgtk-3-dev:$CROSS_DEB_ARCH dpkg dpkg-dev"
 ]
 
@@ -13,6 +17,7 @@ pre-build = [
     "dpkg --add-architecture $CROSS_DEB_ARCH",
     "apt-get update",
     "DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get -y install tzdata",
+    "apt-get install -y -qq qemu-user:$CROSS_DEB_ARCH",
     "apt-get install -y libgtk-3-dev:$CROSS_DEB_ARCH dpkg dpkg-dev"
 ]
 
