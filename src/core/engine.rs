@@ -158,6 +158,7 @@ impl Engine {
 
         log::info!("Unsubscribing all...");
         self.events.disconnect_all();
+        self.frame_processing.disconnect_result_fun();
 
         log::info!("Done");
 

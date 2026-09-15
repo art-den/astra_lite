@@ -857,7 +857,7 @@ impl DarksLibraryUI {
 
     fn connect_widgets_events(self: &Rc<Self>) {
         let connect_checkbtn = |checkbox: &gtk::CheckButton| {
-            checkbox.connect_active_notify(clone!(@strong self as self_ => move |_| {
+            checkbox.connect_active_notify(clone!(@weak self as self_ => move |_| {
                 self_.get_options();
                 self_.show_info();
                 self_.correct_widgets_enable_state();
@@ -865,14 +865,14 @@ impl DarksLibraryUI {
         };
 
         let connect_spinbtn = |spb: &gtk::SpinButton| {
-            spb.connect_value_changed(clone!(@strong self as self_ => move |_| {
+            spb.connect_value_changed(clone!(@weak self as self_ => move |_| {
                 self_.get_options();
                 self_.show_info();
             }));
         };
 
         let connect_radiobtn = |rb: &gtk::RadioButton| {
-            rb.connect_active_notify(clone!(@strong self as self_ => move |_| {
+            rb.connect_active_notify(clone!(@weak self as self_ => move |_| {
                 self_.get_options();
                 self_.show_info();
                 self_.correct_widgets_enable_state();
@@ -880,7 +880,7 @@ impl DarksLibraryUI {
         };
 
         let connect_entry = |e: &gtk::Entry| {
-            e.connect_text_notify(clone!(@strong self as self_ => move |_| {
+            e.connect_text_notify(clone!(@weak self as self_ => move |_| {
                 self_.get_options();
                 self_.show_info();
             }));
@@ -963,13 +963,21 @@ impl DarksLibraryUI {
     fn connect_core_events(self: &Rc<Self>) {
         let (sender, receiver) = async_channel::unbounded();
         self.engine.events.connect(move |evt| {
-            sender.send_blocking(evt).unwrap();
+            // The receiver side may already be gone (module dropped on window close),
+            // so a failed send is simply dropped instead of panicking
+            _ = sender.send_blocking(evt);
         });
-        glib::spawn_future_local(clone!(@weak self as self_ => async move {
+        // Upgrade the weak ref inside the loop body (not via clone!@weak before
+        // `async move`): otherwise the strong ref obtained at the first poll would
+        // be kept alive across every await and pin this module forever.
+
+        let weak_self = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
             while let Ok(event) = receiver.recv().await {
+                let Some(self_) = weak_self.upgrade() else { break; };
                 self_.process_core_event(event);
             }
-        }));
+        });
     }
 
     fn correct_widgets_enable_state(&self) {

@@ -811,11 +811,17 @@ impl MapUi {
         });
 
         let weak_self = self.weak_self_.borrow();
-        let Some(self_) = weak_self.upgrade() else {
+        if weak_self.upgrade().is_none() {
             return Err(eyre::eyre!("self.weak_self_ is empty"));
-        };
-        glib::spawn_future_local(clone!(@weak self_ => async move {
+        }
+        // Upgrade the weak ref inside the loop body (not via clone!@weak before
+        // `async move`): otherwise the strong ref obtained at the first poll would
+        // be kept alive across every await and pin this module while stars load.
+
+        let weak_self = weak_self.clone();
+        glib::spawn_future_local(async move {
             while let Ok(skymaps_with_stars_res) = stars_receiver.recv().await {
+                let Some(self_) = weak_self.upgrade() else { break; };
                 match skymaps_with_stars_res {
                     Ok(mut skymaps_with_stars) => {
                         let mut skymap_data_opt = self_.skymap_data.borrow_mut();
@@ -834,7 +840,7 @@ impl MapUi {
                     }
                 }
             }
-        }));
+        });
 
         Ok(())
     }

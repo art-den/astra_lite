@@ -1,5 +1,5 @@
 use std::{rc::Rc, sync::Arc};
-use gtk::prelude::*;
+use gtk::{prelude::*, glib, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
@@ -200,27 +200,24 @@ impl GuidingUi {
         connect_action(&self.window, self, "stop_dither_calibr",  Self::handler_action_stop_dither_calibr);
 
         let connect_rbtn = |rbtn: &gtk::RadioButton| {
-            let self_ = Rc::clone(self);
-            rbtn.connect_active_notify(move |_| {
+            rbtn.connect_active_notify(clone!(@weak self as self_ => move |_| {
                 self_.correct_widgets_props();
-            });
+            }));
         };
 
         connect_rbtn(&self.widgets.rbtn_no_guiding);
         connect_rbtn(&self.widgets.rbtn_guide_main_cam);
         connect_rbtn(&self.widgets.rbtn_guide_ext);
 
-        let self_ = Rc::clone(self);
-        self.widgets.spb_mnt_cal_exp.connect_value_changed(move |sb| {
+        self.widgets.spb_mnt_cal_exp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
             let Ok(mut options) = self_.engine.options.try_write() else { return; };
             options.guiding.main_cam.calibr_exposure = sb.value();
-        });
+        }));
 
-        let self_ = Rc::clone(self);
-        self.widgets.cbx_mnt_cal_gain.connect_active_id_notify(move |cb| {
+        self.widgets.cbx_mnt_cal_gain.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
             let Ok(mut options) = self_.engine.options.try_write() else { return; };
             options.guiding.main_cam.calibr_gain = Gain::from_active_id(cb.active_id().as_deref());
-        });
+        }));
     }
 
     fn correct_widgets_props_impl(&self) {

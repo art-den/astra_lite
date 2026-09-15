@@ -72,8 +72,14 @@ impl IndiPanelWidget {
             filter_text_lc: String::new(),
         }));
 
-        glib::spawn_future_local(clone!(@weak data => async move {
+        // Upgrade the weak ref inside the loop body (not via clone!@weak before
+        // `async move`): otherwise the strong ref obtained at the first poll would
+        // be kept alive across every await and pin `data` forever.
+
+        let weak_data = Rc::downgrade(&data);
+        glib::spawn_future_local(async move {
             while let Ok(event) = receiver.recv().await {
+                let Some(data) = weak_data.upgrade() else { break; };
                 let mut data = data.borrow_mut();
                 match event {
                     indi::Event::ConnChange(_) |
@@ -91,7 +97,7 @@ impl IndiPanelWidget {
                         {},
                 };
             }
-        }));
+        });
 
         let stack_for_handler = stack.clone();
         glib::timeout_add_local(

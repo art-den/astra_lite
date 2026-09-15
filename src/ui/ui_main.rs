@@ -364,8 +364,14 @@ impl MainUi {
             _ = sender.send_blocking(MainThreadEvent::Core(event));
         });
 
-        glib::spawn_future_local(clone!(@weak self as self_ => async move {
+        // Upgrade the weak ref inside the loop body (not via clone!@weak before
+        // `async move`): otherwise the strong ref obtained at the first poll would
+        // be kept alive across every await and pin MainUi forever.
+
+        let weak_self = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
             while let Ok(event) = main_thread_receiver.recv().await {
+                let Some(self_) = weak_self.upgrade() else { break; };
                 if self_.closed.get() { return; }
                 match event {
                     MainThreadEvent::Core(core_event) => {
@@ -376,7 +382,7 @@ impl MainUi {
                     }
                 }
             }
-        }));
+        });
     }
 
     fn handler_close_window(self: &Rc<Self>) -> glib::Propagation {

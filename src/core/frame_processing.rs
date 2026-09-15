@@ -228,15 +228,25 @@ impl FrameProcessing {
         *result_fun = Some(Box::new(fun));
     }
 
+    /// Disconnects the result handler. The handler keeps a reference to Engine
+    /// (via its captured Arc), so it must be disconnected to allow Engine
+    /// (and the FrameProcessing it owns) to be dropped.
+    pub fn disconnect_result_fun(&self) {
+        *self.result_fun.lock().unwrap() = None;
+    }
+
     pub fn add_to_queue(&self, cmd: FrameProcessCommand) -> eyre::Result<()> {
         self.sender.send(cmd)?;
         Ok(())
     }
 
     fn notify_cmd_result(&self, result: FrameProcessingReply) {
-        let result_fun_mutex = self.result_fun.lock().unwrap();
-        let result_fun = result_fun_mutex.as_ref().expect("FrameProcessing::result_fun");
-        result_fun(result);
+        // The handler may be already disconnected (e.g. during application shutdown),
+        // so a result arriving at this moment is simply discarded
+        let result_fun = self.result_fun.lock().unwrap();
+        if let Some(result_fun) = result_fun.as_ref() {
+            result_fun(result);
+        }
     }
 
     fn notify_frame_result(&self, result: FrameProcessEvent, command: &ProcessImageParams) {

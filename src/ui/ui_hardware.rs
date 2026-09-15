@@ -345,11 +345,17 @@ impl HardwareUi {
             _ = sender.send_blocking(event);
         });
 
-        glib::spawn_future_local(clone!(@weak self as self_ => async move {
+        // Upgrade the weak ref inside the loop body (not via clone!@weak before
+        // `async move`): otherwise the strong ref obtained at the first poll would
+        // be kept alive across every await and pin this module forever.
+
+        let weak_self = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
             while let Ok(event) = main_thread_receiver.recv().await {
+                let Some(self_) = weak_self.upgrade() else { break; };
                 self_.process_indi_event(&event);
             }
-        }));
+        });
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
@@ -434,18 +440,24 @@ impl HardwareUi {
         // Connect PHD2 events
         let sender_clone = sender.clone();
         self.engine.ext_guider.phd2_conn().connect_event_handler(move |event| {
-            sender_clone.send_blocking(HardwareEvent::Phd2(event)).unwrap();
+            // The receiver side may already be gone (module dropped on window close),
+            // so a failed send is simply dropped instead of panicking
+            _ = sender_clone.send_blocking(HardwareEvent::Phd2(event));
         });
 
         // Process incoming events in main thread
-        glib::spawn_future_local(clone!(@weak self as self_ => async move {
+        // (weak ref is upgraded per event, see connect_indi_events)
+
+        let weak_self = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
             while let Ok(event) = receiver.recv().await {
+                let Some(self_) = weak_self.upgrade() else { break; };
                 match event {
                     HardwareEvent::Phd2(event) =>
                         self_.process_phd2_event(event),
                 };
             }
-        }));
+        });
     }
 
     fn show_connection_options(&self, options: &Options) {
