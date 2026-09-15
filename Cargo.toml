@@ -49,7 +49,7 @@ ndarray = "0.17"
 embed-resource = "1.7"
 
 [profile.dev]
-opt-level = 0
+opt-level = 1
 panic = "abort"
 
 [profile.release]
@@ -60,6 +60,10 @@ panic = "abort"
 
 [[bench]]
 name = "stars_find_extremums"
+harness = false
+
+[[bench]]
+name = "image_div_iter"
 harness = false
 
 [profile.dev.package."*"]
