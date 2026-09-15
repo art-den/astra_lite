@@ -319,9 +319,9 @@ fn to_grb_bytes(
         match (params.scale, reduct_ratio) {
             (PreviewScale::CenterAndCorners, _) => to_grb_bytes_corners_rgb(image, &r_table, &g_table, &b_table, result_width, result_height),
             (_, 1) => to_grb_bytes_no_reduct_rgb(image, &r_table, &g_table, &b_table, image.width(), image.height()),
-            (_, 2) => to_grb_bytes_reduct2_rgb  (image, &r_table, &g_table, &b_table, image.width(), image.height()),
-            (_, 3) => to_grb_bytes_reduct3_rgb  (image, &r_table, &g_table, &b_table, image.width(), image.height()),
-            (_, 4) => to_grb_bytes_reduct4_rgb  (image, &r_table, &g_table, &b_table, image.width(), image.height()),
+            (_, 2) => to_grb_bytes_reduct2_rgb  (image, &r_table, &g_table, &b_table),
+            (_, 3) => to_grb_bytes_reduct3_rgb  (image, &r_table, &g_table, &b_table),
+            (_, 4) => to_grb_bytes_reduct4_rgb  (image, &r_table, &g_table, &b_table),
             _ => panic!("Wrong reduct_ratio ({})", reduct_ratio),
         }
     } else {
@@ -335,9 +335,9 @@ fn to_grb_bytes(
         match (params.scale, reduct_ratio) {
             (PreviewScale::CenterAndCorners, _) => to_grb_bytes_corners_mono(layer, &table, result_width, result_height),
             (_, 1) => to_grb_bytes_no_reduct_mono(layer, &table, image.width(), image.height()),
-            (_, 2) => to_grb_bytes_reduct2_mono  (layer, &table, image.width(), image.height()),
-            (_, 3) => to_grb_bytes_reduct3_mono  (layer, &table, image.width(), image.height()),
-            (_, 4) => to_grb_bytes_reduct4_mono  (layer, &table, image.width(), image.height()),
+            (_, 2) => to_grb_bytes_reduct2_mono  (layer, &table),
+            (_, 3) => to_grb_bytes_reduct3_mono  (layer, &table),
+            (_, 4) => to_grb_bytes_reduct4_mono  (layer, &table),
             _ => panic!("Wrong reduct_ratio ({})", reduct_ratio),
         }
     };
@@ -516,70 +516,28 @@ fn to_grb_bytes_reduct2_rgb(
     r_table: &[u8],
     g_table: &[u8],
     b_table: &[u8],
-    width:   usize,
-    height:  usize
 ) -> Vec<u8> {
-    let width = width / 2;
-    let height = height / 2;
-    let mut rgb_bytes = Vec::with_capacity(3 * width * height);
-    for y in 0..height {
-        let mut r0 = image.r.row(2*y).as_ptr();
-        let mut r1 = image.r.row(2*y+1).as_ptr();
-        let mut g0 = image.g.row(2*y).as_ptr();
-        let mut g1 = image.g.row(2*y+1).as_ptr();
-        let mut b0 = image.b.row(2*y).as_ptr();
-        let mut b1 = image.b.row(2*y+1).as_ptr();
-        for _ in 0..width {
-            let r = unsafe {(
-                *r0 as u32 + *r0.offset(1) as u32 +
-                *r1 as u32 + *r1.offset(1) as u32 + 2
-            ) / 4};
-            let g = unsafe {(
-                *g0 as u32 + *g0.offset(1) as u32 +
-                *g1 as u32 + *g1.offset(1) as u32 + 2
-            ) / 4};
-            let b = unsafe {(
-                *b0 as u32 + *b0.offset(1) as u32 +
-                *b1 as u32 + *b1.offset(1) as u32 + 2
-            ) / 4};
-            rgb_bytes.push(r_table[r as usize]);
-            rgb_bytes.push(g_table[g as usize]);
-            rgb_bytes.push(b_table[b as usize]);
-            r0 = r0.wrapping_offset(2);
-            r1 = r1.wrapping_offset(2);
-            g0 = g0.wrapping_offset(2);
-            g1 = g1.wrapping_offset(2);
-            b0 = b0.wrapping_offset(2);
-            b1 = b1.wrapping_offset(2);
-        }
+    let iter = image.iter_div2_rgb();
+    let mut rgb_bytes = Vec::with_capacity(3 * iter.size_hint().0);
+    for (r, g, b) in iter {
+        rgb_bytes.push(r_table[r as usize]);
+        rgb_bytes.push(g_table[g as usize]);
+        rgb_bytes.push(b_table[b as usize]);
     }
     rgb_bytes
 }
 
 fn to_grb_bytes_reduct2_mono(
-    layer:  &ImageLayer<u16>,
-    table:  &[u8],
-    width:  usize,
-    height: usize
+    layer: &ImageLayer<u16>,
+    table: &[u8],
 ) -> Vec<u8> {
-    let width = width / 2;
-    let height = height / 2;
-    let mut rgb_bytes = Vec::with_capacity(3 * width * height);
-    for y in 0..height {
-        let mut l0 = layer.row(2*y).as_ptr();
-        let mut l1 = layer.row(2*y+1).as_ptr();
-        for _ in 0..width {
-            let l = unsafe {(
-                *l0 as u32 + *l0.offset(1) as u32 +
-                *l1 as u32 + *l1.offset(1) as u32 + 2
-            ) / 4};
-            let l = table[l as usize];
-            rgb_bytes.push(l);
-            rgb_bytes.push(l);
-            rgb_bytes.push(l);
-            l0 = l0.wrapping_offset(2);
-            l1 = l1.wrapping_offset(2);
-        }
+    let iter = layer.iter_div2();
+    let mut rgb_bytes = Vec::with_capacity(3 * iter.size_hint().0);
+    for l in iter {
+        let l = table[l as usize];
+        rgb_bytes.push(l);
+        rgb_bytes.push(l);
+        rgb_bytes.push(l);
     }
     rgb_bytes
 }
@@ -589,82 +547,28 @@ fn to_grb_bytes_reduct3_rgb(
     r_table: &[u8],
     g_table: &[u8],
     b_table: &[u8],
-    width:   usize,
-    height:  usize
 ) -> Vec<u8> {
-    let width = width / 3;
-    let height = height / 3;
-    let mut rgb_bytes = Vec::with_capacity(3 * width * height);
-    for y in 0..height {
-        let mut r0 = image.r.row(3*y).as_ptr();
-        let mut r1 = image.r.row(3*y+1).as_ptr();
-        let mut r2 = image.r.row(3*y+2).as_ptr();
-        let mut g0 = image.g.row(3*y).as_ptr();
-        let mut g1 = image.g.row(3*y+1).as_ptr();
-        let mut g2 = image.g.row(3*y+2).as_ptr();
-        let mut b0 = image.b.row(3*y).as_ptr();
-        let mut b1 = image.b.row(3*y+1).as_ptr();
-        let mut b2 = image.b.row(3*y+2).as_ptr();
-        for _ in 0..width {
-            let r = unsafe {(
-                *r0 as u32 + *r0.offset(1) as u32 + *r0.offset(2) as u32 +
-                *r1 as u32 + *r1.offset(1) as u32 + *r1.offset(2) as u32 +
-                *r2 as u32 + *r2.offset(1) as u32 + *r2.offset(2) as u32 + 4
-            ) / 9};
-            let g = unsafe {(
-                *g0 as u32 + *g0.offset(1) as u32 + *g0.offset(2) as u32 +
-                *g1 as u32 + *g1.offset(1) as u32 + *g1.offset(2) as u32 +
-                *g2 as u32 + *g2.offset(1) as u32 + *g2.offset(2) as u32 + 4
-            ) / 9};
-            let b = unsafe {(
-                *b0 as u32 + *b0.offset(1) as u32 + *b0.offset(2) as u32 +
-                *b1 as u32 + *b1.offset(1) as u32 + *b1.offset(2) as u32 +
-                *b2 as u32 + *b2.offset(1) as u32 + *b2.offset(2) as u32 + 4
-            ) / 9};
-            rgb_bytes.push(r_table[r as usize]);
-            rgb_bytes.push(g_table[g as usize]);
-            rgb_bytes.push(b_table[b as usize]);
-            r0 = r0.wrapping_offset(3);
-            r1 = r1.wrapping_offset(3);
-            r2 = r2.wrapping_offset(3);
-            g0 = g0.wrapping_offset(3);
-            g1 = g1.wrapping_offset(3);
-            g2 = g2.wrapping_offset(3);
-            b0 = b0.wrapping_offset(3);
-            b1 = b1.wrapping_offset(3);
-            b2 = b2.wrapping_offset(3);
-        }
+    let iter = image.iter_div3_rgb();
+    let mut rgb_bytes = Vec::with_capacity(3 * iter.size_hint().0);
+    for (r, g, b) in iter {
+        rgb_bytes.push(r_table[r as usize]);
+        rgb_bytes.push(g_table[g as usize]);
+        rgb_bytes.push(b_table[b as usize]);
     }
     rgb_bytes
 }
 
 fn to_grb_bytes_reduct3_mono(
-    layer:  &ImageLayer<u16>,
-    table:  &[u8],
-    width:  usize,
-    height: usize
+    layer: &ImageLayer<u16>,
+    table: &[u8],
 ) -> Vec<u8> {
-    let width = width / 3;
-    let height = height / 3;
-    let mut rgb_bytes = Vec::with_capacity(3 * width * height);
-    for y in 0..height {
-        let mut l0 = layer.row(3*y).as_ptr();
-        let mut l1 = layer.row(3*y+1).as_ptr();
-        let mut l2 = layer.row(3*y+2).as_ptr();
-        for _ in 0..width {
-            let l = unsafe {(
-                *l0 as u32 + *l0.offset(1) as u32 + *l0.offset(2) as u32 +
-                *l1 as u32 + *l1.offset(1) as u32 + *l1.offset(2) as u32 +
-                *l2 as u32 + *l2.offset(1) as u32 + *l2.offset(2) as u32 + 4
-            ) / 9};
-            let l = table[l as usize];
-            rgb_bytes.push(l);
-            rgb_bytes.push(l);
-            rgb_bytes.push(l);
-            l0 = l0.wrapping_offset(3);
-            l1 = l1.wrapping_offset(3);
-            l2 = l2.wrapping_offset(3);
-        }
+    let iter = layer.iter_div3();
+    let mut rgb_bytes = Vec::with_capacity(3 * iter.size_hint().0);
+    for l in iter {
+        let l = table[l as usize];
+        rgb_bytes.push(l);
+        rgb_bytes.push(l);
+        rgb_bytes.push(l);
     }
     rgb_bytes
 }
@@ -674,94 +578,28 @@ fn to_grb_bytes_reduct4_rgb(
     r_table: &[u8],
     g_table: &[u8],
     b_table: &[u8],
-    width:   usize,
-    height:  usize
 ) -> Vec<u8> {
-    let width = width / 4;
-    let height = height / 4;
-    let mut rgb_bytes = Vec::with_capacity(3 * width * height);
-    for y in 0..height {
-        let mut r0 = image.r.row(4*y).as_ptr();
-        let mut r1 = image.r.row(4*y+1).as_ptr();
-        let mut r2 = image.r.row(4*y+2).as_ptr();
-        let mut r3 = image.r.row(4*y+3).as_ptr();
-        let mut g0 = image.g.row(4*y).as_ptr();
-        let mut g1 = image.g.row(4*y+1).as_ptr();
-        let mut g2 = image.g.row(4*y+2).as_ptr();
-        let mut g3 = image.g.row(4*y+3).as_ptr();
-        let mut b0 = image.b.row(4*y).as_ptr();
-        let mut b1 = image.b.row(4*y+1).as_ptr();
-        let mut b2 = image.b.row(4*y+2).as_ptr();
-        let mut b3 = image.b.row(4*y+3).as_ptr();
-        for _ in 0..width {
-            let r = unsafe {(
-                *r0 as u32 + *r0.offset(1) as u32 + *r0.offset(2) as u32 + *r0.offset(3) as u32 +
-                *r1 as u32 + *r1.offset(1) as u32 + *r1.offset(2) as u32 + *r1.offset(3) as u32 +
-                *r2 as u32 + *r2.offset(1) as u32 + *r2.offset(2) as u32 + *r2.offset(3) as u32 +
-                *r3 as u32 + *r3.offset(1) as u32 + *r3.offset(2) as u32 + *r3.offset(3) as u32 + 8
-            ) / 16};
-            let g = unsafe {(
-                *g0 as u32 + *g0.offset(1) as u32 + *g0.offset(2) as u32 + *g0.offset(3) as u32 +
-                *g1 as u32 + *g1.offset(1) as u32 + *g1.offset(2) as u32 + *g1.offset(3) as u32 +
-                *g2 as u32 + *g2.offset(1) as u32 + *g2.offset(2) as u32 + *g2.offset(3) as u32 +
-                *g3 as u32 + *g3.offset(1) as u32 + *g3.offset(2) as u32 + *g3.offset(3) as u32 + 8
-            ) / 16};
-            let b = unsafe {(
-                *b0 as u32 + *b0.offset(1) as u32 + *b0.offset(2) as u32 + *b0.offset(3) as u32 +
-                *b1 as u32 + *b1.offset(1) as u32 + *b1.offset(2) as u32 + *b1.offset(3) as u32 +
-                *b2 as u32 + *b2.offset(1) as u32 + *b2.offset(2) as u32 + *b2.offset(3) as u32 +
-                *b3 as u32 + *b3.offset(1) as u32 + *b3.offset(2) as u32 + *b3.offset(3) as u32 + 8
-            ) / 16};
-            rgb_bytes.push(r_table[r as usize]);
-            rgb_bytes.push(g_table[g as usize]);
-            rgb_bytes.push(b_table[b as usize]);
-            r0 = r0.wrapping_offset(4);
-            r1 = r1.wrapping_offset(4);
-            r2 = r2.wrapping_offset(4);
-            r3 = r3.wrapping_offset(4);
-            g0 = g0.wrapping_offset(4);
-            g1 = g1.wrapping_offset(4);
-            g2 = g2.wrapping_offset(4);
-            g3 = g3.wrapping_offset(4);
-            b0 = b0.wrapping_offset(4);
-            b1 = b1.wrapping_offset(4);
-            b2 = b2.wrapping_offset(4);
-            b3 = b3.wrapping_offset(4);
-        }
+    let iter = image.iter_div4_rgb();
+    let mut rgb_bytes = Vec::with_capacity(3 * iter.size_hint().0);
+    for (r, g, b) in iter {
+        rgb_bytes.push(r_table[r as usize]);
+        rgb_bytes.push(g_table[g as usize]);
+        rgb_bytes.push(b_table[b as usize]);
     }
     rgb_bytes
 }
 
 fn to_grb_bytes_reduct4_mono(
-    layer:  &ImageLayer<u16>,
-    table:  &[u8],
-    width:  usize,
-    height: usize
+    layer: &ImageLayer<u16>,
+    table: &[u8],
 ) -> Vec<u8> {
-    let width = width / 4;
-    let height = height / 4;
-    let mut rgb_bytes = Vec::with_capacity(3 * width * height);
-    for y in 0..height {
-        let mut l0 = layer.row(4*y).as_ptr();
-        let mut l1 = layer.row(4*y+1).as_ptr();
-        let mut l2 = layer.row(4*y+2).as_ptr();
-        let mut l3 = layer.row(4*y+3).as_ptr();
-        for _ in 0..width {
-            let l = unsafe {(
-                *l0 as u32 + *l0.offset(1) as u32 + *l0.offset(2) as u32 + *l0.offset(3) as u32 +
-                *l1 as u32 + *l1.offset(1) as u32 + *l1.offset(2) as u32 + *l1.offset(3) as u32 +
-                *l2 as u32 + *l2.offset(1) as u32 + *l2.offset(2) as u32 + *l2.offset(3) as u32 +
-                *l3 as u32 + *l3.offset(1) as u32 + *l3.offset(2) as u32 + *l3.offset(3) as u32 + 8
-            ) / 16};
-            let l = table[l as usize];
-            rgb_bytes.push(l);
-            rgb_bytes.push(l);
-            rgb_bytes.push(l);
-            l0 = l0.wrapping_offset(4);
-            l1 = l1.wrapping_offset(4);
-            l2 = l2.wrapping_offset(4);
-            l3 = l3.wrapping_offset(4);
-        }
+    let iter = layer.iter_div4();
+    let mut rgb_bytes = Vec::with_capacity(3 * iter.size_hint().0);
+    for l in iter {
+        let l = table[l as usize];
+        rgb_bytes.push(l);
+        rgb_bytes.push(l);
+        rgb_bytes.push(l);
     }
     rgb_bytes
 }

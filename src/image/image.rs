@@ -126,6 +126,18 @@ impl<T: Copy + Default> ImageLayer<T> {
 }
 
 impl ImageLayer<u16> {
+    pub fn iter_div2(&self) -> DivNLIterator<'_, 2> {
+        DivNLIterator::new(self)
+    }
+
+    pub fn iter_div3(&self) -> DivNLIterator<'_, 3> {
+        DivNLIterator::new(self)
+    }
+
+    pub fn iter_div4(&self) -> DivNLIterator<'_, 4> {
+        DivNLIterator::new(self)
+    }
+
     pub fn calc_noise(&self) -> f32 {
         let mut diffs = Vec::with_capacity(self.data.len()/10);
         // To roughly estimate the noise level, we can take every 7th tuple of 10 pixels
@@ -339,6 +351,204 @@ impl<T: Copy + Default> Iterator for CoordIterator<'_, T> {
     }
 }
 
+// Iterates over pixels of a monochrome layer reduced N times:
+// each N*N block is averaged (same formula as the preview reduct functions).
+// Uses raw pointers to avoid bounds checks and per-pixel address calculations;
+// N is a const generic, so the block loops are unrolled at compile time.
+pub struct DivNLIterator<'a, const N: usize> {
+    layer:    &'a ImageLayer<u16>,
+    // pointers to the left pixel of the current NxN block, one per its row
+    rows:     [*const u16; N],
+    advance:  isize,
+    // remaining pixels in the current reduced row
+    x:        usize,
+    y:        usize,
+    width:    usize,
+    height:   usize,
+}
+
+impl<'a, const N: usize> DivNLIterator<'a, N> {
+    fn new(layer: &'a ImageLayer<u16>) -> Self {
+        assert!(N > 0);
+        let width = layer.width();
+        let data = layer.as_slice();
+        let mut rows = [data.as_ptr(); N];
+        for (i, p) in rows.iter_mut().enumerate() {
+            *p = unsafe { data.as_ptr().add(i * width) };
+        }
+        Self {
+            layer,
+            rows,
+            // pointer jump at the row end, skipping the last columns if width % N != 0
+            advance: N as isize * (width - width / N) as isize,
+            x: width / N,
+            y: 0,
+            width: width / N,
+            height: layer.height() / N,
+        }
+    }
+
+    // sum of the NxN block the pointers are pointing at
+    // (not named `sum` to avoid resolving to Iterator::sum in `next`)
+    fn calc_sum(&self) -> u32 {
+        let mut sum = 0u32;
+        unsafe {
+            for i in 0..N {
+                let p = self.rows[i];
+                for j in 0..N {
+                    sum += *p.add(j) as u32;
+                }
+            }
+        }
+        sum
+    }
+
+    fn advance_rows(rows: &mut [*const u16; N], count: isize) {
+        // pointer updates stay within the data allocation (at most one-past-the-end)
+        unsafe {
+            for p in rows.iter_mut() {
+                *p = p.offset(count);
+            }
+        }
+    }
+}
+
+impl<const N: usize> Iterator for DivNLIterator<'_, N> {
+    type Item = u16;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.width == 0
+        || self.y >= self.height {
+            return None;
+        }
+        // all reads are inside the layer data: reduced rows/cols are dropped
+        // for non-divisible sizes, so the last NxN block never crosses the border
+        let sum = self.calc_sum();
+        let k = N as u32 * N as u32;
+        let v = ((sum + k/2) / k) as u16;
+        Self::advance_rows(&mut self.rows, N as isize);
+        self.x -= 1;
+        if self.x == 0 {
+            self.x = self.width;
+            self.y += 1;
+            Self::advance_rows(&mut self.rows, self.advance);
+        }
+        Some(v)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = if self.width == 0 || self.y >= self.height {
+            0
+        } else {
+            (self.height - self.y - 1) * self.width + self.x
+        };
+        (remaining, Some(remaining))
+    }
+}
+
+// Same as DivNLIterator, but averages each NxN block of the r, g and b
+// layers of a color image and yields (r, g, b) tuples.
+pub struct DivNRGBIterator<'a, const N: usize> {
+    image:    &'a Image,
+    r_rows:   [*const u16; N],
+    g_rows:   [*const u16; N],
+    b_rows:   [*const u16; N],
+    advance:  isize,
+    // remaining pixels in the current reduced row
+    x:        usize,
+    y:        usize,
+    width:    usize,
+    height:   usize,
+}
+
+impl<'a, const N: usize> DivNRGBIterator<'a, N> {
+    fn new(image: &'a Image) -> Self {
+        assert!(N > 0);
+        let width = image.r.width();
+        let r = image.r.as_slice();
+        let g = image.g.as_slice();
+        let b = image.b.as_slice();
+        let mut r_rows = [r.as_ptr(); N];
+        let mut g_rows = [g.as_ptr(); N];
+        let mut b_rows = [b.as_ptr(); N];
+        for i in 0..N {
+            unsafe {
+                r_rows[i] = r.as_ptr().add(i * width);
+                g_rows[i] = g.as_ptr().add(i * width);
+                b_rows[i] = b.as_ptr().add(i * width);
+            }
+        }
+        Self {
+            image,
+            r_rows,
+            g_rows,
+            b_rows,
+            // pointer jump at the row end, skipping the last columns if width % N != 0
+            advance: N as isize * (width - width / N) as isize,
+            x: width / N,
+            y: 0,
+            width: width / N,
+            height: image.r.height() / N,
+        }
+    }
+
+    // average of the NxN block the row pointers are pointing at
+    fn avg(rows: &[*const u16; N]) -> u16 {
+        let mut sum = 0u32;
+        unsafe {
+            for &p in rows {
+                for i in 0..N {
+                    sum += *p.add(i) as u32;
+                }
+            }
+        }
+        let k = N as u32 * N as u32;
+        ((sum + k/2) / k) as u16
+    }
+}
+
+impl<const N: usize> Iterator for DivNRGBIterator<'_, N> {
+    type Item = (u16, u16, u16);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.width == 0
+        || self.y >= self.height {
+            return None;
+        }
+        // all reads are inside the layers data: reduced rows/cols are dropped
+        // for non-divisible sizes, so the last NxN block never crosses the border
+        let r = Self::avg(&self.r_rows);
+        let g = Self::avg(&self.g_rows);
+        let b = Self::avg(&self.b_rows);
+        // pointer updates stay within the layers data (at most one-past-the-end)
+        unsafe {
+            for p in self.r_rows.iter_mut() { *p = p.add(N); }
+            for p in self.g_rows.iter_mut() { *p = p.add(N); }
+            for p in self.b_rows.iter_mut() { *p = p.add(N); }
+        }
+        self.x -= 1;
+        if self.x == 0 {
+            self.x = self.width;
+            self.y += 1;
+            unsafe {
+                for p in self.r_rows.iter_mut() { *p = p.offset(self.advance); }
+                for p in self.g_rows.iter_mut() { *p = p.offset(self.advance); }
+                for p in self.b_rows.iter_mut() { *p = p.offset(self.advance); }
+            }
+        }
+        Some((r, g, b))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = if self.width == 0 || self.y >= self.height {
+            0
+        } else {
+            (self.height - self.y - 1) * self.width + self.x
+        };
+        (remaining, Some(remaining))
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 
 pub struct Image {
@@ -440,6 +650,30 @@ impl Image {
         }
     }
 
+    pub fn iter_div2_l(&self) -> DivNLIterator<'_, 2> {
+        self.l.iter_div2()
+    }
+
+    pub fn iter_div3_l(&self) -> DivNLIterator<'_, 3> {
+        self.l.iter_div3()
+    }
+
+    pub fn iter_div4_l(&self) -> DivNLIterator<'_, 4> {
+        self.l.iter_div4()
+    }
+
+    pub fn iter_div2_rgb(&self) -> DivNRGBIterator<'_, 2> {
+        DivNRGBIterator::new(self)
+    }
+
+    pub fn iter_div3_rgb(&self) -> DivNRGBIterator<'_, 3> {
+        DivNRGBIterator::new(self)
+    }
+
+    pub fn iter_div4_rgb(&self) -> DivNRGBIterator<'_, 4> {
+        DivNRGBIterator::new(self)
+    }
+
     pub fn max_value(&self) -> u16 {
         self.max_value
     }
@@ -463,6 +697,163 @@ trait GradientCalcSource {
     fn image_width(&self) -> usize;
     fn image_height(&self) -> usize;
     fn get_rect_values(&self, x1: usize, y1: usize, x2: usize, y2: usize, result: &mut Vec<u16>);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_color_image(width: usize, height: usize) -> Image {
+        let mut img = Image::new_empty();
+        img.make_color(width, height, 0, u16::MAX);
+        for y in 0..height {
+            for x in 0..width {
+                img.r.set(x as isize, y as isize, (x * 7 + y * 13) as u16 % 4096);
+                img.g.set(x as isize, y as isize, (x * 11 + y * 5) as u16 % 4096);
+                img.b.set(x as isize, y as isize, (x * 3 + y * 17) as u16 % 4096);
+            }
+        }
+        img
+    }
+
+    fn make_image(width: usize, height: usize, fill: impl Fn(usize, usize) -> u16) -> Image {
+        let mut img = Image::new_empty();
+        img.make_monochrome(width, height, 0, u16::MAX);
+        for y in 0..height {
+            for x in 0..width {
+                img.l.set(x as isize, y as isize, fill(x, y));
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn test_iter_div2_l() {
+        let img = make_image(4, 4, |_, _| 8);
+        for v in img.iter_div2_l() {
+            assert_eq!(v, 8);
+        }
+        assert_eq!(img.iter_div2_l().count(), 4);
+    }
+
+    #[test]
+    fn test_iter_div2_l_average() {
+        let img = make_image(2, 2, |x, y| (x + y) as u16);
+        // values: 0 1 / 1 2 => one pixel (0+1+1+2)/4 = 1
+        let values: Vec<u16> = img.iter_div2_l().collect();
+        assert_eq!(values, vec![1]);
+    }
+
+    #[test]
+    fn test_iter_div2_l_odd_size() {
+        // 5x3: reduced image is 2x1
+        let img = make_image(5, 3, |_, _| 10);
+        let values: Vec<u16> = img.iter_div2_l().collect();
+        assert_eq!(values, vec![10, 10]);
+    }
+
+    #[test]
+    fn test_iter_div_l_empty() {
+        let img = Image::new_empty();
+        assert_eq!(img.iter_div2_l().count(), 0);
+        assert_eq!(img.iter_div3_l().count(), 0);
+        assert_eq!(img.iter_div4_l().count(), 0);
+    }
+
+    #[test]
+    fn test_iter_div_l_matches_reference() {
+        for n in [2, 3, 4] {
+            for (w, h) in [(4, 4), (5, 3), (7, 9), (1, 8), (8, 1), (12, 8), (13, 10)] {
+                let img = make_image(w, h, |x, y| (x * 7 + y * 13) as u16 % 4096);
+                let mut expected = Vec::with_capacity((w/n) * (h/n));
+                for y in 0..h/n {
+                    for x in 0..w/n {
+                        let mut v = 0u32;
+                        for dy in 0..n {
+                            for dx in 0..n {
+                                v += img.l.get((x*n + dx) as isize, (y*n + dy) as isize).unwrap() as u32;
+                            }
+                        }
+                        expected.push(((v + (n*n) as u32 / 2) / (n*n) as u32) as u16);
+                    }
+                }
+                let actual: Vec<u16> = match n {
+                    2 => img.iter_div2_l().collect(),
+                    3 => img.iter_div3_l().collect(),
+                    _ => img.iter_div4_l().collect(),
+                };
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn test_iter_div_rgb_matches_reference() {
+        for n in [2, 3, 4] {
+            for (w, h) in [(4, 4), (5, 3), (7, 9), (1, 8), (8, 1), (12, 8), (13, 10)] {
+                let img = make_color_image(w, h);
+                let mut expected = Vec::with_capacity((w/n) * (h/n));
+                for y in 0..h/n {
+                    for x in 0..w/n {
+                        let mut r = 0u32;
+                        let mut g = 0u32;
+                        let mut b = 0u32;
+                        for dy in 0..n {
+                            for dx in 0..n {
+                                r += img.r.get((x*n + dx) as isize, (y*n + dy) as isize).unwrap() as u32;
+                                g += img.g.get((x*n + dx) as isize, (y*n + dy) as isize).unwrap() as u32;
+                                b += img.b.get((x*n + dx) as isize, (y*n + dy) as isize).unwrap() as u32;
+                            }
+                        }
+                        let k = (n*n) as u32;
+                        expected.push((
+                            ((r + k/2) / k) as u16,
+                            ((g + k/2) / k) as u16,
+                            ((b + k/2) / k) as u16,
+                        ));
+                    }
+                }
+                let actual: Vec<(u16, u16, u16)> = match n {
+                    2 => img.iter_div2_rgb().collect(),
+                    3 => img.iter_div3_rgb().collect(),
+                    _ => img.iter_div4_rgb().collect(),
+                };
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn test_iter_div_rgb_empty() {
+        let img = Image::new_empty();
+        assert_eq!(img.iter_div2_rgb().count(), 0);
+        assert_eq!(img.iter_div3_rgb().count(), 0);
+        assert_eq!(img.iter_div4_rgb().count(), 0);
+    }
+
+    #[test]
+    fn test_iter_div2_rgb_size_hint() {
+        let img = make_color_image(10, 6);
+        let mut it = img.iter_div2_rgb();
+        assert_eq!(it.size_hint(), (15, Some(15)));
+        it.next(); it.next();
+        assert_eq!(it.size_hint(), (13, Some(13)));
+    }
+
+    #[test]
+    fn test_iter_div_l_size_hint() {
+        let img = make_image(10, 6, |_, _| 0);
+        let mut it = img.iter_div2_l();
+        assert_eq!(it.size_hint(), (15, Some(15)));
+        it.next(); it.next();
+        assert_eq!(it.size_hint(), (13, Some(13)));
+        let mut it = img.iter_div3_l();
+        assert_eq!(it.size_hint(), (6, Some(6)));
+        it.next();
+        assert_eq!(it.size_hint(), (5, Some(5)));
+        let it = img.iter_div4_l();
+        assert_eq!(it.size_hint(), (2, Some(2)));
+    }
 }
 
 fn calc_gradient(source: &dyn GradientCalcSource) -> Option<Plane> {
