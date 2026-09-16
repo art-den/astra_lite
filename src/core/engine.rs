@@ -511,7 +511,13 @@ impl Engine {
 
         // Abort previous mode
         if have_to_abort_mode {
-            mode.active.abort()?;
+            let res = mode.active.abort();
+            mode.active = Box::new(WaitingMode);
+            if res.is_err() {
+                drop(mode);
+                self.events.send(Event::ModeChanged);
+                return res;
+            }
             self.img_proc_stop_flag.lock().unwrap().store(true, std::sync::atomic::Ordering::Relaxed);
         }
 
