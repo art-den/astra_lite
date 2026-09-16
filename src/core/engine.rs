@@ -184,7 +184,7 @@ impl Engine {
                 Ok(())
             } ();
             self_.events.send(Event::Guider(event));
-            self_.process_error(result, "Engine::connect_ext_guider_events");
+            self_.process_error(result, "Engine::set_ext_guider_events_handler");
         }));
     }
 
