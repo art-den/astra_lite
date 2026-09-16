@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{path::Path, sync::Arc};
-use gtk::{prelude::*, glib, glib::clone};
+use gtk::{prelude::*, glib::clone};
 use astra_lite::{ui, ui::gtk_utils::{exec_and_show_error, open_logs_folder}};
 use astra_lite::{
     core::engine::Engine, options::*, utils::{io_utils::*, log_utils::*}
@@ -172,9 +172,13 @@ fn app_activate_handler(app: &gtk::Application) {
     log::info!("Building UI...");
     ui::ui_main::init_ui(app, &engine, &logs_dir);
 
-    // Connect shutdown signal
+    // Connect shutdown signal.
+    // Use @strong: this closure is the guaranteed owner of the engine until app
+    // destruction. With @weak it would silently no-op once the UI modules are
+    // dropped (the weak ref would stay upgradable only because of Engine's own
+    // self-reference cycles, which Engine::stop() below breaks).
 
-    app.connect_shutdown(clone!(@weak engine => move |app| {
+    app.connect_shutdown(clone!(@strong engine => move |app| {
         app_shutdown_handler(app, &engine);
     }));
 }
