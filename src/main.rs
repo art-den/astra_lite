@@ -125,7 +125,7 @@ fn app_activate_handler(app: &gtk::Application) {
         unsafe { std::env::set_var("RUST_BACKTRACE", "0"); }
     }
 
-    // Create core
+    // Create engine
 
     log::info!("Creating engine...");
     let engine = Engine::new();
@@ -194,11 +194,11 @@ fn app_shutdown_handler(_app: &gtk::Application, engine: &Arc<Engine>) {
     drop(options);
     log::info!("Options saved");
 
-    // Stop core
+    // Stop engine
 
-    log::info!("Core stopping...");
+    log::info!("engine stopping...");
     engine.stop();
-    log::info!("Core stopped");
+    log::info!("engine stopped");
 
     dbg!(Arc::strong_count(engine));
 }
