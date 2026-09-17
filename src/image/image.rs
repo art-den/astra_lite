@@ -109,18 +109,36 @@ impl<T: Copy + Default> ImageLayer<T> {
         }
     }
 
-    pub fn rect_iter(&self, mut x1: isize, mut y1: isize, mut x2: isize, mut y2: isize) -> RectIterator<'_, T> {
-        if x1 < 0 { x1 = 0; }
-        if y1 < 0 { y1 = 0; }
-        if x2 >= self.width as isize { x2 = self.width as isize - 1; }
-        if y2 >= self.height as isize { y2 = self.height as isize - 1; }
+    // Iterates over the rect (left, top, width, height) clipped to the layer bounds:
+    // a negative origin shrinks the size, so the rect's right/bottom edges are clipped too.
+    // An empty rect yields an empty iterator.
+    pub fn rect_iter(&self, left: isize, top: isize, width: usize, height: usize) -> RectIterator<'_, T> {
+        // shrink the size by how far the origin is outside the layer
+        let width = width.saturating_sub(isize::min(left, 0).saturating_neg() as usize);
+        let height = height.saturating_sub(isize::min(top, 0).saturating_neg() as usize);
+        let left = isize::max(left, 0) as usize;
+        let top = isize::max(top, 0) as usize;
+        // clamp the size to the remaining layer extent
+        let width = usize::min(width, self.width.saturating_sub(left));
+        let height = usize::min(height, self.height.saturating_sub(top));
+        if width == 0 || height == 0 {
+            // empty rect: an iterator that yields nothing
+            return RectIterator::<T> {
+                left: 0,
+                width: 0,
+                y: 0,
+                y2: 0,
+                img: self,
+                iter: (&[] as &[T]).iter(),
+            };
+        }
         RectIterator::<T> {
-            x1: x1 as usize,
-            x2: x2 as usize,
-            y: y1 as usize,
-            y2: y2 as usize,
+            left,
+            width,
+            y: top,
+            y2: top + height - 1,
             img: self,
-            iter: RectIterator::init_iter(self, x1 as usize, x2 as usize, y1 as usize)
+            iter: RectIterator::init_iter(self, left, width, top)
         }
     }
 }
@@ -292,8 +310,8 @@ impl GradientCalcSource for ImageLayer<u16> {
 }
 
 pub struct RectIterator<'a, T> {
-    x1: usize,
-    x2: usize,
+    left: usize,
+    width: usize,
     y: usize,
     y2: usize,
     iter: std::slice::Iter<'a, T>,
@@ -301,9 +319,9 @@ pub struct RectIterator<'a, T> {
 }
 
 impl<T: Copy + Default> RectIterator<'_, T> {
-    fn init_iter(img: &ImageLayer<T>, x1: usize, x2: usize, y: usize) -> std::slice::Iter<'_, T> {
+    fn init_iter(img: &ImageLayer<T>, left: usize, width: usize, y: usize) -> std::slice::Iter<'_, T> {
         let row = img.row(y);
-        row[x1 ..= x2].iter()
+        row[left .. left + width].iter()
     }
 }
 
@@ -319,7 +337,7 @@ impl<T: Copy + Default> Iterator for RectIterator<'_, T> {
             if self.y > self.y2 {
                 return None;
             }
-            self.iter = Self::init_iter(self.img, self.x1, self.x2, self.y);
+            self.iter = Self::init_iter(self.img, self.left, self.width, self.y);
             self.next()
         }
     }
@@ -737,6 +755,46 @@ trait GradientCalcSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_rect_iter() {
+        let img = make_image(6, 4, |x, y| (x + y * 10) as u16);
+        // rect (1, 1, 3, 2): cols 1..3, rows 1..2
+        let values: Vec<u16> = img.l.rect_iter(1, 1, 3, 2).collect();
+        assert_eq!(values, vec![11, 12, 13, 21, 22, 23]);
+    }
+
+    #[test]
+    fn test_rect_iter_clamped() {
+        let img = make_image(6, 4, |x, y| (x + y * 10) as u16);
+        // negative left/top and size beyond the borders => whole image
+        let values: Vec<u16> = img.l.rect_iter(-2, -1, 10, 10).collect();
+        let all: Vec<u16> = img.l.as_slice().to_vec();
+        assert_eq!(values, all);
+        // a negative origin clips the rect's right/bottom edges as well
+        let values: Vec<u16> = img.l.rect_iter(-2, -1, 4, 3).collect();
+        // => (0, 0, 2, 2): 0 1 / 10 11
+        assert_eq!(values, vec![0, 1, 10, 11]);
+        // right/bottom edges clipped to the layer bounds
+        let values: Vec<u16> = img.l.rect_iter(4, 2, 10, 10).collect();
+        assert_eq!(values, vec![24, 25, 34, 35]);
+    }
+
+    #[test]
+    fn test_rect_iter_empty() {
+        let img = make_image(6, 4, |_, _| 1);
+        // left outside the image
+        assert_eq!(img.l.rect_iter(10, 0, 2, 2).count(), 0);
+        // negative origin that shrinks the rect to nothing
+        assert_eq!(img.l.rect_iter(-5, 0, 2, 2).count(), 0);
+        // top outside the image
+        assert_eq!(img.l.rect_iter(0, 10, 2, 2).count(), 0);
+        // zero width
+        assert_eq!(img.l.rect_iter(1, 1, 0, 2).count(), 0);
+        // empty layer
+        let empty = Image::new_empty();
+        assert_eq!(empty.l.rect_iter(0, 0, 2, 2).count(), 0);
+    }
 
     fn make_color_image(width: usize, height: usize) -> Image {
         let mut img = Image::new_empty();

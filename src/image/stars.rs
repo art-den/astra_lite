@@ -333,12 +333,14 @@ impl StarsFinder {
             || wrong_cnt > 1000 {
                 return StarItems::new();
             }
-            let x1 = x - MAX_STAR_DIAM as isize;
-            let y1 = y - MAX_STAR_DIAM as isize;
-            let x2 = x + MAX_STAR_DIAM as isize;
-            let y2 = y + MAX_STAR_DIAM as isize;
             star_bg_values.clear();
-            for v in image.rect_iter(x1, y1, x2, y2) {
+            // (2 * MAX_STAR_DIAM + 1) square centered at the star, clipped to the image borders
+            for v in image.rect_iter(
+                x - MAX_STAR_DIAM as isize,
+                y - MAX_STAR_DIAM as isize,
+                2 * MAX_STAR_DIAM + 1,
+                2 * MAX_STAR_DIAM + 1,
+            ) {
                 star_bg_values.push(v);
             }
             let bg_pos = star_bg_values.len() / 3;
