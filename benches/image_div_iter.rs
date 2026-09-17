@@ -74,17 +74,17 @@ fn ref_div_n_rgb(image: &Image, n: usize) -> Vec<(u16, u16, u16)> {
 fn bench_div_iter(c: &mut Criterion) {
     let img = generate_image(42);
 
-    c.bench_function("l_iter_div2", |b| b.iter(|| black_box(img.iter_div2_l().collect::<Vec<u16>>())));
-    c.bench_function("l_iter_div3", |b| b.iter(|| black_box(img.iter_div3_l().collect::<Vec<u16>>())));
-    c.bench_function("l_iter_div4", |b| b.iter(|| black_box(img.iter_div4_l().collect::<Vec<u16>>())));
+    c.bench_function("l_iter_div2", |b| b.iter(|| black_box(img.iter_div2_l(None).collect::<Vec<u16>>())));
+    c.bench_function("l_iter_div3", |b| b.iter(|| black_box(img.iter_div3_l(None).collect::<Vec<u16>>())));
+    c.bench_function("l_iter_div4", |b| b.iter(|| black_box(img.iter_div4_l(None).collect::<Vec<u16>>())));
 
     c.bench_function("l_index_div2", |b| b.iter(|| black_box(ref_div_n(&img.l, 2))));
     c.bench_function("l_index_div3", |b| b.iter(|| black_box(ref_div_n(&img.l, 3))));
     c.bench_function("l_index_div4", |b| b.iter(|| black_box(ref_div_n(&img.l, 4))));
 
-    c.bench_function("rgb_iter_div2", |b| b.iter(|| black_box(img.iter_div2_rgb().collect::<Vec<_>>())));
-    c.bench_function("rgb_iter_div3", |b| b.iter(|| black_box(img.iter_div3_rgb().collect::<Vec<_>>())));
-    c.bench_function("rgb_iter_div4", |b| b.iter(|| black_box(img.iter_div4_rgb().collect::<Vec<_>>())));
+    c.bench_function("rgb_iter_div2", |b| b.iter(|| black_box(img.iter_div2_rgb(None).collect::<Vec<_>>())));
+    c.bench_function("rgb_iter_div3", |b| b.iter(|| black_box(img.iter_div3_rgb(None).collect::<Vec<_>>())));
+    c.bench_function("rgb_iter_div4", |b| b.iter(|| black_box(img.iter_div4_rgb(None).collect::<Vec<_>>())));
 
     c.bench_function("rgb_index_div2", |b| b.iter(|| black_box(ref_div_n_rgb(&img, 2))));
     c.bench_function("rgb_index_div3", |b| b.iter(|| black_box(ref_div_n_rgb(&img, 3))));

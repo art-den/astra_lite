@@ -126,16 +126,16 @@ impl<T: Copy + Default> ImageLayer<T> {
 }
 
 impl ImageLayer<u16> {
-    pub fn iter_div2(&self) -> DivNLIterator<'_, 2> {
-        DivNLIterator::new(self)
+    pub fn iter_div2(&self, rect: Option<(usize, usize, usize, usize)>) -> DivNLIterator<'_, 2> {
+        DivNLIterator::new(self, rect)
     }
 
-    pub fn iter_div3(&self) -> DivNLIterator<'_, 3> {
-        DivNLIterator::new(self)
+    pub fn iter_div3(&self, rect: Option<(usize, usize, usize, usize)>) -> DivNLIterator<'_, 3> {
+        DivNLIterator::new(self, rect)
     }
 
-    pub fn iter_div4(&self) -> DivNLIterator<'_, 4> {
-        DivNLIterator::new(self)
+    pub fn iter_div4(&self, rect: Option<(usize, usize, usize, usize)>) -> DivNLIterator<'_, 4> {
+        DivNLIterator::new(self, rect)
     }
 
     pub fn calc_noise(&self) -> f32 {
@@ -351,6 +351,16 @@ impl<T: Copy + Default> Iterator for CoordIterator<'_, T> {
     }
 }
 
+// Clamp a (left, top, w, h) rect to the source size.
+// w or h is 0 if the rect is empty or fully outside the source.
+fn clamp_rect(rect: (usize, usize, usize, usize), width: usize, height: usize) -> (usize, usize, usize, usize) {
+    let (left, top, w, h) = rect;
+    if left >= width || top >= height {
+        return (0, 0, 0, 0);
+    }
+    (left, top, usize::min(w, width - left), usize::min(h, height - top))
+}
+
 // Iterates over pixels of a monochrome layer reduced N times:
 // each N*N block is averaged (same formula as the preview reduct functions).
 // Uses raw pointers to avoid bounds checks and per-pixel address calculations;
@@ -368,23 +378,35 @@ pub struct DivNLIterator<'a, const N: usize> {
 }
 
 impl<'a, const N: usize> DivNLIterator<'a, N> {
-    fn new(layer: &'a ImageLayer<u16>) -> Self {
+    fn new(layer: &'a ImageLayer<u16>, rect: Option<(usize, usize, usize, usize)>) -> Self {
         assert!(N > 0);
-        let width = layer.width();
+        let src_width = layer.width();
+        let src_height = layer.height();
+        // clamped source rect; None means the whole layer
+        let (x1, y1, src_w, src_h) = match rect {
+            Some(r) => clamp_rect(r, src_width, src_height),
+            None => (0, 0, src_width, src_height),
+        };
+        let width = src_w / N;
         let data = layer.as_slice();
         let mut rows = [data.as_ptr(); N];
-        for (i, p) in rows.iter_mut().enumerate() {
-            *p = unsafe { data.as_ptr().add(i * width) };
+        // only set up real pointers if the reduced rect is not empty, so that
+        // pointer arithmetic never goes out of bounds
+        if width > 0 && src_h / N > 0 {
+            for (i, p) in rows.iter_mut().enumerate() {
+                *p = unsafe { data.as_ptr().add((y1 + i) * src_width + x1) };
+            }
         }
         Self {
             layer,
             rows,
-            // pointer jump at the row end, skipping the last columns if width % N != 0
-            advance: N as isize * (width - width / N) as isize,
-            x: width / N,
+            // pointer jump from the last block of the reduced row to the first block
+            // of the next one; the row stride is the full layer width, not src_w
+            advance: N as isize * (src_width - width) as isize,
+            x: width,
             y: 0,
-            width: width / N,
-            height: layer.height() / N,
+            width,
+            height: src_h / N,
         }
     }
 
@@ -462,20 +484,32 @@ pub struct DivNRGBIterator<'a, const N: usize> {
 }
 
 impl<'a, const N: usize> DivNRGBIterator<'a, N> {
-    fn new(image: &'a Image) -> Self {
+    fn new(image: &'a Image, rect: Option<(usize, usize, usize, usize)>) -> Self {
         assert!(N > 0);
-        let width = image.r.width();
+        let src_width = image.r.width();
+        let src_height = image.r.height();
+        // clamped source rect; None means the whole image
+        let (x1, y1, src_w, src_h) = match rect {
+            Some(r) => clamp_rect(r, src_width, src_height),
+            None => (0, 0, src_width, src_height),
+        };
+        let width = src_w / N;
         let r = image.r.as_slice();
         let g = image.g.as_slice();
         let b = image.b.as_slice();
         let mut r_rows = [r.as_ptr(); N];
         let mut g_rows = [g.as_ptr(); N];
         let mut b_rows = [b.as_ptr(); N];
-        for i in 0..N {
-            unsafe {
-                r_rows[i] = r.as_ptr().add(i * width);
-                g_rows[i] = g.as_ptr().add(i * width);
-                b_rows[i] = b.as_ptr().add(i * width);
+        // only set up real pointers if the reduced rect is not empty, so that
+        // pointer arithmetic never goes out of bounds
+        if width > 0 && src_h / N > 0 {
+            for i in 0..N {
+                let off = (y1 + i) * src_width + x1;
+                unsafe {
+                    r_rows[i] = r.as_ptr().add(off);
+                    g_rows[i] = g.as_ptr().add(off);
+                    b_rows[i] = b.as_ptr().add(off);
+                }
             }
         }
         Self {
@@ -483,12 +517,13 @@ impl<'a, const N: usize> DivNRGBIterator<'a, N> {
             r_rows,
             g_rows,
             b_rows,
-            // pointer jump at the row end, skipping the last columns if width % N != 0
-            advance: N as isize * (width - width / N) as isize,
-            x: width / N,
+            // pointer jump from the last block of the reduced row to the first block
+            // of the next one; the row stride is the full layer width, not src_w
+            advance: N as isize * (src_width - width) as isize,
+            x: width,
             y: 0,
-            width: width / N,
-            height: image.r.height() / N,
+            width,
+            height: src_h / N,
         }
     }
 
@@ -650,28 +685,28 @@ impl Image {
         }
     }
 
-    pub fn iter_div2_l(&self) -> DivNLIterator<'_, 2> {
-        self.l.iter_div2()
+    pub fn iter_div2_l(&self, rect: Option<(usize, usize, usize, usize)>) -> DivNLIterator<'_, 2> {
+        self.l.iter_div2(rect)
     }
 
-    pub fn iter_div3_l(&self) -> DivNLIterator<'_, 3> {
-        self.l.iter_div3()
+    pub fn iter_div3_l(&self, rect: Option<(usize, usize, usize, usize)>) -> DivNLIterator<'_, 3> {
+        self.l.iter_div3(rect)
     }
 
-    pub fn iter_div4_l(&self) -> DivNLIterator<'_, 4> {
-        self.l.iter_div4()
+    pub fn iter_div4_l(&self, rect: Option<(usize, usize, usize, usize)>) -> DivNLIterator<'_, 4> {
+        self.l.iter_div4(rect)
     }
 
-    pub fn iter_div2_rgb(&self) -> DivNRGBIterator<'_, 2> {
-        DivNRGBIterator::new(self)
+    pub fn iter_div2_rgb(&self, rect: Option<(usize, usize, usize, usize)>) -> DivNRGBIterator<'_, 2> {
+        DivNRGBIterator::new(self, rect)
     }
 
-    pub fn iter_div3_rgb(&self) -> DivNRGBIterator<'_, 3> {
-        DivNRGBIterator::new(self)
+    pub fn iter_div3_rgb(&self, rect: Option<(usize, usize, usize, usize)>) -> DivNRGBIterator<'_, 3> {
+        DivNRGBIterator::new(self, rect)
     }
 
-    pub fn iter_div4_rgb(&self) -> DivNRGBIterator<'_, 4> {
-        DivNRGBIterator::new(self)
+    pub fn iter_div4_rgb(&self, rect: Option<(usize, usize, usize, usize)>) -> DivNRGBIterator<'_, 4> {
+        DivNRGBIterator::new(self, rect)
     }
 
     pub fn max_value(&self) -> u16 {
@@ -730,17 +765,17 @@ mod tests {
     #[test]
     fn test_iter_div2_l() {
         let img = make_image(4, 4, |_, _| 8);
-        for v in img.iter_div2_l() {
+        for v in img.iter_div2_l(None) {
             assert_eq!(v, 8);
         }
-        assert_eq!(img.iter_div2_l().count(), 4);
+        assert_eq!(img.iter_div2_l(None).count(), 4);
     }
 
     #[test]
     fn test_iter_div2_l_average() {
         let img = make_image(2, 2, |x, y| (x + y) as u16);
         // values: 0 1 / 1 2 => one pixel (0+1+1+2)/4 = 1
-        let values: Vec<u16> = img.iter_div2_l().collect();
+        let values: Vec<u16> = img.iter_div2_l(None).collect();
         assert_eq!(values, vec![1]);
     }
 
@@ -748,16 +783,16 @@ mod tests {
     fn test_iter_div2_l_odd_size() {
         // 5x3: reduced image is 2x1
         let img = make_image(5, 3, |_, _| 10);
-        let values: Vec<u16> = img.iter_div2_l().collect();
+        let values: Vec<u16> = img.iter_div2_l(None).collect();
         assert_eq!(values, vec![10, 10]);
     }
 
     #[test]
     fn test_iter_div_l_empty() {
         let img = Image::new_empty();
-        assert_eq!(img.iter_div2_l().count(), 0);
-        assert_eq!(img.iter_div3_l().count(), 0);
-        assert_eq!(img.iter_div4_l().count(), 0);
+        assert_eq!(img.iter_div2_l(None).count(), 0);
+        assert_eq!(img.iter_div3_l(None).count(), 0);
+        assert_eq!(img.iter_div4_l(None).count(), 0);
     }
 
     #[test]
@@ -778,9 +813,9 @@ mod tests {
                     }
                 }
                 let actual: Vec<u16> = match n {
-                    2 => img.iter_div2_l().collect(),
-                    3 => img.iter_div3_l().collect(),
-                    _ => img.iter_div4_l().collect(),
+                    2 => img.iter_div2_l(None).collect(),
+                    3 => img.iter_div3_l(None).collect(),
+                    _ => img.iter_div4_l(None).collect(),
                 };
                 assert_eq!(actual, expected);
             }
@@ -814,9 +849,9 @@ mod tests {
                     }
                 }
                 let actual: Vec<(u16, u16, u16)> = match n {
-                    2 => img.iter_div2_rgb().collect(),
-                    3 => img.iter_div3_rgb().collect(),
-                    _ => img.iter_div4_rgb().collect(),
+                    2 => img.iter_div2_rgb(None).collect(),
+                    3 => img.iter_div3_rgb(None).collect(),
+                    _ => img.iter_div4_rgb(None).collect(),
                 };
                 assert_eq!(actual, expected);
             }
@@ -826,15 +861,15 @@ mod tests {
     #[test]
     fn test_iter_div_rgb_empty() {
         let img = Image::new_empty();
-        assert_eq!(img.iter_div2_rgb().count(), 0);
-        assert_eq!(img.iter_div3_rgb().count(), 0);
-        assert_eq!(img.iter_div4_rgb().count(), 0);
+        assert_eq!(img.iter_div2_rgb(None).count(), 0);
+        assert_eq!(img.iter_div3_rgb(None).count(), 0);
+        assert_eq!(img.iter_div4_rgb(None).count(), 0);
     }
 
     #[test]
     fn test_iter_div2_rgb_size_hint() {
         let img = make_color_image(10, 6);
-        let mut it = img.iter_div2_rgb();
+        let mut it = img.iter_div2_rgb(None);
         assert_eq!(it.size_hint(), (15, Some(15)));
         it.next(); it.next();
         assert_eq!(it.size_hint(), (13, Some(13)));
@@ -843,16 +878,110 @@ mod tests {
     #[test]
     fn test_iter_div_l_size_hint() {
         let img = make_image(10, 6, |_, _| 0);
-        let mut it = img.iter_div2_l();
+        let mut it = img.iter_div2_l(None);
         assert_eq!(it.size_hint(), (15, Some(15)));
         it.next(); it.next();
         assert_eq!(it.size_hint(), (13, Some(13)));
-        let mut it = img.iter_div3_l();
+        let mut it = img.iter_div3_l(None);
         assert_eq!(it.size_hint(), (6, Some(6)));
         it.next();
         assert_eq!(it.size_hint(), (5, Some(5)));
-        let it = img.iter_div4_l();
+        let it = img.iter_div4_l(None);
         assert_eq!(it.size_hint(), (2, Some(2)));
+    }
+
+    // reference: averages of n*n blocks aligned to the rect top-left corner
+    fn ref_div_rect(layer: &ImageLayer<u16>, n: usize, left: usize, top: usize, w: usize, h: usize) -> Vec<u16> {
+        if left >= layer.width() || top >= layer.height() {
+            return Vec::new();
+        }
+        let w = usize::min(w, layer.width() - left);
+        let h = usize::min(h, layer.height() - top);
+        let rw = w / n;
+        let rh = h / n;
+        let mut out = Vec::with_capacity(rw * rh);
+        for y in 0..rh {
+            for x in 0..rw {
+                let mut sum = 0u32;
+                for dy in 0..n {
+                    for dx in 0..n {
+                        sum += layer.get((left + x * n + dx) as isize, (top + y * n + dy) as isize).unwrap() as u32;
+                    }
+                }
+                let k = (n * n) as u32;
+                out.push(((sum + k / 2) / k) as u16);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn test_iter_div_l_rect_matches_reference() {
+        for n in [2, 3, 4] {
+            for (w, h) in [(8, 8), (7, 9), (12, 8)] {
+                // rects: a plain sub-rect, a rect clamped to the border,
+                // and a rect smaller than one block (empty result for big n)
+                for (left, top, rw, rh) in [(1usize, 0usize, 6usize, 8usize), (2usize, 1usize, 100usize, 100usize), (5usize, 5usize, 3usize, 4usize)] {
+                    let img = make_image(w, h, |x, y| (x * 7 + y * 13) as u16 % 4096);
+                    let expected = ref_div_rect(&img.l, n, left, top, rw, rh);
+                    let actual: Vec<u16> = match n {
+                        2 => img.iter_div2_l(Some((left, top, rw, rh))).collect(),
+                        3 => img.iter_div3_l(Some((left, top, rw, rh))).collect(),
+                        _ => img.iter_div4_l(Some((left, top, rw, rh))).collect(),
+                    };
+                    assert_eq!(actual, expected, "n={n}, img={w}x{h}, rect=({left}, {top}, {rw}, {rh})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_iter_div_rgb_rect_matches_reference() {
+        for n in [2, 3, 4] {
+            for (w, h) in [(8, 8), (7, 9)] {
+                for (left, top, rw, rh) in [(1usize, 0usize, 6usize, 8usize), (2usize, 1usize, 100usize, 100usize), (5usize, 5usize, 3usize, 4usize)] {
+                    let img = make_color_image(w, h);
+                    let r = ref_div_rect(&img.r, n, left, top, rw, rh);
+                    let g = ref_div_rect(&img.g, n, left, top, rw, rh);
+                    let b = ref_div_rect(&img.b, n, left, top, rw, rh);
+                    let expected: Vec<(u16, u16, u16)> = r.into_iter().zip(g).zip(b).map(|((r, g), b)| (r, g, b)).collect();
+                    let actual: Vec<(u16, u16, u16)> = match n {
+                        2 => img.iter_div2_rgb(Some((left, top, rw, rh))).collect(),
+                        3 => img.iter_div3_rgb(Some((left, top, rw, rh))).collect(),
+                        _ => img.iter_div4_rgb(Some((left, top, rw, rh))).collect(),
+                    };
+                    assert_eq!(actual, expected, "n={n}, img={w}x{h}, rect=({left}, {top}, {rw}, {rh})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_iter_div_l_rect_empty() {
+        let img = make_image(4, 4, |_, _| 8);
+        // rect fully outside the image
+        assert_eq!(img.iter_div2_l(Some((10, 10, 2, 2))).count(), 0);
+        // zero-sized rect
+        assert_eq!(img.iter_div2_l(Some((1, 1, 0, 2))).count(), 0);
+        // rect smaller than one block
+        assert_eq!(img.iter_div2_l(Some((2, 2, 1, 2))).count(), 0);
+        // empty layer with a rect
+        let empty = Image::new_empty();
+        assert_eq!(empty.iter_div2_l(Some((0, 0, 1, 1))).count(), 0);
+
+        let cimg = make_color_image(4, 4);
+        assert_eq!(cimg.iter_div2_rgb(Some((10, 10, 2, 2))).count(), 0);
+        assert_eq!(cimg.iter_div2_rgb(Some((2, 2, 1, 2))).count(), 0);
+    }
+
+    #[test]
+    fn test_iter_div2_l_rect_size_hint() {
+        // 10x6 image, rect (1, 0, 8, 6) is 8x6 => reduced 4x3
+        let img = make_image(10, 6, |_, _| 0);
+        let mut it = img.iter_div2_l(Some((1, 0, 8, 6)));
+        assert_eq!(it.size_hint(), (12, Some(12)));
+        it.next(); it.next();
+        assert_eq!(it.size_hint(), (10, Some(10)));
     }
 }
 

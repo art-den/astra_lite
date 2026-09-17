@@ -517,7 +517,7 @@ fn to_grb_bytes_reduct2_rgb(
     g_table: &[u8],
     b_table: &[u8],
 ) -> Vec<u8> {
-    let iter = image.iter_div2_rgb();
+    let iter = image.iter_div2_rgb(None);
     let mut rgb_bytes = Vec::with_capacity(3 * iter.size_hint().0);
     for (r, g, b) in iter {
         rgb_bytes.push(r_table[r as usize]);
@@ -531,7 +531,7 @@ fn to_grb_bytes_reduct2_mono(
     layer: &ImageLayer<u16>,
     table: &[u8],
 ) -> Vec<u8> {
-    let iter = layer.iter_div2();
+    let iter = layer.iter_div2(None);
     let mut rgb_bytes = Vec::with_capacity(3 * iter.size_hint().0);
     for l in iter {
         let l = table[l as usize];
@@ -548,7 +548,7 @@ fn to_grb_bytes_reduct3_rgb(
     g_table: &[u8],
     b_table: &[u8],
 ) -> Vec<u8> {
-    let iter = image.iter_div3_rgb();
+    let iter = image.iter_div3_rgb(None);
     let mut rgb_bytes = Vec::with_capacity(3 * iter.size_hint().0);
     for (r, g, b) in iter {
         rgb_bytes.push(r_table[r as usize]);
@@ -562,7 +562,7 @@ fn to_grb_bytes_reduct3_mono(
     layer: &ImageLayer<u16>,
     table: &[u8],
 ) -> Vec<u8> {
-    let iter = layer.iter_div3();
+    let iter = layer.iter_div3(None);
     let mut rgb_bytes = Vec::with_capacity(3 * iter.size_hint().0);
     for l in iter {
         let l = table[l as usize];
@@ -579,7 +579,7 @@ fn to_grb_bytes_reduct4_rgb(
     g_table: &[u8],
     b_table: &[u8],
 ) -> Vec<u8> {
-    let iter = image.iter_div4_rgb();
+    let iter = image.iter_div4_rgb(None);
     let mut rgb_bytes = Vec::with_capacity(3 * iter.size_hint().0);
     for (r, g, b) in iter {
         rgb_bytes.push(r_table[r as usize]);
@@ -593,7 +593,7 @@ fn to_grb_bytes_reduct4_mono(
     layer: &ImageLayer<u16>,
     table: &[u8],
 ) -> Vec<u8> {
-    let iter = layer.iter_div4();
+    let iter = layer.iter_div4(None);
     let mut rgb_bytes = Vec::with_capacity(3 * iter.size_hint().0);
     for l in iter {
         let l = table[l as usize];
