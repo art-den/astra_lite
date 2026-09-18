@@ -662,10 +662,7 @@ impl PreviewUi {
         );
 
         self.widgets.image.da_image.connect_size_allocate(clone!(@weak self as self_ => move |_, _| {
-            if let Some((h_adj_value, v_adj_value)) = self_.size_adj_pair.take() {
-                self_.widgets.image.sw_img.hadjustment().set_value(h_adj_value);
-                self_.widgets.image.sw_img.vadjustment().set_value(v_adj_value);
-            }
+            self_.apply_pending_size_adj();
         }));
 
         self.widgets.image.da_image.connect_draw(
@@ -1013,16 +1010,34 @@ impl PreviewUi {
 
             self.widgets.image.da_image.set_size_request(img_width as _, img_height as _);
 
+            // If the widget allocation stays unchanged (consecutive frames of the same size at the same zoom),
+            // size-allocate won't fire and the pending adjustment would block mouse zoom forever - apply it now.
+            // Viewport allocation doesn't change here, so the new child allocation is max(request, viewport)
+            let new_width = i32::max(img_width as i32, sw_client_width);
+            let new_height = i32::max(img_height as i32, sw_client_height);
+            let da = &self.widgets.image.da_image;
+            if new_width == da.allocated_width() && new_height == da.allocated_height() {
+                self.apply_pending_size_adj();
+            }
+
             is_color_image = rgb_bytes.is_color_image;
 
-            // New adjustment on scrolled window will be assigned in Gtk.Widget.size-allocate event handler
+            // Otherwise the pending scroll adjustment will be applied in the Gtk.Widget.size-allocate event handler
             // (search self.widgets.image.da_image.connect_size_allocate here)
         } else {
             *self.pb_preview.borrow_mut() = None;
+            self.size_adj_pair.set(None);
             self.widgets.image.da_image.queue_draw();
         }
 
         self.is_color_image.set(is_color_image);
+    }
+
+    fn apply_pending_size_adj(&self) {
+        if let Some((h_adj_value, v_adj_value)) = self.size_adj_pair.take() {
+            self.widgets.image.sw_img.hadjustment().set_value(h_adj_value);
+            self.widgets.image.sw_img.vadjustment().set_value(v_adj_value);
+        }
     }
 
     fn zoom_by_mouse(&self, evt: &gdk::EventScroll) {
