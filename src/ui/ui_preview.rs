@@ -1,6 +1,6 @@
 use std::{cell::{Cell, RefCell}, path::PathBuf, rc::Rc, sync::Arc};
 use chrono::{DateTime, Local, Utc};
-use gtk::{cairo, glib::{self, clone}, prelude::*, gdk};
+use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
@@ -40,10 +40,11 @@ pub fn init_ui(
         light_history:      RefCell::new(Vec::new()),
         calibr_history:     RefCell::new(Vec::new()),
         flat_info:          RefCell::new(FlatImageInfo::default()),
+        pb_preview:         RefCell::new(None),
+        zoom_factor:        Cell::new(1.0),
         is_color_image:     Cell::new(false),
         size_adj_pair:      Cell::new(None),
         image_size:         Cell::new((0, 0)),
-        image_css_provider: Cell::new(None),
     });
 
     obj.init_widgets();
@@ -219,7 +220,7 @@ struct ControlWidgets {
 struct ImageWidgets {
     sw_img:           gtk::ScrolledWindow,
     eb_img:           gtk::EventBox,
-    img_preview:      gtk::Image,
+    da_image:         gtk::DrawingArea,
     l_overlay_top:    gtk::Label,
     l_overlay_bottom: gtk::Label,
 }
@@ -300,10 +301,11 @@ struct PreviewUi {
     light_history:      RefCell<Vec<LightHistoryItem>>,
     calibr_history:     RefCell<Vec<CalibrHistoryItem>>,
     flat_info:          RefCell<FlatImageInfo>,
+    pb_preview:         RefCell<Option<gtk::gdk_pixbuf::Pixbuf>>,
+    zoom_factor:        Cell<f64>,
     is_color_image:     Cell<bool>,
     size_adj_pair:      Cell<Option<(f64, f64)>>,
     image_size:         Cell<(usize, usize)>,
-    image_css_provider: Cell<Option<gtk::CssProvider>>,
 }
 
 impl Drop for PreviewUi {
@@ -659,12 +661,33 @@ impl PreviewUi {
             })
         );
 
-        self.widgets.image.img_preview.connect_size_allocate(clone!(@weak self as self_ => move |_, _| {
+        self.widgets.image.da_image.connect_size_allocate(clone!(@weak self as self_ => move |_, _| {
             if let Some((h_adj_value, v_adj_value)) = self_.size_adj_pair.take() {
                 self_.widgets.image.sw_img.hadjustment().set_value(h_adj_value);
                 self_.widgets.image.sw_img.vadjustment().set_value(v_adj_value);
             }
         }));
+
+        self.widgets.image.da_image.connect_draw(
+            clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
+            move |area, cr| {
+                let pb = self_.pb_preview.borrow();
+                let Some(pixbuf) = pb.as_ref() else { return glib::Propagation::Proceed; };
+                // Zoom factor is set together with the pixbuf in show_preview_image
+                let zoom = self_.zoom_factor.get();
+                let disp_width = pixbuf.width() as f64 * zoom;
+                let disp_height = pixbuf.height() as f64 * zoom;
+                // Center the image like GtkImage did: GtkViewport expands smaller widgets to fill itself,
+                // so the offset is needed only when the image is smaller than the widget
+                let offset_x = f64::max(0.0, 0.5 * (area.allocated_width() as f64 - disp_width));
+                let offset_y = f64::max(0.0, 0.5 * (area.allocated_height() as f64 - disp_height));
+                cr.translate(offset_x, offset_y);
+                cr.scale(zoom, zoom);
+                cr.set_source_pixbuf(pixbuf, 0.0, 0.0);
+                let _ = cr.paint();
+                glib::Propagation::Proceed
+            })
+        );
 
         self.widgets.image.sw_img.connect_scroll_event(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
@@ -919,10 +942,13 @@ impl PreviewUi {
                     gtk::gdk_pixbuf::InterpType::Tiles,
                 ).unwrap();
                 tmr.log("Pixbuf::scale_simple");
+            } else {
+                // scale_simple is skipped for tiny targets: keep img size in sync with the actual pixbuf size
+                img_width = pixbuf.width() as usize;
+                img_height = pixbuf.height() as usize;
             }
 
-            //let prev_pixbuf = self.widgets.image.img_preview.pixbuf();
-            let (mut prev_image_width, mut prev_image_height) = self.widgets.image.img_preview.size_request();
+            let (mut prev_image_width, mut prev_image_height) = self.widgets.image.da_image.size_request();
             prev_image_width = prev_image_width.max(100);
             prev_image_height = prev_image_height.max(100);
 
@@ -937,7 +963,7 @@ impl PreviewUi {
             let (mut center_x, mut center_y) = keep_center.unwrap_or_else(|| {
                 let (img_visible_center_x, img_visible_center_y) =
                     sw_img.translate_coordinates(
-                        &self.widgets.image.img_preview,
+                        &self.widgets.image.da_image,
                         sw_client_width / 2,
                         sw_client_height / 2,
                     ).unwrap_or_default();
@@ -958,28 +984,26 @@ impl PreviewUi {
                 prev_vadj_value = 0.5 * (prev_image_height - sw_client_height) as f64;
             }
 
-            self.widgets.image.img_preview.set_pixbuf(Some(&pixbuf));
-
-            match pp.scale {
+            self.zoom_factor.set(match pp.scale {
                 PreviewScale::P400 => {
-                    self.set_image_scale_factor(4.0);
                     img_width *= 4;
                     img_height *= 4;
+                    4.0
                 }
                 PreviewScale::P300 => {
-                    self.set_image_scale_factor(3.0);
                     img_width *= 3;
                     img_height *= 3;
+                    3.0
                 }
                 PreviewScale::P200 => {
-                    self.set_image_scale_factor(2.0);
                     img_width *= 2;
                     img_height *= 2;
+                    2.0
                 }
-                _ => {
-                    self.set_image_scale_factor(1.0);
-                }
-            };
+                _ => 1.0,
+            });
+            *self.pb_preview.borrow_mut() = Some(pixbuf);
+            self.widgets.image.da_image.queue_draw();
 
             let mag = img_width as f64 / prev_image_width as f64;
             self.size_adj_pair.set(Some((
@@ -987,36 +1011,18 @@ impl PreviewUi {
                 prev_vadj_value + center_y * (mag - 1.0),
             )));
 
-            self.widgets.image.img_preview.set_size_request(img_width as _, img_height as _);
+            self.widgets.image.da_image.set_size_request(img_width as _, img_height as _);
 
             is_color_image = rgb_bytes.is_color_image;
 
             // New adjustment on scrolled window will be assigned in Gtk.Widget.size-allocate event handler
-            // (search self.widgets.image.img_preview.connect_size_allocate here)
+            // (search self.widgets.image.da_image.connect_size_allocate here)
         } else {
-            self.widgets.image.img_preview.clear();
-            self.widgets.image.img_preview.set_pixbuf(None);
+            *self.pb_preview.borrow_mut() = None;
+            self.widgets.image.da_image.queue_draw();
         }
 
         self.is_color_image.set(is_color_image);
-    }
-
-    fn set_image_scale_factor(&self, scale: f64) {
-        let image = &self.widgets.image.img_preview;
-        let context = image.style_context();
-
-        if let Some(prev_provider) = self.image_css_provider.take() {
-            context.remove_provider(&prev_provider);
-        }
-
-        let provider = gtk::CssProvider::new();
-        _ = provider.load_from_data(
-            format!("#image-with-scale {{ -gtk-icon-transform: scale({scale}); }}").as_bytes()
-        );
-        context.add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-        image.set_widget_name("image-with-scale");
-
-        self.image_css_provider.set(Some(provider));
     }
 
     fn zoom_by_mouse(&self, evt: &gdk::EventScroll) {
@@ -1028,7 +1034,7 @@ impl PreviewUi {
         let Some((src_x, src_y)) = evt.coords() else { return; };
 
         let image_coords = self.widgets.image.sw_img.translate_coordinates(
-            &self.widgets.image.img_preview,
+            &self.widgets.image.da_image,
             src_x as _,
             src_y as _
         );
