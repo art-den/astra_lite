@@ -1,6 +1,6 @@
 ## About
 
-- This is software for deepsky astrophotography and live stacking on low power PCs (like rapsberry Pi or Orange Pi). It also works on PCs. More information is in `README.md`.
+- This is software for deepsky astrophotography and live stacking on low power PCs (like Raspberry Pi or Orange Pi). It also works on PCs. More information is in `README.md`.
 - Written in Rust. Sources is in `src` folder, procedural macro is in `macros` folder. 
 - Uses gtk3 via `gtk3-rs` crate for UI.
 
@@ -10,9 +10,9 @@
 - HDU (hdu) - Header Data Unit (The internal structure of a FITS file).
 - flt - filter (wheel).
 - calibr - Calibration
-- sar (SAR) - Search and Replace (for hot pixles)
+- sar (SAR) - Search and Replace (for hot pixels)
 - recogn - Recognition (for stars on image)
-- sens - Sensivity
+- sens - Sensitivity
 - mt = Multi Threading
 
 ## Architecture (Modules)
