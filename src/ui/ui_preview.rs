@@ -668,20 +668,7 @@ impl PreviewUi {
         self.widgets.image.da_image.connect_draw(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
             move |area, cr| {
-                let pb = self_.pb_preview.borrow();
-                let Some(pixbuf) = pb.as_ref() else { return glib::Propagation::Proceed; };
-                // Zoom factor is set together with the pixbuf in show_preview_image
-                let zoom = self_.zoom_factor.get();
-                let disp_width = pixbuf.width() as f64 * zoom;
-                let disp_height = pixbuf.height() as f64 * zoom;
-                // Center the image like GtkImage did: GtkViewport expands smaller widgets to fill itself,
-                // so the offset is needed only when the image is smaller than the widget
-                let offset_x = f64::max(0.0, 0.5 * (area.allocated_width() as f64 - disp_width));
-                let offset_y = f64::max(0.0, 0.5 * (area.allocated_height() as f64 - disp_height));
-                cr.translate(offset_x, offset_y);
-                cr.scale(zoom, zoom);
-                cr.set_source_pixbuf(pixbuf, 0.0, 0.0);
-                let _ = cr.paint();
+                self_.draw_preview_image(area, cr);
                 glib::Propagation::Proceed
             })
         );
@@ -1038,6 +1025,23 @@ impl PreviewUi {
             self.widgets.image.sw_img.hadjustment().set_value(h_adj_value);
             self.widgets.image.sw_img.vadjustment().set_value(v_adj_value);
         }
+    }
+
+    fn draw_preview_image(&self, area: &gtk::DrawingArea, cr: &cairo::Context) {
+        let pb = self.pb_preview.borrow();
+        let Some(pixbuf) = pb.as_ref() else { return; };
+        // Zoom factor is set together with the pixbuf in show_preview_image
+        let zoom = self.zoom_factor.get();
+        let disp_width = pixbuf.width() as f64 * zoom;
+        let disp_height = pixbuf.height() as f64 * zoom;
+        // Center the image like GtkImage did: GtkViewport expands smaller widgets to fill itself,
+        // so the offset is needed only when the image is smaller than the widget
+        let offset_x = f64::max(0.0, 0.5 * (area.allocated_width() as f64 - disp_width));
+        let offset_y = f64::max(0.0, 0.5 * (area.allocated_height() as f64 - disp_height));
+        cr.translate(offset_x, offset_y);
+        cr.scale(zoom, zoom);
+        cr.set_source_pixbuf(pixbuf, 0.0, 0.0);
+        let _ = cr.paint();
     }
 
     fn zoom_by_mouse(&self, evt: &gdk::EventScroll) {
