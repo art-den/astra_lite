@@ -28,6 +28,8 @@
 - `src/ui/resources` - GTK ui-files, images
 - `src/ui/sky_map` - Sky map widget
 - `src/utils` - Utilities: IO, logging, math, timers, compression
+- `tests/` - Integration tests
+- `benches/` - Criterion benchmarks
 
 ## Panic
 
