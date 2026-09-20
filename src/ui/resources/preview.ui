@@ -373,6 +373,7 @@
                     </child>
                     <child>
                       <object class="GtkComboBoxText" id="cb_scale">
+                        <property name="name">cb_scale</property>
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>
                         <property name="valign">center</property>

@@ -18,6 +18,7 @@
 ## Architecture (Modules)
 
 - `src/core` - System core: working modes, frame processing, events, camera control.
+- `src/debug` - UI automation debug mode (`--debug` flag): simulated clicks, screenshots.
 - `src/guiding` - API for external auto-guiding software (PHD2).
 - `src/hal` - Hardware Abstraction Layer — INDI and ASCOM Alpaca for connecting telescopes, cameras, focusers.
 - `src/image` - Image working: raw RAW, FITS, stacking, histograms, stars.
@@ -39,3 +40,7 @@ The program terminates on any panic. (`panic = "abort"` in `Cargo.toml`)
 
 - One commit should contain only one task
 - Commit comments should be as short as possible
+
+## UI debug
+
+To debug the UI, write the necessary code in `src/debug/mod.rs` and use the `--debug` argument when running.
