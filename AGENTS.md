@@ -36,6 +36,10 @@
 
 The program terminates on any panic. (`panic = "abort"` in `Cargo.toml`)
 
+## Temporary files
+
+Temporary files (debug screenshots, logs, scripts) must be saved in the project's `.tmp` folder.
+
 ## GIT usage
 
 - One commit should contain only one task
