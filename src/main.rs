@@ -2,7 +2,7 @@
 
 use std::{path::Path, sync::Arc, time::Duration};
 use gtk::{prelude::*, glib, glib::clone};
-use astra_lite::{debug, ui, ui::gtk_utils::{exec_and_show_error, open_logs_folder}};
+use astra_lite::{ui, ui::gtk_utils::{exec_and_show_error, open_logs_folder}};
 use astra_lite::{
     core::engine::Engine, options::*, utils::{io_utils::*, log_utils::*}
 };
@@ -33,7 +33,7 @@ fn main() {
     }
 
     if std::env::args().any(|arg| arg == "--debug") {
-        debug::test_init();
+        ui::debug::test_init();
     }
     let application = gtk::Application::new(
         Some(&format!("com.github.art-den.{}", env!("CARGO_PKG_NAME"))),
@@ -195,12 +195,12 @@ fn app_activate_handler(app: &gtk::Application) {
         app_shutdown_handler(app, &engine);
     }));
 
-    // Call debug() one second after startup if launched with --debug
+    // Run the UI debug scenario one second after startup if launched with --debug
 
     if std::env::args().any(|arg| arg == "--debug") {
         let app = app.clone();
         glib::timeout_add_local(Duration::from_secs(1), move || {
-            debug::debug(&app);
+            ui::debug::run_scenario(&app);
             app.quit();
             glib::ControlFlow::Break
         });

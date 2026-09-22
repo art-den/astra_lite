@@ -100,6 +100,6 @@ fn debug_preview_scroll(app: &gtk::Application) {
     test_pause_ms(500);
 }
 
-pub fn debug(app: &gtk::Application) {
+pub fn run_scenario(app: &gtk::Application) {
     debug_preview(app);
 }

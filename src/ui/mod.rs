@@ -1,10 +1,10 @@
 pub mod ui_main;
+pub mod sky_map;
+pub mod gtk_utils;
+pub mod debug;
 
 mod utils;
 mod plots;
-pub mod sky_map;
-pub mod gtk_utils;
-
 mod ui_hardware;
 mod indi_panel_widget;
 mod ui_debug;
