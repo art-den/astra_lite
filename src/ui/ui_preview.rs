@@ -4,7 +4,7 @@ use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{engine::*, events::*, frame_processing::*, preview::ResultImageInfo}, hal::FrameType, image::{histogram::*, info::*, io::save_image_to_tif_file, preview::*, raw::CalibrMethods, stars::Stars, stars_offset::Offset}, options::*, sky_math::math::radian_to_degree, utils::{io_utils::*, log_utils::*}
+    core::{engine::*, events::*, frame_processing::*, preview::ResultImageInfo}, hal::FrameType, image::{cam_db::get_cam_info, histogram::*, image::{Image, ImageLayer}, info::*, io::save_image_to_tif_file, preview::*, raw::CalibrMethods, stars::Stars, stars_offset::Offset}, options::*, sky_math::math::radian_to_degree, utils::{io_utils::*, log_utils::*}
 };
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 
@@ -40,8 +40,7 @@ pub fn init_ui(
         light_history:      RefCell::new(Vec::new()),
         calibr_history:     RefCell::new(Vec::new()),
         flat_info:          RefCell::new(FlatImageInfo::default()),
-        pb_preview:         RefCell::new(None),
-        zoom_factor:        Cell::new(1.0),
+        preview:            RefCell::new(None),
         is_color_image:     Cell::new(false),
         size_adj_pair:      Cell::new(None),
         image_size:         Cell::new((0, 0)),
@@ -150,6 +149,16 @@ impl PreviewScale {
             PreviewScale::P10              => Some("p10"),
             PreviewScale::P5               => Some("p5"),
             PreviewScale::CenterAndCorners => Some("c_and_c"),
+        }
+    }
+
+    /// Scale-up factor of the reduced image (1 = no scaling)
+    pub fn zoom_factor(&self) -> usize {
+        match self {
+            PreviewScale::P400 => 4,
+            PreviewScale::P300 => 3,
+            PreviewScale::P200 => 2,
+            _                  => 1,
         }
     }
 }
@@ -291,6 +300,43 @@ struct Widgets {
     history: HistoryWidgets,
 }
 
+struct PreviewImageData {
+    // The part of the image that fits the currently visible gtk::ScrolledWindow area.
+    // Refilled via Image::iter_div*_* (reusing the allocated buffers) whenever the
+    // visible area changes or a new image arrives from the camera
+    image:  Image,
+
+    // The part of the image ready to be drawn on da_image.
+    // Recreated whenever image, PreviewImageData::options or stars
+    // differ from the current ones
+    pixbuf: gtk::gdk_pixbuf::Pixbuf,
+
+    // Gamma tables for the rgb conversion; reused until the
+    // levels/gamma/WB change (not recreated on every scroll)
+    tables: GammaTables,
+
+    // Top-left and bottom-right corners of PreviewImageData::image
+    // in reduced image pixels
+    left:   isize,
+    top:    isize,
+    right:  isize,
+    bottom: isize,
+
+    // Reduction ratio the part was built with; in FitWindow mode it depends
+    // on the widget size, so a window resize can change it
+    reduct_ratio: usize,
+
+    // Options the last pixbuf was created with
+    options: PreviewOptions,
+
+    // Stars list the last pixbuf was created with;
+    // the engine updates it later than the image, so it is compared separately
+    stars:  Option<Arc<Stars>>,
+
+    // A new image has arrived in the engine since this data was last rebuilt
+    dirty:  bool,
+}
+
 struct PreviewUi {
     main_ui:            Rc<MainUi>,
     window:             gtk::ApplicationWindow,
@@ -301,8 +347,7 @@ struct PreviewUi {
     light_history:      RefCell<Vec<LightHistoryItem>>,
     calibr_history:     RefCell<Vec<CalibrHistoryItem>>,
     flat_info:          RefCell<FlatImageInfo>,
-    pb_preview:         RefCell<Option<gtk::gdk_pixbuf::Pixbuf>>,
-    zoom_factor:        Cell<f64>,
+    preview:            RefCell<Option<PreviewImageData>>,
     is_color_image:     Cell<bool>,
     size_adj_pair:      Cell<Option<(f64, f64)>>,
     image_size:         Cell<(usize, usize)>,
@@ -379,7 +424,7 @@ impl UiModule for PreviewUi {
             gtk::main_iteration_do(true);
             gtk::main_iteration_do(true);
             gtk::main_iteration_do(true);
-            //self.create_and_show_preview_image(None);
+            //self.update_preview(None);
         }
     }
 
@@ -492,7 +537,7 @@ impl PreviewUi {
                 let source = PreviewSource::from_active_id(cb.active_id().as_deref());
                 options.preview.source = source;
                 drop(options);
-                self_.create_and_show_preview_image(None);
+                self_.update_preview(None);
                 self_.repaint_histogram();
                 self_.show_histogram_stat();
                 self_.show_image_info();
@@ -513,7 +558,7 @@ impl PreviewUi {
                 let scale = PreviewScale::from_active_id(cb.active_id().as_deref());
                 options.preview.scale = scale;
                 drop(options);
-                self_.create_and_show_preview_image(None);
+                self_.update_preview(None);
             })
         );
 
@@ -523,7 +568,7 @@ impl PreviewUi {
                 let color = PreviewColorMode::from_active_id(cb.active_id().as_deref());
                 options.preview.color = color;
                 drop(options);
-                self_.create_and_show_preview_image(None);
+                self_.update_preview(None);
             })
         );
 
@@ -532,7 +577,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 options.preview.dark_lvl = scl.value();
                 drop(options);
-                self_.create_and_show_preview_image(None);
+                self_.update_preview(None);
             })
         );
 
@@ -541,7 +586,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 options.preview.light_lvl = scl.value();
                 drop(options);
-                self_.create_and_show_preview_image(None);
+                self_.update_preview(None);
             })
         );
 
@@ -550,7 +595,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 options.preview.gamma = scl.value();
                 drop(options);
-                self_.create_and_show_preview_image(None);
+                self_.update_preview(None);
             })
         );
 
@@ -559,7 +604,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 options.preview.remove_grad = chb.is_active();
                 drop(options);
-                self_.create_and_show_preview_image(None);
+                self_.update_preview(None);
             })
         );
 
@@ -579,7 +624,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 options.preview.wb_auto = chb.is_active();
                 drop(options);
-                self_.create_and_show_preview_image(None);
+                self_.update_preview(None);
             })
         );
 
@@ -588,7 +633,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 options.preview.wb_red = scl.value();
                 drop(options);
-                self_.create_and_show_preview_image(None);
+                self_.update_preview(None);
             })
         );
 
@@ -597,7 +642,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 options.preview.wb_green = scl.value();
                 drop(options);
-                self_.create_and_show_preview_image(None);
+                self_.update_preview(None);
             })
         );
 
@@ -606,7 +651,7 @@ impl PreviewUi {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 options.preview.wb_blue = scl.value();
                 drop(options);
-                self_.create_and_show_preview_image(None);
+                self_.update_preview(None);
             })
         );
 
@@ -614,7 +659,7 @@ impl PreviewUi {
             let Ok(mut options) = self_.engine.options.try_write() else { return; };
             options.preview.stars = chb.is_active();
             drop(options);
-            self_.create_and_show_preview_image(None);
+            self_.update_preview(None);
         }));
     }
 
@@ -672,6 +717,16 @@ impl PreviewUi {
                 glib::Propagation::Proceed
             })
         );
+
+        // The preview content depends on the scroll position (the visible rect
+        // maps to different image rows), so a scroll must invalidate the whole
+        // visible area, not only the newly exposed strip queued by GtkScrolledWindow
+        let sw_img = &self.widgets.image.sw_img;
+        for adj in [sw_img.hadjustment(), sw_img.vadjustment()] {
+            adj.connect_value_changed(clone!(@weak self as self_ => move |_| {
+                self_.widgets.image.da_image.queue_draw();
+            }));
+        }
 
         self.widgets.image.sw_img.connect_scroll_event(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,
@@ -841,95 +896,57 @@ impl PreviewUi {
         show_chan(&self.widgets.info.l_flat_l, &self.widgets.info.e_flat_l, info.l.as_ref());
     }
 
-    fn create_and_show_preview_image(&self, keep_center: Option<(f64, f64)>) {
-        let options = self.engine.options.read().unwrap();
-        let preview_params = options.preview.preview_params();
-        let (image, hist, stars) = match options.preview.source {
-            PreviewSource::OrigFrame => {
-                let frame_info = self.engine.preview.info.read().unwrap();
-                let stars = if let ResultImageInfo::LightInfo(light_info) = &*frame_info {
-                    Some(Arc::clone(&light_info.stars))
-                } else {
-                    None
-                };
-
-                (&*self.engine.preview.image, &self.engine.preview.img_hist, stars)
-            }
-            PreviewSource::LiveStacking => {
-                let info = self.engine.live_stacking.info.read().unwrap();
-                let stars = info.as_ref().map(|info| Arc::clone(&info.stars));
-                (&self.engine.live_stacking.image, &self.engine.live_stacking.hist, stars)
-            }
-        };
-        drop(options);
-        let image = image.read().unwrap();
-        let hist = hist.read().unwrap();
-        let rgb_bytes = get_preview_rgb_data(
-            &image,
-            &hist,
-            &preview_params,
-            stars.as_ref().map(|s| &s.items)
-        );
-        drop(hist);
-        drop(image);
-
-        self.show_preview_image(rgb_bytes.as_ref(), None, keep_center);
-        self.correct_widgets_props();
-    }
-
-    fn show_preview_image(
-        &self,
-        rgb_bytes:   Option<&PreviewRgbData>,
-        src_params:  Option<&PreviewParams>,
-        keep_center: Option<(f64, f64)>,
-    ) {
+    /// Updates the preview bookkeeping (source image info, zoom, scroll area size,
+    /// centering) and requests a repaint.
+    /// Note: this doesn't mark the part image dirty - option-only changes don't
+    /// alter the part; new frames do it in show_frame_processing_result.
+    fn update_preview(&self, keep_center: Option<(f64, f64)>) {
         let preview_options = self.engine.options.read().unwrap().preview.clone();
         let pp = preview_options.preview_params();
-        if src_params.is_some() && src_params != Some(&pp) {
-            self.create_and_show_preview_image(None);
-            return;
-        }
 
-        let mut is_color_image = false;
-        if let Some(rgb_bytes) = rgb_bytes {
-            self.image_size.set((rgb_bytes.orig_width, rgb_bytes.orig_height));
+        let (orig_width, orig_height, is_color_image, camera) = {
+            let image = match preview_options.source {
+                PreviewSource::OrigFrame =>
+                    self.engine.preview.image.read().unwrap(),
+                PreviewSource::LiveStacking =>
+                    self.engine.live_stacking.image.read().unwrap(),
+            };
+            let camera = image.raw_info
+                .as_ref()
+                .map(|info| info.camera.clone())
+                .unwrap_or_default();
+            (image.width(), image.height(), image.is_color(), camera)
+        };
 
-            let tmr = TimeLogger::start();
-            let bytes = glib::Bytes::from_owned(rgb_bytes.bytes.clone());
-            let mut pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
-                &bytes,
-                gtk::gdk_pixbuf::Colorspace::Rgb,
-                false,
-                8,
-                rgb_bytes.width as i32,
-                rgb_bytes.height as i32,
-                (rgb_bytes.width * 3) as i32,
-            );
-            tmr.log("Pixbuf::from_bytes");
+        if orig_width > 0 && orig_height > 0 {
+            self.image_size.set((orig_width, orig_height));
+            self.is_color_image.set(is_color_image);
 
-            if !rgb_bytes.sensor_name.is_empty() {
-                self.widgets.ctrl.l_wb_sensor.set_label(format!("({})", rgb_bytes.sensor_name).as_str());
+            let sensor_name = get_cam_info(&camera)
+                .map(|cam_info| cam_info.sensor.to_string())
+                .unwrap_or_default();
+            let sensor_label = if sensor_name.is_empty() {
+                String::new()
             } else {
-                self.widgets.ctrl.l_wb_sensor.set_label("");
-            }
+                format!("({})", sensor_name)
+            };
+            self.widgets.ctrl.l_wb_sensor.set_label(&sensor_label);
+
+            self.widgets.info.e_res_info
+                .set_text(&format!("{} x {}", orig_width, orig_height));
 
             let (mut img_width, mut img_height) = pp.get_preview_img_size(
-                rgb_bytes.orig_width,
-                rgb_bytes.orig_height
+                orig_width,
+                orig_height
             );
-            if (img_width != rgb_bytes.width || img_height != rgb_bytes.height)
-            && img_width > 42 && img_height > 42 {
-                let tmr = TimeLogger::start();
-                pixbuf = pixbuf.scale_simple(
-                    img_width as _,
-                    img_height as _,
-                    gtk::gdk_pixbuf::InterpType::Tiles,
-                ).unwrap();
-                tmr.log("Pixbuf::scale_simple");
-            } else {
-                // scale_simple is skipped for tiny targets: keep img size in sync with the actual pixbuf size
-                img_width = pixbuf.width() as usize;
-                img_height = pixbuf.height() as usize;
+
+            // For tiny targets the reduced grid size is kept (no pixbuf scaling)
+            let reduct_ratio = pp.calc_reduct_ratio(orig_width, orig_height);
+            let (grid_width, grid_height) = (orig_width / reduct_ratio, orig_height / reduct_ratio);
+            if (img_width != grid_width || img_height != grid_height)
+            && (img_width <= 42 || img_height <= 42) {
+                img_width = grid_width;
+                img_height = grid_height;
             }
 
             let (mut prev_image_width, mut prev_image_height) = self.widgets.image.da_image.size_request();
@@ -968,26 +985,9 @@ impl PreviewUi {
                 prev_vadj_value = 0.5 * (prev_image_height - sw_client_height) as f64;
             }
 
-            self.zoom_factor.set(match pp.scale {
-                PreviewScale::P400 => {
-                    img_width *= 4;
-                    img_height *= 4;
-                    4.0
-                }
-                PreviewScale::P300 => {
-                    img_width *= 3;
-                    img_height *= 3;
-                    3.0
-                }
-                PreviewScale::P200 => {
-                    img_width *= 2;
-                    img_height *= 2;
-                    2.0
-                }
-                _ => 1.0,
-            });
-            *self.pb_preview.borrow_mut() = Some(pixbuf);
-            self.widgets.image.da_image.queue_draw();
+            let zoom = pp.scale.zoom_factor();
+            img_width *= zoom;
+            img_height *= zoom;
 
             let mag = img_width as f64 / prev_image_width as f64;
             self.size_adj_pair.set(Some((
@@ -1006,18 +1006,14 @@ impl PreviewUi {
             if new_width == da.allocated_width() && new_height == da.allocated_height() {
                 self.apply_pending_size_adj();
             }
-
-            is_color_image = rgb_bytes.is_color_image;
-
-            // Otherwise the pending scroll adjustment will be applied in the Gtk.Widget.size-allocate event handler
-            // (search self.widgets.image.da_image.connect_size_allocate here)
         } else {
-            *self.pb_preview.borrow_mut() = None;
+            *self.preview.borrow_mut() = None;
             self.size_adj_pair.set(None);
-            self.widgets.image.da_image.queue_draw();
+            self.is_color_image.set(false);
         }
 
-        self.is_color_image.set(is_color_image);
+        self.widgets.image.da_image.queue_draw();
+        self.correct_widgets_props();
     }
 
     fn apply_pending_size_adj(&self) {
@@ -1027,20 +1023,311 @@ impl PreviewUi {
         }
     }
 
+    /// Builds the part of `src` for the rect (left, top, width, height) given in
+    /// original image pixels into `result`, reusing its already allocated layer buffers.
+    /// The result is in reduced coordinates (see `Image::iter_div*`)
+    fn build_part_image(
+        result: &mut Image,
+        src:    &Image,
+        ratio:  usize,
+        rect:   (usize, usize, usize, usize),
+        color:  PreviewColorMode,
+    ) {
+        let (left, top, width, height) = rect;
+        if width == 0 || height == 0 {
+            result.clear();
+            return;
+        }
+
+        let reduced_layer = |src_layer: &ImageLayer<u16>, dst: &mut ImageLayer<u16>| {
+            match ratio {
+                1 => dst.fill_from_iter(src_layer.rect_iter(left as isize, top as isize, width, height), width, height),
+                2 => dst.fill_from_iter(src_layer.iter_div2(Some(rect)), width/2, height/2),
+                3 => dst.fill_from_iter(src_layer.iter_div3(Some(rect)), width/3, height/3),
+                4 => dst.fill_from_iter(src_layer.iter_div4(Some(rect)), width/4, height/4),
+                _ => panic!("Wrong reduct ratio ({})", ratio),
+            }
+        };
+
+        // Empty the layers that won't be filled so the part stays consistent
+        // with src (is_color/is_monochrome/width/height)
+        result.l.reset();
+        result.r.reset();
+        result.g.reset();
+        result.b.reset();
+
+        if src.is_color() {
+            if color == PreviewColorMode::Rgb {
+                // Per-layer iter_div* computes the same NxN block averages as
+                // iter_div*_rgb, so no temporary vecs are needed
+                reduced_layer(&src.r, &mut result.r);
+                reduced_layer(&src.g, &mut result.g);
+                reduced_layer(&src.b, &mut result.b);
+            } else {
+                match color {
+                    PreviewColorMode::Red   => reduced_layer(&src.r, &mut result.r),
+                    PreviewColorMode::Green => reduced_layer(&src.g, &mut result.g),
+                    PreviewColorMode::Blue  => reduced_layer(&src.b, &mut result.b),
+                    _ => unreachable!(),
+                }
+            }
+        } else {
+            reduced_layer(&src.l, &mut result.l);
+        }
+    }
+
     fn draw_preview_image(&self, area: &gtk::DrawingArea, cr: &cairo::Context) {
-        let pb = self.pb_preview.borrow();
-        let Some(pixbuf) = pb.as_ref() else { return; };
-        // Zoom factor is set together with the pixbuf in show_preview_image
-        let zoom = self.zoom_factor.get();
-        let disp_width = pixbuf.width() as f64 * zoom;
-        let disp_height = pixbuf.height() as f64 * zoom;
+        let options = self.engine.options.read().unwrap().preview.clone();
+        let pp = options.preview_params();
+
+        let stars = match options.source {
+            PreviewSource::OrigFrame => {
+                let frame_info = self.engine.preview.info.read().unwrap();
+                if let ResultImageInfo::LightInfo(light_info) = &*frame_info {
+                    Some(Arc::clone(&light_info.stars))
+                } else {
+                    None
+                }
+            }
+            PreviewSource::LiveStacking => {
+                self.engine.live_stacking.info.read().unwrap()
+                    .as_ref()
+                    .map(|info| Arc::clone(&info.stars))
+            }
+        };
+
+        let image = match options.source {
+            PreviewSource::OrigFrame =>
+                self.engine.preview.image.read().unwrap(),
+            PreviewSource::LiveStacking =>
+                self.engine.live_stacking.image.read().unwrap(),
+        };
+        let hist = match options.source {
+            PreviewSource::OrigFrame =>
+                self.engine.preview.img_hist.read().unwrap(),
+            PreviewSource::LiveStacking =>
+                self.engine.live_stacking.hist.read().unwrap(),
+        };
+
+        if image.is_empty() {
+            return;
+        }
+
+        // Clear the widget to the theme background: the part pixbuf covers only
+        // the visible rect, and the rest must not keep stale pixels from prev frames
+        if let Some(rgba) = area.style_context().lookup_color("theme_bg_color") {
+            cr.set_source_rgb(rgba.red(), rgba.green(), rgba.blue());
+            let _ = cr.paint();
+        }
+
+        let zoom = options.scale.zoom_factor() as f64;
+
+        // CenterAndCorners needs the whole image (corners + center), so it
+        // goes through the full pass
+        if pp.scale == PreviewScale::CenterAndCorners {
+            let Some(rgb_data) = get_preview_rgb_data(
+                &image,
+                &hist,
+                &pp,
+                stars.as_ref().map(|s| &s.items)
+            ) else {
+                return;
+            };
+            let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
+                &glib::Bytes::from_owned(rgb_data.bytes),
+                gtk::gdk_pixbuf::Colorspace::Rgb,
+                false,
+                8,
+                rgb_data.width as i32,
+                rgb_data.height as i32,
+                (rgb_data.width * 3) as i32,
+            );
+            let disp_width = pixbuf.width() as f64 * zoom;
+            let disp_height = pixbuf.height() as f64 * zoom;
+            // Center the image like GtkImage did: GtkViewport expands smaller widgets to fill itself,
+            // so the offset is needed only when the image is smaller than the widget
+            let offset_x = f64::max(0.0, 0.5 * (area.allocated_width() as f64 - disp_width));
+            let offset_y = f64::max(0.0, 0.5 * (area.allocated_height() as f64 - disp_height));
+            cr.translate(offset_x, offset_y);
+            cr.scale(zoom, zoom);
+            cr.set_source_pixbuf(&pixbuf, 0.0, 0.0);
+            let _ = cr.paint();
+            return;
+        }
+
+        let orig_width = image.width();
+        let orig_height = image.height();
+        let reduct_ratio = pp.calc_reduct_ratio(orig_width, orig_height);
+        let (grid_width, grid_height) = (orig_width / reduct_ratio, orig_height / reduct_ratio);
+        if grid_width == 0 || grid_height == 0 {
+            return;
+        }
+
+        // Target (reduced) image size for the current scale;
+        // for tiny targets the reduced grid size is kept (no pixbuf scaling)
+        let (mut target_width, mut target_height) = pp.get_preview_img_size(orig_width, orig_height);
+        if (target_width != grid_width || target_height != grid_height)
+        && (target_width <= 42 || target_height <= 42) {
+            target_width = grid_width;
+            target_height = grid_height;
+        }
+
+        // The visible rect in child (da_image) coordinates
+        let sw_img = &self.widgets.image.sw_img;
+        let sw_child = sw_img.child().unwrap();
+        let client_width = sw_child.allocated_width() as f64;
+        let client_height = sw_child.allocated_height() as f64;
+        let hadj = sw_img.hadjustment().value();
+        let vadj = sw_img.vadjustment().value();
+        let child_width = target_width as f64 * zoom;
+        let child_height = target_height as f64 * zoom;
+        // The value can go out of range when the child shrinks (scale switch,
+        // window resize): GtkAdjustment doesn't re-clamp it on range changes
+        let hadj = f64::min(hadj, f64::max(0.0, child_width - client_width));
+        let vadj = f64::min(vadj, f64::max(0.0, child_height - client_height));
+        if hadj != sw_img.hadjustment().value() { sw_img.hadjustment().set_value(hadj); }
+        if vadj != sw_img.vadjustment().value() { sw_img.vadjustment().set_value(vadj); }
+        // The viewport shows the child rect [hadj, hadj + client) in child coordinates
+        let vis_left = f64::max(0.0, hadj);
+        let vis_right = f64::min(child_width, hadj + client_width);
+        let vis_top = f64::max(0.0, vadj);
+        let vis_bottom = f64::min(child_height, vadj + client_height);
+        if vis_right <= vis_left || vis_bottom <= vis_top {
+            return;
+        }
+
+        // The visible rect in reduced grid coordinates
+        // (child = target * zoom, so grid per child pixel is grid / (target * zoom))
+        let x_scale = grid_width as f64 / (target_width as f64 * zoom);
+        let y_scale = grid_height as f64 / (target_height as f64 * zoom);
+        let left = f64::floor(vis_left * x_scale) as isize;
+        let top = f64::floor(vis_top * y_scale) as isize;
+        let right = f64::min(f64::ceil(vis_right * x_scale), grid_width as f64) as isize;
+        let bottom = f64::min(f64::ceil(vis_bottom * y_scale), grid_height as f64) as isize;
+        if right <= left || bottom <= top {
+            return;
+        }
+
+        let mut preview = self.preview.borrow_mut();
+
+        // The part image is out of date only if the source image, the part's
+        // position/size, its reduction ratio or the set of its used layers changed;
+        // other option changes (gamma, WB, etc.) need only the RGB conversion redo
+        let image_stale = match preview.as_ref() {
+            None => true,
+            Some(p) => p.dirty
+                || p.options.scale != options.scale
+                || p.options.source != options.source
+                || p.options.color != options.color
+                || p.reduct_ratio != reduct_ratio
+                || (p.left, p.top, p.right, p.bottom) != (left, top, right, bottom),
+        };
+        // The stars overlay is not part of options: it arrives later (star recognition
+        // finishes after the image is ready), so its change is tracked separately
+        let options_changed = match preview.as_ref() {
+            None => true,
+            Some(p) => p.options != options,
+        };
+        // A new stars list needs the rgb conversion redo (stars are drawn on the
+        // pixbuf), but not the part rebuild. The engine updates the stars later
+        // than the image, so a draw in between would render stale star markers
+        let stars_changed = match preview.as_ref() {
+            None => true,
+            Some(p) => p.stars.as_ref().map(Arc::as_ptr)
+                != stars.as_ref().map(Arc::as_ptr),
+        };
+
+        if image_stale || options_changed || stars_changed {
+            let tmr = TimeLogger::start();
+            // Take the prev data out so the part image buffers and the gamma
+            // tables can be reused instead of allocating fresh ones
+            let (mut part_image, tables) = match preview.take() {
+                Some(p) => (p.image, Some(p.tables)),
+                None    => (Image::new_empty(), None),
+            };
+            if image_stale {
+                // rect for build_part_image is in original image pixels
+                Self::build_part_image(
+                    &mut part_image,
+                    &image,
+                    reduct_ratio,
+                    (left as usize * reduct_ratio,
+                     top as usize * reduct_ratio,
+                     (right - left) as usize * reduct_ratio,
+                     (bottom - top) as usize * reduct_ratio),
+                    options.color,
+                );
+            }
+
+            let part_width = (right - left) as usize;
+            let part_height = (bottom - top) as usize;
+            let Some((rgb_bytes, tables)) = get_preview_part_rgb_bytes(
+                &part_image,
+                &image,
+                &hist,
+                &pp,
+                reduct_ratio,
+                (left as usize, top as usize),
+                stars.as_ref().map(|s| &s.items),
+                tables,
+            ) else {
+                return;
+            };
+
+            let mut pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
+                &glib::Bytes::from_owned(rgb_bytes),
+                gtk::gdk_pixbuf::Colorspace::Rgb,
+                false,
+                8,
+                part_width as i32,
+                part_height as i32,
+                (part_width * 3) as i32,
+            );
+
+            let target_part_width =
+                f64::max(1.0, (part_width as f64) * (target_width as f64) / (grid_width as f64)).round() as usize;
+            let target_part_height =
+                f64::max(1.0, (part_height as f64) * (target_height as f64) / (grid_height as f64)).round() as usize;
+            if target_part_width != part_width || target_part_height != part_height {
+                pixbuf = pixbuf.scale_simple(
+                    target_part_width as _,
+                    target_part_height as _,
+                    gtk::gdk_pixbuf::InterpType::Tiles,
+                ).unwrap();
+            }
+
+            *preview = Some(PreviewImageData {
+                image:  part_image,
+                pixbuf,
+                tables,
+                left, top, right, bottom,
+                reduct_ratio,
+                options,
+                stars,
+                dirty:  false,
+            });
+            if image_stale {
+                tmr.log("preview part rebuild");
+            } else {
+                tmr.log("preview rgb conversion");
+            }
+        }
+
+        let Some(p) = preview.as_ref() else { return; };
+
+        // Draw the part at its position in child coordinates;
+        // the cairo clip shows only the visible area
+        let disp_width = target_width as f64 * zoom;
+        let disp_height = target_height as f64 * zoom;
         // Center the image like GtkImage did: GtkViewport expands smaller widgets to fill itself,
         // so the offset is needed only when the image is smaller than the widget
         let offset_x = f64::max(0.0, 0.5 * (area.allocated_width() as f64 - disp_width));
         let offset_y = f64::max(0.0, 0.5 * (area.allocated_height() as f64 - disp_height));
-        cr.translate(offset_x, offset_y);
+        let part_x = p.left as f64 / x_scale;
+        let part_y = p.top as f64 / y_scale;
+        cr.translate(offset_x + part_x, offset_y + part_y);
         cr.scale(zoom, zoom);
-        cr.set_source_pixbuf(pixbuf, 0.0, 0.0);
+        cr.set_source_pixbuf(&p.pixbuf, 0.0, 0.0);
         let _ = cr.paint();
     }
 
@@ -1115,7 +1402,7 @@ impl PreviewUi {
         self.widgets.ctrl.cb_scale.set_active_id(options.preview.scale.to_active_id());
         drop(options);
 
-        self.create_and_show_preview_image(Some((image_x as _, image_y as _)));
+        self.update_preview(Some((image_x as _, image_y as _)));
     }
 
     fn handler_action_save_image_preview(&self) {
@@ -1220,10 +1507,6 @@ impl PreviewUi {
         let live_stacking_preview = options.preview.source == PreviewSource::LiveStacking;
         drop(options);
 
-        let show_resolution_info = |width, height| {
-            self.widgets.info.e_res_info.set_text(&format!("{} x {}", width, height));
-        };
-
         let is_mode_current = |live_result: bool| {
             live_result == live_stacking_preview
         };
@@ -1238,18 +1521,14 @@ impl PreviewUi {
                 );
                 self.main_ui.set_perf_string(perf_str);
             }
-            FrameProcessEvent::PreviewOrigFrame(img)
+            FrameProcessEvent::ImageHistogramReady
             if is_mode_current(false) || is_from_file_image => {
-                self.show_preview_image(Some(&img.rgb_data), Some(&img.params), None);
-                self.correct_widgets_props();
-                show_resolution_info(img.rgb_data.orig_width, img.rgb_data.orig_height);
-            }
-            FrameProcessEvent::PreviewLiveStacking(img)
-            if is_mode_current(true) => {
-                self.show_preview_image(Some(&img.rgb_data), Some(&img.params), None);
-                self.correct_widgets_props();
-
-                show_resolution_info(img.rgb_data.orig_width, img.rgb_data.orig_height);
+                if let Some(p) = self.preview.borrow_mut().as_mut() {
+                    p.dirty = true;
+                }
+                self.update_preview(None);
+                self.repaint_histogram();
+                self.show_histogram_stat();
             }
             FrameProcessEvent::RawHistogramReady
             if is_mode_current(false) || is_from_file_image => {
@@ -1278,6 +1557,10 @@ impl PreviewUi {
             }
             FrameProcessEvent::LiveStackingHistogramReady
             if is_mode_current(true) => {
+                if let Some(p) = self.preview.borrow_mut().as_mut() {
+                    p.dirty = true;
+                }
+                self.update_preview(None);
                 self.repaint_histogram();
                 self.show_histogram_stat();
             }
@@ -1307,10 +1590,14 @@ impl PreviewUi {
             FrameProcessEvent::OrigFrameInfoReady
             if is_mode_current(false) || is_from_file_image => {
                 self.show_image_info();
+                // The stars are known only now, after the prev image repaint:
+                // redraw, so the rgb conversion is redone with the new star list
+                self.widgets.image.da_image.queue_draw();
             }
             FrameProcessEvent::LiveStackingInfoReady
             if is_mode_current(true) => {
                 self.show_image_info();
+                self.widgets.image.da_image.queue_draw();
             }
             _ => {}
         }

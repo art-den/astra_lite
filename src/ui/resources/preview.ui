@@ -496,6 +496,7 @@ Useful when the object is not large and is in the center of the image.</property
                     </child>
                     <child>
                       <object class="GtkCheckButton" id="chb_stars">
+                        <property name="name">chb_stars</property>
                         <property name="label" translatable="yes">Stars</property>
                         <property name="visible">True</property>
                         <property name="can-focus">True</property>
@@ -587,6 +588,7 @@ Useful when the object is not large and is in the center of the image.</property
             <property name="can-focus">False</property>
             <child>
               <object class="GtkScrolledWindow" id="sw_img">
+                <property name="name">sw_img</property>
                 <property name="visible">True</property>
                 <property name="can-focus">True</property>
                 <property name="kinetic-scrolling">False</property>
@@ -601,6 +603,7 @@ Useful when the object is not large and is in the center of the image.</property
                         <property name="can-focus">False</property>
                         <child>
                           <object class="GtkDrawingArea" id="da_image">
+                            <property name="name">da_image</property>
                             <property name="visible">True</property>
                             <property name="can-focus">False</property>
                           </object>

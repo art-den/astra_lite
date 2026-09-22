@@ -98,11 +98,6 @@ pub struct ProcessImageParams {
     pub live_stacking:   Option<LiveStackingCtx>,
 }
 
-pub struct PreviewImage {
-    pub rgb_data: PreviewRgbData,
-    pub params:   PreviewParams,
-}
-
 #[derive(Clone)]
 pub struct RawFrameResult {
     pub image:       Arc<RawImage>,
@@ -124,8 +119,7 @@ pub enum FrameProcessEvent {
     RawFrameReady(RawFrameResult),
     RawHistogramReady,
     ImageReady,
-    PreviewOrigFrame(Arc<PreviewImage>),
-    PreviewLiveStacking(Arc<PreviewImage>),
+    ImageHistogramReady,
     LightFrameReady(Arc<LightFrameResult>),
     OrigFrameInfoReady,
     LiveStackingInfoReady,
@@ -503,16 +497,15 @@ impl FrameProcessing {
         let tmr = TimeLogger::start();
         hist.from_image(&image);
         tmr.log("histogram for result image");
-
         if command.img_source.get_type() == CameraShotType::ReadyImage {
             *command.preview.raw_hist.write().unwrap() = hist.clone();
-            self.notify_frame_result(
-                FrameProcessEvent::RawHistogramReady,
-                &command,
-            );
         }
-
         drop(hist);
+
+        self.notify_frame_result(
+            FrameProcessEvent::ImageHistogramReady,
+            &command,
+        );
 
         if command.stop_flag.load(Ordering::Relaxed) {
             log::debug!("Command stopped");
@@ -551,33 +544,7 @@ impl FrameProcessing {
             Stars::default()
         };
 
-        // Preview image RGB bytes
-
         let hist = command.preview.img_hist.read().unwrap();
-        let tmr = TimeLogger::start();
-        let rgb_data = get_preview_rgb_data(
-            &image,
-            &hist,
-            &command.preview_params,
-            if is_light_frame { Some(&frame_stars.items)} else { None },
-        );
-        tmr.log("get_rgb_bytes_from_preview_image");
-
-        if command.stop_flag.load(Ordering::Relaxed) {
-            log::debug!("Command stopped");
-            return Ok(());
-        }
-
-        if let Some(rgb_data) = rgb_data {
-            let preview_data = Arc::new(PreviewImage {
-                rgb_data,
-                params: command.preview_params.clone(),
-            });
-            self.notify_frame_result(
-                FrameProcessEvent::PreviewOrigFrame(preview_data),
-                &command,
-            );
-        }
 
         if frame_type == FrameType::Lights {
             let stars = Arc::new(frame_stars);
@@ -716,12 +683,6 @@ impl FrameProcessing {
                     return Ok(());
                 }
 
-                let hist = live_stacking.data.hist.read().unwrap();
-                self.notify_frame_result(
-                    FrameProcessEvent::LiveStackingHistogramReady,
-                    &command,
-                );
-
                 // Stars on live stacking image
 
                 let ls_mono_layer = if res_image.is_color() {
@@ -773,35 +734,10 @@ impl FrameProcessing {
                     &command,
                 );
 
-                // Convert to RGB bytes for preview
-
-                if !command.preview_params.orig_frame_in_ls {
-                    let tmr = TimeLogger::start();
-                    let rgb_data = get_preview_rgb_data(
-                        &res_image,
-                        &hist,
-                        &command.preview_params,
-                        Some(&ls_light_frame_info.stars.items),
-                    );
-                    tmr.log("get_rgb_bytes_from_preview_image");
-
-                    if command.stop_flag.load(Ordering::Relaxed) {
-                        log::debug!("Command stopped");
-                        return Ok(());
-                    }
-
-                    if let Some(rgb_data) = rgb_data {
-                        let preview_data = Arc::new(PreviewImage {
-                            rgb_data,
-                            params: command.preview_params.clone(),
-                        });
-
-                        self.notify_frame_result(
-                            FrameProcessEvent::PreviewLiveStacking(preview_data),
-                            &command,
-                        );
-                    }
-                }
+                self.notify_frame_result(
+                    FrameProcessEvent::LiveStackingHistogramReady,
+                    &command,
+                );
 
                 // Save result image
 

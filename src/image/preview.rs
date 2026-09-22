@@ -16,7 +16,6 @@ pub struct PreviewParams {
     pub pr_area_width:    usize,
     pub pr_area_height:   usize,
     pub scale:            PreviewScale,
-    pub orig_frame_in_ls: bool,
     pub remove_gradient:  bool,
     pub color:            PreviewColorMode,
     pub wb:               Option<[f64; 3]>,
@@ -68,7 +67,7 @@ impl PreviewParams {
         self.get_preview_img_size_for_scale(self.scale, orig_width, orig_height)
     }
 
-    fn calc_reduct_ratio(&self, img_width: usize, img_height: usize) -> usize {
+    pub fn calc_reduct_ratio(&self, img_width: usize, img_height: usize) -> usize {
         match self.scale {
             PreviewScale::FitWindow => {
                 if img_width/4 > self.pr_area_width && img_height/4 > self.pr_area_height {
@@ -94,7 +93,7 @@ impl PreviewParams {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, PartialEq, Clone)]
 pub struct DarkLightLevels {
     pub dark:  f64,
     pub light: f64,
@@ -197,15 +196,29 @@ fn show_stars(
 ) {
     let width = width / reduct_ratio;
     let height = height / reduct_ratio;
+    show_part_stars(stars, bytes, width, height, reduct_ratio, 0, 0);
+}
+
+// Same as show_stars, but for a part of the reduced image: star points outside
+// the part (which starts at part_left/part_top reduced pixels) are skipped
+fn show_part_stars(
+    stars:        &StarItems,
+    bytes:        &mut [u8],
+    width:        usize,
+    height:       usize,
+    reduct_ratio: usize,
+    part_left:    usize,
+    part_top:     usize
+) {
     let good_color = (0, 255, 0);
     let bad_color = (255, 32, 32);
     for star in stars {
         let (r, g, b) = if !star.overexposed { good_color } else { bad_color };
         for (x, y) in &star.points {
-            let x = *x / reduct_ratio;
-            let y = *y / reduct_ratio;
-            if x >= width || y >= height { continue; }
-            let offset = 3 * (y * width + x);
+            let x = *x as isize / reduct_ratio as isize - part_left as isize;
+            let y = *y as isize / reduct_ratio as isize - part_top as isize;
+            if x < 0 || y < 0 || x >= width as isize || y >= height as isize { continue; }
+            let offset = 3 * (y as usize * width + x as usize);
             bytes[offset] = r;
             bytes[offset+1] = g;
             bytes[offset+2] = b;
@@ -213,12 +226,126 @@ fn show_stars(
     }
 }
 
-#[derive(Debug)]
+/// RGB bytes of a reduced-resolution part of an image (see `Image::iter_div*`).
+/// `part` is the part image, `src` is the full source image (its color mode and
+/// camera are used), `hist` is the FULL image histogram: display levels must not
+/// depend on the visible part. `part_origin` is the part's top-left corner in
+/// reduced image pixels. `tables` are the gamma tables cached from the prev
+/// call: they are reused when still valid and returned to be cached again.
+pub fn get_preview_part_rgb_bytes(
+    part:         &Image,
+    src:          &Image,
+    hist:         &Histogram,
+    params:       &PreviewParams,
+    reduct_ratio: usize,
+    part_origin:  (usize, usize),
+    stars:        Option<&StarItems>,
+    tables:       Option<GammaTables>,
+) -> Option<(Vec<u8>, GammaTables)> {
+    if part.is_empty() || (hist.l.is_none() && hist.b.is_none()) {
+        return None;
+    }
+
+    let levels = calc_levels(
+        hist,
+        params,
+        src.max_value() as f64
+    );
+
+    let (wb, _) = get_wb_and_sensor(
+        &params.wb,
+        src.raw_info
+            .as_ref()
+            .map(|info| info.camera.as_str())
+            .unwrap_or_default()
+    );
+
+    let tables = GammaTables::new_or_keep(tables, &levels, params.gamma, wb);
+
+    // In single-channel color modes the part holds only the selected layer,
+    // so take the size from that layer (Image::width/height fall back l -> r)
+    let (width, height) = match (src.is_color(), params.color) {
+        (true, PreviewColorMode::Green) => (part.g.width(), part.g.height()),
+        (true, PreviewColorMode::Blue)  => (part.b.width(), part.b.height()),
+        _                               => (part.width(), part.height()),
+    };
+    let mut rgb_bytes = if src.is_color() && params.color == PreviewColorMode::Rgb {
+        to_grb_bytes_no_reduct_rgb(part, &tables.r, &tables.g, &tables.b, width, height)
+    } else if src.is_color() {
+        let (layer, table) = match params.color {
+            PreviewColorMode::Red   => (&part.r, &tables.r),
+            PreviewColorMode::Green => (&part.g, &tables.g),
+            PreviewColorMode::Blue  => (&part.b, &tables.b),
+            _ => unreachable!(),
+        };
+        to_grb_bytes_no_reduct_mono(layer, table, width, height)
+    } else {
+        to_grb_bytes_no_reduct_mono(&part.l, &tables.l, width, height)
+    };
+
+    if params.stars && let Some(stars) = stars {
+        show_part_stars(stars, &mut rgb_bytes, width, height, reduct_ratio, part_origin.0, part_origin.1);
+    }
+
+    Some((rgb_bytes, tables))
+}
+
+#[derive(Debug, Default, PartialEq, Clone)]
 struct PreviewLevels {
     r: DarkLightLevels,
     g: DarkLightLevels,
     b: DarkLightLevels,
     l: DarkLightLevels,
+}
+
+/// Gamma correction tables for the preview rgb conversion.
+/// Rebuilt only when the display levels or gamma/wb change;
+/// the old vecs' capacity is reused on rebuild
+pub struct GammaTables {
+    r:      Vec<u8>,
+    g:      Vec<u8>,
+    b:      Vec<u8>,
+    l:      Vec<u8>,
+    levels: PreviewLevels,
+    gamma:  f64,
+    wb:     [f64; 3],
+}
+
+impl GammaTables {
+    /// Reuses `old` when it was built from the same levels/gamma/wb,
+    /// otherwise rebuilds the tables in place (reusing the vecs' capacity)
+    fn new_or_keep(old: Option<Self>, levels: &PreviewLevels, gamma: f64, wb: [f64; 3]) -> Self {
+        match old {
+            Some(t) if t.levels == *levels && t.gamma == gamma && t.wb == wb => t,
+            Some(mut t) => {
+                Self::fill(&mut t, levels, gamma, wb);
+                t
+            }
+            None => {
+                let mut t = Self {
+                    r: Vec::new(),
+                    g: Vec::new(),
+                    b: Vec::new(),
+                    l: Vec::new(),
+                    levels: PreviewLevels::default(),
+                    gamma:  1.0,
+                    wb:     [1.0; 3],
+                };
+                Self::fill(&mut t, levels, gamma, wb);
+                t
+            }
+        }
+    }
+
+    fn fill(tables: &mut Self, levels: &PreviewLevels, gamma: f64, wb: [f64; 3]) {
+        fill_gamma_table(&mut tables.r, levels.r.dark, levels.r.light, gamma, wb[0]);
+        fill_gamma_table(&mut tables.g, levels.g.dark, levels.g.light, gamma, wb[1]);
+        fill_gamma_table(&mut tables.b, levels.b.dark, levels.b.light, gamma, wb[2]);
+        fill_gamma_table(&mut tables.l, levels.l.dark, levels.l.light, gamma, 1.0);
+        tables.levels = levels.clone();
+        tables.gamma = gamma;
+        tables.wb = wb;
+    }
 }
 
 fn calc_levels(
@@ -309,35 +436,32 @@ fn to_grb_bytes(
     reduct_ratio: usize,
     wb:           &[f64; 3],
 ) -> (Vec<u8>, usize, usize) {
-    let r_table = create_gamma_table(levels.r.dark, levels.r.light, params.gamma, wb[0]);
-    let g_table = create_gamma_table(levels.g.dark, levels.g.light, params.gamma, wb[1]);
-    let b_table = create_gamma_table(levels.b.dark, levels.b.light, params.gamma, wb[2]);
-    let l_table = create_gamma_table(levels.l.dark, levels.l.light, params.gamma, 1.0);
+    let tables = GammaTables::new_or_keep(None, levels, params.gamma, *wb);
     let (result_width, result_height) = params.get_preview_img_size(image.width(), image.height());
 
     let rgb_bytes = if image.is_color() && params.color == PreviewColorMode::Rgb {
         match (params.scale, reduct_ratio) {
-            (PreviewScale::CenterAndCorners, _) => to_grb_bytes_corners_rgb(image, &r_table, &g_table, &b_table, result_width, result_height),
-            (_, 1) => to_grb_bytes_no_reduct_rgb(image, &r_table, &g_table, &b_table, image.width(), image.height()),
-            (_, 2) => to_grb_bytes_reduct2_rgb  (image, &r_table, &g_table, &b_table),
-            (_, 3) => to_grb_bytes_reduct3_rgb  (image, &r_table, &g_table, &b_table),
-            (_, 4) => to_grb_bytes_reduct4_rgb  (image, &r_table, &g_table, &b_table),
+            (PreviewScale::CenterAndCorners, _) => to_grb_bytes_corners_rgb(image, &tables.r, &tables.g, &tables.b, result_width, result_height),
+            (_, 1) => to_grb_bytes_no_reduct_rgb(image, &tables.r, &tables.g, &tables.b, image.width(), image.height()),
+            (_, 2) => to_grb_bytes_reduct2_rgb  (image, &tables.r, &tables.g, &tables.b),
+            (_, 3) => to_grb_bytes_reduct3_rgb  (image, &tables.r, &tables.g, &tables.b),
+            (_, 4) => to_grb_bytes_reduct4_rgb  (image, &tables.r, &tables.g, &tables.b),
             _ => panic!("Wrong reduct_ratio ({})", reduct_ratio),
         }
     } else {
         let (layer, table) = match (image.is_color(), params.color) {
-            (false, _)                   => (&image.l, l_table),
-            (_, PreviewColorMode::Red)   => (&image.r, r_table),
-            (_, PreviewColorMode::Green) => (&image.g, g_table),
-            (_, PreviewColorMode::Blue)  => (&image.b, b_table),
+            (false, _)                   => (&image.l, &tables.l),
+            (_, PreviewColorMode::Red)   => (&image.r, &tables.r),
+            (_, PreviewColorMode::Green) => (&image.g, &tables.g),
+            (_, PreviewColorMode::Blue)  => (&image.b, &tables.b),
             _ => unreachable!(),
         };
         match (params.scale, reduct_ratio) {
-            (PreviewScale::CenterAndCorners, _) => to_grb_bytes_corners_mono(layer, &table, result_width, result_height),
-            (_, 1) => to_grb_bytes_no_reduct_mono(layer, &table, image.width(), image.height()),
-            (_, 2) => to_grb_bytes_reduct2_mono  (layer, &table),
-            (_, 3) => to_grb_bytes_reduct3_mono  (layer, &table),
-            (_, 4) => to_grb_bytes_reduct4_mono  (layer, &table),
+            (PreviewScale::CenterAndCorners, _) => to_grb_bytes_corners_mono(layer, table, result_width, result_height),
+            (_, 1) => to_grb_bytes_no_reduct_mono(layer, table, image.width(), image.height()),
+            (_, 2) => to_grb_bytes_reduct2_mono  (layer, table),
+            (_, 3) => to_grb_bytes_reduct3_mono  (layer, table),
+            (_, 4) => to_grb_bytes_reduct4_mono  (layer, table),
             _ => panic!("Wrong reduct_ratio ({})", reduct_ratio),
         }
     };
@@ -351,11 +475,12 @@ fn to_grb_bytes(
     (rgb_bytes, width, height)
 }
 
-fn create_gamma_table(min_value: f64, max_value: f64, gamma: f64, k: f64) -> Vec<u8> {
-    let mut table = Vec::new();
+fn fill_gamma_table(table: &mut Vec<u8>, min_value: f64, max_value: f64, gamma: f64, k: f64) {
+    table.clear();
     if min_value == 0.0 && max_value == 0.0 {
-        return table;
+        return;
     }
+    table.reserve((u16::MAX as usize) + 1);
     for i in 0..=u16::MAX {
         let v = linear_interpolate(i as f64, min_value, max_value, 0.0, 1.0);
         let v = v * k;
@@ -368,7 +493,6 @@ fn create_gamma_table(min_value: f64, max_value: f64, gamma: f64, k: f64) -> Vec
         };
         table.push(table_v as u8);
     }
-    table
 }
 
 #[derive(Debug)]

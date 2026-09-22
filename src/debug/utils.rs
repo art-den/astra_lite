@@ -13,7 +13,7 @@ pub fn test_init() {
     }
 }
 
-pub fn test_pause(mut time_ms: usize) {
+pub fn test_pause_ms(mut time_ms: usize) {
     const PERIOD: usize = 10;
     while time_ms >= PERIOD {
         time_ms -= PERIOD;
@@ -34,10 +34,8 @@ fn main_window(app: &gtk::Application) -> gtk::ApplicationWindow {
         .expect("Main window not found")
 }
 
+// Search by widget name property (not by builder id)
 pub fn widget_by_name<T: IsA<gtk::Widget>>(app: &gtk::Application, name: &str) -> T {
-    // GtkBuilder doesn't set the widget name from the id in the .ui file
-    // (the name stays the class name).
-
     let window = main_window(app);
     let widget = find_widget_by_name(window.upcast_ref(), name)
         .unwrap_or_else(|| panic!("Widget with name '{}' not found", name));
@@ -149,7 +147,7 @@ pub fn test_widget_click(name: &str, app: &gtk::Application) {
         gdk::EventType::ButtonPress,
     );
 
-    test_pause(100);
+    test_pause_ms(100);
 
     let released = gdk::test_simulate_button(
         &window,
@@ -160,7 +158,7 @@ pub fn test_widget_click(name: &str, app: &gtk::Application) {
         gdk::EventType::ButtonRelease,
     );
 
-    test_pause(100);
+    test_pause_ms(100);
 
     if !pressed || !released {
         panic!("Failed to simulate click on widget '{}'", name);

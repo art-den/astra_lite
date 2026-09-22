@@ -34,12 +34,37 @@ impl<T: Copy + Default> ImageLayer<T> {
     }
 
     fn clear(&mut self) {
-        self.data.clear();
+        self.reset();
         self.data.shrink_to_fit();
+    }
+
+    /// Resets the layer to empty keeping the allocated buffer,
+    /// so the next `fill_from_iter` can reuse it
+    pub fn reset(&mut self) {
+        self.data.clear();
         self.width = 0;
         self.height = 0;
         self.width_1 = 0;
         self.height_1 = 0;
+    }
+
+    /// Fills the layer in place from `iter`, reusing the allocated buffer
+    /// when it is large enough. `iter` must yield exactly `width * height` items
+    pub fn fill_from_iter<I: IntoIterator<Item = T>>(
+        &mut self,
+        iter:   I,
+        width:  usize,
+        height: usize,
+    ) {
+        let size = width * height;
+        self.data.clear();
+        self.data.reserve(size);
+        self.data.extend(iter);
+        assert!(self.data.len() == size);
+        self.width = width;
+        self.height = height;
+        self.width_1 = width as i64 - 1;
+        self.height_1 = height as i64 - 1;
     }
 
     pub fn resize(&mut self, width: usize, height: usize) {

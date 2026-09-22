@@ -33,7 +33,7 @@ pub enum PreviewScale {
     CenterAndCorners,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(default)]
 pub struct PreviewOptions {
     pub scale:       PreviewScale,
@@ -92,7 +92,6 @@ impl PreviewOptions {
             pr_area_width:    self.widget_width,
             pr_area_height:   self.widget_height,
             scale:            self.scale,
-            orig_frame_in_ls: self.source == PreviewSource::OrigFrame,
             remove_gradient:  self.remove_grad,
             color:            self.color,
             stars:            self.stars,

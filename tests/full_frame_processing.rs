@@ -122,9 +122,9 @@ const STAR_TOLERANCE: f64 = 10.0;
 struct State {
     events_received: Vec<String>,
     histogram_raw_count: usize,
+    image_histogram_count: usize,
     raw_frame_info_count: usize,
     image_count: usize,
-    preview_frame_count: usize,
     light_frame_info_count: usize,
     frame_info_count: usize,
     shot_finished: bool,
@@ -143,10 +143,6 @@ struct State {
     light_background: Option<i32>,
     /// Background percent from LightFrameInfo.
     light_bg_percent: Option<f32>,
-    /// Preview RGB data length.
-    preview_rgb_len: Option<usize>,
-    preview_width: Option<u32>,
-    preview_height: Option<u32>,
     /// RAW standard deviation.
     raw_std_dev: Option<f32>,
     /// Exposure from LightFrameInfo.
@@ -225,13 +221,10 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
                         println!("  Event: Image");
                     }
 
-                    FrameProcessEvent::PreviewOrigFrame(preview) => {
-                        state.events_received.push("PreviewFrame".to_string());
-                        state.preview_frame_count += 1;
-                        state.preview_rgb_len = Some(preview.rgb_data.bytes.as_ref().len());
-                        state.preview_width = Some(preview.rgb_data.width as u32);
-                        state.preview_height = Some(preview.rgb_data.height as u32);
-                        println!("  Event: PreviewFrame");
+                    FrameProcessEvent::ImageHistogramReady => {
+                        state.events_received.push("ImageHistogramReady".to_string());
+                        state.image_histogram_count += 1;
+                        println!("  Event: ImageHistogramReady");
                     }
 
                     FrameProcessEvent::LightFrameReady(info) => {
@@ -303,7 +296,6 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
 
                     other => {
                         let name = match other {
-                            FrameProcessEvent::PreviewLiveStacking(_) => "PreviewLiveRes",
                             FrameProcessEvent::LiveStackingInfoReady => "FrameInfoLiveRes",
                             FrameProcessEvent::LiveStackingHistogramReady => "HistogramLiveRes",
                             FrameProcessEvent::MasterSaved { .. } => "MasterSaved",
@@ -362,6 +354,11 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
         "expected at least 1 HistogramRaw event, got {}",
         state.histogram_raw_count
     );
+    assert!(
+        state.image_histogram_count >= 1,
+        "expected at least 1 ImageHistogramReady event, got {}",
+        state.image_histogram_count
+    );
     assert_eq!(
         state.raw_frame_info_count, 1,
         "expected exactly 1 RawFrameInfo event, got {}",
@@ -371,11 +368,6 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
         state.image_count, 1,
         "expected exactly 1 Image event, got {}",
         state.image_count
-    );
-    assert!(
-        state.preview_frame_count >= 1,
-        "expected at least 1 PreviewFrame event, got {}",
-        state.preview_frame_count
     );
     assert_eq!(
         state.light_frame_info_count, 1,
@@ -458,21 +450,6 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
         expected_is_color
     );
     drop(cur_image);
-
-    // --- Preview size ---
-
-    let rgb_len = state.preview_rgb_len.expect("preview_rgb_len should be set");
-    let pr_w = state.preview_width.expect("preview_width should be set");
-    let pr_h = state.preview_height.expect("preview_height should be set");
-    let expected_rgb_len = (pr_w * pr_h * 3) as usize;
-    println!(
-        "Preview: {} x {} (rgb_len={}, expected={})",
-        pr_w, pr_h, rgb_len, expected_rgb_len
-    );
-    assert_eq!(
-        rgb_len, expected_rgb_len,
-        "preview RGB data length mismatch"
-    );
 
     // --- std_dev RAW ---
 
@@ -596,7 +573,7 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
         "HistogramRaw",
         "RawFrameInfo",
         "Image",
-        "PreviewFrame",
+        "ImageHistogramReady",
         "LightFrameInfo",
         "FrameInfo",
         "ShotProcessingFinished",
