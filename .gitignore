@@ -1,6 +1,7 @@
 /.vscode
 /.zed
-/.tmp
+/.tmp/*
+!/.tmp/README.md
 target
 /target_cross
 /dist
