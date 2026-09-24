@@ -363,7 +363,9 @@ impl IndiPanelWidget {
 
         // Build device property groups UI
         for indi_group in indi_groups {
-            let ui_group = ui_device.groups.iter_mut().find(|g| g.name == *indi_group).unwrap();
+            let Some(ui_group) = ui_device.groups.iter_mut().find(|g| g.name == *indi_group) else {
+                continue;
+            };
             Self::show_device_prop_group(indi, &ui_device.name, ui_group, indi_props, update_list);
         }
     }
@@ -481,7 +483,9 @@ impl IndiPanelWidget {
 
         // Update property values
         for indi_prop in indi_group_props {
-            let ui_prop = ui_group.props.iter_mut().find(|p| p.name == *indi_prop.name).unwrap();
+            let Some(ui_prop) = ui_group.props.iter_mut().find(|p| p.name == *indi_prop.name) else {
+                continue;
+            };
             if indi_prop.change_id != ui_prop.change_id {
                 ui_prop.change_id = indi_prop.change_id;
                 Self::show_property_values(ui_prop, indi_prop);
