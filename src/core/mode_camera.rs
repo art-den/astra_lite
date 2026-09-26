@@ -519,17 +519,17 @@ impl TakingPicturesMode {
 
     fn process_raw_image(
         &mut self,
-        raw_info: &RawFrameResult,
+        event: &RawImageEvent,
     ) -> eyre::Result<NotifyResult> {
         if self.state != State::Common {
             return Ok(NotifyResult::Empty);
         }
 
         let frame_for_raw_stacker =
-            Self::is_frame_type_for_raw_stacker(raw_info.image.info().frame_type);
+            Self::is_frame_type_for_raw_stacker(event.image.info().frame_type);
 
-        if frame_for_raw_stacker && self.flags.use_raw_stacker && raw_info.ccd_temp_ok {
-            self.add_raw_image(&raw_info.image)?;
+        if frame_for_raw_stacker && self.flags.use_raw_stacker && event.ccd_temp_ok {
+            self.add_raw_image(&event.image)?;
         }
 
         if self.next_job.is_none()
@@ -540,7 +540,7 @@ impl TakingPicturesMode {
                 .map(|p| p.cur+1 != p.total)
                 .unwrap_or(true);
 
-            if have_to_continue_by_progress || !raw_info.quality_is_ok() {
+            if have_to_continue_by_progress || !event.ccd_temp_ok {
                 self.take_shot_with_options(self.cam_options.frame.clone(), true)?;
                 self.find_when_to_start_exposure();
             }
@@ -1510,8 +1510,8 @@ impl Mode for TakingPicturesMode {
         fp_result: &FrameProcessNotification
     ) -> eyre::Result<NotifyResult> {
         match &fp_result.event {
-            FrameProcessEvent::RawFrameReady(raw_info) =>
-                self.process_raw_image(raw_info),
+            FrameProcessEvent::RawImage(event) =>
+                self.process_raw_image(event),
 
             FrameProcessEvent::LightFrameReady(info) =>
                 self.process_light_frame_info(info),

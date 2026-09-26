@@ -1535,20 +1535,19 @@ impl PreviewUi {
                 self.repaint_histogram();
                 self.show_histogram_stat();
             }
-            FrameProcessEvent::RawFrameReady(info)
+            FrameProcessEvent::RawFrameReady(event)
             if is_mode_current(false) || is_from_file_image => {
-                let image_info = info.image.info();
-                if image_info.frame_type != FrameType::Lights {
+                if event.info.frame_type != FrameType::Lights {
                     let history_item = CalibrHistoryItem {
-                        time:           image_info.time,
+                        time:           event.info.time,
                         mode_type:      result.mode_kind,
-                        frame_type:     image_info.frame_type,
-                        ccd_temp:       image_info.ccd_temp.map(|v| v as f32),
-                        bad_ccd_temp:   !info.ccd_temp_ok,
-                        mean:           info.mean,
-                        median:         info.median,
-                        std_dev:        info.std_dev,
-                        calibr_methods: image_info.calibr_methods,
+                        frame_type:     event.info.frame_type,
+                        ccd_temp:       event.info.ccd_temp.map(|v| v as f32),
+                        bad_ccd_temp:   !event.ccd_temp_ok,
+                        mean:           event.mean,
+                        median:         event.median,
+                        std_dev:        event.std_dev,
+                        calibr_methods: event.info.calibr_methods,
                     };
                     self.calibr_history.borrow_mut().push(history_item);
                     self.update_calibr_history_table();

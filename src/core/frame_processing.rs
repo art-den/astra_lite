@@ -100,22 +100,23 @@ pub struct ProcessImageParams {
 
 #[derive(Clone)]
 pub struct RawFrameResult {
-    pub image:       Arc<RawImage>,
+    pub info:        RawImageInfo,
     pub ccd_temp_ok: bool,
     pub mean:        f32,
     pub median:      u16,
     pub std_dev:     f32,
 }
 
-impl RawFrameResult {
-    pub fn quality_is_ok(&self) -> bool {
-        self.ccd_temp_ok
-    }
+#[derive(Clone)]
+pub struct RawImageEvent {
+    pub image:       Arc<RawImage>,
+    pub ccd_temp_ok: bool,
 }
 
 #[derive(Clone)]
 pub enum FrameProcessEvent {
     ShotProcessingStarted,
+    RawImage(RawImageEvent),
     RawFrameReady(RawFrameResult),
     RawHistogramReady,
     ImageReady,
@@ -370,8 +371,17 @@ impl FrameProcessing {
 
                 let raw_image = Arc::new(raw_image);
 
+                let raw_image_event = RawImageEvent {
+                    image: Arc::clone(&raw_image),
+                    ccd_temp_ok: quality.ccd_temp_ok,
+                };
+                self.notify_frame_result(
+                    FrameProcessEvent::RawImage(raw_image_event),
+                    &command,
+                );
+
                 let raw_frame_info = RawFrameResult {
-                    image:       Arc::clone(&raw_image),
+                    info:        raw_image.info().clone(),
                     ccd_temp_ok: quality.ccd_temp_ok,
                     mean:        raw_mean as f32,
                     median:      raw_median,
