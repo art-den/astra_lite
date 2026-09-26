@@ -208,7 +208,10 @@ impl ValuesDecompressor {
             HEADER_LZ_TZ_2 => (
                 reader.read::<u32>(5)?, reader.read::<u32>(5)?, reader.read::<u32>(5)?, true),
             _ =>
-            unreachable!(),
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Unexpected header in compressed values stream"
+                )),
         };
         let large_len = (32 - lz_large - tz).max(1);
         if use_large_lz_bits {
