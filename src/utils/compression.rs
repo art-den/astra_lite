@@ -76,7 +76,7 @@ impl ValuesCompressor {
             lz_freq[*lz as usize] += 1;
         }
         if min_tz == 32 {
-            writer.write(3, HEADER_ZEROS)?;
+            writer.write::<3, u32>(HEADER_ZEROS)?;
             return Ok(());
         }
         let mut cnt_sum = 0_usize;
@@ -93,32 +93,32 @@ impl ValuesCompressor {
             .min(31 - min_tz);
 
         if lz_norm + min_tz < 2 {
-            writer.write(3, HEADER_NO_COMPR)?;
+            writer.write::<3, u32>(HEADER_NO_COMPR)?;
             for v in self.data {
-                writer.write(32, v)?;
+                writer.write::<32, u32>(v)?;
             }
             return Ok(());
         }
         let use_large_lz_bits = (lz_norm as i32 - lz_large as i32) >= 2;
         if min_tz == 0 {
             if !use_large_lz_bits {
-                writer.write(3, HEADER_LZ)?;
-                writer.write(5, lz_large)?;
+                writer.write::<3, u32>(HEADER_LZ)?;
+                writer.write::<5, u32>(lz_large)?;
             } else {
-                writer.write(3, HEADER_LZ_2)?;
-                writer.write(5, lz_large)?;
-                writer.write(5, lz_norm)?;
+                writer.write::<3, u32>(HEADER_LZ_2)?;
+                writer.write::<5, u32>(lz_large)?;
+                writer.write::<5, u32>(lz_norm)?;
             }
         } else {
             if !use_large_lz_bits {
-                writer.write(3, HEADER_LZ_TZ)?;
-                writer.write(5, lz_large)?;
-                writer.write(5, min_tz)?;
+                writer.write::<3, u32>(HEADER_LZ_TZ)?;
+                writer.write::<5, u32>(lz_large)?;
+                writer.write::<5, u32>(min_tz)?;
             } else {
-                writer.write(3, HEADER_LZ_TZ_2)?;
-                writer.write(5, lz_large)?;
-                writer.write(5, lz_norm)?;
-                writer.write(5, min_tz)?;
+                writer.write::<3, u32>(HEADER_LZ_TZ_2)?;
+                writer.write::<5, u32>(lz_large)?;
+                writer.write::<5, u32>(lz_norm)?;
+                writer.write::<5, u32>(min_tz)?;
             }
         }
         let large_len = (32 - lz_large - min_tz).max(1);
@@ -130,15 +130,15 @@ impl ValuesCompressor {
                     large_bits |= 1;
                 }
             }
-            writer.write(COMPR_BUF_SIZE as u32, large_bits)?;
+            writer.write_var(COMPR_BUF_SIZE as u32, large_bits)?;
             let norm_len = (32 - lz_norm - min_tz).max(1);
             for (v, lz) in izip!(&self.data, &lz_values) {
                 let len_to_write = if *lz >= lz_norm { norm_len } else { large_len };
-                writer.write(len_to_write, *v >> min_tz)?;
+                writer.write_var(len_to_write, *v >> min_tz)?;
             }
         } else {
             for v in &self.data {
-                writer.write(large_len, *v >> min_tz)?;
+                writer.write_var(large_len, *v >> min_tz)?;
             }
         }
         Ok(())
@@ -186,27 +186,27 @@ impl ValuesDecompressor {
 
     fn decompress_values<T: BitRead>(&mut self, reader: &mut T) -> std::io::Result<()> {
         self.values_ptr = 0;
-        let header = reader.read::<u32>(3)?;
+        let header = reader.read::<3, u32>()?;
         if header == HEADER_ZEROS {
             self.values.fill(self.prev_value);
             return Ok(());
         }
         if header == HEADER_NO_COMPR {
             for v in &mut self.values {
-                self.prev_value ^= reader.read::<u32>(32)?;
+                self.prev_value ^= reader.read::<32, u32>()?;
                 *v = self.prev_value;
             }
             return Ok(());
         }
         let (lz_large, lz_norm, tz, use_large_lz_bits) = match header {
             HEADER_LZ =>
-                (reader.read::<u32>(5)?, 0, 0, false),
+                (reader.read::<5, u32>()?, 0, 0, false),
             HEADER_LZ_2 =>
-                (reader.read::<u32>(5)?, reader.read::<u32>(5)?, 0, true),
+                (reader.read::<5, u32>()?, reader.read::<5, u32>()?, 0, true),
             HEADER_LZ_TZ =>
-                (reader.read::<u32>(5)?, 0, reader.read::<u32>(5)?, false),
+                (reader.read::<5, u32>()?, 0, reader.read::<5, u32>()?, false),
             HEADER_LZ_TZ_2 => (
-                reader.read::<u32>(5)?, reader.read::<u32>(5)?, reader.read::<u32>(5)?, true),
+                reader.read::<5, u32>()?, reader.read::<5, u32>()?, reader.read::<5, u32>()?, true),
             _ =>
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -216,19 +216,19 @@ impl ValuesDecompressor {
         let large_len = (32 - lz_large - tz).max(1);
         if use_large_lz_bits {
             let norm_len = (32 - lz_norm - tz).max(1);
-            let mut large_bits = reader.read::<u64>(COMPR_BUF_SIZE as u32)?;
+            let mut large_bits = reader.read_var::<u64>(COMPR_BUF_SIZE as u32)?;
             for v in &mut self.values {
                 if (large_bits & (1 << (COMPR_BUF_SIZE-1))) == 0 {
-                    self.prev_value ^= reader.read::<u32>(norm_len)? << tz;
+                    self.prev_value ^= reader.read_var::<u32>(norm_len)? << tz;
                 } else {
-                    self.prev_value ^= reader.read::<u32>(large_len)? << tz;
+                    self.prev_value ^= reader.read_var::<u32>(large_len)? << tz;
                 }
                 *v = self.prev_value;
                 large_bits <<= 1;
             }
         } else {
             for v in &mut self.values {
-                self.prev_value ^= reader.read::<u32>(large_len)? << tz;
+                self.prev_value ^= reader.read_var::<u32>(large_len)? << tz;
                 *v = self.prev_value;
             }
         }
@@ -253,7 +253,7 @@ fn test_i32_compression() {
     compressor.write_i32(i32::MAX, &mut bit_writer).unwrap();
 
     compressor.flush(&mut bit_writer).unwrap();
-    bit_writer.write(8, 0).unwrap();
+    BitWrite::pad(&mut bit_writer, 8).unwrap();
     drop(compressor);
     drop(bit_writer);
 
@@ -282,7 +282,7 @@ fn test_compression_decompression() {
             compressor.write_f32(*value, &mut bit_writer).unwrap();
         }
         compressor.flush(&mut bit_writer).unwrap();
-        bit_writer.write(8, 0).unwrap();
+        BitWrite::pad(&mut bit_writer, 8).unwrap();
         drop(compressor);
         drop(bit_writer);
 
