@@ -777,6 +777,65 @@ trait GradientCalcSource {
     fn get_rect_values(&self, x1: usize, y1: usize, x2: usize, y2: usize, result: &mut Vec<u16>);
 }
 
+fn calc_gradient(source: &dyn GradientCalcSource) -> Option<Plane> {
+    let width = source.image_width();
+    let height = source.image_height();
+    let min_size = usize::min(width, height);
+    let cell_size = min_size / 30;
+    if cell_size <= 16 {
+        return None;
+    }
+
+    let border = cell_size / 3;
+    let cells_cnt = (min_size - 2 * border) / cell_size;
+    let corner_cells_cnt = usize::max(cells_cnt / 4, 1);
+    let mut cell_data = Vec::new();
+    let mut points = Vec::new();
+    let mut add_cell = |x, y| {
+        source.get_rect_values(
+            x - cell_size/2,
+            y - cell_size/2,
+            x + cell_size/2,
+            y + cell_size/2,
+            &mut cell_data
+        );
+        let bound1 = cell_data.len()/3;
+        let bound2 = 2*cell_data.len()/3;
+
+        cell_data.select_nth_unstable(bound2);
+        cell_data[..bound2].select_nth_unstable(bound1);
+        let middle = &cell_data[bound1..bound2];
+        let avg = middle.iter().map(|v| *v as f64).sum::<f64>() / middle.len() as f64;
+
+        points.push(Point3D {
+            x: x as f64,
+            y: y as f64,
+            z: avg,
+        });
+    };
+    let mut add_corner_cell = |x, y| {
+        add_cell(x,       y       );
+        add_cell(width-x, y       );
+        add_cell(x,       height-y);
+        add_cell(width-x, height-y);
+    };
+    for i in 0..corner_cells_cnt {
+        let x = border + cell_size/2 + i * cell_size;
+        let y = border + cell_size/2;
+        add_corner_cell(x, y);
+    }
+    for i in 1..corner_cells_cnt-1 {
+        let x = border + cell_size/2;
+        let y = border + cell_size/2 + i * cell_size;
+        add_corner_cell(x, y);
+    }
+    let z_aver = points.iter().map(|p| p.z).sum::<f64>() / points.len() as f64;
+    for p in &mut points {
+        p.z -= z_aver;
+    }
+    calc_fitting_plane_z_dist(&points)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1066,63 +1125,4 @@ mod tests {
         it.next(); it.next();
         assert_eq!(it.size_hint(), (10, Some(10)));
     }
-}
-
-fn calc_gradient(source: &dyn GradientCalcSource) -> Option<Plane> {
-    let width = source.image_width();
-    let height = source.image_height();
-    let min_size = usize::min(width, height);
-    let cell_size = min_size / 30;
-    if cell_size <= 16 {
-        return None;
-    }
-
-    let border = cell_size / 3;
-    let cells_cnt = (min_size - 2 * border) / cell_size;
-    let corner_cells_cnt = usize::max(cells_cnt / 4, 1);
-    let mut cell_data = Vec::new();
-    let mut points = Vec::new();
-    let mut add_cell = |x, y| {
-        source.get_rect_values(
-            x - cell_size/2,
-            y - cell_size/2,
-            x + cell_size/2,
-            y + cell_size/2,
-            &mut cell_data
-        );
-        let bound1 = cell_data.len()/3;
-        let bound2 = 2*cell_data.len()/3;
-
-        cell_data.select_nth_unstable(bound2);
-        cell_data[..bound2].select_nth_unstable(bound1);
-        let middle = &cell_data[bound1..bound2];
-        let avg = middle.iter().map(|v| *v as f64).sum::<f64>() / middle.len() as f64;
-
-        points.push(Point3D {
-            x: x as f64,
-            y: y as f64,
-            z: avg,
-        });
-    };
-    let mut add_corner_cell = |x, y| {
-        add_cell(x,       y       );
-        add_cell(width-x, y       );
-        add_cell(x,       height-y);
-        add_cell(width-x, height-y);
-    };
-    for i in 0..corner_cells_cnt {
-        let x = border + cell_size/2 + i * cell_size;
-        let y = border + cell_size/2;
-        add_corner_cell(x, y);
-    }
-    for i in 1..corner_cells_cnt-1 {
-        let x = border + cell_size/2;
-        let y = border + cell_size/2 + i * cell_size;
-        add_corner_cell(x, y);
-    }
-    let z_aver = points.iter().map(|p| p.z).sum::<f64>() / points.len() as f64;
-    for p in &mut points {
-        p.z -= z_aver;
-    }
-    calc_fitting_plane_z_dist(&points)
 }

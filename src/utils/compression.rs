@@ -254,8 +254,6 @@ fn test_i32_compression() {
 
     compressor.flush(&mut bit_writer).unwrap();
     BitWrite::pad(&mut bit_writer, 8).unwrap();
-    drop(compressor);
-    drop(bit_writer);
 
     let mem_reader = std::io::Cursor::new(&mem_data);
     let mut bit_reader = BitReader::endian(mem_reader, BigEndian);
@@ -283,8 +281,6 @@ fn test_compression_decompression() {
         }
         compressor.flush(&mut bit_writer).unwrap();
         BitWrite::pad(&mut bit_writer, 8).unwrap();
-        drop(compressor);
-        drop(bit_writer);
 
         let mem_reader = std::io::Cursor::new(&mem_data);
         let mut bit_reader = BitReader::endian(mem_reader, BigEndian);
