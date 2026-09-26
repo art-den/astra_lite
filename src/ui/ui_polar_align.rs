@@ -2,7 +2,7 @@ use std::{rc::Rc, sync::Arc};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{engine::{Engine, ModeKind}, events::*, mode_polar_align::{CustomCommand, PolarAlignMode, PolarAlignmentEvent, State}},
+    core::{commands::{ModeCommand, ModeCommandReply}, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignState, PolarAlignmentEvent}},
     hal::{DeviceType, events::HalEvent, indi::degree_to_str_short},
     options::*,
     sky_math::math::*,
@@ -207,9 +207,11 @@ impl PolarAlignUi {
         self.widgets.chb_auto_refresh.set_sensitive(!polar_align);
 
         let mut allow_refresh = false;
-        if let Ok(Some(result)) = self.engine.exec_mode_custom_command(&CustomCommand::GetState)
-        && let Some(state) = result.downcast_ref::<State>() {
-            allow_refresh = matches!(&state, State::WaitForManualRefresh);
+        if polar_align
+            && let Ok(ModeCommandReply::PolarAlignState(state)) =
+                self.engine.exec_mode_command(ModeCommand::PolarAlign(PolarAlignCommand::GetState))
+        {
+            allow_refresh = matches!(state, PolarAlignState::WaitForManualRefresh);
         }
 
         enable_actions(&self.window, &[
@@ -316,7 +318,7 @@ impl PolarAlignUi {
     fn handler_action_restart_polar_align(&self) {
         self.main_ui.get_all_options();
         exec_and_show_error(Some(&self.window), || {
-            self.engine.exec_mode_custom_command(&CustomCommand::Restart)?;
+            self.engine.exec_mode_command(ModeCommand::PolarAlign(PolarAlignCommand::Restart))?;
             Ok(())
         });
     }
@@ -327,7 +329,7 @@ impl PolarAlignUi {
 
     fn handler_action_manual_refresh(&self) {
         gtk_utils::exec_and_show_error(Some(&self.window), || {
-            self.engine.exec_mode_custom_command(&CustomCommand::ManualRefresh)?;
+            self.engine.exec_mode_command(ModeCommand::PolarAlign(PolarAlignCommand::ManualRefresh))?;
             Ok(())
         });
     }

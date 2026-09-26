@@ -15,6 +15,7 @@ use super::{
     mode_focusing::*,
     mode_goto::*,
     mode_mnt_calib::*,
+    commands::*,
     mode_polar_align::PolarAlignMode,
     mode_camera::*,
     mode_waiting::*
@@ -64,7 +65,9 @@ pub trait Mode {
     fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessNotification) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_periodic_timer_tick(&mut self, _timer_period_ms: usize) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn custom_command(&mut self, _args: &dyn Any) -> eyre::Result<Option<Box<dyn Any>>> { Ok(None) }
+    fn command(&mut self, _cmd: &ModeCommand) -> eyre::Result<ModeCommandReply> {
+        eyre::bail!("Mode {:?} does not support mode commands", self.kind())
+    }
     fn notify_processing_queue_overflow(&mut self) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn stop_live_view_before_this_mode(&self) -> bool { true }
 }
@@ -489,12 +492,14 @@ impl Engine {
         }
     }
 
-    pub fn exec_mode_custom_command(
+    pub fn exec_mode_command(
         self: &Arc<Self>,
-        args: &dyn std::any::Any
-    ) -> eyre::Result<Option<Box<dyn Any>>> {
+        cmd:  ModeCommand,
+    ) -> eyre::Result<ModeCommandReply> {
+        log::debug!("Mode command: {:?}", cmd);
         let mut mode = self.modes.write().unwrap();
-        mode.active.custom_command(args)
+        // Each mode decides by itself whether it supports the command.
+        mode.active.command(&cmd)
     }
 
     fn start_new_mode(

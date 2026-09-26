@@ -1,12 +1,13 @@
-use std::{any::Any, f64::consts::PI, sync::{Arc, RwLock}};
+use std::{f64::consts::PI, sync::{Arc, RwLock}};
 
 use chrono::{NaiveDateTime, Utc};
+use serde::Serialize;
 
 use crate::{
     core::{cam_ctrl::take_shot, engine::*, frame_processing::*, preview::Preview}, hal::{Camera, FrameType, Hal, Telescope, indi::degree_to_str}, image::stars::StarItems, options::*, plate_solve::*, sky_math::{math::*, solar_system::calc_atmospheric_refraction},
 };
 
-use super::{consts::*, events::*, utils::{check_telescope_is_at_desired_position, gain_to_value}};
+use super::{commands::*, consts::*, events::*, utils::{check_telescope_is_at_desired_position, gain_to_value}};
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -185,14 +186,15 @@ impl PolarAlignment {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-pub enum CustomCommand {
+#[derive(Serialize, Debug, Clone)]
+pub enum PolarAlignCommand {
     Restart,
     ManualRefresh,
     GetState,
 }
 
-#[derive(Clone)]
-pub enum State {
+#[derive(Serialize, Debug, Clone)]
+pub enum PolarAlignState {
     Undefined,
     Goto {
         time_ms:         usize,
@@ -227,7 +229,7 @@ pub enum PolarAlignmentEvent {
 pub struct PolarAlignMode {
     camera:       Arc<dyn Camera + Send + Sync>,
     telescope:    Arc<dyn Telescope + Send + Sync>,
-    state:        State,
+    state:        PolarAlignState,
     step:         Step,
     cam_opts:     CamOptions,
     pa_opts:      PolarAlignOptions,
@@ -371,7 +373,7 @@ impl PolarAlignMode {
         let plate_solver = PlateSolver::new(opts.plate_solver.solver);
 
         Ok(Self{
-            state:       State::Undefined,
+            state:       PolarAlignState::Undefined,
             step:        Step::Undefined,
             pa_opts:     opts.polar_align.clone(),
             s_opts:      opts.site.clone(),
@@ -447,7 +449,7 @@ impl PolarAlignMode {
     fn process_platesolver_fail(&mut self, err_str: &str) -> eyre::Result<()> {
         if self.step == Step::Corr {
             self.start_capture()?;
-            self.state = State::Capture;
+            self.state = PolarAlignState::Capture;
             Ok(())
         } else {
             eyre::bail!("{}", err_str);
@@ -455,7 +457,7 @@ impl PolarAlignMode {
 }
 
     fn try_process_plate_solving_result(&mut self) -> eyre::Result<NotifyResult> {
-        assert!(matches!(self.state, State::PlateSolve));
+        assert!(matches!(self.state, PolarAlignState::PlateSolve));
 
         let ps_result = match self.plate_solver.get_result()? {
             PlateSolveResult::Waiting => return Ok(NotifyResult::Empty),
@@ -527,9 +529,9 @@ impl PolarAlignMode {
                 self.step = Step::Corr;
                 if self.pa_opts.auto_refresh {
                     self.start_capture()?;
-                    self.state = State::Capture;
+                    self.state = PolarAlignState::Capture;
                 } else {
-                    self.state = State::WaitForManualRefresh;
+                    self.state = PolarAlignState::WaitForManualRefresh;
                 }
                 Ok(NotifyResult::ProgressChanges)
             }
@@ -538,9 +540,9 @@ impl PolarAlignMode {
                 self.notify_error()?;
                 if self.pa_opts.auto_refresh {
                     self.start_capture()?;
-                    self.state = State::Capture;
+                    self.state = PolarAlignState::Capture;
                 } else {
-                    self.state = State::WaitForManualRefresh;
+                    self.state = PolarAlignState::WaitForManualRefresh;
                 }
                 Ok(NotifyResult::ProgressChanges)
             }
@@ -569,7 +571,7 @@ impl PolarAlignMode {
             self.telescope.set_slew_speed(slew_speed)?;
         }
         self.telescope.goto_and_track(radian_to_hour(ra), radian_to_degree(dec))?;
-        self.state = State::Goto {
+        self.state = PolarAlignState::Goto {
             time_ms:         0,
             goto_ok_time_ms: 0,
             target: EqCoord  { dec, ra },
@@ -599,11 +601,11 @@ impl PolarAlignMode {
     }
 
     fn manual_refresh(&mut self) -> eyre::Result<()> {
-        if !matches!(self.state, State::WaitForManualRefresh) {
+        if !matches!(self.state, PolarAlignState::WaitForManualRefresh) {
             return Ok(());
         }
         self.start_capture()?;
-        self.state = State::Capture;
+        self.state = PolarAlignState::Capture;
         Ok(())
     }
 }
@@ -615,18 +617,18 @@ impl Mode for PolarAlignMode {
 
     fn progress(&self) -> Option<Progress> {
         let step = match (&self.step, &self.state) {
-            (Step::GotoInitialPos, _                ) => 0,
-            (Step::First,          State::Capture   ) => 0,
-            (Step::First,          State::PlateSolve) => 1,
-            (Step::First,          State::Goto{..}  ) => 2,
-            (Step::Second,         State::Capture   ) => 3,
-            (Step::Second,         State::PlateSolve) => 4,
-            (Step::Second,         State::Goto{..}  ) => 5,
-            (Step::Third,          State::Capture   ) => 6,
-            (Step::Third,          State::PlateSolve) => 7,
-            (Step::Corr,           _                ) => 8,
-            (_, State::WaitForManualRefresh         ) => 8,
-            _                                         => 0,
+            (Step::GotoInitialPos, _                  ) => 0,
+            (Step::First, PolarAlignState::Capture    ) => 0,
+            (Step::First, PolarAlignState::PlateSolve ) => 1,
+            (Step::First, PolarAlignState::Goto{..}   ) => 2,
+            (Step::Second, PolarAlignState::Capture   ) => 3,
+            (Step::Second, PolarAlignState::PlateSolve) => 4,
+            (Step::Second, PolarAlignState::Goto{..}  ) => 5,
+            (Step::Third, PolarAlignState::Capture    ) => 6,
+            (Step::Third, PolarAlignState::PlateSolve ) => 7,
+            (Step::Corr, _                            ) => 8,
+            (_, PolarAlignState::WaitForManualRefresh ) => 8,
+            _                                          => 0,
         };
 
         Some(Progress{ cur: step, total: 8 })
@@ -634,18 +636,18 @@ impl Mode for PolarAlignMode {
 
     fn progress_string(&self) -> String {
         match (&self.step, &self.state) {
-            (Step::GotoInitialPos, _        ) => "Goto initial position",
-            (Step::First,  State::Capture   ) => "1st capture",
-            (Step::First,  State::PlateSolve) => "1st plate solve",
-            (Step::First,  State::Goto{..}  ) => "1st goto",
-            (Step::Second, State::Capture   ) => "2nd capture",
-            (Step::Second, State::PlateSolve) => "2nd plate solve",
-            (Step::Second, State::Goto{..}  ) => "2nd goto",
-            (Step::Third,  State::Capture   ) => "3rd capture",
-            (Step::Third,  State::PlateSolve) => "3rd plate solve",
-            (Step::Corr,   State::Capture   ) => "Capture",
-            (Step::Corr,   State::PlateSolve) => "PlateSolve",
-            (_, State::WaitForManualRefresh ) => "Wait for manual refresh",
+            (Step::GotoInitialPos, _                  ) => "Goto initial position",
+            (Step::First, PolarAlignState::Capture    ) => "1st capture",
+            (Step::First, PolarAlignState::PlateSolve ) => "1st plate solve",
+            (Step::First, PolarAlignState::Goto{..}   ) => "1st goto",
+            (Step::Second, PolarAlignState::Capture   ) => "2nd capture",
+            (Step::Second, PolarAlignState::PlateSolve) => "2nd plate solve",
+            (Step::Second, PolarAlignState::Goto{..}  ) => "2nd goto",
+            (Step::Third, PolarAlignState::Capture    ) => "3rd capture",
+            (Step::Third, PolarAlignState::PlateSolve ) => "3rd plate solve",
+            (Step::Corr, PolarAlignState::Capture     ) => "Capture",
+            (Step::Corr, PolarAlignState::PlateSolve  ) => "PlateSolve",
+            (_, PolarAlignState::WaitForManualRefresh ) => "Wait for manual refresh",
 
             _ => "",
         }.to_string()
@@ -672,31 +674,29 @@ impl Mode for PolarAlignMode {
         self.subscribers.send(Event::PolarAlignment(PolarAlignmentEvent::Empty));
 
         self.start_capture()?;
-        self.state = State::Capture;
+        self.state = PolarAlignState::Capture;
         self.step = Step::First;
         Ok(())
     }
 
-    fn custom_command(&mut self, args: &dyn Any) -> eyre::Result<Option<Box<dyn Any>>> {
-        let Some(command) = args.downcast_ref::<CustomCommand>() else {
-            return Ok(None);
-        };
-
-        match command {
-            CustomCommand::Restart => {
-                self.restart()?;
-                self.subscribers.send(Event::Progress(self.progress(), self.kind()));
-                Ok(None)
-            }
-
-            CustomCommand::ManualRefresh => {
-                self.manual_refresh()?;
-                self.subscribers.send(Event::Progress(self.progress(), self.kind()));
-                Ok(None)
-            }
-
-            CustomCommand::GetState => {
-                Ok(Some(Box::new(self.state.clone())))
+    fn command(&mut self, cmd: &ModeCommand) -> eyre::Result<ModeCommandReply> {
+        match cmd {
+            ModeCommand::PolarAlign(cmd) => {
+                match cmd {
+                    PolarAlignCommand::Restart => {
+                        self.restart()?;
+                        self.subscribers.send(Event::Progress(self.progress(), self.kind()));
+                        Ok(ModeCommandReply::Empty)
+                    }
+                    PolarAlignCommand::ManualRefresh => {
+                        self.manual_refresh()?;
+                        self.subscribers.send(Event::Progress(self.progress(), self.kind()));
+                        Ok(ModeCommandReply::Empty)
+                    }
+                    PolarAlignCommand::GetState => {
+                        Ok(ModeCommandReply::PolarAlignState(self.state.clone()))
+                    }
+                }
             }
         }
     }
@@ -705,7 +705,7 @@ impl Mode for PolarAlignMode {
         _ = self.camera.abort_exposure();
         _ = self.telescope.abort_motion();
         self.plate_solver.abort();
-        self.state = State::Undefined;
+        self.state = PolarAlignState::Undefined;
         Ok(())
     }
 
@@ -719,16 +719,16 @@ impl Mode for PolarAlignMode {
     ) -> eyre::Result<NotifyResult> {
         let stars_supported = self.plate_solver.support_stars_as_input();
         match (&self.state, &fp_result.event, stars_supported) {
-            (State::Capture, FrameProcessEvent::ImageReady, false) => {
+            (PolarAlignState::Capture, FrameProcessEvent::ImageReady, false) => {
                 let ok = self.plate_solve_image()?;
                 if !ok { return Ok(NotifyResult::Empty); }
-                self.state = State::PlateSolve;
+                self.state = PolarAlignState::PlateSolve;
                 return Ok(NotifyResult::ProgressChanges);
             }
-            (State::Capture, FrameProcessEvent::LightFrameReady(info), true) => {
+            (PolarAlignState::Capture, FrameProcessEvent::LightFrameReady(info), true) => {
                 let ok = self.plate_solve_stars(&info.stars.items, info.image.width, info.image.height)?;
                 if !ok { return Ok(NotifyResult::Empty); }
-                self.state = State::PlateSolve;
+                self.state = PolarAlignState::PlateSolve;
                 return Ok(NotifyResult::ProgressChanges);
             }
             _ => {},
@@ -738,11 +738,11 @@ impl Mode for PolarAlignMode {
 
     fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         match &mut self.state {
-            State::PlateSolve => {
+            PolarAlignState::PlateSolve => {
                 return self.try_process_plate_solving_result();
             }
 
-            State::Goto {goto_ok_time_ms, time_ms, target: goto_pos} => {
+            PolarAlignState::Goto {goto_ok_time_ms, time_ms, target: goto_pos} => {
                 if !self.telescope.is_slewing()? {
                     *goto_ok_time_ms += timer_period_ms;
                     if *goto_ok_time_ms >= AFTER_GOTO_WAIT_TIME * 1000 {
@@ -757,17 +757,17 @@ impl Mode for PolarAlignMode {
                         match self.step {
                             Step::GotoInitialPos => {
                                 self.start_capture()?;
-                                self.state = State::Capture;
+                                self.state = PolarAlignState::Capture;
                                 self.step = Step::First;
                             }
                             Step::First => {
                                 self.start_capture()?;
-                                self.state = State::Capture;
+                                self.state = PolarAlignState::Capture;
                                 self.step = Step::Second;
                             }
                             Step::Second => {
                                 self.start_capture()?;
-                                self.state = State::Capture;
+                                self.state = PolarAlignState::Capture;
                                 self.step = Step::Third;
                             }
                             _ =>
