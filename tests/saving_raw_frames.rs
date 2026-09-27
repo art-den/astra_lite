@@ -2,6 +2,8 @@ use std::{path::Path, sync::{Arc, Mutex}, time::Duration};
 
 use astra_lite::{core::{engine::*, events::*, frame_processing::{FrameProcessNotification, FrameProcessEvent}}, hal::{DeviceType, FrameType, HalImpl}, image::io::load_raw_image_from_fits_file};
 
+mod common;
+
 /// Exposure time per frame in seconds.
 const EXPOSURE_SECS: f64 = 1.0;
 
@@ -100,7 +102,9 @@ fn validate_fits_frame(
 #[test]
 #[serial_test::serial]
 fn saving_raw_frames() {
+    let _lock = common::HardwareLock::acquire().expect("acquiring the hardware test lock");
     let engine = Engine::new();
+    let _teardown = common::EngineTeardown::new(&engine);
     connect_hal(&engine);
 
     // Prepare a unique temporary output directory for raw frames
@@ -257,7 +261,9 @@ fn saving_raw_frames() {
 #[test]
 #[serial_test::serial]
 fn saving_raw_frames_with_master() {
+    let _lock = common::HardwareLock::acquire().expect("acquiring the hardware test lock");
     let engine = Engine::new();
+    let _teardown = common::EngineTeardown::new(&engine);
     connect_hal(&engine);
 
     // Prepare a unique temporary output directory for raw frames
@@ -441,7 +447,9 @@ fn saving_raw_frames_with_master() {
 fn saving_raw_frames_with_abort_and_resume() {
     const ABORT_AFTER_FRAMES: usize = 3;
 
+    let _lock = common::HardwareLock::acquire().expect("acquiring the hardware test lock");
     let engine = Engine::new();
+    let _teardown = common::EngineTeardown::new(&engine);
     connect_hal(&engine);
 
     // Prepare a unique temporary output directory for raw frames

@@ -2,6 +2,8 @@ use std::{sync::{Arc, Mutex}, time::Duration};
 
 use astra_lite::{core::{engine::*, events::*, frame_processing::{FrameProcessNotification, FrameProcessEvent}}, hal::{DeviceType, HalImpl}};
 
+mod common;
+
 /// Exposure time per frame in seconds.
 const EXPOSURE_SECS: f64 = 1.0;
 
@@ -17,8 +19,11 @@ const WATCHDOG_TIMEOUT_SECS: i64 = 5;
 #[test]
 #[serial_test::serial]
 fn live_view() {
+    let _lock = common::HardwareLock::acquire().expect("acquiring the hardware test lock");
+
     // Create system engine
     let engine = Engine::new();
+    let _teardown = common::EngineTeardown::new(&engine);
 
     #[cfg(target_os = "linux")]
     {

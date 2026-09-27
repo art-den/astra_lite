@@ -2,6 +2,8 @@ use std::{sync::{Arc, Mutex}, time::Duration};
 
 use astra_lite::{core::{engine::*, events::*, frame_processing::{FrameProcessNotification, FrameProcessEvent}}, hal::{DeviceType, HalImpl}};
 
+mod common;
+
 /// Exposure time per frame in seconds.
 const EXPOSURE_SECS: f64 = 1.0;
 
@@ -10,8 +12,11 @@ const EXPOSURE_SECS: f64 = 1.0;
 #[test]
 #[serial_test::serial]
 fn single_shot() {
+    let _lock = common::HardwareLock::acquire().expect("acquiring the hardware test lock");
+
     // Create system engine
     let engine = Engine::new();
+    let _teardown = common::EngineTeardown::new(&engine);
 
     #[cfg(target_os = "linux")]
     {

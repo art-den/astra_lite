@@ -12,6 +12,8 @@ use astra_lite::{
     sky_math::math::{degree_to_radian, hour_to_radian, radian_to_degree, EqCoord},
 };
 
+mod common;
+
 /// Target sky coordinates. The telescope emulator accepts any valid coordinates,
 /// so they can be hardcoded. RA is in hours, Dec is in degrees.
 ///
@@ -343,7 +345,9 @@ fn run_goto_image_flow(engine: &Arc<Engine>, match_plate_solver_binning: bool) {
 #[test]
 #[serial_test::serial]
 fn goto_image_offset() {
+    let _lock = common::HardwareLock::acquire().expect("acquiring the hardware test lock");
     let engine = setup_engine();
+    let _teardown = common::EngineTeardown::new(&engine);
     run_goto_image_flow(&engine, false);
 }
 
@@ -354,6 +358,8 @@ fn goto_image_offset() {
 #[test]
 #[serial_test::serial]
 fn goto_image_offset_matched_binning() {
+    let _lock = common::HardwareLock::acquire().expect("acquiring the hardware test lock");
     let engine = setup_engine();
+    let _teardown = common::EngineTeardown::new(&engine);
     run_goto_image_flow(&engine, true);
 }

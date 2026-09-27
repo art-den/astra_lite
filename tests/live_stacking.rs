@@ -2,6 +2,8 @@ use std::{path::Path, sync::{Arc, Mutex}, time::Duration};
 
 use astra_lite::{core::{engine::*, events::*, frame_processing::{FrameProcessNotification, FrameProcessEvent}}, hal::{DeviceType, FrameType, HalImpl}, image::io::load_raw_image_from_fits_file};
 
+mod common;
+
 /// Exposure time per frame in seconds.
 const EXPOSURE_SECS: f64 = 1.0;
 
@@ -60,8 +62,11 @@ fn validate_fits_frame(
 #[test]
 #[serial_test::serial]
 fn live_stacking() {
+    let _lock = common::HardwareLock::acquire().expect("acquiring the hardware test lock");
+
     // Create system engine
     let engine = Engine::new();
+    let _teardown = common::EngineTeardown::new(&engine);
 
     #[cfg(target_os = "linux")]
     {
