@@ -59,7 +59,7 @@ pub trait Mode {
     fn restart_cam_exposure(&mut self) -> eyre::Result<bool> { Ok(false) }
     fn take_next_mode(&mut self) -> Option<ModeBox> { None }
     fn set_or_correct_value(&mut self, _value: &mut dyn Any) {}
-    fn complete_img_process_params(&self, _cmd: &mut ProcessImageParams) {}
+    fn complete_img_process_params(&self, _cmd: &mut ProcessImageParams) -> eyre::Result<()> { return Ok(()); }
     fn notify_camera_download_started(&mut self, _camera_id: &str) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_before_frame_processing_start(&mut self, _camera_shot: &Arc<dyn CameraShot + Send + Sync>, _should_be_processed: &mut bool) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessNotification) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
@@ -356,7 +356,7 @@ impl Engine {
                 camera_id:       camera_id.to_string(),
                 img_source:      Arc::clone(camera_shot),
                 flags:           FrameProcessCommandFlags::empty(),
-                preview:           Arc::clone(&self.preview),
+                preview:         Arc::clone(&self.preview),
                 stop_flag:       new_stop_flag,
                 ref_stars:       None,
                 calibr_data:     Arc::clone(&self.raw_calibration),
@@ -365,11 +365,12 @@ impl Engine {
                 quality_options: Some(options.quality.clone()),
                 cam_ctrl_opts:   None,
                 live_stacking:   None,
+                save_raw_params: None,
                 calibr_params,
             }
         };
 
-        mode.active.complete_img_process_params(&mut command_data);
+        mode.active.complete_img_process_params(&mut command_data)?;
 
         self.frame_processing.add_to_queue(
             FrameProcessCommand::ProcessImage(command_data)
@@ -581,6 +582,7 @@ impl Engine {
             quality_options: None,
             cam_ctrl_opts:   None,
             live_stacking:   None,
+            save_raw_params: None,
             calibr_params,
         };
         self.frame_processing.add_to_queue(

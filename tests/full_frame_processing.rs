@@ -149,7 +149,7 @@ struct State {
     exposure: Option<f64>,
     /// Processing time from ShotProcessingFinished.
     processing_time: Option<f64>,
-    /// RawImageInfo from ShotProcessingFinished.
+    /// RawImageInfo from RawFrameReady.
     raw_info_width: Option<usize>,
     raw_info_height: Option<usize>,
     raw_info_gain: Option<i32>,
@@ -209,6 +209,17 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
                         state.raw_median = Some(info.median);
                         state.raw_mean = Some(info.mean);
                         state.raw_std_dev = Some(info.std_dev);
+                        state.raw_info_width = Some(info.info.width);
+                        state.raw_info_height = Some(info.info.height);
+                        state.raw_info_gain = Some(info.info.gain);
+                        state.raw_info_offset = Some(info.info.offset);
+                        state.raw_info_max_value = Some(info.info.max_value);
+                        state.raw_info_cfa = Some(info.info.cfa);
+                        state.raw_info_bin = Some(info.info.bin);
+                        state.raw_info_frame_type = Some(info.info.frame_type);
+                        state.raw_info_exposure = Some(info.info.exposure);
+                        state.raw_info_camera = Some(info.info.camera.clone());
+                        state.raw_info_ccd_temp = info.info.ccd_temp;
                         println!(
                             "  Event: RawFrameInfo (mean={}, median={}, std_dev={})",
                             info.mean, info.median, info.std_dev
@@ -260,37 +271,17 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
 
                     FrameProcessEvent::ShotProcessingFinished {
                         frame_is_ok,
+                        download_time,
                         processing_time,
-                        raw_image_info,
-                        ..
                     } => {
                         state.events_received.push("ShotProcessingFinished".to_string());
                         state.shot_finished = true;
                         state.frame_is_ok = Some(*frame_is_ok);
                         state.processing_time = Some(*processing_time);
-                        state.raw_info_width = Some(raw_image_info.width);
-                        state.raw_info_height = Some(raw_image_info.height);
-                        state.raw_info_gain = Some(raw_image_info.gain);
-                        state.raw_info_offset = Some(raw_image_info.offset);
-                        state.raw_info_max_value = Some(raw_image_info.max_value);
-                        state.raw_info_cfa = Some(raw_image_info.cfa);
-                        state.raw_info_bin = Some(raw_image_info.bin);
-                        state.raw_info_frame_type = Some(raw_image_info.frame_type);
-                        state.raw_info_exposure = Some(raw_image_info.exposure);
-                        state.raw_info_camera = Some(raw_image_info.camera.clone());
-                        state.raw_info_ccd_temp = raw_image_info.ccd_temp;
                         println!(
-                            "  Event: ShotProcessingFinished (ok={}, time={:.3}s, \
-                             size={}x{}, gain={}, offset={}, max={}, cfa={:?}, bin={}, \
-                             frame={}, exposure={}, camera={:?}, ccd_temp={:?})",
-                            frame_is_ok, processing_time,
-                            raw_image_info.width, raw_image_info.height,
-                            raw_image_info.gain, raw_image_info.offset,
-                            raw_image_info.max_value, raw_image_info.cfa,
-                            raw_image_info.bin, raw_image_info.frame_type.to_str(),
-                            raw_image_info.exposure,
-                            raw_image_info.camera,
-                            raw_image_info.ccd_temp
+                            "  Event: ShotProcessingFinished (ok={}, download={:.3}s, \
+                             time={:.3}s)",
+                            frame_is_ok, download_time, processing_time
                         );
                     }
 
@@ -476,7 +467,7 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
     println!("Processing time: {:.3}s", proc_time);
     assert!(proc_time > 0.0, "processing time must be positive");
 
-    // --- RawImageInfo from ShotProcessingFinished ---
+    // --- RawImageInfo (from RawFrameReady) ---
 
     let ri_width = state.raw_info_width.expect("raw_info_width should be set");
     let ri_height = state.raw_info_height.expect("raw_info_height should be set");

@@ -677,10 +677,11 @@ impl Mode for FocusingMode {
         self.next_mode.take()
     }
 
-    fn complete_img_process_params(&self, cmd: &mut ProcessImageParams) {
+    fn complete_img_process_params(&self, cmd: &mut ProcessImageParams) -> eyre::Result<()> {
         if let Some(quality_options) = &mut cmd.quality_options {
             quality_options.use_max_fwhm = false;
         }
+        Ok(())
     }
 
     fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {

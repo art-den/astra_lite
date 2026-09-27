@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::path::{PathBuf, Path};
+use std::{path::{Path, PathBuf}, sync::atomic::{AtomicU32, Ordering}};
 
 pub fn save_json_to_config<T: serde::Serialize>(
     obj:       &T,
@@ -44,25 +44,25 @@ fn get_app_conf_file_name(
 }
 
 pub struct SeqFileNameGen {
-    last_num: u32,
+    last_num: AtomicU32,
 }
 
 impl SeqFileNameGen {
     pub fn new() -> Self {
         Self {
-            last_num: 1,
+            last_num: AtomicU32::new(1),
         }
     }
 
-    pub fn generate(&mut self, parent_path: &Path, file_mask: &str) -> PathBuf {
+    pub fn generate(&self, parent_path: &Path, file_mask: &str) -> PathBuf {
         loop {
-            let num_str = format!("{:04}", self.last_num);
+            let num_str = format!("{:04}", self.last_num.load(Ordering::Relaxed));
             let file_name = file_mask.replace("${num}", &num_str);
             let result = parent_path.join(file_name);
-            self.last_num += 1;
             if !result.is_file() && !result.is_dir() {
                 return result;
             }
+            self.last_num.fetch_add(1, Ordering::Relaxed);
         }
     }
 }

@@ -1,7 +1,7 @@
-use std::{any::Any, path::PathBuf, sync::{Arc, Mutex, RwLock}};
+use std::{any::Any, path::PathBuf, sync::{Arc, RwLock}};
 use chrono::Utc;
 use crate::{
-    core::{cam_ctrl::take_shot, live_stacking::LiveStacking, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode}, guiding::external_guider::*, hal::{Camera, CameraFeatures, CameraShot, Focuser, FrameType, Telescope}, image::{histogram::*, image_stacker::ImageStackingMode, io::save_raw_image_to_fits_file, raw::{RawImage, RawImageInfo}, raw_stacker::*, stars_offset::*}, options::*, utils::{io_utils::*, log_utils::TimeLogger}
+    core::{cam_ctrl::take_shot, live_stacking::LiveStacking, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode}, guiding::external_guider::*, hal::{Camera, CameraFeatures, CameraShot, Focuser, FrameType, Telescope}, image::{histogram::*, image_stacker::ImageStackingMode, io::save_raw_image_to_fits_file, raw::RawImage, raw_stacker::*, stars_offset::*}, options::*, utils::{io_utils::*, log_utils::TimeLogger}
 };
 
 use super::{
@@ -122,7 +122,7 @@ pub struct TakingPicturesMode {
     cam_mode:          CameraMode,
     state:             State,
     mount:             Option<Arc<dyn Telescope + Send + Sync>>,
-    fn_gen:            Arc<Mutex<SeqFileNameGen>>,
+    fn_gen:            Arc<SeqFileNameGen>,
     events:            Arc<EventHandlers>,
     raw_stacker:       RawStacker,
     options:           Arc<RwLock<Options>>,
@@ -238,7 +238,7 @@ impl TakingPicturesMode {
 
         Ok(Self {
             state:             State::Common,
-            fn_gen:            Arc::new(Mutex::new(SeqFileNameGen::new())),
+            fn_gen:            Arc::new(SeqFileNameGen::new()),
             events:            Arc::clone(&engine.events),
             raw_stacker:       RawStacker::new(raw_stacker_mode),
             options:           Arc::clone(&engine.options),
@@ -570,38 +570,6 @@ impl TakingPicturesMode {
         Ok(())
     }
 
-    fn save_raw_image(
-        &mut self,
-        camera_shot:    &(dyn CameraShot + Send + Sync + 'static),
-        raw_image_info: &RawImageInfo,
-    ) -> eyre::Result<()> {
-        let prefix = match raw_image_info.frame_type {
-            FrameType::Lights => "light",
-            FrameType::Flats => "flat",
-            FrameType::Darks => "dark",
-            FrameType::Biases => "bias",
-        };
-        if !self.out_file_names.raw_files_dir.is_dir() {
-            std::fs::create_dir_all(&self.out_file_names.raw_files_dir)
-                .map_err(|e|eyre::eyre!(
-                    "Error '{}'\nwhen trying to create directory '{}' for saving RAW frame",
-                    e, self.out_file_names.raw_files_dir.to_str().unwrap_or_default()
-                ))?;
-        }
-        let mut file_ext = camera_shot.file_ext();
-        while file_ext.starts_with('.') { file_ext = &file_ext[1..]; }
-        let fn_mask = format!("{}_${{num}}.{}", prefix, file_ext);
-        let mut fn_gen = self.fn_gen.lock().unwrap();
-        let file_name = fn_gen.generate(&self.out_file_names.raw_files_dir, &fn_mask);
-        drop(fn_gen);
-
-        let tmr = TimeLogger::start();
-        camera_shot.save_to_file(&file_name)?;
-        tmr.log("Saving raw image");
-
-        Ok(())
-    }
-
     fn process_light_frame_info(
         &mut self,
         info: &LightFrameResult,
@@ -899,9 +867,7 @@ impl TakingPicturesMode {
 
     fn process_frame_processing_finished_event(
         &mut self,
-        frame_is_ok:    bool,
-        camera_shot:    &Arc<dyn CameraShot + Send + Sync>,
-        raw_image_info: &RawImageInfo,
+        frame_is_ok: bool
     ) -> eyre::Result<NotifyResult> {
         if self.cam_mode == CameraMode::SingleShot {
             return Ok(NotifyResult::Finished {
@@ -920,11 +886,6 @@ impl TakingPicturesMode {
         let mut result = NotifyResult::Empty;
 
         if self.state == State::Common {
-            if frame_is_ok && self.flags.save_raw_files {
-                // Save raw image
-                self.save_raw_image(camera_shot.as_ref(), raw_image_info)?;
-            }
-
             let mut is_last_frame = false;
             if let Some(progress) = &mut self.progress {
                 if frame_is_ok && progress.cur != progress.total {
@@ -945,7 +906,7 @@ impl TakingPicturesMode {
 
                 // TODO: do separated event?
                 let result = FrameProcessEvent::MasterSaved {
-                    frame_type: raw_image_info.frame_type,
+                    frame_type: self.cam_options.frame.frame_type,
                     file_name: self.out_file_names.master_fname.clone()
                 };
 
@@ -1518,21 +1479,18 @@ impl Mode for TakingPicturesMode {
 
             FrameProcessEvent::RawHistogramReady =>
                 self.process_raw_histogram(),
+
             FrameProcessEvent::ShotProcessingFinished {
-                frame_is_ok, camera_shot, raw_image_info, ..
+                frame_is_ok, ..
             } =>
-                self.process_frame_processing_finished_event(
-                    *frame_is_ok,
-                    camera_shot,
-                    raw_image_info,
-                ),
+                self.process_frame_processing_finished_event(*frame_is_ok),
 
             _ =>
                 Ok(NotifyResult::Empty),
         }
     }
 
-    fn complete_img_process_params(&self, cmd: &mut ProcessImageParams) {
+    fn complete_img_process_params(&self, cmd: &mut ProcessImageParams) -> eyre::Result<()> {
         cmd.cam_ctrl_opts = Some(self.cam_options.ctrl.clone());
 
         let options = self.options.read().unwrap();
@@ -1570,6 +1528,17 @@ impl Mode for TakingPicturesMode {
                     None
                 };
         }
+
+        if self.state == State::Common && self.flags.save_raw_files {
+            cmd.save_raw_params = Some(
+                SaveRawParams {
+                    raw_files_dir: self.out_file_names.raw_files_dir.clone(),
+                    fn_gen:        Arc::clone(&self.fn_gen),
+                }
+            );
+        }
+
+        Ok(())
     }
 
     fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {

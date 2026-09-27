@@ -1513,11 +1513,11 @@ impl PreviewUi {
 
         match &result.event {
             FrameProcessEvent::ShotProcessingFinished {
-                camera_shot, processing_time, ..
+                download_time, processing_time, ..
             } => {
                 let perf_str = format!(
                     "Download time = {:.2}s, img. process time = {:.2}s",
-                    camera_shot.download_time(), processing_time
+                    download_time, processing_time
                 );
                 self.main_ui.set_perf_string(perf_str);
             }

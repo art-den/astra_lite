@@ -526,7 +526,7 @@ impl Mode for GotoMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn complete_img_process_params(&self, cmd: &mut ProcessImageParams) {
+    fn complete_img_process_params(&self, cmd: &mut ProcessImageParams) -> eyre::Result<()> {
         if let GotoDestination::Image { stars, .. } = &self.destination
         && let Some(ref_img_size) = self.ref_img_size {
             cmd.ref_stars = Some(RefStars {
@@ -534,5 +534,6 @@ impl Mode for GotoMode {
                 size:   ref_img_size,
             });
         }
+        Ok(())
     }
 }

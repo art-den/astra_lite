@@ -9,15 +9,9 @@ use crate::{
         live_stacking::{LiveStackedImageInfo, LiveStacking},
         preview::{Preview, ResultImageInfo},
         raw_calibration::{CalibrParams, RawCalibration}
-    },
-    hal::{CameraShot, CameraShotType, FrameType},
-    image::{
-        histogram::*, info::*,
-        preview::*, raw::*,
-        stars::{Stars, StarsFinder}, stars_offset::*,
-    },
-    options::*,
-    utils::log_utils::*,
+    }, hal::{CameraShot, CameraShotType, FrameType}, image::{
+        histogram::*, info::*, preview::*, raw::*, stars::{Stars, StarsFinder}, stars_offset::*,
+    }, options::*, utils::{io_utils::SeqFileNameGen, log_utils::*},
 };
 
 #[derive(Clone)]
@@ -32,7 +26,7 @@ impl Default for FrameQuality {
     fn default() -> Self {
         Self {
             ccd_temp_ok:   true,
-            offset_is_ok:  true,
+            offset_is_ok:  true, // does not affect the overall quality
             fwhm_is_ok:    true,
             ovality_is_ok: true,
         }
@@ -41,10 +35,8 @@ impl Default for FrameQuality {
 
 impl FrameQuality {
     pub fn is_ok(&self) -> bool {
-        self.ccd_temp_ok &&
-        self.offset_is_ok &&
-        self.fwhm_is_ok &&
-        self.ovality_is_ok
+        self.stars_is_ok() &&
+        self.ccd_temp_ok
     }
 
     pub fn stars_is_ok(&self) -> bool {
@@ -81,6 +73,11 @@ pub struct RefStars {
     pub size:  (usize, usize),
 }
 
+pub struct SaveRawParams {
+    pub raw_files_dir: PathBuf,
+    pub fn_gen:        Arc<SeqFileNameGen>,
+}
+
 pub struct ProcessImageParams {
     pub mode_kind:       ModeKind,
     pub camera_id:       String,
@@ -96,6 +93,7 @@ pub struct ProcessImageParams {
     pub cam_ctrl_opts:   Option<CamCtrlOptions>,
     pub quality_options: Option<QualityOptions>,
     pub live_stacking:   Option<LiveStackingCtx>,
+    pub save_raw_params: Option<SaveRawParams>,
 }
 
 #[derive(Clone)]
@@ -131,8 +129,7 @@ pub enum FrameProcessEvent {
     },
     ShotProcessingFinished {
         frame_is_ok:     bool,
-        camera_shot:     Arc<dyn CameraShot + Send + Sync>,
-        raw_image_info:  Arc<RawImageInfo>,
+        download_time:   f64,
         processing_time: f64,
     },
 }
@@ -785,11 +782,39 @@ impl FrameProcessing {
 
         let process_time = total_tmr.log("TOTAL PREVIEW");
 
-        if let Some(raw_info) = raw_info {
+        if let Some(raw_info) = &raw_info
+        && let Some(save_raw_params) = &command.save_raw_params
+        && quality.is_ok() {
+            // Save raw file at the end of processing
+            let prefix = match raw_info.frame_type {
+                FrameType::Lights => "light",
+                FrameType::Flats => "flat",
+                FrameType::Darks => "dark",
+                FrameType::Biases => "bias",
+            };
+            if !save_raw_params.raw_files_dir.is_dir() {
+                std::fs::create_dir_all(&save_raw_params.raw_files_dir)
+                    .map_err(|e|eyre::eyre!(
+                        "Error '{}'\nwhen trying to create directory '{}' for saving RAW frame",
+                        e, save_raw_params.raw_files_dir.to_str().unwrap_or_default()
+                    ))?;
+            }
+            let mut file_ext = command.img_source.file_ext();
+            while file_ext.starts_with('.') { file_ext = &file_ext[1..]; }
+            let fn_mask = format!("{}_${{num}}.{}", prefix, file_ext);
+            let file_name = save_raw_params.fn_gen.generate(
+                &save_raw_params.raw_files_dir,
+                &fn_mask
+            );
+            let tmr = TimeLogger::start();
+            command.img_source.save_to_file(&file_name)?;
+            tmr.log("Saving raw image");
+        }
+
+        if raw_info.is_some() {
             let result = FrameProcessEvent::ShotProcessingFinished{
-                raw_image_info:  Arc::new(raw_info),
                 frame_is_ok:     quality.is_ok(),
-                camera_shot:     Arc::clone(&command.img_source),
+                download_time:   command.img_source.download_time(),
                 processing_time: process_time,
             };
             self.notify_frame_result(result, &command);
