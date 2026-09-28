@@ -59,7 +59,7 @@ pub trait Mode {
     fn restart_cam_exposure(&mut self) -> eyre::Result<bool> { Ok(false) }
     fn take_next_mode(&mut self) -> Option<ModeBox> { None }
     fn set_or_correct_value(&mut self, _value: &mut dyn Any) {}
-    fn complete_img_process_params(&self, _cmd: &mut ProcessImageParams) -> eyre::Result<()> { return Ok(()); }
+    fn complete_img_process_params(&self, _cmd: &mut ProcessImageParams) -> eyre::Result<()> { Ok(()) }
     fn notify_camera_download_started(&mut self, _camera_id: &str) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_before_frame_processing_start(&mut self, _camera_shot: &Arc<dyn CameraShot + Send + Sync>, _should_be_processed: &mut bool) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessNotification) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
