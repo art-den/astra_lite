@@ -1563,21 +1563,21 @@ impl PreviewUi {
                 self.repaint_histogram();
                 self.show_histogram_stat();
             }
-            FrameProcessEvent::LightFrameReady(info) => {
+            FrameProcessEvent::LightFrameInfo(info) => {
                 let history_item = LightHistoryItem {
                     mode_type:      result.mode_kind,
                     time:           info.raw.as_ref().and_then(|raw| raw.time),
                     ccd_temp:       info.raw.as_ref().and_then(|raw| raw.ccd_temp.map(|v| v as f32)),
                     bad_ccd_temp:   !info.quality.ccd_temp_ok,
-                    fwhm:           info.stars.info.fwhm,
-                    hfd:            info.stars.info.hfd,
-                    fwhm_angular:   info.stars.info.fwhm_angular,
+                    fwhm:           info.stars.fwhm,
+                    hfd:            info.stars.hfd,
+                    fwhm_angular:   info.stars.fwhm_angular,
                     bad_fwhm:       !info.quality.fwhm_is_ok,
-                    stars_ovality:  info.stars.info.ovality,
+                    stars_ovality:  info.stars.ovality,
                     bad_ovality:    !info.quality.ovality_is_ok,
                     background:     info.image.bg_percent,
                     noise:          info.image.raw_noise.map(|n| 100.0 * n / info.image.max_value as f32),
-                    stars_count:    info.stars.items.len(),
+                    stars_count:    info.stars_cnt,
                     offset:         info.offset.clone(),
                     bad_offset:     !info.quality.offset_is_ok,
                     calibr_methods: info.image.calibr_methods,

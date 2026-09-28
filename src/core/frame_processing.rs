@@ -10,7 +10,7 @@ use crate::{
         preview::{Preview, ResultImageInfo},
         raw_calibration::{CalibrParams, RawCalibration}
     }, hal::{CameraShot, CameraShotType, FrameType}, image::{
-        histogram::*, info::*, preview::*, raw::*, stars::{Stars, StarsFinder}, stars_offset::*,
+        histogram::*, info::*, preview::*, raw::*, stars::{Stars, StarsFinder, StarsInfo}, stars_offset::*,
     }, options::*, utils::{io_utils::SeqFileNameGen, log_utils::*},
 };
 
@@ -51,6 +51,15 @@ pub struct LightFrameResult {
     pub stars:   Arc<Stars>,
     pub offset:  Option<Offset>,
     pub quality: FrameQuality,
+}
+
+pub struct LightFrameResultUI {
+    pub raw:       Option<RawImageInfo>,
+    pub image:     Arc<LightFrameInfo>,
+    pub stars:     StarsInfo,
+    pub stars_cnt: usize,
+    pub offset:    Option<Offset>,
+    pub quality:   FrameQuality,
 }
 
 pub struct LiveStackingCtx {
@@ -120,6 +129,7 @@ pub enum FrameProcessEvent {
     ImageReady,
     ImageHistogramReady,
     LightFrameReady(Arc<LightFrameResult>),
+    LightFrameInfo(Arc<LightFrameResultUI>),
     OrigFrameInfoReady,
     LiveStackingInfoReady,
     LiveStackingHistogramReady,
@@ -614,26 +624,45 @@ impl FrameProcessing {
                     None
                 };
 
-            let info = Arc::new(LightFrameResult {
-                raw: raw_info.clone(),
-                image: Arc::new(info),
-                stars: Arc::clone(&stars),
-                offset: stars_offset,
-                quality: quality.clone(),
-            });
+            let image_info = Arc::new(info);
 
             // Send message about calculated light frame
 
+            let lf_info = Arc::new(LightFrameResult {
+                raw: raw_info.clone(),
+                image: Arc::clone(&image_info),
+                stars: Arc::clone(&stars),
+                offset: stars_offset.clone(),
+                quality: quality.clone(),
+            });
+
             self.notify_frame_result(
-                FrameProcessEvent::LightFrameReady(Arc::clone(&info)),
+                FrameProcessEvent::LightFrameReady(Arc::clone(&lf_info)),
                 &command,
             );
 
             // Send message about light frame info stored
 
-            *command.preview.info.write().unwrap() = ResultImageInfo::LightInfo(Arc::clone(&info));
+            *command.preview.info.write().unwrap() =
+                ResultImageInfo::LightInfo(Arc::clone(&lf_info));
             self.notify_frame_result(
                 FrameProcessEvent::OrigFrameInfoReady,
+                &command,
+            );
+
+            // Send message about calculated light frame for UI
+
+            let lf_info = Arc::new(LightFrameResultUI {
+                raw: raw_info.clone(),
+                image: Arc::clone(&image_info),
+                stars: stars.info.clone(),
+                stars_cnt: stars.items.len(),
+                offset: stars_offset,
+                quality: quality.clone(),
+            });
+
+            self.notify_frame_result(
+                FrameProcessEvent::LightFrameInfo(Arc::clone(&lf_info)),
                 &command,
             );
 
@@ -641,7 +670,7 @@ impl FrameProcessing {
 
             if let (Some(live_stacking), true) = (&command.live_stacking, quality.is_ok()) {
                 // Translate/rotate image to reference image and add
-                let offset = info.offset.clone().unwrap_or_default();
+                let offset = lf_info.offset.clone().unwrap_or_default();
                 let mut stacker = live_stacking.data.stacker.write().unwrap();
                 let tmr = TimeLogger::start();
                 stacker.add(

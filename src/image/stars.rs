@@ -24,7 +24,7 @@ pub struct Star {
 
 pub type StarItems = Vec<Star>;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct StarsInfo {
     pub hfd:           Option<f32>, // half flux diameter
     pub fwhm:          Option<f32>, // full width at half maximum
