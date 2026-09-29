@@ -73,7 +73,7 @@ sudo apt install gcc libgtk-3-dev build-essential
 ```
 
 ### Prerequisites for MS Windows
-* Rust compiler (i686-pc-windows-**gnu**): https://www.rust-lang.org/tools/install
+* Rust compiler (x86_64-pc-windows-**gnu**): https://www.rust-lang.org/tools/install
   Note! You have to install *-gnu (not *-msvc) toolchain:
 ```
 rustup-init.exe --default-toolchain=stable-x86_64-pc-windows-gnu --default-host=x86_64-pc-windows-gnu
