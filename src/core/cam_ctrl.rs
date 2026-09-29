@@ -146,17 +146,16 @@ pub fn set_focal_len_for_cameras(hal: &Hal, options: &Options) -> eyre::Result<(
             continue;
         }
 
-        let camera = hal.camera(&cam_info.id)?;
+        let Ok(camera) = hal.camera(&cam_info.id) else { continue; };
 
-        match cam_info.ccd {
-            CcdPurpose::MainTelescopeCcd => {
-                camera.set_telescope_focal_len(options.telescope.real_focal_length())?;
-            }
-            CcdPurpose::GuiderCcd => {
-                camera.set_telescope_focal_len(options.guiding.foc_len)?;
-            }
-            _ => {},
-        }
+        let focal_len = match cam_info.ccd {
+            CcdPurpose::MainTelescopeCcd => options.telescope.real_focal_length(),
+            CcdPurpose::GuiderCcd => options.guiding.foc_len,
+            _ => continue,
+        };
+
+        // many camera drivers don't expose SCOPE_INFO so simply ignore errors
+        _ = camera.set_telescope_focal_len(focal_len);
     }
     Ok(())
 }
