@@ -50,6 +50,13 @@ pub fn start_logger(log_path: &Path) -> eyre::Result<()> {
     Ok(())
 }
 
+/// If `res` is `Err`, logs the error with `context`.
+pub fn log_if_error<T, E: std::fmt::Debug>(res: &Result<T, E>, context: &str) {
+    if let Err(err) = res {
+        log::error!("Error {:?}, context: {}", err, context);
+    }
+}
+
 pub fn cleanup_old_logs(log_path: &Path, days_to_save: usize) {
     let max_elapsed = days_to_save as u64 * 24 * 60 * 60;
     let Ok(dir_contents) = fs::read_dir(log_path) else { return; };

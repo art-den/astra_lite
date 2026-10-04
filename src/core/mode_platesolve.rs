@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use crate::{
     core::{
         cam_ctrl::take_shot, engine::*, frame_processing::*, preview::Preview,
-    }, hal::{Camera, CcdPurpose, FrameType, Hal, Telescope}, image::stars::StarItems, options::*, plate_solve::*, sky_math::math::*,
+    }, hal::{Camera, CcdPurpose, FrameType, Hal, Telescope}, image::stars::StarItems, options::*, plate_solve::*, sky_math::math::*, utils::log_utils::log_if_error,
 };
 
 use super::{events::*, utils::gain_to_value};
@@ -226,8 +226,10 @@ impl Mode for PlatesolveMode {
     }
 
     fn abort(&mut self) -> eyre::Result<()> {
-        _ = self.camera.abort_exposure();
-        _ = self.mount.abort_motion();
+        let res = self.camera.abort_exposure();
+        log_if_error(&res, "Abort camera exposure on PlatesolveMode abort");
+        let res = self.mount.abort_motion();
+        log_if_error(&res, "Abort mount motion on PlatesolveMode abort");
         self.state = State::None;
         Ok(())
     }

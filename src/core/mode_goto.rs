@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 use crate::{
-    core::{cam_ctrl::take_shot, consts::*, events::*, frame_processing::*, preview::Preview}, hal::{Camera, FrameType, Telescope, indi::value_to_sexagesimal}, image::{image::Image, info::LightFrameInfo, stars::{StarItems, Stars}, stars_offset::Point}, options::*, plate_solve::*, sky_math::math::*,
+    core::{cam_ctrl::take_shot, consts::*, events::*, frame_processing::*, preview::Preview}, hal::{Camera, FrameType, Telescope, indi::value_to_sexagesimal}, image::{image::Image, info::LightFrameInfo, stars::{StarItems, Stars}, stars_offset::Point}, options::*, plate_solve::*, sky_math::math::*, utils::log_utils::log_if_error,
 };
 use super::{engine::*, events::EventHandlers, utils::*};
 
@@ -379,9 +379,11 @@ impl Mode for GotoMode {
 
     fn abort(&mut self) -> eyre::Result<()> {
         if let Some(camera) = &self.camera {
-            _ = camera.abort_exposure();
+            let res = camera.abort_exposure();
+            log_if_error(&res, "Abort camera exposure on GotoMode abort");
         }
-        _ = self.telescope.abort_motion();
+        let res = self.telescope.abort_motion();
+        log_if_error(&res, "Abort mount motion on GotoMode abort");
 
         self.state = State::None;
 

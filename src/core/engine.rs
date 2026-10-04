@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    core::{cam_ctrl::*, cur_devices::CurDevices, live_stacking::LiveStacking, preview::{Preview, ResultImageInfo}, raw_calibration::{CalibrParams, RawCalibration}}, guiding::external_guider::*, hal::{events::HalEvent, *}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::timer::*,
+    core::{cam_ctrl::*, cur_devices::CurDevices, live_stacking::LiveStacking, preview::{Preview, ResultImageInfo}, raw_calibration::{CalibrParams, RawCalibration}}, guiding::external_guider::*, hal::{events::HalEvent, *}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::{log_utils::log_if_error, timer::*},
 };
 
 use super::{
@@ -168,7 +168,8 @@ impl Engine {
         log::info!("Disconnecting from INDI...");
         let indi_hal = self.hal.indi_impl();
         indi_hal.indi().disconnect_all_event_handlers(); // TODO: move into hal
-        _ = indi_hal.indi().disconnect_and_wait(); // TODO: move into hal
+        let disconnect_res = indi_hal.indi().disconnect_and_wait(); // TODO: move into hal
+        log_if_error(&disconnect_res, "Disconnect INDI on Engine::stop");
         log::info!("Done!");
 
         log::info!("Stopping HAL...");
@@ -725,7 +726,8 @@ impl Engine {
             return;
         }
 
-        _ = mode.active.abort();
+        let abort_res = mode.active.abort();
+        log_if_error(&abort_res, "Abort active mode");
 
         self.img_proc_stop_flag.lock().unwrap().store(true, std::sync::atomic::Ordering::Relaxed);
 
@@ -751,7 +753,8 @@ impl Engine {
         let Some(aborted_mode) = mode.aborted.take() else {
             eyre::bail!("Aborted state is empty");
         };
-        _ = mode.active.abort();
+        let abort_res = mode.active.abort();
+        log_if_error(&abort_res, "Abort current mode before continuing aborted mode");
         self.img_proc_stop_flag.lock().unwrap().store(true, std::sync::atomic::Ordering::Relaxed);
         mode.active = aborted_mode;
         mode.active.continue_work()?;

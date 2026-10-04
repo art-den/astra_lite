@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{core::engine::EngineModes, hal::{Camera, CcdPurpose, Hal}, options::{CamCtrlOptions, FrameOptions, Options}};
+use crate::{core::engine::EngineModes, hal::{Camera, CcdPurpose, Hal}, options::{CamCtrlOptions, FrameOptions, Options}, utils::log_utils::log_if_error};
 
 pub fn take_shot(
     camera:    &Arc<dyn Camera + Send + Sync>,
@@ -127,7 +127,8 @@ pub fn restart_camera_exposure(
 
     // Mode did not restart the camera exposure. Do it manually
 
-    _ = camera.abort_exposure();
+    let abort_res = camera.abort_exposure();
+    log_if_error(&abort_res, "Abort camera exposure before manual restart");
 
     let mode_cam_opts = mode.active
         .frame_options_to_restart_exposure()
@@ -146,7 +147,9 @@ pub fn set_focal_len_for_cameras(hal: &Hal, options: &Options) -> eyre::Result<(
             continue;
         }
 
-        let Ok(camera) = hal.camera(&cam_info.id) else { continue; };
+        let camera_res = hal.camera(&cam_info.id);
+        log_if_error(&camera_res, "Get camera from HAL");
+        let Ok(camera) = camera_res else { continue; };
 
         let focal_len = match cam_info.ccd {
             CcdPurpose::MainTelescopeCcd => options.telescope.real_focal_length(),
@@ -154,8 +157,9 @@ pub fn set_focal_len_for_cameras(hal: &Hal, options: &Options) -> eyre::Result<(
             _ => continue,
         };
 
-        // many camera drivers don't expose SCOPE_INFO so simply ignore errors
-        _ = camera.set_telescope_focal_len(focal_len);
+        // many camera drivers don't expose SCOPE_INFO so errors are just logged here
+        let focal_len_res = camera.set_telescope_focal_len(focal_len);
+        log_if_error(&focal_len_res, "Set telescope focal length for camera");
     }
     Ok(())
 }

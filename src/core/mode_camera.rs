@@ -1,7 +1,7 @@
 use std::{any::Any, path::PathBuf, sync::{Arc, RwLock}};
 use chrono::Utc;
 use crate::{
-    core::{cam_ctrl::take_shot, live_stacking::LiveStacking, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode}, guiding::external_guider::*, hal::{Camera, CameraFeatures, CameraShot, Focuser, FrameType, Telescope}, image::{histogram::*, image_stacker::ImageStackingMode, io::save_raw_image_to_fits_file, raw::RawImage, raw_stacker::*, stars_offset::*}, options::*, utils::{io_utils::*, log_utils::TimeLogger}
+    core::{cam_ctrl::take_shot, live_stacking::LiveStacking, mode_focusing::{FocusingErrorReaction, FocusingMode}, mode_waiting::WaitingMode}, guiding::external_guider::*, hal::{Camera, CameraFeatures, CameraShot, Focuser, FrameType, Telescope}, image::{histogram::*, image_stacker::ImageStackingMode, io::save_raw_image_to_fits_file, raw::RawImage, raw_stacker::*, stars_offset::*}, options::*, utils::{io_utils::*, log_utils::{log_if_error, TimeLogger}}
 };
 
 use super::{
@@ -171,7 +171,9 @@ impl TakingPicturesMode {
 
         let mut cam_options = opts.cam.clone();
         let qual_options = opts.quality.clone();
-        let mount = engine.hal.telescope(&opts.mount.device).ok();
+        let mount_res = engine.hal.telescope(&opts.mount.device);
+        log_if_error(&mount_res, "Get telescope from HAL");
+        let mount = mount_res.ok();
 
         match cam_mode {
             CameraMode::LiveStacking =>

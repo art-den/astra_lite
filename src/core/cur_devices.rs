@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex, RwLock};
-use crate::{hal::{events::HalEvent, *}, options::Options};
+use crate::{hal::{events::HalEvent, *}, options::Options, utils::log_utils::log_if_error};
 use super::events::*;
 
 
@@ -34,31 +34,44 @@ impl CurDevices {
         let self_ = Arc::downgrade(&result);
         hal.connect_event_handler(move |event| {
             let Some(self_) = self_.upgrade() else { return; };
-            _ = self_.hal_event_handler(event);
+            self_.hal_event_handler(event);
         });
 
         result
     }
 
-    fn hal_event_handler(self: &Arc<Self>, event: HalEvent) -> eyre::Result<()> {
+    // Lookup errors must not skip the remaining device types, so each lookup is isolated: on error it is logged and the stale registry entry is invalidated
+    fn hal_event_handler(&self, event: HalEvent) {
         match event {
             HalEvent::DeviceConnected(info) => {
                 let options = self.options.read().unwrap();
                 if info.type_.contains(DeviceType::CAMERA) && options.cam.device_id == info.id {
+                    let cam_res = self.hal.camera(&info.id);
+                    log_if_error(&cam_res, "Get camera from HAL");
+
                     let mut data = self.data.lock().unwrap();
-                    data.camera = Some(self.hal.camera(&info.id)?);
+                    data.camera = cam_res.ok();
                 }
                 if info.type_.contains(DeviceType::TELESCOPE) && options.mount.device == info.id {
+                    let telescope_res = self.hal.telescope(&info.id);
+                    log_if_error(&telescope_res, "Get telescope from HAL");
+
                     let mut data = self.data.lock().unwrap();
-                    data.telescope = Some(self.hal.telescope(&info.id)?);
+                    data.telescope = telescope_res.ok();
                 }
                 if info.type_.contains(DeviceType::FOCUSER) && options.focuser.device == info.id {
+                    let focuser_res = self.hal.focuser(&info.id);
+                    log_if_error(&focuser_res, "Get focuser from HAL");
+
                     let mut data = self.data.lock().unwrap();
-                    data.focuser = Some(self.hal.focuser(&info.id)?);
+                    data.focuser = focuser_res.ok();
                 }
                 if info.type_.contains(DeviceType::FLT_WHEEL) && options.filter_wheel.device == info.id {
+                    let filter_wheel_res = self.hal.filter_wheel(&info.id);
+                    log_if_error(&filter_wheel_res, "Get filter wheel from HAL");
+
                     let mut data = self.data.lock().unwrap();
-                    data.filter_wheel = Some(self.hal.filter_wheel(&info.id)?);
+                    data.filter_wheel = filter_wheel_res.ok();
                 }
             }
             HalEvent::DeviceDisconnected(info) => {
@@ -82,7 +95,6 @@ impl CurDevices {
             }
             _ => {}
         }
-        Ok(())
     }
 
     pub fn camera(&self) -> Option<Arc<dyn Camera + Send + Sync>> {
@@ -133,8 +145,11 @@ impl CurDevices {
         options.cam.device_id = new_camera_id.to_string();
         drop(options);
 
+        let cam_res = self.hal.camera(new_camera_id);
+        log_if_error(&cam_res, "Get camera from HAL");
+
         let mut data = self.data.lock().unwrap();
-        data.camera = self.hal.camera(new_camera_id).ok();
+        data.camera = cam_res.ok();
         drop(data);
 
         self.events.send(Event::CameraDeviceChanged(
@@ -185,8 +200,11 @@ impl CurDevices {
         options.mount.device = new_telescope_id.to_string();
         drop(options);
 
+        let telescope_res = self.hal.telescope(new_telescope_id);
+        log_if_error(&telescope_res, "Get telescope from HAL");
+
         let mut data = self.data.lock().unwrap();
-        data.telescope = self.hal.telescope(new_telescope_id).ok();
+        data.telescope = telescope_res.ok();
         drop(data);
 
         self.events.send(
@@ -213,8 +231,11 @@ impl CurDevices {
         options.focuser.device = new_focuser_id.to_string();
         drop(options);
 
+        let focuser_res = self.hal.focuser(new_focuser_id);
+        log_if_error(&focuser_res, "Get focuser from HAL");
+
         let mut data = self.data.lock().unwrap();
-        data.focuser = self.hal.focuser(new_focuser_id).ok();
+        data.focuser = focuser_res.ok();
         drop(data);
 
         self.events.send(
@@ -241,8 +262,11 @@ impl CurDevices {
         options.filter_wheel.device = new_filter_wheel_id.to_string();
         drop(options);
 
+        let filter_wheel_res = self.hal.filter_wheel(new_filter_wheel_id);
+        log_if_error(&filter_wheel_res, "Get filter wheel from HAL");
+
         let mut data = self.data.lock().unwrap();
-        data.filter_wheel = self.hal.filter_wheel(new_filter_wheel_id).ok();
+        data.filter_wheel = filter_wheel_res.ok();
         drop(data);
 
         self.events.send(
