@@ -7,24 +7,28 @@ on low power PCs (like raspberry Pi or Orange Pi)
 ```
 
 AstraLite uses INDI server to work with astrophotography hardware.
+On MS Windows ASCOM Alpaca devices are also supported.
 See https://www.indilib.org/download.html to install INDI
 
 Compiled binaries and discussion here:
 https://www.indilib.org/forum/clients/13006-astralite-simple-indi-client-for-astrophotography.html
 
 ## Features
-* Supported INDI devices are cameras, focusers and mounts
+* Supported INDI and ASCOM (Windows) devices: cameras, focusers, filter wheels and mounts
 * Saving RAW frames
 * Live stacking with **automatic satellites and meteor tracks removal**
 * Background gradient automatic removal
 * Darks, biases and defective pixels library
+* Flat frames capture and calibration with automatic flat exposure calculation
 * Light frames quality filter
 * Mount polar alignment
 * Guiding and dithering by PHD2 or **main camera**
 * Autofocus
+* Goto from sky map
+* Plate solving with local Astrometry.net
 * Sky map
 * Manual mount control
-* UI for INDI devices control
+* UI for INDI and ASCOM devices control
 
 
 ## Requirements
@@ -41,7 +45,7 @@ INDI (https://indilib.org/) - library to access devices (camera, focuser etc)
 ```
 sudo apt-add-repository ppa:mutlaqja/ppa
 sudo apt-get update
-sudo apt-get install indi-full
+sudo apt-get install indi-3rdparty-drivers
 ```
 PHD2 (https://openphdguiding.org/) for guiding *(optional)*
 ```
@@ -114,6 +118,7 @@ DSO:
 Stars:
 * Tycho-2 catalogue - https://www.cosmos.esa.int/web/hipparcos/tycho-2
 * HYG v3 catalogue - https://github.com/astronexus/HYG-Database/tree/main/hyg/v3
+  (this GitHub repository is archived; the catalogue moved to https://codeberg.org/astronexus/hyg)
 
 Constellations:
 * Celestial Data - https://github.com/dieghernan/celestial_data
