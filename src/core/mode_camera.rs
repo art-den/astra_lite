@@ -66,7 +66,6 @@ struct Flags {
     save_master_file:    bool,
     save_defect_pixels:  bool,
     flat_exp_calculated: bool,
-    next_exp_started:    bool,
     queue_overflowed:    bool,
     have_to_slow_down:   bool,
 }
@@ -1404,8 +1403,6 @@ impl Mode for TakingPicturesMode {
     }
 
     fn notify_camera_download_started(&mut self, camera_id: &str) -> eyre::Result<NotifyResult> {
-        self.flags.next_exp_started = false;
-
         if camera_id != self.camera.id() || self.state == State::FrameToSkip {
             return Ok(NotifyResult::Empty);
         }
