@@ -51,7 +51,6 @@ pub struct FocusingMode {
     to_go:          VecDeque<f64>,
     samples:        Vec<FocuserSample>,
     one_pos_hfd:    Vec<f32>,
-    result_pos:     Option<f64>,
     max_try:        usize,
     try_cnt:        usize,
     prelim_step:    bool,
@@ -131,7 +130,6 @@ impl FocusingMode {
             to_go:          VecDeque::new(),
             samples:        Vec::new(),
             one_pos_hfd:    Vec::new(),
-            result_pos:     None,
             stage:          Stage::Undef,
             change_time_ms: None,
             change_cnt:     0,
@@ -368,8 +366,6 @@ impl FocusingMode {
                     self.start_stage(result_pos, Stage::Final)?;
                     return Ok(())
                 }
-
-                self.result_pos = Some(result_pos);
 
                 // for anti-backlash
                 let anti_backlash_pos = result_pos - self.f_opts.anti_backlash_steps as f64;
