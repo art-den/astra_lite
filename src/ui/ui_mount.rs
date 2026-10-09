@@ -4,10 +4,11 @@ use macros::FromBuilder;
 
 use crate::{
     core::{engine::{Engine, ModeKind}, events::*},
-    hal::{DeviceType, HalState, TelescopeState, events::HalEvent, indi::{degree_to_str, hour_to_str}},
+    hal::{DeviceType, HalState, TelescopeState, events::HalEvent},
     options::*,
     ui::ui_main::MainUi,
 };
+use ::indi::{degree_to_str, hour_to_str};
 
 use super::{gtk_utils::*, module::*, utils::*};
 

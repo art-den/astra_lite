@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-pub mod indi;
 pub mod events;
 pub mod hal_indi;
 

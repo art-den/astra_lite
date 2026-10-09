@@ -4,8 +4,9 @@ use chrono::{NaiveDateTime, Utc};
 use serde::Serialize;
 
 use crate::{
-    core::{cam_ctrl::take_shot, engine::*, frame_processing::*, preview::Preview}, hal::{Camera, FrameType, Hal, Telescope, indi::degree_to_str}, image::stars::StarItems, options::*, plate_solve::*, sky_math::{math::*, solar_system::calc_atmospheric_refraction}, utils::log_utils::log_if_error,
+    core::{cam_ctrl::take_shot, engine::*, frame_processing::*, preview::Preview}, hal::{Camera, FrameType, Hal, Telescope}, image::stars::StarItems, options::*, plate_solve::*, sky_math::{math::*, solar_system::calc_atmospheric_refraction}, utils::log_utils::log_if_error,
 };
+use ::indi::degree_to_str;
 
 use super::{commands::*, consts::*, events::*, utils::{check_telescope_is_at_desired_position, gain_to_value}};
 

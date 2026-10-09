@@ -12,8 +12,9 @@ use itertools::Itertools;
 use chrono::prelude::*;
 use macros::FromBuilder;
 use crate::{
-    core::{engine::Engine, events::Event}, guiding::{external_guider::ExtGuiderType, phd2}, hal::{DeviceType, HalImpl, HalState, events::HalEvent, indi::{self, sexagesimal_to_value, value_to_sexagesimal}}, options::*,
+    core::{engine::Engine, events::Event}, guiding::{external_guider::ExtGuiderType, phd2}, hal::{DeviceType, HalImpl, HalState, events::HalEvent}, options::*,
 };
+use ::indi::{self, sexagesimal_to_value, value_to_sexagesimal};
 use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
 
 pub fn init_ui(

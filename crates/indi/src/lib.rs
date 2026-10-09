@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 mod num_format;
 mod connection;
 mod drivers;

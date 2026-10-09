@@ -3,7 +3,6 @@ use itertools::Itertools;
 use crate::{
     hal::{
         events::*, hal_indi::{camera_watchdog::CamWatchdog, dev_watchdog::DevicesWatchdog},
-        indi::EventHandlerId,
         *,
     },
     image::{
@@ -11,7 +10,8 @@ use crate::{
         simple_fits::FitsReader,
     },
 };
-use super::{indi, HalImpl, Camera, DeviceInfo, DeviceType};
+use super::{HalImpl, Camera, DeviceInfo, DeviceType};
+use ::indi::EventHandlerId;
 
 pub const CAM_CCD2_POSTFIX: &str = "_CCD2";
 pub const SET_PROP_TIMEOUT: u64 = 2000; // ms

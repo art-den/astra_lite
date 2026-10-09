@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use crate::hal::indi;
-
 const DEVICE_WAIT_BEFORE_CONNECT_TIME: usize = 1; // in seconds
 const DEVICE_WAIT_BEFORE_LOAD_OPTS_TIME: usize = 2; // in seconds
 const DEVICE_WAIT_CHECK_CUR_DEV_TIME: usize = 3; // in seconds after the last device appeared

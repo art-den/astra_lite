@@ -3,10 +3,11 @@ use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
     core::{commands::{ModeCommand, ModeCommandReply}, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignState, PolarAlignmentEvent}},
-    hal::{DeviceType, events::HalEvent, indi::degree_to_str_short},
+    hal::{DeviceType, events::HalEvent},
     options::*,
     sky_math::math::*,
 };
+use ::indi::degree_to_str_short;
 use super::{gtk_utils::{self, *}, module::*, ui_main::*, utils::*};
 
 pub fn init_ui(

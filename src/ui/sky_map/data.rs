@@ -4,7 +4,8 @@ use std::{collections::*, f64::consts::PI, fmt::Debug, io::{BufRead, Read}, path
 use bitflags::bitflags;
 use bitstream_io::{BigEndian, BitReader};
 use serde::{Deserialize, Serialize};
-use crate::{hal::indi::sexagesimal_to_value, sky_math::math::*, utils::{compression::ValuesDecompressor, math::angles_mean}};
+use crate::{sky_math::math::*, utils::{compression::ValuesDecompressor, math::angles_mean}};
+use ::indi::sexagesimal_to_value;
 
 enum SearchMode {
     Eq,

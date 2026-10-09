@@ -3,7 +3,7 @@
 use std::{sync::Arc, time::Duration, cell::RefCell, rc::Rc};
 use gtk::{prelude::*, glib, glib::clone};
 use itertools::{Itertools, izip};
-use crate::hal::indi;
+use ::indi;
 
 pub struct IndiPanelWidget {
     indi:      Arc<indi::Connection>,

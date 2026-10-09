@@ -6,8 +6,8 @@ use crate::{
     image::{image::Image, preview::PreviewRgbData, stars::StarItems},
     options::PlateSolverType,
     sky_math::math::*,
-    hal::indi::value_to_sexagesimal
 };
+use ::indi::value_to_sexagesimal;
 
 mod astrometry;
 

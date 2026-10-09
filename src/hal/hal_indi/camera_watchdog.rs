@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::hal::{events::{HalEvent, HalEventHandlers}, indi};
+use crate::hal::events::{HalEvent, HalEventHandlers};
 
 const MAX_WAIT_BLOB_TIME: usize = 30; // in seconds
 const MAX_SHUTDOWN_TIME: usize = 2; // in seconds

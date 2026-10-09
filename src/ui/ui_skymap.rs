@@ -5,13 +5,13 @@ use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use crate::{
     core::{engine::*, events::*, mode_goto::GotoConfig},
-    hal::{indi::{degree_to_str, hour_to_str}},
     image::preview::PreviewRgbData,
     options::*,
     plate_solve::PlateSolveOkResult,
     sky_math::math::*,
     utils::io_utils::*,
 };
+use ::indi::{degree_to_str, hour_to_str};
 use super::{
     gtk_utils::*,
     module::*,
