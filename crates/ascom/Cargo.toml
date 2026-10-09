@@ -1,0 +1,68 @@
+[package]
+name = "ascom"
+version = "0.0.341"
+edition = "2024"
+description = "Production-oriented Rust wrapper over classic ASCOM/COM (ICameraV4, ITelescopeV4, IFocuserV4, IFilterWheelV3)"
+repository = "https://github.com/art-den/astra_lite"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "ascom"
+path = "src/lib.rs"
+
+[dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_Variant",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# Async sugar lives outside the core: the core must never block a runtime worker
+# thread on a cross-process driver call. NOT IMPLEMENTED YET: no code is gated on
+# this feature (the async layer is only planned, see docs/ASCOM_RUST_PLAYBOOK.md).
+tokio = { version = "1", optional = true, features = ["rt", "macros"] }
+
+[dev-dependencies]
+# The live driver is one shared Singleton, so the contract tests must not overlap.
+# `#[serial]` states that on each test instead of relying on `--test-threads=1`.
+serial_test = "4.0.1"
+
+# The `#[implement]` macro expands to `::windows_core::...` paths, so the crate has
+# to be reachable by name for the in-process COM mocks used by the unit tests.
+windows-core = "0.62"
+
+[features]
+default = []
+tokio = ["dep:tokio"]
+
+[[example]]
+name = "probe"
+path = "examples/probe.rs"
+
+[[example]]
+name = "telescope"
+path = "examples/telescope.rs"
+
+[[example]]
+name = "focuser"
+path = "examples/focuser.rs"
+
+[[example]]
+name = "camera"
+path = "examples/camera.rs"
+
+[[example]]
+name = "filterwheel"
+path = "examples/filterwheel.rs"
+
+[[example]]
+name = "chooser"
+path = "examples/chooser.rs"
+
+[[example]]
+name = "list_drivers"
+path = "examples/list_drivers.rs"
