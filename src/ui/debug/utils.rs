@@ -113,6 +113,36 @@ fn click_window_for(widget: &gtk::Widget) -> Option<(gdk::Window, gtk::Widget)> 
     None
 }
 
+// Switches the notebook owning the tab label `tab_label_name` to that page.
+// Preferred over test_widget_click() on Windows, where gdk_test_simulate_button()
+// is a no-op (X11 only), and works for tabs that are not mapped yet.
+pub fn test_switch_tab(app: &gtk::Application, tab_label_name: &str) {
+    let label = widget_by_name::<gtk::Widget>(app, tab_label_name);
+    let target: *mut gtk::ffi::GtkWidget = label.to_glib_none().0;
+
+    // The tab label is an internal child of its notebook: walk up to the notebook
+    // and find the page index by comparing tab labels
+    let mut current: Option<gtk::Widget> = Some(label);
+    while let Some(widget) = current {
+        if let Some(notebook) = widget.downcast_ref::<gtk::Notebook>() {
+            for (index, page) in notebook.children().into_iter().enumerate() {
+                let is_target = notebook.tab_label(&page).is_some_and(|tab_label| {
+                    let ptr: *mut gtk::ffi::GtkWidget = tab_label.to_glib_none().0;
+                    ptr == target
+                });
+                if is_target {
+                    notebook.set_current_page(Some(index as u32));
+                    test_pause_ms(300);
+                    return;
+                }
+            }
+        }
+        current = widget.parent();
+    }
+
+    panic!("Tab label '{}' does not belong to a Notebook", tab_label_name);
+}
+
 // Note: requires gdk_disable_multidevice() to be called before the display is opened
 // (see main.rs): with XI2 enabled GDK selects pointer events via XISelectEvents, so the
 // core button events sent by gdk_test_simulate_button() are never delivered to the client.

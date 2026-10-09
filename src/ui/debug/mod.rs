@@ -1,7 +1,9 @@
 #![allow(dead_code)]
 
 pub mod utils;
-use gtk::traits::{AdjustmentExt, ComboBoxExt, ScrolledWindowExt, SpinButtonExt, ToggleButtonExt};
+use crate::core::engine::{Engine, ModeKind};
+use crate::hal::HalImpl;
+use gtk::traits::{AdjustmentExt, ComboBoxExt, ScrolledWindowExt, SpinButtonExt, ToggleButtonExt, WidgetExt};
 pub use utils::*;
 
 // Note: widget_by_name use widget name (not gtk-builder id)!
@@ -100,6 +102,64 @@ fn debug_preview_scroll(app: &gtk::Application) {
     test_pause_ms(500);
 }
 
-pub fn run_scenario(app: &gtk::Application) {
-    debug_preview(app);
+/// Dumps the ASCOM Classic camera state and the widgets that depend on it.
+/// Used to find out why an action (e.g. "Take shot") stays insensitive.
+fn debug_ascom_camera(app: &gtk::Application, engine: &Engine) {
+    // Autoconnect of saved drivers runs shortly after the UI is built
+    test_pause_ms(4000);
+
+    let cam_id = engine.options.read().unwrap().cam.device_id.clone();
+    log::info!("DBG options cam device_id = {cam_id:?}");
+
+    let btn_take_shot = widget_by_name::<gtk::Button>(app, "btn_take_shot");
+    log::info!("DBG btn_take_shot sensitive = {}", btn_take_shot.is_sensitive());
+
+    #[cfg(windows)]
+    log::info!("DBG ASCOM impl state = {:?}", engine.hal.ascom_impl().state());
+    log::info!("DBG mode kind = {:?}", engine.modes().active.kind());
+
+    match engine.cur_devices.camera() {
+        Some(camera) => {
+            log::info!("DBG camera id = {}", camera.id());
+            log::info!("DBG camera is_active() = {:?}", camera.is_active());
+            log::info!("DBG exposure_range() = {:?}", camera.exposure_range());
+            log::info!("DBG is_frame_supported() = {:?}", camera.is_frame_supported());
+            log::info!("DBG is_gain_supported() = {:?}", camera.is_gain_supported());
+            log::info!("DBG is_cooler_supported() = {:?}", camera.is_cooler_supported());
+            log::info!("DBG ccd_size() = {:?}", camera.ccd_size());
+            log::info!("DBG pixel_size_um() = {:?}", camera.pixel_size_um());
+            log::info!("DBG temperature() = {:?}", camera.temperature());
+        }
+        None => log::info!("DBG camera in Core is None (not activated)")
+    }
+
+    test_switch_tab(app, "lb_tab_common");
+    test_save_main_window_screenshot(app, ".tmp/ascom_cam_state.png");
+
+    // Reproduce the user's flow: a single shot over the activated driver
+    // (a real click cannot be simulated on Windows, gdk_test_simulate_button() is X11-only)
+    if btn_take_shot.is_sensitive() {
+        engine.options.write().unwrap().cam.frame.set_exposure(1.0);
+        match engine.start_single_shot() {
+            Ok(_) => log::info!("DBG single shot started"),
+            Err(err) => log::error!("DBG start_single_shot failed: {err}"),
+        }
+
+        for i in 0..20 {
+            test_pause_ms(1000);
+            let mode = engine.modes().active.kind();
+            let empty = engine.preview.image.read().unwrap().is_empty();
+            log::info!("DBG after take shot: t={i}s mode={mode:?} image_empty={empty}");
+            if mode == ModeKind::Waiting && !empty {
+                break;
+            }
+        }
+        test_switch_tab(app, "lb_tab_common");
+        test_save_main_window_screenshot(app, ".tmp/ascom_after_shot.png");
+    }
+    test_pause_ms(500);
+}
+
+pub fn run_scenario(app: &gtk::Application, engine: &Engine) {
+    debug_ascom_camera(app, engine);
 }

@@ -208,7 +208,7 @@ fn app_activate_handler(app: &gtk::Application) {
     if std::env::args().any(|arg| arg == "--debug") {
         let app = app.clone();
         glib::timeout_add_local(Duration::from_secs(1), move || {
-            ui::debug::run_scenario(&app);
+            ui::debug::run_scenario(&app, &engine);
             app.quit();
             glib::ControlFlow::Break
         });
