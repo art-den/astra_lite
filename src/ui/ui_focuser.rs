@@ -1,4 +1,3 @@
-use core::f64;
 use std::{cell::{Cell, RefCell}, rc::Rc, sync::Arc};
 use gtk::{glib, gdk, prelude::*, glib::clone};
 use macros::FromBuilder;
