@@ -83,6 +83,12 @@ impl UiModule for FltWheelUi {
             .to_string();
     }
 
+    fn on_show_options_first_time(&self) {
+        // Fill the device list at first show: ASCOM Classic drivers are always
+        // available, so the list must not depend on connect events
+        self.delayed_actions.schedule(DelayedAction::UpdateDevicesList);
+    }
+
     fn on_event(&self, event: &Event) {
         match event {
             Event::FilterWheelDeviceChanged(new_device_name) => {

@@ -297,6 +297,9 @@ impl UiModule for CameraUi {
     }
 
     fn on_show_options_first_time(&self) {
+        // Fill the device list at first show: ASCOM Classic drivers are always
+        // available, so the list must not depend on connect events
+        self.delayed_actions.schedule(DelayedAction::UpdateCamList);
         self.correct_widgets_props();
     }
 

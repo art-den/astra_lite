@@ -165,6 +165,9 @@ impl UiModule for MountUi {
     }
 
     fn on_show_options_first_time(&self) {
+        // Fill the device list at first show: ASCOM Classic drivers are always
+        // available, so the list must not depend on connect events
+        self.delayed_actions.schedule(DelayedAction::FillDevicesList);
         self.correct_widgets_props();
     }
 

@@ -44,31 +44,55 @@ impl CurDevices {
     fn hal_event_handler(&self, event: HalEvent) {
         match event {
             HalEvent::DeviceConnected(info) => {
-                let options = self.options.read().unwrap();
-                if info.type_.contains(DeviceType::CAMERA) && options.cam.device_id == info.id {
+                // Copy the matching flags and drop the options guard before any HAL
+                // call: `activate()` may block and sends events synchronously
+                let (want_camera, want_mount, want_focuser, want_flt_wheel) = {
+                    let options = self.options.read().unwrap();
+                    (
+                        info.type_.contains(DeviceType::CAMERA)    && options.cam.device_id == info.id,
+                        info.type_.contains(DeviceType::TELESCOPE) && options.mount.device == info.id,
+                        info.type_.contains(DeviceType::FOCUSER)   && options.focuser.device == info.id,
+                        info.type_.contains(DeviceType::FLT_WHEEL) && options.filter_wheel.device == info.id,
+                    )
+                };
+
+                if want_camera {
                     let cam_res = self.hal.camera(&info.id);
                     log_if_error(&cam_res, "Get camera from HAL");
+                    if let Ok(camera) = &cam_res {
+                        // Activate outside `data.lock()`; `activate()` is idempotent
+                        log_if_error(&camera.activate(), "Activate camera on DeviceConnected");
+                    }
 
                     let mut data = self.data.lock().unwrap();
                     data.camera = cam_res.ok();
                 }
-                if info.type_.contains(DeviceType::TELESCOPE) && options.mount.device == info.id {
+                if want_mount {
                     let telescope_res = self.hal.telescope(&info.id);
                     log_if_error(&telescope_res, "Get telescope from HAL");
+                    if let Ok(telescope) = &telescope_res {
+                        log_if_error(&telescope.activate(), "Activate telescope on DeviceConnected");
+                    }
 
                     let mut data = self.data.lock().unwrap();
                     data.telescope = telescope_res.ok();
                 }
-                if info.type_.contains(DeviceType::FOCUSER) && options.focuser.device == info.id {
+                if want_focuser {
                     let focuser_res = self.hal.focuser(&info.id);
                     log_if_error(&focuser_res, "Get focuser from HAL");
+                    if let Ok(focuser) = &focuser_res {
+                        log_if_error(&focuser.activate(), "Activate focuser on DeviceConnected");
+                    }
 
                     let mut data = self.data.lock().unwrap();
                     data.focuser = focuser_res.ok();
                 }
-                if info.type_.contains(DeviceType::FLT_WHEEL) && options.filter_wheel.device == info.id {
+                if want_flt_wheel {
                     let filter_wheel_res = self.hal.filter_wheel(&info.id);
                     log_if_error(&filter_wheel_res, "Get filter wheel from HAL");
+                    if let Ok(filter_wheel) = &filter_wheel_res {
+                        log_if_error(&filter_wheel.activate(), "Activate filter wheel on DeviceConnected");
+                    }
 
                     let mut data = self.data.lock().unwrap();
                     data.filter_wheel = filter_wheel_res.ok();
@@ -94,6 +118,35 @@ impl CurDevices {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Activates the new device outside of any locks (COM drivers may block;
+    /// HAL events run synchronously on this thread). Returns `None` and reports
+    /// `StateChanged(Error)` when activation fails.
+    fn activated<D>(hal: &Arc<Hal>, device: Option<Arc<D>>) -> Option<Arc<D>>
+    where
+        D: Device + Send + Sync + ?Sized,
+    {
+        let Some(device) = device else { return None; };
+        match device.activate() {
+            Ok(_) => Some(device),
+            Err(err) => {
+                log::error!("Device {} activation failed: {err}", device.id());
+                hal.send_event(HalEvent::StateChanged(HalState::Error(err.to_string())));
+                None
+            }
+        }
+    }
+
+    /// Deactivates the replaced device (no-op for implementations where
+    /// selection always means connection).
+    fn deactivate_prev<D>(prev: &Option<Arc<D>>, context: &str)
+    where
+        D: Device + Send + Sync + ?Sized,
+    {
+        if let Some(prev) = prev {
+            log_if_error(&prev.deactivate(), context);
         }
     }
 
@@ -145,12 +198,22 @@ impl CurDevices {
         options.cam.device_id = new_camera_id.to_string();
         drop(options);
 
+        // Take the previous handle so it can be deactivated without any locks held
+        let prev_camera = self.data.lock().unwrap().camera.take();
+
         let cam_res = self.hal.camera(new_camera_id);
         log_if_error(&cam_res, "Get camera from HAL");
 
-        let mut data = self.data.lock().unwrap();
-        data.camera = cam_res.ok();
-        drop(data);
+        // Activate before storing and before the changed-event: its handler
+        // queries device capabilities, so the device must already be active
+        let new_camera = Self::activated(&self.hal, cam_res.ok());
+
+        Self::deactivate_prev(&prev_camera, "Deactivate previous camera");
+
+        {
+            let mut data = self.data.lock().unwrap();
+            data.camera = new_camera;
+        }
 
         self.events.send(Event::CameraDeviceChanged(
             new_camera_id.to_string()
@@ -200,12 +263,19 @@ impl CurDevices {
         options.mount.device = new_telescope_id.to_string();
         drop(options);
 
+        let prev_telescope = self.data.lock().unwrap().telescope.take();
+
         let telescope_res = self.hal.telescope(new_telescope_id);
         log_if_error(&telescope_res, "Get telescope from HAL");
 
-        let mut data = self.data.lock().unwrap();
-        data.telescope = telescope_res.ok();
-        drop(data);
+        let new_telescope = Self::activated(&self.hal, telescope_res.ok());
+
+        Self::deactivate_prev(&prev_telescope, "Deactivate previous telescope");
+
+        {
+            let mut data = self.data.lock().unwrap();
+            data.telescope = new_telescope;
+        }
 
         self.events.send(
             Event::MountDeviceChanged(new_telescope_id.to_string())
@@ -231,12 +301,19 @@ impl CurDevices {
         options.focuser.device = new_focuser_id.to_string();
         drop(options);
 
+        let prev_focuser = self.data.lock().unwrap().focuser.take();
+
         let focuser_res = self.hal.focuser(new_focuser_id);
         log_if_error(&focuser_res, "Get focuser from HAL");
 
-        let mut data = self.data.lock().unwrap();
-        data.focuser = focuser_res.ok();
-        drop(data);
+        let new_focuser = Self::activated(&self.hal, focuser_res.ok());
+
+        Self::deactivate_prev(&prev_focuser, "Deactivate previous focuser");
+
+        {
+            let mut data = self.data.lock().unwrap();
+            data.focuser = new_focuser;
+        }
 
         self.events.send(
             Event::FocuserDeviceChanged(new_focuser_id.to_string())
@@ -262,12 +339,19 @@ impl CurDevices {
         options.filter_wheel.device = new_filter_wheel_id.to_string();
         drop(options);
 
+        let prev_filter_wheel = self.data.lock().unwrap().filter_wheel.take();
+
         let filter_wheel_res = self.hal.filter_wheel(new_filter_wheel_id);
         log_if_error(&filter_wheel_res, "Get filter wheel from HAL");
 
-        let mut data = self.data.lock().unwrap();
-        data.filter_wheel = filter_wheel_res.ok();
-        drop(data);
+        let new_filter_wheel = Self::activated(&self.hal, filter_wheel_res.ok());
+
+        Self::deactivate_prev(&prev_filter_wheel, "Deactivate previous filter wheel");
+
+        {
+            let mut data = self.data.lock().unwrap();
+            data.filter_wheel = new_filter_wheel;
+        }
 
         self.events.send(
             Event::FilterWheelDeviceChanged(new_filter_wheel_id.to_string())

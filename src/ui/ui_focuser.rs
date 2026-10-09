@@ -179,6 +179,10 @@ impl UiModule for FocuserUi {
     }
 
     fn on_show_options_first_time(&self) {
+        // Fill the device list at first show: ASCOM Classic drivers are always
+        // available, so the list must not depend on connect events.
+        // There is no DelayedAction for the list, so update it directly
+        self.update_devices_list();
         self.correct_widgets_props();
     }
 
