@@ -23,13 +23,14 @@ use std::sync::{Arc, Mutex, RwLock};
 use ascom::camera::Camera as AcCamera;
 use ascom::camera::SensorType as AcSensorType;
 use ascom::chooser::DeviceType as AcDeviceType;
-use ascom::device::{AscomDevice, DeviceSpec as AcDeviceSpec};
+use ascom::device::{AscomDevice, DeviceSpec as AcDeviceSpec, GuideDirection as AcGuideDirection};
 use ascom::drivers::installed_drivers;
 use ascom::error::AscomErrorKind;
 use ascom::filterwheel::FilterWheel as AcFilterWheel;
 use ascom::focuser::Focuser as AcFocuser;
 use ascom::image::Image as AcImage;
 use ascom::telescope::Telescope as AcTelescope;
+use ascom::telescope::TelescopeAxis as AcTelescopeAxis;
 use bitflags::bitflags;
 
 use crate::hal::events::HalEventHandlers;
@@ -37,6 +38,8 @@ use crate::hal::events::HalEvent;
 use crate::hal::*;
 use crate::image::raw::{CfaType, RawImage, RawImageInfo};
 use crate::image::simple_fits::{FitsWriter, Header};
+
+const SIDERAL_RATE_DEG_PER_SEC: f64 = 360.0 / (23.0 * 60.0 * 60.0 + 56.0 * 60.0 + 4.09);
 
 ///////////////////////////////////////////////////////////////////////////////
 // Common machinery
@@ -1060,10 +1063,54 @@ impl Camera for AscomCamera {
 ///////////////////////////////////////////////////////////////////////////////
 // Telescope (mount)
 
+bitflags! {
+    struct TelescopeFlags: u32 {
+        const GUIDE_RATE_SUPPORTED = (1 << 0);
+        const CAN_SET_GUIDE_RATE   = (1 << 1);
+    }
+}
+
+/// COM handle plus cached data. Exists only while the device is active.
+struct TelescopeStatic {
+    device:     AcTelescope,
+    move_rates: Vec<(String, f64)>,
+    flags:      TelescopeFlags,
+}
+
+struct TelescopeData {
+    ns_reverted:   bool,
+    we_reverted:   bool,
+    axis_rate:     f64,
+    prev_state:    Option<TelescopeState>,
+    prev_tracking: Option<bool>,
+    prev_parked:   Option<bool>,
+}
+
+struct StateInternal {
+    state:       TelescopeState,
+    is_tracking: bool,
+    is_parked:   bool,
+}
+
 pub struct AscomTelescope {
     ctx:         Arc<HalCtx>,
     device_id:   Arc<String>,
     device_name: String,
+    state:       Mutex<ActState<TelescopeStatic>>,
+    data:        Mutex<TelescopeData>,
+}
+
+impl Default for TelescopeData {
+    fn default() -> Self {
+        Self {
+            ns_reverted:   false,
+            we_reverted:   false,
+            axis_rate:     1.0,
+            prev_state:    None,
+            prev_tracking: None,
+            prev_parked:   None,
+        }
+    }
 }
 
 impl AscomTelescope {
@@ -1072,14 +1119,169 @@ impl AscomTelescope {
             ctx,
             device_id:   Arc::new(info.id),
             device_name: info.name,
+            state:       Mutex::new(ActState::Idle),
+            data:        Mutex::new(TelescopeData::default()),
         }
     }
 
+    fn active_data(&self) -> eyre::Result<Arc<TelescopeStatic>> {
+        let state = self.state.lock().unwrap();
+        match &*state {
+            ActState::Active(data) => Ok(Arc::clone(data)),
+            _ => Err(not_connected(&self.device_id)),
+        }
+    }
+
+    fn active_data_opt(&self) -> Option<Arc<TelescopeStatic>> {
+        let state = self.state.lock().unwrap();
+        match &*state {
+            ActState::Active(data) => Some(Arc::clone(data)),
+            _ => None,
+        }
+    }
+
+    fn is_activated(&self) -> bool {
+        matches!(&*self.state.lock().unwrap(), ActState::Active(_))
+    }
+
+    /// Opens the COM object, connects, and builds the move rate list.
+    /// Blocking: runs on the caller thread with no external locks held.
+    fn activate_impl(&self) -> eyre::Result<TelescopeStatic> {
+        let device = ac_err(
+            &format!("cannot open ASCOM telescope {}", self.device_id),
+            AcTelescope::open(&AcDeviceSpec::new(self.device_id.as_str()))
+        )?;
+
+        if let Err(err) = device.set_connected(true) {
+            eyre::bail!("cannot connect ASCOM telescope {}: {err}", self.device_id);
+        }
+
+        let caps = match device.capabilities() {
+            Ok(caps) => caps,
+            Err(err) => {
+                log::warn!("ASCOM telescope {}: cannot read capabilities: {err}", self.device_id);
+                Default::default()
+            }
+        };
+
+        let prim_axis_rates = device.axis_rates(AcTelescopeAxis::Primary).unwrap_or_default();
+        let sec_axis_rates = device.axis_rates(AcTelescopeAxis::Secondary).unwrap_or_default();
+
+        let prim_max_rate = prim_axis_rates.iter()
+            .map(|range| range.maximum)
+            .max_by(|x, y| f64::partial_cmp(x, y).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(SIDERAL_RATE_DEG_PER_SEC);
+        let sec_max_rate = sec_axis_rates.iter()
+            .map(|range| range.maximum)
+            .max_by(|x, y| f64::partial_cmp(x, y).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(SIDERAL_RATE_DEG_PER_SEC);
+        let max_rate = f64::min(prim_max_rate, sec_max_rate);
+
+        let mut move_rates = Vec::new();
+        for rate in [1, 5, 10, 25, 50, 100, 250, 500, 1000] {
+            let rate_is_deg_in_sec = SIDERAL_RATE_DEG_PER_SEC * rate as f64;
+            if rate_is_deg_in_sec >= 0.5 * max_rate {
+                break;
+            }
+            move_rates.push((format!("x{rate}"), rate_is_deg_in_sec));
+        }
+        move_rates.push(("1/2 Max".to_string(), 0.5 * max_rate));
+        move_rates.push(("Max".to_string(), max_rate));
+
+        // Classic has no `CanPulseGuide`-like flag for reading guide rates:
+        // probing the property is the only way to know
+        let guide_rate_supported = device.guide_rate_right_ascension().is_ok();
+        let can_set_guide_rate = caps.supports("CanSetGuideRates");
+
+        let mut flags = TelescopeFlags::empty();
+        flags.set(TelescopeFlags::GUIDE_RATE_SUPPORTED, guide_rate_supported);
+        flags.set(TelescopeFlags::CAN_SET_GUIDE_RATE, can_set_guide_rate);
+
+        Ok(TelescopeStatic { device, move_rates, flags })
+    }
+
+    /// Ready events: exactly once per successful activation, outside any lock.
+    fn send_ready_events(&self) {
+        self.ctx.event_handlers.send(HalEvent::TelescopeSlewRateListReady(
+            Arc::clone(&self.device_id)
+        ));
+    }
+
     fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+        let Some(st) = self.active_data_opt() else { return Ok(()); };
+
+        let state = match self.state_internal(&st) {
+            Ok(state) => state,
+            Err(err) => {
+                log::debug!("ASCOM telescope {}: cannot read state: {err}", self.device_id);
+                StateInternal {
+                    state: TelescopeState::Error, is_parked: false, is_tracking: false,
+                }
+            }
+        };
+
+        let mut data = self.data.lock().unwrap();
+        let state_changed = data.prev_state != Some(state.state);
+        let tracking_changed = data.prev_tracking != Some(state.is_tracking);
+        let parked_changed = data.prev_parked != Some(state.is_parked);
+        data.prev_state = Some(state.state);
+        data.prev_tracking = Some(state.is_tracking);
+        data.prev_parked = Some(state.is_parked);
+        drop(data);
+
+        if state_changed {
+            self.ctx.event_handlers.send(HalEvent::TelescopeStateChanged {
+                device_id: Arc::clone(&self.device_id),
+                state:     state.state,
+            });
+        }
+        if tracking_changed {
+            self.ctx.event_handlers.send(HalEvent::TelescopeTrackingChanged {
+                device_id: Arc::clone(&self.device_id),
+                tracking:  state.is_tracking,
+            });
+        }
+        if parked_changed {
+            self.ctx.event_handlers.send(
+                if state.is_parked {
+                    HalEvent::TelescopeParked(Arc::clone(&self.device_id))
+                } else {
+                    HalEvent::TelescopeUnparked(Arc::clone(&self.device_id))
+                }
+            );
+        }
         Ok(())
     }
 
+    fn state_internal(&self, st: &TelescopeStatic) -> eyre::Result<StateInternal> {
+        let is_tracking = ac_err("Tracking", st.device.tracking())?;
+        let is_parked = ac_err("AtPark", st.device.at_park())?;
+        let is_slewing = ac_err("Slewing", st.device.slewing())?;
+        let is_pulse_guiding = ac_err("IsPulseGuiding", st.device.is_pulse_guiding())?;
+        let state = if is_parked {
+            TelescopeState::Parked
+        } else if is_pulse_guiding {
+            TelescopeState::Correction
+        } else if is_slewing {
+            TelescopeState::Slewing
+        } else if is_tracking {
+            TelescopeState::Tracking
+        } else {
+            TelescopeState::Stopped
+        };
+        Ok(StateInternal { state, is_tracking, is_parked })
+    }
+
     fn deactivate_impl(&self) -> eyre::Result<()> {
+        let active = take_active(&mut self.state.lock().unwrap());
+        if let Some(st) = active {
+            if let Err(err) = st.device.set_connected(false) {
+                log::error!("cannot disconnect ASCOM telescope {}: {err}", self.device_id);
+            }
+            // Drops the driver COM thread outside any lock (may block up to 5 s)
+            drop(st);
+            self.ctx.device_deactivated();
+        }
         Ok(())
     }
 }
@@ -1093,18 +1295,47 @@ impl Device for AscomTelescope {
         &self.device_name
     }
 
+    // No COM reads here: called on every widget-state correction
     fn is_active(&self) -> eyre::Result<bool> {
-        Ok(false)
+        Ok(self.is_activated())
+    }
+
+    fn activate(&self) -> eyre::Result<()> {
+        if !begin_activation(&mut self.state.lock().unwrap())? {
+            return Ok(()); // already active: no duplicate Ready events
+        }
+
+        match self.activate_impl() {
+            Ok(st) => {
+                *self.state.lock().unwrap() = ActState::Active(Arc::new(st));
+                self.ctx.device_activated();
+                self.send_ready_events();
+                Ok(())
+            }
+            Err(err) => {
+                *self.state.lock().unwrap() = ActState::Idle;
+                Err(err)
+            }
+        }
+    }
+
+    fn deactivate(&self) -> eyre::Result<()> {
+        self.deactivate_impl()
     }
 }
 
 impl Telescope for AscomTelescope {
     fn state(&self) -> eyre::Result<TelescopeState> {
-        Err(not_connected(&self.device_id))
+        let st = self.active_data()?;
+        Ok(self.state_internal(&st)?.state)
     }
 
     fn site(&self) -> eyre::Result<TelescopeSite> {
-        Err(not_connected(&self.device_id))
+        let st = self.active_data()?;
+        let latitude = ac_err("SiteLatitude", st.device.site_latitude())?;
+        let longitude = ac_err("SiteLongitude", st.device.site_longitude())?;
+        let elevation = ac_err("SiteElevation", st.device.site_elevation())?;
+        Ok(TelescopeSite { latitude, longitude, elevation })
     }
 
     fn is_abort_motion_supported(&self) -> bool {
@@ -1112,87 +1343,185 @@ impl Telescope for AscomTelescope {
     }
 
     fn abort_motion(&self) -> eyre::Result<()> {
-        Err(not_connected(&self.device_id))
-    }
-
-    fn is_parked(&self) -> eyre::Result<bool> {
-        Err(not_connected(&self.device_id))
-    }
-
-    fn park(&self) -> eyre::Result<()> {
-        Err(not_connected(&self.device_id))
-    }
-
-    fn unpark(&self) -> eyre::Result<()> {
-        Err(not_connected(&self.device_id))
-    }
-
-    fn is_tracking(&self) -> eyre::Result<bool> {
-        Err(not_connected(&self.device_id))
-    }
-
-    fn track(&self, _enabled: bool) -> eyre::Result<()> {
-        Err(not_connected(&self.device_id))
-    }
-
-    fn revert_motion(&self, _reverse_ns: bool, _reverse_we: bool) -> eyre::Result<()> {
+        let st = self.active_data()?;
+        // Drivers report NotImplemented for axes they do not have
+        _ = st.device.abort_slew();
+        _ = st.device.move_axis(AcTelescopeAxis::Primary, 0.0);
+        _ = st.device.move_axis(AcTelescopeAxis::Secondary, 0.0);
+        _ = st.device.move_axis(AcTelescopeAxis::Tertiary, 0.0);
         Ok(())
     }
 
-    fn move_(&self, _direction: TelescopeMoveDir) -> eyre::Result<()> {
-        Err(not_connected(&self.device_id))
+    fn is_parked(&self) -> eyre::Result<bool> {
+        let st = self.active_data()?;
+        ac_err("AtPark", st.device.at_park())
+    }
+
+    fn park(&self) -> eyre::Result<()> {
+        let st = self.active_data()?;
+        // Async: the park motion completes on its own (state comes from the tick)
+        ac_err("Park", st.device.park_async())
+    }
+
+    fn unpark(&self) -> eyre::Result<()> {
+        let st = self.active_data()?;
+        ac_err("Unpark", st.device.unpark())
+    }
+
+    fn is_tracking(&self) -> eyre::Result<bool> {
+        let st = self.active_data()?;
+        ac_err("Tracking", st.device.tracking())
+    }
+
+    fn track(&self, enabled: bool) -> eyre::Result<()> {
+        let st = self.active_data()?;
+        ac_err("SetTracking", st.device.set_tracking(enabled))
+    }
+
+    fn revert_motion(&self, reverse_ns: bool, reverse_we: bool) -> eyre::Result<()> {
+        let mut data = self.data.lock().unwrap();
+        data.ns_reverted = reverse_ns;
+        data.we_reverted = reverse_we;
+        Ok(())
+    }
+
+    fn move_(&self, direction: TelescopeMoveDir) -> eyre::Result<()> {
+        let st = self.active_data()?;
+
+        let (axis_rate, ns_reverted, we_reverted) = {
+            let data = self.data.lock().unwrap();
+            (data.axis_rate, data.ns_reverted, data.we_reverted)
+        };
+
+        let move_prim_axis = |rate: f64| -> eyre::Result<()> {
+            let rate = if we_reverted { -rate } else { rate };
+            ac_err("MoveAxis(Primary)", st.device.move_axis(AcTelescopeAxis::Primary, rate))
+        };
+
+        let move_sec_axis = |rate: f64| -> eyre::Result<()> {
+            let rate = if ns_reverted { -rate } else { rate };
+            ac_err("MoveAxis(Secondary)", st.device.move_axis(AcTelescopeAxis::Secondary, rate))
+        };
+
+        match direction {
+            TelescopeMoveDir::North => move_sec_axis(axis_rate)?,
+            TelescopeMoveDir::South => move_sec_axis(-axis_rate)?,
+            TelescopeMoveDir::West => move_prim_axis(axis_rate)?,
+            TelescopeMoveDir::East => move_prim_axis(-axis_rate)?,
+            TelescopeMoveDir::NorthWest => {
+                move_sec_axis(axis_rate)?;
+                move_prim_axis(axis_rate)?;
+            }
+            TelescopeMoveDir::NorthEast => {
+                move_sec_axis(axis_rate)?;
+                move_prim_axis(-axis_rate)?;
+            }
+            TelescopeMoveDir::SouthWest => {
+                move_sec_axis(-axis_rate)?;
+                move_prim_axis(axis_rate)?;
+            }
+            TelescopeMoveDir::SouthEast => {
+                move_sec_axis(-axis_rate)?;
+                move_prim_axis(-axis_rate)?;
+            }
+        }
+        Ok(())
     }
 
     fn slew_speed_list(&self) -> eyre::Result<Vec<(String, String)>> {
-        Err(not_connected(&self.device_id))
+        let st = self.active_data()?;
+        let list = st.move_rates
+            .iter()
+            .map(|(name, _)| (name.to_string(), name.to_string()))
+            .collect();
+        Ok(list)
     }
 
-    fn set_slew_speed(&self, _speed_id: &str) -> eyre::Result<()> {
-        Err(not_connected(&self.device_id))
+    fn set_slew_speed(&self, speed_id: &str) -> eyre::Result<()> {
+        let st = self.active_data()?;
+        if let Some((_, rate)) = st.move_rates.iter().find(|(name, _)| name == speed_id) {
+            let rate = *rate;
+            self.data.lock().unwrap().axis_rate = rate;
+        }
+        Ok(())
     }
 
     fn eq_coord(&self) -> eyre::Result<(f64, f64)> {
-        Err(not_connected(&self.device_id))
+        let st = self.active_data()?;
+        let ra = ac_err("RightAscension", st.device.right_ascension())?;
+        let dec = ac_err("Declination", st.device.declination())?;
+        Ok((ra, dec))
     }
 
-    fn goto_and_track(&self, _ra: f64, _dec: f64) -> eyre::Result<()> {
-        Err(not_connected(&self.device_id))
+    fn goto_and_track(&self, ra: f64, dec: f64) -> eyre::Result<()> {
+        let st = self.active_data()?;
+        ac_err("SlewToCoordinatesAsync", st.device.slew_to_coordinates_async(ra, dec))
     }
 
     fn is_slewing(&self) -> eyre::Result<bool> {
-        Err(not_connected(&self.device_id))
+        let st = self.active_data()?;
+        ac_err("Slewing", st.device.slewing())
     }
 
-    fn sync(&self, _ra: f64, _dec: f64) -> eyre::Result<()> {
-        Err(not_connected(&self.device_id))
+    fn sync(&self, ra: f64, dec: f64) -> eyre::Result<()> {
+        let st = self.active_data()?;
+        ac_err("SyncToCoordinates", st.device.sync_to_coordinates(ra, dec))
     }
 
     fn is_guide_rate_supported(&self) -> eyre::Result<bool> {
-        Ok(false)
+        Ok(self.active_data().map(|st| st.flags.contains(TelescopeFlags::GUIDE_RATE_SUPPORTED))
+            .unwrap_or(false))
     }
 
+    // Classic guide rates are fractions of sidereal rate already
     fn guide_rate(&self) -> eyre::Result<(f64, f64)> {
-        Err(not_connected(&self.device_id))
+        let st = self.active_data()?;
+        let ns = ac_err("GuideRateDeclination", st.device.guide_rate_declination())?;
+        let we = ac_err("GuideRateRightAscension", st.device.guide_rate_right_ascension())?;
+        Ok((ns, we))
     }
 
     fn pulse_max_duration(&self) -> eyre::Result<(f64, f64)> {
-        Err(not_connected(&self.device_id))
+        Ok((3000.0, 3000.0))
     }
 
     fn can_set_guide_rate(&self) -> eyre::Result<bool> {
-        Ok(false)
+        Ok(self.active_data().map(|st| st.flags.contains(TelescopeFlags::CAN_SET_GUIDE_RATE))
+            .unwrap_or(false))
     }
 
-    fn set_guide_rate(&self, _rate_ns: f64, _rate_we: f64) -> eyre::Result<()> {
-        Err(not_connected(&self.device_id))
+    fn set_guide_rate(&self, rate_ns: f64, rate_we: f64) -> eyre::Result<()> {
+        let st = self.active_data()?;
+        ac_err("SetGuideRateDeclination", st.device.set_guide_rate_declination(rate_ns))?;
+        ac_err("SetGuideRateRightAscension", st.device.set_guide_rate_right_ascension(rate_we))
     }
 
-    fn pulse_guide(&self, _duration_ns: f64, _duration_we: f64) -> eyre::Result<()> {
-        Err(not_connected(&self.device_id))
+    fn pulse_guide(&self, duration_ns: f64, duration_we: f64) -> eyre::Result<()> {
+        let st = self.active_data()?;
+        if duration_ns != 0.0 {
+            let dir = if duration_ns < 0.0 {
+                AcGuideDirection::North
+            } else {
+                AcGuideDirection::South
+            };
+            let duration = f64::abs(duration_ns) as i32;
+            ac_err("PulseGuide", st.device.pulse_guide(dir, duration))?;
+        }
+        if duration_we != 0.0 {
+            let dir = if duration_we < 0.0 {
+                AcGuideDirection::West
+            } else {
+                AcGuideDirection::East
+            };
+            let duration = f64::abs(duration_we) as i32;
+            ac_err("PulseGuide", st.device.pulse_guide(dir, duration))?;
+        }
+        Ok(())
     }
 
     fn is_pulse_guiding(&self) -> eyre::Result<bool> {
-        Err(not_connected(&self.device_id))
+        let st = self.active_data()?;
+        ac_err("IsPulseGuiding", st.device.is_pulse_guiding())
     }
 }
 
