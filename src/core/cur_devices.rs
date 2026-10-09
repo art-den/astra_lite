@@ -140,12 +140,13 @@ impl CurDevices {
     }
 
     /// Deactivates the replaced device (no-op for implementations where
-    /// selection always means connection).
-    fn deactivate_prev<D>(prev: &Option<Arc<D>>, context: &str)
+    /// selection always means connection). Skipped when the very same device is
+    /// applied again, otherwise `apply_*()` would deactivate what it activated.
+    fn deactivate_prev<D>(prev: &Option<Arc<D>>, new_id: &str, context: &str)
     where
         D: Device + Send + Sync + ?Sized,
     {
-        if let Some(prev) = prev {
+        if let Some(prev) = prev && prev.id() != new_id {
             log_if_error(&prev.deactivate(), context);
         }
     }
@@ -164,10 +165,21 @@ impl CurDevices {
     }
 
     pub fn change_camera(self: &Arc<Self>, new_camera_id: &str) {
+        self.change_camera_impl(new_camera_id, false);
+    }
+
+    /// Applies and activates the camera even when `options` already stores this id.
+    /// ASCOM Classic has no connect events, so after a restart nothing but this
+    /// would activate the saved driver.
+    pub fn apply_camera(self: &Arc<Self>, new_camera_id: &str) {
+        self.change_camera_impl(new_camera_id, true);
+    }
+
+    fn change_camera_impl(self: &Arc<Self>, new_camera_id: &str, force: bool) {
         let mut options = self.options.write().unwrap();
         let prev_camera_id = options.cam.device_id.clone();
         {
-            if prev_camera_id == new_camera_id { return; }
+            if !force && prev_camera_id == new_camera_id { return; }
             let options = &mut *options; // To To pacify borrow checker
 
             // Store previous camera options
@@ -208,7 +220,7 @@ impl CurDevices {
         // queries device capabilities, so the device must already be active
         let new_camera = Self::activated(&self.hal, cam_res.ok());
 
-        Self::deactivate_prev(&prev_camera, "Deactivate previous camera");
+        Self::deactivate_prev(&prev_camera, new_camera_id, "Deactivate previous camera");
 
         {
             let mut data = self.data.lock().unwrap();
@@ -258,8 +270,17 @@ impl CurDevices {
     }
 
     pub fn change_telescope(&self, new_telescope_id: &str) {
+        self.change_telescope_impl(new_telescope_id, false);
+    }
+
+    /// See `apply_camera()`
+    pub fn apply_telescope(&self, new_telescope_id: &str) {
+        self.change_telescope_impl(new_telescope_id, true);
+    }
+
+    fn change_telescope_impl(&self, new_telescope_id: &str, force: bool) {
         let mut options = self.options.write().unwrap();
-        if options.mount.device == new_telescope_id { return; }
+        if !force && options.mount.device == new_telescope_id { return; }
         options.mount.device = new_telescope_id.to_string();
         drop(options);
 
@@ -270,7 +291,7 @@ impl CurDevices {
 
         let new_telescope = Self::activated(&self.hal, telescope_res.ok());
 
-        Self::deactivate_prev(&prev_telescope, "Deactivate previous telescope");
+        Self::deactivate_prev(&prev_telescope, new_telescope_id, "Deactivate previous telescope");
 
         {
             let mut data = self.data.lock().unwrap();
@@ -296,8 +317,17 @@ impl CurDevices {
     }
 
     pub fn change_focuser(&self, new_focuser_id: &str) {
+        self.change_focuser_impl(new_focuser_id, false);
+    }
+
+    /// See `apply_camera()`
+    pub fn apply_focuser(&self, new_focuser_id: &str) {
+        self.change_focuser_impl(new_focuser_id, true);
+    }
+
+    fn change_focuser_impl(&self, new_focuser_id: &str, force: bool) {
         let mut options = self.options.write().unwrap();
-        if options.focuser.device == new_focuser_id { return; }
+        if !force && options.focuser.device == new_focuser_id { return; }
         options.focuser.device = new_focuser_id.to_string();
         drop(options);
 
@@ -308,7 +338,7 @@ impl CurDevices {
 
         let new_focuser = Self::activated(&self.hal, focuser_res.ok());
 
-        Self::deactivate_prev(&prev_focuser, "Deactivate previous focuser");
+        Self::deactivate_prev(&prev_focuser, new_focuser_id, "Deactivate previous focuser");
 
         {
             let mut data = self.data.lock().unwrap();
@@ -334,8 +364,17 @@ impl CurDevices {
     }
 
     pub fn change_filter_wheel(&self, new_filter_wheel_id: &str) {
+        self.change_filter_wheel_impl(new_filter_wheel_id, false);
+    }
+
+    /// See `apply_camera()`
+    pub fn apply_filter_wheel(&self, new_filter_wheel_id: &str) {
+        self.change_filter_wheel_impl(new_filter_wheel_id, true);
+    }
+
+    fn change_filter_wheel_impl(&self, new_filter_wheel_id: &str, force: bool) {
         let mut options = self.options.write().unwrap();
-        if options.filter_wheel.device == new_filter_wheel_id { return; }
+        if !force && options.filter_wheel.device == new_filter_wheel_id { return; }
         options.filter_wheel.device = new_filter_wheel_id.to_string();
         drop(options);
 
@@ -346,7 +385,7 @@ impl CurDevices {
 
         let new_filter_wheel = Self::activated(&self.hal, filter_wheel_res.ok());
 
-        Self::deactivate_prev(&prev_filter_wheel, "Deactivate previous filter wheel");
+        Self::deactivate_prev(&prev_filter_wheel, new_filter_wheel_id, "Deactivate previous filter wheel");
 
         {
             let mut data = self.data.lock().unwrap();

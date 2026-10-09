@@ -193,7 +193,8 @@ impl Engine {
 
     /// Activates ASCOM Classic drivers saved in options (selection == connection
     /// there). Called from `main.rs` after the UI is up, when options are loaded.
-    /// `change_*` early-exits for devices the UI already applied, so this is idempotent.
+    /// `apply_*()` is used on purpose: the saved id already sits in `options`, so
+    /// `change_*()` would early-exit and nothing would activate the driver.
     #[cfg(windows)]
     pub fn autoconnect_ascom(self: &Arc<Self>) {
         let (cam_id, mount_id, focuser_id, flt_wheel_id) = {
@@ -210,19 +211,19 @@ impl Engine {
 
         if !cam_id.is_empty() && ascom.find_camera(&cam_id).is_some() {
             log::info!("Autoconnecting ASCOM camera {cam_id}");
-            self.cur_devices.change_camera(&cam_id);
+            self.cur_devices.apply_camera(&cam_id);
         }
         if !mount_id.is_empty() && ascom.find_telescope(&mount_id).is_some() {
             log::info!("Autoconnecting ASCOM mount {mount_id}");
-            self.cur_devices.change_telescope(&mount_id);
+            self.cur_devices.apply_telescope(&mount_id);
         }
         if !focuser_id.is_empty() && ascom.find_focuser(&focuser_id).is_some() {
             log::info!("Autoconnecting ASCOM focuser {focuser_id}");
-            self.cur_devices.change_focuser(&focuser_id);
+            self.cur_devices.apply_focuser(&focuser_id);
         }
         if !flt_wheel_id.is_empty() && ascom.find_filter_wheel(&flt_wheel_id).is_some() {
             log::info!("Autoconnecting ASCOM filter wheel {flt_wheel_id}");
-            self.cur_devices.change_filter_wheel(&flt_wheel_id);
+            self.cur_devices.apply_filter_wheel(&flt_wheel_id);
         }
     }
 
