@@ -4,6 +4,8 @@ pub mod events;
 pub mod hal_indi;
 
 #[cfg(windows)]
+pub mod hal_ascom;
+#[cfg(windows)]
 pub mod hal_ascom_alpaca;
 
 use bitflags::bitflags;
@@ -12,6 +14,8 @@ use std::{ops::RangeInclusive, path::Path, sync::Arc};
 
 use crate::hal::{events::{EventHandlerId, HalEvent, HalEventHandlers}, hal_indi::IndiHalImpl};
 
+#[cfg(windows)]
+use super::hal::hal_ascom::AscomHalImpl;
 #[cfg(windows)]
 use super::hal::hal_ascom_alpaca::AscomAlpacaHalImpl;
 
@@ -60,6 +64,8 @@ pub struct Hal {
     list:           Vec<Arc<dyn HalImpl + Send + Sync + 'static>>,
     indi:           Arc<IndiHalImpl>,
     #[cfg(windows)]
+    ascom:          Arc<AscomHalImpl>,
+    #[cfg(windows)]
     ascom_alpaca:   Arc<AscomAlpacaHalImpl>,
     event_handlers: Arc<HalEventHandlers>,
 }
@@ -79,7 +85,14 @@ impl Hal {
         #[cfg(windows)]
         list.push(Arc::clone(&ascom_alpaca) as Arc<_>);
 
+        #[cfg(windows)]
+        let ascom = AscomHalImpl::new(&event_handlers);
+        #[cfg(windows)]
+        list.push(Arc::clone(&ascom) as Arc<_>);
+
         Arc::new(Self {
+            #[cfg(windows)]
+            ascom,
             #[cfg(windows)]
             ascom_alpaca,
             indi,
@@ -97,6 +110,11 @@ impl Hal {
         &self.ascom_alpaca
     }
 
+    #[cfg(windows)]
+    pub fn ascom_impl(&self) -> &Arc<AscomHalImpl> {
+        &self.ascom
+    }
+
     pub fn connect_event_handler(
         &self,
         fun: impl Fn(HalEvent) + Send + Sync + 'static
@@ -110,6 +128,11 @@ impl Hal {
 
     pub fn disconnect_all_subscribers(&self) {
         self.event_handlers.disconnect_all();
+    }
+
+    /// Sends a HAL event to all subscribers (used by core to report device errors)
+    pub fn send_event(&self, event: HalEvent) {
+        self.event_handlers.send(event);
     }
 
     pub fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
@@ -205,6 +228,14 @@ pub trait Device {
     fn id(&self) -> &str;
     fn name(&self) -> &str;
     fn is_active(&self) -> eyre::Result<bool>;
+
+    /// Connects the device. Must be idempotent. Called outside of any locks
+    /// (it may block and HAL events are executed synchronously on the caller thread).
+    /// No-op for implementations where device selection means connection.
+    fn activate(&self) -> eyre::Result<()> { Ok(()) }
+
+    /// Disconnects the device. Must be idempotent and never fail hard.
+    fn deactivate(&self) -> eyre::Result<()> { Ok(()) }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
