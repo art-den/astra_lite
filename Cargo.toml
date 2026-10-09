@@ -7,6 +7,12 @@ repository = "https://github.com/art-den/astra_lite"
 license = "MIT"
 build = "build.rs"
 
+[workspace]
+members = ["crates/ascom", "crates/indi"]
+# `ascom` is Windows-only and its live tests need ASCOM drivers installed, so the
+# default members stay at the root package.
+default-members = ["."]
+
 [dependencies]
 gtk = "0.18"
 pangocairo = "0.18"
