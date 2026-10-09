@@ -195,6 +195,14 @@ fn app_activate_handler(app: &gtk::Application) {
         app_shutdown_handler(app, &engine);
     }));
 
+    // Autoconnect saved ASCOM Classic drivers once the UI is up (Windows only)
+
+    #[cfg(windows)]
+    glib::timeout_add_local(Duration::from_millis(700), clone!(@strong engine => move || {
+        engine.autoconnect_ascom();
+        glib::ControlFlow::Break
+    }));
+
     // Run the UI debug scenario one second after startup if launched with --debug
 
     if std::env::args().any(|arg| arg == "--debug") {

@@ -116,6 +116,11 @@ pub struct Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        // Same as Engine::stop(): panic = "abort" bypasses stop(), and a driver
+        // survives the process unless it was disconnected here
+        #[cfg(windows)]
+        log_if_error(&self.hal.ascom_impl().disconnect_all(), "Disconnect ASCOM Classic on Engine::drop");
+
         log::info!("Engine dropped");
     }
 }
@@ -165,6 +170,15 @@ impl Engine {
 
         log::info!("Done");
 
+        // ASCOM Classic drivers must be disconnected explicitly: dropping the last
+        // handle leaves `Connected` set. Must happen before HAL subscribers die.
+        #[cfg(windows)]
+        {
+            log::info!("Disconnecting from ASCOM Classic...");
+            let res = self.hal.ascom_impl().disconnect_all();
+            log_if_error(&res, "Disconnect ASCOM Classic on Engine::stop");
+        }
+
         log::info!("Disconnecting from INDI...");
         let indi_hal = self.hal.indi_impl();
         indi_hal.indi().disconnect_all_event_handlers(); // TODO: move into hal
@@ -175,6 +189,41 @@ impl Engine {
         log::info!("Stopping HAL...");
         self.hal.disconnect_all_subscribers();
         log::info!("Done!");
+    }
+
+    /// Activates ASCOM Classic drivers saved in options (selection == connection
+    /// there). Called from `main.rs` after the UI is up, when options are loaded.
+    /// `change_*` early-exits for devices the UI already applied, so this is idempotent.
+    #[cfg(windows)]
+    pub fn autoconnect_ascom(self: &Arc<Self>) {
+        let (cam_id, mount_id, focuser_id, flt_wheel_id) = {
+            let options = self.options.read().unwrap();
+            (
+                options.cam.device_id.clone(),
+                options.mount.device.clone(),
+                options.focuser.device.clone(),
+                options.filter_wheel.device.clone(),
+            )
+        };
+
+        let ascom = self.hal.ascom_impl();
+
+        if !cam_id.is_empty() && ascom.find_camera(&cam_id).is_some() {
+            log::info!("Autoconnecting ASCOM camera {cam_id}");
+            self.cur_devices.change_camera(&cam_id);
+        }
+        if !mount_id.is_empty() && ascom.find_telescope(&mount_id).is_some() {
+            log::info!("Autoconnecting ASCOM mount {mount_id}");
+            self.cur_devices.change_telescope(&mount_id);
+        }
+        if !focuser_id.is_empty() && ascom.find_focuser(&focuser_id).is_some() {
+            log::info!("Autoconnecting ASCOM focuser {focuser_id}");
+            self.cur_devices.change_focuser(&focuser_id);
+        }
+        if !flt_wheel_id.is_empty() && ascom.find_filter_wheel(&flt_wheel_id).is_some() {
+            log::info!("Autoconnecting ASCOM filter wheel {flt_wheel_id}");
+            self.cur_devices.change_filter_wheel(&flt_wheel_id);
+        }
     }
 
     fn set_ext_guider_events_handler(self: &Arc<Self>) {
