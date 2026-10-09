@@ -27,6 +27,7 @@ use ascom::device::{AscomDevice, DeviceSpec as AcDeviceSpec, GuideDirection as A
 use ascom::drivers::installed_drivers;
 use ascom::error::AscomErrorKind;
 use ascom::filterwheel::FilterWheel as AcFilterWheel;
+use ascom::filterwheel::slot_of as ac_slot_of;
 use ascom::focuser::Focuser as AcFocuser;
 use ascom::image::Image as AcImage;
 use ascom::telescope::Telescope as AcTelescope;
@@ -1528,10 +1529,27 @@ impl Telescope for AscomTelescope {
 ///////////////////////////////////////////////////////////////////////////////
 // Focuser
 
+/// COM handle plus cached data. Exists only while the device is active.
+struct FocuserStatic {
+    device:        AcFocuser,
+    absolute:      bool,
+    max_step:      i32,
+    max_increment: i32,
+}
+
+#[derive(Default)]
+struct FocuserData {
+    prev_state: Option<FocuserState>,
+    prev_pos:   Option<i32>,
+    prev_temp:  Option<f64>,
+}
+
 pub struct AscomFocuser {
     ctx:         Arc<HalCtx>,
     device_id:   Arc<String>,
     device_name: String,
+    state:       Mutex<ActState<FocuserStatic>>,
+    data:        Mutex<FocuserData>,
 }
 
 impl AscomFocuser {
@@ -1540,14 +1558,119 @@ impl AscomFocuser {
             ctx,
             device_id:   Arc::new(info.id),
             device_name: info.name,
+            state:       Mutex::new(ActState::Idle),
+            data:        Mutex::new(FocuserData::default()),
+        }
+    }
+
+    fn active_data(&self) -> eyre::Result<Arc<FocuserStatic>> {
+        let state = self.state.lock().unwrap();
+        match &*state {
+            ActState::Active(data) => Ok(Arc::clone(data)),
+            _ => Err(not_connected(&self.device_id)),
+        }
+    }
+
+    fn active_data_opt(&self) -> Option<Arc<FocuserStatic>> {
+        let state = self.state.lock().unwrap();
+        match &*state {
+            ActState::Active(data) => Some(Arc::clone(data)),
+            _ => None,
+        }
+    }
+
+    fn is_activated(&self) -> bool {
+        matches!(&*self.state.lock().unwrap(), ActState::Active(_))
+    }
+
+    /// Blocking: runs on the caller thread with no external locks held.
+    fn activate_impl(&self) -> eyre::Result<FocuserStatic> {
+        let device = ac_err(
+            &format!("cannot open ASCOM focuser {}", self.device_id),
+            AcFocuser::open(&AcDeviceSpec::new(self.device_id.as_str()))
+        )?;
+
+        if let Err(err) = device.set_connected(true) {
+            eyre::bail!("cannot connect ASCOM focuser {}: {err}", self.device_id);
+        }
+
+        let absolute = ac_err("Absolute", device.absolute())?;
+        if !absolute {
+            log::warn!(
+                "ASCOM focuser {}: Absolute == false, absolute positions emulated as deltas",
+                self.device_id
+            );
+        }
+        let max_step = device.max_step().unwrap_or(0);
+        let max_increment = device.max_increment().unwrap_or(i32::MAX);
+
+        Ok(FocuserStatic { device, absolute, max_step, max_increment })
+    }
+
+    /// Ready events: exactly once per successful activation, outside any lock.
+    fn send_ready_events(&self) {
+        let Some(st) = self.active_data_opt() else { return };
+        if let Ok(abs_value) = st.device.position() {
+            self.ctx.event_handlers.send(HalEvent::FocuserAbsValueCanBeControlled {
+                device_id: Arc::clone(&self.device_id),
+                abs_value: abs_value as f64,
+            });
         }
     }
 
     fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+        let Some(st) = self.active_data_opt() else { return Ok(()); };
+
+        let state = match st.device.is_moving() {
+            Ok(true)  => FocuserState::Moving,
+            Ok(false) => FocuserState::Stopped,
+            Err(_)    => FocuserState::Error,
+        };
+        let pos = st.device.position().unwrap_or(-1);
+        let temperature = st.device.temperature().unwrap_or(25.0);
+
+        let mut data = self.data.lock().unwrap();
+        let state_changed = data.prev_state != Some(state);
+        let pos_changed = data.prev_pos != Some(pos);
+        let temp_changed = data.prev_temp != Some(temperature);
+        data.prev_state = Some(state);
+        data.prev_pos = Some(pos);
+        data.prev_temp = Some(temperature);
+        drop(data);
+
+        if state_changed {
+            self.ctx.event_handlers.send(HalEvent::FocuserStateChanged {
+                device_id: Arc::clone(&self.device_id),
+                state,
+            });
+        }
+        if pos_changed {
+            self.ctx.event_handlers.send(HalEvent::FocuserAbsValueChanged {
+                device_id: Arc::clone(&self.device_id),
+                abs_value: pos as f64,
+            });
+        }
+        if temp_changed {
+            self.ctx.event_handlers.send(HalEvent::FocuserTemperatureChanged {
+                device_id:   Arc::clone(&self.device_id),
+                temperature,
+            });
+        }
+
         Ok(())
     }
 
     fn deactivate_impl(&self) -> eyre::Result<()> {
+        let active = take_active(&mut self.state.lock().unwrap());
+        if let Some(st) = active {
+            *self.data.lock().unwrap() = FocuserData::default();
+            if let Err(err) = st.device.set_connected(false) {
+                log::error!("cannot disconnect ASCOM focuser {}: {err}", self.device_id);
+            }
+            // Drops the driver COM thread outside any lock (may block up to 5 s)
+            drop(st);
+            self.ctx.device_deactivated();
+        }
         Ok(())
     }
 }
@@ -1561,40 +1684,97 @@ impl Device for AscomFocuser {
         &self.device_name
     }
 
+    // No COM reads here: called on every widget-state correction
     fn is_active(&self) -> eyre::Result<bool> {
-        Ok(false)
+        Ok(self.is_activated())
+    }
+
+    fn activate(&self) -> eyre::Result<()> {
+        if !begin_activation(&mut self.state.lock().unwrap())? {
+            return Ok(()); // already active: no duplicate Ready events
+        }
+
+        match self.activate_impl() {
+            Ok(st) => {
+                *self.state.lock().unwrap() = ActState::Active(Arc::new(st));
+                self.ctx.device_activated();
+                self.send_ready_events();
+                Ok(())
+            }
+            Err(err) => {
+                *self.state.lock().unwrap() = ActState::Idle;
+                Err(err)
+            }
+        }
+    }
+
+    fn deactivate(&self) -> eyre::Result<()> {
+        self.deactivate_impl()
     }
 }
 
 impl Focuser for AscomFocuser {
     fn state(&self) -> eyre::Result<FocuserState> {
-        Err(not_connected(&self.device_id))
+        let st = self.active_data()?;
+        Ok(match st.device.is_moving() {
+            Ok(true)  => FocuserState::Moving,
+            Ok(false) => FocuserState::Stopped,
+            Err(_)    => FocuserState::Error,
+        })
     }
 
     fn abs_position_range(&self) -> eyre::Result<RangeInclusive<f64>> {
-        Err(not_connected(&self.device_id))
+        let st = self.active_data()?;
+        Ok(0.0 ..= st.max_step as f64)
     }
 
     fn abs_position(&self) -> eyre::Result<f64> {
-        Err(not_connected(&self.device_id))
+        let st = self.active_data()?;
+        Ok(ac_err("Position", st.device.position())? as f64)
     }
 
-    fn set_abs_position(&self, _value: f64) -> eyre::Result<()> {
-        Err(not_connected(&self.device_id))
+    fn set_abs_position(&self, value: f64) -> eyre::Result<()> {
+        let st = self.active_data()?;
+        let target = value.round() as i32;
+
+        if st.absolute {
+            return ac_err("Move", st.device.move_to(target));
+        }
+
+        // Relative focuser: `Move` argument is a delta
+        let pos = ac_err("Position", st.device.position())?;
+        let delta = target - pos;
+        if i32::abs(delta) > st.max_increment {
+            eyre::bail!(
+                "ASCOM focuser {}: cannot move {pos} -> {target}: delta {delta} is over MaxIncrement {}",
+                self.device_id, st.max_increment
+            );
+        }
+        ac_err("Move", st.device.move_to(delta))
     }
 
     fn temperature(&self) -> eyre::Result<f64> {
-        Err(not_connected(&self.device_id))
+        let st = self.active_data()?;
+        ac_err("Temperature", st.device.temperature())
     }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 // Filter wheel
 
+/// COM handle plus cached filter names. Exists only while the device is active.
+struct FilterWheelStatic {
+    device: AcFilterWheel,
+    names:  Vec<String>,
+}
+
 pub struct AscomFilterWheel {
     ctx:         Arc<HalCtx>,
     device_id:   Arc<String>,
     device_name: String,
+    state:       Mutex<ActState<FilterWheelStatic>>,
+    // Previously reported slot (None == moving/unknown)
+    data:        Mutex<Option<usize>>,
 }
 
 impl AscomFilterWheel {
@@ -1603,14 +1783,86 @@ impl AscomFilterWheel {
             ctx,
             device_id:   Arc::new(info.id),
             device_name: info.name,
+            state:       Mutex::new(ActState::Idle),
+            data:        Mutex::new(None),
         }
     }
 
+    fn active_data(&self) -> eyre::Result<Arc<FilterWheelStatic>> {
+        let state = self.state.lock().unwrap();
+        match &*state {
+            ActState::Active(data) => Ok(Arc::clone(data)),
+            _ => Err(not_connected(&self.device_id)),
+        }
+    }
+
+    fn active_data_opt(&self) -> Option<Arc<FilterWheelStatic>> {
+        let state = self.state.lock().unwrap();
+        match &*state {
+            ActState::Active(data) => Some(Arc::clone(data)),
+            _ => None,
+        }
+    }
+
+    fn is_activated(&self) -> bool {
+        matches!(&*self.state.lock().unwrap(), ActState::Active(_))
+    }
+
+    /// Blocking: runs on the caller thread with no external locks held.
+    fn activate_impl(&self) -> eyre::Result<FilterWheelStatic> {
+        let device = ac_err(
+            &format!("cannot open ASCOM filter wheel {}", self.device_id),
+            AcFilterWheel::open(&AcDeviceSpec::new(self.device_id.as_str()))
+        )?;
+
+        if let Err(err) = device.set_connected(true) {
+            eyre::bail!("cannot connect ASCOM filter wheel {}: {err}", self.device_id);
+        }
+
+        let names = ac_err("Names", device.names())?;
+
+        Ok(FilterWheelStatic { device, names })
+    }
+
+    /// Ready events: exactly once per successful activation, outside any lock.
+    fn send_ready_events(&self) {
+        self.ctx.event_handlers.send(HalEvent::FilterWheelNameChanged(
+            Arc::clone(&self.device_id)
+        ));
+    }
+
     fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+        let Some(st) = self.active_data_opt() else { return Ok(()); };
+
+        // `MOVING` (-1) reads as `None` (the wheel is turning)
+        let pos = ac_slot_of(st.device.position().unwrap_or(-1)).map(|slot| slot as usize);
+
+        let mut prev = self.data.lock().unwrap();
+        let pos_changed = *prev != pos;
+        *prev = pos;
+        drop(prev);
+
+        if pos_changed {
+            self.ctx.event_handlers.send(HalEvent::FilterWheelSlotChange {
+                device_id: Arc::clone(&self.device_id),
+                slot:      pos.map(|slot| slot as i32),
+            });
+        }
+
         Ok(())
     }
 
     fn deactivate_impl(&self) -> eyre::Result<()> {
+        let active = take_active(&mut self.state.lock().unwrap());
+        if let Some(st) = active {
+            *self.data.lock().unwrap() = None;
+            if let Err(err) = st.device.set_connected(false) {
+                log::error!("cannot disconnect ASCOM filter wheel {}: {err}", self.device_id);
+            }
+            // Drops the driver COM thread outside any lock (may block up to 5 s)
+            drop(st);
+            self.ctx.device_deactivated();
+        }
         Ok(())
     }
 }
@@ -1624,17 +1876,58 @@ impl Device for AscomFilterWheel {
         &self.device_name
     }
 
+    // No COM reads here: called on every widget-state correction
     fn is_active(&self) -> eyre::Result<bool> {
-        Ok(false)
+        Ok(self.is_activated())
+    }
+
+    fn activate(&self) -> eyre::Result<()> {
+        if !begin_activation(&mut self.state.lock().unwrap())? {
+            return Ok(()); // already active: no duplicate Ready events
+        }
+
+        match self.activate_impl() {
+            Ok(st) => {
+                *self.state.lock().unwrap() = ActState::Active(Arc::new(st));
+                self.ctx.device_activated();
+                self.send_ready_events();
+                Ok(())
+            }
+            Err(err) => {
+                *self.state.lock().unwrap() = ActState::Idle;
+                Err(err)
+            }
+        }
+    }
+
+    fn deactivate(&self) -> eyre::Result<()> {
+        self.deactivate_impl()
     }
 }
 
 impl FilterWheel for AscomFilterWheel {
     fn list_and_active(&self) -> eyre::Result<(Vec<String>, usize)> {
-        Err(not_connected(&self.device_id))
+        let st = self.active_data()?;
+        let pos = ac_err("Position", st.device.position())?;
+        let pos = ac_slot_of(pos)
+            .ok_or_else(|| eyre::eyre!("Position is not accessible now"))? as usize;
+        Ok((st.names.clone(), pos))
     }
 
-    fn set_active(&self, _active_elem: usize) -> eyre::Result<()> {
-        Err(not_connected(&self.device_id))
+    fn set_active(&self, active_elem: usize) -> eyre::Result<()> {
+        let st = self.active_data()?;
+
+        if ac_slot_of(st.device.position().unwrap_or(-1)) == Some(active_elem as i32) {
+            return Ok(());
+        }
+
+        ac_err("SetPosition", st.device.set_position(active_elem as i32))?;
+
+        self.ctx.event_handlers.send(HalEvent::FilterWheelSlotChange {
+            device_id: Arc::clone(&self.device_id),
+            slot:      None,
+        });
+
+        Ok(())
     }
 }
