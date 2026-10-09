@@ -13,8 +13,8 @@ use std::time::Duration;
 /// `Tracking == false`) raises `ParkedException` on every motion call, so this must
 /// run before any motion. `Unpark` alone does not stop the park motion, and V4
 /// requires `AbortSlew` to refuse while the driver still calls itself parked, so
-/// each step tolerates the error it may raise (docs/KNOWN_DRIVER_QUIRKS.md §4.2,
-/// §4.7, §4.15). Same sequence as `ensure_unparked` in the live tests.
+/// each step tolerates the error it may raise. Same sequence as `ensure_unparked`
+/// in the live tests.
 fn ensure_unparked(scope: &Telescope) {
     match scope.at_park() {
         Ok(true) => println!("note: mount found parked, unparking"),

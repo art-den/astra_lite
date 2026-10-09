@@ -6,7 +6,7 @@
 //! run against the one driver named by `DRIVER`. The other registrations are proxies
 //! (`ASCOM.JustAHub*.FilterWheel`) or the legacy `FilterWheelSim.FilterWheel`, which is
 //! a V1 driver without `InterfaceVersion` or `Connected` — neither can be written to
-//! meaningfully (see `docs/KNOWN_DRIVER_QUIRKS.md`).
+//! meaningfully.
 
 mod common;
 // The driver is one shared Singleton that survives the process: `#[serial]` keeps

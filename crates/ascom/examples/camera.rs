@@ -21,7 +21,7 @@ fn live_bin(read: Result<i32>) -> Result<i32> {
 /// propagated with `?` so the caller always gets to run its disconnect cleanup.
 fn drive(camera: &Camera) -> Result<()> {
     // Connect first: the OmniSim camera answers `Name` with `NotConnected` while
-    // disconnected, which the spec does not allow (docs/KNOWN_DRIVER_QUIRKS.md).
+    // disconnected, which the spec does not allow.
     camera.set_connected(true)?;
     println!("{} / {}", camera.name()?, camera.driver_version()?);
     println!("connected, interface v{}", camera.interface_version()?);
@@ -45,7 +45,7 @@ fn drive(camera: &Camera) -> Result<()> {
     println!("readout modes: {:?}", camera.readout_modes().ok());
 
     // A non-square sub-frame: the classic transposition trap is invisible on a
-    // square frame, so we deliberately avoid squares here (playbook section 9).
+    // square frame, so we deliberately avoid squares here.
     // The frame is in binned pixels, so the limit is CameraXSize / BinX — the same
     // one `set_sub_frame` enforces; a driver left at binning > 1 could not produce
     // a frame sized for unbinned pixels.

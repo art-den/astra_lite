@@ -158,8 +158,7 @@ fn refuse_put(kind: Call) -> windows::core::Result<()> {
 }
 
 /// Raises a driver exception the way a .NET `IDispatch` server does: `Invoke` answers
-/// the generic `DISP_E_EXCEPTION` and the real ASCOM code goes to `EXCEPINFO.scode`
-/// (`docs/KNOWN_DRIVER_QUIRKS.md` §2.1).
+/// the generic `DISP_E_EXCEPTION` and the real ASCOM code goes to `EXCEPINFO.scode`.
 ///
 /// The BSTRs become the caller's property, as the COM contract demands; `Dispatch`
 /// reads them and releases them.

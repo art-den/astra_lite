@@ -390,8 +390,8 @@ pub(crate) fn read_snapshot(
     let mut snapshot = CapabilitySnapshot {
         // Identity members are mandatory in every interface version, so a failure here
         // is a real error rather than a missing member: a driver that refuses them
-        // (OmniSim Camera gates them on `Connected`, quirks §2.6) must not be recorded
-        // as an empty string.
+        // (the OmniSim Camera gates them on `Connected`) must not be recorded as an
+        // empty string.
         interface_version: dispatch.get_i16("InterfaceVersion")?,
         name: dispatch.get_string("Name")?,
         description: dispatch.get_string("Description")?,
@@ -549,8 +549,7 @@ mod tests {
     }
 
     /// The five mandatory identity members, with `refused` raising `NotConnected`
-    /// instead of answering — measured on a disconnected OmniSim Camera
-    /// (`docs/KNOWN_DRIVER_QUIRKS.md` §2.6).
+    /// instead of answering — the behaviour measured on a disconnected OmniSim Camera.
     fn identity_members(refused: Option<&str>) -> Vec<(&'static str, Member)> {
         [
             ("InterfaceVersion", Member::Value(Element::Int(3))),

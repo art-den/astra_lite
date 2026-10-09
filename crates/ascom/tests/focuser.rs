@@ -101,7 +101,7 @@ fn operational_property_needs_connection() {
 // One driver, hard-coded on purpose. The registry also lists `ASCOM.DeviceHub.Focuser`
 // and `ASCOM.JustAHub*.Focuser`, which are proxies with no device behind them, and the
 // legacy `FocusSim.Focuser`, which does not expose `Connected` at all — none of them
-// can be written to meaningfully (see docs/KNOWN_DRIVER_QUIRKS.md).
+// can be written to meaningfully.
 //
 // NOTE, deliberately not covered: `Halt()` against a *moving* focuser. A 50-step move
 // on this simulator finishes in well under a second, so stopping it mid-flight would

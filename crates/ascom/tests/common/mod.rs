@@ -23,7 +23,7 @@ pub fn prog_id(var: &str, fallback: &str) -> String {
 
 /// Walks every read-only member of an interface through [`AscomDevice::probe`].
 ///
-/// The playbook's first checklist item: every member must answer with a value or
+/// The first checklist item for an interface: every member must answer with a value or
 /// an "unimplemented" style domain error — never a panic, never a hang, and never
 /// a *binding-layer* error (`Com`/`NotFound`/`Disconnected`/`Timeout`), which would
 /// mean the late binding in this wrapper, not the driver, is at fault.
@@ -81,7 +81,7 @@ pub fn walk_members<D: AscomDevice>(device: &D, members: &[&str]) {
 
 /// An unknown `Action` name must be **rejected**, never silently accepted.
 ///
-/// Two verified deviations shape this check (see `docs/KNOWN_DRIVER_QUIRKS.md`):
+/// Two verified deviations shape this check:
 /// * `Action` needs **two** arguments; a one-argument call yields `E_INVALIDARG`.
 /// * The OmniSim COM proxy throws a raw .NET parse exception when
 ///   `ActionParameters` is empty, so an empty string is retried with `"0"`.
@@ -204,9 +204,10 @@ pub fn is_binding(error: &AscomError) -> bool {
 ///
 /// `FACILITY_URT` (0x13) in the HRESULT means the CLR raised instead of an ASCOM
 /// exception, which the wrapper cannot classify any better than `Com`. The OmniSim
-/// drivers do this in a handful of places (`docs/KNOWN_DRIVER_QUIRKS.md`), so such a
-/// failure is a driver deviation rather than a fault of this binding, and a test that
-/// expects a domain error must tell the two `Com` cases apart.
+/// drivers do it for an `Action` with empty parameters and for a second `Position`
+/// write while the wheel is turning, so such a failure is a driver deviation rather
+/// than a fault of this binding, and a test that expects a domain error must tell the
+/// two `Com` cases apart.
 pub fn is_raw_managed(error: &AscomError) -> bool {
     error.kind == AscomErrorKind::Com && error.hresult & 0x001F_0000 == 0x0013_0000
 }

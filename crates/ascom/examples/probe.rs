@@ -103,7 +103,7 @@ fn main() -> Result<()> {
     }
 
     // The two-argument Action contract: an unknown name must come back as
-    // ActionNotImplemented, never E_INVALIDARG (see docs/KNOWN_DRIVER_QUIRKS.md).
+    // ActionNotImplemented, never E_INVALIDARG.
     for (name, params) in [
         ("__nope__", ""),
         ("__nope__", "0"),

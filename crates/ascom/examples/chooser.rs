@@ -28,7 +28,7 @@ fn main() -> Result<()> {
             // Prove the picked name is usable immediately. Only the activation may
             // abort the run: identity members are printed as a value or as the
             // driver's refusal, because a legacy driver has no `Name` and no
-            // `InterfaceVersion` at all (docs/KNOWN_DRIVER_QUIRKS.md §2.18).
+            // `InterfaceVersion` at all.
             let device = Telescope::open(&DeviceSpec::new(&prog_id))?;
             println!("{} — v{}", report(device.name()), report(device.interface_version()));
         }

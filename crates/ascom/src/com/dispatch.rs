@@ -546,9 +546,9 @@ mod tests {
     #[test]
     fn a_driver_exception_is_read_from_excepinfo_not_from_the_invoke_hresult() {
         // A .NET server answers `DISP_E_EXCEPTION` and puts the ASCOM code in
-        // `EXCEPINFO.scode` (`docs/KNOWN_DRIVER_QUIRKS.md` §2.1). The mock raises it
-        // the same way, so this is the only in-process cover for that branch: drop it
-        // and every domain error collapses into a generic `Com`.
+        // `EXCEPINFO.scode`. The mock raises it the same way, so this is the only
+        // in-process cover for that branch: drop it and every domain error collapses
+        // into a generic `Com`.
         for (code, kind) in [
             (0x407u16, AscomErrorKind::NotConnected),
             (0x408, AscomErrorKind::Parked),

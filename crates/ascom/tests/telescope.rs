@@ -102,8 +102,7 @@ fn ensure_unparked(scope: &Telescope) {
     if let Err(error) = scope.unpark() {
         println!("note: Unpark on startup: {error}");
     }
-    // Unpark alone does not stop the park motion (docs/KNOWN_DRIVER_QUIRKS.md §4.2), so
-    // cancel it as well.
+    // Unpark alone does not stop the park motion, so cancel it as well.
     if let Err(error) = scope.abort_slew() {
         println!("note: AbortSlew on startup: {error}");
     }
@@ -121,7 +120,7 @@ fn ensure_unparked(scope: &Telescope) {
 /// `SlewToCoordinatesAsync` raise InvalidOperation ("not allowed when tracking is
 /// False"). Verified live: `Unpark` alone does not stop the park motion and the
 /// driver refuses `AbortSlew` with `ParkedException` while it calls itself parked,
-/// hence unpark first, cancel second (docs/KNOWN_DRIVER_QUIRKS.md).
+/// hence unpark first, cancel second.
 fn restore_idle(scope: &Telescope) {
     if let Err(error) = scope.unpark() {
         println!("note: Unpark while restoring: {:?}", error.kind);
@@ -140,11 +139,11 @@ fn restore_idle(scope: &Telescope) {
 /// Stops a `MoveAxis` motion on the way out, even when the test panics before its own
 /// zero-rate stop.
 ///
-/// A turning axis survives this process (docs/KNOWN_DRIVER_QUIRKS.md §4.7, §4.12), so
-/// the guard is armed right after a successful non-zero `MoveAxis` and only disarmed
-/// once the test's own stop succeeded. Like `Restorer`, `Drop` may panic only when the
-/// test itself passed: a second panic during an unwind aborts the process and hides the
-/// real failure, so there the guard only prints `GUARD FAILED`.
+/// A turning axis survives this process, so the guard is armed right after a
+/// successful non-zero `MoveAxis` and only disarmed once the test's own stop
+/// succeeded. Like `Restorer`, `Drop` may panic only when the test itself passed: a
+/// second panic during an unwind aborts the process and hides the real failure, so
+/// there the guard only prints `GUARD FAILED`.
 struct MotionGuard<'a> {
     scope: &'a Telescope,
     armed: Cell<bool>,
@@ -200,11 +199,11 @@ impl Drop for MotionGuard<'_> {
 /// Puts the mount back after a `Park` on the way out, even when the test panics before
 /// its own `Unpark`.
 ///
-/// A park runs at sidereal tempo with tracking off and survives this process (§4.2,
-/// §4.7), so an unfinished one starves every later test. The guard mirrors the test's
-/// teardown: `Unpark`, then `AbortSlew` — which the driver documents as refusing with
-/// `ParkedException` while it still calls itself parked (§4.2), so any answer there is
-/// only noted — then a wait for `Slewing` to clear. `Drop` panics only when the test
+/// A park runs at sidereal tempo with tracking off and survives this process, so an
+/// unfinished one starves every later test. The guard mirrors the test's teardown:
+/// `Unpark`, then `AbortSlew` — which the driver documents as refusing with
+/// `ParkedException` while it still calls itself parked, so any answer there is only
+/// noted — then a wait for `Slewing` to clear. `Drop` panics only when the test
 /// itself passed; during an unwind it only prints `GUARD FAILED`.
 struct ParkGuard<'a> {
     scope: &'a Telescope,
@@ -233,7 +232,7 @@ impl Drop for ParkGuard<'_> {
             Err(error) => problems.push(format!("guard Unpark failed: {error}")),
         }
         // Tolerated: ParkedException is the documented answer while the driver still
-        // calls itself parked (§4.2); the wait below judges the real outcome.
+        // calls itself parked; the wait below judges the real outcome.
         if let Err(error) = self.scope.abort_slew() {
             println!("note: guard: AbortSlew during the teardown: {:?}", error.kind);
         }
@@ -362,13 +361,12 @@ fn park_unpark_round_trip_when_supported() {
     }
 
     // Arrival is not assertable from here: whether AtPark is seconds or minutes away
-    // depends on where the driver's park position happens to be (§4.1 below). A timeout
-    // here is a documented driver property, not a wrapper failure.
+    // depends on where the driver's park position happens to be. A timeout here is a
+    // documented driver property, not a wrapper failure.
     match wait::wait_flag_true(scope.actor(), "AtPark", WaitSpec::new(Duration::from_secs(20))) {
         Ok(()) => assert!(scope.at_park().expect("AtPark after the wait")),
         Err(error) if error.kind == AscomErrorKind::Timeout => println!(
-            "note: driver parks at sidereal rate, AtPark not reached in 20s \
-             (docs/KNOWN_DRIVER_QUIRKS.md)"
+            "note: driver parks at sidereal rate, AtPark not reached in 20s"
         ),
         Err(error) => panic!("waiting for AtPark failed: {error}"),
     }
@@ -388,8 +386,8 @@ fn park_unpark_round_trip_when_supported() {
 /// `SetPark` records the current position as the park position and must change nothing
 /// else — it is neither a motion nor a park. Recording it is also the only way to make
 /// `AtPark` reachable on this simulator, because its default park position is minutes of
-/// sidereal crawling away (docs/KNOWN_DRIVER_QUIRKS.md §4.1), so the test parks afterwards
-/// and checks the parked state while it is there.
+/// sidereal crawling away, so the test parks afterwards and checks the parked state
+/// while it is there.
 ///
 /// What this test cannot undo: the recorded park position is not readable through any V4
 /// member, so there is nothing for the guard to put back. The simulator keeps the new one
@@ -446,8 +444,7 @@ fn set_park_records_the_position_without_parking() {
             }
         }
         Err(error) if error.kind == AscomErrorKind::Timeout => println!(
-            "note: AtPark still not reached 20s after parking at the recorded position \
-             (docs/KNOWN_DRIVER_QUIRKS.md §4.1)"
+            "note: AtPark still not reached 20s after parking at the recorded position"
         ),
         Err(error) => panic!("waiting for AtPark failed: {error}"),
     }
@@ -882,7 +879,7 @@ fn writing_the_current_pier_side_starts_no_motion() {
 //
 // Everything below answers in milliseconds on the simulator (measured: the slowest call
 // was 4 ms), so it covers the rest of `ITelescopeV4` without the minutes a real slew
-// costs. `docs/KNOWN_DRIVER_QUIRKS.md` records the measured numbers.
+// costs.
 
 /// A rate the mount must accept that is also as slow as its own advertisement allows:
 /// the bottom of its lowest range, nudged above zero so that it is a motion at all.

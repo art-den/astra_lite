@@ -23,7 +23,7 @@ windows = { version = "0.62", features = [
 
 # Async sugar lives outside the core: the core must never block a runtime worker
 # thread on a cross-process driver call. NOT IMPLEMENTED YET: no code is gated on
-# this feature (the async layer is only planned, see docs/ASCOM_RUST_PLAYBOOK.md).
+# this feature (the async layer is only planned).
 tokio = { version = "1", optional = true, features = ["rt", "macros"] }
 
 [dev-dependencies]

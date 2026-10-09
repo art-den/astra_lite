@@ -30,7 +30,7 @@ use common::{
 
 /// Read-only members of ICameraV4, from the spec's property list. `ImageArray` and
 /// `ImageArrayVariant` are deliberately absent: the former may only be read after
-/// `ImageReady`, the latter is never used (playbook §9.2).
+/// `ImageReady`, the latter is never used.
 const MEMBERS: &[&str] = &[
     "BayerOffsetX",
     "BayerOffsetY",
@@ -91,7 +91,7 @@ const MEMBERS: &[&str] = &[
     "SensorType",
     // V4-only members. The driver reports InterfaceVersion 3, so it does not expose
     // all of them; `GetIDsOfNames` then fails, which must read as "not implemented"
-    // rather than as a binding-layer failure (docs/KNOWN_DRIVER_QUIRKS.md).
+    // rather than as a binding-layer failure.
     "Actions",
     "Member",
     "NormalReadout",
@@ -317,8 +317,7 @@ fn fits_value(header: &str, key: &str) -> String {
 // Deliberately not tested: refusing writes while an exposure runs. The exception lists
 // of BinX, BinY, StartX, StartY, NumX, NumY, Gain, Offset and FastReadout contain no
 // InvalidOperationException, so the spec requires nothing there; the driver checks an
-// incompatible frame at `StartExposure` instead (see `a_frame_that_does_not_fit`),
-// which is what docs/KNOWN_DRIVER_QUIRKS.md records.
+// incompatible frame at `StartExposure` instead (see `a_frame_that_does_not_fit`).
 
 /// The driver the write tests run against.
 const DRIVER: &str = "ASCOM.OmniSim.Camera";
@@ -805,7 +804,7 @@ fn a_frame_that_does_not_fit_is_refused() {
     // The limit is expressed in binned pixels, so at Bin 2 the same sensor accepts half
     // of what it accepted at Bin 1 — and no more than half. Getting this wrong either
     // way shows up here: too strict rejects a legal frame, too lax lets through one the
-    // driver would only reject at StartExposure (docs/KNOWN_DRIVER_QUIRKS.md §2.13).
+    // driver would only reject at StartExposure.
     camera.set_binning(2, 2).expect("binning for the binned-limit check");
     let (binned_x, binned_y) = (sensor_x / 2, sensor_y / 2);
     camera
@@ -909,7 +908,7 @@ fn cooler_on_moves_the_detector_temperature() {
 // and the exposure lifecycle — a dark frame, an abort — cannot be checked by a read-back
 // at all.
 //
-// What DRIVER reports, measured for these tests (docs/KNOWN_DRIVER_QUIRKS.md §2.19–2.20):
+// What DRIVER reports, measured for these tests:
 // an 800x600 monochrome sensor, MaxBinX = MaxBinY = 4, CanAsymmetricBin = true,
 // ExposureMin = 0.001 s, ExposureMax = 3600 s, MaxADU = 65535, CanAbortExposure = true.
 
@@ -1212,9 +1211,9 @@ fn a_dark_frame_of_zero_seconds_delivers_a_frame() {
 
     // ExposureMin is 0.001 here, so this only succeeds if the dark frame is exempt from
     // the lower bound — which is what `exposure_allowed` is for. That exemption is a
-    // verified fact about this very driver (docs/KNOWN_DRIVER_QUIRKS.md §2.20), so an
-    // "unimplemented" answer here is a regression in behaviour this harness records, not
-    // a feature this camera happens to lack.
+    // verified fact about this very driver, so an "unimplemented" answer here is a
+    // regression in behaviour this harness records, not a feature this camera happens
+    // to lack.
     let image = match camera.expose(0.0, false, WaitSpec::new(EXPOSURE_TIMEOUT)) {
         Ok(image) => image,
         Err(error) if error.is_unsupported() => {

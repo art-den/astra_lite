@@ -480,9 +480,9 @@ mod tests {
     }
 
     /// A raw .NET exception is not an ASCOM failure, so there is no ASCOM code to
-    /// print: the field stays 0 and the HRESULT is what identifies the answer.
-    /// `docs/KNOWN_DRIVER_QUIRKS.md` §2.2 and §2.16 quote exactly this text for the
-    /// OmniSim `0x80131500`.
+    /// print: the field stays 0 and the HRESULT is what identifies the answer. The
+    /// message below and `0x80131500` are what the OmniSim filter wheel really answers
+    /// when a second `Position` write lands mid-motion.
     #[test]
     fn a_raw_managed_exception_prints_the_hresult_without_an_ascom_code() {
         let e = AscomError::from_hresult(0x8013_1500_u32 as i32, "Invoke(Position)")
