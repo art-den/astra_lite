@@ -2,7 +2,6 @@
 
 pub mod utils;
 use crate::core::engine::{Engine, ModeKind};
-use crate::hal::HalImpl;
 use gtk::traits::{AdjustmentExt, ComboBoxExt, ScrolledWindowExt, SpinButtonExt, ToggleButtonExt, WidgetExt};
 pub use utils::*;
 
@@ -105,6 +104,8 @@ fn debug_preview_scroll(app: &gtk::Application) {
 /// Dumps the ASCOM Classic camera state and the widgets that depend on it.
 /// Used to find out why an action (e.g. "Take shot") stays insensitive.
 fn debug_ascom_camera(app: &gtk::Application, engine: &Engine) {
+    use crate::hal::HalImpl;
+
     // Autoconnect of saved drivers runs shortly after the UI is built
     test_pause_ms(4000);
 
