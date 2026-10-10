@@ -1,3 +1,5 @@
+Note for those editing this file: The file should contain only general information, no details!
+
 ## About
 
 - This is software for deepsky astrophotography and live stacking on low power PCs (like Raspberry Pi or Orange Pi). It also works on PCs. More information is in `README.md`.
