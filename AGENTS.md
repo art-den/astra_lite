@@ -19,7 +19,10 @@
 
 - `src/core` - System core: working modes, frame processing, events, camera control.
 - `src/guiding` - API for external auto-guiding software (PHD2).
-- `src/hal` - Hardware Abstraction Layer — "INDI" (Instrument-Neutral-Device-Interface), "ASCOM" and "ASCOM Alpaca" for connecting telescopes, cameras, focusers.
+- `src/hal` - Hardware Abstraction Layer for connecting telescopes, cameras, focusers (interfaces and implementations):
+  - "INDI" (Instrument-Neutral-Device-Interface)
+  - "ASCOM" (Astronomy Common Object Model)
+  - "ASCOM Alpaca" (ASCOM over HTTP)
 - `src/image` - Image working: raw RAW, FITS, stacking, histograms, stars.
 - `src/options` - Serializable settings (JSON) for all components.
 - `src/plate_solve` - Common API for plate solving. Implementation for local Astrometry.net
@@ -29,6 +32,8 @@
 - `src/ui/resources` - GTK ui-files, images
 - `src/ui/sky_map` - Sky map widget
 - `src/utils` - Utilities: IO, logging, math, timers, compression
+- `crates/ascom` - ASCOM API crate
+- `crates/indi` - INDI API crate
 - `tests/` - Integration tests
 - `benches/` - Criterion benchmarks
 
