@@ -12,7 +12,14 @@
 //! device); `activate()`/`deactivate()` and every COM read must run with no
 //! `options`/`data` locks held because HAL events execute synchronously on the
 //! sender thread.
+//!
+//! A driver may register several ProgIDs for one COM class (e.g. OmniSim is
+//! both `ASCOM.OmniSim.Camera` and `ASCOM.Simulator.Camera`). Such wrappers
+//! share the class instance and its `Connected` flag, so connect/disconnect is
+//! refcounted per CLSID: only the first wrapper connects, only the last
+//! disconnects.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::ops::RangeInclusive;
@@ -60,9 +67,35 @@ fn check_ascom_handle_contracts() {
 struct HalCtx {
     event_handlers: Arc<HalEventHandlers>,
     active_count:   AtomicUsize,
+    /// Connect refcounts per COM class (`conn_key`): ProgID aliases of one
+    /// driver share a single connected class instance.
+    conn_refs:      Mutex<HashMap<String, usize>>,
 }
 
 impl HalCtx {
+    /// Registers a connection on a COM class; `false` means another wrapper
+    /// of the same class already connects the driver.
+    fn conn_acquire(&self, key: &str) -> bool {
+        let mut refs = self.conn_refs.lock().unwrap();
+        let count = refs.entry(key.to_string()).or_insert(0);
+        *count += 1;
+        *count == 1
+    }
+
+    /// Unregisters a connection; `true` means this was the last wrapper of the
+    /// class, so the caller must disconnect the shared driver.
+    fn conn_release(&self, key: &str) -> bool {
+        let mut refs = self.conn_refs.lock().unwrap();
+        if let Some(count) = refs.get_mut(key) {
+            *count -= 1;
+            if *count == 0 {
+                refs.remove(key);
+                return true;
+            }
+        }
+        false
+    }
+
     fn device_activated(&self) {
         self.active_count.fetch_add(1, Ordering::Relaxed);
         self.send_state_event();
@@ -148,6 +181,7 @@ impl AscomHalImpl {
         let ctx = Arc::new(HalCtx {
             event_handlers: Arc::clone(event_handlers),
             active_count:   AtomicUsize::new(0),
+            conn_refs:      Mutex::new(HashMap::new()),
         });
 
         let mut data = AscomHalData {
@@ -241,6 +275,28 @@ fn drivers_of(ac_type: AcDeviceType) -> Vec<ascom::drivers::DriverInfo> {
             Vec::new()
         }
     }
+}
+
+/// COM class id (CLSID) of a ProgID, or the ProgID itself when unresolvable.
+/// A driver may register several ProgIDs for one class (e.g. OmniSim exposes
+/// `ASCOM.OmniSim.Camera` also as `ASCOM.Simulator.Camera`): the class
+/// instance and its `Connected` flag are shared, so wrappers with the same
+/// CLSID must coordinate connect/disconnect via this key. Registry only, no
+/// COM calls.
+fn conn_key_of(prog_id: &str) -> String {
+    use ascom::com::registry::{default_string, Hive, View};
+    for (hive, view) in [
+        (Hive::Machine, View::SixtyFour),
+        (Hive::Machine, View::ThirtyTwo),
+        (Hive::User,    View::SixtyFour),
+        (Hive::User,    View::ThirtyTwo),
+    ] {
+        let path = format!(r"SOFTWARE\Classes\{prog_id}\CLSID");
+        if let Ok(Some(clsid)) = default_string(hive, &path, view) {
+            return clsid.trim().to_lowercase();
+        }
+    }
+    prog_id.to_lowercase()
 }
 
 fn device_info(prog_id: &str, description: &Option<String>, type_: DeviceType) -> DeviceInfo {
@@ -517,6 +573,7 @@ pub struct AscomCamera {
     ctx:         Arc<HalCtx>,
     device_id:   Arc<String>,
     device_name: String,
+    conn_key:    Arc<String>,
     state:       Mutex<ActState<CameraStatic>>,
     exp_data:    Mutex<Option<ExposureData>>,
     dyn_data:    Mutex<CameraDynData>,
@@ -525,6 +582,7 @@ pub struct AscomCamera {
 impl AscomCamera {
     fn new(ctx: Arc<HalCtx>, info: DeviceInfo) -> Self {
         Self {
+            conn_key:    Arc::new(conn_key_of(&info.id)),
             ctx,
             device_id:   Arc::new(info.id),
             device_name: info.name,
@@ -554,15 +612,16 @@ impl AscomCamera {
         matches!(&*self.state.lock().unwrap(), ActState::Active(_))
     }
 
-    /// Opens the COM object, connects, and caches capabilities and static data.
+    /// Opens the COM object, connects (unless a ProgID alias of the same class
+    /// is already connected), and caches capabilities and static data.
     /// Blocking: runs on the caller thread with no external locks held.
-    fn activate_impl(&self) -> eyre::Result<CameraStatic> {
+    fn activate_impl(&self, must_connect: bool) -> eyre::Result<CameraStatic> {
         let device = ac_err(
             &format!("cannot open ASCOM camera {}", self.device_id),
             AcCamera::open(&AcDeviceSpec::new(self.device_id.as_str()))
         )?;
 
-        if let Err(err) = device.set_connected(true) {
+        if must_connect && let Err(err) = device.set_connected(true) {
             // Dropping the handle releases the driver COM thread
             eyre::bail!("cannot connect ASCOM camera {}: {err}", self.device_id);
         }
@@ -778,7 +837,8 @@ impl AscomCamera {
         let active = take_active(&mut self.state.lock().unwrap());
         if let Some(st) = active {
             *self.exp_data.lock().unwrap() = None;
-            if let Err(err) = st.device.set_connected(false) {
+            // Disconnect the shared class only when this was its last wrapper
+            if self.ctx.conn_release(&self.conn_key) && let Err(err) = st.device.set_connected(false) {
                 log::error!("cannot disconnect ASCOM camera {}: {err}", self.device_id);
             }
             // Drops the driver COM thread outside any lock (may block up to 5 s)
@@ -813,7 +873,10 @@ impl Device for AscomCamera {
             return Ok(()); // already active: no duplicate Ready events
         }
 
-        match self.activate_impl() {
+        // Several ProgIDs may name one driver class: connect only as its first user
+        let must_connect = self.ctx.conn_acquire(&self.conn_key);
+
+        match self.activate_impl(must_connect) {
             Ok(st) => {
                 *self.state.lock().unwrap() = ActState::Active(Arc::new(st));
                 self.ctx.device_activated();
@@ -821,6 +884,7 @@ impl Device for AscomCamera {
                 Ok(())
             }
             Err(err) => {
+                self.ctx.conn_release(&self.conn_key);
                 *self.state.lock().unwrap() = ActState::Idle;
                 Err(err)
             }
@@ -1097,6 +1161,7 @@ pub struct AscomTelescope {
     ctx:         Arc<HalCtx>,
     device_id:   Arc<String>,
     device_name: String,
+    conn_key:    Arc<String>,
     state:       Mutex<ActState<TelescopeStatic>>,
     data:        Mutex<TelescopeData>,
 }
@@ -1117,6 +1182,7 @@ impl Default for TelescopeData {
 impl AscomTelescope {
     fn new(ctx: Arc<HalCtx>, info: DeviceInfo) -> Self {
         Self {
+            conn_key:    Arc::new(conn_key_of(&info.id)),
             ctx,
             device_id:   Arc::new(info.id),
             device_name: info.name,
@@ -1145,15 +1211,16 @@ impl AscomTelescope {
         matches!(&*self.state.lock().unwrap(), ActState::Active(_))
     }
 
-    /// Opens the COM object, connects, and builds the move rate list.
+    /// Opens the COM object, connects (unless a ProgID alias of the same class
+    /// is already connected), and builds the move rate list.
     /// Blocking: runs on the caller thread with no external locks held.
-    fn activate_impl(&self) -> eyre::Result<TelescopeStatic> {
+    fn activate_impl(&self, must_connect: bool) -> eyre::Result<TelescopeStatic> {
         let device = ac_err(
             &format!("cannot open ASCOM telescope {}", self.device_id),
             AcTelescope::open(&AcDeviceSpec::new(self.device_id.as_str()))
         )?;
 
-        if let Err(err) = device.set_connected(true) {
+        if must_connect && let Err(err) = device.set_connected(true) {
             eyre::bail!("cannot connect ASCOM telescope {}: {err}", self.device_id);
         }
 
@@ -1276,7 +1343,8 @@ impl AscomTelescope {
     fn deactivate_impl(&self) -> eyre::Result<()> {
         let active = take_active(&mut self.state.lock().unwrap());
         if let Some(st) = active {
-            if let Err(err) = st.device.set_connected(false) {
+            // Disconnect the shared class only when this was its last wrapper
+            if self.ctx.conn_release(&self.conn_key) && let Err(err) = st.device.set_connected(false) {
                 log::error!("cannot disconnect ASCOM telescope {}: {err}", self.device_id);
             }
             // Drops the driver COM thread outside any lock (may block up to 5 s)
@@ -1306,7 +1374,10 @@ impl Device for AscomTelescope {
             return Ok(()); // already active: no duplicate Ready events
         }
 
-        match self.activate_impl() {
+        // Several ProgIDs may name one driver class: connect only as its first user
+        let must_connect = self.ctx.conn_acquire(&self.conn_key);
+
+        match self.activate_impl(must_connect) {
             Ok(st) => {
                 *self.state.lock().unwrap() = ActState::Active(Arc::new(st));
                 self.ctx.device_activated();
@@ -1314,6 +1385,7 @@ impl Device for AscomTelescope {
                 Ok(())
             }
             Err(err) => {
+                self.ctx.conn_release(&self.conn_key);
                 *self.state.lock().unwrap() = ActState::Idle;
                 Err(err)
             }
@@ -1548,6 +1620,7 @@ pub struct AscomFocuser {
     ctx:         Arc<HalCtx>,
     device_id:   Arc<String>,
     device_name: String,
+    conn_key:    Arc<String>,
     state:       Mutex<ActState<FocuserStatic>>,
     data:        Mutex<FocuserData>,
 }
@@ -1555,6 +1628,7 @@ pub struct AscomFocuser {
 impl AscomFocuser {
     fn new(ctx: Arc<HalCtx>, info: DeviceInfo) -> Self {
         Self {
+            conn_key:    Arc::new(conn_key_of(&info.id)),
             ctx,
             device_id:   Arc::new(info.id),
             device_name: info.name,
@@ -1584,13 +1658,13 @@ impl AscomFocuser {
     }
 
     /// Blocking: runs on the caller thread with no external locks held.
-    fn activate_impl(&self) -> eyre::Result<FocuserStatic> {
+    fn activate_impl(&self, must_connect: bool) -> eyre::Result<FocuserStatic> {
         let device = ac_err(
             &format!("cannot open ASCOM focuser {}", self.device_id),
             AcFocuser::open(&AcDeviceSpec::new(self.device_id.as_str()))
         )?;
 
-        if let Err(err) = device.set_connected(true) {
+        if must_connect && let Err(err) = device.set_connected(true) {
             eyre::bail!("cannot connect ASCOM focuser {}: {err}", self.device_id);
         }
 
@@ -1664,7 +1738,8 @@ impl AscomFocuser {
         let active = take_active(&mut self.state.lock().unwrap());
         if let Some(st) = active {
             *self.data.lock().unwrap() = FocuserData::default();
-            if let Err(err) = st.device.set_connected(false) {
+            // Disconnect the shared class only when this was its last wrapper
+            if self.ctx.conn_release(&self.conn_key) && let Err(err) = st.device.set_connected(false) {
                 log::error!("cannot disconnect ASCOM focuser {}: {err}", self.device_id);
             }
             // Drops the driver COM thread outside any lock (may block up to 5 s)
@@ -1694,7 +1769,10 @@ impl Device for AscomFocuser {
             return Ok(()); // already active: no duplicate Ready events
         }
 
-        match self.activate_impl() {
+        // Several ProgIDs may name one driver class: connect only as its first user
+        let must_connect = self.ctx.conn_acquire(&self.conn_key);
+
+        match self.activate_impl(must_connect) {
             Ok(st) => {
                 *self.state.lock().unwrap() = ActState::Active(Arc::new(st));
                 self.ctx.device_activated();
@@ -1702,6 +1780,7 @@ impl Device for AscomFocuser {
                 Ok(())
             }
             Err(err) => {
+                self.ctx.conn_release(&self.conn_key);
                 *self.state.lock().unwrap() = ActState::Idle;
                 Err(err)
             }
@@ -1772,6 +1851,7 @@ pub struct AscomFilterWheel {
     ctx:         Arc<HalCtx>,
     device_id:   Arc<String>,
     device_name: String,
+    conn_key:    Arc<String>,
     state:       Mutex<ActState<FilterWheelStatic>>,
     // Previously reported slot (None == moving/unknown)
     data:        Mutex<Option<usize>>,
@@ -1780,6 +1860,7 @@ pub struct AscomFilterWheel {
 impl AscomFilterWheel {
     fn new(ctx: Arc<HalCtx>, info: DeviceInfo) -> Self {
         Self {
+            conn_key:    Arc::new(conn_key_of(&info.id)),
             ctx,
             device_id:   Arc::new(info.id),
             device_name: info.name,
@@ -1809,13 +1890,13 @@ impl AscomFilterWheel {
     }
 
     /// Blocking: runs on the caller thread with no external locks held.
-    fn activate_impl(&self) -> eyre::Result<FilterWheelStatic> {
+    fn activate_impl(&self, must_connect: bool) -> eyre::Result<FilterWheelStatic> {
         let device = ac_err(
             &format!("cannot open ASCOM filter wheel {}", self.device_id),
             AcFilterWheel::open(&AcDeviceSpec::new(self.device_id.as_str()))
         )?;
 
-        if let Err(err) = device.set_connected(true) {
+        if must_connect && let Err(err) = device.set_connected(true) {
             eyre::bail!("cannot connect ASCOM filter wheel {}: {err}", self.device_id);
         }
 
@@ -1856,7 +1937,8 @@ impl AscomFilterWheel {
         let active = take_active(&mut self.state.lock().unwrap());
         if let Some(st) = active {
             *self.data.lock().unwrap() = None;
-            if let Err(err) = st.device.set_connected(false) {
+            // Disconnect the shared class only when this was its last wrapper
+            if self.ctx.conn_release(&self.conn_key) && let Err(err) = st.device.set_connected(false) {
                 log::error!("cannot disconnect ASCOM filter wheel {}: {err}", self.device_id);
             }
             // Drops the driver COM thread outside any lock (may block up to 5 s)
@@ -1886,7 +1968,10 @@ impl Device for AscomFilterWheel {
             return Ok(()); // already active: no duplicate Ready events
         }
 
-        match self.activate_impl() {
+        // Several ProgIDs may name one driver class: connect only as its first user
+        let must_connect = self.ctx.conn_acquire(&self.conn_key);
+
+        match self.activate_impl(must_connect) {
             Ok(st) => {
                 *self.state.lock().unwrap() = ActState::Active(Arc::new(st));
                 self.ctx.device_activated();
@@ -1894,6 +1979,7 @@ impl Device for AscomFilterWheel {
                 Ok(())
             }
             Err(err) => {
+                self.ctx.conn_release(&self.conn_key);
                 *self.state.lock().unwrap() = ActState::Idle;
                 Err(err)
             }
@@ -1929,5 +2015,42 @@ impl FilterWheel for AscomFilterWheel {
         });
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_ctx() -> HalCtx {
+        HalCtx {
+            event_handlers: Arc::new(HalEventHandlers::new()),
+            active_count:   AtomicUsize::new(0),
+            conn_refs:      Mutex::new(HashMap::new()),
+        }
+    }
+
+    #[test]
+    fn only_the_first_wrapper_of_a_class_must_connect() {
+        let ctx = test_ctx();
+        assert!(ctx.conn_acquire("clsid"));    // first wrapper: must connect
+        assert!(!ctx.conn_acquire("clsid"));   // alias wrapper: already connected
+        assert!(!ctx.conn_release("clsid"));   // first leaves: alias still active
+        assert!(ctx.conn_release("clsid"));    // last leaves: must disconnect
+    }
+
+    #[test]
+    fn releasing_an_unregistered_class_does_nothing() {
+        let ctx = test_ctx();
+        assert!(!ctx.conn_release("unknown"));
+    }
+
+    #[test]
+    fn different_classes_are_independent() {
+        let ctx = test_ctx();
+        assert!(ctx.conn_acquire("clsid_a"));
+        assert!(ctx.conn_acquire("clsid_b"));
+        assert!(ctx.conn_release("clsid_a"));
+        assert!(ctx.conn_release("clsid_b"));
     }
 }
