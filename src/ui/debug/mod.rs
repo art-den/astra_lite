@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(unused)]
 
 pub mod utils;
 use crate::core::engine::{Engine, ModeKind};

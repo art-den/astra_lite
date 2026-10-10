@@ -137,8 +137,9 @@ pub fn load_image_from_tif_file(
             image.make_color(width as usize, height as usize, 0, u16::MAX);
             true
         }
-        ct =>
-            eyre::bail!("Color type {:?} unsupported", ct)
+        ct => {
+            eyre::bail!("Color type {:?} unsupported", ct);
+        }
     };
 
     let chunk_size_y = decoder.chunk_dimensions().1 as usize;

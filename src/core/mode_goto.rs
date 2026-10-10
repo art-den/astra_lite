@@ -212,7 +212,7 @@ impl GotoMode {
         let result = match plate_solver.get_result()? {
             PlateSolveResult::Waiting => return Ok(false),
             PlateSolveResult::Done(result) => result,
-            PlateSolveResult::Failed => eyre::bail!("Can't plate solve the image")
+            PlateSolveResult::Failed => { eyre::bail!("Can't plate solve the image"); }
         };
 
         result.print_to_log();

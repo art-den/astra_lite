@@ -316,7 +316,7 @@ impl Property {
             },
             "defBLOBVector" => PropType::Blob,
             "defLightVector" => PropType::Light,
-            s => eyre::bail!("Unknown vector: {}", s),
+            s => { eyre::bail!("Unknown vector: {}", s); }
         };
 
         let label = xml.attributes.remove("label");
@@ -379,8 +379,9 @@ impl Property {
                     };
                     PropValue::Blob(Arc::new(value))
                 },
-                other =>
-                    eyre::bail!("Unknown tag `{}`", other),
+                other => {
+                    eyre::bail!("Unknown tag `{}`", other);
+                }
             };
             items.push(PropElement {
                 name: Arc::new(name),

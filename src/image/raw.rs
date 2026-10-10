@@ -664,7 +664,7 @@ impl RawImage {
                 "Different CFA (light frame: {:?}, calibration frame: {:?})",
                 self.info.cfa,
                 master_frame.info.cfa,
-            )
+            );
         }
 
         Ok(())

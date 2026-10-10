@@ -736,7 +736,7 @@ impl SkyMap {
                         load(item)?;
                     }
                 }
-                _ => eyre::bail!("Unknown geometry type {geometry_type}"),
+                _ => { eyre::bail!("Unknown geometry type {geometry_type}"); }
             }
 
             let id_lc = id.to_ascii_lowercase();

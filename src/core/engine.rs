@@ -66,7 +66,7 @@ pub trait Mode {
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_periodic_timer_tick(&mut self, _timer_period_ms: usize) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn command(&mut self, _cmd: &ModeCommand) -> eyre::Result<ModeCommandReply> {
-        eyre::bail!("Mode {:?} does not support mode commands", self.kind())
+        eyre::bail!("Mode {:?} does not support mode commands", self.kind());
     }
     fn notify_processing_queue_overflow(&mut self) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn stop_live_view_before_this_mode(&self) -> bool { true }
