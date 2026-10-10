@@ -1170,10 +1170,11 @@ struct TelescopeData {
     prev_parked:   Option<bool>,
 }
 
+/// Flags are `None` when the corresponding COM read failed (unknown)
 struct StateInternal {
     state:       TelescopeState,
-    is_tracking: bool,
-    is_parked:   bool,
+    is_tracking: Option<bool>,
+    is_parked:   Option<bool>,
 }
 
 pub struct AscomTelescope {
@@ -1306,23 +1307,16 @@ impl AscomTelescope {
     fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
         let Some(st) = self.active_data_opt() else { return Ok(()); };
 
-        let state = match self.state_internal(&st) {
-            Ok(state) => state,
-            Err(err) => {
-                log::debug!("ASCOM telescope {}: cannot read state: {err}", self.device_id);
-                StateInternal {
-                    state: TelescopeState::Error, is_parked: false, is_tracking: false,
-                }
-            }
-        };
+        let state = self.read_state(&st);
 
         let mut data = self.data.lock().unwrap();
         let state_changed = data.prev_state != Some(state.state);
-        let tracking_changed = data.prev_tracking != Some(state.is_tracking);
-        let parked_changed = data.prev_parked != Some(state.is_parked);
+        let tracking_changed = state.is_tracking.is_some_and(|v| data.prev_tracking != Some(v));
+        let parked_changed = state.is_parked.is_some_and(|v| data.prev_parked != Some(v));
         data.prev_state = Some(state.state);
-        data.prev_tracking = Some(state.is_tracking);
-        data.prev_parked = Some(state.is_parked);
+        // On a failed read keep the last real value: the next good read compares to it
+        data.prev_tracking = state.is_tracking.or(data.prev_tracking);
+        data.prev_parked = state.is_parked.or(data.prev_parked);
         drop(data);
 
         if state_changed {
@@ -1331,15 +1325,15 @@ impl AscomTelescope {
                 state:     state.state,
             });
         }
-        if tracking_changed {
+        if tracking_changed && let Some(tracking) = state.is_tracking {
             self.ctx.event_handlers.send(HalEvent::TelescopeTrackingChanged {
                 device_id: Arc::clone(&self.device_id),
-                tracking:  state.is_tracking,
+                tracking,
             });
         }
-        if parked_changed {
+        if parked_changed && let Some(is_parked) = state.is_parked {
             self.ctx.event_handlers.send(
-                if state.is_parked {
+                if is_parked {
                     HalEvent::TelescopeParked(Arc::clone(&self.device_id))
                 } else {
                     HalEvent::TelescopeUnparked(Arc::clone(&self.device_id))
@@ -1349,23 +1343,38 @@ impl AscomTelescope {
         Ok(())
     }
 
-    fn state_internal(&self, st: &TelescopeStatic) -> eyre::Result<StateInternal> {
-        let is_tracking = ac_err("Tracking", st.device.tracking())?;
-        let is_parked = ac_err("AtPark", st.device.at_park())?;
-        let is_slewing = ac_err("Slewing", st.device.slewing())?;
-        let is_pulse_guiding = ac_err("IsPulseGuiding", st.device.is_pulse_guiding())?;
-        let state = if is_parked {
+    /// Reads every property on its own: a failed read yields `None`, and any
+    /// unknown property makes the whole state `Error`.
+    fn read_state(&self, st: &TelescopeStatic) -> StateInternal {
+        let read_flag = |ctx: &str, res: ascom::error::Result<bool>| -> Option<bool> {
+            res.map_err(|err| {
+                log::debug!("ASCOM telescope {}: {ctx}: {err}", self.device_id);
+            })
+            .ok()
+        };
+        let is_tracking = read_flag("Tracking", st.device.tracking());
+        let is_parked = read_flag("AtPark", st.device.at_park());
+        let is_slewing = read_flag("Slewing", st.device.slewing());
+        let is_pulse_guiding = read_flag("IsPulseGuiding", st.device.is_pulse_guiding());
+
+        let state = if is_parked.is_none()
+            || is_pulse_guiding.is_none()
+            || is_slewing.is_none()
+            || is_tracking.is_none()
+        {
+            TelescopeState::Error
+        } else if is_parked == Some(true) {
             TelescopeState::Parked
-        } else if is_pulse_guiding {
+        } else if is_pulse_guiding == Some(true) {
             TelescopeState::Correction
-        } else if is_slewing {
+        } else if is_slewing == Some(true) {
             TelescopeState::Slewing
-        } else if is_tracking {
+        } else if is_tracking == Some(true) {
             TelescopeState::Tracking
         } else {
             TelescopeState::Stopped
         };
-        Ok(StateInternal { state, is_tracking, is_parked })
+        StateInternal { state, is_tracking, is_parked }
     }
 
     fn deactivate_impl(&self) -> eyre::Result<()> {
@@ -1428,7 +1437,11 @@ impl Device for AscomTelescope {
 impl Telescope for AscomTelescope {
     fn state(&self) -> eyre::Result<TelescopeState> {
         let st = self.active_data()?;
-        Ok(self.state_internal(&st)?.state)
+        let state = self.read_state(&st);
+        if state.state == TelescopeState::Error {
+            eyre::bail!("ASCOM telescope {}: cannot read state", self.device_id);
+        }
+        Ok(state.state)
     }
 
     fn site(&self) -> eyre::Result<TelescopeSite> {
@@ -1742,16 +1755,18 @@ impl AscomFocuser {
             Ok(false) => FocuserState::Stopped,
             Err(_)    => FocuserState::Error,
         };
-        let pos = st.device.position().unwrap_or(-1);
-        let temperature = st.device.temperature().unwrap_or(25.0);
+        // A failed read stays `None`: never fabricate a value for the UI
+        let pos = st.device.position().ok();
+        let temperature = st.device.temperature().ok();
 
         let mut data = self.data.lock().unwrap();
         let state_changed = data.prev_state != Some(state);
-        let pos_changed = data.prev_pos != Some(pos);
-        let temp_changed = data.prev_temp != Some(temperature);
+        let pos_changed = pos.is_some_and(|v| data.prev_pos != Some(v));
+        let temp_changed = temperature.is_some_and(|v| data.prev_temp != Some(v));
         data.prev_state = Some(state);
-        data.prev_pos = Some(pos);
-        data.prev_temp = Some(temperature);
+        // On a failed read keep the last real value: the next good read compares to it
+        data.prev_pos = pos.or(data.prev_pos);
+        data.prev_temp = temperature.or(data.prev_temp);
         drop(data);
 
         if state_changed {
@@ -1760,13 +1775,13 @@ impl AscomFocuser {
                 state,
             });
         }
-        if pos_changed {
+        if pos_changed && let Some(pos) = pos {
             self.ctx.event_handlers.send(HalEvent::FocuserAbsValueChanged {
                 device_id: Arc::clone(&self.device_id),
                 abs_value: pos as f64,
             });
         }
-        if temp_changed {
+        if temp_changed && let Some(temperature) = temperature {
             self.ctx.event_handlers.send(HalEvent::FocuserTemperatureChanged {
                 device_id:   Arc::clone(&self.device_id),
                 temperature,
