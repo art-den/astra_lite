@@ -534,6 +534,11 @@ bitflags! {
     }
 }
 
+/// ASCOM `ICamera` reports no CCD-temperature setpoint bounds (only
+/// `SetCCDTemperature`, which rejects out-of-range values with
+/// `InvalidValueException`). Conservative fallback range.
+const DEFAULT_CCD_TEMP_RANGE: RangeInclusive<f64> = -50.0 ..= 50.0;
+
 /// COM handle plus cached static data. Exists only while the device is active.
 struct CameraStatic {
     device:       AcCamera,
@@ -735,6 +740,14 @@ impl AscomCamera {
         flags.set(CameraFlags::CAN_ABORT_EXP, caps.supports("CanAbortExposure"));
         flags.set(CameraFlags::CAN_GET_COOL_PWR, caps.supports("CanGetCoolerPower"));
         flags.set(CameraFlags::CAN_GET_CCD_TEMP, can_read_ccd_temp);
+
+        if caps.supports("CanSetCCDTemperature") {
+            log::warn!(
+                "ASCOM camera {}: CCD temperature setpoint bounds not reported by driver \
+                 (absent from the ASCOM ICamera interface), assuming {DEFAULT_CCD_TEMP_RANGE:?}",
+                self.device_id
+            );
+        }
 
         Ok(CameraStatic {
             device,
@@ -1110,7 +1123,10 @@ impl Camera for AscomCamera {
     }
 
     fn temperature_range(&self) -> eyre::Result<RangeInclusive<f64>> {
-        Ok(-100.0 ..= 50.0)
+        // `Err` before activation (IMPL_ASCOM 3.2). The ASCOM ICamera interface
+        // exposes no Min/MaxCcdTemperature, so serve the documented fallback.
+        let _st = self.active_data()?;
+        Ok(DEFAULT_CCD_TEMP_RANGE)
     }
 
     fn set_temperature(&self, temperature: Option<f64>) -> eyre::Result<()> {

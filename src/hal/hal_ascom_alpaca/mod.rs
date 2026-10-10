@@ -450,6 +450,11 @@ impl CameraShot for AscomAlpacaCameraShot {
 ///////////////////////////////////////////////////////////////////////////////
 // Camera
 
+/// Alpaca Camera API reports no CCD-temperature setpoint bounds (only
+/// `SetCCDTemperature`, which rejects out-of-range values). Same conservative
+/// fallback as the ASCOM Classic impl.
+const DEFAULT_CCD_TEMP_RANGE: RangeInclusive<f64> = -50.0 ..= 50.0;
+
 bitflags! {
     struct CameraFlags: u32 {
         const FRAME_SUPPORTED   = (1 << 0);
@@ -586,6 +591,14 @@ impl AscomAlpacaCamera {
             camera_flags.set(CameraFlags::CAN_STOP_EXP, can_stop_exposure);
             camera_flags.set(CameraFlags::CAN_GET_COOL_PWR, can_get_cooler_power);
             camera_flags.set(CameraFlags::CAN_GET_CCD_TEMP, can_read_ccd_temp);
+
+            if cooler_supported {
+                log::warn!(
+                    "ASCOM Alpaca camera {}: CCD temperature setpoint bounds not reported by device \
+                     (absent from the Alpaca Camera API), assuming {DEFAULT_CCD_TEMP_RANGE:?}",
+                    aa_camera.unique_id()
+                );
+            }
 
             eyre::Ok(Self {
                 device_id:      Arc::new(aa_camera.unique_id().to_string()),
@@ -893,8 +906,11 @@ impl Camera for AscomAlpacaCamera {
     }
 
     fn temperature_range(&self) -> eyre::Result<RangeInclusive<f64>> {
-        Ok(-100.0 ..= 50.0)
-   }
+        // The Alpaca Camera API exposes no setpoint bounds endpoints, so serve
+        // the documented fallback. The wrapper exists only while the HAL is
+        // connected, so there is no pre-activation state to report `Err` for.
+        Ok(DEFAULT_CCD_TEMP_RANGE)
+    }
 
     fn set_temperature(&self, temperature: Option<f64>) -> eyre::Result<()> {
         self.async_runtime.block_on(async {
