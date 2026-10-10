@@ -47,13 +47,6 @@ Note for those editing this file: The file should contain only general informati
 
 The program terminates on any panic. (`panic = "abort"` in `Cargo.toml`)
 
-## ASCOM Classic implementation
-
-`IMPL_ASCOM.md` is the design/implementation doc for ASCOM Classic (COM) support in `src/hal/hal_ascom`. Key constraints:
-- No Connect/Disconnect buttons for ASCOM in UI; installed drivers appear directly in existing device lists (selection == connection).
-- Device switch: deactivate the previous device BEFORE activating the new one (the old driver's disconnect may cascade to the new device's shared underlying driver, e.g. hub drivers).
-- HAL event handlers run synchronously on the sender's thread.
-
 ## Temporary files
 
 Temporary files (debug screenshots, logs, scripts) must be saved in the project's `.tmp` folder.
