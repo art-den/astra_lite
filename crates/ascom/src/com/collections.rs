@@ -284,7 +284,7 @@ mod tests {
             let bstr = windows::core::BSTR::from(*text);
             // For VT_BSTR, oleaut32 expects the BSTR itself (not a pointer to it)
             // and duplicates it, so the local BSTR stays ours to free.
-            let cell = (&*bstr).as_ptr();
+            let cell = bstr.as_ptr();
             let index = [index as i32];
             unsafe {
                 SafeArrayPutElement(psa, index.as_ptr(), cell.cast()).expect("SafeArrayPutElement");

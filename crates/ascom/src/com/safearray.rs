@@ -658,7 +658,7 @@ mod tests {
             // own duplicate. Passing `&bstr` instead yields empty cells, which is the
             // trap this test documents.
             let bstr = windows::core::BSTR::from(text);
-            let chars: *const u16 = (&*bstr).as_ptr();
+            let chars: *const u16 = bstr.as_ptr();
             let idx = [i as i32];
             unsafe {
                 SafeArrayPutElement(psa, idx.as_ptr(), chars.cast::<c_void>())
@@ -743,7 +743,7 @@ mod tests {
         unsafe {
             let bstr = windows::core::BSTR::from("a");
             let idx = [0i32];
-            SafeArrayPutElement(psa, idx.as_ptr(), (&*bstr).as_ptr().cast::<c_void>())
+            SafeArrayPutElement(psa, idx.as_ptr(), bstr.as_ptr().cast::<c_void>())
                 .expect("PutElement bstr");
         }
         let v = own_array(psa, VT_BSTR);
@@ -819,7 +819,7 @@ mod tests {
         // Three such dimensions cannot be counted in a usize at all, and the count is
         // what the readers use as a slice length and an allocation size.
         let absurd = [wide, wide, wide];
-        let error = flat_positions(&absurd).err().expect("an uncountable shape must fail");
+        let error = flat_positions(&absurd).expect_err("an uncountable shape must fail");
         assert_eq!(error.kind, AscomErrorKind::Driver, "{error}");
         // An empty dimension stays legitimate: oleaut32 reports upper = lower - 1.
         assert!(flat_positions(&[Dim { lower: 0, upper: -1 }]).unwrap().is_empty());

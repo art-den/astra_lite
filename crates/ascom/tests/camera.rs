@@ -229,7 +229,7 @@ fn non_square_exposure_completes_via_imageready() {
     let sensor_x = camera.camera_x_size().expect("CameraXSize");
     let sensor_y = camera.camera_y_size().expect("CameraYSize");
     let num_x = sensor_x.min(96);
-    let num_y = sensor_y.min(48).max(1);
+    let num_y = sensor_y.clamp(1, 48);
     let (num_x, num_y) = if num_x == num_y { (num_x, (num_y / 2).max(1)) } else { (num_x, num_y) };
     camera.set_sub_frame(0, 0, num_x, num_y).expect("set non-square sub-frame");
 
@@ -431,8 +431,8 @@ fn other_frame(camera: &Camera, current: Value) -> Value {
     Value::Frame(0, 0, 1, 1)
 }
 
-/// The row shape (`Case`) and the guard that restores what the rows write (`Restorer`)
-/// live in `tests/common/mod.rs`, shared with the telescope file.
+// The row shape (`Case`) and the guard that restores what the rows write (`Restorer`)
+// live in `tests/common/mod.rs`, shared with the telescope file.
 
 const ALWAYS: fn(&Camera) -> Result<bool> = |_| Ok(true);
 

@@ -124,9 +124,7 @@ impl PartialEq for PropValue {
             (Self::Num(NumPropValue{value: l0, ..}), Self::Num(NumPropValue{value: r0, ..})) => {
                 if l0.is_nan() && r0.is_nan() {
                     true
-                } else if !l0.is_nan() && r0.is_nan() {
-                    false
-                } else if l0.is_nan() && !r0.is_nan() {
+                } else if l0.is_nan() || r0.is_nan() {
                     false
                 } else {
                     l0 == r0
@@ -142,6 +140,28 @@ impl PartialEq for PropValue {
         }
     }
 }
+
+impl std::fmt::Display for PropValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Num(NumPropValue{value, format, ..}) => {
+                let num_format = NumFormat::new_from_indi_format(format);
+                write!(f, "{}", num_format.value_to_string(*value))
+            }
+            Self::Text(text) =>
+                write!(f, "{text}"),
+            Self::Switch(value) =>
+                write!(f, "{value}"),
+            Self::Light(text) =>
+                write!(f, "{text}"),
+            Self::Blob(_) =>
+                write!(f, "[blob]"),
+        }
+    }
+}
+
+/// Changed element name and its new value.
+pub type ChangedValues = Vec<(Arc<String>, PropValue)>;
 
 impl PropValue {
     pub fn to_i32(&self) -> Result<i32> {
@@ -234,23 +254,6 @@ impl PropValue {
                 format!("[BLOB len={}]", blob.data.len()),
             _ =>
                 format!("{:?}", self)
-        }
-    }
-
-    pub fn to_string(&self) -> String {
-        match self {
-            Self::Num(NumPropValue{value, format, ..}) => {
-                let num_format = NumFormat::new_from_indi_format(format);
-                num_format.value_to_string(*value)
-            }
-            Self::Text(text) =>
-                text.to_string(),
-            Self::Switch(value) =>
-                value.to_string(),
-            Self::Light(text) =>
-                text.to_string(),
-            Self::Blob(_) =>
-                "[blob]".to_string(),
         }
     }
 
@@ -407,7 +410,7 @@ impl Property {
         mut blobs:   Vec<XmlStreamReaderBlob>,
         device_name: &str, // for error message
         prop_name:   &str, // same
-    ) -> eyre::Result<(bool, Vec<(Arc<String>, PropValue)>)> {
+    ) -> eyre::Result<(bool, ChangedValues)> {
         let mut changed = false;
         if let Some(state_str) = xml.attributes.get("state") {
             let new_state = PropState::from_str(state_str)?;
@@ -540,5 +543,48 @@ impl Property {
             .iter()
             .map(|v| (Arc::clone(&v.name), v.value.clone()))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn num(value: f64) -> PropValue {
+        PropValue::Num(NumPropValue {
+            value,
+            min:    0.0,
+            max:    0.0,
+            step:   None,
+            format: Arc::new("%1.1f".to_string()),
+        })
+    }
+
+    #[test]
+    fn num_nan_equality() {
+        // NaN values compare equal to each other, unlike plain IEEE 754
+        assert_eq!(num(f64::NAN), num(f64::NAN));
+        assert_ne!(num(f64::NAN), num(1.0));
+        assert_ne!(num(1.0), num(f64::NAN));
+        assert_eq!(num(1.0), num(1.0));
+    }
+
+    #[test]
+    fn different_variants_are_not_equal() {
+        assert_ne!(PropValue::Switch(true), PropValue::Text(Arc::new("true".into())));
+    }
+
+    #[test]
+    fn display_output() {
+        assert_eq!(num(1.5).to_string(), "1.5");
+        assert_eq!(PropValue::Text(Arc::new("txt".into())).to_string(), "txt");
+        assert_eq!(PropValue::Switch(false).to_string(), "false");
+        assert_eq!(PropValue::Light(Arc::new("Busy".into())).to_string(), "Busy");
+        let blob = PropValue::Blob(Arc::new(BlobPropValue {
+            format:  "fits".to_string(),
+            data:    vec![1, 2, 3],
+            dl_time: 0.0,
+        }));
+        assert_eq!(blob.to_string(), "[blob]");
     }
 }

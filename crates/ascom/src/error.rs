@@ -61,22 +61,24 @@ impl AscomErrorKind {
     /// the facility prefix first.
     pub fn from_ascom_code(code: u16) -> Self {
         match code {
-            0x400 => Self::Unsupported,
-            0x401 => Self::InvalidValue,
-            0x402 => Self::ValueNotSet,
-            0x407 => Self::NotConnected,
-            0x408 => Self::Parked,
-            0x409 => Self::Slaved,
-            0x40B => Self::InvalidOperation,
-            0x40C => Self::ActionNotImplemented,
-            0x40E => Self::Cancelled,
+            0x400..=0x4FF => match code {
+                0x400 => Self::Unsupported,
+                0x401 => Self::InvalidValue,
+                0x402 => Self::ValueNotSet,
+                0x407 => Self::NotConnected,
+                0x408 => Self::Parked,
+                0x409 => Self::Slaved,
+                0x40B => Self::InvalidOperation,
+                0x40C => Self::ActionNotImplemented,
+                0x40E => Self::Cancelled,
+                // Any other code in the ASCOM range is still the driver talking, not the
+                // binding layer. Verified live: a legacy filter wheel simulator reports an
+                // out-of-range `Position` as `0x80040404`, a code the specification does not
+                // define. Reporting that as `Com` would blame this wrapper for a driver's
+                // non-standard answer and send a test chasing its own tail.
+                _ => Self::Driver,
+            },
             0x500..=0xFFF => Self::Driver,
-            // Any other code in the ASCOM range is still the driver talking, not the
-            // binding layer. Verified live: a legacy filter wheel simulator reports an
-            // out-of-range `Position` as `0x80040404`, a code the specification does not
-            // define. Reporting that as `Com` would blame this wrapper for a driver's
-            // non-standard answer and send a test chasing its own tail.
-            0x400..=0x4FF => Self::Driver,
             _ => Self::Com,
         }
     }

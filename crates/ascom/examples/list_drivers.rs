@@ -38,14 +38,13 @@ fn known_family(filter: &str) -> bool {
 
 fn main() -> ExitCode {
     let wanted = std::env::args().nth(1);
-    if let Some(filter) = &wanted {
-        if !known_family(filter) {
+    if let Some(filter) = &wanted
+        && !known_family(filter) {
             let names: Vec<&str> = FAMILIES.iter().map(|family| family.as_str()).collect();
             // A typo must not be reported as an install with no drivers.
             eprintln!("unknown family '{filter}'; known families: {}", names.join(", "));
             return ExitCode::from(2);
         }
-    }
 
     let mut total = 0usize;
     let mut listed = 0usize;
@@ -53,11 +52,10 @@ fn main() -> ExitCode {
 
     for family in FAMILIES {
         let name = family.as_str();
-        if let Some(filter) = &wanted {
-            if !filter.eq_ignore_ascii_case(name) {
+        if let Some(filter) = &wanted
+            && !filter.eq_ignore_ascii_case(name) {
                 continue;
             }
-        }
         // One family's registry failure must not hide the other families' answers.
         match installed_drivers(family) {
             Ok(drivers) => {

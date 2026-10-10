@@ -122,6 +122,8 @@ impl Variant {
     /// `ArgumentNullException` instead of seeing `""`. Verified live against the
     /// OmniSim COM proxy: `Action(name, "")` failed with
     /// `Value cannot be null. (Parameter 'value')` until this was fixed.
+    // Infallible by design: implementing `FromStr` would force a `Result` on every call site.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         let bstr = if s.is_empty() {
             // Allocates the same empty BSTR a managed caller would send.

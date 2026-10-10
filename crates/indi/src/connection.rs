@@ -67,7 +67,7 @@ impl Stream {
         }
     }
 
-    fn as_write_box(self) -> Box<dyn std::io::Write> {
+    fn into_write_box(self) -> Box<dyn std::io::Write> {
         match self {
             Self::Tcp(stream) => Box::new(stream),
             #[cfg(target_os = "linux")]
@@ -171,12 +171,21 @@ pub enum AfterCoordSetAction {
     Sync,
 }
 
+/// Slew rate elements: (name, optional label).
+pub type SlewSpeedList = Vec<(Arc<String>, Option<Arc<String>>)>;
+
 pub struct Connection {
     data:            Arc<Mutex<Option<ActiveConnData>>>,
     state:           Arc<Mutex<ConnState>>,
     devices:         Arc<Mutex<Devices>>,
     event_handlers:  Arc<EventHandlers>,
     drivers_started: AtomicBool,
+}
+
+impl Default for Connection {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Connection {
@@ -1923,6 +1932,8 @@ impl Connection {
         }
     }
 
+    // Frame geometry does not group well into fewer parameters
+    #[allow(clippy::too_many_arguments)]
     pub fn camera_set_frame(
         &self,
         device_name: &str,
@@ -2380,7 +2391,7 @@ impl Connection {
     pub fn mount_get_slew_speed_list(
         &self,
         device_name: &str
-    ) -> Result<Vec<(Arc<String>, Option<Arc<String>>)>> {
+    ) -> Result<SlewSpeedList> {
         let devices = self.devices.lock().unwrap();
         let device = devices.find_by_name_res(device_name)?;
         let Some(prop) = device.get_property_opt("TELESCOPE_SLEW_RATE") else {
@@ -2650,7 +2661,7 @@ impl XmlSender {
             writer.flush()?;
             Ok(())
         }
-        let mut writer = BufWriter::new(stream.as_write_box());
+        let mut writer = BufWriter::new(stream.into_write_box());
         while let Ok(item) = receiver.recv() {
             match item {
                 XmlSenderItem::Xml(xml) => {
@@ -2687,6 +2698,8 @@ impl XmlSender {
         Ok(())
     }
 
+    // Property setter shared by all vector types; parameters stay flat for clarity
+    #[allow(clippy::too_many_arguments)]
     fn command_set_property_impl<'a>(
         &self,
         device_name:    &str,
@@ -2918,7 +2931,7 @@ impl XmlReceiver {
         &self,
         device:         &mut Device,
         prop_name:      &str,
-        changed_values: &Vec<(Arc<String>, PropValue)>
+        changed_values: &ChangedValues
     ) {
         for (name, value) in changed_values {
             if prop_name == "CONNECTION"
@@ -2934,6 +2947,8 @@ impl XmlReceiver {
         }
     }
 
+    // One notification carries the full property context
+    #[allow(clippy::too_many_arguments)]
     fn notify_subscribers_about_new_prop(
         &self,
         device_name:    &Arc<String>,
@@ -2941,7 +2956,7 @@ impl XmlReceiver {
         timestamp:      Option<DateTime<Utc>>,
         prop_name:      &Arc<String>,
         state:          PropState,
-        changed_values: Vec<(Arc<String>, PropValue)>,
+        changed_values: ChangedValues,
         events_sender:  &mpsc::Sender<EventSenderEvent>,
     ) {
         for (name, value) in changed_values {
@@ -2974,6 +2989,8 @@ impl XmlReceiver {
         }
     }
 
+    // One notification carries the full property context
+    #[allow(clippy::too_many_arguments)]
     fn notify_subscribers_about_prop_change(
         &self,
         timestamp:      Option<DateTime<Utc>>,
@@ -2981,7 +2998,7 @@ impl XmlReceiver {
         prop_name:      &Arc<String>,
         prev_state:     PropState,
         new_state:      PropState,
-        changed_values: Vec<(Arc<String>, PropValue)>,
+        changed_values: ChangedValues,
         events_sender:  &mpsc::Sender<EventSenderEvent>
     ) {
         for (name, prop_value) in changed_values {

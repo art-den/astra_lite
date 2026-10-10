@@ -70,7 +70,7 @@ impl Element {
             Element::Int(value) => Some(Variant::from_i32(*value)),
             Element::Empty => None,
             Element::Nested { name, value } => {
-                let item: IDispatch = MockItem { name: *name, value: Cell::new(*value) }.into();
+                let item: IDispatch = MockItem { name, value: Cell::new(*value) }.into();
                 // A mock that cannot answer this is a bug in the mock. Turning it into
                 // `None` would fake a `VT_EMPTY` hole, i.e. a missing element, and the
                 // test would read the mock's failure as the driver's data.

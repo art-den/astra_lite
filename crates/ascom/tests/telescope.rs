@@ -521,8 +521,8 @@ fn set_park_while_slewing_is_refused() {
 /// The driver the write tests run against.
 const DRIVER: &str = "ASCOM.OmniSim.Telescope";
 
-/// Grace period and poll step live in `tests/common/mod.rs`, together with the table
-/// machinery below.
+// Grace period and poll step live in `tests/common/mod.rs`, together with the table
+// machinery below.
 
 /// Site coordinates and rates are floats the driver is free to round.
 const EPS: f64 = 1e-6;
@@ -578,7 +578,7 @@ impl Value {
             (Self::When(a), Self::When(b)) => a
                 .duration_since(b)
                 .or_else(|_| b.duration_since(a))
-                .map_or(false, |drift| drift < Duration::from_secs(5)),
+                .is_ok_and(|drift| drift < Duration::from_secs(5)),
             _ => false,
         }
     }
@@ -799,18 +799,16 @@ fn guarded() -> Restorer<Telescope, Value> {
     restore_idle(&scope);
     // Superior drive rates can only be written at the sidereal rate, so normalise it
     // instead of letting a rate left behind by an earlier run skip those two rows.
-    if let Ok(rate) = scope.tracking_rate() {
-        if rate != DriveRate::Sidereal {
-            if let Err(error) = scope.set_tracking_rate(DriveRate::Sidereal) {
+    if let Ok(rate) = scope.tracking_rate()
+        && rate != DriveRate::Sidereal
+            && let Err(error) = scope.set_tracking_rate(DriveRate::Sidereal) {
                 println!("note: TrackingRate is {rate:?} and cannot be set to sidereal: {error}");
             }
-        }
-    }
     Restorer::new(scope, CASES, DRIVER)
 }
 
-/// The three runs over the table are shared with the camera file and live in
-/// `tests/common/mod.rs`; what is interface-specific here is only `guarded()`.
+// The three runs over the table are shared with the camera file and live in
+// `tests/common/mod.rs`; what is interface-specific here is only `guarded()`.
 
 #[serial]
 #[test]
@@ -1258,7 +1256,7 @@ fn sync_to_altaz_answers_in_horizontal_coordinates() {
     // Syncing to the mount's own azimuth and altitude should not have pointed it away,
     // but the mapping is the driver's business, so put the pointing model back anyway.
     let _ = scope.sync_to_coordinates(ra, dec);
-    restore_idle(&scope);
+    restore_idle(scope);
     assert!(!scope.slewing().expect("Slewing"), "the mount must not be left moving");
 }
 

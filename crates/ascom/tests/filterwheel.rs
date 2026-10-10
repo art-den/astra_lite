@@ -202,11 +202,10 @@ impl Drop for Restorer {
         let mut problems = Vec::new();
 
         // Connection first: nothing below can be restored against a disconnected driver.
-        if self.touched_connection.get() && !self.wheel.connected().unwrap_or(false) {
-            if let Err(error) = self.wheel.set_connected(true) {
+        if self.touched_connection.get() && !self.wheel.connected().unwrap_or(false)
+            && let Err(error) = self.wheel.set_connected(true) {
                 problems.push(format!("reconnect: {error}"));
             }
-        }
         if self.touched_motion.get() {
             // Motion first: restoring the slot while the wheel is turning would be
             // overwritten by whatever the wheel is already heading for.

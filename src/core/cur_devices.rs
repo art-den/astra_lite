@@ -128,7 +128,7 @@ impl CurDevices {
     where
         D: Device + Send + Sync + ?Sized,
     {
-        let Some(device) = device else { return None; };
+        let device = device?;
         match device.activate() {
             Ok(_) => Some(device),
             Err(err) => {

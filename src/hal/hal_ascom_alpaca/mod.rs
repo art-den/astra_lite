@@ -223,7 +223,7 @@ impl HalImpl for AscomAlpacaHalImpl {
         self.event_handlers.send(HalEvent::StateChanged(HalState::Disconnecting));
         let mut data = self.data.write().unwrap();
         let devices = if let Some(data) = data.take() {
-            let list = data.devices.iter().cloned().collect();
+            let list = data.devices.to_vec();
             drop(data);
             list
         } else {
@@ -366,18 +366,20 @@ impl AscomAlpacaCameraShot {
                 _ => eyre::bail!("Sensor type {:?} not supported", sensor_type),
             };
 
-            let mut image_info = RawImageInfo::default();
-            image_info.width = width;
-            image_info.height = height;
-            image_info.cfa = cfa_type;
-            image_info.max_value = max_adu as _;
-            image_info.frame_type = frame_type.unwrap_or(FrameType::Lights);
-            image_info.camera = aa_camera.static_name().to_string();
-            image_info.gain = aa_camera.gain().await.unwrap_or(0) as _;
-            image_info.offset = aa_camera.offset().await.unwrap_or(0);
-            image_info.exposure = exposure;
-            image_info.bin = aa_camera.bin_x().await.unwrap_or(1).max(1);
-            image_info.ccd_temp = aa_camera.ccd_temperature().await.ok();
+            let image_info = RawImageInfo {
+                width,
+                height,
+                cfa:        cfa_type,
+                max_value:  max_adu as _,
+                frame_type: frame_type.unwrap_or(FrameType::Lights),
+                camera:     aa_camera.static_name().to_string(),
+                gain:       aa_camera.gain().await.unwrap_or(0) as _,
+                offset:     aa_camera.offset().await.unwrap_or(0),
+                exposure,
+                bin:        aa_camera.bin_x().await.unwrap_or(1).max(1),
+                ccd_temp:   aa_camera.ccd_temperature().await.ok(),
+                ..Default::default()
+            };
 
             Ok(Self { array, sensor_type, dl_time, raw_image_info: image_info })
         })
@@ -658,11 +660,16 @@ impl AscomAlpacaCamera {
 
         if !is_exposure_now {
             self.async_runtime.block_on(async {
+                // Read sensor values before locking: a std MutexGuard must not be held across await points
+                let can_temp = self.flags.contains(CameraFlags::CAN_GET_CCD_TEMP);
+                let can_pwr  = self.flags.contains(CameraFlags::CAN_GET_COOL_PWR);
+                let temperature = if can_temp { self.device.ccd_temperature().await.ok() } else { None };
+                let cool_pwr    = if can_pwr  { self.device.cooler_power().await.ok() }    else { None };
+
                 let mut data = self.dyn_data.lock().unwrap();
 
                 // Check for CCD temperature change
-                if self.flags.contains(CameraFlags::CAN_GET_CCD_TEMP) {
-                    let temperature = self.device.ccd_temperature().await.ok();
+                if can_temp {
                     if data.prev_temperature != temperature && let Some(temperature) = temperature {
                         self.event_handlers.send(HalEvent::CameraCcdTempChanged {
                             device_id: Arc::clone(&self.device_id),
@@ -673,8 +680,7 @@ impl AscomAlpacaCamera {
                 }
 
                 // Check for cooling power change
-                if self.flags.contains(CameraFlags::CAN_GET_COOL_PWR) {
-                    let cool_pwr = self.device.cooler_power().await.ok();
+                if can_pwr {
                     if data.prev_cool_pwr != cool_pwr && let Some(cool_pwr) = cool_pwr {
                         self.event_handlers.send(HalEvent::CameraCoolerPwrChanged {
                             device_id: Arc::clone(&self.device_id),
@@ -1107,7 +1113,7 @@ impl AscomAlpacaTelescope {
                 device:         Arc::clone(aa_telescope),
                 event_handlers: Arc::clone(event_handlers),
                 async_runtime:  Arc::clone(async_runtime),
-                move_rates:     move_rates,
+                move_rates,
                 data:           Mutex::new(TelescopeData::default()),
                 flags,
             })
@@ -1470,8 +1476,8 @@ impl AscomAlpacaFocuser {
             eyre::Ok(Self {
                 device:         Arc::clone(aa_focuser),
                 device_id:      Arc::new(aa_focuser.unique_id().to_string()),
-                async_runtime:  Arc::clone(&async_runtime),
-                event_handlers: Arc::clone(&event_handlers),
+                async_runtime:  Arc::clone(async_runtime),
+                event_handlers: Arc::clone(event_handlers),
                 range:          0.0 ..= max_pos as f64,
                 data:           Mutex::new(FocuserData::default()),
             })
@@ -1598,8 +1604,8 @@ impl AscomAlpacaFilterWheel {
             eyre::Ok(Self {
                 device:         Arc::clone(aa_filterwheel),
                 device_id:      Arc::new(aa_filterwheel.unique_id().to_string()),
-                async_runtime:  Arc::clone(&async_runtime),
-                event_handlers: Arc::clone(&event_handlers),
+                async_runtime:  Arc::clone(async_runtime),
+                event_handlers: Arc::clone(event_handlers),
                 data:           Mutex::new(FilterWheelData::default()),
             })
         })?;
@@ -1642,13 +1648,13 @@ impl Device for AscomAlpacaFilterWheel {
 
 impl FilterWheel for AscomAlpacaFilterWheel {
     fn list_and_active(&self) -> eyre::Result<(Vec<String>, usize)> {
-        Ok(self.async_runtime.block_on(async {
+        self.async_runtime.block_on(async {
             let names = self.device.names().await?;
             let pos = self.device.position()
                 .await?
                 .ok_or_else(|| eyre::eyre!("Position is not accessible now"))?;
             eyre::Ok((names, pos))
-        })?)
+        })
     }
 
     fn set_active(&self, active_elem: usize) -> eyre::Result<()> {

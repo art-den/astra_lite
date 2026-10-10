@@ -351,11 +351,10 @@ impl<D: AscomDevice + 'static, V: Copy + PartialEq + Debug + 'static> Restorer<D
 impl<D: AscomDevice + 'static, V: Copy + PartialEq + Debug + 'static> Drop for Restorer<D, V> {
     fn drop(&mut self) {
         let mut problems = Vec::new();
-        if self.disconnected.get() && !self.device.connected().unwrap_or(false) {
-            if let Err(error) = self.device.set_connected(true) {
+        if self.disconnected.get() && !self.device.connected().unwrap_or(false)
+            && let Err(error) = self.device.set_connected(true) {
                 problems.push(format!("reconnect: {error}"));
             }
-        }
         // Last written, first restored: a value whose legality depends on another
         // member has to go back after the one it depends on, which is what the order
         // of the table encodes.

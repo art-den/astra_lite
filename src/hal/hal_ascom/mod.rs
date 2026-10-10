@@ -697,9 +697,8 @@ impl AscomCamera {
                 let ccd_size_y = i32::max(ac_err("CameraYSize", device.camera_y_size())?, 0) as usize;
                 Ok((exp_min, exp_max, pixel_size_x, pixel_size_y, ccd_size_x, ccd_size_y))
             })()
-            .map_err(|err| {
+            .inspect_err(|_err| {
                 rollback_activation(&self.ctx, &device, &self.conn_key, &self.device_id);
-                err
             })?;
 
         let max_bin_x = usize::max(i32::max(device.max_bin_x().unwrap_or(1), 0) as usize, 1);
@@ -925,17 +924,19 @@ impl AscomCamera {
         let start_x = i32::max(st.device.start_x().unwrap_or(0), 0) as usize;
         let start_y = i32::max(st.device.start_y().unwrap_or(0), 0) as usize;
 
-        let mut info = RawImageInfo::default();
-        info.width     = image.width;
-        info.height    = image.height;
-        info.max_value = st.max_value;
-        info.frame_type = frame_type.unwrap_or(FrameType::Lights);
-        info.camera    = st.cam_name.clone();
-        info.gain      = st.device.gain().unwrap_or(0);
-        info.offset    = st.device.offset().unwrap_or(0);
-        info.bin       = st.device.bin_x().unwrap_or(1).clamp(1, u8::MAX as i32) as u8;
-        info.ccd_temp  = st.device.ccd_temperature().ok();
-        info.exposure  = exposure;
+        let info = RawImageInfo {
+            width:      image.width,
+            height:     image.height,
+            max_value:  st.max_value,
+            frame_type: frame_type.unwrap_or(FrameType::Lights),
+            camera:     st.cam_name.clone(),
+            gain:       st.device.gain().unwrap_or(0),
+            offset:     st.device.offset().unwrap_or(0),
+            bin:        st.device.bin_x().unwrap_or(1).clamp(1, u8::MAX as i32) as u8,
+            ccd_temp:   st.device.ccd_temperature().ok(),
+            exposure,
+            ..Default::default()
+        };
 
         let shot = AscomCameraShot::new(
             image,
@@ -1837,10 +1838,9 @@ impl AscomFocuser {
         }
 
         let absolute = ac_err("Absolute", device.absolute())
-            .map_err(|err| {
+            .inspect_err(|_err| {
                 // Roll back the connection while the handle is still alive
                 rollback_activation(&self.ctx, &device, &self.conn_key, &self.device_id);
-                err
             })?;
         if !absolute {
             log::warn!(
@@ -2087,10 +2087,9 @@ impl AscomFilterWheel {
         }
 
         let names = ac_err("Names", device.names())
-            .map_err(|err| {
+            .inspect_err(|_err| {
                 // Roll back the connection while the handle is still alive
                 rollback_activation(&self.ctx, &device, &self.conn_key, &self.device_id);
-                err
             })?;
 
         Ok(FilterWheelStatic { device, names })

@@ -627,8 +627,8 @@ impl HardwareUi {
         #[cfg(windows)] {
             let aa_state = self.aa_state.borrow();
             enable_actions(&self.window, &[
-                ("conn_aa",    conn_en(&*aa_state)),
-                ("disconn_aa", disconn_en(&*aa_state)),
+                ("conn_aa",    conn_en(&aa_state)),
+                ("disconn_aa", disconn_en(&aa_state)),
             ]);
         }
 

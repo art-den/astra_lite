@@ -92,6 +92,12 @@ pub struct EventHandlers {
     key:   AtomicU64,
 }
 
+impl Default for EventHandlers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EventHandlers {
     pub fn new() -> Self {
         Self {

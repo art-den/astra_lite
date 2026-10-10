@@ -177,11 +177,10 @@ impl Drop for Restorer {
         let mut problems = Vec::new();
 
         // Connection first: nothing below can be restored against a disconnected driver.
-        if self.touched_connection.get() && !self.focuser.connected().unwrap_or(false) {
-            if let Err(error) = self.focuser.set_connected(true) {
+        if self.touched_connection.get() && !self.focuser.connected().unwrap_or(false)
+            && let Err(error) = self.focuser.set_connected(true) {
                 problems.push(format!("reconnect: {error}"));
             }
-        }
         if self.touched_motion.get() {
             // Motion before position: a move still running would undo the position.
             let _ = self.focuser.halt();
@@ -208,13 +207,11 @@ impl Drop for Restorer {
                 Ok(_) => {}
             }
         }
-        if self.touched_temp_comp.get() {
-            if let Some(wanted) = self.temp_comp {
-                if let Err(error) = self.focuser.set_temp_comp(wanted) {
+        if self.touched_temp_comp.get()
+            && let Some(wanted) = self.temp_comp
+                && let Err(error) = self.focuser.set_temp_comp(wanted) {
                     problems.push(format!("restore TempComp={wanted}: {error}"));
                 }
-            }
-        }
 
         // Step 4 for the guard itself: verify the driver really is back where we started.
         if self.touched_motion.get() {
