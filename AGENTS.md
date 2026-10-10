@@ -1,8 +1,9 @@
 ## About
 
 - This is software for deepsky astrophotography and live stacking on low power PCs (like Raspberry Pi or Orange Pi). It also works on PCs. More information is in `README.md`.
-- Written in Rust. Sources is in `src` folder, procedural macro is in `macros` folder. 
+- Written in Rust (edition 2024).
 - Uses gtk3 via `gtk3-rs` crate for UI.
+- Cargo workspace: root package is the app; `crates/ascom` and `crates/indi` are members. Default member is only the root package (`ascom` is Windows-only).
 
 ## Abbreviations and acronyms
 
@@ -32,14 +33,23 @@
 - `src/ui/resources` - GTK ui-files, images
 - `src/ui/sky_map` - Sky map widget
 - `src/utils` - Utilities: IO, logging, math, timers, compression
-- `crates/ascom` - ASCOM API crate
+- `crates/ascom` - ASCOM Classic (COM, late binding) API crate. Windows-only
 - `crates/indi` - INDI API crate
+- `map_data/` - Data files for sky map: star catalog (binary), DSO/named-star CSVs, constellation GeoJSON
 - `tests/` - Integration tests
 - `benches/` - Criterion benchmarks
+- `scripts/` - Packaging scripts (create .deb package)
+- `docs/` - Screenshots for README
 
 ## Panic
 
 The program terminates on any panic. (`panic = "abort"` in `Cargo.toml`)
+
+## ASCOM Classic implementation
+
+`IMPL_ASCOM.md` is the design/implementation doc for ASCOM Classic (COM) support in `src/hal/hal_ascom`. Key constraints:
+- No Connect/Disconnect buttons for ASCOM in UI; installed drivers appear directly in existing device lists (selection == connection).
+- HAL event handlers run synchronously on the sender's thread.
 
 ## Temporary files
 
