@@ -160,6 +160,64 @@ fn debug_ascom_camera(app: &gtk::Application, engine: &Engine) {
     test_pause_ms(500);
 }
 
+/// Reproduces the user's bug: shot on OmniSim, then switch to V3 Simulator,
+/// then take shot -> "SetBinning: Invoke(MaxBinX): NotConnected".
+fn debug_ascom_switch(app: &gtk::Application, engine: &Engine) {
+    // Let startup autoconnect finish
+    test_pause_ms(4000);
+
+    let log_cam = |tag: &str| {
+        match engine.cur_devices.camera() {
+            Some(cam) => log::info!(
+                "DBG [{tag}] cam id = {}, is_active = {:?}, exp_range = {:?}",
+                cam.id(), cam.is_active().is_ok(), cam.exposure_range()
+            ),
+            None => log::info!("DBG [{tag}] camera is None"),
+        }
+    };
+
+    log_cam("after autoconnect");
+
+    // Step 1: switch to OmniSim and activate it
+    engine.cur_devices.apply_camera("ASCOM.OmniSim.Camera");
+    test_pause_ms(1000);
+    log_cam("after apply OmniSim");
+
+    // Step 2: switch to V3 Simulator (deactivates OmniSim)
+    engine.cur_devices.apply_camera("ASCOM.Simulator.Camera");
+    test_pause_ms(1000);
+    log_cam("after apply V3 Simulator");
+
+    // Step 3: the exact call that failed for the user
+    if let Some(cam) = engine.cur_devices.camera() {
+        log::info!("DBG set_binning(1,1) = {:?}", cam.set_binning(1, 1));
+        log::info!("DBG max_binning() = {:?}", cam.max_binning());
+        log::info!("DBG ccd_size() = {:?}", cam.ccd_size());
+        log::info!("DBG set_binning(1,1) again = {:?}", cam.set_binning(1, 1));
+
+        // Step 4: full single shot like the user's Take Shot click
+        engine.options.write().unwrap().cam.frame.set_exposure(1.0);
+        test_switch_tab(app, "lb_tab_common");
+        match engine.start_single_shot() {
+            Ok(_) => log::info!("DBG single shot started"),
+            Err(err) => log::error!("DBG start_single_shot failed: {err}"),
+        }
+
+        for i in 0..15 {
+            test_pause_ms(1000);
+            let mode = engine.modes().active.kind();
+            let empty = engine.preview.image.read().unwrap().is_empty();
+            log::info!("DBG shot t={i}s mode={mode:?} image_empty={empty}");
+            if mode == ModeKind::Waiting && !empty {
+                break;
+            }
+        }
+        test_switch_tab(app, "lb_tab_common");
+        test_save_main_window_screenshot(app, ".tmp/ascom_switch_shot.png");
+    }
+    test_pause_ms(500);
+}
+
 pub fn run_scenario(app: &gtk::Application, engine: &Engine) {
-    debug_ascom_camera(app, engine);
+    debug_ascom_switch(app, engine);
 }
