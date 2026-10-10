@@ -156,6 +156,16 @@ fn begin_activation<T>(state: &mut ActState<T>) -> eyre::Result<bool> {
     }
 }
 
+/// Rolls back a failed activation while the COM handle is still alive: releases
+/// the connection ref and, when it was the class's last wrapper, disconnects the
+/// shared driver (drop never disconnects). Mirrors `deactivate_impl`: disconnect
+/// failures are logged, never propagated, so the original error is not masked.
+fn rollback_activation<D: AscomDevice>(ctx: &HalCtx, device: &D, conn_key: &str, device_id: &str) {
+    if ctx.conn_release(conn_key) && let Err(err) = device.set_connected(false) {
+        log::error!("cannot disconnect ASCOM device {device_id}: {err}");
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // AscomHalImpl
 
@@ -600,13 +610,21 @@ impl AscomCamera {
     /// is already connected), and caches capabilities and static data.
     /// Blocking: runs on the caller thread with no external locks held.
     fn activate_impl(&self, must_connect: bool) -> eyre::Result<CameraStatic> {
-        let device = ac_err(
+        let device = match ac_err(
             &format!("cannot open ASCOM camera {}", self.device_id),
             AcCamera::open(&AcDeviceSpec::new(self.device_id.as_str()))
-        )?;
+        ) {
+            Ok(device) => device,
+            Err(err) => {
+                // No handle exists to disconnect: only drop the acquired ref
+                self.ctx.conn_release(&self.conn_key);
+                return Err(err);
+            }
+        };
 
         if must_connect && let Err(err) = device.set_connected(true) {
-            // Dropping the handle releases the driver COM thread
+            // The driver may have set `Connected` before failing: roll back
+            rollback_activation(&self.ctx, &device, &self.conn_key, &self.device_id);
             eyre::bail!("cannot connect ASCOM camera {}: {err}", self.device_id);
         }
 
@@ -620,12 +638,22 @@ impl AscomCamera {
             }
         };
 
-        let exp_min = ac_err("ExposureMin", device.exposure_min())?;
-        let exp_max = ac_err("ExposureMax", device.exposure_max())?;
-        let pixel_size_x = ac_err("PixelSizeX", device.pixel_size_x())?;
-        let pixel_size_y = ac_err("PixelSizeY", device.pixel_size_y())?;
-        let ccd_size_x = i32::max(ac_err("CameraXSize", device.camera_x_size())?, 0) as usize;
-        let ccd_size_y = i32::max(ac_err("CameraYSize", device.camera_y_size())?, 0) as usize;
+        // Mandatory reads: on failure roll back the connection while the
+        // handle is still alive (dropping it never disconnects)
+        let (exp_min, exp_max, pixel_size_x, pixel_size_y, ccd_size_x, ccd_size_y) =
+            (|| -> eyre::Result<(f64, f64, f64, f64, usize, usize)> {
+                let exp_min = ac_err("ExposureMin", device.exposure_min())?;
+                let exp_max = ac_err("ExposureMax", device.exposure_max())?;
+                let pixel_size_x = ac_err("PixelSizeX", device.pixel_size_x())?;
+                let pixel_size_y = ac_err("PixelSizeY", device.pixel_size_y())?;
+                let ccd_size_x = i32::max(ac_err("CameraXSize", device.camera_x_size())?, 0) as usize;
+                let ccd_size_y = i32::max(ac_err("CameraYSize", device.camera_y_size())?, 0) as usize;
+                Ok((exp_min, exp_max, pixel_size_x, pixel_size_y, ccd_size_x, ccd_size_y))
+            })()
+            .map_err(|err| {
+                rollback_activation(&self.ctx, &device, &self.conn_key, &self.device_id);
+                err
+            })?;
 
         let max_bin_x = usize::max(i32::max(device.max_bin_x().unwrap_or(1), 0) as usize, 1);
         let max_bin_y = usize::max(i32::max(device.max_bin_y().unwrap_or(1), 0) as usize, 1);
@@ -868,7 +896,7 @@ impl Device for AscomCamera {
                 Ok(())
             }
             Err(err) => {
-                self.ctx.conn_release(&self.conn_key);
+                // The connection ref was already released by `activate_impl`
                 *self.state.lock().unwrap() = ActState::Idle;
                 Err(err)
             }
@@ -1206,12 +1234,21 @@ impl AscomTelescope {
     /// is already connected), and builds the move rate list.
     /// Blocking: runs on the caller thread with no external locks held.
     fn activate_impl(&self, must_connect: bool) -> eyre::Result<TelescopeStatic> {
-        let device = ac_err(
+        let device = match ac_err(
             &format!("cannot open ASCOM telescope {}", self.device_id),
             AcTelescope::open(&AcDeviceSpec::new(self.device_id.as_str()))
-        )?;
+        ) {
+            Ok(device) => device,
+            Err(err) => {
+                // No handle exists to disconnect: only drop the acquired ref
+                self.ctx.conn_release(&self.conn_key);
+                return Err(err);
+            }
+        };
 
         if must_connect && let Err(err) = device.set_connected(true) {
+            // The driver may have set `Connected` before failing: roll back
+            rollback_activation(&self.ctx, &device, &self.conn_key, &self.device_id);
             eyre::bail!("cannot connect ASCOM telescope {}: {err}", self.device_id);
         }
 
@@ -1376,7 +1413,7 @@ impl Device for AscomTelescope {
                 Ok(())
             }
             Err(err) => {
-                self.ctx.conn_release(&self.conn_key);
+                // The connection ref was already released by `activate_impl`
                 *self.state.lock().unwrap() = ActState::Idle;
                 Err(err)
             }
@@ -1650,16 +1687,30 @@ impl AscomFocuser {
 
     /// Blocking: runs on the caller thread with no external locks held.
     fn activate_impl(&self, must_connect: bool) -> eyre::Result<FocuserStatic> {
-        let device = ac_err(
+        let device = match ac_err(
             &format!("cannot open ASCOM focuser {}", self.device_id),
             AcFocuser::open(&AcDeviceSpec::new(self.device_id.as_str()))
-        )?;
+        ) {
+            Ok(device) => device,
+            Err(err) => {
+                // No handle exists to disconnect: only drop the acquired ref
+                self.ctx.conn_release(&self.conn_key);
+                return Err(err);
+            }
+        };
 
         if must_connect && let Err(err) = device.set_connected(true) {
+            // The driver may have set `Connected` before failing: roll back
+            rollback_activation(&self.ctx, &device, &self.conn_key, &self.device_id);
             eyre::bail!("cannot connect ASCOM focuser {}: {err}", self.device_id);
         }
 
-        let absolute = ac_err("Absolute", device.absolute())?;
+        let absolute = ac_err("Absolute", device.absolute())
+            .map_err(|err| {
+                // Roll back the connection while the handle is still alive
+                rollback_activation(&self.ctx, &device, &self.conn_key, &self.device_id);
+                err
+            })?;
         if !absolute {
             log::warn!(
                 "ASCOM focuser {}: Absolute == false, absolute positions emulated as deltas",
@@ -1771,7 +1822,7 @@ impl Device for AscomFocuser {
                 Ok(())
             }
             Err(err) => {
-                self.ctx.conn_release(&self.conn_key);
+                // The connection ref was already released by `activate_impl`
                 *self.state.lock().unwrap() = ActState::Idle;
                 Err(err)
             }
@@ -1882,16 +1933,30 @@ impl AscomFilterWheel {
 
     /// Blocking: runs on the caller thread with no external locks held.
     fn activate_impl(&self, must_connect: bool) -> eyre::Result<FilterWheelStatic> {
-        let device = ac_err(
+        let device = match ac_err(
             &format!("cannot open ASCOM filter wheel {}", self.device_id),
             AcFilterWheel::open(&AcDeviceSpec::new(self.device_id.as_str()))
-        )?;
+        ) {
+            Ok(device) => device,
+            Err(err) => {
+                // No handle exists to disconnect: only drop the acquired ref
+                self.ctx.conn_release(&self.conn_key);
+                return Err(err);
+            }
+        };
 
         if must_connect && let Err(err) = device.set_connected(true) {
+            // The driver may have set `Connected` before failing: roll back
+            rollback_activation(&self.ctx, &device, &self.conn_key, &self.device_id);
             eyre::bail!("cannot connect ASCOM filter wheel {}: {err}", self.device_id);
         }
 
-        let names = ac_err("Names", device.names())?;
+        let names = ac_err("Names", device.names())
+            .map_err(|err| {
+                // Roll back the connection while the handle is still alive
+                rollback_activation(&self.ctx, &device, &self.conn_key, &self.device_id);
+                err
+            })?;
 
         Ok(FilterWheelStatic { device, names })
     }
@@ -1970,7 +2035,7 @@ impl Device for AscomFilterWheel {
                 Ok(())
             }
             Err(err) => {
-                self.ctx.conn_release(&self.conn_key);
+                // The connection ref was already released by `activate_impl`
                 *self.state.lock().unwrap() = ActState::Idle;
                 Err(err)
             }
