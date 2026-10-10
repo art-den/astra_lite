@@ -1689,10 +1689,9 @@ impl Telescope for AscomTelescope {
 
 /// COM handle plus cached data. Exists only while the device is active.
 struct FocuserStatic {
-    device:        AcFocuser,
-    absolute:      bool,
-    max_step:      i32,
-    max_increment: i32,
+    device:   AcFocuser,
+    absolute: bool,
+    max_step: i32,
 }
 
 #[derive(Default)]
@@ -1776,9 +1775,8 @@ impl AscomFocuser {
             );
         }
         let max_step = device.max_step().unwrap_or(0);
-        let max_increment = device.max_increment().unwrap_or(i32::MAX);
 
-        Ok(FocuserStatic { device, absolute, max_step, max_increment })
+        Ok(FocuserStatic { device, absolute, max_step })
     }
 
     /// Ready events: exactly once per successful activation, outside any lock.
@@ -1922,15 +1920,18 @@ impl Focuser for AscomFocuser {
             return ac_err("Move", st.device.move_to(target));
         }
 
-        // Relative focuser: `Move` argument is a delta
+        // Relative focuser: `Move` argument is a delta. Delta computed in i64 to
+        // avoid i32 overflow; the crate validates it against live MaxIncrement.
         let pos = ac_err("Position", st.device.position())?;
-        let delta = target - pos;
-        if i32::abs(delta) > st.max_increment {
+        let Some(delta) = i64::from(target)
+            .checked_sub(i64::from(pos))
+            .and_then(|delta| i32::try_from(delta).ok())
+        else {
             eyre::bail!(
-                "ASCOM focuser {}: cannot move {pos} -> {target}: delta {delta} is over MaxIncrement {}",
-                self.device_id, st.max_increment
+                "ASCOM focuser {}: cannot move {pos} -> {target}: delta is out of range",
+                self.device_id
             );
-        }
+        };
         ac_err("Move", st.device.move_to(delta))
     }
 
