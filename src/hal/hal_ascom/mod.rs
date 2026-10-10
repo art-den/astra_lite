@@ -235,21 +235,30 @@ impl AscomHalImpl {
 
     /// Disconnects every activated device. Called on engine stop/shutdown:
     /// dropping the last handle does NOT disconnect a driver.
+    /// All deactivations are attempted; if any failed, the first error is
+    /// returned (the rest are only logged).
     pub fn disconnect_all(&self) -> eyre::Result<()> {
         let data = self.data_read();
+        let mut first_err: Option<eyre::Report> = None;
+        let mut check = |res: eyre::Result<()>, context: &str| {
+            log_if_error_pub(&res, context);
+            if first_err.is_none() {
+                first_err = res.err();
+            }
+        };
         for camera in &data.cameras {
-            log_if_error_pub(&camera.deactivate_impl(), "Deactivate ASCOM camera");
+            check(camera.deactivate_impl(), "Deactivate ASCOM camera");
         }
         for telescope in &data.telescopes {
-            log_if_error_pub(&telescope.deactivate_impl(), "Deactivate ASCOM telescope");
+            check(telescope.deactivate_impl(), "Deactivate ASCOM telescope");
         }
         for focuser in &data.focusers {
-            log_if_error_pub(&focuser.deactivate_impl(), "Deactivate ASCOM focuser");
+            check(focuser.deactivate_impl(), "Deactivate ASCOM focuser");
         }
         for filter_wheel in &data.filter_wheels {
-            log_if_error_pub(&filter_wheel.deactivate_impl(), "Deactivate ASCOM filter wheel");
+            check(filter_wheel.deactivate_impl(), "Deactivate ASCOM filter wheel");
         }
-        Ok(())
+        first_err.map_or(Ok(()), Err)
     }
 
     pub fn find_camera(&self, id: &str) -> Option<Arc<AscomCamera>> {
