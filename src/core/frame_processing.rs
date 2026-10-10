@@ -463,11 +463,6 @@ impl FrameProcessing {
                 }
                 tmr.log("demosaic");
 
-                if command.stop_flag.load(Ordering::Relaxed) {
-                    log::debug!("Command stopped");
-                    return Ok(());
-                }
-
                 raw_info = Some(info);
 
                 image
@@ -490,26 +485,8 @@ impl FrameProcessing {
             tmr.log("remove gradient from light frame");
         }
 
-        drop(image);
-
-        if command.stop_flag.load(Ordering::Relaxed) {
-            log::debug!("Command stopped");
-            return Ok(());
-        }
-
-        self.notify_frame_result(
-            FrameProcessEvent::ImageReady,
-            &command,
-        );
-
-        if command.stop_flag.load(Ordering::Relaxed) {
-            log::debug!("Command stopped");
-            return Ok(());
-        }
-
         // Result image histogram
 
-        let image = command.preview.image.read().unwrap();
         let mut hist = command.preview.img_hist.write().unwrap();
         let tmr = TimeLogger::start();
         hist.from_image(&image);
@@ -518,6 +495,14 @@ impl FrameProcessing {
             *command.preview.raw_hist.write().unwrap() = hist.clone();
         }
         drop(hist);
+        drop(image);
+
+        // ImageReady message must be sent after assigning a histogram
+        // so that the image preview uses the corrected histogram.
+        self.notify_frame_result(
+            FrameProcessEvent::ImageReady,
+            &command,
+        );
 
         self.notify_frame_result(
             FrameProcessEvent::ImageHistogramReady,
@@ -530,7 +515,7 @@ impl FrameProcessing {
         }
 
         // Stars
-
+        let image = command.preview.image.read().unwrap();
         let frame_stars = if is_light_frame {
             let stars_recgn_send = command.quality_options
                 .as_ref().map(|qo| qo.star_recogn_sens)
@@ -560,8 +545,6 @@ impl FrameProcessing {
         } else {
             Stars::default()
         };
-
-        let hist = command.preview.img_hist.read().unwrap();
 
         if frame_type == FrameType::Lights {
             let stars = Arc::new(frame_stars);
@@ -672,6 +655,7 @@ impl FrameProcessing {
                 // Translate/rotate image to reference image and add
                 let offset = lf_info.offset.clone().unwrap_or_default();
                 let mut stacker = live_stacking.data.stacker.write().unwrap();
+                let hist = command.preview.img_hist.read().unwrap();
                 let tmr = TimeLogger::start();
                 stacker.add(
                     &image,
@@ -682,6 +666,7 @@ impl FrameProcessing {
                     exposure,
                 );
                 tmr.log("ImageStacker::add");
+                drop(hist);
                 drop(stacker);
 
                 if command.stop_flag.load(Ordering::Relaxed) {
