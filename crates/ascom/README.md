@@ -56,6 +56,12 @@ code table and the late binding layer against **in-process COM mocks**
 (`src/com/mock.rs`: `IDispatch` collections with `NewEnum`/`Count`/`Item` using different
 index bases, plus a broken and an infinite `IEnumVARIANT`).
 
+`--features mock` hands the same mocks to a dependent crate as a driver-injection seam
+(`Camera::open_mock` and friends, plus `ascom::mock::{Element, Member}`); that is how the
+`astra_lite` HAL tests a failed activation without a driver installed. The mocks
+themselves stay crate-internal — only the member vocabulary is public, and `Connected` is
+the writable `Member::Flag` a test can observe.
+
 ## Live examples (Platform 7 required)
 
 The default ProgID is OmniSim, overridable through the environment variables

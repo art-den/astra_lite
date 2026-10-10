@@ -510,7 +510,7 @@ impl IDispatch_Impl for MockItem_Impl {
     }
 }
 
-/// How one named member of a [`MockDevice`] answers.
+/// How one named member of a `MockDevice` answers.
 #[derive(Clone, Debug)]
 pub enum Member {
     /// Answers with this element. `Element::Empty` leaves `pVarResult` as `VT_EMPTY`,
@@ -519,9 +519,9 @@ pub enum Member {
     /// Raises a driver exception whose `EXCEPINFO.scode` is this HRESULT: how a .NET
     /// driver refuses a member it does have (e.g. an ASCOM `NotConnected`).
     Refuses(HRESULT),
-    /// The one writable member: a get answers the current value, a put stores it.
-    /// Shared with the test thread so a driver's `Connected` flag stays observable
-    /// while `Invoke` runs on the device's actor thread.
+    /// The only writable member of a `MockDevice`: a get answers the current value,
+    /// a put stores it. Shared with the test thread so a driver's `Connected` flag stays
+    /// observable while `Invoke` runs on the device's actor thread.
     Flag(Arc<AtomicBool>),
 }
 
@@ -613,6 +613,11 @@ impl IDispatch_Impl for MockDevice_Impl {
         match member {
             Member::Flag(flag) => {
                 if kind == Call::Put {
+                    // `call_kind` folds a by-ref write into `Call::Put`, but a real
+                    // server refuses a putref on a `bool`, so this member must too.
+                    if flags.contains(DISPATCH_PROPERTYPUTREF) {
+                        return Err(Error::from_hresult(DISP_E_MEMBERNOTFOUND));
+                    }
                     let value = unsafe { first_bool_arg(params) }
                         .ok_or(Error::from_hresult(DISP_E_TYPEMISMATCH))?;
                     flag.store(value, Ordering::SeqCst);
@@ -880,6 +885,39 @@ mod tests {
 
         dispatch.set_bool("Connected", false).expect("clearing the flag must work");
         assert!(!flag.load(Ordering::SeqCst), "the flag kept the old value");
+    }
+
+    #[test]
+    fn a_flag_putref_is_refused() {
+        // A by-ref write is not a value put, and the writable member must not turn it
+        // into one: every other member already gets `DISP_E_MEMBERNOTFOUND`.
+        let flag = Arc::new(AtomicBool::new(false));
+        let device: IDispatch =
+            MockDevice::new(vec![("Connected", Member::Flag(Arc::clone(&flag)))]).into();
+        let value = Variant::from_bool(true);
+        let mut argv = [core::mem::ManuallyDrop::new(unsafe { core::ptr::read(value.raw()) })];
+        let mut named = [DISPID_PROPERTYPUT];
+        let params = DISPPARAMS {
+            rgvarg: argv.as_mut_ptr().cast::<VARIANT>(),
+            rgdispidNamedArgs: named.as_mut_ptr(),
+            cArgs: 1,
+            cNamedArgs: 1,
+        };
+        let error = unsafe {
+            device.Invoke(
+                FIRST_MEMBER_DISPID,
+                &GUID::zeroed(),
+                0,
+                DISPATCH_PROPERTYPUTREF,
+                &params,
+                None,
+                None,
+                None,
+            )
+        }
+        .expect_err("a by-ref write to a bool member must be refused");
+        assert_eq!(error.code(), DISP_E_MEMBERNOTFOUND, "a putref was taken for a put");
+        assert!(!flag.load(Ordering::SeqCst), "a refused putref wrote the flag");
     }
 
     #[test]

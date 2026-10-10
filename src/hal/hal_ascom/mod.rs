@@ -610,7 +610,8 @@ impl AscomCamera {
         }
     }
 
-    /// Instantiates the COM driver object for this wrapper's ProgID.
+    /// Instantiates the COM driver object: the wrapper's ProgID in production, the
+    /// injected mock when a test set `open_override`.
     fn open_driver(&self) -> ascom::error::Result<AcCamera> {
         #[cfg(test)]
         if let Some(open) = &self.open_override {
@@ -2308,9 +2309,15 @@ mod tests {
     use ascom::mock::{Element, HRESULT, Member};
     use std::sync::atomic::AtomicBool;
 
-    /// An ASCOM exception HRESULT, e.g. code `0x402` = ValueNotSet.
-    fn ascom_hr(code: u16) -> HRESULT {
-        HRESULT(0x8004_0000_u32 as i32 | i32::from(code))
+    /// ProgID of the mock driver. Every wrapper must use this very id: a different
+    /// fake ProgID would resolve to a different `conn_key`, and the alias test would
+    /// silently stop testing an alias.
+    const MOCK_PROG_ID: &str = "Astra.Mock.Camera";
+
+    /// The driver exception a mandatory member read fails with in these fixtures
+    /// (`0x402` = ValueNotSet), encoded the ASCOM way: `0x8004_0000 | code`.
+    fn driver_fault() -> HRESULT {
+        HRESULT(0x8004_0000_u32 as i32 | 0x402)
     }
 
     /// A mock camera answering everything `activate_impl` needs. A member left out of
@@ -2353,12 +2360,12 @@ mod tests {
     /// both aliases on one `conn_key`, because no CLSID resolves for it.
     fn mock_camera_wrapper(ctx: Arc<HalCtx>, members: Vec<(&'static str, Member)>) -> AscomCamera {
         let info = DeviceInfo {
-            id:    "Astra.Mock.Camera".to_string(),
+            id:    MOCK_PROG_ID.to_string(),
             name:  "Mock Camera".to_string(),
             type_: DeviceType::CAMERA,
         };
         AscomCamera::with_open_override(ctx, info, move || {
-            AcCamera::open_mock(members.clone(), "Astra.Mock.Camera")
+            AcCamera::open_mock(members.clone(), MOCK_PROG_ID)
         })
     }
 
@@ -2372,7 +2379,7 @@ mod tests {
         let ctx = Arc::new(test_ctx());
         let connected = Arc::new(AtomicBool::new(false));
         let mut members = mock_camera(Arc::clone(&connected));
-        refuse(&mut members, "CameraXSize", ascom_hr(0x402));
+        refuse(&mut members, "CameraXSize", driver_fault());
         let camera = mock_camera_wrapper(Arc::clone(&ctx), members);
 
         let err =
@@ -2387,11 +2394,38 @@ mod tests {
     }
 
     #[test]
+    fn open_failure_releases_the_ref_without_touching_the_driver() {
+        // No COM handle exists on this path, so the rollback may only drop the ref it
+        // acquired: there is nothing to disconnect.
+        let ctx = Arc::new(test_ctx());
+        let connected = Arc::new(AtomicBool::new(false));
+        let info = DeviceInfo {
+            id:    MOCK_PROG_ID.to_string(),
+            name:  "Mock Camera".to_string(),
+            type_: DeviceType::CAMERA,
+        };
+        let camera = AscomCamera::with_open_override(Arc::clone(&ctx), info, || {
+            Err(ascom::AscomError::local(
+                ascom::AscomErrorKind::NotFound,
+                "CoCreateInstance",
+                "the fake driver is not registered",
+            ))
+        });
+
+        let err = camera.activate().expect_err("an unopenable driver must fail activation");
+        assert!(err.to_string().contains(MOCK_PROG_ID), "the driver is not named: {err}");
+        assert!(!connected.load(Ordering::SeqCst), "a driver that never existed was connected");
+        assert_eq!(conn_total(&ctx), 0, "the connection ref was not released");
+        assert_eq!(ctx.active_count.load(Ordering::Relaxed), 0);
+        assert!(!camera.is_activated());
+    }
+
+    #[test]
     fn activation_is_retryable_after_failure() {
         let ctx = Arc::new(test_ctx());
         let connected = Arc::new(AtomicBool::new(false));
         let mut members = mock_camera(Arc::clone(&connected));
-        refuse(&mut members, "CameraYSize", ascom_hr(0x402));
+        refuse(&mut members, "CameraYSize", driver_fault());
         let camera = mock_camera_wrapper(Arc::clone(&ctx), members);
 
         let err = camera.activate().expect_err("the first attempt must fail");
@@ -2434,7 +2468,7 @@ mod tests {
         assert_eq!(ctx.active_count.load(Ordering::Relaxed), 1);
 
         let mut members = mock_camera(Arc::clone(&connected));
-        refuse(&mut members, "PixelSizeX", ascom_hr(0x402));
+        refuse(&mut members, "PixelSizeX", driver_fault());
         let alias = mock_camera_wrapper(Arc::clone(&ctx), members);
         let err = alias.activate().expect_err("the alias must fail on its refusing member");
         assert!(err.to_string().contains("PixelSizeX"), "the failing member is lost: {err}");

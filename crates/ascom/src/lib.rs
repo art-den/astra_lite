@@ -88,12 +88,19 @@ pub mod prelude {
 pub use com::variant::{AscomEnum, VariantKind};
 pub use error::{AscomError, AscomErrorKind};
 
-/// The vocabulary of the mock-driver seams (`Camera::open_mock` and friends), so a
-/// test can name a member answer without reaching into [`com`].
+/// The vocabulary of the mock-driver seams (`Camera::open_mock` and friends): the mock
+/// module itself stays crate-internal, so this is the only public door to it.
 #[cfg(feature = "mock")]
 pub mod mock {
     pub use crate::com::mock::{Element, Member};
     // Named here so a caller can build a `Member::Refuses` answer without depending
     // on the `windows` crate itself.
     pub use windows::core::HRESULT;
+
+    // A member table is carried into the actor's `Send` closure, so a variant holding a
+    // non-`Send` payload must fail here rather than deep inside `Actor::start`.
+    const _: fn() = || {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Member>();
+    };
 }
