@@ -140,8 +140,11 @@ impl CurDevices {
     }
 
     /// Deactivates the replaced device (no-op for implementations where
-    /// selection always means connection). Skipped when the very same device is
-    /// applied again, otherwise `apply_*()` would deactivate what it activated.
+    /// selection always means connection). Must run BEFORE the replacement is
+    /// activated: while disconnecting, the old driver may also disconnect the
+    /// new device's underlying driver (hub drivers).
+    /// Skipped when the very same device is applied again, otherwise
+    /// `apply_*()` would deactivate what it activated.
     fn deactivate_prev<D>(prev: &Option<Arc<D>>, new_id: &str, context: &str)
     where
         D: Device + Send + Sync + ?Sized,
@@ -180,7 +183,7 @@ impl CurDevices {
         let prev_camera_id = options.cam.device_id.clone();
         {
             if !force && prev_camera_id == new_camera_id { return; }
-            let options = &mut *options; // To To pacify borrow checker
+            let options = &mut *options; // To pacify borrow checker
 
             // Store previous camera options
             Self::store_separated_options_for_specific_camera(options, &prev_camera_id);
@@ -216,11 +219,15 @@ impl CurDevices {
         let cam_res = self.hal.camera(new_camera_id);
         log_if_error(&cam_res, "Get camera from HAL");
 
+        // Deactivate the previous device before activating the new one: while
+        // disconnecting, a hub driver (e.g. JustAHub) may also disconnect the
+        // underlying driver of the other camera, which would leave the just
+        // activated device connected only on paper.
+        Self::deactivate_prev(&prev_camera, new_camera_id, "Deactivate previous camera");
+
         // Activate before storing and before the changed-event: its handler
         // queries device capabilities, so the device must already be active
         let new_camera = Self::activated(&self.hal, cam_res.ok());
-
-        Self::deactivate_prev(&prev_camera, new_camera_id, "Deactivate previous camera");
 
         {
             let mut data = self.data.lock().unwrap();
@@ -289,9 +296,10 @@ impl CurDevices {
         let telescope_res = self.hal.telescope(new_telescope_id);
         log_if_error(&telescope_res, "Get telescope from HAL");
 
-        let new_telescope = Self::activated(&self.hal, telescope_res.ok());
-
+        // Deactivate before activating: see `change_camera_impl()`
         Self::deactivate_prev(&prev_telescope, new_telescope_id, "Deactivate previous telescope");
+
+        let new_telescope = Self::activated(&self.hal, telescope_res.ok());
 
         {
             let mut data = self.data.lock().unwrap();
@@ -336,9 +344,10 @@ impl CurDevices {
         let focuser_res = self.hal.focuser(new_focuser_id);
         log_if_error(&focuser_res, "Get focuser from HAL");
 
-        let new_focuser = Self::activated(&self.hal, focuser_res.ok());
-
+        // Deactivate before activating: see `change_camera_impl()`
         Self::deactivate_prev(&prev_focuser, new_focuser_id, "Deactivate previous focuser");
+
+        let new_focuser = Self::activated(&self.hal, focuser_res.ok());
 
         {
             let mut data = self.data.lock().unwrap();
@@ -383,9 +392,10 @@ impl CurDevices {
         let filter_wheel_res = self.hal.filter_wheel(new_filter_wheel_id);
         log_if_error(&filter_wheel_res, "Get filter wheel from HAL");
 
-        let new_filter_wheel = Self::activated(&self.hal, filter_wheel_res.ok());
-
+        // Deactivate before activating: see `change_camera_impl()`
         Self::deactivate_prev(&prev_filter_wheel, new_filter_wheel_id, "Deactivate previous filter wheel");
+
+        let new_filter_wheel = Self::activated(&self.hal, filter_wheel_res.ok());
 
         {
             let mut data = self.data.lock().unwrap();
