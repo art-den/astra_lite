@@ -7,7 +7,7 @@ on low power PCs (like raspberry Pi or Orange Pi)
 ```
 
 AstraLite uses INDI server to work with astrophotography hardware.
-On MS Windows ASCOM Alpaca devices are also supported.
+On MS Windows ASCOM (+ ASCOM Alpaca) devices are also supported.
 See https://www.indilib.org/download.html to install INDI
 
 Compiled binaries and discussion here:
