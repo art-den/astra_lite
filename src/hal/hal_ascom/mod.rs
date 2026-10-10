@@ -148,7 +148,7 @@ fn take_active<T>(state: &mut ActState<T>) -> Option<Arc<T>> {
 fn begin_activation<T>(state: &mut ActState<T>) -> eyre::Result<bool> {
     match &*state {
         ActState::Active(_) => Ok(false),
-        ActState::Busy => eyre::bail!("ASCOM device is busy (activation/disactivation in progress)"),
+        ActState::Busy => eyre::bail!("ASCOM device is busy (activation in progress)"),
         ActState::Idle => {
             *state = ActState::Busy;
             Ok(true)
@@ -561,6 +561,8 @@ struct CameraStatic {
 struct ExposureData {
     duration:   f64,
     start_time: std::time::Instant,
+    // `CameraBeginDownloadData` was already sent for this exposure
+    download_begun: bool,
 }
 
 #[derive(Default)]
@@ -840,14 +842,29 @@ impl AscomCamera {
     }
 
     fn get_image_and_send_event(&self, st: &CameraStatic) -> eyre::Result<()> {
-        self.ctx.event_handlers.send(HalEvent::CameraBeginDownloadData(
-            Arc::clone(&self.device_id)
-        ));
-
         let (frame_type, exposure) = {
             let data = self.dyn_data.lock().unwrap();
             (data.frame_type, data.exposure)
         };
+
+        // Send Begin exactly once per exposure, right before the read:
+        // the `InvalidOperation` retry below re-enters this function on
+        // the next tick and must not re-send it
+        let first_read_attempt = {
+            let mut exp_data = self.exp_data.lock().unwrap();
+            match exp_data.as_mut() {
+                Some(exp) if !exp.download_begun => {
+                    exp.download_begun = true;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if first_read_attempt {
+            self.ctx.event_handlers.send(HalEvent::CameraBeginDownloadData(
+                Arc::clone(&self.device_id)
+            ));
+        }
 
         let timer = std::time::Instant::now();
         let image = match st.device.read_image() {
@@ -879,7 +896,7 @@ impl AscomCamera {
         info.camera    = st.cam_name.clone();
         info.gain      = st.device.gain().unwrap_or(0);
         info.offset    = st.device.offset().unwrap_or(0);
-        info.bin       = st.device.bin_x().unwrap_or(1).clamp(0, u8::MAX as i32) as u8;
+        info.bin       = st.device.bin_x().unwrap_or(1).clamp(1, u8::MAX as i32) as u8;
         info.ccd_temp  = st.device.ccd_temperature().ok();
         info.exposure  = exposure;
 
@@ -988,7 +1005,8 @@ impl Camera for AscomCamera {
 
         *self.exp_data.lock().unwrap() = Some(ExposureData {
             duration,
-            start_time: std::time::Instant::now(),
+            start_time:     std::time::Instant::now(),
+            download_begun: false,
         });
 
         let result = ac_err(
@@ -997,8 +1015,10 @@ impl Camera for AscomCamera {
         );
         if result.is_err() {
             *self.exp_data.lock().unwrap() = None;
+        } else {
+            // Only remember the exposure of a successfully started shot
+            self.dyn_data.lock().unwrap().exposure = duration;
         }
-        self.dyn_data.lock().unwrap().exposure = duration;
         result
     }
 
@@ -1614,10 +1634,11 @@ impl Telescope for AscomTelescope {
 
     fn set_slew_speed(&self, speed_id: &str) -> eyre::Result<()> {
         let st = self.active_data()?;
-        if let Some((_, rate)) = st.move_rates.iter().find(|(name, _)| name == speed_id) {
-            let rate = *rate;
-            self.data.lock().unwrap().axis_rate = rate;
-        }
+        let Some((_, rate)) = st.move_rates.iter().find(|(name, _)| name == speed_id) else {
+            eyre::bail!("unknown slew speed id {speed_id}");
+        };
+        let rate = *rate;
+        self.data.lock().unwrap().axis_rate = rate;
         Ok(())
     }
 

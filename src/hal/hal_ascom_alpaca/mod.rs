@@ -376,7 +376,7 @@ impl AscomAlpacaCameraShot {
             image_info.gain = aa_camera.gain().await.unwrap_or(0) as _;
             image_info.offset = aa_camera.offset().await.unwrap_or(0);
             image_info.exposure = exposure;
-            image_info.bin = aa_camera.bin_x().await.unwrap_or(0);
+            image_info.bin = aa_camera.bin_x().await.unwrap_or(1).max(1);
             image_info.ccd_temp = aa_camera.ccd_temperature().await.ok();
 
             Ok(Self { array, sensor_type, dl_time, raw_image_info: image_info })
@@ -471,6 +471,8 @@ bitflags! {
 struct ExposureData {
     duration:   f64,
     start_time: std::time::Instant,
+    // `CameraBeginDownloadData` was already sent for this exposure
+    download_begun: bool,
 }
 
 #[derive(Default)]
@@ -690,14 +692,28 @@ impl AscomAlpacaCamera {
     }
 
     fn get_image_from_camera_and_send_event(&self) -> eyre::Result<()> {
-        self.event_handlers.send(HalEvent::CameraBeginDownloadData(
-            Arc::clone(&self.device_id)
-        ));
-
         let data = self.dyn_data.lock().unwrap();
         let frame_type = data.frame_type;
         let exposure = data.exposure;
         drop(data);
+
+        // Send Begin exactly once per exposure, right before the actual
+        // image read (inside `AscomAlpacaCameraShot::new`)
+        let first_read_attempt = {
+            let mut exp_data = self.exp_data.lock().unwrap();
+            match exp_data.as_mut() {
+                Some(exp) if !exp.download_begun => {
+                    exp.download_begun = true;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if first_read_attempt {
+            self.event_handlers.send(HalEvent::CameraBeginDownloadData(
+                Arc::clone(&self.device_id)
+            ));
+        }
 
         let camera_shot = AscomAlpacaCameraShot::new(
             &self.async_runtime,
@@ -761,7 +777,8 @@ impl Camera for AscomAlpacaCamera {
     fn start_exposure(&self, duration: f64) -> eyre::Result<()> {
         *self.exp_data.lock().unwrap() = Some(ExposureData{
             duration,
-            start_time: std::time::Instant::now(),
+            start_time:     std::time::Instant::now(),
+            download_begun: false,
         });
         let result = self.async_runtime.block_on(async {
             let duration = std::time::Duration::from_secs_f64(duration);
@@ -771,8 +788,10 @@ impl Camera for AscomAlpacaCamera {
         });
         if result.is_err() {
             *self.exp_data.lock().unwrap() = None;
+        } else {
+            // Only remember the exposure of a successfully started shot
+            self.dyn_data.lock().unwrap().exposure = duration;
         }
-        self.dyn_data.lock().unwrap().exposure = duration;
         result
     }
 
@@ -1320,13 +1339,14 @@ impl Telescope for AscomAlpacaTelescope {
     }
 
     fn set_slew_speed(&self, speed_id: &str) -> eyre::Result<()> {
-        let item = self.move_rates
+        let Some((_, rate)) = self.move_rates
             .iter()
-            .find(|(name, _)| name == speed_id);
-        if let Some((_, rate)) = item {
-            let mut data = self.data.lock().unwrap();
-            data.axis_rate = *rate;
+            .find(|(name, _)| name == speed_id)
+        else {
+            eyre::bail!("unknown slew speed id {speed_id}");
         };
+        let mut data = self.data.lock().unwrap();
+        data.axis_rate = *rate;
         Ok(())
     }
 
