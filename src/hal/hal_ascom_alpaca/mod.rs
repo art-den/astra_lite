@@ -1,8 +1,6 @@
-use std::io::{BufWriter, Write};
 use std::ops::RangeInclusive;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
-use std::fs::File;
 
 use ascom_alpaca as aa;
 use bitflags::bitflags;
@@ -10,8 +8,8 @@ use itertools::izip;
 
 use crate::hal::*;
 use crate::hal::events::{HalEvent, HalEventHandlers};
+use crate::image::io::save_raw_image_to_fits_file;
 use crate::image::raw::{CfaType, RawImage, RawImageInfo};
-use crate::image::simple_fits::{FitsWriter, Header};
 
 const SIDERAL_RATE_DEG_PER_SEC: f64 = 360.0 / (23.0 * 60.0 * 60.0 + 56.0 * 60.0 + 4.09);
 
@@ -383,23 +381,8 @@ impl AscomAlpacaCameraShot {
     }
 
     fn save_raw_file(&self, file_name: &Path) -> eyre::Result<()> {
-        let raw_2d_arr = self.array.index_axis(ndarray::Axis(2), 0);
-        let info = &self.raw_image_info;
-
-        let mut file = BufWriter::new(File::create(file_name)?);
-        let writer = FitsWriter::new();
-        let mut hdu = Header::new_2d(info.width, info.height);
-        info.save_to_fits_header(&mut hdu);
-        writer.write_header(&mut file, &hdu)?;
-
-        for row in 0..info.height {
-            for src in raw_2d_arr.column(row) {
-                let value = (*src).clamp(0, u16::MAX as i32) as u16;
-                file.write_all(&value.to_be_bytes())?;
-            }
-        }
-
-        Ok(())
+        let raw_image = self.get_raw()?;
+        save_raw_image_to_fits_file(&raw_image, file_name)
     }
 
     fn save_image(&self, _file_name: &Path) -> eyre::Result<()> {
