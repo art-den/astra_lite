@@ -51,6 +51,16 @@ impl FilterWheel {
         Ok(Self { actor: Actor::spawn(&spec.prog_id)?, spec: spec.clone() })
     }
 
+    /// Builds the filter wheel around an in-process mock driver answering `members`.
+    /// Test seam only (`feature = "mock"`); it replaces instantiation alone.
+    #[cfg(feature = "mock")]
+    pub fn open_mock(
+        members: Vec<(&'static str, crate::com::mock::Member)>,
+        prog_id: &str,
+    ) -> Result<Self> {
+        Ok(Self { actor: Actor::spawn_mock(members)?, spec: DeviceSpec::new(prog_id) })
+    }
+
     pub fn prog_id(&self) -> &str {
         &self.spec.prog_id
     }

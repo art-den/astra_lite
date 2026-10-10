@@ -87,3 +87,13 @@ pub mod prelude {
 /// without naming a path inside the [`com`] module.
 pub use com::variant::{AscomEnum, VariantKind};
 pub use error::{AscomError, AscomErrorKind};
+
+/// The vocabulary of the mock-driver seams (`Camera::open_mock` and friends), so a
+/// test can name a member answer without reaching into [`com`].
+#[cfg(feature = "mock")]
+pub mod mock {
+    pub use crate::com::mock::{Element, Member};
+    // Named here so a caller can build a `Member::Refuses` answer without depending
+    // on the `windows` crate itself.
+    pub use windows::core::HRESULT;
+}

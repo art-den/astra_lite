@@ -26,18 +26,24 @@ windows = { version = "0.62", features = [
 # this feature (the async layer is only planned).
 tokio = { version = "1", optional = true, features = ["rt", "macros"] }
 
+# The `#[implement]` macro expands to `::windows_core::...` paths, so the crate has
+# to be reachable by name wherever the in-process COM mocks are compiled.
+windows-core = { version = "0.62", optional = true }
+
 [dev-dependencies]
 # The live driver is one shared Singleton, so the contract tests must not overlap.
 # `#[serial]` states that on each test instead of relying on `--test-threads=1`.
 serial_test = "4.0.1"
 
-# The `#[implement]` macro expands to `::windows_core::...` paths, so the crate has
-# to be reachable by name for the in-process COM mocks used by the unit tests.
+# `com::mock` also compiles under plain `cfg(test)`, where the `mock` feature is off.
 windows-core = "0.62"
 
 [features]
 default = []
 tokio = ["dep:tokio"]
+# In-process COM mocks plus the driver-injection seams used by external tests.
+# Off by default so production builds never compile a mock.
+mock = ["dep:windows-core"]
 
 [[example]]
 name = "probe"

@@ -16,13 +16,15 @@
 //! Like the rest of `com`, everything unsafe lives in this file.
 
 use std::cell::Cell;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::core::{
     BSTR, Error, GUID, HRESULT, IUnknown, IUnknownImpl, Interface, PCWSTR, implement,
 };
 use windows::Win32::Foundation::{
     DISP_E_BADINDEX, DISP_E_EXCEPTION, DISP_E_MEMBERNOTFOUND, DISP_E_PARAMNOTFOUND,
-    DISP_E_UNKNOWNNAME, E_FAIL, E_NOTIMPL, S_FALSE, S_OK,
+    DISP_E_TYPEMISMATCH, DISP_E_UNKNOWNNAME, E_FAIL, E_NOTIMPL, S_FALSE, S_OK,
 };
 use windows::Win32::System::Com::{
     DISPPARAMS, DISPATCH_FLAGS, DISPATCH_PROPERTYPUT, DISPATCH_PROPERTYPUTREF, EXCEPINFO,
@@ -195,6 +197,22 @@ unsafe fn first_i32_arg(params: *const DISPPARAMS) -> Option<i32> {
         return None;
     }
     variant::peek_i32(unsafe { &*params.rgvarg })
+}
+
+/// Reads the single `VT_BOOL` argument of a property put.
+///
+/// # Safety
+/// `params` must be null or point at a `DISPPARAMS` whose `rgvarg` really has
+/// `cArgs` entries, which is what `Invoke` promises.
+unsafe fn first_bool_arg(params: *const DISPPARAMS) -> Option<bool> {
+    if params.is_null() {
+        return None;
+    }
+    let params = unsafe { &*params };
+    if params.cArgs == 0 || params.rgvarg.is_null() {
+        return None;
+    }
+    variant::peek_bool(unsafe { &*params.rgvarg })
 }
 
 /// Reports how many elements were delivered and hands back the HRESULT.
@@ -501,6 +519,10 @@ pub enum Member {
     /// Raises a driver exception whose `EXCEPINFO.scode` is this HRESULT: how a .NET
     /// driver refuses a member it does have (e.g. an ASCOM `NotConnected`).
     Refuses(HRESULT),
+    /// The one writable member: a get answers the current value, a put stores it.
+    /// Shared with the test thread so a driver's `Connected` flag stays observable
+    /// while `Invoke` runs on the device's actor thread.
+    Flag(Arc<AtomicBool>),
 }
 
 /// DISPIDs handed out by [`MockDevice`]. Late binding never depends on the numeric
@@ -583,10 +605,23 @@ impl IDispatch_Impl for MockDevice_Impl {
             .and_then(|index| device.members.get(index))
             .map(|(_, member)| member)
             .ok_or_else(|| Error::from_hresult(DISP_E_MEMBERNOTFOUND))?;
-        // Every member here is read-only, so a put is refused the way a real driver
-        // refuses a member it does not expose for writing.
-        refuse_put(kind)?;
+        // A `Flag` is the only member exposed for writing, so a put on any other is
+        // refused the way a real driver refuses a member it does not write.
+        if !matches!(member, Member::Flag(_)) {
+            refuse_put(kind)?;
+        }
         match member {
+            Member::Flag(flag) => {
+                if kind == Call::Put {
+                    let value = unsafe { first_bool_arg(params) }
+                        .ok_or(Error::from_hresult(DISP_E_TYPEMISMATCH))?;
+                    flag.store(value, Ordering::SeqCst);
+                    // A property put answers with no value at all.
+                    return Ok(());
+                }
+                unsafe { give(result, Variant::from_bool(flag.load(Ordering::SeqCst))) };
+                Ok(())
+            }
             Member::Refuses(scode) => Err(unsafe { raise_exception(excepinfo, *scode) }),
             Member::Value(element) => {
                 unsafe { write_element(result, element) };
@@ -826,5 +861,56 @@ mod tests {
         }
         .expect_err("a put with no DISPID_PROPERTYPUT must be refused");
         assert_eq!(error.code(), DISP_E_PARAMNOTFOUND, "the mock answered a put it must refuse");
+    }
+
+    #[test]
+    fn a_flag_member_answers_its_value_and_keeps_a_put() {
+        // A driver flag (`Connected`) has to survive a put and stay readable from the
+        // asserting thread, or the activation-rollback tests prove nothing.
+        let flag = Arc::new(AtomicBool::new(false));
+        let keep =
+            MockDevice::new(vec![("Connected", Member::Flag(Arc::clone(&flag)))]).into_variant();
+        let dispatch =
+            crate::com::Dispatch::from_variant(&keep).expect("the mock is dispatchable");
+
+        assert!(!dispatch.get_bool("Connected").expect("a get answers the flag"));
+        dispatch.set_bool("Connected", true).expect("a well-formed put must be accepted");
+        assert!(dispatch.get_bool("Connected").expect("the written value must read back"));
+        assert!(flag.load(Ordering::SeqCst), "the put never reached the shared flag");
+
+        dispatch.set_bool("Connected", false).expect("clearing the flag must work");
+        assert!(!flag.load(Ordering::SeqCst), "the flag kept the old value");
+    }
+
+    #[test]
+    fn a_flag_put_without_the_named_argument_is_still_refused() {
+        // Making one member writable must not open a hole in the put protocol.
+        let flag = Arc::new(AtomicBool::new(false));
+        let device: IDispatch =
+            MockDevice::new(vec![("Connected", Member::Flag(Arc::clone(&flag)))]).into();
+        let value = Variant::from_bool(true);
+        // A borrowed copy for `rgvarg`; `value` stays the only owner of the payload.
+        let mut argv = [core::mem::ManuallyDrop::new(unsafe { core::ptr::read(value.raw()) })];
+        let params = DISPPARAMS {
+            rgvarg: argv.as_mut_ptr().cast::<VARIANT>(),
+            rgdispidNamedArgs: core::ptr::null_mut(),
+            cArgs: 1,
+            cNamedArgs: 0,
+        };
+        let error = unsafe {
+            device.Invoke(
+                FIRST_MEMBER_DISPID,
+                &GUID::zeroed(),
+                0,
+                DISPATCH_PROPERTYPUT,
+                &params,
+                None,
+                None,
+                None,
+            )
+        }
+        .expect_err("a put with no DISPID_PROPERTYPUT must be refused");
+        assert_eq!(error.code(), DISP_E_PARAMNOTFOUND, "the flag member bypassed the check");
+        assert!(!flag.load(Ordering::SeqCst), "a refused put wrote the flag");
     }
 }

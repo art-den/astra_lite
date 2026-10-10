@@ -590,6 +590,9 @@ pub struct AscomCamera {
     state:       Mutex<ActState<CameraStatic>>,
     exp_data:    Mutex<Option<ExposureData>>,
     dyn_data:    Mutex<CameraDynData>,
+    /// Replaces driver instantiation in tests; production always opens the ProgID.
+    #[cfg(test)]
+    open_override: Option<Box<dyn Fn() -> ascom::error::Result<AcCamera> + Send + Sync>>,
 }
 
 impl AscomCamera {
@@ -602,7 +605,31 @@ impl AscomCamera {
             state:       Mutex::new(ActState::Idle),
             exp_data:    Mutex::new(None),
             dyn_data:    Mutex::new(CameraDynData::default()),
+            #[cfg(test)]
+            open_override: None,
         }
+    }
+
+    /// Instantiates the COM driver object for this wrapper's ProgID.
+    fn open_driver(&self) -> ascom::error::Result<AcCamera> {
+        #[cfg(test)]
+        if let Some(open) = &self.open_override {
+            return open();
+        }
+        AcCamera::open(&AcDeviceSpec::new(self.device_id.as_str()))
+    }
+
+    /// Wrapper whose driver comes from `open` instead of the ProgID: how the tests
+    /// inject an in-process mock driver.
+    #[cfg(test)]
+    fn with_open_override(
+        ctx: Arc<HalCtx>,
+        info: DeviceInfo,
+        open: impl Fn() -> ascom::error::Result<AcCamera> + Send + Sync + 'static,
+    ) -> Self {
+        let mut camera = Self::new(ctx, info);
+        camera.open_override = Some(Box::new(open));
+        camera
     }
 
     fn active_data(&self) -> eyre::Result<Arc<CameraStatic>> {
@@ -631,7 +658,7 @@ impl AscomCamera {
     fn activate_impl(&self, must_connect: bool) -> eyre::Result<CameraStatic> {
         let device = match ac_err(
             &format!("cannot open ASCOM camera {}", self.device_id),
-            AcCamera::open(&AcDeviceSpec::new(self.device_id.as_str()))
+            self.open_driver(),
         ) {
             Ok(device) => device,
             Err(err) => {
@@ -2274,5 +2301,148 @@ mod tests {
             begin_activation(&mut state).expect("a failed activation must be retryable"),
             "the second attempt was refused"
         );
+    }
+
+    // --- Activation against an injected in-process mock driver -------------------
+
+    use ascom::mock::{Element, HRESULT, Member};
+    use std::sync::atomic::AtomicBool;
+
+    /// An ASCOM exception HRESULT, e.g. code `0x402` = ValueNotSet.
+    fn ascom_hr(code: u16) -> HRESULT {
+        HRESULT(0x8004_0000_u32 as i32 | i32::from(code))
+    }
+
+    /// A mock camera answering everything `activate_impl` needs. A member left out of
+    /// the table answers `DISP_E_UNKNOWNNAME` ("not implemented"), which is exactly
+    /// what the tolerant HAL reads expect.
+    fn mock_camera(connected: Arc<AtomicBool>) -> Vec<(&'static str, Member)> {
+        vec![
+            ("Connected", Member::Flag(connected)),
+            // Identity members: mandatory for the capability snapshot
+            ("InterfaceVersion", Member::Value(Element::Int(3))),
+            ("Name", Member::Value(Element::Str("Mock Camera"))),
+            ("Description", Member::Value(Element::Str("In-process mock camera"))),
+            ("DriverInfo", Member::Value(Element::Str("astra_lite tests"))),
+            ("DriverVersion", Member::Value(Element::Str("1.0"))),
+            // Mandatory activation reads
+            ("ExposureMin", Member::Value(Element::Int(1))),
+            ("ExposureMax", Member::Value(Element::Int(600))),
+            ("PixelSizeX", Member::Value(Element::Int(4))),
+            ("PixelSizeY", Member::Value(Element::Int(4))),
+            ("CameraXSize", Member::Value(Element::Int(4000))),
+            ("CameraYSize", Member::Value(Element::Int(3000))),
+            // Reads the HAL can do without
+            ("MaxBinX", Member::Value(Element::Int(4))),
+            ("MaxBinY", Member::Value(Element::Int(4))),
+            ("SensorType", Member::Value(Element::Int(0))),
+            ("MaxADU", Member::Value(Element::Int(65535))),
+        ]
+    }
+
+    /// Turns one member of a fixture into a driver exception.
+    fn refuse(members: &mut [(&'static str, Member)], name: &str, scode: HRESULT) {
+        let (_, answer) = members
+            .iter_mut()
+            .find(|(member, _)| *member == name)
+            .expect("the fixture carries that member");
+        *answer = Member::Refuses(scode);
+    }
+
+    /// Wrapper whose driver is a fresh mock built on every open. One fake ProgID keeps
+    /// both aliases on one `conn_key`, because no CLSID resolves for it.
+    fn mock_camera_wrapper(ctx: Arc<HalCtx>, members: Vec<(&'static str, Member)>) -> AscomCamera {
+        let info = DeviceInfo {
+            id:    "Astra.Mock.Camera".to_string(),
+            name:  "Mock Camera".to_string(),
+            type_: DeviceType::CAMERA,
+        };
+        AscomCamera::with_open_override(ctx, info, move || {
+            AcCamera::open_mock(members.clone(), "Astra.Mock.Camera")
+        })
+    }
+
+    /// Total live connection refs over every COM class.
+    fn conn_total(ctx: &HalCtx) -> usize {
+        ctx.conn_refs.lock().unwrap().values().sum()
+    }
+
+    #[test]
+    fn failed_activation_disconnects_the_driver() {
+        let ctx = Arc::new(test_ctx());
+        let connected = Arc::new(AtomicBool::new(false));
+        let mut members = mock_camera(Arc::clone(&connected));
+        refuse(&mut members, "CameraXSize", ascom_hr(0x402));
+        let camera = mock_camera_wrapper(Arc::clone(&ctx), members);
+
+        let err =
+            camera.activate().expect_err("a refused mandatory member must fail activation");
+        assert!(err.to_string().contains("CameraXSize"), "the failing member is lost: {err}");
+
+        // The connect that already happened has to be rolled back
+        assert!(!connected.load(Ordering::SeqCst), "the driver was left connected");
+        assert_eq!(ctx.active_count.load(Ordering::Relaxed), 0, "a failure activated a device");
+        assert_eq!(conn_total(&ctx), 0, "the connection ref was not released");
+        assert!(!camera.is_activated(), "the wrapper claims to be active");
+    }
+
+    #[test]
+    fn activation_is_retryable_after_failure() {
+        let ctx = Arc::new(test_ctx());
+        let connected = Arc::new(AtomicBool::new(false));
+        let mut members = mock_camera(Arc::clone(&connected));
+        refuse(&mut members, "CameraYSize", ascom_hr(0x402));
+        let camera = mock_camera_wrapper(Arc::clone(&ctx), members);
+
+        let err = camera.activate().expect_err("the first attempt must fail");
+        assert!(err.to_string().contains("CameraYSize"), "the failing member is lost: {err}");
+        let err = camera.activate().expect_err("the second attempt must fail the same way");
+        assert!(err.to_string().contains("CameraYSize"), "the retry lost the member: {err}");
+
+        assert!(!connected.load(Ordering::SeqCst), "a retry left the driver connected");
+        assert_eq!(conn_total(&ctx), 0, "a retry leaked a connection ref");
+        assert_eq!(ctx.active_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn successful_activation_connects_and_deactivate_disconnects() {
+        let ctx = Arc::new(test_ctx());
+        let connected = Arc::new(AtomicBool::new(false));
+        let camera = mock_camera_wrapper(Arc::clone(&ctx), mock_camera(Arc::clone(&connected)));
+
+        camera.activate().expect("a cooperative mock camera must activate");
+        assert!(connected.load(Ordering::SeqCst), "activation never connected the driver");
+        assert_eq!(ctx.active_count.load(Ordering::Relaxed), 1);
+        assert!(camera.is_activated());
+        assert_eq!(conn_total(&ctx), 1, "exactly one connection ref must be live");
+
+        camera.deactivate_impl().expect("deactivation must succeed");
+        assert!(!connected.load(Ordering::SeqCst), "deactivation left the driver connected");
+        assert_eq!(ctx.active_count.load(Ordering::Relaxed), 0);
+        assert!(!camera.is_activated());
+        assert_eq!(conn_total(&ctx), 0);
+    }
+
+    #[test]
+    fn alias_failure_does_not_disconnect() {
+        // Two wrappers of one COM class: a failing alias must not disconnect the
+        // driver the first wrapper still uses (`conn_release` answers `false` for it).
+        let ctx = Arc::new(test_ctx());
+        let connected = Arc::new(AtomicBool::new(false));
+        let first = mock_camera_wrapper(Arc::clone(&ctx), mock_camera(Arc::clone(&connected)));
+        first.activate().expect("the first wrapper must activate");
+        assert_eq!(ctx.active_count.load(Ordering::Relaxed), 1);
+
+        let mut members = mock_camera(Arc::clone(&connected));
+        refuse(&mut members, "PixelSizeX", ascom_hr(0x402));
+        let alias = mock_camera_wrapper(Arc::clone(&ctx), members);
+        let err = alias.activate().expect_err("the alias must fail on its refusing member");
+        assert!(err.to_string().contains("PixelSizeX"), "the failing member is lost: {err}");
+
+        assert!(connected.load(Ordering::SeqCst), "the alias disconnected the shared driver");
+        assert_eq!(ctx.active_count.load(Ordering::Relaxed), 1, "the alias changed the count");
+        assert_eq!(conn_total(&ctx), 1, "the alias left its ref behind");
+        assert!(!alias.is_activated());
+        assert!(first.is_activated());
     }
 }

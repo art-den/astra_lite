@@ -55,6 +55,10 @@ ascom = { path = "./crates/ascom" }
 tokio = { version = "1", features = ["rt-multi-thread", "net"]}
 ndarray = "0.17"
 
+[target.'cfg(windows)'.dev-dependencies]
+# The `hal_ascom` tests inject an in-process mock ASCOM driver through this feature.
+ascom = { path = "./crates/ascom", features = ["mock"] }
+
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "1.7"
 

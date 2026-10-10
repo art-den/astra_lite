@@ -420,9 +420,9 @@ impl Variant {
 
     /// `VT_UNKNOWN` around a COM object, as the inverse of [`Variant::as_unknown`].
     ///
-    /// Test-only: it lets an in-process mock travel through exactly the same
+    /// Mocks only: it lets an in-process mock travel through exactly the same
     /// marshalling path as a real driver's reply.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "mock"))]
     pub(crate) fn from_unknown(unknown: &IUnknown) -> Self {
         let mut u = VARIANT_0_0_0::default();
         // `clone` takes the reference that `VariantClear` in `Drop` will release;
@@ -485,13 +485,25 @@ pub(crate) fn peek_f64(v: &VARIANT) -> Option<f64> {
 
 /// Reads `lVal` from a VARIANT we do not own, used by the COM mocks that receive an
 /// index argument through `DISPPARAMS`.
-#[cfg(test)]
+#[cfg(any(test, feature = "mock"))]
 pub(crate) fn peek_i32(v: &VARIANT) -> Option<i32> {
     if head(v).vt != VT_I4 {
         return None;
     }
     let payload = unsafe { core::ptr::read(core::ptr::addr_of!(head(v).Anonymous)) };
     Some(unsafe { payload.lVal })
+}
+
+/// Reads `boolVal` from a VARIANT we do not own, used by the COM mocks that receive a
+/// property put through `DISPPARAMS`.
+#[cfg(any(test, feature = "mock"))]
+pub(crate) fn peek_bool(v: &VARIANT) -> Option<bool> {
+    if head(v).vt != VT_BOOL {
+        return None;
+    }
+    let payload = unsafe { core::ptr::read(core::ptr::addr_of!(head(v).Anonymous)) };
+    // VARIANT_TRUE is -1, so only 0 reads as false.
+    Some(unsafe { payload.boolVal } != VARIANT_FALSE)
 }
 
 // ---------------------------------------------------------------------------

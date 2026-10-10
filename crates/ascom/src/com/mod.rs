@@ -11,9 +11,10 @@ pub mod safearray;
 pub mod variant;
 
 /// In-process COM mocks, so that the collection and dispatch plumbing can be tested
-/// without a driver installed.
-#[cfg(test)]
-pub(crate) mod mock;
+/// without a driver installed. The `mock` feature exposes them (and the driver
+/// injection seams built on them) to tests outside this crate.
+#[cfg(any(test, feature = "mock"))]
+pub mod mock;
 
 pub use apartment::ComGuard;
 pub use dispatch::Dispatch;

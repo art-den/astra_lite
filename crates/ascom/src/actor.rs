@@ -106,6 +106,20 @@ impl Actor {
         })
     }
 
+    /// Starts a COM thread whose driver is an in-process mock answering `members`
+    /// (see [`crate::com::mock`]). Exists so tests outside the crate can drive the
+    /// whole activation path without a driver installed.
+    ///
+    /// Only the mock's ingredients cross the thread boundary: the `IDispatch` is built
+    /// on the worker thread, because it is not `Send`.
+    #[cfg(feature = "mock")]
+    pub fn spawn_mock(members: Vec<(&'static str, crate::com::mock::Member)>) -> Result<Self> {
+        Self::start(move || {
+            let variant = crate::com::mock::MockDevice::new(members).into_variant();
+            Ok(Device { dispatch: Dispatch::from_variant(&variant)?, capabilities: None })
+        })
+    }
+
     /// Starts a COM thread and builds the device on it with `make`.
     ///
     /// The device is created on the worker thread because an `IDispatch` must never
