@@ -360,6 +360,9 @@ impl AscomAlpacaCameraShot {
                         _ => unreachable!(),
                     }
                 }
+                // Defensive: activation defaults the offset, so this should not happen
+                aa::api::camera::SensorType::RGGB =>
+                    eyre::bail!("RGGB sensor missing BayerOffset"),
                 _ => eyre::bail!("Sensor type {:?} not supported", sensor_type),
             };
 
@@ -522,7 +525,55 @@ impl AscomAlpacaCamera {
             let min_offset = aa_camera.offset_min().await.unwrap_or(0) as f64;
             let max_offset = aa_camera.offset_max().await.unwrap_or(65535) as f64;
             let sensor_type = aa_camera.sensor_type().await.unwrap_or(aa::api::camera::SensorType::Monochrome);
-            let bayer_offset = aa_camera.bayer_offset().await.ok();
+            // A pre-ASCOM-6 driver may leave BayerOffset unimplemented: only that case may
+            // be defaulted to 0. A real failure (timeout, RPC) must not be masked.
+            #[derive(Clone, Copy)]
+            enum MemberRead { Value(u8), Absent, Fault }
+            let not_implemented = |err: &aa::ASCOMError| {
+                err.code == aa::ASCOMErrorCode::NOT_IMPLEMENTED
+                    || err.code == aa::ASCOMErrorCode::ACTION_NOT_IMPLEMENTED
+            };
+            let read_offset = |member: &str, read: aa::ASCOMResult<u8>| -> MemberRead {
+                match read {
+                    Ok(value) => MemberRead::Value(value),
+                    Err(err) if not_implemented(&err) => MemberRead::Absent,
+                    Err(err) => {
+                        log::error!(
+                            "ASCOM Alpaca camera {}: cannot read {member}: {err}",
+                            aa_camera.unique_id()
+                        );
+                        MemberRead::Fault
+                    }
+                }
+            };
+            let offset_x = read_offset("BayerOffsetX", aa_camera.bayer_offset_x().await);
+            let offset_y = read_offset("BayerOffsetY", aa_camera.bayer_offset_y().await);
+            let value = |read: MemberRead| match read {
+                MemberRead::Value(value) => Some(value),
+                _ => None,
+            };
+            let bayer_offset = match (offset_x, offset_y) {
+                (MemberRead::Value(x), MemberRead::Value(y)) => Some([x, y]),
+                (MemberRead::Absent, MemberRead::Absent)
+                | (MemberRead::Absent, MemberRead::Value(_))
+                | (MemberRead::Value(_), MemberRead::Absent)
+                    if sensor_type == aa::api::camera::SensorType::RGGB =>
+                {
+                    let offset = [value(offset_x).unwrap_or(0), value(offset_y).unwrap_or(0)];
+                    let missing = match (offset_x, offset_y) {
+                        (MemberRead::Absent, MemberRead::Absent) => "BayerOffsetX/Y",
+                        (MemberRead::Absent, _) => "BayerOffsetX",
+                        _ => "BayerOffsetY",
+                    };
+                    log::warn!(
+                        "ASCOM Alpaca camera {}: {missing} not reported by driver, assuming ({}, {})",
+                        aa_camera.unique_id(), offset[0], offset[1]
+                    );
+                    Some(offset)
+                }
+                // A real read failure (or a non-Bayer sensor): leave the offset unknown
+                _ => None,
+            };
             //let max_adu = aa_camera.max_adu().await.unwrap_or(u16::MAX as _);
             let max_adu = u16::MAX as _;
 

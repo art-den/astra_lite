@@ -455,6 +455,9 @@ impl AscomCameraShot {
                     _ => CfaType::BGGR,
                 })
             }
+            // Defensive: activation defaults the offset, so this should not happen
+            AcSensorType::RGGB =>
+                eyre::bail!("RGGB sensor missing BayerOffset"),
             _ => eyre::bail!("Sensor type {:?} not supported", self.sensor_type),
         }
     }
@@ -665,8 +668,50 @@ impl AscomCamera {
         let offset_max = device.offset_max().unwrap_or(65535) as f64;
 
         let sensor_type = device.sensor_type().unwrap_or(AcSensorType::Monochrome);
-        let bayer_offset = match (device.bayer_offset_x(), device.bayer_offset_y()) {
-            (Ok(x), Ok(y)) => Some([i32::rem_euclid(x, 2) as u8, i32::rem_euclid(y, 2) as u8]),
+        // A pre-ASCOM-6 driver may leave BayerOffsetX/Y unimplemented: only that case
+        // may be defaulted to 0. A real read failure (timeout, RPC) must not be masked.
+        #[derive(Clone, Copy)]
+        enum MemberRead { Value(i32), Absent, Fault }
+        let read_offset = |member: &str, read: ascom::error::Result<i32>| -> MemberRead {
+            match read {
+                Ok(value) => MemberRead::Value(value),
+                Err(err) if err.is_unsupported() => MemberRead::Absent,
+                Err(err) => {
+                    log::error!("ASCOM camera {}: cannot read {member}: {err}", self.device_id);
+                    MemberRead::Fault
+                }
+            }
+        };
+        let offset_x = read_offset("BayerOffsetX", device.bayer_offset_x());
+        let offset_y = read_offset("BayerOffsetY", device.bayer_offset_y());
+        let value = |read: MemberRead| match read {
+            MemberRead::Value(value) => Some(value),
+            _ => None,
+        };
+        let rem2 = |value: i32| i32::rem_euclid(value, 2) as u8;
+        let bayer_offset = match (offset_x, offset_y) {
+            (MemberRead::Value(x), MemberRead::Value(y)) => Some([rem2(x), rem2(y)]),
+            (MemberRead::Absent, MemberRead::Absent)
+            | (MemberRead::Absent, MemberRead::Value(_))
+            | (MemberRead::Value(_), MemberRead::Absent)
+                if sensor_type == AcSensorType::RGGB =>
+            {
+                let offset = [
+                    rem2(value(offset_x).unwrap_or(0)),
+                    rem2(value(offset_y).unwrap_or(0)),
+                ];
+                let missing = match (offset_x, offset_y) {
+                    (MemberRead::Absent, MemberRead::Absent) => "BayerOffsetX/Y",
+                    (MemberRead::Absent, _) => "BayerOffsetX",
+                    _ => "BayerOffsetY",
+                };
+                log::warn!(
+                    "ASCOM camera {}: {missing} not reported by driver, assuming ({}, {})",
+                    self.device_id, offset[0], offset[1]
+                );
+                Some(offset)
+            }
+            // A real read failure (or a non-Bayer sensor): leave the offset unknown
             _ => None,
         };
 
