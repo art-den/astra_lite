@@ -219,5 +219,58 @@ fn debug_ascom_switch(app: &gtk::Application, engine: &Engine) {
 }
 
 pub fn run_scenario(app: &gtk::Application, engine: &Engine) {
-    debug_ascom_switch(app, engine);
+    debug_ascom_bin2(app, engine);
+}
+
+/// Reproduces the user's Bin=2 bug on the currently selected ASCOM camera:
+/// applies a full unbinned frame at bin 2 directly, then runs the whole
+/// single-shot pipeline like the Take Shot click.
+fn debug_ascom_bin2(app: &gtk::Application, engine: &Engine) {
+    use crate::options::Binning;
+
+    // Let startup autoconnect finish
+    test_pause_ms(4000);
+
+    let Some(cam) = engine.cur_devices.camera() else {
+        log::error!("DBG bin2: camera is None (not activated)");
+        return;
+    };
+    let Ok((w, h)) = cam.ccd_size() else {
+        log::error!("DBG bin2: ccd_size failed");
+        return;
+    };
+    log::info!("DBG bin2: cam = {}, ccd_size = {w}x{h}, max_binning = {:?}",
+        cam.id(), cam.max_binning());
+
+    // Direct check of the fixed unbinned->binned sub-frame conversion
+    log::info!("DBG bin2: set_binning(2,2) = {:?}", cam.set_binning(2, 2));
+    log::info!("DBG bin2: set_frame(0,0,{w},{h}) = {:?}", cam.set_frame(0, 0, w, h));
+
+    // Full take_shot pipeline like the user's Take Shot click
+    {
+        let mut options = engine.options.write().unwrap();
+        options.cam.frame.binning = Binning::Bin2;
+        options.cam.frame.set_exposure(1.0);
+    }
+    test_switch_tab(app, "lb_tab_common");
+    match engine.start_single_shot() {
+        Ok(_) => log::info!("DBG bin2: single shot started"),
+        Err(err) => log::error!("DBG bin2: start_single_shot failed: {err}"),
+    }
+
+    for i in 0..20 {
+        test_pause_ms(1000);
+        let mode = engine.modes().active.kind();
+        let (iw, ih) = {
+            let img = engine.preview.image.read().unwrap();
+            (img.width(), img.height())
+        };
+        if mode == ModeKind::Waiting && iw > 0 {
+            log::info!("DBG bin2: shot done t={i}s image={iw}x{ih} (expect {}/2 x {}/2 at bin2)", w, h);
+            break;
+        }
+        log::info!("DBG bin2: shot t={i}s mode={mode:?} image={iw}x{ih}");
+    }
+    test_save_main_window_screenshot(app, ".tmp/ascom_bin2_shot.png");
+    test_pause_ms(500);
 }
