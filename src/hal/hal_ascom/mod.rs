@@ -2216,4 +2216,63 @@ mod tests {
         assert!(ctx.conn_release("clsid_a"));
         assert!(ctx.conn_release("clsid_b"));
     }
+
+    #[test]
+    fn idle_activation_begins_and_latches_busy() {
+        let mut state: ActState<u32> = ActState::Idle;
+        assert!(begin_activation(&mut state).expect("Idle must accept an activation"));
+        assert!(matches!(state, ActState::Busy), "beginning must latch Busy");
+    }
+
+    #[test]
+    fn concurrent_activation_is_refused_while_busy() {
+        let mut state: ActState<u32> = ActState::Busy;
+        let err = begin_activation(&mut state).expect_err("Busy must refuse an activation");
+        assert!(
+            err.to_string().contains("activation in progress"),
+            "the error does not explain the busy state: {err}"
+        );
+        assert!(matches!(state, ActState::Busy), "a refused begin changed the state");
+    }
+
+    #[test]
+    fn activating_an_active_device_is_a_noop() {
+        // `activate()` uses `Ok(false)` to skip both the work and the Ready events
+        let mut state: ActState<u32> = ActState::Active(Arc::new(7));
+        assert!(!begin_activation(&mut state).expect("Active must be reported as already done"));
+        assert!(matches!(&state, ActState::Active(data) if **data == 7), "the cache was lost");
+    }
+
+    #[test]
+    fn take_active_returns_data_and_resets_to_idle() {
+        let data = Arc::new(7u32);
+        let mut state: ActState<u32> = ActState::Active(Arc::clone(&data));
+        let taken = take_active(&mut state).expect("Active must hand out its payload");
+        assert!(Arc::ptr_eq(&taken, &data), "a different payload came out");
+        assert!(matches!(state, ActState::Idle), "taking the payload must leave Idle");
+    }
+
+    #[test]
+    fn take_active_preserves_busy_and_idle() {
+        // Deactivating while an activation is in flight must not clobber Busy
+        let mut busy: ActState<u32> = ActState::Busy;
+        assert!(take_active(&mut busy).is_none(), "Busy has no payload to hand out");
+        assert!(matches!(busy, ActState::Busy), "Busy was clobbered");
+
+        let mut idle: ActState<u32> = ActState::Idle;
+        assert!(take_active(&mut idle).is_none());
+        assert!(matches!(idle, ActState::Idle), "Idle was changed");
+    }
+
+    #[test]
+    fn failed_activation_returns_to_idle() {
+        // The transition pair `activate()` performs when `activate_impl` fails
+        let mut state: ActState<u32> = ActState::Idle;
+        assert!(begin_activation(&mut state).expect("the first attempt must be accepted"));
+        state = ActState::Idle;
+        assert!(
+            begin_activation(&mut state).expect("a failed activation must be retryable"),
+            "the second attempt was refused"
+        );
+    }
 }
