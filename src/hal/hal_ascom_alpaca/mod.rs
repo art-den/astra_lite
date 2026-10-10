@@ -777,10 +777,17 @@ impl Camera for AscomAlpacaCamera {
 
     fn set_frame(&self, x: usize, y: usize, width: usize, height: usize) -> eyre::Result<()> {
         self.async_runtime.block_on(async {
-            self.device.set_start_x(x as u32).await?;
-            self.device.set_start_y(y as u32).await?;
-            self.device.set_num_x(width as u32).await?;
-            self.device.set_num_y(height as u32).await?;
+            // The trait passes unbinned sensor pixels; ASCOM SubFrame counts binned
+            // pixels, so convert using the binning the driver currently reports.
+            let bin_x = self.device.bin_x().await.unwrap_or(1).max(1) as usize;
+            let bin_y = self.device.bin_y().await.unwrap_or(1).max(1) as usize;
+            let (bx, by, bw, bh) = super::unbinned_rect_to_binned(
+                x, y, width, height, bin_x, bin_y, self.ccd_size_x, self.ccd_size_y
+            );
+            self.device.set_start_x(bx as u32).await?;
+            self.device.set_start_y(by as u32).await?;
+            self.device.set_num_x(bw as u32).await?;
+            self.device.set_num_y(bh as u32).await?;
             eyre::Ok(())
         })
     }

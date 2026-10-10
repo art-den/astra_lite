@@ -978,9 +978,16 @@ impl Camera for AscomCamera {
 
     fn set_frame(&self, x: usize, y: usize, width: usize, height: usize) -> eyre::Result<()> {
         let st = self.active_data()?;
+        // The trait passes unbinned sensor pixels; ASCOM SubFrame counts binned
+        // pixels, so convert using the binning the driver currently reports.
+        let bin_x = st.device.bin_x().unwrap_or(1).max(1) as usize;
+        let bin_y = st.device.bin_y().unwrap_or(1).max(1) as usize;
+        let (bx, by, bw, bh) = super::unbinned_rect_to_binned(
+            x, y, width, height, bin_x, bin_y, st.ccd_size_x, st.ccd_size_y
+        );
         ac_err(
             "SetSubFrame",
-            st.device.set_sub_frame(x as i32, y as i32, width as i32, height as i32)
+            st.device.set_sub_frame(bx as i32, by as i32, bw as i32, bh as i32)
         )
     }
 

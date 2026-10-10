@@ -290,6 +290,8 @@ pub trait Camera : Device {
     fn pixel_size_um(&self) -> eyre::Result<(f64, f64)>;
     fn is_frame_supported(&self) -> eyre::Result<bool>;
     fn ccd_size(&self) -> eyre::Result<(usize, usize)>;
+    /// Sub-frame in unbinned sensor pixels (INDI SET_REGION semantics).
+    /// Implementations whose driver counts binned pixels (ASCOM) must convert.
     fn set_frame(&self, x: usize, y: usize, width: usize, height: usize) -> eyre::Result<()>;
 
     // Gain
@@ -337,6 +339,79 @@ pub trait Camera : Device {
 
     // Telescope
     fn set_telescope_focal_len(&self, focal_len: f64) -> eyre::Result<()>;
+}
+
+/// Converts an unbinned-pixel rect to binned pixels, clamped to the binned sensor.
+///
+/// The binned cells exactly cover the requested unbinned span `[x, x + width)`
+/// (start floors, size extends to the last touched cell), then the rect is
+/// clamped inside `sensor / bin`. Returns (x, y, width, height) in binned pixels.
+pub(crate) fn unbinned_rect_to_binned(
+    x: usize, y: usize, width: usize, height: usize,
+    bin_x: usize, bin_y: usize,
+    sensor_x: usize, sensor_y: usize,
+) -> (usize, usize, usize, usize) {
+    let bin_x = usize::max(bin_x, 1);
+    let bin_y = usize::max(bin_y, 1);
+    let limit_x = usize::max(sensor_x / bin_x, 1);
+    let limit_y = usize::max(sensor_y / bin_y, 1);
+
+    let bx = usize::min(x / bin_x, limit_x - 1);
+    let by = usize::min(y / bin_y, limit_y - 1);
+    // Cells touched by [x % bin + width] starting at the floored cell
+    let bw = ((x % bin_x + width).div_ceil(bin_x)).min(limit_x - bx).max(1);
+    let bh = ((y % bin_y + height).div_ceil(bin_y)).min(limit_y - by).max(1);
+    (bx, by, bw, bh)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unbinned_rect_to_binned;
+
+    #[test]
+    fn bin1_is_identity() {
+        assert_eq!(unbinned_rect_to_binned(10, 20, 300, 400, 1, 1, 6216, 4152),
+            (10, 20, 300, 400));
+    }
+
+    #[test]
+    fn full_frame_at_bin2() {
+        // The take_shot case that failed on the ASCOM ToupTek driver
+        assert_eq!(unbinned_rect_to_binned(0, 0, 6216, 4152, 2, 2, 6216, 4152),
+            (0, 0, 3108, 2076));
+    }
+
+    #[test]
+    fn centered_crop_at_bin2() {
+        // CenterHalf of 6216x4152: x=1554, y=1038, 3108x2076 unbinned
+        assert_eq!(unbinned_rect_to_binned(1554, 1038, 3108, 2076, 2, 2, 6216, 4152),
+            (777, 519, 1554, 1038));
+    }
+
+    #[test]
+    fn misaligned_start_keeps_full_coverage() {
+        // Centered 3/4 crop of 6216: x=777 (odd), width=4662
+        let (bx, _, bw, _) = unbinned_rect_to_binned(777, 0, 4662, 100, 2, 2, 6216, 4152);
+        assert_eq!((bx, bw), (388, 2332));
+        // Binned cells [388, 2720) cover unbinned [776, 5440) >= requested [777, 5439)
+        assert!(bx * 2 <= 777 && (bx + bw) * 2 >= 777 + 4662);
+    }
+
+    #[test]
+    fn asymmetric_binning() {
+        // Legal with CanAsymmetricBin: axes divide independently
+        assert_eq!(unbinned_rect_to_binned(0, 0, 6216, 4152, 2, 4, 6216, 4152),
+            (0, 0, 3108, 1038));
+    }
+
+    #[test]
+    fn odd_rect_stays_inside_binned_sensor() {
+        // Odd start floors, size ceils, result clamps inside 1554x1038
+        let (x, y, w, h) = unbinned_rect_to_binned(3107, 4151, 6216, 4152, 4, 4, 6216, 4152);
+        assert_eq!((x, y), (776, 1037));
+        assert!(x + w <= 1554 && y + h <= 1038);
+        assert!(w >= 1 && h >= 1);
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
