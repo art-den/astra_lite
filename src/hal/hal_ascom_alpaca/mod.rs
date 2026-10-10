@@ -386,7 +386,7 @@ impl AscomAlpacaCameraShot {
     }
 
     fn save_image(&self, _file_name: &Path) -> eyre::Result<()> {
-        todo!()
+        eyre::bail!("Saving ReadyImage is not supported for ASCOM Alpaca drivers");
     }
 }
 
@@ -420,7 +420,7 @@ impl CameraShot for AscomAlpacaCameraShot {
     }
 
     fn get_image(&self, _image: &mut crate::image::image::Image) -> eyre::Result<()> {
-        todo!()
+        eyre::bail!("Color image is unimplemented for ASCOM Alpaca drivers");
     }
 
     fn download_time(&self) -> f64 {

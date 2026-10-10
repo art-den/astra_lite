@@ -490,7 +490,7 @@ impl CameraShot for AscomCameraShot {
     }
 
     fn get_image(&self, _image: &mut crate::image::image::Image) -> eyre::Result<()> {
-        todo!()
+        eyre::bail!("Color image is unimplemented for ASCOM drivers");
     }
 
     fn download_time(&self) -> f64 {
@@ -509,7 +509,7 @@ impl CameraShot for AscomCameraShot {
             CameraShotType::RawCcdData =>
                 self.save_raw_file(file_name),
             CameraShotType::ReadyImage =>
-                todo!(),
+                eyre::bail!("Saving ReadyImage is not supported for ASCOM drivers"),
         }
     }
 }
