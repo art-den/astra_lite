@@ -93,6 +93,14 @@ impl PlateSolver {
         data:   &PlateSolverInData,
         config: &PlateSolveConfig
     ) -> eyre::Result<()> {
+        // Hard guarantee: a solver that advertises star-list input must never be
+        // fed an image. Enforced here at the single public chokepoint so it holds
+        // for every `PlateSolverIface` implementation.
+        if self.support_stars_as_input()
+            && matches!(data, PlateSolverInData::Image(_)) {
+            eyre::bail!("Solver accepts only star-list input, but was given an image");
+        }
+
         match data {
             PlateSolverInData::Image(image) => {
                 if image.is_empty() {

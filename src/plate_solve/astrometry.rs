@@ -7,6 +7,53 @@ use super::*;
 
 const EXECUTABLE_FNAME: &str = "solve-field";
 
+// Optional drop-in replacement for `solve-field`, placed next to the app binary.
+const STAR_SOLVER_FNAME: &str = if cfg!(windows) { "starsolver.exe" } else { "starsolver" };
+
+#[derive(Clone, Copy, PartialEq)]
+enum ResolveExecutable {
+    SolveField,
+    StarSolver,
+}
+
+impl ResolveExecutable {
+    fn fname(&self) -> &'static str {
+        match self {
+            ResolveExecutable::SolveField => EXECUTABLE_FNAME,
+            ResolveExecutable::StarSolver => STAR_SOLVER_FNAME,
+        }
+    }
+}
+
+/// Directory containing the running app executable.
+fn app_dir() -> Option<PathBuf> {
+    Some(std::env::current_exe().ok()?.parent()?.to_path_buf())
+}
+
+/// Returns the path to the plate-solving executable.
+/// Prefers a `starsolver` binary next to the app; falls back to `solve-field`.
+fn resolve_executable() -> (PathBuf, ResolveExecutable) {
+    if let Some(dir) = app_dir() {
+        let path = dir.join(STAR_SOLVER_FNAME);
+        if path.is_file() {
+            return (path, ResolveExecutable::StarSolver);
+        }
+    }
+    (PathBuf::from(EXECUTABLE_FNAME), ResolveExecutable::SolveField)
+}
+
+// Directory of index files placed next to the app binary (used with `starsolver`).
+const INDEX_DIR_NAME: &str = "index_files";
+
+/// Returns the path to the `index_files` directory next to the app, if present.
+fn resolve_index_dir() -> Option<PathBuf> {
+    let path = app_dir()?.join(INDEX_DIR_NAME);
+    if path.is_dir() { Some(path) } else { None }
+}
+
+// Solver output marker meaning "could not solve" (not a hard error).
+const NOT_SOLVED_MARKER: &str = "not solved";
+
 const FIRST_TRY_RADIUS: i32 = 3;
 const SECOND_TRY_RADIUS: i32 = 10;
 
@@ -31,6 +78,7 @@ pub struct AstrometryPlateSolver {
     radius_try: RadiusTry,
     start_time: Instant,
     img_width:  Option<f64>, // radians, to optimize subsequent platesolves
+    executable: ResolveExecutable, // which solver binary is in use
 }
 
 impl AstrometryPlateSolver {
@@ -43,6 +91,7 @@ impl AstrometryPlateSolver {
             radius_try: RadiusTry::Blind,
             start_time: Instant::now(),
             img_width:  None,
+            executable: ResolveExecutable::SolveField,
         }
     }
 
@@ -66,24 +115,36 @@ impl Drop for AstrometryPlateSolver {
 }
 
 impl AstrometryPlateSolver {
-    fn exec_solve_field(&mut self) -> eyre::Result<()> {
+    fn exec_solver(&mut self) -> eyre::Result<()> {
         let Some(file_name) = self.file_name.clone() else {
-            eyre::bail!("Calling exec_solve_field before saving image!");
+            eyre::bail!("Calling exec_solver before saving input!");
         };
         use std::process::*;
-        let mut cmd = Command::new(EXECUTABLE_FNAME);
+        let (exe, executable) = resolve_executable();
+        self.executable = executable;
+        // `starsolver` is a stripped-down solver that accepts only a subset of
+        // `solve-field` args and reads only `.xyls` star lists.
+        let star_solver = executable == ResolveExecutable::StarSolver;
+        let mut cmd = Command::new(&exe);
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
-        cmd
-            .arg("--no-plots")
-            .arg("--overwrite")
-            .arg("--corr").arg("none")
-            .arg("--solved").arg("none")
-            .arg("--match").arg("none")
-            .arg("--rdls").arg("none")
-            .arg("--index-xyls").arg("none")
-            .arg("--new-fits").arg("none")
-            .arg("--temp-axy");
+        if !star_solver {
+            cmd
+                .arg("--no-plots")
+                .arg("--overwrite")
+                .arg("--corr").arg("none")
+                .arg("--solved").arg("none")
+                .arg("--match").arg("none")
+                .arg("--rdls").arg("none")
+                .arg("--index-xyls").arg("none")
+                .arg("--new-fits").arg("none")
+                .arg("--temp-axy");
+        }
+
+        if star_solver
+            && let Some(index_dir) = resolve_index_dir() {
+            cmd.arg("--index-dir").arg(index_dir);
+        }
 
         if let Some(img_width) = self.img_width {
             let degwidth = radian_to_degree(img_width);
@@ -131,17 +192,19 @@ impl AstrometryPlateSolver {
         if let Mode::Stars { img_width, img_height } = &self.mode {
             cmd.arg("--width").arg(img_width.to_string());
             cmd.arg("--height").arg(img_height.to_string());
-            cmd.arg("--x-column").arg("X");
-            cmd.arg("--y-column").arg("Y");
-            cmd.arg("--sort-column").arg("FLUX");
+            if !star_solver {
+                cmd.arg("--x-column").arg("X");
+                cmd.arg("--y-column").arg("Y");
+                cmd.arg("--sort-column").arg("FLUX");
+            }
         }
         cmd.arg(&file_name);
 
         self.start_time = Instant::now();
 
-        log::debug!("Running solve-field args={:?}", cmd.get_args());
+        log::debug!("Running {:?} args={:?}", exe, cmd.get_args());
         let child = cmd.spawn().map_err(|e|
-            eyre::format_err!("{} when trying to execute {}", e, EXECUTABLE_FNAME)
+            eyre::format_err!("{} when trying to execute {:?}", e, exe)
         )?;
         self.child = Some(child);
         Ok(())
@@ -270,7 +333,7 @@ impl AstrometryPlateSolver {
 
                 if result_ra.is_none() || result_dec.is_none()
                 || result_width.is_none() || result_height.is_none() {
-                    log::error!("Can't extract data from solve-field stdout");
+                    log::error!("Can't extract data from solver stdout");
                     log::error!(
                         "result_ra={:?}, result_dec={:?}, result_width={:?}, result_height={:?}",
                         result_ra, result_dec, result_width, result_height
@@ -301,14 +364,32 @@ impl AstrometryPlateSolver {
 
                 return Ok(PlateSolveResult::Done(result));
             } else {
-                let mut output = child.stderr.take().unwrap();
-                let mut str_output = String::new();
-                _ = output.read_to_string(&mut str_output);
+                let mut stdout = String::new();
+                if let Some(mut out) = child.stdout.take() {
+                    _ = out.read_to_string(&mut stdout);
+                }
+                let mut stderr = String::new();
+                if let Some(mut err) = child.stderr.take() {
+                    _ = err.read_to_string(&mut stderr);
+                }
                 self.child = None;
+
+                // `starsolver` exits non-zero when it simply cannot solve the
+                // field; report Failed so the retry logic can widen the search.
+                // Keep the original hard-error behavior for `solve-field`.
+                if self.executable == ResolveExecutable::StarSolver
+                    && format!("{}\n{}", stdout, stderr)
+                        .to_lowercase().contains(NOT_SOLVED_MARKER) {
+                    log::debug!("Platesolver did not solve the field");
+                    return Ok(PlateSolveResult::Failed);
+                }
+
+                let exe_name = self.executable.fname();
                 return Err(eyre::format_err!(
-                    "solve-field exited with code {}\n\n{}",
+                    "{} exited with code {}\n\n{}",
+                    exe_name,
                     exit_status.code().unwrap_or_default(),
-                    str_output
+                    if stderr.is_empty() { stdout } else { stderr }
                 ));
             }
         }
@@ -338,7 +419,7 @@ impl PlateSolverIface for AstrometryPlateSolver {
             PlateSolverInData::Stars{ stars, img_width, img_height } =>
                 self.save_stars_file(stars, *img_width, *img_height)?,
         }
-        self.exec_solve_field()?;
+        self.exec_solver()?;
         Ok(())
     }
 
@@ -356,13 +437,13 @@ impl PlateSolverIface for AstrometryPlateSolver {
                 (RadiusTry::First, _) => {
                     log::debug!("Restarting platesolver");
                     self.radius_try = RadiusTry::Second;
-                    self.exec_solve_field()?;
+                    self.exec_solver()?;
                     return Ok(PlateSolveResult::Waiting);
                 }
                 (RadiusTry::Second, true) => {
                     log::debug!("Restarting platesolver");
                     self.radius_try = RadiusTry::Blind;
-                    self.exec_solve_field()?;
+                    self.exec_solver()?;
                     return Ok(PlateSolveResult::Waiting);
                 }
                 _ => {
