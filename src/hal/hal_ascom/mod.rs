@@ -898,9 +898,7 @@ impl AscomCamera {
                 if data.prev_cool_pwr != cool_pwr && let Some(cool_pwr) = cool_pwr {
                     self.ctx.event_handlers.send(HalEvent::CameraCoolerPwrChanged {
                         device_id: Arc::clone(&self.device_id),
-                        // Classic reports a 0..1 fraction; the UI shows percents
-                        // (as INDI does)
-                        power:     cool_pwr * 100.0,
+                        power:     cool_pwr,
                     });
                 }
                 data.prev_cool_pwr = cool_pwr;

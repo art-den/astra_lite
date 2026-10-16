@@ -417,7 +417,7 @@ impl Camera {
     // Thermal ----------------------------------------------------------------
 
     read_property!(ccd_temperature, "CCDTemperature", f64, get_f64, "Current detector temperature (degrees C).");
-    read_property!(cooler_power, "CoolerPower", f64, get_f64, "Cooler power as a fraction of maximum, 0-1.");
+    read_property!(cooler_power, "CoolerPower", f64, get_f64, "Cooler power in percent, 0-100 (zero when CoolerOn is false).");
 
     // Readout ----------------------------------------------------------------
 

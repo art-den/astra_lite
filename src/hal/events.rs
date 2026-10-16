@@ -29,7 +29,7 @@ pub enum HalEvent {
     CameraBeginDownloadData(Arc<String/*device id*/>),
     CameraCoolerPwrChanged {
         device_id: Arc<String>,
-        power:     f64,
+        power:     f64, // percent, 0-100 (ASCOM and INDI report percents)
     },
     CameraTimeUntilEndOfExposure {
         device_id: Arc<String>,
