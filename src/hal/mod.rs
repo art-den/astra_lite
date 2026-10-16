@@ -136,8 +136,18 @@ impl Hal {
     }
 
     pub fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
+        // Tick all impls unconditionally: a persistently erroring backend must
+        // not starve the later ones. Impl error messages are user-facing, so they
+        // are passed through verbatim (joined when several fail at once).
+        let mut errors: Vec<String> = Vec::new();
         for impl_ in &self.list {
-            impl_.notify_periodic_timer_tick(timer_period_ms)?;
+            if let Err(err) = impl_.notify_periodic_timer_tick(timer_period_ms) {
+                log::error!("HAL impl tick error: {err:?}");
+                errors.push(err.to_string());
+            }
+        }
+        if !errors.is_empty() {
+            eyre::bail!("{}", errors.join("; "));
         }
         Ok(())
     }
@@ -212,6 +222,9 @@ impl Hal {
 pub trait HalImpl {
     fn state(&self) -> HalState;
     fn disconnect(&self) -> eyre::Result<()>;
+    /// Ticked by `Hal` unconditionally (one failing impl never skips the others).
+    /// Returning Err aborts the active engine mode; impls that only report device
+    /// failures should log and send `HalEvent::Error` instead (see `AscomHalImpl`).
     fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()>;
     fn devices(&self, type_filter: DeviceType) -> eyre::Result<Vec<DeviceInfo>>;
     fn cameras(&self) -> eyre::Result<Vec<CameraInfo>>;
