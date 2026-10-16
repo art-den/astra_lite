@@ -351,6 +351,8 @@ impl AscomAlpacaCameraShot {
                 aa::api::camera::SensorType::Monochrome =>
                     CfaType::None,
                 aa::api::camera::SensorType::RGGB if let Some(bayer_offset) = bayer_offset => {
+                    // `start` is binned and must not be scaled by BinX/BinY here, see the note on
+                    // `AscomCameraShot::cfa_type()` in the ASCOM Classic path (hardware-tested).
                     let bayer_offset_x = (start[0] + bayer_offset[0] as u32) % 2;
                     let bayer_offset_y = (start[1] + bayer_offset[1] as u32) % 2;
                     match (bayer_offset_x, bayer_offset_y) {

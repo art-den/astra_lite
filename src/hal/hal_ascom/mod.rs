@@ -422,7 +422,7 @@ impl HalImpl for AscomHalImpl {
 
 struct AscomCameraShot {
     image:          AcImage,
-    // Subframe origin, needed to derive the full-frame Bayer pattern
+    // Subframe origin in binned pixels, needed to derive the full-frame Bayer pattern
     start_x:        usize,
     start_y:        usize,
     sensor_type:    AcSensorType,
@@ -450,6 +450,11 @@ impl AscomCameraShot {
     }
 
     /// Bayer pattern for the subframe position
+    ///
+    /// `StartX/Y` is added to `BayerOffsetX/Y` without scaling by the binning on purpose:
+    /// hardware-tested with binning and crop, the raw parity gives correct colours, while
+    /// scaling - what the ASCOM docs appear to ask for - swaps the channels (42786a5).
+    /// `bayer_offset` is read at activation, so it cannot account for this shot's sub-frame.
     fn cfa_type(&self) -> eyre::Result<CfaType> {
         if self.image.planes != 1 {
             eyre::bail!("Image has {} planes", self.image.planes);
