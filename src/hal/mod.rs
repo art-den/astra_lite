@@ -8,6 +8,81 @@ pub mod hal_ascom;
 #[cfg(windows)]
 pub mod hal_ascom_alpaca;
 
+/// Shared bounded-retry logic for periodic device property polling.
+/// Compiled on Windows (HAL backends) and in tests (cross-platform check).
+#[cfg(any(windows, test))]
+pub(crate) mod poll_budget {
+    use std::fmt::Display;
+
+    // Give up after this many consecutive poll failures (at least ~5 s at the
+    // 250 ms engine tick; longer with per-call transport retries): a
+    // persistently failing device still ends the session
+    pub const MAX_POLL_ERRORS: usize = 20;
+
+    /// Per-exposure consecutive-failure budget.
+    #[derive(Default)]
+    pub struct PollBudget {
+        errors: usize,
+    }
+
+    impl PollBudget {
+        /// Registers a failed poll; `fatal` means the device is gone for good.
+        /// Returns `true` when the poll should be retried on the next tick.
+        /// `ctx` identifies the device/property in the log.
+        pub fn failed(&mut self, fatal: bool, ctx: &dyn Display, err: &dyn Display) -> bool {
+            if fatal {
+                log::error!("{ctx}: device is gone, giving up: {err}");
+                return false;
+            }
+            if self.errors >= MAX_POLL_ERRORS {
+                log::error!("{ctx}: {MAX_POLL_ERRORS} failures in a row, giving up: {err}");
+                return false;
+            }
+            self.errors += 1;
+            let n = self.errors;
+            log::warn!("{ctx}: error #{n}/{MAX_POLL_ERRORS}, will retry: {err}");
+            true
+        }
+
+        /// A successful poll proves the transport healthy: reset the budget.
+        /// The wait may still be unbounded for a device that answers polls but
+        /// never reports ready (an absolute exposure deadline does not exist).
+        pub fn succeeded(&mut self) {
+            self.errors = 0;
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn retries_until_budget_exhausted() {
+            let mut b = PollBudget::default();
+            for i in 1..=MAX_POLL_ERRORS {
+                assert!(b.failed(false, &"ctx", &"err"), "failure {i} must retry");
+            }
+            assert!(!b.failed(false, &"ctx", &"err"));
+        }
+
+        #[test]
+        fn success_resets_budget() {
+            let mut b = PollBudget::default();
+            for _ in 0..MAX_POLL_ERRORS {
+                assert!(b.failed(false, &"ctx", &"err"));
+            }
+            b.succeeded();
+            assert!(b.failed(false, &"ctx", &"err"));
+        }
+
+        #[test]
+        fn fatal_fails_at_once() {
+            let mut b = PollBudget::default();
+            assert!(!b.failed(true, &"ctx", &"err"));
+        }
+    }
+}
+
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use std::{ops::RangeInclusive, path::Path, sync::Arc};
@@ -224,8 +299,9 @@ pub trait HalImpl {
     fn state(&self) -> HalState;
     fn disconnect(&self) -> eyre::Result<()>;
     /// Ticked by `Hal` unconditionally (one failing impl never skips the others).
-    /// Returning Err aborts the active engine mode; impls that only report device
-    /// failures should log and send `HalEvent::Error` instead (see `AscomHalImpl`).
+    /// Returning Err aborts the active engine mode, and so does `HalEvent::Error`:
+    /// retry transient device failures inside the device ticks and report only
+    /// final failures (see `AscomHalImpl`).
     fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()>;
     fn devices(&self, type_filter: DeviceType) -> eyre::Result<Vec<DeviceInfo>>;
     fn cameras(&self) -> eyre::Result<Vec<CameraInfo>>;

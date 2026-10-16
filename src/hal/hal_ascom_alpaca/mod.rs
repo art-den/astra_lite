@@ -8,6 +8,7 @@ use itertools::izip;
 
 use crate::hal::*;
 use crate::hal::events::{HalEvent, HalEventHandlers};
+use crate::hal::poll_budget::PollBudget;
 use crate::image::io::save_raw_image_to_fits_file;
 use crate::image::raw::{CfaType, RawImage, RawImageInfo};
 
@@ -484,6 +485,8 @@ struct ExposureData {
     start_time: std::time::Instant,
     // `CameraBeginDownloadData` was already sent for this exposure
     download_begun: bool,
+    // Bounded retries for transient `ImageReady` poll errors
+    poll: PollBudget,
 }
 
 #[derive(Default)]
@@ -656,12 +659,36 @@ impl AscomAlpacaCamera {
 
             match image_ready_result {
                 Ok(ready) => {
+                    // A successful poll proves the transport healthy: reset the budget
+                    {
+                        let mut exp_data = self.exp_data.lock().unwrap();
+                        if let Some(exp) = exp_data.as_mut() {
+                            exp.poll.succeeded();
+                        }
+                    }
                     if ready {
                         self.get_image_from_camera_and_send_event()?;
                     }
                 }
                 Err(err) => {
-                    *self.exp_data.lock().unwrap() = None;
+                    // A transient poll error (network hiccup, server busy, one-off
+                    // driver exception) must not discard a long exposure: keep
+                    // `exp_data` and retry next tick within the bounded budget.
+                    // No fatal fast-path: the ascom-alpaca crate folds transport
+                    // failures into code UNSPECIFIED, so kinds cannot be told apart.
+                    let mut exp_data = self.exp_data.lock().unwrap();
+                    let Some(exp) = exp_data.as_mut() else {
+                        // The exposure was cancelled concurrently: nothing to retry
+                        return Ok(());
+                    };
+                    if exp.poll.failed(
+                        false,
+                        &format_args!("ASCOM Alpaca camera {} ImageReady poll", self.device_id),
+                        &err,
+                    ) {
+                        return Ok(());
+                    }
+                    *exp_data = None;
                     eyre::bail!("Error waiting for end of exposure: {}", err);
                 }
             }
@@ -794,6 +821,7 @@ impl Camera for AscomAlpacaCamera {
             duration,
             start_time:     std::time::Instant::now(),
             download_begun: false,
+            poll:           PollBudget::default(),
         });
         let result = self.async_runtime.block_on(async {
             let duration = std::time::Duration::from_secs_f64(duration);

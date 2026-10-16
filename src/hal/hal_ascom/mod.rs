@@ -41,6 +41,7 @@ use bitflags::bitflags;
 
 use crate::hal::events::HalEventHandlers;
 use crate::hal::events::HalEvent;
+use crate::hal::poll_budget::PollBudget;
 use crate::hal::*;
 use crate::image::io::save_raw_image_to_fits_file;
 use crate::image::raw::{CfaType, RawImage, RawImageInfo};
@@ -346,8 +347,10 @@ impl HalImpl for AscomHalImpl {
     fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
         let data = self.data_read();
 
-        // Contract: never return Err here. An Err from the tick aborts the active
-        // mode; single COM read failures are logged and reported as HalEvent::Error.
+        // Contract: never return Err here. Both an Err from the tick and
+        // `HalEvent::Error` abort the active mode (`Engine::process_error_str`), so
+        // this is the final escalation after transient failures were retried in the
+        // device ticks.
         for camera in &data.cameras {
             if let Err(err) = camera.notify_periodic_timer_tick(timer_period_ms) {
                 log::error!("ASCOM camera tick error: {err}");
@@ -581,6 +584,8 @@ struct ExposureData {
     start_time: std::time::Instant,
     // `CameraBeginDownloadData` was already sent for this exposure
     download_begun: bool,
+    // Bounded retries for transient `ImageReady` poll errors
+    poll: PollBudget,
 }
 
 #[derive(Default)]
@@ -842,16 +847,39 @@ impl AscomCamera {
 
             // One `ImageReady` read per tick
             match st.device.image_ready() {
-                Ok(true) => {
-                    if let Err(err) = self.get_image_and_send_event(&st) {
-                        log::error!("ASCOM camera {}: cannot finish exposure: {err}", self.device_id);
-                        *self.exp_data.lock().unwrap() = None;
-                        return Err(err);
+                Ok(ready) => {
+                    // A successful poll proves the transport healthy: reset the budget
+                    {
+                        let mut exp_data = self.exp_data.lock().unwrap();
+                        if let Some(exp) = exp_data.as_mut() {
+                            exp.poll.succeeded();
+                        }
+                    }
+                    if ready {
+                        if let Err(err) = self.get_image_and_send_event(&st) {
+                            log::error!("ASCOM camera {}: cannot finish exposure: {err}", self.device_id);
+                            *self.exp_data.lock().unwrap() = None;
+                            return Err(err);
+                        }
                     }
                 }
-                Ok(false) => {}
                 Err(err) => {
-                    *self.exp_data.lock().unwrap() = None;
+                    // A transient poll error (server busy, one-off driver exception)
+                    // must not discard a long exposure: keep `exp_data` and retry
+                    // next tick within the bounded budget.
+                    let mut exp_data = self.exp_data.lock().unwrap();
+                    let Some(exp) = exp_data.as_mut() else {
+                        // The exposure was cancelled concurrently: nothing to retry
+                        return Ok(());
+                    };
+                    if exp.poll.failed(
+                        err.is_disconnected(),
+                        &format_args!("ASCOM camera {} ImageReady poll", self.device_id),
+                        &err,
+                    ) {
+                        return Ok(());
+                    }
+                    *exp_data = None;
                     eyre::bail!("error waiting for end of exposure on ASCOM camera {}: {err}", self.device_id);
                 }
             }
@@ -1073,6 +1101,7 @@ impl Camera for AscomCamera {
             duration,
             start_time:     std::time::Instant::now(),
             download_begun: false,
+            poll:           PollBudget::default(),
         });
 
         let result = ac_err(
