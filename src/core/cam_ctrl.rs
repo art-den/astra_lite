@@ -46,6 +46,8 @@ pub fn take_shot(
 
     if camera.is_frame_supported()? {
         let (width, height) = camera.ccd_size()?;
+        // Floor both the size and the origin to the bin grid: the ROI stays inside the sensor
+        // and the delivered frame keeps matching `FrameOptions::active_sensor_size()`
         let align_to_binning = |size| binning * (size / binning);
         let crop_width = align_to_binning(frame.crop.translate(width));
         let crop_height = align_to_binning(frame.crop.translate(height));
