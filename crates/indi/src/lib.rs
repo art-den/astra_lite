@@ -11,6 +11,7 @@ mod events;
 mod property;
 mod device;
 
+pub use error::Error;
 pub use num_format::*;
 pub use connection::*;
 pub use drivers::*;

@@ -235,8 +235,14 @@ impl CamWatchdog {
         self.ccd_list.clear();
     }
 
-    pub fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<()> {
-        if self.indi.state() != indi::ConnState::Connected {
+    /// `conn_state` is passed in (not read from `self.indi`) to keep the lock
+    /// order state -> watchdogs, see `IndiHalImpl::notify_periodic_timer_tick`
+    pub fn notify_periodic_timer_tick(
+        &mut self,
+        timer_period_ms: usize,
+        conn_state:      &indi::ConnState,
+    ) -> eyre::Result<()> {
+        if *conn_state != indi::ConnState::Connected {
             return Ok(());
         }
 

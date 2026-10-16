@@ -164,6 +164,10 @@ impl IndiHalImpl {
                         watchdogs.camera.reset();
                         watchdogs.devices.reset();
                         drop(watchdogs);
+                    } else if matches!(state, indi::ConnState::Error(_)) {
+                        // Reconnect can go Error -> Connecting -> Connected, so these
+                        // actions can never succeed (camera state is kept on purpose)
+                        self.watchdogs.lock().unwrap().devices.reset();
                     }
                     let hal_state = match state {
                         indi::ConnState::Disconnected   => HalState::Disconnected,
@@ -502,9 +506,15 @@ impl HalImpl for IndiHalImpl {
     }
 
     fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
+        // Read the INDI state before locking `watchdogs`: `Connection` dispatches
+        // `ConnChange` while holding its state lock, and those handlers lock
+        // `watchdogs`, so the lock order must stay state -> watchdogs.
+        let conn_state = self.indi.state();
+
         let mut watchdogs = self.watchdogs.lock().unwrap();
-        watchdogs.camera.notify_periodic_timer_tick(timer_period_ms)?;
-        watchdogs.devices.notify_periodic_timer_tick(timer_period_ms)?;
+        // A camera error may still abort the active mode, device actions never do
+        watchdogs.camera.notify_periodic_timer_tick(timer_period_ms, &conn_state)?;
+        watchdogs.devices.notify_periodic_timer_tick(timer_period_ms, &conn_state);
         drop(watchdogs);
 
         Ok(())
