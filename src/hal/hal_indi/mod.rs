@@ -512,10 +512,13 @@ impl HalImpl for IndiHalImpl {
         let conn_state = self.indi.state();
 
         let mut watchdogs = self.watchdogs.lock().unwrap();
-        // A camera error may still abort the active mode, device actions never do
-        watchdogs.camera.notify_periodic_timer_tick(timer_period_ms, &conn_state)?;
+        // A camera error may still abort the active mode, device actions never do.
+        // Devices are ticked unconditionally, so a camera failure cannot starve them.
+        let camera_result = watchdogs.camera.notify_periodic_timer_tick(timer_period_ms, &conn_state);
         watchdogs.devices.notify_periodic_timer_tick(timer_period_ms, &conn_state);
         drop(watchdogs);
+
+        camera_result?;
 
         Ok(())
     }

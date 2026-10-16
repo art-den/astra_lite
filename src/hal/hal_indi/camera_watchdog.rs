@@ -15,6 +15,9 @@ enum CcdMode {
     Shutdown(usize),
     WaitExposureProp(usize),
     WaitAfterRestart(usize),
+    /// Device command failed, the camera is considered lost.
+    /// `CamWatchdog::notify_periodic_timer_tick` drops such entries in the same tick.
+    MustBeDeleted,
 }
 
 struct CcdToWatch {
@@ -52,6 +55,8 @@ impl CcdToWatch {
         Ok(())
     }
 
+    /// Advances the recovery machine. A failed device command marks the entry as
+    /// `CcdMode::MustBeDeleted` and returns an error meant for the user.
     fn notify_periodic_timer_tick(
         &mut self,
         timer_period_ms: usize,
@@ -68,7 +73,9 @@ impl CcdToWatch {
                         self.name, MAX_WAIT_BLOB_TIME
                     );
                     log::info!("Shutdown INDI camera {} ...", self.name);
-                    indi.command_enable_device(&self.name, false, true, None)?;
+                    if let Err(err) = indi.command_enable_device(&self.name, false, true, None) {
+                        return Err(self.abandon("shutdown", err));
+                    }
                     self.mode = CcdMode::Shutdown(0)
                 }
             }
@@ -76,7 +83,11 @@ impl CcdToWatch {
                 *time_ms += timer_period_ms;
                 if *time_ms >= MAX_SHUTDOWN_TIME * 1000 {
                     log::info!("Switching on camera {} ...", self.name);
-                    indi.command_enable_device(&self.name, true, true, None)?;
+                    // On failure the device stays powered off: switching it back on is
+                    // up to `DevicesWatchdog`, which re-queues it on the next `CONNECTION`
+                    if let Err(err) = indi.command_enable_device(&self.name, true, true, None) {
+                        return Err(self.abandon("switch on", err));
+                    }
                     self.mode = CcdMode::WaitExposureProp(0);
                 }
             }
@@ -96,8 +107,24 @@ impl CcdToWatch {
                     events.send(HalEvent::CameraNeedRestartExposure(Arc::clone(&self.device_id)));
                 }
             }
+
+            // Inert: purged by the caller in the same tick
+            CcdMode::MustBeDeleted => {}
         }
         Ok(())
+    }
+
+    /// Gives up on an unreachable camera: marks the entry for removal and builds
+    /// the error reported to the user. No retry: a device that cannot be commanded
+    /// at all means a hardware fault and needs the user. Coverage returns when the
+    /// device announces itself again (`notify_device_added`).
+    fn abandon(&mut self, action: &str, err: indi::Error) -> eyre::Report {
+        self.mode = CcdMode::MustBeDeleted;
+        eyre::eyre!(
+            "Cannot {action} INDI camera {name}, it is unreachable. \
+             Camera recovery abandoned! Reason: {err}",
+            name = self.name,
+        )
     }
 
     /// Only an idle CCD may be dropped. Deleting an entry mid-recovery would
@@ -242,6 +269,10 @@ impl CamWatchdog {
 
     /// `conn_state` is passed in (not read from `self.indi`) to keep the lock
     /// order state -> watchdogs, see `IndiHalImpl::notify_periodic_timer_tick`
+    ///
+    /// All entries are ticked even if one fails. Doomed CCDs are dropped before
+    /// returning, so a failure is reported once per camera instead of once per
+    /// tick. Only the first error is returned, the rest are logged.
     pub fn notify_periodic_timer_tick(
         &mut self,
         timer_period_ms: usize,
@@ -251,15 +282,42 @@ impl CamWatchdog {
             return Ok(());
         }
 
+        // CCD errors are collected first: they are the severe ones and only the
+        // first error reaches the user
+        let mut errors: Vec<eyre::Report> = Vec::new();
+
+        for ccd in &mut self.ccd_list {
+            if let Err(err) = ccd.notify_periodic_timer_tick(timer_period_ms, &self.indi, &self.events) {
+                errors.push(err);
+            }
+        }
+
         for camera in &mut self.init_list {
-            camera.notify_periodic_timer_tick(timer_period_ms, &self.indi, &self.events)?;
+            if let Err(err) = camera.notify_periodic_timer_tick(timer_period_ms, &self.indi, &self.events) {
+                errors.push(err);
+            }
         }
 
-        for camera in &mut self.ccd_list {
-            camera.notify_periodic_timer_tick(timer_period_ms, &self.indi, &self.events)?;
+        self.ccd_list.retain(|ccd| {
+            let doomed = matches!(ccd.mode, CcdMode::MustBeDeleted);
+            if doomed {
+                log::warn!(
+                    "Camera watchdog gives up on INDI camera {} (CCD {:?}), \
+                     no recovery until the device reconnects",
+                    ccd.name, ccd.ccd
+                );
+            }
+            !doomed
+        });
+
+        if errors.is_empty() {
+            return Ok(());
+        }
+        for err in errors.iter().skip(1) {
+            log::error!("Additional camera watchdog error: {:#}", err);
         }
 
-        Ok(())
+        Err(errors.remove(0))
     }
 
     pub fn notify_device_added(&mut self, device_name: &Arc<String>) {
