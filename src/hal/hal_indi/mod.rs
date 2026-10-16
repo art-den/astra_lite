@@ -506,9 +506,8 @@ impl HalImpl for IndiHalImpl {
     }
 
     fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
-        // Read the INDI state before locking `watchdogs`: `Connection` dispatches
-        // `ConnChange` while holding its state lock, and those handlers lock
-        // `watchdogs`, so the lock order must stay state -> watchdogs.
+        // Lock order convention: state -> watchdogs, never the reverse.
+        // Read the state before locking `watchdogs` to keep it.
         let conn_state = self.indi.state();
 
         let mut watchdogs = self.watchdogs.lock().unwrap();

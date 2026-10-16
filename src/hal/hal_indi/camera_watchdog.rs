@@ -267,8 +267,8 @@ impl CamWatchdog {
         self.ccd_list.clear();
     }
 
-    /// `conn_state` is passed in (not read from `self.indi`) to keep the lock
-    /// order state -> watchdogs, see `IndiHalImpl::notify_periodic_timer_tick`
+    /// `conn_state` is passed in (not read from `self.indi`) to keep the
+    /// state -> watchdogs lock order convention, see the HAL tick caller
     ///
     /// All entries are ticked even if one fails. Doomed CCDs are dropped before
     /// returning, so a failure is reported once per camera instead of once per

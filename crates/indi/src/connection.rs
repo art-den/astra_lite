@@ -338,20 +338,20 @@ impl Connection {
     }
 
     pub fn connect(self: &Arc<Self>, settings: &ConnSettings) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
-        match *state {
-            ConnState::Connecting =>
-                return Err(Error::WrongSequence("Already connecting".to_string())),
-            ConnState::Connected =>
-                return Err(Error::WrongSequence("Already connected".to_string())),
-            _ => {},
+        {
+            let mut state = self.state.lock().unwrap();
+            match *state {
+                ConnState::Connecting =>
+                    return Err(Error::WrongSequence("Already connecting".to_string())),
+                ConnState::Connected =>
+                    return Err(Error::WrongSequence("Already connected".to_string())),
+                _ => {},
+            }
+            // Validation and transition must be atomic, so set under the same
+            // guard; after validation `Connecting` is always a change
+            *state = ConnState::Connecting;
         }
-        Self::set_new_conn_state(
-            ConnState::Connecting,
-            &mut state,
-            &self.event_handlers
-        );
-        drop(state);
+        self.event_handlers.send(Event::ConnChange(ConnState::Connecting));
         let settings = settings.clone();
         let self_ = Arc::clone(self);
         std::thread::spawn(move || {
@@ -364,11 +364,7 @@ impl Connection {
                 match start_result {
                     Ok(child) => Some(child),
                     Err(err) => {
-                        Self::set_new_conn_state(
-                            ConnState::Error(err.to_string()),
-                            &mut self_.state.lock().unwrap(),
-                            &self_.event_handlers
-                        );
+                        self_.set_new_conn_state(ConnState::Error(err.to_string()));
                         return;
                     }
                 }
@@ -382,10 +378,8 @@ impl Connection {
                     _ = indiserver.kill();
                     _ = indiserver.wait();
                 }
-                Self::set_new_conn_state(
-                    ConnState::Error(format!("Can't connect to {}", settings.host)),
-                    &mut self_.state.lock().unwrap(),
-                    &self_.event_handlers
+                self_.set_new_conn_state(
+                    ConnState::Error(format!("Can't connect to {}", settings.host))
                 );
                 return;
             };
@@ -399,6 +393,9 @@ impl Connection {
                     while let Ok(event) = events_receiver.recv() {
                         match event {
                             EventSenderEvent::Mess(event) => {
+                                // Edition 2024 drops the temporary `state` guard from
+                                // the `if let` condition before the block, so the sends
+                                // below never run with `state` locked
                                 if let Event::ConnChange(state) = &event
                                 && *state == ConnState::Disconnected
                                 && *self_.state.lock().unwrap() == ConnState::Connected {
@@ -484,22 +481,23 @@ impl Connection {
         self.drivers_started.load(Ordering::Relaxed)
     }
 
-    fn set_new_conn_state(
-        new_state:      ConnState,
-        state:          &mut ConnState,
-        event_handlers: &EventHandlers
-    ) {
-        if new_state == *state { return; }
-        *state = new_state;
-        event_handlers.send(Event::ConnChange(state.clone()));
+    /// Sets the connection state and dispatches `ConnChange`. The state guard is
+    /// released before dispatching (handlers run synchronously and may re-enter
+    /// `state()` or lock other mutexes). No event if the state is unchanged;
+    /// the payload may be stale under concurrent transitions, use `state()`
+    /// for the authoritative value.
+    fn set_new_conn_state(&self, new_state: ConnState) {
+        let applied = {
+            let mut guard = self.state.lock().unwrap();
+            if new_state == *guard { return; }
+            *guard = new_state;
+            guard.clone()
+        };
+        self.event_handlers.send(Event::ConnChange(applied));
     }
 
     pub fn disconnect_and_wait(&self) -> Result<()> {
-        Self::set_new_conn_state(
-            ConnState::Disconnecting,
-            &mut self.state.lock().unwrap(),
-            &self.event_handlers
-        );
+        self.set_new_conn_state(ConnState::Disconnecting);
         let mut data = self.data.lock().unwrap();
         if let Some(conn) = data.take() {
             drop(data);
@@ -530,11 +528,7 @@ impl Connection {
             self.devices.lock().unwrap().clear();
 
             // Set new "disconnected" state
-            Self::set_new_conn_state(
-                ConnState::Disconnected,
-                &mut self.state.lock().unwrap(),
-                &self.event_handlers
-            );
+            self.set_new_conn_state(ConnState::Disconnected);
         } else {
             return Err(Error::WrongSequence("Not connected".into()));
         }
