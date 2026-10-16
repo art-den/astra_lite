@@ -419,9 +419,11 @@ impl HalImpl for AscomHalImpl {
 
 struct AscomCameraShot {
     image:          AcImage,
-    // Subframe origin, needed to derive the full-frame Bayer pattern
+    // Subframe origin in BINNED pixels, needed to derive the full-frame Bayer pattern
     start_x:        usize,
     start_y:        usize,
+    bin_x:          usize,
+    bin_y:          usize,
     sensor_type:    AcSensorType,
     bayer_offset:   Option<[u8; 2]>,
     dl_time:        f64,
@@ -433,12 +435,24 @@ impl AscomCameraShot {
         image:          AcImage,
         start_x:        usize,
         start_y:        usize,
+        bin_x:          usize,
+        bin_y:          usize,
         sensor_type:    AcSensorType,
         bayer_offset:   Option<[u8; 2]>,
         dl_time:        f64,
         raw_image_info: RawImageInfo,
     ) -> Self {
-        Self { image, start_x, start_y, sensor_type, bayer_offset, dl_time, raw_image_info }
+        Self {
+            image,
+            start_x,
+            start_y,
+            bin_x,
+            bin_y,
+            sensor_type,
+            bayer_offset,
+            dl_time,
+            raw_image_info,
+        }
     }
 
     fn pixel(&self, x: usize, y: usize) -> u16 {
@@ -446,7 +460,7 @@ impl AscomCameraShot {
         value.round().clamp(0.0, u16::MAX as f64) as u16
     }
 
-    /// Bayer pattern for the subframe position
+    /// Bayer pattern for the subframe position and binning
     fn cfa_type(&self) -> eyre::Result<CfaType> {
         if self.image.planes != 1 {
             eyre::bail!("Image has {} planes", self.image.planes);
@@ -455,14 +469,9 @@ impl AscomCameraShot {
             AcSensorType::Monochrome =>
                 Ok(CfaType::None),
             AcSensorType::RGGB if let Some(bayer_offset) = self.bayer_offset => {
-                let x = (self.start_x + bayer_offset[0] as usize) % 2;
-                let y = (self.start_y + bayer_offset[1] as usize) % 2;
-                Ok(match (x, y) {
-                    (0, 0) => CfaType::RGGB,
-                    (1, 0) => CfaType::GRBG,
-                    (0, 1) => CfaType::GBRG,
-                    _ => CfaType::BGGR,
-                })
+                Ok(super::binned_start_to_cfa(
+                    self.start_x, self.start_y, self.bin_x, self.bin_y, bayer_offset,
+                ))
             }
             // Defensive: activation defaults the offset, so this should not happen
             AcSensorType::RGGB =>
@@ -920,9 +929,26 @@ impl AscomCamera {
             log::warn!("ASCOM camera {}: slow wide (VT_VARIANT) pixel path", self.device_id);
         }
 
-        // `Image` carries no sub-frame origin: read it off the handle right away
-        let start_x = i32::max(st.device.start_x().unwrap_or(0), 0) as usize;
-        let start_y = i32::max(st.device.start_y().unwrap_or(0), 0) as usize;
+        // `Image` carries no sub-frame origin or binning: read them off the handle
+        // right away. A failed read must not silently force a wrong CFA, so log it.
+        let read_geom = |member: &str, read: ascom::error::Result<i32>, default: usize| -> usize {
+            match read {
+                Ok(value) => i32::max(value, 0) as usize,
+                Err(err) => {
+                    if err.is_unsupported() {
+                        // Pre-ASCOM-6 driver: the member is legitimately absent
+                        log::debug!("ASCOM camera {}: {member} unsupported, assuming {default}", self.device_id);
+                    } else {
+                        log::error!("ASCOM camera {}: cannot read {member}, assuming {default}: {err}", self.device_id);
+                    }
+                    default
+                }
+            }
+        };
+        let start_x = read_geom("StartX", st.device.start_x(), 0);
+        let start_y = read_geom("StartY", st.device.start_y(), 0);
+        let bin_x = usize::max(read_geom("BinX", st.device.bin_x(), 1), 1);
+        let bin_y = usize::max(read_geom("BinY", st.device.bin_y(), 1), 1);
 
         let info = RawImageInfo {
             width:      image.width,
@@ -932,7 +958,7 @@ impl AscomCamera {
             camera:     st.cam_name.clone(),
             gain:       st.device.gain().unwrap_or(0),
             offset:     st.device.offset().unwrap_or(0),
-            bin:        st.device.bin_x().unwrap_or(1).clamp(1, u8::MAX as i32) as u8,
+            bin:        u8::try_from(bin_x).unwrap_or(u8::MAX),
             ccd_temp:   st.device.ccd_temperature().ok(),
             exposure,
             ..Default::default()
@@ -942,6 +968,8 @@ impl AscomCamera {
             image,
             start_x,
             start_y,
+            bin_x,
+            bin_y,
             st.sensor_type,
             st.bayer_offset,
             dl_time,
