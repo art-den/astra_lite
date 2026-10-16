@@ -753,11 +753,23 @@ impl IndiPanelWidget {
         next_row: &mut i32,
     ) -> Vec<UiIndiPropElem> {
         let mut result = Vec::new();
-        let bx = gtk::Box::builder()
-            .visible(true)
-            .spacing(5)
-            .orientation(gtk::Orientation::Horizontal)
-            .build();
+        // Box for few elems (tight row, no wrap); FlowBox for many (wraps when narrow)
+        let bx: gtk::Container =
+            if property.elements.len() <= 4 {
+                gtk::Box::builder()
+                    .visible(true)
+                    .orientation(gtk::Orientation::Horizontal)
+                    .spacing(5)
+                    .build()
+                    .upcast()
+            } else {
+                gtk::FlowBox::builder()
+                    .visible(true)
+                    .column_spacing(5)
+                    .row_spacing(5)
+                    .build()
+                    .upcast()
+            };
         grid.attach(&bx, 1, *next_row, 5, 1);
         for elem in &property.elements {
             let indi = Arc::clone(indi);

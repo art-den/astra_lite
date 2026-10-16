@@ -158,6 +158,9 @@ const CSS: &[u8] = b"
 .bold {
     font-weight: bold;
 }
+flowbox flowboxchild {
+   padding: 0;
+}
 ";
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
