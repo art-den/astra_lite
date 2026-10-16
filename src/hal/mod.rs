@@ -88,7 +88,6 @@ use serde::{Deserialize, Serialize};
 use std::{ops::RangeInclusive, path::Path, sync::Arc};
 
 use crate::hal::{events::{EventHandlerId, HalEvent, HalEventHandlers}, hal_indi::IndiHalImpl};
-use crate::image::raw::CfaType;
 
 #[cfg(windows)]
 use super::hal::hal_ascom::AscomHalImpl;
@@ -454,58 +453,9 @@ pub(crate) fn unbinned_rect_to_binned(
     (bx, by, bw, bh)
 }
 
-/// Derives the Bayer pattern of a sub-frame from its ASCOM start position.
-///
-/// ASCOM `StartX/StartY` are counted in BINNED pixels, while `BayerOffsetX/Y`
-/// describe the pattern on the unbinned 1x1 sensor matrix, so the start must be
-/// scaled back by the binning before taking the parity.
-pub(crate) fn binned_start_to_cfa(
-    start_x: usize, start_y: usize,
-    bin_x: usize, bin_y: usize,
-    bayer_offset: [u8; 2],
-) -> CfaType {
-    let bin_x = usize::max(bin_x, 1);
-    let bin_y = usize::max(bin_y, 1);
-    // u64 math: `start * bin` must not overflow on 32-bit targets
-    let x = ((start_x as u64 * bin_x as u64) + bayer_offset[0] as u64) % 2;
-    let y = ((start_y as u64 * bin_y as u64) + bayer_offset[1] as u64) % 2;
-    match (x, y) {
-        (0, 0) => CfaType::RGGB,
-        (1, 0) => CfaType::GRBG,
-        (0, 1) => CfaType::GBRG,
-        _ => CfaType::BGGR,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{binned_start_to_cfa, unbinned_rect_to_binned};
-    use crate::image::raw::CfaType;
-
-    #[test]
-    fn cfa_at_full_frame() {
-        assert_eq!(binned_start_to_cfa(0, 0, 1, 1, [0, 0]), CfaType::RGGB);
-        assert_eq!(binned_start_to_cfa(1, 0, 1, 1, [0, 0]), CfaType::GRBG);
-        assert_eq!(binned_start_to_cfa(0, 1, 1, 1, [0, 0]), CfaType::GBRG);
-        assert_eq!(binned_start_to_cfa(1, 1, 1, 1, [0, 0]), CfaType::BGGR);
-        // BayerOffset shifts the pattern the same way a start does
-        assert_eq!(binned_start_to_cfa(0, 0, 1, 1, [1, 1]), CfaType::BGGR);
-    }
-
-    #[test]
-    fn cfa_even_bin_never_flips_pattern() {
-        // CenterHalf of 6216x4152 binned 2x2: binned start (777, 519) is odd,
-        // but the unbinned start (1554, 1038) is even, so the pattern is unchanged
-        assert_eq!(binned_start_to_cfa(777, 519, 2, 2, [0, 0]), CfaType::RGGB);
-        assert_eq!(binned_start_to_cfa(778, 520, 2, 2, [0, 0]), CfaType::RGGB);
-        assert_eq!(binned_start_to_cfa(777, 519, 4, 4, [1, 1]), CfaType::BGGR);
-    }
-
-    #[test]
-    fn cfa_odd_bin_follows_binned_parity() {
-        // Bin 3: unbinned start = 777 * 3 (odd), so the pattern flips in X
-        assert_eq!(binned_start_to_cfa(777, 0, 3, 1, [0, 0]), CfaType::GRBG);
-    }
+    use super::unbinned_rect_to_binned;
 
     #[test]
     fn bin1_is_identity() {

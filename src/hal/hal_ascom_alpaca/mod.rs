@@ -347,29 +347,20 @@ impl AscomAlpacaCameraShot {
             let raw_2d_arr = array.index_axis(ndarray::Axis(2), 0);
             let (width, height) = raw_2d_arr.dim();
 
-            // `start()` counts BINNED pixels while BayerOffset belongs to the unbinned
-            // sensor matrix, so the binning is needed for the Bayer parity. A read failure
-            // must not silently force a wrong CFA, so log it. `bin()` reads both axes
-            // concurrently, in one round trip.
-            let (bin_x, bin_y) = match aa_camera.bin().await {
-                Ok([x, y]) => (u8::max(x, 1), u8::max(y, 1)),
-                Err(err) => {
-                    log::error!(
-                        "ASCOM Alpaca camera {}: cannot read BinX/BinY, assuming 1x1: {err}",
-                        aa_camera.unique_id()
-                    );
-                    (1, 1)
-                }
-            };
-
             let cfa_type = match sensor_type {
                 aa::api::camera::SensorType::Monochrome =>
                     CfaType::None,
-                aa::api::camera::SensorType::RGGB if let Some(bayer_offset) = bayer_offset =>
-                    super::binned_start_to_cfa(
-                        start[0] as usize, start[1] as usize,
-                        bin_x as usize, bin_y as usize, bayer_offset,
-                    ),
+                aa::api::camera::SensorType::RGGB if let Some(bayer_offset) = bayer_offset => {
+                    let bayer_offset_x = (start[0] + bayer_offset[0] as u32) % 2;
+                    let bayer_offset_y = (start[1] + bayer_offset[1] as u32) % 2;
+                    match (bayer_offset_x, bayer_offset_y) {
+                        (0, 0) => CfaType::RGGB,
+                        (1, 0) => CfaType::GRBG,
+                        (0, 1) => CfaType::GBRG,
+                        (1, 1) => CfaType::BGGR,
+                        _ => unreachable!(),
+                    }
+                }
                 // Defensive: activation defaults the offset, so this should not happen
                 aa::api::camera::SensorType::RGGB =>
                     eyre::bail!("RGGB sensor missing BayerOffset"),
@@ -386,7 +377,7 @@ impl AscomAlpacaCameraShot {
                 gain:       aa_camera.gain().await.unwrap_or(0) as _,
                 offset:     aa_camera.offset().await.unwrap_or(0),
                 exposure,
-                bin:        bin_x,
+                bin:        aa_camera.bin_x().await.unwrap_or(1).max(1),
                 ccd_temp:   aa_camera.ccd_temperature().await.ok(),
                 ..Default::default()
             };
