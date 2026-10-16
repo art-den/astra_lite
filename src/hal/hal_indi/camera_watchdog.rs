@@ -100,6 +100,11 @@ impl CcdToWatch {
         Ok(())
     }
 
+    /// Only an idle CCD may be dropped. Deleting an entry mid-recovery would
+    /// abandon it: in `CcdMode::Shutdown` the power-off was already sent and
+    /// only this entry's own tick switches the camera back on, so the exposure
+    /// would never restart. Ignoring a CCD removal during recovery leaks the
+    /// entry until `reset()` - deliberately simple, not strictly correct.
     fn can_be_deleted(&self) -> bool {
         self.mode == CcdMode::Waiting
     }
