@@ -32,8 +32,10 @@ pub fn take_shot(
 
     // Binning
 
+    let mut binning = 1;
     if camera.is_binning_supported()? {
-        camera.set_binning(frame.binning.get_ratio(), frame.binning.get_ratio())?;
+        binning = frame.binning.get_ratio();
+        camera.set_binning(binning, binning)?;
     }
 
     // Frame type
@@ -44,12 +46,12 @@ pub fn take_shot(
 
     if camera.is_frame_supported()? {
         let (width, height) = camera.ccd_size()?;
-        let crop_width = frame.crop.translate(width);
-        let crop_height = frame.crop.translate(height);
-        camera.set_frame(
-            (width - crop_width) / 2, (height - crop_height) / 2,
-            crop_width, crop_height
-        )?;
+        let align_to_binning = |size| binning * (size / binning);
+        let crop_width = align_to_binning(frame.crop.translate(width));
+        let crop_height = align_to_binning(frame.crop.translate(height));
+        let crop_left = align_to_binning((width - crop_width) / 2);
+        let crop_top = align_to_binning((height - crop_height) / 2);
+        camera.set_frame(crop_left, crop_top, crop_width, crop_height)?;
     }
 
     // Gain
