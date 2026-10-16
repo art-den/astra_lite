@@ -857,6 +857,8 @@ impl AscomCamera {
                             *self.exp_data.lock().unwrap() = None;
                             return Err(err);
                         }
+                        // Also read here: a back-to-back burst never reaches an idle tick
+                        self.poll_dyn_data_and_send_events(&st);
                     }
                 }
                 Err(err) => {
@@ -880,32 +882,41 @@ impl AscomCamera {
                 }
             }
         } else {
-            let mut data = self.dyn_data.lock().unwrap();
-
-            if st.flags.contains(CameraFlags::CAN_GET_CCD_TEMP) {
-                let temperature = st.device.ccd_temperature().ok();
-                if data.prev_temperature != temperature && let Some(temperature) = temperature {
-                    self.ctx.event_handlers.send(HalEvent::CameraCcdTempChanged {
-                        device_id:   Arc::clone(&self.device_id),
-                        temperature,
-                    });
-                }
-                data.prev_temperature = temperature;
-            }
-
-            if st.flags.contains(CameraFlags::CAN_GET_COOL_PWR) {
-                let cool_pwr = st.device.cooler_power().ok();
-                if data.prev_cool_pwr != cool_pwr && let Some(cool_pwr) = cool_pwr {
-                    self.ctx.event_handlers.send(HalEvent::CameraCoolerPwrChanged {
-                        device_id: Arc::clone(&self.device_id),
-                        power:     cool_pwr,
-                    });
-                }
-                data.prev_cool_pwr = cool_pwr;
-            }
+            self.poll_dyn_data_and_send_events(&st);
         }
 
         Ok(())
+    }
+
+    /// Reads the sensor state and sends the change events.
+    ///
+    /// Called on an idle tick and right after a frame: status reads are unwanted while
+    /// exposing, and idle ticks alone would starve a burst of back-to-back exposures.
+    /// A concurrent `start_exposure()` may still overlap with these reads.
+    fn poll_dyn_data_and_send_events(&self, st: &CameraStatic) {
+        let mut data = self.dyn_data.lock().unwrap();
+
+        if st.flags.contains(CameraFlags::CAN_GET_CCD_TEMP) {
+            let temperature = st.device.ccd_temperature().ok();
+            if data.prev_temperature != temperature && let Some(temperature) = temperature {
+                self.ctx.event_handlers.send(HalEvent::CameraCcdTempChanged {
+                    device_id:   Arc::clone(&self.device_id),
+                    temperature,
+                });
+            }
+            data.prev_temperature = temperature;
+        }
+
+        if st.flags.contains(CameraFlags::CAN_GET_COOL_PWR) {
+            let cool_pwr = st.device.cooler_power().ok();
+            if data.prev_cool_pwr != cool_pwr && let Some(cool_pwr) = cool_pwr {
+                self.ctx.event_handlers.send(HalEvent::CameraCoolerPwrChanged {
+                    device_id: Arc::clone(&self.device_id),
+                    power:     cool_pwr,
+                });
+            }
+            data.prev_cool_pwr = cool_pwr;
+        }
     }
 
     fn get_image_and_send_event(&self, st: &CameraStatic) -> eyre::Result<()> {

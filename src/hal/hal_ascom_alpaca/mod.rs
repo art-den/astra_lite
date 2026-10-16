@@ -661,6 +661,8 @@ impl AscomAlpacaCamera {
                     }
                     if ready {
                         self.get_image_from_camera_and_send_event()?;
+                        // Also read here: a back-to-back burst never reaches an idle tick
+                        self.poll_dyn_data_and_send_events();
                     }
                 }
                 Err(err) => {
@@ -688,42 +690,49 @@ impl AscomAlpacaCamera {
         }
 
         if !is_exposure_now {
-            self.async_runtime.block_on(async {
-                // Read sensor values before locking: a std MutexGuard must not be held across await points
-                let can_temp = self.flags.contains(CameraFlags::CAN_GET_CCD_TEMP);
-                let can_pwr  = self.flags.contains(CameraFlags::CAN_GET_COOL_PWR);
-                let temperature = if can_temp { self.device.ccd_temperature().await.ok() } else { None };
-                let cool_pwr    = if can_pwr  { self.device.cooler_power().await.ok() }    else { None };
-
-                let mut data = self.dyn_data.lock().unwrap();
-
-                // Check for CCD temperature change
-                if can_temp {
-                    if data.prev_temperature != temperature && let Some(temperature) = temperature {
-                        self.event_handlers.send(HalEvent::CameraCcdTempChanged {
-                            device_id: Arc::clone(&self.device_id),
-                            temperature
-                        });
-                    }
-                    data.prev_temperature = temperature;
-                }
-
-                // Check for cooling power change
-                if can_pwr {
-                    if data.prev_cool_pwr != cool_pwr && let Some(cool_pwr) = cool_pwr {
-                        self.event_handlers.send(HalEvent::CameraCoolerPwrChanged {
-                            device_id: Arc::clone(&self.device_id),
-                            power:     cool_pwr,
-                        });
-                    }
-                    data.prev_cool_pwr = cool_pwr;
-                }
-
-                eyre::Ok(())
-            })?;
+            self.poll_dyn_data_and_send_events();
         }
 
         Ok(())
+    }
+
+    /// Reads the sensor state and sends the change events.
+    ///
+    /// Called on an idle tick and right after a frame: status reads are unwanted while
+    /// exposing, and idle ticks alone would starve a burst of back-to-back exposures.
+    /// A concurrent `start_exposure()` may still overlap with these reads.
+    fn poll_dyn_data_and_send_events(&self) {
+        self.async_runtime.block_on(async {
+            // Read sensor values before locking: a std MutexGuard must not be held across await points
+            let can_temp = self.flags.contains(CameraFlags::CAN_GET_CCD_TEMP);
+            let can_pwr  = self.flags.contains(CameraFlags::CAN_GET_COOL_PWR);
+            let temperature = if can_temp { self.device.ccd_temperature().await.ok() } else { None };
+            let cool_pwr    = if can_pwr  { self.device.cooler_power().await.ok() }    else { None };
+
+            let mut data = self.dyn_data.lock().unwrap();
+
+            // Check for CCD temperature change
+            if can_temp {
+                if data.prev_temperature != temperature && let Some(temperature) = temperature {
+                    self.event_handlers.send(HalEvent::CameraCcdTempChanged {
+                        device_id: Arc::clone(&self.device_id),
+                        temperature
+                    });
+                }
+                data.prev_temperature = temperature;
+            }
+
+            // Check for cooling power change
+            if can_pwr {
+                if data.prev_cool_pwr != cool_pwr && let Some(cool_pwr) = cool_pwr {
+                    self.event_handlers.send(HalEvent::CameraCoolerPwrChanged {
+                        device_id: Arc::clone(&self.device_id),
+                        power:     cool_pwr
+                    });
+                }
+                data.prev_cool_pwr = cool_pwr;
+            }
+        });
     }
 
     fn get_image_from_camera_and_send_event(&self) -> eyre::Result<()> {
