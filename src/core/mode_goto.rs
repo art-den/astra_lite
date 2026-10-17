@@ -5,13 +5,16 @@ use crate::{
 use ::indi::value_to_sexagesimal;
 use super::{engine::*, events::EventHandlers, utils::*};
 
-const MAX_MOUNT_UNPARK_TIME: usize = 20; // seconds
+const MAX_MOUNT_UNPARK_TIME: usize = 60; // seconds
+const MIN_ENSURE_UNPARKED_TIME: usize = 1; // seconds
+const MAX_START_TRACKING_TIME: usize = 5; // seconds
 
 #[derive(PartialEq)]
 enum State {
     None,
     ImagePlateSolving,
-    Unparking,
+    Unparking{elapsed_ms: usize, stop_slew_ms: usize},
+    StartTracking(usize/*time in ms*/),
     Goto,
     TakingPicture,
     PlateSolving,
@@ -55,7 +58,6 @@ pub struct GotoMode {
     options:      Arc<RwLock<Options>>,
     subscribers:  Arc<EventHandlers>,
     plate_solver: Option<PlateSolver>,
-    unpark_ms:    usize,
     goto_ms:      usize,
     goto_ok_ms:   usize,
     extra_stages: usize,
@@ -105,7 +107,6 @@ impl GotoMode {
             cur_frame:    Arc::clone(&engine.preview),
             options:      Arc::clone(&engine.options),
             subscribers:  Arc::clone(&engine.events),
-            unpark_ms:    0,
             goto_ms:      0,
             goto_ok_ms:   0,
             extra_stages: 0,
@@ -122,6 +123,8 @@ impl GotoMode {
     fn start_goto(&mut self) -> eyre::Result<()> {
         if self.telescope.is_parked()? {
             self.start_unpark_telescope()?;
+        } else if !self.telescope.is_tracking()? {
+            self.start_tracking()?;
         } else {
             self.start_goto_coord()?;
             self.state = State::Goto;
@@ -132,8 +135,17 @@ impl GotoMode {
     fn start_unpark_telescope(&mut self) -> eyre::Result<()> {
         log::debug!("Unparking mount...");
         self.telescope.unpark()?;
-        self.unpark_ms = 0;
-        self.state = State::Unparking;
+        self.state = State::Unparking{
+            elapsed_ms: 0,
+            stop_slew_ms: 0
+        };
+        Ok(())
+    }
+
+    fn start_tracking(&mut self) -> eyre::Result<()> {
+        log::debug!("Start tracking...");
+        self.telescope.track(true)?;
+        self.state = State::StartTracking(0);
         Ok(())
     }
 
@@ -278,8 +290,10 @@ impl Mode for GotoMode {
         match self.state {
             State::ImagePlateSolving =>
                 "Custom image plate solving".to_string(),
-            State::Unparking =>
+            State::Unparking {..} =>
                 "Unpark mount".to_string(),
+            State::StartTracking(_) =>
+                "Start tracking".to_string(),
             State::Goto =>
                 "Goto coordinate".to_string(),
             State::TakingPicture =>
@@ -307,7 +321,8 @@ impl Mode for GotoMode {
         let mut stage = match self.state {
             State::None => return None,
             State::ImagePlateSolving => -1,
-            State::Unparking => 0,
+            State::Unparking {..} => 0,
+            State::StartTracking(_) => 0,
             State::Goto => 0,
             State::TakingPicture => 1,
             State::PlateSolving => 2,
@@ -401,18 +416,42 @@ impl Mode for GotoMode {
     }
 
     fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
-        match self.state {
-            State::Unparking => {
-                if !self.telescope.is_parked()? {
+        match &mut self.state {
+            State::Unparking{ elapsed_ms, stop_slew_ms } => {
+                if !self.telescope.is_parked()? && !self.telescope.is_slewing()? {
+                    *stop_slew_ms += timer_period_ms;
+                } else {
+                    *stop_slew_ms = 0;
+                }
+                if *stop_slew_ms >= MIN_ENSURE_UNPARKED_TIME * 1000 {
+                    if !self.telescope.is_tracking()? {
+                        self.start_tracking()?;
+                    } else {
+                        self.start_goto_coord()?;
+                        self.state = State::Goto;
+                    }
+                    return Ok(NotifyResult::ProgressChanges);
+                }
+                *elapsed_ms += timer_period_ms;
+                if *elapsed_ms > MAX_MOUNT_UNPARK_TIME * 1000 {
+                    eyre::bail!(
+                        "Mount unpark timeout (> {} seconds)!",
+                        MAX_MOUNT_UNPARK_TIME
+                    );
+                }
+            }
+
+            State::StartTracking(time_ms) => {
+                if self.telescope.is_tracking()? {
                     self.start_goto_coord()?;
                     self.state = State::Goto;
                     return Ok(NotifyResult::ProgressChanges);
                 }
-                self.unpark_ms += timer_period_ms;
-                if self.unpark_ms > MAX_MOUNT_UNPARK_TIME * 1000 {
+                *time_ms += timer_period_ms;
+                if *time_ms > MAX_START_TRACKING_TIME * 1000 {
                     eyre::bail!(
-                        "Mount unpark timeout (> {} seconds)!",
-                        MAX_MOUNT_UNPARK_TIME
+                        "Mount start tracking timeout (> {} seconds)!",
+                        MAX_START_TRACKING_TIME
                     );
                 }
             }
