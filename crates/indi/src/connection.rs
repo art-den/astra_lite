@@ -393,12 +393,12 @@ impl Connection {
                     while let Ok(event) = events_receiver.recv() {
                         match event {
                             EventSenderEvent::Mess(event) => {
-                                // Edition 2024 drops the temporary `state` guard from
+                                // Edition 2024 drops the temporary `data` guard from
                                 // the `if let` condition before the block, so the sends
-                                // below never run with `state` locked
+                                // below never run with `data` locked
                                 if let Event::ConnChange(state) = &event
                                 && *state == ConnState::Disconnected
-                                && *self_.state.lock().unwrap() == ConnState::Connected {
+                                && self_.data.lock().unwrap().is_some() {
                                     self_.event_handlers.send(Event::ConnectionLost);
                                     std::thread::spawn(move || {
                                         _ = self_.disconnect_and_wait();
@@ -459,6 +459,11 @@ impl Connection {
                 write_thread,
                 events_sender,
             });
+
+            if self_.state() == ConnState::Disconnected {
+                _ = self_.disconnect_and_wait();
+                return;
+            }
 
             self_.drivers_started.store(!settings.remote, Ordering::Relaxed);
 
@@ -2905,6 +2910,12 @@ impl XmlReceiver {
                 }
                 Ok(XmlStreamReaderResult::Disconnected) => {
                     log::debug!("indi_api: Disconnected");
+                    {
+                        let mut state = self.conn_state.lock().unwrap();
+                        if *state == ConnState::Connecting {
+                            *state = ConnState::Disconnected;
+                        }
+                    }
                     _ = events_sender.send(EventSenderEvent::Mess(Event::ConnChange(
                         ConnState::Disconnected
                     )));
