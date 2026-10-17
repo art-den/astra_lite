@@ -1,6 +1,6 @@
 [package]
 name = "ascom"
-version = "0.0.341"
+version = "0.0.571"
 edition = "2024"
 description = "Production-oriented Rust wrapper over classic ASCOM/COM (ICameraV4, ITelescopeV4, IFocuserV4, IFilterWheelV3)"
 repository = "https://github.com/art-den/astra_lite"

@@ -1,6 +1,6 @@
 [package]
 name = "indi"
-version = "0.0.341"
+version = "0.0.571"
 edition = "2024"
 description = "INDI protocol client library"
 repository = "https://github.com/art-den/astra_lite"
