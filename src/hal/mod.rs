@@ -292,6 +292,16 @@ impl Hal {
             eyre::bail!("Filter wheel with id={id} not found");
         }
     }
+
+    /// Starts autoconnect of the selected devices. Backends where selecting a
+    /// device means connecting to it must implement this: filter `selected_ids`
+    /// against their own registry, activate the matches off the caller thread,
+    /// sending `DeviceConnected` as each succeeds.
+    pub fn autoconnect_on_startup(&self, selected_ids: &[String]) {
+        for impl_ in &self.list {
+            impl_.autoconnect_on_startup(selected_ids);
+        }
+    }
 }
 
 pub trait HalImpl {
@@ -308,6 +318,12 @@ pub trait HalImpl {
     fn telescope(&self, id: &str) -> Option<Arc<dyn Telescope + Send + Sync>>;
     fn focuser(&self, id: &str) -> Option<Arc<dyn Focuser + Send + Sync>>;
     fn filter_wheel(&self, id: &str) -> Option<Arc<dyn FilterWheel + Send + Sync>>;
+
+    /// Called once at startup after the UI is up. Backends that connect
+    /// explicitly (an INDI server, an Alpaca endpoint) leave this as the default
+    /// no-op; backends where a selection is a connection should activate the
+    /// devices listed in `selected_ids`, off the caller thread.
+    fn autoconnect_on_startup(&self, _selected_ids: &[String]) {}
 }
 
 ///////////////////////////////////////////////////////////////////////////////

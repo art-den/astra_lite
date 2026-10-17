@@ -9,6 +9,30 @@ pub use utils::*;
 // Note: widget_by_name use widget name (not gtk-builder id)!
 // Don't forget to set widget name in *.ui-file before using of widget_by_name!
 
+/// Waits (pumping GTK events via `test_pause_ms`) until the ASCOM Classic
+/// background autoconnect finishes. ASCOM-specific by nature: a no-op on
+/// non-Windows, where that impl does not exist.
+fn wait_for_startup_autoconnect(engine: &Engine) {
+    #[cfg(windows)]
+    {
+        const POLL_MS: u64 = 100;
+        const TIMEOUT_MS: u64 = 30_000;
+        let mut waited: u64 = 0;
+        while !engine.hal.ascom_impl().autoconnect_finished() {
+            if waited >= TIMEOUT_MS {
+                log::error!("DBG autoconnect did not finish within {TIMEOUT_MS} ms");
+                return;
+            }
+            test_pause_ms(POLL_MS as usize);
+            waited += POLL_MS;
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = engine;
+    }
+}
+
 fn debug_preview(app: &gtk::Application) {
     let cb_scale = widget_by_name::<gtk::ComboBoxText>(app, "cb_scale");
     let spb_cam_exp = widget_by_name::<gtk::SpinButton>(app, "spb_cam_exp");
@@ -107,8 +131,8 @@ fn debug_preview_scroll(app: &gtk::Application) {
 fn debug_ascom_camera(app: &gtk::Application, engine: &Engine) {
     use crate::hal::HalImpl;
 
-    // Autoconnect of saved drivers runs shortly after the UI is built
-    test_pause_ms(4000);
+    // Let startup autoconnect finish (background thread; cold drivers take seconds)
+    wait_for_startup_autoconnect(engine);
 
     let cam_id = engine.options.read().unwrap().cam.device_id.clone();
     log::info!("DBG options cam device_id = {cam_id:?}");
@@ -169,8 +193,8 @@ fn debug_ascom_camera(app: &gtk::Application, engine: &Engine) {
 /// instance), which used to leave the reactivated camera "NotConnected".
 /// Needs both drivers registered; the hub must be configured to connect.
 fn debug_ascom_switch(app: &gtk::Application, engine: &Engine) {
-    // Let startup autoconnect finish
-    test_pause_ms(4000);
+    // Let startup autoconnect finish (background thread; cold drivers take seconds)
+    wait_for_startup_autoconnect(engine);
 
     let log_cam = |tag: &str| {
         match engine.cur_devices.camera() {
@@ -240,8 +264,8 @@ pub fn run_scenario(app: &gtk::Application, engine: &Engine) {
 fn debug_ascom_bin2(app: &gtk::Application, engine: &Engine) {
     use crate::options::Binning;
 
-    // Let startup autoconnect finish
-    test_pause_ms(4000);
+    // Let startup autoconnect finish (background thread; cold drivers take seconds)
+    wait_for_startup_autoconnect(engine);
 
     let Some(cam) = engine.cur_devices.camera() else {
         log::error!("DBG bin2: camera is None (not activated)");

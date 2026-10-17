@@ -191,40 +191,24 @@ impl Engine {
         log::info!("Done!");
     }
 
-    /// Activates ASCOM Classic drivers saved in options (selection == connection
-    /// there). Called from `main.rs` after the UI is up, when options are loaded.
-    /// `apply_*()` is used on purpose: the saved id already sits in `options`, so
-    /// `change_*()` would early-exit and nothing would activate the driver.
-    #[cfg(windows)]
-    pub fn autoconnect_ascom(self: &Arc<Self>) {
-        let (cam_id, mount_id, focuser_id, flt_wheel_id) = {
+    /// Activates devices selected in options by delegating to the HAL. Any
+    /// backend that treats device selection as connection may autoconnect here
+    /// (in the background); backends that connect explicitly do nothing.
+    /// Safe to call on any platform.
+    pub fn autoconnect_on_startup(&self) {
+        let ids: Vec<String> = {
             let options = self.options.read().unwrap();
-            (
+            [
                 options.cam.device_id.clone(),
                 options.mount.device.clone(),
                 options.focuser.device.clone(),
                 options.filter_wheel.device.clone(),
-            )
+            ]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect()
         };
-
-        let ascom = self.hal.ascom_impl();
-
-        if !cam_id.is_empty() && ascom.find_camera(&cam_id).is_some() {
-            log::info!("Autoconnecting ASCOM camera {cam_id}");
-            self.cur_devices.apply_camera(&cam_id);
-        }
-        if !mount_id.is_empty() && ascom.find_telescope(&mount_id).is_some() {
-            log::info!("Autoconnecting ASCOM mount {mount_id}");
-            self.cur_devices.apply_telescope(&mount_id);
-        }
-        if !focuser_id.is_empty() && ascom.find_focuser(&focuser_id).is_some() {
-            log::info!("Autoconnecting ASCOM focuser {focuser_id}");
-            self.cur_devices.apply_focuser(&focuser_id);
-        }
-        if !flt_wheel_id.is_empty() && ascom.find_filter_wheel(&flt_wheel_id).is_some() {
-            log::info!("Autoconnecting ASCOM filter wheel {flt_wheel_id}");
-            self.cur_devices.apply_filter_wheel(&flt_wheel_id);
-        }
+        self.hal.autoconnect_on_startup(&ids);
     }
 
     fn set_ext_guider_events_handler(self: &Arc<Self>) {

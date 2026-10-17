@@ -22,8 +22,10 @@
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::thread::JoinHandle;
+use std::time::Instant;
 
 use ascom::camera::Camera as AcCamera;
 use ascom::camera::SensorType as AcSensorType;
@@ -64,11 +66,15 @@ fn check_ascom_handle_contracts() {
 
 /// Shared between the impl and all device wrappers.
 struct HalCtx {
-    event_handlers: Arc<HalEventHandlers>,
-    active_count:   AtomicUsize,
+    event_handlers:     Arc<HalEventHandlers>,
+    active_count:       AtomicUsize,
     /// Connect refcounts per COM class (`conn_key`): ProgID aliases of one
     /// driver share a single connected class instance.
-    conn_refs:      Mutex<HashMap<String, usize>>,
+    conn_refs:          Mutex<HashMap<String, usize>>,
+    /// When the most recent successful activation finished. Shutdown uses
+    /// this to let freshly activated drivers finish their own async init
+    /// before `set_connected(false)`.
+    last_activation_at: Mutex<Option<Instant>>,
 }
 
 impl HalCtx {
@@ -97,6 +103,7 @@ impl HalCtx {
 
     fn device_activated(&self) {
         self.active_count.fetch_add(1, Ordering::Relaxed);
+        *self.last_activation_at.lock().unwrap() = Some(Instant::now());
         self.send_state_event();
     }
 
@@ -179,8 +186,12 @@ struct AscomHalData {
 }
 
 pub struct AscomHalImpl {
-    data:           RwLock<Arc<AscomHalData>>,
-    ctx:            Arc<HalCtx>,
+    data:               RwLock<Arc<AscomHalData>>,
+    ctx:                Arc<HalCtx>,
+    /// Signals the background autoconnect thread to stop before shutdown.
+    closing:            Arc<AtomicBool>,
+    /// Handle to the autoconnect thread (if spawned and not yet joined).
+    autoconnect_thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl AscomHalImpl {
@@ -188,9 +199,10 @@ impl AscomHalImpl {
         check_ascom_handle_contracts();
 
         let ctx = Arc::new(HalCtx {
-            event_handlers: Arc::clone(event_handlers),
-            active_count:   AtomicUsize::new(0),
-            conn_refs:      Mutex::new(HashMap::new()),
+            event_handlers:     Arc::clone(event_handlers),
+            active_count:       AtomicUsize::new(0),
+            conn_refs:          Mutex::new(HashMap::new()),
+            last_activation_at: Mutex::new(None),
         });
 
         let mut data = AscomHalData {
@@ -229,16 +241,58 @@ impl AscomHalImpl {
         );
 
         Arc::new(Self {
-            data: RwLock::new(Arc::new(data)),
+            data:               RwLock::new(Arc::new(data)),
             ctx,
+            closing:            Arc::new(AtomicBool::new(false)),
+            autoconnect_thread: Mutex::new(None),
         })
     }
 
     /// Disconnects every activated device. Called on engine stop/shutdown:
     /// dropping the last handle does NOT disconnect a driver.
-    /// All deactivations are attempted; if any failed, the first error is
-    /// returned (the rest are only logged).
+    /// Blocks the caller: first waits (bounded) for the background autoconnect
+    /// thread, then lets recently activated drivers settle. All deactivations
+    /// are attempted; if any failed, the first error is returned (the rest are
+    /// only logged).
     pub fn disconnect_all(&self) -> eyre::Result<()> {
+        // Signal the background autoconnect thread to stop; it checks `closing`
+        // before each activation. Waiting for it keeps deactivation from racing
+        // an activation; after the deadline below we give up, so a hung driver
+        // may still latch itself active behind us.
+        self.closing.store(true, Ordering::SeqCst);
+        let handle = self.autoconnect_thread.lock().unwrap().take();
+        if let Some(handle) = handle {
+            // Poll `is_finished()` so a hung out-of-proc driver cannot stall
+            // shutdown indefinitely (one cold activation is already 1.4-11 s).
+            const POLL_MS: u64 = 100;
+            const DEADLINE_MS: u64 = 20_000;
+            let mut waited: u64 = 0;
+            while !handle.is_finished() {
+                if waited >= DEADLINE_MS {
+                    log::error!("ASCOM autoconnect thread did not finish within {DEADLINE_MS} ms; proceeding with shutdown");
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
+                waited += POLL_MS;
+            }
+        }
+
+        {
+            // Some drivers (ToupTek observed) finish bring-up asynchronously
+            // after `Connected = true`: a `Connected = false` that arrives too
+            // early returns Ok but leaves the cooler fan powered. Empirical
+            // value; bump it if another driver misbehaves.
+            const MIN_CONN_TIME: std::time::Duration = std::time::Duration::from_secs(5);
+            let remaining = self.ctx.last_activation_at.lock().unwrap().map_or(
+                std::time::Duration::ZERO,
+                |t| std::time::Duration::saturating_sub(MIN_CONN_TIME, t.elapsed()),
+            );
+            if !remaining.is_zero() {
+                log::info!("ASCOM: letting drivers settle {remaining:.0?} before disconnect");
+                std::thread::sleep(remaining);
+            }
+        }
+
         let data = self.data_read();
         let mut first_err: Option<eyre::Report> = None;
         let mut check = |res: eyre::Result<()>, context: &str| {
@@ -262,6 +316,13 @@ impl AscomHalImpl {
         first_err.map_or(Ok(()), Err)
     }
 
+    /// Returns `true` when no autoconnect thread was spawned or it already
+    /// finished. Used by `--debug` scenarios to wait for startup autoconnect.
+    pub fn autoconnect_finished(&self) -> bool {
+        let guard = self.autoconnect_thread.lock().unwrap();
+        guard.as_ref().is_none_or(|h| h.is_finished())
+    }
+
     pub fn find_camera(&self, id: &str) -> Option<Arc<AscomCamera>> {
         self.data_read().cameras.iter().find(|d| *d.device_id == id).map(Arc::clone)
     }
@@ -280,6 +341,66 @@ impl AscomHalImpl {
 
     fn data_read(&self) -> Arc<AscomHalData> {
         Arc::clone(&self.data.read().unwrap())
+    }
+}
+
+/// Activates the given devices in order (camera → telescope → focuser → filter
+/// wheel), sending `DeviceConnected` after each success. Stops early when
+/// `closing`. Runs inline on whatever thread calls it (the autoconnect thread
+/// today); blocking (COM).
+fn autoconnect_loop(
+    data:         Arc<AscomHalData>,
+    ctx:          Arc<HalCtx>,
+    closing:      Arc<AtomicBool>,
+    selected_ids: &[String],
+) {
+    /// Activates `dev` (any `Device` wrapper) if its id is in `selected_ids`,
+    /// sending `DeviceConnected` on success or `StateChanged(Error)` on failure.
+    /// No-op when `dev.id()` is not selected.
+    fn try_activate<D: Device + ?Sized>(
+        dev:          &Arc<D>,
+        ctx:          &HalCtx,
+        selected_ids: &[String],
+        type_:        DeviceType,
+        label:        &str,
+    ) {
+        let id = dev.id();
+        if !selected_ids.iter().any(|s| s == id) {
+            return;
+        }
+        match dev.activate() {
+            Ok(()) => {
+                log::info!("ASCOM autoconnect: {label} {id} activated");
+                let info = DeviceInfo {
+                    id:    id.to_string(),
+                    name:  dev.name().to_string(),
+                    type_,
+                };
+                ctx.event_handlers.send(HalEvent::DeviceConnected(Arc::new(info)));
+            }
+            Err(err) => {
+                log::error!("ASCOM autoconnect: {label} {id} failed: {err}");
+                ctx.event_handlers.send(HalEvent::StateChanged(HalState::Error(err.to_string())));
+            }
+        }
+    }
+
+    // `closing` is only honored between groups: at most one extra activation.
+    if closing.load(Ordering::SeqCst) { return; }
+    for cam in &data.cameras {
+        try_activate(cam, &ctx, selected_ids, DeviceType::CAMERA, "camera");
+    }
+    if closing.load(Ordering::SeqCst) { return; }
+    for telescope in &data.telescopes {
+        try_activate(telescope, &ctx, selected_ids, DeviceType::TELESCOPE, "telescope");
+    }
+    if closing.load(Ordering::SeqCst) { return; }
+    for focuser in &data.focusers {
+        try_activate(focuser, &ctx, selected_ids, DeviceType::FOCUSER, "focuser");
+    }
+    if closing.load(Ordering::SeqCst) { return; }
+    for fw in &data.filter_wheels {
+        try_activate(fw, &ctx, selected_ids, DeviceType::FLT_WHEEL, "filter wheel");
     }
 }
 
@@ -414,6 +535,35 @@ impl HalImpl for AscomHalImpl {
 
     fn filter_wheel(&self, id: &str) -> Option<Arc<dyn FilterWheel + Send + Sync>> {
         self.find_filter_wheel(id).map(|d| d as Arc<dyn FilterWheel + Send + Sync>)
+    }
+
+    fn autoconnect_on_startup(&self, selected_ids: &[String]) {
+        // Do not start anything once shutdown has begun.
+        if self.closing.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut guard = self.autoconnect_thread.lock().unwrap();
+        // Re-check under the lock: `disconnect_all()` sets `closing` before it
+        // takes the handle, so spawning past this point could leak a thread it
+        // never joins. Also guard against a duplicate call while a previous
+        // thread is still alive.
+        if self.closing.load(Ordering::SeqCst)
+            || guard.as_ref().is_some_and(|h| !h.is_finished())
+        {
+            return;
+        }
+        // Snapshot data (`data_read()` returns an Arc, does not hold the guard).
+        let data = self.data_read();
+        let ctx = Arc::clone(&self.ctx);
+        let closing = Arc::clone(&self.closing);
+        let ids: Vec<String> = selected_ids.to_vec();
+        let handle = std::thread::Builder::new()
+            .name("ascom_autoconnect".to_string())
+            .spawn(move || autoconnect_loop(data, ctx, closing, &ids));
+        match handle {
+            Ok(h) => { *guard = Some(h); }
+            Err(err) => log::error!("ASCOM autoconnect: cannot spawn background thread: {err}"),
+        }
     }
 }
 
@@ -821,6 +971,11 @@ impl AscomCamera {
         let device_id = Arc::clone(&self.device_id);
         self.ctx.event_handlers.send(HalEvent::CameraIsReadyToWork(Arc::clone(&device_id)));
         self.ctx.event_handlers.send(HalEvent::CameraIsReadyForCooling(Arc::clone(&device_id)));
+        // No-ops today (`is_fan_ctrl_supported()`/`is_heater_supported()` return
+        // `Ok(false)`); sent for parity with INDI so they work once ASCOM gains
+        // fan/heater support.
+        self.ctx.event_handlers.send(HalEvent::CameraIsReadyForCtrlFan(Arc::clone(&device_id)));
+        self.ctx.event_handlers.send(HalEvent::CameraIsReadyForCtrlHeater(Arc::clone(&device_id)));
         self.ctx.event_handlers.send(HalEvent::CameraOffsetCanBeControlled(Arc::clone(&device_id)));
         self.ctx.event_handlers.send(HalEvent::CameraGainCanBeControlled(device_id));
     }
@@ -1005,8 +1160,23 @@ impl AscomCamera {
         if let Some(st) = active {
             *self.exp_data.lock().unwrap() = None;
             // Disconnect the shared class only when this was its last wrapper
-            if self.ctx.conn_release(&self.conn_key) && let Err(err) = st.device.set_connected(false) {
-                log::error!("cannot disconnect ASCOM camera {}: {err}", self.device_id);
+            if self.ctx.conn_release(&self.conn_key) {
+                // Turn off the cooler explicitly: some drivers (ToupTek) leave
+                // the sensor fan powered after `Connected = false` if the cooler
+                // was still on. Only on real disconnect - an alias wrapper of
+                // the same class must not switch off a still-used cooler.
+                // Best-effort; the disconnect below must run regardless.
+                if st.flags.contains(CameraFlags::COOLER_SUPPORTED)
+                    && let Err(err) = st.device.set_cooler_on(false)
+                {
+                    log::warn!(
+                        "ASCOM camera {}: cannot turn off cooler before disconnect: {err}",
+                        self.device_id
+                    );
+                }
+                if let Err(err) = st.device.set_connected(false) {
+                    log::error!("cannot disconnect ASCOM camera {}: {err}", self.device_id);
+                }
             }
             // Drops the driver COM thread outside any lock (may block up to 5 s)
             drop(st);
@@ -2257,9 +2427,10 @@ mod tests {
 
     fn test_ctx() -> HalCtx {
         HalCtx {
-            event_handlers: Arc::new(HalEventHandlers::new()),
-            active_count:   AtomicUsize::new(0),
-            conn_refs:      Mutex::new(HashMap::new()),
+            event_handlers:     Arc::new(HalEventHandlers::new()),
+            active_count:       AtomicUsize::new(0),
+            conn_refs:          Mutex::new(HashMap::new()),
+            last_activation_at: Mutex::new(None),
         }
     }
 
@@ -2520,5 +2691,164 @@ mod tests {
         assert_eq!(conn_total(&ctx), 1, "the alias left its ref behind");
         assert!(!alias.is_activated());
         assert!(first.is_activated());
+    }
+
+    // --- autoconnect_loop ---------------------------------------------------------
+
+    /// Like `mock_camera_wrapper` but with a caller-supplied id, so several mocks
+    /// each own a distinct `conn_key` (the fallback lowercases an unresolvable
+    /// fake ProgID). Used by the autoconnect tests to activate subsets of cameras.
+    fn mock_camera_wrapper_with_id(
+        ctx: Arc<HalCtx>,
+        id: &str,
+        members: Vec<(&'static str, Member)>,
+    ) -> AscomCamera {
+        let info = DeviceInfo {
+            id:    id.to_string(),
+            name:  format!("Mock {id}"),
+            type_: DeviceType::CAMERA,
+        };
+        let prog_id = id.to_string();
+        AscomCamera::with_open_override(ctx, info, move || {
+            AcCamera::open_mock(members.clone(), &prog_id)
+        })
+    }
+
+    /// Collects the events relevant to `autoconnect_loop` (activation also
+    /// sends Ready events, so the collector filters by variant).
+    #[derive(Default)]
+    struct EventCollector {
+        connected: Mutex<Vec<String>>,
+        errors:    Mutex<Vec<String>>,
+    }
+
+    impl EventCollector {
+        fn new() -> Arc<Self> {
+            Arc::new(Self::default())
+        }
+
+        fn attach(self: &Arc<Self>, ctx: &HalCtx) {
+            let this = Arc::clone(self);
+            ctx.event_handlers.connect(move |ev| match ev {
+                HalEvent::DeviceConnected(info) => {
+                    this.connected.lock().unwrap().push(info.id.clone());
+                }
+                HalEvent::StateChanged(HalState::Error(msg)) => {
+                    this.errors.lock().unwrap().push(msg);
+                }
+                _ => {}
+            });
+        }
+    }
+
+    fn hal_data_with_cameras(cameras: Vec<Arc<AscomCamera>>) -> Arc<AscomHalData> {
+        Arc::new(AscomHalData {
+            devices:       Vec::new(),
+            cameras,
+            telescopes:    Vec::new(),
+            focusers:      Vec::new(),
+            filter_wheels: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn autoconnect_activates_only_selected_cameras() {
+        let ctx = Arc::new(test_ctx());
+        let collector = EventCollector::new();
+        collector.attach(&ctx);
+
+        let c1 = Arc::new(AtomicBool::new(false));
+        let c2 = Arc::new(AtomicBool::new(false));
+        let c3 = Arc::new(AtomicBool::new(false));
+        let cam1 = Arc::new(mock_camera_wrapper_with_id(
+            Arc::clone(&ctx), "Astra.Mock.A", mock_camera(Arc::clone(&c1)),
+        ));
+        let cam2 = Arc::new(mock_camera_wrapper_with_id(
+            Arc::clone(&ctx), "Astra.Mock.B", mock_camera(Arc::clone(&c2)),
+        ));
+        let cam3 = Arc::new(mock_camera_wrapper_with_id(
+            Arc::clone(&ctx), "Astra.Mock.C", mock_camera(Arc::clone(&c3)),
+        ));
+
+        let data = hal_data_with_cameras(vec![
+            Arc::clone(&cam1), Arc::clone(&cam2), Arc::clone(&cam3),
+        ]);
+        let closing = Arc::new(AtomicBool::new(false));
+        let ids = vec!["Astra.Mock.A".to_string(), "Astra.Mock.C".to_string()];
+
+        autoconnect_loop(data, Arc::clone(&ctx), closing, &ids);
+
+        assert!(c1.load(Ordering::SeqCst), "selected cam1 must be connected");
+        assert!(!c2.load(Ordering::SeqCst), "unselected cam2 must not be connected");
+        assert!(c3.load(Ordering::SeqCst), "selected cam3 must be connected");
+
+        let mut connected = collector.connected.lock().unwrap().clone();
+        connected.sort();
+        assert_eq!(connected, vec!["Astra.Mock.A".to_string(), "Astra.Mock.C".to_string()]);
+        assert!(collector.errors.lock().unwrap().is_empty(), "no errors expected");
+
+        assert_eq!(ctx.active_count.load(Ordering::Relaxed), 2);
+        assert_eq!(conn_total(&ctx), 2);
+    }
+
+    #[test]
+    fn autoconnect_reports_error_and_continues() {
+        let ctx = Arc::new(test_ctx());
+        let collector = EventCollector::new();
+        collector.attach(&ctx);
+
+        let c1 = Arc::new(AtomicBool::new(false));
+        let mut m1 = mock_camera(Arc::clone(&c1));
+        refuse(&mut m1, "CameraXSize", driver_fault());
+        let cam1 = Arc::new(mock_camera_wrapper_with_id(Arc::clone(&ctx), "Astra.Mock.A", m1));
+
+        let c2 = Arc::new(AtomicBool::new(false));
+        let cam2 = Arc::new(mock_camera_wrapper_with_id(
+            Arc::clone(&ctx), "Astra.Mock.B", mock_camera(Arc::clone(&c2)),
+        ));
+
+        let data = hal_data_with_cameras(vec![Arc::clone(&cam1), Arc::clone(&cam2)]);
+        let closing = Arc::new(AtomicBool::new(false));
+        let ids = vec!["Astra.Mock.A".to_string(), "Astra.Mock.B".to_string()];
+
+        autoconnect_loop(data, Arc::clone(&ctx), closing, &ids);
+
+        let connected = collector.connected.lock().unwrap().clone();
+        assert_eq!(
+            connected, vec!["Astra.Mock.B".to_string()],
+            "the failing camera must not send DeviceConnected"
+        );
+        let errors = collector.errors.lock().unwrap().clone();
+        assert_eq!(errors.len(), 1, "exactly one StateChanged(Error) expected");
+        assert!(
+            errors[0].contains("CameraXSize"),
+            "the error must name the failing member: {}", errors[0]
+        );
+        assert!(!c1.load(Ordering::SeqCst), "the failed camera must be rolled back");
+        assert!(c2.load(Ordering::SeqCst), "the loop must continue after a failure");
+    }
+
+    #[test]
+    fn autoconnect_stops_early_when_closing() {
+        let ctx = Arc::new(test_ctx());
+        let collector = EventCollector::new();
+        collector.attach(&ctx);
+
+        let c1 = Arc::new(AtomicBool::new(false));
+        let cam1 = Arc::new(mock_camera_wrapper_with_id(
+            Arc::clone(&ctx), "Astra.Mock.A", mock_camera(Arc::clone(&c1)),
+        ));
+
+        let data = hal_data_with_cameras(vec![Arc::clone(&cam1)]);
+        let closing = Arc::new(AtomicBool::new(true));
+        let ids = vec!["Astra.Mock.A".to_string()];
+
+        autoconnect_loop(data, Arc::clone(&ctx), closing, &ids);
+
+        assert!(!c1.load(Ordering::SeqCst), "closing must prevent activation");
+        assert!(collector.connected.lock().unwrap().is_empty());
+        assert!(collector.errors.lock().unwrap().is_empty());
+        assert_eq!(ctx.active_count.load(Ordering::Relaxed), 0);
+        assert_eq!(conn_total(&ctx), 0);
     }
 }

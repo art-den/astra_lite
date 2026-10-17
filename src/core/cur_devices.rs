@@ -171,9 +171,9 @@ impl CurDevices {
         self.change_camera_impl(new_camera_id, false);
     }
 
-    /// Applies and activates the camera even when `options` already stores this id.
-    /// ASCOM Classic has no connect events, so after a restart nothing but this
-    /// would activate the saved driver.
+    /// Applies and activates the camera even when `options` already stores this
+    /// id. Startup autoconnect does not go through here (the HAL activates the
+    /// saved driver itself); this is the force path for explicit re-activation.
     pub fn apply_camera(self: &Arc<Self>, new_camera_id: &str) {
         self.change_camera_impl(new_camera_id, true);
     }

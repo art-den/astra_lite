@@ -195,13 +195,12 @@ fn app_activate_handler(app: &gtk::Application) {
         app_shutdown_handler(app, &engine);
     }));
 
-    // Autoconnect saved ASCOM Classic drivers once the UI is up (Windows only)
-
-    #[cfg(windows)]
-    glib::timeout_add_local(Duration::from_millis(700), clone!(@strong engine => move || {
-        engine.autoconnect_ascom();
-        glib::ControlFlow::Break
-    }));
+    // Kick off startup autoconnect of the saved drivers. Backends that connect
+    // explicitly ignore it; those where a selection is a connection activate the
+    // devices on their own thread, so the UI stays responsive.
+    // HAL event subscribers are ready: `CurDevices` from `Engine::new`, UI
+    // panels from `init_ui` above.
+    engine.autoconnect_on_startup();
 
     // Run the UI debug scenario one second after startup if launched with --debug
 
