@@ -87,7 +87,7 @@ use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use std::{ops::RangeInclusive, path::Path, sync::Arc};
 
-use crate::hal::{events::{EventHandlerId, HalEvent, HalEventHandlers}, hal_indi::IndiHalImpl};
+use crate::{hal::{events::{EventHandlerId, HalEvent, HalEventHandlers}, hal_indi::IndiHalImpl}, utils::log_utils::log_if_error};
 
 #[cfg(windows)]
 use super::hal::hal_ascom::AscomHalImpl;
@@ -203,6 +203,32 @@ impl Hal {
 
     pub fn disconnect_all_subscribers(&self) {
         self.event_handlers.disconnect_all();
+    }
+
+    /// Disconnects ASCOM Classic and INDI, then drops all HAL subscribers.
+    /// Alpaca needs no disconnect: it is stateless HTTP, never sets `Connected`
+    /// on remote devices, and its local state dies with the process.
+    pub fn disconnect_all(&self) {
+        // ASCOM Classic drivers must be disconnected explicitly: dropping the last
+        // handle leaves `Connected` set. Must happen before HAL subscribers die.
+        #[cfg(windows)]
+        {
+            log::info!("Disconnecting from ASCOM Classic...");
+            let res = self.ascom.disconnect_all();
+            log_if_error(&res, "Disconnect ASCOM Classic on Hal::disconnect_all");
+        }
+
+        log::info!("Disconnecting from INDI...");
+        // Drop the connection's own event handlers before tearing down its
+        // threads, so no events fire into dying subscribers.
+        self.indi.indi().disconnect_all_event_handlers();
+        let disconnect_res = self.indi.indi().disconnect_and_wait();
+        log_if_error(&disconnect_res, "Disconnect INDI on Hal::disconnect_all");
+        log::info!("Done!");
+
+        log::info!("Disconnecting HAL subscribers...");
+        self.disconnect_all_subscribers();
+        log::info!("Done!");
     }
 
     /// Sends a HAL event to all subscribers (used by core to report device errors)

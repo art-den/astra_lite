@@ -116,8 +116,9 @@ pub struct Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        // Same as Engine::stop(): panic = "abort" bypasses stop(), and a driver
-        // survives the process unless it was disconnected here
+        // Same ASCOM teardown as Hal::disconnect_all(): panic = "abort" bypasses
+        // stop(), and an out-of-proc driver keeps `Connected` unless disconnected.
+        // INDI needs no teardown here: the OS releases sockets at process exit.
         #[cfg(windows)]
         log_if_error(&self.hal.ascom_impl().disconnect_all(), "Disconnect ASCOM Classic on Engine::drop");
 
@@ -170,25 +171,7 @@ impl Engine {
 
         log::info!("Done");
 
-        // ASCOM Classic drivers must be disconnected explicitly: dropping the last
-        // handle leaves `Connected` set. Must happen before HAL subscribers die.
-        #[cfg(windows)]
-        {
-            log::info!("Disconnecting from ASCOM Classic...");
-            let res = self.hal.ascom_impl().disconnect_all();
-            log_if_error(&res, "Disconnect ASCOM Classic on Engine::stop");
-        }
-
-        log::info!("Disconnecting from INDI...");
-        let indi_hal = self.hal.indi_impl();
-        indi_hal.indi().disconnect_all_event_handlers(); // TODO: move into hal
-        let disconnect_res = indi_hal.indi().disconnect_and_wait(); // TODO: move into hal
-        log_if_error(&disconnect_res, "Disconnect INDI on Engine::stop");
-        log::info!("Done!");
-
-        log::info!("Stopping HAL...");
-        self.hal.disconnect_all_subscribers();
-        log::info!("Done!");
+        self.hal.disconnect_all();
     }
 
     /// Activates devices selected in options by delegating to the HAL. Any
