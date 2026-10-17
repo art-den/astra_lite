@@ -512,6 +512,13 @@ impl Property {
                             });
                             changed = true;
                             elem_changed = true;
+                        } else {
+                            // Unreachable today (each blob is stamped with its element name in
+                            // `xml_reader.rs`); warn-only guard in case a change breaks that.
+                            log::warn!(
+                                "No streamed blob for `setBLOB` element `{}` of device `{}` property `{}`; keeping the previous value",
+                                elem_name, device_name, prop_name
+                            );
                         }
                     }
                 };
@@ -526,6 +533,12 @@ impl Property {
                     elem_name, prop_name, device_name
                 );
             }
+        }
+        if !blobs.is_empty() {
+            log::warn!(
+                "{} streamed blob(s) left unmatched after `setBLOBVector` for device `{}` property `{}`",
+                blobs.len(), device_name, prop_name
+            );
         }
         Ok((changed, changed_values))
     }
