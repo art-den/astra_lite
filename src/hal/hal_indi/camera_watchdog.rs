@@ -16,7 +16,7 @@ enum CcdMode {
     WaitExposureProp(usize),
     WaitAfterRestart(usize),
     /// Device command failed, the camera is considered lost.
-    /// `CamWatchdog::notify_periodic_timer_tick` drops such entries in the same tick.
+    /// `CamWatchdog::timer_tick` drops such entries in the same tick.
     MustBeDeleted,
 }
 
@@ -57,7 +57,7 @@ impl CcdToWatch {
 
     /// Advances the recovery machine. A failed device command marks the entry as
     /// `CcdMode::MustBeDeleted` and returns an error meant for the user.
-    fn notify_periodic_timer_tick(
+    fn timer_tick(
         &mut self,
         timer_period_ms: usize,
         indi:            &Arc<indi::Connection>,
@@ -193,7 +193,7 @@ impl CameraToInit {
         Ok(())
     }
 
-    fn notify_periodic_timer_tick(
+    fn timer_tick(
         &mut self,
         timer_period_ms: usize,
         indi:            &Arc<indi::Connection>,
@@ -273,7 +273,7 @@ impl CamWatchdog {
     /// All entries are ticked even if one fails. Doomed CCDs are dropped before
     /// returning, so a failure is reported once per camera instead of once per
     /// tick. Only the first error is returned, the rest are logged.
-    pub fn notify_periodic_timer_tick(
+    pub fn timer_tick(
         &mut self,
         timer_period_ms: usize,
         conn_state:      &indi::ConnState,
@@ -287,13 +287,13 @@ impl CamWatchdog {
         let mut errors: Vec<eyre::Report> = Vec::new();
 
         for ccd in &mut self.ccd_list {
-            if let Err(err) = ccd.notify_periodic_timer_tick(timer_period_ms, &self.indi, &self.events) {
+            if let Err(err) = ccd.timer_tick(timer_period_ms, &self.indi, &self.events) {
                 errors.push(err);
             }
         }
 
         for camera in &mut self.init_list {
-            if let Err(err) = camera.notify_periodic_timer_tick(timer_period_ms, &self.indi, &self.events) {
+            if let Err(err) = camera.timer_tick(timer_period_ms, &self.indi, &self.events) {
                 errors.push(err);
             }
         }

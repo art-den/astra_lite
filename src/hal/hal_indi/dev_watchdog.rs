@@ -101,7 +101,7 @@ impl DevicesWatchdog {
     /// Errors are logged, never returned: one flaky device must not abort the
     /// active mode through the HAL tick chain.
     /// `conn_state` is passed in to keep the lock order, see the caller.
-    pub fn notify_periodic_timer_tick(
+    pub fn timer_tick(
         &mut self,
         timer_period_ms: usize,
         conn_state:      &indi::ConnState,

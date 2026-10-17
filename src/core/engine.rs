@@ -64,7 +64,7 @@ pub trait Mode {
     fn notify_before_frame_processing_start(&mut self, _camera_shot: &Arc<dyn CameraShot + Send + Sync>, _should_be_processed: &mut bool) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_about_frame_processing_result(&mut self, _fp_result: &FrameProcessNotification) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn notify_guider_event(&mut self, _event: ExtGuiderEvent) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
-    fn notify_periodic_timer_tick(&mut self, _timer_period_ms: usize) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
+    fn timer_tick(&mut self, _timer_period_ms: usize) -> eyre::Result<NotifyResult> { Ok(NotifyResult::Empty) }
     fn command(&mut self, _cmd: &ModeCommand) -> eyre::Result<ModeCommandReply> {
         eyre::bail!("Mode {:?} does not support mode commands", self.kind());
     }
@@ -255,10 +255,10 @@ impl Engine {
 
     fn timer_event_handler(self: &Arc<Self>) -> eyre::Result<()> {
         let mut mode = self.modes.write().unwrap();
-        let result = mode.active.notify_periodic_timer_tick(Self::TIMER_PERIOD_MS)?;
+        let result = mode.active.timer_tick(Self::TIMER_PERIOD_MS)?;
         self.apply_notify_result(result, &mut mode)?;
         drop(mode);
-        self.hal.notify_periodic_timer_tick(Self::TIMER_PERIOD_MS)?;
+        self.hal.timer_tick(Self::TIMER_PERIOD_MS)?;
         Ok(())
     }
 

@@ -415,7 +415,7 @@ impl Mode for GotoMode {
         self.cam_opts.as_ref().map(|cam_opts| &cam_opts.frame)
     }
 
-    fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
+    fn timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         match &mut self.state {
             State::Unparking{ elapsed_ms, stop_slew_ms } => {
                 if !self.telescope.is_parked()? && !self.telescope.is_slewing()? {

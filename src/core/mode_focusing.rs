@@ -680,7 +680,7 @@ impl Mode for FocusingMode {
         Ok(())
     }
 
-    fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
+    fn timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         if let Some(change_time_ms) = &mut self.change_time_ms {
             *change_time_ms += timer_period_ms;
             if *change_time_ms > MAX_FOCUS_CHANGE_TIME * 1000 {

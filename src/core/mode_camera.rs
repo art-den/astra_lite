@@ -1540,7 +1540,7 @@ impl Mode for TakingPicturesMode {
         Ok(())
     }
 
-    fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
+    fn timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
         match (&mut self.state, &self.mount) {
             (State::InternalMountCorrection(ok_time_ms), Some(mount)) => {

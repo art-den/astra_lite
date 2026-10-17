@@ -242,19 +242,19 @@ impl HalImpl for AscomAlpacaHalImpl {
         Ok(())
     }
 
-    fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
+    fn timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
         if let Ok(data) = self.data() {
             for camera in &data.cameras {
-                camera.notify_periodic_timer_tick(timer_period_ms)?;
+                camera.timer_tick(timer_period_ms)?;
             }
             for telescope in &data.telescopes {
-                telescope.notify_periodic_timer_tick(timer_period_ms)?;
+                telescope.timer_tick(timer_period_ms)?;
             }
             for focuser in &data.focusers {
-                focuser.notify_periodic_timer_tick(timer_period_ms)?;
+                focuser.timer_tick(timer_period_ms)?;
             }
             for filter_wheel in &data.filter_wheels {
-                filter_wheel.notify_periodic_timer_tick(timer_period_ms)?;
+                filter_wheel.timer_tick(timer_period_ms)?;
             }
         }
         Ok(())
@@ -634,7 +634,7 @@ impl AscomAlpacaCamera {
         Ok(result)
     }
 
-    fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+    fn timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
         let exp_data_mutex = self.exp_data.lock().unwrap();
         let is_exposure_now = exp_data_mutex.is_some();
         if let Some(exp_data) = &*exp_data_mutex {
@@ -1161,7 +1161,7 @@ impl AscomAlpacaTelescope {
         Ok(result)
     }
 
-    fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+    fn timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
         let state = self.read_state();
         let mut data = self.data.lock().unwrap();
         let state_changed = data.prev_state != Some(state.state);
@@ -1524,7 +1524,7 @@ impl AscomAlpacaFocuser {
         Ok(result)
     }
 
-    fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+    fn timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
         self.async_runtime.block_on(async {
             let state = self.state_impl().await;
             // A failed read stays `None`: never fabricate a value for the UI
@@ -1651,7 +1651,7 @@ impl AscomAlpacaFilterWheel {
         Ok(result)
     }
 
-    fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+    fn timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
         self.async_runtime.block_on(async {
             let pos = self.device.position().await.unwrap_or_default();
             let mut data = self.data.lock().unwrap();

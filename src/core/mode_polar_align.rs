@@ -739,7 +739,7 @@ impl Mode for PolarAlignMode {
         Ok(NotifyResult::Empty)
     }
 
-    fn notify_periodic_timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
+    fn timer_tick(&mut self, timer_period_ms: usize) -> eyre::Result<NotifyResult> {
         match &mut self.state {
             PolarAlignState::PlateSolve => {
                 return self.try_process_plate_solving_result();

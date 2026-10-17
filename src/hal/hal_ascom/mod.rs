@@ -465,7 +465,7 @@ impl HalImpl for AscomHalImpl {
         self.disconnect_all()
     }
 
-    fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
+    fn timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
         let data = self.data_read();
 
         // Contract: never return Err here. Both an Err from the tick and
@@ -473,25 +473,25 @@ impl HalImpl for AscomHalImpl {
         // this is the final escalation after transient failures were retried in the
         // device ticks.
         for camera in &data.cameras {
-            if let Err(err) = camera.notify_periodic_timer_tick(timer_period_ms) {
+            if let Err(err) = camera.timer_tick(timer_period_ms) {
                 log::error!("ASCOM camera tick error: {err}");
                 self.ctx.event_handlers.send(HalEvent::Error(Arc::new(err.to_string())));
             }
         }
         for telescope in &data.telescopes {
-            if let Err(err) = telescope.notify_periodic_timer_tick(timer_period_ms) {
+            if let Err(err) = telescope.timer_tick(timer_period_ms) {
                 log::error!("ASCOM telescope tick error: {err}");
                 self.ctx.event_handlers.send(HalEvent::Error(Arc::new(err.to_string())));
             }
         }
         for focuser in &data.focusers {
-            if let Err(err) = focuser.notify_periodic_timer_tick(timer_period_ms) {
+            if let Err(err) = focuser.timer_tick(timer_period_ms) {
                 log::error!("ASCOM focuser tick error: {err}");
                 self.ctx.event_handlers.send(HalEvent::Error(Arc::new(err.to_string())));
             }
         }
         for filter_wheel in &data.filter_wheels {
-            if let Err(err) = filter_wheel.notify_periodic_timer_tick(timer_period_ms) {
+            if let Err(err) = filter_wheel.timer_tick(timer_period_ms) {
                 log::error!("ASCOM filter wheel tick error: {err}");
                 self.ctx.event_handlers.send(HalEvent::Error(Arc::new(err.to_string())));
             }
@@ -980,7 +980,7 @@ impl AscomCamera {
         self.ctx.event_handlers.send(HalEvent::CameraGainCanBeControlled(device_id));
     }
 
-    fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+    fn timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
         let Some(st) = self.active_data_opt() else { return Ok(()); };
 
         let exp_status = {
@@ -1636,7 +1636,7 @@ impl AscomTelescope {
         ));
     }
 
-    fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+    fn timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
         let Some(st) = self.active_data_opt() else { return Ok(()); };
 
         let state = self.read_state(&st);
@@ -2077,7 +2077,7 @@ impl AscomFocuser {
         }
     }
 
-    fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+    fn timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
         let Some(st) = self.active_data_opt() else { return Ok(()); };
 
         let state = match st.device.is_moving() {
@@ -2315,7 +2315,7 @@ impl AscomFilterWheel {
         ));
     }
 
-    fn notify_periodic_timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
+    fn timer_tick(&self, _timer_period: usize) -> eyre::Result<()> {
         let Some(st) = self.active_data_opt() else { return Ok(()); };
 
         // `MOVING` (-1) reads as `None` (the wheel is turning)

@@ -505,7 +505,7 @@ impl HalImpl for IndiHalImpl {
         Ok(())
     }
 
-    fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
+    fn timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
         // Lock order convention: state -> watchdogs, never the reverse.
         // Read the state before locking `watchdogs` to keep it.
         let conn_state = self.indi.state();
@@ -513,8 +513,8 @@ impl HalImpl for IndiHalImpl {
         let mut watchdogs = self.watchdogs.lock().unwrap();
         // A camera error may still abort the active mode, device actions never do.
         // Devices are ticked unconditionally, so a camera failure cannot starve them.
-        let camera_result = watchdogs.camera.notify_periodic_timer_tick(timer_period_ms, &conn_state);
-        watchdogs.devices.notify_periodic_timer_tick(timer_period_ms, &conn_state);
+        let camera_result = watchdogs.camera.timer_tick(timer_period_ms, &conn_state);
+        watchdogs.devices.timer_tick(timer_period_ms, &conn_state);
         drop(watchdogs);
 
         camera_result?;

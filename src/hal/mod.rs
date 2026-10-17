@@ -236,13 +236,13 @@ impl Hal {
         self.event_handlers.send(event);
     }
 
-    pub fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
+    pub fn timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
         // Tick all impls unconditionally: a persistently erroring backend must
         // not starve the later ones. Impl error messages are user-facing, so they
         // are passed through verbatim (joined when several fail at once).
         let mut errors: Vec<String> = Vec::new();
         for impl_ in &self.list {
-            if let Err(err) = impl_.notify_periodic_timer_tick(timer_period_ms) {
+            if let Err(err) = impl_.timer_tick(timer_period_ms) {
                 log::error!("HAL impl tick error: {err:?}");
                 errors.push(err.to_string());
             }
@@ -337,7 +337,7 @@ pub trait HalImpl {
     /// Returning Err aborts the active engine mode, and so does `HalEvent::Error`:
     /// retry transient device failures inside the device ticks and report only
     /// final failures (see `AscomHalImpl`).
-    fn notify_periodic_timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()>;
+    fn timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()>;
     fn devices(&self, type_filter: DeviceType) -> eyre::Result<Vec<DeviceInfo>>;
     fn cameras(&self) -> eyre::Result<Vec<CameraInfo>>;
     fn camera(&self, id: &str) -> Option<Arc<dyn Camera + Send + Sync>>;
