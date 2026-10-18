@@ -165,8 +165,11 @@ impl RawCalibration {
         }
 
         // Apply master flat image
+        // A master flat cached from light frames can still be present here,
+        // so it must never be applied to flat frames
 
-        if let (Some(file_name), Some(flat_image)) = (&params.flat_fname, &self.master_flat) {
+        if !is_flat_file
+        && let (Some(file_name), Some(flat_image)) = (&params.flat_fname, &self.master_flat) {
             let tmr = TimeLogger::start();
             raw_image.apply_flat(flat_image)
                 .map_err(|err| eyre::eyre!(
