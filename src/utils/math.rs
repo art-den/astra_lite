@@ -635,29 +635,6 @@ fn point_on_segment(
     x >= min_x && x <= max_x && y >= min_y && y <= max_y
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_square() {
-        let square = vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]];
-        assert!(point_in_polygon(&square, [1.0, 1.0]));
-        assert!(point_in_polygon(&square, [0.0, 1.0]));
-        assert!(point_in_polygon(&square, [2.0, 2.0]));
-        assert!(!point_in_polygon(&square, [3.0, 1.0]));
-    }
-
-    #[test]
-    fn test_triangle() {
-        let triangle = vec![[0.0, 0.0], [2.0, 3.0], [4.0, 0.0]];
-        assert!(point_in_polygon(&triangle, [2.0, 1.0]));
-        assert!(point_in_polygon(&triangle, [2.0, 0.0]));
-        assert!(!point_in_polygon(&triangle, [2.0, -0.5]));
-        assert!(!point_in_polygon(&triangle, [-1.0, 1.0]));
-    }
-}
-
 pub fn coordinate_descent(
     mut point:  Vec<f64>,
     step_value: f64,
@@ -699,4 +676,27 @@ pub fn coordinate_descent(
     }
 
     point
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_square() {
+        let square = vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]];
+        assert!(point_in_polygon(&square, [1.0, 1.0]));
+        assert!(point_in_polygon(&square, [0.0, 1.0]));
+        assert!(point_in_polygon(&square, [2.0, 2.0]));
+        assert!(!point_in_polygon(&square, [3.0, 1.0]));
+    }
+
+    #[test]
+    fn test_triangle() {
+        let triangle = vec![[0.0, 0.0], [2.0, 3.0], [4.0, 0.0]];
+        assert!(point_in_polygon(&triangle, [2.0, 1.0]));
+        assert!(point_in_polygon(&triangle, [2.0, 0.0]));
+        assert!(!point_in_polygon(&triangle, [2.0, -0.5]));
+        assert!(!point_in_polygon(&triangle, [-1.0, 1.0]));
+    }
 }
