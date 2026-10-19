@@ -158,7 +158,7 @@ pub enum FrameProcessingReply {
     QueueOverflow,
 }
 
-pub type ResultFun = Box<dyn Fn(FrameProcessingReply) + Send + 'static>;
+pub type ResultFun = Arc<dyn Fn(FrameProcessingReply) + Send + Sync + 'static>;
 
 pub enum FrameProcessCommand {
     ProcessImage(ProcessImageParams),
@@ -225,9 +225,9 @@ impl FrameProcessing {
         this
     }
 
-    pub fn connect_result_fun(&self, fun: impl Fn(FrameProcessingReply) + Send + 'static) {
+    pub fn connect_result_fun(&self, fun: impl Fn(FrameProcessingReply) + Send + Sync + 'static) {
         let mut result_fun = self.result_fun.lock().unwrap();
-        *result_fun = Some(Box::new(fun));
+        *result_fun = Some(Arc::new(fun));
     }
 
     /// Disconnects the result handler. The handler keeps a reference to Engine
@@ -244,9 +244,10 @@ impl FrameProcessing {
 
     fn notify_cmd_result(&self, result: FrameProcessingReply) {
         // The handler may be already disconnected (e.g. during application shutdown),
-        // so a result arriving at this moment is simply discarded
-        let result_fun = self.result_fun.lock().unwrap();
-        if let Some(result_fun) = result_fun.as_ref() {
+        // so a result arriving at this moment is simply discarded.
+        // Invoke without holding the mutex: the handler runs the engine chain
+        let result_fun = self.result_fun.lock().unwrap().clone();
+        if let Some(result_fun) = result_fun {
             result_fun(result);
         }
     }
@@ -423,20 +424,24 @@ impl FrameProcessing {
 
                 match frame_type {
                     FrameType::Flats => {
-                        let hist = command.preview.raw_hist.read().unwrap();
-                        *command.preview.info.write().unwrap() = ResultImageInfo::FlatInfo(
+                        let hist_info = {
+                            let hist = command.preview.raw_hist.read().unwrap();
                             FlatImageInfo::from_histogram(&hist)
-                        );
+                        };
+                        *command.preview.info.write().unwrap() =
+                            ResultImageInfo::FlatInfo(hist_info);
                         self.notify_frame_result(
                             FrameProcessEvent::OrigFrameInfoReady,
                             &command,
                         );
                     },
                     FrameType::Darks | FrameType::Biases => {
-                        let hist = command.preview.raw_hist.read().unwrap();
-                        *command.preview.info.write().unwrap() = ResultImageInfo::RawInfo(
+                        let raw_stat = {
+                            let hist = command.preview.raw_hist.read().unwrap();
                             RawImageStat::from_histogram(&hist)
-                        );
+                        };
+                        *command.preview.info.write().unwrap() =
+                            ResultImageInfo::RawInfo(raw_stat);
                         self.notify_frame_result(
                             FrameProcessEvent::OrigFrameInfoReady,
                             &command,
@@ -514,100 +519,109 @@ impl FrameProcessing {
             return Ok(());
         }
 
-        // Stars
-        let image = command.preview.image.read().unwrap();
-        let frame_stars = if is_light_frame {
-            let stars_recgn_send = command.quality_options
-                .as_ref().map(|qo| qo.star_recogn_sens)
-                .unwrap_or_default();
+        // preview.image guard must not survive into the notify calls below
+        // (they may take the modes lock)
+        let (frame_stars, light_info, stars_offset) = {
+            let image = command.preview.image.read().unwrap();
 
-            let mono_layer = if image.is_color() { &image.g } else { &image.l };
-            let mut stars_finder = StarsFinder::new();
-            let ignore_3px_stars = command.quality_options
-                .as_ref()
-                .map(|opts| opts.ignore_3px_stars)
-                .unwrap_or(false);
+            let frame_stars = if is_light_frame {
+                let stars_recgn_send = command.quality_options
+                    .as_ref().map(|qo| qo.star_recogn_sens)
+                    .unwrap_or_default();
 
-            let stars = stars_finder.find_stars_and_get_info(
-                mono_layer,
-                &image.raw_info,
-                stars_recgn_send,
-                ignore_3px_stars,
-                true
-            );
-            match stars {
-                Ok(stars) => stars,
-                Err(err) => {
-                    log::warn!("{}", err);
-                    Stars::default()
+                let mono_layer = if image.is_color() { &image.g } else { &image.l };
+                let mut stars_finder = StarsFinder::new();
+                let ignore_3px_stars = command.quality_options
+                    .as_ref()
+                    .map(|opts| opts.ignore_3px_stars)
+                    .unwrap_or(false);
+
+                let stars = stars_finder.find_stars_and_get_info(
+                    mono_layer,
+                    &image.raw_info,
+                    stars_recgn_send,
+                    ignore_3px_stars,
+                    true
+                );
+                match stars {
+                    Ok(stars) => stars,
+                    Err(err) => {
+                        log::warn!("{}", err);
+                        Stars::default()
+                    }
                 }
+            } else {
+                Stars::default()
+            };
+
+            if frame_type == FrameType::Lights {
+                // Stars quality
+
+                if let Some(qo) = &command.quality_options {
+                    if qo.use_max_fwhm && let Some(fwhm) = frame_stars.info.fwhm {
+                        quality.fwhm_is_ok = fwhm < qo.max_fwhm;
+                    }
+                    if qo.use_max_ovality && let Some(ovality) = frame_stars.info.ovality {
+                        quality.ovality_is_ok = ovality < qo.max_ovality;
+                    }
+                }
+
+                // Light frame information
+
+                let tmr = TimeLogger::start();
+                let mut info = LightFrameInfo::from_image(
+                    &image,
+                    true,
+                );
+                info.exposure = exposure;
+                info.raw_noise = raw_noise;
+                info.calibr_methods = raw_info.as_ref()
+                    .map(|i| i.calibr_methods)
+                    .unwrap_or(CalibrMethods::empty());
+                tmr.log("TOTAL LightImageInfo::from_image");
+
+                if command.stop_flag.load(Ordering::Relaxed) {
+                    log::debug!("Command stopped");
+                    return Ok(());
+                }
+
+                // Offset by previous stars
+
+                let stars_offset =
+                    if let (Some(ref_stars), true) = (&command.ref_stars, quality.stars_is_ok()) {
+                        let tmr = TimeLogger::start();
+                        // Scale the reference stars to the current image's pixel scale
+                        let (ref_w, ref_h) = ref_stars.size;
+                        let sx = image.width()  as f64 / ref_w as f64;
+                        let sy = image.height() as f64 / ref_h as f64;
+                        let ref_points: Vec<Point> = ref_stars.stars.iter()
+                            .map(|p| Point { x: p.x * sx, y: p.y * sy })
+                            .collect();
+                        let cur_stars_points: Vec<_> = frame_stars.items.iter()
+                            .map(|star| Point {x: star.x, y: star.y })
+                            .collect();
+                        let image_offset = Offset::calculate(
+                            &ref_points,
+                            &cur_stars_points,
+                            image.width() as f64,
+                            image.height() as f64
+                        );
+                        tmr.log("Offset::calculate");
+                        quality.offset_is_ok = image_offset.is_some();
+                        image_offset
+                    } else {
+                        None
+                    };
+
+                (frame_stars, Some(info), stars_offset)
+            } else {
+                (frame_stars, None, None)
             }
-        } else {
-            Stars::default()
         };
 
         if frame_type == FrameType::Lights {
             let stars = Arc::new(frame_stars);
-
-            // Stars quality
-
-            if let Some(qo) = &command.quality_options {
-                if qo.use_max_fwhm && let Some(fwhm) = stars.info.fwhm {
-                    quality.fwhm_is_ok = fwhm < qo.max_fwhm;
-                }
-                if qo.use_max_ovality && let Some(ovality) = stars.info.ovality {
-                    quality.ovality_is_ok = ovality < qo.max_ovality;
-                }
-            }
-
-            // Light frame information
-
-            let tmr = TimeLogger::start();
-            let mut info = LightFrameInfo::from_image(
-                &image,
-                true,
-            );
-            info.exposure = exposure;
-            info.raw_noise = raw_noise;
-            info.calibr_methods = raw_info.as_ref()
-                .map(|i| i.calibr_methods)
-                .unwrap_or(CalibrMethods::empty());
-            tmr.log("TOTAL LightImageInfo::from_image");
-
-            if command.stop_flag.load(Ordering::Relaxed) {
-                log::debug!("Command stopped");
-                return Ok(());
-            }
-
-            // Offset by previous stars
-
-            let stars_offset =
-                if let (Some(ref_stars), true) = (&command.ref_stars, quality.stars_is_ok()) {
-                    let tmr = TimeLogger::start();
-                    // Scale the reference stars to the current image's pixel scale
-                    let (ref_w, ref_h) = ref_stars.size;
-                    let sx = image.width()  as f64 / ref_w as f64;
-                    let sy = image.height() as f64 / ref_h as f64;
-                    let ref_points: Vec<Point> = ref_stars.stars.iter()
-                        .map(|p| Point { x: p.x * sx, y: p.y * sy })
-                        .collect();
-                    let cur_stars_points: Vec<_> = stars.items.iter()
-                        .map(|star| Point {x: star.x, y: star.y })
-                        .collect();
-                    let image_offset = Offset::calculate(
-                        &ref_points,
-                        &cur_stars_points,
-                        image.width() as f64,
-                        image.height() as f64
-                    );
-                    tmr.log("Offset::calculate");
-                    quality.offset_is_ok = image_offset.is_some();
-                    image_offset
-                } else {
-                    None
-                };
-
-            let image_info = Arc::new(info);
+            let image_info = Arc::new(light_info.expect("set for Lights frames"));
 
             // Send message about calculated light frame
 
@@ -656,6 +670,7 @@ impl FrameProcessing {
                 let offset = lf_info.offset.clone().unwrap_or_default();
                 let mut stacker = live_stacking.data.stacker.write().unwrap();
                 let hist = command.preview.img_hist.read().unwrap();
+                let image = command.preview.image.read().unwrap();
                 let tmr = TimeLogger::start();
                 stacker.add(
                     &image,
@@ -666,6 +681,7 @@ impl FrameProcessing {
                     exposure,
                 );
                 tmr.log("ImageStacker::add");
+                drop(image);
                 drop(hist);
                 drop(stacker);
 
@@ -674,20 +690,22 @@ impl FrameProcessing {
                     return Ok(());
                 }
 
-                let stacker = live_stacking.data.stacker.read().unwrap();
-
-                let mut res_image = live_stacking.data.image.write().unwrap();
-                let tmr = TimeLogger::start();
-                stacker.copy_to_image(&mut res_image);
-                tmr.log("ImageStacker::copy_to_image");
-
-                if command.preview_params.remove_gradient {
+                // Minimal guard holding: notifies below may take the modes lock
+                let total_exposure = {
+                    let stacker = live_stacking.data.stacker.read().unwrap();
+                    let mut res_image = live_stacking.data.image.write().unwrap();
                     let tmr = TimeLogger::start();
-                    res_image.remove_gradient();
-                    tmr.log("remove gradient from live stacking result");
-                }
+                    stacker.copy_to_image(&mut res_image);
+                    tmr.log("ImageStacker::copy_to_image");
 
-                drop(res_image);
+                    if command.preview_params.remove_gradient {
+                        let tmr = TimeLogger::start();
+                        res_image.remove_gradient();
+                        tmr.log("remove gradient from live stacking result");
+                    }
+
+                    stacker.total_exposure()
+                };
 
                 let res_image = live_stacking.data.image.read().unwrap();
 
@@ -734,8 +752,9 @@ impl FrameProcessing {
 
                 let tmr = TimeLogger::start();
                 let mut live_stacking_info = LightFrameInfo::from_image(&res_image, true);
-                live_stacking_info.exposure = stacker.total_exposure();
+                live_stacking_info.exposure = total_exposure;
                 tmr.log("LightImageInfo::from_image for live stacking");
+                drop(res_image);
 
                 if command.stop_flag.load(Ordering::Relaxed) {
                     log::debug!("Command stopped");
@@ -781,6 +800,7 @@ impl FrameProcessing {
                                 ))?;
                         }
                         let file_path = file_path.join(format!("Live_{}.tif", now_time_str));
+                        let stacker = live_stacking.data.stacker.read().unwrap();
                         let tmr = TimeLogger::start();
                         stacker.save_to_tiff(&file_path)?;
                         tmr.log("save live stacking result image");

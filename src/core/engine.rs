@@ -106,6 +106,8 @@ pub struct Engine {
     pub live_stacking:  Arc<LiveStacking>,
     pub ext_guider:     Arc<ExternalGuiderCtrl>,
 
+    /// Engine modes. Lock order: modes -> options. Drop `preview.*` /
+    /// `live_stacking.*` guards before engine notifications (they take this lock).
     modes:              RwLock<EngineModes>,
     raw_calibration:    Arc<Mutex<RawCalibration>>,
     timer:              Arc<Timer>,
