@@ -70,8 +70,25 @@ enum Mode {
     Stars { img_width: usize, img_height: usize },
 }
 
+/// stdout/stderr are drained by threads: a full pipe buffer (~64 KB) would
+/// block the child forever while we poll `try_wait()`
+struct SolverPipes {
+    stdout: std::thread::JoinHandle<Vec<u8>>,
+    stderr: std::thread::JoinHandle<Vec<u8>>,
+}
+
+fn drain_stream(stream: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let mut stream = stream;
+        _ = stream.read_to_end(&mut buf);
+        buf
+    })
+}
+
 pub struct AstrometryPlateSolver {
     child:      Option<std::process::Child>,
+    pipes:      Option<SolverPipes>,
     file_name:  Option<PathBuf>,
     mode:       Mode,
     config:     PlateSolveConfig,
@@ -85,6 +102,7 @@ impl AstrometryPlateSolver {
     pub fn new() -> Self {
         Self {
             child:      None,
+            pipes:      None,
             file_name:  None,
             mode:       Mode::None,
             config:     PlateSolveConfig::default(),
@@ -100,6 +118,9 @@ impl AstrometryPlateSolver {
             _ = child.kill();
             _ = child.wait();
         }
+        // Drain threads end on pipe EOF after kill/wait; a surviving
+        // grandchild holding the pipe fd can park one (holds no app state)
+        self.pipes = None;
 
         if let Some(file_name) = self.file_name.take() {
             _ = std::fs::remove_file(file_name.clone());
@@ -203,10 +224,15 @@ impl AstrometryPlateSolver {
         self.start_time = Instant::now();
 
         log::debug!("Running {:?} args={:?}", exe, cmd.get_args());
-        let child = cmd.spawn().map_err(|e|
+        let mut child = cmd.spawn().map_err(|e|
             eyre::format_err!("{} when trying to execute {:?}", e, exe)
         )?;
+        let pipes = SolverPipes {
+            stdout: drain_stream(child.stdout.take().unwrap()),
+            stderr: drain_stream(child.stderr.take().unwrap()),
+        };
         self.child = Some(child);
+        self.pipes = Some(pipes);
         Ok(())
     }
 
@@ -285,11 +311,18 @@ impl AstrometryPlateSolver {
                 Err(e)           => return Err(e.into()),
                 _                => return Ok(PlateSolveResult::Waiting),
             };
-            if exit_status.success() {
-                let mut output = child.stdout.take().unwrap();
-                let mut str_output = String::new();
-                _ = output.read_to_string(&mut str_output);
+            // Child exited, so the drain threads are at EOF and join() is instant
+            let (str_output, str_err) = match self.pipes.take() {
+                Some(pipes) => {
+                    let out = pipes.stdout.join().unwrap_or_default();
+                    let err = pipes.stderr.join().unwrap_or_default();
+                    (String::from_utf8_lossy(&out).into_owned(),
+                     String::from_utf8_lossy(&err).into_owned())
+                }
+                None => (String::new(), String::new()),
+            };
 
+            if exit_status.success() {
                 let platesolve_time = self.start_time.elapsed().as_secs_f64();
 
                 log::debug!("Platesolver time = {:.1}s", platesolve_time);
@@ -364,21 +397,13 @@ impl AstrometryPlateSolver {
 
                 return Ok(PlateSolveResult::Done(result));
             } else {
-                let mut stdout = String::new();
-                if let Some(mut out) = child.stdout.take() {
-                    _ = out.read_to_string(&mut stdout);
-                }
-                let mut stderr = String::new();
-                if let Some(mut err) = child.stderr.take() {
-                    _ = err.read_to_string(&mut stderr);
-                }
                 self.child = None;
 
                 // `starsolver` exits non-zero when it simply cannot solve the
                 // field; report Failed so the retry logic can widen the search.
                 // Keep the original hard-error behavior for `solve-field`.
                 if self.executable == ResolveExecutable::StarSolver
-                    && format!("{}\n{}", stdout, stderr)
+                    && format!("{}\n{}", str_output, str_err)
                         .to_lowercase().contains(NOT_SOLVED_MARKER) {
                     log::debug!("Platesolver did not solve the field");
                     return Ok(PlateSolveResult::Failed);
@@ -389,7 +414,7 @@ impl AstrometryPlateSolver {
                     "{} exited with code {}\n\n{}",
                     exe_name,
                     exit_status.code().unwrap_or_default(),
-                    if stderr.is_empty() { stdout } else { stderr }
+                    if str_err.is_empty() { str_output } else { str_err }
                 ));
             }
         }

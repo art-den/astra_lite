@@ -1,3 +1,7 @@
+// Each integration test binary compiles its own copy of this module and
+// may use only part of the helpers
+#![allow(dead_code)]
+
 use std::{
     fs::{File, OpenOptions},
     io,
@@ -79,6 +83,24 @@ impl HardwareLock {
             thread::sleep(Duration::from_millis(100));
         }
     }
+}
+
+/// Aborts a hardware test if the fake solver used by
+/// `tests/platesolve_pipe_drain.rs` is left next to the running test binary
+/// (a stale fake would silently hijack real plate solving). That test removes
+/// the file on drop, but `panic = "abort"` skips destructors, so it can leak.
+pub fn assert_no_fake_starsolver() {
+    let path = std::env::current_exe()
+        .expect("current exe")
+        .parent()
+        .expect("exe parent dir")
+        .join("starsolver");
+    assert!(
+        !path.exists(),
+        "stale fake solver left by a crashed platesolve_pipe_drain run — \
+         delete {} before running plate-solving tests",
+        path.display()
+    );
 }
 
 /// Disconnects the engine from the hardware server when dropped.
