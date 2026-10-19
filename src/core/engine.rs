@@ -218,6 +218,8 @@ impl Engine {
         self.modes.read().unwrap()
     }
 
+    /// On error aborts the active mode and sends `Event::Error`.
+    /// Must not be called while holding engine locks (see `abort_active_mode`).
     fn process_error(
         self:    &Arc<Self>,
         result:  eyre::Result<()>,
@@ -431,15 +433,19 @@ impl Engine {
             Event::CameraCoolingOptionsChanged |
             Event::CameraFanOptionsChanged |
             Event::CameraHeaterOptionsChanged => {
-                let options = self.options.read().unwrap();
-                let Ok(camera) = self.hal.camera(&options.cam.device_id) else { return; };
+                // Snapshot in one guard: process_error() takes modes.write()
+                let (cam_id, cam_ctrl) = {
+                    let options = self.options.read().unwrap();
+                    (options.cam.device_id.clone(), options.cam.ctrl.clone())
+                };
+                let Ok(camera) = self.hal.camera(&cam_id) else { return; };
                 let res = match &event {
                     Event::CameraCoolingOptionsChanged =>
-                        control_camera_cooling(&camera, &options.cam.ctrl),
+                        control_camera_cooling(&camera, &cam_ctrl),
                     Event::CameraFanOptionsChanged =>
-                        control_camera_fan(&camera, &options.cam.ctrl),
+                        control_camera_fan(&camera, &cam_ctrl),
                     Event::CameraHeaterOptionsChanged =>
-                        control_camera_heater(&camera, &options.cam.ctrl),
+                        control_camera_heater(&camera, &cam_ctrl),
                     _ => unreachable!(),
                 };
                 self.process_error(res, "event_handler, camera control");
@@ -451,21 +457,28 @@ impl Engine {
     fn process_camera_changed(self: &Arc<Self>) {
         let Some(camera) = self.cur_devices.camera() else { return; };
 
-        let options = self.options.read().unwrap();
+        // Snapshot in one guard: process_error() takes modes.write()
+        let cam_ctrl = {
+            let options = self.options.read().unwrap();
+            options.cam.ctrl.clone()
+        };
 
-        let res = control_camera_cooling(&camera, &options.cam.ctrl);
+        let res = control_camera_cooling(&camera, &cam_ctrl);
         self.process_error(res, "control_camera_cooling");
 
-        let res = control_camera_fan(&camera, &options.cam.ctrl);
+        let res = control_camera_fan(&camera, &cam_ctrl);
         self.process_error(res, "control_camera_fan");
 
-        let res = control_camera_heater(&camera, &options.cam.ctrl);
+        let res = control_camera_heater(&camera, &cam_ctrl);
         self.process_error(res, "control_camera_heater");
     }
 
     fn init_focal_len_for_cameras(self: &Arc<Self>) {
-        let options = self.options.read().unwrap();
-        let res = set_focal_len_for_cameras(&self.hal, &options);
+        // Drop the guard before process_error(): it takes modes.write()
+        let res = {
+            let options = self.options.read().unwrap();
+            set_focal_len_for_cameras(&self.hal, &options)
+        };
         self.process_error(res, "set_focal_len_for_cameras");
     }
 
@@ -736,6 +749,8 @@ impl Engine {
         Ok(())
     }
 
+    /// Takes `modes.write()` unconditionally, so callers must not hold
+    /// engine locks (global lock order: modes -> options).
     pub fn abort_active_mode(&self) {
         let mut mode = self.modes.write().unwrap();
 
