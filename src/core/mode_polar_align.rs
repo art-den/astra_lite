@@ -482,9 +482,10 @@ impl PolarAlignMode {
 
         let coord = cvt.eq_to_sphere(&ps_result.crd_now);
 
-        // Correct atmospheric refraction
+        // Correct atmospheric refraction: plate solve gives the apparent
+        // position, convert it to the true one
         let mut horiz = HorizCoord::from_sphere_pt(&coord);
-        horiz.alt += calc_atmospheric_refraction(horiz.alt);
+        horiz.alt = correct_atmospheric_refraction(horiz.alt);
         let mut coord = horiz.to_sphere_pt();
 
         // Add simulated polar alignment error (debug only)

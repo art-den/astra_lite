@@ -407,11 +407,131 @@ pub fn j2000_time() -> NaiveDateTime {
     NaiveDate::from_ymd_opt(2000, 1, 1).unwrap().and_hms_opt(12, 0, 0).unwrap()
 }
 
-/// Calculation of atmospheric refraction depending on the angle to the horizon
-pub fn calc_atmospheric_refraction(alt: f64) -> f64 {
-    const MIN_ALT: f64 = 3.0; // in degrees
-    let c = 0.5 * PI - f64::max(alt, MIN_ALT * PI / 180.0);
-    const A: f64 = degree_to_radian(57.085 / (60.0 * 60.0));
-    const B: f64 = degree_to_radian(0.0666 / (60.0 * 60.0));
-    A * f64::tan(c) - B * f64::tan(c)
+/// Corrects the apparent (observed) altitude of a celestial body for
+/// atmospheric refraction and returns the true altitude (both in radians).
+/// Bennett (1982) formula with Meeus refinement, standard atmosphere
+/// (1010 hPa, 10 °C). Accurate to ~1" for altitudes above ~5 degrees.
+///
+/// See <https://en.wikipedia.org/wiki/Atmospheric_refraction> and
+/// Bennett (1982), J. Nav. 35(2) 255, <https://doi.org/10.1017/S0373463300022037>
+pub fn correct_atmospheric_refraction(apparent_alt: f64) -> f64 {
+    let h = radian_to_degree(apparent_alt);
+    // Formula is unreliable below this apparent altitude, no correction there
+    const MIN_ALT_DEG: f64 = -1.0;
+    if !h.is_finite() || h < MIN_ALT_DEG {
+        return apparent_alt;
+    }
+    // Clamp to the zenith (input above 90 deg is out of range)
+    let h = f64::min(h, 90.0);
+    // Refraction in arcminutes, h in degrees
+    let r0 = 1.0 / f64::tan(degree_to_radian(h + 7.31 / (h + 4.4)));
+    // Meeus refinement (argument in degrees), reduces max error to ~1"
+    let r = r0 - 0.06 * f64::sin(degree_to_radian(14.7 * r0 + 13.0));
+    let r = f64::max(r, 0.0);
+    // Refraction lifts objects, so the true altitude is lower
+    degree_to_radian(h - r / 60.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Reference refraction R (in arcminutes) for apparent altitudes,
+    // Bennett (1982), standard atmosphere (1010 hPa, 10 °C).
+    // Source: Bennett 1982 / Meeus "Astronomical Algorithms" ch. 15 tables.
+    const REF_TABLE: [(f64, f64); 10] = [
+        // (apparent alt, deg; R, arcmin)
+        (0.0, 34.48),
+        (0.5, 28.76),
+        (1.0, 24.33),
+        (2.0, 18.22),
+        (3.0, 14.35),
+        (5.0, 9.88),
+        (10.0, 5.39),
+        (20.0, 2.70),
+        (45.0, 1.00),
+        (60.0, 0.58),
+    ];
+
+    // Tolerance in arcmin: covers the difference between the plain Bennett
+    // table and our Meeus-refined variant (~0.06'), leaves headroom
+    const TOL_ARCMIN: f64 = 0.15;
+
+    #[test]
+    fn refraction_matches_bennett_table() {
+        for &(alt_deg, r_arcmin) in &REF_TABLE {
+            let apparent = degree_to_radian(alt_deg);
+            let true_alt = correct_atmospheric_refraction(apparent);
+            let got_arcmin = radian_to_degree(apparent - true_alt) * 60.0;
+            assert!(
+                f64::abs(got_arcmin - r_arcmin) < TOL_ARCMIN,
+                "alt={alt_deg} deg: expected R={r_arcmin}', got {got_arcmin}'",
+            );
+        }
+    }
+
+    #[test]
+    fn correction_always_lowers_altitude() {
+        // Up to 88 deg: near the zenith the correction shrinks below 0.01'
+        let mut alt = 0.0;
+        while alt <= 88.0 {
+            let apparent = degree_to_radian(alt);
+            let true_alt = correct_atmospheric_refraction(apparent);
+            assert!(
+                true_alt < apparent,
+                "alt={alt} deg: true altitude must be below apparent",
+            );
+            alt += 1.0;
+        }
+    }
+
+    #[test]
+    fn refraction_decreases_with_altitude() {
+        let r = |alt_deg: f64| {
+            let apparent = degree_to_radian(alt_deg);
+            radian_to_degree(apparent - correct_atmospheric_refraction(apparent))
+        };
+        let mut alt = 0.0;
+        while alt < 89.0 {
+            assert!(
+                r(alt) > r(alt + 1.0),
+                "refraction must decrease with altitude ({} deg)",
+                alt,
+            );
+            alt += 1.0;
+        }
+    }
+
+    #[test]
+    fn zenith_and_edge_cases() {
+        // At the zenith refraction is ~0 (within 0.1")
+        let zenith = correct_atmospheric_refraction(degree_to_radian(90.0));
+        assert!(f64::abs(zenith - degree_to_radian(90.0)) < degree_to_radian(0.1 / 3600.0));
+
+        // Below -1 deg the formula is unreliable: no correction
+        let below = degree_to_radian(-5.0);
+        assert_eq!(correct_atmospheric_refraction(below), below);
+
+        // Above 90 deg is clamped to the zenith
+        let over = correct_atmospheric_refraction(degree_to_radian(95.0));
+        assert!(f64::abs(over - degree_to_radian(90.0)) < degree_to_radian(0.1 / 3600.0));
+
+        // NaN passes through unchanged
+        assert!(correct_atmospheric_refraction(f64::NAN).is_nan());
+    }
+
+    /// Prints the apparent -> true altitude shift table (run with --nocapture)
+    #[test]
+    fn print_refraction_table() {
+        println!("apparent alt          R          true alt");
+        for alt in [0.0, 1.0, 3.0, 5.0, 10.0, 20.0, 30.0, 45.0, 60.0, 75.0, 90.0] {
+            let apparent = degree_to_radian(alt);
+            let true_alt = correct_atmospheric_refraction(apparent);
+            let r_arcmin = radian_to_degree(apparent - true_alt) * 60.0;
+            println!(
+                "{alt:>8.1} deg    {r_arcmin:>7.2}'    {:.4} deg",
+                radian_to_degree(true_alt),
+            );
+        }
+    }
 }
