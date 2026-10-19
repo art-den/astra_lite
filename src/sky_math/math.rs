@@ -407,45 +407,11 @@ pub fn j2000_time() -> NaiveDateTime {
     NaiveDate::from_ymd_opt(2000, 1, 1).unwrap().and_hms_opt(12, 0, 0).unwrap()
 }
 
-pub fn coordinate_descent(
-    mut point:  Vec<f64>,
-    step_value: f64,
-    max_iter:   usize,
-    f:          impl Fn(&[f64]) -> f64,
-) -> Vec<f64> {
-    let n = point.len();
-    let mut prev_value = f(&point);
-
-    let mut point_plus = Vec::new();
-    point_plus.resize(n, 0.0);
-    let mut point_minus = Vec::new();
-    point_minus.resize(n, 0.0);
-
-    for _iters in 0..max_iter {
-        let mut new_value = prev_value;
-        for i in 0..n {
-            point_plus.copy_from_slice(&point);
-            point_plus[i] += step_value;
-            let value_plus = f(&point_plus);
-
-            point_minus.copy_from_slice(&point);
-            point_minus[i] -= step_value;
-            let value_minus = f(&point_minus);
-
-            if value_plus < new_value {
-                point[i] += step_value;
-                new_value = value_plus;
-            } else if value_minus < new_value {
-                point[i] -= step_value;
-                new_value = value_minus;
-            }
-        }
-
-        if new_value >= prev_value {
-            break;
-        }
-        prev_value = new_value;
-    }
-
-    point
+/// Calculation of atmospheric refraction depending on the angle to the horizon
+pub fn calc_atmospheric_refraction(alt: f64) -> f64 {
+    const MIN_ALT: f64 = 3.0; // in degrees
+    let c = 0.5 * PI - f64::max(alt, MIN_ALT * PI / 180.0);
+    const A: f64 = degree_to_radian(57.085 / (60.0 * 60.0));
+    const B: f64 = degree_to_radian(0.0666 / (60.0 * 60.0));
+    A * f64::tan(c) - B * f64::tan(c)
 }

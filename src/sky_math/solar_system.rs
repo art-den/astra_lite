@@ -211,12 +211,3 @@ pub fn pn_matrix(t0: f64, t: f64) -> Matrix33 {
     nut_equ(t, &mut m.a13, &mut m.a23, &mut m.a33); // to true equinox T
     m
 }
-
-/// Calculation of atmospheric refraction depending on the angle to the horizon
-pub fn calc_atmospheric_refraction(alt: f64) -> f64 {
-    const MIN_ALT: f64 = 3.0; // in degrees
-    let c = 0.5 * PI - f64::max(alt, MIN_ALT * PI / 180.0);
-    const A: f64 = degree_to_radian(57.085 / (60.0 * 60.0));
-    const B: f64 = degree_to_radian(0.0666 / (60.0 * 60.0));
-    A * f64::tan(c) - B * f64::tan(c)
-}

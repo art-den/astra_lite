@@ -657,3 +657,46 @@ mod tests {
         assert!(!point_in_polygon(&triangle, [-1.0, 1.0]));
     }
 }
+
+pub fn coordinate_descent(
+    mut point:  Vec<f64>,
+    step_value: f64,
+    max_iter:   usize,
+    f:          impl Fn(&[f64]) -> f64,
+) -> Vec<f64> {
+    let n = point.len();
+    let mut prev_value = f(&point);
+
+    let mut point_plus = Vec::new();
+    point_plus.resize(n, 0.0);
+    let mut point_minus = Vec::new();
+    point_minus.resize(n, 0.0);
+
+    for _iters in 0..max_iter {
+        let mut new_value = prev_value;
+        for i in 0..n {
+            point_plus.copy_from_slice(&point);
+            point_plus[i] += step_value;
+            let value_plus = f(&point_plus);
+
+            point_minus.copy_from_slice(&point);
+            point_minus[i] -= step_value;
+            let value_minus = f(&point_minus);
+
+            if value_plus < new_value {
+                point[i] += step_value;
+                new_value = value_plus;
+            } else if value_minus < new_value {
+                point[i] -= step_value;
+                new_value = value_minus;
+            }
+        }
+
+        if new_value >= prev_value {
+            break;
+        }
+        prev_value = new_value;
+    }
+
+    point
+}
