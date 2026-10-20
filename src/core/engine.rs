@@ -345,6 +345,17 @@ impl Engine {
         FileNameUtils::setpoint_for_naming(supported, ctrl)
     }
 
+    /// Gain/offset capabilities for master file naming (unsupported parts are
+    /// omitted from the name), taken from the camera itself
+    fn calibr_gain_offset_supported(&self, camera_id: &str) -> (bool, bool) {
+        self.hal.camera(camera_id)
+            .map(|cam| (
+                cam.is_gain_supported().unwrap_or(false),
+                cam.is_offset_supported().unwrap_or(false),
+            ))
+            .unwrap_or((false, false))
+    }
+
     fn process_camera_shot_result(
         self:        &Arc<Self>,
         camera_id:   &str,
@@ -370,13 +381,17 @@ impl Engine {
             let options = self.options.read().unwrap();
 
             let ccd_temp = self.calibr_ccd_temp(camera_id, &options.cam.ctrl);
+            let (gain_supported, offset_supported) =
+                self.calibr_gain_offset_supported(camera_id);
 
             let calibr_params = Some(CalibrParams {
                 extract_dark:   options.calibr.dark_frame_en,
                 dark_lib_path:  options.calibr.dark_library_path.clone(),
                 flat_fname:     None,
                 sar_hot_pixels: options.calibr.hot_pixels,
-                ccd_temp
+                ccd_temp,
+                gain_supported,
+                offset_supported,
             });
 
             let new_stop_flag = Arc::new(AtomicBool::new(false));
@@ -641,14 +656,18 @@ impl Engine {
         let new_stop_flag = Arc::new(AtomicBool::new(false));
         *self.img_proc_stop_flag.lock().unwrap() = Arc::clone(&new_stop_flag);
         let options = self.options.read().unwrap();
+        let (gain_supported, offset_supported) =
+            self.calibr_gain_offset_supported(&options.cam.device_id);
         let calibr_params = Some(CalibrParams {
             extract_dark:  options.calibr.dark_frame_en,
             dark_lib_path: options.calibr.dark_library_path.clone(),
             flat_fname:     None,
             sar_hot_pixels: options.calibr.hot_pixels,
-            // The temperature gate uses the currently configured camera,
+            // The gates use the currently configured camera,
             // while the folder key comes from the file's INSTRUME header
             ccd_temp:       self.calibr_ccd_temp(&options.cam.device_id, &options.cam.ctrl),
+            gain_supported,
+            offset_supported,
         });
         let command = ProcessImageParams {
             mode_kind:       ModeKind::OpeningImgFile,

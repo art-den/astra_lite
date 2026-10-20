@@ -369,10 +369,18 @@ impl FrameProcessing {
                 // Applying calibration data
                 if is_light_frame
                 || frame_type == FrameType::Flats {
+                    // Master names for live frames come from the current global
+                    // capture options; frames opened from file keep FITS header values
+                    let capture_options = if command.mode_kind == ModeKind::OpeningImgFile {
+                        None
+                    } else {
+                        Some(&command.frame_options)
+                    };
                     let mut calibr = command.calibr_data.lock().unwrap();
                     calibr.apply_calibr_data_and_remove_hot_pixels(
                         &command.calibr_params,
                         &mut raw_image,
+                        capture_options,
                     )?;
                     info = raw_image.info().clone()
                 }

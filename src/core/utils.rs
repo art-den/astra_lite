@@ -9,8 +9,10 @@ use crate::{
 pub enum FileNameArg<'a> {
     Options(&'a CamOptions),
     RawInfo {
-        info:     &'a RawImageInfo,
-        ccd_temp: Option<f64>,
+        info:             &'a RawImageInfo,
+        ccd_temp:         Option<f64>,
+        gain_supported:   bool,
+        offset_supported: bool,
     },
 }
 
@@ -38,6 +40,9 @@ pub struct FileNameUtils {
     sensor_width: usize,
     sensor_height: usize,
     cooler_supported: bool,
+    // Unsupported settings are omitted from master file names
+    gain_supported: bool,
+    offset_supported: bool,
 }
 
 impl FileNameUtils {
@@ -46,6 +51,8 @@ impl FileNameUtils {
 
         let (sensor_width, sensor_height) = camera.ccd_size().unwrap_or((0, 0));
         self.cooler_supported = camera.is_cooler_supported().unwrap_or(false);
+        self.gain_supported = camera.is_gain_supported().unwrap_or(false);
+        self.offset_supported = camera.is_offset_supported().unwrap_or(false);
 
         self.sensor_width = sensor_width;
         self.sensor_height = sensor_height;
@@ -117,21 +124,21 @@ impl FileNameUtils {
                     date,
                     master_frame_type,
                     opts.frame.exposure(),
-                    opts.frame.gain as i32,
-                    opts.frame.offset,
+                    self.gain_supported.then_some(opts.frame.gain as i32),
+                    self.offset_supported.then_some(opts.frame.offset),
                     img_width,
                     img_height,
                     opts.frame.binning.get_ratio() as i32,
                     temperature
                 )
             }
-            FileNameArg::RawInfo{info, ccd_temp} => {
+            FileNameArg::RawInfo{info, ccd_temp, gain_supported, offset_supported} => {
                 Self::master_file_name_impl(
                     info.time,
                     master_frame_type,
                     info.exposure,
-                    info.gain,
-                    info.offset,
+                    gain_supported.then_some(info.gain),
+                    offset_supported.then_some(info.offset),
                     info.width,
                     info.height,
                     info.bin as i32,
@@ -238,28 +245,24 @@ impl FileNameUtils {
         date:        Option<DateTime<Utc>>,
         frame_type:  FrameType,
         exposure:    f64,
-        gain:        i32,
-        offset:      i32,
+        gain:        Option<i32>,   // None = gain unsupported: omit from the name
+        offset:      Option<i32>,   // None = offset unsupported: omit from the name
         img_width:   usize,
         img_height:  usize,
         bin:         i32,
         temperature: Option<f64>,
     ) -> String {
-        let mut result = match frame_type {
-            FrameType::Biases =>
-                format!(
-                    "{}_g{}_offs{}_{}x{}",
-                    Self::type_part_of_file_name(frame_type),
-                    gain, offset, img_width, img_height,
-                ),
-            _ =>
-                format!(
-                    "{}_{}_g{}_offs{}_{}x{}",
-                    Self::type_part_of_file_name(frame_type),
-                    Self::exp_to_str(exposure),
-                    gain, offset, img_width, img_height,
-                ),
-        };
+        let mut result = Self::type_part_of_file_name(frame_type).to_string();
+        if frame_type != FrameType::Biases {
+            result += &format!("_{}", Self::exp_to_str(exposure));
+        }
+        if let Some(gain) = gain {
+            result += &format!("_g{}", gain);
+        }
+        if let Some(offset) = offset {
+            result += &format!("_offs{}", offset);
+        }
+        result += &format!("_{}x{}", img_width, img_height);
 
         if bin != 1 {
             result += "_";
@@ -405,6 +408,8 @@ mod tests {
             sensor_width: 1000,
             sensor_height: 800,
             cooler_supported: true,
+            gain_supported: true,
+            offset_supported: true,
         }
     }
 
@@ -463,6 +468,39 @@ mod tests {
     }
 
     #[test]
+    fn test_master_file_name_unsupported_parts_omitted() {
+        let mut utils = fn_utils();
+        let mut opts = dark_opts();
+        opts.ctrl.enable_cooler = false;
+
+        // Gain unsupported: no `_g...` segment
+        utils.gain_supported = false;
+        let name = utils.master_only_file_name(
+            None,
+            &FileNameArg::Options(&opts),
+            FrameType::Darks
+        );
+        assert_eq!(name, "dark_30s_offs10_500x400_bin2x2.fit");
+
+        // Both unsupported:
+        // unsupported settings cannot split creation and lookup anymore
+        utils.offset_supported = false;
+        let name = utils.master_only_file_name(
+            None,
+            &FileNameArg::Options(&opts),
+            FrameType::Darks
+        );
+        assert_eq!(name, "dark_30s_500x400_bin2x2.fit");
+
+        let name = utils.master_only_file_name(
+            None,
+            &FileNameArg::Options(&opts),
+            FrameType::Biases
+        );
+        assert_eq!(name, "bias_500x400_bin2x2.fit");
+    }
+
+    #[test]
     fn test_master_file_name_exposure_formats() {
         let utils = fn_utils();
         let mut opts = dark_opts();
@@ -488,6 +526,9 @@ mod tests {
         set_temp:       Option<f64>,
         // temperature reported by the camera into FITS header
         measured_temp:  Option<f64>,
+        // camera capabilities passed to both naming sides
+        gain_sup:       bool,
+        offset_sup:     bool,
     ) {
         let opts_path = utils.master_file_name(
             &FileNameArg::Options(opts),
@@ -510,7 +551,12 @@ mod tests {
             ..Default::default()
         };
         let raw_path = utils.master_file_name(
-            &FileNameArg::RawInfo{ info: &info, ccd_temp: set_temp },
+            &FileNameArg::RawInfo{
+                info: &info,
+                ccd_temp: set_temp,
+                gain_supported: gain_sup,
+                offset_supported: offset_sup,
+            },
             Path::new("/lib"),
             FrameType::Darks
         );
@@ -527,17 +573,24 @@ mod tests {
 
         // Cooled camera: the suffix is the setpoint, not the measured value
         // (-9.4 C would format as `+/-9C` and break the match if it leaked in)
-        check_master_paths_match(&utils, &opts, Some(-10.0), Some(-9.4));
+        check_master_paths_match(&utils, &opts, Some(-10.0), Some(-9.4), true, true);
 
         // Cooler disabled: no suffix even though the camera reports temperature
         opts.ctrl.enable_cooler = false;
-        check_master_paths_match(&utils, &opts, None, Some(-9.4));
+        check_master_paths_match(&utils, &opts, None, Some(-9.4), true, true);
 
         // Camera without cooler capability but enable_cooler option left on:
         // no suffix (the engine gates the lookup by capability too)
         opts.ctrl.enable_cooler = true;
         utils.cooler_supported = false;
-        check_master_paths_match(&utils, &opts, None, Some(-9.4));
+        check_master_paths_match(&utils, &opts, None, Some(-9.4), true, true);
+
+        // Gain/offset unsupported (like the ASCOM Simulator): the segments are
+        // omitted on both sides even though the option values are non-zero
+        utils.cooler_supported = true;
+        utils.gain_supported = false;
+        utils.offset_supported = false;
+        check_master_paths_match(&utils, &opts, Some(-10.0), Some(-9.4), false, false);
     }
 
     #[test]
@@ -597,8 +650,14 @@ mod tests {
             camera: "Bad:Name/x".to_string(),
             ..Default::default()
         };
+        let raw_info_arg = || FileNameArg::RawInfo{
+            info: &info,
+            ccd_temp: None,
+            gain_supported: true,
+            offset_supported: true,
+        };
         let fname = utils.defect_pixels_file_name(
-            &FileNameArg::RawInfo{ info: &info, ccd_temp: None },
+            &raw_info_arg(),
             Path::new("/lib")
         );
         assert_eq!(
@@ -608,7 +667,7 @@ mod tests {
 
         // master_file_name must sanitize `info.camera` the same way
         let master = utils.master_file_name(
-            &FileNameArg::RawInfo{ info: &info, ccd_temp: None },
+            &raw_info_arg(),
             Path::new("/lib"),
             FrameType::Darks
         );
