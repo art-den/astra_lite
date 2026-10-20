@@ -410,6 +410,9 @@ pub trait Camera : Device {
 
     // Exposure
     fn exposure_range(&self) -> eyre::Result<RangeInclusive<f64>>;
+    /// Starts an exposure. ASCOM/Alpaca impls must send `HalEvent::CameraBeforeShot`
+    /// synchronously before touching the driver and before taking any lock:
+    /// event handlers may re-enter the device
     fn start_exposure(&self, duration: f64) -> eyre::Result<()>;
     fn abort_exposure(&self) -> eyre::Result<()>;
     fn remaining_time(&self) -> Option<f64>;
@@ -470,6 +473,26 @@ pub trait Camera : Device {
 
     // Telescope
     fn set_telescope_focal_len(&self, focal_len: f64) -> eyre::Result<()>;
+
+    /// Mount pointing at exposure start: RA and Dec **in degrees**
+    /// (`Telescope::eq_coord()` returns RA in hours - convert before calling).
+    /// HALs which build FITS headers themselves use it for the RA/DEC keywords.
+    fn set_shot_eq_coord(&self, _ra: f64, _dec: f64) {}
+}
+
+/// Set Engine-sampled shot metadata in a fresh `RawImageInfo`
+/// (shared by the ASCOM Classic and Alpaca backends)
+pub(crate) fn apply_shot_metadata(
+    info:      &mut crate::image::raw::RawImageInfo,
+    time:      Option<chrono::DateTime<chrono::Utc>>,
+    eq_ra:     Option<f64>,
+    eq_dec:    Option<f64>,
+    focal_len: Option<f64>,
+) {
+    info.time      = time;
+    info.ra        = eq_ra;
+    info.dec       = eq_dec;
+    info.focal_len = focal_len;
 }
 
 /// Converts an unbinned-pixel rect to binned pixels, clamped to the binned sensor.

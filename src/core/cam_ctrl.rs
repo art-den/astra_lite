@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{core::engine::EngineModes, hal::{Camera, CcdPurpose, Hal}, options::{CamCtrlOptions, FrameOptions, Options}, utils::log_utils::log_if_error};
+use crate::{core::engine::EngineModes, hal::{Camera, CameraInfo, CcdPurpose, Hal}, options::{CamCtrlOptions, FrameOptions, Options}, utils::log_utils::log_if_error};
 
 pub fn take_shot(
     camera:    &Arc<dyn Camera + Send + Sync>,
@@ -147,23 +147,60 @@ pub fn restart_camera_exposure(
 pub fn set_focal_len_for_cameras(hal: &Hal, options: &Options) -> eyre::Result<()> {
     let cameras = hal.cameras()?;
     for cam_info in cameras {
-        if cam_info.ccd == CcdPurpose::Unknown {
+        let Some(focal_len) = focal_len_for_cam(&cam_info, options) else {
             continue;
-        }
+        };
 
         let camera_res = hal.camera(&cam_info.id);
         log_if_error(&camera_res, "Get camera from HAL");
         let Ok(camera) = camera_res else { continue; };
 
-        let focal_len = match cam_info.ccd {
-            CcdPurpose::MainTelescopeCcd => options.telescope.real_focal_length(),
-            CcdPurpose::GuiderCcd => options.guiding.foc_len,
-            _ => continue,
-        };
-
-        // many camera drivers don't expose SCOPE_INFO so errors are just logged here
+        // INDI drivers may not expose SCOPE_INFO, so errors are just logged here
         let focal_len_res = camera.set_telescope_focal_len(focal_len);
         log_if_error(&focal_len_res, "Set telescope focal length for camera");
     }
     Ok(())
+}
+
+/// Focal length (mm) to push to this camera; `None` means skip the camera.
+/// The camera-to-telescope mapping source of truth is `CameraInfo::ccd`
+pub fn focal_len_for_cam(cam_info: &CameraInfo, options: &Options) -> Option<f64> {
+    match cam_info.ccd {
+        // Camera on the main telescope (the secondary telescope camera shares it,
+        // same as `PlatesolveMode::calc_focal_len()` treats it)
+        CcdPurpose::MainTelescopeCcd |
+        CcdPurpose::SecondaryTelescopeCcd => Some(options.telescope.real_focal_length()),
+        // Camera on the guide telescope
+        CcdPurpose::GuiderCcd => Some(options.guiding.foc_len),
+        // `Unknown` (all ASCOM/Alpaca cameras, extra INDI devices): treat the active one as main
+        CcdPurpose::Unknown if cam_info.id == options.cam.device_id =>
+            Some(options.telescope.real_focal_length()),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cam(ccd: CcdPurpose, id: &str) -> CameraInfo {
+        CameraInfo { id: id.to_string(), name: String::new(), ccd }
+    }
+
+    #[test]
+    fn focal_len_for_cam_selection() {
+        let mut options = Options::default();
+        options.telescope.focal_len = 600.0;
+        options.telescope.barlow = 2.0;
+        options.guiding.foc_len = 200.0;
+        options.cam.device_id = "cam_main".to_string();
+
+        assert_eq!(focal_len_for_cam(&cam(CcdPurpose::MainTelescopeCcd, "x"), &options), Some(1200.0));
+        assert_eq!(focal_len_for_cam(&cam(CcdPurpose::GuiderCcd, "x"), &options), Some(200.0));
+        // Unknown purpose (ASCOM/Alpaca): the active camera is treated as the main one
+        assert_eq!(focal_len_for_cam(&cam(CcdPurpose::Unknown, "cam_main"), &options), Some(1200.0));
+        assert_eq!(focal_len_for_cam(&cam(CcdPurpose::Unknown, "other"), &options), None);
+        // Secondary telescope camera is on the main telescope too
+        assert_eq!(focal_len_for_cam(&cam(CcdPurpose::SecondaryTelescopeCcd, "x"), &options), Some(1200.0));
+    }
 }

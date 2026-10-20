@@ -120,6 +120,10 @@ pub struct RawImageInfo {
     pub ra:             Option<f64>, // deg
 }
 
+/// FITS `DATE-OBS` format: UTC, milliseconds, no 'Z' suffix.
+/// Shared by the writer (`save_to_fits_header`) and the parser (`new_from_fits_header`)
+pub const DATE_OBS_FMT: &str = "%Y-%m-%dT%H:%M:%S%.3f";
+
 impl RawImageInfo {
     pub fn new_from_fits_header(image_hdu: &Header) -> Self {
         let bitdepth     = image_hdu.get_i64("BITDEPTH").unwrap_or(image_hdu.bitpix() as i64) as i32;
@@ -154,7 +158,7 @@ impl RawImageInfo {
         );
 
         let time =
-            NaiveDateTime::parse_from_str(time_str, "%Y-%m-%dT%H:%M:%S%.3f")
+            NaiveDateTime::parse_from_str(time_str, DATE_OBS_FMT)
                 .map(|dt| Utc.from_utc_datetime(&dt))
                 .ok();
 
@@ -196,6 +200,25 @@ impl RawImageInfo {
         }
         if let Some(ccd_temp) = self.ccd_temp {
             hdu.set_f64("CCD-TEMP", ccd_temp);
+        }
+        if let Some(time) = self.time {
+            hdu.set_str("DATE-OBS", &time.format(DATE_OBS_FMT).to_string());
+        }
+        if let Some(focal_len) = self.focal_len {
+            hdu.set_f64("FOCALLEN", focal_len);
+        }
+        if let Some(pixel_size_x) = self.pixel_size_x {
+            // um per the `RawImageInfo` field convention, not the FITS-standard mm
+            hdu.set_f64("PIXSIZE1", pixel_size_x);
+        }
+        if let Some(pixel_size_y) = self.pixel_size_y {
+            hdu.set_f64("PIXSIZE2", pixel_size_y);
+        }
+        if let Some(ra) = self.ra {
+            hdu.set_f64("RA", ra);
+        }
+        if let Some(dec) = self.dec {
+            hdu.set_f64("DEC", dec);
         }
     }
 
@@ -1080,5 +1103,74 @@ impl Iterator for RawRectIterator<'_> {
                 self.next()
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod fits_header_tests {
+    use super::*;
+
+    #[test]
+    fn raw_image_info_header_roundtrip() {
+        let naive = NaiveDateTime::parse_from_str(
+            "2026-10-20T12:34:56.789", DATE_OBS_FMT
+        ).unwrap();
+        let info = RawImageInfo {
+            time:         Some(Utc.from_utc_datetime(&naive)),
+            width:        4,
+            height:       3,
+            gain:         100,
+            offset:       5,
+            max_value:    65535,
+            cfa:          CfaType::RGGB,
+            bin:          2,
+            frame_type:   FrameType::Lights,
+            exposure:     30.5,
+            camera:       "TestCam".to_string(),
+            ccd_temp:     Some(-10.5),
+            focal_len:    Some(600.0),
+            pixel_size_x: Some(3.75),
+            pixel_size_y: Some(3.75),
+            dec:          Some(45.25),
+            ra:           Some(122.5),
+            ..Default::default()
+        };
+
+        let mut hdu = Header::new_2d(info.width, info.height);
+        info.save_to_fits_header(&mut hdu);
+        let back = RawImageInfo::new_from_fits_header(&hdu);
+
+        assert_eq!(back.time, info.time);
+        assert_eq!(back.width, 4);
+        assert_eq!(back.height, 3);
+        assert_eq!(back.gain, 100);
+        assert_eq!(back.offset, 5);
+        assert_eq!(back.exposure, 30.5);
+        assert_eq!(back.bin, 2);
+        assert_eq!(back.ccd_temp, Some(-10.5));
+        assert_eq!(back.focal_len, Some(600.0));
+        assert_eq!(back.pixel_size_x, Some(3.75));
+        assert_eq!(back.pixel_size_y, Some(3.75));
+        assert_eq!(back.ra, Some(122.5));
+        assert_eq!(back.dec, Some(45.25));
+        assert_eq!(back.cfa, CfaType::RGGB);
+    }
+
+    #[test]
+    fn header_omits_absent_metadata() {
+        let info = RawImageInfo {
+            width:     2,
+            height:    2,
+            max_value: 255, // bitpix 8, no BZERO
+            ..Default::default()
+        };
+        let mut hdu = Header::new_2d(info.width, info.height);
+        info.save_to_fits_header(&mut hdu);
+
+        assert!(hdu.get_str("DATE-OBS").is_none());
+        assert!(hdu.get_f64("FOCALLEN").is_none());
+        assert!(hdu.get_f64("PIXSIZE1").is_none());
+        assert!(hdu.get_f64("RA").is_none());
+        assert!(hdu.get_f64("DEC").is_none());
     }
 }

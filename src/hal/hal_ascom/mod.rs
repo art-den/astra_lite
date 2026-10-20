@@ -40,6 +40,7 @@ use ascom::image::Image as AcImage;
 use ascom::telescope::Telescope as AcTelescope;
 use ascom::telescope::TelescopeAxis as AcTelescopeAxis;
 use bitflags::bitflags;
+use chrono::{DateTime, Utc};
 
 use crate::hal::events::HalEventHandlers;
 use crate::hal::events::HalEvent;
@@ -728,6 +729,8 @@ struct CameraStatic {
 struct ExposureData {
     duration:   f64,
     start_time: std::time::Instant,
+    // Wall-clock exposure start, for the FITS DATE-OBS keyword
+    wall_start:     DateTime<Utc>,
     // `CameraBeginDownloadData` was already sent for this exposure
     download_begun: bool,
     // Bounded retries for transient `ImageReady` poll errors
@@ -740,6 +743,11 @@ struct CameraDynData {
     prev_cool_pwr:    Option<f64>,
     frame_type:       Option<FrameType>,
     exposure:         f64,
+    // Mount pointing pushed for the current exposure, degrees
+    eq_ra:      Option<f64>,
+    eq_dec:     Option<f64>,
+    // Cached by `set_telescope_focal_len()`: ASCOM `ICamera` has no SCOPE_INFO
+    focal_len:  Option<f64>,
 }
 
 pub struct AscomCamera {
@@ -1075,23 +1083,24 @@ impl AscomCamera {
     }
 
     fn get_image_and_send_event(&self, st: &CameraStatic) -> eyre::Result<()> {
-        let (frame_type, exposure) = {
+        let (frame_type, exposure, eq_ra, eq_dec, focal_len) = {
             let data = self.dyn_data.lock().unwrap();
-            (data.frame_type, data.exposure)
+            (data.frame_type, data.exposure, data.eq_ra, data.eq_dec, data.focal_len)
         };
 
         // Send Begin exactly once per exposure, right before the read:
         // the `InvalidOperation` retry below re-enters this function on
         // the next tick and must not re-send it
-        let first_read_attempt = {
+        let (first_read_attempt, wall_start) = {
             let mut exp_data = self.exp_data.lock().unwrap();
-            match exp_data.as_mut() {
+            let first = match exp_data.as_mut() {
                 Some(exp) if !exp.download_begun => {
                     exp.download_begun = true;
                     true
                 }
                 _ => false,
-            }
+            };
+            (first, exp_data.as_ref().map(|e| e.wall_start))
         };
         if first_read_attempt {
             self.ctx.event_handlers.send(HalEvent::CameraBeginDownloadData(
@@ -1121,7 +1130,7 @@ impl AscomCamera {
         let start_x = i32::max(st.device.start_x().unwrap_or(0), 0) as usize;
         let start_y = i32::max(st.device.start_y().unwrap_or(0), 0) as usize;
 
-        let info = RawImageInfo {
+        let mut info = RawImageInfo {
             width:      image.width,
             height:     image.height,
             max_value:  st.max_value,
@@ -1132,8 +1141,11 @@ impl AscomCamera {
             bin:        st.device.bin_x().unwrap_or(1).clamp(1, u8::MAX as i32) as u8,
             ccd_temp:   st.device.ccd_temperature().ok(),
             exposure,
+            pixel_size_x:   Some(st.pixel_size_x),
+            pixel_size_y:   Some(st.pixel_size_y),
             ..Default::default()
         };
+        apply_shot_metadata(&mut info, wall_start, eq_ra, eq_dec, focal_len);
 
         let shot = AscomCameraShot::new(
             image,
@@ -1249,6 +1261,16 @@ impl Camera for AscomCamera {
     }
 
     fn start_exposure(&self, duration: f64) -> eyre::Result<()> {
+        // Drop the stale pointing before `CameraBeforeShot`
+        // (send before any lock: handlers may re-enter, see the `start_exposure()` trait doc)
+        {
+            let mut data = self.dyn_data.lock().unwrap();
+            data.eq_ra = None;
+            data.eq_dec = None;
+            data.focal_len = None;
+        }
+        self.ctx.event_handlers.send(HalEvent::CameraBeforeShot(Arc::clone(&self.device_id)));
+
         let st = self.active_data()?;
         let light = self.dyn_data.lock().unwrap().frame_type
             .unwrap_or(FrameType::Lights) == FrameType::Lights;
@@ -1256,6 +1278,7 @@ impl Camera for AscomCamera {
         *self.exp_data.lock().unwrap() = Some(ExposureData {
             duration,
             start_time:     std::time::Instant::now(),
+            wall_start:     Utc::now(),
             download_begun: false,
             poll:           PollBudget::default(),
         });
@@ -1471,8 +1494,16 @@ impl Camera for AscomCamera {
 
     // Telescope
 
-    fn set_telescope_focal_len(&self, _focal_len: f64) -> eyre::Result<()> {
+    fn set_telescope_focal_len(&self, focal_len: f64) -> eyre::Result<()> {
+        // ASCOM `ICamera` has no SCOPE_INFO: cache the value for the FITS FOCALLEN keyword
+        self.dyn_data.lock().unwrap().focal_len = Some(focal_len);
         Ok(())
+    }
+
+    fn set_shot_eq_coord(&self, ra: f64, dec: f64) {
+        let mut data = self.dyn_data.lock().unwrap();
+        data.eq_ra = Some(ra);
+        data.eq_dec = Some(dec);
     }
 }
 

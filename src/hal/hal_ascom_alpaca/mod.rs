@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use ascom_alpaca as aa;
 use bitflags::bitflags;
+use chrono::{DateTime, Utc};
 use itertools::izip;
 
 use crate::hal::*;
@@ -476,6 +477,8 @@ bitflags! {
 struct ExposureData {
     duration:   f64,
     start_time: std::time::Instant,
+    // Wall-clock exposure start, for the FITS DATE-OBS keyword
+    wall_start:     DateTime<Utc>,
     // `CameraBeginDownloadData` was already sent for this exposure
     download_begun: bool,
     // Bounded retries for transient `ImageReady` poll errors
@@ -488,6 +491,11 @@ struct CameraDynData {
     prev_cool_pwr:    Option<f64>,
     frame_type:       Option<FrameType>,
     exposure:         f64,
+    // Mount pointing pushed for the current exposure, degrees
+    eq_ra:      Option<f64>,
+    eq_dec:     Option<f64>,
+    // Cached by `set_telescope_focal_len()`: Alpaca camera has no SCOPE_INFO
+    focal_len:  Option<f64>,
 }
 
 struct AscomAlpacaCamera {
@@ -739,19 +747,21 @@ impl AscomAlpacaCamera {
         let data = self.dyn_data.lock().unwrap();
         let frame_type = data.frame_type;
         let exposure = data.exposure;
+        let (eq_ra, eq_dec, focal_len) = (data.eq_ra, data.eq_dec, data.focal_len);
         drop(data);
 
         // Send Begin exactly once per exposure, right before the actual
         // image read (inside `AscomAlpacaCameraShot::new`)
-        let first_read_attempt = {
+        let (first_read_attempt, wall_start) = {
             let mut exp_data = self.exp_data.lock().unwrap();
-            match exp_data.as_mut() {
+            let first = match exp_data.as_mut() {
                 Some(exp) if !exp.download_begun => {
                     exp.download_begun = true;
                     true
                 }
                 _ => false,
-            }
+            };
+            (first, exp_data.as_ref().map(|e| e.wall_start))
         };
         if first_read_attempt {
             self.event_handlers.send(HalEvent::CameraBeginDownloadData(
@@ -771,9 +781,17 @@ impl AscomAlpacaCamera {
 
         *self.exp_data.lock().unwrap() = None;
 
+        let mut camera_shot = camera_shot?;
+        camera_shot.raw_image_info.pixel_size_x = Some(self.pixel_size_x);
+        camera_shot.raw_image_info.pixel_size_y = Some(self.pixel_size_y);
+        apply_shot_metadata(
+            &mut camera_shot.raw_image_info,
+            wall_start, eq_ra, eq_dec, focal_len,
+        );
+
         self.event_handlers.send(HalEvent::CameraShotResult{
             device_id: Arc::clone(&self.device_id),
-            shot:      Arc::new(camera_shot?),
+            shot:      Arc::new(camera_shot),
         });
 
         Ok(())
@@ -819,9 +837,20 @@ impl Camera for AscomAlpacaCamera {
     }
 
     fn start_exposure(&self, duration: f64) -> eyre::Result<()> {
+        // Drop the stale pointing before `CameraBeforeShot`
+        // (send before any lock: handlers may re-enter, see the `start_exposure()` trait doc)
+        {
+            let mut data = self.dyn_data.lock().unwrap();
+            data.eq_ra = None;
+            data.eq_dec = None;
+            data.focal_len = None;
+        }
+        self.event_handlers.send(HalEvent::CameraBeforeShot(Arc::clone(&self.device_id)));
+
         *self.exp_data.lock().unwrap() = Some(ExposureData{
             duration,
             start_time:     std::time::Instant::now(),
+            wall_start:     Utc::now(),
             download_begun: false,
             poll:           PollBudget::default(),
         });
@@ -1048,9 +1077,16 @@ impl Camera for AscomAlpacaCamera {
 
     // Telescope
 
-    fn set_telescope_focal_len(&self, _focal_len: f64) -> eyre::Result<()> {
-        // do nothing
+    fn set_telescope_focal_len(&self, focal_len: f64) -> eyre::Result<()> {
+        // Alpaca camera API has no SCOPE_INFO: cache the value for the FITS FOCALLEN keyword
+        self.dyn_data.lock().unwrap().focal_len = Some(focal_len);
         Ok(())
+    }
+
+    fn set_shot_eq_coord(&self, ra: f64, dec: f64) {
+        let mut data = self.dyn_data.lock().unwrap();
+        data.eq_ra = Some(ra);
+        data.eq_dec = Some(dec);
     }
 }
 

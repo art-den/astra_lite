@@ -20,6 +20,8 @@ pub enum HalEvent {
         device_id: Arc<String>,
         shot:      Arc<dyn CameraShot + Send + Sync>,
     },
+    /// The camera is about to start an exposure
+    CameraBeforeShot(Arc<String/*device id*/>),
     CameraIsReadyToWork(Arc<String/*device id*/>),
     CameraNeedRestartExposure(Arc<String/*device id*/>),
     CameraNeedInitTelescopeFocalLen(Arc<String/*device id*/>),

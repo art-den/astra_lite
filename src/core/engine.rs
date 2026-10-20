@@ -327,6 +327,9 @@ impl Engine {
             HalEvent::CameraNeedInitTelescopeFocalLen(_camera_id) => {
                 self.init_focal_len_for_cameras();
             }
+            HalEvent::CameraBeforeShot(camera_id) => {
+                self.save_shot_metadata(camera_id.as_str());
+            }
             _ => {}
         }
         Ok(())
@@ -482,6 +485,44 @@ impl Engine {
             set_focal_len_for_cameras(&self.hal, &options)
         };
         self.process_error(res, "set_focal_len_for_cameras");
+    }
+
+    /// Answer to `HalEvent::CameraBeforeShot`: push the mount pointing and the
+    /// telescope focal length to the camera that just started the exposure,
+    /// so ASCOM/Alpaca FITS get RA/DEC and FOCALLEN
+    fn save_shot_metadata(&self, camera_id: &str) {
+        // A mount may be absent (darks on the bench): log and skip, never abort the mode.
+        // The camera-to-telescope mapping is the same as in `set_focal_len_for_cameras()`
+        let (mount_id, focal_len) = {
+            let options = self.options.read().unwrap();
+            let focal_len = self.hal.cameras()
+                .unwrap_or_default()
+                .iter()
+                .find(|cam_info| cam_info.id == camera_id)
+                .and_then(|cam_info| focal_len_for_cam(cam_info, &options));
+            (options.mount.device.clone(), focal_len)
+        };
+        let Ok(camera) = self.hal.camera(camera_id) else {
+            log::debug!("CameraBeforeShot: camera '{camera_id}' not found");
+            return;
+        };
+        if let Some(focal_len) = focal_len {
+            log_if_error(
+                &camera.set_telescope_focal_len(focal_len),
+                "CameraBeforeShot: set_telescope_focal_len"
+            );
+        }
+        let Ok(telescope) = self.hal.telescope(&mount_id) else {
+            log::debug!("CameraBeforeShot: telescope '{mount_id}' not found");
+            return;
+        };
+        let Ok((ra_hours, dec_deg)) = telescope.eq_coord() else {
+            log::debug!("CameraBeforeShot: cannot read eq_coord from '{mount_id}'");
+            return;
+        };
+        // `eq_coord()` returns RA in hours; FITS `RA` and `RawImageInfo` use degrees
+        const RA_HOURS_TO_DEG: f64 = 15.0;
+        camera.set_shot_eq_coord(ra_hours * RA_HOURS_TO_DEG, dec_deg);
     }
 
     fn frame_process_result_handler(self: &Arc<Self>, res: FrameProcessingReply) {
