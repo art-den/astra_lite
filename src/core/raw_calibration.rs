@@ -12,6 +12,8 @@ pub struct CalibrParams {
     pub extract_dark:    bool,
     pub dark_lib_path:   PathBuf,
     pub flat_fname:      Option<PathBuf>,
+    /// Setpoint temperature, pre-gated by the caller with
+    /// `enable_cooler && cooler_supported` (see `Engine::calibr_ccd_temp`)
     pub ccd_temp:        Option<f64>,
     pub sar_hot_pixels:  bool, // "sar" means Search And Remove (hot pixels)
 }
@@ -95,29 +97,38 @@ impl RawCalibration {
 
         if self.subtract_fname != subtract_fname {
             self.subtract_image = None;
-            if let Some(file_name) = &subtract_fname && file_name.is_file() {
-                log::info!(
-                    "Loading master file for subtraction {} ...",
-                    file_name.to_str().unwrap_or_default()
-                );
-                let tmr = TimeLogger::start();
-                let subtract_image = load_raw_image_from_fits_file(file_name)
-                    .map_err(|e| eyre::eyre!(
-                        "Error '{}'\nwhen loading file '{}'",
-                        e, file_name.to_str().unwrap_or_default(),
-                    ))?;
-                tmr.log("loading master file for subtraction");
-
-                if subtract_method.contains(CalibrMethods::BY_DARK)
-                && self.defect_pixels.is_none() {
+            if let Some(file_name) = &subtract_fname {
+                if file_name.is_file() {
+                    log::info!(
+                        "Loading master file for subtraction {} ...",
+                        file_name.to_str().unwrap_or_default()
+                    );
                     let tmr = TimeLogger::start();
-                    let defect_pixels = subtract_image.find_hot_pixels_in_master_dark();
-                    tmr.log("searching hot pixels in dark image");
-                    self.defect_pixels = Some(defect_pixels);
-                    reload_flat = true;
-                }
+                    let subtract_image = load_raw_image_from_fits_file(file_name)
+                        .map_err(|e| eyre::eyre!(
+                            "Error '{}'\nwhen loading file '{}'",
+                            e, file_name.to_str().unwrap_or_default(),
+                        ))?;
+                    tmr.log("loading master file for subtraction");
 
-                self.subtract_image = Some(subtract_image);
+                    if subtract_method.contains(CalibrMethods::BY_DARK)
+                    && self.defect_pixels.is_none() {
+                        let tmr = TimeLogger::start();
+                        let defect_pixels = subtract_image.find_hot_pixels_in_master_dark();
+                        tmr.log("searching hot pixels in dark image");
+                        self.defect_pixels = Some(defect_pixels);
+                        reload_flat = true;
+                    }
+
+                    self.subtract_image = Some(subtract_image);
+                } else {
+                    // Logged once per file name change, not per frame
+                    log::warn!(
+                        "Master file for subtraction not found: {}\n\
+                         Create it or check the camera folder name in the dark library",
+                        file_name.to_str().unwrap_or_default()
+                    );
+                }
             }
             self.subtract_fname = subtract_fname.clone();
         }

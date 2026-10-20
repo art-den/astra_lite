@@ -481,7 +481,7 @@ impl TakingPicturesMode {
             let mut path = PathBuf::new();
             if matches!(self.cam_mode, CameraMode::MasterDark|CameraMode::MasterBias) {
                 path.push(&options.calibr.dark_library_path);
-                path.push(self.camera.id());
+                path.push(self.fname_utils.camera_dir_name());
             } else {
                 path.push(&options.raw_frames.out_path);
             }

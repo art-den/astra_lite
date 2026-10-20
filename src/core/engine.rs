@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    core::{cam_ctrl::*, cur_devices::CurDevices, live_stacking::LiveStacking, preview::{Preview, ResultImageInfo}, raw_calibration::{CalibrParams, RawCalibration}}, guiding::external_guider::*, hal::{events::HalEvent, *}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::{log_utils::log_if_error, timer::*},
+    core::{cam_ctrl::*, cur_devices::CurDevices, live_stacking::LiveStacking, preview::{Preview, ResultImageInfo}, raw_calibration::{CalibrParams, RawCalibration}, utils::FileNameUtils}, guiding::external_guider::*, hal::{events::HalEvent, *}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::{log_utils::log_if_error, timer::*},
 };
 
 use super::{
@@ -335,6 +335,16 @@ impl Engine {
         Ok(())
     }
 
+    /// Setpoint temperature for master file names.
+    /// Capability is queried live from the HAL; the gate itself is shared with
+    /// the creation side via `FileNameUtils::setpoint_for_naming`.
+    fn calibr_ccd_temp(&self, camera_id: &str, ctrl: &CamCtrlOptions) -> Option<f64> {
+        let supported = self.hal.camera(camera_id)
+            .and_then(|cam| cam.is_cooler_supported())
+            .unwrap_or(false);
+        FileNameUtils::setpoint_for_naming(supported, ctrl)
+    }
+
     fn process_camera_shot_result(
         self:        &Arc<Self>,
         camera_id:   &str,
@@ -359,11 +369,7 @@ impl Engine {
         let mut command_data = {
             let options = self.options.read().unwrap();
 
-            let ccd_temp = if options.cam.ctrl.enable_cooler {
-                Some(options.cam.ctrl.temperature)
-            } else {
-                None
-            };
+            let ccd_temp = self.calibr_ccd_temp(camera_id, &options.cam.ctrl);
 
             let calibr_params = Some(CalibrParams {
                 extract_dark:   options.calibr.dark_frame_en,
@@ -640,7 +646,9 @@ impl Engine {
             dark_lib_path: options.calibr.dark_library_path.clone(),
             flat_fname:     None,
             sar_hot_pixels: options.calibr.hot_pixels,
-            ccd_temp:       None,
+            // The temperature gate uses the currently configured camera,
+            // while the folder key comes from the file's INSTRUME header
+            ccd_temp:       self.calibr_ccd_temp(&options.cam.device_id, &options.cam.ctrl),
         });
         let command = ProcessImageParams {
             mode_kind:       ModeKind::OpeningImgFile,

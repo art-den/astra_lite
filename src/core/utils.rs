@@ -32,7 +32,9 @@ impl FileNameArg<'_> {
 
 #[derive(Default)]
 pub struct FileNameUtils {
-    camera_id: String,
+    // Sanitized `Camera::name()`: folder key in the dark library.
+    // Must match `RawImageInfo::camera` written by the HAL into FITS `INSTRUME`
+    camera_name: String,
     sensor_width: usize,
     sensor_height: usize,
     cooler_supported: bool,
@@ -40,13 +42,59 @@ pub struct FileNameUtils {
 
 impl FileNameUtils {
     pub fn init(&mut self, camera: &Arc<dyn Camera>) {
-        self.camera_id = camera.id().to_string();
+        self.camera_name = Self::sanitize_file_name(camera.name());
 
         let (sensor_width, sensor_height) = camera.ccd_size().unwrap_or((0, 0));
         self.cooler_supported = camera.is_cooler_supported().unwrap_or(false);
 
         self.sensor_width = sensor_width;
         self.sensor_height = sensor_height;
+    }
+
+    /// Sanitized folder name of the camera initialized by `init()`
+    pub fn camera_dir_name(&self) -> &str {
+        &self.camera_name
+    }
+
+    /// Single gate for the temperature suffix in file/folder names:
+    /// the setpoint applies only when the camera supports cooling and it is enabled
+    pub fn setpoint_for_naming(cooler_supported: bool, ctrl: &CamCtrlOptions) -> Option<f64> {
+        if cooler_supported && ctrl.enable_cooler {
+            Some(ctrl.temperature)
+        } else {
+            None
+        }
+    }
+
+    /// Camera folder key in the dark library / output tree
+    fn camera_folder_key(&self, args: &FileNameArg) -> String {
+        match args {
+            FileNameArg::RawInfo{info, ..} => Self::sanitize_file_name(&info.camera),
+            FileNameArg::Options(_) => self.camera_name.clone(),
+        }
+    }
+
+    /// Camera names may contain arbitrary text (INDI/ASCOM/Alpaca), so make
+    /// it safe to use as a path component.
+    /// Windows reserved names (CON, COM1, ...) are deliberately not handled:
+    /// real camera names never match them
+    pub fn sanitize_file_name(name: &str) -> String {
+        let mut result: String = name.chars().map(|c| {
+            if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+                || (c as u32) < 0x20 {
+                    '_'
+                } else {
+                    c
+                }
+        }).collect();
+        // Windows forbids trailing dots and spaces in file/directory names
+        while result.ends_with('.') || result.ends_with(' ') {
+            result.pop();
+        }
+        if result.is_empty() {
+            result = "_".to_string();
+        }
+        result
     }
 
     pub fn master_only_file_name(
@@ -61,11 +109,10 @@ impl FileNameUtils {
                     self.sensor_width,
                     self.sensor_height,
                 );
-                let temperature = if self.cooler_supported && opts.ctrl.enable_cooler {
-                    Some(opts.ctrl.temperature)
-                } else {
-                    None
-                };
+                let temperature = Self::setpoint_for_naming(
+                    self.cooler_supported,
+                    &opts.ctrl
+                );
                 Self::master_file_name_impl(
                     date,
                     master_frame_type,
@@ -88,7 +135,9 @@ impl FileNameUtils {
                     info.width,
                     info.height,
                     info.bin as i32,
-                    ccd_temp.or(info.ccd_temp)
+                    // Only the gated setpoint may add the suffix; measured `info.ccd_temp`
+                    // must not leak into the lookup name
+                    *ccd_temp
                 )
             },
         }
@@ -101,11 +150,7 @@ impl FileNameUtils {
         master_frame_type: FrameType
     ) -> PathBuf {
         let mut path = PathBuf::new();
-        let cam_name = if let FileNameArg::RawInfo{info, ..} = to_calibrate {
-            info.camera.clone()
-        } else {
-            self.camera_id.clone()
-        };
+        let cam_name = self.camera_folder_key(to_calibrate);
         path.push(dark_library_path);
         path.push(&cam_name);
         path.push(self.master_only_file_name(None, to_calibrate, master_frame_type));
@@ -117,26 +162,22 @@ impl FileNameUtils {
         args:              &FileNameArg,
         dark_library_path: &Path
     ) -> PathBuf {
-        let (defect_pixels_file_name, camera) = match args {
+        let camera = self.camera_folder_key(args);
+        let defect_pixels_file_name = match args {
             FileNameArg::Options(opts) => {
                 let (img_width, img_height) = opts.frame.active_sensor_size(
                     self.sensor_width,
                     self.sensor_height,
                 );
-                let file_name = Self::defect_pixels_file_name_impl(
+                Self::defect_pixels_file_name_impl(
                     img_width, img_height,
                     opts.frame.binning.get_ratio() as i32,
-                );
-
-                (file_name, &self.camera_id)
+                )
             }
-            FileNameArg::RawInfo{info, ..} => {
-                let file_name = Self::defect_pixels_file_name_impl(
-                    info.width, info.height,
-                    info.bin as i32,
-                );
-                (file_name, &info.camera)
-            }
+            FileNameArg::RawInfo{info, ..} => Self::defect_pixels_file_name_impl(
+                info.width, info.height,
+                info.bin as i32,
+            ),
         };
 
         let mut path = PathBuf::new();
@@ -155,11 +196,10 @@ impl FileNameUtils {
             self.sensor_width,
             self.sensor_height,
         );
-        let temperature = if self.cooler_supported && cam_options.ctrl.enable_cooler {
-            Some(cam_options.ctrl.temperature)
-        } else {
-            None
-        };
+        let temperature = Self::setpoint_for_naming(
+            self.cooler_supported,
+            &cam_options.ctrl
+        );
         Self::raw_directory_name_impl(
             date,
             cam_options.frame.frame_type,
@@ -173,6 +213,7 @@ impl FileNameUtils {
         )
     }
 
+    /// Master file to subtract: flat under 1 s exposure -> master bias, otherwise master dark
     pub fn get_subtract_master_fname(
         self:          &FileNameUtils,
         to_calibrate:  &FileNameArg,
@@ -352,4 +393,241 @@ pub fn check_telescope_is_at_desired_position(
         eyre::bail!("Telescope position is too far from desired one");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fn_utils() -> FileNameUtils {
+        FileNameUtils {
+            camera_name: "Cam A".to_string(),
+            sensor_width: 1000,
+            sensor_height: 800,
+            cooler_supported: true,
+        }
+    }
+
+    fn dark_opts() -> CamOptions {
+        let mut opts = CamOptions::default();
+        opts.frame.frame_type = FrameType::Lights;
+        opts.frame.exp_main = 30.0;
+        opts.frame.gain = 100.0;
+        opts.frame.offset = 10;
+        opts.frame.binning = Binning::Bin2;
+        opts.ctrl.enable_cooler = true;
+        opts.ctrl.temperature = -10.0;
+        opts
+    }
+
+    #[test]
+    fn test_master_file_name_from_options() {
+        let mut utils = fn_utils();
+        let opts = dark_opts();
+        let name = utils.master_only_file_name(
+            None,
+            &FileNameArg::Options(&opts),
+            FrameType::Darks
+        );
+        assert_eq!(name, "dark_30s_g100_offs10_500x400_bin2x2_-10C.fit");
+
+        utils.cooler_supported = false;
+        let name = utils.master_only_file_name(
+            None,
+            &FileNameArg::Options(&opts),
+            FrameType::Darks
+        );
+        assert_eq!(name, "dark_30s_g100_offs10_500x400_bin2x2.fit");
+    }
+
+    #[test]
+    fn test_master_file_name_bias_no_exposure() {
+        let utils = fn_utils();
+        let mut opts = dark_opts();
+        opts.ctrl.enable_cooler = false;
+        opts.frame.binning = Binning::Orig;
+        let name = utils.master_only_file_name(
+            None,
+            &FileNameArg::Options(&opts),
+            FrameType::Biases
+        );
+        assert_eq!(name, "bias_g100_offs10_1000x800.fit");
+
+        opts.ctrl.enable_cooler = true;
+        let name = utils.master_only_file_name(
+            None,
+            &FileNameArg::Options(&opts),
+            FrameType::Biases
+        );
+        assert_eq!(name, "bias_g100_offs10_1000x800_-10C.fit");
+    }
+
+    #[test]
+    fn test_master_file_name_exposure_formats() {
+        let utils = fn_utils();
+        let mut opts = dark_opts();
+        opts.ctrl.enable_cooler = false;
+        opts.frame.binning = Binning::Orig;
+
+        for (exp, exp_str) in [(1.0, "1s"), (0.5, "500ms"), (0.0001, "100us")] {
+            opts.frame.exp_main = exp;
+            let name = utils.master_only_file_name(
+                None,
+                &FileNameArg::Options(&opts),
+                FrameType::Darks
+            );
+            assert_eq!(name, format!("dark_{}_g100_offs10_1000x800.fit", exp_str));
+        }
+    }
+
+    fn check_master_paths_match(
+        utils:          &FileNameUtils,
+        opts:           &CamOptions,
+        // CalibrParams.ccd_temp: the engine computes it with the same
+        // `cooler_supported && enable_cooler` gate as the Options branch
+        set_temp:       Option<f64>,
+        // temperature reported by the camera into FITS header
+        measured_temp:  Option<f64>,
+    ) {
+        let opts_path = utils.master_file_name(
+            &FileNameArg::Options(opts),
+            Path::new("/lib"),
+            FrameType::Darks
+        );
+
+        let info = RawImageInfo {
+            time: None,
+            width: 500,            // already binned frame size
+            height: 400,
+            gain: 100,
+            offset: 10,
+            max_value: 65535,
+            bin: 2,
+            frame_type: FrameType::Lights,
+            exposure: 30.0,
+            ccd_temp: measured_temp,
+            camera: "Cam A".to_string(),
+            ..Default::default()
+        };
+        let raw_path = utils.master_file_name(
+            &FileNameArg::RawInfo{ info: &info, ccd_temp: set_temp },
+            Path::new("/lib"),
+            FrameType::Darks
+        );
+
+        assert_eq!(opts_path, raw_path);
+    }
+
+    #[test]
+    fn test_master_file_name_options_matches_raw_info() {
+        // Regression: the creation path (Options) and the calibration lookup
+        // path (RawInfo) must produce the identical full path for one camera setup
+        let mut utils = fn_utils();
+        let mut opts = dark_opts();
+
+        // Cooled camera: the suffix is the setpoint, not the measured value
+        // (-9.4 C would format as `+/-9C` and break the match if it leaked in)
+        check_master_paths_match(&utils, &opts, Some(-10.0), Some(-9.4));
+
+        // Cooler disabled: no suffix even though the camera reports temperature
+        opts.ctrl.enable_cooler = false;
+        check_master_paths_match(&utils, &opts, None, Some(-9.4));
+
+        // Camera without cooler capability but enable_cooler option left on:
+        // no suffix (the engine gates the lookup by capability too)
+        opts.ctrl.enable_cooler = true;
+        utils.cooler_supported = false;
+        check_master_paths_match(&utils, &opts, None, Some(-9.4));
+    }
+
+    #[test]
+    fn test_get_subtract_master_fname() {
+        let utils = fn_utils();
+
+        // Light frame -> master dark
+        let opts = dark_opts();
+        let (fname, method) = utils.get_subtract_master_fname(
+            &FileNameArg::Options(&opts),
+            Path::new("/lib")
+        );
+        assert!(method.contains(CalibrMethods::BY_DARK));
+        let mut expected = PathBuf::from("/lib");
+        expected.push("Cam A");
+        expected.push("dark_30s_g100_offs10_500x400_bin2x2_-10C.fit");
+        assert_eq!(fname, expected);
+
+        // Flat with exposure < 1 s -> master bias
+        let mut flat_opts = dark_opts();
+        flat_opts.frame.frame_type = FrameType::Flats;
+        flat_opts.frame.exp_flat = 0.5;
+        let (fname, method) = utils.get_subtract_master_fname(
+            &FileNameArg::Options(&flat_opts),
+            Path::new("/lib")
+        );
+        assert!(method.contains(CalibrMethods::BY_BIAS));
+        assert_eq!(fname.file_name().unwrap().to_str().unwrap(), "bias_g100_offs10_500x400_bin2x2_-10C.fit");
+
+        // Flat with exposure >= 1 s -> master dark
+        flat_opts.frame.exp_flat = 2.0;
+        let (_fname, method) = utils.get_subtract_master_fname(
+            &FileNameArg::Options(&flat_opts),
+            Path::new("/lib")
+        );
+        assert!(method.contains(CalibrMethods::BY_DARK));
+    }
+
+    #[test]
+    fn test_defect_pixels_file_name() {
+        let utils = fn_utils();
+        let opts = dark_opts();
+        let fname = utils.defect_pixels_file_name(
+            &FileNameArg::Options(&opts),
+            Path::new("/lib")
+        );
+        assert_eq!(
+            fname.to_str().unwrap().replace('\\', "/"),
+            "/lib/Cam A/defect_pixels_500x400_bin2x2.txt"
+        );
+
+        // RawInfo branch: folder from sanitized `info.camera`
+        let info = RawImageInfo {
+            width: 500,
+            height: 400,
+            bin: 2,
+            camera: "Bad:Name/x".to_string(),
+            ..Default::default()
+        };
+        let fname = utils.defect_pixels_file_name(
+            &FileNameArg::RawInfo{ info: &info, ccd_temp: None },
+            Path::new("/lib")
+        );
+        assert_eq!(
+            fname.to_str().unwrap().replace('\\', "/"),
+            "/lib/Bad_Name_x/defect_pixels_500x400_bin2x2.txt"
+        );
+
+        // master_file_name must sanitize `info.camera` the same way
+        let master = utils.master_file_name(
+            &FileNameArg::RawInfo{ info: &info, ccd_temp: None },
+            Path::new("/lib"),
+            FrameType::Darks
+        );
+        assert!(
+            master.to_str().unwrap().replace('\\', "/").contains("/lib/Bad_Name_x/"),
+            "unexpected master path: {:?}", master
+        );
+    }
+
+    #[test]
+    fn test_sanitize_file_name() {
+        assert_eq!(FileNameUtils::sanitize_file_name("ZWO ASI120MM"), "ZWO ASI120MM");
+        assert_eq!(
+            FileNameUtils::sanitize_file_name("Cam:1/2\\3*4?5|6<7>8\"9"),
+            "Cam_1_2_3_4_5_6_7_8_9"
+        );
+        assert_eq!(FileNameUtils::sanitize_file_name("name..  "), "name");
+        assert_eq!(FileNameUtils::sanitize_file_name("a\u{1}b"), "a_b");
+        assert_eq!(FileNameUtils::sanitize_file_name(""), "_");
+        assert_eq!(FileNameUtils::sanitize_file_name("..."), "_");
+    }
 }

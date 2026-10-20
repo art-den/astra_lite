@@ -723,7 +723,6 @@ struct CameraStatic {
     sensor_type:  AcSensorType,
     bayer_offset: Option<[u8; 2]>,
     max_value:    u16,
-    cam_name:     String,
 }
 
 struct ExposureData {
@@ -933,7 +932,6 @@ impl AscomCamera {
             usize::min(max_adu as usize, u16::MAX as usize) as u16
         };
 
-        let cam_name = device.name().unwrap_or_else(|_| self.device_name.clone());
         let can_read_ccd_temp = device.ccd_temperature().is_ok();
 
         let mut flags = CameraFlags::empty();
@@ -970,7 +968,6 @@ impl AscomCamera {
             sensor_type,
             bayer_offset,
             max_value,
-            cam_name,
         })
     }
 
@@ -1135,7 +1132,9 @@ impl AscomCamera {
             height:     image.height,
             max_value:  st.max_value,
             frame_type: frame_type.unwrap_or(FrameType::Lights),
-            camera:     st.cam_name.clone(),
+            // Stable key for dark library folders: same string as `Camera::name()`
+            // (the runtime `Name` property can differ from the chooser description)
+            camera:     self.device_name.clone(),
             gain:       st.device.gain().unwrap_or(0),
             offset:     st.device.offset().unwrap_or(0),
             bin:        st.device.bin_x().unwrap_or(1).clamp(1, u8::MAX as i32) as u8,
