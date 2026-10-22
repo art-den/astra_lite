@@ -9,10 +9,8 @@ use crate::{
 pub enum FileNameArg<'a> {
     Options(&'a CamOptions),
     RawInfo {
-        info:             &'a RawImageInfo,
-        ccd_temp:         Option<f64>,
-        gain_supported:   bool,
-        offset_supported: bool,
+        info:     &'a RawImageInfo,
+        ccd_temp: Option<f64>,
     },
 }
 
@@ -132,13 +130,13 @@ impl FileNameUtils {
                     temperature
                 )
             }
-            FileNameArg::RawInfo{info, ccd_temp, gain_supported, offset_supported} => {
+            FileNameArg::RawInfo{info, ccd_temp} => {
                 Self::master_file_name_impl(
                     info.time,
                     master_frame_type,
                     info.exposure,
-                    gain_supported.then_some(info.gain),
-                    offset_supported.then_some(info.offset),
+                    info.gain,
+                    info.offset,
                     info.width,
                     info.height,
                     info.bin as i32,
@@ -518,81 +516,6 @@ mod tests {
         }
     }
 
-    fn check_master_paths_match(
-        utils:          &FileNameUtils,
-        opts:           &CamOptions,
-        // CalibrParams.ccd_temp: the engine computes it with the same
-        // `cooler_supported && enable_cooler` gate as the Options branch
-        set_temp:       Option<f64>,
-        // temperature reported by the camera into FITS header
-        measured_temp:  Option<f64>,
-        // camera capabilities passed to both naming sides
-        gain_sup:       bool,
-        offset_sup:     bool,
-    ) {
-        let opts_path = utils.master_file_name(
-            &FileNameArg::Options(opts),
-            Path::new("/lib"),
-            FrameType::Darks
-        );
-
-        let info = RawImageInfo {
-            time: None,
-            width: 500,            // already binned frame size
-            height: 400,
-            gain: 100,
-            offset: 10,
-            max_value: 65535,
-            bin: 2,
-            frame_type: FrameType::Lights,
-            exposure: 30.0,
-            ccd_temp: measured_temp,
-            camera: "Cam A".to_string(),
-            ..Default::default()
-        };
-        let raw_path = utils.master_file_name(
-            &FileNameArg::RawInfo{
-                info: &info,
-                ccd_temp: set_temp,
-                gain_supported: gain_sup,
-                offset_supported: offset_sup,
-            },
-            Path::new("/lib"),
-            FrameType::Darks
-        );
-
-        assert_eq!(opts_path, raw_path);
-    }
-
-    #[test]
-    fn test_master_file_name_options_matches_raw_info() {
-        // Regression: the creation path (Options) and the calibration lookup
-        // path (RawInfo) must produce the identical full path for one camera setup
-        let mut utils = fn_utils();
-        let mut opts = dark_opts();
-
-        // Cooled camera: the suffix is the setpoint, not the measured value
-        // (-9.4 C would format as `+/-9C` and break the match if it leaked in)
-        check_master_paths_match(&utils, &opts, Some(-10.0), Some(-9.4), true, true);
-
-        // Cooler disabled: no suffix even though the camera reports temperature
-        opts.ctrl.enable_cooler = false;
-        check_master_paths_match(&utils, &opts, None, Some(-9.4), true, true);
-
-        // Camera without cooler capability but enable_cooler option left on:
-        // no suffix (the engine gates the lookup by capability too)
-        opts.ctrl.enable_cooler = true;
-        utils.cooler_supported = false;
-        check_master_paths_match(&utils, &opts, None, Some(-9.4), true, true);
-
-        // Gain/offset unsupported (like the ASCOM Simulator): the segments are
-        // omitted on both sides even though the option values are non-zero
-        utils.cooler_supported = true;
-        utils.gain_supported = false;
-        utils.offset_supported = false;
-        check_master_paths_match(&utils, &opts, Some(-10.0), Some(-9.4), false, false);
-    }
-
     #[test]
     fn test_get_subtract_master_fname() {
         let utils = fn_utils();
@@ -653,8 +576,6 @@ mod tests {
         let raw_info_arg = || FileNameArg::RawInfo{
             info: &info,
             ccd_temp: None,
-            gain_supported: true,
-            offset_supported: true,
         };
         let fname = utils.defect_pixels_file_name(
             &raw_info_arg(),

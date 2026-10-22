@@ -29,7 +29,8 @@ pub fn load_raw_image_from_fits_reader(
     let mut data = vec![0; image_hdu.data_len()];
     FitsReader::read_data(image_hdu, stream, 0, &mut data)?;
     let cfa_array = info.cfa.get_array();
-    Ok(RawImage::new(info, data, cfa_array))
+    let data_offset = image_hdu.get_i64("PEDESTAL").unwrap_or_default() as i32;
+    Ok(RawImage::new(info, data, cfa_array, data_offset))
 }
 
 pub fn load_raw_image_from_fits_stream(stream: &mut impl SeekNRead) -> eyre::Result<RawImage> {
@@ -52,6 +53,10 @@ pub fn save_raw_image_to_fits_file(
     let info = raw_image.info();
     let mut hdu = Header::new_2d(info.width, info.height);
     raw_image.info().save_to_fits_header(&mut hdu);
+    let data_offset = raw_image.data_offset();
+    if data_offset != 0 {
+        hdu.set_i64("PEDESTAL", data_offset as i64);
+    }
     let (bzero, bitpix) = info.bzero_and_bitpix_for_fits_file();
     writer.write_header(&mut file, &hdu)?;
     writer.write_data(bitpix, bzero, &mut file, raw_image.as_slice())?;
@@ -130,11 +135,11 @@ pub fn load_image_from_tif_file(
     let (width, height) = decoder.dimensions()?;
     let is_rgb = match decoder.colortype()? {
         tiff::ColorType::Gray(_) => {
-            image.make_monochrome(width as usize, height as usize, 0, u16::MAX);
+            image.make_monochrome(width as usize, height as usize, u16::MAX);
             false
         }
         tiff::ColorType::RGB(_) => {
-            image.make_color(width as usize, height as usize, 0, u16::MAX);
+            image.make_color(width as usize, height as usize, u16::MAX);
             true
         }
         ct => {
@@ -224,12 +229,12 @@ pub fn load_image_from_fits_reader(
     if let Some(hdu) = mono_hdu {
         let width  = hdu.dims()[0];
         let height = hdu.dims()[1];
-        image.make_monochrome(width, height, 0, u16::MAX);
+        image.make_monochrome(width, height, u16::MAX);
         FitsReader::read_data(hdu, stream, 0, image.l.as_slice_mut())?;
     } else if let Some(hdu) = color_hdu {
         let width  = hdu.dims()[0];
         let height = hdu.dims()[1];
-        image.make_color(width, height, 0, u16::MAX);
+        image.make_color(width, height, u16::MAX);
         let one_color_bytes_len = hdu.bytes_len() / 3;
         FitsReader::read_data(hdu, stream,                       0, image.r.as_slice_mut())?;
         FitsReader::read_data(hdu, stream,     one_color_bytes_len, image.g.as_slice_mut())?;
@@ -256,7 +261,7 @@ pub fn load_image_using_pixbuf(
     let height = pixbuf.height() as usize;
     let row_size = pixbuf.rowstride() as usize;
 
-    image.make_color(width, height, 0, u16::MAX);
+    image.make_color(width, height, u16::MAX);
 
     let u8_to_u16 = |value: u8| -> u16 {
         let f32_v = value as f32 / 255.0;

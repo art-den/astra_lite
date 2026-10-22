@@ -635,19 +635,17 @@ pub struct Image {
     pub b:        ImageLayer<u16>,
     pub l:        ImageLayer<u16>,
     pub raw_info: Option<RawImageInfo>,
-    zero:         i32,
     max_value:    u16,
 }
 
 impl Image {
     pub fn new_empty() -> Self {
         Self {
-            l: ImageLayer::new_empty(),
-            r: ImageLayer::new_empty(),
-            g: ImageLayer::new_empty(),
-            b: ImageLayer::new_empty(),
-            raw_info: None,
-            zero: 0,
+            l:         ImageLayer::new_empty(),
+            r:         ImageLayer::new_empty(),
+            g:         ImageLayer::new_empty(),
+            b:         ImageLayer::new_empty(),
+            raw_info:  None,
             max_value: 0,
         }
     }
@@ -656,14 +654,12 @@ impl Image {
         &mut self,
         width:     usize,
         height:    usize,
-        zero:      i32,
         max_value: u16
     ) {
         self.l.clear();
         self.r.resize(width, height);
         self.g.resize(width, height);
         self.b.resize(width, height);
-        self.zero = zero;
         self.max_value = max_value;
     }
 
@@ -671,14 +667,12 @@ impl Image {
         &mut self,
         width:     usize,
         height:    usize,
-        zero:      i32,
         max_value: u16
     ) {
         self.l.resize(width, height);
         self.r.clear();
         self.g.clear();
         self.b.clear();
-        self.zero = zero;
         self.max_value = max_value;
     }
 
@@ -687,7 +681,6 @@ impl Image {
         self.r.clear();
         self.g.clear();
         self.b.clear();
-        self.zero = 0;
         self.max_value = 0;
     }
 
@@ -882,7 +875,7 @@ mod tests {
 
     fn make_color_image(width: usize, height: usize) -> Image {
         let mut img = Image::new_empty();
-        img.make_color(width, height, 0, u16::MAX);
+        img.make_color(width, height, u16::MAX);
         for y in 0..height {
             for x in 0..width {
                 img.r.set(x as isize, y as isize, (x * 7 + y * 13) as u16 % 4096);
@@ -895,7 +888,7 @@ mod tests {
 
     fn make_image(width: usize, height: usize, fill: impl Fn(usize, usize) -> u16) -> Image {
         let mut img = Image::new_empty();
-        img.make_monochrome(width, height, 0, u16::MAX);
+        img.make_monochrome(width, height, u16::MAX);
         for y in 0..height {
             for x in 0..width {
                 img.l.set(x as isize, y as isize, fill(x, y));

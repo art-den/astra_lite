@@ -59,3 +59,7 @@ Temporary files (debug screenshots, logs, scripts) must be saved in the project'
 ## UI debug
 
 To debug the UI, write the necessary code in `src/ui/debug/mod.rs` and use the `--debug` argument when running.
+
+## Misc.
+
+- Raw data calibration is only required for previews. Raw images are saved to a FITS file in the same unaltered form as they came from the CCD.

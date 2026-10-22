@@ -555,10 +555,7 @@ impl TakingPicturesMode {
             let mut normalized_flat = raw_image.clone();
             let tmr = TimeLogger::start();
             let flat_offset = self.camera_offset.unwrap_or_default();
-            if flat_offset != 0 {
-                normalized_flat.set_offset(flat_offset as i32);
-            }
-            normalized_flat.normalize_flat()?;
+            normalized_flat.normalize_flat(flat_offset)?;
             tmr.log("Normalizing flat");
             let tmr = TimeLogger::start();
             self.raw_stacker.add(&normalized_flat)?;
@@ -1349,6 +1346,8 @@ impl Mode for TakingPicturesMode {
                 );
             }
         }
+
+        self.camera_offset = None;
 
         self.start_or_continue()?;
         Ok(())

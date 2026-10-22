@@ -15,8 +15,8 @@ pub struct RawStacker {
     images:     Vec<RawImage>,
     info:       Option<RawImageInfo>,
     divisor:    u32, // divisor for values from `data`
-    zero_sum:   i32,
-    zero_div:   u32,
+    offset_sum: i64,
+    offset_div: u32,
     integr_exp: f64,
 }
 
@@ -28,8 +28,8 @@ impl RawStacker {
             images:     Vec::new(),
             info:       None,
             divisor:    0,
-            zero_sum:   0,
-            zero_div:   0,
+            offset_sum: 0,
+            offset_div: 0,
             integr_exp: 0.0,
         }
     }
@@ -41,8 +41,8 @@ impl RawStacker {
         self.images.shrink_to_fit();
         self.info = None;
         self.divisor = 0;
-        self.zero_sum = 0;
-        self.zero_div = 0;
+        self.offset_sum = 0;
+        self.offset_div = 0;
         self.integr_exp = 0.0;
     }
 
@@ -69,12 +69,12 @@ impl RawStacker {
         } else {
             self.info = Some(raw_info.clone());
             self.divisor = 0;
-            self.zero_sum = 0;
-            self.zero_div = 0;
+            self.offset_sum = 0;
+            self.offset_div = 0;
             self.data.resize(raw.as_slice().len(), 0);
         }
-        self.zero_sum += raw_info.offset;
-        self.zero_div += 1;
+        self.offset_sum += raw.data_offset() as i64;
+        self.offset_div += 1;
         match self.mode {
             RawStackerMode::Average => {
                 for (s, d) in izip!(raw.as_slice(), &mut self.data) {
@@ -112,10 +112,14 @@ impl RawStacker {
 
         let cfa_arr = info.cfa.get_array();
         let mut info = info.clone();
-        let divisor2 = self.divisor/2;
 
-        info.offset = self.zero_sum / self.zero_div as i32;
         info.integr_time = Some(self.integr_exp);
+        let data_offset =
+            if self.offset_div != 0 {
+                self.offset_sum / self.offset_div as i64
+            } else {
+                0
+            } as i32;
 
         if self.divisor == 0 && !self.images.is_empty() {
             // Median mode is active but fewer than 5 images have been added.
@@ -144,13 +148,14 @@ impl RawStacker {
                     break;
                 }
             }
-            Ok(RawImage::new(info, data, cfa_arr))
+            Ok(RawImage::new(info, data, cfa_arr, data_offset))
         } else {
+            let divisor2 = self.divisor/2;
             let data: Vec<_> = self.data
                 .iter()
                 .map(|v| ((*v + divisor2) / self.divisor) as u16)
                 .collect();
-            Ok(RawImage::new(info, data, cfa_arr))
+            Ok(RawImage::new(info, data, cfa_arr, data_offset))
         }
     }
 }

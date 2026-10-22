@@ -12,7 +12,7 @@ fn generate_image(seed: u64) -> Image {
         (0..IMG_WIDTH * IMG_HEIGHT).map(|_| rng.random_range(0u16..4096)).collect()
     };
     let mut img = Image::new_empty();
-    img.make_monochrome(IMG_WIDTH, IMG_HEIGHT, 0, 4095);
+    img.make_monochrome(IMG_WIDTH, IMG_HEIGHT, 4095);
     img.l = ImageLayer::new_mono(random_pixels(), IMG_WIDTH, IMG_HEIGHT);
     img.r = ImageLayer::new_mono(random_pixels(), IMG_WIDTH, IMG_HEIGHT);
     img.g = ImageLayer::new_mono(random_pixels(), IMG_WIDTH, IMG_HEIGHT);

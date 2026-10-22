@@ -98,8 +98,8 @@ fn create_synthetic_raw_image(cfa: CfaType) -> RawImage {
     let info = RawImageInfo {
         width: IMG_WIDTH,
         height: IMG_HEIGHT,
-        gain: 1,
-        offset: 0,
+        gain: Some(1),
+        offset: Some(0),
         max_value: 65535,
         cfa,
         bin: 1,
@@ -111,7 +111,7 @@ fn create_synthetic_raw_image(cfa: CfaType) -> RawImage {
     };
 
     let cfa_arr = info.cfa.get_array();
-    RawImage::new(info, data, cfa_arr)
+    RawImage::new(info, data, cfa_arr, 0)
 }
 
 /// Maximum pixel distance allowed between an expected and a detected star.
@@ -211,8 +211,8 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
                         state.raw_std_dev = Some(info.std_dev);
                         state.raw_info_width = Some(info.info.width);
                         state.raw_info_height = Some(info.info.height);
-                        state.raw_info_gain = Some(info.info.gain);
-                        state.raw_info_offset = Some(info.info.offset);
+                        state.raw_info_gain = info.info.gain;
+                        state.raw_info_offset = info.info.offset;
                         state.raw_info_max_value = Some(info.info.max_value);
                         state.raw_info_cfa = Some(info.info.cfa);
                         state.raw_info_bin = Some(info.info.bin);

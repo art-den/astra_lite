@@ -3,8 +3,7 @@ use std::path::PathBuf;
 use crate::{
     core::utils::{FileNameArg, FileNameUtils},
     hal::FrameType,
-    image::{io::load_raw_image_from_fits_file, raw::{BadPixels, CalibrMethods, RawImage, RawImageInfo}},
-    options::FrameOptions,
+    image::{io::load_raw_image_from_fits_file, raw::{BadPixels, CalibrMethods, RawImage}},
     utils::log_utils::TimeLogger,
 };
 
@@ -44,9 +43,8 @@ impl RawCalibration {
 
     pub fn apply_calibr_data_and_remove_hot_pixels(
         &mut self,
-        params:          &Option<CalibrParams>,
-        raw_image:       &mut RawImage,
-        capture_options: Option<&FrameOptions>,
+        params:    &Option<CalibrParams>,
+        raw_image: &mut RawImage,
     ) -> eyre::Result<()> {
         let Some(params) = params else { return Ok(()); };
 
@@ -57,12 +55,9 @@ impl RawCalibration {
         let fn_utils = FileNameUtils::default();
         let (defect_pixel_file, subtract_fname, subtract_method) =
             if params.extract_dark {
-                let name_info = name_info_for_calibr(image_info, capture_options);
                 let calibr_filename_data = FileNameArg::RawInfo{
-                    info:             &name_info,
-                    ccd_temp:         params.ccd_temp,
-                    gain_supported:   params.gain_supported,
-                    offset_supported: params.offset_supported,
+                    info:     &image_info,
+                    ccd_temp: params.ccd_temp,
                 };
                 let defect_pixel_file = fn_utils.defect_pixels_file_name(
                     &calibr_filename_data,
@@ -233,59 +228,5 @@ impl RawCalibration {
         raw_image.set_calibr_methods(calibr_methods);
 
         Ok(())
-    }
-}
-
-/// Base frame info for master file names. For live-captured frames the current
-/// global capture options are used (not the mode's per-run snapshot): device-
-/// reported values may be absent or differ (e.g. gain unsupported -> driver
-/// reads as 0), while master files are named from the same options at creation.
-/// For frames opened from a file the FITS header values are kept.
-fn name_info_for_calibr(
-    info:            &RawImageInfo,
-    capture_options: Option<&FrameOptions>,
-) -> RawImageInfo {
-    let Some(frame) = capture_options else { return info.clone(); };
-    let mut name_info = info.clone();
-    name_info.gain     = frame.gain as i32;
-    name_info.offset   = frame.offset;
-    name_info.exposure = frame.exposure();
-    name_info.bin      = frame.binning.get_ratio() as u8;
-    name_info
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::options::Binning;
-
-    #[test]
-    fn test_name_info_for_calibr() {
-        let info = RawImageInfo {
-            gain: 0, offset: 0, exposure: 1.1, bin: 1,
-            ..Default::default()
-        };
-
-        let frame = FrameOptions {
-            frame_type: FrameType::Lights,
-            exp_main: 1.1,
-            gain: 1.0,
-            offset: 5,
-            binning: Binning::Bin2,
-            ..Default::default()
-        };
-
-        let patched = name_info_for_calibr(&info, Some(&frame));
-        assert_eq!(patched.gain, 1);
-        assert_eq!(patched.offset, 5);
-        assert_eq!(patched.exposure, 1.1);
-        assert_eq!(patched.bin, 2);
-        // Size and camera stay from the actual frame
-        assert_eq!(patched.width, info.width);
-        assert_eq!(patched.camera, info.camera);
-
-        // Opened from file: header values are kept as is
-        let untouched = name_info_for_calibr(&info, None);
-        assert_eq!((untouched.gain, untouched.offset, untouched.bin), (0, 0, 1));
     }
 }

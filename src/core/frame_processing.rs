@@ -285,8 +285,8 @@ impl FrameProcessing {
             crate::hal::CameraShotType::RawCcdData => {
                 let mut raw_image = command.img_source.get_raw()?;
                 let mut info = raw_image.info().clone();
-                if info.offset == 0 {
-                    info.offset = command.frame_options.offset;
+                if info.offset.is_none() {
+                    info.offset = Some(command.frame_options.offset);
                     raw_image.set_offset(info.offset);
                 }
 
@@ -297,7 +297,7 @@ impl FrameProcessing {
                 log::debug!("Raw type      = {:?}", frame_type);
                 log::debug!("Raw width     = {}",   info.width);
                 log::debug!("Raw height    = {}",   info.height);
-                log::debug!("Raw zero      = {}",   info.offset);
+                log::debug!("Raw zero      = {:?}",   info.offset);
                 log::debug!("Raw max_value = {}",   info.max_value);
                 log::debug!("Raw CFA       = {:?}", info.cfa);
                 log::debug!("Raw bin       = {}",   info.bin);
@@ -369,18 +369,10 @@ impl FrameProcessing {
                 // Applying calibration data
                 if is_light_frame
                 || frame_type == FrameType::Flats {
-                    // Master names for live frames come from the current global
-                    // capture options; frames opened from file keep FITS header values
-                    let capture_options = if command.mode_kind == ModeKind::OpeningImgFile {
-                        None
-                    } else {
-                        Some(&command.frame_options)
-                    };
                     let mut calibr = command.calibr_data.lock().unwrap();
                     calibr.apply_calibr_data_and_remove_hot_pixels(
                         &command.calibr_params,
                         &mut raw_image,
-                        capture_options,
                     )?;
                     info = raw_image.info().clone()
                 }

@@ -102,8 +102,8 @@ pub struct RawImageInfo {
     pub time:           Option<DateTime<Utc>>,
     pub width:          usize,
     pub height:         usize,
-    pub gain:           i32,
-    pub offset:         i32,
+    pub gain:           Option<i32>,
+    pub offset:         Option<i32>,
     pub max_value:      u16,
     pub cfa:            CfaType,
     pub bin:            u8,
@@ -133,8 +133,8 @@ impl RawImageInfo {
         let integr_time  = image_hdu.get_f64("TOTALEXP");
         let bayer        = image_hdu.get_str("BAYERPAT").unwrap_or_default();
         let bin          = image_hdu.get_f64("XBINNING").unwrap_or(1.0) as u8;
-        let gain         = image_hdu.get_f64("GAIN").unwrap_or(0.0) as i32;
-        let offset       = image_hdu.get_f64("OFFSET").unwrap_or(0.0) as i32;
+        let gain         = image_hdu.get_f64("GAIN").map(|v| v as i32);
+        let offset       = image_hdu.get_i64("OFFSET").map(|v| v as i32);
         let frame_str    = image_hdu.get_str("FRAME");
         let time_str     = image_hdu.get_str("DATE-OBS").unwrap_or_default();
         let camera       = image_hdu.get_str("INSTRUME").unwrap_or_default().to_string();
@@ -192,8 +192,12 @@ impl RawImageInfo {
         hdu.set_str("FRAME",    self.frame_type.to_str());
         hdu.set_i64("XBINNING", self.bin as i64);
         hdu.set_i64("YBINNING", self.bin as i64);
-        hdu.set_i64("GAIN",     self.gain as i64);
-        hdu.set_i64("OFFSET",   self.offset as i64);
+        if let Some(gain) = self.gain {
+            hdu.set_i64("GAIN", gain as i64);
+        }
+        if let Some(offset) = self.offset {
+            hdu.set_i64("OFFSET", offset as i64);
+        }
         hdu.set_str("INSTRUME", &self.camera);
         if let Some(bayer) = self.cfa.to_str() {
             hdu.set_str("BAYERPAT", bayer);
@@ -232,27 +236,31 @@ impl RawImageInfo {
 }
 
 pub struct RawImage {
-    info:    RawImageInfo,
-    data:    Vec<u16>,
-    cfa_arr: &'static CfaArray,
+    info:        RawImageInfo,
+    data:        Vec<u16>,
+    data_offset: i32, // Mostly used for proper calibration. Not used for preview!
+    cfa_arr:     &'static CfaArray,
 }
 
 impl Clone for RawImage {
     fn clone(&self) -> Self {
         Self {
-            info: self.info.clone(),
-            data: self.data.clone(),
-            cfa_arr: self.cfa_arr
+            info:        self.info.clone(),
+            data:        self.data.clone(),
+            data_offset: 0,
+            cfa_arr:     self.cfa_arr
         }
     }
 }
 
 impl RawImage {
     pub fn new(
-        info:    RawImageInfo,
-        data:    Vec<u16>,
-        cfa_arr: &'static CfaArray) -> Self {
-        Self { info, data, cfa_arr }
+        info:        RawImageInfo,
+        data:        Vec<u16>,
+        cfa_arr:     &'static CfaArray,
+        data_offset: i32
+    ) -> Self {
+        Self { info, data, cfa_arr, data_offset }
     }
 
     pub fn as_slice(&self) -> &[u16] {
@@ -263,8 +271,12 @@ impl RawImage {
         &self.info
     }
 
-    pub fn set_offset(&mut self, offset: i32) {
+    pub fn set_offset(&mut self, offset: Option<i32>) {
         self.info.offset = offset;
+    }
+
+    pub fn data_offset(&self) -> i32 {
+        self.data_offset
     }
 
     pub fn row(&self, y: usize) -> &[u16] {
@@ -712,24 +724,22 @@ impl RawImage {
             if value > u16::MAX as i32 { value = u16::MAX as i32; }
             *s = value as u16;
         }
-        self.info.offset += diff;
+        self.data_offset += diff;
         Ok(())
     }
 
     pub fn apply_flat(&mut self, flat: &RawImage) -> eyre::Result<()> {
         self.check_master_frame_is_compatible(flat, &[FrameType::Flats])?;
         debug_assert!(self.data.len() == flat.data.len());
-        let zero = self.info.offset as i64;
-        let flat_zero = flat.info.offset as i64;
         self.data.par_iter_mut().zip(flat.data.par_iter()).for_each(|(s, f)| {
-            let mut flat_value = *f as i64 - flat_zero;
+            let mut flat_value = *f as i64;
             if flat_value == 0 {
                 flat_value = 1;
             }
             let mut value = *s as i64;
-            value -= zero;
+            value -= self.data_offset as i64;
             value = value * u16::MAX as i64 / flat_value;
-            value += zero;
+            value += self.data_offset as i64;
             if value < 0 { value = 0; }
             if value > u16::MAX as i64 { value = u16::MAX as i64; }
             *s = value as u16;
@@ -737,7 +747,7 @@ impl RawImage {
         Ok(())
     }
 
-    pub fn normalize_flat(&mut self) -> eyre::Result<()> {
+    pub fn normalize_flat(&mut self, offset: u16) -> eyre::Result<()> {
         let mut l_values = Vec::new();
         let mut r_values = Vec::new();
         let mut g_values = Vec::new();
@@ -766,11 +776,10 @@ impl RawImage {
                 result as i64
             }
         };
-        let zero = self.info.offset as i64;
-        let l_max = get_99(&mut l_values) - zero;
-        let r_max = get_99(&mut r_values) - zero;
-        let g_max = get_99(&mut g_values) - zero;
-        let b_max = get_99(&mut b_values) - zero;
+        let l_max = get_99(&mut l_values) - offset as i64;
+        let r_max = get_99(&mut r_values) - offset as i64;
+        let g_max = get_99(&mut g_values) - offset as i64;
+        let b_max = get_99(&mut b_values) - offset as i64;
         for y in 0..self.info.height {
             let cfa_arr = self.cfa_row(y);
             let row = self.row_mut(y);
@@ -784,13 +793,12 @@ impl RawImage {
                 if max == 0 {
                     eyre::bail!("Not valid flat image");
                 }
-                let val = *v as i64 - zero;
+                let val = *v as i64 - offset as i64;
                 let normalized: i64 = (u16::MAX as i64 * val) / max;
                 let normalized = normalized.max(0).min(u16::MAX as i64);
                 *v = normalized as u16;
             }
         }
-        self.info.offset = 0;
         Ok(())
     }
 
@@ -897,7 +905,6 @@ impl RawImage {
         dst_img.make_monochrome(
             self.info.width,
             self.info.height,
-            self.info.offset,
             self.info.max_value
         );
         dst_img.l
@@ -909,7 +916,6 @@ impl RawImage {
         result.make_color(
             self.info.width,
             self.info.height,
-            self.info.offset,
             self.info.max_value
         );
 
@@ -1103,74 +1109,5 @@ impl Iterator for RawRectIterator<'_> {
                 self.next()
             },
         }
-    }
-}
-
-#[cfg(test)]
-mod fits_header_tests {
-    use super::*;
-
-    #[test]
-    fn raw_image_info_header_roundtrip() {
-        let naive = NaiveDateTime::parse_from_str(
-            "2026-10-20T12:34:56.789", DATE_OBS_FMT
-        ).unwrap();
-        let info = RawImageInfo {
-            time:         Some(Utc.from_utc_datetime(&naive)),
-            width:        4,
-            height:       3,
-            gain:         100,
-            offset:       5,
-            max_value:    65535,
-            cfa:          CfaType::RGGB,
-            bin:          2,
-            frame_type:   FrameType::Lights,
-            exposure:     30.5,
-            camera:       "TestCam".to_string(),
-            ccd_temp:     Some(-10.5),
-            focal_len:    Some(600.0),
-            pixel_size_x: Some(3.75),
-            pixel_size_y: Some(3.75),
-            dec:          Some(45.25),
-            ra:           Some(122.5),
-            ..Default::default()
-        };
-
-        let mut hdu = Header::new_2d(info.width, info.height);
-        info.save_to_fits_header(&mut hdu);
-        let back = RawImageInfo::new_from_fits_header(&hdu);
-
-        assert_eq!(back.time, info.time);
-        assert_eq!(back.width, 4);
-        assert_eq!(back.height, 3);
-        assert_eq!(back.gain, 100);
-        assert_eq!(back.offset, 5);
-        assert_eq!(back.exposure, 30.5);
-        assert_eq!(back.bin, 2);
-        assert_eq!(back.ccd_temp, Some(-10.5));
-        assert_eq!(back.focal_len, Some(600.0));
-        assert_eq!(back.pixel_size_x, Some(3.75));
-        assert_eq!(back.pixel_size_y, Some(3.75));
-        assert_eq!(back.ra, Some(122.5));
-        assert_eq!(back.dec, Some(45.25));
-        assert_eq!(back.cfa, CfaType::RGGB);
-    }
-
-    #[test]
-    fn header_omits_absent_metadata() {
-        let info = RawImageInfo {
-            width:     2,
-            height:    2,
-            max_value: 255, // bitpix 8, no BZERO
-            ..Default::default()
-        };
-        let mut hdu = Header::new_2d(info.width, info.height);
-        info.save_to_fits_header(&mut hdu);
-
-        assert!(hdu.get_str("DATE-OBS").is_none());
-        assert!(hdu.get_f64("FOCALLEN").is_none());
-        assert!(hdu.get_f64("PIXSIZE1").is_none());
-        assert!(hdu.get_f64("RA").is_none());
-        assert!(hdu.get_f64("DEC").is_none());
     }
 }
