@@ -377,8 +377,8 @@ impl AscomAlpacaCameraShot {
                 max_value:  max_adu as _,
                 frame_type: frame_type.unwrap_or(FrameType::Lights),
                 camera:     aa_camera.static_name().to_string(),
-                gain:       aa_camera.gain().await.unwrap_or(0) as _,
-                offset:     aa_camera.offset().await.unwrap_or(0),
+                gain:       aa_camera.gain().await.ok(),
+                offset:     aa_camera.offset().await.ok(),
                 exposure,
                 bin:        aa_camera.bin_x().await.unwrap_or(1).max(1),
                 ccd_temp:   aa_camera.ccd_temperature().await.ok(),
@@ -425,7 +425,7 @@ impl CameraShot for AscomAlpacaCameraShot {
         }
 
         let cfa_array = self.raw_image_info.cfa.get_array();
-        Ok(RawImage::new(self.raw_image_info.clone(), data, cfa_array))
+        Ok(RawImage::new(self.raw_image_info.clone(), data, cfa_array, 0))
     }
 
     fn get_image(&self, _image: &mut crate::image::image::Image) -> eyre::Result<()> {

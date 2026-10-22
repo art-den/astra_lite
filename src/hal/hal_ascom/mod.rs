@@ -657,7 +657,7 @@ impl CameraShot for AscomCameraShot {
         }
 
         let cfa_array = info.cfa.get_array();
-        Ok(RawImage::new(info, data, cfa_array))
+        Ok(RawImage::new(info, data, cfa_array, 0))
     }
 
     fn get_image(&self, _image: &mut crate::image::image::Image) -> eyre::Result<()> {
@@ -1135,8 +1135,8 @@ impl AscomCamera {
             // Stable key for dark library folders: same string as `Camera::name()`
             // (the runtime `Name` property can differ from the chooser description)
             camera:     self.device_name.clone(),
-            gain:       st.device.gain().unwrap_or(0),
-            offset:     st.device.offset().unwrap_or(0),
+            gain:       st.device.gain().ok(),
+            offset:     st.device.offset().ok(),
             bin:        st.device.bin_x().unwrap_or(1).clamp(1, u8::MAX as i32) as u8,
             ccd_temp:   st.device.ccd_temperature().ok(),
             exposure,
