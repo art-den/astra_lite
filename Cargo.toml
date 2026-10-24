@@ -8,10 +8,11 @@ license = "MIT"
 build = "build.rs"
 
 [workspace]
-members = ["crates/ascom", "crates/indi"]
-# `ascom` is Windows-only and its live tests need ASCOM drivers installed, so the
-# default members stay at the root package.
-default-members = ["."]
+members = ["crates/ascom", "crates/indi", "crates/starsolver"]
+# `ascom` is Windows-only and its live tests need ASCOM drivers installed, so it is
+# not a default member. `starsolver` is built alongside the app: it is an external
+# plate-solving binary the app spawns next to its own executable.
+default-members = [".", "crates/starsolver"]
 
 [dependencies]
 gtk = "0.18"

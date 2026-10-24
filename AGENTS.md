@@ -5,7 +5,7 @@ Note for those editing this file: The file should contain only general informati
 - This is software for deepsky astrophotography and live stacking on low power PCs (like Raspberry Pi or Orange Pi). It also works on PCs. More information is in `README.md`.
 - Written in Rust (edition 2024).
 - Uses gtk3 via `gtk3-rs` crate for UI.
-- Cargo workspace: root package is the app; `crates/ascom` and `crates/indi` are members. Default member is only the root package (`ascom` is Windows-only).
+- Cargo workspace: root package is the app; `crates/ascom`, `crates/indi` and `crates/starsolver` are members. Default members are the root package and `crates/starsolver` (`ascom` is Windows-only).
 
 ## Abbreviations and acronyms
 
@@ -37,6 +37,7 @@ Note for those editing this file: The file should contain only general informati
 - `src/utils` - Utilities: IO, logging, math, timers, compression
 - `crates/ascom` - ASCOM Classic (COM, late binding) API crate. Windows-only
 - `crates/indi` - INDI API crate
+- `crates/starsolver` - Plate solver binary (spawned as an external process by `src/plate_solve`)
 - `map_data/` - Data files for sky map: star catalog (binary), DSO/named-star CSVs, constellation GeoJSON
 - `tests/` - Integration tests
 - `benches/` - Criterion benchmarks
