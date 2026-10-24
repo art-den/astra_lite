@@ -149,6 +149,14 @@ impl AstrometryPlateSolver {
         let mut cmd = Command::new(&exe);
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            // App is a GUI subsystem binary; without this Windows allocates
+            // a new console window for the child process.
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
         if !star_solver {
             cmd
                 .arg("--no-plots")
