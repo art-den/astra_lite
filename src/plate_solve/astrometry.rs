@@ -280,6 +280,8 @@ impl AstrometryPlateSolver {
         main_header.set_bool("SIMPLE", true);
         main_header.set_i64("BITPIX", 8);
         main_header.set_i64("NAXIS", 0);
+        main_header.set_i64("IMAGEW", img_width as _);
+        main_header.set_i64("IMAGEH", img_height as _);
         main_header.set_bool("EXTEND", true);
         fits_writer.write_header(&mut file, &main_header)?;
         let mut data = Vec::new();
