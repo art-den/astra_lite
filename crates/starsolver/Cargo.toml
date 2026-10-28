@@ -9,4 +9,24 @@ memmap2 = "0.9"
 clap = { version = "4.6", features = ["derive"] }
 rayon = "1.12"
 
-# Build profiles are inherited from the workspace root `Cargo.toml`.
+[features]
+# Test-only surface (`starsolver::genfield`, the synthetic-field generator) that
+# the targets under `tests/` need but a consumer of the crate must not see. Not
+# in `default`, so a normal build - and the shipped binary - carries none of it;
+# the self dev-dependency below switches it on for `cargo test`.
+test-util = []
+
+[dev-dependencies]
+# Cargo builds the lib for the integration targets with this feature on, which is
+# how `tests/` reaches `genfield` without the module joining the public API.
+starsolver = { path = ".", features = ["test-util"] }
+
+[profile.dev]
+opt-level = 1
+panic = "abort"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

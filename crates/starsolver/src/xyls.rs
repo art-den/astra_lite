@@ -29,9 +29,11 @@ pub struct Star {
     pub x: f64,
     pub y: f64,
     /// The `FLUX` column, carried through unchanged apart from the non-finite
-    /// clamp in `stars_from`. Nothing in the pipeline reads it: what stands in
-    /// for brightness is the star's POSITION in the list (see
-    /// [`crate::augment`]), never this value.
+    /// clamp in `stars_from`. The quad enumeration never reads it: what stands
+    /// in for brightness there is the star's POSITION in the list (see
+    /// [`crate::augment`]). The only reader is `verify::probe_stars`, which
+    /// picks the pre-verification probe's detections; with no FLUX column every
+    /// flux is 0.0 and that pick degenerates to list order.
     pub flux: f64,
 }
 

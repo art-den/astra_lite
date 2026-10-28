@@ -18,6 +18,7 @@ use crate::coords::{RAD2ARCSEC, rad2arcsec};
 use crate::fits::{BlobView, Endian, Fits, FitsHeaders, Header, Headers};
 use crate::kdtree::KdTree;
 use crate::params::{QSF_HI, QSF_LO};
+use crate::solver::star_outside_hint;
 
 /// Everything we need from the primary header (and the codes-tree header) to
 /// decide whether an index is usable.
@@ -215,6 +216,37 @@ impl IndexMeta {
         !(fmin > self.scale_upper_arcsec || fmax < self.scale_lower_arcsec)
     }
 
+    /// Mean catalog density over the sky this index covers, stars per square
+    /// degree.
+    ///
+    /// An all-sky index covers 4pi sr = 41252.96 deg^2. A ring-scheme healpix
+    /// tile of `hpnside` covers 1/(12 nside^2) of the sphere and healpix pixels
+    /// are equal-area, so one cell's area follows from `nside` alone. `None`
+    /// when the file offers no usable star count or nside, which callers must
+    /// treat as "no density estimate", never as 0.
+    #[must_use]
+    pub fn stars_per_deg2(&self) -> Option<f64> {
+        if self.nstars == 0 {
+            return None;
+        }
+        // Square degrees in the whole sphere, and the equal-area cells a
+        // ring-scheme healpix grid of `nside` divides the sphere into (12 at
+        // nside 1).
+        const SPHERE_DEG2: f64 = 41252.96125917812;
+        const HEALPIX_BASE_CELLS: f64 = 12.0;
+        let sphere_frac = if self.allsky {
+            1.0
+        } else {
+            if self.hpnside < 1 {
+                return None;
+            }
+            let n = self.hpnside as f64;
+            1.0 / (HEALPIX_BASE_CELLS * n * n)
+        };
+        let deg2 = SPHERE_DEG2 * sphere_frac;
+        Some(self.nstars as f64 / deg2)
+    }
+
     pub fn describe(&self) -> String {
         let mut s = format!(
             "index {}: quads={} stars={} dimquads={} scale=[{:.6}, {:.6}] arcsec, endian={}",
@@ -269,6 +301,48 @@ pub struct Index {
     /// (the star lookup it belongs to is out of scope), so `--dump-index` only
     /// echoes it, or -1 when the stars tree header has no such key.
     pub cutside: i64,
+}
+
+/// The quads of one index that a `--ra/--dec` hint can reach at all, and the
+/// compact codes tree built over them.
+///
+/// Which quads are reachable belongs to the index file and the hint alone - never
+/// to the field, the depth round or the worker schedule - so a sweep computes it
+/// once per `(file, hint)` and reuses it for every round. Two uses:
+/// * [`HintIndex::any`] decides whether the file stays in the sweep at all: with
+///   no reachable quad no code hit of its own can pass the pre-fit matched-star
+///   gate of `solver.rs::process_hit`, so the file never reaches a fit and
+///   `sweep.rs` drops it from the later rounds;
+/// * [`HintIndex::codes`] is the same subset as a small tree over only the
+///   reachable code records, which is what the queries of a hinted attempt search
+///   instead of the index's own (full) codes tree.
+pub(crate) struct HintIndex {
+    /// Whether the file holds at least one reachable quad.
+    pub any: bool,
+    /// The reachable quads as a tree, when the caller wanted one, there are any,
+    /// and the tree could be built (a subset too large to copy is not worth a
+    /// tree, see [`crate::params::HINT_TREE_MAX_RECORDS`], and the sweep's budget
+    /// for how many files get one). Without it the search stays on the index's
+    /// own codes tree, which answers the same queries.
+    pub codes: Option<HintCodes>,
+}
+
+/// The hint-reachable code records of one index file, as their own tree.
+pub(crate) struct HintCodes {
+    /// A tree over the reachable code records (`kdtree::KdTree::filtered`): same
+    /// quantized rows, same external-unit geometry, fewer records to descend.
+    pub tree: KdTree,
+    /// Record `i` of `tree` is the code of this index quad.
+    pub quad_of: Vec<u32>,
+}
+
+impl HintIndex {
+    /// An index with (or without) a reachable quad, for the sweep tests that
+    /// exercise the elimination rule without opening an index file.
+    #[cfg(test)]
+    pub(crate) fn for_test(any: bool) -> Self {
+        Self { any, codes: None }
+    }
 }
 
 impl Index {
@@ -390,11 +464,68 @@ impl Index {
     /// Dequantized unit-sphere position of index star `i`.
     #[must_use]
     pub fn star_xyz(&self, i: usize) -> [f64; 3] {
-        [
-            self.stars.coord(i, 0),
-            self.stars.coord(i, 1),
-            self.stars.coord(i, 2),
-        ]
+        self.stars.coord3(i)
+    }
+
+    /// Computes [`HintIndex`] for a precomputed hint circle (the pair
+    /// `PositionHint::precompute` produces), so the accept test here is the one
+    /// the solver's pre-fit gate applies: star `i` is in when
+    /// [`star_outside_hint`] reports it out of the circle, and quad `q` is
+    /// reachable when all `dimquads` of its stars are in.
+    ///
+    /// The two passes walk the star and quad tables in full, which faults the
+    /// pages they live on, so a sweep computes this at most once per index file
+    /// per process (see `sweep.rs`) - and that full walk is also what makes the
+    /// reachable subset cheap enough to be worth a tree of its own.
+    ///
+    /// `want_tree` asks for the compact tree over the reachable quads. A caller
+    /// that has no room for one (`sweep.rs`'s budget over the sweep's files)
+    /// passes `false`, and the quad walk then stops at the first reachable quad:
+    /// without a tree to fill, `any` is all the verdict is, and one quad answers
+    /// it.
+    #[must_use]
+    pub fn hint_index(&self, hint: &([f64; 3], f64), want_tree: bool) -> HintIndex {
+        let d = self.meta.dimquads;
+        // Star pass: one bit per star, in star-number order.
+        let mut instar = vec![0u64; self.meta.nstars.div_ceil(64)];
+        for i in 0..self.meta.nstars {
+            if !star_outside_hint(&self.star_xyz(i), hint) {
+                instar[i / 64] |= 1u64 << (i % 64);
+            }
+        }
+        // Quad pass: reachable when no slot is missing from the star bits. The
+        // slots past `dimquads` are the dim3 sentinel and stay unread. Collection
+        // stops one past the size a tree is still worth building; without a tree
+        // the first reachable quad is already the whole verdict.
+        let cap = if want_tree {
+            crate::params::HINT_TREE_MAX_RECORDS + 1
+        } else {
+            1
+        };
+        let mut quads: Vec<u32> = Vec::new();
+        for q in 0..self.meta.nquads {
+            let ids = self.quad(q);
+            if ids[..d]
+                .iter()
+                .all(|&s| instar[s as usize / 64] & (1u64 << (s as usize % 64)) != 0)
+            {
+                quads.push(q as u32);
+                if quads.len() >= cap {
+                    break;
+                }
+            }
+        }
+        let codes = if want_tree {
+            self.codes
+                .filtered(&quads)
+                .map(|(tree, quad_of)| HintCodes { tree, quad_of })
+        } else {
+            None
+        };
+        HintIndex {
+            any: !quads.is_empty(),
+            codes,
+        }
     }
 
     /// Text dump printed by the hidden `--dump-index` flag.
@@ -611,7 +742,7 @@ use crate::testutil;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coords::{deg2arcsec, radec_to_xyz, xyz_to_radec};
+    use crate::coords::{deg2arcsec, deg2distsq, distsq, radec_to_xyz, xyz_to_radec};
 
     /// The quads-table decoding, as an invariant over whichever installed
     /// index the selector returns: every sampled row addresses the star table,
@@ -714,6 +845,98 @@ mod tests {
             );
         }
         assert!(sampled > 1, "stride sampled only {sampled} stars");
+    }
+
+    /// The hint index must agree with the pre-fit matched-star gate it stands in
+    /// for: star `i` counts when `!(d > r2) && !d.is_nan()` for
+    /// `d = distsq(star_xyz(i), center)`, and a quad is reachable exactly when
+    /// every one of its `dimquads` slots counts. Checked against that formula over
+    /// the whole file, both for the yes/no verdict and for the record list the
+    /// compact tree is built from.
+    ///
+    /// Two of the circles are chosen so the verdict does not depend on what the
+    /// catalog holds: a wide circle drawn around a star of the file accepts every
+    /// quad, while a circle of radius 59.9 deg drawn around the center of the
+    /// sphere rather than on its surface has every unit-length star at distance
+    /// 1 from it, outside the radius, so it accepts nothing. The third is the
+    /// interesting case: a circle that takes in part of the file.
+    #[test]
+    fn hint_index_matches_the_star_by_star_gate() {
+        let Some(meta) = testutil::smallest_index(0) else {
+            return;
+        };
+        let index = testutil::load(meta);
+        let d = index.meta.dimquads;
+        let (ra, dec) = xyz_to_radec(index.star_xyz(index.quad(0)[0] as usize));
+        let mid = index.star_xyz(index.meta.nstars / 2);
+        for (center, r2, all, what) in [
+            (
+                radec_to_xyz(ra, dec),
+                deg2distsq(179.9),
+                Some(true),
+                "a circle that spans the whole sky",
+            ),
+            (
+                [0.0f64; 3],
+                deg2distsq(59.9),
+                Some(false),
+                "a circle around the center of the sphere",
+            ),
+            (mid, deg2distsq(6.0), None, "a narrow circle"),
+        ] {
+            let hint = (center, r2);
+            // The gate re-stated here rather than called: `star_outside_hint` is
+            // what this test must be able to contradict, negation and NaN
+            // behaviour included.
+            #[allow(clippy::neg_cmp_op_on_partial_ord)]
+            let star_in = |s: u32| {
+                let dd = distsq(&index.star_xyz(s as usize), &hint.0);
+                !(dd > hint.1) && !dd.is_nan()
+            };
+            let want: Vec<u32> = (0..index.meta.nquads)
+                .filter(|&q| index.quad(q)[..d].iter().all(|&s| star_in(s)))
+                .map(|q| q as u32)
+                .collect();
+            let got = index.hint_index(&hint, true);
+            assert_eq!(got.any, !want.is_empty(), "{what}: any = {}", got.any);
+            if let Some(all) = all {
+                assert_eq!(got.any, all, "{what}: any = {}", got.any);
+            }
+            // The cheaper call of a caller that has no room for a tree: the same
+            // verdict, reached without collecting the quads or building anything.
+            let bare = index.hint_index(&hint, false);
+            assert_eq!(
+                bare.any, got.any,
+                "{what}: want_tree=false changed the verdict"
+            );
+            assert!(
+                bare.codes.is_none(),
+                "{what}: want_tree=false still built a tree"
+            );
+            let Some(codes) = &got.codes else {
+                assert!(
+                    want.is_empty() || want.len() > crate::params::HINT_TREE_MAX_RECORDS,
+                    "{what}: {} reachable quads and no tree",
+                    want.len()
+                );
+                continue;
+            };
+            assert_eq!(
+                codes.tree.ndata,
+                usize::min(want.len(), crate::params::HINT_TREE_MAX_RECORDS),
+                "{what}: the tree holds a different number of records than the gate reaches"
+            );
+            let mut listed = codes.quad_of.clone();
+            listed.sort_unstable();
+            assert_eq!(
+                listed,
+                want.iter()
+                    .copied()
+                    .take(crate::params::HINT_TREE_MAX_RECORDS)
+                    .collect::<Vec<_>>(),
+                "{what}: the tree's records are not the quads the gate reaches"
+            );
+        }
     }
 
     /// Self-consistency over the installed set (headers for all, full load for
@@ -864,6 +1087,36 @@ mod tests {
 
     fn meta_ids(metas: &[IndexMeta]) -> Vec<i64> {
         metas.iter().map(|m| m.indexid).collect()
+    }
+
+    /// The catalog surface density behind the probe's chance-coincidence rate:
+    /// an all-sky index spreads its stars over the whole sphere, a healpix tile
+    /// over `1 / (12 nside^2)` of it, so the same star count means densities two
+    /// orders of magnitude apart. `None` (never 0) when the file gives nothing
+    /// to divide by.
+    #[test]
+    fn stars_per_deg2_divides_by_the_sky_the_index_covers() {
+        let allsky = |nstars: usize| IndexMeta {
+            nstars,
+            ..meta_with_scale(4211, 0.0, 1.0)
+        };
+        let tile = |nstars: usize, nside: i64| IndexMeta {
+            nstars,
+            ..meta_tile(4204, 3, nside, 0.0, 1.0)
+        };
+        // 182520 stars over 41252.96 deg^2.
+        assert!((allsky(182520).stars_per_deg2().unwrap() - 4.4244).abs() < 1e-4);
+        // nside 2 -> 48 equal-area cells -> 859.4 deg^2 per tile.
+        assert!((tile(484000, 2).stars_per_deg2().unwrap() - 563.16).abs() < 1e-2);
+        // A coarser grid spreads the same stars over more sky: nside 1 is 4x
+        // the area of nside 2, so a quarter of the density.
+        assert!(
+            (tile(484000, 1).stars_per_deg2().unwrap() - 563.16 / 4.0).abs() < 1e-2,
+            "nside 1 must dilute the same star count over 4x the sky"
+        );
+        // No star count, or a tile with no usable nside, is "no estimate".
+        assert_eq!(allsky(0).stars_per_deg2(), None);
+        assert_eq!(tile(484000, 0).stars_per_deg2(), None);
     }
 
     /// A healpix sub-region tile of `indexid`/`healpix` with the given scale

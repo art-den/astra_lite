@@ -308,12 +308,9 @@ mod tests {
         Star { x, y, flux: 1.0 }
     }
 
-    /// The field-center pixel of the `4656x3522-2` fixture frame.
-    fn center_pix() -> [f64; 2] {
-        [
-            pixel_center_of_size(FIELD2.1),
-            pixel_center_of_size(FIELD2.2),
-        ]
+    /// The field-center pixel of a `w x h` frame.
+    fn center_pix_of(w: f64, h: f64) -> [f64; 2] {
+        [pixel_center_of_size(w), pixel_center_of_size(h)]
     }
 
     /// Refines a hit and re-centres it on the field center: the report path of
@@ -323,7 +320,7 @@ mod tests {
     fn refined_report(index: &Index, hit: &QuadHit, stars: &[Star], w: f64, h: f64) -> Wcs {
         refine_wcs(index, hit, stars, w, h, false)
             .unwrap_or(hit.wcs)
-            .recentered_at(center_pix())
+            .recentered_at(center_pix_of(w, h))
     }
 
     /// The reports to compare: the solved hits of the round that won the field,
@@ -592,5 +589,51 @@ mod tests {
             w.crval_deg
         );
         assert!(w.parity_is_neg(), "parity");
+    }
+
+    /// Budget of the generated-field refine gate: what is left once the truth
+    /// carries no fit noise is the refine's own drift, so the center budget is
+    /// 4x tighter than `genfield::TOL_CENTER_PX`. Rotation and scale reuse the
+    /// generator's budgets: a refine that moves them is a bug, not noise.
+    const GEN_REFINE_CENTER_PX: f64 = 0.05;
+    /// Frame of the generated field this gate solves.
+    const GEN_FRAME: (f64, f64) = (1920.0, 1080.0);
+
+    /// Gate: on a generated field - a real catalog pattern with an exact truth -
+    /// every solved hit of the winning round, refined and re-centred, lands on
+    /// that truth. This is the "refine must not wander" pin: the raw fit comes
+    /// from one quad, the refine re-fits on a tight pair set, and the two must
+    /// agree with the sky to a fraction of a pixel, not merely with each other.
+    #[test]
+    fn refine_of_a_generated_field_lands_on_the_exact_truth() {
+        let Some((run, gen_truth)) = testutil::generated_field_run(23, GEN_FRAME.0, GEN_FRAME.1)
+        else {
+            return;
+        };
+        let truth = testutil::exact_truth(&gen_truth);
+        let index = testutil::load(run.meta);
+        // `min_want` 1: an empty hit list must fail the gate, not pass it vacuously.
+        for h in &testutil::solved_hits_with_peers(&run, 1) {
+            let quad = h.hit.quad;
+            let report = refined_report(&index, &h.hit, &run.stars, run.width, run.height);
+            let off = truth.center_off_px(&report);
+            assert!(
+                off <= GEN_REFINE_CENTER_PX,
+                "quad {quad}: refined report off the exact truth by {off} px"
+            );
+            let drot = testutil::wrap_deg(report.orientation_deg() - truth.orient_deg);
+            assert!(
+                f64::abs(drot) <= crate::genfield::TOL_ORIENT_DEG,
+                "quad {quad}: rotation off by {drot} deg"
+            );
+            assert!(
+                f64::abs(report.arcsec_per_pix() / truth.scale_arcsec - 1.0)
+                    <= crate::genfield::TOL_SIZE_FRAC,
+                "quad {quad}: scale {} vs truth {}",
+                report.arcsec_per_pix(),
+                truth.scale_arcsec
+            );
+            assert_eq!(report.parity_is_neg(), truth.parity_neg, "quad {quad}");
+        }
     }
 }

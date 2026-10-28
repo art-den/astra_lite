@@ -35,7 +35,7 @@
 
 use crate::codes::{canonical_ok, in_circle, parity_flip, swap_backbone};
 use crate::coords::{arcsec2rad, chord2_to_rad, deg2distsq, distsq, radec_to_xyz};
-use crate::index::Index;
+use crate::index::{HintCodes, Index};
 use crate::kdtree::Hit;
 use crate::params::{
     CODE_TOL, CXDX_MARGIN_FACTOR, DEADLINE_CHECK_PERIOD, DEADLINE_EVENT_BATCH, MAX_OBJS, QSF_HI,
@@ -105,13 +105,33 @@ impl PositionHint {
     }
 }
 
+/// The pre-fit hint test for ONE matched index star: is its unit direction
+/// outside the circle of a precomputed hint (`PositionHint::precompute`)?
+///
+/// A NaN distance - a corrupt index star - counts as outside, which the bare
+/// `d > r2` comparison would let through; the post-fit gate
+/// ([`PositionHint::contains`]) accepts NaN on purpose, so the two sites are not
+/// interchangeable.
+///
+/// The solver's per-hit gate (`Searcher::process_hit`) and the per-file
+/// reachability scan (`index.rs::Index::hint_index`) both run this one
+/// predicate, so a scan verdict can never disagree with the gate it stands in
+/// for.
+#[inline]
+#[must_use]
+pub(crate) fn star_outside_hint(xyz: &[f64; 3], hint: &([f64; 3], f64)) -> bool {
+    let d = distsq(xyz, &hint.0);
+    d > hint.1 || d.is_nan()
+}
+
 /// Everything about the field the solver sees.
 pub struct FieldSpec<'a> {
     /// Field stars in the order `xyls::load` delivers them (after the
-    /// reordering of `augment.rs`, which is NOT flux-sorted). The solver sees
-    /// only list position: slots are ordered by list rank (no flux is ever
-    /// read), the largest index of a quad is its "newest" star, and the depth
-    /// rounds are windows over this order.
+    /// reordering of `augment.rs`, which is NOT flux-sorted). The enumeration
+    /// sees only list position: slots are ordered by list rank, the largest
+    /// index of a quad is its "newest" star, and the depth rounds are windows
+    /// over this order. (`Star::flux` is read by the pre-verification probe
+    /// only, never here.)
     pub stars: &'a [Star],
     pub width: f64,
     pub height: f64,
@@ -121,6 +141,14 @@ pub struct FieldSpec<'a> {
     pub app_max: f64,
     /// `--ra/--dec/--radius` hint, degrees.
     pub radecs: Option<PositionHint>,
+    /// The index's compact hint codes tree (`index.rs`), when the sweep has built
+    /// one for this `(index, hint)` pair: the index's own codes tree restricted to
+    /// the quads whose stars all lie inside the hint circle. Searching it instead
+    /// of the full tree cannot change the hits that reach [`process_hit`], because
+    /// the `radecs` gate there stays in force and rejects exactly the records the
+    /// tree leaves out. `None` for a blind pass and for the first round of a
+    /// hinted one, which has no tree yet.
+    pub hint_codes: Option<&'a HintCodes>,
     /// Cap on the number of field stars this pass may use; `solve_index`
     /// clamps it further to `params::MAX_OBJS` (the emergency brake that keeps
     /// an unsolvable field from walking the whole list).
@@ -137,6 +165,12 @@ pub struct FieldSpec<'a> {
     /// the flag trips, only the work already in flight runs, so the overshoot
     /// is bounded by the sampling lag plus the in-flight tasks.
     pub deadline: Option<std::time::Instant>,
+    /// Cooperative cancel of a concurrent index attempt (`sweep.rs`): raised
+    /// once some earlier index of the same round has captured a solution, so
+    /// this attempt stops instead of walking its enumeration to the end. Read
+    /// as one relaxed load per [`Searcher::should_stop`] call, and reported as
+    /// [`SolveStats::cancelled`] - never as a timeout or a callback stop.
+    pub cancel: Option<&'a AtomicBool>,
 }
 
 /// A code hit that survived the scale checks and got a WCS fit.
@@ -199,6 +233,8 @@ pub struct SolveStats {
     pub stopped_early: bool,
     /// Set when the `FieldSpec::deadline` passed mid-enumeration.
     pub timed_out: bool,
+    /// Set when the `FieldSpec::cancel` flag was raised mid-enumeration.
+    pub cancelled: bool,
 }
 
 impl SolveStats {
@@ -214,6 +250,7 @@ impl SolveStats {
             hits: self.hits + o.hits,
             stopped_early: self.stopped_early || o.stopped_early,
             timed_out: self.timed_out || o.timed_out,
+            cancelled: self.cancelled || o.cancelled,
         }
     }
 }
@@ -234,11 +271,11 @@ struct Shared {
 /// check and the post-fit scale check, `on_hit` is called with the fitted WCS;
 /// return [`Flow::Stop`] from it to abandon the remaining depth steps
 /// (first-solution semantics).
-/// Note: production `solve_field` never returns `Stop` - its round capture has
-/// to see every hit of the round to keep the lexicographic-best solved one, so
-/// the printed solution does not depend on worker scheduling (`sweep.rs`);
-/// `Stop` is what the tests use and stays available for a first-solution
-/// caller.
+/// Note: production `solve_field` never returns `Stop` - the capture of the
+/// attempt that solves has to see every hit that attempt enumerates to keep the
+/// lexicographic-best solved one, so the printed solution does not depend on
+/// worker scheduling (`sweep.rs`); `Stop` is what the tests use and stays
+/// available for a first-solution caller.
 ///
 /// `on_hit` may be called concurrently from several worker threads: it must
 /// be `Sync` and guard its own mutable state. After it returns `Stop`, other
@@ -284,6 +321,16 @@ pub fn solve_index(
         }
         if shared.stop.load(Ordering::Relaxed) {
             total.stopped_early = true;
+            break;
+        }
+        // Same tail, one rank lower: a cancel is neither a deadline nor a
+        // callback `Stop`, and the sweep's fold needs to tell the three apart.
+        // This is tested only at a depth-step boundary, so an attempt cancelled
+        // during its LAST `imax` step finishes that step and reports
+        // `Nothing`/`Solved`, not `cancelled` - harmless for stdout, because
+        // the fold reports the earlier solver that raised the cancel either way.
+        if spec.cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            total.cancelled = true;
             break;
         }
     }
@@ -340,9 +387,15 @@ struct Searcher<'a> {
     /// Hint center as unit vector + squared chord radius.
     hint: Option<([f64; 3], f64)>,
     dimquads: usize,
+    /// The compact codes tree of the current hint, when the sweep has one; see
+    /// [`FieldSpec::hint_codes`].
+    hint_codes: Option<&'a HintCodes>,
     /// `--cpulimit` deadline, checked via the global counter, see
     /// [`Searcher::should_stop`].
     deadline: Option<std::time::Instant>,
+    /// Sibling-cancel flag of a concurrent index attempt, see
+    /// [`FieldSpec::cancel`].
+    cancel: Option<&'a AtomicBool>,
     /// Iterations accumulated locally before being added to the global
     /// counter in one atomic (avoids per-iteration cache-line ping-pong).
     deadline_events: usize,
@@ -384,7 +437,9 @@ impl<'a> Searcher<'a> {
             scale_hi: arcsec2rad(spec.app_max) * (1.0 + CODE_TOL),
             hint,
             dimquads: index.meta.dimquads,
+            hint_codes: spec.hint_codes,
             deadline: spec.deadline,
+            cancel: spec.cancel,
             deadline_events: 0,
             hitbuf: Vec::new(),
             bb: None,
@@ -615,15 +670,27 @@ impl<'a> Searcher<'a> {
         Flow::Continue
     }
 
-    /// Cooperative stop for all workers: the callback stopped, or the
-    /// `--cpulimit` deadline passed. Each call counts as one search event when
-    /// a deadline is set (a call that already sees a stop returns before
-    /// counting); events are counted globally but accumulated per worker in
+    /// Cooperative stop for all workers: the callback stopped, a sibling of a
+    /// concurrent chunk cancelled this attempt, or the `--cpulimit` deadline
+    /// passed. Each call counts as one search event when a deadline is set (a
+    /// call that already sees a stop returns before counting); events are
+    /// counted globally but accumulated per worker in
     /// batches of `DEADLINE_EVENT_BATCH` (one atomic RMW per batch), and the
     /// clock is read only when the global count crosses a
     /// `DEADLINE_CHECK_PERIOD` boundary, however many workers are running.
+    /// The cancel flag is tested BEFORE the deadline-event counter, so an
+    /// attempt that observes a cancel returns without reading the clock: it can
+    /// never also observe the deadline, and `solve_index` reports it as
+    /// `cancelled`, not `timed_out`.
     fn should_stop(&mut self) -> bool {
         if self.shared.stop.load(Ordering::Relaxed) || self.shared.timed_out.load(Ordering::Relaxed)
+        {
+            return true;
+        }
+        // The cancel flag belongs to this attempt alone and is written once per
+        // chunk, so the line stays shared and the load costs an L1 hit.
+        if let Some(flag) = self.cancel
+            && flag.load(Ordering::Relaxed)
         {
             return true;
         }
@@ -647,8 +714,15 @@ impl<'a> Searcher<'a> {
     }
 
     /// Ball search of one code vector at the CODE_TOL radius; the hits are
-    /// processed in ascending code-distance order, so a query offers its
-    /// closest code to the callback first.
+    /// processed in ascending code-distance order, so a query offers its closest
+    /// code to the callback first.
+    ///
+    /// Under a hint the sweep hands over a tree of only the reachable records
+    /// ([`FieldSpec::hint_codes`]), which is searched in place of the index's own:
+    /// a 3 deg circle covers a fraction of a percent of a wide index, so nearly
+    /// every query would otherwise descend through records the hint gate is going
+    /// to throw away. The hits it returns are records of that tree, so each one is
+    /// mapped back to the quad its record is the code of before it is processed.
     fn query(
         &mut self,
         code: &[f64],
@@ -662,7 +736,10 @@ impl<'a> Searcher<'a> {
         // Reuse the hit buffer across queries (hot loop).
         let mut buf = std::mem::take(&mut self.hitbuf);
         buf.clear();
-        self.index.codes.ball_search_into(code, CODE_TOL, &mut buf);
+        match self.hint_codes {
+            Some(hint) => hint.tree.ball_search_into(code, CODE_TOL, &mut buf),
+            None => self.index.codes.ball_search_into(code, CODE_TOL, &mut buf),
+        }
         buf.sort_by(|a, b| f64::total_cmp(&a.dist2, &b.dist2));
         let mut flow = Flow::Continue;
         for hit in buf.iter() {
@@ -673,7 +750,11 @@ impl<'a> Searcher<'a> {
                 flow = Flow::Stop;
                 break;
             }
-            if self.process_hit(hit.index, hit.dist2, corr, on_hit) == Flow::Stop {
+            let quad_no = match self.hint_codes {
+                Some(hint) => hint.quad_of[hit.index] as usize,
+                None => hit.index,
+            };
+            if self.process_hit(quad_no, hit.dist2, corr, on_hit) == Flow::Stop {
                 flow = Flow::Stop;
                 break;
             }
@@ -685,6 +766,14 @@ impl<'a> Searcher<'a> {
     /// Turns one code hit into a candidate solution: hint gate on the matched
     /// stars -> pre-fit |AB| scale gate -> TAN fit -> post-fit scale gate ->
     /// `on_hit`. Verification and odds are the caller's (`verify.rs`).
+    ///
+    /// This star-by-star gate is the ONLY accept test a hinted hit faces. The
+    /// hint structures of `index.rs` decide which records a query can return, never
+    /// whether a returned hit is accepted, so an attempt that searched the index's
+    /// own codes tree (a blind round, or a file outside the sweep's tree budget)
+    /// and one that searched the filtered tree accept exactly the same hits. A
+    /// per-hit quad mask would only re-test what this loop already tests on its way
+    /// to the fit, so there is none.
     fn process_hit(
         &mut self,
         quad_no: usize,
@@ -698,14 +787,13 @@ impl<'a> Searcher<'a> {
         let mut fieldxy = [[0.0f64; 2]; 4];
         for i in 0..d {
             starxyz[i] = self.index.star_xyz(stars[i] as usize);
-            if let Some((center, r2)) = self.hint {
+            if let Some(hint) = self.hint {
                 // Any matched star outside the hint circle rejects the hit
                 // before any fitting. A NaN distance (a corrupt index star) is
                 // rejected too, which the bare `d > r2` comparison would let
                 // through; the post-fit gate accepts NaN on purpose, so the two
                 // sites are not interchangeable.
-                let d = distsq(&starxyz[i], &center);
-                if d > r2 || d.is_nan() {
+                if star_outside_hint(&starxyz[i], &hint) {
                     self.stats.radec_skipped += 1;
                     return Flow::Continue;
                 }
@@ -810,15 +898,18 @@ mod tests {
             app_min: 0.95,
             app_max: 1.05,
             radecs: None,
+            hint_codes: None,
             // Two rounds of the sweep's depth ramp: objs 1-20.
             max_objs: 20,
             obj_start: 0,
             verbose: false,
             deadline: None,
+            cancel: None,
         };
         let best = std::sync::Mutex::new((f64::NEG_INFINITY, 0usize));
+        let pre = crate::verify::FieldPre::new(&run.stars);
         solve_index(&index, &spec, &|hit| {
-            let vr = crate::verify::verify_hit(&index, hit, &run.stars, 1920.0, 1080.0);
+            let vr = crate::verify::verify_hit(&index, hit, &run.stars, &pre, 1920.0, 1080.0);
             let mut b = best.lock().unwrap();
             if vr.bestlogodds > b.0 {
                 *b = (vr.bestlogodds, vr.nmatch);
@@ -848,10 +939,14 @@ mod tests {
             app_min: 0.1 * 3600.0 / 4656.0,
             app_max: 180.0 * 3600.0 / 4656.0,
             radecs,
+            // The compact hint tree is the sweep's business; these passes exercise
+            // the gate and the index's own codes tree.
+            hint_codes: None,
             max_objs: 15,
             obj_start: 0,
             verbose: false,
             deadline: None,
+            cancel: None,
         }
     }
 
@@ -1212,6 +1307,94 @@ mod tests {
         assert!(
             stats.queries > 0,
             "the search never even started: {stats:?}"
+        );
+    }
+
+    /// The other half of the tail's precedence: an attempt that times out while
+    /// a cancel flag is present (but never raised) is still reported as a
+    /// timeout, so the sweep's fold prints the timeout line instead of treating
+    /// the attempt as speculative work to be dropped.
+    #[test]
+    fn a_timeout_is_not_reported_as_a_cancel() {
+        let Some((run, index)) = field1_winner_index() else {
+            return;
+        };
+        let mut s = spec(&run.stars, None);
+        s.max_objs = run.max_objs;
+        s.deadline = Some(std::time::Instant::now());
+        let cancelled = AtomicBool::new(false);
+        s.cancel = Some(&cancelled);
+        let stats = solve_index(&index, &s, &|_| Flow::Continue);
+        assert!(
+            stats.timed_out,
+            "the deadline must still be reported: {stats:?}"
+        );
+        assert!(
+            !stats.cancelled,
+            "a timeout must not be reported as a cancel: {stats:?}"
+        );
+        assert!(
+            !cancelled.load(Ordering::Relaxed),
+            "the deadline path must not raise the cancel flag: {stats:?}"
+        );
+    }
+
+    /// A cancel raised by a sibling is reported as `cancelled` - never as a
+    /// timeout, never as a callback stop - and it winds the walk down instead of
+    /// running the round to its end.
+    #[test]
+    fn cancel_stops_the_search_and_reports_cancelled() {
+        let Some((run, index)) = field1_winner_index() else {
+            return;
+        };
+        let mut s = spec(&run.stars, None);
+        s.max_objs = run.max_objs;
+        let full = solve_index(&index, &s, &|_| Flow::Continue);
+        assert!(full.hits > 1, "the round must offer more than one hit");
+        assert!(
+            !full.cancelled && !full.timed_out && !full.stopped_early,
+            "the uncancelled round reported a reason to stop: {full:?}"
+        );
+
+        // Cancelled before the first query: every worker stops at its first
+        // `should_stop`, so nothing reaches the callback at all.
+        let mut s = spec(&run.stars, None);
+        s.max_objs = run.max_objs;
+        let flag = AtomicBool::new(true);
+        s.cancel = Some(&flag);
+        let stats = solve_index(&index, &s, &|_| Flow::Continue);
+        assert!(
+            stats.cancelled,
+            "the cancel flag never reached the stats: {stats:?}"
+        );
+        assert!(!stats.timed_out, "a cancel is not a timeout: {stats:?}");
+        assert!(
+            !stats.stopped_early,
+            "a cancel must not be reported as a callback stop: {stats:?}"
+        );
+        assert_eq!(stats.hits, 0, "a pre-cancelled walk must deliver nothing");
+        assert_eq!(
+            stats.queries, 0,
+            "a pre-cancelled walk must not even reach a code search: {stats:?}"
+        );
+
+        // Cancelled mid-round (the callback stands for the sibling that just
+        // solved): the walk stops within a few hits of the flag, not at the end
+        // of the round.
+        let flag = AtomicBool::new(false);
+        s.cancel = Some(&flag);
+        let stats = solve_index(&index, &s, &|_| {
+            flag.store(true, Ordering::Relaxed);
+            Flow::Continue
+        });
+        assert!(
+            stats.cancelled,
+            "a cancel raised mid-round never reached the stats: {stats:?}"
+        );
+        assert!(!stats.timed_out && !stats.stopped_early, "{stats:?}");
+        assert!(
+            stats.hits < full.hits,
+            "the cancelled walk ran the whole round: {stats:?} vs {full:?}"
         );
     }
 

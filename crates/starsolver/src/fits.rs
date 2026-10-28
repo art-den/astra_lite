@@ -313,8 +313,11 @@ fn data_size(header: &Header) -> Result<usize> {
 #[derive(Clone)]
 pub enum Bytes {
     Mmap(std::sync::Arc<memmap2::Mmap>),
-    /// Backing for crafted in-memory test files ([`Fits::from_bytes`]).
-    #[cfg(test)]
+    /// Backing for bytes the process owns instead of a file: crafted test files
+    /// ([`Fits::from_bytes`]) and the compact hint-filtered codes tree
+    /// ([`KdTree::filtered`](crate::kdtree::KdTree::filtered)), which is a few
+    /// thousand records and so stays far inside the RSS budget that keeps real
+    /// index tables mapped.
     Owned(std::sync::Arc<[u8]>),
 }
 
@@ -323,7 +326,6 @@ impl Bytes {
     pub fn as_slice(&self) -> &[u8] {
         match self {
             Bytes::Mmap(m) => m,
-            #[cfg(test)]
             Bytes::Owned(v) => v,
         }
     }
@@ -333,7 +335,6 @@ impl std::fmt::Debug for Bytes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (kind, len) = match self {
             Bytes::Mmap(m) => ("mmap", m.len()),
-            #[cfg(test)]
             Bytes::Owned(v) => ("owned", v.len()),
         };
         write!(f, "Bytes({kind}, {len} bytes)")
@@ -423,12 +424,41 @@ impl BlobView {
         }
     }
 
+    /// Whether element reads are the single multiply-add layout (no row walk).
+    #[must_use]
+    pub fn is_flat(&self) -> bool {
+        self.flat
+    }
+
     /// The whole data area as one slice (only for flat views; used by the
-    /// tiny fixed-size kd-tree `range` tables at load time).
+    /// tiny fixed-size kd-tree `range` tables at load time and by the flat
+    /// little-endian coordinate fast paths).
     #[must_use]
     pub fn raw_bytes(&self) -> &[u8] {
         debug_assert!(self.flat);
         &self.bytes.as_slice()[self.data_off..self.data_off + self.nrows * self.row_len]
+    }
+
+    /// A flat little-endian view over bytes the process owns: an array a run-time
+    /// kd-tree build writes instead of a file ([`KdTree::filtered`]). `row_len`
+    /// (>= 1) is the width of one row, so the view reads as `bytes.len() / row_len`
+    /// rows and takes the same element accessors as a mapped one; being flat and
+    /// little-endian is what keeps the searches on their fast decode paths.
+    ///
+    /// [`KdTree::filtered`]: crate::kdtree::KdTree::filtered
+    #[must_use]
+    pub(crate) fn owned(bytes: Vec<u8>, row_len: usize) -> Self {
+        debug_assert!(row_len >= 1, "owned view with a zero-width row");
+        let nrows = bytes.len() / row_len;
+        Self {
+            bytes: Bytes::Owned(bytes.into()),
+            data_off: 0,
+            row_len,
+            col_off: 0,
+            col_bytes: row_len,
+            nrows,
+            flat: true,
+        }
     }
 }
 

@@ -26,7 +26,11 @@
 //!
 //! The public API is [`Args`], [`run`], [`run_into`] and the [`Solution`] data
 //! [`run_into`] returns, nothing else: every module below stays private, so the
-//! crate makes no library-API promises (frozen scope). `main.rs` is a thin
+//! crate makes no library-API promises (frozen scope). The one exception is
+//! [`genfield`], the synthetic-field generator the test suite shares between its
+//! unit and integration targets; it exists only under the non-default
+//! `test-util` feature (or `cfg(test)`), so a normal build - and the shipped
+//! binary - still exposes exactly the four items above. `main.rs` is a thin
 //! binary that parses [`Args`], calls [`run`] and maps its result onto the exit
 //! codes (0 solved, 1 not solved, 2 error); [`run`] is [`run_into`] bound to the
 //! process stdout/stderr, while an embedding host gets the solution as data and
@@ -49,6 +53,11 @@ mod cli;
 mod codes;
 mod coords;
 mod fits;
+// Test-only surface; see the module docs for why it is public and the pipeline
+// modules are not.
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub mod genfield;
 mod healpix;
 mod index;
 mod indexdir;
@@ -191,8 +200,9 @@ pub fn run_into(
     // `selected` is already in sweep order: `load_metas_in` sorts by descending
     // index quad scale, so the indices that cover the widest fields go first.
     // Ordering by the indices rather than by their file names is a project
-    // decision. The first index that yields a verified solution ends the sweep
-    // (the round that produced it still runs to its end - see `solve_field`).
+    // decision. The sweep reports the first index that yields a verified solution
+    // and stops there; the attempts behind it in the same chunk run until
+    // cancelled and later chunks are never issued (see `solve_field`).
     //
     // The solve budget `--cpulimit` (seconds) becomes an absolute wall-clock
     // deadline; it is floored so a 0 budget cannot expire before the first check.

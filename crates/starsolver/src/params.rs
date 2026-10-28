@@ -49,7 +49,7 @@ pub const PARITY_BOTH: bool = true;
 
 /// Prior probability that a detected field star has no index counterpart
 /// (noise detection, moving object, source below the index's flux limit). It is
-/// `delta` in `verify::odds_scan`: a star that adds no match contributes
+/// `delta` in `verify::odds_scan_inner`: a star that adds no match contributes
 /// `ln(delta + (1-delta) * matches/nr)` nats, and a match's Gaussian peak
 /// carries the factor (1-delta).
 ///
@@ -87,7 +87,7 @@ pub const VERIFY_PIX: f64 = 1.0;
 pub const INDEX_JITTER_ARCSEC: f64 = 1.0;
 
 /// Floor for the odds accumulator, as plain odds: once the running log-odds of
-/// one hit drops below ln(this), `verify::odds_scan` abandons the rest of the
+/// one hit drops below ln(this), `verify::odds_scan_inner` abandons the rest of the
 /// field list and sets `VerifyResult::bailed`. Documentation only as a
 /// constant: the value the code compares is `BAIL_THRESHOLD_LN` below, and the
 /// threshold itself is live.
@@ -101,7 +101,7 @@ pub const INDEX_JITTER_ARCSEC: f64 = 1.0;
 pub const BAIL_THRESHOLD: f64 = 1e-100;
 
 /// `ln(BAIL_THRESHOLD)`, precomputed because `f64::ln` is not a `const fn`.
-/// This is the value `verify::verify_hit` passes to `odds_scan` as `bail_ln`;
+/// This is the value `verify::verify_hit` passes to `odds_scan_inner` as `bail_ln`;
 /// the plain-odds form above documents the same threshold.
 pub const BAIL_THRESHOLD_LN: f64 = -230.25850929940458;
 
@@ -143,7 +143,7 @@ pub const ODDS_TO_SOLVE_LN: f64 = 20.72326583694641;
 /// or a tighter scale range.
 pub const MAXQUADS: usize = 0;
 /// Cap on the number of matched stars a solution may use; 0 means unlimited.
-/// Documentation only: `verify::odds_scan` walks the whole test-star list,
+/// Documentation only: `verify::odds_scan_inner` walks the whole test-star list,
 /// stopping only at the bail floor or at its early-stop threshold, which
 /// `verify::verify_hit` passes as infinity.
 pub const MAXMATCHES: usize = 0;
@@ -201,7 +201,7 @@ pub const MAX_WIDTH_DEG: f64 = 180.0;
 /// Nearest-neighbour match radius of the odds scan, in sigmas: each field star
 /// takes the nearest still-unused reference star whose squared pixel distance
 /// is at most `NN_RADIUS_SIGMA^2 * sigma_i^2` = `25 * sigma_i^2`
-/// (`verify::odds_scan`), where `sigma_i^2` is the VERIFY_PIX/INDEX_JITTER
+/// (`verify::odds_scan_inner`), where `sigma_i^2` is the VERIFY_PIX/INDEX_JITTER
 /// sigma2 expanded by the star's distance from the quad backbone's midpoint
 /// (`verify::verify_hit`).
 ///
@@ -224,6 +224,92 @@ pub const NN_RADIUS_SIGMA: f64 = 5.0;
 /// than the cap never solves; raise it and the late rounds cost far more than
 /// the shipped fields, which solve in the first rounds, ever need.
 pub const MAX_OBJS: usize = 150;
+
+/// How many indices one depth round attempts at once (`sweep::solve_field`).
+///
+/// The round structure and the sweep order are unchanged: consecutive indices
+/// of the round are issued together on the rayon pool and the chunk's results
+/// are folded in sweep order, so the reported solution is still the first
+/// solving index of the round. The lever is the idle pool: a round that walks
+/// its indices one at a time keeps all but one worker empty, and the shallow
+/// rounds of a small field are mostly index-opening overhead.
+///
+/// It is also the memory knob, and the reason it is 3 rather than larger:
+/// validating an index faults most of its tables in, so the resident set of a
+/// round is ~K times that of one index, and the < 200 MB peak-RSS target is what
+/// bounds K (the measured MiB series is in `AGENTS.md`, since it depends on the
+/// files one machine happens to have). The cost is clean page cache, evictable
+/// under pressure - but the target is a target.
+pub const INDEX_FANOUT: usize = 3;
+
+/// Target leaf size of a hint-filtered codes tree (`kdtree::KdTree::filtered`):
+/// the build stops halving once a leaf would hold fewer records than this, so a
+/// query descends about `log2(records / this)` levels and then scans a handful of
+/// codes.
+///
+/// It trades descent against scanned records and changes nothing else: the tree
+/// holds the same records whatever the value, so no hit set depends on it. Lower
+/// makes the tree deeper (more nodes per query), higher makes each visited leaf
+/// scan more codes.
+///
+/// The halting rule is not the leaf occupancy. A tree's leaf count is a power of
+/// two and the build halves only while the smaller half would still hold this
+/// many, so a built leaf averages 16 to 31 records (a file whose subset holds
+/// fewer than 32 records gets a single leaf holding all of them).
+pub const HINT_TREE_LEAF: usize = 16;
+
+/// How many split dimensions one node of a hint-filtered tree tries, widest
+/// spread first, before it gives up and hands all its records to the left child
+/// (`kdtree::KdTree::filtered`).
+///
+/// A node whose records share a coordinate in every dimension has no valid split
+/// plane at all, so this only bounds the search for one; with `ndim` of 4 or fewer
+/// it never binds.
+pub const HINT_TREE_MAX_PART: usize = 8;
+
+/// Most records a hint-filtered codes tree is built for
+/// (`kdtree::KdTree::filtered`). It is the per-file RSS guard for that tree:
+/// unlike an index table it is anonymous memory (`ndim` integers per record plus
+/// two `u32` per node), so past this size the tree is not built and the search
+/// stays on the index's own tree.
+///
+/// It is a byte budget and nothing else - counted at the row width
+/// [`HINT_TREE_MAX_ROW_BYTES`] states, and the per-file term of the sweep-wide
+/// bound [`HINT_TREE_MAX_FILES`] gives. It is not a claim about when a tree stops
+/// paying, and there is a cliff at it: a file whose eligible count lands one past
+/// the cap pays the full star and quad walk, gets no tree, and searches its own
+/// codes tree in every later round, which costs time and no memory. Widening the
+/// cap was measured to buy that time back only on a wide hint circle that cannot
+/// contain the field, at a twice- to four-fold larger worst case for the same
+/// anonymous memory, and to cost a little on a circle that can; the value
+/// therefore stays where the memory budget is, not where the last file that could
+/// have used a tree is.
+pub const HINT_TREE_MAX_RECORDS: usize = 16384;
+
+/// Widest record row (in bytes) a hint-filtered codes tree is built for
+/// (`kdtree::KdTree::filtered`): four code dimensions of `u32` data, the widest
+/// codes tree the index format reaches (`DIMQUADS` of at most 4 means `ndim` of
+/// at most `2 * (4 - 2)`).
+///
+/// This is the row [`HINT_TREE_MAX_RECORDS`] was counted at. A caller with wider
+/// rows would get a tree bigger by the same factor as its row, so `filtered`
+/// refuses them instead of letting the record cap silently mean a larger budget.
+pub const HINT_TREE_MAX_ROW_BYTES: usize = 4 * 4;
+
+/// How many index files of one hinted sweep may hold a hint-filtered codes tree
+/// (`sweep.rs`): the aggregate RSS guard those trees need and the per-file cap
+/// cannot give them, because a hint can leave many selected files each with a
+/// tree of its own, retained for the rest of the sweep. Together the two caps
+/// hold the trees to `HINT_TREE_MAX_FILES * HINT_TREE_MAX_RECORDS` records of
+/// anonymous memory - at `ndim = 4` and `u32` codes some 20 MB.
+///
+/// The budget is spent in sweep order, which settles which files get a tree with
+/// no cross-file negotiation: a file past the budget keeps searching the index's
+/// own codes tree, which costs time and no memory. A total is deliberately not
+/// charged as the files are opened: that would decide the set of tree-holding
+/// files by the order the pool workers arrive, and every cross-attempt aggregate
+/// of a sweep must be schedule-independent (see `sweep.rs`).
+pub const HINT_TREE_MAX_FILES: usize = 64;
 
 /// Bin budget of the input reordering in `augment::uniformize`: the survivors
 /// of the line filter are binned on an `nx x ny` grid over their bounding box,
@@ -323,3 +409,93 @@ pub const MAX_REFINE_ITERS: usize = 3;
 /// opt out more often on sparse fields, whose printed WCS then keeps the raw
 /// fit's anchor noise.
 pub const REFINE_MIN_PAIRS: usize = 5;
+
+// ---- Pre-verification probe (`verify::verify_probe`) -----------------------
+//
+// Calibrated on a dump of every code hit of the five shipped fields and of 196
+// generated blind fields, with the probe's per-probe distances recorded next to
+// the oracle `nmatch`. Outcome, recorded here because the dump itself is not in
+// the repository: 0 of the 474 hits that verify as solved are rejected, while
+// 94.8% of the shipped fields' hits and 83.3% of the generated ones are. Each
+// number below is the value that keeps some solving hit's margin; the
+// accompanying risk of any of them is that a false rejection loses a field
+// (exit 1), so they move only together with a new calibration.
+
+/// Cap on how many of the brightest field detections the probe projects through
+/// a fitted hit and looks up in the index.
+///
+/// Set by the solving hits, not the garbage: the hit that solves the shipped
+/// `platesolve_...` field banks 20 of 91 test stars but only 4 of 16 probe
+/// matches at 3 sigma, which is a 6.3e-2 binomial risk of falling under an
+/// acceptance count of 2. At 32 it banks 10, and the worst risk over the dumped
+/// solving hits is 1.2e-3 while the garbage chance-pass grows only 0.17% ->
+/// 0.18%. Every rejected hit pays for its probes - one tree search each on the
+/// fallback path, or `PROBE_STARS x collected` distance tests against one ball
+/// (see PROBE_BALL_MAX_STARS) - so raising this further buys safety with the
+/// time the probe exists to save.
+pub const PROBE_STARS: usize = 32;
+
+/// Floor on the detections the probe needs before it will judge a hit at all:
+/// below it a good fit's count is dominated by luck. The dumped solving hits go
+/// down to 10 probes and still bank 4-10 matches there.
+pub const PROBE_MIN_PROBES: usize = 8;
+
+/// Radius of the probe's index lookup, in UNWIDENED sigmas.
+///
+/// Deliberately not the per-star variance `verify_hit` matches with: that one
+/// grows with the distance from the quad backbone, reaching ~10 px on an 800x600
+/// frame, so a "few sigma" probe becomes a search over a visible slice of the
+/// frame and stops discriminating.
+///
+/// 3 sigma is where the measured solving-hit counts saturate: at 1 sigma two of
+/// the nine shipped-field solving hits fall to 1-2 matches and would be
+/// rejected, while 4-5 sigma pushes the density-derived acceptance count to 3-5
+/// without the true counts growing, eating the margin back.
+pub const PROBE_RADIUS_SIGMA: f64 = 3.0;
+
+/// Smallest number of probe matches that lets a hit through.
+///
+/// The worst margin over the 474 dumped solving hits is +2 (count 4 against 2)
+/// on the all-sky family, +4 on the tile family, so this has no room to go up:
+/// at 3 the shipped `platesolve_...` field and one generated field stop solving.
+pub const PROBE_MIN_MATCHES: usize = 2;
+
+/// Multiplier of the expected chance-match count in the acceptance rule: a hit
+/// passes when its measured count reaches `ceil(PROBE_RANDOM_FACTOR * expected)`
+/// (or [`PROBE_MIN_MATCHES`], whichever is larger).
+///
+/// Keeps the garbage chance-pass share at 0.18% of all shipped-field hits, and
+/// is what makes one floor mean different things per index: 2 at 563
+/// stars/deg^2 and 2.9 "/px, but 10 for the same tile at 7.8 "/px.
+pub const PROBE_RANDOM_FACTOR: f64 = 4.0;
+
+/// Probe abstains - answers "verify it" - when the index holds fewer than this
+/// many stars under the frame, where a good fit may have nothing to match.
+///
+/// This is the value the margin above was measured at (the worst dumped solving
+/// hit sits at 15.0 catalog stars in frame). Judging below it was never tested,
+/// and abstaining is always safe - it only costs the verification the probe
+/// exists to avoid - so the guard sits at the validated value, not one below it.
+pub const PROBE_MIN_CAT_STARS: f64 = 12.0;
+
+/// Ceiling on the catalog stars the probe's batched lookup may collect, and on
+/// the frame's estimated catalog content for which it is tried at all.
+///
+/// Pure performance threshold, no effect on the verdict: the ball it collects is
+/// a superset of the per-probe lookup balls, so both paths answer the same
+/// question. Two quantities are gated on it: the frame's estimated catalog
+/// content (`cat_in_frame`, the tile-mean estimate that decides whether the
+/// batched path is tried at all), and the number of stars the collection
+/// actually holds, which abandons the ball for the per-probe searches once it
+/// reaches this ceiling. The batched test costs one distance evaluation per
+/// (probe, collected star) pair against the ~31 tree descents it replaces, so it
+/// pays while the collected count stays around a hundred.
+///
+/// One value serves both ceilings on purpose: the entry estimate and the
+/// collection abort ask the same question, once of the tile mean and once of the
+/// ball itself.
+///
+/// Lower and more calls fall back to one search per probe (slower, never wrong);
+/// higher and the coarse-scale end pays `PROBE_STARS x collected` evaluations on
+/// one big ball.
+pub const PROBE_BALL_MAX_STARS: usize = 128;

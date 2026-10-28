@@ -12,7 +12,7 @@
 //! parity - and `scale = sqrt(sum|p|^2 / sum|w|^2)` over the centered std
 //! coords `p` and the centered pixels `w` (rad/px, stored as deg/px).
 
-use crate::coords::rad2deg;
+use crate::coords::{deg2rad, rad2deg};
 
 /// CD-based TAN WCS (FITS convention): intermediate world coords in degrees,
 /// `[xi, eta] = CD * ([x, y] - crpix)`, where `xi` grows with RA and `eta`
@@ -428,6 +428,147 @@ pub fn xyz_to_std(v: [f64; 3], v0: [f64; 3]) -> [f64; 2] {
     [xi, eta]
 }
 
+/// An `xyz -> pixel` map precomputed once per WCS: the gnomonic projection of
+/// a unit-sphere vector onto this WCS's pixels by dot products, with no
+/// per-star trigonometry.
+///
+/// The tangent frame is the one [`radec_to_std`] uses - `ra0`/`dec0` of
+/// `crval_deg` fix `e1`/`e2`/`w0` there, so this map agrees with
+/// `radec_to_pix(xyz_to_radec(v))` everywhere, including at an exact pole
+/// (unlike [`xyz_to_std`]'s vector basis, which rotates 90 degrees there).
+/// The algebra differs (expanded dot products instead of nested trig), so the
+/// two paths agree to rounding, not bit for bit. Like every TAN map it is only
+/// meaningful within the hemisphere around `crval_deg`: a vector with
+/// `v . w0 <= 0` has no projection and nothing here rejects one (the
+/// `verify_hit` caller discards the resulting wild pixel coordinates with its
+/// in-frame test, as before).
+pub struct XyzToPix {
+    /// `rad2deg / det(CD) * CD^-1 * [e1; e2]` written out: one row per axis.
+    rows: [[f64; 3]; 2],
+    /// Gnomonic depth: the dot product `v . w0` dividing both rows.
+    w0: [f64; 3],
+    crpix: [f64; 2],
+}
+
+impl XyzToPix {
+    /// Project a unit-sphere vector to pixel coordinates.
+    #[inline]
+    #[must_use]
+    pub fn project(&self, v: [f64; 3]) -> (f64, f64) {
+        let den = self.w0[0] * v[0] + self.w0[1] * v[1] + self.w0[2] * v[2];
+        let r0 = &self.rows[0];
+        let r1 = &self.rows[1];
+        (
+            (r0[0] * v[0] + r0[1] * v[1] + r0[2] * v[2]) / den + self.crpix[0],
+            (r1[0] * v[0] + r1[1] * v[1] + r1[2] * v[2]) / den + self.crpix[1],
+        )
+    }
+}
+
+impl Wcs {
+    /// Build the [`XyzToPix`] map of this WCS. The four `sin`/`cos` of
+    /// `crval_deg` and the CD inversion are paid once per call site instead of
+    /// once per projected star.
+    #[must_use]
+    pub fn xyz_to_pix_map(&self) -> XyzToPix {
+        let (ra0, dec0) = (
+            self.crval_deg[0].to_radians(),
+            self.crval_deg[1].to_radians(),
+        );
+        let (sin_ra0, cos_ra0) = (f64::sin(ra0), f64::cos(ra0));
+        let (sin_dec0, cos_dec0) = (f64::sin(dec0), f64::cos(dec0));
+        // The (ra0, dec0) tangent frame of `radec_to_std`: e1 along increasing
+        // RA, e2 north, w0 the tangent point itself.
+        let e1 = [-sin_ra0, cos_ra0, 0.0];
+        let e2 = [-sin_dec0 * cos_ra0, -sin_dec0 * sin_ra0, cos_dec0];
+        let w0 = [cos_dec0 * cos_ra0, cos_dec0 * sin_ra0, sin_dec0];
+        // `radec_to_pix` reads dx = (CD11*xi - CD01*eta)/det, dy =
+        // (-CD10*xi + CD00*eta)/det with xi/eta in degrees; fold the CD
+        // inverse and the radian->degree scale into the two dot-product rows.
+        let k = rad2deg(1.0) / self.cd_determinant();
+        let rows = [
+            std::array::from_fn(|d| k * (self.cd[1][1] * e1[d] - self.cd[0][1] * e2[d])),
+            std::array::from_fn(|d| k * (-self.cd[1][0] * e1[d] + self.cd[0][0] * e2[d])),
+        ];
+        XyzToPix {
+            rows,
+            w0,
+            crpix: self.crpix,
+        }
+    }
+
+    /// Build the [`PixToXyz`] map of this WCS: the same tangent frame as
+    /// [`Wcs::xyz_to_pix_map`], read in the other direction.
+    #[must_use]
+    pub fn pix_to_xyz_map(&self) -> PixToXyz {
+        let (ra0, dec0) = (
+            self.crval_deg[0].to_radians(),
+            self.crval_deg[1].to_radians(),
+        );
+        let (sin_ra0, cos_ra0) = (f64::sin(ra0), f64::cos(ra0));
+        let (sin_dec0, cos_dec0) = (f64::sin(dec0), f64::cos(dec0));
+        let e1 = [-sin_ra0, cos_ra0, 0.0];
+        let e2 = [-sin_dec0 * cos_ra0, -sin_dec0 * sin_ra0, cos_dec0];
+        let w0 = [cos_dec0 * cos_ra0, cos_dec0 * sin_ra0, sin_dec0];
+        // `std_to_radec` takes std = CD * (pixel - crpix) in radians, so the
+        // per-pixel work collapses onto two sky-direction columns.
+        let k = deg2rad(1.0);
+        let cols = [
+            std::array::from_fn(|d| k * (self.cd[0][0] * e1[d] + self.cd[1][0] * e2[d])),
+            std::array::from_fn(|d| k * (self.cd[0][1] * e1[d] + self.cd[1][1] * e2[d])),
+        ];
+        PixToXyz {
+            cols,
+            w0,
+            crpix: self.crpix,
+        }
+    }
+}
+
+/// A `pixel -> unit-sphere vector` map precomputed once per WCS: the TAN
+/// deprojection written as `u = normalize(w0 + dx*col_x + dy*col_y)`, which is
+/// `radec_to_xyz(pix_to_radec(x, y))` with the tangent basis and the four
+/// `sin`/`cos` of `crval_deg` pulled out of the per-pixel path.
+///
+/// Per pixel it costs two multiplies per axis plus one normalization, against
+/// the `atan2`/`asin`/`sin`/`cos` round trip of the two-function path; the two
+/// agree to rounding, not bit for bit (see the note on [`XyzToPix`]).
+///
+/// Unlike the `xyz -> pixel` direction this one has no excluded hemisphere:
+/// every pixel deprojects to `w0 + dx*col_x + dy*col_y`, whose dot product with
+/// `w0` is always positive, so no pixel is degenerate.
+pub struct PixToXyz {
+    /// `deg2rad * CD * [e1; e2]`: the sky direction of a step along each axis.
+    cols: [[f64; 3]; 2],
+    /// The tangent point: the vector a pixel at `crpix` deprojects to.
+    w0: [f64; 3],
+    crpix: [f64; 2],
+}
+
+impl PixToXyz {
+    /// Deproject a pixel to a unit-sphere vector.
+    #[inline]
+    #[must_use]
+    pub fn project(&self, x: f64, y: f64) -> [f64; 3] {
+        let dx = x - self.crpix[0];
+        let dy = y - self.crpix[1];
+        let mut v = [0.0f64; 3];
+        for (c, out) in v.iter_mut().enumerate() {
+            *out = self.w0[c] + dx * self.cols[0][c] + dy * self.cols[1][c];
+        }
+        let n = f64::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        // A real pixel always has `n >= 1`; anything else arrives only with a
+        // non-finite coordinate, and returning `v` keeps that NaN visible to the
+        // caller (the probe tests its components) instead of hiding it behind a
+        // division.
+        if n > 0.0 && n.is_finite() {
+            [v[0] / n, v[1] / n, v[2] / n]
+        } else {
+            v
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod test_data {
     use super::Wcs;
@@ -525,6 +666,87 @@ mod tests {
             let (x2, y2) = w.radec_to_pix(ra, dec);
             assert!(f64::abs(x2 - x) < 1e-7, "({x},{y}) -> ({x2},{y2})");
             assert!(f64::abs(y2 - y) < 1e-7);
+        }
+    }
+
+    /// XyzToPix projects exactly where `radec_to_pix(xyz_to_radec(..))` does,
+    /// to rounding: the dot-product map and the trig path must stay
+    /// interchangeable for `verify_hit`'s reference-star loop, including for a
+    /// tangent point at an exact pole (the `ra0`-fixed basis of
+    /// `radec_to_std`, not the vector basis of `xyz_to_std`).
+    #[test]
+    fn xyz_to_pix_map_matches_radec_to_pix() {
+        for w in [
+            FIELD1_WCS,
+            // A mirrored wide-field WCS and a pole tangent point, alongside
+            // the shipped-field one.
+            Wcs {
+                crpix: [1000.0, 800.0],
+                crval_deg: [310.0, -66.5],
+                cd: [[8e-4, 3e-5], [3e-5, -8e-4]],
+            },
+            Wcs {
+                crpix: [400.0, 300.0],
+                crval_deg: [42.0, 90.0],
+                cd: [[-4e-4, 0.0], [0.0, 4e-4]],
+            },
+        ] {
+            let m = w.xyz_to_pix_map();
+            for (x, y) in [
+                (0.0, 0.0),
+                (800.0, 600.0),
+                (400.5, 300.5),
+                (1234.0, 45.0),
+                (777.0, 1500.0),
+            ] {
+                let (ra, dec) = w.pix_to_radec(x, y);
+                let (x0, y0) = w.radec_to_pix(ra, dec);
+                let (x1, y1) = m.project(radec_to_xyz(ra, dec));
+                assert!(f64::abs(x1 - x0) < 1e-9, "({x},{y}): {x0} vs {x1}");
+                assert!(f64::abs(y1 - y0) < 1e-9, "({x},{y}): {y0} vs {y1}");
+            }
+        }
+    }
+
+    /// The `pixel -> unit-sphere` deprojection the probe's whole verdict rests
+    /// on must stay interchangeable with `radec_to_xyz(pix_to_radec(x, y))`:
+    /// the same tangent frame, agreeing to rounding, for a mirrored wide field
+    /// and a tangent point at an exact pole alongside the shipped-field WCS.
+    #[test]
+    fn pix_to_xyz_map_matches_pix_to_radec() {
+        for w in [
+            FIELD1_WCS,
+            // A mirrored wide-field WCS and a pole tangent point, the same leg
+            // pair as `xyz_to_pix_map_matches_radec_to_pix`.
+            Wcs {
+                crpix: [1000.0, 800.0],
+                crval_deg: [310.0, -66.5],
+                cd: [[8e-4, 3e-5], [3e-5, -8e-4]],
+            },
+            Wcs {
+                crpix: [400.0, 300.0],
+                crval_deg: [42.0, 90.0],
+                cd: [[-4e-4, 0.0], [0.0, 4e-4]],
+            },
+        ] {
+            let m = w.pix_to_xyz_map();
+            for (x, y) in [
+                (0.0, 0.0),
+                (800.0, 600.0),
+                (400.5, 300.5),
+                (1234.0, 45.0),
+                (777.0, 1500.0),
+            ] {
+                let (ra, dec) = w.pix_to_radec(x, y);
+                let want = radec_to_xyz(ra, dec);
+                let got = m.project(x, y);
+                for d in 0..3 {
+                    assert!(
+                        f64::abs(got[d] - want[d]) < 1e-12,
+                        "({x},{y}) axis {d}: {want:?} vs {got:?}"
+                    );
+                }
+            }
         }
     }
 
