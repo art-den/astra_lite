@@ -245,6 +245,13 @@ pub fn load_image_from_fits_reader(
     Ok(())
 }
 
+pub fn load_image_from_fits_file(image: &mut Image, file_name: &Path) -> eyre::Result<()> {
+    let file = File::open(file_name)?;
+    let mut stream = BufReader::with_capacity(1024*1024, file);
+    let reader = FitsReader::new(&mut stream)?;
+    load_image_from_fits_reader(image, &reader, &mut stream)
+}
+
 pub fn load_image_using_pixbuf(
     image:     &mut Image,
     file_name: &Path,
@@ -349,7 +356,10 @@ impl CameraShot for FromFileCameraShot {
         let is_tif = ext_cmp("tif") || ext_cmp("tiff");
         let is_jpeg = ext_cmp("jpg") || ext_cmp("jpeg");
         let is_png = ext_cmp("png");
-        if is_tif {
+        let is_fits = ext_cmp("fit") || ext_cmp("fits");
+        if is_fits {
+            load_image_from_fits_file(image, &self.file_name)?;
+        } else if is_tif {
             load_image_from_tif_file(image, &self.file_name)?;
         } else if is_jpeg || is_png {
             load_image_using_pixbuf(image, &self.file_name, 6000)?;
