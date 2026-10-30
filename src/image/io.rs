@@ -8,6 +8,8 @@ use crate::{hal::{CameraShot, CameraShotType}, ui::gtk_utils::*};
 
 use super::{image::{Image, ImageLayer}, raw::*, simple_fits::{FitsReader, FitsWriter, Header, SeekNRead}};
 
+const READY_IMAGE_GAMMUT: f32 = 2.4;
+
 ///////////////////////////////////////////////////////////////////////////////
 
 // Raw image
@@ -272,7 +274,7 @@ pub fn load_image_using_pixbuf(
 
     let u8_to_u16 = |value: u8| -> u16 {
         let f32_v = value as f32 / 255.0;
-        let linear = f32_v.powf(2.4);
+        let linear = f32_v.powf(READY_IMAGE_GAMMUT);
         (linear * 65535.0) as u16
     };
 
@@ -312,8 +314,6 @@ pub fn load_image_using_pixbuf(
 
     Ok(())
 }
-
-
 
 pub struct FromFileCameraShot {
     file_name: PathBuf,

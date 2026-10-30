@@ -318,7 +318,7 @@ impl GammaTables {
         match old {
             Some(t) if t.levels == *levels && t.gamma == gamma && t.wb == wb => t,
             Some(mut t) => {
-                Self::fill(&mut t, levels, gamma, wb);
+                Self::fill_all_tables(&mut t, levels, gamma, wb);
                 t
             }
             None => {
@@ -331,20 +331,40 @@ impl GammaTables {
                     gamma:  1.0,
                     wb:     [1.0; 3],
                 };
-                Self::fill(&mut t, levels, gamma, wb);
+                Self::fill_all_tables(&mut t, levels, gamma, wb);
                 t
             }
         }
     }
 
-    fn fill(tables: &mut Self, levels: &PreviewLevels, gamma: f64, wb: [f64; 3]) {
-        fill_gamma_table(&mut tables.r, levels.r.dark, levels.r.light, gamma, wb[0]);
-        fill_gamma_table(&mut tables.g, levels.g.dark, levels.g.light, gamma, wb[1]);
-        fill_gamma_table(&mut tables.b, levels.b.dark, levels.b.light, gamma, wb[2]);
-        fill_gamma_table(&mut tables.l, levels.l.dark, levels.l.light, gamma, 1.0);
+    fn fill_all_tables(tables: &mut Self, levels: &PreviewLevels, gamma: f64, wb: [f64; 3]) {
+        Self::fill_table(&mut tables.r, levels.r.dark, levels.r.light, gamma, wb[0]);
+        Self::fill_table(&mut tables.g, levels.g.dark, levels.g.light, gamma, wb[1]);
+        Self::fill_table(&mut tables.b, levels.b.dark, levels.b.light, gamma, wb[2]);
+        Self::fill_table(&mut tables.l, levels.l.dark, levels.l.light, gamma, 1.0);
         tables.levels = levels.clone();
         tables.gamma = gamma;
         tables.wb = wb;
+    }
+
+    fn fill_table(table: &mut Vec<u8>, min_value: f64, max_value: f64, gamma: f64, k: f64) {
+        table.clear();
+        if min_value == 0.0 && max_value == 0.0 {
+            return;
+        }
+        table.reserve((u16::MAX as usize) + 1);
+        for i in 0..=u16::MAX {
+            let v = linear_interpolate(i as f64, min_value, max_value, 0.0, 1.0);
+            let v = v * k;
+            let table_v = if v < 0.0 {
+                0.0
+            } else if v > 1.0 {
+                u8::MAX as f64
+            } else {
+                v.powf(1.0 / gamma) * u8::MAX as f64
+            };
+            table.push(table_v as u8);
+        }
     }
 }
 
@@ -473,26 +493,6 @@ fn to_grb_bytes(
     };
 
     (rgb_bytes, width, height)
-}
-
-fn fill_gamma_table(table: &mut Vec<u8>, min_value: f64, max_value: f64, gamma: f64, k: f64) {
-    table.clear();
-    if min_value == 0.0 && max_value == 0.0 {
-        return;
-    }
-    table.reserve((u16::MAX as usize) + 1);
-    for i in 0..=u16::MAX {
-        let v = linear_interpolate(i as f64, min_value, max_value, 0.0, 1.0);
-        let v = v * k;
-        let table_v = if v < 0.0 {
-            0.0
-        } else if v > 1.0 {
-            u8::MAX as f64
-        } else {
-            v.powf(1.0 / gamma) * u8::MAX as f64
-        };
-        table.push(table_v as u8);
-    }
 }
 
 #[derive(Debug)]
