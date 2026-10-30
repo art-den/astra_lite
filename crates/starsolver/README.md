@@ -29,8 +29,11 @@ at most ~0.2 deg of rotation and ~0.02% of scale.
 It is intentionally minimal: `.xyls` input only (no image processing), stdout
 output only (no `.wcs` files), old-format `QUAD` index files only (all-sky and
 healpix sub-region tiles). It uses
-little memory (a single index at a time) and solves a typical field in well
-under a second.
+little memory (at most `params::INDEX_FANOUT` index files open at once, and only
+the tables an attempt actually touches are read in) and solves a typical field in
+well under a second. Solving runs on at most the 100 brightest detections in
+brightness order (`params::TOP_OBJS`): a dense field whose solving quad would
+need a fainter star does not solve.
 
 Build with `cargo build --release`; index files can be downloaded from
 <https://data.astrometry.net/4100/>.
@@ -175,10 +178,13 @@ lines to `progress`, and returns the solved `starsolver::Solution` as data
 ## Testing
 
 `cargo test` runs the unit and integration tests, including the tolerance gate
-on the four shipped fields (`tests/ground_truth.rs`, run blind and with a
-position hint), the public end-to-end glue (`tests/run_pipeline.rs`) and the
-binary's exit-code and `--verbose` liveness contract
-(`tests/cli_contract.rs`). Two kinds of data, gated independently:
+on the shipped fields (`tests/ground_truth.rs`, where every field is
+solved under seven priors - blind, three position hints, two scale ranges and
+their tightest combination - while three further legs on a three-field shortlist
+must *not* solve), the public end-to-end glue (`tests/run_pipeline.rs`), the
+binary's exit-code and `--verbose` liveness contract (`tests/cli_contract.rs`) and
+the generated fields (`tests/generated_fields.rs`). Three kinds of input, gated
+independently:
 
 - **Index files are not part of the repository.** The tests use the astrometry.net
   install found on the machine - the same discovery the solver uses without
@@ -187,10 +193,25 @@ binary's exit-code and `--verbose` liveness contract
   id, a quad number or a log-odds value: tests pick an index by header properties
   or by which index actually solves a field, and assert invariants plus the
   published sky truth of those fields (the record of the `solve-field` runs
-  behind them, kept in the gate's entry comments). Format-level
-  tests build their FITS bytes in memory and need no data at all.
-- **Field files** (`testdata/*.xyls`, gitignored) are the small fixtures every
-  end-to-end test needs.
+  behind them, kept in the gate's entry comments). Format-level tests build
+  their FITS bytes in memory and need no data at all.
+- **Field files** (`testdata/*.xyls`, committed) are the small fixtures the
+  gates that run on real detections need.
+- **Generated fields** need no fixture at all: `src/genfield.rs` projects
+  reference stars of an installed index through a WCS the test chooses, so the
+  answer is exact by construction (no observation noise, no reference run).
+  Those cases - the generated-field unit gates and `tests/generated_fields.rs` -
+  need only the index install, and because their truth is exact they gate the
+  center and rotation about ten times tighter than the shipped-field gate. One
+  of them (`generated_fields_solve_blind`) takes its stars from ten fields cut
+  from pseudo-randomly chosen index files of the install (one file can be drawn
+  twice) and solves each blind - no scale range, no position hint - twice over:
+  once clean and once with centroid noise and distractor stars, so the sweep has
+  to find the fitting index without being pointed at it. The generator is shared,
+  not copied:
+  `starsolver::genfield` is compiled only for the tests (the
+  non-default `test-util` feature plus the crate's own dev-dependency), so the
+  shipped binary exposes nothing new.
 
 A test whose data is absent prints `skipping:` and passes as skipped. Set
 `ASTROMETRY_REQUIRE_TEST_DATA=1` to turn any skip into a failure, so a run with
@@ -200,4 +221,12 @@ no index install cannot read as an all-pass:
 ASTROMETRY_REQUIRE_TEST_DATA=1 cargo test     # fails if anything would be skipped
 cargo test --release                          # the tolerance gate at its release budgets
 GATE_FIELD=4656x3522-1 cargo test --test ground_truth   # one field of the gate
+GATE_VARIANT=hint_tight cargo test --test ground_truth  # one prior variant of it
+cargo test --test generated_fields            # the generated fields only: no testdata/ needed
 ```
+
+Each variant is its own test (`gate_blind`, `gate_hint_tight`,
+`gate_reject_wrong_scale`, ...), so `cargo test --test ground_truth -- gate_hint`
+runs a subset. Within this target the legs are serialized, because each one
+already parallelizes inside the binary; other test targets are separate
+processes and run alongside them.

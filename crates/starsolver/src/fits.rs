@@ -1,8 +1,5 @@
-//! Minimal FITS reader.
-//!
-//! Only what this project needs: header cards, BINTABLE columns and the
-//! endianness of the raw (`'A'`-typed) blobs. No `CONTINUE` support: our files
-//! do not use it.
+//! Minimal FITS reader: only header cards, BINTABLE columns and the endianness
+//! of raw (`'A'`-typed) blobs. No `CONTINUE` support: our files do not use it.
 
 use anyhow::{Context, Result, bail, ensure};
 use std::fs::File;
@@ -22,9 +19,8 @@ pub enum Endian {
 }
 
 impl Endian {
-    /// Decodes the `ENDIAN` header key: the bytes of the `u32` `0x01020304`
-    /// spelled in the order they were written. Low byte first (`04 03 02 01`) is
-    /// little-endian, high byte first is big-endian.
+    /// Decodes the `ENDIAN` key (the bytes of `0x01020304` in write order):
+    /// `04:03:02:01` is little-endian, `01:02:03:04` big-endian.
     pub fn from_key(s: &str) -> Result<Self> {
         match s.trim() {
             "04:03:02:01" => Ok(Endian::Little),
@@ -33,14 +29,13 @@ impl Endian {
         }
     }
 
-    /// From the primary header. When the key is missing we are dealing with a
-    /// classic FITS file (e.g. `.xyls`), which is big-endian.
+    /// From the primary header; a missing key means classic FITS (e.g. `.xyls`),
+    /// which is big-endian.
     pub fn from_header(header: &Header) -> Result<Self> {
         match header.get_str("ENDIAN") {
             Some(s) => Self::from_key(s),
             None => {
-                // A present-but-unquoted `ENDIAN` (an int/bool/float card) must
-                // not be silently read as the big-endian default.
+                // A present-but-unquoted `ENDIAN` must not fall to the big-endian default.
                 ensure!(
                     header.get("ENDIAN").is_none(),
                     "ENDIAN key is present but not a quoted string"
@@ -151,7 +146,6 @@ impl Header {
         self.get(key).and_then(Value::as_str)
     }
 
-    /// Value or a descriptive error.
     pub fn require_i64(&self, key: &str) -> Result<i64> {
         self.get_i64(key)
             .ok_or_else(|| anyhow::anyhow!("header key {key} is missing or not an integer"))
@@ -169,8 +163,7 @@ impl Header {
 }
 
 fn parse_value(key: &str, field: &[u8]) -> Result<Option<Value>> {
-    // A non-UTF-8 field is not a value we can interpret; drop it (as before)
-    // rather than erroring, so binary/odd cards never abort header parsing.
+    // Lenient: a non-UTF-8 field is dropped, not an error, so odd cards never abort parsing.
     let Ok(s) = std::str::from_utf8(field) else {
         return Ok(None);
     };
@@ -180,9 +173,8 @@ fn parse_value(key: &str, field: &[u8]) -> Result<Option<Value>> {
     }
     if let Some(rest) = s.strip_prefix('\'') {
         // Scan to the closing quote; a doubled '' is an escaped literal quote
-        // (FITS), so `'it''s'` decodes to `it's`. An unterminated string must
-        // bail: silently dropping the key here surfaces later as a misleading
-        // "missing key" error.
+        // (`'it''s'` -> `it's`). Unterminated must bail: a silent key drop would
+        // surface later as a misleading "missing key".
         let mut out = String::new();
         let mut chars = rest.chars().peekable();
         let terminated = loop {
@@ -199,7 +191,6 @@ fn parse_value(key: &str, field: &[u8]) -> Result<Option<Value>> {
                 Some(c) => out.push(c),
             }
         };
-        // No CONTINUE support: an over-long unterminated value is a hard error, not a key drop.
         ensure!(terminated, "unterminated string value for key {key}");
         return Ok(Some(Value::Str(out.trim_end().to_string())));
     }
@@ -286,10 +277,9 @@ fn data_size(header: &Header) -> Result<usize> {
         matches!(bitpix, 8 | 16 | 32 | 64 | -32 | -64),
         "unsupported BITPIX {bitpix}"
     );
-    // BINTABLE-only assumption: GCOUNT/PCOUNT are clamped to a sane range and
-    // PCOUNT is added as a raw byte count (it is only a byte count for extended
-    // tables; typed groups are not supported). The size math stays in u64 so a
-    // 64-bit GCOUNT/PCOUNT cannot silently truncate on a 32-bit target.
+    // BINTABLE-only: GCOUNT/PCOUNT clamped, PCOUNT added as a raw byte count
+    // (valid only for extended tables; typed groups unsupported). Math stays in
+    // u64 so a 64-bit GCOUNT/PCOUNT cannot truncate on a 32-bit target.
     let gcount = u64::try_from(header.get_i64("GCOUNT").unwrap_or(1).max(1))
         .map_err(|_| anyhow::anyhow!("GCOUNT too large"))?;
     let pcount = u64::try_from(header.get_i64("PCOUNT").unwrap_or(0).max(0))
@@ -302,22 +292,20 @@ fn data_size(header: &Header) -> Result<usize> {
     usize::try_from(bytes).map_err(|_| anyhow::anyhow!("data area size exceeds the address space"))
 }
 
-/// The byte storage behind [`Fits`], shared (via `Arc`) with every lazy
-/// [`BlobView`] the caller keeps after the `Fits` itself is dropped.
+/// Byte storage behind [`Fits`], `Arc`-shared with every lazy [`BlobView`] kept
+/// after the `Fits` is dropped.
 ///
-/// Real files are memory-mapped: loading a multi-gigabyte index must not copy
-/// it into anonymous memory. mmap pages are demand-paged into the page cache,
-/// are clean and evictable under memory pressure, and keep this process's
-/// private (unreclaimable) memory independent of the index file size
+/// Real files are mmap'd: a multi-gigabyte index must never be copied into
+/// anonymous memory, and mmap pages (demand-paged, clean, evictable under
+/// pressure) keep private unreclaimable memory independent of file size
 /// (the < 200 MB peak RSS target).
 #[derive(Clone)]
 pub enum Bytes {
     Mmap(std::sync::Arc<memmap2::Mmap>),
-    /// Backing for bytes the process owns instead of a file: crafted test files
+    /// Bytes the process owns instead of a file: crafted test files
     /// ([`Fits::from_bytes`]) and the compact hint-filtered codes tree
-    /// ([`KdTree::filtered`](crate::kdtree::KdTree::filtered)), which is a few
-    /// thousand records and so stays far inside the RSS budget that keeps real
-    /// index tables mapped.
+    /// ([`KdTree::filtered`](crate::kdtree::KdTree::filtered)), a few thousand
+    /// records, well inside the RSS budget that keeps real index tables mapped.
     Owned(std::sync::Arc<[u8]>),
 }
 
@@ -342,15 +330,14 @@ impl std::fmt::Debug for Bytes {
 }
 
 /// A lazy view over the data area of one BINTABLE, sharing the [`Bytes`]
-/// storage with the [`Fits`] it came from. Elements are decoded on access
-/// (the kd-tree data, `lr`, `split` and `quads` arrays are read this way), so
-/// no index-sized buffer is ever materialized; untouched file regions simply
-/// stay on disk.
+/// storage with the [`Fits`] it came from. Elements are decoded on access (the
+/// kd-tree data, `lr`, `split` and `quads` arrays), so no index-sized buffer is
+/// materialized and untouched file regions stay on disk.
 ///
-/// Two layouts are supported, one per accessor that builds a view:
+/// Two layouts, one per accessor that builds a view:
 /// * first-blob-column packing (`Fits::blob_view`: `col_off`/`col_bytes` select
-///   the column; per-row padding is skipped, element `i` lives at byte
-///   `i * element size` of the concatenated column bytes);
+///   the column; padding skipped, so element `i` sits at `i * element size` of
+///   the packed column bytes);
 /// * whole-row packing (`Fits::raw_view`: `col_off = 0`, `col_bytes = row_len`),
 ///   equivalent to chunking the raw table bytes.
 #[derive(Debug, Clone)]
@@ -362,8 +349,8 @@ pub struct BlobView {
     col_off: usize,
     col_bytes: usize,
     nrows: usize,
-    /// The column fills the whole row at offset 0: element reads are a single
-    /// multiply-add with no division (the hot kd-tree data path).
+    /// The column fills the whole row at offset 0, so element reads are a
+    /// single multiply-add (the hot kd-tree data path).
     flat: bool,
 }
 
@@ -373,20 +360,18 @@ impl BlobView {
         self.nrows
     }
 
-    /// Total packed payload: the bytes the element accessor walks over
-    /// (column bytes for a blob view, whole rows for a raw view).
+    /// Total packed payload: the bytes the element accessor walks over (column
+    /// bytes for a blob view, whole rows for a raw view).
     ///
-    /// Cannot overflow: `col_bytes <= row_len` (`Table::new`) and
-    /// `nrows * row_len` was checked against the file length there too, so the
-    /// product is bounded by the file size.
+    /// Cannot overflow: `Table::new` checks `nrows * row_len` against the data
+    /// length and each column fits its row, bounding the product by file size.
     #[must_use]
     pub fn payload_bytes(&self) -> usize {
         self.nrows * self.col_bytes
     }
 
-    /// Number of `u32` entries in the view: its bytes read back-to-back as a
-    /// packed `u32` array, so the per-row width must be a positive multiple of
-    /// 4 bytes. Callers compare the count against their expected length.
+    /// Number of `u32` entries: the bytes read back-to-back as a packed array,
+    /// so the per-row width must be a positive multiple of 4.
     pub fn u32_entries(&self) -> Result<usize> {
         ensure!(
             self.col_bytes > 0 && usize::is_multiple_of(self.col_bytes, 4),
@@ -409,17 +394,15 @@ impl BlobView {
         &self.bytes.as_slice()[off..off + len]
     }
 
-    /// The `idx`-th packed unsigned integer element (`size` = 2 or 4 bytes).
-    /// Blob payloads are memory images, so this decodes in the order the file's
-    /// `ENDIAN` key records, not in the big-endian layout typed columns use.
+    /// The `idx`-th packed unsigned integer (`size` 2 or 4). Blob payloads are
+    /// memory images: decoded by the file's `ENDIAN` key, not typed columns' big-endian.
     #[must_use]
     pub fn uint_at(&self, endian: Endian, size: usize, idx: usize) -> u32 {
         let b = self.at(idx * size, size);
         match size {
             2 => u32::from(endian.read_u16(b)),
             4 => endian.read_u32(b),
-            // Only reachable from new callers: `IntKind::size()` yields 2/4
-            // and the u32 callers pass a literal 4.
+            // `IntKind::size()` yields 2/4 and current callers pass a literal 4.
             other => unreachable!("uint_at element size {other} (only 2 or 4)"),
         }
     }
@@ -430,20 +413,18 @@ impl BlobView {
         self.flat
     }
 
-    /// The whole data area as one slice (only for flat views; used by the
-    /// tiny fixed-size kd-tree `range` tables at load time and by the flat
-    /// little-endian coordinate fast paths).
+    /// The whole data area as one slice (flat views only; the tiny fixed-size
+    /// kd-tree `range` tables and the flat little-endian coordinate fast paths).
     #[must_use]
     pub fn raw_bytes(&self) -> &[u8] {
         debug_assert!(self.flat);
         &self.bytes.as_slice()[self.data_off..self.data_off + self.nrows * self.row_len]
     }
 
-    /// A flat little-endian view over bytes the process owns: an array a run-time
-    /// kd-tree build writes instead of a file ([`KdTree::filtered`]). `row_len`
-    /// (>= 1) is the width of one row, so the view reads as `bytes.len() / row_len`
-    /// rows and takes the same element accessors as a mapped one; being flat and
-    /// little-endian is what keeps the searches on their fast decode paths.
+    /// A flat little-endian view over bytes a run-time kd-tree build writes
+    /// instead of a file ([`KdTree::filtered`]). `row_len` (>= 1) gives
+    /// `bytes.len() / row_len` rows read through the same accessors as a mapped
+    /// view; flat + little-endian keeps searches on their fast decode paths.
     ///
     /// [`KdTree::filtered`]: crate::kdtree::KdTree::filtered
     #[must_use]
@@ -462,10 +443,9 @@ impl BlobView {
     }
 }
 
-/// A BINTABLE extension: `XTENSION = 'BINTABLE'` (the value is already trimmed
-/// by `parse_value`) with `BITPIX = 8`, the only blob layout this reader
-/// understands. A BINTABLE with another BITPIX is rejected here, giving a
-/// clearer early error than a later size mismatch.
+/// A BINTABLE extension: `XTENSION = 'BINTABLE'` (already trimmed by
+/// `parse_value`) with `BITPIX = 8`, the only blob layout understood here.
+/// Rejecting another BITPIX early beats a later size mismatch.
 fn is_bintable(header: &Header) -> bool {
     header.get_i64("BITPIX") == Some(8)
         && header
@@ -489,20 +469,17 @@ impl Fits {
         let md = file
             .metadata()
             .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
-        // File::open succeeds on a directory, and mmap of one fails with a
-        // cryptic ENODEV; report the clearer error instead.
+        // `File::open` succeeds on a directory, where mmap fails with a cryptic ENODEV.
         ensure!(md.is_file(), "{} is not a regular file", path.display());
-        // `Mmap::map` rejects an empty file with a bare EINVAL, and files
-        // shorter than one FITS BLOCK_SIZE cannot parse; reject both up
-        // front (the message names the path, which the buffer reader's did not).
+        // `Mmap::map` rejects an empty file with a bare EINVAL, and anything
+        // shorter than a BLOCK_SIZE cannot parse: reject both up front.
         ensure!(
             md.len() >= BLOCK_SIZE as u64,
             "file is too small to be FITS: {}",
             path.display()
         );
-        // The mapping assumes nobody truncates or rewrites the file while we
-        // read it (index files are read-only data in our scope); it stays
-        // valid after `file` is dropped because mmap pins the inode.
+        // Assumes no truncation/rewrite while reading (index files are read-only
+        // here); mmap pins the inode, so the map outlives `file`.
         let map = unsafe { memmap2::Mmap::map(&file) }
             .map_err(|e| anyhow::anyhow!("cannot mmap {}: {e}", path.display()))?;
         Self::from_storage(Bytes::Mmap(std::sync::Arc::new(map)))
@@ -575,9 +552,9 @@ impl Fits {
         })
     }
 
-    /// First BINTABLE holding a column named `name`, as `(HDU index, 1-based
-    /// column index)`. Unlike `find_table`, `name` need not be the first
-    /// column; callers use it to report a clearer error than "no such column".
+    /// First BINTABLE holding a column named `name` (any position, unlike
+    /// `find_table`) as `(HDU index, 1-based column index)`, giving callers a
+    /// clearer error than "no such column".
     pub fn find_column(&self, name: &str) -> Option<(usize, usize)> {
         self.hdus.iter().enumerate().find_map(|(hdu, h)| {
             if !is_bintable(&h.header) {
@@ -585,9 +562,8 @@ impl Fits {
             }
             let nfields = h.header.get_i64("TFIELDS").unwrap_or(0);
             let nfields = usize::try_from(nfields).unwrap_or(0);
-            // Reject-biased bound mirroring `Table::new`: every column occupies
-            // at least one row byte, so a hostile `TFIELDS` cannot spin this
-            // scan (unlike `Table::new`, this runs on the reject path).
+            // Reject-biased bound mirroring `Table::new` (this is the reject path):
+            // every column takes >=1 row byte, so a hostile `TFIELDS` cannot spin this.
             let row_len = usize::try_from(h.header.get_i64("NAXIS1").unwrap_or(0)).unwrap_or(0);
             let nfields = usize::min(nfields, usize::max(row_len, 1));
             (1..=nfields)
@@ -681,9 +657,8 @@ impl Fits {
     }
 }
 
-/// Header access shared by the whole-file [`Fits`] and the header-only
-/// [`FitsHeaders`], so a check that needs no table data (the index metadata)
-/// can run on either.
+/// Header access shared by [`Fits`] and [`FitsHeaders`], so checks that need no
+/// table data (the index metadata) can run on either.
 pub trait Headers {
     fn primary(&self) -> &Header;
 
@@ -716,10 +691,9 @@ impl Headers for Fits {
 
 /// The headers of a FITS file without any of its data.
 ///
-/// Reading the metadata of every index of a directory must not read the gigabytes
-/// of kd-tree data that follow the headers, so this reader walks the header
-/// blocks and seeks over each data area. [`Fits`] maps the file and reads the
-/// tables through lazy [`BlobView`]s.
+/// Reading the metadata of every index of a directory must not read the
+/// gigabytes of kd-tree data after the headers, so this reader walks header
+/// blocks and seeks over each data area.
 #[derive(Debug)]
 pub struct FitsHeaders {
     headers: Vec<Header>,
@@ -727,8 +701,7 @@ pub struct FitsHeaders {
 }
 
 impl FitsHeaders {
-    /// The error is never contextualized with the path: the caller prints it
-    /// together with the file name.
+    /// The error is not contextualized with the path: the caller prints it with the file name.
     pub fn open(path: &Path) -> Result<Self> {
         let mut file =
             File::open(path).map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
@@ -780,8 +753,7 @@ impl Headers for FitsHeaders {
     }
 }
 
-/// One `BLOCK_SIZE` read: a full block, the short tail of a truncated file, or
-/// nothing (end of file).
+/// A `BLOCK_SIZE` read: a full block, a truncated file's short tail, or EOF.
 enum Chunk {
     Full,
     Short,
@@ -803,11 +775,10 @@ fn read_chunk<R: Read>(reader: &mut R, block: &mut [u8; BLOCK_SIZE]) -> Result<C
     })
 }
 
-/// Walks the HDU headers of a FITS stream, seeking over every data area. The
-/// whole-buffer walk of [`Fits::from_storage`] (also behind the test-only
-/// `Fits::from_bytes`) is the twin of this walker: the stop rule and the
-/// header/data size math are shared, any change belongs to both. Generic over
-/// `Read + Seek` so the tests can run it on a `Cursor`.
+/// Walks the HDU headers of a FITS stream, seeking over every data area.
+/// [`Fits::from_storage`] (also behind the test-only `Fits::from_bytes`) is its
+/// twin: the stop rule and header/data size math are shared, any change belongs
+/// to both. Generic over `Read + Seek` so tests can run it on a `Cursor`.
 fn scan_headers<R: Read + Seek>(reader: &mut R) -> Result<Vec<Header>> {
     let mut headers: Vec<Header> = Vec::new();
     let mut block = [0u8; BLOCK_SIZE];
@@ -845,8 +816,7 @@ fn scan_headers<R: Read + Seek>(reader: &mut R) -> Result<Vec<Header>> {
                 _ => bail!("truncated FITS header at byte {off}"),
             }
         }
-        // The block holding END is consumed whole, so the data starts right after
-        // it, on a block boundary.
+        // The END block is consumed whole, so data starts on the next block boundary.
         off += BLOCK_SIZE as u64;
         let len = data_size(&header).with_context(|| format!("HDU {} header", headers.len()))?;
         let skip = (len as u64).div_ceil(BLOCK_SIZE as u64) * BLOCK_SIZE as u64;
@@ -921,9 +891,8 @@ impl Form {
 
     /// Bytes this column occupies in a row.
     ///
-    /// Checked: a hostile `TFORM` count (e.g. `2^62D`) must not overflow the
-    /// row-size arithmetic. Offsets are validated against `row_len` in
-    /// `Table::new`, which is the only place that knows the row length.
+    /// Checked so a hostile `TFORM` count (e.g. `2^62D`) cannot overflow the
+    /// row-size arithmetic; `Table::new` validates offsets against `row_len`.
     pub fn nbytes(&self) -> Result<usize> {
         match self {
             Form::Blob(n) => Ok(*n),
@@ -963,11 +932,11 @@ impl Column {
 
     /// `idx`-th value of a numeric column.
     ///
-    /// Typed FITS columns are always big-endian (the FITS standard's fixed byte
-    /// order), unlike the `'A'` blobs, whose byte order follows the `ENDIAN` key.
+    /// Typed FITS columns are always big-endian (the standard's fixed byte
+    /// order), unlike `'A'` blobs, whose order follows the `ENDIAN` key.
     ///
-    /// Returns the raw storage value: FITS quantization (`TZERO + TSCAL*n`)
-    /// and `TNULL` are not applied, so such columns are rejected in `Table::new`.
+    /// Returns the raw storage value: quantization (`TZERO + TSCAL*n`) and
+    /// `TNULL` are not applied, so such columns are rejected in `Table::new`.
     pub fn f64_at(&self, row: &[u8], idx: usize) -> Result<f64> {
         let Form::Num { count, kind } = self.form else {
             bail!("column {:?} is a raw blob, not a numeric column", self.name);
@@ -978,8 +947,7 @@ impl Column {
             self.name
         );
         let kind_size = kind.size();
-        // `bytes.len() == count * kind_size` (nbytes succeeded) and `idx <
-        // count`, so these indices are in bounds and cannot overflow.
+        // `bytes.len() == count * kind_size` and `idx < count`: in bounds, no overflow.
         let bytes = self.bytes(row)?;
         let b = &bytes[idx * kind_size..(idx + 1) * kind_size];
         Ok(match kind {
@@ -1004,9 +972,8 @@ pub struct Table<'a> {
 
 impl<'a> Table<'a> {
     fn new(header: &'a Header, data: &'a [u8]) -> Result<Self> {
-        // A BINTABLE is always 2-D (NAXIS1 = row length, NAXIS2 = row count).
-        // Requiring exactly 2 also closes the loophole where NAXIS < 2 (0 or 1)
-        // let a negative NAXIS2 slip past `data_size`'s `1..=NAXIS` checks.
+        // A BINTABLE is 2-D (NAXIS1 = row length, NAXIS2 = row count), so
+        // NAXIS < 2 cannot let a negative NAXIS2 slip past `data_size`'s per-axis checks.
         let naxis = header.require_i64("NAXIS")?;
         ensure!(naxis == 2, "BINTABLE requires NAXIS == 2, found {naxis}");
 
@@ -1027,16 +994,15 @@ impl<'a> Table<'a> {
             nrows,
             row_len
         );
-        // Zero-width rows with a positive count pass the size check on an empty
-        // data area while leaving `nrows` free to explode a later allocation.
+        // Zero-width rows with a positive count pass the size check on empty
+        // data, leaving `nrows` free to explode a later allocation.
         ensure!(
             row_len != 0 || nrows == 0,
             "BINTABLE has zero-width rows but {nrows} of them"
         );
-        // Cheap, reject-biased pre-`with_capacity` bound: real columns are
-        // >=1 byte, so TFIELDS <= row_len; the exact sum(nbytes) <= row_len is
-        // enforced in the column-offset loop below. Zero-width TFORMs (0A/0J)
-        // make this stricter than necessary, never looser.
+        // Cheap, reject-biased pre-`with_capacity` bound: real columns are >=1
+        // byte, so TFIELDS <= row_len; the offset loop below enforces the exact
+        // sum(nbytes) <= row_len (zero-width TFORMs only make this stricter).
         ensure!(
             nfields <= usize::max(row_len, 1),
             "TFIELDS {nfields} exceeds the row length {row_len}"
@@ -1059,8 +1025,7 @@ impl<'a> Table<'a> {
                     header.get_str("TTYPE1")
                 )
             })?;
-            // `f64_at` returns raw storage values, so a quantized or nullable
-            // column would silently yield wrong numbers; bail instead.
+            // `f64_at` gives raw storage values: quantized/nullable would be silently wrong.
             if matches!(form, Form::Num { .. }) {
                 for key in ["TSCAL", "TZERO", "TNULL"] {
                     ensure!(
@@ -1070,9 +1035,8 @@ impl<'a> Table<'a> {
                     );
                 }
             }
-            // BINTABLE columns start at a multiple of their data-unit size, capped
-            // at 4 bytes: even 8-byte types (`D`, `K`) align on 4-byte boundaries
-            // (the FITS standard caps BINTABLE padding at 4 bytes).
+            // Columns start at a multiple of their data-unit size capped at 4
+            // bytes (the standard's BINTABLE cap), so `D` and `K` align on 4.
             let align = match form {
                 Form::Blob(_) => 1,
                 Form::Num { kind, .. } => usize::min(kind.size(), 4),
@@ -1101,9 +1065,8 @@ impl<'a> Table<'a> {
         })
     }
 
-    /// The whole data area: for a single-blob-column table this is the raw
-    /// array. Production readers use the lazy `Fits::raw_view`/`blob_view`
-    /// instead; this stays for the table-layout tests.
+    /// The whole data area (the raw array for a single-blob-column table).
+    /// Production readers use the lazy `Fits::raw_view`/`blob_view`; this is for tests.
     #[cfg(test)]
     pub fn raw(&self) -> &'a [u8] {
         self.data
@@ -1111,10 +1074,9 @@ impl<'a> Table<'a> {
 
     /// Reads the numeric single-value columns `names` into one vector per column.
     ///
-    /// Any single-element numeric TFORM is accepted (a column stored as `1E`
-    /// floats or as integers reads like one stored as `1D` doubles); a
-    /// multi-element column is rejected rather than silently truncated to its
-    /// first element.
+    /// Any single-element numeric TFORM is accepted (`1E` floats or integers
+    /// read like `1D` doubles); a multi-element column is rejected, not silently
+    /// truncated to its first element.
     pub fn f64_columns(&self, names: &[&str]) -> Result<Vec<Vec<f64>>> {
         let mut out = Vec::with_capacity(names.len());
         for name in names {
@@ -1277,8 +1239,7 @@ mod tests {
         blocks
     }
 
-    /// Parsing the file or opening its "BLOB" BINTABLE must fail cleanly with
-    /// an `Err` (never a panic or a hang).
+    /// Parsing the file or opening its "BLOB" BINTABLE must give an `Err`, never panic or hang.
     fn assert_rejected(buf: Vec<u8>) {
         match Fits::from_bytes(buf) {
             Err(_) => {}
@@ -1291,8 +1252,8 @@ mod tests {
         }
     }
 
-    /// Column offsets must follow the 4-byte alignment cap of the BINTABLE
-    /// standard, and typed values are big-endian regardless of `ENDIAN`.
+    /// Offsets follow the standard's 4-byte BINTABLE alignment cap, and typed
+    /// values are big-endian regardless of `ENDIAN`.
     #[test]
     fn table_columns_and_offsets() {
         let mut row = Vec::new();
@@ -1330,8 +1291,8 @@ mod tests {
         assert_eq!(table.raw(), &row[..]);
     }
 
-    /// A single-element numeric column must read whatever its storage type is:
-    /// `1E` floats and the integer forms, not only `1D` doubles.
+    /// A single-element numeric column reads whatever its storage type is: `1E`
+    /// floats and the integer forms, not only `1D` doubles.
     #[test]
     fn f64_columns_accepts_float_and_int_forms() {
         let mut data = Vec::new();
@@ -1360,8 +1321,7 @@ mod tests {
             vec![vec![10.5, 1.0, 4656.0], vec![20.25, 2.0, 3522.0],]
         );
 
-        // Integer forms are accepted too (note they are the usual quantization
-        // vehicle, hence the TSCAL/TZERO/TNULL guard below).
+        // Integer forms too: the usual quantization vehicle, hence the TSCAL/TZERO/TNULL guard.
         let mut data = Vec::new();
         for (x, y) in [(3i32, 4i32), (4656, 3522)] {
             data.extend_from_slice(&x.to_be_bytes());
@@ -1389,8 +1349,7 @@ mod tests {
         );
     }
 
-    /// A multi-element numeric column is rejected, not silently truncated to
-    /// its first element.
+    /// A multi-element numeric column is rejected, not truncated to its first element.
     #[test]
     fn f64_columns_rejects_multi_element() {
         let data = [1.5f64.to_be_bytes(), 2.5f64.to_be_bytes()].concat();
@@ -1411,9 +1370,8 @@ mod tests {
         assert!(table.f64_columns(&["XY"]).is_err());
     }
 
-    /// A quantized or nullable column would need `TZERO + TSCAL*n` decoding and
-    /// `TNULL` handling, which are not implemented: it is rejected at load time
-    /// instead of returning storage-unit values.
+    /// Quantized (`TZERO + TSCAL*n`) and nullable (`TNULL`) columns are not
+    /// implemented: rejected at load time, not read as storage-unit values.
     #[test]
     fn rejects_quantized_column() {
         for card in [
@@ -1454,8 +1412,7 @@ mod tests {
         assert!(Fits::from_bytes(buf).is_err());
     }
 
-    /// A negative `TFIELDS` must not reach `Vec::with_capacity` ("capacity
-    /// overflow" panic before the fix).
+    /// A negative `TFIELDS` must not reach `Vec::with_capacity` (capacity overflow panic).
     #[test]
     fn rejects_negative_tfields() {
         let buf = make_fits(
@@ -1473,8 +1430,8 @@ mod tests {
         assert_rejected(buf);
     }
 
-    /// A BINTABLE must declare `NAXIS == 2`; 0 or 1 previously let a negative
-    /// `NAXIS2` slip past `data_size`'s per-axis checks into an unchecked cast.
+    /// A BINTABLE must declare `NAXIS == 2`: 0 or 1 lets a negative `NAXIS2`
+    /// slip past `data_size`'s per-axis checks into an unchecked cast.
     #[test]
     fn rejects_bad_naxis() {
         for naxis in ["0", "1"] {
@@ -1495,8 +1452,7 @@ mod tests {
         }
     }
 
-    /// A negative axis is rejected (last card wins, so the override is applied
-    /// after the valid pair in the header).
+    /// A negative axis is rejected; last card wins, so the override beats the earlier pair.
     #[test]
     fn rejects_negative_axis() {
         for card in [
@@ -1518,8 +1474,8 @@ mod tests {
         }
     }
 
-    /// A `TFORM` count large enough to overflow `count * size()` must produce
-    /// an `Err`, not a wrapping `nbytes()` that later slices out of bounds.
+    /// A `TFORM` count that overflows `count * size()` must give an `Err`, not
+    /// a wrapping `nbytes()` that later slices out of bounds.
     #[test]
     fn rejects_overflowing_tform() {
         let buf = make_fits(
@@ -1537,8 +1493,8 @@ mod tests {
         assert_rejected(buf);
     }
 
-    /// Only standard BITPIX values are accepted; 0 and 24 previously passed the
-    /// "multiple of 8" check and mis-sized the data area.
+    /// Only standard BITPIX values are accepted: 0 and 24 would pass a naive
+    /// "multiple of 8" check and mis-size the data area.
     #[test]
     fn rejects_bad_bitpix() {
         for bitpix in ["0", "24"] {
@@ -1552,8 +1508,7 @@ mod tests {
         }
     }
 
-    /// A hostile `NAXIS` must fail fast instead of spinning the axis loop in
-    /// `data_size` (the FITS standard caps NAXIS at 999).
+    /// A hostile `NAXIS` fails fast instead of spinning `data_size`'s axis loop (capped at 999).
     #[test]
     fn rejects_huge_naxis() {
         for naxis in ["200000000", "9223372036854775807"] {
@@ -1566,8 +1521,7 @@ mod tests {
         }
     }
 
-    /// A doubled `''` inside a quoted value is an escaped quote, not a
-    /// terminator, so the value decodes to a single `'` instead of truncating.
+    /// A doubled `''` in a quoted value is an escaped quote, not a terminator.
     #[test]
     fn doubled_quote_escape() {
         let h = parse("KEY     = 'it''s here' / comment");
@@ -1587,9 +1541,9 @@ mod tests {
         assert!(parse_header(&buf, 0).is_err());
     }
 
-    /// `blob_view` exposes only the first blob column's bytes; a second
-    /// column's bytes must not leak into the element sequence. The row here is
-    /// col1 (4A) = u32 1 (LE), col2 (4A) = u32 2 (LE); ENDIAN is little.
+    /// `blob_view` exposes only the first blob column's bytes; the second
+    /// column's must not leak into the element sequence. The row here is col1
+    /// (4A) = u32 1, col2 (4A) = u32 2, ENDIAN little.
     #[test]
     fn blob_view_reads_only_first_column() {
         let row = [1u8, 0, 0, 0, 2, 0, 0, 0];
@@ -1609,7 +1563,6 @@ mod tests {
         );
         let fits = Fits::from_bytes(buf).unwrap();
         let view = fits.blob_view("BLOB").unwrap();
-        // Only col1 (u32 1) survives; col2 (u32 2) is excluded.
         assert_eq!(view.payload_bytes(), 4);
         assert_eq!(view.uint_at(fits.endian(), 4, 0), 1);
     }
@@ -1668,9 +1621,8 @@ mod tests {
         assert!(headers.header_by_ttype("stars").is_err());
     }
 
-    /// Scanning a directory of indices must not read their data: a header that
-    /// declares a gigabyte of data is seeked over, while the whole-file reader
-    /// insists that those bytes exist.
+    /// Scanning a directory must not read data: a header declaring a gigabyte is
+    /// seeked over, while the whole-file reader insists those bytes exist.
     #[test]
     fn header_only_reader_skips_a_data_area_it_cannot_see() {
         let bytes = hdu_block(&[
@@ -1691,8 +1643,7 @@ mod tests {
         );
     }
 
-    /// A header block that never reaches `END` is a truncated file, not an empty
-    /// header, and must not be reported as HDU list success.
+    /// A header block that never reaches `END` is a truncated file, not an empty header list.
     #[test]
     fn header_without_end_is_truncated() {
         let mut bytes = Vec::new();

@@ -1,36 +1,20 @@
-//! Helpers shared by the data-gated tests.
+//! Helpers shared by the data-gated tests. Three kinds of input, gated independently:
 //!
-//! Three kinds of input, gated independently:
+//! - **Index files are not part of the repository.** Tests use the system astrometry.net install
+//!   (the dirs the binary uses without `--index-dir`: [`IndexDirs`], i.e. `add_path` of
+//!   `astrometry.cfg` else the conventional install dirs), or `$ASTROMETRY_TEST_INDEX_DIR` (a path
+//!   list) when set. Since that set is not ours to pin, a test must not name an index id: it
+//!   selects by header properties ([`smallest_index`], [`dim4_index`]) or takes the index that
+//!   actually solved a field ([`field_run`]), asserting invariants, not numbers one file owns.
+//! - **Field files** (`testdata/*.xyls`): the small, irreplaceable half of the fixtures.
+//! - **Generated fields** need no fixture: `genfield` synthesizes one from the installed indices,
+//!   so those gates run without `testdata/` ([`generated_index`], [`generated_field_run`]).
 //!
-//! - **Index files are not part of the repository.** The tests use the
-//!   astrometry.net install found on the system, discovered by the same code
-//!   the binary uses when `--index-dir` is absent ([`IndexDirs`]: the
-//!   `add_path` directories of `astrometry.cfg`, else the conventional install
-//!   directories), or the directories named by `$ASTROMETRY_TEST_INDEX_DIR` (a
-//!   path list) when that is set. Because the installed set is not ours to
-//!   pin, a test must not name an index id: it selects by header properties
-//!   ([`smallest_index`], [`dim4_index`]) or takes the index that actually
-//!   solved a field ([`field_run`]), and asserts invariants rather than
-//!   numbers that belong to one particular index file.
-//! - **Field files** (`testdata/`, `.xyls`) stay local and gitignored: the
-//!   small, irreplaceable half of the fixtures.
-//! - **Generated fields** need no fixture at all: `genfield` synthesizes one out
-//!   of the installed index set, so those gates run on a machine that has the
-//!   indices but no `testdata/` (see [`generated_index`], [`generated_params`],
-//!   [`generated_field_run`]).
-//!
-//! Every gate goes through [`skip`]: when the data a test needs is absent it
-//! prints a `skipping:` note and reports the test as skipped so the caller
-//! returns early. A file that is *present but corrupt* is not a skip: the
-//! loaders panic, because data that is there is treated as known-good.
-//!
-//! Set `ASTROMETRY_REQUIRE_TEST_DATA=1` to turn a would-be skip into a panic,
-//! so CI can tell an all-skipped run from an all-passed one (`cargo test`
-//! otherwise swallows the `skipping:` note without `--nocapture`).
-//!
-//! Field paths resolve against `CARGO_MANIFEST_DIR`, which `env!` bakes in at
-//! compile time — the crate root the tests were compiled against, not the
-//! runtime cwd.
+//! Every gate goes through [`skip`]: absent data prints a `skipping:` note and the caller returns
+//! early; a present but corrupt file is not a skip - loaders panic, because data that is there is
+//! treated as known-good. `ASTROMETRY_REQUIRE_TEST_DATA=1` turns a would-be skip into a panic, so
+//! CI can tell an all-skipped run from an all-passed one (`cargo test` hides the note without
+//! `--nocapture`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -50,7 +34,7 @@ use crate::xyls::Star;
 use crate::cli::{ScaleUnits, SolveOptions};
 use crate::sweep::{OBJ_ROUND_STEP, Solution, select_indices, solve_field};
 
-/// `<crate root>/<dir>/<name>`. `CARGO_MANIFEST_DIR` is baked in at compile time.
+/// `<crate root>/<dir>/<name>`, from compile-time `CARGO_MANIFEST_DIR` (not the runtime cwd).
 pub(crate) fn data_path(dir: &str, name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(dir).join(name)
 }
@@ -61,9 +45,7 @@ pub(crate) fn testdata_path(name: &str) -> PathBuf {
     data_path("testdata", name)
 }
 
-/// Reports a skipped test. Normally prints a note and returns `false`; when
-/// `ASTROMETRY_REQUIRE_TEST_DATA` is set to a truthy value, panics instead so a
-/// silently-empty run cannot pass for a real pass.
+/// Reports a skipped test: note + `false`; panics if `ASTROMETRY_REQUIRE_TEST_DATA` is truthy.
 pub(crate) fn skip(msg: &str) -> bool {
     let strict = matches!(
         std::env::var("ASTROMETRY_REQUIRE_TEST_DATA").as_deref(),
@@ -76,16 +58,14 @@ pub(crate) fn skip(msg: &str) -> bool {
     false
 }
 
-/// Is `<crate root>/<dir>/<name>` present (with the usual skip/strict rules)?
-/// For data-dependent tests on the local field files in `testdata/`.
+/// Is `<crate root>/<dir>/<name>` present (skip/strict rules as in [`skip`])?
 #[must_use]
 pub(crate) fn have_file(dir: &str, name: &str) -> bool {
     let path = data_path(dir, name);
     path.is_file() || skip(&format!("no {}", path.display()))
 }
 
-/// A header-shaped `IndexMeta` stub for the gate/ordering tests that need no
-/// index file: an all-sky meta when `healpix < 0`, a healpix tile otherwise.
+/// A header-shaped `IndexMeta` stub for tests that need no index file.
 pub(crate) fn meta_stub(indexid: i64, healpix: i64, hpnside: i64) -> IndexMeta {
     IndexMeta {
         path: PathBuf::from(format!("index-{indexid}.fits")),
@@ -105,8 +85,7 @@ pub(crate) fn meta_stub(indexid: i64, healpix: i64, hpnside: i64) -> IndexMeta {
     }
 }
 
-/// Loads `testdata/<name>`, or returns `None` (after a `skipping:` note) when
-/// the file is absent. Panics if the file is present but corrupt.
+/// Loads `testdata/<name>`, or `None` after a skip when the file is absent.
 pub(crate) fn load_field(name: &str) -> Option<Vec<Star>> {
     let path = testdata_path(name);
     if !path.is_file() {
@@ -118,9 +97,8 @@ pub(crate) fn load_field(name: &str) -> Option<Vec<Star>> {
 
 // ---- Index discovery: the machine's astrometry.net install ----------------
 
-/// The directories the tests take index files from: the path list in
-/// `ASTROMETRY_TEST_INDEX_DIR` when set (verbatim, for a developer pointing the
-/// suite at a private set), else the system install that [`IndexDirs`] finds.
+/// The suite's index dirs: `$ASTROMETRY_TEST_INDEX_DIR` (a path list) verbatim
+/// when set, else the system install [`IndexDirs`] finds.
 static TEST_DIRS: OnceLock<Vec<PathBuf>> = OnceLock::new();
 
 fn test_dirs() -> &'static [PathBuf] {
@@ -136,14 +114,9 @@ fn test_dirs() -> &'static [PathBuf] {
     })
 }
 
-/// Metadata of every index the suite can use, in sweep order, scanned once per
-/// test binary (headers only, so the scan is cheap even over a full system
-/// data directory).
-///
-/// Formats this solver does not read are skipped rather than fatal, exactly as
-/// the binary's own system-directory scan does (`Unusable::Skip`), and many
-/// tiles legitimately share one `INDEXID`, which [`load_metas_in`] warns about
-/// once per duplicated id.
+/// Metadata of every index the suite can use, in sweep order, scanned once per test binary
+/// (headers only). Formats this solver does not read are skipped, not fatal (`Unusable::Skip`);
+/// many tiles legitimately share one `INDEXID`, which [`load_metas_in`] warns about once per id.
 pub(crate) fn metas() -> Option<&'static [IndexMeta]> {
     static CACHE: OnceLock<Vec<IndexMeta>> = OnceLock::new();
     let metas = CACHE.get_or_init(|| match load_metas_in(test_dirs(), Unusable::Skip) {
@@ -163,16 +136,15 @@ pub(crate) fn metas() -> Option<&'static [IndexMeta]> {
     Some(metas)
 }
 
-/// Reports `msg` as a skip (or panics under `ASTROMETRY_REQUIRE_TEST_DATA`) and
-/// returns `None`, so a selector can end with `?`.
+/// [`skip`]s `msg` and returns `None`, so a selector can end with `?`.
 #[must_use]
 pub(crate) fn skipped<T>(msg: &str) -> Option<T> {
     skip(msg);
     None
 }
 
-/// File size, for selector ordering; 0 when it cannot be stat'ed (the selector
-/// then prefers that file and [`load`] reports it).
+/// File size, for selector ordering; 0 when it cannot be stat'ed, so the
+/// selector prefers that file and [`load`] reports it.
 fn file_len(meta: &IndexMeta) -> u64 {
     std::fs::metadata(&meta.path).map(|m| m.len()).unwrap_or(0)
 }
@@ -185,9 +157,8 @@ fn by_size_then_id(a: &&IndexMeta, b: &&IndexMeta) -> std::cmp::Ordering {
         .then(a.healpix.cmp(&b.healpix))
 }
 
-/// The smallest index file with at least `min_stars` stars: for the tests that
-/// only need real kd-tree data and want it fast, and for the ones that need a
-/// catalog big enough for the star numbers they build.
+/// The smallest index file with at least `min_stars` stars: fast real kd-tree
+/// data, or a catalog big enough for the star counts a test builds.
 pub(crate) fn smallest_index(min_stars: usize) -> Option<&'static IndexMeta> {
     metas()?
         .iter()
@@ -196,8 +167,7 @@ pub(crate) fn smallest_index(min_stars: usize) -> Option<&'static IndexMeta> {
         .or_else(|| skipped(&format!("no installed index has >= {min_stars} stars")))
 }
 
-/// The `n` smallest installed index files in [`by_size_then_id`] order: for
-/// tests that full-load a few files. `None` only via the [`metas`] gate.
+/// The `n` smallest installed files in [`by_size_then_id`] order; `None` only via [`metas`].
 pub(crate) fn smallest_indices(n: usize) -> Option<Vec<&'static IndexMeta>> {
     let mut files: Vec<&IndexMeta> = metas()?.iter().collect();
     files.sort_by(by_size_then_id);
@@ -205,11 +175,9 @@ pub(crate) fn smallest_indices(n: usize) -> Option<Vec<&'static IndexMeta>> {
     Some(files)
 }
 
-/// `n` installed index files spread across the size ordering: the smallest, one
-/// from the middle, the largest, and so on. For a test that stands for "any
-/// index" and must not see only the little tiles: big files bring deeper trees
-/// and denser code distributions. Distinct while the install holds `n` files or
-/// more. `None` only via the [`metas`] gate.
+/// `n` installed files spread across the size ordering (smallest, middle, largest, ...), so a
+/// test standing for "any index" also sees deeper trees and denser code distributions. Distinct
+/// while the install holds `n` files; `None` only via [`metas`].
 pub(crate) fn spread_indices(n: usize) -> Option<Vec<&'static IndexMeta>> {
     let metas = metas()?;
     let mut files: Vec<&IndexMeta> = metas.iter().collect();
@@ -229,8 +197,8 @@ pub(crate) fn spread_indices(n: usize) -> Option<Vec<&'static IndexMeta>> {
     Some(picked.iter().map(|&pos| files[pos]).collect())
 }
 
-/// The smallest `dimquads == 4` index: the 4-star quad code path and the
-/// `CIRCLE`/`CXDX`/`CXDXLT1` filters that go with it.
+/// The smallest `dimquads == 4` index: the 4-star quad code path and its
+/// `CIRCLE`/`CXDX`/`CXDXLT1` filters.
 pub(crate) fn dim4_index() -> Option<&'static IndexMeta> {
     metas()?
         .iter()
@@ -239,9 +207,8 @@ pub(crate) fn dim4_index() -> Option<&'static IndexMeta> {
         .or_else(|| skipped("no dimquads=4 index installed"))
 }
 
-/// Loads the index a selector returned. Cheap: mmap plus lazy byte views, and
-/// the caller decides how long to keep it resident. A file that is present but
-/// unreadable is a fixture failure, so this panics.
+/// Loads a selected index: mmap plus lazy byte views, so the caller decides how
+/// long to keep it resident. An unreadable file is a fixture failure: panic.
 #[must_use]
 pub(crate) fn load(meta: &IndexMeta) -> Index {
     Index::load(&meta.path).expect("index load failed")
@@ -249,11 +216,9 @@ pub(crate) fn load(meta: &IndexMeta) -> Index {
 
 // ---- Generated fields: an index to synthesize them from -------------------
 
-/// An installed index file a synthetic field can be generated from, or a skip.
-/// The pick is the one a caller outside the crate gets (`genfield::default_index`
-/// on a scanned directory), applied here to the already-scanned [`metas`] so a
-/// multi-directory install is searched as a whole and the headers are not parsed
-/// again per call. Cached: several gates ask for it.
+/// An installed index a synthetic field can be generated from, or a skip: the pick
+/// `genfield::default_index` makes, over the already-scanned [`metas`] (so a multi-directory
+/// install is searched as a whole, headers parsed once). Cached: several gates ask for it.
 #[must_use]
 pub(crate) fn generated_index() -> Option<PathBuf> {
     static CACHE: OnceLock<Option<PathBuf>> = OnceLock::new();
@@ -269,9 +234,9 @@ pub(crate) fn generated_index() -> Option<PathBuf> {
     cached.clone()
 }
 
-/// `Params` of a seeded generated field, or a skip when the installed index set
-/// cannot produce one at this frame size: a coarse all-sky-only set has no
-/// narrow field, and that is a property of the install, not a code failure.
+/// `Params` of a seeded generated field, or a skip when the installed set cannot produce one at
+/// this frame size (a coarse all-sky-only set has no narrow field): an install property, not a
+/// code failure.
 #[must_use]
 pub(crate) fn generated_params(
     seed: u64,
@@ -290,22 +255,16 @@ pub(crate) fn generated_params(
 
 // ---- Sky truth of the shipped fields the unit gates replay ----------------
 
-/// Gate budgets of the end-to-end gate (`tests/ground_truth.rs`), mirrored here
-/// for the unit gates: center 1.5 px of the field's own scale, rotation 0.5 deg,
-/// scale 1%, printed sizes 0.5%. `gate_budgets_match_the_cargo_gate` pins them
-/// against that gate's copy, so the two cannot drift apart silently.
-/// One deliberate asymmetry: `Truth::check` gates the center radially (hypot of
-/// the two components) where the end-to-end gate checks each component
-/// separately, so `Truth::check` is the stricter of the two.
+/// Gate budgets, mirrored from `tests/ground_truth.rs` for the unit gates and pinned against it
+/// by `gate_budgets_match_the_cargo_gate`. One deliberate asymmetry: where that gate checks each
+/// center component separately, [`Truth::check`] gates the center radially (hypot) and is stricter.
 pub(crate) const TOL_CENTER_PX: f64 = 1.5;
 pub(crate) const TOL_ORIENT_DEG: f64 = 0.5;
 pub(crate) const TOL_SCALE_FRAC: f64 = 0.01;
 pub(crate) const TOL_SIZE_FRAC: f64 = 0.005;
 
-/// Floor of matched stars the data-gated tests demand of a winner: a marginal
-/// bogus hit matches only a few stars, so this separates a real solve from
-/// noise while staying far under what real winners match; the exact count is a
-/// property of the index set, so it is deliberately not pinned.
+/// Matched-star floor the data-gated tests demand of a winner: bogus hits match few stars, real
+/// winners far more; the exact count belongs to the index set, so it is deliberately not pinned.
 pub(crate) const MIN_WINNER_NMATCH: usize = 15;
 
 /// Angle difference normalized to (-180, 180], as the end-to-end gate does.
@@ -315,19 +274,17 @@ pub(crate) fn wrap_deg(a: f64) -> f64 {
     if a == -180.0 { a + 360.0 } else { a }
 }
 
-/// Angular offset of two sky positions, in pixels of `scale_arcsec`: the RA
-/// component is scaled by `cos(dec)` of the first (reported) position, matching
-/// `Truth::check` and `tests/common`, and the two are combined radially.
+/// Angular offset of two sky positions in pixels of `scale_arcsec`: RA scaled by `cos(dec)` of the
+/// first (reported) position as in [`Truth::check`] and `tests/common`, the two combined radially.
 #[must_use]
 pub(crate) fn center_off_px(ra1: f64, dec1: f64, ra2: f64, dec2: f64, scale_arcsec: f64) -> f64 {
     let dra = wrap_deg(ra1 - ra2) * f64::cos(f64::to_radians(dec1));
     f64::hypot(dra, dec1 - dec2) * 3600.0 / scale_arcsec
 }
 
-/// A field's published sky truth (the reference run recorded in
-/// `tests/ground_truth.rs`, mirrored here for the unit gates) plus the gate that
-/// the end-to-end test applies to the printed solution. Both copies of the
-/// numbers are pinned by `truth_consts_match_the_cargo_gate`.
+/// A field's published sky truth (the reference run recorded in `tests/ground_truth.rs`, mirrored
+/// here for the unit gates) plus the gate that test applies to the printed solution. Both copies of
+/// the numbers are pinned by `truth_consts_match_the_cargo_gate`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Truth {
     pub(crate) ra_deg: f64,
@@ -337,16 +294,13 @@ pub(crate) struct Truth {
     pub(crate) height_deg: f64,
     pub(crate) orient_deg: f64,
     pub(crate) parity_neg: bool,
-    /// The truth entry's `tol_center_arcsec`: an absolute center budget
-    /// that wins over the pixel one (the real-centroid 1920x1080 fields).
+    /// Absolute center budget that overrides the pixel one (real-centroid 1920x1080 fields).
     pub(crate) tol_center_arcsec: Option<f64>,
 }
 
 impl Truth {
-    /// Checks a printed solution against this truth: center within the
-    /// budget, rotation within 0.5 deg (angle difference wrapped, as the gate
-    /// does), scale derived from the printed width within 1%, both printed
-    /// sizes within 0.5%, parity exact.
+    /// Checks a printed solution against this truth: center within the budget (radially), rotation
+    /// wrapped, scale derived from the printed width, both printed sizes, parity exact.
     pub(crate) fn check(&self, sol: &Solution, width_pix: f64) {
         let tol = self
             .tol_center_arcsec
@@ -382,8 +336,7 @@ impl Truth {
         assert_eq!(sol.parity_neg, self.parity_neg, "parity");
     }
 
-    /// Center offset of a WCS report from this truth, in px of the report's
-    /// own plate scale.
+    /// Center offset of a WCS report from this truth, in px of the report's own plate scale.
     #[must_use]
     pub(crate) fn center_off_px(&self, w: &Wcs) -> f64 {
         center_off_px(
@@ -396,11 +349,9 @@ impl Truth {
     }
 }
 
-/// A generated field's exact truth as a [`Truth`], for [`Truth::center_off_px`]
-/// on a synthetic field. Do not use [`Truth::check`] with it: that applies the
-/// shipped fields' budgets (1.5 px, 0.5 deg), several times looser than any
-/// generated-field gate. No absolute center budget either - at these scales the
-/// pixel one is the tighter of the two.
+/// A generated field's exact truth as a [`Truth`], for [`Truth::center_off_px`]. Not for
+/// [`Truth::check`]: the shipped budgets are several times looser than any generated-field gate. No
+/// absolute center budget: at these scales the pixel one is the tighter of the two.
 #[must_use]
 pub(crate) fn exact_truth(t: &crate::genfield::Truth) -> Truth {
     Truth {
@@ -415,9 +366,8 @@ pub(crate) fn exact_truth(t: &crate::genfield::Truth) -> Truth {
     }
 }
 
-/// The shipped fields' sky truth, the same numbers the end-to-end gate carries
-/// (its comments record the reference runs they came from). Only the fields a
-/// unit gate needs are mirrored here.
+/// The shipped fields' sky truth, the same numbers the end-to-end gate carries (its comments record
+/// the reference runs). Only the fields a unit gate replays are mirrored here.
 pub(crate) const FIELD1_TRUTH: Truth = Truth {
     ra_deg: 60.031038,
     dec_deg: 36.375976,
@@ -458,10 +408,9 @@ pub(crate) const NARROW2_TRUTH: Truth = Truth {
     parity_neg: true,
     tol_center_arcsec: Some(2.0),
 };
-/// `testdata/platesolve_13932859987089881536.xyls`, mirrored for the hinted
-/// fanout leg of `sweep.rs`, which needs a circle at the field's true center.
-/// That field reaches the fifth depth round before it solves, which is what
-/// makes the leg run the hint structures a sweep builds only from round 2 on.
+/// `testdata/platesolve_13932859987089881536.xyls`, for the hinted fanout leg of `sweep.rs` (it
+/// needs a circle at the field's true center). That field reaches the fifth depth round before it
+/// solves, which is what makes the leg run the hint structures a sweep builds only from round 2 on.
 pub(crate) const PLATESOLVE1_TRUTH: Truth = Truth {
     ra_deg: 313.855978,
     dec_deg: 44.34006,
@@ -475,16 +424,15 @@ pub(crate) const PLATESOLVE1_TRUTH: Truth = Truth {
 
 // ---- Field runs: the index and round that solve a field --------------------
 
-/// What the replayable rounds of a field need: the index that solved it, the
-/// depth round that solved it, the hit the round reported, and the field stars
-/// in pipeline order. Produced by [`field_run`] and [`generated_field_run`].
+/// Everything a replayed round needs: the index and depth round that solved the field, the hit that
+/// round reported, the field stars in pipeline order. From [`field_run`] / [`generated_field_run`].
 pub(crate) struct FieldRun {
     pub(crate) meta: &'static IndexMeta,
     pub(crate) field: String,
     pub(crate) width: f64,
     pub(crate) height: f64,
     /// Scale range the sweep ran with: the blind one in [`field_run`], the
-    /// generator's own window in [`generated_field_run`].
+    /// generator's window in [`generated_field_run`].
     pub(crate) app_min: f64,
     pub(crate) app_max: f64,
     pub(crate) radecs: Option<PositionHint>,
@@ -498,8 +446,7 @@ pub(crate) struct FieldRun {
     pub(crate) log_odds: f64,
 }
 
-/// Cache key: field file, frame size and position hint, with the floats taken
-/// as bits so the key is `Eq + Hash`.
+/// Cache key: field file, frame size and hint; floats as bits, so `Eq + Hash`.
 type RunKey = (String, u64, u64, Option<(u64, u64, u64)>);
 
 fn run_key(field: &str, width: f64, height: f64, radecs: Option<PositionHint>) -> RunKey {
@@ -517,24 +464,18 @@ fn run_key(field: &str, width: f64, height: f64, radecs: Option<PositionHint>) -
     )
 }
 
-/// One [`field_run`] cache slot: the `OnceLock` makes concurrent callers of
-/// the same key wait on the in-flight discovery instead of each repeating it.
+/// One [`field_run`] cache slot: its `OnceLock` makes concurrent callers of the
+/// same key wait on the in-flight discovery instead of each repeating it.
 type RunSlot = OnceLock<Option<&'static FieldRun>>;
 type RunCache = OnceLock<Mutex<HashMap<RunKey, Arc<RunSlot>>>>;
 
-/// The index and round that solve `field`: [`discover`] over the installed
-/// indices. The result (including negative ones) is cached per field + frame +
-/// hint, because the search costs what a real solve costs - a few seconds for
-/// the wide fields, and that is the only expensive step of the suite; the
-/// tests then re-run the single winning index or round.
+/// The index and round that solve `field`: [`discover`] over the installed set, cached (negative
+/// results too) per field + frame + hint, because the search costs what a real solve does - a few
+/// seconds for the wide fields, the only expensive step of the suite; tests then re-run just the
+/// winning index or round. Several tests share one run at suite start, hence the per-key slot.
 ///
-/// The cache holds one `OnceLock` slot per key: concurrent callers on the same
-/// field block on the in-flight discovery instead of each starting their own
-/// (several tests consume the same field run at suite start).
-///
-/// A field the installed set cannot solve is a skip, not a failure: which
-/// indices a machine has is not ours to decide. Under
-/// `ASTROMETRY_REQUIRE_TEST_DATA` it is a panic, as everywhere else here.
+/// A field the installed set cannot solve is a skip, not a failure: which indices a machine has is
+/// not ours to decide. Under `ASTROMETRY_REQUIRE_TEST_DATA` it is a panic, as everywhere else here.
 pub(crate) fn field_run(
     field: &str,
     width: f64,
@@ -558,21 +499,17 @@ pub(crate) fn field_run(
     })
 }
 
-/// CPU-time budget of a [`discover`] sweep: effectively unlimited for a unit
-/// test, yet representable as a `Duration` for `solve_field`'s deadline.
+/// CPU budget of a [`discover`] sweep: unlimited for a unit test, yet a `Duration` deadline.
 const DISCOVER_CPULIMIT_S: f64 = 3600.0;
 
-/// The field solved the way the binary solves it: the production sweep
-/// ([`solve_field`]) over [`metas`] pre-filtered by the very
-/// [`select_indices`] gate the binary applies, at the blind scale range. What
-/// the record holds is therefore exactly what the binary would have reported -
-/// index, round window, winner quad, log-odds - for any hint, which is what
-/// lets the tests re-run the winning index instead of hardcoding an index id.
+/// Solves the field the way the binary does - [`solve_field`] over [`metas`] pre-filtered by the
+/// same [`select_indices`] gate, at the blind scale range - minus `run_into`'s brightest-first cap
+/// (this path hands the sweep the uncapped [`xyls::load`] order). The record is therefore what the
+/// binary would have reported but for that cap - index, round window, winner quad, log-odds - for
+/// any hint, which is what lets tests re-run the winning index instead of hardcoding an index id.
 ///
-/// The scale range is the blind one: which index solves a field is decided
-/// here, not by a scale guess. That matters - the index whose nominal band
-/// contains the field width is frequently not the one that solves it (a quad
-/// diameter is smaller than the field it can be found in).
+/// The blind scale range matters: the index whose nominal band contains the field width is often
+/// not the one that solves it (a quad diameter is smaller than the field it is found in).
 fn discover(
     field: &str,
     width: f64,
@@ -595,22 +532,17 @@ fn discover(
         units: ScaleUnits::DegWidth,
     };
     let run = solve_into_run(metas, stars, &opts, field)?;
-    // One leaked record per (field, frame, hint): the suite solves each field a
-    // handful of times at most, and `&'static` keeps every helper here free of
-    // lifetimes. Test-only by construction (this whole module is `cfg(test)`).
+    // One leaked record per (field, frame, hint): a handful per suite at most,
+    // and `&'static` keeps every helper here free of lifetimes.
     Some(Box::leak(Box::new(run)))
 }
 
-/// Solves `stars` the way the binary would (`solve_field` over the
-/// [`select_indices`] pre-filter of `metas`, at `opts`' frame, scale range and
-/// hint) and records the run the binary would have reported: index, depth-round
-/// window, winner quad, log-odds.
+/// Solves `stars` the way the binary would ([`solve_field`] over the [`select_indices`] pre-filter
+/// of `metas`, at `opts`' frame, scale range and hint; the list as handed, without the `run_into`
+/// cap) and records the run the binary would have reported.
 ///
-/// Shared by [`discover`] (a `testdata/` field at the blind scale range) and
-/// [`generated_field_run`] (a synthetic field at the generator's window), so the
-/// two cannot drift on how a run is recorded. `None` means nothing solved, no
-/// meta matched the winner, or a sweep error; the caller decides whether that is
-/// a skip.
+/// Shared by [`discover`] and [`generated_field_run`] so the two cannot drift on how a run is
+/// recorded; `None` (nothing solved, no meta matched the winner, sweep error) is the caller's skip.
 fn solve_into_run(
     metas: &'static [IndexMeta],
     stars: Vec<Star>,
@@ -621,18 +553,17 @@ fn solve_into_run(
     let deadline = Instant::now() + Duration::from_secs_f64(DISCOVER_CPULIMIT_S);
     let sol = match solve_field(opts, &stars, &selected, deadline) {
         Ok(Some(sol)) => sol,
-        // "Nothing solved" is a skip for every caller, but which one is theirs
-        // to say; a sweep error is a data problem, reported and skipped alike.
+        // Both are the caller's skip to phrase; a sweep error is a data problem,
+        // so it is reported here too.
         Ok(None) => return None,
         Err(e) => {
             eprintln!("test data: {e:#}");
             return None;
         }
     };
-    // Map the winner back to its meta by (indexid, healpix), the same identity
-    // `run()`'s verbose selection uses. An install with two files sharing both
-    // (same indexid, different HPNSIDE) resolves to the first in sweep order - a
-    // file that just solved the field, so the replays still hold.
+    // Map the winner back to its meta by (indexid, healpix), the identity `run()`'s verbose
+    // selection uses. Two files sharing both (same indexid, different HPNSIDE) resolve to the
+    // first in sweep order - one that just solved the field, so the replays still hold.
     let meta = metas
         .iter()
         .find(|m| m.indexid == sol.winner.indexid && m.healpix == sol.winner.healpix)?;
@@ -652,14 +583,13 @@ fn solve_into_run(
     })
 }
 
-/// The same [`FieldRun`] for a generated field, plus the exact truth it was
-/// built from: for the gate that replays the winning round (refine) on a field
-/// whose answer is known by construction rather than taken from a reference run.
+/// The same [`FieldRun`] for a generated field, plus the exact truth it was built from: for the
+/// gate that replays the winning round (refine) on a field whose answer is known by construction
+/// rather than taken from a reference run.
 ///
-/// The sweep here runs with the generator's own scale window, which is what
-/// [`replay_round`] then replays with, so the round recorded here is the round
-/// that really won. A field the installed set cannot produce or cannot solve is
-/// a skip, as elsewhere.
+/// The sweep runs with the generator's own scale window, which is what [`replay_round`] replays
+/// with, so the recorded round is the one that really won. A field the set cannot produce or solve
+/// is a skip, as elsewhere.
 pub(crate) fn generated_field_run(
     seed: u64,
     width: f64,
@@ -698,9 +628,9 @@ pub(crate) struct RoundHit {
     pub(crate) verify: VerifyResult,
 }
 
-/// Replays the depth round `obj_start..max_objs` on the index that solved the
-/// field and returns every code hit with its verify result. The order is the
-/// rayon scheduling order; callers sort on whatever they compare.
+/// Replays the depth round `obj_start..max_objs` on the index that solved the field, returning
+/// every code hit with its verify result in rayon scheduling order (callers sort on what they
+/// compare).
 #[must_use]
 pub(crate) fn replay_round(run: &FieldRun, obj_start: usize, max_objs: usize) -> Vec<RoundHit> {
     let index = load(run.meta);
@@ -711,8 +641,8 @@ pub(crate) fn replay_round(run: &FieldRun, obj_start: usize, max_objs: usize) ->
         app_min: run.app_min,
         app_max: run.app_max,
         radecs: run.radecs,
-        // Replays search the index's own codes tree: the replay has no hint tree
-        // and must see the hits the first round of the original sweep saw.
+        // Replays search the index's own codes tree: there is no hint tree here, and they
+        // must see the hits the first round of the original sweep saw.
         hint_codes: None,
         max_objs,
         obj_start,
@@ -735,10 +665,8 @@ pub(crate) fn replay_round(run: &FieldRun, obj_start: usize, max_objs: usize) ->
     hits.into_inner().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Every hit of `run`'s round that verifies as solved, on the index that solved
-/// the field, ordered by quad number (the rayon workers deliver hits in
-/// scheduling order). This is what replaces pinning a quad id: the refine and
-/// racing-hit tests take whatever the round really verified.
+/// Hits of `run`'s round that verify as solved, in quad order (rayon delivers them in scheduling
+/// order). This replaces pinning a quad id: the refine and racing-hit tests take real verifies.
 #[must_use]
 pub(crate) fn solved_hits(run: &FieldRun) -> Vec<RoundHit> {
     let mut hits: Vec<RoundHit> = replay_round(run, run.obj_start, run.max_objs)
@@ -749,18 +677,14 @@ pub(crate) fn solved_hits(run: &FieldRun) -> Vec<RoundHit> {
     hits
 }
 
-/// Depth rounds [`solved_hits_with_peers`] may run past the winning round
-/// before giving up.
+/// Depth rounds [`solved_hits_with_peers`] may run past the winning round before giving up.
 const PEER_ROUNDS_MAX: usize = 3;
 
-/// The solved hits of the winning round, in quad order; when that round
-/// produced fewer than `min_want` (a round's next-best hit is often junk below
-/// the solve gate), extended with the solved hits of up to `PEER_ROUNDS_MAX`
-/// following depth rounds of the same index - fits over different field-star
-/// subsets, which is what a racing-hit comparison needs when the raw fits of
-/// one round disagree. Panics when even those rounds cannot supply `min_want`
-/// hits: the caller's comparison
-/// needs peers.
+/// The winning round's solved hits in quad order; when it gives fewer than `min_want` (a round's
+/// next-best hit is often junk below the solve gate), extended with the solved hits of up to
+/// `PEER_ROUNDS_MAX` following depth rounds of the same index - fits over different field-star
+/// subsets, what a racing-hit comparison needs when one round's raw fits disagree. Panics when even
+/// those rounds cannot supply `min_want`: the caller needs peers.
 #[must_use]
 pub(crate) fn solved_hits_with_peers(run: &FieldRun, min_want: usize) -> Vec<RoundHit> {
     let mut hits = solved_hits(run);
@@ -791,8 +715,7 @@ pub(crate) fn solved_hits_with_peers(run: &FieldRun, min_want: usize) -> Vec<Rou
 /// The round's reported winner: [`FieldRun::quad`] with its verify result.
 ///
 /// # Panics
-/// If the recorded winner is not among the hits it came from: the round is
-/// replayed with the same parameters, so that would be a real regression.
+/// If the recorded winner is not among the replayed hits (same round, same params): a regression.
 #[must_use]
 pub(crate) fn winning_hit(run: &FieldRun) -> RoundHit {
     solved_hits(run)
@@ -805,9 +728,8 @@ pub(crate) fn winning_hit(run: &FieldRun) -> RoundHit {
 mod tests {
     use super::*;
 
-    /// The absent-data path self-skips (returns `None`) rather than panicking —
-    /// the whole point of the helpers, exercised here without needing any data.
-    /// Under `ASTROMETRY_REQUIRE_TEST_DATA` the same call must fail loudly.
+    /// The absent-data path self-skips (`None`) rather than panicking - the whole point of the
+    /// helpers, exercised without data. Under `ASTROMETRY_REQUIRE_TEST_DATA` it must fail loudly.
     #[test]
     fn absent_field_file_self_skips() {
         let missing = "no-such-field-file-xyz.xyls";
@@ -830,11 +752,9 @@ mod tests {
         }
     }
 
-    /// The gate budgets exist twice: as the constants above (what the unit
-    /// gates accept) and in `tests/ground_truth.rs` (the end-to-end gate).
-    /// Changing a budget means editing both in lockstep, so pin the set: if they
-    /// drift, `cargo test` silently keeps accepting solutions the end-to-end
-    /// gate rejects.
+    /// The gate budgets exist twice: the constants above and `tests/ground_truth.rs`, nothing
+    /// deriving one from the other. Pin them: on drift `cargo test` would keep accepting solutions
+    /// the end-to-end gate rejects.
     #[test]
     fn gate_budgets_match_the_cargo_gate() {
         let rs = std::fs::read_to_string(concat!(
@@ -867,11 +787,9 @@ mod tests {
         }
     }
 
-    /// The sky truth is written twice: the `Truth` consts above (what the unit
-    /// gates demand) and the `FIELDS` table of `tests/ground_truth.rs` (what the
-    /// end-to-end gate demands). Nothing derives one from the other, so pin them
-    /// number by number. A gate entry no unit gate replays (`platesolve`) has no
-    /// const here and is therefore not in this list.
+    /// The sky truth is written twice: the `Truth` consts above and the `FIELDS` table of
+    /// `tests/ground_truth.rs`, nothing deriving one from the other, so pin them number by number.
+    /// A gate entry no unit gate replays (`platesolve`) has no const here, so is not in the list.
     #[test]
     fn truth_consts_match_the_cargo_gate() {
         /// The `FieldTruth { .. }` literal that declares one field.

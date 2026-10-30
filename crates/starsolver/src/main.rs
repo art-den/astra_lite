@@ -1,6 +1,5 @@
-//! Thin binary: parse the CLI (`Args`) and map `starsolver::run` onto the exit
-//! codes. The pipeline and the `--dump-index` branch live in the library crate
-//! (`src/lib.rs`); stdout is formatted in `output.rs`.
+//! Thin binary: CLI parse and exit-code mapping. The pipeline and the
+//! `--dump-index` branch live in `src/lib.rs`; stdout is formatted in `output.rs`.
 
 use clap::Parser;
 use starsolver::{Args, run};

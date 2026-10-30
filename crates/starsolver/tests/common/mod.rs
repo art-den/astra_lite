@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 /// The built-in index directories of the library (`src/indexdir.rs`).
 const BUILTIN_DIRS: [&str; 2] = ["/usr/share/astrometry", "/usr/local/astrometry/data"];
 
+const ARCSEC_PER_DEG: f64 = 3600.0;
+
 pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
 }
@@ -172,6 +174,23 @@ pub fn indices() -> Option<Indices> {
     Some(Indices::System)
 }
 
+/// The first candidate directory that holds index files; `None` after reporting
+/// a skip. For cases that have to name the directory themselves: a generated
+/// field is made from a file inside the returned directory and its run is pinned
+/// to that same directory, so a multi-directory `ASTROMETRY_TEST_INDEX_DIR` (which
+/// [`indices`] refuses to guess between) is still self-consistent here.
+pub fn one_index_dir() -> Option<PathBuf> {
+    candidate_dirs()
+        .into_iter()
+        .find(|dir| !index_files_in(dir).is_empty())
+        .or_else(|| {
+            skip(
+                "no astrometry.net index files found via the config add_path or the built-in dirs",
+            );
+            None
+        })
+}
+
 /// The first `.fits` of a usable directory, for `--dump-index` style cases;
 /// `None` after reporting a skip.
 pub fn one_index_file() -> Option<PathBuf> {
@@ -193,6 +212,13 @@ pub fn rel_frac(got: f64, want: f64) -> f64 {
 pub fn normalize_deg(a: f64) -> f64 {
     let a = f64::rem_euclid(a + 180.0, 360.0) - 180.0;
     if a == -180.0 { a + 360.0 } else { a }
+}
+
+/// Great-circle distance in arcsec between a reported center and the truth
+/// center. dRA is scaled by `cos(dec)` of the reported point.
+pub fn center_off_arcsec(got_ra: f64, got_dec: f64, want_ra: f64, want_dec: f64) -> f64 {
+    let dra = normalize_deg(got_ra - want_ra) * f64::cos(f64::to_radians(got_dec));
+    f64::hypot(dra, got_dec - want_dec) * ARCSEC_PER_DEG
 }
 
 /// The five-line success block as parsed back from the printed text.

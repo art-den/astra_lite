@@ -1,22 +1,19 @@
-//! Gnomonic (TAN) projection in both directions, the WCS fit from a matched
-//! quad, and the recentring of a fitted WCS onto a new tangent point (the
-//! field-center frame the printed solution is reported from).
+//! Gnomonic (TAN) projection both ways, the WCS fit from a matched quad, and
+//! the recentring of a fitted WCS onto a new tangent point (the field-center
+//! frame the printed solution is reported from).
 //!
-//! The fit is a Procrustes-like similarity (rotation + uniform scale, no
-//! shear); the translation is not free but is *solved as a centroid*: `crval`
-//! is the normalized sum of the star `xyz` vectors and `crpix` the centroid
-//! of the pixels. `CD = R * scale` with `R` orthogonal - the orthogonal
-//! Procrustes factor of the 2x2 star/pixel covariance, taken analytically as
-//! the complex similarity `z -> a*z` (rotation, `det CD > 0`) or
-//! `z -> a*conj(z)` (reflection, `det CD < 0`); picking the branch IS the
-//! parity - and `scale = sqrt(sum|p|^2 / sum|w|^2)` over the centered std
-//! coords `p` and the centered pixels `w` (rad/px, stored as deg/px).
+//! The fit is a Procrustes-like similarity (rotation + uniform scale, no shear)
+//! whose translation is not free but *solved as a centroid*; `CD = R * scale`
+//! with `R` the orthogonal Procrustes factor of the 2x2 star/pixel covariance,
+//! taken analytically as the complex similarity `z -> a*z` (rotation,
+//! `det CD > 0`) or `z -> a*conj(z)` (reflection, `det CD < 0`) - picking the
+//! branch IS the parity. See [`fit_tan_wcs`].
 
 use crate::coords::{deg2rad, rad2deg};
 
 /// CD-based TAN WCS (FITS convention): intermediate world coords in degrees,
-/// `[xi, eta] = CD * ([x, y] - crpix)`, where `xi` grows with RA and `eta`
-/// grows north. Pixel coordinates are 0-based.
+/// `[xi, eta] = CD * ([x, y] - crpix)`, `xi` growing with RA, `eta` north.
+/// Pixel coordinates are 0-based.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Wcs {
     /// Reference pixel (0-based): the pixel that maps to `crval_deg`.
@@ -38,9 +35,8 @@ impl Wcs {
         std_to_radec([xi, eta], self.crval_deg)
     }
 
-    /// `(ra, dec)` in degrees -> pixel. Inverts `CD` by dividing through
-    /// `cd_determinant()`; a zero-scale (singular-CD) fit is impossible
-    /// because [`fit_tan_wcs`] rejects it, so the determinant is never zero.
+    /// `(ra, dec)` in degrees -> pixel. `CD` is inverted by dividing through
+    /// `cd_determinant()`, never zero ([`fit_tan_wcs`] rejects a zero-scale fit).
     #[must_use]
     pub fn radec_to_pix(&self, ra: f64, dec: f64) -> (f64, f64) {
         let [xi, eta] = radec_to_std(ra, dec, self.crval_deg);
@@ -57,19 +53,17 @@ impl Wcs {
         self.cd[0][0] * self.cd[1][1] - self.cd[0][1] * self.cd[1][0]
     }
 
-    /// Image scale, arcsec/pixel: `3600 * sqrt(|det CD|)`. For the similarity
-    /// fits this module produces (`CD = R * scale` with `R` orthogonal) that
-    /// square root is the fit's uniform scale `scale`, in deg/px before the
-    /// 3600.
+    /// Image scale, arcsec/pixel: `3600 * sqrt(|det CD|)` - for this module's
+    /// similarity fits (`CD = R * scale`) that root is the fit's scale in deg/px.
     #[must_use]
     pub fn arcsec_per_pix(&self) -> f64 {
         3600.0 * f64::sqrt(f64::abs(self.cd_determinant()))
     }
 
-    /// Reported parity: `neg` when `det(CD) > 0`, `pos` otherwise. The stdout
-    /// `Field parity:` word keeps the reference solver's wording; the sign
-    /// itself is set by the branch [`fit_tan_wcs`] picks - its rotation branch
-    /// has `det = +scale^2`, its reflection branch `det = -scale^2`.
+    /// Reported parity: `neg` when `det(CD) > 0`, `pos` otherwise (the stdout
+    /// `Field parity:` word keeps the reference solver's wording). The sign is
+    /// the branch [`fit_tan_wcs`] picks: rotation `det = +scale^2`, reflection
+    /// `-scale^2`.
     #[must_use]
     pub fn parity_is_neg(&self) -> bool {
         self.cd_determinant() > 0.0
@@ -78,13 +72,12 @@ impl Wcs {
     /// Field rotation angle: the position angle on the sky of the image +y
     /// direction (stdout's "up is X degrees E of N"). Near the tangent point
     /// `dRA*cos(dec) = xi` and `dDec = eta` to first order, so that PA is
-    /// `atan2(CD1_2, CD2_2)`; folding the parity sign into the two `atan2`
-    /// arguments keeps that answer for both branches of [`fit_tan_wcs`]
-    /// (the reflection branch negates the second CD row). The plain
+    /// `atan2(CD1_2, CD2_2)`; folding the parity sign into both `atan2`
+    /// arguments keeps that answer for both branches of [`fit_tan_wcs`] (the
+    /// reflection branch negates the second CD row). The plain
     /// `atan2(CD1_2, CD1_1)` agrees only while `det(CD) >= 0`; with
-    /// `det(CD) < 0` it answers 180 degrees minus this angle, so a mirrored
-    /// fit would read up to ~180 degrees wrong. The printed summary applies it
-    /// to the report WCS (refined, then recentered), not to the raw fit.
+    /// `det(CD) < 0` it answers 180 degrees minus this angle. Printed from the
+    /// report WCS (refined, then recentered), not the raw fit.
     #[must_use]
     pub fn orientation_deg(&self) -> f64 {
         let parity = if self.cd_determinant() >= 0.0 {
@@ -97,30 +90,27 @@ impl Wcs {
         -f64::atan2(a, t).to_degrees()
     }
 
-    /// Reparameterize this TAN WCS with the tangent point moved to `pixel`:
-    /// new `crval = pix_to_radec(pixel)`, new `crpix = pixel`, `CD' = J · CD`,
-    /// where `J` is the Jacobian of the reprojection between the two tangent
-    /// frames at the new tangent point:
+    /// Reparameterize this TAN WCS with the tangent point moved to `pixel`: new
+    /// `crval = pix_to_radec(pixel)` (the sky answer at that pixel is unchanged),
+    /// new `crpix = pixel`, `CD' = J · CD`, where `J` is the Jacobian of the
+    /// reprojection between the two tangent frames at the new tangent point:
     /// `J_ij = e_i' · (e_j - s0_j·u) / D` with `s0 = CD·(pixel - crpix)` in
     /// radians, `u = (s0_x e_1 + s0_y e_2 + w_0) / D`, `D = sqrt(1 + |s0|^2)`,
-    /// `e_1/e_2` the tangent basis at the old tangent point `w_0` and
-    /// `e_1'/e_2'` the one at `w_1`. It is the gradient of
-    /// `xi' = (u·e_1')/(u·w_1)` there, so it is exact at `pixel` and only
-    /// first-order right away from it.
+    /// `e_1/e_2` the tangent basis at the old tangent point `w_0`, `e_1'/e_2'`
+    /// the one at `w_1`. It is the gradient of `xi' = (u·e_1')/(u·w_1)` there, so
+    /// exact at `pixel`, only first-order right away from it.
     ///
-    /// Why the report needs it: TAN cannot move its tangent point exactly
-    /// without extra distortion terms, so the two WCS agree at `pixel` and
-    /// drift apart elsewhere - the drift is linear in the tangent-point move
-    /// and quadratic in the distance from the new tangent point. Anchoring
-    /// every reported solution on the field center is what turns the printed
-    /// rotation/scale/center into one shared frame instead of one frame per
-    /// quad fit.
+    /// The report needs it because TAN cannot move its tangent point exactly
+    /// without extra distortion terms: the two WCS agree at `pixel` and drift
+    /// elsewhere - linearly in the tangent-point move, quadratically in the
+    /// distance from it. Anchoring every solution on the field center puts the
+    /// printed rotation/scale/center in one shared frame instead of one per quad
+    /// fit.
     ///
-    /// Parity is invariant: `det J = (w_0·w_1)/D^2`, because the 2x2 minor of
-    /// the rotation between the two right-handed tangent frames has that
-    /// determinant; positive for any two tangent points under 90 degrees
-    /// apart. On any non-finite intermediate `*self` is returned: reporting
-    /// must never fail a solve.
+    /// Parity is invariant: `det J = (w_0·w_1)/D^2`, the 2x2 minor of the rotation
+    /// between two right-handed tangent frames, positive for tangent points under
+    /// 90 degrees apart. On any non-finite intermediate `*self` is returned:
+    /// reporting must never fail a solve.
     #[must_use]
     pub fn recentered_at(&self, pixel: [f64; 2]) -> Wcs {
         let (ra1, dec1) = self.pix_to_radec(pixel[0], pixel[1]);
@@ -182,11 +172,10 @@ impl Wcs {
 
 /// The tangent-plane basis [`xyz_to_std`] uses at the tangent point `v0`
 /// (normalized here, so any nonzero scalar multiple gives the same basis):
-/// `e1 = (-sin ra, cos ra, 0)`, the increasing-RA direction, and
-/// `e2 = v0 x e1`, the northward one (`d v0 / d dec`); both are unit vectors
-/// orthogonal to `v0`. At an exact pole the RA direction is undefined
-/// (`rho = hypot(x, y) = 0`) and the fixed `[1, 0, 0]` stands in - see
-/// [`xyz_to_std`] for what that does to the projected axes.
+/// `e1 = (-sin ra, cos ra, 0)`, the increasing-RA direction, `e2 = v0 x e1`, the
+/// northward one (`d v0 / d dec`); both unit vectors orthogonal to `v0`. At an
+/// exact pole the RA direction is undefined (`rho = hypot(x, y) = 0`) and the
+/// fixed `[1, 0, 0]` stands in - see [`xyz_to_std`] for the projected axes there.
 fn tangent_basis(v0: [f64; 3]) -> ([f64; 3], [f64; 3]) {
     let norm = f64::hypot(f64::hypot(v0[0], v0[1]), v0[2]);
     let v0 = [v0[0] / norm, v0[1] / norm, v0[2] / norm];
@@ -204,38 +193,27 @@ fn tangent_basis(v0: [f64; 3]) -> ([f64; 3], [f64; 3]) {
     (e1, e2)
 }
 
-/// Field-center pixel of an image `size` pixels wide/tall: `size/2 + 0.5`.
-/// Every reported field center uses this anchor: the verbose hit line in
-/// `solver`, the recentring in `sweep` and the tests' published-center
-/// checks. Evaluating at the naive `size/2` instead shifts the result half a
-/// pixel in each axis - a third of the 1.5 px center budget of the solution
-/// gate, spent before any solver error is counted - so it must not be
-/// substituted.
+/// Field-center pixel of an image `size` pixels wide/tall: `size/2 + 0.5`. Every
+/// reported field center uses this anchor (`solver`'s verbose hit line, the
+/// recentring in `sweep`, the tests' published-center checks). The naive
+/// `size/2` shifts the result half a pixel in each axis - a third of the
+/// solution gate's 1.5 px center budget, spent before any solver error - so it
+/// must not be substituted.
 #[must_use]
 pub fn pixel_center_of_size(size: f64) -> f64 {
     0.5 + size / 2.0
 }
 
 /// Standard (tangent-plane) coordinates of `(ra, dec)`, radians, relative to
-/// `crval_deg` (`xi` along increasing RA, `eta` north):
-///
-/// ```text
-/// dra = ra - ra0
-/// den = cos(dec)cos(dec0)cos(dra) + sin(dec)sin(dec0)
-/// xi  = cos(dec) sin(dra) / den
-/// eta = (cos(dec0) sin(dec) - sin(dec0) cos(dec) cos(dra)) / den
-/// ```
-///
-/// `den` is the dot product of the two unit sky vectors - hence `cos(dra)`
-/// on the cos-cos term - the gnomonic depth along the tangent point: the
-/// numerators are the projections of the star's unit vector onto the
-/// tangent-plane axes, so this is [`xyz_to_std`] with the basis written out
-/// in `(ra, dec)`.
+/// `crval_deg` (`xi` along increasing RA, `eta` north). `den` is the dot product
+/// of the two unit sky vectors - hence the `cos(dra)` on the cos-cos term -, the
+/// gnomonic depth along the tangent point; the numerators are the projections of
+/// the star's unit vector onto the tangent-plane axes, so this is [`xyz_to_std`]
+/// with its basis written out in `(ra, dec)`.
 ///
 /// At the exact pole (`dec0 = ±90`) the `ra0` of `crval_deg` still fixes the
-/// basis, which makes it a 90-degree rotation of [`xyz_to_std`]'s fixed-pole
-/// basis there; each is self-consistent and round-trips with its own inverse
-/// (pinned by the tests below).
+/// basis, a 90-degree rotation of [`xyz_to_std`]'s fixed-pole basis there; each
+/// is self-consistent and round-trips with its own inverse.
 #[must_use]
 pub fn radec_to_std(ra: f64, dec: f64, crval_deg: [f64; 2]) -> [f64; 2] {
     let (ra0, dec0) = (crval_deg[0].to_radians(), crval_deg[1].to_radians());
@@ -248,18 +226,17 @@ pub fn radec_to_std(ra: f64, dec: f64, crval_deg: [f64; 2]) -> [f64; 2] {
     [xi, eta]
 }
 
-/// Inverse gnomonic: standard coords (radians) -> `(ra, dec)` degrees. The
-/// exact scalar inverse of [`radec_to_std`]: both follow the `ra0` of
-/// `crval_deg`, so they round-trip even at `dec0 = ±90` (where
-/// [`xyz_to_std`]'s fixed-pole basis uses a different, equally consistent
-/// frame).
+/// Inverse gnomonic: standard coords (radians) -> `(ra, dec)` degrees. The exact
+/// scalar inverse of [`radec_to_std`]: both follow the `ra0` of `crval_deg`, so
+/// they round-trip even at `dec0 = ±90`, where [`xyz_to_std`]'s fixed-pole basis
+/// uses a different, equally consistent frame.
 #[must_use]
 pub fn std_to_radec(std: [f64; 2], crval_deg: [f64; 2]) -> (f64, f64) {
     let ra0 = crval_deg[0].to_radians();
     let dec0 = crval_deg[1].to_radians();
     let (xi, eta) = (std[0], std[1]);
-    // Closed form of "normalize w0 + xi*e1 + eta*e2, read it back as
-    // (ra, dec)": r is that vector's length, sqrt(1 + xi^2 + eta^2).
+    // Closed form of "normalize w0 + xi*e1 + eta*e2, read back as (ra, dec)";
+    // r is that vector's length.
     let r = f64::sqrt(1.0 + xi * xi + eta * eta);
     let (sin_dec0, cos_dec0) = (f64::sin(dec0), f64::cos(dec0));
     let dec = f64::asin((sin_dec0 + eta * cos_dec0) / r);
@@ -273,14 +250,13 @@ pub fn std_to_radec(std: [f64; 2], crval_deg: [f64; 2]) -> (f64, f64) {
 
 /// Procrustes similarity fit of index stars to field pixels.
 ///
-/// `starxyz` are unit-sphere positions, `fieldxy` 0-based pixels; both slices
-/// must be the same length of >= 3 (the solver passes one quad's stars - 3 or
-/// 4, the index's quad size; `refine::fit_pairs` passes the whole matched-pair
-/// set). The returned WCS uses `crval = normalize(sum xyz)` and
-/// `crpix = mean(fieldxy)`: those two centroids are the anchors by
-/// construction. The mean of the projected stars (`pcm`) only centers the
-/// covariance below; it is deliberately not folded back into the reference
-/// position, so `crval` stays the star-centroid direction.
+/// `starxyz` unit-sphere positions, `fieldxy` 0-based pixels, equal length >= 3
+/// (the solver passes one quad's 3 or 4 stars; `refine::fit_pairs` the whole
+/// matched-pair set). The returned WCS uses `crval = normalize(sum xyz)` and
+/// `crpix = mean(fieldxy)`: those two centroids are the anchors by construction.
+/// The mean of the projected stars (`pcm`) only centers the covariance and is
+/// deliberately not folded back into the reference position, so `crval` stays
+/// the star-centroid direction.
 #[must_use]
 pub fn fit_tan_wcs(starxyz: &[[f64; 3]], fieldxy: &[[f64; 2]]) -> Option<Wcs> {
     let n = starxyz.len();
@@ -330,13 +306,12 @@ pub fn fit_tan_wcs(starxyz: &[[f64; 3]], fieldxy: &[[f64; 2]]) -> Option<Wcs> {
         p[2 * i + 1] -= pcm[1];
     }
 
-    // (d,e) complex Procrustes == the orthogonal factor of the 2x2
-    // star/pixel covariance SVD, in closed form.
-    // z_i = centered std coords, w_i = centered pixels. Two orientation
-    // classes, each with its optimal complex coefficient a in closed form:
+    // (d,e) complex Procrustes == the closed-form orthogonal factor of the 2x2
+    // star/pixel covariance SVD. z_i = centered std coords, w_i = centered
+    // pixels; the optimal complex coefficient a of each orientation class:
     //   z ~= a*w        (rotation, det > 0)  -> a = sum z*conj(w) / sum|w|^2
     //   z ~= a*conj(w)  (reflection, det < 0)-> a = sum z*w        / sum|w|^2
-    // Each leaves residual sum|z|^2 - |a|^2 * sum|w|^2 over the same sum|w|^2,
+    // Both leave residual sum|z|^2 - |a|^2 * sum|w|^2 over the same sum|w|^2,
     // so the larger |a| is the better-fitting model and wins the branch.
     let mut z_rot = [0.0f64; 2]; // complex (re, im)
     let mut z_ref = [0.0f64; 2];
@@ -386,9 +361,8 @@ pub fn fit_tan_wcs(starxyz: &[[f64; 3]], fieldxy: &[[f64; 2]]) -> Option<Wcs> {
         ]
     };
 
-    // Defense-in-depth: every guard above fails open on NaN, so a poisoned fit
-    // (e.g. NaN in a corrupt index star's xyz) can reach here with a non-finite
-    // CD. Reject it rather than return a NaN WCS.
+    // Defense-in-depth: the guards above fail open on NaN, so a poisoned fit can
+    // reach here with a non-finite CD; reject it rather than return a NaN WCS.
     if !cd.iter().flatten().all(|v| f64::is_finite(*v)) {
         return None;
     }
@@ -404,23 +378,20 @@ pub fn fit_tan_wcs(starxyz: &[[f64; 3]], fieldxy: &[[f64; 2]]) -> Option<Wcs> {
 /// tangent point `v0` — the vector form of [`radec_to_std`]:
 /// `xi = (v·e1)/(v·v0)`, `eta = (v·e2)/(v·v0)` on the `tangent_basis` at `v0`.
 ///
-/// Callers must keep inputs within one hemisphere: a vector with `v·v0 <= 0`
-/// has no TAN projection (at `v·v0 = 0` the divide blows up, below it the
-/// signs flip into the far hemisphere) and nothing here rejects one. The only
-/// production caller projects one fit's stars about their own centroid (a
-/// quad's stars, or a refine step's matched pairs), so `v·v0` stays near 1.
+/// Callers must keep inputs within one hemisphere: no vector with `v·v0 <= 0`
+/// has a TAN projection (at `v·v0 = 0` the divide blows up, below it the signs
+/// flip into the far hemisphere) and nothing here rejects one. The only
+/// production caller projects one fit's stars about their own centroid (a quad's
+/// stars, a refine step's matched pairs), so `v·v0` stays near 1.
 ///
-/// Exact-pole exception: at `v0 = (0, 0, ±1)` the increasing-RA direction is
-/// undefined (`rho = hypot(x, y) = 0`), so a fixed basis `[1, 0, 0]` is used,
-/// giving `xi = ±x/z`, `eta = y/z`. That is a 90-degree rotation of
-/// [`radec_to_std`]'s `ra0`-based basis at the same pole; both bases are
-/// internally consistent and round-trip with their own inverse.
+/// Exact pole (`v0 = (0, 0, ±1)`, `rho = hypot(x, y) = 0`): the increasing-RA
+/// direction is undefined, so the fixed basis `[1, 0, 0]` gives `xi = ±x/z`,
+/// `eta = y/z` - a 90-degree rotation of [`radec_to_std`]'s `ra0`-based basis;
+/// both are self-consistent and round-trip with their own inverse.
 #[must_use]
 pub fn xyz_to_std(v: [f64; 3], v0: [f64; 3]) -> [f64; 2] {
     let norm = f64::hypot(f64::hypot(v0[0], v0[1]), v0[2]);
     let v0 = [v0[0] / norm, v0[1] / norm, v0[2] / norm];
-    // e1/e2: the tangent basis at the normalized v0 (increasing-RA and
-    // north; the pole exception lives in `tangent_basis`).
     let (e1, e2) = tangent_basis(v0);
     let den = v[0] * v0[0] + v[1] * v0[1] + v[2] * v0[2];
     let xi = (v[0] * e1[0] + v[1] * e1[1] + v[2] * e1[2]) / den;
@@ -428,20 +399,17 @@ pub fn xyz_to_std(v: [f64; 3], v0: [f64; 3]) -> [f64; 2] {
     [xi, eta]
 }
 
-/// An `xyz -> pixel` map precomputed once per WCS: the gnomonic projection of
-/// a unit-sphere vector onto this WCS's pixels by dot products, with no
-/// per-star trigonometry.
+/// An `xyz -> pixel` map precomputed once per WCS: the gnomonic projection of a
+/// unit-sphere vector onto its pixels by dot products, with no per-star trig.
 ///
-/// The tangent frame is the one [`radec_to_std`] uses - `ra0`/`dec0` of
-/// `crval_deg` fix `e1`/`e2`/`w0` there, so this map agrees with
-/// `radec_to_pix(xyz_to_radec(v))` everywhere, including at an exact pole
-/// (unlike [`xyz_to_std`]'s vector basis, which rotates 90 degrees there).
-/// The algebra differs (expanded dot products instead of nested trig), so the
-/// two paths agree to rounding, not bit for bit. Like every TAN map it is only
-/// meaningful within the hemisphere around `crval_deg`: a vector with
-/// `v . w0 <= 0` has no projection and nothing here rejects one (the
-/// `verify_hit` caller discards the resulting wild pixel coordinates with its
-/// in-frame test, as before).
+/// Its tangent frame is the one [`radec_to_std`] uses - `ra0`/`dec0` of
+/// `crval_deg` fix `e1`/`e2`/`w0` - so it agrees with
+/// `radec_to_pix(xyz_to_radec(v))` everywhere, including at an exact pole (unlike
+/// [`xyz_to_std`]'s vector basis, which rotates 90 degrees there). The expanded
+/// dot products differ from that nested-trig path in rounding, not bit for bit.
+/// Like every TAN map it is meaningful only within the hemisphere around
+/// `crval_deg`: no vector with `v . w0 <= 0` has a projection and nothing here
+/// rejects one (`verify_hit` discards those wild pixels with its in-frame test).
 pub struct XyzToPix {
     /// `rad2deg / det(CD) * CD^-1 * [e1; e2]` written out: one row per axis.
     rows: [[f64; 3]; 2],
@@ -466,9 +434,8 @@ impl XyzToPix {
 }
 
 impl Wcs {
-    /// Build the [`XyzToPix`] map of this WCS. The four `sin`/`cos` of
-    /// `crval_deg` and the CD inversion are paid once per call site instead of
-    /// once per projected star.
+    /// Build the [`XyzToPix`] map of this WCS: the four `sin`/`cos` of
+    /// `crval_deg` and the CD inversion are paid here, not per projected star.
     #[must_use]
     pub fn xyz_to_pix_map(&self) -> XyzToPix {
         let (ra0, dec0) = (
@@ -482,9 +449,8 @@ impl Wcs {
         let e1 = [-sin_ra0, cos_ra0, 0.0];
         let e2 = [-sin_dec0 * cos_ra0, -sin_dec0 * sin_ra0, cos_dec0];
         let w0 = [cos_dec0 * cos_ra0, cos_dec0 * sin_ra0, sin_dec0];
-        // `radec_to_pix` reads dx = (CD11*xi - CD01*eta)/det, dy =
-        // (-CD10*xi + CD00*eta)/det with xi/eta in degrees; fold the CD
-        // inverse and the radian->degree scale into the two dot-product rows.
+        // `radec_to_pix`: dx = (CD11*xi - CD01*eta)/det, dy = (-CD10*xi +
+        // CD00*eta)/det, xi/eta in degrees; k folds in the CD inverse and rad->deg.
         let k = rad2deg(1.0) / self.cd_determinant();
         let rows = [
             std::array::from_fn(|d| k * (self.cd[1][1] * e1[d] - self.cd[0][1] * e2[d])),
@@ -526,17 +492,14 @@ impl Wcs {
 }
 
 /// A `pixel -> unit-sphere vector` map precomputed once per WCS: the TAN
-/// deprojection written as `u = normalize(w0 + dx*col_x + dy*col_y)`, which is
-/// `radec_to_xyz(pix_to_radec(x, y))` with the tangent basis and the four
-/// `sin`/`cos` of `crval_deg` pulled out of the per-pixel path.
+/// deprojection `u = normalize(w0 + dx*col_x + dy*col_y)`, i.e.
+/// `radec_to_xyz(pix_to_radec(x, y))` with the tangent basis and the `sin`/`cos`
+/// of `crval_deg` pulled out of the per-pixel path (it agrees with that path to
+/// rounding, not bit for bit; see the note on [`XyzToPix`]).
 ///
-/// Per pixel it costs two multiplies per axis plus one normalization, against
-/// the `atan2`/`asin`/`sin`/`cos` round trip of the two-function path; the two
-/// agree to rounding, not bit for bit (see the note on [`XyzToPix`]).
-///
-/// Unlike the `xyz -> pixel` direction this one has no excluded hemisphere:
-/// every pixel deprojects to `w0 + dx*col_x + dy*col_y`, whose dot product with
-/// `w0` is always positive, so no pixel is degenerate.
+/// Unlike the `xyz -> pixel` direction this one has no excluded hemisphere: every
+/// pixel deprojects to `w0 + dx*col_x + dy*col_y`, whose dot product with `w0` is
+/// always positive, so no pixel is degenerate.
 pub struct PixToXyz {
     /// `deg2rad * CD * [e1; e2]`: the sky direction of a step along each axis.
     cols: [[f64; 3]; 2],
@@ -557,10 +520,8 @@ impl PixToXyz {
             *out = self.w0[c] + dx * self.cols[0][c] + dy * self.cols[1][c];
         }
         let n = f64::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-        // A real pixel always has `n >= 1`; anything else arrives only with a
-        // non-finite coordinate, and returning `v` keeps that NaN visible to the
-        // caller (the probe tests its components) instead of hiding it behind a
-        // division.
+        // A real pixel always has `n >= 1`; anything else means a non-finite
+        // coordinate, and returning `v` keeps that NaN visible to the probe.
         if n > 0.0 && n.is_finite() {
             [v[0] / n, v[1] / n, v[2] / n]
         } else {
@@ -574,8 +535,7 @@ pub(crate) mod test_data {
     use super::Wcs;
     use crate::testutil;
 
-    /// Field `4656x3522-1`'s published WCS: the CRVAL/CRPIX/CD its reference run
-    /// left behind (recorded in `tests/ground_truth.rs`).
+    /// Field `4656x3522-1`'s published WCS from its reference run, as in `tests/ground_truth.rs`.
     pub const FIELD1_WCS: Wcs = Wcs {
         crpix: [2651.20111448, 2327.06991884],
         crval_deg: [59.7194055429, 35.9547818436],
@@ -584,8 +544,7 @@ pub(crate) mod test_data {
             [1.38160452186e-05, -0.000753336628101],
         ],
     };
-    /// Field 1's published center/scale, shorthands for the tests; the single
-    /// source is `testutil::FIELD1_TRUTH`.
+    /// Field 1's published center/scale; the single source is `testutil::FIELD1_TRUTH`.
     pub const FIELD1_CENTER: (f64, f64) = (
         testutil::FIELD1_TRUTH.ra_deg,
         testutil::FIELD1_TRUTH.dec_deg,
@@ -612,9 +571,9 @@ mod tests {
         }
     }
 
-    /// Off-pole, `xyz_to_std` and `radec_to_std` agree to round-off. At the
-    /// exact pole their tangent-plane bases differ by a 90-degree rotation
-    /// (each self-consistent); pin that so a future basis edit is caught.
+    /// Off-pole, `xyz_to_std` and `radec_to_std` agree to round-off; at the exact
+    /// pole their tangent-plane bases differ by a 90-degree rotation, each
+    /// self-consistent (pinned so a future basis edit is caught).
     #[test]
     fn xyz_std_matches_radec_std() {
         let crval = [60.0, 36.0];
@@ -625,10 +584,9 @@ mod tests {
             assert!(f64::abs(a[1] - b[1]) < 1e-12);
         }
 
-        // Exact-pole: `xyz_to_std` uses the fixed pole basis
-        // (north: xi=x/z, eta=y/z; south: xi=-x/z, eta=y/z); `radec_to_std`
-        // follows the ra0 it is given, a 90-degree rotation of that basis.
-        // Both round-trip with their own inverse.
+        // Exact pole: `xyz_to_std`'s fixed basis (north xi=x/z, eta=y/z; south
+        // xi=-x/z, eta=y/z) vs `radec_to_std` following the ra0 it is given, a
+        // 90-degree rotation of it; both round-trip with their own inverse.
         for (ra, dec) in [(30.0, 80.0), (120.0, 45.0)] {
             let v = radec_to_xyz(ra, dec);
             let b = xyz_to_std(v, radec_to_xyz(0.0, 90.0));
@@ -669,17 +627,15 @@ mod tests {
         }
     }
 
-    /// XyzToPix projects exactly where `radec_to_pix(xyz_to_radec(..))` does,
-    /// to rounding: the dot-product map and the trig path must stay
-    /// interchangeable for `verify_hit`'s reference-star loop, including for a
-    /// tangent point at an exact pole (the `ra0`-fixed basis of
-    /// `radec_to_std`, not the vector basis of `xyz_to_std`).
+    /// `XyzToPix` projects exactly where `radec_to_pix(xyz_to_radec(..))` does,
+    /// to rounding: dot-product map and trig path must stay interchangeable for
+    /// `verify_hit`'s reference-star loop, including at an exact pole (the
+    /// `ra0`-fixed basis of `radec_to_std`, not `xyz_to_std`'s vector basis).
     #[test]
     fn xyz_to_pix_map_matches_radec_to_pix() {
         for w in [
             FIELD1_WCS,
-            // A mirrored wide-field WCS and a pole tangent point, alongside
-            // the shipped-field one.
+            // Plus a mirrored wide-field WCS and a pole tangent point.
             Wcs {
                 crpix: [1000.0, 800.0],
                 crval_deg: [310.0, -66.5],
@@ -708,16 +664,14 @@ mod tests {
         }
     }
 
-    /// The `pixel -> unit-sphere` deprojection the probe's whole verdict rests
-    /// on must stay interchangeable with `radec_to_xyz(pix_to_radec(x, y))`:
-    /// the same tangent frame, agreeing to rounding, for a mirrored wide field
-    /// and a tangent point at an exact pole alongside the shipped-field WCS.
+    /// The `pixel -> unit-sphere` deprojection the probe's whole verdict rests on
+    /// must stay interchangeable with `radec_to_xyz(pix_to_radec(x, y))`: same
+    /// tangent frame, agreeing to rounding, for the mirrored and pole WCSs too.
     #[test]
     fn pix_to_xyz_map_matches_pix_to_radec() {
         for w in [
             FIELD1_WCS,
-            // A mirrored wide-field WCS and a pole tangent point, the same leg
-            // pair as `xyz_to_pix_map_matches_radec_to_pix`.
+            // The same two extra WCS legs as `xyz_to_pix_map_matches_radec_to_pix`.
             Wcs {
                 crpix: [1000.0, 800.0],
                 crval_deg: [310.0, -66.5],
@@ -755,8 +709,7 @@ mod tests {
     ///
     /// NB: the published center is the sky position at the field-center pixel
     /// `W/2 + 0.5, H/2 + 0.5` ([`pixel_center_of_size`]), in the same 0-based
-    /// pixel system [`Wcs::crpix`] uses. Evaluating at `(W/2, H/2)` instead
-    /// moves it half a pixel per axis (~1.4 arcsec at this field's scale),
+    /// pixels as [`Wcs::crpix`]; `(W/2, H/2)` moves it half a pixel per axis,
     /// four times the 1e-4 deg checked here.
     #[test]
     fn reference_wcs_derived_fields() {
@@ -769,24 +722,22 @@ mod tests {
         assert!(w.parity_is_neg()); // det(CD) > 0 -> "neg"
     }
 
-    /// Gate: fitting the stars of in-field quads of the index that solves
-    /// field 1 recovers the reference WCS: its scale to within 2.7125 +/- 0.01
-    /// arcsec/px, a field-center position within ~1 deg of the published
-    /// center, and a CD matrix that matches the reference WCS where the fit
-    /// lives.
+    /// Gate: fitting the stars of in-field quads of the index that solves field 1
+    /// recovers the reference WCS: scale to within 2.7125 +/- 0.01 arcsec/px, a
+    /// field-center position within ~1 deg of the published center, and a CD that
+    /// matches the reference WCS where the fit lives.
     ///
-    /// Quads are selected by a predicate, not by id: stars that all project
-    /// inside the field frame through `FIELD1_WCS`, with a cheap dot guard
-    /// (within 4 deg of the published center) first so the projection never
-    /// sees a far-hemisphere star, plus a triangle-shape guard (see below).
-    /// Pixels come from `FIELD1_WCS` itself, so the fit inverts the projection.
+    /// Quads are selected by a predicate, not by id: stars that all project inside
+    /// the field frame through `FIELD1_WCS`, with a cheap dot guard (within 4 deg
+    /// of the published center) first so the projection never sees a
+    /// far-hemisphere star, plus a triangle-shape guard (below). Pixels come from
+    /// `FIELD1_WCS` itself, so the fit inverts the projection.
     ///
     /// CD is tangent-point dependent under TAN, so it is compared against the
-    /// reference WCS recentred at the quad's own pixel centroid (the analytic
-    /// [`Wcs::recentered_at`] Jacobian, pinned by its own tests); comparing
-    /// against the raw reference CD instead would add a reprojection term that
-    /// grows with the distance to the reference tangent point - up to ~2e-5
-    /// deg/px at the corners of this frame, well over the 1e-6 asserted here.
+    /// reference recentred at the quad's own pixel centroid (the analytic
+    /// [`Wcs::recentered_at`] Jacobian); the raw reference CD would add a
+    /// reprojection term growing with the distance to its tangent point - ~2e-5
+    /// deg/px at this frame's corners, over the 1e-6 asserted here.
     #[test]
     fn fit_from_in_field_quads_matches_reference() {
         let Some(run) = testutil::field_run("4656x3522-1.xyls", 4656.0, 3522.0, None) else {
@@ -826,13 +777,11 @@ mod tests {
             if !inside {
                 continue;
             }
-            // Keep the third star off the A-B line. At exact collinearity the
-            // centered configuration is rank-1: both orientation classes fit
-            // it equally well (|z_rot| == |z_ref|), so the branch tie-break -
-            // not the data - would decide the parity, and only the backbone
-            // direction constrains the fit. Require min altitude >= 5% of the
-            // longest side, which for twice the triangle area means
-            // area2 >= 0.05 * longest^2.
+            // Keep the third star off the A-B line: at exact collinearity the
+            // centered configuration is rank-1, both orientation classes fit it
+            // equally (|z_rot| == |z_ref|) so the tie-break - not the data - would
+            // pick the parity, and only the backbone direction constrains the fit.
+            // Hence min altitude >= 5% of the longest side: area2 >= 0.05*longest^2.
             let (ax, ay) = (fieldxy[0][0], fieldxy[0][1]);
             let (bx, by) = (fieldxy[1][0], fieldxy[1][1]);
             let (cx, cy) = (fieldxy[2][0], fieldxy[2][1]);
@@ -861,8 +810,7 @@ mod tests {
                 "quad {q}: center {ra},{dec}"
             );
 
-            // The fit's CD, compared at the quad's own tangent point (see
-            // the doc comment).
+            // Recentred so the CD is compared at the same tangent point (gate doc above).
             let cenx = fieldxy[..d].iter().map(|p| p[0]).sum::<f64>() / d as f64;
             let ceny = fieldxy[..d].iter().map(|p| p[1]).sum::<f64>() / d as f64;
             let refw = FIELD1_WCS.recentered_at([cenx, ceny]);
@@ -880,7 +828,6 @@ mod tests {
     /// projected to pixels must be recovered by the fit.
     #[test]
     fn fit_recovers_synthetic_similarity() {
-        // A field-like WCS and 4 field positions near its center.
         let base = FIELD1_WCS;
         let offs = [
             [-400.0, -300.0],
@@ -928,10 +875,9 @@ mod tests {
                     fit.arcsec_per_pix(),
                     w.arcsec_per_pix()
                 );
-                // All input stars must land back within 0.05 px: TAN is not an
-                // exact similarity, but the mismatch grows as the cube of the
-                // star set's spread (8x per doubling), so over these
-                // +-1000 px offsets it only reaches ~0.01 px.
+                // All input stars must land back within 0.05 px: the TAN
+                // non-similarity grows as the cube of the star set's spread (8x per
+                // doubling), so over these +-1000 px offsets it reaches ~0.01 px.
                 for (i, [x, y]) in fieldxy.iter().enumerate() {
                     let (ra, dec) = crate::coords::xyz_to_radec(starxyz[i]);
                     let (x2, y2) = fit.radec_to_pix(ra, dec);
@@ -960,8 +906,8 @@ mod tests {
                 crval_deg: FIELD1_WCS.crval_deg,
                 cd,
             };
-            // Independent measurement at the tangent point, where the CD
-            // orientation is defined: PA of "one pixel up" on the sphere.
+            // Measured independently at the tangent point, where the CD
+            // orientation is defined: PA on the sphere of "one pixel up".
             let (ra0, dec0) = w.pix_to_radec(w.crpix[0], w.crpix[1]);
             let (ra1, dec1) = w.pix_to_radec(w.crpix[0], w.crpix[1] + 1.0);
             let pa = f64::atan2(
@@ -980,8 +926,8 @@ mod tests {
         }
     }
 
-    /// Well-conditioned 3-star fit inputs near the tangent point (shared by the
-    /// guard tests).
+    /// Well-conditioned 3-star fit inputs near the tangent point, for the guard
+    /// tests.
     fn guard_fit_inputs() -> (Vec<[f64; 3]>, Vec<[f64; 2]>) {
         let base = FIELD1_WCS;
         let offs = [[-400.0, -300.0], [900.0, -120.0], [150.0, 700.0]];
@@ -1052,11 +998,10 @@ mod tests {
     }
 
     /// TAN cannot change the tangent point exactly without extra distortion
-    /// terms, so the recentring agrees with the old WCS at the anchor and
-    /// drifts elsewhere: linearly in the tangent-point move, quadratically in
-    /// the distance from it. Here the anchor moves ~650 px on a 3.5 deg wide
-    /// frame, which puts the worst corner at 0.88 px - well inside the 2 px
-    /// budget asserted below.
+    /// terms, so the recentring agrees with the old WCS at the anchor and drifts
+    /// elsewhere: linearly in the tangent-point move, quadratically in the
+    /// distance from it. Here the anchor moves ~650 px on a 3.5 deg wide frame,
+    /// putting the worst corner at 0.88 px against the 2 px budget below.
     #[test]
     fn recentered_at_drift_within_budget_on_3_5deg_field() {
         let p = [pixel_center_of_size(4656.0), pixel_center_of_size(3522.0)];
@@ -1069,10 +1014,9 @@ mod tests {
         }
     }
 
-    /// Parity is invariant under recentring (`det J > 0`) and the scale moves
-    /// only in the 4th digit: the relative scale drift is `sqrt(det J) - 1`,
-    /// second order in the tangent-point move (5e-4 for this fixture's
-    /// ~1950 px anchor move).
+    /// Parity is invariant under recentring (`det J > 0`) and the scale moves only
+    /// in the 4th digit: relative drift `sqrt(det J) - 1`, second order in the
+    /// tangent-point move (5e-4 for this fixture's ~1950 px anchor move).
     #[test]
     fn recentered_at_preserves_parity_and_scale() {
         let p = [1234.5, 987.25];
@@ -1082,16 +1026,15 @@ mod tests {
         assert!(rel < 1e-3, "relative scale drift {rel}");
     }
 
-    /// A NaN-poisoned WCS must be returned unchanged: reporting must never
-    /// fail a solve, and a recentring of garbage is garbage.
+    /// A NaN-poisoned WCS must come back unchanged: reporting must never fail a
+    /// solve.
     #[test]
     fn recentered_at_returns_self_on_non_finite() {
         let mut bad = FIELD1_WCS;
         bad.cd[0][0] = f64::NAN;
         let p = [100.0, 100.0];
         let w = bad.recentered_at(p);
-        // NaN-poisoned input must come back unchanged field-by-field (NaN
-        // never equals NaN, so compare the parts explicitly).
+        // NaN never equals NaN, so the unchanged fields are compared one by one.
         assert_eq!(w.crpix, bad.crpix);
         assert_eq!(w.crval_deg, bad.crval_deg);
         assert!(w.cd[0][0].is_nan());
@@ -1100,26 +1043,23 @@ mod tests {
         assert_eq!(w.cd[1][1], bad.cd[1][1]);
     }
 
-    /// The raw per-quad fits of a solving round disagree mostly because each
-    /// one puts its tangent point on its own star centroid; moving them to the
-    /// field-center tangent frame with [`Wcs::recentered_at`] removes that
-    /// off-center divergence, which is what makes the printed rotation one
-    /// well-defined number rather than one per quad.
+    /// The raw per-quad fits of a solving round disagree mostly because each puts
+    /// its tangent point on its own star centroid; moving them to the field-center
+    /// tangent frame with [`Wcs::recentered_at`] removes that off-center divergence,
+    /// which is what makes the printed rotation one well-defined number rather than
+    /// one per quad.
     ///
-    /// Nothing here is pinned to a quad id: a quad's raw fit is a property of
-    /// one index file, not of the solver. The comparison peers are the solved
-    /// hits of the round that really solved field 2, which
-    /// `testutil::solved_hits_with_peers` extends with the following depth
-    /// rounds whenever the winning round verifies fewer than two of them -
-    /// their fits cover different field-star sets, which is exactly the
-    /// material this test needs. Asserted is the property itself: the
-    /// recentred raw fits agree with the winner's recentred frame within the
-    /// budgets below (parity is checked exactly: invariance under recentring).
+    /// Nothing here is pinned to a quad id: a raw fit is a property of one index
+    /// file, not of the solver. The peers are the solved hits of the round that
+    /// really solved field 2, which `testutil::solved_hits_with_peers` extends with
+    /// the following depth rounds whenever the winning round verifies fewer than
+    /// two; their fits cover different field-star sets. Asserted: the recentred
+    /// fits agree with the winner's recentred frame within the budgets below
+    /// (parity exactly, by invariance under recentring).
     #[test]
     fn recentered_field2_hits_agree_at_field_center() {
-        // Budgets for the recentred raw fits of a solving round, each measured
-        // against the winner's recentred frame. Parity is not budgeted: each
-        // hit is compared with its own raw fit, exactly.
+        // Budgets for the recentred raw fits, each against the winner's recentred
+        // frame. Parity is not budgeted: compared with its own raw fit, exactly.
         const RECENTRE_ROT_DEG: f64 = 0.2;
         const RECENTRE_SCALE_FRAC: f64 = 0.005;
         const RECENTRE_CENTER_DEG: f64 = 0.05;

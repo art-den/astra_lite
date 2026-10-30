@@ -2,27 +2,23 @@
 //!
 //! The layout the loader reads and the searches walk:
 //! * heap numbering: node 0 is the root, children of `i` are `2i+1` (left) and
-//!   `2i+2` (right), and every node `i >= ninterior` is a leaf - the searches
-//!   address it as leaf number `node - ninterior`, and there are exactly
-//!   `nnodes - ninterior = nbottom` leaves;
-//! * `lr[j]` is the *inclusive* right end of the data range owned by leaf `j`
-//!   (read as `u32` regardless of `KDT_INT`), so leaf `j` covers
-//!   `[j == 0 ? 0 : lr[j-1] + 1, lr[j]]`; `leaf_range` reports that range
-//!   half-open, which keeps empty leaves empty;
-//! * `split[i]` packs the split value and the split dimension into one integer:
-//!   `dim = split & dimmask`, `split value = split & !dimmask`,
-//!   `dimmask = 2^ceil(log2(ndim)) - 1`;
-//! * the split plane divides the halves: left child owns `value[dim] <= split`,
-//!   right child owns `value[dim] >= split`. Every search prunes on that rule
-//!   (see `descend` and the near/far choice in `nearest_inner`), so a tree whose
-//!   halves were stored the other way round would silently lose hits - the
-//!   brute-force comparisons in the tests are the guard;
-//! * dequantization is `value = q * invscale + minval[dim]`, `invscale = 1/scale`.
+//!   `2i+2` (right), every node `i >= ninterior` is leaf `node - ninterior`,
+//!   `nnodes - ninterior = nbottom`;
+//! * `lr[j]` is the *inclusive* right end of leaf `j`'s data range (always read as
+//!   `u32`, regardless of `KDT_INT`): `[j == 0 ? 0 : lr[j-1] + 1, lr[j]]`, which
+//!   `leaf_range` reports half-open so empty leaves stay empty;
+//! * `split[i]` packs value and dimension: `dim = split & dimmask`,
+//!   `value = split & !dimmask`, `dimmask = 2^ceil(log2(ndim)) - 1`;
+//! * the split plane divides the halves: left child owns `value[dim] <= split`, right
+//!   child owns `value[dim] >= split`, and every search prunes on that rule
+//!   (`descend`, the near/far choice in `nearest_inner`) - halves stored the other way
+//!   round would silently lose hits, which the tests' brute-force comparisons guard;
+//! * dequantization: `value = q * invscale + minval[dim]`, `invscale = 1/scale`.
 //!
-//! Every distance is L2 in the *external* (double) units: the query point and
-//! the tolerance are given in that space (the solver queries the codes tree
-//! with a code vector and `params::CODE_TOL`) and each component is
-//! dequantized before it is subtracted, never compared in quantized units.
+//! Distances are L2 in the *external* (double) units: query and tolerance come in that
+//! space (the solver queries the codes tree with a code vector and
+//! `params::CODE_TOL`) and each component is dequantized before subtraction, never
+//! compared in quantized units.
 
 use anyhow::{Context, Result, bail, ensure};
 use core::ops::ControlFlow;
@@ -53,8 +49,8 @@ impl IntKind {
     }
 }
 
-/// A search result: index of the record in the tree's data array and the squared
-/// distance in external units.
+/// A search result: record index in the tree's data array, squared distance in
+/// external units.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hit {
     pub index: usize,
@@ -63,16 +59,12 @@ pub struct Hit {
 
 /// A compact kd-tree over quantized records.
 ///
-/// All arrays (`lr`, `split`, `data`) are read lazily from the index file
-/// through [`BlobView`]: the tree holds no index-sized anonymous buffer, only
-/// byte views into the mmap, so its memory cost is independent of the index
-/// size. It stays that way on purpose: dequantizing eagerly would mean
-/// 8-byte doubles where the file holds 2- or 4-byte integers, so 4x the `u16`
-/// data blob and 2x the `u32` one of anonymous memory, more than the project's
-/// peak-RSS budget for index work allows. Coordinates are therefore
-/// dequantized on access - `q * invscale + minval[d]`, a couple of ALU ops -
-/// while the cache lines a search touches stay a quarter (`u16`) or a half
-/// (`u32`) of what an `f64` array would need.
+/// `lr`, `split` and `data` are lazy [`BlobView`] byte views into the mmap: no
+/// index-sized anonymous buffer, so the memory cost is independent of the index
+/// size. Dequantizing eagerly would trade the file's 2- or 4-byte integers for
+/// 8-byte doubles - 4x the `u16` blob, 2x the `u32` one - more anonymous memory than
+/// the peak-RSS budget for index work allows. Coordinates are therefore dequantized
+/// on access (`q * invscale + minval[d]`).
 #[derive(Debug)]
 pub struct KdTree {
     pub name: String,
@@ -106,15 +98,14 @@ pub struct KdTree {
     data: BlobView,
 }
 
-/// Upper bound on `KDT_NDIM`: without it a corrupt header would overflow the
-/// doubling in `dimmask_for`, which in release (where the multiply wraps to 0)
-/// turns into a loop that never ends.
+/// Upper bound on `KDT_NDIM`: a corrupt header would overflow the doubling in
+/// `dimmask_for`, which in release (the multiply wraps to 0) never ends.
 const MAX_NDIM: usize = 64;
 
-/// The mask that isolates the split dimension from a packed `split` entry:
-/// `2^ceil(log2(ndim)) - 1`, the low bits needed to number `ndim` dimensions
-/// (`3` for `ndim = 4`, `7` for `ndim = 5`). For `ndim = 1` the mask is `0`:
-/// the dimension is always `0` and the entry holds the value alone.
+/// The mask isolating the split dimension from a packed `split` entry:
+/// `2^ceil(log2(ndim)) - 1`, the bits needed to number `ndim` dimensions (`3` for
+/// `ndim = 4`, `7` for `ndim = 5`). For `ndim = 1` it is `0`: the entry holds the
+/// value alone.
 fn dimmask_for(ndim: usize) -> Result<u32> {
     ensure!((1..=MAX_NDIM).contains(&ndim), "kd-tree with ndim={ndim}");
     let mut val: u32 = 1;
@@ -124,19 +115,17 @@ fn dimmask_for(ndim: usize) -> Result<u32> {
     Ok(val - 1)
 }
 
-/// DFS stack slots for `ball_search_into`. The pending set holds at most one
-/// sibling per tree level (they are pairwise incomparable), so the high-water
-/// mark is about one level plus the transient push headroom, and a tree whose
-/// nodes fit a `u32` has at most `u32::BITS` levels. The array is exactly that
-/// bound plus the headroom (the zero-init is measurable in the hot searches,
-/// so it carries no slack), and `descend` `debug_assert!`s it.
+/// DFS stack slots for the searches: pending nodes are pairwise incomparable, so at
+/// most one per tree level is in flight, and a tree whose nodes fit a `u32` has at
+/// most `u32::BITS` levels. The array is exactly that bound plus the push headroom
+/// `descend` `debug_assert!`s; the zero-init is measurable in the hot searches, so it
+/// carries no slack.
 const SEARCH_STACK_SLOTS: usize = u32::BITS as usize + 2;
 
 /// The record-distance strategy [`Scan::dist2`] dispatches on once per scan.
 enum Dist<'a> {
-    /// Flat little-endian blob with `ndim` 3/4 hoisted: the query and
-    /// `minval` are fixed arrays and the row stride is a compile-time
-    /// constant, so the per-record loop is a constant-sized unrolled decode.
+    /// Flat little-endian blob with `ndim` 3 hoisted: fixed-array query/`minval` and
+    /// a compile-time row stride, so the decode is a constant-sized unrolled loop.
     Fixed3 {
         raw: &'a [u8],
         q: [f64; 3],
@@ -149,24 +138,22 @@ enum Dist<'a> {
         m: [f64; 4],
         e2: bool,
     },
-    /// Any other layout or `ndim`: the general [`KdTree::dist2_cutoff`] per
-    /// record (it still carries its own flat little-endian fast path).
+    /// Any other layout or `ndim`: [`KdTree::dist2_cutoff`] per record (it keeps its
+    /// own flat little-endian fast path).
     General,
 }
 
 /// Decode context for one traversal.
 ///
-/// The tree's layout (byte order, blob packing, element kind, `ndim`) is fixed
-/// for the whole search, but the generic accessors re-derive the decode choice
-/// on every element read: [`KdTree::dist2_cutoff`] per record,
-/// [`KdTree::split_at`] per node, [`KdTree::leaf_range`] per leaf entry. `Scan`
-/// resolves those choices once, keeps the `ndim` 3/4 record loop
-/// constant-sized, and turns the `lr`/`split` reads into indexed slices of the
+/// The layout (byte order, blob packing, element kind, `ndim`) is fixed for the
+/// whole search, but the generic accessors re-derive the decode choice on every
+/// element read: [`KdTree::dist2_cutoff`] per record, [`KdTree::split_at`] per node,
+/// [`KdTree::leaf_range`] per leaf entry. `Scan` resolves those choices once, keeps
+/// the `ndim` 3/4 record loop constant-sized, and works off indexed slices of the
 /// once-taken raw byte views.
 ///
-/// The fast legs cover the layout every installed index uses (flat
-/// little-endian blobs) and are bit-identical to the accessors they replace;
-/// any other layout falls through to the unchanged `KdTree` methods.
+/// The fast legs must stay BIT-IDENTICAL to the accessors they replace; any other
+/// layout falls through to the unchanged `KdTree` methods.
 struct Scan<'a> {
     tree: &'a KdTree,
     query: &'a [f64],
@@ -181,10 +168,8 @@ struct Scan<'a> {
 }
 
 /// The fixed-`ndim` flat little-endian record scan: exactly the arithmetic of
-/// [`KdTree::dist2_cutoff`]'s flat path (`N` dimensions of `E`-byte quantized
-/// ints), with the row bound and the element-kind dispatch hoisted out.
-/// `N * E` is a compile-time stride, so the row span is one multiply and the
-/// dimension loop fully unrolls.
+/// [`KdTree::dist2_cutoff`]'s flat path (`N` dimensions of `E`-byte quantized ints),
+/// with the row bound and element-kind dispatch hoisted out.
 #[inline(always)]
 fn dist2_flat<const N: usize, const E: usize>(
     raw: &[u8],
@@ -213,15 +198,15 @@ fn dist2_flat<const N: usize, const E: usize>(
 }
 
 impl<'a> Scan<'a> {
-    /// Resolves the decode legs for `tree`. `query` must already be `tree.ndim`
-    /// long, which both searches assert before constructing a `Scan`.
+    /// Resolves the decode legs for `tree`. `query` must already be `tree.ndim` long,
+    /// which both searches assert before constructing a `Scan`.
     fn new(tree: &'a KdTree, query: &'a [f64]) -> Self {
         let le = tree.endian == Endian::Little;
         let dist = if le && tree.data.is_flat() {
             let raw = tree.data.raw_bytes();
             let e2 = tree.data_kind == IntKind::U16;
-            // `minval` is `ndim` long and `query` was checked against `ndim`,
-            // so the query and `minval` conversions succeed or fail together.
+            // `minval` is `ndim` long and `query` was checked against `ndim`, so
+            // both conversions succeed or fail together.
             if let (Ok(q), Ok(m)) = (
                 <[f64; 3]>::try_from(query),
                 <[f64; 3]>::try_from(tree.minval.as_slice()),
@@ -325,8 +310,7 @@ impl<'a> Scan<'a> {
             "leaf {leaf} out of {}",
             self.tree.nbottom
         );
-        // One past the inclusive right end stored in `lr[j]`, as `leaf_range`
-        // reports it.
+        // One past the inclusive `lr[j]`, as `leaf_range` reports it.
         let end_after = |j: usize| -> usize {
             usize::try_from(u32::from_le_bytes(
                 raw[j * 4..j * 4 + 4].try_into().expect("4-byte lr entry"),
@@ -338,14 +322,12 @@ impl<'a> Scan<'a> {
         (left, end_after(leaf))
     }
 
-    /// Pushes the children of an interior node onto `stack`: the near child
-    /// first, then the far one when it can still hold a hit, so a pop takes the
-    /// far child first. A range search does not care in which order its hits
-    /// arrive, so the order is free. The far child is skipped once the
-    /// perpendicular gap along the split dimension exceeds `tol`: everything
-    /// below it lies on the far side of the plane, so its distance is at least
-    /// `|gap|`. A `gap < 0` puts the query below the plane, and the left child
-    /// owns `value[dim] <= split`, so there the left child is the near one.
+    /// Pushes the node's children onto `stack`, near child first so a pop takes the
+    /// far child first (a range search does not care about hit order). The far child
+    /// is skipped once the gap along the split dimension exceeds `tol`: everything
+    /// below it lies on the far side of the plane, so its distance is at least `|gap|`.
+    /// A `gap < 0` puts the query below the plane, and the left child owns
+    /// `value[dim] <= split`, so there the left child is the near one.
     #[inline]
     fn descend(&self, node: usize, tol: f64, stack: &mut [u32], sp: &mut usize) {
         debug_assert!(*sp + 2 <= stack.len(), "dfs stack overflow");
@@ -386,16 +368,14 @@ impl KdTree {
             "unsupported kd-tree version {:?}",
             header.get_i64("KDT_VER")
         );
-        // A tree is stored as the chunks header, lr, perm, bb, split, splitdim,
-        // data and range; this loader reads header, lr, split, range and data.
-        // The three rejected here change how the rest must be read: `perm`
-        // renumbers the records (a hit's row index would have to be mapped
-        // through it before it names a record the rest of the index
-        // understands), `bb` carries per-node bounding boxes a traversal can
-        // prune with instead of the split planes, and `splitdim` keeps the
-        // split dimension in its own array, which frees (and so invalidates)
-        // the low bits of `split`. None is decoded, so its presence is an
-        // error rather than something to ignore.
+        // A tree is stored as the chunks header, lr, perm, bb, split, splitdim, data
+        // and range; this loader reads header, lr, split, range and data. The three
+        // rejected here each change how the rest must be read: `perm` renumbers the
+        // records (a hit's row index would have to be mapped through it before it
+        // names a record of the index), `bb` carries per-node bounding boxes to prune
+        // on instead of the split planes, `splitdim` keeps the dimension in its own
+        // array (freeing, so invalidating, the low bits of `split`). None is decoded,
+        // so its presence is an error.
         for forbidden in ["bb", "splitdim", "perm"] {
             let table = format!("kdtree_{forbidden}_{name}");
             ensure!(
@@ -404,12 +384,10 @@ impl KdTree {
             );
         }
 
-        // The sizes must be validated before any arithmetic uses them: a
-        // negative card run through `as usize` would become `usize::MAX` (and
-        // `as usize` truncates on 32-bit targets), so the conversion here is
-        // `usize::try_from`. `ndim == 0` is not a usable dimension either; left
-        // alone it would only show up later, as one of the blob-size checks
-        // below, so it is rejected at the header stage.
+        // Sizes are validated before any arithmetic uses them: a negative card
+        // through `as usize` becomes `usize::MAX` (and `as usize` truncates on 32-bit
+        // targets), so the conversion here is `usize::try_from`; `ndim == 0` is
+        // rejected here, not as a later blob-size mismatch.
         let ndim = usize::try_from(header.require_i64("KDT_NDIM")?)
             .map_err(|_| anyhow::anyhow!("kd-tree {name:?}: negative KDT_NDIM"))?;
         ensure!(
@@ -426,12 +404,10 @@ impl KdTree {
         let data_kind = IntKind::from_name(header.require_str("KDT_DATA")?)?;
         let (nbottom, ninterior) = Self::node_counts(nnodes)?;
 
-        // lr: the entries are u32 no matter what KDT_INT says for the split
-        // array. `KDT_LINL` means the leaves are uniformly sized, so the ranges
-        // are recomputed from `ndata` and `nbottom` and any `lr` table the file
-        // still carries is never looked up - hence the flag is tested first.
-        // Otherwise the entries are read lazily, one u32 at a time, as the
-        // searches walk the leaves.
+        // lr entries are u32 regardless of KDT_INT. `KDT_LINL` means uniformly sized
+        // leaves, so the ranges are recomputed from `ndata` and `nbottom` and any `lr`
+        // table the file still carries is never looked up - hence the flag is tested
+        // first. Otherwise the entries are read lazily.
         let linear_lr = header.get_bool("KDT_LINL").unwrap_or(false);
         let lr = if linear_lr {
             None
@@ -465,8 +441,8 @@ impl KdTree {
             Some(view)
         };
 
-        // range table: minval[ndim], maxval[ndim], scale (all f64). Small
-        // fixed size (ndim <= MAX_NDIM), so it is copied eagerly.
+        // range table: minval[ndim], maxval[ndim], scale (all f64). Small fixed size
+        // (ndim <= MAX_NDIM), so it is copied eagerly.
         let range = fits.raw_view(&format!("kdtree_range_{name}"))?;
         let raw = range.raw_bytes();
         let want = (2 * ndim + 1) * 8;
@@ -486,9 +462,9 @@ impl KdTree {
         );
         let minval = vals[..ndim].to_vec();
         let maxval = vals[ndim..2 * ndim].to_vec();
-        // Non-finite or inverted bounds poison every dequantized coordinate
-        // (NaN coords match nothing, so the solver would quietly find nothing),
-        // so they must fail here rather than at search time.
+        // Non-finite or inverted bounds poison every dequantized coordinate (NaN
+        // coords match nothing, so the solver would quietly find nothing), so they
+        // must fail here rather than at search time.
         for d in 0..ndim {
             ensure!(
                 f64::is_finite(minval[d]) && f64::is_finite(maxval[d]),
@@ -524,9 +500,9 @@ impl KdTree {
             "kd-tree {name:?}: data column {:?} is not a raw blob",
             first.name
         );
-        // One view over the whole row area: the integer of record `rec`,
-        // dimension `d` is addressed as `rec * ndim + d` and dequantized in
-        // `coord`, so no record is ever copied out of the mmap.
+        // One view over the whole row area: the integer of record `rec`, dimension
+        // `d` is addressed as `rec * ndim + d` and dequantized in `coord`, so no
+        // record is ever copied out of the mmap.
         let data = fits.raw_view(&format!("kdtree_data_{name}"))?;
         ensure!(
             row_len.checked_mul(ndata) == Some(data.payload_bytes()),
@@ -561,14 +537,12 @@ impl KdTree {
 
     /// `nbottom = ceil(nnodes / 2)` and `ninterior = nnodes - nbottom`.
     ///
-    /// Trees in this format are full binary trees, so `nnodes` is odd. Only
-    /// then do the two children of the last interior node `ninterior - 1`
-    /// (nodes `2 * ninterior - 1` and `2 * ninterior`) land on the last two
-    /// leaves, `nbottom - 2` and `nbottom - 1` (for `nnodes >= 3`). With an
-    /// even count they land on `nbottom - 1` and `nbottom`, so a search that
-    /// descends into the second one asks for a leaf index that does not exist;
-    /// `leaf_range` asserts before it reads anything. The `u32` bound keeps
-    /// node ids representable in the `u32` search stacks.
+    /// These trees are full binary trees, so `nnodes` is odd: only then do the
+    /// children of the last interior node (nodes `2 * ninterior - 1` and
+    /// `2 * ninterior`) land on the last two leaves `nbottom - 2` and `nbottom - 1`
+    /// (for `nnodes >= 3`); with an even count the second lands on `nbottom`, a leaf
+    /// index that does not exist, and `leaf_range` asserts before it reads anything.
+    /// The `u32` bound keeps node ids representable in the search stacks.
     pub fn node_counts(nnodes: usize) -> Result<(usize, usize)> {
         ensure!(
             nnodes % 2 == 1,
@@ -582,9 +556,9 @@ impl KdTree {
         Ok((nbottom, nnodes - nbottom))
     }
 
-    /// Dequantized coordinate: `q * invscale + minval[d]`, decoded from the
-    /// quantized blob on demand (the blob stays in the mmap; the struct docs
-    /// give the reason there is no eager `f64` copy).
+    /// Dequantized coordinate: `q * invscale + minval[d]`, decoded from the quantized
+    /// blob on demand (it stays in the mmap; the struct docs give the reason there is
+    /// no eager `f64` copy).
     #[inline]
     #[must_use]
     pub fn coord(&self, rec: usize, d: usize) -> f64 {
@@ -592,9 +566,9 @@ impl KdTree {
         f64::from(q) * self.invscale + self.minval[d]
     }
 
-    /// The stored quantized integer of record `rec`, dimension `d`: `coord`
-    /// without the dequantization, for a caller that works in quantized units
-    /// (the split values of a filtered tree are one).
+    /// The stored quantized integer of record `rec`, dimension `d`: `coord` without
+    /// the dequantization, for a caller working in quantized units (the split values
+    /// of a filtered tree are one).
     #[inline]
     #[must_use]
     fn raw_at(&self, rec: usize, d: usize) -> u32 {
@@ -610,9 +584,8 @@ impl KdTree {
     /// Dequantized first three coordinates of `rec` (the 3D star trees).
     ///
     /// The flat little-endian fast path reads the record as one byte span and
-    /// dispatches on the element kind once instead of once per coordinate;
-    /// every value goes through the same dequantization as [`coord`], so the
-    /// result is bit-identical to three `coord` calls.
+    /// dispatches on the element kind once, with the same dequantization as [`coord`]:
+    /// bit-identical to three `coord` calls.
     #[must_use]
     pub fn coord3(&self, rec: usize) -> [f64; 3] {
         debug_assert!(self.ndim >= 3, "coord3 on a tree with ndim < 3");
@@ -643,8 +616,8 @@ impl KdTree {
         [self.coord(rec, 0), self.coord(rec, 1), self.coord(rec, 2)]
     }
 
-    /// The inclusive right end stored in leaf `leaf`'s `lr` entry.
-    /// Panics when `linear_lr` (no table); callers gate on `leaf_range`.
+    /// The inclusive right end stored in leaf `leaf`'s `lr` entry. Panics when
+    /// `linear_lr` (no table); callers gate on `leaf_range`.
     #[must_use]
     pub fn lr_entry(&self, leaf: usize) -> u32 {
         self.lr
@@ -659,9 +632,8 @@ impl KdTree {
         assert!(leaf < self.nbottom, "leaf {leaf} out of {}", self.nbottom);
         if self.linear_lr {
             // Uniform leaves: leaf j owns [j * ndata / nbottom,
-            // (j + 1) * ndata / nbottom), the same rule read half-open. The
-            // end of one leaf is the start of the next and the final end is
-            // exactly `ndata`, so the ranges tile [0, ndata).
+            // (j + 1) * ndata / nbottom); each end is the next leaf's start and the
+            // final end is `ndata`, so the ranges tile [0, ndata).
             let l = Self::linear_lr_end(leaf, self.ndata, self.nbottom);
             let r = Self::linear_lr_end(leaf + 1, self.ndata, self.nbottom);
             return (l, r);
@@ -671,21 +643,19 @@ impl KdTree {
         } else {
             usize::try_from(self.lr_entry(leaf - 1)).expect("u32 fits in usize") + 1
         };
-        // The table stores the *inclusive* right end; +1 never overflows a
-        // usize (u32 + 1).
+        // The table stores the *inclusive* right end; +1 never overflows a usize
+        // (u32 + 1).
         (
             left,
             usize::try_from(self.lr_entry(leaf)).expect("u32 fits in usize") + 1,
         )
     }
 
-    /// The uniform leaf boundary `leaf * ndata / nbottom` (integer division),
-    /// with the product taken in `u128`. The widening is the point: on a
-    /// 32-bit target `leaf * ndata` passes `u32::MAX` at about a million
-    /// records (500_000 * 1_000_000 = 5e11), and a wrapped product would hand
-    /// out wrong, possibly overlapping ranges. `nbottom >= 1` because
-    /// `nnodes >= 1`, but it is floored at 1 here so the helper cannot divide
-    /// by zero on its own.
+    /// The uniform leaf boundary `leaf * ndata / nbottom` (integer division), product
+    /// taken in `u128`: on a 32-bit target `leaf * ndata` passes `u32::MAX` at about a
+    /// million records (500_000 * 1_000_000 = 5e11), and a wrapped product would hand
+    /// out wrong, possibly overlapping ranges. `nbottom >= 1` because `nnodes >= 1`,
+    /// but it is floored at 1 here so the helper cannot divide by zero on its own.
     fn linear_lr_end(leaf: usize, ndata: usize, nbottom: usize) -> usize {
         let leaf = u64::try_from(leaf).unwrap_or(u64::MAX);
         let ndata = u64::try_from(ndata).unwrap_or(u64::MAX);
@@ -714,13 +684,12 @@ impl KdTree {
         (dim, value)
     }
 
-    /// Structural self-check, run on every tree at load: the blob sizes agree
-    /// with the header counts, the node counts agree with each other, every
-    /// packed split dimension is inside `ndim`, `lr` has one entry per leaf, and
-    /// the leaf ranges tile `[0, ndata)` without gaps or overlaps - which for a
-    /// table-driven tree is what makes `lr` non-decreasing and its last entry
-    /// `ndata - 1`. A corrupt index fails here (exit 2) instead of quietly
-    /// returning wrong hits later.
+    /// Structural self-check, run on every tree at load: blob sizes agree with the
+    /// header counts, the node counts with each other, every packed split dimension
+    /// is inside `ndim`, `lr` has one entry per leaf, and the leaf ranges tile
+    /// `[0, ndata)` without gaps or overlaps (for a table-driven tree that means `lr`
+    /// is non-decreasing with last entry `ndata - 1`). A corrupt index fails here
+    /// (exit 2) instead of quietly returning wrong hits later.
     pub fn check_structure(&self) -> Result<()> {
         ensure!(
             self.ndata.checked_mul(self.ndim * self.data_kind.size())
@@ -729,11 +698,10 @@ impl KdTree {
             "kd-tree {:?}: data blob size mismatch",
             self.name
         );
-        // Trees in this format are full binary trees, and the searches address a
-        // node as a leaf exactly when `node >= ninterior`, so the three counts
-        // must agree. A tree read from a file gets `nbottom`/`ninterior` from
-        // `node_counts(nnodes)`; a tree built at run time (`filtered`) sets all
-        // three by hand, which is what this check is for.
+        // The searches address a node as a leaf exactly when `node >= ninterior`, so
+        // the three counts must agree. A loaded tree gets them from
+        // `node_counts(nnodes)`; one built at run time (`filtered`) sets all three by
+        // hand, which is what this check is for.
         ensure!(
             self.nnodes == self.nbottom + self.ninterior,
             "kd-tree {:?}: {} nodes for {} leaves + {} interior",
@@ -802,48 +770,41 @@ impl KdTree {
     }
 
     /// A compact tree over `recs` alone - the records of `self`, in any order and
-    /// without duplicates - for a caller that must only ever see a subset of them.
-    /// Returns the tree together with the record map: record `i` of the new tree
-    /// is record `rec_map[i]` of `self`.
+    /// without duplicates - for a caller that must only ever see that subset. Returns
+    /// the tree with its record map: new record `i` is `rec_map[i]` of `self`.
     ///
-    /// The quantized rows are copied verbatim (decoded from the source's byte
-    /// order, written little-endian, so every dequantized coordinate is
-    /// unchanged) and re-medianed into a fresh perfect tree by
-    /// [`PartBuild`]. `minval`/`maxval`/`scale` are inherited, which is what keeps
-    /// the external-unit geometry - and therefore every query answer - the same as
-    /// the source tree's.
+    /// The quantized rows are copied verbatim (decoded from the source's byte order,
+    /// written little-endian, so every dequantized coordinate is unchanged) and
+    /// re-medianed into a fresh perfect tree by [`PartBuild`]. `minval`/`maxval`/
+    /// `scale` are inherited, keeping the external-unit geometry - and therefore every
+    /// query answer - the source tree's.
     ///
-    /// The result is anonymous memory (`ndim` integers per record plus two `u32`
-    /// per node), so this is for a few thousand records. `None` means "no tree":
-    /// `recs` is empty, larger than
-    /// [`HINT_TREE_MAX_RECORDS`](crate::params::HINT_TREE_MAX_RECORDS), out of
-    /// range, wider than
-    /// [`HINT_TREE_MAX_ROW_BYTES`](crate::params::HINT_TREE_MAX_ROW_BYTES) per
-    /// record (that cap is the byte budget the record cap was counted at, so a
-    /// wider row is refused instead of silently getting a bigger budget), or a
-    /// node's records admit no storable plane above them (`u32` data inside the
-    /// top `dimmask` steps of its range). A caller that gets `None`
-    /// must fall back to searching `self`, which is always correct: this says
-    /// nothing about whether any record matches, and in particular an empty `recs`
-    /// is not a verdict of "no hits" - the caller that knows its subset is empty
-    /// is the one that says so.
+    /// The result is anonymous memory (`ndim` integers per record plus two `u32` per
+    /// node), so this is for a few thousand records. `None` means "no tree": `recs` is
+    /// empty, larger than `params::HINT_TREE_MAX_RECORDS`, out of range, wider than
+    /// `params::HINT_TREE_MAX_ROW_BYTES` per record (that cap is the byte budget the
+    /// record cap was counted at, so a wider row is refused, not given a bigger
+    /// budget), or a node's records admit no storable plane above them (`u32` data
+    /// inside the top `dimmask` steps of its range). A caller that gets `None` must
+    /// fall back to searching `self`, which is always correct: this says nothing about
+    /// whether any record matches, and an empty `recs` is not a verdict of "no hits" -
+    /// only its caller knows that subset is empty.
     ///
-    /// For every query the new tree returns exactly the records of `recs` inside
-    /// the ball, which is what makes it interchangeable with the source tree plus
-    /// a filter: every split value - the median planes and the one plane a node
-    /// with inseparable records gets - is chosen so the left half's quantized
-    /// coordinate is `<= plane` and the right half's above it, the invariant
-    /// `descend` prunes on, stated in the quantized units the entry stores (the
-    /// masked low bits are why the rule is stated against the plane rather than
-    /// against the median record's own value).
+    /// For every query the new tree returns exactly the records of `recs` inside the
+    /// ball - interchangeable with the source tree plus a filter. Every split value
+    /// (the median planes and the one a node with inseparable records gets) is chosen
+    /// so the left half's quantized coordinate is `<= plane` and the right half's above
+    /// it: the invariant `descend` prunes on, in the quantized units the entry stores
+    /// (the masked low bits are why the rule is against the plane, not the median
+    /// record's own value).
     pub fn filtered(&self, recs: &[u32]) -> Option<(KdTree, Vec<u32>)> {
         let m = recs.len();
         if m == 0 || m > crate::params::HINT_TREE_MAX_RECORDS {
             return None;
         }
-        // The record cap is a byte budget counted at one row width: the widest
-        // codes row the index format produces. A caller with wider rows would get
-        // a tree bigger by the same factor as its row, so it gets no tree.
+        // The record cap is a byte budget counted at one row width: the widest codes
+        // row the index format produces. A caller with wider rows would get a tree
+        // bigger by that factor, so it gets none.
         let esize = self.data_kind.size();
         if self.ndim * esize > crate::params::HINT_TREE_MAX_ROW_BYTES {
             return None;
@@ -863,8 +824,8 @@ impl KdTree {
             },
             "filtered: a repeated record would be searched twice"
         );
-        // Leaves: the largest power of two that still leaves `HINT_TREE_LEAF`
-        // records for each of them, so no leaf is forced empty by the shape alone.
+        // Leaves: the largest power of two that still leaves `HINT_TREE_LEAF` records
+        // each, so no leaf is forced empty by the shape alone.
         let mut nbottom = 1usize;
         while nbottom * 2 * crate::params::HINT_TREE_LEAF <= m {
             nbottom *= 2;
@@ -883,10 +844,9 @@ impl KdTree {
         } = build;
 
         // `lr` holds the inclusive right end of each leaf's range, so the running
-        // total of the leaf counts is one past it. An empty leaf repeats the
-        // previous end; a running total of 0 would have to store `-1`, which no
-        // `u32` can, and that is the case the build keeps away from leaf 0 by never
-        // letting a node's left half come out empty.
+        // total of the leaf counts is one past it. An empty leaf repeats the previous
+        // end; a total of 0 would need `-1`, which no `u32` holds - the case the build
+        // keeps away from leaf 0 by never letting a node's left half come out empty.
         let mut acc = 0u32;
         let mut lr = Vec::with_capacity(nbottom * 4);
         for &count in &counts {
@@ -922,7 +882,6 @@ impl KdTree {
             maxval: self.maxval.clone(),
             scale: self.scale,
             invscale: self.invscale,
-            // The tables this build writes, in the order the searches read them.
             int_kind: IntKind::U32,
             data_kind: self.data_kind,
             endian: Endian::Little,
@@ -936,25 +895,22 @@ impl KdTree {
         Some((tree, order))
     }
 
-    /// Squared L2 distance from `query` to record `rec` in external units,
-    /// bailing out as soon as the running total exceeds `cutoff`: every caller
-    /// only needs to know that the record is outside, so the dimensions past
-    /// that point are not worth reading.
+    /// Squared L2 distance from `query` to record `rec` in external units, bailing
+    /// out as soon as the running total exceeds `cutoff`: callers only need to know
+    /// the record is outside, so the remaining dimensions are not worth reading.
     ///
-    /// A bailed-out record reports `f64::INFINITY`, not a value just above
-    /// `cutoff`: from `cutoff >= 4.0` up the ulp is at least 4 * `f64::EPSILON`,
-    /// so `cutoff + eps` rounds back to `cutoff` and such a record would pass
-    /// the caller's `d2 <= cutoff` test as a hit. A bail can never be mistaken
-    /// for a real distance in `nearest` either: while its best is still the
-    /// `INFINITY` sentinel the running total cannot exceed the cutoff, so the
-    /// exact distance is what comes back.
+    /// A bailed-out record reports `f64::INFINITY`, not a value just above `cutoff`:
+    /// from `cutoff >= 4.0` up the ulp is at least 4 * `f64::EPSILON`, so `cutoff +
+    /// eps` rounds back to `cutoff` and such a record would pass the caller's
+    /// `d2 <= cutoff` test as a hit. A bail is never mistaken for a real distance in
+    /// `nearest`: while its best is still the `INFINITY` sentinel the running total
+    /// cannot exceed the cutoff, so the exact distance comes back.
     fn dist2_cutoff(&self, rec: usize, query: &[f64], cutoff: f64) -> f64 {
-        // The per-record accessor. The searches go through `Scan::dist2`, which
-        // hoists this flat little-endian fast path once per traversal and
-        // delegates trees outside it back here; the legs must stay
-        // arithmetically identical, including the INFINITY bail
-        // (`scan_paths_match_the_general_accessors` pins this body, the general
-        // path below it and `dist2_flat` against each other).
+        // The per-record accessor: searches go through `Scan::dist2`, which hoists
+        // this flat little-endian fast path once per traversal and delegates other
+        // layouts back here. The legs must stay arithmetically identical, including
+        // the INFINITY bail (`scan_paths_match_the_general_accessors` pins this body,
+        // the general path below it and `dist2_flat` against each other).
         if self.endian == Endian::Little && self.data.is_flat() {
             let raw = self.data.raw_bytes();
             let mut d2 = 0.0;
@@ -999,15 +955,14 @@ impl KdTree {
         d2
     }
 
-    /// All records within `tol` (L2, external units) of `query`, handed to `f`
-    /// as `(record, squared distance)` in traversal order.
+    /// All records within `tol` (L2, external units) of `query`, handed to `f` as
+    /// `(record, squared distance)` in traversal order.
     ///
-    /// The three ball entry points - this, [`KdTree::ball_search_into`] and
-    /// [`KdTree::try_ball_search_visit`] - all run the one traversal of
-    /// [`KdTree::ball_search_try`], so they cannot drift. Visiting lets a caller
-    /// act on a hit without materializing the ones it will drop (which is what
-    /// [`crate::verify`] does - for a garbage fit the ball can be the whole star
-    /// table, and nearly all of it fails the caller's in-frame test).
+    /// This, [`KdTree::ball_search_into`] and [`KdTree::try_ball_search_visit`] all
+    /// run the one traversal [`KdTree::ball_search_try`], so they cannot drift.
+    /// Visiting lets a caller act on a hit without materializing the ones it will
+    /// drop (what [`crate::verify`] does: for a garbage fit the ball can be the whole
+    /// star table, nearly all of it failing the in-frame test).
     pub fn ball_search_visit(&self, query: &[f64], tol: f64, mut f: impl FnMut(usize, f64)) {
         self.ball_search_try(query, tol, &mut |index, dist2| {
             f(index, dist2);
@@ -1015,15 +970,14 @@ impl KdTree {
         });
     }
 
-    /// [`KdTree::ball_search_visit`] with a callback that can stop the search:
-    /// `f` returns [`ControlFlow::Break`] to abandon the traversal, which then
-    /// reports `false` (records that would have followed were never visited);
-    /// a search that ran to the end reports `true`.
+    /// [`KdTree::ball_search_visit`] whose callback can stop the search: `f` returns
+    /// [`ControlFlow::Break`] to abandon the traversal, which then reports `false`
+    /// (records that would have followed were never visited); a search that ran to
+    /// the end reports `true`.
     ///
-    /// This is how a caller bounds the cost of collecting a ball it no longer
-    /// wants: the visit callback of [`KdTree::ball_search_visit`] cannot abort,
-    /// and neither the tree nor the ball has a size bound a caller could trust
-    /// in advance.
+    /// This bounds the cost of collecting a ball no longer wanted: neither the tree
+    /// nor the ball has a size bound a caller could trust in advance, and
+    /// [`KdTree::ball_search_visit`]'s callback cannot abort.
     pub fn try_ball_search_visit(
         &self,
         query: &[f64],
@@ -1033,9 +987,8 @@ impl KdTree {
         self.ball_search_try(query, tol, &mut f)
     }
 
-    /// The shared ball traversal: `f` sees every record within `tol` in
-    /// traversal order and may break the search early (see
-    /// [`KdTree::try_ball_search_visit`]).
+    /// The shared ball traversal: `f` sees every record within `tol` in traversal
+    /// order and may break the search early (see [`KdTree::try_ball_search_visit`]).
     fn ball_search_try(
         &self,
         query: &[f64],
@@ -1046,14 +999,13 @@ impl KdTree {
         if self.ndata == 0 || tol < 0.0 {
             return true;
         }
-        // The layout decode choices are fixed for the whole traversal;
-        // `Scan` resolves them once instead of per record and per node.
+        // `Scan` resolves the layout's decode choices once per traversal.
         let scan = Scan::new(self, query);
         let maxd2 = tol * tol;
-        // Pending nodes are pairwise incomparable in the tree - each is the
-        // sibling of some node on the path being descended - so at most one
-        // per level is in flight; `SEARCH_STACK_SLOTS` carries the bound for
-        // the fixed array. The hot searches never touch the allocator.
+        // Pending nodes are pairwise incomparable in the tree - each is the sibling
+        // of a node on the path being descended - so at most one per level is in
+        // flight, which `SEARCH_STACK_SLOTS` bounds. The hot searches never touch the
+        // allocator.
         let mut stack = [0u32; SEARCH_STACK_SLOTS];
         let mut sp = 0usize;
         stack[sp] = 0;
@@ -1076,21 +1028,20 @@ impl KdTree {
         true
     }
 
-    /// All records within `tol` (L2, external units) of `query`, appended to
-    /// `out` in traversal order; use [`KdTree::ball_search`] when they must be
-    /// sorted by distance, [`KdTree::ball_search_visit`] to consume them
-    /// without a buffer.
+    /// All records within `tol` (L2, external units) of `query`, appended to `out` in
+    /// traversal order; use [`KdTree::ball_search`] when they must be sorted by
+    /// distance, [`KdTree::ball_search_visit`] to consume them without a buffer.
     pub fn ball_search_into(&self, query: &[f64], tol: f64, out: &mut Vec<Hit>) {
         self.ball_search_visit(query, tol, |index, dist2| {
             out.push(Hit { index, dist2 });
         });
     }
 
-    /// All records within `tol` of `query`, sorted by ascending squared
-    /// distance. The per-field-code query uses [`KdTree::ball_search_into`] and
-    /// sorts the buffer itself, and `verify::collect_refs` filters during
-    /// [`KdTree::ball_search_visit`] and sorts only the survivors; this wrapper is
-    /// what [`KdTree::self_check`] and the tests call.
+    /// All records within `tol` of `query`, sorted by ascending squared distance. The
+    /// per-field-code query uses [`KdTree::ball_search_into`] and sorts the buffer
+    /// itself, and `verify::collect_refs` filters during [`KdTree::ball_search_visit`]
+    /// and sorts only the survivors; this wrapper is what [`KdTree::self_check`] and
+    /// the tests call.
     pub fn ball_search(&self, query: &[f64], tol: f64) -> Vec<Hit> {
         let mut hits = Vec::new();
         self.ball_search_into(query, tol, &mut hits);
@@ -1098,44 +1049,40 @@ impl KdTree {
         hits
     }
 
-    /// Nearest record to `query` (branch and bound). Every stack entry carries
-    /// a lower bound on the distance from `query` to anything below it: `gap^2`
-    /// for a far child, `0.0` for a near one, and an entry whose bound has
-    /// fallen behind the best distance found so far is dropped on pop. The near
-    /// child is visited first, the opposite of `descend`'s push order in the
-    /// range search.
+    /// Nearest record to `query` (branch and bound). Every stack entry carries a lower
+    /// bound on the distance from `query` to anything below it (`gap^2` for a far
+    /// child, `0.0` for a near one), and an entry whose bound has fallen behind the
+    /// best distance so far is dropped on pop. The near child is visited first, the
+    /// opposite of `descend`'s push order in the range search.
     ///
-    /// No cutoff, so a query whose nearest record is far away still pays for the
-    /// full descent; a caller that only cares up to some radius wants
-    /// [`KdTree::nearest_within`].
+    /// With no cutoff, a query whose nearest record is far away still pays for the
+    /// full descent; up to some radius use [`KdTree::nearest_within`].
     pub fn nearest(&self, query: &[f64]) -> Option<Hit> {
         // The infinite-cutoff case: `dist2_cutoff` never bails against an
-        // `INFINITY` best, so every distance it reports here is exact.
+        // `INFINITY` best, so every distance reported here is exact.
         self.nearest_inner(query, f64::INFINITY)
     }
 
-    /// The nearest record within `cutoff2` (squared L2, external units), or
-    /// `None` when no record lies inside it. The boundary is inclusive, like
-    /// the `d2 <= maxd2` test of [`KdTree::ball_search_visit`].
+    /// The nearest record within `cutoff2` (squared L2, external units), or `None`
+    /// when no record lies inside it. The boundary is inclusive, like the
+    /// `d2 <= maxd2` test of [`KdTree::ball_search_visit`].
     ///
-    /// [`KdTree::nearest`] cannot stand in for it: without a cutoff a query
-    /// whose nearest record is far away still pays for the full descent. Here the
-    /// cutoff starts as the best distance, so a record beyond it is rejected by
-    /// `dist2_cutoff` without ever becoming the best, and the far-child test
-    /// prunes exactly like a ball search of the same radius: a query with nothing
-    /// near it costs the descent path plus the leaves that touch the ball, no
-    /// more.
+    /// [`KdTree::nearest`] cannot stand in for it: here the cutoff starts as the best
+    /// distance, so a record beyond it is rejected by `dist2_cutoff` without ever
+    /// becoming the best, and the far-child test prunes like a ball search of the same
+    /// radius - a query with nothing near it costs the descent path plus the leaves
+    /// touching the ball.
     ///
-    /// A caller that asks only "is anything inside?" for a whole frame of queries
-    /// should not pay one descent each: [`crate::verify`] collects one
-    /// [`KdTree::try_ball_search_visit`] over the frame and tests the queries
-    /// against what it holds. This is what the probe's per-probe fallback answers,
-    /// and the reference the batched verdict is pinned against
+    /// A caller asking only "is anything inside?" for a whole frame of queries should
+    /// not pay one descent each: [`crate::verify`] collects one
+    /// [`KdTree::try_ball_search_visit`] over the frame and tests the queries against
+    /// what it holds. This is the probe's per-probe fallback and the reference the
+    /// batched verdict is pinned against
     /// (`kdtree::tests::batched_probe_ball_matches_nearest_within`).
     #[must_use]
     pub fn nearest_within(&self, query: &[f64], cutoff2: f64) -> Option<Hit> {
-        // A negative or non-finite cutoff asks for nothing (and `nearest` is the
-        // infinite-cutoff case, not what a caller of this wants).
+        // A negative or non-finite cutoff asks for nothing (the infinite-cutoff case
+        // is `nearest`, which bypasses this).
         if cutoff2 < 0.0 || !cutoff2.is_finite() {
             return None;
         }
@@ -1143,11 +1090,9 @@ impl KdTree {
     }
 
     /// The branch and bound shared by [`KdTree::nearest`] (infinite cutoff) and
-    /// [`KdTree::nearest_within`]; `cutoff2` must be non-negative and finite.
-    ///
-    /// The stack is the fixed array of [`KdTree::ball_search_visit`] for the same
-    /// reason (pending nodes are pairwise incomparable, so one per level), which
-    /// keeps both searches allocation-free.
+    /// [`KdTree::nearest_within`]; `cutoff2` must be non-negative and finite. The
+    /// stack is the same fixed [`SEARCH_STACK_SLOTS`] array as the ball search, bounded
+    /// the same way, which keeps both searches allocation-free.
     fn nearest_inner(&self, query: &[f64], cutoff2: f64) -> Option<Hit> {
         assert_eq!(query.len(), self.ndim, "nearest dimension mismatch");
         if self.ndata == 0 {
@@ -1175,9 +1120,8 @@ impl KdTree {
                 let (l, r) = scan.leaf_range(node - self.ninterior);
                 for rec in l..r {
                     let d2 = scan.dist2(rec, best.dist2);
-                    // Same winner rule as `nearest` (lowest index wins an exact
-                    // tie), and with `best.dist2` starting at the cutoff it also
-                    // makes the cutoff itself a hit.
+                    // Lowest index wins an exact tie; `best.dist2` starting at the
+                    // cutoff also makes the cutoff itself a hit.
                     if d2 < best.dist2 || (d2 == best.dist2 && rec < best.index) {
                         best = Hit {
                             index: rec,
@@ -1309,11 +1253,10 @@ fn kind_name(k: IntKind) -> &'static str {
 
 /// The record array and the node tables a [`KdTree::filtered`] build is writing.
 ///
-/// The build is a depth-first walk of a perfect tree over `order`: the records,
-/// permuted in place into the order the leaves end up reading them. A node's
-/// records always form one contiguous span of `order`, so a leaf's data range
-/// follows from how many records each leaf got, and the ranges tile the records
-/// exactly the way `lr` must store them.
+/// A depth-first walk of a perfect tree over `order`: the records, permuted in place
+/// into the order the leaves read them. A node's records always form one contiguous
+/// span of `order`, so a leaf's data range follows from the leaf counts and the
+/// ranges tile the records the way `lr` stores them.
 struct PartBuild<'a> {
     src: &'a KdTree,
     /// The records, permuted into tree order: the record map of the result.
@@ -1344,10 +1287,10 @@ impl<'a> PartBuild<'a> {
         self.src.raw_at(rec as usize, d)
     }
 
-    /// Writes the subtree rooted at `node` over `order[lo .. hi]`, whose leaves
-    /// are `counts[leaf .. leaf + nleaf]`. Reports `false` when the records cannot
-    /// be put in a tree whose splits the searches can prune on soundly; no partial
-    /// result is then usable.
+    /// Writes the subtree rooted at `node` over `order[lo .. hi]`, whose leaves are
+    /// `counts[leaf .. leaf + nleaf]`. Reports `false` when the records cannot be put
+    /// in a tree whose splits the searches can prune on soundly; then no partial
+    /// result is usable.
     fn part(&mut self, lo: usize, hi: usize, node: usize, leaf: usize, nleaf: usize) -> bool {
         let n = hi - lo;
         if n == 0 {
@@ -1363,7 +1306,7 @@ impl<'a> PartBuild<'a> {
         let nleft = nleaf / 2;
         let (dimmask, ndim) = (self.src.dimmask, self.src.ndim);
         // Coordinate range of this node's records per dim: the widest dim splits
-        // best, and a dim whose range holds no storable value cannot split at all.
+        // best, a dim with no storable value in its range cannot split at all.
         let mut qmin = [u32::MAX; MAX_NDIM];
         let mut qmax = [0u32; MAX_NDIM];
         for &rec in &self.order[lo..hi] {
@@ -1400,10 +1343,9 @@ impl<'a> PartBuild<'a> {
                 u32::cmp(&src.raw_at(*x as usize, d), &src.raw_at(*y as usize, d))
             });
             // The split value: the median's, masked the way the format masks it,
-            // bumped to the first storable value that is not below `qmin[d]`. It
-            // must land inside `[qmin[d], qmax[d])` so each half gets a record.
-            // The bump is by `gran` - a multiple of it - so the result keeps the
-            // dimension bits clear.
+            // bumped by `gran` (so the dimension bits stay clear) to the first
+            // storable value not below `qmin[d]`. It must land inside
+            // `[qmin[d], qmax[d])` so each half gets a record.
             let mut s = self.key(self.order[mid], d) & !dimmask;
             if s < qmin[d] {
                 let Some(v) = s.checked_add(gran) else {
@@ -1414,10 +1356,8 @@ impl<'a> PartBuild<'a> {
             if s < qmin[d] || s >= qmax[d] {
                 continue;
             }
-            // `<= s` goes left, `> s` right, which is exactly the rule `descend`
-            // prunes on, in the quantized units the entry stores: dequantizing is
-            // monotone, so the left half's external coordinate is `<= split` and
-            // the right half's above it.
+            // `<= s` goes left, `> s` right: exactly the rule `descend` prunes on,
+            // in the quantized units the entry stores (dequantizing is monotone).
             let mut p = lo;
             for i in lo..hi {
                 if self.key(self.order[i], d) <= s {
@@ -1431,22 +1371,20 @@ impl<'a> PartBuild<'a> {
             }
             return self.part(p, hi, right, leaf + nleft, nleaf - nleft);
         }
-        // No dim offers a plane between `[qmin[d], qmax[d])`: every coordinate of
-        // these records agrees within one storage step. They all go left, and the
-        // plane is the smallest storable value at or above the largest of their
-        // dim-0 coordinates.
+        // No dim offers a plane inside `[qmin[d], qmax[d])`: these records agree within
+        // one storage step in every coordinate. They all go left, and the plane is the
+        // smallest storable value at or above their dim-0 maximum.
         //
-        // What `descend` needs from any plane is that the left half holds no record
-        // above it: a query loses a record only by sitting more than its tolerance
-        // above the plane while that record sits at or under it. Rounding the
-        // half's own maximum up provides that for every element kind; the largest
-        // storable value alone would not, because `KDT_DATA = u32` records can sit
-        // above it and then a query just past the plane would prune the half that
-        // holds every record.
+        // What `descend` needs of any plane is that the left half holds no record above
+        // it: a query loses a record only by sitting more than its tolerance above the
+        // plane while that record sits at or under it. Rounding the half's own maximum
+        // up provides that for every element kind; the largest storable value alone
+        // would not, because `KDT_DATA = u32` records can sit above it, and then a
+        // query just past the plane would prune the half that holds every record.
         //
         // Rounding up leaves one case with no plane: keys inside the top `dimmask`
         // steps of the `u32` range have nothing storable above them, so the honest
-        // answer is no tree, and the caller is left searching the source tree.
+        // answer is no tree and the caller keeps searching the source tree.
         let ceil = (u64::from(qmax[0]) + u64::from(dimmask)) & !u64::from(dimmask);
         let Ok(s) = u32::try_from(ceil) else {
             return false;
@@ -1465,10 +1403,10 @@ mod tests {
     use crate::testutil;
     use crate::verify::probe_pin::{probe_ball_coords, probe_ball_radius, within_chord2};
 
-    /// These tests are `ANY_INDEX`: any old-format installed index works, so
-    /// they take the smallest installed file, which keeps the brute-force
-    /// comparisons fast. They self-skip (via `testutil::smallest_index`) when
-    /// no index is installed.
+    /// These tests are `ANY_INDEX`: any old-format installed index works, so the
+    /// smallest installed file is used, which keeps the brute-force comparisons
+    /// fast. They self-skip (via `testutil::smallest_index`) with no index
+    /// installed.
     fn load_tree(which: &str) -> Option<KdTree> {
         let meta = testutil::smallest_index(0)?;
         let fits = Fits::open(&meta.path).unwrap();
@@ -1483,8 +1421,8 @@ mod tests {
         load_tree("codes")
     }
 
-    /// Deterministic pseudo-random generator: the same query points every
-    /// run, and no rng dependency.
+    /// Deterministic pseudo-random generator: the same query points every run, and
+    /// no rng dependency.
     struct Lcg(u64);
 
     impl Lcg {
@@ -1578,10 +1516,10 @@ mod tests {
         }
     }
 
-    /// Brute-force reference for [`KdTree::nearest_within`]: the nearest record
-    /// at squared distance `<= cutoff2` (an exact tie goes to the lowest index),
-    /// `None` when the cutoff holds nothing. Mirrors the searched semantics
-    /// rather than deriving them, so a drift in the tree walk shows up here.
+    /// Brute-force reference for [`KdTree::nearest_within`]: the nearest record at
+    /// squared distance `<= cutoff2` (an exact tie goes to the lowest index), `None`
+    /// when the cutoff holds nothing. It mirrors the searched semantics rather than
+    /// deriving them, so a drift in the tree walk shows up here.
     fn brute_force_nearest_within(tree: &KdTree, q: &[f64], cutoff2: f64) -> Option<Hit> {
         if cutoff2 < 0.0 || !cutoff2.is_finite() {
             return None;
@@ -1607,8 +1545,8 @@ mod tests {
     }
 
     /// `nearest_within` must agree with a linear scan for every cutoff from "no
-    /// record" to "the whole space", on the installed trees and on the crafted
-    /// one, in both element kinds.
+    /// record" to "the whole space", on the installed trees and on the crafted one,
+    /// in both element kinds.
     #[test]
     fn nearest_within_matches_brute_force() {
         let (Some(stars), Some(codes)) = (stars_tree(), codes_tree()) else {
@@ -1622,9 +1560,9 @@ mod tests {
                     .map(|d| rng.next_range(tree.minval[d], tree.maxval[d]))
                     .collect();
                 let free = brute_force_nearest(tree, &q);
-                // Cutoffs around the unconstrained nearest: strictly inside it
-                // (must find nothing outside), exactly on it (inclusive
-                // boundary) and one ulp below (must then find nothing).
+                // Cutoffs around the unconstrained nearest: strictly inside it (must
+                // find nothing outside), exactly on it (inclusive boundary), one ulp
+                // below (must then find nothing).
                 let on = free.dist2;
                 let below = f64::from_bits(f64::to_bits(on).saturating_sub(1));
                 // A cutoff that covers the tree's whole bounding box.
@@ -1655,7 +1593,7 @@ mod tests {
         }
     }
 
-    /// A record sitting exactly on the cutoff counts as a hit, and a negative or
+    /// A record sitting exactly on the cutoff counts as a hit; a negative or
     /// non-finite cutoff asks for nothing.
     #[test]
     fn nearest_within_boundary_and_degenerate_cutoffs() {
@@ -1694,7 +1632,6 @@ mod tests {
         assert_eq!((rec.index, rec.dist2), (3, 0.0));
     }
 
-    /// Results of `ball_search` are sorted by ascending distance.
     #[test]
     fn ball_search_is_sorted() {
         let Some(tree) = codes_tree() else {
@@ -1704,9 +1641,9 @@ mod tests {
         let q: Vec<f64> = (0..tree.ndim)
             .map(|d| rng.next_range(tree.minval[d], tree.maxval[d]))
             .collect();
-        // Grow the radius until several records fall inside it: the query
-        // point is random, so a fixed radius could land far from every record
-        // of an arbitrarily small installed tree.
+        // Grow the radius until several records fall inside it: the query point is
+        // random, so a fixed radius could land far from every record of an
+        // arbitrarily small installed tree.
         let mut tol = 0.05;
         let mut hits = tree.ball_search(&q, tol);
         while hits.len() <= 1 && tol < 16.0 {
@@ -1721,11 +1658,10 @@ mod tests {
         assert!(hits.is_sorted_by(|a, b| a.dist2 <= b.dist2));
     }
 
-    /// Drift guard: `ball_search_into` is a wrapper over `ball_search_visit`, so
-    /// today this compares a thing to itself; it earns its keep if that ever
-    /// stops being true (one entry point changing without the other). The
-    /// traversal ORDER they share is pinned by
-    /// [`ball_search_visit_yields_documented_traversal_order`].
+    /// Drift guard: `ball_search_into` is a wrapper over `ball_search_visit`, so today
+    /// this compares a thing to itself; it earns its keep if that ever stops being
+    /// true (one entry point changing without the other). The shared traversal ORDER
+    /// is pinned by [`ball_search_visit_yields_documented_traversal_order`].
     #[test]
     fn ball_search_visit_matches_ball_search_into() {
         let Some(tree) = codes_tree() else {
@@ -1747,15 +1683,14 @@ mod tests {
         }
     }
 
-    /// Pins the FROZEN traversal order of [`KdTree::ball_search_visit`]: a DFS
-    /// that takes the FAR child's subtree before the near one's (the order
-    /// `descend` pushes children so a pop takes the far child first), records in
-    /// ascending order inside a leaf. `verify`'s `collect_refs` stable-sorts the
-    /// hits it keeps by distance, so tied reference distances resolve to THIS
-    /// order and the printed `refxy` would change if the traversal changed.
-    /// The reference walk below mirrors the documented child order but is
-    /// written independently of the iterative stack, so it catches a flip of
-    /// either the near/far choice or the leaf record direction.
+    /// Pins the FROZEN traversal order of [`KdTree::ball_search_visit`]: a DFS that
+    /// takes the FAR child's subtree before the near one's (how `descend` pushes so a
+    /// pop takes the far child first), records ascending inside a leaf. `verify`'s
+    /// `collect_refs` stable-sorts by distance, so tied reference distances resolve to
+    /// THIS order and the printed `refxy` would change if it changed. The reference
+    /// walk below mirrors that child order but is written independently of the
+    /// iterative stack, so it catches a flip of either the near/far choice or the leaf
+    /// record direction.
     #[test]
     fn ball_search_visit_yields_documented_traversal_order() {
         let Some(tree) = codes_tree() else {
@@ -1800,9 +1735,9 @@ mod tests {
             let q: Vec<f64> = (0..tree.ndim)
                 .map(|d| rng.next_range(tree.minval[d], tree.maxval[d]))
                 .collect();
-            // Grow the radius until the ball is non-empty: a random point can
-            // sit far from every record of a small installed tree, and an empty
-            // comparison would pin nothing. Every radius tried checks the order.
+            // Grow the radius until the ball is non-empty: a random point can sit far
+            // from every record of a small installed tree, and an empty comparison
+            // would pin nothing. Every radius tried checks the order.
             let mut tol = 0.05;
             loop {
                 let mut want = Vec::new();
@@ -1841,10 +1776,10 @@ mod tests {
     }
 
     /// In the old-format indices the `codes` tree stores its splits as `u16`
-    /// (`KDT_INT`): the dimension in the low `dimmask` bits, the split value in
-    /// the bits above them. The dimension being inside `ndim` is the property
-    /// that can fail on data; a masked value has zero bits inside `dimmask` by
-    /// construction, asserted as a guard on the unpacking itself.
+    /// (`KDT_INT`): the dimension in the low `dimmask` bits, the split value above
+    /// them. That the dimension is inside `ndim` is the property that can fail on data;
+    /// a masked value has zero bits inside `dimmask` by construction, asserted as a
+    /// guard on the unpacking itself.
     #[test]
     fn split_values_are_masked_multiples() {
         let Some(tree) = codes_tree() else {
@@ -1862,8 +1797,8 @@ mod tests {
 
     const TREE: &str = "stars";
 
-    /// Writer for the format's chunk layout: a primary header plus one BINTABLE
-    /// per chunk, each holding a single `A` (character blob) column.
+    /// Writer for the format's chunk layout: a primary header plus one BINTABLE per
+    /// chunk, each holding a single `A` (character blob) column.
     #[derive(Default)]
     struct FitsBuf(Vec<u8>);
 
@@ -1917,8 +1852,8 @@ mod tests {
     }
 
     /// The header cards of a crafted tree. The lr/split/range/data chunks always
-    /// describe a *valid* 2-D, 4-record, 3-node tree, so when a test corrupts a
-    /// header card the guard — not a later size mismatch — is what rejects it.
+    /// describe a *valid* 2-D, 4-record, 3-node tree, so when a test corrupts a header
+    /// card the guard — not a later size mismatch — is what rejects it.
     struct Spec {
         ndim: i64,
         ndata: i64,
@@ -1943,9 +1878,9 @@ mod tests {
         }
     }
 
-    /// `x` is 0, 1 in the left leaf and 2, 3 in the right one, so the single
-    /// split plane (dim 0, value 2) agrees with the leaf order and the searches
-    /// can be compared against brute force.
+    /// `x` is 0, 1 in the left leaf and 2, 3 in the right one, so the single split
+    /// plane (dim 0, value 2) agrees with the leaf order and the searches can be
+    /// compared against brute force.
     fn crafted_records() -> [[u32; 2]; 4] {
         [[0, 0], [1, 1], [2, 0], [3, 3]]
     }
@@ -2012,18 +1947,18 @@ mod tests {
             .unwrap_or_else(|e| panic!("case {tag}: valid crafted kd-tree was rejected: {e:#}"))
     }
 
-    /// A structurally valid 3-D, 4-record, 3-node tree with the given element
-    /// kind (`u16` or `u32`) and records, for the flat little-endian decode
-    /// fast paths. The split plane is never consulted by those tests.
+    /// A structurally valid 3-D, 4-record, 3-node tree with the given element kind
+    /// (`u16` or `u32`) and records, for the flat little-endian decode fast paths. Its
+    /// split plane is never consulted by those tests.
     fn crafted_3d_tree(kind: &str, records: &[[u32; 3]]) -> KdTree {
         let rows: Vec<&[u32]> = records.iter().map(|r| r.as_slice()).collect();
         crafted_flat_tree(kind, 3, &rows)
     }
 
-    /// [`crafted_3d_tree`] generalized to any `ndim`: a structurally valid
-    /// `ndim`-D, 4-record, 3-node tree with flat little-endian blobs, one
-    /// interior node splitting on dim `2 & dimmask(ndim)` at value 0, and
-    /// `rows` as records (each `ndim` long).
+    /// [`crafted_3d_tree`] generalized to any `ndim`: a structurally valid `ndim`-D,
+    /// 4-record, 3-node tree with flat little-endian blobs, one interior node
+    /// splitting on dim `2 & dimmask(ndim)` at value 0, and `rows` as records (each
+    /// `ndim` long).
     fn crafted_flat_tree(kind: &str, ndim: usize, rows: &[&[u32]]) -> KdTree {
         let elem = if kind == "u16" { 2 } else { 4 };
         let mut w = FitsBuf::default();
@@ -2049,8 +1984,8 @@ mod tests {
         // Leaf 0 owns records 0..=1, leaf 1 owns 2..=3.
         let lr: Vec<u8> = [1u32, 3].iter().flat_map(|v| v.to_le_bytes()).collect();
         w.table(&table_cards("lr", 4, 2), &lr);
-        // One interior node; dim = 2 & dimmask(ndim) < ndim for every ndim
-        // these tests build, value 0.
+        // One interior node; dim = 2 & dimmask(ndim) < ndim for every ndim these
+        // tests build, value 0.
         let split: Vec<u8> = [2u32].iter().flat_map(|v| v.to_le_bytes()).collect();
         w.table(&table_cards("split", 4, 1), &split);
         let range: Vec<u8> = (0..ndim)
@@ -2099,9 +2034,9 @@ mod tests {
         }
     }
 
-    /// The flat little-endian `dist2_cutoff` fast path must report the same
-    /// distance - including the `INFINITY` bail - as the general per-coordinate
-    /// decode, for both element kinds.
+    /// The flat little-endian `dist2_cutoff` fast path must report the same distance -
+    /// including the `INFINITY` bail - as the general per-coordinate decode, for both
+    /// element kinds.
     #[test]
     fn dist2_cutoff_flat_path_matches_the_general_decode() {
         for kind in ["u16", "u32"] {
@@ -2126,8 +2061,8 @@ mod tests {
         }
     }
 
-    /// Which `Scan` legs the crafted trees collectively exercised, so the
-    /// differential test can tell a compared leg from one that never ran.
+    /// Which `Scan` legs the crafted trees collectively exercised, so the differential
+    /// test can tell a compared leg from one that never ran.
     #[derive(Default, Debug)]
     struct ScanLegs {
         fixed3: usize,
@@ -2139,17 +2074,15 @@ mod tests {
         lr_general: usize,
     }
 
-    /// The decode legs `Scan` hoists must return bit-identical values to the
-    /// general accessors on every crafted layout: the fixed-`ndim` distance
-    /// legs and the general fallback (`ndim` 2), the `split` and `lr` fast
-    /// legs and their delegating legs (big-endian, `linear_lr`). The cutoffs
-    /// include the exact distance, `INFINITY` and NaN, so the `INFINITY` bail
-    /// is compared on both paths. The 4-D leg is pinned at the record level
-    /// only: the crafted 4-D tree's split plane is deliberately not consistent
-    /// with its records, so traversal-level pins live on consistent trees -
-    /// `crafted_tree_searches_match_brute_force` (3-D) and the installed-tree
-    /// `searches_match_brute_force`, whose codes tree is 4-D for a
-    /// `dimquads=4` index.
+    /// The decode legs `Scan` hoists must return bit-identical values to the general
+    /// accessors on every crafted layout: the fixed-`ndim` distance legs and the
+    /// general fallback (`ndim` 2), the `split` and `lr` fast legs and their delegating
+    /// legs (big-endian, `linear_lr`). The cutoffs include the exact distance,
+    /// `INFINITY` and NaN, so the `INFINITY` bail is compared on both paths. The 4-D
+    /// leg is pinned at the record level only: that tree's split plane is deliberately
+    /// not consistent with its records, so traversal-level pins live on consistent
+    /// trees - `crafted_tree_searches_match_brute_force` (3-D) and the installed-tree
+    /// `searches_match_brute_force`, whose codes tree is 4-D for a `dimquads=4` index.
     #[test]
     fn scan_paths_match_the_general_accessors() {
         let mut trees: Vec<(&str, KdTree)> = Vec::new();
@@ -2218,8 +2151,8 @@ mod tests {
                     }
                 }
             }
-            // The descent-side legs do not depend on the query; one scan's
-            // worth of nodes and leaves is the whole table.
+            // The descent-side legs do not depend on the query; one scan's worth of
+            // nodes and leaves is the whole table.
             let zero_query = vec![0.0; tree.ndim];
             let scan = Scan::new(tree, &zero_query);
             for node in 0..tree.ninterior {
@@ -2250,14 +2183,14 @@ mod tests {
         );
     }
 
-    /// The leaf a record of [`crafted_partition_tree`] lands in: level 0 splits
-    /// dim 0 at 8, level 1 splits dim 1 at 8 in both halves.
+    /// The leaf a record of [`crafted_partition_tree`] lands in: level 0 splits dim 0
+    /// at 8, level 1 splits dim 1 at 8 in both halves.
     fn partition_leaf(r: &[u32; 3]) -> usize {
         usize::from(r[0] > 8) * 2 + usize::from(r[1] > 8)
     }
 
-    /// `records` in leaf order (leaf 0 first) with the four leaf sizes, the
-    /// layout [`crafted_partition_tree`] writes into `lr`.
+    /// `records` in leaf order (leaf 0 first) with the four leaf sizes, the layout
+    /// [`crafted_partition_tree`] writes into `lr`.
     fn partition_into_leaves(records: &[[u32; 3]]) -> (Vec<[u32; 3]>, [usize; 4]) {
         let mut counts = [0usize; 4];
         for r in records {
@@ -2275,13 +2208,13 @@ mod tests {
         (ordered, counts)
     }
 
-    /// A valid 3-D tree over `ordered` (the leaf-ordered records): a perfect tree
-    /// of 7 nodes - 3 interior, 4 leaves - that splits on dim 0 at 8 and then on
-    /// dim 1 at 8, so each half holds exactly the records its range selects.
-    /// Unlike [`crafted_3d_tree`] its split planes are consistent with its data,
-    /// which is what makes the pruning searches (and anything compared against
-    /// them) meaningful. Leaf 0 and leaf 3 must be non-empty: an empty leading or
-    /// trailing leaf cannot be expressed in `lr`.
+    /// A valid 3-D tree over `ordered` (the leaf-ordered records): a perfect tree of 7
+    /// nodes - 3 interior, 4 leaves - that splits on dim 0 at 8 and then on dim 1 at
+    /// 8, so each half holds exactly the records its range selects. Unlike
+    /// [`crafted_3d_tree`] its split planes are consistent with its data, which is what
+    /// makes the pruning searches (and anything compared against them) meaningful.
+    /// Leaf 0 and leaf 3 must be non-empty: an empty leading or trailing leaf cannot
+    /// be expressed in `lr`.
     fn crafted_partition_tree(kind: &str, ordered: &[[u32; 3]], counts: &[usize; 4]) -> KdTree {
         let elem = if kind == "u16" { 2 } else { 4 };
         let mut w = FitsBuf::default();
@@ -2304,8 +2237,8 @@ mod tests {
             card("KDT_LINL", "F"),
         ]);
         w.block(&header);
-        // Inclusive right ends; an empty middle leaf repeats the previous end,
-        // which `leaf_range` reads back as an empty range.
+        // Inclusive right ends; an empty middle leaf repeats the previous end, which
+        // `leaf_range` reads back as an empty range.
         let mut lr: Vec<u8> = Vec::new();
         let mut end: i64 = -1;
         for &c in counts {
@@ -2313,8 +2246,8 @@ mod tests {
             lr.extend_from_slice(&u32::try_from(end).expect("record index fits").to_le_bytes());
         }
         w.table(&table_cards("lr", 4, 4), &lr);
-        // node 0: dim 0, value 8; nodes 1 and 2: dim 1, value 8 (the low
-        // dimmask bits carry the dimension, the value stays a multiple of 4).
+        // node 0: dim 0, value 8; nodes 1 and 2: dim 1, value 8 (the low dimmask bits
+        // carry the dimension, the value stays a multiple of 4).
         let split: Vec<u8> = [8u32, 9, 9].iter().flat_map(|v| v.to_le_bytes()).collect();
         w.table(&table_cards("split", 4, 3), &split);
         let range: Vec<u8> = [0.0f64, 0.0, 0.0, 16.0, 16.0, 16.0, 1.0]
@@ -2341,17 +2274,16 @@ mod tests {
         KdTree::load(&fits, TREE).expect("crafted partition tree was rejected")
     }
 
-    /// V1a's exactness contract on trees whose split planes agree with their
-    /// records: for every probe query, "some star of the footprint ball lies
-    /// within the lookup cutoff" must be exactly what
-    /// `nearest_within(..).is_some()` answers, and both must match a brute-force
-    /// scan. Every witness of every probe is additionally asserted to sit inside
-    /// the collected ball (the superset property the batched verdict rests on),
-    /// and a tight-frame leg shows a chordless `sqrt(far2)` ball loses a witness
+    /// The exactness contract on trees whose split planes agree with their records:
+    /// for every probe query, "some star of the footprint ball lies within the lookup
+    /// cutoff" must be exactly what `nearest_within(..).is_some()` answers, and both
+    /// must match a brute-force scan. Every witness of every probe is also asserted to
+    /// sit inside the collected ball (the superset property the batched verdict rests
+    /// on), and a tight-frame leg shows a chordless `sqrt(far2)` ball loses a witness
     /// the searches find, so that containment assertion is load-bearing. All over
-    /// randomized records and query frames, plus the legs the probe's argument
-    /// rests on: the inclusive cutoff boundary, a query with nothing near it, a
-    /// non-finite query, an empty ball and a collection that reaches the cap.
+    /// randomized records and query frames, plus the legs the probe's argument rests
+    /// on: the inclusive cutoff boundary, a query with nothing near it, a non-finite
+    /// query, an empty ball and a collection that reaches the cap.
     #[test]
     fn batched_probe_ball_matches_nearest_within() {
         let mut rng = Lcg(0xc0ffee);
@@ -2368,8 +2300,8 @@ mod tests {
             let (ordered, counts) = partition_into_leaves(&records);
             for kind in ["u16", "u32"] {
                 let tree = crafted_partition_tree(kind, &ordered, &counts);
-                // A tree whose halves did not match their split planes would
-                // make every search below wrong in the same direction.
+                // A tree whose halves did not match their split planes would make
+                // every search below wrong in the same direction.
                 tree.self_check().expect("crafted partition tree");
                 batched_vs_nearest(&tree, &mut rng, &mut stats);
             }
@@ -2392,9 +2324,8 @@ mod tests {
         );
     }
 
-    /// How often the differential leg of `batched_vs_nearest` saw each outcome,
-    /// so the test can tell a passing comparison from one that never had anything
-    /// to compare.
+    /// How often the differential leg of `batched_vs_nearest` saw each outcome, so the
+    /// test can tell a passing comparison from one that never had anything to compare.
     #[derive(Default, Debug)]
     struct BatchedStats {
         balls: usize,
@@ -2418,8 +2349,8 @@ mod tests {
         };
         let center = pick(rng);
         let mut qs: Vec<[f64; 3]> = (0..8).map(|_| pick(rng)).collect();
-        // A query sitting exactly on a record, and one kept aside for the
-        // boundary leg below.
+        // A query sitting exactly on a record, and one kept aside for the boundary
+        // leg below.
         let sampled = tree.sample_records();
         let pick_rec = usize::try_from(rng.next_u64() % u64::try_from(sampled.len()).unwrap())
             .unwrap_or(usize::MAX);
@@ -2427,8 +2358,8 @@ mod tests {
         let boundary = pick(rng);
         qs.push(boundary);
 
-        // `probe_ball_radius` is what the probe uses, so this measures the ball
-        // the probe would really collect.
+        // `probe_ball_radius` is what the probe uses, so this measures the ball the
+        // probe would really collect.
         let radius = probe_ball_radius(&center, &qs, chord);
         assert!(radius.is_finite(), "a finite frame must give a finite ball");
         let mut buf = Vec::new();
@@ -2438,12 +2369,12 @@ mod tests {
             tree.ndata
         );
         for q in &qs {
-            // Every witness of this probe - every star `nearest_within` could
-            // hand it - must sit inside the collected footprint ball. This is
-            // the superset property the batched verdict rests on, and the `+ chord`
-            // term of `probe_ball_radius` is what puts the far witnesses in: a
-            // star at the probe's cutoff boundary, on the far side of the probe
-            // from the center, is a chord farther out than the probe itself.
+            // Every witness of this probe - every star `nearest_within` could hand it
+            // - must sit inside the collected footprint ball: the superset property
+            // the batched verdict rests on. The `+ chord` term of `probe_ball_radius`
+            // is what puts the far witnesses in: a star at the probe's cutoff
+            // boundary, on the far side of the probe from the center, is a chord
+            // farther out than the probe itself.
             let witnesses: Vec<usize> = (0..tree.ndata)
                 .filter(|rec| distsq(&tree.coord3(*rec), q) <= cutoff2)
                 .collect();
@@ -2468,9 +2399,9 @@ mod tests {
         stats.balls += 1;
         stats.non_empty_balls += usize::from(!buf.is_empty());
 
-        // The inclusive boundary: with the cutoff at the nearest record's own
-        // squared distance - inside the lookup ball, so inside the footprint ball
-        // - both paths must report the match the `<=` allows.
+        // The inclusive boundary: with the cutoff at the nearest record's own squared
+        // distance - inside the lookup ball, so inside the footprint ball - both paths
+        // must report the match the `<=` allows.
         let dmin2 = (0..tree.ndata).fold(f64::INFINITY, |m, rec| {
             f64::min(m, distsq(&tree.coord3(rec), &boundary))
         });
@@ -2482,9 +2413,9 @@ mod tests {
             assert!(tree.nearest_within(&boundary, dmin2).is_some());
         }
 
-        // A non-finite probe: no match on either path. And a ball built from one
-        // must be refused outright - a NaN radius silently collects nothing,
-        // which would read as a rejection instead of as "no ball".
+        // A non-finite probe: no match on either path. A ball built from one must be
+        // refused outright - a NaN radius silently collects nothing, which would read
+        // as a rejection instead of as "no ball".
         let nan = [f64::NAN, 1.0, 1.0];
         assert!(!buf.iter().any(|s| within_chord2(&nan, s, cutoff2)));
         assert!(tree.nearest_within(&nan, cutoff2).is_none());
@@ -2512,8 +2443,8 @@ mod tests {
         ));
         assert!(empty.is_empty());
 
-        // The cap: what fits is accepted, one more aborts and leaves the buffer
-        // empty for the caller's fallback path.
+        // The cap: what fits is accepted, one more aborts and leaves the buffer empty
+        // for the caller's fallback path.
         let n = buf.len();
         if n >= 1 {
             stats.cap_legs += 1;
@@ -2528,19 +2459,17 @@ mod tests {
             );
         }
 
-        // The tight frame: one probe at `[12, 12, 3]`, whose only witness in
-        // every tree built here is the record `[12, 12, 4]` - strictly farther
-        // from the frame center than the probe is, so the `+ chord` term of
-        // `probe_ball_radius` is the only thing that pulls it into the ball.
-        // The control radius `sqrt(far2)` (the same ball without the chord term)
-        // must be shown to LOSE that witness while the searches still find it:
-        // it proves the containment assertion above is load-bearing, not luck.
+        // The tight frame: one probe at `[12, 12, 3]`, whose only witness in every
+        // tree built here is the record `[12, 12, 4]` - strictly farther from the
+        // frame center than the probe is, so the `+ chord` term of `probe_ball_radius`
+        // is the only thing that pulls it into the ball. The control radius
+        // `sqrt(far2)` (the same ball without the chord term) must be shown to LOSE
+        // that witness while the searches still find it: that is what makes the
+        // containment assertion above load-bearing, not luck.
         let corner = [12.0, 12.0, 3.0];
         let tight_center = [0.0, 0.0, 0.0];
         let far2 = distsq(&corner, &tight_center);
         let tight_radius = probe_ball_radius(&tight_center, &[corner], chord);
-        // The witness is inside the real ball (the containment property) and is
-        // matched by it.
         assert!(
             distsq(&[12.0, 12.0, 4.0], &tight_center) <= tight_radius * tight_radius,
             "the far witness must sit inside the footprint ball"
@@ -2576,8 +2505,8 @@ mod tests {
         stats.tight_legs += 1;
     }
 
-    /// `load` must reject the crafted tree with a clean `Err` mentioning
-    /// `needle` (never a panic or a hang).
+    /// `load` must reject the crafted tree with a clean `Err` mentioning `needle`
+    /// (never a panic or a hang).
     fn assert_rejected(tag: &str, spec: &Spec, needle: &str) {
         let fits = Fits::from_bytes(crafted_bytes(spec))
             .unwrap_or_else(|e| panic!("case {tag}: crafted FITS failed to parse: {e:#}"));
@@ -2605,9 +2534,9 @@ mod tests {
         tree.self_check().expect("crafted searches");
     }
 
-    /// The big-endian crafted file of [`crafted_big_endian_u16_tree`], loaded:
-    /// the layout that keeps every `Scan` leg on its general (delegating)
-    /// path - big-endian decoding, `u16` splits and a non-flat `lr` column.
+    /// The big-endian crafted file of [`crafted_big_endian_u16_tree`], loaded: the
+    /// layout that keeps every `Scan` leg on its general (delegating) path -
+    /// big-endian decoding, `u16` splits and a non-flat `lr` column.
     fn crafted_big_endian_tree() -> KdTree {
         let mut w = FitsBuf::default();
         w.block(&[
@@ -2630,9 +2559,9 @@ mod tests {
         ]);
         w.block(&header);
 
-        // lr: 2 rows of 8 bytes, the u32 column occupying the first 4 bytes
-        // of each row. The filler column is 0xFF: were the element packing
-        // flat instead of per-row, `lr[1]` would read it back as 0xFFFFFFFF.
+        // lr: 2 rows of 8 bytes, the u32 column in the first 4 bytes of each. The
+        // filler column is 0xFF: were the element packing flat instead of per-row,
+        // `lr[1]` would read it back as 0xFFFFFFFF.
         let mut lr = Vec::new();
         for v in [1u32, 3] {
             lr.extend_from_slice(&u32::to_be_bytes(v));
@@ -2675,10 +2604,9 @@ mod tests {
         KdTree::load(&fits, TREE).expect("crafted BE tree loads")
     }
 
-    /// Big-endian file with `u16` data/split and a padded multi-row `lr`
-    /// column: covers the non-flat (div/mod) element packing of
-    /// `BlobView::at` and big-endian decoding at all three element reads
-    /// (`coord`, `lr_entry`, `split_at`).
+    /// Big-endian file with `u16` data/split and a padded multi-row `lr` column: covers
+    /// the non-flat (div/mod) element packing of `BlobView::at` and big-endian
+    /// decoding at all three element reads (`coord`, `lr_entry`, `split_at`).
     #[test]
     fn crafted_big_endian_u16_tree() {
         let tree = crafted_big_endian_tree();
@@ -2697,7 +2625,6 @@ mod tests {
         tree.self_check().expect("BE searches");
     }
 
-    /// A `KDT_LINL` tree has no lr table and uniform leaf ranges.
     #[test]
     fn crafted_linear_lr_ranges_tile_the_records() {
         let tree = load_crafted(
@@ -2717,9 +2644,9 @@ mod tests {
     /// `KDT_NDIM` must be rejected before any arithmetic uses it.
     #[test]
     fn crafted_ndim_is_rejected() {
-        // -1 must not survive the conversion to usize and 0 is not a usable
-        // dimension: both have to be header-level errors rather than a later
-        // blob-size mismatch; the needles below are those guards' own messages.
+        // -1 must not survive the conversion to usize and 0 is not a usable dimension:
+        // both are header-level errors rather than a later blob-size mismatch, and the
+        // needles below are those guards' own messages.
         assert_rejected(
             "ndim_neg",
             &Spec {
@@ -2784,10 +2711,10 @@ mod tests {
         );
     }
 
-    /// A full binary tree has an odd node count: with an even `KDT_NNOD` the
-    /// children of the last interior node step one leaf past `lr` (see
-    /// `node_counts`), which would only blow up in `leaf_range` during the
-    /// first search, so it is rejected at load.
+    /// A full binary tree has an odd node count: with an even `KDT_NNOD` the children
+    /// of the last interior node step one leaf past `lr` (see `node_counts`), which
+    /// would only blow up in `leaf_range` during the first search, so it is rejected at
+    /// load.
     #[test]
     fn crafted_even_nnodes_is_rejected() {
         for nnodes in [2i64, 4, 1_000_000] {
@@ -2807,9 +2734,9 @@ mod tests {
         assert_eq!(KdTree::node_counts(3).expect("odd"), (2, 1));
     }
 
-    /// NaN or inverted range bounds dequantize into NaN coordinates, which
-    /// match nothing: left alone they make every query miss, and the solver
-    /// exits 1 (not solved) on what is really a corrupt-file 2.
+    /// NaN or inverted range bounds dequantize into NaN coordinates, which match
+    /// nothing: left alone they make every query miss, and the solver exits 1 (not
+    /// solved) on what is really a corrupt-file 2.
     #[test]
     fn crafted_range_table_bounds_are_rejected() {
         assert_rejected(
@@ -2856,9 +2783,9 @@ mod tests {
     }
 
     /// The bailout sentinel must stay above every cutoff: once `cutoff >= 4.0`,
-    /// `cutoff + EPSILON` rounds back to `cutoff`, so a sentinel of that shape
-    /// would let a bailed-out record pass the callers' `d2 <= cutoff` test as a
-    /// strictly farther "hit".
+    /// `cutoff + EPSILON` rounds back to `cutoff`, so a sentinel of that shape would
+    /// let a bailed-out record pass the callers' `d2 <= cutoff` test as a strictly
+    /// farther "hit".
     #[test]
     fn dist2_bailout_sentinel_excludes_far_records() {
         let tree = load_crafted("bailout", &Spec::valid());
@@ -2888,20 +2815,19 @@ mod tests {
         assert_eq!(KdTree::linear_lr_end(0, 4, 2), 0);
         assert_eq!(KdTree::linear_lr_end(1, 4, 2), 2);
         assert_eq!(KdTree::linear_lr_end(2, 4, 2), 4);
-        // 500_000 * 1_000_000 = 5e11 exceeds u32::MAX: the widened product is
-        // what keeps the linear-lr boundaries correct on a 32-bit target.
+        // 500_000 * 1_000_000 = 5e11 exceeds u32::MAX: the widened product keeps the
+        // linear-lr boundaries correct on a 32-bit target.
         assert_eq!(
             KdTree::linear_lr_end(500_000, 1_000_000, 1_000_000),
             500_000
         );
         // Half-open ends turn an empty leaf into an empty range instead of an
-        // underflowed right end (a tree with no records is rejected at load
-        // anyway).
+        // underflowed right end (a tree with no records is rejected at load anyway).
         assert_eq!(KdTree::linear_lr_end(0, 0, 1), 0);
     }
 
-    /// `searches_match_brute_force` on a tree built in the test, so the leaf
-    /// range and bailout semantics are covered without the index data.
+    /// `searches_match_brute_force` on a tree built in the test, so the leaf range and
+    /// bailout semantics are covered without the index data.
     #[test]
     fn crafted_tree_searches_match_brute_force() {
         for spec in [
@@ -2934,12 +2860,12 @@ mod tests {
 
     // ---- The filtered (hint-compact) tree ---------------------------------
 
-    /// A structurally valid source tree over `rows` for [`KdTree::filtered`]:
-    /// `nbottom` leaves as uniform `KDT_LINL` ranges and interior nodes carrying
-    /// the trivial plane, because the filtered build reads only the data and the
-    /// quantization, never the source's own `lr` or splits. `span` is the per-dim
-    /// `maxval` (with `minval` 0 and `scale` 1 a stored integer dequantizes to
-    /// itself, so a test can put keys anywhere in the element's range).
+    /// A structurally valid source tree over `rows` for [`KdTree::filtered`]: `nbottom`
+    /// leaves as uniform `KDT_LINL` ranges and interior nodes carrying the trivial
+    /// plane, because the filtered build reads only the data and the quantization,
+    /// never the source's own `lr` or splits. `span` is the per-dim `maxval` (with
+    /// `minval` 0 and `scale` 1 a stored integer dequantizes to itself, so a test can
+    /// put keys anywhere in the element's range).
     fn crafted_source(
         kind: &str,
         ndim: usize,
@@ -3033,9 +2959,9 @@ mod tests {
         hits
     }
 
-    /// One filtered tree against the linear scan over the same records, queried
-    /// across `[0, span]`. Returns the tree's leaf and interior counts so a caller
-    /// can pin that the build actually had depth.
+    /// One filtered tree against the linear scan over the same records, queried across
+    /// `[0, span]`. Returns the tree's leaf and interior counts so a caller can pin
+    /// that the build actually had depth.
     fn assert_filtered_matches(
         kind: &str,
         ndim: usize,
@@ -3052,7 +2978,6 @@ mod tests {
         });
         assert_eq!(tree.ndata, recs.len(), "filtered ndata");
         assert_eq!(rec_map.len(), recs.len(), "record map length");
-        // Every source record appears exactly once.
         let mut seen = rec_map.clone();
         seen.sort_unstable();
         let mut want = recs.to_vec();
@@ -3082,16 +3007,16 @@ mod tests {
         (tree.nbottom, tree.ninterior)
     }
 
-    /// A filtered tree answers every query with exactly the records a linear scan
-    /// of the subset finds. The crafted records lean on the cases a median build
-    /// can get wrong: values inside one split-value step (so the masked plane
-    /// cannot land between them), blocks of identical records (so no dim offers a
-    /// plane at all), and a subset smaller than one leaf (so the tree is a lone
-    /// leaf with no interior node).
+    /// A filtered tree answers every query with exactly the records a linear scan of
+    /// the subset finds. The crafted records lean on the cases a median build can get
+    /// wrong: values inside one split-value step (so the masked plane cannot land
+    /// between them), blocks of identical records (so no dim offers a plane at all),
+    /// and a subset smaller than one leaf (so the tree is a lone leaf with no interior
+    /// node).
     #[test]
     fn crafted_filtered_tree_matches_a_linear_scan() {
-        // 48 records: 16 that vary within a few units per dim, then two blocks of
-        // 16 that are identical inside each block.
+        // 48 records: 16 that vary within a few units per dim, then two blocks of 16
+        // that are identical inside each block.
         let base: Vec<Vec<u32>> = (0..16)
             .map(|i| (0..4).map(|d| ((i * 7 + d * 13) % 5) as u32).collect())
             .chain((0..16).map(|_| vec![7u32; 4]))
@@ -3119,16 +3044,16 @@ mod tests {
         }
     }
 
-    /// The same comparison several levels deep, which the 48-record sets above
-    /// cannot reach: at `params::HINT_TREE_LEAF` a subset needs a few hundred
-    /// records before the tree has more than a root split. Deep builds exercise
-    /// the per-node dim choice, the fallback plane below the root, and an `lr`
-    /// table that tiles many more leaves than two.
+    /// The same comparison several levels deep, which the 48-record sets above cannot
+    /// reach: at `params::HINT_TREE_LEAF` a subset needs a few hundred records before
+    /// the tree has more than a root split. Deep builds exercise the per-node dim
+    /// choice, the fallback plane below the root, and an `lr` table that tiles many
+    /// more leaves than two.
     #[test]
     fn crafted_filtered_tree_deep_subset_matches_a_linear_scan() {
-        // 320 records: a spread-out half, then blocks that are identical inside
-        // each block, so a deep node is guaranteed to be one of the inseparable
-        // ones and to fall back mid-tree rather than at the root.
+        // 320 records: a spread-out half, then blocks that are identical inside each
+        // block, so a deep node is guaranteed to be one of the inseparable ones and to
+        // fall back mid-tree rather than at the root.
         let base: Vec<Vec<u32>> = (0..160)
             .map(|i| (0..4).map(|d| ((i * 37 + d * 11) % 64) as u32).collect())
             .chain((0..40).map(|_| vec![9u32; 4]))
@@ -3147,8 +3072,8 @@ mod tests {
                     "{kind} {ndim}-D tree over 320 records is shallow: {nbottom} leaves, \
                      {ninterior} interior nodes - the deep coverage this test exists for is gone"
                 );
-                // A block whose records are identical in every dim: no node
-                // holding them has a plane to split on, all the way down.
+                // A block whose records are identical in every dim: no node holding
+                // them has a plane to split on, all the way down.
                 assert_filtered_matches(kind, ndim, &rows, &(200..240).collect::<Vec<u32>>(), 64.0);
                 // Inseparable blocks plus separable records interleaved.
                 assert_filtered_matches(kind, ndim, &rows, &(150..250).collect::<Vec<u32>>(), 64.0);
@@ -3164,18 +3089,18 @@ mod tests {
     }
 
     /// A node whose records no storable plane can separate still has to hand its
-    /// children a plane the searches can prune on: the left half's coordinate must
-    /// be at or under it, or a query on the far side of the plane would skip the
-    /// half that holds every record. For `KDT_DATA = u32` the records can sit in
-    /// the top steps of their range, where the largest storable value is *below*
-    /// them, so the build must refuse instead of writing that plane.
+    /// children a plane the searches can prune on: the left half's coordinate must be
+    /// at or under it, or a query on the far side of the plane would skip the half
+    /// that holds every record. For `KDT_DATA = u32` the records can sit in the top
+    /// steps of their range, where the largest storable value is *below* them, so the
+    /// build must refuse instead of writing that plane.
     #[test]
     fn crafted_filtered_tree_plane_dominates_its_own_records() {
         let top = u32::MAX as f64;
-        // Just inside the corner: `ceil(qmax)` is still representable, so the tree
-        // is built and its plane sits at the records' own top coordinate. Queries
-        // above the plane - inside and outside the pruning window - must agree
-        // with the linear scan, not lose the records to the empty half.
+        // Just inside the corner: `ceil(qmax)` is still representable, so the tree is
+        // built and its plane sits at the records' own top coordinate. Queries above
+        // the plane - inside and outside the pruning window - must agree with the
+        // linear scan, not lose the records to the empty half.
         let near: Vec<Vec<u32>> = (0..40)
             .map(|i| vec![u32::MAX - 8, 5, 5, 5 + (i % 3)])
             .collect();
@@ -3207,10 +3132,10 @@ mod tests {
                 );
             }
         }
-        // Inside the corner: every dim's range is one storage step wide and its
-        // top coordinate has no storable value above it, so there is no tree to be
-        // had. A plane here would be below the records it dominates, which is the
-        // one thing `descend` cannot tolerate.
+        // Inside the corner: every dim's range is one storage step wide and its top
+        // coordinate has no storable value above it, so there is no tree to be had. A
+        // plane here would be below the records it dominates, which is the one thing
+        // `descend` cannot tolerate.
         let corner: Vec<Vec<u32>> = (0..40).map(|i| vec![u32::MAX - (i % 2), 5, 5, 5]).collect();
         let source = crafted_source("u32", 4, &corner, 4, top);
         assert!(
@@ -3221,10 +3146,9 @@ mod tests {
     }
 
     /// The record cap of [`KdTree::filtered`] is a byte budget counted at one row
-    /// width, so a wider row must be refused rather than quietly get a tree bigger
-    /// by the same factor: `params::HINT_TREE_MAX_ROW_BYTES` is what keeps a
-    /// future caller with a wider codes tree from multiplying the anonymous memory
-    /// of every hinted file.
+    /// width, so a wider row must be refused rather than quietly get a bigger tree:
+    /// `params::HINT_TREE_MAX_ROW_BYTES` is what keeps a caller with wider rows from
+    /// multiplying the anonymous memory of every hinted file.
     #[test]
     fn crafted_filtered_tree_refuses_a_row_over_its_budget() {
         let wide: Vec<Vec<u32>> = (0..40)
@@ -3251,24 +3175,24 @@ mod tests {
         );
     }
 
-    /// The filtered codes tree of a real index must return, for a real query, the
-    /// records the full tree returns that pass the filter - as multisets, distance
-    /// included. A filtered tree has its own shape and its own split planes, so
-    /// the pruning it does is only safe if it matches the tree it replaces. Half
-    /// the queries are the stored code of a record of the subset, the distribution
-    /// the solver actually queries with (and one that must return at least that
-    /// record), half are points drawn from the tree's range. Three files spread
-    /// across the install contribute three tree shapes and three code densities,
-    /// and ~1000 queries x 3 radii each is enough that a prune which only bites on
-    /// rare geometry still shows up. `ANY_INDEX`, self-skips without the data.
+    /// The filtered codes tree of a real index must return, for a real query, exactly
+    /// the records the full tree returns that pass the filter - as multisets, distance
+    /// included. A filtered tree has its own shape and its own split planes, so the
+    /// pruning it does is only safe if it matches the tree it replaces: that
+    /// equivalence holds by test, not by argument. Half the queries are the stored code
+    /// of a record of the subset - the distribution the solver queries with, and one
+    /// that must return at least that record - half are points drawn from the tree's
+    /// range. Three index files spread across the install contribute three tree shapes
+    /// and three code densities, and ~1000 queries x 3 radii each is enough that a
+    /// prune which only bites on rare geometry still shows up. `ANY_INDEX`, self-skips
+    /// without the data.
     #[test]
     fn filtered_codes_tree_returns_the_source_hits_that_pass_the_filter() {
         let Some(files) = testutil::spread_indices(3) else {
             return;
         };
-        // Subsets of up to two thousand records: enough that the filtered tree is
-        // a real tree of several levels rather than one leaf, shrunk for a file
-        // smaller than that.
+        // Subsets of up to two thousand records: enough that the filtered tree is a
+        // real tree of several levels rather than one leaf, shrunk for a smaller file.
         const SUBSET: usize = 2000;
         const NQUERY: usize = 170;
         let mut rng = Lcg(0x9e3_779b);
@@ -3303,10 +3227,6 @@ mod tests {
                     .filtered(&recs)
                     .unwrap_or_else(|| panic!("{what}: filtered tree was refused"));
                 for _ in 0..NQUERY {
-                    // Half the queries are the stored code of a record of the
-                    // subset (a query of exactly the kind the solver issues, and
-                    // one that must return at least that record), half are points
-                    // drawn from the tree's range.
                     let q: Vec<f64> = if u64::is_multiple_of(rng.next_u64(), 2) {
                         let rec = recs[rng.next_range(0.0, recs.len() as f64) as usize];
                         tree.record(rec as usize)

@@ -1,14 +1,9 @@
-//! Loading the old-format (`AN_FILE='QUAD'`) astrometry.net index file.
-//!
-//! An index is the primary header, one `quads` table holding the star indices
-//! of every quad, and the two kd-trees `codes` (the quad codes) and `stars`
-//! (the index stars). Only that layout is supported, and its data areas are
-//! byte views into the mmap'd file rather than decoded copies.
-//!
-//! Two kinds of sky coverage share it: all-sky indices (`HEALPIX=-1`,
-//! `ALLSKY=T`) and healpix sub-region tiles (`HEALPIX>=0` + `HPNSIDE`), whose
-//! cell number uses the astrometry.net "xy" pixel numbering - the tile/hint
-//! overlap geometry lives in `healpix.rs`.
+//! Loading the old-format (`AN_FILE='QUAD'`) astrometry.net index file: the
+//! primary header, a `quads` table of star indices and the `codes`/`stars`
+//! kd-trees. Only that layout is supported; its data areas are byte views into
+//! the mmap'd file, never decoded copies. Two sky coverages share it: all-sky
+//! (`HEALPIX=-1`, `ALLSKY=T`) and healpix tiles (`HEALPIX>=0` + `HPNSIDE`) in
+//! the astrometry.net "xy" numbering (tile/hint geometry in `healpix.rs`).
 
 use anyhow::{Context, Result, ensure};
 use std::fs;
@@ -20,8 +15,8 @@ use crate::kdtree::KdTree;
 use crate::params::{QSF_HI, QSF_LO};
 use crate::solver::star_outside_hint;
 
-/// Everything we need from the primary header (and the codes-tree header) to
-/// decide whether an index is usable.
+/// Everything from the primary (and codes-tree) header that decides whether an
+/// index is usable.
 #[derive(Debug, Clone)]
 pub struct IndexMeta {
     pub path: PathBuf,
@@ -30,37 +25,33 @@ pub struct IndexMeta {
     pub nquads: usize,
     pub nstars: usize,
     /// Bounds of the quad-size band the index covers, arcsec on the sky
-    /// (`SCALE_L`/`SCALE_U` carry the same band in radians). Quad size is the
-    /// backbone `|AB|` length, the quantity `QSF_LO`/`QSF_HI` bound in pixels
-    /// on the field side; [`Self::fits_scale`] overlaps the two bands.
+    /// (`SCALE_L`/`SCALE_U` carry it in radians). Quad size is the backbone
+    /// `|AB|` length, which `QSF_LO`/`QSF_HI` bound in px on the field side;
+    /// [`Self::fits_scale`] overlaps the two bands.
     pub scale_lower_arcsec: f64,
     pub scale_upper_arcsec: f64,
     pub healpix: i64,
-    /// `HPNSIDE`: the healpix subdivision of a sub-region tile (`healpix >= 0`).
-    /// 0 for all-sky indices and when the key is absent. A tile whose nside is
-    /// missing or not a power of two is refused at load as corrupt - no
-    /// subdivision is invented for it.
+    /// `HPNSIDE`: the healpix subdivision of a tile (`healpix >= 0`); 0 for
+    /// all-sky and when the key is absent. A tile whose nside is missing or not
+    /// a power of two is refused at load as corrupt - none is invented for it.
     pub hpnside: i64,
     pub allsky: bool,
     pub endian: Endian,
-    /// Quad-convention flags, read from the codes kd-tree header; a file
-    /// without that header falls back to the primary one. They say which
-    /// filters the index builder applied to its codes, so the field side can
-    /// prune its own codes the same way: `circle` is the code circle centered
-    /// (0.5, 0.5) of radius 1/sqrt(2) and is required (see `from_fits`);
-    /// `cx_less_than_dx` (`CXDX`, `cx <= dx` for the non-backbone stars) and
-    /// `meanx_less_than_half` (`CXDXLT1`, the code's mean x never above 0.5)
-    /// are the canonicalization filters `solver.rs` passes to
-    /// `codes::canonical_ok`.
+    /// Quad-convention flags, read from the codes kd-tree header (falling back
+    /// to the primary one): which filters the index builder applied to its
+    /// codes, so the field side prunes its own the same way. `circle` is the
+    /// code circle centered (0.5, 0.5) of radius 1/sqrt(2), required (see
+    /// `from_fits`); `cx_less_than_dx` (`CXDX`, `cx <= dx` for the non-backbone
+    /// stars) and `meanx_less_than_half` (`CXDXLT1`, mean x never above 0.5) are
+    /// the canonicalization filters `solver.rs` passes to `codes::canonical_ok`.
     pub circle: bool,
     pub cx_less_than_dx: bool,
     pub meanx_less_than_half: bool,
 }
 
-/// First-column (`TTYPE1`) names that mark a table this reader cannot
-/// interpret - the index flavors outside its scope (new-format indices, H4,
-/// a healpix lookup). Finding one of them in a file is a load error, not a
-/// partial read of a format we would get wrong.
+/// First-column (`TTYPE1`) names marking a table this reader cannot interpret -
+/// the index flavors outside its scope (new format, H4, a healpix lookup).
+/// Finding one is a load error, not a partial read of a format we get wrong.
 const UNSUPPORTED_TABLES: [&str; 5] = [
     "index_stars",
     "index_margins",
@@ -69,9 +60,8 @@ const UNSUPPORTED_TABLES: [&str; 5] = [
     "healpix",
 ];
 
-/// Reads a non-negative integer header key as `usize` (`NQUADS`/`NSTARS`).
-/// A negative value is a clean load error (exit 2), not a debug overflow panic
-/// or an `as usize` bit-cast that yields a garbage value like 18446744073709551615.
+/// Reads a non-negative integer header key as `usize` (`NQUADS`/`NSTARS`). A
+/// negative value is a clean load error (exit 2), not a panic or a bit-cast.
 fn require_usize(primary: &Header, key: &str) -> Result<usize> {
     let v = primary.require_i64(key)?;
     usize::try_from(v).map_err(|_| anyhow::anyhow!("{key} is {v} (must be non-negative)"))
@@ -79,11 +69,9 @@ fn require_usize(primary: &Header, key: &str) -> Result<usize> {
 
 impl IndexMeta {
     /// Builds the metadata from any header source: a whole file (`Fits`) or the
-    /// header-only reader (`FitsHeaders`).
-    ///
-    /// Error messages here never mention `path`: the caller adds the
-    /// `loading index {path}` context, so a filename appears exactly once in
-    /// the rendered error.
+    /// header-only reader (`FitsHeaders`). Messages here never mention `path`:
+    /// the caller adds the `loading index {path}` context, so a filename appears
+    /// exactly once in the rendered error.
     fn from_fits(fits: &dyn Headers, path: &Path) -> Result<Self> {
         let primary = fits.primary();
         let an_file = primary
@@ -104,9 +92,8 @@ impl IndexMeta {
         let allsky = primary.get_bool("ALLSKY").unwrap_or(healpix == -1);
         let hpnside = primary.get_i64("HPNSIDE").unwrap_or(0);
         if healpix >= 0 {
-            // A healpix sub-region tile: one cell of the sky carrying the same
-            // QUAD table layout. The cell number is in the xy scheme
-            // `healpix.rs` implements, not the FITS ring order.
+            // A healpix tile: one sky cell with the same QUAD layout, its cell
+            // number in the xy scheme `healpix.rs` implements, not ring order.
             ensure!(
                 !allsky,
                 "contradictory index header: HEALPIX={healpix} with ALLSKY=T"
@@ -120,10 +107,9 @@ impl IndexMeta {
                 u64::try_from(hpnside).is_ok_and(u64::is_power_of_two),
                 "HPNSIDE={hpnside} is not a power of two"
             );
-            // Only the xy cell numbering is implemented here, and the check
-            // does not look at nside: any NESTED key is refused, because a tile
-            // read under the wrong numbering points at the wrong sky cell - and
-            // so misplaces the whole field.
+            // Only the xy numbering is implemented, and the check does not look
+            // at nside: any NESTED key is refused, because a tile read under the
+            // wrong numbering points at the wrong cell, misplacing the field.
             if let Some(comp) = primary.get_str("HPNCOMP") {
                 ensure!(
                     !comp.eq_ignore_ascii_case("NESTED"),
@@ -145,21 +131,17 @@ impl IndexMeta {
             "unsupported DIMQUADS={dimquads} (only 3 and 4 are supported)"
         );
 
-        // The quad-convention flags (CIRCLE/CXDX/CXDXLT1) are looked for in the
-        // codes kd-tree header; only a file that has no such header is read
-        // from the primary one.
         let flag_header = match fits.header_by_ttype("kdtree_header_codes") {
             Ok(h) => h,
             Err(_) => fits.primary(),
         };
 
-        // SCALE_L/SCALE_U are the index's quad-size band in radians. A damaged
-        // band never errors later, it only skews index selection: a NaN bound
-        // makes its side of the `fits_scale` overlap test always false (both
-        // NaN and the index is a candidate for every field), a non-positive
-        // lower bound disables the low-side check outright, and an inverted
-        // band admits fields the index cannot serve. Reject them at load
-        // (exit 2).
+        // SCALE_L/SCALE_U are the quad-size band in radians. A damaged band
+        // never errors later, it only skews index selection: a NaN bound makes
+        // its side of the `fits_scale` test always false (both NaN and the index
+        // suits every field), a non-positive lower bound disables the low-side
+        // check, an inverted band admits fields the index cannot serve. Reject
+        // them at load (exit 2).
         let scale_lower_rad = primary.require_f64("SCALE_L")?;
         let scale_upper_rad = primary.require_f64("SCALE_U")?;
         ensure!(
@@ -187,11 +169,10 @@ impl IndexMeta {
             meanx_less_than_half: flag_header.get_bool("CXDXLT1").unwrap_or(false),
         };
         // The solver applies the code-circle filter to every field quad
-        // unconditionally (`codes::in_circle`, reached from `solver.rs`), and
-        // that pruning is only sound when the index codes were built under the
-        // same convention. Without CIRCLE the miss is silent: field quads whose
+        // unconditionally, which is only sound when the index codes were built
+        // the same way. Without CIRCLE the miss is silent: field quads whose
         // code falls outside the circle are pruned while the index may still
-        // hold their match. Refuse the file here rather than report a field
+        // hold their match. Refuse the file rather than report the field
         // unsolved.
         ensure!(
             meta.circle,
@@ -201,14 +182,11 @@ impl IndexMeta {
     }
 
     /// Index scale selection: does this index's quad-size band overlap the one
-    /// the field can produce?
-    ///
-    /// The field's band runs from `QSF_LO` * the shorter frame side * `app_min`
-    /// to `QSF_HI` * the frame diagonal * `app_max`: the smallest and largest
-    /// angular backbone length its quads can have. The overlap test is
-    /// inclusive, so bands that merely touch still select the index.
-    ///
-    /// `app_min`/`app_max` are in arcsec/px, `width`/`height` in px.
+    /// the field can produce? The field's band runs from `QSF_LO` * the shorter
+    /// frame side * `app_min` to `QSF_HI` * the frame diagonal * `app_max`: the
+    /// smallest and largest angular backbone length its quads can have. The
+    /// overlap test is inclusive, so bands that merely touch still select the
+    /// index. `app_min`/`app_max` are in arcsec/px, `width`/`height` in px.
     pub fn fits_scale(&self, app_min: f64, app_max: f64, width: f64, height: f64) -> bool {
         let quadsize_min = QSF_LO * f64::min(width, height);
         let fmin = quadsize_min * app_min;
@@ -217,21 +195,15 @@ impl IndexMeta {
     }
 
     /// Mean catalog density over the sky this index covers, stars per square
-    /// degree.
-    ///
-    /// An all-sky index covers 4pi sr = 41252.96 deg^2. A ring-scheme healpix
-    /// tile of `hpnside` covers 1/(12 nside^2) of the sphere and healpix pixels
-    /// are equal-area, so one cell's area follows from `nside` alone. `None`
-    /// when the file offers no usable star count or nside, which callers must
-    /// treat as "no density estimate", never as 0.
+    /// degree. An all-sky index covers 4pi sr = 41252.96 deg^2; a tile of
+    /// `hpnside` covers 1/(12 nside^2) of the sphere and healpix pixels are
+    /// equal-area, so a cell's area follows from `nside` alone. `None` when the
+    /// file offers no usable star count or nside: never read as 0.
     #[must_use]
     pub fn stars_per_deg2(&self) -> Option<f64> {
         if self.nstars == 0 {
             return None;
         }
-        // Square degrees in the whole sphere, and the equal-area cells a
-        // ring-scheme healpix grid of `nside` divides the sphere into (12 at
-        // nside 1).
         const SPHERE_DEG2: f64 = 41252.96125917812;
         const HEALPIX_BASE_CELLS: f64 = 12.0;
         let sphere_frac = if self.allsky {
@@ -258,8 +230,7 @@ impl IndexMeta {
             self.scale_upper_arcsec,
             endian_name(self.endian),
         );
-        // Name the cell so the verbose per-index lines (which print this
-        // string) tell tiles of one indexid apart.
+        // Name the cell so the verbose lines tell tiles of one indexid apart.
         if self.healpix >= 0 {
             s.push_str(&format!(
                 ", healpix={} hpnside={}",
@@ -278,67 +249,63 @@ fn endian_name(e: Endian) -> &'static str {
 }
 
 /// A fully loaded index: quads plus both kd-trees. Their bulk arrays are byte
-/// views sharing the mmap'd file and elements are decoded on access, so loading
-/// an index costs only the pages the solver actually touches. Those are clean,
-/// evictable page cache, never an anonymous copy, which is what keeps the memory
-/// profile independent of the index file size.
+/// views sharing the mmap'd file, decoded on access, so loading costs only the
+/// pages the solver touches: clean, evictable page cache, never an anonymous
+/// copy, which keeps memory use independent of the file size.
 pub struct Index {
     pub meta: IndexMeta,
     /// `nquads * dimquads` star indices: per quad its slots `(A, B, C[, D])` as
     /// u32, `A`/`B` the backbone pair the quad code is built on. A blob column
-    /// of the mapped file, read through [`Self::quad`] by the solver's hit
-    /// processing and by verification.
+    /// of the mapped file, read through [`Self::quad`].
     quads: BlobView,
     /// Tree over the quad codes: one record per quad holding an (x, y) pair for
     /// every non-backbone star, hence `ndim = 2 * (DIMQUADS - 2)` (checked at
-    /// load). The quantized values are decoded per the tree's `KDT_DATA` kind,
-    /// `u16` or `u32`, both accepted.
+    /// load), quantized as `u16` or `u32` (both accepted).
     pub codes: KdTree,
     /// Tree over the index stars: the quantized unit-sphere direction of each
     /// star (`ndim == 3`, checked at load), dequantized by [`Self::star_xyz`].
     pub stars: KdTree,
-    /// The stars tree's `CUTNSIDE` header key. Nothing in this solver reads it
-    /// (the star lookup it belongs to is out of scope), so `--dump-index` only
-    /// echoes it, or -1 when the stars tree header has no such key.
+    /// The stars tree's `CUTNSIDE` key, echoed by `--dump-index` (or -1 when
+    /// the key is absent): the star lookup it belongs to is out of scope here.
     pub cutside: i64,
 }
 
 /// The quads of one index that a `--ra/--dec` hint can reach at all, and the
 /// compact codes tree built over them.
 ///
-/// Which quads are reachable belongs to the index file and the hint alone - never
-/// to the field, the depth round or the worker schedule - so a sweep computes it
-/// once per `(file, hint)` and reuses it for every round. Two uses:
-/// * [`HintIndex::any`] decides whether the file stays in the sweep at all: with
-///   no reachable quad no code hit of its own can pass the pre-fit matched-star
-///   gate of `solver.rs::process_hit`, so the file never reaches a fit and
-///   `sweep.rs` drops it from the later rounds;
-/// * [`HintIndex::codes`] is the same subset as a small tree over only the
-///   reachable code records, which is what the queries of a hinted attempt search
-///   instead of the index's own (full) codes tree.
+/// Which quads are reachable belongs to the index file and the hint alone -
+/// never to the field, the depth round or the worker schedule - so a sweep
+/// computes it once per `(file, hint)` and reuses it for every round. Two uses:
+/// * [`HintIndex::any`] is the verdict on whether the file stays in the sweep:
+///   with no reachable quad no code hit of its own can pass the pre-fit
+///   matched-star gate of `solver.rs::process_hit`, so the file never reaches a
+///   fit and `sweep.rs` drops it from the later rounds;
+/// * [`HintIndex::codes`] is the same subset as a tree over only the reachable
+///   code records, which a hinted attempt queries instead of the index's own
+///   (full) codes tree.
 pub(crate) struct HintIndex {
     /// Whether the file holds at least one reachable quad.
     pub any: bool,
-    /// The reachable quads as a tree, when the caller wanted one, there are any,
-    /// and the tree could be built (a subset too large to copy is not worth a
-    /// tree, see [`crate::params::HINT_TREE_MAX_RECORDS`], and the sweep's budget
-    /// for how many files get one). Without it the search stays on the index's
-    /// own codes tree, which answers the same queries.
+    /// The reachable quads as a tree: when the caller wanted one, there are any,
+    /// and it could be built (a subset too large to copy is not worth a tree,
+    /// see [`crate::params::HINT_TREE_MAX_RECORDS`] and the sweep's budget of
+    /// files that get one). Without it the search stays on the index's own codes
+    /// tree, which answers the same queries.
     pub codes: Option<HintCodes>,
 }
 
 /// The hint-reachable code records of one index file, as their own tree.
 pub(crate) struct HintCodes {
-    /// A tree over the reachable code records (`kdtree::KdTree::filtered`): same
-    /// quantized rows, same external-unit geometry, fewer records to descend.
+    /// A tree over the reachable code records (`kdtree::KdTree::filtered`): the
+    /// same quantized rows and external-unit geometry, fewer records.
     pub tree: KdTree,
     /// Record `i` of `tree` is the code of this index quad.
     pub quad_of: Vec<u32>,
 }
 
 impl HintIndex {
-    /// An index with (or without) a reachable quad, for the sweep tests that
-    /// exercise the elimination rule without opening an index file.
+    /// A verdict with (or without) a reachable quad, for the sweep tests of the
+    /// drop rule that do not open an index file.
     #[cfg(test)]
     pub(crate) fn for_test(any: bool) -> Self {
         Self { any, codes: None }
@@ -346,15 +313,12 @@ impl HintIndex {
 }
 
 impl Index {
-    /// Metadata of `path`, or `None` when the file is not an astrometry.net
-    /// index at all (e.g. a plain image dropped into the index directory, or a
-    /// file whose header blocks cannot be read); those are reported on stderr
-    /// and skipped. An index in a format this solver cannot read is returned as
-    /// `Err` and the caller decides what it means (see [`load_metas_in`] and
-    /// [`Unusable`]).
-    ///
-    /// Only the header blocks are read: a directory scan must not pull the
-    /// kd-tree data of every index into memory.
+    /// Metadata of `path`, or `None` (warned on stderr, skipped) when the file
+    /// is not an astrometry.net index at all: a plain image in the index
+    /// directory, or one whose header blocks cannot be read. An index in a
+    /// format this solver cannot read is `Err` for the caller to judge (see
+    /// [`load_metas_in`] and [`Unusable`]). Only the header blocks are read: a
+    /// directory scan must not pull every index's kd-tree data into memory.
     pub fn try_load_meta(path: &Path) -> Result<Option<IndexMeta>> {
         let fits = match FitsHeaders::open(path) {
             Ok(fits) => fits,
@@ -378,7 +342,7 @@ impl Index {
     }
 
     /// Body of [`Self::load`]. Its own messages name the failing step, never
-    /// `path`; the filename comes from the context `load` adds (once).
+    /// `path`; the filename comes from the context `load` adds, once.
     fn load_body(path: &Path) -> Result<Index> {
         let fits = Fits::open(path)?;
         let meta = IndexMeta::from_fits(&fits, path).context("reading the index header")?;
@@ -386,7 +350,7 @@ impl Index {
         let quads = fits.blob_view("quads").context("reading the quads table")?;
         let quad_u32s = quads.u32_entries().context("quads table")?;
         // `NQUADS * DIMQUADS` can overflow `usize` when a corrupt header makes
-        // NQUADS huge; checked_mul turns that into a clean error (exit 2).
+        // NQUADS huge; `checked_mul` turns that into a clean error (exit 2).
         let expected_quads = meta.nquads.checked_mul(meta.dimquads).ok_or_else(|| {
             anyhow::anyhow!(
                 "NQUADS {} * DIMQUADS {} overflows",
@@ -399,12 +363,11 @@ impl Index {
             "quads table has {quad_u32s} u32, expected {expected_quads}"
         );
         // One-time pass: a star index >= NSTARS would make `star_xyz` ->
-        // `KdTree::coord` address bytes outside the star table later, on a
-        // rayon worker - a slice-index panic, or whatever trailing padding the
-        // offset happens to land on. Reject the corrupt index at load (exit 2).
-        // One compare per u32 of the table (nquads * dimquads), cheap next to
-        // loading the trees; it does fault the quads pages in, which stay clean
-        // evictable page cache.
+        // `KdTree::coord` address bytes outside the star table later, on a rayon
+        // worker - a slice-index panic, or whatever trailing padding the offset
+        // lands on. Reject the corrupt index at load (exit 2). One compare per
+        // u32, cheap next to loading the trees; it faults the quads pages in,
+        // which stay clean evictable page cache.
         ensure!(
             (0..quad_u32s).all(|i| (quads.uint_at(meta.endian, 4, i) as usize) < meta.nstars),
             "quads table references star index >= NSTARS ({})",
@@ -449,8 +412,7 @@ impl Index {
     }
 
     /// Star indices of quad `q`, in `(A, B, C[, D])` order, decoded from the
-    /// mapped file. Slot 3 is 0 when `DIMQUADS == 3`; callers must only read
-    /// `..meta.dimquads`.
+    /// mapped file. Slot 3 is 0 when `DIMQUADS == 3`; read only `..meta.dimquads`.
     #[must_use]
     pub fn quad(&self, q: usize) -> [u32; 4] {
         let d = self.meta.dimquads;
@@ -473,16 +435,15 @@ impl Index {
     /// [`star_outside_hint`] reports it out of the circle, and quad `q` is
     /// reachable when all `dimquads` of its stars are in.
     ///
-    /// The two passes walk the star and quad tables in full, which faults the
-    /// pages they live on, so a sweep computes this at most once per index file
-    /// per process (see `sweep.rs`) - and that full walk is also what makes the
-    /// reachable subset cheap enough to be worth a tree of its own.
+    /// Both passes walk a table in full, faulting the pages it lives on, so a
+    /// sweep computes this at most once per file per process (see `sweep.rs`) -
+    /// and that full walk is what makes the subset cheap enough to be worth a
+    /// tree of its own.
     ///
     /// `want_tree` asks for the compact tree over the reachable quads. A caller
-    /// that has no room for one (`sweep.rs`'s budget over the sweep's files)
-    /// passes `false`, and the quad walk then stops at the first reachable quad:
-    /// without a tree to fill, `any` is all the verdict is, and one quad answers
-    /// it.
+    /// with no room for one (`sweep.rs`'s budget over the sweep's files) passes
+    /// `false`, and the quad walk stops at the first reachable quad: with no
+    /// tree to fill, `any` is all the verdict is, and one quad answers it.
     #[must_use]
     pub fn hint_index(&self, hint: &([f64; 3], f64), want_tree: bool) -> HintIndex {
         let d = self.meta.dimquads;
@@ -493,10 +454,10 @@ impl Index {
                 instar[i / 64] |= 1u64 << (i % 64);
             }
         }
-        // Quad pass: reachable when no slot is missing from the star bits. The
-        // slots past `dimquads` are the dim3 sentinel and stay unread. Collection
-        // stops one past the size a tree is still worth building; without a tree
-        // the first reachable quad is already the whole verdict.
+        // Quad pass: reachable when no slot is missing from the star bits (slots
+        // past `dimquads` are the dim3 sentinel, unread). Collection stops one
+        // past the size a tree is still worth building; without a tree the first
+        // reachable quad is already the whole verdict.
         let cap = if want_tree {
             crate::params::HINT_TREE_MAX_RECORDS + 1
         } else {
@@ -570,7 +531,7 @@ impl Index {
 }
 
 /// All `*.fits` files in `dir`, sorted by name. A directory without a single one
-/// is an error; `metas_in` is the caller that may turn it into a warning.
+/// is an error; [`metas_in`] is the caller that may turn it into a warning.
 pub fn index_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let entries = fs::read_dir(dir)
         .map_err(|e| anyhow::anyhow!("cannot read directory {}: {e}", dir.display()))?;
@@ -586,7 +547,7 @@ pub fn index_files(dir: &Path) -> Result<Vec<PathBuf>> {
             continue;
         }
         // `fs::metadata` follows symlinks (unlike `DirEntry::file_type`), so a
-        // symlink-to-a-regular-file index is accepted; `is_file` skips directories,
+        // symlink to a regular file is accepted; `is_file` skips directories,
         // broken symlinks and non-regular files (a FIFO would block `fs::read`).
         if fs::metadata(&path).is_ok_and(|md| md.is_file()) {
             files.push(path);
@@ -601,14 +562,13 @@ pub fn index_files(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// Index sweep order: largest `scale_upper_arcsec` first, ties broken by the
-/// larger `indexid`, then (for equal-scale tiles of one index) by ascending
-/// `healpix` so the tile order is deterministic and not just a stable-sort
-/// coincidence.
+/// Index sweep order: largest `scale_upper_arcsec` first, ties by the larger
+/// `indexid`, then (equal-scale tiles of one index) by ascending `healpix`, so
+/// the tile order is deterministic and not a stable-sort coincidence.
 ///
-/// Ordering by quad size instead of by file name is a project decision: the
-/// indices that cover the widest fields are tried first, and the sweep order is
-/// a property of the indices rather than of how their files happen to be named.
+/// Ordering by quad size rather than file name is a project decision: the
+/// widest-field indices go first, and the order stays a property of the indices,
+/// not of how their files are named.
 pub fn sweep_cmp(a: &IndexMeta, b: &IndexMeta) -> std::cmp::Ordering {
     b.scale_upper_arcsec
         .total_cmp(&a.scale_upper_arcsec)
@@ -616,11 +576,10 @@ pub fn sweep_cmp(a: &IndexMeta, b: &IndexMeta) -> std::cmp::Ordering {
         .then(a.healpix.cmp(&b.healpix))
 }
 
-/// Duplicated indices: `(indexid, count)` for every run of adjacent `metas`
-/// entries sharing `(indexid, healpix)`. `metas` must already be in `sweep_cmp`
-/// order: it sorts by `SCALE_U` first, so copies of one index are adjacent only
-/// while that bound matches; copies that sort apart with another index between
-/// them go unreported.
+/// `(indexid, count)` per run of adjacent `metas` sharing `(indexid, healpix)`.
+/// `metas` must be in `sweep_cmp` order, which sorts by `SCALE_U` first: copies
+/// are adjacent only while that bound matches, and copies that sort apart with
+/// another index between them go unreported.
 fn duplicate_indexids(metas: &[IndexMeta]) -> Vec<(i64, usize)> {
     metas
         .chunk_by(|a, b| a.indexid == b.indexid && a.healpix == b.healpix)
@@ -629,10 +588,9 @@ fn duplicate_indexids(metas: &[IndexMeta]) -> Vec<(i64, usize)> {
         .collect()
 }
 
-/// What to do when an index directory cannot contribute an index: either a file
-/// that IS an astrometry.net index but in a format this solver cannot read
-/// (the new index format, H4, a `HPNCOMP=NESTED` tile), or a directory that
-/// cannot be scanned at all (unreadable, or without any `.fits` file).
+/// What to do when an index directory cannot contribute an index: a file that
+/// IS an astrometry.net index in a format this solver cannot read (the new
+/// format, H4, a `HPNCOMP=NESTED` tile), or a directory it cannot scan at all.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Unusable {
     /// Fail the run (exit 2): the directory came from `--index-dir`, so the user
@@ -644,8 +602,7 @@ pub enum Unusable {
 }
 
 /// One warning per unusable index file, up to this many; the rest are only
-/// counted. A system data directory may hold many files this solver cannot
-/// read, and one line each would bury the real output.
+/// counted, because one line each would bury the real output.
 const MAX_UNUSABLE_WARNINGS: usize = 3;
 
 /// Metadata of every index file in `dir`, handled per `unusable`.
@@ -665,7 +622,7 @@ fn metas_in(dir: &Path, unusable: Unusable) -> Result<Vec<IndexMeta>> {
     for path in files {
         match Index::try_load_meta(&path) {
             Ok(Some(meta)) => metas.push(meta),
-            // Not an index file at all: `try_load_meta` already warned.
+            // Not an index file at all: `try_load_meta` has warned already.
             Ok(None) => {}
             Err(e) => match unusable {
                 Unusable::Fail => return Err(e),
@@ -696,13 +653,12 @@ pub(crate) fn path_list(paths: &[PathBuf]) -> String {
         .join(", ")
 }
 
-/// Loads metadata of every index in `dirs`, ordered from the largest quad scale
-/// to the smallest (a project decision, see [`sweep_cmp`]).
+/// Metadata of every index in `dirs`, in sweep order (see [`sweep_cmp`]).
 ///
 /// Files that are not astrometry.net indices at all are skipped with a warning
-/// on stderr (see [`Index::try_load_meta`]). Everything else that cannot be
-/// used (see [`Unusable`]) is a hard error for a directory named by
-/// `--index-dir` and a warning for a directory discovered in a system install.
+/// on stderr (see [`Index::try_load_meta`]); everything else unusable (see
+/// [`Unusable`]) is fatal for a `--index-dir` directory, a warning for one
+/// discovered in a system install.
 pub fn load_metas_in(dirs: &[PathBuf], unusable: Unusable) -> Result<Vec<IndexMeta>> {
     ensure!(
         !dirs.is_empty(),
@@ -719,10 +675,9 @@ pub fn load_metas_in(dirs: &[PathBuf], unusable: Unusable) -> Result<Vec<IndexMe
         path_list(dirs)
     );
     metas.sort_by(sweep_cmp);
-    // The sweep tries every entry in turn, so a duplicated INDEXID means the
-    // same index is solved twice, and the verbose per-index lines print
-    // INDEXID plus the cell, so the copies would print identically. Warn once
-    // per duplicate; deduping is left to the user.
+    // The sweep tries every entry, so a duplicated INDEXID means solving the
+    // same index twice, and the verbose lines (INDEXID plus the cell) print the
+    // copies identically. Warn once per duplicate; deduping is left to the user.
     let where_ = path_list(dirs);
     for (indexid, count) in duplicate_indexids(&metas) {
         eprintln!(
@@ -733,9 +688,8 @@ pub fn load_metas_in(dirs: &[PathBuf], unusable: Unusable) -> Result<Vec<IndexMe
     Ok(metas)
 }
 
-/// The tests take index files from the astrometry.net index set this machine
-/// provides, through the `testutil` selectors; every selector reports a skip
-/// and returns `None` when no index data is available.
+/// Tests take index files from the machine's astrometry.net index set through
+/// the `testutil` selectors, which skip and return `None` without index data.
 #[cfg(test)]
 use crate::testutil;
 
@@ -744,12 +698,10 @@ mod tests {
     use super::*;
     use crate::coords::{deg2arcsec, deg2distsq, distsq, radec_to_xyz, xyz_to_radec};
 
-    /// The quads-table decoding, as an invariant over whichever installed
-    /// index the selector returns: every sampled row addresses the star table,
-    /// and the slots past `DIMQUADS` read back as `0` - the sentinel of a dim3
-    /// quad (`Index::quad` zero-fills them, so this leg pins the accessor's
-    /// contract, not the file). Rows are walked on a fixed stride, not at
-    /// random.
+    /// The quads-table decoding over the selector's installed index: every
+    /// sampled row addresses the star table, and slots past `DIMQUADS` read back
+    /// as the `0` dim3 sentinel `Index::quad` zero-fills - so this pins the
+    /// accessor's contract, not the file.
     #[test]
     fn quad_rows_address_the_star_table() {
         let Some(meta) = testutil::smallest_index(0) else {
@@ -776,15 +728,12 @@ mod tests {
         assert!(sampled > 1, "stride sampled only {sampled} quads");
     }
 
-    /// The kd-tree range tables. Dequantization is
-    /// `q * invscale + minval[dim]` with `invscale = 1 / scale`, so `scale` is
-    /// the reciprocal of the quantization step, set by the window and the data
-    /// width. Read from the smallest index the selector finds and asserted
-    /// bit-exactly: the stars tree spans the unit cube the star directions live
-    /// in, in 32-bit levels (step 2 / (2^32 - 1), scale 2147483647.5), and the
-    /// codes tree the bounding box of the code circle, from (1 - sqrt2)/2 to
-    /// (1 + sqrt2)/2, in 16-bit levels. A shifted window or a different bit
-    /// width fails here.
+    /// The kd-tree range tables, bit-exact on the smallest index the selector
+    /// finds, dequantized as `q * invscale + minval` with `invscale = 1 / scale`:
+    /// the stars tree spans the unit cube the star directions live in, in 32-bit
+    /// levels (step 2 / (2^32 - 1), scale 2147483647.5), the codes tree the
+    /// bounding box of the code circle, (1 - sqrt2)/2 to (1 + sqrt2)/2, in 16-bit
+    /// levels. A shifted window or a different bit width fails here.
     #[test]
     fn tree_ranges_match_the_code_circle() {
         let Some(meta) = testutil::smallest_index(0) else {
@@ -813,12 +762,10 @@ mod tests {
         }
     }
 
-    /// A deterministic sample of an installed index' stars: `star_xyz` must
-    /// dequantize to a unit vector whose RA/Dec round-trips back through
-    /// `radec_to_xyz` (a dequantization regression breaks it; a coherent
-    /// `coords.rs` convention flip moves both sides of the round trip and is
-    /// caught by the sky-truth tests instead). Stars are walked on a fixed
-    /// stride.
+    /// A stride sample of an installed index' stars: `star_xyz` dequantizes to a
+    /// unit vector whose RA/Dec round-trips through `radec_to_xyz`; a
+    /// dequantization regression breaks that. A coherent `coords.rs` convention
+    /// flip moves both sides, caught by the sky-truth tests instead.
     #[test]
     fn star_positions_roundtrip_via_radec() {
         let Some(meta) = testutil::smallest_index(0) else {
@@ -850,16 +797,14 @@ mod tests {
     /// The hint index must agree with the pre-fit matched-star gate it stands in
     /// for: star `i` counts when `!(d > r2) && !d.is_nan()` for
     /// `d = distsq(star_xyz(i), center)`, and a quad is reachable exactly when
-    /// every one of its `dimquads` slots counts. Checked against that formula over
-    /// the whole file, both for the yes/no verdict and for the record list the
-    /// compact tree is built from.
+    /// every one of its `dimquads` slots counts. Checked against that formula
+    /// over the whole file, for the verdict and the record list the compact tree
+    /// is built from.
     ///
-    /// Two of the circles are chosen so the verdict does not depend on what the
-    /// catalog holds: a wide circle drawn around a star of the file accepts every
-    /// quad, while a circle of radius 59.9 deg drawn around the center of the
-    /// sphere rather than on its surface has every unit-length star at distance
-    /// 1 from it, outside the radius, so it accepts nothing. The third is the
-    /// interesting case: a circle that takes in part of the file.
+    /// Two circles make the verdict independent of the catalog: a wide one
+    /// around a star of the file accepts every quad; one of radius 59.9 deg
+    /// around the sphere's center has every unit-length star at distance 1,
+    /// outside it, so accepts nothing. The third takes in part of the file.
     #[test]
     fn hint_index_matches_the_star_by_star_gate() {
         let Some(meta) = testutil::smallest_index(0) else {
@@ -885,9 +830,8 @@ mod tests {
             (mid, deg2distsq(6.0), None, "a narrow circle"),
         ] {
             let hint = (center, r2);
-            // The gate re-stated here rather than called: `star_outside_hint` is
-            // what this test must be able to contradict, negation and NaN
-            // behaviour included.
+            // The gate re-stated rather than called: this test must be able to
+            // contradict `star_outside_hint`, negation and NaN behaviour included.
             #[allow(clippy::neg_cmp_op_on_partial_ord)]
             let star_in = |s: u32| {
                 let dd = distsq(&index.star_xyz(s as usize), &hint.0);
@@ -902,8 +846,8 @@ mod tests {
             if let Some(all) = all {
                 assert_eq!(got.any, all, "{what}: any = {}", got.any);
             }
-            // The cheaper call of a caller that has no room for a tree: the same
-            // verdict, reached without collecting the quads or building anything.
+            // The no-tree call: the same verdict, with no quads collected and
+            // no tree built.
             let bare = index.hint_index(&hint, false);
             assert_eq!(
                 bare.any, got.any,
@@ -940,10 +884,8 @@ mod tests {
     }
 
     /// Self-consistency over the installed set (headers for all, full load for
-    /// the few smallest): every header the loader accepted must satisfy the
-    /// rules it enforces, and a loaded file's tables must agree with its own
-    /// headers. A parser regression breaks one of these invariants; no per-file
-    /// numbers are pinned.
+    /// the few smallest): accepted headers satisfy the loader's own rules and a
+    /// loaded file's tables agree with its headers; no per-file numbers pinned.
     #[test]
     fn installed_indices_are_self_consistent() {
         let Some(all) = testutil::metas() else {
@@ -975,10 +917,10 @@ mod tests {
                 m.indexid
             );
         }
-        // Full load of the few smallest installed files (cheap by design):
-        // the tables must agree with the headers, and `lr` is read as `u32`,
-        // monotonic, ending at `ndata - 1`, with the leaves tiling [0, ndata).
-        // `metas()` is non-empty here, so the loop runs at least once.
+        // Full load of the few smallest installed files: the tables agree with
+        // the headers, and `lr` is monotonic, ends at `ndata - 1` and its leaves
+        // tile [0, ndata). `metas()` is non-empty, so this loop runs at least
+        // once.
         let Some(files) = testutil::smallest_indices(3) else {
             return;
         };
@@ -1024,8 +966,7 @@ mod tests {
 
     /// Index scale selection: a narrow scale hint keeps only the indices whose
     /// quad-size band overlaps the one the field can produce, and the survivors
-    /// keep the sweep order. Asserted over a synthetic scale ladder, so it
-    /// needs no index files on disk.
+    /// keep the sweep order. A synthetic scale ladder, so no index files needed.
     #[test]
     fn index_scale_selection() {
         let mut metas = vec![
@@ -1064,8 +1005,8 @@ mod tests {
 
     // ---- Order and scale selection, without index files -------------------
 
-    /// A hand-built meta for the ordering/scale/duplicate tests; only the id,
-    /// healpix and scale bounds are read by them.
+    /// A hand-built meta for the ordering/scale/duplicate tests; they read only
+    /// the id, healpix and scale bounds.
     fn meta_with_scale(indexid: i64, lower_arcsec: f64, upper_arcsec: f64) -> IndexMeta {
         IndexMeta {
             path: PathBuf::from(format!("index-{indexid}.fits")),
@@ -1090,10 +1031,9 @@ mod tests {
     }
 
     /// The catalog surface density behind the probe's chance-coincidence rate:
-    /// an all-sky index spreads its stars over the whole sphere, a healpix tile
-    /// over `1 / (12 nside^2)` of it, so the same star count means densities two
-    /// orders of magnitude apart. `None` (never 0) when the file gives nothing
-    /// to divide by.
+    /// an all-sky index spreads its stars over the whole sphere, a tile over
+    /// 1 / (12 nside^2) of it, so the same star count means densities two orders
+    /// of magnitude apart. `None` (never 0) with nothing to divide by.
     #[test]
     fn stars_per_deg2_divides_by_the_sky_the_index_covers() {
         let allsky = |nstars: usize| IndexMeta {
@@ -1108,8 +1048,7 @@ mod tests {
         assert!((allsky(182520).stars_per_deg2().unwrap() - 4.4244).abs() < 1e-4);
         // nside 2 -> 48 equal-area cells -> 859.4 deg^2 per tile.
         assert!((tile(484000, 2).stars_per_deg2().unwrap() - 563.16).abs() < 1e-2);
-        // A coarser grid spreads the same stars over more sky: nside 1 is 4x
-        // the area of nside 2, so a quarter of the density.
+        // nside 1 is 4x the area of nside 2, so a quarter of the density.
         assert!(
             (tile(484000, 1).stars_per_deg2().unwrap() - 563.16 / 4.0).abs() < 1e-2,
             "nside 1 must dilute the same star count over 4x the sky"
@@ -1119,8 +1058,8 @@ mod tests {
         assert_eq!(tile(484000, 0).stars_per_deg2(), None);
     }
 
-    /// A healpix sub-region tile of `indexid`/`healpix` with the given scale
-    /// bounds, for the tile ordering/dedup tests.
+    /// A healpix tile of `indexid`/`healpix` with the given scale bounds, for
+    /// the tile ordering/dedup tests.
     fn meta_tile(indexid: i64, healpix: i64, nside: i64, lower: f64, upper: f64) -> IndexMeta {
         IndexMeta {
             healpix,
@@ -1130,9 +1069,8 @@ mod tests {
         }
     }
 
-    /// `sweep_cmp` is a project decision (largest quad size first), asserted
-    /// directly here; `index_scale_selection` sweeps the same order over its
-    /// synthetic scale ladder.
+    /// The `sweep_cmp` project decision (largest quad size first), asserted
+    /// directly.
     #[test]
     fn sweep_cmp_orders_by_largest_quad_scale() {
         let mut metas = vec![
@@ -1145,8 +1083,8 @@ mod tests {
         assert_eq!(meta_ids(&metas), vec![4115, 4113, 4111, 4110]);
     }
 
-    /// Equal quad sizes fall back to the larger `indexid` first, and the
-    /// comparison is a total order (`load_metas_in` relies on both).
+    /// Equal quad sizes fall back to the larger `indexid`, and the comparison is
+    /// a total order (`load_metas_in` relies on both).
     #[test]
     fn sweep_cmp_breaks_scale_ties_by_larger_indexid() {
         let mut metas = vec![
@@ -1159,8 +1097,8 @@ mod tests {
         assert_eq!(sweep_cmp(&metas[0], &metas[0]), std::cmp::Ordering::Equal);
     }
 
-    /// Tiles of one indexid with equal scale bounds order by ascending
-    /// `healpix` (the final `sweep_cmp` tie-break), and are not duplicates.
+    /// Tiles of one indexid with equal scale bounds order by ascending `healpix`
+    /// (the final `sweep_cmp` tie-break) and are not duplicates.
     #[test]
     fn sweep_cmp_orders_equal_tiles_by_ascending_healpix() {
         let mut metas = vec![
@@ -1182,31 +1120,27 @@ mod tests {
         assert_eq!(duplicate_indexids(&dup), vec![(4206, 2)]);
     }
 
-    /// The edges of `fits_scale` on a 1024x1920 field. The frame is an 8-15-17
-    /// triangle scaled by 128, so `hypot` is exactly 2176 and `QSF_LO * min(w,
-    /// h)` exactly 102.4; with `QSF_HI` at 1.0 the boundary products below are
-    /// exact too.
+    /// The edges of `fits_scale` on a 1024x1920 field: an 8-15-17 triangle
+    /// scaled by 128, so `hypot` is exactly 2176 and `QSF_LO * min(w, h)` exactly
+    /// 102.4; with `QSF_HI` at 1.0 the boundary products below are exact too.
     #[test]
     fn fits_scale_below_within_and_above_the_index_scale() {
         let m = meta_with_scale(1, 34.0, 409.6);
-        // fmin = 102.4 * 4.25, above the index upper bound of 409.6: the biggest
-        // quad this index holds is smaller than the smallest the field can
-        // produce.
+        // fmin = 102.4 * 4.25 is above the index upper bound of 409.6: its
+        // biggest quad is smaller than the smallest the field can produce.
         assert!(!m.fits_scale(4.25, 1.0, 1024.0, 1920.0));
         // Exactly at the upper bound (102.4 * 4.0 = 409.6): inclusive.
         assert!(m.fits_scale(4.0, 1.0, 1024.0, 1920.0));
-        // fmax = 2176 * 0.01 = 21.76 below the index lower bound: even the
-        // smallest quad of the index overshoots the whole field.
+        // fmax = 2176 * 0.01 = 21.76 is below the index lower bound: even its
+        // smallest quad overshoots the whole field.
         assert!(!m.fits_scale(0.001, 0.01, 1024.0, 1920.0));
         // Exactly at the lower bound (2176 * 0.015625 = 34): also inclusive.
         assert!(m.fits_scale(0.001, 0.015625, 1024.0, 1920.0));
-        // Anything else comfortably inside the index range is a candidate.
         assert!(m.fits_scale(1.0, 1.0, 1024.0, 1920.0));
     }
 
     /// The duplicate-index warning of `load_metas_in`: one entry per duplicated
-    /// `indexid` after the sweep sort, and nothing for distinct ids (a set of
-    /// distinct indices, like a normal install, must stay silent).
+    /// `indexid` after the sweep sort, and nothing for distinct ids.
     #[test]
     fn duplicate_indexids_are_reported_once_per_index() {
         let mut metas = vec![
@@ -1235,10 +1169,8 @@ mod tests {
         );
     }
 
-    // ---- Crafted-bytes regression tests for the load-time guards. ----------
-    // None of these need an installed index: they build minimal FITS bytes in
-    // memory, so they run (and must pass) on a machine with no index data at all.
-    // Each asserts a clean `Err`, never a panic.
+    // Crafted-bytes regression tests for the load-time guards: minimal FITS
+    // bytes in memory (no index data needed), each asserting a clean `Err`.
 
     /// Accumulates 2880-byte FITS blocks so a test can hand `Fits`/`Index::load`
     /// a parseable file built from raw card strings.
@@ -1267,7 +1199,7 @@ mod tests {
     }
 
     /// A valid allsky QUAD primary header. `Header::get` returns the last value,
-    /// so tests override a key simply by repeating it after these cards.
+    /// so a test overrides a key simply by repeating it after these cards.
     const GOOD_PRIMARY: [&str; 14] = [
         "SIMPLE  =                    T",
         "BITPIX  =                    8",
@@ -1294,8 +1226,8 @@ mod tests {
         w.buf
     }
 
-    /// A primary plus a single-row `quads` BLOB column holding `quads`. `overrides`
-    /// replace header keys (last card wins).
+    /// A primary plus a single-row `quads` BLOB column holding `quads`.
+    /// `overrides` replace header keys (last card wins).
     fn make_index_bytes(overrides: &[&str], quads: &[u32]) -> Vec<u8> {
         let mut w = FitsWriter::default();
         let mut primary: Vec<&str> = GOOD_PRIMARY.to_vec();
@@ -1328,7 +1260,7 @@ mod tests {
     }
 
     /// Writes `bytes` to a temp file, runs `Index::load`, then always removes
-    /// the file. A `Result` is returned so the caller asserts `Err` (not panic).
+    /// the file. The `Result` lets the caller assert `Err` (not a panic).
     fn load_bytes(tag: &str, bytes: &[u8]) -> Result<Index> {
         let path =
             std::env::temp_dir().join(format!("ansolve_test_{tag}_{}.fits", std::process::id()));
@@ -1353,8 +1285,8 @@ mod tests {
             .expect("crafted primary should parse");
         let err = IndexMeta::from_fits(&fits, Path::new("crafted.fits")).unwrap_err();
         let msg = err.to_string();
-        // A bare `as usize` cast would have turned -1 into
-        // 18446744073709551615; the guard must name the key instead.
+        // A bare `as usize` cast would turn -1 into 18446744073709551615; the
+        // guard must name the key instead.
         assert!(
             msg.contains("NQUADS") && msg.contains("non-negative"),
             "{msg}"
@@ -1424,8 +1356,8 @@ mod tests {
 
     #[test]
     fn crafted_in_range_star_index_passes_the_guard() {
-        // All star indices < NSTARS, so the guard stays silent; the crafted file
-        // has no kd-tree tables, so `load` must fail later (not at the guard).
+        // All star indices < NSTARS, so the guard stays silent; the file has no
+        // kd-tree tables, so `load` must fail later (not at the guard).
         let err = load_bytes("inrange", &make_index_bytes(&[], &[0, 1, 1]))
             .err()
             .expect("crafted file has no kd-tree tables");
@@ -1436,8 +1368,8 @@ mod tests {
         );
     }
 
-    /// `GOOD_PRIMARY` without the cards starting with `prefix` (last card wins,
-    /// so dropping a card is how a test exercises a missing key).
+    /// `GOOD_PRIMARY` without the cards starting with `prefix`: dropping a card
+    /// is how a test exercises a missing key.
     fn good_primary_without(prefix: &str) -> Vec<&'static str> {
         GOOD_PRIMARY
             .iter()
@@ -1460,9 +1392,6 @@ mod tests {
 
     #[test]
     fn crafted_circle_false_is_rejected() {
-        // The solver applies the circle filter unconditionally, so an index
-        // that does not declare the convention is refused at load rather than
-        // trusted to solve by luck.
         let fits = Fits::from_bytes(make_meta_bytes(&["CIRCLE  =                    F"]))
             .expect("crafted primary should parse");
         let err = IndexMeta::from_fits(&fits, Path::new("crafted.fits")).unwrap_err();
@@ -1471,8 +1400,8 @@ mod tests {
 
     #[test]
     fn crafted_missing_circle_is_rejected() {
-        // GOOD_PRIMARY declares CIRCLE=T; drop that card to exercise the
-        // missing-key `unwrap_or(false)` fallback path.
+        // GOOD_PRIMARY declares CIRCLE=T; dropping that card exercises the
+        // missing-key `unwrap_or(false)` fallback.
         let mut w = FitsWriter::default();
         w.push_block(&good_primary_without("CIRCLE"));
         let fits = Fits::from_bytes(w.buf).expect("crafted primary should parse");
@@ -1503,9 +1432,8 @@ mod tests {
         );
     }
 
-    /// A healpix sub-region tile with the all-sky table layout is accepted
-    /// (`HEALPIX>=0` + `HPNSIDE` power of two, `ALLSKY` false or absent),
-    /// while contradictory or nonsensical combinations are refused.
+    /// A healpix tile with the all-sky table layout is accepted (`HEALPIX>=0` +
+    /// `HPNSIDE` a power of two, `ALLSKY` false or absent).
     #[test]
     fn crafted_healpix_tile_is_accepted() {
         let fits = Fits::from_bytes(make_meta_bytes(&[
@@ -1517,8 +1445,7 @@ mod tests {
         let meta = IndexMeta::from_fits(&fits, Path::new("crafted.fits")).expect("tile must load");
         assert_eq!((meta.healpix, meta.hpnside, meta.allsky), (123, 4, false));
 
-        // A tile header carrying no ALLSKY key at all: `allsky` then defaults
-        // to `healpix == -1`, i.e. false.
+        // With no ALLSKY key, `allsky` defaults to `healpix == -1`, i.e. false.
         let mut w = FitsWriter::default();
         let mut cards = good_primary_without("ALLSKY");
         cards.extend_from_slice(&[
@@ -1564,7 +1491,6 @@ mod tests {
             ],
             &["HPNSIDE"],
         );
-        // Non-power-of-two HPNSIDE.
         assert_meta_rejected_with(
             &[
                 "HEALPIX =                    5",
@@ -1573,7 +1499,7 @@ mod tests {
             ],
             &["power of two"],
         );
-        // NESTED cell numbering, which this reader cannot interpret.
+        // NESTED cell numbering, in either spelling.
         assert_meta_rejected_with(
             &[
                 "HEALPIX =                    5",
@@ -1627,8 +1553,7 @@ mod tests {
     }
 
     /// Load-error convention: the inner messages carry no path, the caller's
-    /// `loading index {path}` context does, so a filename appears exactly once
-    /// in the rendered error (for both a header gate and a table guard).
+    /// `loading index {path}` context does, so a filename appears exactly once.
     #[test]
     fn load_errors_name_the_file_exactly_once() {
         let header_err = load_bytes(
@@ -1656,8 +1581,8 @@ mod tests {
         assert!(meta.circle);
     }
 
-    // ---- Directory scanning: the strict and the lenient policy --------------
-    // (the lenient one is what a directory discovered in a system install gets).
+    // Directory scanning: the strict and the lenient policy (the lenient one is
+    // what a directory discovered in a system install gets).
 
     /// A temp directory of crafted files, removed with the guard.
     struct TempIndexDir(PathBuf);
@@ -1731,8 +1656,8 @@ mod tests {
         assert!(format!("{err:#}").contains("--index-dir"), "{err:#}");
     }
 
-    /// Indices of several directories are merged into one sweep-ordered list,
-    /// so the sweep does not depend on the order the directories came from.
+    /// Indices of several directories merge into one sweep-ordered list, so the
+    /// sweep does not depend on the order the directories came from.
     #[test]
     fn metas_of_several_directories_are_merged_in_sweep_order() {
         let small = TempIndexDir::new(

@@ -1,29 +1,25 @@
 //! Synthetic fields with exact sky truth, for the test suite.
 //!
-//! The reference stars of an installed index file are a real star pattern whose
-//! sky positions the solver itself can read back (`Index::star_xyz`), so
-//! projecting a subset of them through a WCS *chosen here* produces a star list
-//! whose truth is exact by construction: the field center, plate scale,
-//! orientation and parity of the answer are the four numbers that went into the
-//! projection. That is what the shipped `testdata/` fields cannot give - their
-//! truth is a reference run and carries real-observation noise and distortion.
+//! An installed index' reference stars are a real pattern whose sky positions the
+//! solver can read back (`Index::star_xyz`), so projecting a subset through a WCS
+//! *chosen here* makes the truth exact by construction: center, plate scale,
+//! orientation and parity are the projection's inputs - unlike the shipped
+//! `testdata/` fields, whose truth is a noisy reference run.
 //!
 //! Two traps this module exists to avoid, both measured:
 //!
-//! * A gnomonic projection is only defined within 90 degrees of its tangent
-//!   point. Beyond it a star lands back inside the frame, and the far-side stars
-//!   are a *mirrored* pattern of the antipodal sky - such a field really does
-//!   have a second solution half a sphere away. Hence
+//! * TAN is defined only within 90 degrees of the tangent point; beyond it a star
+//!   lands back in the frame as a *mirrored* pattern of the antipodal sky, so such
+//!   a field really has a second solution half a sphere away. Hence
 //!   `MAX_PROJECTION_ANGLE_DEG`, which keeps the truth unique.
-//! * The source index must be one the sweep will try at the field's plate scale:
-//!   a field made from an index the scale selection prunes never solves. So
-//!   [`random_params`] derives the scale from the index' own `SCALE_L`/`SCALE_U`
-//!   band and checks it with `IndexMeta::fits_scale`.
+//! * The source index must be one the sweep tries at the field's plate scale, or
+//!   the field never solves: [`random_params`] takes the scale from the index'
+//!   `SCALE_L`/`SCALE_U` band and checks it with `IndexMeta::fits_scale`.
 //!
-//! The surface is deliberately plain data (`PathBuf`, `f64`, `Vec<[f64; 2]>`),
-//! so this module can be published to `tests/` while every pipeline module stays
-//! private. The in-memory star-list helpers (`generate_stars`, `noise_stars`,
-//! `wcs_of`) exist only under `cfg(test)`: an outside caller goes through
+//! Plain data (`PathBuf`, `f64`, `Vec<[f64; 2]>`) throughout, so this module can
+//! be published to `tests/` (non-default `test-util` feature) with every pipeline
+//! module private; the in-memory star-list helpers (`generate_stars`,
+//! `noise_stars`, `wcs_of`) are `cfg(test)` only - outside, go through
 //! [`write_xyls`] and the public solve API.
 
 use anyhow::{Result, bail, ensure};
@@ -36,68 +32,59 @@ use crate::fits::{BLOCK_SIZE, CARD_SIZE};
 use crate::index::{Index, IndexMeta, Unusable, load_metas_in};
 use crate::params::MAX_OBJS;
 use crate::wcs::{Wcs, pixel_center_of_size};
-// Only the in-memory star-list helpers need these: the file path hands the pixel
-// list to `xyls::load`, which applies the same reordering itself.
+// Only the in-memory star-list helpers need these; `xyls::load` reorders for the file path.
 #[cfg(test)]
 use crate::{augment, xyls::Star};
 
-/// Gate budgets of a generated field, shared by the unit legs and the
-/// integration target so the two cannot drift apart. Center is in pixels of the
-/// field's own plate scale, rotation in degrees, sizes relative.
-///
-/// The pattern of a clean generated field is the catalog itself, so its residual
-/// is solver noise only: these are a drift alarm rather than a precision claim -
-/// and still several times tighter than the shipped fields' budgets, whose truth
-/// is a reference run carrying real-observation noise.
+/// Gate budgets of a generated field, shared by the unit legs and the integration
+/// target so the two cannot drift apart: center in pixels of the field's own
+/// scale, rotation in degrees, sizes relative. A clean generated field's pattern
+/// is the catalog itself, so its residual is solver noise only: these are a drift
+/// alarm, not a precision claim - still far tighter than the shipped fields'.
 pub const TOL_CENTER_PX: f64 = 0.2;
 pub const TOL_ORIENT_DEG: f64 = 0.05;
 pub const TOL_SIZE_FRAC: f64 = 0.001;
 
-/// Ceiling on the angular distance from the tangent point a generated field may
-/// span, degrees. Well inside the 90 degrees where TAN is injective, and far
-/// outside any field the solver is asked to produce, so it only ever removes the
-/// antipodal contamination described in the module docs.
+/// Ceiling on a field's angular span from the tangent point, degrees: inside it
+/// TAN is injective and no real field is affected, so it only trims the antipodal
+/// contamination of the module docs.
 const MAX_PROJECTION_ANGLE_DEG: f64 = 60.0;
-/// Floor on the sky radius the selection pass looks over, degrees. Keeps a tiny
-/// narrow field from being trimmed by the cut instead of by the frame.
+/// Floor on the sky radius the selection pass looks over, degrees, so a tiny
+/// narrow field is trimmed by the frame rather than by the cut.
 const MIN_SELECTION_RADIUS_DEG: f64 = 5.0;
-/// Fewest stars taken from the index that a generated field must contain before
-/// [`random_params`] accepts the placement. Below it a field is too sparse to
-/// verify, and the odds gate has too little to work with.
+/// Fewest index stars a field must contain for [`random_params`] to accept a
+/// placement: below it the field is too sparse to verify.
 const MIN_SOURCE_STARS: usize = 12;
 /// Placements [`random_params`] tries before giving up on an index.
 const MAX_PLACEMENT_TRIES: usize = 24;
-/// Star count [`random_params`] caps a field at, below `MAX_OBJS` so the depth
-/// ramp still reaches the whole list.
+/// Star count [`random_params`] caps a field at: below `MAX_OBJS` the depth ramp
+/// reaches the whole list on direct test paths; above
+/// [`crate::params::TOP_OBJS`] `run_into` cuts to the brightest on the binary path.
 const DEFAULT_MAX_STARS: usize = 120;
 /// Plate scale bounds, arcsec/pixel, that [`random_params`] will hand back.
 const MIN_SCALE_ARCSEC: f64 = 0.05;
 const MAX_SCALE_ARCSEC: f64 = 60.0;
 /// The index quad size that sets the plate scale, as a fraction of the frame
-/// diagonal: half the diagonal, so the source index' quads span a good part of
-/// the field instead of a corner of it.
+/// diagonal: half of it, so the quads span much of the field, not a corner.
 const QUAD_OVER_FRAME: f64 = 0.5;
-/// Half-width of the plate-scale window [`scale_window`] returns, as a fraction
-/// of the scale. Wide enough that the index a field was generated from survives
-/// the sweep's scale selection (`random_params` guarantees one exists at the
-/// field's scale), narrow enough that the sweep tries few indices.
+/// Half-width of the [`scale_window`] window as a fraction of the scale: wide
+/// enough that the generating index survives the sweep's scale selection
+/// (`random_params` guarantees one exists), narrow enough to try few indices.
 const SCALE_WINDOW_FRAC: f64 = 0.02;
 
-/// What field to generate. Every field is explicit, so a gate that builds
-/// `Params` by hand gets the same field from the same `index` file, on any
-/// machine (the index file itself is the machine-local half of the input).
+/// What field to generate. Everything is explicit, so a hand-built `Params` gives
+/// the same field from the same `index` file on any machine.
 #[derive(Debug, Clone)]
 pub struct Params {
-    /// Index file to take reference stars from. It must be one the sweep will
-    /// try at `scale_arcsec` (see [`random_params`]).
+    /// Index to take reference stars from; one the sweep will try at
+    /// `scale_arcsec` (see [`random_params`]).
     pub index: PathBuf,
-    /// Seed of every choice [`generate`] makes: subsample, jitter, distractors
-    /// and list order. The center, orientation and parity are not drawn here -
-    /// [`random_params`] picks those with its own draw and stores the derived
-    /// seed, so changing `seed` afterwards re-rolls the noise but not the sky.
+    /// Seed of every choice [`generate`] makes: subsample, jitter, distractors,
+    /// list order. [`random_params`] draws center, orientation and parity itself
+    /// and stores the derived seed, so changing this re-rolls the noise, not the sky.
     pub seed: u64,
-    /// Truth field center, degrees. It must lie inside the index' coverage;
-    /// [`random_params`] picks it from a star of the index to guarantee that.
+    /// Truth field center, degrees; must lie inside the index' coverage, which
+    /// [`random_params`] guarantees by picking it from one of the index' stars.
     pub ra_deg: f64,
     pub dec_deg: f64,
     /// Frame size, pixels.
@@ -109,21 +96,19 @@ pub struct Params {
     pub orient_deg: f64,
     /// Truth `Field parity`: `true` prints `neg`.
     pub parity_neg: bool,
-    /// Sigma of the centroid noise added to every source star, pixels. `0.0`
-    /// leaves the pattern exact; the field then matches the index star for star.
+    /// Sigma of the centroid noise on every source star, pixels; `0.0` leaves the
+    /// pattern exact, matching the index star for star.
     pub jitter_px: f64,
-    /// Uniform-random stars added on top of the sources: the bad-pixel and
-    /// diffraction-spike model the verifier's distractor handling exists for.
-    /// They count towards the list the depth ramp walks, so a large `extra` can
-    /// push the tail of the list past `MAX_OBJS`, where the ramp never reaches.
+    /// Uniform-random stars added on top of the sources: the bad-pixel and spike
+    /// model the verifier's distractor handling exists for. They join the list the
+    /// depth ramp walks, so a large `extra` pushes its tail past `MAX_OBJS`.
     pub extra: usize,
-    /// Cap on the source stars kept (random subsample); `0` keeps them all.
-    /// Above `MAX_OBJS` the depth ramp would never reach the tail.
+    /// Cap on the source stars kept (random subsample); `0` keeps them all. Above
+    /// `MAX_OBJS` the depth ramp would never reach the tail.
     pub max_stars: usize,
 }
 
-/// The sky truth a generated field was built from: the numbers the success block
-/// prints, plus what went into the star list.
+/// The sky truth a field was built from: the printed numbers plus the star-list counts.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Truth {
     pub ra_deg: f64,
@@ -133,26 +118,23 @@ pub struct Truth {
     pub orient_deg: f64,
     pub parity_neg: bool,
     pub scale_arcsec: f64,
-    /// Stars taken from the index, before the jitter and before any reordering
-    /// can drop them: the upper bound of what can match.
+    /// Index stars kept, before jitter/reordering: the upper bound on what can match.
     pub n_source: usize,
-    /// Uniform-random stars added after them.
+    /// Uniform-random stars added after the sources.
     pub n_extra: usize,
 }
 
-/// A generated field: its truth and its pixel list in the generator's own order
-/// (a projection is shuffled, a pure-distractor frame is not). The order the
-/// solver sees is produced later - by `augment::preprocess` for the in-memory
-/// list, by `xyls::load` for the file.
+/// A generated field: truth plus pixels in the generator's own order (a
+/// projection is shuffled, a pure-distractor frame is not). The order the solver
+/// sees comes later, from `augment::preprocess` or `xyls::load`.
 #[derive(Debug, Clone)]
 pub struct Field {
     pub truth: Truth,
     pub stars: Vec<[f64; 2]>,
 }
 
-/// Deterministic PRNG (splitmix64). The dependency set is frozen, so the suite
-/// gets its own generator rather than a `rand` crate; nothing here needs
-/// cryptographic quality, only reproducibility from a `u64` seed.
+/// Deterministic PRNG (splitmix64): the frozen dependency set leaves the suite
+/// its own generator rather than `rand`; only reproducibility from a seed matters.
 #[derive(Debug, Clone, Copy)]
 struct Rng(u64);
 
@@ -169,8 +151,8 @@ impl Rng {
         z ^ (z >> 31)
     }
 
-    /// A value in [0, 1) built from the 53 high bits of one draw: splitmix64's
-    /// low bits are the weakest, so they are the ones dropped here.
+    /// A value in [0, 1) from the 53 high bits of a draw; splitmix64's low bits are
+    /// the weakest.
     fn unit(&mut self) -> f64 {
         (self.next_u64() >> 11) as f64 / ((1u64 << 53) as f64)
     }
@@ -179,15 +161,13 @@ impl Rng {
         lo + self.unit() * (hi - lo)
     }
 
-    /// An index into `0..n`; `n` must not be zero. The modulo bias is irrelevant
-    /// at these list sizes and the cost is one division.
+    /// An index into `0..n` (`n` must not be zero); modulo bias is irrelevant here.
     fn below(&mut self, n: usize) -> usize {
         (self.next_u64() % (n as u64)) as usize
     }
 
-    /// Standard normal, Box-Muller; the second root of the pair is discarded on
-    /// purpose. The `max` keeps `ln` finite for the one draw whose high 53 bits
-    /// all come out zero.
+    /// Standard normal (Box-Muller); the second root is dropped on purpose, `max`
+    /// keeps `ln` finite for a draw whose high 53 bits are all zero.
     fn normal(&mut self) -> f64 {
         let u = f64::max(self.unit(), f64::MIN_POSITIVE);
         let v = self.unit();
@@ -196,11 +176,9 @@ impl Rng {
 }
 
 /// CD matrix of a truth WCS with the requested printed orientation and parity.
-///
 /// Both branches are the inverse of what `Wcs` reports (`parity_is_neg` is
-/// `det(CD) > 0`, and `orientation_deg` folds the parity sign into its `atan2`
-/// arguments); `generated_truth_round_trips_through_the_wcs_conventions` pins
-/// that for every orientation and both parities.
+/// `det(CD) > 0`, `orientation_deg` folds the parity sign into its `atan2`); pinned by
+/// `generated_truth_round_trips_through_the_wcs_conventions`.
 fn truth_cd(scale_deg: f64, orient_deg: f64, parity_neg: bool) -> [[f64; 2]; 2] {
     if parity_neg {
         // det = +scale^2: the rotation branch of the fit.
@@ -222,9 +200,8 @@ fn truth_cd(scale_deg: f64, orient_deg: f64, parity_neg: bool) -> [[f64; 2]; 2] 
     }
 }
 
-/// The truth WCS of `t`: tangent point at the printed field center, which is
-/// where the success block reports from (`Wcs::recentered_at` of
-/// [`pixel_center_of_size`]), so the comparison needs no reprojection.
+/// The truth WCS of `t`: tangent point at the printed field center, where the
+/// success block reports from (`Wcs::recentered_at` of [`pixel_center_of_size`]).
 #[cfg(test)]
 #[must_use]
 pub(crate) fn wcs_of(t: &Truth) -> Wcs {
@@ -238,8 +215,7 @@ pub(crate) fn wcs_of(t: &Truth) -> Wcs {
     }
 }
 
-/// The truth WCS of a `Params` (the frame size comes from the params, not from
-/// a `Truth`).
+/// The truth WCS of a `Params` (frame size from the params, not a `Truth`).
 fn truth_wcs(p: &Params) -> Wcs {
     let s = p.scale_arcsec / 3600.0;
     Wcs {
@@ -252,9 +228,8 @@ fn truth_wcs(p: &Params) -> Wcs {
     }
 }
 
-/// Validates the parameters a caller built by hand; anything here would
-/// otherwise surface as a field that cannot solve, which is a confusing failure
-/// for a test whose own numbers are wrong.
+/// Validates hand-built parameters, so a bad one fails here rather than as a
+/// field that mysteriously never solves.
 fn check_params(p: &Params) -> Result<()> {
     ensure!(p.width_pix >= 1.0, "width_pix is {0}", p.width_pix);
     ensure!(p.height_pix >= 1.0, "height_pix is {0}", p.height_pix);
@@ -282,24 +257,20 @@ fn check_params(p: &Params) -> Result<()> {
     Ok(())
 }
 
-/// The field `p` describes, from an already-loaded index: the index stars inside
-/// the projection cut that land in the frame, randomly subsampled to
-/// `max_stars`, jittered, extended with `extra` distractors, then shuffled (the
-/// shuffle is why the list order carries no brightness or position meaning).
+/// The field `p` describes from an already-loaded index: index stars inside the
+/// projection cut that land in the frame, subsampled to `max_stars`, jittered,
+/// extended with `extra` distractors, then shuffled (so list order means nothing).
 fn project(index: &Index, p: &Params) -> Field {
     let wcs = truth_wcs(p);
     let half_diag_deg = f64::hypot(p.width_pix, p.height_pix) * p.scale_arcsec / 7200.0;
-    // Look out to twice the frame's half-diagonal so the frame is filled from a
-    // pattern wider than itself, with a floor for tiny narrow fields (at these
-    // scales the diagonal term is usually below it, so the floor is what bites)
-    // and the antipodal ceiling of the module docs above.
+    // Look out to twice the frame's half-diagonal so the frame fills from a wider
+    // pattern, clamped by the tiny-field floor and the antipodal ceiling.
     let cut_deg = f64::clamp(
         2.0 * half_diag_deg,
         MIN_SELECTION_RADIUS_DEG,
         MAX_PROJECTION_ANGLE_DEG,
     );
-    // The cut is a dot-product test: cos(cut) on the tangent-point direction, no
-    // trig per star (see `coords::distsq` for the same chord trick).
+    // The cut is a dot-product test against cos(cut), no trig per star.
     let center = radec_to_xyz(p.ra_deg, p.dec_deg);
     let cos_cut = f64::cos(deg2rad(cut_deg));
 
@@ -318,11 +289,10 @@ fn project(index: &Index, p: &Params) -> Field {
     }
 
     let mut rng = Rng::new(p.seed);
-    // Subsample before the noise, so `max_stars` bounds the work the solver's
-    // depth ramp has to do rather than the work this module did.
+    // Subsample before the noise, so `max_stars` bounds the ramp's work, not ours.
     if p.max_stars != 0 && kept.len() > p.max_stars {
-        // Partial Fisher-Yates: the first `max_stars` slots of a shuffle are a
-        // uniform sample without replacement, and only need that many swaps.
+        // Partial Fisher-Yates: a shuffle's first slots are a uniform sample
+        // without replacement.
         let take = p.max_stars;
         let n = kept.len();
         for i in 0..take {
@@ -337,15 +307,13 @@ fn project(index: &Index, p: &Params) -> Field {
             s[1] += p.jitter_px * rng.normal();
         }
     }
-    // Counted after the subsample and the jitter: `n_source` is how many stars
-    // can actually match, which is also the denominator of the noisy-field gate.
+    // Counted after subsample and jitter: `n_source` is what can match, the noisy gate's divisor.
     let n_source = kept.len();
     for _ in 0..p.extra {
         kept.push([rng.range(0.0, p.width_pix), rng.range(0.0, p.height_pix)]);
     }
-    // The list order is the depth ramp's star ranking, and a real detection list
-    // is not ordered by sky position - so shuffle, and let the truth be the
-    // pattern rather than any implied brightness order.
+    // The list order is the depth ramp's star ranking, and a real detection list is
+    // not ordered by sky position: shuffle, so the truth is the pattern alone.
     for i in (1..kept.len()).rev() {
         let j = rng.below(i + 1);
         kept.swap(i, j);
@@ -372,22 +340,19 @@ pub fn generate(p: &Params) -> Result<Field> {
     Ok(project(&index, p))
 }
 
-/// The field's star list as the sweep wants it: a `Vec<Star>` that has been
-/// through the same [`augment::preprocess`] `xyls::load` applies, so a unit gate
-/// drives `sweep::solve_field` with exactly the list a `.xyls` of these stars
-/// would produce - without writing or reading a file.
+/// The field's star list as the sweep wants it: through the same
+/// [`augment::preprocess`] `xyls::load` applies, so a unit gate drives
+/// `sweep::solve_field` with exactly what a `.xyls` of these stars would give.
 #[cfg(test)]
 pub(crate) fn generate_stars(p: &Params) -> Result<(Vec<Star>, Truth)> {
     let field = generate(p)?;
     Ok((field_stars(&field), field.truth))
 }
 
-/// A field of pure distractors: `n_stars` uniform-random pixels and nothing from
-/// any index. The false-positive gate's input - a list the odds scan must not
-/// talk into a solution.
-///
-/// Its `Truth` carries no usable sky at all: only `n_extra` and the frame mean
-/// anything here, and the center, rotation and parity are placeholders.
+/// A field of pure distractors: `n_stars` uniform-random pixels, nothing from any
+/// index. The false-positive gate's input - a list the odds scan must not talk
+/// into a solution. Its `Truth` has no usable sky: only `n_extra` and the frame
+/// size mean anything, the rest are placeholders.
 pub fn noise_field(
     width_pix: f64,
     height_pix: f64,
@@ -428,17 +393,14 @@ pub(crate) fn noise_stars(
     (field_stars(&field), field.truth)
 }
 
-/// The brightness of list entry `i` of `n`: a falling ramp, so the `FLUX` column
-/// is not a constant, like a real detection list. Brightness carries no weight in
-/// the pipeline (see `crate::xyls::Star`); what the two producers below must
-/// agree on is the pixel list, and `written_xyls_read_back_through_the_reader`
-/// compares this column across them too.
+/// The brightness of list entry `i` of `n`: a falling ramp, like a real detection
+/// list. Brightness carries no weight in the pipeline (see `crate::xyls::Star`);
+/// `written_xyls_read_back_through_the_reader` compares it across both producers.
 fn flux_of(i: usize, n: usize) -> f64 {
     1e6 * (1.0 - i as f64 / f64::max(n as f64, 1.0))
 }
 
-/// The pixel list as `Star`s with a falling brightness ramp, run through the
-/// position reordering the reader applies.
+/// The pixel list as `Star`s with a brightness ramp, through the reader's reordering.
 #[cfg(test)]
 fn field_stars(field: &Field) -> Vec<Star> {
     let stars = field
@@ -454,9 +416,8 @@ fn field_stars(field: &Field) -> Vec<Star> {
     augment::preprocess(stars)
 }
 
-/// The plate scale that puts the index' own quad band across the frame: the
-/// middle of the band, divided by the fraction of the frame diagonal a quad
-/// should span. Returns `None` for an index with no usable band.
+/// The plate scale that puts the index' quad band across the frame: band middle
+/// over `QUAD_OVER_FRAME` of the diagonal; `None` if there is no usable band.
 fn scale_for_index(meta: &IndexMeta, width: f64, height: f64) -> Option<f64> {
     let (band_lo, band_hi) = (meta.scale_lower_arcsec, meta.scale_upper_arcsec);
     if !band_lo.is_finite() || !band_hi.is_finite() || band_lo <= 0.0 || band_hi < band_lo {
@@ -468,8 +429,7 @@ fn scale_for_index(meta: &IndexMeta, width: f64, height: f64) -> Option<f64> {
     if !(MIN_SCALE_ARCSEC..=MAX_SCALE_ARCSEC).contains(&s) {
         return None;
     }
-    // The scale is only usable if the sweep's own selection keeps this index at
-    // it, under the very window a run of this field is swept with.
+    // Usable only if the sweep's own selection keeps this index under that window.
     let (lo, hi) = scale_window(s);
     if !meta.fits_scale(lo, hi, width, height) {
         return None;
@@ -477,12 +437,10 @@ fn scale_for_index(meta: &IndexMeta, width: f64, height: f64) -> Option<f64> {
     Some(s)
 }
 
-/// A `Params` for a random field of `width_pix` x `height_pix` in `index`:
-/// center at a star of that index (hence inside its coverage), plate scale in
-/// the index' band, orientation uniform and parity random, then the first
-/// placement with at least `MIN_SOURCE_STARS` source stars.
-///
-/// Every choice comes from `seed`, so a gate names one seed and owns one field.
+/// A `Params` for a random field of `width_pix` x `height_pix` in `index`: center
+/// at a star of that index (hence inside its coverage), scale in the index' band,
+/// uniform orientation, random parity; the first placement with at least
+/// `MIN_SOURCE_STARS` source stars. Every choice comes from `seed`.
 pub fn random_params(index: &Path, seed: u64, width_pix: f64, height_pix: f64) -> Result<Params> {
     let loaded = Index::load(index)?;
     ensure!(loaded.meta.nstars > 0, "{:?} has no stars", index);
@@ -503,10 +461,9 @@ pub fn random_params(index: &Path, seed: u64, width_pix: f64, height_pix: f64) -
         let (ra, dec) = xyz_to_radec(loaded.star_xyz(rng.below(loaded.meta.nstars)));
         let p = Params {
             index: index.to_path_buf(),
-            // Derived rather than the argument, and distinct per attempt: the
-            // seed is what `generate` re-rolls, so a retry that re-rolled nothing
-            // would reproduce the same star set and loop for nothing. Any odd
-            // multiplier would do; this one just spreads the bits well.
+            // Derived and distinct per attempt: `generate` re-rolls this seed, so a
+            // retry that re-rolled nothing would redraw the same field and loop for
+            // nothing. Any odd multiplier would do; this one spreads the bits well.
             seed: seed.wrapping_mul(1_000_003).wrapping_add(attempt as u64),
             ra_deg: ra,
             dec_deg: dec,
@@ -530,9 +487,8 @@ pub fn random_params(index: &Path, seed: u64, width_pix: f64, height_pix: f64) -
     )
 }
 
-/// The `--scale-low/--scale-high` pair (arcsec/pixel) a run should sweep a
-/// field of this plate scale with, so the index it was generated from is among
-/// the indices the sweep tries. See `SCALE_WINDOW_FRAC`.
+/// The `--scale-low/--scale-high` pair (arcsec/pixel) to sweep a field of this
+/// scale with, so its generating index is tried. See `SCALE_WINDOW_FRAC`.
 #[must_use]
 pub fn scale_window(scale_arcsec: f64) -> (f64, f64) {
     (
@@ -546,12 +502,9 @@ pub fn default_index(dir: &Path) -> Result<PathBuf> {
     default_index_from(&load_metas_in(&[dir.to_path_buf()], Unusable::Skip)?)
 }
 
-/// The index of `metas` to generate fields from: the sub-region tile with the
-/// most stars, else the largest index whatever its coverage.
-///
-/// A dense tile is the cheap choice: the pattern is local, so the field needs few
-/// stars, and the file stays small. Taking metas rather than a directory lets a
-/// caller that has already scanned the headers not scan them again.
+/// The index of `metas` to generate fields from: the sub-region tile with the most
+/// stars, else the largest index whatever its coverage - a dense tile's pattern is
+/// local, so the field needs few stars and the file stays small.
 /// Deterministic: ties break on the path.
 pub(crate) fn default_index_from(metas: &[IndexMeta]) -> Result<PathBuf> {
     let best = metas
@@ -568,11 +521,9 @@ pub(crate) fn default_index_from(metas: &[IndexMeta]) -> Result<PathBuf> {
     Ok(best.path.clone())
 }
 
-/// A pseudo-random index file of `dir` to generate fields from, drawn from
-/// `seed`: spreads a gate's fields over the installed set instead of always
-/// handing back the same file. Deterministic - the same `seed` over the same set
-/// picks the same file, and a pick is a draw, not a shuffle, so two seeds can
-/// land on one file.
+/// A pseudo-random index file of `dir`, drawn from `seed`: spreads a gate's fields
+/// over the installed set. Deterministic - same `seed` over the same set, same
+/// file; a draw, not a shuffle, so two seeds can land on one file.
 pub fn random_index(dir: &Path, seed: u64) -> Result<PathBuf> {
     let metas = load_metas_in(&[dir.to_path_buf()], Unusable::Skip)?;
     random_index_from(&metas, seed)
@@ -580,10 +531,8 @@ pub fn random_index(dir: &Path, seed: u64) -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("no usable index file in {}", dir.display()))
 }
 
-/// [`random_index`] over metas someone else has already scanned, so an in-crate
-/// gate can draw over the whole installed set without reparsing headers. Sorted
-/// by path before the draw, so the pick does not depend on the order the
-/// directory scan happened to produce.
+/// [`random_index`] over already-scanned metas. Sorted by path before the draw, so
+/// the pick does not depend on the directory scan's order.
 pub(crate) fn random_index_from(metas: &[IndexMeta], seed: u64) -> Option<&IndexMeta> {
     let mut usable: Vec<&IndexMeta> = metas.iter().filter(|m| m.nstars > 0).collect();
     usable.sort_by(|a, b| a.path.cmp(&b.path));
@@ -593,12 +542,10 @@ pub(crate) fn random_index_from(metas: &[IndexMeta], seed: u64) -> Option<&Index
     Some(usable[Rng::new(seed).below(usable.len())])
 }
 
-/// Writes the field as a `.xyls`: the plain primary header plus one BINTABLE of
-/// `X`/`Y`/`FLUX` big-endian doubles, which is the layout `xyls::load` reads.
-///
-/// Hand-written because the crate has no FITS writer, and a test that cannot
-/// write its own input has no truth to check against. No `IMAGEW`/`IMAGEH`
-/// cards, so a caller must pass the frame size the way the shipped `.xyls` do.
+/// Writes the field as a `.xyls`: plain primary header plus one BINTABLE of
+/// `X`/`Y`/`FLUX` big-endian doubles - the layout `xyls::load` reads. No
+/// `IMAGEW`/`IMAGEH`, so a caller must pass the frame size the way the shipped
+/// `.xyls` do.
 pub fn write_xyls(field: &Field, path: &Path) -> Result<()> {
     let mut out = BufWriter::new(File::create(path)?);
     out.write_all(&header_block(&[
@@ -630,8 +577,7 @@ pub fn write_xyls(field: &Field, path: &Path) -> Result<()> {
 
     let mut row = [0u8; 3 * size_of::<f64>()];
     for (i, [x, y]) in field.stars.iter().enumerate() {
-        // The same brightness ramp the in-memory list gets, so both paths hand
-        // the solver the same values.
+        // The same brightness ramp as the in-memory list, so both paths match.
         let flux = flux_of(i, field.stars.len());
         for (slot, value) in row.chunks_mut(size_of::<f64>()).zip([*x, *y, flux]) {
             slot.copy_from_slice(&value.to_be_bytes());
@@ -648,23 +594,20 @@ pub fn write_xyls(field: &Field, path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// One `KEY  = value` card with a numeric or logical value, right-justified to
-/// end at column 30 where the standard puts it, leaving columns 31-80 blank.
+/// One `KEY  = value` card (numeric or logical), right-justified to column 30.
 fn card(key: &str, value: &str) -> String {
     format!("{:<8}= {:>20}{:<50}", key, value, "")
 }
 
-/// One `KEY  = 'string'` card: the literal starts at column 11 and is padded to
-/// the standard's minimum string width of 8 characters, which is the shape
-/// `fits::parse_value` trims back off.
+/// One `KEY  = 'string'` card: literal at column 11, padded to the standard's
+/// minimum 8 characters - the shape `fits::parse_value` trims back off.
 fn card_str(key: &str, value: &str) -> String {
     let width = usize::max(value.len(), 8);
     format!("{:<8}= {:<70}", key, format!("'{value:<width$}'"))
 }
 
-/// Cards plus `END`, padded with spaces to a whole `BLOCK_SIZE` header block.
-/// Both card helpers above produce exactly `CARD_SIZE` bytes, so a card of any
-/// other length is a bug in this module rather than input to be truncated.
+/// Cards plus `END`, space-padded to a whole `BLOCK_SIZE` header block. A card is
+/// exactly `CARD_SIZE` bytes by construction; any other length is a bug here.
 fn header_block(cards: &[String]) -> Vec<u8> {
     let mut block = String::new();
     for c in cards {
@@ -684,10 +627,9 @@ mod tests {
     use crate::coords::rad2deg;
     use crate::testutil;
 
-    /// `Params` of a seeded generated field, or a skip when the installed index
-    /// set cannot produce one at this frame size (a coarse all-sky-only set has
-    /// no field this small, and that is not a code failure). The same gate the
-    /// `sweep.rs` generated-field legs use.
+    /// `Params` of a seeded generated field, or a skip when the installed index set
+    /// cannot produce one at this frame size (a coarse all-sky-only set has none
+    /// this small, which is not a code failure). Same gate as the `sweep.rs` legs.
     fn params_for(seed: u64, width: f64, height: f64) -> Option<Params> {
         testutil::generated_params(seed, width, height)
     }
@@ -713,9 +655,8 @@ mod tests {
 
     #[test]
     fn generated_truth_round_trips_through_the_wcs_conventions() {
-        // The generator's CD parametrization must agree with what `Wcs` reports,
-        // for every orientation and both parities: this is the anti-drift pin, so
-        // a field cannot be generated against a truth the reader would not print.
+        // Anti-drift pin: the CD parametrization must agree with what `Wcs` reports
+        // for every orientation and both parities.
         for parity_neg in [true, false] {
             for deg in -180..=180 {
                 let orient = deg as f64 + 0.25;
@@ -789,8 +730,8 @@ mod tests {
 
     #[test]
     fn stars_beyond_the_projection_angle_never_reach_the_frame() {
-        // The antipodal contamination the module docs describe: with the cut in
-        // place, every kept star is well inside 90 deg of the tangent point.
+        // With the cut in place every kept star is well inside 90 deg of the
+        // tangent point.
         let Some(p) = params_for(3, 1920.0, 1080.0) else {
             return;
         };
@@ -824,11 +765,9 @@ mod tests {
         assert_eq!(dirty.truth.n_source, clean.truth.n_source);
         assert_eq!(dirty.truth.n_extra, 40);
         assert_eq!(dirty.stars.len(), clean.stars.len() + 40);
-        // Jitter moves every source star, by a little. The two lists are shuffled
-        // independently (the shuffle draws after the extras are appended), so the
-        // order carries nothing: match each clean star to its nearest dirty star
-        // and require a sub-pixel mean offset - far above zero, far below the
-        // 1920 px frame.
+        // Jitter moves every source star a little. The two lists are shuffled
+        // independently (the shuffle draws after the extras are appended), so match
+        // each clean star to its nearest dirty one, sub-pixel mean offset expected.
         let mean = clean
             .stars
             .iter()
@@ -859,17 +798,15 @@ mod tests {
 
         let back = crate::xyls::load(&path).expect("read back");
         assert_eq!(back.len(), field.stars.len(), "row count");
-        // `xyls::load` reorders by position (`augment::preprocess`), so compare
-        // the point sets, not the order. `1D` columns carry full doubles, so the
-        // coordinates must come back bit-identical.
+        // `xyls::load` reorders by position, so compare point sets, not order; `1D`
+        // columns carry full doubles, so coordinates come back bit-identical.
         let got = sorted(back.iter().map(|s| [s.x, s.y]).collect());
         let want = sorted(field.stars.clone());
         assert_eq!(got, want, "every star must survive the round trip");
 
-        // And the in-memory path is the file path, star for star and in the same
-        // order (down to the brightness ramp): both apply `augment::preprocess`
-        // to the same pixels. This is what makes an in-memory unit leg's result a
-        // statement about what `xyls::load` hands the sweep.
+        // And the in-memory path equals the file path star for star in the same
+        // order (down to the brightness ramp): both apply `augment::preprocess` to
+        // the same pixels, so an in-memory leg also tests `xyls::load`.
         let (stars, truth) = generate_stars(&p).expect("generate_stars");
         let via_file: Vec<(f64, f64, f64)> = back.iter().map(|s| (s.x, s.y, s.flux)).collect();
         let via_memory: Vec<(f64, f64, f64)> = stars.iter().map(|s| (s.x, s.y, s.flux)).collect();
@@ -882,12 +819,10 @@ mod tests {
 
     #[test]
     fn jitter_is_the_requested_sigma() {
-        // `jitter_px` sizes the budget of the noisy gate, so it has to be the
-        // sigma it claims. Stars are matched by nearest neighbour, not by list
-        // position: the shuffle inside `generate` draws after the jitter, so the
-        // two lists come out in different orders. Source stars are far more
-        // widely spaced than the jitter, so a nearest neighbour cannot be the
-        // wrong one (and if it were, the band below would not hold).
+        // `jitter_px` sizes the noisy gate's budget, so it must be the sigma it
+        // claims. Matched by nearest neighbour, not list position: `generate`'s
+        // shuffle draws after the jitter. Source stars are far more widely spaced
+        // than the jitter, so a nearest neighbour cannot be the wrong one.
         let Some(base) = params_for(23, 1920.0, 1080.0) else {
             return;
         };
@@ -899,9 +834,8 @@ mod tests {
         })
         .expect("jittered field");
         assert_eq!(jittered.stars.len(), clean.stars.len());
-        // Every match is a 2D displacement, so E[d^2] = 2 sigma^2 and the expected
-        // rms is sigma*sqrt(2). Over a few dozen stars that statistic is stable
-        // enough to catch a sigma off by 2x, which is all the band is for.
+        // Each match is a 2D displacement: E[d^2] = 2 sigma^2, expected rms
+        // sigma*sqrt(2). Over a few dozen stars that catches a sigma off by 2x.
         let sum_sq: f64 = clean
             .stars
             .iter()
@@ -930,8 +864,8 @@ mod tests {
         let cap = 20;
         let full = generate(&base).expect("full field");
         if full.truth.n_source <= cap {
-            // Nothing to subsample on this machine's index; the cap logic below
-            // would prove nothing, so only the distractor leg runs.
+            // Nothing to subsample with this index set, so the cap logic would
+            // prove nothing and only the distractor leg runs.
             assert!(
                 full.truth.n_source >= MIN_SOURCE_STARS,
                 "the placement is below its own floor: {:?}",
@@ -950,8 +884,8 @@ mod tests {
             uniq.dedup();
             assert_eq!(uniq.len(), before, "the subsample repeats a star");
         }
-        // Distractors are drawn inside the frame, and with jitter on, source stars
-        // may land just outside it - which the verifier simply cannot match.
+        // Distractors are drawn inside the frame; jitter may push a source star
+        // just outside it, which the verifier cannot match.
         let dirty = generate(&Params {
             jitter_px: 0.3,
             extra: 40,
@@ -977,8 +911,8 @@ mod tests {
         assert_eq!(field.stars.len(), n, "the requested star count");
         assert_eq!(field.truth.n_extra, n);
         assert_eq!(field.truth.n_source, 0, "nothing comes from an index");
-        // The gate that uses this asserts only "not solved", so the list itself
-        // must be checked not to be empty (or to have been emptied downstream).
+        // The gate that uses this asserts only "not solved", so the list must be
+        // checked non-empty here and after `preprocess`.
         assert!(!field_stars(&field).is_empty(), "preprocess kept the list");
         for [x, y] in &field.stars {
             assert!(
@@ -990,10 +924,9 @@ mod tests {
 
     #[test]
     fn the_truth_record_alone_rebuilds_the_projection() {
-        // `Truth` is what a gate compares the answer against, and `wcs_of` is the
-        // projection it implies. If the two ever disagreed, a gate would be
-        // checking the printed numbers against a sky the pixels were not made
-        // from, so the pixel list must survive a round trip through the truth.
+        // `Truth` is what a gate compares the answer against and `wcs_of` the
+        // projection it implies; if they disagreed a gate would check the printed
+        // numbers against a sky the pixels were not made from.
         let Some(p) = params_for(17, 1920.0, 1080.0) else {
             return;
         };
@@ -1032,8 +965,8 @@ mod tests {
 
     #[test]
     fn default_index_picks_a_usable_index_file() {
-        // The selector is reached through the shared gate, so the unit legs and
-        // an outside caller resolve the same index file.
+        // Reached through the shared gate, so unit legs and outside callers resolve
+        // the same index file.
         let Some(path) = testutil::generated_index() else {
             return;
         };
@@ -1058,8 +991,8 @@ mod tests {
             assert_eq!(once.path, twice.path, "draw {seed} is not stable");
             assert!(once.nstars > 0, "{} has no stars", once.path.display());
         }
-        // The draw spreads over the set instead of pinning one file, and the
-        // public wrapper over a directory hands back a file that really loads.
+        // The draw spreads over the set, and the directory wrapper hands back a
+        // file that really loads.
         let distinct: std::collections::HashSet<_> = (0..64u64)
             .filter_map(|s| random_index_from(metas, s).map(|m| &m.path))
             .collect();
@@ -1080,8 +1013,8 @@ mod tests {
         );
     }
 
-    /// A `Params` with only what a convention test needs filled in. The index
-    /// path is unset until a test needs one: nothing here loads it.
+    /// A `Params` with only what a convention test needs. The index path is unset:
+    /// nothing here loads it.
     fn test_params(seed: u64) -> Params {
         Params {
             index: PathBuf::new(),
@@ -1101,8 +1034,7 @@ mod tests {
 
     #[test]
     fn hand_built_params_are_checked() {
-        // Every branch of `check_params`, so a hand-built `Params` fails here
-        // instead of as a field that mysteriously never solves.
+        // Every branch of `check_params`, so a bad hand-built `Params` fails here.
         let bad = Params {
             scale_arcsec: 0.0,
             ..test_params(0)

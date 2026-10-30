@@ -1,37 +1,25 @@
-//! Solve loop: field quad codes -> codes kd-tree search -> hit filtering ->
-//! WCS fit. Verification/odds live in `verify.rs`, the index sweep that walks
-//! the depth ramp round by round in `sweep.rs`, stdout printing in `output.rs`.
+//! Solve loop: field quad codes -> codes kd-tree search -> hit filtering -> WCS
+//! fit; verification/odds in `verify.rs`, the depth-ramp sweep in `sweep.rs`,
+//! stdout printing in `output.rs`.
 //!
-//! Enumeration order (the minimal sufficient set, see [`Searcher::triple`]
-//! and [`Searcher::quad`]): an index whose header declares `CXDX` (plus
-//! `CXDXLT1` on top of it) stores its codes canonicalized in the backbone
-//! order - `cx <= dx` and a mean x <= 0.5, which for `dimquads=4` adds up to
-//! `cx + dx <= 1` - but parity is not part of that convention: the header
-//! carries no key for it, so codes of either handedness can occur. Therefore
-//! it is enough to try
+//! Enumeration is the minimal sufficient set ([`Searcher::triple`],
+//! [`Searcher::quad`]): every choice of star C (`dimquads=3`) or ordered pair
+//! (C, D) (`dimquads=4`), each x 2 parities - an index declares its
+//! canonicalization in the header (`CXDX`, `CXDXLT1`) but has no key for parity,
+//! so codes of either handedness occur - dropping the variants that index's
+//! filters reject ([`Searcher::variants`], [`canonical_ok`]).
 //!
-//! * `dimquads=3`: every choice of star C x 2 parities,
-//! * `dimquads=4`: 2 orders of (C, D) x 2 parities,
-//!
-//! and to drop the variants the canonicalization filters of the index reject
-//! (see [`Searcher::variants`]): with those filters on, a field code reaches
-//! the tree as whichever of {code, 1 - code} has mean x <= 0.5 plus the
-//! `CXDX_MARGIN_FACTOR * CODE_TOL` slack, so both are queried only near that
-//! boundary ([`canonical_ok`]).
-//!
-//! The hits of one query are processed in ascending code distance, so a
-//! callback sees the closest code first. The enumeration is incremental: step
-//! `imax` covers exactly the quads whose newest slot is `imax`, so a pass that
-//! starts at `obj_start = 0` has enumerated every quad formable from stars
-//! `0..=i` once step `i` is done (most of them die at the |AB| or circle
-//! filters without ever reaching the tree). That is what lets a shallow round
-//! solve a field whose quad is made of early stars, and what a
+//! A query's hits are processed in ascending code distance, so the callback sees
+//! the closest code first. Enumeration is incremental: step `imax` covers exactly
+//! the quads whose newest slot is `imax`, so a pass from `obj_start = 0` has
+//! enumerated every quad formable from stars `0..=i` once step `i` is done (most
+//! die at the |AB| or circle filters, never reaching the tree) - what lets a
+//! shallow round solve a field whose quad is made of early stars, and what a
 //! [`Flow::Stop`] callback cuts off.
 //!
-//! Within one depth step the enumeration runs on the rayon pool, one task
-//! per backbone `(A, B)`. First-solution semantics is best-effort: when the
-//! callback returns [`Flow::Stop`], the remaining workers observe the shared
-//! flag and abandon their not-yet-started work.
+//! Within a depth step the enumeration runs on the rayon pool, one task per
+//! backbone `(A, B)`; first-solution semantics is best-effort - after
+//! [`Flow::Stop`] workers abandon their not-yet-started work.
 
 use crate::codes::{canonical_ok, in_circle, parity_flip, swap_backbone};
 use crate::coords::{arcsec2rad, chord2_to_rad, deg2distsq, distsq, radec_to_xyz};
@@ -46,10 +34,9 @@ use crate::xyls::Star;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-/// Callback flow for [`solve_index`].
-///
-/// Under the rayon pool `Stop` is best-effort: it prevents not-yet-started
-/// work, but workers already inside a hit may still call the callback.
+/// Callback flow for [`solve_index`]. Under the rayon pool `Stop` is
+/// best-effort: it prevents not-yet-started work, but workers already inside a
+/// hit may still call the callback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use = "honor the callback flow: a discarded Stop can miss first-solution semantics"]
 pub enum Flow {
@@ -58,15 +45,14 @@ pub enum Flow {
 }
 
 /// The `--ra/--dec/--radius` position hint: a circle on the sky (`--radius`
-/// falls back to `params::DEFAULT_RADECS_RADIUS_DEG`). It is the single source
-/// of the chord²-vs-`deg2distsq` test that gates both the pre-fit solver-side
-/// filter and the post-fit check of a finished solution.
+/// falls back to `params::DEFAULT_RADECS_RADIUS_DEG`); the single source of the
+/// chord²-vs-`deg2distsq` test behind the pre-fit solver-side gate and the
+/// post-fit check of a finished solution.
 ///
-/// [`contains`](Self::contains) is inclusive of the boundary, and the two sites
-/// that run this test differ on NaN deliberately (see their docs).
-/// Deliberately does NOT derive `Eq`/`Hash` (the fields are `f64`, which
-/// implement neither on this toolchain); a caller that needs a hash key takes
-/// the fields' `to_bits` itself (see `testutil::run_key`).
+/// [`contains`](Self::contains) is boundary-inclusive and the two sites that run
+/// this test differ on NaN deliberately (see their docs). No `Eq`/`Hash` (the
+/// `f64` fields implement neither on this toolchain); a caller that needs a hash
+/// key takes their `to_bits` itself (`testutil::run_key`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PositionHint {
     pub ra_deg: f64,
@@ -76,9 +62,9 @@ pub struct PositionHint {
 
 impl PositionHint {
     /// `(hint center xyz, squared-chord radius)` - the ONE source of the
-    /// chord²-vs-`deg2distsq` geometry, consumed precomputed by the solver's
-    /// per-searcher gate (`Searcher::new`). NaN handling is the CALLER's: the
-    /// pre-fit gate rejects a NaN star distance (`Searcher::process_hit`).
+    /// chord²-vs-`deg2distsq` geometry, precomputed per searcher by
+    /// `Searcher::new`. NaN handling is the CALLER's: the pre-fit gate rejects a
+    /// NaN star distance.
     #[must_use]
     pub fn precompute(&self) -> ([f64; 3], f64) {
         (
@@ -87,14 +73,13 @@ impl PositionHint {
         )
     }
 
-    /// Post-fit solution gate: is a sky point inside the hint circle? The test
-    /// is the negated rejection `!(distsq > deg2distsq(radius))`, so it is
-    /// inclusive of the boundary and - crucially - a NaN distance is NOT
-    /// rejected here: a NaN center passes. The pre-fit gate rejects NaN instead
-    /// (`Searcher::process_hit`): the two sites keep their own NaN behavior on
-    /// purpose and must not be merged across the xyz/radec boundary. The
-    /// negation's NaN consequence is why the partially-ordered-negation lint is
-    /// allowed.
+    /// Post-fit solution gate: is a sky point inside the hint circle? The test is
+    /// the negated rejection `!(distsq > deg2distsq(radius))`, so it is boundary
+    /// inclusive and - crucially - a NaN distance is NOT rejected: a NaN center
+    /// passes. The pre-fit gate rejects NaN instead (`Searcher::process_hit`); the
+    /// two keep their NaN behavior on purpose and must not be merged across the
+    /// xyz/radec boundary. That negation is why the partially-ordered-negation
+    /// lint is allowed.
     #[must_use]
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn contains(&self, ra_deg: f64, dec_deg: f64) -> bool {
@@ -105,18 +90,14 @@ impl PositionHint {
     }
 }
 
-/// The pre-fit hint test for ONE matched index star: is its unit direction
-/// outside the circle of a precomputed hint (`PositionHint::precompute`)?
-///
-/// A NaN distance - a corrupt index star - counts as outside, which the bare
-/// `d > r2` comparison would let through; the post-fit gate
-/// ([`PositionHint::contains`]) accepts NaN on purpose, so the two sites are not
-/// interchangeable.
-///
-/// The solver's per-hit gate (`Searcher::process_hit`) and the per-file
-/// reachability scan (`index.rs::Index::hint_index`) both run this one
-/// predicate, so a scan verdict can never disagree with the gate it stands in
-/// for.
+/// Pre-fit hint test for ONE matched index star: is its unit direction outside
+/// the circle of a precomputed hint (`PositionHint::precompute`)? A NaN distance
+/// (a corrupt index star) counts as outside, which the bare `d > r2` comparison
+/// would let through; [`PositionHint::contains`] accepts NaN on purpose, so the
+/// two sites are not interchangeable. The per-hit gate (`Searcher::process_hit`)
+/// and the per-file reachability scan (`index.rs::Index::hint_index`) both run
+/// this one predicate, so a scan verdict can never disagree with the gate it
+/// stands in for.
 #[inline]
 #[must_use]
 pub(crate) fn star_outside_hint(xyz: &[f64; 3], hint: &([f64; 3], f64)) -> bool {
@@ -126,49 +107,49 @@ pub(crate) fn star_outside_hint(xyz: &[f64; 3], hint: &([f64; 3], f64)) -> bool 
 
 /// Everything about the field the solver sees.
 pub struct FieldSpec<'a> {
-    /// Field stars in the order `xyls::load` delivers them (after the
-    /// reordering of `augment.rs`, which is NOT flux-sorted). The enumeration
-    /// sees only list position: slots are ordered by list rank, the largest
-    /// index of a quad is its "newest" star, and the depth rounds are windows
-    /// over this order. (`Star::flux` is read by the pre-verification probe
-    /// only, never here.)
+    /// Field stars in the order the caller hands them over: on the CLI path the
+    /// brightest `params::TOP_OBJS` descending by flux (`xyls::brightest_first`);
+    /// callers that enter here directly (`testutil`, the unit tests) may still
+    /// pass the uncapped `xyls::load` order, which is NOT flux-sorted. The
+    /// enumeration sees only list position: slots are ordered by list rank, a
+    /// quad's largest index is its "newest" star, and the depth rounds are windows
+    /// over this order (`Star::flux` is never read here).
     pub stars: &'a [Star],
     pub width: f64,
     pub height: f64,
-    /// Allowed image-scale range, arcsec/px: `--scale-low`/`--scale-high`, or
-    /// the blind default (the frame width spanning 0.1 to 180 degrees).
+    /// Allowed image scale, arcsec/px: `--scale-low`/`--scale-high`, or the
+    /// blind default (the frame width spanning 0.1 to 180 degrees).
     pub app_min: f64,
     pub app_max: f64,
     /// `--ra/--dec/--radius` hint, degrees.
     pub radecs: Option<PositionHint>,
-    /// The index's compact hint codes tree (`index.rs`), when the sweep has built
-    /// one for this `(index, hint)` pair: the index's own codes tree restricted to
-    /// the quads whose stars all lie inside the hint circle. Searching it instead
-    /// of the full tree cannot change the hits that reach [`process_hit`], because
-    /// the `radecs` gate there stays in force and rejects exactly the records the
-    /// tree leaves out. `None` for a blind pass and for the first round of a
-    /// hinted one, which has no tree yet.
+    /// The sweep's compact hint codes tree for this `(index, hint)` pair
+    /// (`index.rs`): the index's own codes tree restricted to the quads whose
+    /// stars all lie inside the hint circle. Searching it instead of the full tree
+    /// cannot change the hits that reach [`process_hit`], because the `radecs`
+    /// gate there stays in force and rejects exactly the records the tree leaves
+    /// out. `None` for a blind pass and for a hinted pass's first round, which has
+    /// no tree yet.
     pub hint_codes: Option<&'a HintCodes>,
-    /// Cap on the number of field stars this pass may use; `solve_index`
-    /// clamps it further to `params::MAX_OBJS` (the emergency brake that keeps
-    /// an unsolvable field from walking the whole list).
+    /// Cap on the number of field stars this pass may use; `solve_index` clamps
+    /// it further to `params::MAX_OBJS` (the emergency brake that keeps an
+    /// unsolvable field from walking the whole list).
     pub max_objs: usize,
-    /// First field star of the depth round: the sweep drives one pass per
-    /// window of `OBJ_ROUND_STEP` stars (objs 1-10, then 11-20, ...). Only
-    /// quads whose newest (largest-index) slot is >= `obj_start` are
-    /// enumerated; older stars stay valid A/C/D slots, which is what makes
-    /// consecutive windows an exact partition of the quad set (`tasks_for_imax`).
+    /// First field star of the depth round: the sweep drives one pass per window
+    /// of `OBJ_ROUND_STEP` stars (objs 1-10, then 11-20, ...). Only quads whose
+    /// newest (largest-index) slot is >= `obj_start` are enumerated; older stars
+    /// stay valid A/C/D slots, which makes consecutive windows an exact partition
+    /// of the quad set (`tasks_for_imax`).
     pub obj_start: usize,
     pub verbose: bool,
     /// Cooperative `--cpulimit` deadline: the clock is sampled once per
-    /// `DEADLINE_CHECK_PERIOD` enumeration iterations counted globally; after
-    /// the flag trips, only the work already in flight runs, so the overshoot
-    /// is bounded by the sampling lag plus the in-flight tasks.
+    /// `DEADLINE_CHECK_PERIOD` globally counted enumeration iterations; once the
+    /// flag trips only work already in flight runs, so the overshoot is the
+    /// sampling lag plus those tasks.
     pub deadline: Option<std::time::Instant>,
-    /// Cooperative cancel of a concurrent index attempt (`sweep.rs`): raised
-    /// once some earlier index of the same round has captured a solution, so
-    /// this attempt stops instead of walking its enumeration to the end. Read
-    /// as one relaxed load per [`Searcher::should_stop`] call, and reported as
+    /// Cooperative cancel of a concurrent index attempt (`sweep.rs`): raised once
+    /// some earlier index of the same round has captured a solution. Read as one
+    /// relaxed load per [`Searcher::should_stop`] call and reported as
     /// [`SolveStats::cancelled`] - never as a timeout or a callback stop.
     pub cancel: Option<&'a AtomicBool>,
 }
@@ -176,18 +157,16 @@ pub struct FieldSpec<'a> {
 /// A code hit that survived the scale checks and got a WCS fit.
 #[derive(Debug, Clone)]
 pub struct QuadHit {
-    /// Index quad number. The codes tree holds exactly `NQUADS` records (a
-    /// mismatch is rejected when the index loads) and record `q` is the code of
-    /// quad `q`, so a hit's record index addresses the `quads` table directly.
+    /// Index quad number: the codes tree holds exactly `NQUADS` records (a
+    /// mismatch is rejected when the index loads) and record `q` is quad `q`'s
+    /// code, so a hit's record index addresses the `quads` table directly.
     pub quad: usize,
     /// Squared code-space distance to the field code.
-    #[allow(dead_code)] // carried on the hit for external consumers; the
-    // verbose `[hit]` line prints the square root of the
-    // `process_hit` parameter, never this field
+    #[allow(dead_code)] // carried for external consumers; the verbose `[hit]`
+    // line prints the square root of the `process_hit` parameter, not this field
     pub code_dist2: f64,
-    /// Field star for each quad slot `(A, B, C[, D])`. For `dimquads=3` the
-    /// 4th slot is an unused sentinel `0` (a valid star #0); consumers slice
-    /// `..dimquads` and never read it.
+    /// Field star for each quad slot `(A, B, C[, D])`; for `dimquads=3` the 4th
+    /// slot is an unused sentinel `0` (a valid star #0) that consumers never read.
     pub field_stars: [usize; 4],
     pub wcs: Wcs,
 }
@@ -198,8 +177,8 @@ impl QuadHit {
         self.wcs.arcsec_per_pix()
     }
 
-    /// Residuals of the matched quad's index stars against the field stars
-    /// they came from, pixels. Needs the field list, hence a method here.
+    /// Residuals (pixels) of the matched quad's index stars against the field
+    /// stars they came from. Needs the field list, hence a method here.
     #[cfg(test)]
     #[must_use]
     pub fn residuals(&self, index: &Index, stars: &[Star]) -> Vec<f64> {
@@ -267,19 +246,19 @@ struct Shared {
 }
 
 /// Runs one index over the field on the rayon pool, one depth step at a time.
-/// For every code hit that passes the ra/dec hint, the pre-fit |AB| scale
-/// check and the post-fit scale check, `on_hit` is called with the fitted WCS;
-/// return [`Flow::Stop`] from it to abandon the remaining depth steps
-/// (first-solution semantics).
-/// Note: production `solve_field` never returns `Stop` - the capture of the
-/// attempt that solves has to see every hit that attempt enumerates to keep the
-/// lexicographic-best solved one, so the printed solution does not depend on
-/// worker scheduling (`sweep.rs`); `Stop` is what the tests use and stays
-/// available for a first-solution caller.
+/// Every code hit that passes the ra/dec hint, the pre-fit |AB| scale check and
+/// the post-fit scale check reaches `on_hit` with the fitted WCS; return
+/// [`Flow::Stop`] to abandon the remaining depth steps (first-solution
+/// semantics, for the tests and other first-solution callers). Production
+/// `solve_field` never returns `Stop`: the capture of the attempt that solves has
+/// to see every hit that attempt enumerates to keep the lexicographic-best solved
+/// one, so the printed solution does not depend on worker scheduling
+/// (`sweep.rs`).
 ///
-/// `on_hit` may be called concurrently from several worker threads: it must
-/// be `Sync` and guard its own mutable state. After it returns `Stop`, other
-/// workers may still finish the hits they already started.
+/// `on_hit` may be called concurrently from several worker threads: it must stay
+/// `Sync` and guard its own mutable state, and must not spawn rayon work (an
+/// attempt runs inside a rayon task). After it returns `Stop`, other workers may
+/// still finish the hits they already started.
 pub fn solve_index(
     index: &Index,
     spec: &FieldSpec<'_>,
@@ -295,8 +274,8 @@ pub fn solve_index(
     for imax in spec.obj_start..n {
         // One task per backbone; workers share `index`/`spec` immutably.
         let tasks = tasks_for_imax(imax);
-        // Note: `with_min_len(>1)` was measured to be ~2.4x slower (coarse
-        // chunks defeat the heavy/light interleaving of `tasks_for_imax`).
+        // No `with_min_len`: coarse chunks defeat `tasks_for_imax`'s heavy/light
+        // interleaving.
         let part: SolveStats = tasks
             .par_iter()
             // One Searcher per fold split: its hit buffer and backbone
@@ -311,10 +290,10 @@ pub fn solve_index(
             .map(|srch| srch.stats)
             .reduce(SolveStats::default, SolveStats::add);
         total = total.add(part);
-        // Deliberate precedence: `timed_out` is tested first, so a round in
-        // which both flags are set reports a timeout and not a callback stop
-        // (`past_deadline_stops_the_search` pins that a lone timeout never
-        // sets `stopped_early`).
+        // Deliberate precedence: `timed_out` is tested first, so a round in which
+        // both flags are set reports a timeout and not a callback stop
+        // (`past_deadline_stops_the_search` pins that a lone timeout never sets
+        // `stopped_early`).
         if shared.timed_out.load(Ordering::Relaxed) {
             total.timed_out = true;
             break;
@@ -325,10 +304,10 @@ pub fn solve_index(
         }
         // Same tail, one rank lower: a cancel is neither a deadline nor a
         // callback `Stop`, and the sweep's fold needs to tell the three apart.
-        // This is tested only at a depth-step boundary, so an attempt cancelled
-        // during its LAST `imax` step finishes that step and reports
-        // `Nothing`/`Solved`, not `cancelled` - harmless for stdout, because
-        // the fold reports the earlier solver that raised the cancel either way.
+        // Only tested at a depth-step boundary, so an attempt cancelled during
+        // its LAST `imax` step finishes that step and reports `Nothing`/`Solved`,
+        // not `cancelled` - harmless for stdout, because the fold reports the
+        // earlier solver that raised the cancel either way.
         if spec.cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
             total.cancelled = true;
             break;
@@ -338,24 +317,23 @@ pub fn solve_index(
 }
 
 /// A unit of parallel work: all quads of one depth step `imax` that share a
-/// backbone `(A, B)`, so the backbone `cos/sin` stay memoized per worker.
+/// backbone `(A, B)`, so its `cos/sin` stay memoized per worker.
 #[derive(Clone, Copy)]
 enum Task {
-    /// The newest star occupies backbone slot B: `B = imax`, C/D run over
-    /// the older stars.
+    /// The newest star occupies backbone slot B: `B = imax`, C/D run over the
+    /// older stars.
     BackboneNewest { a: usize, b: usize },
-    /// The backbone is made of older stars; the newest star takes the C or
-    /// the D slot.
+    /// The backbone is made of older stars; the newest star takes the C or D
+    /// slot.
     NewestSlot { a: usize, b: usize, imax: usize },
 }
 
 /// Enumerates the quads whose newest (largest-index) slot is `imax` (the
 /// incremental step of the depth ramp), split by backbone.
 ///
-/// The two families are INTERLEAVED per `a`, and rayon splits contiguous task
-/// ranges — mixed chunks keep the workers balanced. The per-task cost differs
-/// by `dimquads`: for 4 `BackboneNewest` is O(imax^2) and `NewestSlot` O(imax);
-/// for 3 they are O(imax) and O(1).
+/// The two families are INTERLEAVED per `a` so rayon's contiguous task chunks
+/// stay balanced despite the cost gap: for `dimquads=4` `BackboneNewest` is
+/// O(imax^2) and `NewestSlot` O(imax), for 3 they are O(imax) and O(1).
 fn tasks_for_imax(imax: usize) -> Vec<Task> {
     let mut tasks = Vec::with_capacity(imax + imax * imax.saturating_sub(1) / 2);
     for a in 0..imax {
@@ -376,8 +354,7 @@ struct Searcher<'a> {
     qmax2: f64,
     /// Slack allowed on the index's canonicalization filters:
     /// `CXDX_MARGIN_FACTOR * CODE_TOL` = 1.5 * 0.01 = 0.015, wide enough that a
-    /// query inside the CODE_TOL ball is never pruned away from a stored code
-    /// (see `params::CXDX_MARGIN_FACTOR`).
+    /// CODE_TOL ball query is never pruned away from a stored code.
     margin: f64,
     /// Pre-fit |AB| scale bounds, rad/px: `app_min`/`app_max` converted from
     /// arcsec/px and widened by a relative CODE_TOL (1 %) slack, because this
@@ -396,15 +373,15 @@ struct Searcher<'a> {
     /// Sibling-cancel flag of a concurrent index attempt, see
     /// [`FieldSpec::cancel`].
     cancel: Option<&'a AtomicBool>,
-    /// Iterations accumulated locally before being added to the global
-    /// counter in one atomic (avoids per-iteration cache-line ping-pong).
+    /// Iterations accumulated locally before one atomic add to the global
+    /// counter (avoids per-iteration cache-line ping-pong).
     deadline_events: usize,
-    /// Reused hit buffer of the codes ball search (debug builds dominate
-    /// here on per-query allocation otherwise).
+    /// Reused hit buffer of the codes ball search (debug builds would otherwise
+    /// allocate per query here).
     hitbuf: Vec<Hit>,
-    /// Memoized backbone of the last `triple`/`quad` call: the enumeration
-    /// holds `(A, B)` fixed while `C` runs, so `cos/sin` and the |AB| range
-    /// gate are computed once per backbone.
+    /// Memoized backbone of the last `triple`/`quad` call: the enumeration holds
+    /// `(A, B)` fixed while `C` runs, so `cos/sin` and the |AB| range gate are
+    /// computed once per backbone.
     bb: Option<Backbone>,
 }
 
@@ -447,10 +424,9 @@ impl<'a> Searcher<'a> {
     }
 
     /// Runs one backbone task: the inner C/D loops of [`Task`]. Non-backbone
-    /// slots never reuse A or B; coverage of the full
-    /// quad set is pinned by `depth_rounds_partition_the_hits` and the
-    /// serial-vs-parallel multiset equality in
-    /// `hit_multiset_is_schedule_independent`.
+    /// slots never reuse A or B; coverage of the full quad set is pinned by
+    /// `depth_rounds_partition_the_hits` and the serial-vs-parallel multiset
+    /// equality in `hit_multiset_is_schedule_independent`.
     fn run_task(&mut self, task: Task, on_hit: &(dyn Fn(&QuadHit) -> Flow + Sync)) {
         match task {
             Task::BackboneNewest { a, b } => {
@@ -466,8 +442,8 @@ impl<'a> Searcher<'a> {
                 } else {
                     for c in 0..b {
                         // C and D never reuse a backbone star: the code of A is
-                        // (0,0) and of B is (1,1), and both sit on the circle
-                        // filter, so only the enumeration can drop the repeat.
+                        // (0,0) and of B is (1,1), both on the circle filter, so
+                        // only the enumeration can drop the repeat.
                         if c == a {
                             continue;
                         }
@@ -485,9 +461,9 @@ impl<'a> Searcher<'a> {
             Task::NewestSlot { a, b, imax } => {
                 if self.dimquads == 3 {
                     if !self.should_stop() {
-                        // `Stop` is stored globally in `shared.stop` and seen
-                        // by every other loop head/query, so dropping the
-                        // local Flow here is intentional.
+                        // `Stop` is stored globally in `shared.stop` and seen by
+                        // every other loop head/query, so dropping the local
+                        // Flow here is intentional.
                         let _ = self.triple(a, b, imax, on_hit);
                     }
                 } else {
@@ -514,8 +490,8 @@ impl<'a> Searcher<'a> {
         &self.spec.stars[i]
     }
 
-    /// `cos/sin` of the code formula for the backbone `(A, B)` plus the
-    /// |AB| quad-size gate, memoized across the inner `C` loops.
+    /// `cos/sin` of the code formula for the backbone `(A, B)` plus the |AB|
+    /// quad-size gate, memoized across the inner `C` loops.
     fn backbone(&mut self, a: usize, b: usize) -> (f64, f64) {
         if let Some(bb) = self.bb
             && bb.a == a
@@ -527,14 +503,14 @@ impl<'a> Searcher<'a> {
         let dx = sb.x - sa.x;
         let dy = sb.y - sa.y;
         let s = dx * dx + dy * dy;
-        // Quad-size gate on the backbone length, from the frame alone: |AB|
-        // must lie between QSF_LO * min(W, H) and QSF_HI * the frame diagonal.
-        // There is no second gate taken from the index's own quad-diameter
-        // range: omitting such a pre-filter can only add ball searches, since
-        // every query still has to land inside the CODE_TOL ball and pass both
-        // scale gates to reach the callback. `s > 0` belongs to the gate - a
-        // zero-length backbone would divide by zero; `inv` stays 0 when the
-        // gate fails, so cos/sin stay finite and the caller bails on `within`.
+        // Quad-size gate on the backbone length, from the frame alone: |AB| must
+        // lie between QSF_LO * min(W, H) and QSF_HI * the frame diagonal. There is
+        // no second gate from the index's own quad-diameter range, and omitting
+        // such a pre-filter can only add ball searches: every query must still land
+        // inside the CODE_TOL ball and pass both scale gates to reach the callback.
+        // `s > 0` belongs to the gate (a zero-length backbone would divide by
+        // zero); `inv` stays 0 when it fails, so cos/sin stay finite and the caller
+        // bails on `within`.
         let within = s >= self.qmin2 && s <= self.qmax2 && s > 0.0;
         let inv = if within { 1.0 / s } else { 0.0 };
         let bb = Backbone {
@@ -548,14 +524,9 @@ impl<'a> Searcher<'a> {
         (bb.cos, bb.sin)
     }
 
-    /// One `dimquads=3` assignment: backbone `A=a, B=b` (`a < b` by list rank)
-    /// and star `C=c`.
-    ///
-    /// Minimal sufficient enumeration: 2 parities per choice of C. When the
-    /// index declares the canonicalization filters, each field code is queried
-    /// as whichever of {code, 1 - code} has mean x <= 0.5 (+ margin); both are
-    /// queried only near the canonicalization boundary, see [`canonical_ok`]
-    /// and the module header.
+    /// One `dimquads=3` assignment: backbone `A=a, B=b` (`a < b` by list rank) and
+    /// star `C=c`. Minimal sufficient enumeration: 2 parities per choice of C, minus
+    /// what the index's canonicalization filters reject (see the module header).
     fn triple(
         &mut self,
         a: usize,
@@ -569,8 +540,7 @@ impl<'a> Searcher<'a> {
         }
         let (sa, sc) = (self.star(a), self.star(c));
         let (ux, uy) = (sc.x - sa.x, sc.y - sa.y);
-        // Same formula as `codes::star_code`, with the backbone terms
-        // precomputed.
+        // Same formula as `codes::star_code`, backbone terms precomputed.
         let base = [ux * cos + uy * sin, -ux * sin + uy * cos];
         if !in_circle(base[0], base[1], CODE_TOL) {
             return Flow::Continue;
@@ -579,7 +549,7 @@ impl<'a> Searcher<'a> {
     }
 
     /// One `dimquads=4` assignment: backbone `A=a, B=b` (`a < b`), stars
-    /// `C=c, D=d` (ordered — both orders of C,D are tried by the caller).
+    /// `C=c, D=d` (ordered - both orders of C,D are tried by the caller).
     fn quad(
         &mut self,
         a: usize,
@@ -598,9 +568,9 @@ impl<'a> Searcher<'a> {
             [ux * cos + uy * sin, -ux * sin + uy * cos]
         };
         // Every non-backbone star must pass the circle filter, not just C (see
-        // `codes::in_circle`). An index that does not declare the CIRCLE
-        // convention is refused when it loads (`index.rs`), so running this
-        // filter unconditionally cannot drop a code that could have matched.
+        // `codes::in_circle`); an index that does not declare the CIRCLE convention
+        // is refused at load (`index.rs`), so running this filter unconditionally
+        // cannot drop a code that could have matched.
         if !in_circle(cc[0], cc[1], CODE_TOL) {
             return Flow::Continue;
         }
@@ -615,25 +585,17 @@ impl<'a> Searcher<'a> {
         self.variants(&base, [a, b, c, dd], on_hit)
     }
 
-    /// Queries the four orbit variants `{c, 1-c, flip(c), 1-flip(c)}` of a
-    /// base code, keeping only those that pass the canonicalization filters the
-    /// index declares (`codes::canonical_ok`). The filters follow the index
-    /// header flags: `cxdx` needs `CXDX`, the mean-x test needs both `CXDX` and
-    /// `CXDXLT1`, and the `cxdx` test is inert for `dimquads=3` (a single
-    /// non-backbone star has no second x to be compared against).
+    /// Queries the four orbit variants `{c, 1-c, flip(c), 1-flip(c)}` of a base
+    /// code, keeping those `codes::canonical_ok` accepts for the flags this index
+    /// declares (both handednesses are always offered; the filter does the pruning).
+    /// The pruning is sound: a `CXDX`+`CXDXLT1` index stores only codes of mean
+    /// x <= 0.5 and a ball search returns only codes within `CODE_TOL < margin` of
+    /// the query, so a dropped variant is at most a code too far from every stored
+    /// code to ever match.
     ///
-    /// With the mean-x filter on, each field code is queried as whichever of
-    /// {code, 1 - code} has mean x <= 0.5 (+ margin); both are queried only
-    /// near the boundary. Because field backbones are enumerated in list-rank
-    /// order (not canonicalized), for about half of the field codes the
-    /// `1 - code` variant is the only one that can match a stored code.
-    ///
-    /// The filter is a sound pruning, not merely empirical: every stored code
-    /// of a `CXDX`+`CXDXLT1` index has mean x <= 0.5, and a ball search only
-    /// returns codes within `CODE_TOL < margin` of the query, so a query with
-    /// mean x > 0.5 + margin cannot be within `CODE_TOL` of any stored code.
-    /// Variants of both handedness are always offered; the filter may drop
-    /// one, but only a code too far from every stored code to ever match.
+    /// Because field backbones are enumerated in list-rank order rather than
+    /// canonicalized, for about half of the field codes the `1 - code` variant is
+    /// the only one that can match a stored code.
     fn variants(
         &mut self,
         base: &[f64],
@@ -656,8 +618,8 @@ impl<'a> Searcher<'a> {
                 continue;
             }
             // The `1 - code` variants are the same quad with the backbone read
-            // the other way round, so the field stars of slots A and B swap
-            // places to stay aligned with the index quad's A and B.
+            // the other way round, so the field stars of slots A and B swap to
+            // stay aligned with the index quad's A and B.
             let corr = if swapped {
                 [corr[1], corr[0], corr[2], corr[3]]
             } else {
@@ -672,16 +634,14 @@ impl<'a> Searcher<'a> {
 
     /// Cooperative stop for all workers: the callback stopped, a sibling of a
     /// concurrent chunk cancelled this attempt, or the `--cpulimit` deadline
-    /// passed. Each call counts as one search event when a deadline is set (a
-    /// call that already sees a stop returns before counting); events are
-    /// counted globally but accumulated per worker in
-    /// batches of `DEADLINE_EVENT_BATCH` (one atomic RMW per batch), and the
-    /// clock is read only when the global count crosses a
-    /// `DEADLINE_CHECK_PERIOD` boundary, however many workers are running.
-    /// The cancel flag is tested BEFORE the deadline-event counter, so an
-    /// attempt that observes a cancel returns without reading the clock: it can
-    /// never also observe the deadline, and `solve_index` reports it as
-    /// `cancelled`, not `timed_out`.
+    /// passed. With a deadline set each call counts as one search event (a call
+    /// that already sees a stop returns before counting); events are counted
+    /// globally, accumulated per worker in batches of `DEADLINE_EVENT_BATCH` (one
+    /// atomic RMW per batch), and the clock is read only when the global count
+    /// crosses a `DEADLINE_CHECK_PERIOD` boundary, however many workers run. The
+    /// cancel flag is tested BEFORE that counter, so an attempt that sees a cancel
+    /// never also sees the deadline and `solve_index` reports it `cancelled`, not
+    /// `timed_out`.
     fn should_stop(&mut self) -> bool {
         if self.shared.stop.load(Ordering::Relaxed) || self.shared.timed_out.load(Ordering::Relaxed)
         {
@@ -718,11 +678,10 @@ impl<'a> Searcher<'a> {
     /// code to the callback first.
     ///
     /// Under a hint the sweep hands over a tree of only the reachable records
-    /// ([`FieldSpec::hint_codes`]), which is searched in place of the index's own:
-    /// a 3 deg circle covers a fraction of a percent of a wide index, so nearly
-    /// every query would otherwise descend through records the hint gate is going
-    /// to throw away. The hits it returns are records of that tree, so each one is
-    /// mapped back to the quad its record is the code of before it is processed.
+    /// ([`FieldSpec::hint_codes`]), searched in place of the index's own: a 3 deg
+    /// circle covers a fraction of a percent of a wide index, so nearly every query
+    /// would otherwise descend through records the hint gate throws away. A hit's
+    /// record is mapped back to the quad it is the code of before processing.
     fn query(
         &mut self,
         code: &[f64],
@@ -744,8 +703,8 @@ impl<'a> Searcher<'a> {
         let mut flow = Flow::Continue;
         for hit in buf.iter() {
             self.stats.code_hits += 1;
-            // Hits (not queries) dominate the runtime on wide scale ranges:
-            // every hit runs a fit, so the stop check runs here too.
+            // Hits (not queries) dominate the runtime on wide scale ranges: every
+            // hit runs a fit, so the stop check runs here too.
             if self.should_stop() {
                 flow = Flow::Stop;
                 break;
@@ -763,17 +722,17 @@ impl<'a> Searcher<'a> {
         flow
     }
 
-    /// Turns one code hit into a candidate solution: hint gate on the matched
-    /// stars -> pre-fit |AB| scale gate -> TAN fit -> post-fit scale gate ->
-    /// `on_hit`. Verification and odds are the caller's (`verify.rs`).
+    /// Turns one code hit into a candidate solution: hint gate on the matched stars
+    /// -> pre-fit |AB| scale gate -> TAN fit -> post-fit scale gate -> `on_hit`.
+    /// Verification and odds are the caller's (`verify.rs`).
     ///
-    /// This star-by-star gate is the ONLY accept test a hinted hit faces. The
-    /// hint structures of `index.rs` decide which records a query can return, never
+    /// This star-by-star gate is the ONLY accept test a hinted hit faces: the hint
+    /// structures of `index.rs` decide which records a query can return, never
     /// whether a returned hit is accepted, so an attempt that searched the index's
     /// own codes tree (a blind round, or a file outside the sweep's tree budget)
     /// and one that searched the filtered tree accept exactly the same hits. A
     /// per-hit quad mask would only re-test what this loop already tests on its way
-    /// to the fit, so there is none.
+    /// to the fit.
     fn process_hit(
         &mut self,
         quad_no: usize,
@@ -789,10 +748,9 @@ impl<'a> Searcher<'a> {
             starxyz[i] = self.index.star_xyz(stars[i] as usize);
             if let Some(hint) = self.hint {
                 // Any matched star outside the hint circle rejects the hit
-                // before any fitting. A NaN distance (a corrupt index star) is
-                // rejected too, which the bare `d > r2` comparison would let
-                // through; the post-fit gate accepts NaN on purpose, so the two
-                // sites are not interchangeable.
+                // before any fitting, NaN distance (corrupt index star) too; the
+                // post-fit gate accepts NaN on purpose, so the two sites are not
+                // interchangeable (see `star_outside_hint`).
                 if star_outside_hint(&starxyz[i], &hint) {
                     self.stats.radec_skipped += 1;
                     return Flow::Continue;
@@ -802,16 +760,16 @@ impl<'a> Searcher<'a> {
             fieldxy[i] = [s.x, s.y];
         }
 
-        // Quick scale estimate from the A-B pair, BEFORE the fit: the index
-        // stars' angular separation (chord^2 -> radians) over their field
-        // distance in pixels gives an implied scale in rad/px, compared against
-        // the requested range widened by the CODE_TOL slack (`Searcher::new`).
+        // Quick scale estimate from the A-B pair, BEFORE the fit: the index stars'
+        // angular separation (chord^2 -> radians) over their field distance in
+        // pixels gives an implied scale in rad/px, compared against the requested
+        // range widened by the CODE_TOL slack (`Searcher::new`).
         let ab_chord2 = distsq(&starxyz[0], &starxyz[1]);
         let ab_pix = f64::hypot(fieldxy[1][0] - fieldxy[0][0], fieldxy[1][1] - fieldxy[0][1]);
         let implied = chord2_to_rad(ab_chord2) / ab_pix;
-        // Explicit-accept range gate: `contains` is false for NaN - here only
-        // the pixel side can make one, the 0/0 of coincident field and index
-        // A-B pairs - where `implied < lo || implied > hi` would fail open.
+        // Explicit-accept range gate: `contains` is false for NaN - here only the
+        // pixel side can make one, the 0/0 of coincident field and index A-B
+        // pairs - where `implied < lo || implied > hi` would fail open.
         if !(self.scale_lo..=self.scale_hi).contains(&implied) {
             self.stats.abscale_skipped += 1;
             return Flow::Continue;
@@ -831,9 +789,9 @@ impl<'a> Searcher<'a> {
         }
 
         self.stats.hits += 1;
-        // The verbose line reports the code distance in code units (the square
-        // root of the squared L2), the fitted scale, and where the WCS points
-        // at the center pixel of the frame.
+        // Verbose line: code distance in code units (the square root of the
+        // squared L2), the fitted scale, and where the WCS points at the frame's
+        // center pixel.
         if self.spec.verbose {
             let (ra, dec) = wcs.pix_to_radec(
                 pixel_center_of_size(self.spec.width),
@@ -873,16 +831,17 @@ mod tests {
     use crate::testutil;
     use crate::wcs::test_data::*;
 
-    /// With the order the `.xyls` reader hands the solver (`xyls.rs` ->
-    /// `augment.rs`), the narrow field `1920x1080-2` already verifies a solved
-    /// hit on the index that wins it inside the FIRST TWO depth rounds (objs
-    /// 1-20). Handed the 20 highest-FLUX detections instead, the same field
-    /// only made it at the objs 41-50 round.
+    /// With the uncapped reader order that this test hands the solver directly
+    /// (`xyls.rs` -> `augment.rs`; on the CLI path `run_into` would re-sort it
+    /// brightest-first), the narrow field `1920x1080-2` already verifies a solved
+    /// hit on the index that wins it inside the FIRST TWO depth rounds
+    /// (objs 1-20); handed the 20 highest-FLUX detections it only made it at the
+    /// objs 41-50 round.
     ///
-    /// Which index wins a field is a property of the installed set, so it is
-    /// discovered at runtime and no index id or exact log-odds is pinned. The
-    /// strength of the match stays an invariant: the solve gate plus a healthy
-    /// match count (a marginal bogus hit could not lift that high).
+    /// Which index wins is a property of the installed set, so it is discovered at
+    /// runtime and no index id or exact log-odds is pinned. The strength of the
+    /// match stays the invariant (a marginal bogus hit could not match many
+    /// stars).
     #[test]
     fn narrow_field2_verifies_true_match_in_first_rounds() {
         let Some(run) = testutil::field_run("1920x1080-2.xyls", 1920.0, 1080.0, None) else {
@@ -933,14 +892,14 @@ mod tests {
             stars,
             width: 4656.0,
             height: 3522.0,
-            // The blind-mode "no scale hint" range: the frame width spanning
-            // 0.1 to 180 degrees, divided by the frame width in pixels (what
-            // `cli` produces when neither `--scale-*` is given).
+            // The blind-mode "no scale hint" range: the frame width spanning 0.1
+            // to 180 degrees over the frame width in pixels (what `cli` produces
+            // when neither `--scale-*` is given).
             app_min: 0.1 * 3600.0 / 4656.0,
             app_max: 180.0 * 3600.0 / 4656.0,
             radecs,
-            // The compact hint tree is the sweep's business; these passes exercise
-            // the gate and the index's own codes tree.
+            // The compact hint tree is the sweep's business; these passes
+            // exercise the gate and the index's own codes tree.
             hint_codes: None,
             max_objs: 15,
             obj_start: 0,
@@ -950,18 +909,16 @@ mod tests {
         }
     }
 
-    /// Mechanics fixture for the field-1 tests: the installed index that
-    /// actually solves `4656x3522-1`, loaded. Its winning round is guaranteed
-    /// to produce at least one code hit, which is all the mechanics tests
-    /// below need; `field_run` is cached for the whole test binary, so only
-    /// the first caller pays the solve.
+    /// Mechanics fixture for the field-1 tests: the installed index that actually
+    /// solves `4656x3522-1`, loaded. Its winning round is guaranteed to produce at
+    /// least one code hit, which is all the mechanics tests below need;
+    /// `field_run` is cached for the whole test binary.
     fn field1_winner_index() -> Option<(&'static testutil::FieldRun, Index)> {
         let run = testutil::field_run("4656x3522-1.xyls", 4656.0, 3522.0, None)?;
         Some((run, testutil::load(run.meta)))
     }
 
-    /// The hit multiset `(quad, field_stars)` of one pass, sorted; the unit
-    /// `hit_multiset_is_schedule_independent` compares.
+    /// The hit multiset `(quad, field_stars)` of one pass, sorted.
     fn collect_hits(index: &Index, stars: &[Star], max_objs: usize) -> Vec<(usize, [usize; 4])> {
         let mut s = spec(stars, None);
         s.max_objs = max_objs;
@@ -994,9 +951,8 @@ mod tests {
         );
     }
 
-    /// Task-split algebra of one depth step, independent of index data:
-    /// `imax` backbone-newest tasks + one newest-slot task per older pair,
-    /// none for the degenerate steps.
+    /// Task-split algebra of one depth step, independent of index data: `imax`
+    /// backbone-newest tasks + one newest-slot task per older pair.
     #[test]
     fn tasks_for_imax_counts() {
         let counts = |imax: usize| {
@@ -1015,16 +971,14 @@ mod tests {
     }
 
     /// The round winner on `4656x3522-1.xyls` fits the field's published sky
-    /// truth: scale within 0.05" of 2.71247 "/px, the field-center pixel
-    /// pointing within 1 deg of (60.031, 36.376), and the matched index quad
-    /// projecting within 1 px of its field stars.
+    /// truth: scale within 0.05" of 2.71247 "/px, the field-center pixel pointing
+    /// within 1 deg of (60.031, 36.376), matched index quad within 1 px of its
+    /// field stars.
     ///
-    /// The window invariant on its slots: they are distinct stars below
-    /// `max_objs`, and the NEWEST slot (the maximum - the star whose step
-    /// enumerated this quad) lies inside the round window. Older slots may
-    /// predate `obj_start`, since a round keeps earlier stars as A/C/D slots.
-    /// No quad id is pinned: which quad wins is a property of the installed
-    /// index set, not of the pipeline.
+    /// The window invariant on its slots: distinct stars below `max_objs`, and
+    /// the NEWEST slot (the maximum - the star whose step enumerated this quad)
+    /// inside the round window; older slots may predate `obj_start`. No quad id is
+    /// pinned: which quad wins is a property of the installed index set.
     #[test]
     fn field1_winning_hit_matches_sky_truth() {
         let Some(run) = testutil::field_run("4656x3522-1.xyls", 4656.0, 3522.0, None) else {
@@ -1068,10 +1022,9 @@ mod tests {
         assert!(res.iter().all(|&r| r < 1.0), "residuals {res:?}");
     }
 
-    /// The same gate for field 2, on the installed index that wins it:
-    /// scale and center against that field's published truth
-    /// (`testutil::FIELD2_TRUTH`), distinct slots inside the round window, and
-    /// sub-pixel residuals. As in field 1, no quad or index id is pinned.
+    /// The same gate for field 2, on the installed index that wins it: scale and
+    /// center against `testutil::FIELD2_TRUTH`, distinct slots inside the round
+    /// window, sub-pixel residuals; as in field 1, no quad or index id is pinned.
     #[test]
     fn field2_winning_hit_matches_sky_truth() {
         let Some(run) = testutil::field_run("4656x3522-2.xyls", 4656.0, 3522.0, None) else {
@@ -1116,9 +1069,9 @@ mod tests {
         assert!(res.iter().all(|&r| r < 1.0), "residuals {res:?}");
     }
 
-    /// The ra/dec hint rejects hits away from the hint circle: the
-    /// far-hint pass still queries the tree, every code hit is skipped by the
-    /// hint and no hit reaches the callback.
+    /// The ra/dec hint rejects hits away from the hint circle: the far-hint pass
+    /// still queries the tree, every code hit is skipped by the hint and none
+    /// reaches the callback.
     #[test]
     fn radec_hint_rejects_far_field() {
         let Some((run, index)) = field1_winner_index() else {
@@ -1141,12 +1094,11 @@ mod tests {
         );
     }
 
-    /// Every slot of a hit must hold a distinct field star: a repeated star
-    /// gives a degenerate code (`codes::star_code` returns `(0, 0)` for a star
-    /// in the A slot and `(1, 1)` for one in the B slot, and both lie on the
-    /// circle filter, so the code checks would not catch it) and a degenerate
-    /// fit. Hence the enumeration itself skips A and B when it fills the C and
-    /// D slots.
+    /// Every slot of a hit holds a distinct field star: a repeat gives a
+    /// degenerate code (`codes::star_code` returns `(0, 0)` for a star in the A
+    /// slot and `(1, 1)` for one in the B slot, both on the circle filter, so the
+    /// code checks would not catch it) and a degenerate fit. Hence the enumeration
+    /// itself skips A and B when it fills the C and D slots.
     #[test]
     fn hits_never_reuse_a_field_star() {
         let Some((run, index)) = field1_winner_index() else {
@@ -1172,18 +1124,18 @@ mod tests {
         );
     }
 
-    /// Consecutive depth windows must partition the enumeration exactly:
-    /// every quad is enumerated once, at `imax = max(its field slots)`, so
-    /// the hits of `[0,split)` and `[split,n)` together make the hits of
-    /// `[0,n)` without overlap (the depth rounds of `sweep.rs` rely on this).
+    /// Consecutive depth windows must partition the enumeration exactly: every
+    /// quad is enumerated once, at `imax = max(its field slots)`, so the hits of
+    /// `[0,split)` and `[split,n)` together make the hits of `[0,n)` without
+    /// overlap (the depth rounds of `sweep.rs` rely on this).
     #[test]
     fn depth_rounds_partition_the_hits() {
         let Some((run, index)) = field1_winner_index() else {
             return;
         };
         let d = index.meta.dimquads;
-        // Split the winning round's window in half: it is known to hold at
-        // least the round's solving quad.
+        // Split the winning round's window in half: it is known to hold at least
+        // the round's solving quad.
         let (split, n) = (run.max_objs / 2, run.max_objs);
 
         let collect = |obj_start: usize, max_objs: usize| -> Vec<(usize, [usize; 4])> {
@@ -1203,8 +1155,8 @@ mod tests {
         let lo = collect(0, split);
         let hi = collect(split, n);
 
-        // Each round only touches its own window, always using its largest
-        // slot as the newest star `imax`.
+        // Each round only touches its own window, always using its largest slot
+        // as the newest star `imax`.
         for (quad, fs) in &lo {
             let m = fs[..d].iter().max().copied().unwrap();
             assert!(
@@ -1220,8 +1172,8 @@ mod tests {
             );
         }
 
-        // Multiset equality (no dedup): the rounds are disjoint AND cover
-        // every hit exactly once.
+        // Multiset equality (no dedup): the rounds are disjoint AND cover every
+        // hit exactly once.
         let mut merged = lo;
         merged.extend(hi);
         merged.sort();
@@ -1230,11 +1182,11 @@ mod tests {
         assert_eq!(merged, all, "depth rounds did not partition the hits");
     }
 
-    /// `Flow::Stop` must be reflected in `stopped_early` and actually cut
-    /// the remaining work short (parallel best-effort: the stopped pass may
-    /// finish in-flight hits, but cannot do the whole sweep). The strict
-    /// query inequality is the substance; the hit inequality says the stopped
-    /// pass cannot have emitted the full round's multiset.
+    /// `Flow::Stop` must be reflected in `stopped_early` and actually cut the
+    /// remaining work short (parallel best-effort: the stopped pass may finish
+    /// in-flight hits, but cannot do the whole sweep). The strict query
+    /// inequality is the substance; the hit inequality says the stopped pass
+    /// cannot have emitted the full round's multiset.
     #[test]
     fn stop_early_truncates_work() {
         let Some((run, index)) = field1_winner_index() else {
@@ -1253,15 +1205,14 @@ mod tests {
     }
 
     /// The rayon task decomposition must emit the exact same multiset of
-    /// `(quad, field_stars)` hits as a serial run of the same search: one pass
-    /// runs on a single-thread rayon pool, the other on the ambient pool, and
-    /// the sorted multisets must be equal and non-empty.
+    /// `(quad, field_stars)` hits as a serial run of the same search: one pass on
+    /// a single-thread rayon pool, the other on the ambient pool, sorted multisets
+    /// equal and non-empty.
     ///
-    /// The multiset - not the order it arrives in - is the invariant: the
-    /// sweep only gets a deterministic round winner once the set of hits a
-    /// round produces is independent of how its tasks were scheduled
-    /// (`sweep.rs`). Both a `dimquads=3` field and a `dimquads=4` synthetic
-    /// quad are exercised, one leg per index shape.
+    /// The multiset - not the order it arrives in - is the invariant: the sweep
+    /// only gets a deterministic round winner once the set of hits a round
+    /// produces is independent of how its tasks were scheduled (`sweep.rs`). Both
+    /// a `dimquads=3` field and a `dimquads=4` synthetic quad are exercised.
     #[test]
     fn hit_multiset_is_schedule_independent() {
         // dimquads=3: real field 1 against its winning index, winning round.
@@ -1288,8 +1239,8 @@ mod tests {
         assert_parallel_equals_serial(&index4, &field, 4);
     }
 
-    /// A `--cpulimit` deadline that is already in the past must stop the
-    /// enumeration and report `timed_out`.
+    /// A `--cpulimit` deadline already in the past must stop the enumeration and
+    /// report `timed_out`.
     #[test]
     fn past_deadline_stops_the_search() {
         let Some((run, index)) = field1_winner_index() else {
@@ -1310,10 +1261,10 @@ mod tests {
         );
     }
 
-    /// The other half of the tail's precedence: an attempt that times out while
-    /// a cancel flag is present (but never raised) is still reported as a
-    /// timeout, so the sweep's fold prints the timeout line instead of treating
-    /// the attempt as speculative work to be dropped.
+    /// The other half of the tail's precedence: an attempt that times out while a
+    /// cancel flag is present (but never raised) is still reported as a timeout,
+    /// so the sweep's fold prints the timeout line instead of treating the attempt
+    /// as speculative work to be dropped.
     #[test]
     fn a_timeout_is_not_reported_as_a_cancel() {
         let Some((run, index)) = field1_winner_index() else {
@@ -1340,7 +1291,7 @@ mod tests {
     }
 
     /// A cancel raised by a sibling is reported as `cancelled` - never as a
-    /// timeout, never as a callback stop - and it winds the walk down instead of
+    /// timeout, never as a callback stop - and winds the walk down instead of
     /// running the round to its end.
     #[test]
     fn cancel_stops_the_search_and_reports_cancelled() {
@@ -1357,7 +1308,7 @@ mod tests {
         );
 
         // Cancelled before the first query: every worker stops at its first
-        // `should_stop`, so nothing reaches the callback at all.
+        // `should_stop`, so nothing reaches the callback.
         let mut s = spec(&run.stars, None);
         s.max_objs = run.max_objs;
         let flag = AtomicBool::new(true);
@@ -1379,8 +1330,7 @@ mod tests {
         );
 
         // Cancelled mid-round (the callback stands for the sibling that just
-        // solved): the walk stops within a few hits of the flag, not at the end
-        // of the round.
+        // solved): the walk stops within a few hits of the flag, not at the end.
         let flag = AtomicBool::new(false);
         s.cancel = Some(&flag);
         let stats = solve_index(&index, &s, &|_| {
@@ -1399,10 +1349,9 @@ mod tests {
     }
 
     /// Both scale gates fire: the pre-fit |AB| check rejects when the allowed
-    /// scale range is far off, the post-fit check when the range differs from
-    /// the truth by less than the pre-fit slack (unrelated bogus quads may
-    /// still land inside such a narrow window, so only the counters are
-    /// asserted).
+    /// scale range is far off, the post-fit check when the range differs from the
+    /// truth by less than the pre-fit slack (unrelated bogus quads may still land
+    /// inside such a narrow window, so only the counters are asserted).
     #[test]
     fn scale_bounds_filter_hits() {
         let Some((run, index)) = field1_winner_index() else {
@@ -1434,21 +1383,19 @@ mod tests {
     }
 
     /// First quad of the installed dim4 index that projects cleanly into a
-    /// synthetic field frame, as `(quad, projected pixels)`. Shared by the
-    /// dim4 tests.
+    /// synthetic field frame, as `(quad, projected pixels)`; shared by the dim4
+    /// tests.
     ///
-    /// The projection runs through a tangent WCS at the QUAD'S OWN centroid
-    /// with `FIELD1_WCS`'s CD, so the synthetic plate scale is
-    /// `FIELD1_SCALE_ARCSEC` and the parity convention matches the real
-    /// fields, while any dim4 tile works no matter where on the sky it sits -
-    /// projecting through `FIELD1_WCS` itself would require the tile to
-    /// overlap field 1. Guards: every pair of projected pixels at least 50 px
-    /// apart, `|AB|` inside 500..5000 px (comfortably inside the backbone
-    /// window the tests' 4656x3522 frame gives: 352 px up to the 5838 px
-    /// diagonal), and the height of C over AB at least 5 % of the triangle's
-    /// longest side, so `fit_tan_wcs` stays well-conditioned (a collinear C can
-    /// sit dead-center of the code circle, so the index's CIRCLE filter does
-    /// not exclude it).
+    /// The projection runs through a tangent WCS at the QUAD'S OWN centroid with
+    /// `FIELD1_WCS`'s CD, so the synthetic plate scale is `FIELD1_SCALE_ARCSEC` and
+    /// the parity convention matches the real fields while any dim4 tile works no
+    /// matter where it sits (through `FIELD1_WCS` itself it would have to overlap
+    /// field 1). Guards: every pair of projected pixels at least 50 px apart, `|AB|`
+    /// inside 500..5000 px (inside the backbone window the tests' 4656x3522 frame
+    /// gives: 352 px up to the 5838 px diagonal), and C's height over AB at least
+    /// 5 % of the triangle's longest side, so `fit_tan_wcs` stays well-conditioned
+    /// (a collinear C can sit dead-center of the code circle, so the index's CIRCLE
+    /// filter does not exclude it).
     fn pick_dim4_quad(index: &Index) -> Option<(usize, Vec<[f64; 2]>)> {
         for q in 0..index.meta.nquads {
             let quad = index.quad(q);
@@ -1512,13 +1459,12 @@ mod tests {
         None
     }
 
-    /// dimquads=4 (works with any installed 4-star index that declares
-    /// `CXDX`+`CXDXLT1` - the flags this code path needs, which the test
-    /// asserts right after the load): a synthetic field built by projecting a
-    /// real quad's stars through a tangent WCS at the quad's own centroid (see
-    /// [`pick_dim4_quad`]) must be solved back to that quad through the C/D
-    /// permutation + CXDX/CXDXLT1 path, with sub-pixel residuals and the
-    /// synthetic plate scale recovered.
+    /// dimquads=4 (any installed 4-star index that declares `CXDX`+`CXDXLT1` -
+    /// the flags this code path needs, which the test asserts right after the
+    /// load): a synthetic field built by projecting a real quad's stars through a
+    /// tangent WCS at the quad's own centroid (see [`pick_dim4_quad`]) must be
+    /// solved back to that quad through the C/D permutation + CXDX/CXDXLT1 path,
+    /// with sub-pixel residuals and the synthetic plate scale recovered.
     #[test]
     fn dimquads4_synthetic_quad_is_found() {
         let Some(meta) = testutil::dim4_index() else {
@@ -1531,8 +1477,7 @@ mod tests {
         let (q, px) = pick_dim4_quad(&index).expect("no usable dim4 quad found");
 
         // Field stars = the projected quad in slot order, so the enumeration's
-        // `a < b` backbone is (0, 1); the decreasing flux is fixture detail,
-        // the solver never reads it.
+        // `a < b` backbone is (0, 1); the decreasing flux is fixture detail.
         let field: Vec<Star> = px
             .iter()
             .enumerate()
@@ -1563,8 +1508,8 @@ mod tests {
     }
 
     /// The `process_hit` scale gates use explicit-accept range checks, so a NaN
-    /// scale is rejected; the open-range form (`v < lo || v > hi`) fails open.
-    /// Finite values must behave identically.
+    /// scale is rejected (the open-range form `v < lo || v > hi` fails open);
+    /// finite values must behave identically.
     #[test]
     fn scale_gate_rejects_nan() {
         let range = 1.0..=10.0;
@@ -1577,11 +1522,11 @@ mod tests {
         }
     }
 
-    /// The post-fit solution gate (`PositionHint::contains`) is inclusive of
-    /// the boundary and - unlike the pre-fit gate, which rejects NaN
+    /// The post-fit solution gate (`PositionHint::contains`) is inclusive of the
+    /// boundary and - unlike the pre-fit gate, which rejects NaN
     /// (`Searcher::process_hit`) - a NaN sky center PASSES it, because the
-    /// comparison is a negation. Nothing else exercises that divergence, so pin
-    /// it here (hermetic: no index or field data).
+    /// comparison is a negation. Nothing else exercises that divergence
+    /// (hermetic: no index or field data).
     #[test]
     fn position_hint_contains_boundary_and_nan() {
         let hint = PositionHint {
@@ -1603,9 +1548,8 @@ mod tests {
     /// formula instead of calling `codes::star_code`, so the unit-test guard in
     /// `codes.rs` would otherwise validate a copy the binary never runs. This
     /// data-free test recomputes the inlined `base` exactly as `backbone` +
-    /// `triple`/`quad` build it (including the `* (1.0/s)` reciprocal form)
-    /// and pins it against the canonical `codes::star_code` to ~1e-12, for
-    /// both a triple and a quad, with no index or field data at all.
+    /// `triple`/`quad` build it (including the `* (1.0/s)` reciprocal form) and
+    /// pins it against `codes::star_code` to ~1e-12, for a triple and a quad.
     #[test]
     fn inlined_star_code_matches_codes_star_code() {
         // Hand-built backbone A,B and non-backbone stars C,D (pixel coords).

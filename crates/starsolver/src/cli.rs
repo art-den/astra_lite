@@ -1,14 +1,11 @@
 //! CLI surface: the `clap` `Args`, the scale-unit and angle parsing behind the
-//! flags, and `SolveOptions` - the parsed options, with CLI units already
-//! converted into the ones the solver works in (arcsec/pixel, degrees, seconds).
+//! flags, and `SolveOptions` - CLI units converted into the solver's
+//! (arcsec/pixel, degrees, seconds). Flag names and value forms stay compatible
+//! with `solve-field` wherever we have the matching knob, so the rules below
+//! record what a compatible command line may contain.
 //!
-//! Flag names and value forms are kept compatible with astrometry.net's
-//! `solve-field` wherever this solver has the matching knob, so the rules stated
-//! below are also the record of what a compatible command line may contain.
-//!
-//! `Args` is re-exported from the crate root as part of the public API; its
-//! fields stay crate-private, so callers build it by parsing arguments:
-//! `Args::parse()` in the binary, `Args::try_parse_from(..)` in-process.
+//! `Args` is re-exported with crate-private fields, so callers build it by
+//! parsing (`Args::parse()`, `Args::try_parse_from(..)`).
 
 use anyhow::{Result, bail, ensure};
 use clap::Parser;
@@ -34,9 +31,9 @@ pub(crate) enum ScaleUnits {
     FocalMm,
 }
 
-/// Parses a `--scale-units` name: surrounding whitespace and letter case are
-/// ignored, and every unit but `focalmm` also has short aliases (`degw`/`dw`,
-/// `amw`/`aw`, `app`); the error message lists each accepted spelling.
+/// Parses a `--scale-units` name, ignoring surrounding whitespace and letter
+/// case; every unit but `focalmm` also has short aliases (`degw`/`dw`,
+/// `amw`/`aw`, `app`).
 fn parse_scale_units(s: &str) -> Result<ScaleUnits> {
     match s.trim().to_ascii_lowercase().as_str() {
         "degwidth" | "degw" | "dw" => Ok(ScaleUnits::DegWidth),
@@ -50,10 +47,9 @@ fn parse_scale_units(s: &str) -> Result<ScaleUnits> {
     }
 }
 
-/// Converts one `--scale-*` bound into arcsec/pixel: a field-width unit is
-/// divided by the frame width in pixels (`width_px`), `arcsecperpix` is the
-/// bound itself and `focalmm` is refused. The result has to come out positive
-/// and finite, so a zero, negative or non-finite bound fails here.
+/// Converts one `--scale-*` bound into arcsec/pixel: a field-width unit divided
+/// by `width_px`, `arcsecperpix` the bound itself, `focalmm` refused. The converted
+/// value must be positive and finite, so a zero, negative or non-finite bound fails.
 fn to_arcsec_per_pix(units: ScaleUnits, value: f64, width_px: f64) -> Result<f64> {
     let app = match units {
         ScaleUnits::DegWidth => deg2arcsec(value) / width_px,
@@ -68,12 +64,11 @@ fn to_arcsec_per_pix(units: ScaleUnits, value: f64, width_px: f64) -> Result<f64
     Ok(app)
 }
 
-/// Parses a sexagesimal angle written loosely as `[+-]dd:mm:ss`: an optional
-/// sign, then two colon-separated components of one or two digits each, then
-/// the seconds, whose digits are optional (`digits* ('.' digits*)?`) - so
-/// `"1:2:"` and `"1:2:."` are legal and mean zero seconds. The whole string has
-/// to match: one colon, three digits in a component or trailing junk is not
-/// sexagesimal and returns `None`, leaving the caller to try another form.
+/// Parses a loose sexagesimal `[+-]dd:mm:ss`: optional sign, two colon-separated
+/// components of one or two digits, then seconds whose digits are optional
+/// (`digits* ('.' digits*)?`) - so `"1:2:"` and `"1:2:."` mean zero seconds. The
+/// whole string must match: one colon, three digits in a component or trailing
+/// junk returns `None`, leaving the caller to try another form.
 fn parse_sexagesimal(s: &str, is_ra: bool) -> Option<f64> {
     let b = s.as_bytes();
     let mut i = 0usize;
@@ -100,7 +95,6 @@ fn parse_sexagesimal(s: &str, is_ra: bool) -> Option<f64> {
         }
         i += 1;
     }
-    // Seconds: `digits* ('.' digits*)?`, possibly empty.
     let start = i;
     while i < b.len() && b[i].is_ascii_digit() {
         i += 1;
@@ -119,20 +113,16 @@ fn parse_sexagesimal(s: &str, is_ra: bool) -> Option<f64> {
         "" | "." => 0.0,
         t => t.parse::<f64>().ok()?,
     };
-    // deg (or hours) + min/60 + sec/3600, folded together from the finest term
-    // up. An RA is counted in hours, so its total is scaled to degrees; the
-    // sign multiplies the finished angle, which is why it covers every
-    // component.
+    // Fold from the finest term up: deg (or hours) + min/60 + sec/3600, scaled
+    // to degrees for RA, with the sign on the finished angle.
     let value = comp[0] + (comp[1] + sec / 60.0) / 60.0;
     Some(sign * if is_ra { 15.0 * value } else { value })
 }
 
-/// Parses one `--ra`/`--dec` value as degrees, ignoring surrounding
-/// whitespace: sexagesimal is tried first (`hh:mm:ss` for RA - so hours - and
-/// `[+-]dd:mm:ss` for Dec), otherwise the value is decimal degrees. An empty
-/// string or a non-finite result is an error. A finished RA is folded into
-/// [0, 360); a Dec keeps sign and magnitude as written (no latitude range
-/// check).
+/// Parses one `--ra`/`--dec` value as degrees (whitespace trimmed): sexagesimal
+/// first (`hh:mm:ss` for RA - so hours, `[+-]dd:mm:ss` for Dec), else decimal
+/// degrees. Empty or non-finite is an error. A finished RA is folded into
+/// [0, 360); a Dec is kept as written (no latitude range check).
 fn parse_angle(s: &str, is_ra: bool) -> Result<f64> {
     let s = s.trim();
     ensure!(!s.is_empty(), "empty angle");
@@ -184,10 +174,9 @@ pub struct Args {
     )]
     scale_units: String,
 
-    // allow_hyphen_values: for CLI compatibility a negative hint value may be
-    // passed as its own token - `-3 -4 -4 -60` reads RA -4 and Dec -60. Only
-    // --ra/--dec accept that; every other numeric flag must be positive, so a
-    // token starting with `-` there is a missing value, not a value.
+    // allow_hyphen_values: for CLI compatibility a negative hint may be its own
+    // token (`-3 -4 -4 -60` reads RA -4, Dec -60). Only --ra/--dec accept that -
+    // elsewhere a `-` token is a missing value, not a value.
     /// Assuming RA of the field centre, degrees or hh:mm:ss.
     #[arg(
         short = '3',
@@ -237,11 +226,11 @@ pub struct SolveOptions {
     pub app_max: f64,
     /// `(ra, dec, radius)` in degrees, when the caller gave a field position.
     pub radecs: Option<PositionHint>,
-    /// CPU limit for the solve loop, seconds.
+    /// CPU limit, seconds.
     pub cpulimit: f64,
     pub verbose: bool,
-    /// Units the `--scale-*` bounds were given in (retained for the verbose
-    /// warning so `--scale-units` is parsed only once).
+    /// Units the `--scale-*` bounds came in, kept for the verbose warning so
+    /// `--scale-units` is parsed only once.
     pub(crate) units: ScaleUnits,
 }
 
@@ -251,11 +240,9 @@ impl SolveOptions {
             .file
             .clone()
             .ok_or_else(|| anyhow::anyhow!("no input .xyls file given"))?;
-        // The frame size: the CLI values win, but only as a pair. `cli` treats
-        // a missing *or* zero flag as absent, and the file fallback is a pair
-        // too (`xyls::frame_size` wants IMAGEW and IMAGEH both >= 1), so one
-        // side is never taken from the command line and the other from the
-        // file - a lone `-w` does not pair with a file `IMAGEH`.
+        // The frame size: the CLI values win, but only as a pair - a missing or
+        // zero flag is absent, and `xyls::frame_size` is a pair too (both keys
+        // >= 1), so the two sides never come from different sources.
         let cli = |v: Option<u32>| v.filter(|n| *n >= 1);
         let (width, height) = match (cli(args.width), cli(args.height)) {
             (Some(w), Some(h)) => (w, h),
@@ -269,10 +256,8 @@ impl SolveOptions {
         let (width, height) = (f64::from(width), f64::from(height));
 
         let units = parse_scale_units(&args.scale_units)?;
-        // A single bound means an exact scale (project decision): the range
-        // collapses to that one value instead of staying open on one side,
-        // where solve-field would widen a missing bound to 0.1-180 deg of field
-        // width.
+        // One bound given means an exact scale, deliberately unlike solve-field,
+        // which leaves the missing side open (widening to 0.1-180 deg).
         let given = match (args.scale_low, args.scale_high) {
             (Some(lo), Some(hi)) => Some((lo, hi)),
             (Some(lo), None) => Some((lo, lo)),
@@ -289,10 +274,9 @@ impl SolveOptions {
                 );
                 (lo, hi)
             }
-            // No bound given (blind mode): the field width may be anything from
-            // MIN_WIDTH_DEG to MAX_WIDTH_DEG (0.1-180 deg), read exactly like an
-            // explicit width bound, i.e. divided by the frame width - and always
-            // in degrees, since --scale-units has no bound to apply to.
+            // Blind mode: MIN_WIDTH_DEG..MAX_WIDTH_DEG read like an explicit
+            // width bound (divided by the frame width), always in degrees since
+            // --scale-units has no bound to apply to.
             None => (
                 deg2arcsec(MIN_WIDTH_DEG) / width,
                 deg2arcsec(MAX_WIDTH_DEG) / width,
@@ -322,9 +306,8 @@ impl SolveOptions {
         }
 
         let cpulimit = args.cpulimit.unwrap_or(CPU_LIMIT_SECS);
-        // Positive and representable as a Duration: `run_into` builds the sweep
-        // deadline with `Duration::from_secs_f64`, which panics on `inf` or a
-        // huge finite value - exit 101 where an input error should exit 2.
+        // Positive and Duration-representable: `Duration::from_secs_f64` panics
+        // on `inf` or a huge value - exit 101 where an input error should exit 2.
         ensure!(
             cpulimit > 0.0 && Duration::try_from_secs_f64(cpulimit).is_ok(),
             "--cpulimit must be a positive, finite number of seconds"
@@ -344,21 +327,15 @@ impl SolveOptions {
     }
 }
 
-/// True when `--scale-units` was named with a unit other than the default
-/// `degwidth` while neither scale bound was given, so the unit has nothing to
-/// apply to (`run_into` warns about this under `-v`). `units` is the value
-/// `SolveOptions` already parsed, so the string is not parsed a second time
-/// here.
+/// True when a non-default `--scale-units` was named with no bound to apply to
+/// (`run_into` warns under `-v`). `units` is pre-parsed, avoiding a second parse.
 pub(crate) fn given_scale_missing(units: ScaleUnits, args: &Args) -> bool {
     units != ScaleUnits::DegWidth && args.scale_low.is_none() && args.scale_high.is_none()
 }
 
-/// Test helper: parses `extra` on top of a command line that already carries
-/// `-I /tmp/indices`, a 1000x1000 frame and `img.xyls`. `from_args` opens none
-/// of those paths, and with the frame on the command line there is no header
-/// fallback either. Shared by the sweep tests
-/// (`solve_field_honors_a_past_deadline` builds its options through the real CLI
-/// parser).
+/// Test helper: parses `extra` on top of `-I /tmp/indices`, a 1000x1000 frame
+/// and `img.xyls`; `from_args` opens none of those and the CLI frame means no
+/// header fallback. Also used by the sweep tests.
 #[cfg(test)]
 pub(crate) fn parse_options(extra: &[&str]) -> Result<SolveOptions> {
     let mut argv = vec![
@@ -372,7 +349,6 @@ pub(crate) fn parse_options(extra: &[&str]) -> Result<SolveOptions> {
         "img.xyls",
     ];
     argv.extend_from_slice(extra);
-    // Propagate clap parse errors as Err, so tests can assert on them.
     let args = Args::try_parse_from(argv).map_err(|e| anyhow::anyhow!("{e}"))?;
     SolveOptions::from_args(&args)
 }
@@ -420,13 +396,12 @@ mod tests {
         assert!((parse_angle("+36:22:33.512", false).unwrap() - 36.375976).abs() < 1e-6);
         // The sign applies to every component of a Dec.
         assert!((parse_angle("-36:22:33.512", false).unwrap() + 36.375976).abs() < 1e-6);
-        // An empty seconds field is legal and counts as zero seconds.
+        // An empty seconds field counts as zero.
         assert!((parse_angle("1:2:", false).unwrap() - 1.0333333).abs() < 1e-6);
         // Negative RA is folded into [0, 360).
         assert!((parse_angle("-10", true).unwrap() - 350.0).abs() < 1e-9);
-        // One colon is not sexagesimal (two are required) and not a number
-        // either, so it is an error; astrometry.net's solve-field would quietly
-        // take the numeric prefix 23 instead.
+        // One colon is neither sexagesimal (two colons required) nor a number, so
+        // it errors; solve-field would quietly take the numeric prefix instead.
         assert!(parse_angle("23:00", true).is_err());
         assert!(parse_angle("1:2:3:4", true).is_err());
         assert!(parse_angle("123:00:00", true).is_err());
@@ -434,8 +409,8 @@ mod tests {
         assert!(parse_angle("N", false).is_err());
     }
 
-    /// `--index-dir` became optional: the options parse without it (where the
-    /// index files come from is decided later, by `indexdir::IndexDirs`).
+    /// `--index-dir` is optional; the index files are located later, by
+    /// `indexdir::IndexDirs`.
     #[test]
     fn options_parse_without_index_dir() {
         let args = Args::try_parse_from(["starsolver", "-w", "1000", "-e", "1000", "i.xyls"])
@@ -446,10 +421,9 @@ mod tests {
         assert_eq!(opt.file, PathBuf::from("i.xyls"));
     }
 
-    /// One CLI flag is not a frame: the pair counts together or not at all, so
-    /// the size is then taken from the file and - with no readable file - this
-    /// is an input error even though `-w` was given. A zero-valued flag counts
-    /// as missing on the same grounds (a frame side must be at least 1 px).
+    /// The CLI frame counts only as a pair, else the size comes from the file:
+    /// with no readable file this errors even though `-w` was given. A
+    /// zero-valued flag counts as missing (a frame side must be >= 1 px).
     #[test]
     fn a_lone_frame_flag_defers_to_the_file() {
         let missing = "no-such-file-xyz.xyls";
@@ -470,8 +444,8 @@ mod tests {
         }
     }
 
-    /// A `.xyls` whose primary header records the frame: `from_args` reads
-    /// headers only, so a primary HDU with the keys is all the fallback needs.
+    /// A `.xyls` carrying the frame in its primary header: `from_args` reads
+    /// headers only, so that is all the fallback needs.
     fn frame_xyls_bytes(w: u32, h: u32) -> Vec<u8> {
         let mut buf: Vec<u8> = Vec::new();
         for card in [
@@ -489,8 +463,7 @@ mod tests {
         buf
     }
 
-    /// The headline fallback: with no `-w`/`-e`, `SolveOptions` takes the frame
-    /// from the file; a full CLI pair still beats the file's keys.
+    /// With no `-w`/`-e` the frame comes from the file; a full CLI pair beats it.
     #[test]
     fn frame_falls_back_to_the_file_in_solve_options() {
         let unique = std::time::SystemTime::now()
@@ -553,20 +526,19 @@ mod tests {
         assert!(parse_options(&["--scale-low", "2", "--scale-high", "1"]).is_err());
     }
 
-    /// `--cpulimit inf`/a huge value must be an input error (exit 2), not a
-    /// panic once `run_into` turns the limit into a `Duration`.
+    /// `--cpulimit inf` or a huge value is an input error (exit 2), not a
+    /// `Duration` panic.
     #[test]
     fn cpulimit_rejects_non_finite_or_huge() {
         assert!(parse_options(&["--cpulimit", "inf"]).is_err());
         assert!(parse_options(&["--cpulimit", "1e300"]).is_err());
         assert!(parse_options(&["--cpulimit", "nan"]).is_err());
-        // A large-but-reasonable value is still accepted.
+        // The guard must not over-reject a large-but-reasonable value.
         assert!(parse_options(&["--cpulimit", "1e9"]).is_ok());
     }
 
-    /// Non-finite scale bounds / radius are rejected at the CLI, fail-closed.
-    /// The solver's own scale gate drops a NaN as well, but a bad bound should
-    /// not get that far.
+    /// Non-finite scale bounds and radius fail at the CLI, before the solver's
+    /// own gate ever sees them.
     #[test]
     fn non_finite_scale_and_radius_are_errors() {
         assert!(parse_options(&["--scale-low", "inf"]).is_err());
@@ -575,8 +547,8 @@ mod tests {
         assert!(parse_options(&["--ra", "10", "--dec", "5", "--radius", "inf"]).is_err());
     }
 
-    /// CLI compatibility: a negative hint value may be a separate token
-    /// (`-3 -4 -4 -60` sets RA -4, Dec -60), sexagesimal form included.
+    /// A negative hint may be a separate token (`-3 -4 -4 -60`), sexagesimal
+    /// form included.
     #[test]
     fn negative_hints_parse_as_separate_tokens() {
         let opt = parse_options(&["--ra", "10", "--dec", "-60"]).unwrap();
@@ -589,8 +561,7 @@ mod tests {
         assert!((h.dec_deg + 60.0).abs() < 1e-12);
     }
 
-    /// Flags that must be positive do not swallow a following `-...` token
-    /// (no `allow_hyphen_values` on them).
+    /// Flags that must be positive do not swallow a following `-...` token.
     #[test]
     fn positive_only_flags_reject_hyphen_tokens() {
         assert!(parse_options(&["--cpulimit", "-1"]).is_err());

@@ -1,21 +1,21 @@
 //! Reading `.xyls` — the input star list.
 //!
-//! The star table is a BINTABLE whose first column (`TTYPE1`) is `X`, followed
-//! by `Y` and optionally `FLUX`; HDU0 is the plain IMAGE header a FITS file
-//! starts with, which may carry the frame-size cards. Positions are read out of
-//! the columns as doubles with no re-basing or scaling applied, and any
-//! single-element numeric `TFORM` is accepted, so a list stored as `1E` floats
-//! or as integers reads as well as one stored as `1D`.
+//! The star table is a BINTABLE whose first column (`TTYPE1`) is `X`, then `Y`
+//! and optionally `FLUX`; HDU0 is the plain IMAGE header, which may carry the
+//! frame-size cards. Positions are read as doubles with no re-basing or scaling,
+//! and any single-element numeric `TFORM` reads (`1E` and integers as well as
+//! `1D`).
 //!
-//! A `.xyls` need not state the frame size (then the CLI has to supply it), but
-//! it may carry `IMAGEW`/`IMAGEH` header keys, which [`frame_size`] reads for
-//! callers that omit `-w`/`-e`.
+//! A `.xyls` need not state the frame size (then the CLI has to supply it); it
+//! may carry `IMAGEW`/`IMAGEH` keys, which [`frame_size`] reads for callers that
+//! omit `-w`/`-e`.
 //!
-//! Rows with non-finite X/Y are dropped and non-finite FLUX values are clamped
-//! (see `stars_from`); stars outside the frame (CLI or file) are only counted
-//! and warned about, never removed (see `warn_out_of_frame`). The surviving list
-//! is then run through the position reordering in [`crate::augment`], so the
-//! caller receives that order rather than the order the rows are stored in.
+//! Rows with non-finite X/Y are dropped and non-finite FLUX clamped
+//! (`stars_from`); out-of-frame stars are only counted and warned about, never
+//! removed (`warn_out_of_frame`). The survivors go through the position
+//! reordering in [`crate::augment`] - the caller receives that order, not the
+//! stored row order - and [`brightest_first`] is a separate step `run_into`
+//! applies on top, so the solver does not work in the [`crate::augment`] order.
 
 use anyhow::{Context, Result, bail, ensure};
 use std::path::Path;
@@ -28,39 +28,28 @@ use crate::fits::{Fits, FitsHeaders, Header, Headers, Table};
 pub struct Star {
     pub x: f64,
     pub y: f64,
-    /// The `FLUX` column, carried through unchanged apart from the non-finite
-    /// clamp in `stars_from`. The quad enumeration never reads it: what stands
-    /// in for brightness there is the star's POSITION in the list (see
-    /// [`crate::augment`]). The only reader is `verify::probe_stars`, which
-    /// picks the pre-verification probe's detections; with no FLUX column every
-    /// flux is 0.0 and that pick degenerates to list order.
+    /// The `FLUX` column, unchanged apart from the non-finite clamp in
+    /// `stars_from`. Quad enumeration never reads it: brightness there is the
+    /// star's POSITION in the list (see [`crate::augment`]). Only
+    /// `verify::probe_stars` and [`brightest_first`] read it; with no FLUX column
+    /// every flux is 0.0 and both degenerate to list order.
     pub flux: f64,
 }
 
 /// Project decision, not a format limit: reject absurdly large xylists before
 /// the derived allocations happen.
 ///
-/// The peak at the cap is an analytic bound, not a measurement, and counts only
-/// what this reader derives: the `Vec<Star>` (24 B per row, so 24 MB) plus the
-/// `augment` transients it feeds - two `Vec<f64>` coordinate copies (16 MB) and
-/// the two bin-sort vectors (24 B and 16 B per row, 40 MB) - about 80 MB in
-/// all. The column buffers add another 24 MB but are released before
-/// `preprocess` runs (see `stars_from`). Either way this stays inside the 200 MB
-/// RSS budget, and the file bytes themselves are mmap'd by `Fits::open` before
-/// this check, so the cap bounds the derived allocations, not the raw read.
-/// Verification consumes the whole list, so an over-cap file is an error rather
-/// than a silent truncation.
-///
-/// Future optimization: iterate the rows in a single pass instead of
-/// materializing one column vector per column, which would cut the peak again.
+/// The peak at the cap is an analytic bound over what this reader derives (its
+/// `Vec<Star>` plus the `augment` transients it feeds), inside the 200 MB RSS
+/// budget; the file bytes are already mmap'd by `Fits::open`, so the cap bounds
+/// the derived allocations, not the raw read. It bounds the read, not the solve:
+/// `run_into` keeps the brightest [`crate::params::TOP_OBJS`] stars afterwards, so
+/// an over-cap file stays an error rather than a silent truncation.
 const MAX_XYLS_ROWS: usize = 1_000_000;
 
-/// Opens the star table: the first BINTABLE whose first column is `X`.
-///
-/// The table is picked by `TTYPE1` alone, the column a `.xyls` keeps `X` in. A
-/// table carrying `X` further right is not something this reader can open, and
-/// it gets a message saying so instead of the misleading "no BINTABLE column
-/// named X" that the fallback below would produce.
+/// Opens the star table: the first BINTABLE whose first column (`TTYPE1`) is `X`.
+/// A table carrying `X` further right cannot be opened, and is reported by name,
+/// not by the misleading "no BINTABLE column named X" the fallback below gives.
 fn xy_table(fits: &Fits) -> Result<Table<'_>> {
     if let Some(i) = fits.find_table("X") {
         return fits.table(i);
@@ -79,19 +68,15 @@ fn count_x_tables(fits: &Fits) -> usize {
         .count()
 }
 
-/// Reads the star list from an already parsed FITS file.
+/// Reads the star list from an already parsed FITS file. Every returned star has
+/// finite `x`/`y` and finite `flux`: a non-finite coordinate can never match and
+/// the position reordering expects finite X/Y, so such a row is dropped instead
+/// of turning the file into an error; a non-finite `FLUX` is no reason to lose a
+/// detection, so that star is kept at the dimmest finite value. All-unusable rows
+/// come back empty, which the caller reports as an input error.
 ///
-/// Guarantees that every returned star has finite `x`/`y` and finite `flux`. A
-/// non-finite coordinate can never match anything in the solver and the position
-/// reordering expects finite X/Y, so such a row is dropped here instead of
-/// turning the whole file into an error. A non-finite `FLUX` is no reason to
-/// lose a detection, so that star is kept with the dimmest finite value.
-///
-/// A list whose rows are all unusable comes back empty; the caller reports that
-/// as an input error rather than solving nothing.
-///
-/// The returned order is not the file's: the rows are read in file order and
-/// then run through [`crate::augment::preprocess`].
+/// The returned order is not the file's: rows are read in file order, then run
+/// through [`crate::augment::preprocess`].
 fn stars_from(fits: &Fits) -> Result<Vec<Star>> {
     let ntables = count_x_tables(fits);
     if ntables > 1 {
@@ -124,10 +109,8 @@ fn stars_from(fits: &Fits) -> Result<Vec<Star>> {
         }
         // A column always holds `nrows` values, so the index is in range.
         let raw_flux = fluxes.as_ref().map_or(0.0, |f| f[i]);
-        // Keep the star, but record a dim flux: dropping it would lose a real
-        // detection whose brightness measurement alone is corrupt. Nothing orders
-        // by flux, so the clamped value only has to keep the guarantee that a
-        // returned flux is finite.
+        // Keep the star: only its brightness is corrupt. The clamp decides where
+        // it lands in `brightest_first`, since f64::MIN sorts last.
         let flux = if f64::is_finite(raw_flux) {
             raw_flux
         } else {
@@ -143,17 +126,15 @@ fn stars_from(fits: &Fits) -> Result<Vec<Star>> {
         );
     }
     // Free the column vectors before `preprocess` allocates its own transients:
-    // at the row cap they are 24 MB of otherwise overlapping peak.
+    // at the row cap they are 24 MB of peak that would otherwise overlap.
     drop((data, fluxes));
-    // No flux sort here: `preprocess` bins the stars on a grid over their
-    // bounding box and emits them round-robin over the bins, and the depth ramp
-    // reads its star windows out of that ordering.
+    // No flux sort here: `preprocess` bins the stars over their bounding box and
+    // emits them round-robin, and the depth ramp reads its windows from that.
     Ok(augment::preprocess(stars))
 }
 
-/// Slack, in px, for the out-of-frame warning. Edge detections straddle the
-/// frame boundary, and a slightly mis-measured centroid is not worth an alarm;
-/// diagnostic only, it never affects the solver numerics.
+/// Slack, in px, for the out-of-frame warning (edge detections straddle the
+/// boundary). Diagnostic only, it never affects the solver numerics.
 const FRAME_MARGIN_PX: f64 = 5.0;
 
 /// Is a (finite) star clearly outside the `width` x `height` frame?
@@ -167,9 +148,7 @@ fn out_of_frame(star: &Star, width: f64, height: f64) -> bool {
 /// Warns (stderr) about stars outside the image frame; returns their count.
 ///
 /// Warning only, never a filter: dropping a star here would silently change the
-/// star list the depth ramp and verification work on, so a star that is merely
-/// far from the frame stays in the input. The count itself is a diagnostic, and
-/// `FRAME_MARGIN_PX` keeps ordinary edge detections from triggering the warning.
+/// star list the depth ramp and verification work on. The count is a diagnostic.
 pub fn warn_out_of_frame(stars: &[Star], width: f64, height: f64) -> usize {
     let n = stars
         .iter()
@@ -185,28 +164,39 @@ pub fn warn_out_of_frame(stars: &[Star], width: f64, height: f64) -> usize {
 }
 
 /// Reads the star list from disk in the order [`crate::augment`] delivers it:
-/// the file rows with their dense source lines filtered out and the survivors
-/// interleaved over their position bins, not the order they are stored in.
+/// dense source lines filtered out, survivors interleaved over their position
+/// bins, not the order the rows are stored in.
 pub fn load(path: &Path) -> Result<Vec<Star>> {
     let fits = Fits::open(path).with_context(|| format!("loading xylist {}", path.display()))?;
     stars_from(&fits).with_context(|| format!("reading xylist {}", path.display()))
 }
 
+/// Keeps the brightest `cap` stars, in descending-flux order.
+///
+/// The sort is stable, so equal fluxes - and a file with no FLUX column, where
+/// every flux is 0.0 - keep the incoming [`crate::augment`] order, and a list at
+/// or below `cap` is only sorted, never cut. Sorting still pays off there: the
+/// depth ramp reads its star windows out of list position, so bright stars first
+/// reach their quads in cheaper rounds. The cap trade-off is in
+/// [`crate::params::TOP_OBJS`]; every flux must be finite, per [`stars_from`].
+pub(crate) fn brightest_first(mut stars: Vec<Star>, cap: usize) -> Vec<Star> {
+    stars.sort_by(|a, b| b.flux.total_cmp(&a.flux));
+    stars.truncate(cap);
+    stars.shrink_to_fit(); // the read buffer of a 1M-row file is ~24 MB
+    stars
+}
+
 /// Frame size recorded in the file: the `IMAGEW`/`IMAGEH` pair of the primary
-/// header, else of the first extension header. The CLI `-w`/`-e` pair wins over
-/// this - the file is consulted only when that pair is missing or incomplete,
-/// never mixed with it (a lone `-w` never pairs with a file `IMAGEH`; see
-/// `SolveOptions::from_args`).
+/// header, else of the first extension header. The CLI `-w`/`-e` pair wins - the
+/// file is consulted only when that pair is missing or incomplete, never mixed
+/// with it (a lone `-w` never pairs with a file `IMAGEH`; see
+/// `SolveOptions::from_args`). Only the headers are read, never the table data.
 ///
-/// Only the headers are read, never the table data, so the cost does not depend
-/// on how many stars the list holds.
-///
-/// `Ok(None)` means "this file carries no usable frame size": no pair in either
-/// header, one card in each header (they must come as a pair out of one header),
-/// a value that is not an integer card value (a float-formatted `4656.0` is
-/// read as a float), a size below 1, or one that does not fit `u32`. All of them
-/// collapse into the caller's single "width and height must be given or stored
-/// in the headers" error, which is one exit-2 message rather than one per case.
+/// `Ok(None)` means "no usable frame size": no pair in either header, one card in
+/// each (they must come as a pair out of one header), a non-integer card value (a
+/// float-formatted `4656.0` reads as a float), a size below 1 or one that does not
+/// fit `u32`. All collapse into the caller's single exit-2 "width and height must
+/// be given or stored in the headers" error.
 pub fn frame_size(path: &Path) -> Result<Option<(u32, u32)>> {
     let fits = FitsHeaders::open(path)
         .with_context(|| format!("reading headers of {}", path.display()))?;
@@ -229,8 +219,8 @@ mod tests {
     use super::*;
     use crate::fits::{BLOCK_SIZE, CARD_SIZE};
 
-    /// Cards + `END`, each card space-padded to `CARD_SIZE` and the whole header
-    /// padded out to a multiple of `BLOCK_SIZE`.
+    /// Cards + `END`: each card padded to `CARD_SIZE`, the header to a multiple of
+    /// `BLOCK_SIZE`.
     fn header_block(cards: &[String]) -> Vec<u8> {
         let mut blocks: Vec<u8> = Vec::new();
         for c in cards {
@@ -366,8 +356,8 @@ mod tests {
         make_fits(rows, with_flux, "X")
     }
 
-    /// A valid `X, Y` xylist with `nrows` rows in 1-byte columns, so a
-    /// row count beyond the cap costs kilobytes rather than gigabytes.
+    /// A valid `X, Y` xylist with `nrows` rows in 1-byte columns, so a row count
+    /// beyond the cap costs kilobytes rather than gigabytes.
     fn make_many_rows(nrows: usize) -> Vec<u8> {
         let mut data: Vec<u8> = Vec::with_capacity(2 * nrows);
         for i in 0..nrows {
@@ -379,9 +369,9 @@ mod tests {
         buf
     }
 
-    /// No flux sort: a row set with a zero-height bounding box cannot be put on
-    /// a grid, so `uniformize` hands the list back unchanged and the file order
-    /// must survive even though the fluxes are not descending.
+    /// The reader must not sort by flux: rows on a zero-height bounding box cannot
+    /// be gridded, so `uniformize` returns the list unchanged and file order
+    /// survives despite the non-descending fluxes. Pins `stars_from` alone.
     #[test]
     fn reads_file_order_when_uniformize_is_a_no_op() {
         let buf = make_xyls(
@@ -406,10 +396,10 @@ mod tests {
         assert_eq!(stars[2].x, 3.0);
     }
 
-    /// End to end on a sample list: the reader hands back the position-binned
-    /// order of the file rows. The permutation itself is pinned in `augment`'s
-    /// `uniformize_reproduces_the_fixture_order`, so what is checked here is the
-    /// reader's half of that handoff.
+    /// End to end: the reader hands back the position-binned order of the file
+    /// rows (the permutation itself is pinned in `augment`'s
+    /// `uniformize_reproduces_the_fixture_order`); checked here is the reader's
+    /// half - `load` only, before `run_into` reorders the list brightest-first.
     #[test]
     fn loads_the_fixture_in_the_augment_order() {
         if !crate::testutil::have_file("testdata", "1920x1080-2.xyls") {
@@ -435,16 +425,15 @@ mod tests {
                 "position {i} must hold file row {row}"
             );
         }
-        // Explicitly not a brightness order: a flux-sorted list is
-        // non-increasing, so one increasing adjacent pair rules it out.
+        // Not a brightness order: one increasing adjacent flux pair rules it out.
         assert!(
             stars.windows(2).any(|w| w[0].flux < w[1].flux),
             "the loaded list still looks flux-sorted"
         );
     }
 
-    /// A list without a FLUX column still loads (all fluxes equal). Two stars
-    /// well apart land in separate bins, so they keep their file order.
+    /// A list without a FLUX column still loads (all fluxes equal). Two stars well
+    /// apart land in separate bins, so they keep their file order.
     #[test]
     fn reads_without_flux_column() {
         let buf = make_xyls(&[(7.0, 8.0, 0.0), (9.0, 10.0, 0.0)], false);
@@ -498,13 +487,11 @@ mod tests {
         assert!(err.contains(&MAX_XYLS_ROWS.to_string()), "got: {err}");
     }
 
-    /// The same shape just below the cap still loads (the cap is a bound on
-    /// absurd input, not on real ones). The rows are position-reordered like any
-    /// other list: `x = i % 251` reaches 250 and the `as u8` cast of `i % 257`
-    /// reaches 255 (the value 256 wraps to 0), so the box spans 250 x 255 px and
-    /// the bin budget grids it 3 x 3. Each pass of the round-robin takes one star
-    /// per occupied bin, so the first positions out are the first star of each
-    /// bin (file rows 0, 84, 85, 167, 170) rather than the first file rows.
+    /// Just below the cap the same shape still loads (the cap bounds absurd input,
+    /// not real). Rows are position-reordered like any other list: the box spans
+    /// 250 x 255 px (`i % 251` reaches 250, `as u8` of `i % 257` reaches 255, 256
+    /// wrapping to 0) and the bin budget grids it 3 x 3, so each round-robin pass
+    /// emits the first star of each bin (file rows 0, 84, 85, 167, 170).
     #[test]
     fn loads_many_rows_under_the_cap() {
         let buf = make_many_rows(1000);
@@ -522,8 +509,7 @@ mod tests {
         assert_eq!(xs, want, "the reordering must not lose rows");
     }
 
-    /// Several `X` tables are counted for the stderr warning, and reading
-    /// still uses the first one.
+    /// Several `X` tables are counted for the stderr warning; reading uses the first.
     #[test]
     fn counts_extra_x_tables() {
         let mut buf = primary_block();
@@ -543,9 +529,8 @@ mod tests {
         assert_eq!(count_x_tables(&one), 1);
     }
 
-    /// A row with non-finite X or Y cannot take part in a fit, so it is gone.
-    /// The two survivors keep their order: they land in separate bins, and a
-    /// round-robin over singleton bins emits them by ascending input index.
+    /// A row with non-finite X or Y cannot take part in a fit, so it is gone; the
+    /// two survivors keep their order (separate bins, ascending input index).
     #[test]
     fn drops_rows_with_non_finite_positions() {
         let buf = make_xyls(
@@ -583,11 +568,10 @@ mod tests {
         );
     }
 
-    /// A star with a non-finite flux survives as the dimmest one. Nothing orders
-    /// by flux, so the only contract here is the clamp plus the position order:
-    /// these four diagonal stars land in three bins (the last two share one), and
-    /// a bin emits its stars in input-index order, so `uniformize` leaves the
-    /// list in file order.
+    /// A star with a non-finite flux survives as the dimmest one. Nothing here
+    /// orders by flux, so the contract is the clamp plus the position order: these
+    /// four stars land in three bins (the last two share one), and a bin emits its
+    /// stars in input-index order, so `uniformize` leaves the list in file order.
     #[test]
     fn non_finite_flux_is_clamped() {
         let buf = make_xyls(
@@ -612,7 +596,7 @@ mod tests {
     }
 
     /// A list whose rows are all unusable reads as empty: the caller turns that
-    /// into the exit-2 input error rather than solving nothing.
+    /// into the exit-2 input error.
     #[test]
     fn all_rows_unusable_yields_empty_list() {
         let buf = make_xyls(&[(f64::NAN, 1.0, 5.0), (2.0, f64::NAN, 5.0)], true);
@@ -620,8 +604,7 @@ mod tests {
         assert!(stars.is_empty());
     }
 
-    /// `IMAGEW`/`IMAGEH` in the primary header are the frame size, and the
-    /// primary is looked at first: its pair wins over one in the extension.
+    /// The primary header's `IMAGEW`/`IMAGEH` win over a pair in the extension.
     #[test]
     fn frame_size_reads_primary_keys_first() {
         let mut buf = primary_block_with(&frame_cards(4656, 3522));
@@ -637,8 +620,7 @@ mod tests {
         assert_eq!(frame_of(buf), Some((4656, 3522)));
     }
 
-    /// Without primary keys the first extension header is consulted, so a list
-    /// that stores its size next to the table still works.
+    /// Without primary keys the first extension header is consulted.
     #[test]
     fn frame_size_falls_back_to_the_extension_header() {
         let mut buf = primary_block();
@@ -654,8 +636,7 @@ mod tests {
         assert_eq!(frame_of(buf), Some((1920, 1080)));
     }
 
-    /// No keys at all, a half pair, or a non-positive value: no frame size, so
-    /// the caller's "must be specified" error fires.
+    /// No keys, a half pair or a non-positive value: no usable frame size.
     #[test]
     fn frame_size_absent_or_non_positive_is_none() {
         assert_eq!(frame_of(make_xyls(&[(1.0, 2.0, 3.0)], true)), None);
@@ -732,5 +713,91 @@ mod tests {
             warn_out_of_frame(&[star(0.0, 0.0), star(39.0, 19.0)], w, h),
             0
         );
+    }
+
+    /// At or below the cap nothing is dropped, the list only gets sorted: flux
+    /// descending, equal fluxes in their incoming order (stable sort).
+    #[test]
+    fn brightest_first_sorts_without_dropping() {
+        let star = |x, flux| Star { x, y: 0.0, flux };
+        let out = brightest_first(
+            vec![
+                star(1.0, 10.0),
+                star(2.0, 30.0),
+                star(3.0, 20.0),
+                star(4.0, 30.0),
+            ],
+            10,
+        );
+        assert_eq!(out.len(), 4, "a list below the cap keeps every star");
+        assert_eq!(
+            out.iter().map(|s| s.flux).collect::<Vec<_>>(),
+            vec![30.0, 30.0, 20.0, 10.0]
+        );
+        assert_eq!(
+            out.iter().map(|s| s.x).collect::<Vec<_>>(),
+            vec![2.0, 4.0, 3.0, 1.0],
+            "the two equal fluxes must keep their input order"
+        );
+    }
+
+    /// Above the cap exactly the `cap` brightest survive, in descending order, a
+    /// tie across the boundary broken by input position (stable sort).
+    #[test]
+    fn brightest_first_keeps_the_cap_brightest() {
+        let star = |x, flux| Star { x, y: 0.0, flux };
+        let out = brightest_first(
+            vec![
+                star(1.0, 5.0),
+                star(2.0, 9.0),
+                star(3.0, 7.0),
+                star(4.0, 9.0),
+                star(5.0, 1.0),
+            ],
+            3,
+        );
+        assert_eq!(out.len(), 3);
+        assert_eq!(
+            out.iter().map(|s| s.flux).collect::<Vec<_>>(),
+            vec![9.0, 9.0, 7.0],
+            "the dimmer stars must be the ones dropped"
+        );
+        assert_eq!(
+            out.iter().map(|s| s.x).collect::<Vec<_>>(),
+            vec![2.0, 4.0, 3.0],
+            "of equal fluxes the earlier input entry wins"
+        );
+    }
+
+    /// A file with no FLUX column reads as all-zero fluxes, so the cap alone
+    /// decides: the first `cap` entries, in the incoming order, unchanged.
+    #[test]
+    fn brightest_first_of_equal_fluxes_keeps_input_order() {
+        let star = |x| Star {
+            x,
+            y: 0.0,
+            flux: 0.0,
+        };
+        let out = brightest_first(vec![star(1.0), star(2.0), star(3.0)], 2);
+        assert_eq!(
+            out.iter().map(|s| s.x).collect::<Vec<_>>(),
+            vec![1.0, 2.0],
+            "a stable sort of equal keys must not permute the list"
+        );
+    }
+
+    /// Nothing to sort: the empty list (the caller's exit-2 case) and a single
+    /// star pass through the cap untouched.
+    #[test]
+    fn brightest_first_passes_short_lists_through() {
+        assert!(brightest_first(Vec::new(), 100).is_empty());
+        let one = Star {
+            x: 1.0,
+            y: 2.0,
+            flux: 3.0,
+        };
+        assert_eq!(brightest_first(vec![one], 100), vec![one]);
+        // A zero cap empties the list; only `params::TOP_OBJS` keeps that unreachable.
+        assert!(brightest_first(vec![one; 5], 0).is_empty());
     }
 }

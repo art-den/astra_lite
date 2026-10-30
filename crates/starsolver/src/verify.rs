@@ -1,57 +1,38 @@
-//! Verification and odds: take a fitted code hit, project the index stars that
-//! land in the frame against it, and accumulate the log-odds that the match is
-//! real over the field stars.
+//! Verification and odds: project the index stars of one fitted code hit into
+//! the frame and accumulate the log-odds that the match over the field stars is
+//! real.
 //!
-//! The odds model is the minimal two-term one: every field star contributes
-//! `max(match term, distractor term)` against a uniform background over the
-//! whole frame (`effA = W*H`), and nothing else. There is no conflict
-//! resolution when two field stars want one reference star: the first to claim
-//! it keeps it. The test list is scanned as delivered - in the order
-//! [`crate::augment::preprocess`] produced, with no re-shuffling here - and
-//! `bestlogodds` is the maximum over the prefixes of that scan.
-//!
-//! First-come matching is a deliberate project decision that biases the odds
-//! slightly upward: when a second field star lands near an already-taken
-//! reference star, a matcher that resolves that conflict can deny the match,
-//! while here it banks a fresh full match term. The frozen ln(1e9) solve gate
-//! ([`crate::params::ODDS_TO_SOLVE_LN`]) is calibrated against this slightly
-//! looser matcher, so the two must not be tuned independently.
+//! The odds model is the minimal two-term one: each field star contributes
+//! `max(match term, distractor term)` against a uniform background over the whole
+//! frame (`effA = W*H`), nothing else. Matching is first-come with no conflict
+//! resolution - deliberate, and it biases the odds slightly upward, since where a
+//! conflict-resolving matcher can deny a star whose reference is already taken,
+//! here a fresh full match term is banked - so the frozen ln(1e9) solve gate
+//! ([`crate::params::ODDS_TO_SOLVE_LN`]) and this matcher must not be tuned
+//! independently. The test list is scanned as delivered (the
+//! [`crate::augment::preprocess`] order, capped brightest-first on the CLI path)
+//! and never re-shuffled here, so `bestlogodds` is a maximum over its prefixes.
 //!
 //! Flow:
-//! 0. Before any of it, [`verify_probe`] may drop the hit outright: the
-//!    brightest non-quad detections are deprojected through the fitted WCS and
-//!    counted against index stars at `PROBE_RADIUS_SIGMA` UNWIDENED sigmas, and
-//!    a count that cannot be told apart from chance — priced from the index's
-//!    own catalog density — never reaches step 1. The probe is a pure function
-//!    of `(index, hit, stars, frame)`, so which hits it drops cannot depend on
-//!    how the rayon pool scheduled the attempt.
-//! 1. `sigma2 = VERIFY_PIX^2 + (INDEX_JITTER_ARCSEC / arcsec_per_pix)^2`, px^2:
-//!    the field-side centroid uncertainty added in quadrature with the index
-//!    position uncertainty converted from arcsec to pixels by the fitted scale.
-//!    Every per-star variance below is a multiple of this base value.
-//! 2. Index stars are collected by a 3D chord-ball search around the sky
-//!    position of the frame-center pixel `(W/2, H/2)`, radius = the chord to
-//!    the `(0, 0)` corner. The ball only narrows the candidate set (see the
-//!    note in [`verify_hit`]), so each star it returns is projected into pixels
-//!    and kept only when `0 <= x <= W` and `0 <= y <= H`, inclusive. Those
-//!    bounds are 0-based, which makes the upper edge one pixel looser than the
-//!    1-based FITS convention the reference solver's in-frame test uses. Since
-//!    `nr` divides both odds terms, moving this edge shifts the log-odds a run
-//!    reports, so it is frozen.
-//! 3. The quad's own index stars never enter the reference list (and so are not
-//!    in `nr`): they are the stars the WCS was just fitted from, so a match
-//!    against one would be evidence reused as evidence. The quad's field stars
-//!    leave the test list too, but only after deduplication.
-//! 4. Each field star takes the nearest still-unused reference star within
-//!    `NN_RADIUS_SIGMA * sigma_i`, where `sigma2_i = sigma2 * (1 + R_i^2 / Q^2)`
-//!    with `R_i` the star's distance to the midpoint of the quad backbone `AB`
-//!    and `Q = |AB|/2`. The quad's own stars are what the fit was pinned to, so
-//!    a star far from them is projected less accurately and is matched against a
-//!    wider Gaussian.
-//! 5. The accumulator ([`odds_scan_inner`]) adds `term - logbg` per star, with
-//!    `term = max(logfg, logd)`, abandons the hit below `BAIL_THRESHOLD_LN` and
-//!    stops early above `stop_ln` — which [`verify_hit`] sets to infinity, so a
-//!    production scan always visits the whole list.
+//! 0. [`verify_probe`] may drop the hit outright: the brightest non-quad
+//!    detections are counted against index stars, and a count that cannot be told
+//!    apart from chance never reaches step 1. It decides which hits are verified at
+//!    all, so it must stay a pure function of `(index, hit, stars, frame)`, never
+//!    of rayon scheduling.
+//! 1. [`sigma2_base`]: the base per-star variance, px^2; every variance below is a
+//!    multiple of it.
+//! 2. [`collect_refs`]: index stars from a 3D chord-ball search about the
+//!    frame-center pixel, projected and kept only when `0 <= x <= W` and
+//!    `0 <= y <= H`, inclusive.
+//! 3. The quad's own index stars stay out of the reference list (and out of `nr`):
+//!    the WCS was just fitted from them, so matching one reuses evidence. Their
+//!    field stars leave the test list only after deduplication.
+//! 4. Each field star takes the nearest still-unused reference within
+//!    `NN_RADIUS_SIGMA * sigma_i`, `sigma2_i = sigma2 * (1 + R_i^2 / Q^2)`, `R_i`
+//!    its distance to the midpoint of the quad backbone `AB`, `Q = |AB|/2`.
+//! 5. [`odds_scan_inner`] adds `term - logbg` per star, `term = max(logfg, logd)`,
+//!    abandons the hit below `BAIL_THRESHOLD_LN` and stops above `stop_ln` - which
+//!    [`verify_hit`] sets to infinity, so a production scan visits the whole list.
 
 use std::cell::RefCell;
 use std::f64::consts::PI;
@@ -71,20 +52,20 @@ use crate::xyls::Star;
 /// Outcome of verifying one code hit.
 #[derive(Debug, Clone, Copy)]
 pub struct VerifyResult {
-    /// The highest the running log-odds reached over the prefixes of the scan.
-    /// The terms are not all positive and the prefix that trips the bail is
-    /// never offered, so this is the best prefix, not the last total.
+    /// Peak running log-odds over the prefixes of the scan - not the last
+    /// total: the terms are not all positive and the prefix that trips the bail
+    /// is never offered.
     pub bestlogodds: f64,
     /// Matches banked up to that best prefix.
     pub nmatch: usize,
     /// Reference stars kept in the frame, quad stars removed. `nr` divides both
-    /// odds terms, so it sets the price of a match and of a miss.
+    /// odds terms, so it prices a match and a miss.
     pub nr: usize,
-    /// Test stars that reach the scan: after deduplication and after the quad's
+    /// Test stars reaching the scan: after deduplication and after the quad's
     /// field stars are dropped.
     pub nt: usize,
-    /// Set when the running total dropped below `BAIL_THRESHOLD_LN` and the
-    /// rest of the list was abandoned.
+    /// Set when the running total fell below `BAIL_THRESHOLD_LN` and the rest of
+    /// the list was abandoned.
     pub bailed: bool,
 }
 
@@ -95,37 +76,30 @@ impl VerifyResult {
     }
 }
 
-/// Odds accumulator over the test stars, visited in the order they are handed
-/// in (the preprocessed field order, which is not flux-sorted), against the
-/// projected reference stars. First come wins: once a reference star is matched
-/// it is no longer offered to later test stars.
+/// Odds accumulator over the test stars in the order they are handed in (on the
+/// CLI path the capped brightest-first list of `xyls::brightest_first`), against
+/// the projected references. First come wins: a matched reference star is no
+/// longer offered to later test stars.
 ///
-/// Each star contributes `ln(P(observed | solved) / P(observed | unsolved))`,
-/// both sides as densities per square pixel: the unsolved side is the uniform
-/// background `1 / eff_area` (the distractor term), the solved side a Gaussian
-/// of variance `testsigma2[i]` at the nearest still-unused reference star (the
-/// match term). The larger of the two is banked, so a star whose counterpart is
-/// missing or far away costs odds instead of paying for a match. That makes the
-/// traversal order part of the result: `bestlogodds` is a maximum over prefixes
-/// of the scan.
+/// Each star contributes `ln(P(observed | solved) / P(observed | unsolved))`, both
+/// sides per square pixel: the unsolved side the uniform background `1 / eff_area`
+/// (the distractor term), the solved side a Gaussian of variance `testsigma2[i]`
+/// at the nearest still-unused reference (the match term). The larger is banked,
+/// so a star whose counterpart is missing or far costs odds instead of paying for
+/// a match - which makes the traversal order part of the result.
 ///
-/// Returns `(bestlogodds, nmatch_at_best, bailed)`.
+/// Returns `(bestlogodds, nmatch_at_best, bailed)`; the `used` bitmap and the
+/// x-ordered lookup (`refxs` ascending, `reford` the matching `refxy` indices) are
+/// handed in as reusable buffers.
 ///
-/// The scan body with the `used` bitmap and the x-ordered reference lookup
-/// (`refxs` ascending, `reford` the matching `refxy` indices) handed in as
-/// reusable buffers.
-///
-/// The distractor term `logd` depends on the scan state only through `mu`, so
-/// it is cached and recomputed only when a match moves `mu`; the ln calls and
-/// their arguments are the same ones the uncached loop made at every star.
+/// `logd` depends on the scan state only through `mu`, so it is cached until a
+/// match moves `mu`, with the same ln calls the uncached loop made.
 ///
 /// The nearest-free search scans only the references whose x lies within
-/// `sqrt(s2 * nnsig2)` of the test star: a reference with a bigger dx has
-/// `d2 > s2 * nnsig2` = the loop's initial `bd2`, which only shrinks, so the
-/// full ascending scan could never have picked it (dropping the window and
-/// scanning everything costs far more here than the two searches save). The
-/// winner rule of that scan (`d2 <= bd2`, so the highest index wins an exact
-/// tie) is reproduced explicitly by the comparison below.
+/// `sqrt(s2 * nnsig2)`: a bigger dx means `d2 > s2 * nnsig2` = the loop's initial
+/// `bd2`, which only shrinks, so a full ascending scan could never have picked such
+/// a reference. The full scan's winner rule (`d2 <= bd2`, highest index wins an
+/// exact tie) is reproduced explicitly below.
 // The scratch buffers are threaded through to keep the hot loop allocation-free;
 // bundling them would only add a wrapper with no other caller.
 #[allow(clippy::too_many_arguments)]
@@ -164,25 +138,20 @@ fn odds_scan_inner(
     let nnsig2 = NN_RADIUS_SIGMA * NN_RADIUS_SIGMA;
     for (i, tp) in testxy.iter().enumerate() {
         let s2 = testsigma2[i];
-        // Distractor density. A fraction `delta` of detections is junk
-        // outright; the rest are real stars, and a share `mu / nr` of the
-        // reference stars is already consumed, so a real star has that chance of
-        // finding no free counterpart and adding only noise. The price of a miss
-        // is therefore ln(delta + (1 - delta) * mu / nr): -1.39 nats at the
-        // start, rising toward 0 as the scan uses up the reference stars, so it
-        // is the first misses that drive a bail. `mu` never exceeds `nr`
-        // (matches are one-to-one), so the `u32` step into `f64::from` is
-        // lossless. Cached across stars with the same `mu` (see the fn docs);
-        // the live value is the `logd` accumulator kept by the loop head.
+        // Distractor density. A fraction `delta` of detections is junk outright;
+        // the rest are real stars, and a share `mu / nr` of the references is
+        // already consumed, so a real star has that chance of finding no free
+        // counterpart and adding only noise. A miss therefore costs
+        // ln(delta + (1 - delta) * mu / nr): -1.39 nats at the start, rising toward
+        // 0 as the scan uses up the references, so the first misses drive a bail.
+        // `mu` never exceeds `nr` (one-to-one matches), so the `u32` step into
+        // `f64::from` is lossless. Cached on `mu` (see the fn docs).
 
-        // The nearest reference star that is still free and lies within
-        // NN_RADIUS_SIGMA (5) sigmas of this star: `bd2` starts as the squared
-        // search radius and only shrinks, so the loop returns the nearest one
-        // rather than any one. The x-window is a sound restriction (see the fn
-        // docs): at these densities it hands back a handful of candidates
-        // instead of every reference in the frame; a NaN sigma or test
-        // coordinate empties the window, matching the `d2 <= bd2` comparisons
-        // never firing in the full scan.
+        // The nearest reference still free within NN_RADIUS_SIGMA (5) sigmas: `bd2`
+        // starts as the squared search radius and only shrinks, so the loop returns
+        // the nearest one rather than any one. The x-window is a sound restriction
+        // (see the fn docs); a NaN sigma or test coordinate empties it, matching the
+        // `d2 <= bd2` comparisons never firing in the full scan.
         let r = f64::sqrt(s2 * nnsig2);
         let lo = refxs.partition_point(|&x| x < tp[0] - r);
         let hi = refxs.partition_point(|&x| x <= tp[0] + r);
@@ -209,8 +178,8 @@ fn odds_scan_inner(
             // The match density: the peak of a 2D Gaussian of variance `s2`
             // (1 / 2pi*s2) scaled by the prior (1 - delta) / nr that this
             // detection is the counterpart of one particular reference star,
-            // evaluated at the offset actually found (`bd2` is 0 for an exact
-            // overlap, where the term is largest).
+            // evaluated at the offset found (`bd2` is 0 for an exact overlap,
+            // where the term is largest).
             let loggmax = f64::ln((1.0 - delta) / (2.0 * PI * s2 * nr));
             let logfg = loggmax - bd2 / (2.0 * s2);
             if logfg > logd {
@@ -220,7 +189,7 @@ fn odds_scan_inner(
                 logfg
             } else {
                 // Too weak to beat the distractor term: the star contributes
-                // noise and the reference star stays free for later stars.
+                // noise and the reference stays free for later stars.
                 logd
             }
         };
@@ -243,18 +212,18 @@ fn odds_scan_inner(
     (bestlogodds, best_mu, bailed)
 }
 
-/// Reusable per-worker buffers of [`verify_hit`] and of [`verify_probe`]. Every
-/// field is cleared before use, so a call only ever reads what it wrote; keeping
-/// the allocations across the ~10^6 hits of a sweep removes the per-hit
-/// allocations `verify_hit` used to pay (and the probe's per-hit ball) without
-/// touching the arithmetic. The buffers keep their high-water capacity
-/// on each pool worker for the rest of the run (per worker, not per hit; at the
-/// shipped-field sizes that is a few tens of KB).
+/// Reusable per-worker buffers of [`verify_hit`] and [`verify_probe`]. Every field
+/// is cleared before use, so a call only ever reads what it wrote; reusing them
+/// across the ~10^6 hits of a sweep removes the per-hit allocations without
+/// touching the arithmetic. Each pool worker (not each hit) keeps their high-water
+/// capacity for the rest of the run - a few tens of KB at shipped-field sizes.
+///
+/// `verify_hit` holds this `RefCell` borrow for its whole call, so no rayon work
+/// may be spawned from inside an attempt.
 #[derive(Default)]
 struct Scratch {
     /// The in-frame survivors of the star ball search, `(dist2, [x, y])`,
-    /// ordered by ascending `dist2`; [`verify_hit`] takes the coordinates
-    /// out of it into `refxy`.
+    /// ascending `dist2`; [`verify_hit`] copies the coordinates into `refxy`.
     refs: Vec<(f64, [f64; 2])>,
     refxy: Vec<[f64; 2]>,
     refxs: Vec<f64>,
@@ -266,8 +235,8 @@ struct Scratch {
     used: Vec<bool>,
     /// The star coordinates inside the footprint ball of [`verify_probe`]'s
     /// batched lookup. Its collector clears it on entry to every collection, and
-    /// [`verify_probe`] additionally clears it on entry to every call (the
-    /// abstain path included), so no hit can read another hit's ball.
+    /// [`verify_probe`] clears it on entry to every call (the abstain path
+    /// included), so no hit can read another hit's ball.
     probe: Vec<[f64; 3]>,
 }
 
@@ -288,9 +257,9 @@ thread_local! {
     };
 }
 
-/// The NN lookup order of [`odds_scan_inner`]: reference indices ascending by
-/// x (`reford`, stable) with the x values beside them for `partition_point`
-/// (`refxs`).
+/// The NN lookup order of [`odds_scan_inner`]: `reford` = reference indices
+/// ascending by x (stable), `refxs` the same x values beside them for
+/// `partition_point`.
 fn x_order(refxy: &[[f64; 2]], reford: &mut Vec<u32>, refxs: &mut Vec<f64>) {
     reford.clear();
     reford.extend(0..refxy.len() as u32);
@@ -299,11 +268,10 @@ fn x_order(refxy: &[[f64; 2]], reford: &mut Vec<u32>, refxs: &mut Vec<f64>) {
     refxs.extend(reford.iter().map(|&i| refxy[i as usize][0]));
 }
 
-/// The per-field precomputations of [`verify_hit`]: the field indices sorted
-/// by x and their x values in that order. They depend on the star list only,
-/// never on a hit, so the sweep builds them once per field instead of once
-/// per verified hit; the arrays are exactly the ones the per-hit code used to
-/// build, so the dedup outcome is bit-identical.
+/// The per-field precomputations of [`verify_hit`]: the field indices sorted by x
+/// and their x values in that order. They depend on the star list only, never on a
+/// hit, so the sweep builds them once per field; the arrays are exactly the ones
+/// the per-hit code used to build, so the dedup outcome is bit-identical.
 pub struct FieldPre {
     byx: Vec<u32>,
     xs: Vec<f64>,
@@ -319,34 +287,30 @@ impl FieldPre {
     }
 }
 
-/// Reference stars of one fitted hit: the hits of the star ball search that are
-/// not the quad's own index stars and project inside the frame, ordered by
-/// ascending ball distance. That order is the one `ball_search` applies on its
-/// way out and part of the first-come matching semantics, so it is frozen.
+/// Reference stars of one fitted hit: the star-ball hits that are not the quad's
+/// own index stars and project inside the frame, ordered by ascending ball
+/// distance - the order `ball_search` applies on its way out, part of the
+/// first-come matching semantics, so it is frozen.
 ///
-/// The candidate cap is a ball in 3D chord space around the sky position of the
-/// frame-center pixel `(W/2, H/2)`, radius = the chord from there to the `(0, 0)`
-/// corner. It is a pre-filter, not a strict bound: the fitted WCS puts its
-/// tangent point at the matched quad's pixel centroid (see `fit_tan_wcs`), so
-/// chord distance from the center pixel is not monotone in pixel distance and
-/// the `(0, 0)` corner is not generally the frame's farthest point on the sky.
-/// With the tangent point displaced toward one corner that corner pokes out of
-/// the ball - on field 1's reference WCS (tangent point ~650 px off the frame
-/// center) it is 4.8 arcsec, about 1.8 px, beyond it. Stars inside the frame but
-/// outside the ball are lost at the search; sky the ball reaches outside the
-/// frame is cut by the pixel test below, which is inclusive at both ends in
-/// 0-based pixels (see the module header for why that upper edge is frozen).
+/// The candidate cap is a ball in 3D chord space about the sky position of the
+/// frame-center pixel `(W/2, H/2)`, radius = the chord to the `(0, 0)` corner - a
+/// pre-filter, not a strict bound: the fitted WCS puts its tangent point at the
+/// matched quad's pixel centroid (see `fit_tan_wcs`), so chord distance from the
+/// center pixel is not monotone in pixel distance and `(0, 0)` is not generally
+/// the frame's farthest point on the sky; on the shipped field-1 WCS (tangent
+/// point ~650 px off the frame center) that corner pokes 4.8 arcsec (about 1.8 px)
+/// beyond the ball.
+/// Stars in the frame but outside the ball are lost here; sky the ball reaches
+/// outside the frame is cut by the pixel test below, inclusive at both ends in
+/// 0-based pixels - one pixel looser at the top than the 1-based FITS convention,
+/// and frozen because `nr` divides both odds terms.
 ///
 /// Survivors are collected by [`KdTree::ball_search_visit`] rather than
-/// materialized: for a garbage fit the ball can reach the whole star table while
-/// almost none of it lands in the frame, and a rejected candidate should be
-/// neither pushed nor sorted. Sorting the survivors still equals sorting every
-/// hit and then filtering, because `sort_by` is stable and equal keys keep their
-/// relative traversal order in both - the survivor subsequence, which is what
-/// [`odds_scan_inner`] matches against, is identical element for element.
-///
-/// `refs` comes back as `(dist2, [x, y])` pairs in that order; the coordinates
-/// are what [`verify_hit`] copies into its `refxy`.
+/// materialized: a garbage fit's ball can reach the whole star table while almost
+/// none of it lands in the frame. Sorting only the survivors still equals sorting
+/// every hit and then filtering: `sort_by` is stable, so equal keys keep their
+/// traversal order either way and the survivor subsequence [`odds_scan_inner`]
+/// matches against is identical element for element.
 fn collect_refs(
     index: &Index,
     hit: &QuadHit,
@@ -363,15 +327,14 @@ fn collect_refs(
         radec_to_xyz(ra, dec)
     };
     let radius = f64::sqrt(distsq(&center, &corner));
-    // The comparison is direct because a quad row holds star-table row numbers,
-    // which is what the star tree reports as a hit index.
+    // A quad row holds star-table row numbers, which is what the star tree
+    // reports as a hit index, so the comparison is direct.
     let quad_ids = index.quad(hit.quad);
     let dimquads = index.meta.dimquads;
-    // Trig-free projection of the ball stars: the map folds the tangent frame
-    // and the CD inverse into dot products, agreeing with the
-    // `radec_to_pix(xyz_to_radec(..))` path to rounding (pinned by
-    // `wcs::tests::xyz_to_pix_map_matches_radec_to_pix`); the LSB drift stays
-    // far below any margin of the solve gate.
+    // Trig-free projection: the map folds the tangent frame and the CD inverse
+    // into dot products, agreeing with `radec_to_pix(xyz_to_radec(..))` to
+    // rounding (pinned by `wcs::tests::xyz_to_pix_map_matches_radec_to_pix`);
+    // the LSB drift stays far below any margin of the solve gate.
     let proj = hit.wcs.xyz_to_pix_map();
     refs.clear();
     index
@@ -422,12 +385,12 @@ pub fn verify_hit(
             testxy,
             testsigma2,
             used,
-            // The probe's ball buffer: `verify_probe` owns its contents and
-            // clears them itself, and this call neither reads nor writes it.
+            // The probe's ball buffer: `verify_probe` owns and clears it, and
+            // this call neither reads nor writes it.
             probe: _,
         } = &mut *scratch;
-        // Reference stars: the ball hits that project inside the frame, minus
-        // the quad's own index stars (see `collect_refs`).
+        // Ball hits that project inside the frame, minus the quad's own index
+        // stars (see `collect_refs`).
         collect_refs(index, hit, width, height, refs);
         refxy.clear();
         refxy.extend(refs.iter().map(|&(_, p)| p));
@@ -435,11 +398,11 @@ pub fn verify_hit(
         // The NN lookup order of `odds_scan_inner` (see `x_order`).
         x_order(refxy, reford, refxs);
 
-        // Per-test-star variance: sigma2 widened by how far the star sits from the
-        // quad, sigma2_i = sigma2 * (1 + R_i^2 / Q2). Q2 is the squared half of the
-        // backbone AB (the midpoint-to-A distance), so a star one half-backbone from
-        // the midpoint already carries twice the variance, and the Gaussian that
-        // pays its match is correspondingly lower and wider.
+        // Per-test-star variance sigma2_i = sigma2 * (1 + R_i^2 / Q2), Q2 the
+        // squared half-backbone AB (midpoint-to-A): stars far from the ones the fit
+        // was pinned to project less accurately, so a star one half-backbone from
+        // the midpoint already carries twice the variance and its match Gaussian is
+        // lower and wider.
         let qa = &stars[hit.field_stars[0]];
         let qb = &stars[hit.field_stars[1]];
         let qc = [(qa.x + qb.x) / 2.0, (qa.y + qb.y) / 2.0];
@@ -455,15 +418,14 @@ pub fn verify_hit(
             sigma2 * (1.0 + r2 * inv_q2)
         }));
 
-        // Deduplication: a star that lands within one sigma of an earlier kept star
-        // is dropped, at that earlier star's own sigma2 as the radius. "Earlier" is
-        // the incoming list order, so a drop only ever removes a later entry and the
-        // kept set depends on that order.
+        // Deduplication: a star within one sigma of an earlier kept star is
+        // dropped, at that earlier star's own sigma2 as the radius. "Earlier" is the
+        // incoming list order, so the kept set depends on that order.
         //
-        // Neighbours are looked up in a copy of the indices sorted by x, so the two
-        // partition_point calls hand back the x-window [xi-r, xi+r] and only the
-        // stars in it get the real 2D test. The radii are a pixel or two near the
-        // quad (sigma2 grows away from it, see above), so the window stays short.
+        // Neighbours come from a copy of the indices sorted by x, so the two
+        // partition_point calls hand back the x-window [xi-r, xi+r] and only those
+        // stars get the real 2D test; the radii are a pixel or two near the quad
+        // (sigma2 grows away from it), so the window stays short.
         let nstars = stars.len();
         keep.clear();
         keep.resize(nstars, true);
@@ -481,8 +443,8 @@ pub fn verify_hit(
                 for &j32 in &byx[lo..hi] {
                     let j = j32 as usize;
                     // Only later entries can be dropped, and only by a star still
-                    // kept when its turn comes: the outer loop skips the rest, so a
-                    // dropped star never removes anything in turn.
+                    // kept when its turn comes (the outer loop skips the rest), so
+                    // a dropped star never removes anything in turn.
                     if j <= i || !keep[j] {
                         continue;
                     }
@@ -495,10 +457,10 @@ pub fn verify_hit(
             }
         }
         // The quad's field stars leave the test list only now, AFTER dedup: while
-        // dedup runs they are still in the list, so they can still suppress a
-        // nearby detection, and that suppression is part of the odds a run
-        // reproduces. Slicing to dimquads matters - for a 3-star index the unused
-        // 4th slot holds the 0 sentinel, which would silently drop star 0.
+        // dedup runs they can still suppress a nearby detection, and that
+        // suppression is part of the odds a run reproduces. Slicing to dimquads
+        // matters - for a 3-star index the unused 4th slot holds the 0 sentinel,
+        // which would silently drop star 0.
         for &slot in &hit.field_stars[..index.meta.dimquads] {
             keep[slot] = false;
         }
@@ -513,18 +475,16 @@ pub fn verify_hit(
         }
         let nt = testxy.len();
 
-        // No early stop here: stop_ln is +infinity, so the scan runs the whole test
-        // list and the solve decision is made from the odds it returns. That is the
-        // caller's job - the sweep's capture takes hits whose log-odds reach
-        // ODDS_TO_SOLVE_LN (see VerifyResult::solved) and keeps the lexicographic
-        // best of the attempt; it deliberately never interrupts the attempt that
-        // solves, so stdout does not depend on the order in which parallel workers
-        // reach their hits.
+        // No early stop: stop_ln is +infinity, so the scan runs the whole list and
+        // the solve decision is the caller's job - the sweep's capture takes hits
+        // whose log-odds reach ODDS_TO_SOLVE_LN (see VerifyResult::solved) and keeps
+        // the lexicographic best of the attempt, and it deliberately never
+        // interrupts the attempt that solves, so stdout does not depend on the order
+        // in which parallel workers reach their hits.
         //
         // Traversal order is part of the odds definition: bestlogodds is a maximum
         // over the prefixes of the incoming list order - the preprocessed .xyls
-        // order from augment::preprocess - and nothing re-sorts it here, so any
-        // change to that order changes the log-odds a hit reports.
+        // order from augment::preprocess - and nothing re-sorts it here.
         let (bestlogodds, nmatch, bailed) = odds_scan_inner(
             testxy,
             testsigma2,
@@ -546,12 +506,11 @@ pub fn verify_hit(
     })
 }
 
-/// Base per-star variance of the verification model, px^2: the field-side
-/// centroid uncertainty [`VERIFY_PIX`] in quadrature with the index position
-/// uncertainty [`INDEX_JITTER_ARCSEC`] converted to pixels by the fitted scale.
-/// [`verify_hit`] and the probe read it through here so the two cannot drift;
-/// the probe uses it UNWIDENED, while `verify_hit` widens it per star (step 4 of
-/// the module header) — that difference is deliberate, see `PROBE_RADIUS_SIGMA`.
+/// Base per-star variance of the verification model, px^2: the field centroid
+/// uncertainty [`VERIFY_PIX`] in quadrature with the index position uncertainty
+/// [`INDEX_JITTER_ARCSEC`] converted to pixels by the fitted scale. [`verify_hit`]
+/// and the probe read it here so the two cannot drift; the probe uses it UNWIDENED
+/// while `verify_hit` widens it per star, deliberately, see `PROBE_RADIUS_SIGMA`.
 #[must_use]
 pub(crate) fn sigma2_base(arcsec_per_pix: f64) -> f64 {
     VERIFY_PIX * VERIFY_PIX + f64::powi(INDEX_JITTER_ARCSEC / arcsec_per_pix, 2)
@@ -568,14 +527,14 @@ fn top_k<const CAP: usize>(
     let mut len = 0usize;
     for (i, s) in stars.iter().enumerate() {
         let Some(k) = key(s) else { continue };
-        // `xyls::load` guarantees a finite flux, so the finiteness test only
-        // has to hold for some future key; it keeps a NaN from silently
-        // ordering its way into the probe set.
+        // `xyls::load` guarantees a finite flux, so this only has to hold for
+        // some future key: it keeps a NaN from silently ordering its way into
+        // the probe set.
         if !k.is_finite() || (len == CAP && k <= keys[CAP - 1]) {
             continue;
         }
-        // Insertion into the descending top-K; entries that cannot make the cut
-        // are rejected above, so the shifts stay rare for a long list.
+        // Insertion into the descending top-K; rejects above keep the shifts
+        // rare for a long list.
         let mut j = usize::min(len, CAP - 1);
         while j > 0 && keys[j - 1] < k {
             keys[j] = keys[j - 1];
@@ -589,27 +548,24 @@ fn top_k<const CAP: usize>(
     len
 }
 
-/// Cheap sanity check of a fitted hit, meant to run before [`verify_hit`]: do
-/// the brightest field stars that are not part of the quad land on index stars
-/// at all?
+/// Cheap sanity check of a fitted hit, run before [`verify_hit`]: do the brightest
+/// non-quad field stars land on index stars at all?
 ///
 /// Returns `false` only to say "this similarity is garbage, do not spend a
-/// verification on it": the hits that survive are handed to `verify_hit`
-/// untouched, so a `true` here never commits anything. The answer is a pure
-/// function of `(index, hit, stars, cands, width, height)` - no clock, no thread,
-/// no `--ra/--dec` - so which hits get verified cannot depend on how the rayon
-/// pool scheduled them.
+/// verification on it": survivors go to `verify_hit` untouched, so a `true` here
+/// never commits anything. The answer is a pure function of
+/// `(index, hit, stars, cands, width, height)` - no clock, no thread, no
+/// `--ra/--dec` - so which hits get verified cannot depend on how the rayon pool
+/// scheduled them.
 ///
-/// A code hit is produced by a code match whose tolerance is loose next to the
-/// fitted scale, and most of them land nowhere near the truth: their odds scan
-/// runs to the end of the star list (the bail never fires) and returns zero
-/// matches. The probe buys that scan back by counting how many probe stars land
-/// on a catalog star at all, which is why the hit's own share of the setup work
-/// must stay small: the candidate list comes from [`probe_stars`] (once per
-/// attempt), the pixel -> sky map is built once per hit, and the lookups are
-/// folded into one ball search over the fitted footprint whenever the frame is
-/// sparse enough (see [`PROBE_BALL_MAX_STARS`]) instead of one tree descent per
-/// probe.
+/// Most code hits come from a code match whose tolerance is loose next to the
+/// fitted scale and land nowhere near the truth: their odds scan runs to the end of
+/// the star list (the bail never fires) for zero matches. The probe buys that scan
+/// back by counting how many probe stars land on a catalog star at all, so its own
+/// setup must stay small: candidates from [`probe_stars`] once per attempt, the
+/// pixel -> sky map once per hit, and the lookups folded into one ball search over
+/// the fitted footprint whenever the frame is sparse enough (see
+/// [`PROBE_BALL_MAX_STARS`]) instead of one tree descent per probe.
 pub fn verify_probe(
     index: &Index,
     hit: &QuadHit,
@@ -619,19 +575,19 @@ pub fn verify_probe(
     height: f64,
 ) -> bool {
     // The abstain path returns before the collector runs, so the shared scratch
-    // is emptied here too; a hit that only abstains never leaves the previous
-    // hit's ball behind for the next one. The batched path is safe without this
-    // (its collector clears `probe` on entry), so this clear covers exactly the
-    // paths that never reach the collector.
+    // is emptied here too: a hit that only abstains must not leave the previous
+    // hit's ball behind. The batched path is safe without this (its collector
+    // clears `probe` on entry), so this covers exactly the paths that never reach
+    // the collector.
     SCRATCH.with(|cell| cell.borrow_mut().probe.clear());
     let Some(plan) = probe_setup(index, hit, stars, cands, width, height) else {
         return true;
     };
     // Borrowed only for the collection, not across `probe_setup`. The batched
     // path answers exactly what the per-probe searches answer (see
-    // [`probe_via_ball`]); the guard only decides which of the two is cheaper,
-    // and `probe_via_ball` aborts on its own when the ball is bigger than the
-    // guard estimated.
+    // [`probe_via_ball`]); the guard only picks the cheaper path, and
+    // `probe_via_ball` aborts on its own when the ball is bigger than the guard
+    // estimated.
     let batched = SCRATCH.with(|cell| {
         let mut scratch = cell.borrow_mut();
         probe_batched(&index.stars, &plan, &mut scratch.probe)
@@ -643,8 +599,8 @@ pub fn verify_probe(
 }
 
 /// The batched verdict for a planned hit: `None` when the frame's estimated
-/// catalog content is above [`PROBE_BALL_MAX_STARS`] (the guard that keeps the
-/// dense end off the batched path) or when [`probe_via_ball`] found the ball
+/// catalog content is above [`PROBE_BALL_MAX_STARS`] (the guard keeping dense
+/// frames off the batched path) or when [`probe_via_ball`] found the ball
 /// unusable - both mean "use [`probe_via_searches`]".
 fn probe_batched(stars: &KdTree, plan: &ProbePlan, buf: &mut Vec<[f64; 3]>) -> Option<bool> {
     if plan.cat_in_frame > PROBE_BALL_MAX_STARS as f64 {
@@ -676,13 +632,10 @@ pub(crate) fn probe_paths(
     ))
 }
 
-/// Everything both probe paths need from one hit, computed once.
-///
-/// Every live probe is projected here up front: the batched path's ball radius
-/// scans all of `qs`, so the projection cannot be shared lazily between the
-/// paths. An accepting hit that lands on the fallback therefore pays all its
-/// projections where the old per-probe loop stopped after its first matches -
-/// at most `PROBE_STARS` projections, the price of one setup both paths read.
+/// Everything both probe paths need from one hit, computed once. Every live probe
+/// is projected up front - the batched ball radius scans all of `qs`, so the
+/// projections cannot be shared lazily - which costs an accepting hit that lands on
+/// the fallback all of its projections, at most `PROBE_STARS` of them.
 struct ProbePlan {
     /// Catalog stars under the frame from the index's tile-mean density: the
     /// estimate the batched lookup is gated on.
@@ -715,9 +668,9 @@ fn probe_setup(
     width: f64,
     height: f64,
 ) -> Option<ProbePlan> {
-    // A catalog of unknown surface density cannot price a chance coincidence, so
-    // the probe abstains; a frame too small to hold enough catalog stars for a
-    // count to mean anything gets the same answer.
+    // A catalog of unknown surface density cannot price a chance coincidence, and
+    // a frame too small to hold enough catalog stars for a count to mean anything
+    // cannot be judged: both abstain.
     let density = index.meta.stars_per_deg2()?;
     let arcsec = hit.arcsec_per_pix();
     let deg_per_pix = arcsec / DEG2ARCSEC;
@@ -752,19 +705,19 @@ fn probe_setup(
     let chord = 2.0 * f64::sin(theta / 2.0);
     let cutoff2 = chord * chord;
 
-    // What a WCS fitted at the right scale but pointed at the wrong patch of sky
-    // would bank by luck over these probes, and the count that puts the hit well
-    // above it. Density-normalized because the chance rate per probe varies by
-    // four orders of magnitude between index families.
+    // What a WCS of the right scale but a wrong pointing would bank by luck over
+    // these probes, and the count that puts a hit well above it.
+    // Density-normalized: the chance rate per probe varies by four orders of
+    // magnitude between index families.
     let probe_area_deg2 = PI * f64::powi(PROBE_RADIUS_SIGMA * sigma * deg_per_pix, 2);
     let e_random = probes as f64 * density * probe_area_deg2;
     let need = usize::max(
         PROBE_MIN_MATCHES,
         f64::ceil(PROBE_RANDOM_FACTOR * e_random) as usize,
     );
-    // A frame so sparse that even every probe together could not reach `need`
-    // cannot be judged at all: a good fit there would be rejected for lack of
-    // catalog stars to land on, so the probe abstains instead.
+    // A frame so sparse that even all its probes together could not reach `need`
+    // cannot be judged: a good fit there would be rejected for lack of catalog
+    // stars to land on, so the probe abstains.
     if need > probes {
         return None;
     }
@@ -775,7 +728,7 @@ fn probe_setup(
         qs[i] = proj.project(stars[star].x, stars[star].y);
     }
     let center = proj.project(width / 2.0, height / 2.0);
-    // The batched ball: centered on the frame, large enough to contain every
+    // The batched ball: centered on the frame, large enough to hold every
     // probe's own lookup ball, so one traversal replaces the per-probe searches.
     let radius = probe_ball_radius(&center, &qs[..probes], chord);
     Some(ProbePlan {
@@ -789,21 +742,20 @@ fn probe_setup(
     })
 }
 
-/// Slack on the batched ball's radius. The three distances that build the radius
-/// are computed by different code paths, so the ball has to be a few ulps
-/// roomier than the exact triangle-inequality bound: with too little slack a
-/// witness lands outside the collected ball and the probe's verdict flips.
-/// `1e-12` relative swamps the ~1e-15 accumulated rounding and stays negligible
-/// against the collection cap.
+/// Slack on the batched ball's radius. Its parts come from different code paths,
+/// so the ball must be a few ulps roomier than the exact triangle-inequality
+/// bound: with too little slack a witness lands outside the collected ball and
+/// the probe's verdict flips. `1e-12` relative swamps the ~1e-15 accumulated
+/// rounding and stays negligible against the collection cap.
 const BALL_MARGIN: f64 = 1.0 + 1e-12;
 
 /// The radius of the smallest ball about `center` that contains every probe's
-/// lookup ball of radius `chord`, or `f64::NAN` when a non-finite projection
-/// makes that question unanswerable (and the batched path must be skipped).
+/// lookup ball of radius `chord`, or `f64::NAN` when a non-finite projection makes
+/// that question unanswerable (and the batched path must be skipped).
 ///
 /// Both radii are chords - the Euclidean metric of the tree's xyz space - so the
-/// superset property is the triangle inequality and `sqrt` is monotone; the
-/// extra room is [`BALL_MARGIN`].
+/// superset property is the triangle inequality and `sqrt` is monotone; the extra
+/// room is [`BALL_MARGIN`].
 fn probe_ball_radius(center: &[f64; 3], qs: &[[f64; 3]], chord: f64) -> f64 {
     let mut far2 = 0.0;
     let mut usable = all_finite(center);
@@ -824,17 +776,15 @@ fn all_finite(v: &[f64; 3]) -> bool {
 }
 
 /// Collects the dequantized coordinates of the stars inside the ball
-/// `center`/`radius` into `buf`, aborting once they would pass `cap` (the
-/// caller's own ceiling).
+/// `center`/`radius` into `buf`, answering `false` and emptying `buf` again once
+/// they would pass `cap` (the caller's own ceiling).
 ///
 /// The collector owns the buffer's state - it empties `buf` on entry and on the
-/// abort path - so the buffer holds exactly this ball's stars and no caller can
-/// leak an earlier ball into it. The abort is what bounds the cost: the caller's
-/// estimate of the ball's content is a tile mean, which bounds neither the
-/// traversal nor the population inside it, and `false` is the answer for an
-/// aborted collection. The coordinates come from [`KdTree::coord3`], which is
-/// what [`Index::star_xyz`] returns, so they are the ones the per-probe searches
-/// measure.
+/// abort path - so no caller can leak an earlier ball into it. The abort bounds the
+/// cost: the caller's estimate of the ball's content is a tile mean, which bounds
+/// neither the traversal nor the population inside it. The coordinates come from
+/// [`KdTree::coord3`], which is what [`Index::star_xyz`] returns, so they are the
+/// ones the per-probe searches measure.
 fn probe_ball_coords(
     tree: &KdTree,
     center: &[f64; 3],
@@ -862,30 +812,28 @@ fn probe_ball_coords(
     false
 }
 
-/// The probe count taken from one ball search over the fitted footprint: collect
-/// the catalog stars of the ball once, then ask each probe whether any of them
-/// lies inside its own lookup ball.
+/// The probe count from one ball search over the fitted footprint: collect the
+/// ball's catalog stars once, then ask each probe whether any of them lies inside
+/// its own lookup ball.
 ///
 /// `None` says the ball was not usable and the caller must fall back to
 /// [`probe_via_searches`]; the buffer comes back empty for that answer.
 ///
 /// The verdict is identical to `probe_via_searches`' by construction:
 ///
-/// - the ball is a superset of every probe's lookup ball. A star `s` that
+/// - the ball is a superset of every probe's lookup ball: a star `s` that
 ///   `nearest_within` could report for probe `q` satisfies `|s - q| <= chord`
 ///   (boundary included, up to the ulp [`BALL_MARGIN`] covers), so
-///   `|s - center| <= chord + |q - center| <= chord + sqrt(far2) <= radius`; like
-///   the descent's own pruning, it assumes a leaf's records respect its split
-///   planes;
+///   `|s - center| <= chord + |q - center| <= chord + sqrt(far2) <= radius` - and,
+///   like the descent's own pruning, this assumes a leaf's records respect its
+///   split planes;
 /// - [`within_chord2`] decides a pair by the same squared chord `dist2_cutoff`
-///   accumulates - same dimensions, same order, same inclusive `<= cutoff2`
-///   boundary - and `Index::star_xyz` is `KdTree::coord3`, documented
-///   bit-identical to three `coord` calls;
+///   accumulates: same dimensions, same order, same inclusive `<= cutoff2`;
 /// - the counting is `probe_via_searches`' loop line for line, so the order the
-///   probes are walked in stays irrelevant, as it always was.
+///   probes are walked in stays irrelevant.
 fn probe_via_ball(tree: &KdTree, plan: &ProbePlan, buf: &mut Vec<[f64; 3]>) -> Option<bool> {
     // A non-finite lookup is not answerable by collection: `nearest_within`
-    // refuses any non-finite cutoff and reports no match, while `<= +inf` would
+    // refuses a non-finite cutoff and reports no match, while `<= +inf` would
     // call every collected star a match. A NaN radius already means a non-finite
     // projection (see `probe_setup`).
     if !plan.radius.is_finite() || !plan.cutoff2.is_finite() {
@@ -903,7 +851,7 @@ fn probe_via_ball(tree: &KdTree, plan: &ProbePlan, buf: &mut Vec<[f64; 3]>) -> O
             }
         }
         // Even every remaining probe cannot reach `need`: reject now. Exact -
-        // the loop above could not have returned `true` from here on.
+        // the loop above cannot have returned `true` from here on.
         if matches + (plan.probes - done - 1) < plan.need {
             return Some(false);
         }
@@ -913,9 +861,9 @@ fn probe_via_ball(tree: &KdTree, plan: &ProbePlan, buf: &mut Vec<[f64; 3]>) -> O
 
 /// The probe count from one [`KdTree::nearest_within`] existence test per probe:
 /// the reference the batched path is checked against, and the path a hit takes
-/// whenever the ball is not usable. Its loop is deliberately kept as a separate
-/// copy of the counting: the two-paths-agree pins only mean something if the
-/// batched path does not share the code it is compared against.
+/// whenever the ball is not usable. Its loop is deliberately a separate copy of
+/// the counting: the two-paths-agree pins prove nothing if the batched path
+/// shared the code it is compared against.
 fn probe_via_searches(tree: &KdTree, plan: &ProbePlan) -> bool {
     let mut matches = 0usize;
     for (done, q) in plan.qs[..plan.probes].iter().enumerate() {
@@ -927,7 +875,7 @@ fn probe_via_searches(tree: &KdTree, plan: &ProbePlan) -> bool {
             }
         }
         // Even every remaining probe cannot reach `need`: reject now. Exact -
-        // the loop above could not have returned `true` from here on.
+        // the loop above cannot have returned `true` from here on.
         if matches + (plan.probes - done - 1) < plan.need {
             return false;
         }
@@ -937,8 +885,8 @@ fn probe_via_searches(tree: &KdTree, plan: &ProbePlan) -> bool {
 
 /// `distsq(q, s) <= cutoff2` in `dist2_cutoff`'s accumulate-and-bail order: a
 /// partial sum past `cutoff2` cannot come back down, so the dimensions after the
-/// bail are not worth reading, and dropping them cannot change the answer.
-/// A non-finite component makes every comparison false, the same "no match" the
+/// bail are not worth reading and dropping them cannot change the answer. A
+/// non-finite component makes every comparison false, the same "no match" the
 /// full sum gives.
 #[inline]
 fn within_chord2(q: &[f64; 3], s: &[f64; 3], cutoff2: f64) -> bool {
@@ -960,7 +908,7 @@ fn within_chord2(q: &[f64; 3], s: &[f64; 3], cutoff2: f64) -> bool {
 /// The batched lookup's internals, reachable from `kdtree`'s differential pin
 /// (`kdtree::tests::batched_probe_ball_matches_nearest_within`) under `cfg(test)`
 /// only. Production keeps these private; the pin drives the very functions the
-/// batched path runs, so the seam forwards instead of mirroring their logic.
+/// batched path runs, so the seam forwards instead of mirroring them.
 #[cfg(test)]
 pub(crate) mod probe_pin {
     use super::KdTree;
@@ -986,14 +934,13 @@ pub(crate) mod probe_pin {
 
 /// How far past [`PROBE_STARS`] the candidate list of [`probe_stars`] reaches:
 /// slack for the quad's own stars, which only become known per hit and are
-/// dropped from the list there. Index files use 3 or 4 stars per quad; a larger
-/// `dimquads` would simply leave the probe with fewer probes to count.
+/// dropped there. Index files use 3 or 4 stars per quad; a larger `dimquads`
+/// just leaves the probe with fewer probes to count.
 const PROBE_SLACK: usize = 4;
 
 /// The probe's candidate detections of one field star list, ordered once per
 /// field next to [`FieldPre`] rather than once per hit: the brightest
-/// [`PROBE_STARS`] + [`PROBE_SLACK`] entries by descending flux (the slack for
-/// the quad stars, which only become known per hit).
+/// [`PROBE_STARS`] + [`PROBE_SLACK`] entries by descending flux.
 pub struct ProbeStars {
     idx: Vec<usize>,
 }
@@ -1016,16 +963,13 @@ mod tests {
     use crate::testutil;
     use crate::wcs::{Wcs, test_data::FIELD1_SCALE_ARCSEC};
 
-    /// The pre-`collect_refs` `verify_hit`, kept as the frozen reference copy of
-    /// the algorithm it replaced: the star ball is materialized with
-    /// [`KdTree::ball_search_into`], the whole hit list is sorted by distance,
-    /// and only then filtered into `refxy`. Everything else (sigma2, the dedup
-    /// window, the test list, the odds scan) is the same arithmetic, run on
-    /// fresh buffers instead of the thread-local `Scratch`.
-    ///
-    /// It returns the `refxy` sequence next to the result because that sequence -
-    /// the input of first-come matching - is what the survivor-collecting
-    /// implementation must reproduce exactly.
+    /// The pre-`collect_refs` `verify_hit`, kept as the frozen reference copy of the
+    /// algorithm it replaced: the ball is materialized with
+    /// [`KdTree::ball_search_into`] and the whole hit list sorted by distance before
+    /// filtering into `refxy`; everything else (sigma2, the dedup window, the test
+    /// list, the odds scan) is the same arithmetic on fresh buffers rather than the
+    /// thread-local `Scratch`. It also returns the `refxy` sequence - the input of
+    /// first-come matching - which the survivor-collecting code must reproduce.
     fn verify_hit_reference(
         index: &Index,
         hit: &QuadHit,
@@ -1153,14 +1097,12 @@ mod tests {
         refs.into_iter().map(|(_, p)| p).collect()
     }
 
-    /// B1 must be invisible: collecting only the survivors of the star ball and
-    /// sorting those has to hand the matcher the same `refxy` the old
-    /// materialize-and-sort-everything path built, and therefore the same
-    /// `VerifyResult`. Checked on a real winning hit of a shipped field and on
-    /// garbage fits: one with the reference Dec shifted (no true matches left),
-    /// one with a 500x too coarse scale (its ball is the whole star table, so
-    /// nearly every candidate is projected and rejected), a degenerate zero-CD
-    /// fit (empty ball, `nr == 0`) and a field of exactly `dimquads` stars
+    /// Collecting only the ball's survivors and sorting those must hand the matcher
+    /// the same `refxy` as the old materialize-and-sort-everything path, and so the
+    /// same `VerifyResult`. Checked on a real winning hit of a shipped field and on
+    /// garbage fits: reference Dec shifted (no true matches left), a 500x too coarse
+    /// scale (ball = the whole star table, nearly every candidate rejected), a
+    /// zero-CD fit (empty ball, `nr == 0`), a field of exactly `dimquads` stars
     /// (`nt == 0`).
     #[test]
     fn verify_hit_matches_the_materialize_and_sort_reference() {
@@ -1170,8 +1112,8 @@ mod tests {
         let index = testutil::load(run.meta);
         let winner = testutil::winning_hit(run).hit;
 
-        // A fit 500x coarser than the field's: the ball reaches the whole sky,
-        // so the survivor fraction is tiny - the case B1 was written for.
+        // A fit 500x coarser than the field's: the ball reaches the whole sky, so
+        // the survivor fraction is tiny.
         let coarse = QuadHit {
             wcs: Wcs {
                 cd: [
@@ -1182,8 +1124,8 @@ mod tests {
             },
             ..winner.clone()
         };
-        // The degenerate fit: a zero CD makes the corner and the center pixel
-        // project to the same sky point, so the ball radius is 0 and empty.
+        // A zero CD makes the corner and the center pixel project to the same sky
+        // point, so the ball radius is 0 and empty.
         let degenerate = QuadHit {
             wcs: Wcs {
                 cd: [[0.0, 0.0], [0.0, 0.0]],
@@ -1259,9 +1201,9 @@ mod tests {
             old_refs.len(),
             old.nmatch
         );
-        // The coarse leg's ball has to dwarf the winner's and cover a large
-        // share of the star table, or the leg does not test the case B1 was
-        // written for: a huge ball whose survivors are a handful.
+        // The coarse leg's ball has to dwarf the winner's and cover a large share
+        // of the star table, or the leg does not test a huge ball whose survivors
+        // are a handful.
         let ball_at = |wcs: &Wcs| {
             let (ra, dec) = wcs.pix_to_radec(run.width / 2.0, run.height / 2.0);
             let center = radec_to_xyz(ra, dec);
@@ -1295,17 +1237,15 @@ mod tests {
         );
     }
 
-    /// The ordering rule `collect_refs` relies on, checked on crafted keys
-    /// instead of on a projection: stable-sorting a candidate list and then
-    /// filtering it equals filtering it and stable-sorting the survivors, for
-    /// duplicate keys (real star tables do hold duplicate records), for `-0.0`
-    /// and `+0.0` (the inclusive in-frame test admits both) and for a NaN
-    /// coordinate (a corrupt index star), which `f64::total_cmp` puts at a
-    /// fixed end of the order rather than leaving it wherever it started.
+    /// The ordering rule `collect_refs` relies on, on crafted keys: stable-sorting a
+    /// candidate list then filtering equals filtering then stable-sorting the
+    /// survivors, for duplicate keys (real star tables hold duplicates), for `-0.0`
+    /// and `+0.0` (the inclusive in-frame test admits both) and for a NaN coordinate
+    /// (a corrupt index star), which `f64::total_cmp` puts at a fixed order end.
     #[test]
     fn filter_and_sort_commute_on_the_survivor_subsequence() {
-        // (ball dist2, x, y); `x.is_nan()` is the reject test, so the entries
-        // with a NaN x are the ones the in-frame test drops.
+        // (ball dist2, x, y); `x.is_nan()` is the reject test, so the NaN-x
+        // entries are the ones the in-frame test drops.
         let nan = f64::NAN;
         let cases: Vec<(f64, f64, f64)> = vec![
             (1.0, 10.0, 1.0),
@@ -1350,11 +1290,9 @@ mod tests {
         }
         // The legs above must actually have exercised the interesting cases:
         // duplicate keys keep their incoming order (the three survivors at
-        // dist2 = 2.0 come out in the order they went in), and the two records
-        // at dist2 = 0.0 (whose x are -0.0 and +0.0) carry an EQUAL sort key, so
-        // their order - negative x first - is fixed by the sort's STABILITY, not
-        // by `total_cmp` (which only sees equal keys here); both pass the
-        // in-frame test and survive.
+        // dist2 = 2.0 come out as they went in), and the two records at dist2 = 0.0
+        // (x = -0.0 and +0.0) share an EQUAL sort key, so their order - negative x
+        // first - comes from the sort's STABILITY; both pass the in-frame test.
         let twos: Vec<f64> = survivors
             .iter()
             .filter(|s| s.0 == 2.0)
@@ -1388,8 +1326,8 @@ mod tests {
     }
 
     /// Pure accumulator: perfect matches must lift the odds above the solve
-    /// threshold, pure noise must bury it, and the bail flag must fire on a
-    /// long run of distractors.
+    /// threshold, pure noise must bury it, and the bail flag must fire on a long
+    /// run of distractors.
     #[test]
     fn odds_scan_synthetic() {
         let refs: Vec<[f64; 2]> = (0..20).map(|i| [10.0 * i as f64, 10.0]).collect();
@@ -1403,8 +1341,8 @@ mod tests {
         assert_eq!(nm, 15);
         assert!(lo > ODDS_TO_SOLVE_LN, "perfect matches: {lo}");
 
-        // No matches at all: every star is a distractor, so each costs
-        // ln(delta) = -1.39 nats and the best prefix - the first star - stays
+        // No matches at all: every star is a distractor costing
+        // ln(delta) = -1.39 nats, so the best prefix - the first star - stays
         // negative. 50 of them come to -69 nats, nowhere near the -300 floor
         // passed here, so this scan runs to the end.
         let far: Vec<[f64; 2]> = (0..50).map(|i| [10.0 * i as f64, 10000.0]).collect();
@@ -1423,17 +1361,13 @@ mod tests {
 
     /// The round winner on field 1 must verify as solved.
     ///
-    /// The odds gate is ours (`ODDS_TO_SOLVE_LN`), so it must hold on any
-    /// installed index set, while which quad wins and what its exact log-odds
-    /// are is a property of that set and is deliberately not pinned. Kept as
-    /// invariants: the gate, a match count floored by
-    /// `testutil::MIN_WINNER_NMATCH` well above what chance pairs can reach
-    /// (the count itself is a property of the index set, so it is not pinned),
-    /// and the field's published scale.
-    ///
-    /// Every field-star slot of the winning quad (the `dimquads` slots the index
-    /// actually uses) must sit below the round's object ceiling: the quad can
-    /// only have been enumerated from stars that round feeds the search.
+    /// The odds gate is ours (`ODDS_TO_SOLVE_LN`) so it must hold on any installed
+    /// index set, while which quad wins and its exact log-odds belong to that set
+    /// and are deliberately not pinned. Kept: the gate, a match count floored by
+    /// `testutil::MIN_WINNER_NMATCH` well above what chance pairs reach, and the
+    /// field's published scale. Every field-star slot of the winning quad (the
+    /// `dimquads` slots the index uses) must sit below the round's object ceiling:
+    /// the quad can only have been enumerated from that round's stars.
     #[test]
     fn winner_quad_on_field1_verifies_as_solved() {
         let Some(run) = testutil::field_run("4656x3522-1.xyls", 4656.0, 3522.0, None) else {
@@ -1470,10 +1404,8 @@ mod tests {
     /// NOT solve: log-odds below `ODDS_TO_SOLVE_LN`. The bogus WCS is built at
     /// runtime from the winner, so no quad id is pinned.
     ///
-    /// Shifting the reference Dec by 0.5 degrees moves every projected index
-    /// star by roughly 660 px at the field's arcsec/pixel - far past the
-    /// 5-sigma match radius - so the pairs the true WCS banked are gone and only
-    /// chance pairs remain, which cannot lift the scan to the gate.
+    /// That shift moves every projected index star by roughly 660 px at the field's
+    /// arcsec/pixel, far past the 5-sigma match radius: only chance pairs remain.
     #[test]
     fn bogus_quad_does_not_verify_as_solved() {
         let Some(run) = testutil::field_run("4656x3522-1.xyls", 4656.0, 3522.0, None) else {
@@ -1491,8 +1423,8 @@ mod tests {
     }
 
     /// The thread-local `Scratch` must be as good as fresh on every call: two
-    /// consecutive `verify_hit` runs of one hit on one thread (and a run of a
-    /// different hit between them) must return identical results.
+    /// consecutive `verify_hit` runs of one hit on one thread, with a run of a
+    /// different hit between them, must return identical results.
     #[test]
     fn verify_hit_is_repeatable_through_the_scratch() {
         let Some(run) = testutil::field_run("4656x3522-1.xyls", 4656.0, 3522.0, None) else {
@@ -1517,8 +1449,8 @@ mod tests {
     /// `top_k` picks the probe's candidate detections, so it must return the
     /// brightest entries in descending order, hand a tie at the cap boundary to
     /// the EARLIER list rank (the probe's answer has to stay a function of the
-    /// field list alone, never of how a buffer happened to fill up), cope with a
-    /// cap wider than the list, and drop `None` keys.
+    /// field list alone, never of how a buffer filled up), cope with a cap wider
+    /// than the list, and drop `None` keys.
     #[test]
     fn top_k_picks_the_brightest_and_breaks_ties_by_list_rank() {
         let mk = |fluxes: &[f64]| -> Vec<Star> {
@@ -1561,17 +1493,16 @@ mod tests {
         assert_eq!(fluxes_of(&buf, &stars), vec![30.0, 20.0, 20.0]);
     }
 
-    /// The probe's two-sided contract: the hit that actually solves the field
-    /// must get through (a false rejection here is a lost field), and a WCS
-    /// pointed away from the truth must be dropped before `verify_hit` runs.
+    /// The probe's two-sided contract: the hit that solves the field must get
+    /// through (a false rejection here is a lost field), and a WCS pointed away from
+    /// the truth must be dropped before `verify_hit` runs.
     ///
     /// The bogus leg shifts the reference Dec by 5 degrees, not by the 0.5 the
-    /// verification-level bogus uses: at 0.5 degrees the probes still land
-    /// inside a healpix tile's sky area, so a couple of chance coincidences
-    /// could legitimately lift it over the acceptance count and make this test
-    /// flaky. At 5 degrees they land off the tile (or, for an all-sky index,
-    /// where the chance rate over 32 probes is ~1e-4), and a pass is out of the
-    /// question.
+    /// verification-level bogus uses: at 0.5 degrees the probes still land inside a
+    /// healpix tile's sky area, so a couple of chance coincidences could lift it over
+    /// the acceptance count and make this test flaky. At 5 degrees they land off the
+    /// tile (or, for an all-sky index, where the chance rate over 32 probes is
+    /// ~1e-4), and a pass is out of the question.
     #[test]
     fn probe_passes_the_winner_and_rejects_a_wrong_pointing() {
         let Some(run) = testutil::field_run("4656x3522-1.xyls", 4656.0, 3522.0, None) else {
@@ -1617,12 +1548,11 @@ mod tests {
     }
 
     /// `(stars, cands, width, height)` of a square sub-frame of `run`, centered on
-    /// the field, whose `cat_in_frame` for `hit` is about `target`: the estimate
-    /// is `density * W * H * deg_per_pix^2`, so the side follows from `target`
-    /// alone, and the star list is filtered to the square so the probe's footprint
-    /// ball stays with it. The fit itself is untouched, which is what makes this
-    /// usable for a hit the probe must accept; scaling `cd` instead would move
-    /// every probe off its star and destroy that.
+    /// the field, whose `cat_in_frame` for `hit` is about `target`: the estimate is
+    /// `density * W * H * deg_per_pix^2`, so the side follows from `target` alone,
+    /// and the star list is filtered to the square so the probe's footprint ball
+    /// stays with it. The fit itself is untouched, which is what makes this usable
+    /// for a hit the probe must accept; scaling `cd` would move probes off stars.
     fn sub_frame(
         index: &Index,
         hit: &QuadHit,
@@ -1647,11 +1577,10 @@ mod tests {
         (stars, cands, side, side)
     }
 
-    /// Fits to probe: the winner plus perturbations of it - shifts from well below
-    /// the probe radius to far outside the tile, a rotated and a rescaled CD, a
-    /// shifted reference pixel. The garbage end of this spread is what the probe
-    /// sorts out in production, and it is the population on which the two lookup
-    /// paths must never disagree.
+    /// Fits to probe: the winner plus perturbations - shifts from well below the
+    /// probe radius to far outside the tile, a rotated and a rescaled CD, a shifted
+    /// reference pixel. The garbage end of this spread is what the probe sorts out in
+    /// production, and the population the two lookup paths must never disagree on.
     fn probe_fixture_hits(winner: &QuadHit) -> Vec<QuadHit> {
         let mut hits = vec![winner.clone()];
         for shift in [0.0005, 0.002, 0.02, 0.2, 2.0, 5.0] {
@@ -1694,9 +1623,9 @@ mod tests {
 
     /// The real guard on the batched lookup: for the same hit, the ball path and
     /// the per-probe searches must return the same verdict, on real index data.
-    /// Every hit is probed over a frame that puts `cat_in_frame` comfortably
-    /// inside the batched path's guard, so the comparison cannot be vacuous by
-    /// abstention, and both verdicts must show up.
+    /// Every hit is probed over a frame that puts `cat_in_frame` comfortably inside
+    /// the batched path's guard, so the comparison cannot be vacuous by abstention,
+    /// and both verdicts must show up.
     #[test]
     fn probe_ball_and_searches_agree_for_every_hit() {
         let Some(run) = testutil::field_run("4656x3522-1.xyls", 4656.0, 3522.0, None) else {
@@ -1706,7 +1635,7 @@ mod tests {
         let winner = testutil::winning_hit(run).hit;
         // A quarter of the guard's ceiling: the footprint ball holds about twice
         // the frame's estimate, and a ball over the ceiling aborts into the
-        // fallback path instead of answering here.
+        // fallback instead of answering here.
         let target = PROBE_BALL_MAX_STARS as f64 / 4.0;
 
         let hits = probe_fixture_hits(&winner);
@@ -1752,7 +1681,7 @@ mod tests {
     /// The guard decides which path a hit takes, and neither path may change the
     /// answer: the same winner probed over a frame above the ceiling (the batched
     /// path is never started) and inside it (the batched path answers) must both
-    /// get through, and so must a pointing that is wrong by 5 degrees.
+    /// get through, and so must a pointing wrong by 5 degrees.
     #[test]
     fn probe_guard_chooses_the_path_without_choosing_the_verdict() {
         let Some(run) = testutil::field_run("4656x3522-1.xyls", 4656.0, 3522.0, None) else {
@@ -1800,12 +1729,14 @@ mod tests {
     }
 
     /// The probe's ball buffer is thread-local scratch, so it must be as good as
-    /// fresh on every call: the same hit twice on one worker and two hits in
-    /// either order must give the same verdicts; a hit that abstains right after
-    /// a filled ball must leave the scratch observably empty (its path never
-    /// reaches the collector, so only the entry clear can do it); and repeated
-    /// batched hits must keep the buffer bounded - every collection starts from
-    /// an empty buffer, so it never grows past one ball.
+    /// fresh on every call:
+    /// - the same hit twice on one worker, and two hits in either order, give the
+    ///   same verdicts;
+    /// - a hit that abstains right after a filled ball leaves the scratch observably
+    ///   empty (its path never reaches the collector, so only the entry clear can do
+    ///   it);
+    /// - repeated batched hits keep it bounded: every collection starts empty, so it
+    ///   never grows past one ball.
     #[test]
     fn probe_is_repeatable_through_the_scratch() {
         let Some(run) = testutil::field_run("4656x3522-1.xyls", 4656.0, 3522.0, None) else {
@@ -1836,10 +1767,9 @@ mod tests {
             assert!(verify_probe(&index, &winner, &stars, &cands, w, h));
         }
         // A hit the probe abstains on must leave the scratch clean too: the next
-        // hit is judged from its own ball, not from the abstaining one's. The
-        // winner first fills the buffer - the abstaining hit's path never reaches
-        // the collector, so an empty scratch afterwards is the entry clear's
-        // doing alone.
+        // hit is judged from its own ball. The winner first fills the buffer - the
+        // abstaining hit's path never reaches the collector, so an empty scratch
+        // afterwards is the entry clear's doing alone.
         assert!(verify_probe(&index, &winner, &stars, &cands, w, h));
         let (few, few_cands, fw, fh) = sub_frame(&index, &winner, run, PROBE_MIN_CAT_STARS / 2.0);
         assert!(verify_probe(&index, &winner, &few, &few_cands, fw, fh));
@@ -1906,7 +1836,7 @@ mod tests {
 
         // One probe whose own projection is garbage, the rest fine: no ball can be
         // sized (its radius would be NaN), so the searches answer - and a probe
-        // that cannot match can only ever cost a match, never invent one.
+        // that cannot match can only cost a match, never invent one.
         let (clean, clean_ball, _) =
             probe_paths(&index, &winner, &stars, &cands, w, h).expect("the scale is finite");
         assert_eq!(clean_ball, Some(clean), "the clean case must be batched");
@@ -1939,16 +1869,14 @@ mod tests {
         }
     }
 
-    /// The accept threshold is `matches >= need`, not `> need`: a hit whose
-    /// probes match exactly `need` catalog stars must be accepted by both paths
-    /// and by `verify_probe`, and one short of `need` must be rejected by all
-    /// three. The winner alone cannot show this - it matches far more than
-    /// `need` and the probe count cannot be trimmed below `PROBE_MIN_PROBES` -
-    /// so the fixture sweeps small pointing offsets, which peel probe stars off
-    /// their catalog counterparts one by one, and walks candidate-list prefixes
-    /// per fixture until the match count sits exactly on `need` and one below
-    /// it. Both frames: one the batched path answers, one dense enough to force
-    /// the per-probe fallback.
+    /// The accept threshold is `matches >= need`, not `> need`: a hit whose probes
+    /// match exactly `need` catalog stars must be accepted by both paths and by
+    /// `verify_probe`, one short of `need` rejected by all three. The winner cannot
+    /// show this - it matches far more than `need` and the probe count cannot drop
+    /// below `PROBE_MIN_PROBES` - so the fixture sweeps small pointing offsets,
+    /// which peel probe stars off their catalog counterparts one by one, and walks
+    /// candidate-list prefixes until the count sits exactly on `need` and one below,
+    /// in a batched frame and one dense enough to force the per-probe fallback.
     #[test]
     fn probe_accepts_at_exactly_need_matches() {
         let Some(run) = testutil::field_run("4656x3522-1.xyls", 4656.0, 3522.0, None) else {
@@ -2030,10 +1958,9 @@ mod tests {
         );
     }
 
-    /// The collector owns the buffer's state: `probe_ball_coords` empties `buf`
-    /// on entry, so a buffer that arrives holding a stale witness still answers
-    /// from this ball only - one hit's collection can never match another
-    /// hit's probes.
+    /// The collector owns the buffer's state: `probe_ball_coords` empties `buf` on
+    /// entry, so a buffer that arrives holding a stale witness still answers from
+    /// this ball only - one hit's collection can never match another hit's probes.
     #[test]
     fn probe_ball_coords_clears_its_buffer() {
         let Some(run) = testutil::field_run("4656x3522-1.xyls", 4656.0, 3522.0, None) else {
@@ -2052,8 +1979,8 @@ mod tests {
             usize::MAX,
             &mut fresh
         ));
-        // A star of the winner's ball that really answers one of its probes: if
-        // a stale copy of it survived into the next collection, it would match.
+        // A star of the winner's ball that really answers one of its probes: a
+        // stale copy of it surviving into the next collection would match.
         let mut stale = None;
         'probes: for q in &plan.qs[..plan.probes] {
             for s in &fresh {
@@ -2082,8 +2009,8 @@ mod tests {
         );
         assert!(clean.is_empty(), "the far ball holds no star");
         // The same collection into a buffer that already holds the witness: the
-        // entry clear must erase it, or the stale star answers `Some(true)` for
-        // a ball that holds nothing.
+        // entry clear must erase it, or the stale star answers `Some(true)` for a
+        // ball that holds nothing.
         let mut stale_buf = vec![stale];
         assert_eq!(
             probe_via_ball(&index.stars, &far_plan, &mut stale_buf),

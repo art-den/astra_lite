@@ -1,9 +1,8 @@
 //! The index sweep: the object-count depth ramp, index selection by scale
 //! range plus the `--ra/--dec` position gate, and `solve_field` - the round
 //! loop that drives `solve_index` over chunks of concurrent index attempts and
-//! keeps the deterministic winner of the round that solves (the
-//! lexicographic-best `(log-odds, quad)` solved hit, so the print does not
-//! depend on worker scheduling).
+//! reports the deterministic winner: the lexicographic-best `(log-odds, quad)`
+//! solved hit, so the print does not depend on worker scheduling.
 
 use anyhow::Result;
 use rayon::prelude::*;
@@ -23,13 +22,11 @@ use crate::verify::{FieldPre, ProbeStars, VerifyResult, probe_stars, verify_hit,
 use crate::wcs::pixel_center_of_size;
 use crate::xyls::Star;
 
-/// A solved field: the values of the success block `output::write_solution`
-/// prints (center, sizes, rotation, parity), plus the identity of the hit that
-/// produced them (never printed).
-///
-/// `winner` is what lets the sweep's tests re-run the index that actually
-/// solved a field instead of hardcoding an index id: the suite then works with
-/// any installed index set, not one specific index file.
+/// A solved field: the values `output::write_solution` prints (center, sizes,
+/// rotation, parity), plus the identity of the hit that produced them (never
+/// printed). `winner` lets the sweep's tests re-run the index that solved a
+/// field instead of hardcoding an index id, so the suite works with any
+/// installed index set.
 #[derive(Debug, Clone)]
 pub struct Solution {
     pub ra: f64,
@@ -39,20 +36,17 @@ pub struct Solution {
     pub orient_deg: f64,
     pub parity_neg: bool,
     // Carried for the sweep's tests (which index/quad/round won); the shipped
-    // print path never reads it. Kept `pub(crate)` so re-exporting `Solution`
-    // at the crate root does not drag `Winner` into the public API; the lint
-    // is allowed because only tests read it.
+    // print path never reads it. `pub(crate)` so re-exporting `Solution` does
+    // not drag `Winner` into the public API; the lint is allowed for tests.
     #[allow(dead_code)]
     pub(crate) winner: Winner,
 }
 
-/// Which index and quad the sweep reported as solved, the log-odds the winner
-/// was picked by ([`better_hit`] defines that order), and the depth-round window
-/// that produced it. The window lets the tests replay the exact winning round
-/// (`testutil::FieldRun`) without re-deriving the ramp.
-///
-/// Every field is consumed only by the tests, not by the shipped print path
-/// (see [`Solution::winner`] for why the lint is allowed here).
+/// Which index and quad the sweep reported as solved, the log-odds it won by
+/// ([`better_hit`] defines that order), and the depth-round window that produced
+/// it (lets tests replay the exact winning round, `testutil::FieldRun`, without
+/// re-deriving the ramp). Consumed only by the tests, not the shipped print
+/// path (see [`Solution::winner`] for the lint allow).
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct Winner {
@@ -67,17 +61,15 @@ pub struct Winner {
 }
 
 /// Floor for `--cpulimit` when computing the deadline: `Instant + 0` would
-/// expire immediately on the first check, a sub-millisecond budget is
-/// meaningless anyway.
+/// expire on the first check; a sub-millisecond budget is meaningless anyway.
 pub(crate) const MIN_CPULIMIT_S: f64 = 0.001;
 
-/// Index selection for the sweep: an index is kept when its quad-size band
-/// overlaps the one the field can produce (`IndexMeta::fits_scale`) AND - when
-/// a `--ra/--dec` hint is given - its sky cell passes the healpix tile position
-/// gate ([`tile_in_hint`]). `index::load_metas_in` hands the metas over in
-/// sweep order (largest index quad size first) and `filter` preserves it, so
-/// the result is still in sweep order. Shared with `testutil::discover`, which
-/// runs the production sweep on installed indices.
+/// Index selection for the sweep: keep an index when its quad-size band
+/// overlaps the one the field can produce (`IndexMeta::fits_scale`) AND - under
+/// a `--ra/--dec` hint - when its sky cell passes [`tile_in_hint`].
+/// `index::load_metas_in` hands the metas over in sweep order (largest index
+/// quad size first) and `filter` preserves it. Shared with
+/// `testutil::discover`, which runs the production sweep on installed indices.
 pub(crate) fn select_indices(metas: &[IndexMeta], opts: &SolveOptions) -> Vec<IndexMeta> {
     metas
         .iter()
@@ -87,10 +79,9 @@ pub(crate) fn select_indices(metas: &[IndexMeta], opts: &SolveOptions) -> Vec<In
         .collect()
 }
 
-/// The healpix tile position gate: an all-sky index is always in range; a
-/// healpix sub-region tile is tried only when its sky cell overlaps the
-/// `--ra/--dec` hint circle. With no hint (blind solve) every scale-fitting
-/// tile is tried: the gate is a performance filter, never a correctness one
+/// The healpix tile position gate: all-sky is always in range; a tile is tried
+/// only when its cell overlaps the `--ra/--dec` hint circle; blind mode tries
+/// every scale-fitting tile. A performance filter, never a correctness one
 /// (`healpix::tile_overlaps_circle` errs towards keeping).
 fn tile_in_hint(meta: &IndexMeta, radecs: Option<PositionHint>) -> bool {
     match (meta.healpix >= 0, radecs) {
@@ -115,19 +106,17 @@ fn timeout_msg(cpulimit: f64) -> String {
     )
 }
 
-/// What one hinted sweep knows about each index file it has opened: the quads the
-/// hint can reach, and the compact codes tree over them (`index.rs`).
+/// What one hinted sweep knows about each index file it has opened: the quads
+/// the hint can reach, and the compact codes tree over them (`index.rs`).
 ///
 /// Keyed by the index file path and NEVER by `INDEXID`: one installed series
-/// gives every one of its healpix tiles the same id (a duplicated id is only a
-/// warning in `index::load_metas_in`), so an id-keyed cache would apply the
-/// verdict of one tile to dozens of others and drop files that do hold
-/// hint-reachable quads.
+/// gives every healpix tile the same id (a duplicate is only a warning in
+/// `index::load_metas_in`), so an id-keyed cache would apply one tile's verdict
+/// to dozens of others and drop files that do hold hint-reachable quads.
 ///
-/// The two counters say whether the mechanism fired at all during this sweep.
-/// They exist for the tests that pin it: a regression that quietly turns the
-/// whole thing off is invisible in the prints (searching a file's own codes tree
-/// is always correct) and shows only on a bench. Never printed to stdout.
+/// Tests pin the two counters: a regression that quietly turns the mechanism
+/// off is invisible in the prints (searching a file's own codes tree is always
+/// correct) and shows only on a bench. Never printed to stdout.
 #[derive(Default)]
 struct HintCache {
     by_path: Mutex<HashMap<PathBuf, Arc<HintIndex>>>,
@@ -169,12 +158,11 @@ impl HintCache {
     }
 }
 
-/// Whether an index stays in the sweep under a hint: an index whose cached hint
-/// reaches no quad is dropped, everything else - including an index the cache has
-/// not seen yet - is kept. Only a hint computed from a successfully loaded index
-/// can enter the cache, so a dropped file is one the sweep has already opened
-/// without an error: the elimination cannot hide an input error (`Err`, exit 2)
-/// at the position of a file that was never readable.
+/// Whether an index stays in the sweep under a hint: a cached hint that reaches
+/// no quad drops the file; everything else - including a file the cache has not
+/// seen - is kept. Only a hint computed from a successfully loaded index enters
+/// the cache, so the elimination cannot hide an input error (`Err`, exit 2) at
+/// the position of a never-readable file.
 fn hint_kept(meta: &IndexMeta, hints: &HintCache) -> bool {
     match hints.get(&meta.path) {
         Some(hint) => hint.any,
@@ -182,16 +170,15 @@ fn hint_kept(meta: &IndexMeta, hints: &HintCache) -> bool {
     }
 }
 
-/// How many attempts of a chunk may keep a compact hint codes tree: that chunk's
+/// Attempts of a chunk that may keep a compact hint codes tree: this chunk's
 /// share of the sweep-wide `params::HINT_TREE_MAX_FILES` budget, spent in sweep
 /// order over the round's list.
 ///
-/// Every file gets its verdict in the same round (the round that first fills the
-/// cache, where the list is still the list `select_indices` handed over), so
-/// which files land inside the budget is fixed by their position and not by how
-/// the pool schedules the chunk. A file past the budget loses only the tree: its
-/// own codes tree answers the same queries, and the elimination verdict still
-/// applies.
+/// Every file gets its verdict in the same round (the one that first fills the
+/// cache, where the list is still what `select_indices` handed over), so the
+/// budget falls on files by position, not by how the pool schedules the chunk.
+/// A file past the budget loses only the tree: its own codes tree answers the
+/// same queries and the elimination verdict still applies.
 fn hint_tree_slots(chunk_no: usize, fanout: usize) -> usize {
     crate::params::HINT_TREE_MAX_FILES
         .saturating_sub(chunk_no * fanout)
@@ -211,20 +198,18 @@ fn newly_dropped<'a>(prev: &[&'a IndexMeta], kept: &[&'a IndexMeta]) -> Vec<&'a 
 
 /// Step of the depth ramp: sweep every selected index over field stars 1-10,
 /// then 11-20, 21-30, ..., stopping at the first round + index that verifies a
-/// solved hit. The ramp is capped at `MAX_OBJS` (frozen project constant) and
-/// at the length of the star list.
+/// solved hit; capped at `MAX_OBJS` and the star-list length.
 ///
 /// Shallow-first is what makes the ramp useful: a round enumerates the quads
 /// whose newest star falls inside its window, and that count grows with the
-/// top of the window, so a coarse first round (say 1-100) is deep work on the
-/// first index tried, while stepping by 10 gives every index its bright stars
-/// before any index starts spending the whole `--cpulimit` on faint ones.
+/// window top, so a coarse first round (say 1-100) is deep work on the first
+/// index tried, while stepping by 10 gives every index its bright stars before
+/// any index spends the whole `--cpulimit` on faint ones.
 pub(crate) const OBJ_ROUND_STEP: usize = 10;
 
 /// The round's replace rule: the lexicographic-best `(log-odds, quad)` solved
-/// hit of a round wins; the quad tie-break keeps even exact float ties
-/// deterministic, so the winner never depends on the order in which worker
-/// threads report their hits.
+/// hit wins; the quad tie-break keeps even exact float ties deterministic, so
+/// the winner never depends on the order in which worker threads report hits.
 fn better_hit(candidate: (f64, usize), current: Option<(f64, usize)>) -> bool {
     match current {
         None => true,
@@ -249,23 +234,22 @@ struct CaptureCtx {
 
 /// The winner capture for one index's round (`solve_field`'s `on_hit`).
 ///
-/// [`collect`](Self::collect) takes an already-verified hit; `verify_hit` stays
-/// in the `solve_field` glue (it needs the `&Index`, but is not part of the
-/// capture semantics under test). `collect` runs the refine and the
-/// field-center recentring on the worker thread BEFORE the winner lock (CPU
-/// work is never serialized across rayon), applies the hint gate on the refined
-/// center, and does the lexicographic compare-and-replace as ONE atomic
-/// operation under the slot lock. It always returns [`Flow::Continue`]: stopping
-/// the enumeration from the callback would make the winning attempt's hit set
-/// depend on which worker got there first.
+/// [`collect`](Self::collect) takes an already-verified hit (`verify_hit` stays
+/// in the `solve_field` glue, it needs the `&Index`). Refine + recentring run
+/// on the worker thread BEFORE the winner lock (CPU work is never serialized
+/// across rayon), then the hint gate on the refined center, then the
+/// lexicographic compare-and-replace as ONE atomic operation under the slot
+/// lock. Always [`Flow::Continue`]: stopping the enumeration from the callback
+/// would make the winning attempt's hit set depend on which worker got there
+/// first.
 ///
-/// When the capture belongs to a chunked sweep ([`Self::with_cancel`]), the
-/// winner replace also publishes it to the board, in the same critical section,
-/// so the later attempts of that chunk can stop.
+/// In a chunked sweep ([`Self::with_cancel`]) the winner replace also publishes
+/// to the board in the same critical section, so the chunk's later attempts can
+/// stop.
 ///
-/// The glue closure is `Sync` and shares one capture across workers, so the two
-/// pieces of mutable state are `Mutex`-guarded; `panic = "abort"` makes
-/// poisoning unobservable.
+/// The glue closure is `Sync` and shares one capture across workers, so the
+/// mutable state is `Mutex`-guarded; `panic = "abort"` makes poisoning
+/// unobservable.
 struct RoundCapture<'a> {
     /// The field list: `refine_wcs` matches index stars against it.
     stars: &'a [Star],
@@ -350,8 +334,8 @@ impl<'a> RoundCapture<'a> {
                 max_objs: self.ctx.max_objs,
             },
         };
-        // Poison-safe replace under the lock: keep the lexicographic-best
-        // (log-odds, quad) solved hit of this index's round.
+        // Poison-safe compare-and-replace under the slot lock: keep the
+        // lexicographic-best (log-odds, quad) solved hit of this round.
         let mut slot = self
             .winner
             .lock()
@@ -361,10 +345,8 @@ impl<'a> RoundCapture<'a> {
             slot.as_ref().map(|(l, q, _)| (*l, *q)),
         ) {
             *slot = Some((vr.bestlogodds, hit.quad, sol));
-            // Still under the winner lock: once a solution is here, the later
-            // attempts of the chunk have lost the race and may stop. Publishing
-            // inside the same critical section keeps "captured" and "siblings
-            // told" from ever disagreeing.
+            // Still under the winner lock: publishing in this same critical section
+            // keeps "captured" and "siblings told" from ever disagreeing.
             if let Some((board, own)) = self.cancel {
                 board.cancel_after(own);
             }
@@ -385,15 +367,14 @@ impl<'a> RoundCapture<'a> {
     }
 }
 
-/// The cancel flags of one chunk of concurrent index attempts: one per slot of
-/// the chunk, raised when a strictly EARLIER slot of the same round has captured
-/// a solution. An earlier attempt is never cancelled - it could still be the one
+/// The cancel flags of one chunk of concurrent index attempts: one per slot,
+/// raised when a strictly EARLIER slot of the same round has captured a
+/// solution. An earlier attempt is never cancelled - it could still be the one
 /// the sweep reports - so cancellation can only ever discard work whose result
 /// the fold of [`solve_field`] would drop anyway.
 ///
 /// The board is the sweep-order rule "cancel iff some earlier position solved",
-/// written so that the hot enumeration test is one relaxed load of a line this
-/// thread normally only reads.
+/// written so the hot enumeration test is one relaxed load.
 struct CancelBoard {
     flags: Vec<AtomicBool>,
 }
@@ -446,16 +427,15 @@ enum Attempt {
     Nothing,
 }
 
-/// One index of one depth round: exactly the body the sequential sweep ran
-/// inline per index (cancelled? -> load -> enumerate -> capture -> verbose
-/// line), turned into a positional [`Attempt`] instead of returning from the
-/// sweep. A cancelled slot stops before the load, so it yields
-/// [`Attempt::Cancelled`] and never opens a file.
+/// One index of one depth round: the body the sequential sweep ran inline per
+/// index (cancelled? -> load -> enumerate -> capture -> verbose line), returned
+/// as a positional [`Attempt`]. A cancelled slot stops before the load, so it
+/// yields [`Attempt::Cancelled`] and never opens a file.
 ///
-/// Runs on a pool worker alongside the chunk's other attempts, each with its own
-/// index open. Its `on_hit` callback must never spawn rayon work: `verify_hit`
-/// holds its thread-local `Scratch` `RefCell` borrow for the whole call, and a
-/// rayon join can move the task to another worker before it resumes.
+/// Runs on a pool worker alongside the chunk's other attempts, each with its
+/// own index open. Its `on_hit` callback must never spawn rayon work:
+/// `verify_hit` holds its thread-local `Scratch` `RefCell` borrow for the whole
+/// call, and a rayon join can move the rest of the task to another worker.
 #[allow(clippy::too_many_arguments)]
 fn attempt_index(
     opts: &SolveOptions,
@@ -474,11 +454,10 @@ fn attempt_index(
     tree_allowed: bool,
 ) -> Attempt {
     // Cancelled before the file is opened: the sequential sweep would never have
-    // reached this index, so neither should its reader. This narrows the window
-    // in which a file the sequential sweep never opens can be read at all; the
-    // actual `panic = "abort"` safety comes from `Index::load` returning `Err`
-    // rather than panicking on a corrupt file (and the fold discards a later
-    // position's `Err` anyway, which is what "never reached it" means here).
+    // reached this index, so neither should its reader (this only narrows when
+    // a file the sequential sweep would never open gets read at all). The real
+    // `panic = "abort"` safety comes from `Index::load` returning `Err` rather
+    // than panicking; the fold discards a later position's `Err` anyway.
     if board.cancelled(slot) {
         return Attempt::Cancelled;
     }
@@ -528,11 +507,9 @@ fn attempt_index(
         deadline: Some(deadline),
         cancel: Some(board.flag(slot)),
     };
-    // `solve_index` runs on the rayon pool: the callback is `Sync` and guards
-    // its mutable state itself. The winner capture holds the round's mutable
-    // state; `verify_hit` stays in this glue (it needs `&index`), the capture
-    // composes refine + recentre, the hint gate and the atomic winner replace
-    // (see `RoundCapture`).
+    // `solve_index` runs on the rayon pool: the callback is `Sync` and guards its
+    // mutable state itself (`RoundCapture`: refine + recentre, the hint gate, the
+    // atomic winner replace; `verify_hit` stays in this glue, it needs `&index`).
     let capture = RoundCapture::new(
         stars,
         CaptureCtx {
@@ -548,14 +525,13 @@ fn attempt_index(
     )
     .with_cancel(board, slot);
     let stats = solve_index(&index, &spec, &|hit| {
-        // Cheap sanity check first: most code hits are fitted garbage and their
-        // odds scan would run to the end of the star list for zero matches. The
-        // probe is a pure function of `(index, hit, stars, cands, frame)`, so
-        // which hits it drops cannot depend on how the pool scheduled this
-        // attempt, and a dropped hit never reaches `RoundCapture::collect`. What
-        // it can move is stderr only - this hit's `[verify]` line is not printed,
-        // so the attempt's `best logodds` is the best over the hits that were
-        // actually verified - never the `output.rs` block on stdout.
+        // Cheap sanity check first: most code hits are fitted garbage whose odds
+        // scan would run to the end of the star list for zero matches. The probe is
+        // pure in `(index, hit, stars, cands, frame)`, so which hits it drops cannot
+        // depend on how the pool scheduled this attempt, and a dropped hit never
+        // reaches `RoundCapture::collect`. It can move stderr only - this hit's
+        // `[verify]` line is not printed, so `best logodds` covers the hits actually
+        // verified - never the `output.rs` block on stdout.
         if !verify_probe(&index, hit, stars, cands, opts.width, opts.height) {
             return Flow::Continue;
         }
@@ -628,17 +604,16 @@ enum Folded {
 /// the sequential loop's precedence exactly: the FIRST terminating position
 /// wins - `Err` (a corrupt index stays exit 2), then `Timeout` (a captured
 /// solution still outranks the timeout report), then `Solved`; `Cancelled` and
-/// `Nothing` fall through to the next position. It reads no clock: every verdict
-/// a position needed was taken when that attempt ran, so the fold of a given
-/// chunk is a pure function of the positions.
+/// `Nothing` fall through to the next position. It reads no clock: every
+/// verdict a position needed was taken when that attempt ran, so the fold of a
+/// given chunk is a pure function of the positions.
 ///
 /// The `Err` arm honours the deadline verdict the attempt recorded at its load:
-/// the sequential loop tested the `--cpulimit` deadline at the top of EVERY
-/// index before opening it, so an index whose deadline had already passed
-/// printed the timeout and exited 1 and never reached its (possibly corrupt)
-/// file to become an `Err`. That is also why the timeout line is printed through
-/// `on_timeout` here while the top-of-chunk check prints directly: this seam
-/// exists so the precedence rules can be tested without a sweep behind them.
+/// the sequential loop tested `--cpulimit` at the top of EVERY index before
+/// opening it, so an index past the deadline printed the timeout and exited 1
+/// without reaching its (possibly corrupt) file. Hence the timeout line prints
+/// through `on_timeout` here while the top-of-chunk check prints directly: the
+/// seam lets the precedence rules be tested without a sweep.
 fn fold_attempts(
     attempts: Vec<Attempt>,
     cpulimit: f64,
@@ -669,39 +644,38 @@ fn fold_attempts(
     Ok(Folded::Continue)
 }
 
-/// The index sweep: rounds of field depth outer, and inside a round the
-/// selected indices issued in chunks of `fanout` concurrent attempts, which is
-/// `params::INDEX_FANOUT` on the CLI path. `selected` is swept as given, so the
-/// caller must hand it over in sweep order ([`select_indices`]: largest index
-/// quad size first).
+/// The index sweep: rounds of field depth outer; inside a round the selected
+/// indices issued in chunks of `fanout` concurrent attempts
+/// (`params::INDEX_FANOUT` on the CLI path). `selected` is swept as given, so
+/// the caller must hand it over in sweep order ([`select_indices`]: largest
+/// index quad size first).
 ///
 /// What is reported is the first round + index (in that order) with a solved
-/// hit, and that winning ATTEMPT runs its enumeration to its end: every hit it
-/// produces is verified and the reported solution is the lexicographic-best
-/// (log-odds, quad) solved hit of its capture, so the printed WCS does not
-/// depend on rayon scheduling - unless `--cpulimit` truncates that attempt,
-/// which is timing-dependent by design. Attempts at later positions of the
-/// winning chunk run until cancelled and later chunks are never issued, so only
-/// the winning attempt's hit set is schedule-independent; a cancelled attempt's
-/// does depend on when the cancel lands, and the fold discards its result.
+/// hit, and that winning ATTEMPT runs its enumeration to its end: every hit is
+/// verified and the reported solution is the lexicographic-best (log-odds,
+/// quad) solved hit of its capture, so the printed WCS does not depend on
+/// rayon scheduling - unless `--cpulimit` truncates that attempt, which is
+/// timing-dependent by design. Attempts at later positions of the winning
+/// chunk run until cancelled and later chunks are never issued, so only the
+/// winning attempt's hit set is schedule-independent; a cancelled attempt's
+/// depends on when the cancel lands, and the fold discards its result.
 ///
-/// Chunking does not change what is reported because the chunk's attempts are
-/// folded in sweep order and only the FIRST position that terminates the sweep
-/// is used: [`fold_attempts`] reproduces the sequential loop's precedence, and
-/// everything at a later position is speculative - cancelled (only strictly
-/// later attempts are, and one cancelled after capturing could not have been the
-/// reported one) or discarded by the fold. Per-index results are
-/// schedule-independent (`solver::tests::hit_multiset_is_schedule_independent`)
-/// and the winner inside an index is still [`better_hit`].
+/// Chunking does not change what is reported: the chunk's attempts are folded
+/// in sweep order and only the FIRST terminating position is used
+/// ([`fold_attempts`] reproduces the sequential loop's precedence); everything
+/// later is speculative - cancelled (only strictly later attempts are, and one
+/// cancelled after capturing could not have been the reported one) or
+/// discarded by the fold. Per-index results are schedule-independent
+/// (`solver::tests::hit_multiset_is_schedule_independent`); the winner inside
+/// an index is still [`better_hit`].
 ///
-/// Two consequences of issuing a chunk at a time: the `--cpulimit` check at the
-/// top of an attempt is now a check at the top of a chunk (it still runs before
-/// any index is opened; inside a chunk the deadline is tripped by `solve_index`
-/// through `FieldSpec::deadline`), and the chunk's verbose stderr lines
-/// interleave, which they may - stderr is not a contract, the `output.rs` block
-/// on stdout is. Chunks do NOT cancel across their boundary: a solution in chunk
-/// `k` means every chunk before it found nothing, and the chunks after it are
-/// simply never issued.
+/// Two consequences of chunk issuance: the `--cpulimit` check moves from the
+/// top of an attempt to the top of a chunk (still before any index is opened;
+/// inside a chunk the deadline is tripped by `solve_index` through
+/// `FieldSpec::deadline`), and the chunk's verbose stderr lines interleave,
+/// which they may - stderr is not a contract, the `output.rs` block on stdout
+/// is. Chunks do NOT cancel across their boundary: a solution in chunk `k`
+/// means every earlier chunk found nothing.
 pub(crate) fn solve_field(
     opts: &SolveOptions,
     stars: &[Star],
@@ -844,7 +818,6 @@ fn solve_field_swept(
                     )
                 })
                 .collect();
-            // Positional fold: see `fold_attempts` (the sequential precedence).
             match fold_attempts(attempts, opts.cpulimit, &mut |m| eprintln!("{m}"))? {
                 Folded::Solved(sol) => return Ok(Some(sol)),
                 Folded::Stop => return Ok(None),
@@ -872,14 +845,13 @@ mod tests {
     use std::path::Path;
     use std::time::Duration;
 
-    /// Invariant: with the frame size given and no angular size, the scale
-    /// half of index selection keeps every installed index. The blind 0.1-180
-    /// deg field-width range is a field quad band of 27.2 arcsec to 225.7 deg
-    /// of backbone on this 4656x3522 frame (`IndexMeta::fits_scale`), so an
-    /// index would need its whole quad band outside that span to be dropped.
-    /// An installed set is not ours to enumerate, so the assertion is an
-    /// invariant, never a count: nothing dropped, and the sweep order survives
-    /// the filter (`metas` arrives in `sweep_cmp` order and filtering keeps it).
+    /// Invariant: given the frame size and no angular size, the scale half of
+    /// index selection keeps every installed index: the blind 0.1-180 deg
+    /// field-width range is a 27.2 arcsec to 225.7 deg backbone quad band on
+    /// this 4656x3522 frame (`IndexMeta::fits_scale`), so an index would need
+    /// its whole quad band outside that span to be dropped. The installed set
+    /// is not ours to enumerate, so the assertion is an invariant, never a
+    /// count: nothing dropped and the `sweep_cmp` order survives the filter.
     #[test]
     fn blind_scale_range_keeps_every_installed_index() {
         let Some(metas) = crate::testutil::metas() else {
@@ -940,8 +912,7 @@ mod tests {
     /// the larger quad id.
     #[test]
     fn better_hit_is_lexicographic_and_order_independent() {
-        // Two solved hits whose log-odds differ: the higher one must win in
-        // either arrival order.
+        // Differing log-odds: the higher one must win in either arrival order.
         let a = (342.720f64, 88080usize);
         let b = (321.500, 69298);
         for order in [[a, b], [b, a]] {
@@ -1027,9 +998,8 @@ mod tests {
     }
 
     /// (a) The capture's winner is the lexicographic-best `(log-odds, quad)`
-    /// solved hit, independent of the arrival order of `collect` (the property
-    /// `solve_field` relies on, tested on the capture directly). No hint, so
-    /// the gate never fires and the winner is the pure argmax.
+    /// solved hit independent of `collect` arrival order (the property
+    /// `solve_field` relies on). No hint: the winner is the pure argmax.
     #[test]
     fn round_capture_winner_is_order_independent() {
         let Some(meta) = crate::testutil::smallest_index(0) else {
@@ -1164,23 +1134,19 @@ mod tests {
 
     /// The round reports the lexicographic-best `(log-odds, quad)` solved hit:
     /// the callback always continues, so the round runs to its end and its hit
-    /// set does not depend on scheduling, and the sweep reports exactly that
-    /// hit. Replaying the round that wins `4656x3522-2` twice must therefore
-    /// give the same winner twice.
-    ///
-    /// No quad id or log-odds value is pinned here on purpose: which quad wins
-    /// is a property of the installed index set, the rule that picks it is ours.
+    /// set does not depend on scheduling. Replaying the round that wins
+    /// `4656x3522-2` twice must give the same winner twice. No quad id or
+    /// log-odds value is pinned here on purpose: which quad wins is a property
+    /// of the installed index set; the rule that picks it is ours.
     #[test]
     fn round_winner_is_the_best_solved_hit_of_the_round() {
         let Some(run) = crate::testutil::field_run(FIELD2, 4656.0, 3522.0, None) else {
             return;
         };
-        // The hit the production sweep reported.
         let reported = (run.log_odds, run.quad);
         // Two replays of the winning round: each must contain the reported
-        // winner again (a replay runs the round with the same parameters, so
-        // losing it here would be a real regression) and must pick the same
-        // argmax over the round's solved hits, which is also the reported one.
+        // winner again (same parameters, so losing it would be a real
+        // regression) and pick the same argmax, which is also the reported one.
         let mut argmaxes: Vec<(f64, usize)> = Vec::new();
         for _ in 0..2 {
             let hits = crate::testutil::solved_hits(run);
@@ -1254,9 +1220,9 @@ mod tests {
     const NARROW_SCALE: (f64, f64) = (0.95, 1.05);
 
     /// Depth cap of the far-hint legs: 40 stars = 4 rounds of the production
-    /// ramp ([`OBJ_ROUND_STEP`]). With the full star list an unsolvable hint
-    /// sends the ramp to `MAX_OBJS` over every all-sky index, which is a
-    /// batch-job cost, not a unit-test one.
+    /// ramp ([`OBJ_ROUND_STEP`]). Uncapped, an unsolvable hint sends the ramp
+    /// to `MAX_OBJS` over every all-sky index - a batch-job cost, not a
+    /// unit-test one.
     const SHALLOW_OBJS: usize = 40;
 
     /// Offset of the far-hint legs, in degrees of declination from the field's
@@ -1369,15 +1335,14 @@ mod tests {
         }
     }
 
-    /// A `--ra/--dec` circle that does not contain the field must report nothing.
-    /// The control leg (no hint) sweeps the installed set and must solve; the far
-    /// leg then runs on exactly the index the control won - same index, same
-    /// depth, only the hint moved - so what is under test is the gate, and its
-    /// cost is one index rather than a sweep over the whole install.
-    ///
-    /// Both legs are depth-capped (see [`SHALLOW_OBJS`]): uncapped, an unsolvable
-    /// hint sends the ramp to `MAX_OBJS` over every all-sky index, which is a
-    /// batch-job cost, not a unit-test one.
+    /// A `--ra/--dec` circle that does not contain the field must report
+    /// nothing. The control leg (no hint) sweeps the installed set and must
+    /// solve, so the far leg's `None` proves something; it then runs on
+    /// exactly the index the control won - same index, same depth, only the
+    /// hint moved - so the gate is what is under test, at the cost of one
+    /// index. Both legs are depth-capped (see [`SHALLOW_OBJS`]): uncapped, an
+    /// unsolvable hint sends the ramp to `MAX_OBJS` over every all-sky index -
+    /// a batch-job cost, not a unit-test one.
     fn far_hint_reports_nothing(
         metas: &[IndexMeta],
         stars: &[crate::xyls::Star],
@@ -1436,13 +1401,12 @@ mod tests {
         );
     }
 
-    /// End-to-end gate, anchored on the sky: the production sweep run
-    /// blind over the whole installed set must print field 2's published
-    /// center/size/rotation/parity within the budgets of
-    /// `testutil::Truth::check`. Which index wins is whatever the installed set
-    /// offers - the print is a property of the sky, not of one index file, and
-    /// that is the point: no index id, quad id or per-index fixed point is
-    /// pinned here.
+    /// End-to-end gate, anchored on the sky: the blind production sweep over
+    /// the whole installed set must print field 2's published center/size/
+    /// rotation/parity within `testutil::Truth::check`'s budgets. Which index
+    /// wins is whatever the installed set offers - the print is a property of
+    /// the sky, not of one index file: no index id, quad id or per-index fixed
+    /// point is pinned here.
     #[test]
     fn blind_field2_print_matches_sky_truth() {
         let Some(metas) = crate::testutil::metas() else {
@@ -1540,10 +1504,9 @@ mod tests {
     }
 
     /// `K = 1` is the sequential sweep; every wider chunking must report the
-    /// same solution for the same field. The `K = 1` leg comes from the injected
-    /// chunk width, never from a one-thread pool, so what is being compared is
-    /// the issue order and the fold, not the amount of parallelism inside one
-    /// index (both legs enumerate their quads on the full pool).
+    /// same solution. The `K = 1` leg comes from the injected chunk width,
+    /// never a one-thread pool, so what is compared is the issue order and the
+    /// fold, not the parallelism inside one index (both enumerate on the pool).
     #[test]
     fn fanout_matches_sequential_output() {
         let Some(metas) = crate::testutil::metas() else {
@@ -1552,18 +1515,16 @@ mod tests {
         if !pool_wider_than_a_chunk() {
             return;
         }
-        // `4656x3522-2` is the chunk-boundary-sensitive witness named in
-        // AGENTS.md: its winning index sits where a chunk boundary can move it,
-        // so it covers "a boundary lands on the winner" that `-1` does not.
+        // `4656x3522-2`'s winning index sits where a chunk boundary can move
+        // it - the case `-1` does not cover.
         for field in ["4656x3522-1.xyls", "4656x3522-2.xyls"] {
             let Some(stars) = crate::testutil::load_field(field) else {
                 return;
             };
             let opts = solve_opts(field, 4656.0, 3522.0, None, None);
             let mut want: Option<Solution> = None;
-            // Around the shipped constant in both directions, so a chunk
-            // boundary that lands on the winning index is covered on either
-            // side of it.
+            // Around the shipped constant in both directions, so a boundary on
+            // the winning index is covered on either side of it.
             for fanout in [1usize, 2, params::INDEX_FANOUT, params::INDEX_FANOUT + 1] {
                 let sol = solve_field_with_fanout(&opts, &stars, metas, test_deadline(), fanout)
                     .unwrap()
@@ -1586,24 +1547,24 @@ mod tests {
         }
     }
 
-    /// The hinted sweep is held to the same rule as the blind one: the same
-    /// solution bits at every chunk width, and the field's published sky truth.
+    /// The hinted sweep obeys the same rule as the blind one: the same
+    /// solution bits at every chunk width, and the published sky truth.
     ///
     /// It runs on [`PLATE1`] under a [`TIGHT_HINT_RADIUS_DEG`] circle at the
-    /// field's center because that combination reaches the fifth depth round:
-    /// this branch builds the compact hint trees only from round 2 on, so a field
-    /// that solves in round 1 would exercise nothing the blind legs above do not.
-    /// The print is NOT compared against a blind run (a sweep narrowed by a hint
-    /// may reach the field through another winner), only against the leg at
-    /// `fanout = 1` and against the sky.
+    /// field's center because that reaches the fifth depth round: compact hint
+    /// trees are built only from round 2 on, so a field that solves in round 1
+    /// would exercise nothing the blind legs above do not. The print is NOT
+    /// compared against a blind run (a hint-narrowed sweep may reach the field
+    /// through another winner), only against the `fanout = 1` leg and the sky.
     ///
     /// The chunk width also decides which files get a tree, because
-    /// [`hint_tree_slots`] spends the budget by position: the legs differ in which
-    /// records a query walks and in the order equal-distance hits arrive, and they
-    /// must still agree on the winner - including the `quad`, which under a tree
-    /// is the product of the record-to-quad remap of `solver.rs::Searcher::query`.
-    /// `trees_built > 0` says the leg really searched a filtered tree; without it
-    /// the equality could be won by a sweep where the mechanism never fired.
+    /// [`hint_tree_slots`] spends the budget by position: the legs differ in
+    /// which records a query walks and in the order equal-distance hits arrive,
+    /// yet must agree on the winner - including the `quad`, which under a tree
+    /// is the product of the record-to-quad remap of
+    /// `solver.rs::Searcher::query`. `trees_built > 0` says the leg really
+    /// searched a filtered tree; without it the equality could be won by a
+    /// sweep where the mechanism never fired.
     #[test]
     fn hinted_fanout_matches_sequential_output() {
         let Some(metas) = crate::testutil::metas() else {
@@ -1660,16 +1621,16 @@ mod tests {
         );
     }
 
-    /// A wrong hint must leave nothing to report and report it through the new
-    /// mechanism. The counters are the only witness of the second half: a file
-    /// searched through its own codes tree answers the same queries as one
-    /// searched through a filtered tree, so a sweep with the mechanism switched
-    /// off prints exactly the same "not solved".
+    /// A wrong hint must leave nothing to report, and report it through the
+    /// new mechanism: the counters are the only witness of the second half,
+    /// since a file searched through its own codes tree answers the same
+    /// queries as through a filtered tree, so a sweep with the mechanism off
+    /// prints exactly the same "not solved".
     ///
     /// [`NARROW1`] is the smallest bench field and its antipode the farthest
-    /// circle from it, so the sweep walks every round with the field outside the
-    /// circle: files whose quads are nowhere near it must leave the list, and the
-    /// ones the circle does reach must be searched through their compact trees.
+    /// circle from it: the sweep walks every round with the field outside the
+    /// circle, files whose quads are nowhere near it must leave the list, and
+    /// those the circle reaches must be searched through their compact trees.
     #[test]
     fn wrong_hint_drops_files_and_builds_trees() {
         let Some(metas) = crate::testutil::metas() else {
@@ -1713,9 +1674,8 @@ mod tests {
     }
 
     /// The same field solved three times over a chunked sweep must render the
-    /// identical stdout block, and identical to the sequential sweep's: the
-    /// printed solution is a property of the field, not of how the round's
-    /// indices were issued or of which worker got there first.
+    /// identical stdout block, identical to the sequential sweep's: the print
+    /// is a property of the field, not of issue order or worker scheduling.
     #[test]
     fn fanout_stdout_is_reproducible() {
         let Some(metas) = crate::testutil::metas() else {
@@ -1840,12 +1800,11 @@ mod tests {
         assert!(printed.is_empty(), "a solution must not print a timeout");
     }
 
-    /// C1 regression: an attempt that was already past the deadline when it
-    /// opened its file reports the timeout (exit 1), not its `Err` (exit 2) - the
-    /// sequential loop would have hit the deadline at the top of that index
-    /// before ever opening its corrupt file. The verdict travels with the
-    /// attempt, so a sibling still running when the clock passes the deadline
-    /// cannot downgrade a live `Err` (the leg above) into this one.
+    /// C1 regression: an attempt already past the deadline when it opened its
+    /// file reports the timeout (exit 1), not its `Err` (exit 2) - the
+    /// sequential loop would have hit the deadline before ever opening the
+    /// corrupt file. The verdict travels with the attempt, so a sibling still
+    /// running at the deadline cannot downgrade a live `Err` (above) to this.
     #[test]
     fn fold_reports_timeout_not_a_late_err_once_past_the_deadline() {
         let mut printed = Vec::new();
@@ -1869,11 +1828,10 @@ mod tests {
         );
     }
 
-    /// T2: a timeout at an earlier position terminates the sweep before a later
-    /// solution and prints the timeout line exactly once (the fold never reaches
-    /// the later position, so a sibling's solution cannot spoil it or leave a
-    /// stray line). A timeout that carried a solution reports it without
-    /// printing.
+    /// T2: a timeout at an earlier position ends the sweep before a later
+    /// solution and prints the timeout line exactly once (the fold never
+    /// reaches the later position). A timeout that carried a solution reports
+    /// it without printing.
     #[test]
     fn fold_timeout_beats_a_later_solution_and_prints_once() {
         let mut printed = Vec::new();
@@ -2057,11 +2015,10 @@ mod tests {
     // ---- Healpix tile selection: the hint gate ------------------------------
 
     /// All-sky metas are never gated; a tile is tried blind, kept when its
-    /// cell overlaps the hint circle, and pruned by a far hint. The pixel
-    /// numbers are the astrometry.net xy scheme (`healpix.rs`): cell 2 of
-    /// nside 1 - the north cap centered at RA 225 deg, dec +41.8 deg - is the
-    /// cell that contains both narrow field centers, and `near` below is
-    /// `1920x1080-1`'s published center.
+    /// cell overlaps the hint circle, pruned by a far hint. The pixel numbers
+    /// are the xy scheme (`healpix.rs`): cell 2 of nside 1 - the north cap
+    /// centered at RA 225 deg, dec +41.8 deg - contains both narrow field
+    /// centers, and `near` is `1920x1080-1`'s published center.
     #[test]
     fn tile_in_hint_gates_tiles_not_allsky() {
         let allsky = crate::testutil::meta_stub(4213, -1, 0);
@@ -2152,11 +2109,10 @@ mod tests {
 
     /// The hint-tree budget is spent in sweep order, never overspent and never
     /// over-promised: the chunks of a sweep get exactly
-    /// `params::HINT_TREE_MAX_FILES` tree slots between them however the list is
-    /// chunked, and a slot goes to an attempt exactly when that attempt holds one
-    /// of the first `HINT_TREE_MAX_FILES` positions of the sweep list. Both
-    /// together are what make the budget a position rule rather than something
-    /// that could drift with the pool schedule.
+    /// `params::HINT_TREE_MAX_FILES` slots between them however the list is
+    /// chunked, and a slot goes to an attempt exactly when it holds one of the
+    /// first `HINT_TREE_MAX_FILES` list positions - which is what makes the
+    /// budget a position rule, immune to the pool schedule.
     #[test]
     fn hint_tree_slots_spend_the_budget_in_sweep_order() {
         let cap = crate::params::HINT_TREE_MAX_FILES;
@@ -2187,21 +2143,19 @@ mod tests {
     }
 
     /// Gate: both `1920x1080-*` narrow fields solve end to end over the
-    /// installed set at their own ~1 arcsec/px scale, and the print lands on the
-    /// published sky truth within the budgets of `testutil::Truth::check`. Those
-    /// two truth entries trade the pixel center budget for an absolute 2.0
-    /// arcsec one, looser than 1.5 px at their scale: the published center is a
-    /// plate fit that carries a distortion term, and our refine is
+    /// installed set at their own ~1 arcsec/px scale, and the print lands on
+    /// the published sky truth within `testutil::Truth::check`'s budgets.
+    /// Those two truth entries trade the pixel center budget for an absolute
+    /// 2.0 arcsec one, looser than 1.5 px at their scale: the published center
+    /// is a plate fit that carries a distortion term, and our refine is
     /// similarity-only, so it cannot follow that term.
     ///
-    /// The sweep is run with the scale hint ([`NARROW_SCALE`]), which is what
-    /// keeps selection on the fine-scale indices - and what a consumer of a
-    /// narrow field actually knows, so it is the honest input.
-    ///
-    /// Self-skips when the installed set has no `dimquads = 4` index
-    /// (`testutil::dim4_index`): which indices a machine has is not ours to
-    /// decide, so an install without the 4-star code path skips instead of
-    /// failing.
+    /// Run with the scale hint ([`NARROW_SCALE`]), which keeps selection on the
+    /// fine-scale indices - and what a consumer of a narrow field actually
+    /// knows, so it is the honest input. Self-skips when the installed set has
+    /// no `dimquads = 4` index (`testutil::dim4_index`): which indices a
+    /// machine has is not ours to decide, so an install without the 4-star code
+    /// path skips instead of failing.
     #[test]
     fn narrow_fields_solve_with_the_scale_hint() {
         if crate::testutil::dim4_index().is_none() {
@@ -2229,9 +2183,8 @@ mod tests {
 
     /// The hint end to end on a narrow field: a hint at the published center
     /// keeps the tile that contains the field and still solves (print on
-    /// truth); a circle [`FAR_HINT_OFFSET_DEG`] deg away leaves the field
-    /// unsolved. Run with the same scale hint as
-    /// [`narrow_fields_solve_with_the_scale_hint`].
+    /// truth); a circle [`FAR_HINT_OFFSET_DEG`] deg away leaves it unsolved.
+    /// Same scale hint as [`narrow_fields_solve_with_the_scale_hint`].
     #[test]
     fn hint_gate_end_to_end_on_the_narrow_field() {
         if crate::testutil::dim4_index().is_none() {
@@ -2279,8 +2232,8 @@ mod tests {
     const GEN_HEIGHT: f64 = 1080.0;
 
     /// Name of a generated run: `solve_field` never opens `SolveOptions.file`
-    /// (the caller hands it the stars), and this one has no file behind it - so
-    /// it is deliberately not a `testdata/` path.
+    /// and this one has no file behind it - so it is deliberately not a
+    /// `testdata/` path.
     const GEN_PSEUDO_FILE: &str = "generated.xyls";
 
     /// Seeds of the clean legs. Orientation and parity come from the seed (and
@@ -2422,14 +2375,12 @@ mod tests {
         }
     }
 
-    /// Gate: the same patch mirrored in parity is a different image but the same
-    /// point on the sky. Each leg must land on its own truth (which differs in
-    /// rotation, not in center), so the two reports must also agree with each
-    /// other to within the sum of their budgets - the reflection branch of the
-    /// fit is not allowed to bias the center.
-    ///
-    /// The mirrored placement is a different set of index stars, so neither leg
-    /// solving is a data limitation here; only one of them solving is a failure.
+    /// Gate: the same patch mirrored in parity is a different image but the
+    /// same point on the sky. Each leg lands on its own truth (which differs
+    /// in rotation, not center), so the two reports must agree within the sum
+    /// of their budgets - the reflection branch of the fit may not bias the
+    /// center. The mirrored placement is a different set of index stars, so
+    /// neither leg solving is a data limitation; only one solving is a failure.
     #[test]
     fn generated_field_parity_flip_keeps_the_center() {
         let Some(metas) = crate::testutil::metas() else {
@@ -2516,10 +2467,9 @@ mod tests {
         assert_eq!(legs[0].parity_neg, legs[1].parity_neg);
     }
 
-    /// Gate: the `--ra/--dec` hint on a field with an exact center. A circle at
-    /// the truth center keeps the solution; the far-hint legs reuse
-    /// `far_hint_reports_nothing`, so the rejection is proven on the very index
-    /// the unhinted control won.
+    /// Gate: the `--ra/--dec` hint on a field with an exact center. A circle
+    /// at the truth center keeps the solution; the far-hint legs reuse
+    /// `far_hint_reports_nothing`, proven on the very index the control won.
     #[test]
     fn generated_hint_at_the_center_solves_and_a_far_one_does_not() {
         let Some(metas) = crate::testutil::metas() else {
@@ -2556,10 +2506,8 @@ mod tests {
     }
 
     /// Gate against false positives: a frame of uniform-random stars - the
-    /// bad-pixel and diffraction-spike pattern, with no real pattern under it -
-    /// must not talk the odds scan into a solution. Small on purpose: the depth
-    /// ramp is a function of the star count, so a long noise list is a long run,
-    /// not a stronger gate.
+    /// bad-pixel and diffraction-spike pattern, with no real pattern under it
+    /// - must not talk the odds scan into a solution.
     #[test]
     fn generated_distractor_only_field_is_not_solved() {
         let Some(metas) = crate::testutil::metas() else {
@@ -2647,11 +2595,10 @@ mod tests {
 
     /// Draws of the blind gate, each solved twice (clean and noisy). A blind
     /// sweep is the slow path (every installed index whose band overlaps the
-    /// blind range gets tried, largest quad first), so the draws run on the shared
-    /// rayon pool rather than one after another: each sweep holds one index
-    /// resident, so the pool overlaps one sweep's serial phases (index load,
-    /// verify) with another's parallel enumeration. It is not a free speedup - the
-    /// draw-collection loop below is serial and sits on the critical path.
+    /// blind range is tried, largest quad first), so the draws run on the
+    /// shared rayon pool: each holds one index resident, and the pool overlaps
+    /// one sweep's serial phases (index load, verify) with another's parallel
+    /// enumeration (the draw-collection loop below stays serial).
     const BLIND_DRAWS: usize = 10;
     /// Index picks spent to collect [`BLIND_DRAWS`] fields. An index whose quad
     /// band does not fit this frame hosts no field at all; such a pick is cheap,
@@ -2672,25 +2619,25 @@ mod tests {
 
     /// Gate: fields generated from pseudo-randomly chosen index files of the
     /// installed set, each solved blind twice - once clean, once with centroid
-    /// noise and distractor stars. The other legs point the sweep at the
-    /// generator's own scale window; here the run gets nothing but 0.1-180 deg of
-    /// field width, so a selection or scale-filtering mistake that a windowed leg
-    /// cannot see shows up as a field that does not solve - and the index that
-    /// wins need not be the one the stars came from.
+    /// noise and distractor stars. The windowed legs point the sweep at the
+    /// generator's own scale window; here the run gets nothing but 0.1-180 deg
+    /// of field width, so a selection or scale-filtering mistake a windowed
+    /// leg cannot see shows up as a field that does not solve - and the
+    /// winning index need not be the one the stars came from.
     ///
     /// The noisy leg is the closest this suite comes to a real observation: an
-    /// index nobody points at, no hints at all, centroids off by
-    /// [`NOISY_SIGMA_PX`] and stars that are not on the sky. It keeps the knobs of
-    /// [`generated_noisy_field_stays_within_its_statistical_budget`] and the clean
-    /// solve of the very same draw as its control (noise alone may not unsolve a
+    /// index nobody points at, no hints, centroids off by [`NOISY_SIGMA_PX`],
+    /// stars not on the sky. It keeps the knobs of
+    /// [`generated_noisy_field_stays_within_its_statistical_budget`] and the
+    /// clean solve of the same draw as control (noise alone may not unsolve a
     /// field the clean list solved), but its center budget is looser - see
     /// [`BLIND_NOISY_N_DIVISOR`] - with the median of the draws as the tight
-    /// assertion, so a single draw landing on a sparser winner is not a failure
-    /// while a systematic drift still is.
+    /// assertion: one draw on a sparser winner is not a failure, a systematic
+    /// drift is.
     ///
     /// Which files host a field at this frame is a property of the install (a
     /// coarse all-sky-only set hosts none), so a set below [`BLIND_MIN_FIELDS`]
-    /// skips, and one between that and [`BLIND_DRAWS`] runs with what it has.
+    /// skips, one between that and [`BLIND_DRAWS`] runs with what it has.
     #[test]
     fn generated_fields_solve_blind() {
         let Some(metas) = crate::testutil::metas() else {
@@ -2789,10 +2736,7 @@ mod tests {
                 a.noisy_truth.scale_arcsec,
             ));
         }
-        // The per-draw budget above is a cap, so one draw landing on a sparser
-        // winner cannot fail the gate. The quality statement is the median: most
-        // noisy blind solves are as accurate as the clean ones, and a solver that
-        // drifted with noise quality or with the winning index would move it.
+        // The per-draw budget is a cap; the quality statement is the median.
         residuals.sort_by(f64::total_cmp);
         let mid = residuals.len() / 2;
         let median_px = if residuals.len() % 2 == 1 {
