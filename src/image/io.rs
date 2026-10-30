@@ -141,7 +141,7 @@ pub fn load_image_from_tif_file(
             false
         }
         tiff::ColorType::RGB(_) => {
-            image.make_color(width as usize, height as usize, u16::MAX);
+            image.make_color(width as usize, height as usize, u16::MAX, false);
             true
         }
         ct => {
@@ -236,7 +236,7 @@ pub fn load_image_from_fits_reader(
     } else if let Some(hdu) = color_hdu {
         let width  = hdu.dims()[0];
         let height = hdu.dims()[1];
-        image.make_color(width, height, u16::MAX);
+        image.make_color(width, height, u16::MAX, false);
         let one_color_bytes_len = hdu.bytes_len() / 3;
         FitsReader::read_data(hdu, stream,                       0, image.r.as_slice_mut())?;
         FitsReader::read_data(hdu, stream,     one_color_bytes_len, image.g.as_slice_mut())?;
@@ -270,7 +270,7 @@ pub fn load_image_using_pixbuf(
     let height = pixbuf.height() as usize;
     let row_size = pixbuf.rowstride() as usize;
 
-    image.make_color(width, height, u16::MAX);
+    image.make_color(width, height, u16::MAX, true);
 
     let u8_to_u16 = |value: u8| -> u16 {
         let f32_v = value as f32 / 255.0;

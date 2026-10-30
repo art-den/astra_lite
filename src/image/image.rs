@@ -635,31 +635,37 @@ pub struct Image {
     pub b:        ImageLayer<u16>,
     pub l:        ImageLayer<u16>,
     pub raw_info: Option<RawImageInfo>,
+    /// Display-referred source (JPEG/PNG): preview levels and WB are fixed.
+    /// Reset by `make_monochrome` and `clear`
+    levels_locked: bool,
     max_value:    u16,
 }
 
 impl Image {
     pub fn new_empty() -> Self {
         Self {
-            l:         ImageLayer::new_empty(),
-            r:         ImageLayer::new_empty(),
-            g:         ImageLayer::new_empty(),
-            b:         ImageLayer::new_empty(),
-            raw_info:  None,
-            max_value: 0,
+            l:             ImageLayer::new_empty(),
+            r:             ImageLayer::new_empty(),
+            g:             ImageLayer::new_empty(),
+            b:             ImageLayer::new_empty(),
+            raw_info:      None,
+            levels_locked: false,
+            max_value:     0,
         }
     }
 
     pub fn make_color(
         &mut self,
-        width:     usize,
-        height:    usize,
-        max_value: u16
+        width:         usize,
+        height:        usize,
+        max_value:     u16,
+        levels_locked: bool
     ) {
         self.l.clear();
         self.r.resize(width, height);
         self.g.resize(width, height);
         self.b.resize(width, height);
+        self.levels_locked = levels_locked;
         self.max_value = max_value;
     }
 
@@ -673,6 +679,7 @@ impl Image {
         self.r.clear();
         self.g.clear();
         self.b.clear();
+        self.levels_locked = false;
         self.max_value = max_value;
     }
 
@@ -681,6 +688,7 @@ impl Image {
         self.r.clear();
         self.g.clear();
         self.b.clear();
+        self.levels_locked = false;
         self.max_value = 0;
     }
 
@@ -747,6 +755,10 @@ impl Image {
 
     pub fn max_value(&self) -> u16 {
         self.max_value
+    }
+
+    pub fn levels_locked(&self) -> bool {
+        self.levels_locked
     }
 
     pub fn set_max_value(&mut self, max_value: u16) {
@@ -875,7 +887,7 @@ mod tests {
 
     fn make_color_image(width: usize, height: usize) -> Image {
         let mut img = Image::new_empty();
-        img.make_color(width, height, u16::MAX);
+        img.make_color(width, height, u16::MAX, false);
         for y in 0..height {
             for x in 0..width {
                 img.r.set(x as isize, y as isize, (x * 7 + y * 13) as u16 % 4096);

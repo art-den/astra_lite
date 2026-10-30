@@ -916,7 +916,8 @@ impl RawImage {
         result.make_color(
             self.info.width,
             self.info.height,
-            self.info.max_value
+            self.info.max_value,
+            false
         );
 
         fn demosaic_row(

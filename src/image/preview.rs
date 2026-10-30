@@ -144,7 +144,8 @@ pub fn get_preview_rgb_data(
     let levels = calc_levels(
         hist,
         params,
-        image.max_value() as f64
+        image.max_value() as f64,
+        image.levels_locked()
     );
     log::debug!("preview levels = {:?}", levels);
 
@@ -153,7 +154,8 @@ pub fn get_preview_rgb_data(
         image.raw_info
             .as_ref()
             .map(|info| info.camera.as_str())
-            .unwrap_or_default()
+            .unwrap_or_default(),
+        image.levels_locked()
     );
     log::debug!("preview wb and sensor = {:?} {}", wb, sensor);
 
@@ -249,7 +251,8 @@ pub fn get_preview_part_rgb_bytes(
     let levels = calc_levels(
         hist,
         params,
-        src.max_value() as f64
+        src.max_value() as f64,
+        src.levels_locked()
     );
 
     let (wb, _) = get_wb_and_sensor(
@@ -257,7 +260,8 @@ pub fn get_preview_part_rgb_bytes(
         src.raw_info
             .as_ref()
             .map(|info| info.camera.as_str())
-            .unwrap_or_default()
+            .unwrap_or_default(),
+        src.levels_locked()
     );
 
     let tables = GammaTables::new_or_keep(tables, &levels, params.gamma, wb);
@@ -369,14 +373,26 @@ impl GammaTables {
 }
 
 fn calc_levels(
-    hist:      &Histogram,
-    params:    &PreviewParams,
-    light_max: f64,
+    hist:          &Histogram,
+    params:        &PreviewParams,
+    light_max:     f64,
+    levels_locked: bool,
 ) -> PreviewLevels {
     const WB_PERCENTILE:        f64 = 45.0;
     const DARK_MIN_PERCENTILE:  f64 = 1.0;
     const DARK_MAX_PERCENTILE:  f64 = 60.0;
     const LIGHT_MIN_PERCENTILE: f64 = 95.0;
+
+    // JPEG/PNG images are already display-ready: use the full range
+    if levels_locked {
+        let full = DarkLightLevels { dark: 0.0, light: (u16::MAX - 1) as f64 };
+        return PreviewLevels {
+            r: full.clone(),
+            g: full.clone(),
+            b: full.clone(),
+            l: full,
+        };
+    }
 
     let light_lvl = params.light_lvl.powf(0.05);
 
@@ -431,8 +447,19 @@ fn calc_levels(
     }
 }
 
-fn get_wb_and_sensor(wb: &Option<[f64; 3]>, camera: &str) -> ([f64; 3], String) {
+fn get_wb_and_sensor(
+    wb:            &Option<[f64; 3]>,
+    camera:        &str,
+    levels_locked: bool,
+) -> ([f64; 3], String) {
     let cam_info = get_cam_info(camera);
+    let sensor = cam_info.as_ref()
+        .map(|cam_info| cam_info.sensor.to_string())
+        .unwrap_or_default();
+    // JPEG/PNG images already have their colors set: keep WB neutral
+    if levels_locked {
+        return ([1.0, 1.0, 1.0], sensor);
+    }
     let auto_wb_coeffs = cam_info.as_ref().map(|cam_info| cam_info.wb).unwrap_or([1.0, 1.0, 1.0]);
     let mut r_wb = wb.map(|wb| wb[0]).unwrap_or(auto_wb_coeffs[0] as f64);
     let mut g_wb = wb.map(|wb| wb[1]).unwrap_or(auto_wb_coeffs[1] as f64);
@@ -442,10 +469,6 @@ fn get_wb_and_sensor(wb: &Option<[f64; 3]>, camera: &str) -> ([f64; 3], String) 
     r_wb /= min_wb;
     g_wb /= min_wb;
     b_wb /= min_wb;
-    let sensor = cam_info.as_ref()
-        .map(|cam_info|
-            cam_info.sensor.to_string()
-        ).unwrap_or_default();
     ([r_wb, g_wb, b_wb], sensor)
 }
 

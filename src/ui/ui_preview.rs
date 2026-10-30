@@ -42,6 +42,7 @@ pub fn init_ui(
         flat_info:          RefCell::new(FlatImageInfo::default()),
         preview:            RefCell::new(None),
         is_color_image:     Cell::new(false),
+        levels_locked:      Cell::new(false),
         size_adj_pair:      Cell::new(None),
         image_size:         Cell::new((0, 0)),
     });
@@ -211,8 +212,10 @@ struct ControlWidgets {
     cb_scale:      gtk::ComboBoxText,
     cb_color:      gtk::ComboBoxText,
     chb_rem_grad:  gtk::CheckButton,
+    l_dark:        gtk::Label,
     scl_dark:      gtk::Scale,
     scl_gamma:     gtk::Scale,
+    l_highlight:   gtk::Label,
     scl_highlight: gtk::Scale,
     chb_wb_auto:   gtk::CheckButton,
     l_wb_sensor:   gtk::Label,
@@ -349,6 +352,7 @@ struct PreviewUi {
     flat_info:          RefCell<FlatImageInfo>,
     preview:            RefCell<Option<PreviewImageData>>,
     is_color_image:     Cell<bool>,
+    levels_locked:      Cell<bool>,
     size_adj_pair:      Cell<Option<(f64, f64)>>,
     image_size:         Cell<(usize, usize)>,
 }
@@ -762,10 +766,17 @@ impl PreviewUi {
     fn correct_widgets_props(&self) {
         let auto_color_checked = self.widgets.ctrl.chb_wb_auto.is_active();
         let is_color_image = self.is_color_image.get();
-        let rgb_enabled = !auto_color_checked && is_color_image;
+        // JPEG/PNG images use fixed display levels and WB
+        let levels_unlocked = !self.levels_locked.get();
+        let rgb_enabled = !auto_color_checked && is_color_image && levels_unlocked;
 
         self.widgets.ctrl.cb_color.set_sensitive(is_color_image);
-        self.widgets.ctrl.chb_wb_auto.set_sensitive(is_color_image);
+        self.widgets.ctrl.chb_wb_auto.set_sensitive(is_color_image && levels_unlocked);
+
+        self.widgets.ctrl.l_dark.set_sensitive(levels_unlocked);
+        self.widgets.ctrl.scl_dark.set_sensitive(levels_unlocked);
+        self.widgets.ctrl.l_highlight.set_sensitive(levels_unlocked);
+        self.widgets.ctrl.scl_highlight.set_sensitive(levels_unlocked);
 
         self.widgets.ctrl.l_wb_red.set_sensitive(rgb_enabled);
         self.widgets.ctrl.scl_wb_red.set_sensitive(rgb_enabled);
@@ -904,7 +915,7 @@ impl PreviewUi {
         let preview_options = self.engine.options.read().unwrap().preview.clone();
         let pp = preview_options.preview_params();
 
-        let (orig_width, orig_height, is_color_image, camera) = {
+        let (orig_width, orig_height, is_color_image, levels_locked, camera) = {
             let image = match preview_options.source {
                 PreviewSource::OrigFrame =>
                     self.engine.preview.image.read().unwrap(),
@@ -915,12 +926,13 @@ impl PreviewUi {
                 .as_ref()
                 .map(|info| info.camera.clone())
                 .unwrap_or_default();
-            (image.width(), image.height(), image.is_color(), camera)
+            (image.width(), image.height(), image.is_color(), image.levels_locked(), camera)
         };
 
         if orig_width > 0 && orig_height > 0 {
             self.image_size.set((orig_width, orig_height));
             self.is_color_image.set(is_color_image);
+            self.levels_locked.set(levels_locked);
 
             let sensor_name = get_cam_info(&camera)
                 .map(|cam_info| cam_info.sensor.to_string())
@@ -1010,6 +1022,7 @@ impl PreviewUi {
             *self.preview.borrow_mut() = None;
             self.size_adj_pair.set(None);
             self.is_color_image.set(false);
+            self.levels_locked.set(false);
         }
 
         self.widgets.image.da_image.queue_draw();
