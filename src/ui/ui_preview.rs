@@ -1145,6 +1145,11 @@ impl PreviewUi {
             ) else {
                 return;
             };
+            // Released before the pixbuf and cairo work below: the frame worker must
+            // not be blocked by the draw handler
+            drop(hist);
+            drop(image);
+
             let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
                 &glib::Bytes::from_owned(rgb_data.bytes),
                 gtk::gdk_pixbuf::Colorspace::Rgb,
@@ -1285,6 +1290,10 @@ impl PreviewUi {
             ) else {
                 return;
             };
+            // Released together and as early as possible: the pixbuf build and
+            // scaling below must not block the frame worker's write()
+            drop(hist);
+            drop(image);
 
             let mut pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(
                 &glib::Bytes::from_owned(rgb_bytes),
