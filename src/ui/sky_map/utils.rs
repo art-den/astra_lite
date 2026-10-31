@@ -7,6 +7,7 @@ pub struct Screen {
     pub main_size: f64,
     pub center_x:  f64,
     pub center_y:  f64,
+    // Used for both axes; monitor pixels are assumed square
     pub dpmm_x:    f64,
     pub font_size: f64,
 }
