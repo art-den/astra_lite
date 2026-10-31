@@ -105,6 +105,7 @@ pub fn init_ui(
     main_ui.apply_panel_options();
 
     main_ui.connect_delete_event();
+    main_ui.connect_periodic_timer();
     main_ui.connect_close_after_finish_work();
     main_ui.connect_widgets_events();
     main_ui.connect_hal_and_core_events();
@@ -334,17 +335,48 @@ impl MainUi {
         );
     }
 
+    /// Periodic UI work of all modules, split out of
+    /// `connect_close_after_finish_work()` so that a refused close cannot stop it.
+    fn connect_periodic_timer(self: &Rc<Self>) {
+        glib::timeout_add_local(
+            Duration::from_millis(TIMER_PERIOD_MS),
+            clone!(@weak self as self_ => @default-return glib::ControlFlow::Break,
+            move || {
+                // Teardown has already started: nothing left to update.
+                if self_.closed.get() {
+                    return glib::ControlFlow::Break;
+                }
+                let modules = self_.modules.borrow();
+                modules.on_250ms_timer();
+                glib::ControlFlow::Continue
+            }
+        ));
+    }
+
+    /// Closes the window after the user confirmed terminating a running mode.
+    ///
+    /// `gtk_window_close()` only queues an idle which synthesizes `delete-event`,
+    /// and `handler_close_window()` answers it with Stop while a mode is running,
+    /// so a close request cannot be judged until the next tick. Waiting for
+    /// `ModeKind::Waiting` avoids popping the confirmation dialog every tick.
     fn connect_close_after_finish_work(self: &Rc<Self>) {
         glib::timeout_add_local(
             Duration::from_millis(TIMER_PERIOD_MS),
             clone!(@weak self as self_ => @default-return glib::ControlFlow::Break,
             move || {
-                if self_.close_win_flag.get() {
-                    self_.widgets.window.close();
+                // `handler_close_window()` sets `closed` as soon as it accepts the
+                // close. Retrying on `close_win_flag` alone would call `close()`
+                // again and re-enter the teardown.
+                if self_.closed.get() {
                     return glib::ControlFlow::Break;
                 }
-                let modules = self_.modules.borrow();
-                modules.on_250ms_timer();
+                if !self_.close_win_flag.get() {
+                    return glib::ControlFlow::Continue;
+                }
+                if self_.engine.modes().active.kind() != ModeKind::Waiting {
+                    return glib::ControlFlow::Continue;
+                }
+                self_.widgets.window.close();
                 glib::ControlFlow::Continue
             }
         ));
@@ -389,7 +421,9 @@ impl MainUi {
     }
 
     fn handler_close_window(self: &Rc<Self>) -> glib::Propagation {
-        if self.engine.modes().active.kind() != ModeKind::Waiting {
+        let mode = self.engine.modes().active.kind();
+
+        if mode != ModeKind::Waiting {
             let dialog = gtk::MessageDialog::builder()
                 .transient_for(&self.widgets.window)
                 .title("Operation is in progress")
@@ -412,6 +446,8 @@ impl MainUi {
                 }
                 dlg.close();
             }));
+            // A "No" answer must cancel an already requested deferred close
+            self.close_win_flag.set(false);
             return glib::Propagation::Stop
         }
 
