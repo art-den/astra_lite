@@ -473,9 +473,8 @@ impl PreviewUi {
         self.widgets.ctrl.scl_dark.set_round_digits(1);
         self.widgets.ctrl.scl_dark.set_digits(1);
 
-        let (dpmm_x, _) = get_widget_dpmm(&self.window)
-            .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
-        self.widgets.ctrl.scl_dark.set_width_request((40.0 * dpmm_x) as i32);
+        let dpmm = get_widget_dpmm(&self.window);
+        self.widgets.ctrl.scl_dark.set_width_request((40.0 * dpmm.x) as i32);
 
         self.widgets.ctrl.scl_highlight.set_range(0.0, 1.0);
         self.widgets.ctrl.scl_highlight.set_increments(0.1, 0.5);
@@ -1703,9 +1702,8 @@ impl PreviewUi {
         drop(options);
 
         let font_size_pt = 8.0;
-        let (_, dpmm_y) = get_widget_dpmm(area)
-            .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
-        let font_size_px = font_size_to_pixels(FontSize::Pt(font_size_pt), dpmm_y);
+        let dpmm = get_widget_dpmm(area);
+        let font_size_px = font_size_to_pixels(FontSize::Pt(font_size_pt), dpmm.y);
         cr.set_font_size(font_size_px);
 
         let ui_options = self.ui_options.borrow();

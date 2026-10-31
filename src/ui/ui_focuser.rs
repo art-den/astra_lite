@@ -606,9 +606,8 @@ impl FocuserUi {
         plots.bottom_axis.dec_digits = 0;
 
         let font_size_pt = 8.0;
-        let (_, dpmm_y) = get_widget_dpmm(da)
-            .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
-        let font_size_px = font_size_to_pixels(FontSize::Pt(font_size_pt), dpmm_y);
+        let dpmm = get_widget_dpmm(da);
+        let font_size_px = font_size_to_pixels(FontSize::Pt(font_size_pt), dpmm.y);
         ctx.set_font_size(font_size_px);
 
         draw_plots(&plots, da, ctx)?;

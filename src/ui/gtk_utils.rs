@@ -285,23 +285,36 @@ pub fn select_file_name_to_save(
     }
 }
 
-pub const DEFAULT_DPMM: f64 = 3.8;
+// 3.8 dpmm ~= 96 dpi
+const DEFAULT_DPMM: f64 = 3.8;
 
-/// Returns monitor density as `(dpmm_x, dpmm_y)`, or `None` if no monitor was found for
-/// the widget's window. An axis whose physical size is unknown gets `DEFAULT_DPMM`.
-/// Density counts application pixels, so it is not corrected for `scale_factor`.
-pub fn get_widget_dpmm(widget: &impl IsA<gtk::Widget>) -> Option<(f64, f64)> {
+/// Monitor pixel density (dots per mm) per axis; an axis with unknown size gets `Dpmm::DEFAULT`
+pub struct Dpmm {
+    pub x: f64,
+    pub y: f64,
+}
+
+impl Dpmm {
+    pub const DEFAULT: Self = Self { x: DEFAULT_DPMM, y: DEFAULT_DPMM };
+}
+
+/// Returns the monitor density for the widget's window; each unknown axis falls back to
+/// `Dpmm::DEFAULT` on its own. Density counts application pixels, so it is not corrected
+/// for `scale_factor`.
+pub fn get_widget_dpmm(widget: &impl IsA<gtk::Widget>) -> Dpmm {
+    // mm <= 0 means the physical size is unknown (no EDID); dividing would give inf/NaN
+    let axis_dpmm = |px: i32, mm: i32|
+        if mm <= 0 { DEFAULT_DPMM } else { px as f64 / mm as f64 };
     widget.window()
         .and_then(|window|
             widget.display().monitor_at_window(&window)
         )
-        .map(|monitor| {
+        .map_or(Dpmm::DEFAULT, |monitor| {
             let g = monitor.geometry();
-            // GTK reports mm <= 0 when the physical size is unknown (no EDID), which yields inf/NaN
-            let dpmm = |px: i32, mm: i32|
-                if mm <= 0 { DEFAULT_DPMM } else { px as f64 / mm as f64 };
-            (dpmm(g.width(),  monitor.width_mm()),
-            dpmm(g.height(), monitor.height_mm()))
+            Dpmm {
+                x: axis_dpmm(g.width(),  monitor.width_mm()),
+                y: axis_dpmm(g.height(), monitor.height_mm()),
+            }
         })
 }
 

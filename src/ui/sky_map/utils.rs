@@ -19,14 +19,13 @@ impl Screen {
         let height = da_size.height() as f64;
         let main_size = 0.5 * f64::max(width, height);
 
-        let (dpmm_x, dpmm_y) = get_widget_dpmm(da)
-            .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
+        let dpmm = get_widget_dpmm(da);
 
         let tolerance = Rect {
-            left: -20.0 * dpmm_x,
-            top: -20.0 * dpmm_y,
-            right: width + 20.0 * dpmm_x,
-            bottom: height + 20.0 * dpmm_y,
+            left: -20.0 * dpmm.x,
+            top: -20.0 * dpmm.y,
+            right: width + 20.0 * dpmm.x,
+            bottom: height + 20.0 * dpmm.y,
         };
         let rect = Rect {
             left: 0.0,
@@ -40,7 +39,7 @@ impl Screen {
             main_size,
             center_x: 0.5 * width,
             center_y: 0.5 * height,
-            dpmm_x,
+            dpmm_x: dpmm.x,
             font_size: da.style_context().font(gtk::StateFlags::NORMAL).size() as _,
         }
     }

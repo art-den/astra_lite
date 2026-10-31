@@ -437,10 +437,8 @@ impl MapUi {
         self.widgets.top.scl_max_dso_mag.set_range(0.0, 20.0);
         self.widgets.top.scl_max_dso_mag.set_increments(0.5, 2.0);
 
-        let (dpmm_x, _) = get_widget_dpmm(&self.window)
-            .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
-
-        self.widgets.top.scl_max_dso_mag.set_width_request((40.0 * dpmm_x) as i32);
+        let dpmm = get_widget_dpmm(&self.window);
+        self.widgets.top.scl_max_dso_mag.set_width_request((40.0 * dpmm.x) as i32);
 
         self.set_alt_graph_height();
     }

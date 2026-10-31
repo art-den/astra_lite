@@ -19,8 +19,7 @@ pub fn paint_altitude_by_time(
     observer: &Observer,
     crd:      &Option<EqCoord>,
 ) -> eyre::Result<()> {
-    let (_, dpmm_y) = get_widget_dpmm(area)
-        .unwrap_or((DEFAULT_DPMM, DEFAULT_DPMM));
+    let dpmm = get_widget_dpmm(area);
     let sc = area.style_context();
     let fg_color = sc
         .lookup_color("theme_fg_color")
@@ -161,7 +160,7 @@ pub fn paint_altitude_by_time(
         }
     }
 
-    cr.set_line_width(f64::max(0.5 * dpmm_y, 2.0));
+    cr.set_line_width(f64::max(0.5 * dpmm.y, 2.0));
     cr.set_source_rgba(0.0, 1.0, 0.0, 0.6);
     cr.stroke()?;
 
@@ -221,7 +220,7 @@ pub fn paint_altitude_by_time(
     cr.set_dash(&[], 0.0);
     cr.rectangle(0.0, 0.0, width, height);
     cr.set_source_rgba(fg_r, fg_g, fg_b, 0.33);
-    cr.set_line_width(f64::max(0.3 * dpmm_y, 1.0));
+    cr.set_line_width(f64::max(0.3 * dpmm.y, 1.0));
     cr.stroke()?;
 
     // Line at center
