@@ -1188,7 +1188,7 @@ impl CameraUi {
         widgets.ctrl.chb_high_fw  .set_sensitive(cam_active && can_change_cam_opts);
 
         widgets.frame.grid        .set_sensitive(cam_active);
-        widgets.frame.cb_mode     .set_sensitive(can_change_frame_opts);
+        widgets.frame.cb_mode     .set_sensitive(waiting);
         widgets.frame.chb_auto_exp.set_sensitive(exposure_supported && can_change_frame_opts && frame_mode_is_flat);
         widgets.frame.spb_exp     .set_sensitive(exposure_supported && can_change_frame_opts);
         widgets.frame.cb_crop     .set_sensitive(crop_supported && can_change_frame_opts);
