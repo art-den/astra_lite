@@ -164,6 +164,7 @@ impl IndiPanelWidget {
     /// Refreshes the device list and the property widgets.
     /// When `update_list` is set, `data.devices` and the `stack` child order are
     /// synced to the model order produced by `cmp_devices`.
+    /// The opened page is kept if that device still exists.
     fn show_all_props(
         indi:        &Arc<indi::Connection>,
         stack:       &gtk::Stack,
@@ -286,6 +287,9 @@ impl IndiPanelWidget {
             devices_list_changed |= devices_count_before_remove != data.devices.len();
 
             if devices_list_changed {
+                // GtkStack falls back to the first child once the visible one is removed
+                let visible_name = stack.visible_child_name().map(|n| n.to_string());
+
                 data.devices.sort_by(|d1, d2| cmp_devices(&d1.name, &d2.name));
                 let children = stack.children();
                 for child in children {
@@ -293,6 +297,11 @@ impl IndiPanelWidget {
                 }
                 for device in &data.devices {
                     stack.add_titled(&device.layout, &device.name, &device.name);
+                }
+
+                // No restore if the opened device disappeared: the first page is fine then
+                if let Some(name) = visible_name.filter(|n| data.devices.iter().any(|d| &d.name == n)) {
+                    stack.set_visible_child_name(&name);
                 }
             }
         }
