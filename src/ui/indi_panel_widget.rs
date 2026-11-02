@@ -792,8 +792,14 @@ impl IndiPanelWidget {
                         &[(&elem_name, true)]
                     );
                     if one_btn {
+                        // GTK3: set_active() re-emits `clicked`, re-entering this closure;
+                        // the bracket makes that re-entry hit the `is_sensitive` guard above.
+                        btn.set_sensitive(false);
                         btn.set_active(false);
+                        btn.set_sensitive(true);
                     } else {
+                        // Stays insensitive until the server echo re-enables the
+                        // button in `show_switch_property_values()`.
                         btn.set_sensitive(false);
                     }
                 });
