@@ -1,6 +1,6 @@
 // Widget for controlling properties of INDI devices
 
-use std::{sync::Arc, time::Duration, cell::RefCell, rc::Rc};
+use std::{collections::HashMap, sync::Arc, time::Duration, cell::RefCell, rc::Rc};
 use gtk::{prelude::*, glib, glib::clone};
 use itertools::{Itertools, izip};
 use ::indi;
@@ -161,6 +161,9 @@ impl IndiPanelWidget {
         }
     }
 
+    /// Refreshes the device list and the property widgets.
+    /// When `update_list` is set, `data.devices` and the `stack` child order are
+    /// synced to the model order produced by `cmp_devices`.
     fn show_all_props(
         indi:        &Arc<indi::Connection>,
         stack:       &gtk::Stack,
@@ -189,43 +192,51 @@ impl IndiPanelWidget {
                 100
             };
 
-            indi_devices.sort_by(|d1, d2| {
-                let pr1 = get_device_sort_prio(d1.interface);
-                let pr2 = get_device_sort_prio(d2.interface);
-                let ord = usize::cmp(&pr1, &pr2);
+            // Sort key: interface prio, then CCD sensor size (biggest first), then
+            // name. The name tiebreaker makes the order total (so the model and UI
+            // sorts always agree) and keeps the sidebar stable across reconnects.
+            let get_device_sort_key = |name: &str, interface: indi::DriverInterface| -> (usize, f64) {
+                let prio = get_device_sort_prio(interface);
+                if !interface.contains(indi::DriverInterface::CCD) {
+                    return (prio, 0.0);
+                }
+                let (psx, psy) = indi.camera_get_pixel_size_um(name, indi::CamCcd::Main).unwrap_or_default();
+                let (fsx, fsy) = indi.camera_get_max_frame_size(name, indi::CamCcd::Main).unwrap_or_default();
+                (prio, f64::max(psx * fsx as f64, psy * fsy as f64))
+            };
+
+            let unknown_key = (get_device_sort_prio(indi::DriverInterface::empty()), 0.0);
+
+            let sort_keys: HashMap<String, (usize, f64)> = indi_devices.iter()
+                .map(|d| (d.name.to_string(), get_device_sort_key(&d.name, d.interface)))
+                .collect();
+
+            let cmp_devices = |name1: &str, name2: &str| -> std::cmp::Ordering {
+                // A name is always known after `retain`; `unknown_key` is only a safe fallback
+                let key1 = sort_keys.get(name1).copied().unwrap_or(unknown_key);
+                let key2 = sort_keys.get(name2).copied().unwrap_or(unknown_key);
+                let ord = usize::cmp(&key1.0, &key2.0);
                 if ord != std::cmp::Ordering::Equal {
                     return ord;
                 }
-                let d1_is_ccd = d1.interface.contains(indi::DriverInterface::CCD);
-                let d2_is_ccd = d2.interface.contains(indi::DriverInterface::CCD);
-                if d1_is_ccd && d2_is_ccd {
-                    // Sort by physical frame size
-                    let (psx1, psy1) = indi.camera_get_pixel_size_um(&d1.name, indi::CamCcd::Main).unwrap_or_default();
-                    let (fsx1, fsy1) = indi.camera_get_max_frame_size(&d1.name, indi::CamCcd::Main).unwrap_or_default();
-                    let fx1 = psx1 * fsx1 as f64;
-                    let fh1 = psy1 * fsy1 as f64;
-                    let f1 = f64::max(fx1, fh1);
-
-                    let (psx2, psy2) = indi.camera_get_pixel_size_um(&d2.name, indi::CamCcd::Main).unwrap_or_default();
-                    let (fsx2, fsy2) = indi.camera_get_max_frame_size(&d2.name, indi::CamCcd::Main).unwrap_or_default();
-                    let fx2 = psx2 * fsx2 as f64;
-                    let fh2 = psy2 * fsy2 as f64;
-                    let f2 = f64::max(fx2, fh2);
-                    f64::total_cmp(&f2, &f1)
-                } else {
-                    ord
+                let ord = f64::total_cmp(&key2.1, &key1.1); // biggest sensor first
+                if ord != std::cmp::Ordering::Equal {
+                    return ord;
                 }
-            });
+                str::cmp(name1, name2)
+            };
+
+            indi_devices.sort_by(|d1, d2| cmp_devices(&d1.name, &d2.name));
 
             let mut devices_list_changed = false;
 
             if indi_devices.len() != data.devices.len() {
                 devices_list_changed = true;
             } else {
-                // Device order changed?
+                // Device order changed? Both lists are sorted with the same total
+                // comparator, so a positional name compare is enough
                 for (indi_device, ui_device) in izip!(&indi_devices, &data.devices) {
-                    if *indi_device.name != ui_device.name
-                    || get_device_sort_prio(indi_device.interface) != get_device_sort_prio(ui_device.interface) {
+                    if *indi_device.name != ui_device.name {
                         devices_list_changed = true;
                     }
                 }
@@ -257,7 +268,6 @@ impl IndiPanelWidget {
                     vert_box.add(&notebook);
                     data.devices.push(UiIndiDevice {
                         name:      indi_device.name.to_string(),
-                        interface: indi_device.interface,
                         groups:    Vec::new(),
                         layout:    vert_box,
                         notebook,
@@ -276,7 +286,7 @@ impl IndiPanelWidget {
             devices_list_changed |= devices_count_before_remove != data.devices.len();
 
             if devices_list_changed {
-                data.devices.sort_by_key(|d| get_device_sort_prio(d.interface));
+                data.devices.sort_by(|d1, d2| cmp_devices(&d1.name, &d2.name));
                 let children = stack.children();
                 for child in children {
                     stack.remove(&child);
@@ -1028,7 +1038,6 @@ impl IndiPanelWidget {
 
 struct UiIndiDevice {
     name:      String,
-    interface: indi::DriverInterface,
     groups:    Vec<UiIndiPropsGroup>,
     notebook:  gtk::Notebook,
     layout:    gtk::Box,
