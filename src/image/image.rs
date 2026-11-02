@@ -635,7 +635,7 @@ pub struct Image {
     pub b:        ImageLayer<u16>,
     pub l:        ImageLayer<u16>,
     pub raw_info: Option<RawImageInfo>,
-    /// Display-referred source (JPEG/PNG): preview levels and WB are fixed.
+    /// Display-referred source: preview levels and WB are fixed.
     /// Reset by `make_monochrome` and `clear`
     levels_locked: bool,
     max_value:    u16,

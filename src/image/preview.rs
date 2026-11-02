@@ -383,7 +383,7 @@ fn calc_levels(
     const DARK_MAX_PERCENTILE:  f64 = 60.0;
     const LIGHT_MIN_PERCENTILE: f64 = 95.0;
 
-    // JPEG/PNG images are already display-ready: use the full range
+    // Display-referred images need no stretching: use the full range
     if levels_locked {
         let full = DarkLightLevels { dark: 0.0, light: (u16::MAX - 1) as f64 };
         return PreviewLevels {
@@ -456,7 +456,7 @@ fn get_wb_and_sensor(
     let sensor = cam_info.as_ref()
         .map(|cam_info| cam_info.sensor.to_string())
         .unwrap_or_default();
-    // JPEG/PNG images already have their colors set: keep WB neutral
+    // Display-referred images already have their colors set: keep WB neutral
     if levels_locked {
         return ([1.0, 1.0, 1.0], sensor);
     }

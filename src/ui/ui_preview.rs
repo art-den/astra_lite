@@ -768,7 +768,7 @@ impl PreviewUi {
     fn correct_widgets_props(&self) {
         let auto_color_checked = self.widgets.ctrl.chb_wb_auto.is_active();
         let is_color_image = self.is_color_image.get();
-        // JPEG/PNG images use fixed display levels and WB
+        // Display-referred images have fixed display levels and WB
         let levels_unlocked = !self.levels_locked.get();
         let rgb_enabled = !auto_color_checked && is_color_image && levels_unlocked;
 
