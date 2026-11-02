@@ -8,7 +8,8 @@ use crate::{hal::{CameraShot, CameraShotType}, ui::gtk_utils::*};
 
 use super::{image::{Image, ImageLayer}, raw::*, simple_fits::{FitsReader, FitsWriter, Header, SeekNRead}};
 
-const READY_IMAGE_GAMMUT: f32 = 2.4;
+/// Gamma used to linearize display-referred pixels on load
+pub const READY_IMAGE_GAMMUT: f32 = 2.4;
 
 ///////////////////////////////////////////////////////////////////////////////
 

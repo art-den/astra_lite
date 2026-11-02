@@ -4,7 +4,7 @@ use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{engine::*, events::*, frame_processing::*, preview::ResultImageInfo}, hal::FrameType, image::{cam_db::get_cam_info, histogram::*, image::{Image, ImageLayer}, info::*, io::save_image_to_tif_file, preview::*, raw::CalibrMethods, stars::Stars, stars_offset::Offset}, options::*, sky_math::math::radian_to_degree, utils::{io_utils::*, log_utils::*}
+    core::{engine::*, events::*, frame_processing::*, preview::ResultImageInfo}, hal::FrameType, image::{cam_db::get_cam_info, histogram::*, image::{Image, ImageLayer}, info::*, io::{READY_IMAGE_GAMMUT, save_image_to_tif_file}, preview::*, raw::CalibrMethods, stars::Stars, stars_offset::Offset}, options::*, sky_math::math::radian_to_degree, utils::{io_utils::*, log_utils::*}
 };
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 
@@ -43,6 +43,7 @@ pub fn init_ui(
         preview:            RefCell::new(None),
         is_color_image:     Cell::new(false),
         levels_locked:      Cell::new(false),
+        gamma_mark:         Cell::new(false),
         size_adj_pair:      Cell::new(None),
         image_size:         Cell::new((0, 0)),
     });
@@ -353,6 +354,8 @@ struct PreviewUi {
     preview:            RefCell<Option<PreviewImageData>>,
     is_color_image:     Cell<bool>,
     levels_locked:      Cell<bool>,
+    // Last mark state applied to scl_gamma: marks are updated only on a change
+    gamma_mark:         Cell<bool>,
     size_adj_pair:      Cell<Option<(f64, f64)>>,
     image_size:         Cell<(usize, usize)>,
 }
@@ -785,6 +788,28 @@ impl PreviewUi {
         self.widgets.ctrl.scl_wb_blue.set_sensitive(rgb_enabled);
     }
 
+    /// Marks READY_IMAGE_GAMMUT: the gamma that undoes the load-time
+    /// linearization of a display-referred image (see `Image::levels_locked`)
+    fn update_gamma_mark(&self) {
+        let show_mark = self.levels_locked.get();
+        // add_mark()/clear_marks() queue a resize, so run them only on a state change
+        if self.gamma_mark.get() == show_mark {
+            return;
+        }
+        self.gamma_mark.set(show_mark);
+
+        let scl = &self.widgets.ctrl.scl_gamma;
+        scl.clear_marks();
+        if show_mark {
+            // Bottom: the scale shows its value at the right, so the mark is put below the trough
+            let mark = format!(
+                r##"<span color="{}"><b>{READY_IMAGE_GAMMUT:.1}</b></span>"##,
+                get_warn_color_str()
+            );
+            scl.add_mark(READY_IMAGE_GAMMUT as f64, gtk::PositionType::Bottom, Some(&mark));
+        }
+    }
+
     fn show_overlay_message(&self, pos: &OverlayMessagePos, text: &str) {
         match pos {
             OverlayMessagePos::Top => {
@@ -907,7 +932,8 @@ impl PreviewUi {
     }
 
     /// Updates the preview bookkeeping (source image info, zoom, scroll area size,
-    /// centering) and requests a repaint.
+    /// centering), syncs the dependent widgets (gamma mark, sensitivity)
+    /// and requests a repaint.
     /// Note: this doesn't mark the part image dirty - option-only changes don't
     /// alter the part; new frames do it in show_frame_processing_result.
     fn update_preview(&self, keep_center: Option<(f64, f64)>) {
@@ -1025,6 +1051,7 @@ impl PreviewUi {
         }
 
         self.widgets.image.da_image.queue_draw();
+        self.update_gamma_mark();
         self.correct_widgets_props();
     }
 
