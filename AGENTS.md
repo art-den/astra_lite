@@ -83,3 +83,9 @@ To debug the UI, write the necessary code in `src/ui/debug/mod.rs` and use the `
 ## Misc.
 
 - Raw data calibration (dark/bias, flat, hot-pixel SAR) is applied in the frame processing pipeline, which feeds previews and live stacking. Raw frames are saved to a FITS file in the same unaltered form as they came from the CCD.
+
+## README.md
+
+The first section of the `README.md` should be for the end user. This section should describe the purpose of the program and its capabilities. This section should not cover the program's internals or implementation details.
+
+The second section of the `README.md` is for advanced users or programmers who want to build the program from source code or modify it.
