@@ -49,6 +49,7 @@ Note for those editing this file: The file should contain only general informati
 - `map_data/` - Data files for sky map: star catalog (binary), DSO/named-star CSVs, constellation GeoJSON
 - `tests/` - Integration tests
 - `benches/` - Criterion benchmarks
+- `examples/` - Standalone programs; `skymap_paint_bench.rs` is a benchmark (times the sky map painting; not Criterion)
 - `scripts/` - Packaging scripts (create .deb package)
 - `mswin_stuff/` - Windows icon and resources
 - `docs/` - Screenshots for README
