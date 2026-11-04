@@ -193,11 +193,18 @@ impl SkyZoneKey {
 
     pub fn from_coord(mut ra: f64, mut dec: f64) -> Self {
         while ra >= 2.0 * PI { ra -= 2.0 * PI; }
-        while ra <= 0.0 { ra += 2.0 * PI; }
-        dec += 0.5 * PI;
-        dec = dec.clamp(0.0, PI);
-        let ra_int = (Self::RA_COUNT as f64 * ra / (2.0 * PI)) as u16;
-        let dec_int = (Self::DEC_COUNT as f64 * dec / PI) as u16;
+        while ra < 0.0 { ra += 2.0 * PI; }
+        dec = f64::clamp(dec + 0.5 * PI, 0.0, PI);
+        // RA = 2π and Dec = +π/2 belong to the last zone, as well as the values
+        // that float rounding may push up to the next index
+        let ra_int = u16::min(
+            (Self::RA_COUNT as f64 * ra / (2.0 * PI)) as u16,
+            (Self::RA_COUNT - 1) as u16,
+        );
+        let dec_int = u16::min(
+            (Self::DEC_COUNT as f64 * dec / PI) as u16,
+            (Self::DEC_COUNT - 1) as u16,
+        );
         SkyZoneKey {
             ra_key: ra_int,
             dec_key: dec_int,
