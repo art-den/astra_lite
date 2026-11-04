@@ -83,7 +83,8 @@ fn test_obj_coord() {
 }
 
 /// Brightness
-#[derive(Copy, Clone, PartialEq, PartialOrd)]
+/// Ord is consistent with the stored i16 (NaN is mapped to i16::MIN), giving a total order
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ObjMagnitude(i16);
 
 impl ObjMagnitude {
@@ -134,7 +135,7 @@ impl StarBV {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct StarData {
     pub crd: ObjEqCoord,
     pub mag: ObjMagnitude,
@@ -151,7 +152,7 @@ pub struct NamedStar {
     pub data:     StarData,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct Star {
     pub data: StarData,
 }
@@ -246,6 +247,21 @@ impl Stars {
         &self.zones
     }
 
+    /// The painter binary-searches the magnitude cutoff, so the zone vectors
+    /// must stay sorted by ascending magnitude once loading finished
+    fn sort_stars_by_mag(&mut self) {
+        for zone in self.zones.values_mut() {
+            zone.stars.sort_unstable_by_key(|star| star.data.mag);
+        }
+    }
+
+    fn sort_named_stars_by_mag(&mut self) {
+        for zone in self.zones.values_mut() {
+            zone.nstars.sort_unstable_by_key(|star| star.data.mag);
+        }
+    }
+
+    /// Does not keep the magnitude-sorted order: sort the zones after bulk adds
     pub fn add_star(&mut self, data: StarData, name: Option<String>, bayer: Option<String>, cnst_id: Option<u8>) {
         let ra = data.crd.ra();
         let dec = data.crd.dec();
@@ -289,7 +305,7 @@ impl Stars {
 
         let star_to_named_star = |star: &Star| -> NamedStar {
             NamedStar {
-                data:     star.data.clone(),
+                data:     star.data,
                 name:     String::new(),
                 name_lc:  String::new(),
                 bayer:    String::new(),
@@ -335,6 +351,55 @@ impl Stars {
         }
         result
     }
+}
+
+#[test]
+fn test_zone_stars_sorted_by_mag() {
+    let crd = ObjEqCoord::new(1.0, 0.5);
+    let mk = |mag: f32| StarData { crd, mag: ObjMagnitude::new(mag), bv: StarBV::new(0.0) };
+    let mut stars = Stars::new();
+    stars.add_star(mk(5.0),  None, None, None);
+    stars.add_star(mk(2.5),  None, None, None);
+    // NaN magnitude is stored as i16::MIN: it must sort first and always pass the cutoff
+    stars.add_star(mk(f32::NAN), None, None, None);
+    stars.add_star(mk(5.0), Some("a".into()), Some("al".into()), Some(1));
+    stars.add_star(mk(1.5), Some("b".into()), Some("bet".into()), Some(1));
+    stars.sort_stars_by_mag();
+    stars.sort_named_stars_by_mag();
+
+    let zone = stars.zones.get(&SkyZoneKey::from_coord(crd.ra(), crd.dec())).unwrap();
+    assert!(zone.stars().windows(2).all(|w| w[0].data.mag <= w[1].data.mag));
+    assert!(zone.named_stars().windows(2).all(|w| w[0].data.mag <= w[1].data.mag));
+
+    let max_mag = ObjMagnitude::new(3.0);
+    let cut = zone.stars().partition_point(|star| star.data.mag <= max_mag);
+    assert_eq!(cut, 2);
+}
+
+#[test]
+fn test_merge_keeps_stars_sorted_by_mag() {
+    let crd = ObjEqCoord::new(1.0, 0.5);
+    let mk = |mag: f32| StarData { crd, mag: ObjMagnitude::new(mag), bv: StarBV::new(0.0) };
+
+    let mut map = SkyMap::new();
+    map.stars.add_star(mk(5.0), None, None, None);
+    map.stars.add_star(mk(2.5), None, None, None);
+    map.stars.add_star(mk(5.0), Some("a".into()), Some("al".into()), Some(1));
+    map.stars.sort_stars_by_mag();
+    map.stars.sort_named_stars_by_mag();
+
+    let mut other = SkyMap::new();
+    other.stars.add_star(mk(3.0),  None, None, None);
+    other.stars.add_star(mk(-1.0), None, None, None);
+    other.stars.add_star(mk(-1.0), Some("b".into()), Some("bet".into()), Some(1));
+    other.stars.sort_stars_by_mag();
+    other.stars.sort_named_stars_by_mag();
+
+    map.merge_other_skymaps(&other);
+    assert_eq!(map.stars.zones.len(), 1);
+    let zone = map.stars.zones.values().next().unwrap();
+    assert!(zone.stars.windows(2).all(|w| w[0].data.mag <= w[1].data.mag));
+    assert!(zone.nstars.windows(2).all(|w| w[0].data.mag <= w[1].data.mag));
 }
 
 bitflags! {
@@ -688,6 +753,8 @@ impl SkyMap {
                 })
                 .or_insert(star_zone.clone());
         }
+        self.stars.sort_stars_by_mag();
+        self.stars.sort_named_stars_by_mag();
     }
 
     pub fn load_constellations(&mut self, path: impl AsRef<Path>, as_bounds: bool) -> eyre::Result<()> {
@@ -873,6 +940,7 @@ impl SkyMap {
             self.stars.add_star(star_data, None, None, None);
         }
 
+        self.stars.sort_stars_by_mag();
         Ok(())
     }
 
@@ -917,6 +985,7 @@ impl SkyMap {
                 Some(cnst_id)
             );
         }
+        self.stars.sort_named_stars_by_mag();
         Ok(())
     }
 

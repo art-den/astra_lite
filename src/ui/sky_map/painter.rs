@@ -573,11 +573,12 @@ impl SkyMapPainter {
                 continue;
             }
 
+            // Zones are sorted by ascending magnitude, so only a visible prefix
+            // is walked; iterate it back to front to paint faint stars first
             if mode == PainterMode::Objects {
-                for star in zone.stars() {
-                    if star.data.mag > max_mag {
-                        continue;
-                    }
+                let stars = zone.stars();
+                let visible_count = stars.partition_point(|star| star.data.mag <= max_mag);
+                for star in stars[..visible_count].iter().rev() {
                     let star_is_painted = self.paint_star(
                         &star.data, "", "",
                         params, ctx, mode,
@@ -587,10 +588,9 @@ impl SkyMapPainter {
                 }
             }
 
-            for star in zone.named_stars() {
-                if star.data.mag > max_mag {
-                    continue;
-                }
+            let nstars = zone.named_stars();
+            let visible_count = nstars.partition_point(|star| star.data.mag <= max_mag);
+            for star in nstars[..visible_count].iter().rev() {
                 let star_is_painted = self.paint_star(
                     &star.data, &star.name, &star.bayer,
                     params, ctx, mode,
